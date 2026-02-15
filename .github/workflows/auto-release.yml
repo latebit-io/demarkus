@@ -112,7 +112,7 @@ jobs:
           [ -n "$protocol_version" ] && echo "protocol → v${protocol_version}" && any_bump=true
           [ -n "$server_version" ] && echo "server → v${server_version}" && any_bump=true
           [ -n "$client_version" ] && echo "client → v${client_version}" && any_bump=true
-          $any_bump || echo "No version bumps needed"
+          [ "$any_bump" = true ] || echo "No version bumps needed"
 
       - name: Create tags
         run: |
