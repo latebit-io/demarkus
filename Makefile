@@ -62,13 +62,15 @@ install: all
 	@cp client/bin/demarkus /usr/local/bin/
 	@echo "✓ Installed to /usr/local/bin/"
 
+URL ?= mark://localhost:6309/index.md
+
 # Run server (for development)
 run-server: server
-	cd server && ./bin/demarkus-server --config config.example.toml
+	./server/bin/demarkus-server -root ./examples/demo-site
 
 # Run client (for development)
 run-client: client
-	cd client && ./bin/demarkus
+	./client/bin/demarkus $(URL)
 
 # Format code
 fmt:
