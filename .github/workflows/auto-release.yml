@@ -108,10 +108,11 @@ jobs:
           echo "server=${server_version}" >> "$GITHUB_OUTPUT"
           echo "client=${client_version}" >> "$GITHUB_OUTPUT"
 
-          [ -n "$protocol_version" ] && echo "protocol → v${protocol_version}"
-          [ -n "$server_version" ] && echo "server → v${server_version}"
-          [ -n "$client_version" ] && echo "client → v${client_version}"
-          [ -z "$protocol_version" ] && [ -z "$server_version" ] && [ -z "$client_version" ] && echo "No version bumps needed"
+          any_bump=false
+          [ -n "$protocol_version" ] && echo "protocol → v${protocol_version}" && any_bump=true
+          [ -n "$server_version" ] && echo "server → v${server_version}" && any_bump=true
+          [ -n "$client_version" ] && echo "client → v${client_version}" && any_bump=true
+          [ "$any_bump" = true ] || echo "No version bumps needed"
 
       - name: Create tags
         run: |
