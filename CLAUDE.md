@@ -91,13 +91,21 @@ feat(protocol): add WRITE verb             → protocol minor bump
 feat!: breaking change                     → major bump
 ```
 
-**Pipeline**: push to main → CI tests changed modules → release-please opens version PR → merge PR → GoReleaser builds binaries and creates GitHub release.
+**Pipeline**: push to main → CI tests changed modules → auto-release scans conventional commits per module → creates tags → GoReleaser builds binaries, Docker images, and creates GitHub releases. No PRs, fully automatic.
 
 **Tags** use Go module-compatible prefixes: `server/v0.1.0`, `client/v0.1.0`, `protocol/v0.1.0`.
 
-**Key files**: `.release-please-config.json`, `server/.goreleaser.yml`, `client/.goreleaser.yml`.
+**Key files**: `.github/workflows/auto-release.yml`, `server/.goreleaser.yml`, `client/.goreleaser.yml`.
 
-Protocol is a library (no binary release) — only server and client produce GoReleaser builds.
+Protocol is a library (tag-only, no binary). Server and client produce GoReleaser builds. Server also pushes Docker images to `ghcr.io/latebit/demarkus-server`.
+
+While in `0.x.x`, breaking changes bump minor (not major). Major `1.0.0` will be an explicit decision.
+
+## Core Protocol Invariants
+
+**Version immutability is vital.** Every write to a document creates a new version. Published versions are permanent and must never be modified or deleted. Version history is an append-only log — this enables distributed verification, censorship resistance, and prevents historical revisionism. If content needs correction, publish a new version.
+
+**Security is foundational.** No tracking, no telemetry, no client-side execution. Transport is always encrypted. Paths are always validated. Auth grants capabilities, not identities.
 
 ## Current State
 
