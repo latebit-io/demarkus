@@ -2,6 +2,8 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -39,7 +41,7 @@ func (h *Handler) HandleStream(stream Stream) {
 
 	switch req.Verb {
 	case protocol.VerbFetch:
-		h.handleFetch(stream, req.Path)
+		h.handleFetch(stream, req)
 	case protocol.VerbList:
 		h.handleList(stream, req.Path)
 	default:
@@ -91,16 +93,16 @@ func (h *Handler) resolvePath(reqPath string) string {
 	return absPath
 }
 
-func (h *Handler) handleFetch(w io.Writer, reqPath string) {
-	filePath := h.resolvePath(reqPath)
+func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
+	filePath := h.resolvePath(req.Path)
 	if filePath == "" {
-		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
+		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
 
 	info, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
-		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
+		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
 	if err != nil {
@@ -109,7 +111,7 @@ func (h *Handler) handleFetch(w io.Writer, reqPath string) {
 		return
 	}
 	if info.IsDir() {
-		h.writeError(w, protocol.StatusNotFound, reqPath+" is a directory")
+		h.writeError(w, protocol.StatusNotFound, req.Path+" is a directory")
 		return
 	}
 
@@ -120,10 +122,28 @@ func (h *Handler) handleFetch(w io.Writer, reqPath string) {
 		return
 	}
 
+	etag := computeEtag(data)
+	modified := info.ModTime().UTC().Truncate(time.Second)
+
+	// Check conditional: etag first, then modified-since.
+	if ifNoneMatch, ok := req.Metadata["if-none-match"]; ok && ifNoneMatch == etag {
+		h.writeNotModified(w)
+		return
+	}
+	if ifModSince, ok := req.Metadata["if-modified-since"]; ok {
+		if t, err := time.Parse(time.RFC3339, ifModSince); err == nil {
+			if !modified.After(t) {
+				h.writeNotModified(w)
+				return
+			}
+		}
+	}
+
 	body, existingMeta := stripFrontmatter(string(data))
 
 	meta := map[string]string{
-		"modified": info.ModTime().UTC().Format(time.RFC3339),
+		"modified": modified.Format(time.RFC3339),
+		"etag":     etag,
 	}
 	if v, ok := existingMeta["version"]; ok {
 		meta["version"] = v
@@ -137,6 +157,19 @@ func (h *Handler) handleFetch(w io.Writer, reqPath string) {
 		Body:     body,
 	}
 	resp.WriteTo(w)
+}
+
+func (h *Handler) writeNotModified(w io.Writer) {
+	resp := protocol.Response{
+		Status:   protocol.StatusNotModified,
+		Metadata: map[string]string{},
+	}
+	resp.WriteTo(w)
+}
+
+func computeEtag(data []byte) string {
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
 }
 
 func (h *Handler) handleList(w io.Writer, reqPath string) {
