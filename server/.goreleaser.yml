@@ -11,9 +11,16 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: windows
+        goarch: arm
     ldflags:
       - -s -w
 
@@ -25,6 +32,57 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+
+dockers:
+  - id: demarkus-server-amd64
+    ids:
+      - demarkus-server
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-amd64"
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+
+  - id: demarkus-server-arm64
+    ids:
+      - demarkus-server
+    goos: linux
+    goarch: arm64
+    image_templates:
+      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-arm64"
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+
+  - id: demarkus-server-armv7
+    ids:
+      - demarkus-server
+    goos: linux
+    goarch: arm
+    goarm: "7"
+    image_templates:
+      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-armv7"
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm/v7"
+
+docker_manifests:
+  - name_template: "ghcr.io/latebit/demarkus-server:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-amd64"
+      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-arm64"
+      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-armv7"
+
+  - name_template: "ghcr.io/latebit/demarkus-server:latest"
+    image_templates:
+      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-amd64"
+      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-arm64"
+      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-armv7"
 
 changelog:
   use: github-native
