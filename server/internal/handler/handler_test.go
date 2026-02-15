@@ -128,6 +128,107 @@ func TestHandleFetch(t *testing.T) {
 	})
 }
 
+func TestEtagInResponse(t *testing.T) {
+	dir := setupContentDir(t, map[string]string{
+		"hello.md": "# Hello World\n",
+	})
+	h := &Handler{ContentDir: dir}
+
+	stream := newMockStream("FETCH /hello.md\n")
+	h.HandleStream(stream)
+
+	resp, err := protocol.ParseResponse(&stream.output)
+	if err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if resp.Metadata["etag"] == "" {
+		t.Error("expected etag in response metadata")
+	}
+	if len(resp.Metadata["etag"]) != 64 {
+		t.Errorf("etag should be 64-char hex SHA-256, got %q", resp.Metadata["etag"])
+	}
+}
+
+func TestConditionalFetch(t *testing.T) {
+	dir := setupContentDir(t, map[string]string{
+		"hello.md": "# Hello World\n",
+	})
+	h := &Handler{ContentDir: dir}
+
+	// First fetch to get etag and modified time.
+	stream := newMockStream("FETCH /hello.md\n")
+	h.HandleStream(stream)
+
+	resp, err := protocol.ParseResponse(&stream.output)
+	if err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	etag := resp.Metadata["etag"]
+	modified := resp.Metadata["modified"]
+
+	t.Run("if-none-match hit", func(t *testing.T) {
+		req := "FETCH /hello.md\n---\nif-none-match: " + etag + "\n---\n"
+		stream := newMockStream(req)
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotModified {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotModified)
+		}
+		if resp.Body != "" {
+			t.Errorf("not-modified should have no body, got %q", resp.Body)
+		}
+	})
+
+	t.Run("if-none-match miss", func(t *testing.T) {
+		req := "FETCH /hello.md\n---\nif-none-match: stale-etag\n---\n"
+		stream := newMockStream(req)
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if !strings.Contains(resp.Body, "# Hello World") {
+			t.Error("expected full body on etag miss")
+		}
+	})
+
+	t.Run("if-modified-since not modified", func(t *testing.T) {
+		req := "FETCH /hello.md\n---\nif-modified-since: " + modified + "\n---\n"
+		stream := newMockStream(req)
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotModified {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotModified)
+		}
+	})
+
+	t.Run("if-modified-since stale", func(t *testing.T) {
+		req := "FETCH /hello.md\n---\nif-modified-since: 2000-01-01T00:00:00Z\n---\n"
+		stream := newMockStream(req)
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+}
+
 func TestSymlinkEscape(t *testing.T) {
 	// Create a file outside the content directory.
 	outsideDir := t.TempDir()
