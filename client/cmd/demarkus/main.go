@@ -47,7 +47,16 @@ func main() {
 		log.Fatalf("open stream: %v", err)
 	}
 
-	req := protocol.Request{Verb: protocol.VerbFetch, Path: u.Path}
+	verb := protocol.VerbFetch
+	path := u.Path
+	if path == "" || path[len(path)-1] == '/' {
+		verb = protocol.VerbList
+		if path == "" {
+			path = "/"
+		}
+	}
+
+	req := protocol.Request{Verb: verb, Path: path}
 	if _, err := req.WriteTo(stream); err != nil {
 		log.Fatalf("send request: %v", err)
 	}

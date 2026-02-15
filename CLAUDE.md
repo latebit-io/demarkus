@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Development Philosophy
+
+**Small, incremental changes.** Robustness and stability are the highest priorities. Every change should be minimal, tested, and working before moving to the next step. Do not combine unrelated changes. Do not skip tests. Do not rush ahead — build on solid ground.
+
+**Concise, readable code with minimal cognitive load.** Favour the simplest solution that works. Code must be highly maintainable by both humans and agents — short functions, clear names, obvious flow. Avoid cleverness, unnecessary abstraction, and deep nesting. If a reader has to pause to understand what a block does, simplify it.
+
 ## Build & Test Commands
 
 ```bash
@@ -109,4 +115,4 @@ While in `0.x.x`, breaking changes bump minor (not major). Major `1.0.0` will be
 
 ## Current State
 
-Phase 1 MVP (read-only). Only `FETCH` verb is implemented. No auth, no versioning, no caching, no TUI — just QUIC transport serving markdown files end-to-end. See `docs/DESIGN.md` for the full protocol specification and roadmap.
+Phase 1 MVP (read-only). `FETCH` and `LIST` verbs are implemented. Server uses env-based config (`DEMARKUS_` prefix) with flag overrides for dev. No auth, no versioning, no caching, no TUI — just QUIC transport serving markdown files end-to-end. See `docs/DESIGN.md` for the full protocol specification and roadmap.
