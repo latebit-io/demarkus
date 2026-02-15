@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,7 +43,7 @@ func (h *Handler) HandleStream(stream Stream) {
 	case protocol.VerbList:
 		h.handleList(stream, req.Path)
 	default:
-		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+req.Verb)
+		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
 }
 
@@ -168,24 +169,21 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 	}
 
 	var body strings.Builder
-	body.WriteString("\n# Index of " + reqPath + "\n\n")
+	body.WriteString("\n# Index of " + escapeMD(reqPath) + "\n\n")
 
+	entryCount := 0
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
+		entryCount++
+		display := escapeMD(name)
+		link := escapeURL(name)
 		if entry.IsDir() {
-			body.WriteString("- [" + name + "/](" + name + "/)\n")
+			body.WriteString("- [" + display + "/](" + link + "/)\n")
 		} else {
-			body.WriteString("- [" + name + "](" + name + ")\n")
-		}
-	}
-
-	entryCount := 0
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), ".") {
-			entryCount++
+			body.WriteString("- [" + display + "](" + link + ")\n")
 		}
 	}
 
@@ -244,4 +242,21 @@ func stripFrontmatter(content string) (string, map[string]string) {
 
 	body := content[4+end+5:]
 	return body, meta
+}
+
+var mdReplacer = strings.NewReplacer(
+	`\`, `\\`,
+	`[`, `\[`, `]`, `\]`,
+	`(`, `\(`, `)`, `\)`,
+	`*`, `\*`, `_`, `\_`,
+	"`", "\\`", `~`, `\~`,
+	`#`, `\#`, `|`, `\|`,
+)
+
+func escapeMD(s string) string {
+	return mdReplacer.Replace(s)
+}
+
+func escapeURL(s string) string {
+	return url.PathEscape(s)
 }

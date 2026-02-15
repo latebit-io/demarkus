@@ -33,6 +33,7 @@ cd server && go test -run TestHandleFetch/path_traversal_blocked ./internal/hand
 
 # Run client
 ./client/bin/demarkus mark://localhost:6309/index.md
+./client/bin/demarkus -X LIST mark://localhost:6309/
 ```
 
 ## Architecture
