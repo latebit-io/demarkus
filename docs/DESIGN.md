@@ -1,0 +1,1219 @@
+# Demarkus: Mark Protocol Design Document
+
+**Project Name:** Demarkus  
+**Protocol Name:** Mark Protocol  
+**Version:** 0.1  
+**Date:** February 14, 2025  
+**Status:** Draft
+
+## Vision
+
+Demarkus reimagines the web around markdown as the primary content format, with privacy and security as foundational principles rather than afterthoughts. The Mark Protocol provides a lightweight, human-readable protocol for document-centric communication free from tracking, commercialization, and unnecessary complexity.
+
+## Core Principles
+
+1. **Privacy First**: No user tracking, minimal logging, anonymity by default
+2. **Security Minded**: Encryption mandatory, capability-based auth, comprehensive audit trails
+3. **Simplicity**: Human-readable protocol, minimal complexity, markdown-native
+4. **Anti-Commercialization**: No ads, no tracking, no central authority
+5. **Federation**: Anyone can run a server, content can be mirrored freely
+
+## Protocol Specification
+
+### Transport Layer
+
+- **Protocol**: QUIC (UDP-based, TLS 1.3 encryption built-in)
+- **Port**: 6309 (default)
+- **Scheme**: `mark://`
+- **Encryption**: Mandatory, no plaintext fallback
+- **URL Format**: `mark://example.com:6309/path/to/doc.md`
+
+### Why QUIC?
+
+- Encryption by default (TLS 1.3)
+- Connection migration (good for mobile clients)
+- Multiplexed streams (efficient for following links)
+- 0-RTT resumption (with security constraints)
+- Modern transport layer without HTTP baggage
+
+### Request Format
+
+Requests use document-centric verbs that align with the markdown-focused nature of the protocol. Parameters are passed via frontmatter, and versions are accessed via path structure.
+
+**Basic Requests**:
+```
+FETCH /hello.md
+```
+
+```
+WRITE /doc.md
+
+---
+auth: sha256-abc123def456
+timestamp: 2025-02-14T10:30:00Z
+---
+
+# Updated Content
+New text here
+```
+
+```
+APPEND /article/comments.md
+
+---
+auth: sha256-abc123def456
+timestamp: 2025-02-14T10:30:00Z
+parent: /article.md
+---
+
+Great article! Here's my thought...
+```
+
+```
+ARCHIVE /doc.md
+
+---
+auth: sha256-abc123def456
+timestamp: 2025-02-14T10:30:00Z
+reason: "Outdated information"
+---
+```
+
+**Directory Operations**:
+```
+LIST /docs/
+```
+
+**Version Access** (path-based):
+```
+FETCH /doc.md                    # Current version
+FETCH /doc.md/v41                # Specific version
+VERSIONS /doc.md                 # Get version history
+```
+
+**Search with Parameters** (frontmatter):
+```
+SEARCH /articles/
+
+---
+query: "security architecture"
+limit: 10
+after: 2025-01-01
+---
+```
+
+**Cache Validation** (frontmatter):
+```
+FETCH /doc.md
+
+---
+if-modified-since: 2025-02-14T10:30:00Z
+if-none-match: "abc123"
+---
+```
+
+### Response Format
+
+Responses are markdown with optional YAML frontmatter:
+
+```markdown
+---
+modified: 2025-02-14T10:30:00Z
+etag: "abc123"
+version: 42
+---
+
+# Hello World
+This is a [link](other.md)
+```
+
+### Protocol Verbs
+
+Document-centric operations that align with markdown usage:
+
+- **FETCH**: Retrieve a document
+- **WRITE**: Create or update a document (creates new version)
+- **APPEND**: Add content to end of document (comments, logs, notes)
+- **ARCHIVE**: Remove a document from active serving (preserves in version history)
+- **LIST**: Get directory contents or document index
+- **SEARCH**: Find documents matching query
+- **VERSIONS**: Get version history for a document
+
+### Path Structure & Parameters
+
+**No Query Strings**: Unlike HTTP, Demarkus doesn't use query strings (`?key=value`). Instead, it uses path-based resource addressing and frontmatter for parameters.
+
+**Path-Based Version Access**:
+
+Versions are treated as resources within the document path:
+
+```
+/doc.md              # Current version (symlink to latest)
+/doc.md/v42          # Specific version 42
+/doc.md/v41          # Specific version 41
+/doc.md/v1           # First version
+```
+
+This creates a file system-like hierarchy:
+```
+/docs/
+  article.md         <- current version
+  article.md/
+    v1               <- version 1
+    v2               <- version 2
+    v42              <- version 42 (current)
+```
+
+**Benefits**:
+- Clean, readable URLs: `mark://example.com/doc.md/v41`
+- Each version is a distinct, cacheable resource
+- Can link directly to specific versions in markdown: `[old version](/doc.md/v41)`
+- Intuitive hierarchy: versions are "inside" the document
+
+**Frontmatter for Parameters**:
+
+Complex parameters go in request frontmatter:
+
+```
+SEARCH /articles/
+
+---
+query: "security architecture"
+limit: 10
+sort: relevance
+after: 2025-01-01
+---
+```
+
+```
+FETCH /doc.md
+
+---
+if-modified-since: 2025-02-14T10:30:00Z
+if-none-match: "abc123"
+include-metadata: true
+---
+```
+
+**Benefits**:
+- Structured, typed parameters (YAML parsing)
+- No URL encoding issues
+- Easy to add complex nested parameters
+- Consistent with markdown frontmatter convention
+
+### Status System
+
+**Philosophy**: Text-based, human-readable status values instead of numeric codes. Status is communicated through frontmatter, allowing rich contextual information.
+
+**Success States**:
+- `ok` - Request succeeded, content follows
+- `created` - Document was created
+- `not-modified` - Cached version is current (no content body)
+
+**Client Error States**:
+- `not-found` - Document doesn't exist
+- `unauthorized` - Missing or invalid auth
+- `forbidden` - Valid auth but insufficient capability
+- `conflict` - Version conflict (simultaneous edits)
+- `bad-request` - Malformed request
+- `too-large` - Document exceeds size limit
+
+**Server Error States**:
+- `server-error` - Internal server problem
+- `unavailable` - Server temporarily can't fulfill request
+
+### Status Response Format
+
+**Success Response**:
+```markdown
+---
+status: ok
+modified: 2025-02-14T10:30:00Z
+version: 42
+---
+
+# Document content here
+```
+
+**Not Modified (Cache Valid)**:
+```markdown
+---
+status: not-modified
+cached-version-current: true
+---
+```
+
+**Not Found with Suggestions**:
+```markdown
+---
+status: not-found
+path: /article.md
+suggestions: ["/articles.md", "/article-2024.md"]
+---
+
+# Document Not Found
+
+The requested document does not exist at `/article.md`.
+
+## Did you mean:
+- [/articles.md](/articles.md)
+- [/article-2024.md](/article-2024.md)
+```
+
+**Unauthorized**:
+```markdown
+---
+status: unauthorized
+required-capability: write
+token-fingerprint: sha256-abc...
+---
+
+# Authentication Required
+
+Your token does not have write access to this path.
+
+Contact the server administrator to request write permissions.
+```
+
+**Forbidden**:
+```markdown
+---
+status: forbidden
+reason: "Token does not grant write access to /private/*"
+required-capability: write
+your-capabilities: [read]
+---
+
+# Access Forbidden
+
+Your authentication token grants read-only access to this path.
+
+To write to this path, you need a token with write capability.
+```
+
+**Version Conflict**:
+```markdown
+---
+status: conflict
+your-version: 41
+server-version: 43
+conflict-resolution: "server-wins"
+---
+
+# Version Conflict
+
+The document has been modified since you last fetched it.
+
+Your changes were not applied. Please fetch the latest version and reapply your edits.
+
+Current version: 43 (modified 2025-02-14T11:00:00Z)
+Your version: 41 (modified 2025-02-14T10:30:00Z)
+```
+
+**Server Error**:
+```markdown
+---
+status: server-error
+error-id: "err-2025-02-14-1234"
+---
+
+# Server Error
+
+An internal error occurred while processing your request.
+
+Reference ID: err-2025-02-14-1234
+
+Please try again later or contact the server administrator if the problem persists.
+```
+
+### Benefits Over Numeric Status Codes
+
+1. **Human-readable**: "not-found" is clearer than "404"
+2. **Self-documenting**: No need to memorize numeric codes
+3. **Extensible**: Add new statuses without number conflicts
+4. **Contextual**: Rich error information in markdown
+5. **Markdown-native**: Fits the protocol philosophy
+6. **Helpful**: Error responses can include documentation, suggestions, and links
+
+## Content Format
+
+### Markdown Dialect
+
+- **Base**: CommonMark specification
+- **Extensions**: 
+  - Tables (GFM-style)
+  - Task lists
+  - Footnotes
+  - Strikethrough
+  - Wikilinks `[[document]]` (optional)
+  - Transclusion `![[document]]` (optional)
+
+### Frontmatter
+
+YAML frontmatter for metadata:
+
+```markdown
+---
+title: Document Title
+modified: 2025-02-14T10:30:00Z
+version: 42
+author: Fritz (optional)
+signed: gpg-signature-here (optional)
+acl:
+  read: [public]
+  write: [token-hash-abc123]
+---
+
+# Content starts here
+```
+
+### No Client-Side Execution
+
+- **No JavaScript**: Markdown only, nothing executable
+- **No embedded scripts**: Security by simplicity
+- **Server-side only**: All dynamic content generated server-side
+
+## Security Architecture
+
+### Authentication Model: Capability-Based
+
+**Philosophy**: Tokens grant capabilities, not identities. The server doesn't need to know who you are, only what you're allowed to do.
+
+**Token Structure**:
+```toml
+# Server configuration: /etc/mark-server/tokens.toml
+[tokens]
+"sha256-abc123def456..." = {
+  paths = ["/docs/*", "/public/*"],
+  operations = ["read", "write"],
+  expires = "2026-02-14T10:30:00Z"  # optional
+}
+```
+
+**Token Usage**:
+```markdown
+WRITE /docs/article.md
+
+---
+auth: sha256-abc123def456...
+timestamp: 2025-02-14T10:30:00Z
+---
+
+# Content
+```
+
+**Timestamp Validation**:
+- Prevents replay attacks
+- Server accepts requests within ±5 minute window
+- Each timestamp can only be used once per token
+
+### Transport Security
+
+**QUIC/TLS 1.3 Provides**:
+- Encryption by default
+- Forward secrecy
+- Certificate verification
+- Optional mutual TLS (client certificates)
+
+**0-RTT Security**:
+- Only allow idempotent operations (FETCH, LIST, VERSIONS) in 0-RTT packets
+- Reject WRITE/APPEND/ARCHIVE in 0-RTT to prevent replay attacks
+
+**Certificate Pinning** (optional):
+- Clients can pin server certificates for high-security scenarios
+- Stored in `~/.mark/pins.toml`
+
+### Content Security
+
+**Input Validation**:
+- Size limits: 10MB per document (configurable)
+- Validate markdown syntax
+- Sanitize links (prevent injection)
+- No executable content allowed
+
+**Link Validation**:
+- `mark://` URLs validated for proper format
+- External schemes (`http://`, `https://`) flagged/blocked (configurable)
+- Relative links resolved safely (prevent path traversal)
+
+**Rate Limiting**:
+- Per-client connection limits
+- Request rate limits (configurable)
+- Prevents DoS attacks
+
+### Access Control
+
+**Capability-Based ACL**:
+
+Documents can specify access requirements in frontmatter:
+
+```markdown
+---
+acl:
+  read: [public]
+  write: [sha256-token-hash]
+---
+```
+
+Or via directory-level `.mark-acl` files:
+
+```json
+{
+  "/docs/private.md": {
+    "read": ["sha256-token-hash-1"],
+    "write": ["sha256-token-hash-1"]
+  },
+  "/docs/public/*": {
+    "read": ["public"],
+    "write": ["sha256-token-hash-2"]
+  }
+}
+```
+
+### Versioning & Audit Trail
+
+**Every write creates a new version** (immutable history):
+
+```
+/var/mark-server/
+  data/
+    doc.md -> versions/doc.md.v42  # symlink to current
+  versions/
+    doc.md.v1
+    doc.md.v2
+    ...
+    doc.md.v42
+  audit/
+    doc.md.log  # security audit log
+```
+
+**Security Audit Log** (server-side only, not public):
+
+```json
+{
+  "timestamp": "2025-02-14T10:30:00Z",
+  "operation": "WRITE",
+  "path": "/doc.md",
+  "version": 42,
+  "auth_fingerprint": "sha256-abc...",
+  "success": true,
+  "size_bytes": 1234
+}
+```
+
+**Note**: No IP addresses, no user agents, no identifying information beyond token fingerprint.
+
+**Public Version History** (anyone can query):
+
+```
+VERSIONS /doc.md
+
+---
+status: ok
+total: 42
+current: 42
+---
+
+# Version History: /doc.md
+
+- [v42](/doc.md/v42) - 2025-02-14T10:30:00Z (current)
+- [v41](/doc.md/v41) - 2025-02-13T09:15:00Z
+- [v40](/doc.md/v40) - 2025-02-12T08:00:00Z
+- [v39](/doc.md/v39) - 2025-02-11T14:20:00Z
+...
+```
+
+**Retrieve Specific Version**:
+
+```
+FETCH /doc.md/v41
+
+---
+status: ok
+version: 41
+archived: true
+current-version: 42
+---
+
+# Document Content (Version 41)
+
+This is the content as it existed at version 41.
+
+[View current version](/doc.md) | [Version history](/doc.md)
+```
+
+**Retrieve Current Version**:
+
+```
+FETCH /doc.md
+
+---
+status: ok
+version: 42
+modified: 2025-02-14T10:30:00Z
+---
+
+# Document Content (Current)
+```
+
+**Optional Attribution**:
+
+Authors can sign their work if they choose:
+
+```markdown
+---
+author: Fritz
+signed: -----BEGIN PGP SIGNATURE-----
+  ...GPG signature...
+  -----END PGP SIGNATURE-----
+---
+
+# My Document
+```
+
+This is content-level attribution, not protocol-level tracking.
+
+## Privacy Architecture
+
+### No User Tracking
+
+**Server Never Collects**:
+- IP addresses (beyond what QUIC requires for connection)
+- User agents
+- Referer headers
+- Cookies or session identifiers
+- Analytics or telemetry
+- Behavioral data
+
+**Minimal Logging Philosophy**:
+
+```
+2025-02-14T10:30:00Z FETCH /doc.md 200
+2025-02-14T10:31:15Z WRITE /doc.md 201
+2025-02-14T10:32:00Z APPEND /doc/comments.md 201
+```
+
+Just operation, path, status. Nothing personally identifiable.
+
+**Security logs** (detailed) are kept separate and private, used only for debugging/security incidents.
+
+### Client Privacy
+
+**Client Should**:
+- Not send User-Agent headers
+- Not send Referer information
+- Support proxy/Tor connections
+- Randomize request timing if prefetching (prevent traffic analysis)
+- Store tokens securely (system keychain integration)
+
+**Client Cache Location**:
+
+```
+~/.mark/cache/
+  example.com/
+    hello.md
+    hello.md.meta  # etag, modified time, version
+```
+
+### Anonymity by Default
+
+**Authentication grants capability, not identity**:
+- Tokens don't identify users
+- Multiple people can share a token (if they want)
+- No correlation between tokens and identities
+- Server doesn't maintain user database
+
+**Optional Identity**:
+- Users can choose to sign content (GPG)
+- Users can choose to include authorship in frontmatter
+- Protocol doesn't require or track it
+
+## Distributed Preservation & Archiving
+
+### Every Client is a Mirror
+
+**Git-like Properties**: Just as Git distributes repository copies to every developer, Mark Protocol distributes content to every reader. This creates powerful emergent properties:
+
+**Automatic Preservation**:
+- When you `FETCH` a document, you cache it locally
+- Your cache is a complete, versioned copy
+- If the origin server goes down, you still have the content
+- You can re-host it from your own server
+
+**Client Cache Structure**:
+```
+~/.mark/cache/
+  example.com/
+    article.md           # Current version (symlink)
+    article.md.v42       # Versioned copy
+    article.md.v41
+    article.md.v40
+    ...
+```
+
+### Censorship Resistance
+
+**Content Survives Takedowns**:
+
+1. **Publication**: Document published at `mark://news.com/investigation.md`
+2. **Distribution**: Thousands of readers fetch it, thousands cache it locally
+3. **Takedown**: Original server removes it (pressure, legal, commercial reasons)
+4. **Preservation**: Community members re-host from their caches
+5. **Discovery**: Directory sites list new mirrors
+6. **Verification**: Content hash proves it's the authentic document
+
+**Re-hosting from Cache**:
+
+Any user can become a mirror:
+```bash
+# User has cached copy
+~/.mark/cache/news.com/investigation.md.v42
+
+# User runs their own server and re-hosts
+mark-server --mirror news.com/investigation.md
+# Now available at: mark://myserver.com/news.com/investigation.md
+```
+
+### Content Addressing & Verification
+
+**Hash-Based Addressing** (future extension):
+
+```
+FETCH mark://example.com/article.md
+
+# Server responds with:
+---
+content-hash: sha256-abc123def456...
+version: 42
+modified: 2025-02-14T10:30:00Z
+---
+
+# Article content
+```
+
+**Fetch by Hash from Any Server**:
+
+```
+FETCH mark://hash/sha256-abc123def456...
+```
+
+Any server that has this content can serve it. Client verifies hash matches content.
+
+**Benefits**:
+- Content is location-independent
+- Can be mirrored without central coordination
+- Cryptographic proof of authenticity
+- Prevents tampering
+
+### Trust & Verification
+
+**Signed Content**:
+
+```markdown
+---
+content-hash: sha256-abc123...
+signed: -----BEGIN PGP SIGNATURE-----
+  iQIzBAABCAAdFiEE...
+  -----END PGP SIGNATURE-----
+author: Fritz <fritz@example.com>
+signed-date: 2025-02-14T10:30:00Z
+---
+
+# Important Document
+
+Content here...
+```
+
+**Verification Layers**:
+1. **Content hash**: Proves document hasn't been modified since creation
+2. **GPG signature**: Proves who wrote it (if you trust their public key)
+3. **Timestamped versions**: Proves chronological order of edits
+4. **Multiple mirrors**: Cross-verify content across servers
+
+**Web of Trust Model**:
+- Authors sign their documents with GPG keys
+- Readers verify signatures against known public keys
+- Build trust networks organically (like PGP web of trust)
+- No central certificate authority needed
+- Trust is personal and distributed
+
+### Client Operating Modes
+
+**Reader Mode** (default):
+- Cache documents you read
+- Keep for 30 days (configurable)
+- Automatic cleanup of old content
+- Minimal disk space usage
+
+**Archivist Mode**:
+- Keep everything forever
+- Automatically fetch all versions when reading
+- Preserve complete version history
+- Participate in content-addressed network
+- Help preserve important documents
+
+**Mirror Mode**:
+- Run your own mark server
+- Serve cached content to others
+- Opt-in to mirroring specific sites/domains/documents
+- Become part of distributed preservation network
+
+**Configuration** (`~/.mark/config.toml`):
+
+```toml
+[client]
+mode = "archivist"  # reader, archivist, mirror
+cache_retention_days = 0  # 0 = forever
+max_cache_size_mb = 10000  # 10GB
+
+[archiving]
+auto_fetch_versions = true
+preserve_deleted = true
+mirror_network_participate = true
+
+[mirroring]
+enabled = true
+serve_port = 6309
+whitelist = ["example.com/*", "news.org/investigations/*"]
+blacklist = []
+```
+
+### Archive Command (Future Extension)
+
+**Explicit Archiving**:
+
+```
+ARCHIVE mark://example.com/article.md
+
+# Client behavior:
+# 1. Fetches document + all available versions
+# 2. Saves permanently (not just cache)
+# 3. Marks as "preserved" (never auto-delete)
+# 4. Optionally registers as mirror in DHT
+# 5. Can serve it from local server
+```
+
+**Response**:
+
+```markdown
+---
+status: archived
+versions-fetched: 42
+total-size: 145KB
+mirror-registered: true
+---
+
+Archived 42 versions of /article.md
+Now serving at: mark://localhost:6309/article.md
+```
+
+### Community Archiving Networks
+
+**Decentralized Preservation**:
+
+Like how BitTorrent works for files, Mark Protocol enables distributed archiving of documents:
+
+1. **Important document published**
+2. **Community recognizes value**
+3. **Many users run `ARCHIVE` command**
+4. **Document preserved across dozens/hundreds of nodes**
+5. **Original can disappear, content lives on**
+
+**Discovery Mechanisms**:
+
+- **Directory sites**: Curated lists of mirrors for important content
+- **DHT/Content-addressed network**: Query by hash, get list of mirrors
+- **Social**: "I'm mirroring X at mark://myserver.com/..."
+- **RSS/Atom feeds**: Subscribe to mirror announcements
+
+### Philosophical Alignment
+
+This distributed preservation model embodies the core principles:
+
+**Library Model, Not Platform Model**:
+- Anyone can copy books (documents)
+- Anyone can run a library (server)
+- Knowledge wants to be free
+- Preservation over profit
+
+**Cannot Be**:
+- **Taken down**: Content persists in distributed caches
+- **Censored**: Re-hosting is trivial, no central point of control
+- **Controlled**: No central authority decides what exists
+- **Monetized**: Content is freely copyable, no DRM, no paywalls
+
+**Emergent Properties**:
+- The more important/controversial a document, the more it gets cached
+- Attempted censorship often increases preservation (Streisand effect)
+- Content persists proportional to its value to readers
+- No single point of failure
+
+### Version History Preservation
+
+**Complete Historical Record**:
+
+If original server prunes old versions:
+```
+Server now only has: v41, v42 (deleted v1-v40)
+```
+
+But users who read it earlier still have:
+```
+User A cached: v1, v2, v3, v4
+User B cached: v15, v16, v17
+User C cached: v38, v39, v40, v41
+```
+
+**Community Reconstruction**:
+- Users can pool their cached versions
+- Reconstruct complete history
+- Verify via content hashes
+- Re-host full version history
+
+This prevents historical revisionism - you can't just delete inconvenient past versions.
+
+## Caching Strategy
+
+### Client-Side Caching
+
+**On first fetch**:
+1. Client requests `FETCH /doc.md`
+2. Server responds with document + frontmatter (modified, etag, version)
+3. Client saves to `~/.mark/cache/example.com/doc.md`
+4. Client saves metadata to `~/.mark/cache/example.com/doc.md.meta`
+
+**On subsequent fetch**:
+1. Client sends `FETCH /doc.md` with `If-Modified-Since` or `If-None-Match`
+2. Server responds:
+   - `status: not-modified` if unchanged
+   - `status: ok` with new content if changed
+
+**Request with cache validation**:
+
+```
+FETCH /doc.md
+
+---
+if-modified-since: 2025-02-14T10:30:00Z
+if-none-match: "abc123"
+---
+```
+
+**Cache metadata** (`doc.md.meta`):
+
+```toml
+url = "mark://example.com:6309/doc.md"
+modified = "2025-02-14T10:30:00Z"
+etag = "abc123"
+version = 42
+cached_at = "2025-02-14T10:35:00Z"
+```
+
+### Offline Browsing
+
+**Markdown is lightweight**, so aggressive caching makes sense:
+
+1. Client can download entire sites for offline reading
+2. Client syncs on reconnection (checks modified times)
+3. Conflict resolution: server version wins (or prompt user)
+
+**Offline mode**:
+- Client detects no connectivity
+- Serves from cache
+- Shows "Offline" indicator in TUI
+- Queues writes for when online
+
+## Federation & Decentralization
+
+### Anyone Can Run a Server
+
+- Reference implementation in Go (GPL/MIT licensed)
+- Protocol specification is public domain (CC0)
+- No central authority or registry
+- No commercial control
+
+### Content Addressing (Future)
+
+Support content-addressed URLs:
+
+```
+mark://hash/sha256-abc123def456...
+```
+
+This allows:
+- Content mirroring without central control
+- Verification of content integrity
+- Censorship resistance
+- Distributed caching
+
+### Server Discovery
+
+**DNS-based** (standard):
+```
+mark://example.com:6309/doc.md
+```
+
+**Content-addressed** (future):
+```
+mark://hash/sha256-...
+```
+
+Client queries DHT or known mirrors for content.
+
+## Protocol Extensions (Future Considerations)
+
+### Transclusion
+
+Include other documents inline:
+
+```markdown
+# My Document
+
+![[other-doc.md]]
+
+More content here.
+```
+
+Server expands transclusions before sending, or client fetches recursively.
+
+### Live Collaboration Hints
+
+```markdown
+---
+watchers: 3
+last-modified: 2025-02-14T10:30:00Z
+lock: none
+---
+```
+
+Servers can provide hints about concurrent editing (but don't enforce).
+
+### Search Protocol
+
+```
+SEARCH /docs/
+
+---
+query: "security architecture"
+limit: 10
+sort: relevance
+---
+```
+
+Server responds with markdown list of results:
+
+```markdown
+---
+status: ok
+results: 3
+query: "security architecture"
+---
+
+# Search Results
+
+## [Security Architecture](/docs/security.md)
+Modified: 2025-02-14T10:30:00Z
+Excerpt: Our security architecture is built on capability-based authentication...
+
+## [Authentication Model](/docs/auth.md)
+Modified: 2025-02-13T09:15:00Z
+Excerpt: The authentication system uses tokens that grant capabilities...
+
+## [Protocol Design](/docs/protocol.md)
+Modified: 2025-02-12T08:00:00Z
+Excerpt: Security is a foundational principle of the protocol architecture...
+```
+
+### WebSub-style Subscriptions
+
+```
+SUBSCRIBE /docs/*
+
+---
+callback: mark://subscriber.com:6309/updates
+---
+```
+
+Server notifies subscriber when content changes.
+
+## Implementation Roadmap
+
+### Phase 1: MVP (Read-Only)
+
+**Server**:
+- Serve markdown files from directory over QUIC
+- Basic FETCH support
+- Frontmatter with modified timestamps
+- Simple logging
+
+**Client (TUI)**:
+- Connect to `mark://` URLs
+- Render markdown with Glamour
+- Follow links
+- Navigation history (back/forward)
+- Basic caching
+
+**Tech Stack**:
+- Go with quic-go
+- Bubble Tea (TUI framework)
+- Glamour (markdown rendering)
+- Lip Gloss (styling)
+
+### Phase 2: Write Operations
+
+**Server**:
+- WRITE/APPEND/ARCHIVE support
+- Capability-based authentication
+- Versioning system
+- Audit logging
+
+**Client**:
+- Document editing (open in $EDITOR)
+- Token management
+- Conflict resolution
+
+### Phase 3: Advanced Features
+
+**Server**:
+- Full-text search
+- Directory indexes
+- Content addressing
+- Federation support
+
+**Client**:
+- Offline mode
+- Bookmarks/favorites
+- Tab support
+- Search interface
+
+## Security Considerations
+
+### Threat Model
+
+**What we protect against**:
+- Unauthorized access (capability-based auth)
+- Data tampering (versioning, signatures)
+- Traffic interception (QUIC encryption)
+- Replay attacks (timestamp validation)
+- DoS attacks (rate limiting, size limits)
+- Privacy invasion (minimal logging, no tracking)
+
+**What we don't protect against**:
+- Compromised server (trust your server operator)
+- Compromised client (malware can steal tokens)
+- Network-level blocking (not designed for censorship resistance yet)
+
+### Token Security
+
+**Best Practices**:
+- Tokens stored in system keychain (not plain files)
+- Tokens are long, random, high-entropy
+- Tokens can be scoped to specific paths/operations
+- Tokens can expire
+- Tokens can be revoked server-side
+
+**Token Generation**:
+```bash
+# Generate secure token
+openssl rand -hex 32
+# Server stores SHA256 hash of this token
+```
+
+### Encryption at Rest
+
+**Server-side**:
+- Document storage: server's responsibility (filesystem encryption recommended)
+- Audit logs: should be encrypted
+- Tokens: stored as hashes, not plaintext
+
+**Client-side**:
+- Cache: can be encrypted (optional)
+- Tokens: stored in system keychain
+
+## Anti-Commercialization Measures
+
+### Protocol Design Decisions
+
+1. **No tracking hooks**: Protocol doesn't support analytics, pixels, or telemetry
+2. **No ad injection points**: Pure markdown content, no embedded ads
+3. **Clean URLs**: No tracking parameters (`?utm_source=...`)
+4. **Content-first**: No bandwidth wasted on tracking scripts
+5. **Open specification**: Public domain, anyone can implement
+
+### Licensing Strategy
+
+**Protocol Specification**: CC0 (public domain)
+**Reference Implementation**: GPL v3 or MIT (TBD)
+**Explicitly prohibit**: Commercial control or proprietary extensions to protocol
+
+### Governance
+
+- Community-driven specification
+- No single company or entity controls protocol
+- Changes proposed via open process (similar to RFCs)
+- Multiple independent implementations encouraged
+
+## Open Questions
+
+1. **Binary content**: How to handle images, videos, PDFs?
+   - Embed as base64 in markdown?
+   - Separate binary protocol extension?
+   - Reference external URLs?
+
+2. **Real-time collaboration**: Should protocol support it?
+   - Operational transforms?
+   - CRDTs?
+   - Simple last-write-wins with conflict flags?
+
+3. **Mobile clients**: How to handle on iOS/Android?
+   - Native apps?
+   - Web-based client (ironic)?
+   - Terminal emulator?
+
+4. **Discoverability**: How do users find mark:// sites?
+   - Directory/index sites?
+   - Search engines?
+   - Word of mouth?
+
+5. **Backwards compatibility**: Should there be a mark-to-HTTP gateway?
+   - For accessibility?
+   - Or keep it separate?
+
+## Success Metrics
+
+**How do we know if this succeeds?**
+
+1. Multiple independent implementations exist
+2. Active community of server operators
+3. Privacy-conscious users adopt it
+4. No commercial capture or advertising
+5. Protocol stays simple and focused
+
+**Not success metrics**:
+- Total users (bigger isn't always better)
+- Commercial adoption
+- Venture funding
+- "Web scale" anything
+
+## References & Inspiration
+
+- **Gopher Protocol**: Simple, document-centric
+- **Gemini Protocol**: Privacy-focused, minimal
+- **IPFS**: Content addressing, decentralization
+- **ActivityPub**: Federation
+- **HTTP/3 (QUIC)**: Modern transport
+- **Markdown**: Human-readable, simple
+
+## Contributing
+
+This is a draft design document for the Demarkus project. Feedback, critiques, and suggestions welcome.
+
+**Project Name**: Demarkus  
+**Protocol Name**: Mark Protocol  
+**Contact**: [To be determined]  
+**Repository**: [To be determined]  
+**License**: This document is CC0 (public domain)
+
+---
+
+*"The web we want, not the web we got."* - Demarkus Project
