@@ -284,14 +284,31 @@ func TestHandleList(t *testing.T) {
 
 func TestMultipleLeadingSlashes(t *testing.T) {
 	dir := setupContentDir(t, map[string]string{
-		"hello.md": "# Hello\n",
+		"hello.md":      "# Hello\n",
+		"docs/guide.md": "# Guide\n",
 	})
 	h := &Handler{ContentDir: dir}
 
-	paths := []string{"///hello.md", "//hello.md", "////hello.md"}
-	for _, p := range paths {
+	fetchPaths := []string{"///hello.md", "//hello.md", "////hello.md"}
+	for _, p := range fetchPaths {
 		t.Run("FETCH "+p, func(t *testing.T) {
 			stream := newMockStream("FETCH " + p + "\n")
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status != protocol.StatusOK {
+				t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+			}
+		})
+	}
+
+	listPaths := []string{"///docs/", "//docs/", "////docs/"}
+	for _, p := range listPaths {
+		t.Run("LIST "+p, func(t *testing.T) {
+			stream := newMockStream("LIST " + p + "\n")
 			h.HandleStream(stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
@@ -329,6 +346,18 @@ func TestDeeplyNestedTraversal(t *testing.T) {
 				t.Fatalf("SECURITY: path traversal not blocked for %q", p)
 			}
 		})
+		t.Run("LIST "+p, func(t *testing.T) {
+			stream := newMockStream("LIST " + p + "\n")
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status == protocol.StatusOK {
+				t.Fatalf("SECURITY: path traversal not blocked for %q", p)
+			}
+		})
 	}
 }
 
@@ -336,8 +365,9 @@ func TestRelativeContentDir(t *testing.T) {
 	// Create a temp dir and work from inside it.
 	tmpDir := t.TempDir()
 	contentDir := filepath.Join(tmpDir, "site")
-	os.MkdirAll(contentDir, 0o755)
+	os.MkdirAll(filepath.Join(contentDir, "docs"), 0o755)
 	os.WriteFile(filepath.Join(contentDir, "page.md"), []byte("# Page\n"), 0o644)
+	os.WriteFile(filepath.Join(contentDir, "docs/guide.md"), []byte("# Guide\n"), 0o644)
 
 	// Use a relative path for ContentDir.
 	origWd, err := os.Getwd()
@@ -374,12 +404,44 @@ func TestRelativeContentDir(t *testing.T) {
 			t.Fatal("SECURITY: traversal not blocked with relative ContentDir")
 		}
 	})
+
+	t.Run("list works with relative content dir", func(t *testing.T) {
+		stream := newMockStream("LIST /docs/\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+
+	t.Run("list traversal blocked with relative content dir", func(t *testing.T) {
+		stream := newMockStream("LIST /../../\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		// Traversal resolves to content root, which is safe — but must not escape it.
+		if resp.Status == protocol.StatusOK {
+			// If ok, verify it listed the content dir (not something outside it).
+			if !strings.Contains(resp.Body, "page.md") {
+				t.Fatal("SECURITY: LIST traversal escaped relative ContentDir")
+			}
+		}
+	})
 }
 
 func TestContentDirAsSymlink(t *testing.T) {
 	// Create actual content directory.
 	actualDir := t.TempDir()
+	os.MkdirAll(filepath.Join(actualDir, "docs"), 0o755)
 	os.WriteFile(filepath.Join(actualDir, "file.md"), []byte("# Content\n"), 0o644)
+	os.WriteFile(filepath.Join(actualDir, "docs/guide.md"), []byte("# Guide\n"), 0o644)
 
 	// Symlink another path to it.
 	symlinkDir := filepath.Join(t.TempDir(), "link")
@@ -412,6 +474,34 @@ func TestContentDirAsSymlink(t *testing.T) {
 		}
 		if resp.Status == protocol.StatusOK {
 			t.Fatal("SECURITY: traversal not blocked when ContentDir is symlink")
+		}
+	})
+
+	t.Run("list through symlinked content dir", func(t *testing.T) {
+		stream := newMockStream("LIST /docs/\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+
+	t.Run("list traversal blocked with symlinked content dir", func(t *testing.T) {
+		stream := newMockStream("LIST /../../../\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status == protocol.StatusOK {
+			if !strings.Contains(resp.Body, "file.md") {
+				t.Fatal("SECURITY: LIST traversal escaped symlinked ContentDir")
+			}
 		}
 	})
 }

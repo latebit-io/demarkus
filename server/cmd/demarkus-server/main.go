@@ -17,7 +17,10 @@ func main() {
 	port := flag.Int("port", 0, "port to listen on (overrides DEMARKUS_PORT)")
 	flag.Parse()
 
-	cfg, _ := config.NewConfig()
+	cfg, err := config.NewConfig()
+	if err != nil {
+		log.Printf("config: %v", err)
+	}
 
 	// Flag overrides take precedence over env vars
 	if *root != "" {
