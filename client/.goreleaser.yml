@@ -1,0 +1,37 @@
+version: 2
+
+project_name: demarkus
+
+builds:
+  - id: demarkus
+    main: ./cmd/demarkus
+    binary: demarkus
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: windows
+        goarch: arm
+    ldflags:
+      - -s -w
+
+archives:
+  - id: demarkus
+    builds:
+      - demarkus
+    name_template: "demarkus_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github-native
