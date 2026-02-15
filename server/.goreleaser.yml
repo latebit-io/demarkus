@@ -1,0 +1,30 @@
+version: 2
+
+project_name: demarkus-server
+
+builds:
+  - id: demarkus-server
+    main: ./cmd/demarkus-server
+    binary: demarkus-server
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: demarkus-server
+    builds:
+      - demarkus-server
+    name_template: "demarkus-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github-native
