@@ -6,32 +6,53 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit/demarkus/server/internal/config"
 	"github.com/latebit/demarkus/server/internal/handler"
 	devtls "github.com/latebit/demarkus/server/internal/tls"
 	"github.com/quic-go/quic-go"
 )
 
 func main() {
-	root := flag.String("root", ".", "content directory to serve")
-	port := flag.Int("port", protocol.DefaultPort, "port to listen on")
+	root := flag.String("root", "", "content directory to serve (overrides DEMARKUS_ROOT)")
+	port := flag.Int("port", 0, "port to listen on (overrides DEMARKUS_PORT)")
 	flag.Parse()
+
+	cfg, err := config.NewConfig()
+	if err != nil {
+		log.Printf("config: %v", err)
+	}
+
+	// Flag overrides take precedence over env vars
+	if *root != "" {
+		cfg.ContentDir = *root
+	}
+	if *port != 0 {
+		cfg.Port = *port
+	}
+	if cfg.ContentDir == "" {
+		log.Fatal("config: content directory is required (set DEMARKUS_ROOT or use -root flag)")
+	}
 
 	tlsConfig, err := devtls.GenerateDevConfig()
 	if err != nil {
 		log.Fatalf("generating TLS config: %v", err)
 	}
 
-	addr := fmt.Sprintf(":%d", *port)
-	listener, err := quic.ListenAddr(addr, tlsConfig, nil)
+	quicConfig := &quic.Config{
+		MaxIncomingStreams:    int64(cfg.MaxStreams),
+		MaxIncomingUniStreams: 0,
+	}
+
+	addr := fmt.Sprintf(":%d", cfg.Port)
+	listener, err := quic.ListenAddr(addr, tlsConfig, quicConfig)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 	defer listener.Close()
 
-	h := &handler.Handler{ContentDir: *root}
+	h := &handler.Handler{ContentDir: cfg.ContentDir}
 
-	log.Printf("demarkus-server listening on %s (root: %s)", addr, *root)
+	log.Printf("demarkus-server listening on %s (root: %s)", addr, cfg.ContentDir)
 
 	for {
 		conn, err := listener.Accept(context.Background())
