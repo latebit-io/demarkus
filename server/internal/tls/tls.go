@@ -7,6 +7,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"math/big"
+	"net"
+	"time"
 
 	"github.com/latebit/demarkus/protocol"
 )
@@ -19,9 +21,15 @@ func GenerateDevConfig() (*tls.Config, error) {
 		return nil, err
 	}
 
+	now := time.Now()
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		NotBefore:    now,
+		NotAfter:     now.Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, priv.Public(), priv)
 	if err != nil {
