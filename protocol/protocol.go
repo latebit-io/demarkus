@@ -10,4 +10,7 @@ const (
 
 	// VerbFetch retrieves a document.
 	VerbFetch = "FETCH"
+
+	// VerbList retrieves directory contents.
+	VerbList = "LIST"
 )

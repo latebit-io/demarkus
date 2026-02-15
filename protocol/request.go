@@ -13,10 +13,14 @@ type Request struct {
 	Path string
 }
 
+// MaxRequestLineLength is the maximum allowed length for a request line.
+const MaxRequestLineLength = 4096
+
 // ParseRequest reads a newline-terminated request line from r.
 // Format: "VERB /path\n"
 func ParseRequest(r io.Reader) (Request, error) {
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 1024), MaxRequestLineLength)
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
 			return Request{}, fmt.Errorf("reading request: %w", err)
