@@ -34,24 +34,68 @@ func (h *Handler) HandleStream(stream Stream) {
 		return
 	}
 
-	log.Printf("%s %s", req.Verb, req.Path)
+	log.Printf("%s %s", sanitize(req.Verb), sanitize(req.Path))
 
-	if req.Verb != protocol.VerbFetch {
+	switch req.Verb {
+	case protocol.VerbFetch:
+		h.handleFetch(stream, req.Path)
+	case protocol.VerbList:
+		h.handleList(stream, req.Path)
+	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+req.Verb)
-		return
+	}
+}
+
+// resolvePath validates and resolves a request path to an absolute filesystem path
+// within the content directory. Returns empty string if the path escapes the root.
+// Uses filepath.EvalSymlinks to prevent symlink escape attacks.
+func (h *Handler) resolvePath(reqPath string) string {
+	cleaned := filepath.Clean(reqPath)
+	cleaned = strings.TrimLeft(cleaned, "/")
+	joined := filepath.Join(h.ContentDir, cleaned)
+
+	absRoot, err := filepath.Abs(h.ContentDir)
+	if err != nil {
+		log.Printf("failed to resolve content directory: %v", err)
+		return ""
+	}
+	// Resolve symlinks in root for consistent comparison.
+	resolved, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		log.Printf("failed to resolve content directory symlinks: %v", err)
+		return ""
+	}
+	absRoot = resolved
+
+	// Resolve symlinks in the target path to detect escapes.
+	absPath, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		// Path doesn't exist yet — fall back to Abs for structural validation.
+		absPath, err = filepath.Abs(joined)
+		if err != nil {
+			return ""
+		}
+	}
+	// EvalSymlinks may return a relative path; ensure it's absolute.
+	if !filepath.IsAbs(absPath) {
+		absPath, err = filepath.Abs(absPath)
+		if err != nil {
+			return ""
+		}
 	}
 
-	h.handleFetch(stream, req.Path)
+	if absPath != absRoot && !strings.HasPrefix(absPath, absRoot+string(filepath.Separator)) {
+		return ""
+	}
+	return absPath
 }
 
 func (h *Handler) handleFetch(w io.Writer, reqPath string) {
-	cleaned := filepath.Clean(reqPath)
-	if strings.Contains(cleaned, "..") {
+	filePath := h.resolvePath(reqPath)
+	if filePath == "" {
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
 	}
-
-	filePath := filepath.Join(h.ContentDir, cleaned)
 
 	info, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
@@ -94,6 +138,67 @@ func (h *Handler) handleFetch(w io.Writer, reqPath string) {
 	resp.WriteTo(w)
 }
 
+func (h *Handler) handleList(w io.Writer, reqPath string) {
+	dirPath := h.resolvePath(reqPath)
+	if dirPath == "" {
+		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
+		return
+	}
+
+	info, err := os.Stat(dirPath)
+	if os.IsNotExist(err) {
+		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
+		return
+	}
+	if err != nil {
+		log.Printf("stat error: %v", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+	if !info.IsDir() {
+		h.writeError(w, protocol.StatusNotFound, reqPath+" is not a directory")
+		return
+	}
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		log.Printf("readdir error: %v", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	var body strings.Builder
+	body.WriteString("\n# Index of " + reqPath + "\n\n")
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		if entry.IsDir() {
+			body.WriteString("- [" + name + "/](" + name + "/)\n")
+		} else {
+			body.WriteString("- [" + name + "](" + name + ")\n")
+		}
+	}
+
+	entryCount := 0
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".") {
+			entryCount++
+		}
+	}
+
+	resp := protocol.Response{
+		Status: protocol.StatusOK,
+		Metadata: map[string]string{
+			"entries": fmt.Sprintf("%d", entryCount),
+		},
+		Body: body.String(),
+	}
+	resp.WriteTo(w)
+}
+
 func (h *Handler) writeError(w io.Writer, status, message string) {
 	resp := protocol.Response{
 		Status:   status,
@@ -101,6 +206,16 @@ func (h *Handler) writeError(w io.Writer, status, message string) {
 		Body:     fmt.Sprintf("\n# %s\n\n%s\n", statusTitle(status), message),
 	}
 	resp.WriteTo(w)
+}
+
+// sanitize strips control characters from a string for safe logging.
+func sanitize(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func statusTitle(s string) string {
