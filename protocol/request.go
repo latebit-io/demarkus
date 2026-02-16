@@ -53,6 +53,10 @@ func ParseRequest(r io.Reader) (Request, error) {
 	if path == "" || !strings.HasPrefix(path, "/") {
 		return Request{}, fmt.Errorf("invalid path: %q", path)
 	}
+	// Reject null bytes and control characters in paths.
+	if containsControlChars(path) {
+		return Request{}, fmt.Errorf("invalid path: contains control characters")
+	}
 
 	req := Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
@@ -114,6 +118,17 @@ func isValidVerb(verb string) bool {
 	default:
 		return false
 	}
+}
+
+// containsControlChars returns true if s contains null bytes or control characters
+// (except tab, which is valid in paths on some systems).
+func containsControlChars(s string) bool {
+	for _, r := range s {
+		if r == 0 || (r < 32 && r != '\t') || r == 127 {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateMetadata validates request metadata values for common issues.
