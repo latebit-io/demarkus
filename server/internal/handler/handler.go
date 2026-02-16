@@ -16,6 +16,12 @@ import (
 	"github.com/latebit/demarkus/protocol"
 )
 
+// MaxFileSize is the maximum file size the server will serve (10 MB).
+const MaxFileSize = 10 * 1024 * 1024
+
+// MaxDirectoryEntries is the maximum number of entries returned by LIST.
+const MaxDirectoryEntries = 1000
+
 // Handler serves markdown files from a content directory.
 type Handler struct {
 	ContentDir string
@@ -128,6 +134,11 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusNotFound, req.Path+" is a directory")
 		return
 	}
+	if info.Size() > MaxFileSize {
+		log.Printf("[ERROR] file too large: %s (%d bytes)", sanitize(req.Path), info.Size())
+		h.writeError(w, protocol.StatusServerError, "file exceeds size limit")
+		return
+	}
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -170,7 +181,7 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		Metadata: meta,
 		Body:     body,
 	}
-	resp.WriteTo(w)
+	writeResponse(w, resp)
 }
 
 func (h *Handler) writeNotModified(w io.Writer) {
@@ -178,7 +189,7 @@ func (h *Handler) writeNotModified(w io.Writer) {
 		Status:   protocol.StatusNotModified,
 		Metadata: map[string]string{},
 	}
-	resp.WriteTo(w)
+	writeResponse(w, resp)
 }
 
 func computeEtag(data []byte) string {
@@ -227,6 +238,10 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 			continue
 		}
 		entryCount++
+		if entryCount > MaxDirectoryEntries {
+			body.WriteString("\n*...truncated, too many entries*\n")
+			break
+		}
 		display := escapeMD(name)
 		link := escapeURL(name)
 		if entry.IsDir() {
@@ -243,7 +258,7 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 		},
 		Body: body.String(),
 	}
-	resp.WriteTo(w)
+	writeResponse(w, resp)
 }
 
 func (h *Handler) handleHealth(w io.Writer) {
@@ -252,7 +267,7 @@ func (h *Handler) handleHealth(w io.Writer) {
 		Metadata: map[string]string{},
 		Body:     "# Health Check\n\nServer is healthy.\n",
 	}
-	resp.WriteTo(w)
+	writeResponse(w, resp)
 }
 
 func (h *Handler) writeError(w io.Writer, status, message string) {
@@ -261,7 +276,13 @@ func (h *Handler) writeError(w io.Writer, status, message string) {
 		Metadata: map[string]string{},
 		Body:     fmt.Sprintf("\n# %s\n\n%s\n", statusTitle(status), message),
 	}
-	resp.WriteTo(w)
+	writeResponse(w, resp)
+}
+
+func writeResponse(w io.Writer, resp protocol.Response) {
+	if _, err := resp.WriteTo(w); err != nil {
+		log.Printf("[ERROR] write response: %v", err)
+	}
 }
 
 // sanitize strips control characters from a string for safe logging.

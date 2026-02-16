@@ -24,6 +24,7 @@ func LoadConfig(certFile, keyFile string) (*tls.Config, error) {
 
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
 		NextProtos:   []string{protocol.ALPN},
 	}, nil
 }
@@ -56,6 +57,7 @@ func GenerateDevConfig() (*tls.Config, error) {
 			Certificate: [][]byte{certDER},
 			PrivateKey:  priv,
 		}},
+		MinVersion: tls.VersionTLS13,
 		NextProtos: []string{protocol.ALPN},
 	}, nil
 }
