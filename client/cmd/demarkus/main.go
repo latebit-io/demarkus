@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -12,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/latebit/demarkus/client/internal/cache"
+	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/protocol"
-	"github.com/quic-go/quic-go"
 )
 
 func main() {
@@ -54,69 +52,25 @@ func main() {
 		path = "/"
 	}
 
-	tlsConf := &tls.Config{
-		InsecureSkipVerify: true,
-		NextProtos:         []string{protocol.ALPN},
-	}
-
-	conn, err := quic.DialAddr(context.Background(), host, tlsConf, nil)
-	if err != nil {
-		log.Fatalf("dial: %v", err)
-	}
-	defer conn.CloseWithError(0, "")
-
-	stream, err := conn.OpenStreamSync(context.Background())
-	if err != nil {
-		log.Fatalf("open stream: %v", err)
-	}
-
-	c := cache.New(*cacheDir)
-
-	req := protocol.Request{Verb: *verb, Path: path, Metadata: make(map[string]string)}
-
-	// Populate conditional request metadata from cache.
-	var cached *cache.Entry
+	var c *cache.Cache
 	if !*noCache {
-		cached, _ = c.Get(host, path, *verb)
-		if cached != nil {
-			if etag := cached.Response.Metadata["etag"]; etag != "" {
-				req.Metadata["if-none-match"] = etag
-			}
-			if mod := cached.Response.Metadata["modified"]; mod != "" {
-				req.Metadata["if-modified-since"] = mod
-			}
-		}
+		c = cache.New(*cacheDir)
 	}
 
-	if _, err := req.WriteTo(stream); err != nil {
-		log.Fatalf("send request: %v", err)
-	}
-	// Close the write side (sends FIN) so the server knows the request is complete.
-	stream.Close()
-
-	resp, err := protocol.ParseResponse(stream)
+	result, err := fetch.Fetch(host, path, *verb, c)
 	if err != nil {
-		log.Fatalf("read response: %v", err)
+		log.Fatal(err)
 	}
 
-	// On not-modified, use the cached response.
-	if resp.Status == protocol.StatusNotModified && cached != nil {
-		resp = cached.Response
-	}
-
-	// Cache successful responses.
-	if !*noCache && resp.Status == protocol.StatusOK {
-		if err := c.Put(host, path, *verb, resp); err != nil {
-			log.Printf("cache write: %v", err)
-		}
-	}
-
-	fmt.Printf("[%s]", resp.Status)
-	for k, v := range resp.Metadata {
+	fmt.Printf("[%s]", result.Response.Status)
+	for k, v := range result.Response.Metadata {
 		fmt.Printf(" %s=%s", k, v)
 	}
+	if result.FromCache {
+		fmt.Printf(" (cached)")
+	}
 	fmt.Println()
-	fmt.Print(resp.Body)
+	fmt.Print(result.Response.Body)
 }
 
 var validVerbs = map[string]bool{
