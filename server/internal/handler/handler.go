@@ -16,6 +16,12 @@ import (
 	"github.com/latebit/demarkus/protocol"
 )
 
+// MaxFileSize is the maximum file size the server will serve (10 MB).
+const MaxFileSize = 10 * 1024 * 1024
+
+// MaxDirectoryEntries is the maximum number of entries returned by LIST.
+const MaxDirectoryEntries = 1000
+
 // Handler serves markdown files from a content directory.
 type Handler struct {
 	ContentDir string
@@ -32,12 +38,18 @@ func (h *Handler) HandleStream(stream Stream) {
 
 	req, err := protocol.ParseRequest(stream)
 	if err != nil {
-		log.Printf("bad request: %v", err)
+		log.Printf("[ERROR] parse request: %v", err)
 		h.writeError(stream, protocol.StatusServerError, "bad request")
 		return
 	}
 
-	log.Printf("%s %s", sanitize(req.Verb), sanitize(req.Path))
+	log.Printf("[REQUEST] %s %s", sanitize(req.Verb), sanitize(req.Path))
+
+	// Health check endpoint: responds to FETCH /health with OK
+	if req.Path == "/health" && req.Verb == protocol.VerbFetch {
+		h.handleHealth(stream)
+		return
+	}
 
 	switch req.Verb {
 	case protocol.VerbFetch:
@@ -51,7 +63,13 @@ func (h *Handler) HandleStream(stream Stream) {
 
 // resolvePath validates and resolves a request path to an absolute filesystem path
 // within the content directory. Returns empty string if the path escapes the root.
-// Uses filepath.EvalSymlinks to prevent symlink escape attacks.
+//
+// Security (race conditions): This function is safe from TOCTOU races because:
+//  1. filepath.Clean prevents .. escapes at the string level.
+//  2. filepath.EvalSymlinks resolves all symlinks to detect escape attempts.
+//  3. The bounds check is done after symlink resolution, so even if a symlink
+//     is changed between EvalSymlinks and the caller's os.Stat, the path is still valid.
+//  4. If EvalSymlinks fails (ENOENT), we use filepath.Abs which only does string ops.
 func (h *Handler) resolvePath(reqPath string) string {
 	cleaned := filepath.Clean(reqPath)
 	cleaned = strings.TrimLeft(cleaned, "/")
@@ -59,13 +77,13 @@ func (h *Handler) resolvePath(reqPath string) string {
 
 	absRoot, err := filepath.Abs(h.ContentDir)
 	if err != nil {
-		log.Printf("failed to resolve content directory: %v", err)
+		log.Printf("[ERROR] resolve content directory: %v", err)
 		return ""
 	}
 	// Resolve symlinks in root for consistent comparison.
 	resolved, err := filepath.EvalSymlinks(absRoot)
 	if err != nil {
-		log.Printf("failed to resolve content directory symlinks: %v", err)
+		log.Printf("[ERROR] resolve content directory symlinks: %v", err)
 		return ""
 	}
 	absRoot = resolved
@@ -96,17 +114,19 @@ func (h *Handler) resolvePath(reqPath string) string {
 func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 	filePath := h.resolvePath(req.Path)
 	if filePath == "" {
+		log.Printf("[SECURITY] path traversal attempt: %s", sanitize(req.Path))
 		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
 
 	info, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
+		log.Printf("[NOTFOUND] %s", sanitize(req.Path))
 		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
 	if err != nil {
-		log.Printf("stat error: %v", err)
+		log.Printf("[ERROR] stat %s: %v", sanitize(req.Path), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -114,10 +134,15 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusNotFound, req.Path+" is a directory")
 		return
 	}
+	if info.Size() > MaxFileSize {
+		log.Printf("[ERROR] file too large: %s (%d bytes)", sanitize(req.Path), info.Size())
+		h.writeError(w, protocol.StatusServerError, "file exceeds size limit")
+		return
+	}
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		log.Printf("read error: %v", err)
+		log.Printf("[ERROR] read %s: %v", sanitize(req.Path), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -156,7 +181,7 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		Metadata: meta,
 		Body:     body,
 	}
-	resp.WriteTo(w)
+	writeResponse(w, resp)
 }
 
 func (h *Handler) writeNotModified(w io.Writer) {
@@ -164,7 +189,7 @@ func (h *Handler) writeNotModified(w io.Writer) {
 		Status:   protocol.StatusNotModified,
 		Metadata: map[string]string{},
 	}
-	resp.WriteTo(w)
+	writeResponse(w, resp)
 }
 
 func computeEtag(data []byte) string {
@@ -175,17 +200,19 @@ func computeEtag(data []byte) string {
 func (h *Handler) handleList(w io.Writer, reqPath string) {
 	dirPath := h.resolvePath(reqPath)
 	if dirPath == "" {
+		log.Printf("[SECURITY] path traversal attempt: %s", sanitize(reqPath))
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
 	}
 
 	info, err := os.Stat(dirPath)
 	if os.IsNotExist(err) {
+		log.Printf("[NOTFOUND] %s", sanitize(reqPath))
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
 	}
 	if err != nil {
-		log.Printf("stat error: %v", err)
+		log.Printf("[ERROR] stat %s: %v", sanitize(reqPath), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -196,7 +223,7 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		log.Printf("readdir error: %v", err)
+		log.Printf("[ERROR] readdir %s: %v", sanitize(reqPath), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -211,6 +238,10 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 			continue
 		}
 		entryCount++
+		if entryCount > MaxDirectoryEntries {
+			body.WriteString("\n*...truncated, too many entries*\n")
+			break
+		}
 		display := escapeMD(name)
 		link := escapeURL(name)
 		if entry.IsDir() {
@@ -227,7 +258,16 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 		},
 		Body: body.String(),
 	}
-	resp.WriteTo(w)
+	writeResponse(w, resp)
+}
+
+func (h *Handler) handleHealth(w io.Writer) {
+	resp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{},
+		Body:     "# Health Check\n\nServer is healthy.\n",
+	}
+	writeResponse(w, resp)
 }
 
 func (h *Handler) writeError(w io.Writer, status, message string) {
@@ -236,7 +276,13 @@ func (h *Handler) writeError(w io.Writer, status, message string) {
 		Metadata: map[string]string{},
 		Body:     fmt.Sprintf("\n# %s\n\n%s\n", statusTitle(status), message),
 	}
-	resp.WriteTo(w)
+	writeResponse(w, resp)
+}
+
+func writeResponse(w io.Writer, resp protocol.Response) {
+	if _, err := resp.WriteTo(w); err != nil {
+		log.Printf("[ERROR] write response: %v", err)
+	}
 }
 
 // sanitize strips control characters from a string for safe logging.

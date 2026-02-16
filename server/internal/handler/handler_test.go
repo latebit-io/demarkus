@@ -128,6 +128,27 @@ func TestHandleFetch(t *testing.T) {
 	})
 }
 
+func TestHealthCheck(t *testing.T) {
+	dir := setupContentDir(t, map[string]string{
+		"hello.md": "# Hello\n",
+	})
+	h := &Handler{ContentDir: dir}
+
+	stream := newMockStream("FETCH /health\n")
+	h.HandleStream(stream)
+
+	resp, err := protocol.ParseResponse(&stream.output)
+	if err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if resp.Status != protocol.StatusOK {
+		t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+	}
+	if !strings.Contains(resp.Body, "Server is healthy") {
+		t.Errorf("body missing health message: %q", resp.Body)
+	}
+}
+
 func TestEtagInResponse(t *testing.T) {
 	dir := setupContentDir(t, map[string]string{
 		"hello.md": "# Hello World\n",

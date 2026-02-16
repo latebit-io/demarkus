@@ -33,6 +33,36 @@ func TestParseRequest(t *testing.T) {
 			input:   "FETCH\n",
 			wantErr: true,
 		},
+		{
+			name:    "empty verb",
+			input:   " /index.md\n",
+			wantErr: true,
+		},
+		{
+			name:    "unknown verb",
+			input:   "DELETE /index.md\n",
+			wantErr: true,
+		},
+		{
+			name:    "path without leading slash",
+			input:   "FETCH index.md\n",
+			wantErr: true,
+		},
+		{
+			name:    "empty path",
+			input:   "FETCH \n",
+			wantErr: true,
+		},
+		{
+			name:    "null byte in path",
+			input:   "FETCH /index\x00.md\n",
+			wantErr: true,
+		},
+		{
+			name:    "control char in path",
+			input:   "FETCH /index\x01.md\n",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -144,6 +174,26 @@ func TestParseRequestScannerErrorInFrontmatter(t *testing.T) {
 		t.Fatal("expected error for scanner failure in frontmatter, got nil")
 	}
 	if !strings.Contains(err.Error(), "reading request metadata") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseRequestFrontmatterTooLarge(t *testing.T) {
+	// Build frontmatter that exceeds MaxRequestFrontmatterLength.
+	// Each line is "key: value\n" — repeat enough to exceed 64KB.
+	var input strings.Builder
+	input.WriteString("FETCH /index.md\n---\n")
+	line := "k: " + strings.Repeat("v", 1000) + "\n"
+	for input.Len() < MaxRequestFrontmatterLength+1000 {
+		input.WriteString(line)
+	}
+	input.WriteString("---\n")
+
+	_, err := ParseRequest(strings.NewReader(input.String()))
+	if err == nil {
+		t.Fatal("expected error for oversized frontmatter, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds limit") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
