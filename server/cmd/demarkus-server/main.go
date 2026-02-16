@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/latebit/demarkus/server/internal/config"
 	"github.com/latebit/demarkus/server/internal/handler"
@@ -81,7 +82,7 @@ func main() {
 				errChan <- err
 				return
 			}
-			go handleConn(conn, h)
+			go handleConn(conn, h, cfg.RequestTimeout)
 		}
 	}()
 
@@ -98,11 +99,14 @@ func main() {
 	log.Printf("[INFO] demarkus-server stopped")
 }
 
-func handleConn(conn *quic.Conn, h *handler.Handler) {
+func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duration) {
 	for {
 		stream, err := conn.AcceptStream(context.Background())
 		if err != nil {
 			return // connection closed
+		}
+		if requestTimeout > 0 {
+			stream.SetDeadline(time.Now().Add(requestTimeout))
 		}
 		go h.HandleStream(stream)
 	}
