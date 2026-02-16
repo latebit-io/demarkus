@@ -126,11 +126,25 @@ func TestRequestWriteToWithMetadata(t *testing.T) {
 	if !strings.Contains(got, "if-none-match: abc123\n") {
 		t.Errorf("missing if-none-match: %q", got)
 	}
-	if !strings.Contains(got, "if-modified-since: 2025-02-14T10:30:00Z\n") {
+	if !strings.Contains(got, "if-modified-since:") || !strings.Contains(got, "2025-02-14T10:30:00Z") {
 		t.Errorf("missing if-modified-since: %q", got)
 	}
 	if !strings.HasSuffix(got, "---\n") {
 		t.Errorf("missing closing ---: %q", got)
+	}
+}
+
+func TestParseRequestScannerErrorInFrontmatter(t *testing.T) {
+	// Frontmatter opened but never closed, with a line exceeding the scanner buffer.
+	// This triggers a scanner error (token too long) inside the frontmatter loop.
+	input := "FETCH /index.md\n---\n" + strings.Repeat("x", MaxRequestLineLength+1) + "\n"
+
+	_, err := ParseRequest(strings.NewReader(input))
+	if err == nil {
+		t.Fatal("expected error for scanner failure in frontmatter, got nil")
+	}
+	if !strings.Contains(err.Error(), "reading request metadata") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }
 

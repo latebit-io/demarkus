@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -70,17 +69,19 @@ func ParseResponse(r io.Reader) (Response, error) {
 func (resp Response) WriteTo(w io.Writer) (int64, error) {
 	var buf bytes.Buffer
 
-	buf.WriteString("---\n")
-	buf.WriteString("status: " + resp.Status + "\n")
+	fm := make(map[string]string, len(resp.Metadata)+1)
+	fm["status"] = resp.Status
+	for k, v := range resp.Metadata {
+		fm[k] = v
+	}
 
-	keys := make([]string, 0, len(resp.Metadata))
-	for k := range resp.Metadata {
-		keys = append(keys, k)
+	yamlBytes, err := yaml.Marshal(fm)
+	if err != nil {
+		return 0, fmt.Errorf("encoding frontmatter: %w", err)
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		buf.WriteString(k + ": " + resp.Metadata[k] + "\n")
-	}
+
+	buf.WriteString("---\n")
+	buf.Write(yamlBytes)
 	buf.WriteString("---\n")
 
 	if resp.Body != "" {

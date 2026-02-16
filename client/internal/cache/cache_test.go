@@ -128,6 +128,91 @@ func TestPathSanitisation(t *testing.T) {
 	}
 }
 
+func TestCorruptedMetaIsCacheMiss(t *testing.T) {
+	c := New(t.TempDir())
+
+	resp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{"version": "1"},
+		Body:     "# Hello\n",
+	}
+
+	if err := c.Put("localhost:6309", "/index.md", protocol.VerbFetch, resp); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	// Corrupt the metadata file
+	metaPath := c.filePath("localhost:6309", "/index.md", protocol.VerbFetch) + ".meta"
+	if err := os.WriteFile(metaPath, []byte("not valid toml {{{"), 0o644); err != nil {
+		t.Fatalf("corrupt meta: %v", err)
+	}
+
+	entry, err := c.Get("localhost:6309", "/index.md", protocol.VerbFetch)
+	if err != nil {
+		t.Fatalf("expected no error for corrupted meta, got: %v", err)
+	}
+	if entry != nil {
+		t.Error("expected nil entry for corrupted meta")
+	}
+}
+
+func TestMissingMetaIsCacheMiss(t *testing.T) {
+	c := New(t.TempDir())
+
+	resp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{"version": "1"},
+		Body:     "# Hello\n",
+	}
+
+	if err := c.Put("localhost:6309", "/index.md", protocol.VerbFetch, resp); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	// Remove the metadata file
+	metaPath := c.filePath("localhost:6309", "/index.md", protocol.VerbFetch) + ".meta"
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatalf("remove meta: %v", err)
+	}
+
+	entry, err := c.Get("localhost:6309", "/index.md", protocol.VerbFetch)
+	if err != nil {
+		t.Fatalf("expected no error for missing meta, got: %v", err)
+	}
+	if entry != nil {
+		t.Error("expected nil entry for missing meta")
+	}
+}
+
+func TestHostTraversalBlocked(t *testing.T) {
+	c := New(t.TempDir())
+
+	resp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{},
+		Body:     "# Pwned\n",
+	}
+
+	if err := c.Put("../../etc", "/passwd", protocol.VerbFetch, resp); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	// Should not write outside cache dir
+	escaped := filepath.Join(c.Dir, "..", "..", "etc", "passwd")
+	if _, err := os.Stat(escaped); err == nil {
+		t.Fatal("SECURITY: cache wrote outside cache directory via host traversal")
+	}
+
+	// Should still be retrievable via the same key
+	entry, err := c.Get("../../etc", "/passwd", protocol.VerbFetch)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if entry == nil {
+		t.Fatal("expected cached entry for sanitized host")
+	}
+}
+
 func TestNestedPath(t *testing.T) {
 	c := New(t.TempDir())
 
