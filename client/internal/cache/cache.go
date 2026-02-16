@@ -32,6 +32,19 @@ type meta struct {
 	Metadata map[string]string `toml:"metadata"`
 }
 
+// DefaultDir returns the default cache directory.
+// It checks DEMARKUS_CACHE_DIR first, then falls back to ~/.mark/cache.
+func DefaultDir() string {
+	if dir := os.Getenv("DEMARKUS_CACHE_DIR"); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", ".mark", "cache")
+	}
+	return filepath.Join(home, ".mark", "cache")
+}
+
 // New creates a cache rooted at the given directory.
 func New(dir string) *Cache {
 	return &Cache{Dir: dir}

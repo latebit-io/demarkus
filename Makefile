@@ -31,7 +31,8 @@ server: protocol
 client: protocol
 	@echo "Building demarkus client..."
 	cd client && go build -o bin/demarkus ./cmd/demarkus
-	@echo "✓ Client built: client/bin/demarkus"
+	cd client && go build -o bin/demarkus-tui ./cmd/demarkus-tui
+	@echo "✓ Client built: client/bin/demarkus, client/bin/demarkus-tui"
 
 # Build tools
 tools:
@@ -70,7 +71,11 @@ run-server: server
 
 # Run client (for development)
 run-client: client
-	./client/bin/demarkus $(URL)
+	./client/bin/demarkus --insecure $(URL)
+
+# Run TUI (for development)
+run-tui: client
+	./client/bin/demarkus-tui --insecure $(URL)
 
 # Format code
 fmt:
