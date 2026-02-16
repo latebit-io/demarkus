@@ -104,7 +104,7 @@ feat!: breaking change                     → major bump
 
 **Key files**: `.github/workflows/auto-release.yml`, `server/.goreleaser.yml`, `client/.goreleaser.yml`.
 
-Protocol is a library (tag-only, no binary). Server and client produce GoReleaser builds. Server also pushes Docker images to `ghcr.io/latebit/demarkus-server`.
+Protocol is a library (tag-only, no binary). Server and client produce GoReleaser builds. Server also pushes Docker images to `ghcr.io/latebit-io/demarkus-server`.
 
 While in `0.x.x`, breaking changes bump minor (not major). Major `1.0.0` will be an explicit decision.
 
