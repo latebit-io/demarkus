@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/latebit/demarkus/protocol v0.0.0
 	github.com/quic-go/quic-go v0.59.0
+	github.com/BurntSushi/toml v1.6.0
 )
 
 require (

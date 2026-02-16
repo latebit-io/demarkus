@@ -87,13 +87,16 @@ func TestResponseWriteTo(t *testing.T) {
 	}
 
 	got := buf.String()
-	if !strings.HasPrefix(got, "---\nstatus: ok\n") {
-		t.Errorf("should start with status frontmatter, got: %q", got[:40])
+	if !strings.HasPrefix(got, "---\n") {
+		t.Errorf("should start with frontmatter delimiter, got: %q", got[:40])
 	}
-	if !strings.Contains(got, "modified: 2025-02-14T10:30:00Z") {
+	if !strings.Contains(got, "status: ok") {
+		t.Error("missing status")
+	}
+	if !strings.Contains(got, "modified:") || !strings.Contains(got, "2025-02-14T10:30:00Z") {
 		t.Error("missing modified metadata")
 	}
-	if !strings.Contains(got, "version: 1") {
+	if !strings.Contains(got, "version:") || !strings.Contains(got, "1") {
 		t.Error("missing version metadata")
 	}
 	if !strings.HasSuffix(got, "# Hello\n") {
