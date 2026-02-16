@@ -130,21 +130,3 @@ func containsControlChars(s string) bool {
 	}
 	return false
 }
-
-// ValidateMetadata validates request metadata values for common issues.
-// Returns error if any metadata is invalid.
-func (req Request) ValidateMetadata() error {
-	for k, v := range req.Metadata {
-		switch k {
-		case "if-modified-since", "if-none-match":
-			// These are optional and can have any value; server will validate during use
-		default:
-			// No validation needed for unknown keys
-		}
-		// Check for obviously bad values (extremely long strings)
-		if len(v) > 1024 {
-			return fmt.Errorf("metadata value for %q exceeds reasonable limit (>1024 chars)", k)
-		}
-	}
-	return nil
-}

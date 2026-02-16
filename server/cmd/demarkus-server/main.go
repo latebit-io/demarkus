@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -74,6 +75,7 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Accept connections in a goroutine so we can listen for shutdown signals
+	var wg sync.WaitGroup
 	errChan := make(chan error, 1)
 	go func() {
 		for {
@@ -82,7 +84,11 @@ func main() {
 				errChan <- err
 				return
 			}
-			go handleConn(conn, h, cfg.RequestTimeout)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				handleConn(conn, h, cfg.RequestTimeout)
+			}()
 		}
 	}()
 
@@ -96,6 +102,21 @@ func main() {
 
 	// Close the listener to stop accepting new connections
 	listener.Close()
+
+	// Wait for in-flight connections to drain with a timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Printf("[INFO] all connections drained")
+	case <-time.After(10 * time.Second):
+		log.Printf("[WARN] shutdown timeout: some connections did not finish")
+	}
+
 	log.Printf("[INFO] demarkus-server stopped")
 }
 
@@ -106,7 +127,7 @@ func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duratio
 			return // connection closed
 		}
 		if requestTimeout > 0 {
-			stream.SetDeadline(time.Now().Add(requestTimeout))
+			stream.SetReadDeadline(time.Now().Add(requestTimeout))
 		}
 		go h.HandleStream(stream)
 	}
