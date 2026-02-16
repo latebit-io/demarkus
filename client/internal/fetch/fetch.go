@@ -6,7 +6,9 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,8 +45,20 @@ type Result struct {
 
 // Options configures client behavior.
 type Options struct {
-	Cache    *cache.Cache
-	Insecure bool
+	Cache          *cache.Cache
+	Insecure       bool
+	DialTimeout    time.Duration // Timeout for establishing connection
+	RequestTimeout time.Duration // Timeout for individual requests
+}
+
+// applyDefaults sets default timeout values if not specified.
+func (o *Options) applyDefaults() {
+	if o.DialTimeout == 0 {
+		o.DialTimeout = 10 * time.Second
+	}
+	if o.RequestTimeout == 0 {
+		o.RequestTimeout = 10 * time.Second
+	}
 }
 
 // Client manages QUIC connections and fetches Mark Protocol documents.
@@ -57,6 +71,7 @@ type Client struct {
 
 // NewClient creates a new fetch client with the given options.
 func NewClient(opts Options) *Client {
+	opts.applyDefaults()
 	return &Client{
 		opts: opts,
 		tlsConf: &tls.Config{
@@ -78,16 +93,22 @@ func (c *Client) Close() {
 }
 
 // getConn returns a pooled connection to host, or dials a new one.
+// Stale connections (closed by idle timeout) are detected and removed.
 func (c *Client) getConn(host string) (*quic.Conn, error) {
 	c.mu.Lock()
 	conn, ok := c.conns[host]
 	c.mu.Unlock()
 
 	if ok {
-		return conn, nil
+		// Check if the pooled connection is still alive.
+		if conn.Context().Err() != nil {
+			c.removeConn(host)
+		} else {
+			return conn, nil
+		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), c.opts.DialTimeout)
 	defer cancel()
 
 	conn, err := quic.DialAddr(ctx, host, c.tlsConf, nil)
@@ -109,28 +130,50 @@ func (c *Client) removeConn(host string) {
 	c.mu.Unlock()
 }
 
-// Fetch retrieves a document from a Mark Protocol server.
+// Fetch retrieves a document from a Mark Protocol server with automatic retry.
+// Retries transient failures up to 3 times with exponential backoff + jitter.
 func (c *Client) Fetch(host, path, verb string) (Result, error) {
-	conn, err := c.getConn(host)
-	if err != nil {
+	const maxRetries = 3
+	const baseBackoff = 100 * time.Millisecond
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		conn, err := c.getConn(host)
+		if err != nil {
+			if attempt < maxRetries-1 && isTransientError(err) {
+				backoff := baseBackoff * time.Duration(1<<uint(attempt)) // 100ms, 200ms, 400ms
+				jitter := time.Duration(rand.Int63n(int64(backoff / 2))) // 0-50% jitter
+				time.Sleep(backoff + jitter)
+				c.removeConn(host)
+				continue
+			}
+			return Result{}, err
+		}
+
+		result, err := c.fetchOnConn(conn, host, path, verb)
+		if err == nil {
+			return result, nil
+		}
+
+		lastErr = err
+		if attempt < maxRetries-1 && isTransientError(err) {
+			// Connection may be stale — backoff and retry
+			backoff := baseBackoff * time.Duration(1<<uint(attempt))
+			jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+			time.Sleep(backoff + jitter)
+			c.removeConn(host)
+			continue
+		}
+
+		// Non-transient error, don't retry
 		return Result{}, err
 	}
 
-	result, err := c.fetchOnConn(conn, host, path, verb)
-	if err != nil {
-		// Connection may be stale — redial once and retry.
-		c.removeConn(host)
-		conn, dialErr := c.getConn(host)
-		if dialErr != nil {
-			return Result{}, err
-		}
-		return c.fetchOnConn(conn, host, path, verb)
-	}
-	return result, nil
+	return Result{}, lastErr
 }
 
 func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb string) (Result, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), c.opts.RequestTimeout)
 	defer cancel()
 
 	stream, err := conn.OpenStreamSync(ctx)
@@ -173,9 +216,50 @@ func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb string) (Result, 
 
 	if c.opts.Cache != nil && resp.Status == protocol.StatusOK {
 		if err := c.opts.Cache.Put(host, path, verb, resp); err != nil {
-			log.Printf("cache write: %v", err)
+			log.Printf("[WARN] cache write: %v", err)
 		}
 	}
 
 	return Result{Response: resp, FromCache: fromCache}, nil
+}
+
+// isTransientError returns true if an error is likely transient and worth retrying.
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isTimeoutError(err) || isTemporaryError(err) {
+		return true
+	}
+	// Match common transient error strings from QUIC and network layers.
+	errStr := err.Error()
+	switch {
+	case errStr == "EOF":
+		return true
+	case strings.Contains(errStr, "no recent network activity"):
+		return true
+	case strings.Contains(errStr, "connection refused"):
+		return true
+	case strings.Contains(errStr, "connection reset"):
+		return true
+	}
+	return false
+}
+
+// isTimeoutError checks if an error is a timeout.
+func isTimeoutError(err error) bool {
+	type timeoutError interface {
+		Timeout() bool
+	}
+	te, ok := err.(timeoutError)
+	return ok && te.Timeout()
+}
+
+// isTemporaryError checks if an error is temporary.
+func isTemporaryError(err error) bool {
+	type temporaryError interface {
+		Temporary() bool
+	}
+	te, ok := err.(temporaryError)
+	return ok && te.Temporary()
 }

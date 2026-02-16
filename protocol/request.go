@@ -20,6 +20,9 @@ type Request struct {
 // MaxRequestLineLength is the maximum allowed length for a request line.
 const MaxRequestLineLength = 4096
 
+// MaxRequestFrontmatterLength is the maximum allowed size for request metadata.
+const MaxRequestFrontmatterLength = 65536 // 64KB
+
 // ParseRequest reads a request from r.
 // Format: "VERB /path\n" followed by optional YAML frontmatter.
 func ParseRequest(r io.Reader) (Request, error) {
@@ -38,6 +41,23 @@ func ParseRequest(r io.Reader) (Request, error) {
 		return Request{}, fmt.Errorf("malformed request: %q", line)
 	}
 
+	// Validate verb is non-empty and is a known verb
+	if verb == "" {
+		return Request{}, fmt.Errorf("empty verb")
+	}
+	if !isValidVerb(verb) {
+		return Request{}, fmt.Errorf("unknown verb: %q", verb)
+	}
+
+	// Validate path is non-empty and starts with /
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return Request{}, fmt.Errorf("invalid path: %q", path)
+	}
+	// Reject null bytes and control characters in paths.
+	if containsControlChars(path) {
+		return Request{}, fmt.Errorf("invalid path: contains control characters")
+	}
+
 	req := Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
 	// Check for optional frontmatter.
@@ -49,6 +69,11 @@ func ParseRequest(r io.Reader) (Request, error) {
 			}
 			fmBuf.WriteString(scanner.Text())
 			fmBuf.WriteByte('\n')
+
+			// Enforce frontmatter size limit
+			if fmBuf.Len() > MaxRequestFrontmatterLength {
+				return Request{}, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", fmBuf.Len(), MaxRequestFrontmatterLength)
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			return Request{}, fmt.Errorf("reading request metadata: %w", err)
@@ -83,4 +108,25 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 
 	n, err := w.Write(buf.Bytes())
 	return int64(n), err
+}
+
+// isValidVerb returns true if verb is a known Mark Protocol verb.
+func isValidVerb(verb string) bool {
+	switch verb {
+	case VerbFetch, VerbList:
+		return true
+	default:
+		return false
+	}
+}
+
+// containsControlChars returns true if s contains null bytes or control characters
+// (except tab, which is valid in paths on some systems).
+func containsControlChars(s string) bool {
+	for _, r := range s {
+		if r == 0 || (r < 32 && r != '\t') || r == 127 {
+			return true
+		}
+	}
+	return false
 }

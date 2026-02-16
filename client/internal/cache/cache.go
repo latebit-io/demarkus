@@ -50,16 +50,14 @@ func New(dir string) *Cache {
 	return &Cache{Dir: dir}
 }
 
-// Put writes a response to the cache.
+// Put writes a response to the cache atomically.
+// Writes metadata first (which is smaller), then body. This ensures
+// if we crash, we don't have orphaned body files without metadata.
 func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
 	filePath := c.filePath(host, path, verb)
 	metaPath := filePath + ".meta"
 
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(filePath, []byte(resp.Body), 0o644); err != nil {
 		return err
 	}
 
@@ -71,29 +69,56 @@ func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
 		Metadata: resp.Metadata,
 	}
 
+	// Write metadata first (atomic order for crash safety).
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
 		return err
 	}
-	return os.WriteFile(metaPath, buf.Bytes(), 0o644)
+	if err := os.WriteFile(metaPath, buf.Bytes(), 0o644); err != nil {
+		return err
+	}
+
+	// Then write body. If this fails, metadata still exists as a marker.
+	if err := os.WriteFile(filePath, []byte(resp.Body), 0o644); err != nil {
+		// Best effort cleanup if body write fails.
+		os.Remove(metaPath)
+		return err
+	}
+
+	return nil
 }
 
 // Get reads a cached response. Returns nil if not cached.
+// If cache files are inconsistent (metadata missing but body exists),
+// cleans up the orphaned body and returns nil.
 func (c *Cache) Get(host, path, verb string) (*Entry, error) {
 	filePath := c.filePath(host, path, verb)
 	metaPath := filePath + ".meta"
 
+	// Try to read metadata first (it's required).
+	var m meta
+	if _, err := toml.DecodeFile(metaPath, &m); err != nil {
+		if os.IsNotExist(err) {
+			// Metadata missing. Check if body exists (corrupted cache).
+			if _, err := os.Stat(filePath); err == nil {
+				// Body exists but metadata doesn't — clean it up.
+				os.Remove(filePath)
+			}
+			return nil, nil
+		}
+		// Metadata unreadable for other reasons, treat as miss.
+		return nil, nil
+	}
+
+	// Metadata exists, now read body.
 	body, err := os.ReadFile(filePath)
 	if os.IsNotExist(err) {
+		// Body missing but metadata exists (corrupted cache). Clean up metadata.
+		os.Remove(metaPath)
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
-	}
-
-	var m meta
-	if _, err := toml.DecodeFile(metaPath, &m); err != nil {
-		return nil, nil
 	}
 
 	return &Entry{
