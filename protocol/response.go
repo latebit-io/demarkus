@@ -43,6 +43,13 @@ func ParseResponse(r io.Reader) (Response, error) {
 		}
 
 		fmData := content[4 : 4+end]
+
+		// Handle empty frontmatter gracefully
+		if strings.TrimSpace(fmData) == "" {
+			resp.Body = content[4+end+5:]
+			return resp, nil
+		}
+
 		// Parse as map[string]string to avoid YAML interpreting timestamps, numbers, etc.
 		var raw map[string]string
 		if err := yaml.Unmarshal([]byte(fmData), &raw); err != nil {

@@ -62,16 +62,90 @@ cd client && go build -o bin/demarkus ./cmd/demarkus
 
 ### Running
 
-**Start a server**:
+**Start a server (dev mode)**:
 ```bash
-cd server
-./bin/demarkus-server --config config.example.toml
+./server/bin/demarkus-server -root ./examples/demo-site
 ```
 
 **Run the client**:
 ```bash
-cd client
-./bin/demarkus mark://localhost:6309/index.md
+./client/bin/demarkus -insecure mark://localhost:6309/index.md
+```
+
+**List directory contents**:
+```bash
+./client/bin/demarkus -insecure -X LIST mark://localhost:6309/
+```
+
+### Deploying with Let's Encrypt
+
+The server supports loading TLS certificates from disk for production deployments.
+
+**1. Install certbot and obtain a certificate**:
+```bash
+# Install certbot (Ubuntu/Debian)
+sudo apt install certbot
+
+# Obtain a certificate (standalone mode, requires port 80 open temporarily)
+sudo certbot certonly --standalone -d yourdomain.com
+```
+
+Certificates are saved to `/etc/letsencrypt/live/yourdomain.com/`.
+
+**2. Start the server with real certificates**:
+```bash
+./demarkus-server \
+  -root /srv/content \
+  -tls-cert /etc/letsencrypt/live/yourdomain.com/fullchain.pem \
+  -tls-key /etc/letsencrypt/live/yourdomain.com/privkey.pem
+```
+
+Or using environment variables:
+```bash
+export DEMARKUS_ROOT=/srv/content
+export DEMARKUS_TLS_CERT=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
+export DEMARKUS_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
+./demarkus-server
+```
+
+**3. Open the QUIC port** (UDP 6309):
+```bash
+sudo ufw allow 6309/udp
+```
+
+**4. Connect from a client**:
+```bash
+./demarkus mark://yourdomain.com/index.md
+```
+
+**5. Auto-renew certificates** with a cron job or systemd timer:
+```bash
+# Add to crontab (runs twice daily, restarts server on renewal)
+0 */12 * * * certbot renew --quiet --deploy-hook "systemctl restart demarkus"
+```
+
+**Example systemd service** (`/etc/systemd/system/demarkus.service`):
+```ini
+[Unit]
+Description=Demarkus Mark Protocol Server
+After=network.target
+
+[Service]
+Type=simple
+User=demarkus
+ExecStart=/usr/local/bin/demarkus-server
+Environment=DEMARKUS_ROOT=/srv/content
+Environment=DEMARKUS_TLS_CERT=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
+Environment=DEMARKUS_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now demarkus
 ```
 
 ## Core Principles
