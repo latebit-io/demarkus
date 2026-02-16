@@ -4,9 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/latebit/demarkus/client/internal/cache"
@@ -17,7 +15,8 @@ import (
 func main() {
 	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST)")
 	noCache := flag.Bool("no-cache", false, "disable caching")
-	cacheDir := flag.String("cache-dir", defaultCacheDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
+	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
+	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus [-X VERB] mark://host:port/path\n\n")
 		flag.PrintDefaults()
@@ -34,30 +33,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	u, err := url.Parse(flag.Arg(0))
+	host, path, err := fetch.ParseMarkURL(flag.Arg(0))
 	if err != nil {
-		log.Fatalf("invalid URL: %v", err)
-	}
-	if u.Scheme != "mark" {
-		log.Fatalf("unsupported scheme: %s (expected mark://)", u.Scheme)
+		log.Fatal(err)
 	}
 
-	host := u.Host
-	if u.Port() == "" {
-		host = fmt.Sprintf("%s:%d", u.Hostname(), protocol.DefaultPort)
-	}
-
-	path := u.Path
-	if path == "" {
-		path = "/"
-	}
-
-	var c *cache.Cache
+	opts := fetch.Options{Insecure: *insecure}
 	if !*noCache {
-		c = cache.New(*cacheDir)
+		opts.Cache = cache.New(*cacheDir)
 	}
 
-	result, err := fetch.Fetch(host, path, *verb, c)
+	client := fetch.NewClient(opts)
+	defer client.Close()
+
+	result, err := client.Fetch(host, path, *verb)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -83,15 +72,4 @@ func validateVerb(verb string) error {
 		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST)", verb)
 	}
 	return nil
-}
-
-func defaultCacheDir() string {
-	if dir := os.Getenv("DEMARKUS_CACHE_DIR"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".", ".mark", "cache")
-	}
-	return filepath.Join(home, ".mark", "cache")
 }

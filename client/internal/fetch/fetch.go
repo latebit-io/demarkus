@@ -6,11 +6,33 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"net/url"
+	"sync"
 
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/protocol"
 	"github.com/quic-go/quic-go"
 )
+
+// ParseMarkURL parses a mark:// URL and returns the host (with default port) and path.
+func ParseMarkURL(raw string) (host, path string, err error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "mark" {
+		return "", "", fmt.Errorf("unsupported scheme: %s (expected mark://)", u.Scheme)
+	}
+	host = u.Host
+	if u.Port() == "" {
+		host = fmt.Sprintf("%s:%d", u.Hostname(), protocol.DefaultPort)
+	}
+	path = u.Path
+	if path == "" {
+		path = "/"
+	}
+	return host, path, nil
+}
 
 // Result holds a fetch response and metadata about how it was served.
 type Result struct {
@@ -18,20 +40,92 @@ type Result struct {
 	FromCache bool
 }
 
-// Fetch retrieves a document from a Mark Protocol server.
-// If c is non-nil, cache conditional headers are sent and successful responses are cached.
-func Fetch(host, path, verb string, c *cache.Cache) (Result, error) {
-	tlsConf := &tls.Config{
-		InsecureSkipVerify: true,
-		NextProtos:         []string{protocol.ALPN},
+// Options configures client behavior.
+type Options struct {
+	Cache    *cache.Cache
+	Insecure bool
+}
+
+// Client manages QUIC connections and fetches Mark Protocol documents.
+type Client struct {
+	opts    Options
+	tlsConf *tls.Config
+	mu      sync.Mutex
+	conns   map[string]*quic.Conn
+}
+
+// NewClient creates a new fetch client with the given options.
+func NewClient(opts Options) *Client {
+	return &Client{
+		opts: opts,
+		tlsConf: &tls.Config{
+			InsecureSkipVerify: opts.Insecure,
+			NextProtos:         []string{protocol.ALPN},
+		},
+		conns: make(map[string]*quic.Conn),
+	}
+}
+
+// Close closes all pooled connections.
+func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for host, conn := range c.conns {
+		conn.CloseWithError(0, "")
+		delete(c.conns, host)
+	}
+}
+
+// getConn returns a pooled connection to host, or dials a new one.
+func (c *Client) getConn(host string) (*quic.Conn, error) {
+	c.mu.Lock()
+	conn, ok := c.conns[host]
+	c.mu.Unlock()
+
+	if ok {
+		return conn, nil
 	}
 
-	conn, err := quic.DialAddr(context.Background(), host, tlsConf, nil)
+	conn, err := quic.DialAddr(context.Background(), host, c.tlsConf, nil)
 	if err != nil {
-		return Result{}, fmt.Errorf("dial %s: %w", host, err)
+		return nil, fmt.Errorf("dial %s: %w", host, err)
 	}
-	defer conn.CloseWithError(0, "")
 
+	c.mu.Lock()
+	c.conns[host] = conn
+	c.mu.Unlock()
+
+	return conn, nil
+}
+
+// removeConn removes a stale connection from the pool.
+func (c *Client) removeConn(host string) {
+	c.mu.Lock()
+	delete(c.conns, host)
+	c.mu.Unlock()
+}
+
+// Fetch retrieves a document from a Mark Protocol server.
+func (c *Client) Fetch(host, path, verb string) (Result, error) {
+	conn, err := c.getConn(host)
+	if err != nil {
+		return Result{}, err
+	}
+
+	result, err := c.fetchOnConn(conn, host, path, verb)
+	if err != nil {
+		// Connection may be stale — redial once and retry.
+		c.removeConn(host)
+		conn, dialErr := c.getConn(host)
+		if dialErr != nil {
+			return Result{}, err
+		}
+		return c.fetchOnConn(conn, host, path, verb)
+	}
+	return result, nil
+}
+
+func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb string) (Result, error) {
 	stream, err := conn.OpenStreamSync(context.Background())
 	if err != nil {
 		return Result{}, fmt.Errorf("open stream: %w", err)
@@ -40,8 +134,8 @@ func Fetch(host, path, verb string, c *cache.Cache) (Result, error) {
 	req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
 	var cached *cache.Entry
-	if c != nil {
-		cached, _ = c.Get(host, path, verb)
+	if c.opts.Cache != nil {
+		cached, _ = c.opts.Cache.Get(host, path, verb)
 		if cached != nil {
 			if etag := cached.Response.Metadata["etag"]; etag != "" {
 				req.Metadata["if-none-match"] = etag
@@ -63,13 +157,13 @@ func Fetch(host, path, verb string, c *cache.Cache) (Result, error) {
 	}
 
 	fromCache := false
-	if resp.Status == protocol.StatusNotModified && cached != nil {
+	if resp.Status == protocol.StatusNotModified && cached != nil && cached.Response.Status == protocol.StatusOK {
 		resp = cached.Response
 		fromCache = true
 	}
 
-	if c != nil && resp.Status == protocol.StatusOK {
-		if err := c.Put(host, path, verb, resp); err != nil {
+	if c.opts.Cache != nil && resp.Status == protocol.StatusOK {
+		if err := c.opts.Cache.Put(host, path, verb, resp); err != nil {
 			log.Printf("cache write: %v", err)
 		}
 	}

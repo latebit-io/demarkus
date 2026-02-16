@@ -71,11 +71,11 @@ run-server: server
 
 # Run client (for development)
 run-client: client
-	./client/bin/demarkus $(URL)
+	./client/bin/demarkus --insecure $(URL)
 
 # Run TUI (for development)
 run-tui: client
-	./client/bin/demarkus-tui $(URL)
+	./client/bin/demarkus-tui --insecure $(URL)
 
 # Format code
 fmt:
