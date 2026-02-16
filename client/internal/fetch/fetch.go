@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/protocol"
@@ -86,7 +87,10 @@ func (c *Client) getConn(host string) (*quic.Conn, error) {
 		return conn, nil
 	}
 
-	conn, err := quic.DialAddr(context.Background(), host, c.tlsConf, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := quic.DialAddr(ctx, host, c.tlsConf, nil)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", host, err)
 	}
@@ -126,10 +130,14 @@ func (c *Client) Fetch(host, path, verb string) (Result, error) {
 }
 
 func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb string) (Result, error) {
-	stream, err := conn.OpenStreamSync(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("open stream: %w", err)
 	}
+	defer stream.Close()
 
 	req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
@@ -149,6 +157,7 @@ func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb string) (Result, 
 	if _, err := req.WriteTo(stream); err != nil {
 		return Result{}, fmt.Errorf("send request: %w", err)
 	}
+	// Send FIN so the server knows the request is complete.
 	stream.Close()
 
 	resp, err := protocol.ParseResponse(stream)
