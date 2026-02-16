@@ -1,10 +1,9 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -25,18 +24,19 @@ const (
 )
 
 type model struct {
-	addressBar textinput.Model
-	viewport   viewport.Model
-	focus      focus
-	status     string
-	metadata   map[string]string
-	fromCache  bool
-	err        error
-	loading    bool
-	cache      *cache.Cache
-	width      int
-	height     int
-	ready      bool
+	addressBar  textinput.Model
+	viewport    viewport.Model
+	focus       focus
+	status      string
+	metadata    map[string]string
+	fromCache   bool
+	err         error
+	loading     bool
+	client      *fetch.Client
+	pendingBody string
+	width       int
+	height      int
+	ready       bool
 }
 
 type fetchResult struct {
@@ -45,7 +45,7 @@ type fetchResult struct {
 	url    string
 }
 
-func initialModel(initialURL string, c *cache.Cache) model {
+func initialModel(initialURL string, client *fetch.Client) model {
 	ti := textinput.New()
 	ti.Placeholder = "mark://host:port/path"
 	ti.Prompt = " "
@@ -55,13 +55,14 @@ func initialModel(initialURL string, c *cache.Cache) model {
 	return model{
 		addressBar: ti,
 		focus:      focusAddressBar,
-		cache:      c,
+		client:     client,
 	}
 }
 
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{textinput.Blink}
 	if m.addressBar.Value() != "" {
+		m.loading = true
 		cmds = append(cmds, m.doFetch(m.addressBar.Value()))
 	}
 	return tea.Batch(cmds...)
@@ -86,9 +87,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Forward all mouse events to viewport (scroll wheel, etc).
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
+		if m.ready {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -103,6 +107,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.ready {
 			m.viewport = viewport.New(m.width, viewportHeight)
 			m.ready = true
+			if m.pendingBody != "" {
+				rendered, err := renderMarkdown(m.pendingBody, m.width)
+				if err != nil {
+					m.viewport.SetContent(m.pendingBody)
+				} else {
+					m.viewport.SetContent(rendered)
+				}
+				m.pendingBody = ""
+			}
+			if m.err != nil {
+				m.viewport.SetContent(errorView(m.err))
+			}
 		} else {
 			m.viewport.Width = m.width
 			m.viewport.Height = viewportHeight
@@ -117,7 +133,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = ""
 			m.metadata = nil
 			m.fromCache = false
-			m.viewport.SetContent(errorView(msg.err))
+			if m.ready {
+				m.viewport.SetContent(errorView(msg.err))
+			}
 			return m, nil
 		}
 		m.err = nil
@@ -125,16 +143,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.metadata = msg.result.Response.Metadata
 		m.fromCache = msg.result.FromCache
 
-		rendered, err := renderMarkdown(msg.result.Response.Body, m.width)
-		if err != nil {
-			m.viewport.SetContent(msg.result.Response.Body)
+		if m.ready {
+			rendered, err := renderMarkdown(msg.result.Response.Body, m.width)
+			if err != nil {
+				m.viewport.SetContent(msg.result.Response.Body)
+			} else {
+				m.viewport.SetContent(rendered)
+			}
+			m.viewport.GotoTop()
 		} else {
-			m.viewport.SetContent(rendered)
+			m.pendingBody = msg.result.Response.Body
 		}
-		m.viewport.GotoTop()
 		m.focus = focusViewport
 		m.addressBar.Blur()
-		return m, nil
+		return m, tea.ClearScreen
 	}
 
 	return m, nil
@@ -248,37 +270,21 @@ func (m model) statusBarView() string {
 	scroll := fmt.Sprintf("%d%%", int(m.viewport.ScrollPercent()*100))
 	parts = append(parts, scroll)
 
+	if m.status != protocol.StatusOK {
+		style = style.Foreground(lipgloss.Color("11"))
+	}
 	return style.Render(strings.Join(parts, "  "))
 }
 
 func (m model) doFetch(raw string) tea.Cmd {
 	return func() tea.Msg {
-		host, path, err := parseMarkURL(raw)
+		host, path, err := fetch.ParseMarkURL(raw)
 		if err != nil {
 			return fetchResult{err: err, url: raw}
 		}
-		result, err := fetch.Fetch(host, path, protocol.VerbFetch, m.cache)
+		result, err := m.client.Fetch(host, path, protocol.VerbFetch)
 		return fetchResult{result: result, err: err, url: raw}
 	}
-}
-
-func parseMarkURL(raw string) (host, path string, err error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid URL: %w", err)
-	}
-	if u.Scheme != "mark" {
-		return "", "", fmt.Errorf("unsupported scheme: %s (expected mark://)", u.Scheme)
-	}
-	host = u.Host
-	if u.Port() == "" {
-		host = fmt.Sprintf("%s:%d", u.Hostname(), protocol.DefaultPort)
-	}
-	path = u.Path
-	if path == "" {
-		path = "/"
-	}
-	return host, path, nil
 }
 
 func renderMarkdown(body string, width int) (string, error) {
@@ -296,27 +302,23 @@ func errorView(err error) string {
 	return fmt.Sprintf("\n  Error: %s\n", err.Error())
 }
 
-func defaultCacheDir() string {
-	if dir := os.Getenv("DEMARKUS_CACHE_DIR"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".", ".mark", "cache")
-	}
-	return filepath.Join(home, ".mark", "cache")
-}
-
 func main() {
-	c := cache.New(defaultCacheDir())
+	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
+	flag.Parse()
+
+	client := fetch.NewClient(fetch.Options{
+		Cache:    cache.New(cache.DefaultDir()),
+		Insecure: *insecure,
+	})
+	defer client.Close()
 
 	initialURL := ""
-	if len(os.Args) > 1 {
-		initialURL = os.Args[1]
+	if flag.NArg() > 0 {
+		initialURL = flag.Arg(0)
 	}
 
 	p := tea.NewProgram(
-		initialModel(initialURL, c),
+		initialModel(initialURL, client),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
