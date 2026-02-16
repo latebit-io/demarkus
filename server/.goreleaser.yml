@@ -40,7 +40,7 @@ dockers:
     goos: linux
     goarch: amd64
     image_templates:
-      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-amd64"
+      - "ghcr.io/latebit-io/demarkus-server:{{ .Version }}-amd64"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
@@ -52,7 +52,7 @@ dockers:
     goos: linux
     goarch: arm64
     image_templates:
-      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-arm64"
+      - "ghcr.io/latebit-io/demarkus-server:{{ .Version }}-arm64"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
@@ -65,24 +65,24 @@ dockers:
     goarch: arm
     goarm: "7"
     image_templates:
-      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-armv7"
+      - "ghcr.io/latebit-io/demarkus-server:{{ .Version }}-armv7"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
       - "--platform=linux/arm/v7"
 
 docker_manifests:
-  - name_template: "ghcr.io/latebit/demarkus-server:{{ .Version }}"
+  - name_template: "ghcr.io/latebit-io/demarkus-server:{{ .Version }}"
     image_templates:
-      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-amd64"
-      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-arm64"
-      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-armv7"
+      - "ghcr.io/latebit-io/demarkus-server:{{ .Version }}-amd64"
+      - "ghcr.io/latebit-io/demarkus-server:{{ .Version }}-arm64"
+      - "ghcr.io/latebit-io/demarkus-server:{{ .Version }}-armv7"
 
-  - name_template: "ghcr.io/latebit/demarkus-server:latest"
+  - name_template: "ghcr.io/latebit-io/demarkus-server:latest"
     image_templates:
-      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-amd64"
-      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-arm64"
-      - "ghcr.io/latebit/demarkus-server:{{ .Version }}-armv7"
+      - "ghcr.io/latebit-io/demarkus-server:{{ .Version }}-amd64"
+      - "ghcr.io/latebit-io/demarkus-server:{{ .Version }}-arm64"
+      - "ghcr.io/latebit-io/demarkus-server:{{ .Version }}-armv7"
 
 changelog:
   use: github-native
