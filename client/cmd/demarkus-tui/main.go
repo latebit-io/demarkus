@@ -56,13 +56,13 @@ func initialModel(initialURL string, client *fetch.Client) model {
 		addressBar: ti,
 		focus:      focusAddressBar,
 		client:     client,
+		loading:    initialURL != "",
 	}
 }
 
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{textinput.Blink}
 	if m.addressBar.Value() != "" {
-		m.loading = true
 		cmds = append(cmds, m.doFetch(m.addressBar.Value()))
 	}
 	return tea.Batch(cmds...)
