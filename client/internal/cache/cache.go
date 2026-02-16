@@ -80,7 +80,7 @@ func (c *Cache) Get(host, path, verb string) (*Entry, error) {
 
 	var m meta
 	if _, err := toml.DecodeFile(metaPath, &m); err != nil {
-		return nil, err
+		return nil, nil
 	}
 
 	return &Entry{
@@ -95,6 +95,9 @@ func (c *Cache) Get(host, path, verb string) (*Entry, error) {
 
 // filePath returns the cache file path for a given host, request path, and verb.
 func (c *Cache) filePath(host, reqPath, verb string) string {
+	safeHost := strings.ReplaceAll(host, "..", "_")
+	safeHost = strings.ReplaceAll(safeHost, string(filepath.Separator), "_")
+
 	cleaned := filepath.Clean(reqPath)
 	cleaned = strings.TrimLeft(cleaned, "/")
 
@@ -106,5 +109,5 @@ func (c *Cache) filePath(host, reqPath, verb string) string {
 		cleaned = ".index"
 	}
 
-	return filepath.Join(c.Dir, host, cleaned)
+	return filepath.Join(c.Dir, safeHost, cleaned)
 }

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -51,6 +50,9 @@ func ParseRequest(r io.Reader) (Request, error) {
 			fmBuf.WriteString(scanner.Text())
 			fmBuf.WriteByte('\n')
 		}
+		if err := scanner.Err(); err != nil {
+			return Request{}, fmt.Errorf("reading request metadata: %w", err)
+		}
 		if fmBuf.Len() > 0 {
 			var raw map[string]string
 			if err := yaml.Unmarshal([]byte(fmBuf.String()), &raw); err != nil {
@@ -70,15 +72,12 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 	fmt.Fprintf(&buf, "%s %s\n", req.Verb, req.Path)
 
 	if len(req.Metadata) > 0 {
+		yamlBytes, err := yaml.Marshal(req.Metadata)
+		if err != nil {
+			return 0, fmt.Errorf("encoding request metadata: %w", err)
+		}
 		buf.WriteString("---\n")
-		keys := make([]string, 0, len(req.Metadata))
-		for k := range req.Metadata {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			buf.WriteString(k + ": " + req.Metadata[k] + "\n")
-		}
+		buf.Write(yamlBytes)
 		buf.WriteString("---\n")
 	}
 
