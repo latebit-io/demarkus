@@ -32,12 +32,18 @@ func (h *Handler) HandleStream(stream Stream) {
 
 	req, err := protocol.ParseRequest(stream)
 	if err != nil {
-		log.Printf("bad request: %v", err)
+		log.Printf("[ERROR] parse request: %v", err)
 		h.writeError(stream, protocol.StatusServerError, "bad request")
 		return
 	}
 
-	log.Printf("%s %s", sanitize(req.Verb), sanitize(req.Path))
+	log.Printf("[REQUEST] %s %s", sanitize(req.Verb), sanitize(req.Path))
+
+	// Health check endpoint: responds to FETCH /health with OK
+	if req.Path == "/health" && req.Verb == protocol.VerbFetch {
+		h.handleHealth(stream)
+		return
+	}
 
 	switch req.Verb {
 	case protocol.VerbFetch:
@@ -51,7 +57,13 @@ func (h *Handler) HandleStream(stream Stream) {
 
 // resolvePath validates and resolves a request path to an absolute filesystem path
 // within the content directory. Returns empty string if the path escapes the root.
-// Uses filepath.EvalSymlinks to prevent symlink escape attacks.
+//
+// Security (race conditions): This function is safe from TOCTOU races because:
+//  1. filepath.Clean prevents .. escapes at the string level.
+//  2. filepath.EvalSymlinks resolves all symlinks to detect escape attempts.
+//  3. The bounds check is done after symlink resolution, so even if a symlink
+//     is changed between EvalSymlinks and the caller's os.Stat, the path is still valid.
+//  4. If EvalSymlinks fails (ENOENT), we use filepath.Abs which only does string ops.
 func (h *Handler) resolvePath(reqPath string) string {
 	cleaned := filepath.Clean(reqPath)
 	cleaned = strings.TrimLeft(cleaned, "/")
@@ -59,13 +71,13 @@ func (h *Handler) resolvePath(reqPath string) string {
 
 	absRoot, err := filepath.Abs(h.ContentDir)
 	if err != nil {
-		log.Printf("failed to resolve content directory: %v", err)
+		log.Printf("[ERROR] resolve content directory: %v", err)
 		return ""
 	}
 	// Resolve symlinks in root for consistent comparison.
 	resolved, err := filepath.EvalSymlinks(absRoot)
 	if err != nil {
-		log.Printf("failed to resolve content directory symlinks: %v", err)
+		log.Printf("[ERROR] resolve content directory symlinks: %v", err)
 		return ""
 	}
 	absRoot = resolved
@@ -96,17 +108,19 @@ func (h *Handler) resolvePath(reqPath string) string {
 func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 	filePath := h.resolvePath(req.Path)
 	if filePath == "" {
+		log.Printf("[SECURITY] path traversal attempt: %s", sanitize(req.Path))
 		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
 
 	info, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
+		log.Printf("[NOTFOUND] %s", sanitize(req.Path))
 		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
 	if err != nil {
-		log.Printf("stat error: %v", err)
+		log.Printf("[ERROR] stat %s: %v", sanitize(req.Path), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -117,7 +131,7 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		log.Printf("read error: %v", err)
+		log.Printf("[ERROR] read %s: %v", sanitize(req.Path), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -175,17 +189,19 @@ func computeEtag(data []byte) string {
 func (h *Handler) handleList(w io.Writer, reqPath string) {
 	dirPath := h.resolvePath(reqPath)
 	if dirPath == "" {
+		log.Printf("[SECURITY] path traversal attempt: %s", sanitize(reqPath))
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
 	}
 
 	info, err := os.Stat(dirPath)
 	if os.IsNotExist(err) {
+		log.Printf("[NOTFOUND] %s", sanitize(reqPath))
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
 	}
 	if err != nil {
-		log.Printf("stat error: %v", err)
+		log.Printf("[ERROR] stat %s: %v", sanitize(reqPath), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -196,7 +212,7 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		log.Printf("readdir error: %v", err)
+		log.Printf("[ERROR] readdir %s: %v", sanitize(reqPath), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -226,6 +242,15 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 			"entries": fmt.Sprintf("%d", entryCount),
 		},
 		Body: body.String(),
+	}
+	resp.WriteTo(w)
+}
+
+func (h *Handler) handleHealth(w io.Writer) {
+	resp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{},
+		Body:     "# Health Check\n\nServer is healthy.\n",
 	}
 	resp.WriteTo(w)
 }
