@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/latebit/demarkus/protocol"
 	"github.com/latebit/demarkus/server/internal/config"
 	"github.com/latebit/demarkus/server/internal/handler"
 	servertls "github.com/latebit/demarkus/server/internal/tls"
@@ -47,7 +48,7 @@ func main() {
 		log.Fatal("[ERROR] content directory is required (set DEMARKUS_ROOT or use -root flag)")
 	}
 
-	tlsConfig, err := loadTLS(cfg)
+	tlsConfig, prodMode, err := loadTLS(cfg)
 	if err != nil {
 		log.Fatalf("[ERROR] %v", err)
 	}
@@ -73,6 +74,23 @@ func main() {
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Set up SIGHUP handler for certificate reload (production mode only)
+	sighupChan := make(chan os.Signal, 1)
+	signal.Notify(sighupChan, syscall.SIGHUP)
+	go func() {
+		for range sighupChan {
+			if !prodMode {
+				log.Printf("[WARN] tls: certificate reload not supported in dev mode")
+				continue
+			}
+			if err := loadCert(cfg.TLSCert, cfg.TLSKey); err != nil {
+				log.Printf("[ERROR] tls: certificate reload failed: %v", err)
+			} else {
+				log.Printf("[INFO] tls: certificate reloaded from %s", cfg.TLSCert)
+			}
+		}
+	}()
 
 	// Accept connections in a goroutine so we can listen for shutdown signals
 	var wg sync.WaitGroup
@@ -133,22 +151,52 @@ func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duratio
 	}
 }
 
+var (
+	certMu      sync.RWMutex
+	currentCert *tls.Certificate
+)
+
+// loadCert loads a TLS certificate from disk and stores it for serving.
+func loadCert(certFile, keyFile string) error {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return fmt.Errorf("loading TLS certificate: %w", err)
+	}
+	certMu.Lock()
+	currentCert = &cert
+	certMu.Unlock()
+	return nil
+}
+
 // loadTLS returns a TLS config based on the server configuration.
-// If TLSCert and TLSKey are set, loads certificates from disk (production mode).
+// In production mode (cert+key provided), uses GetCertificate callback
+// so certificates can be reloaded at runtime via SIGHUP.
 // If neither is set, generates a self-signed dev certificate.
 // Returns an error if only one of cert/key is provided.
-func loadTLS(cfg *config.Config) (*tls.Config, error) {
+func loadTLS(cfg *config.Config) (tlsConfig *tls.Config, prodMode bool, err error) {
 	haveCert := cfg.TLSCert != ""
 	haveKey := cfg.TLSKey != ""
 
 	switch {
 	case haveCert && haveKey:
 		log.Printf("[INFO] tls: loading certificate from %s", cfg.TLSCert)
-		return servertls.LoadConfig(cfg.TLSCert, cfg.TLSKey)
+		if err := loadCert(cfg.TLSCert, cfg.TLSKey); err != nil {
+			return nil, false, err
+		}
+		return &tls.Config{
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+				certMu.RLock()
+				defer certMu.RUnlock()
+				return currentCert, nil
+			},
+			MinVersion: tls.VersionTLS13,
+			NextProtos: []string{protocol.ALPN},
+		}, true, nil
 	case haveCert != haveKey:
-		return nil, fmt.Errorf("both -tls-cert and -tls-key must be provided (got cert=%q, key=%q)", cfg.TLSCert, cfg.TLSKey)
+		return nil, false, fmt.Errorf("both -tls-cert and -tls-key must be provided (got cert=%q, key=%q)", cfg.TLSCert, cfg.TLSKey)
 	default:
 		log.Printf("[INFO] tls: using self-signed dev certificate (set DEMARKUS_TLS_CERT and DEMARKUS_TLS_KEY for production)")
-		return servertls.GenerateDevConfig()
+		tc, err := servertls.GenerateDevConfig()
+		return tc, false, err
 	}
 }

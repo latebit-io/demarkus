@@ -120,7 +120,12 @@ sudo ufw allow 6309/udp
 
 **5. Auto-renew certificates** with a cron job or systemd timer:
 ```bash
-# Add to crontab (runs twice daily, restarts server on renewal)
+# Add to crontab (runs twice daily, reloads cert on renewal — no downtime)
+0 */12 * * * certbot renew --quiet --deploy-hook "kill -HUP $(pidof demarkus-server)"
+```
+
+The server reloads certificates on `SIGHUP` without dropping connections. If you prefer a full restart instead:
+```bash
 0 */12 * * * certbot renew --quiet --deploy-hook "systemctl restart demarkus"
 ```
 
