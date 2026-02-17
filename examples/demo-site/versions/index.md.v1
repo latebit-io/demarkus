@@ -1,0 +1,23 @@
+---
+version: 1
+---
+
+# Welcome to Demarkus
+
+This is the first version of the Demarkus demo site.
+
+## What is Demarkus?
+
+Demarkus is a new protocol for serving markdown documents over QUIC.
+
+- **Privacy by default** - No tracking, no cookies
+- **Markdown-native** - Content is just markdown files
+- **Simple** - Human-readable protocol
+
+## Navigation
+
+- [About the Protocol](about.md)
+
+---
+
+*Built with Demarkus*

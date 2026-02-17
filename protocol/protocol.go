@@ -13,4 +13,7 @@ const (
 
 	// VerbList retrieves directory contents.
 	VerbList = "LIST"
+
+	// VerbVersions retrieves the version history of a document.
+	VerbVersions = "VERSIONS"
 )

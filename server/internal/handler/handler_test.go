@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit/demarkus/server/internal/store"
 )
 
 // mockStream implements handler.Stream for testing.
@@ -626,4 +627,199 @@ func TestContentDirAsSymlink(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestHandleVersions(t *testing.T) {
+	dir := setupContentDir(t, map[string]string{
+		"doc.md": "# Current\n",
+	})
+	// Create versioned files.
+	versionsDir := filepath.Join(dir, "versions")
+	os.Mkdir(versionsDir, 0o755)
+	os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# V1\n"), 0o644)
+	os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), []byte("# V2\n"), 0o644)
+
+	h := &Handler{
+		ContentDir: dir,
+		Store:      store.New(dir),
+	}
+
+	t.Run("version history", func(t *testing.T) {
+		stream := newMockStream("VERSIONS /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if resp.Metadata["total"] != "2" {
+			t.Errorf("total: got %q, want %q", resp.Metadata["total"], "2")
+		}
+		if resp.Metadata["current"] != "2" {
+			t.Errorf("current: got %q, want %q", resp.Metadata["current"], "2")
+		}
+		if !strings.Contains(resp.Body, "v1") || !strings.Contains(resp.Body, "v2") {
+			t.Errorf("body should list both versions: %q", resp.Body)
+		}
+	})
+
+	t.Run("flat file single version", func(t *testing.T) {
+		flatDir := setupContentDir(t, map[string]string{
+			"flat.md": "# Flat\n",
+		})
+		flatH := &Handler{
+			ContentDir: flatDir,
+			Store:      store.New(flatDir),
+		}
+
+		stream := newMockStream("VERSIONS /flat.md\n")
+		flatH.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if resp.Metadata["total"] != "1" {
+			t.Errorf("total: got %q, want %q", resp.Metadata["total"], "1")
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		stream := newMockStream("VERSIONS /missing.md\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
+		}
+	})
+
+	t.Run("no store configured", func(t *testing.T) {
+		noStoreH := &Handler{ContentDir: dir}
+
+		stream := newMockStream("VERSIONS /doc.md\n")
+		noStoreH.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusServerError {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusServerError)
+		}
+	})
+}
+
+func TestFetchVersion(t *testing.T) {
+	dir := setupContentDir(t, map[string]string{
+		"doc.md": "# Current\n",
+	})
+	versionsDir := filepath.Join(dir, "versions")
+	os.Mkdir(versionsDir, 0o755)
+	os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# Version One\n"), 0o644)
+	os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), []byte("# Version Two\n"), 0o644)
+
+	h := &Handler{
+		ContentDir: dir,
+		Store:      store.New(dir),
+	}
+
+	t.Run("fetch specific version", func(t *testing.T) {
+		stream := newMockStream("FETCH /doc.md/v1\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if !strings.Contains(resp.Body, "# Version One") {
+			t.Errorf("body should contain v1 content: %q", resp.Body)
+		}
+		if resp.Metadata["version"] != "1" {
+			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "1")
+		}
+		if resp.Metadata["current-version"] != "2" {
+			t.Errorf("current-version: got %q, want %q", resp.Metadata["current-version"], "2")
+		}
+	})
+
+	t.Run("fetch nonexistent version", func(t *testing.T) {
+		stream := newMockStream("FETCH /doc.md/v99\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
+		}
+	})
+
+	t.Run("fetch version of nonexistent doc", func(t *testing.T) {
+		stream := newMockStream("FETCH /missing.md/v1\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
+		}
+	})
+
+	t.Run("version path without store falls through to normal fetch", func(t *testing.T) {
+		noStoreH := &Handler{ContentDir: dir}
+
+		// Without a store, /doc.md/v1 is treated as a regular path (not found)
+		stream := newMockStream("FETCH /doc.md/v1\n")
+		noStoreH.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
+		}
+	})
+}
+
+func TestParseVersionPath(t *testing.T) {
+	tests := []struct {
+		path    string
+		base    string
+		version int
+	}{
+		{"/doc.md/v1", "/doc.md", 1},
+		{"/doc.md/v42", "/doc.md", 42},
+		{"/docs/guide.md/v3", "/docs/guide.md", 3},
+		{"/doc.md", "/doc.md", 0},
+		{"/doc.md/v0", "/doc.md/v0", 0},
+		{"/doc.md/v-1", "/doc.md/v-1", 0},
+		{"/doc.md/notversion", "/doc.md/notversion", 0},
+		{"/v1", "/v1", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			base, version := parseVersionPath(tt.path)
+			if base != tt.base || version != tt.version {
+				t.Errorf("parseVersionPath(%q) = (%q, %d), want (%q, %d)",
+					tt.path, base, version, tt.base, tt.version)
+			}
+		})
+	}
 }

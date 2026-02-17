@@ -10,10 +10,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit/demarkus/server/internal/store"
 )
 
 // MaxFileSize is the maximum file size the server will serve (10 MB).
@@ -25,6 +27,7 @@ const MaxDirectoryEntries = 1000
 // Handler serves markdown files from a content directory.
 type Handler struct {
 	ContentDir string
+	Store      *store.Store
 }
 
 // Stream represents a bidirectional stream that can be read, written, and closed.
@@ -56,6 +59,8 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handleFetch(stream, req)
 	case protocol.VerbList:
 		h.handleList(stream, req.Path)
+	case protocol.VerbVersions:
+		h.handleVersions(stream, req.Path)
 	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
@@ -111,7 +116,32 @@ func (h *Handler) resolvePath(reqPath string) string {
 	return absPath
 }
 
+// parseVersionPath checks if a path ends with /vN (e.g., /doc.md/v3).
+// Returns the base path and version number, or the original path and 0.
+func parseVersionPath(reqPath string) (string, int) {
+	dir, last := filepath.Split(reqPath)
+	if !strings.HasPrefix(last, "v") {
+		return reqPath, 0
+	}
+	num, err := strconv.Atoi(last[1:])
+	if err != nil || num < 1 {
+		return reqPath, 0
+	}
+	// dir has trailing slash, clean it
+	base := strings.TrimRight(dir, "/")
+	if base == "" {
+		return reqPath, 0
+	}
+	return base, num
+}
+
 func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
+	// Check for path-based version access: FETCH /doc.md/v3
+	if basePath, version := parseVersionPath(req.Path); version > 0 && h.Store != nil {
+		h.handleFetchVersion(w, req, basePath, version)
+		return
+	}
+
 	filePath := h.resolvePath(req.Path)
 	if filePath == "" {
 		log.Printf("[SECURITY] path traversal attempt: %s", sanitize(req.Path))
@@ -255,6 +285,84 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 		Status: protocol.StatusOK,
 		Metadata: map[string]string{
 			"entries": fmt.Sprintf("%d", entryCount),
+		},
+		Body: body.String(),
+	}
+	writeResponse(w, resp)
+}
+
+func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath string, version int) {
+	doc, err := h.Store.Get(basePath, version)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("[NOTFOUND] %s (v%d)", sanitize(basePath), version)
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
+		log.Printf("[ERROR] fetch version %s v%d: %v", sanitize(basePath), version, err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	if int64(len(doc.Content)) > MaxFileSize {
+		log.Printf("[ERROR] file too large: %s v%d (%d bytes)", sanitize(basePath), version, len(doc.Content))
+		h.writeError(w, protocol.StatusServerError, "file exceeds size limit")
+		return
+	}
+
+	body, existingMeta := stripFrontmatter(string(doc.Content))
+
+	meta := map[string]string{
+		"modified": doc.Modified.Format(time.RFC3339),
+		"version":  strconv.Itoa(doc.Version),
+	}
+	// Preserve version from file frontmatter if present.
+	if v, ok := existingMeta["version"]; ok {
+		meta["version"] = v
+	}
+	// Indicate current version so client knows if this is historical.
+	current := h.Store.CurrentVersion(basePath)
+	meta["current-version"] = strconv.Itoa(current)
+
+	resp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: meta,
+		Body:     body,
+	}
+	writeResponse(w, resp)
+}
+
+func (h *Handler) handleVersions(w io.Writer, reqPath string) {
+	if h.Store == nil {
+		h.writeError(w, protocol.StatusServerError, "versioning not configured")
+		return
+	}
+
+	versions, err := h.Store.Versions(reqPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("[NOTFOUND] %s", sanitize(reqPath))
+			h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
+			return
+		}
+		log.Printf("[ERROR] versions %s: %v", sanitize(reqPath), err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	var body strings.Builder
+	body.WriteString("\n# Version History: " + escapeMD(reqPath) + "\n\n")
+	for _, v := range versions {
+		body.WriteString(fmt.Sprintf("- [v%d](%s/v%d) - %s\n",
+			v.Version, escapeURL(reqPath), v.Version,
+			v.Modified.Format(time.RFC3339)))
+	}
+
+	resp := protocol.Response{
+		Status: protocol.StatusOK,
+		Metadata: map[string]string{
+			"total":   fmt.Sprintf("%d", len(versions)),
+			"current": fmt.Sprintf("%d", versions[0].Version),
 		},
 		Body: body.String(),
 	}
