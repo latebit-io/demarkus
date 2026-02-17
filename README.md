@@ -95,14 +95,14 @@ Certificates are saved to `/etc/letsencrypt/live/yourdomain.com/`.
 **2. Start the server with real certificates**:
 ```bash
 ./demarkus-server \
-  -root /srv/content \
-  -tls-cert /etc/letsencrypt/live/yourdomain.com/fullchain.pem \
-  -tls-key /etc/letsencrypt/live/yourdomain.com/privkey.pem
+  -root /srv/blog \
+  -tls-cert /etc/letsencrypt/live/demarkus.latebit.io/fullchain.pem \
+  -tls-key /etc/letsencrypt/live/demarkus.latebit.io/privkey.pem
 ```
 
 Or using environment variables:
 ```bash
-export DEMARKUS_ROOT=/srv/content
+export DEMARKUS_ROOT=/srv/blog
 export DEMARKUS_TLS_CERT=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
 export DEMARKUS_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
 ./demarkus-server
@@ -139,7 +139,7 @@ After=network.target
 Type=simple
 User=demarkus
 ExecStart=/usr/local/bin/demarkus-server
-Environment=DEMARKUS_ROOT=/srv/content
+Environment=DEMARKUS_ROOT=/srv/blog
 Environment=DEMARKUS_TLS_CERT=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
 Environment=DEMARKUS_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
 Restart=on-failure
