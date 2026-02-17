@@ -1036,6 +1036,128 @@ callback: mark://subscriber.com:6309/updates
 
 Server notifies subscriber when content changes.
 
+## Agent-Native Protocol
+
+Markdown is the lingua franca of AI. Training data, prompts, responses, tool outputs, and documentation are all markdown-formatted. This makes Demarkus a natural protocol for AI agent communication — agents already "think" in markdown, so no translation layer is needed.
+
+### Why Markdown is the Agent Format
+
+LLMs process markdown natively. Every major AI system uses markdown for:
+
+- Training data and knowledge bases
+- Prompt and response formatting
+- Tool output and function results
+- Documentation and specifications
+- Generated content and reports
+
+When an agent fetches a document over HTTP, it must parse HTML, strip ads, remove tracking scripts, and extract content. Over Mark Protocol, the agent receives clean, structured markdown — the format it already works in.
+
+### Agent Interaction Model
+
+```
+Agent discovers service via mark://api.example.com/
+↓
+Reads markdown-based API docs natively
+↓
+Calls endpoints, receives markdown responses
+↓
+Processes without HTML parsing overhead
+↓
+Caches results in distributed markdown cache
+```
+
+### Advantages Over HTTP/HTML for Agents
+
+- **No parsing complexity** — Agents already think in markdown, no HTML-to-text conversion
+- **Token efficiency** — Markdown is more compact than HTML, reducing LLM context usage
+- **Semantic clarity** — Headers, lists, and code blocks map directly to reasoning structures
+- **Machine-readable metadata** — YAML frontmatter provides structured data alongside content
+- **Cacheable knowledge** — Distributed markdown cache acts as shared agent memory
+- **Privacy-first** — No cookies, no tracking, no JavaScript execution risks
+- **Version control** — Git-native format enables change tracking and verification
+- **Composability** — Agents can remix and recombine markdown documents
+- **Validation** — Easier to verify agent-generated outputs against markdown schemas
+
+### Use Cases
+
+**Information Retrieval**:
+```
+mark://wikipedia.org/Quantum_Computing
+→ Returns pure markdown, no ads, no scripts, no bloat
+→ Agent parses natively, no extraction step
+```
+
+**API Documentation**:
+```
+mark://api.stripe.com/docs/payments
+→ Markdown API specs with structured parameters
+→ Agent reads, understands, and implements directly
+```
+
+**Collaborative Agent Networks**:
+```
+Agent A: mark://cache.network/topic/climate-data
+Agent B: Reads same cached markdown
+Agent C: Contributes updates via WRITE/APPEND
+→ Distributed knowledge graph in markdown
+```
+
+**Skills and Tool Definitions**:
+```
+mark://tools.example.com/weather/SKILL.md
+→ Agent fetches skill definition in markdown
+→ Parameters, endpoints, and response formats are already structured
+→ Direct execution without parsing
+```
+
+### Agent-First Features (Future)
+
+These features would make Demarkus a first-class protocol for agent ecosystems:
+
+- **Agent manifest discovery** — `.well-known/agent-manifest.md` describes available capabilities, rate limits, and authentication requirements
+- **Markdown-based function schemas** — Tool definitions as structured markdown with typed parameters
+- **Semantic versioning in frontmatter** — Agents can pin to specific API versions
+- **Agent authentication** — Capability tokens scoped to agent operations
+- **Rate limiting metadata** — Frontmatter communicates limits so agents self-throttle
+
+**Example: Agent-Capable Endpoint**:
+
+```markdown
+---
+agent-capable: true
+rate-limit: 100/hour
+auth-required: api-key
+---
+
+# Weather API
+
+## Get Current Weather
+
+**Endpoint:** `mark://weather.api/current`
+
+**Parameters:**
+- `location` (string): City name
+- `units` (string): `metric` or `imperial`
+
+**Response Format:**
+- Temperature: 5C
+- Conditions: Cloudy
+- Updated: 2026-02-17T00:30:00Z
+```
+
+### The Protocol Stack for Agents
+
+```
+Application Layer:  AI Skills/Tools (markdown)
+Protocol Layer:     Mark Protocol (markdown transfer)
+Cache Layer:        Distributed markdown cache
+Transport Layer:    QUIC (Go implementation)
+```
+
+This positions Demarkus as the transport layer for AI-native communication — human-readable AND machine-readable, with no translation layer between what agents process and what the protocol delivers.
+
+An information superhighway for both humans and agents: the same protocol, the same content format, the same caching infrastructure. Humans browse markdown documents in a TUI. Agents fetch markdown knowledge programmatically. Neither needs a different protocol or a translation step. The web bifurcated into human-facing HTML and machine-facing APIs — Demarkus unifies them.
+
 ## Implementation Roadmap
 
 ### Phase 1: MVP (Read-Only)
