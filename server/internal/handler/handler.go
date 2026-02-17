@@ -18,9 +18,6 @@ import (
 	"github.com/latebit/demarkus/server/internal/store"
 )
 
-// MaxFileSize is the maximum file size the server will serve (10 MB).
-const MaxFileSize = 10 * 1024 * 1024
-
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
 const MaxDirectoryEntries = 1000
 
@@ -164,7 +161,7 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusNotFound, req.Path+" is a directory")
 		return
 	}
-	if info.Size() > MaxFileSize {
+	if info.Size() > store.MaxFileSize {
 		log.Printf("[ERROR] file too large: %s (%d bytes)", sanitize(req.Path), info.Size())
 		h.writeError(w, protocol.StatusServerError, "file exceeds size limit")
 		return
@@ -304,7 +301,7 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 		return
 	}
 
-	if int64(len(doc.Content)) > MaxFileSize {
+	if int64(len(doc.Content)) > store.MaxFileSize {
 		log.Printf("[ERROR] file too large: %s v%d (%d bytes)", sanitize(basePath), version, len(doc.Content))
 		h.writeError(w, protocol.StatusServerError, "file exceeds size limit")
 		return
