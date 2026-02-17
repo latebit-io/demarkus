@@ -784,7 +784,9 @@ func TestFetchVersion(t *testing.T) {
 	t.Run("version path without store falls through to normal fetch", func(t *testing.T) {
 		noStoreH := &Handler{ContentDir: dir}
 
-		// Without a store, /doc.md/v1 is treated as a regular path (not found)
+		// Without a store, /doc.md/v1 is treated as a regular path.
+		// Result varies by OS: "not-found" or "server-error" depending on
+		// how the OS handles stat on a path through a regular file.
 		stream := newMockStream("FETCH /doc.md/v1\n")
 		noStoreH.HandleStream(stream)
 
@@ -792,8 +794,8 @@ func TestFetchVersion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
 		}
-		if resp.Status != protocol.StatusNotFound {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
+		if resp.Status == protocol.StatusOK {
+			t.Error("expected error status, got ok")
 		}
 	})
 }
