@@ -42,6 +42,9 @@ type VersionInfo struct {
 	Modified time.Time
 }
 
+// MaxFileSize is the maximum file size the store will read (10 MB).
+const MaxFileSize = 10 * 1024 * 1024
+
 // Store provides read access to a versioned document directory.
 type Store struct {
 	root string
@@ -74,7 +77,10 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 		return nil, err
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("%s is a directory", reqPath)
+		return nil, os.ErrNotExist
+	}
+	if info.Size() > MaxFileSize {
+		return nil, fmt.Errorf("file exceeds size limit")
 	}
 
 	data, err := os.ReadFile(filePath)
@@ -103,7 +109,7 @@ func (s *Store) ListDir(reqPath string) ([]os.DirEntry, error) {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory", reqPath)
+		return nil, os.ErrNotExist
 	}
 
 	entries, err := os.ReadDir(dirPath)
@@ -136,7 +142,7 @@ func (s *Store) Versions(reqPath string) ([]VersionInfo, error) {
 		return nil, err
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("%s is a directory", reqPath)
+		return nil, os.ErrNotExist
 	}
 
 	// Look for versioned files in the versions directory.
@@ -262,6 +268,9 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return nil, err
+	}
+	if info.Size() > MaxFileSize {
+		return nil, fmt.Errorf("file exceeds size limit")
 	}
 
 	data, err := os.ReadFile(filePath)
