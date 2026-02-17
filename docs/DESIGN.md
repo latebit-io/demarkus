@@ -1158,6 +1158,24 @@ This positions Demarkus as the transport layer for AI-native communication — h
 
 An information superhighway for both humans and agents: the same protocol, the same content format, the same caching infrastructure. Humans browse markdown documents in a TUI. Agents fetch markdown knowledge programmatically. Neither needs a different protocol or a translation step. The web bifurcated into human-facing HTML and machine-facing APIs — Demarkus unifies them.
 
+### Versioning for Agents
+
+Immutable versioning is particularly powerful in agent workflows:
+
+**Knowledge Consistency** — An agent can pin to a specific version when reasoning. Fetching `mark://api.stripe.com/docs/payments/v12` guarantees the exact content it's working with. If the API docs change, the agent's cached reasoning doesn't silently break.
+
+**Change Detection** — An agent monitoring a knowledge source can use `VERSIONS /doc.md` to detect when content changes, then fetch only the new version. This is cheaper than re-reading entire documents and re-processing them.
+
+**Audit Trail for Agent Actions** — When agents write content, every write creates an immutable version. You can trace exactly what an agent produced, when, and what it changed. If an agent edits a document, you can always diff v41 against v42 to see exactly what it did. This is critical for trust in autonomous systems.
+
+**Reproducible Workflows** — An agent can reference specific versions in its outputs: "Based on [API spec v12](/docs/api.md/v12), here's the implementation." Another agent or a human can verify the source hasn't changed since the recommendation was made.
+
+**Rollback** — If an agent writes something incorrect, the previous version is always there. No data is lost. This maps directly to the protocol's core invariant: version immutability is vital.
+
+**Distributed Verification** — Multiple agents reading the same versioned document from different mirrors can verify they're working with identical content. Same version number, same document. This enables trust in multi-agent networks without a central authority.
+
+Versions give agents the same guarantees that Git gives developers — you always know what you're looking at, you can always go back, and you can always prove what changed.
+
 ## Implementation Roadmap
 
 ### Phase 1: MVP (Read-Only)
