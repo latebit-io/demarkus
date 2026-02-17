@@ -75,22 +75,8 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Set up SIGHUP handler for certificate reload (production mode only)
-	sighupChan := make(chan os.Signal, 1)
-	signal.Notify(sighupChan, syscall.SIGHUP)
-	go func() {
-		for range sighupChan {
-			if !prodMode {
-				log.Printf("[WARN] tls: certificate reload not supported in dev mode")
-				continue
-			}
-			if err := loadCert(cfg.TLSCert, cfg.TLSKey); err != nil {
-				log.Printf("[ERROR] tls: certificate reload failed: %v", err)
-			} else {
-				log.Printf("[INFO] tls: certificate reloaded from %s", cfg.TLSCert)
-			}
-		}
-	}()
+	// Start SIGHUP handler for certificate reload (Unix only, no-op on Windows)
+	startCertReloader(cfg, prodMode)
 
 	// Accept connections in a goroutine so we can listen for shutdown signals
 	var wg sync.WaitGroup
@@ -187,6 +173,9 @@ func loadTLS(cfg *config.Config) (tlsConfig *tls.Config, prodMode bool, err erro
 			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 				certMu.RLock()
 				defer certMu.RUnlock()
+				if currentCert == nil {
+					return nil, fmt.Errorf("tls: no certificate loaded")
+				}
 				return currentCert, nil
 			},
 			MinVersion: tls.VersionTLS13,
