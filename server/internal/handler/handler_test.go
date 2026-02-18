@@ -100,9 +100,8 @@ func TestHandleFetch(t *testing.T) {
 		}
 	})
 
-	t.Run("path traversal contained", func(t *testing.T) {
-		// ../../etc/passwd resolves inside the content dir (filepath.Join handles this).
-		// The file doesn't exist there, so it returns not-found — path cannot escape.
+	t.Run("path traversal blocked", func(t *testing.T) {
+		// Paths with .. segments are rejected outright as defense-in-depth.
 		stream := newMockStream("FETCH /../../etc/passwd\n")
 		h.HandleStream(stream)
 
@@ -389,9 +388,8 @@ func TestHandleList(t *testing.T) {
 		}
 	})
 
-	t.Run("path traversal resolves to root", func(t *testing.T) {
-		// /../../ resolves to / via filepath.Clean, which maps to the content root.
-		// This is safe — the path cannot escape the content directory.
+	t.Run("path traversal blocked in list", func(t *testing.T) {
+		// Paths with .. segments are rejected outright as defense-in-depth.
 		stream := newMockStream("LIST /../../\n")
 		h.HandleStream(stream)
 
@@ -399,8 +397,8 @@ func TestHandleList(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
 		}
-		if resp.Status != protocol.StatusOK {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
 		}
 	})
 }
