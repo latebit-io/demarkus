@@ -15,6 +15,7 @@ import (
 	"github.com/latebit/demarkus/protocol"
 	"github.com/latebit/demarkus/server/internal/config"
 	"github.com/latebit/demarkus/server/internal/handler"
+	"github.com/latebit/demarkus/server/internal/store"
 	servertls "github.com/latebit/demarkus/server/internal/tls"
 	"github.com/quic-go/quic-go"
 )
@@ -66,7 +67,8 @@ func main() {
 	}
 	defer listener.Close()
 
-	h := &handler.Handler{ContentDir: cfg.ContentDir}
+	s := store.New(cfg.ContentDir)
+	h := &handler.Handler{ContentDir: cfg.ContentDir, Store: s}
 
 	log.Printf("[INFO] demarkus-server listening on %s (root: %s, idle_timeout: %v, request_timeout: %v)",
 		addr, cfg.ContentDir, cfg.IdleTimeout, cfg.RequestTimeout)

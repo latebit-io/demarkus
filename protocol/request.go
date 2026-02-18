@@ -113,7 +113,7 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 // isValidVerb returns true if verb is a known Mark Protocol verb.
 func isValidVerb(verb string) bool {
 	switch verb {
-	case VerbFetch, VerbList:
+	case VerbFetch, VerbList, VerbVersions:
 		return true
 	default:
 		return false
