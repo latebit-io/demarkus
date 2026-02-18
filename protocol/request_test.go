@@ -216,6 +216,81 @@ func TestRequestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestParseWriteRequestWithBody(t *testing.T) {
+	t.Run("body with frontmatter", func(t *testing.T) {
+		input := "WRITE /doc.md\n---\nauthor: Fritz\n---\n# Hello\n\nBody text.\n"
+		req, err := ParseRequest(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Verb != "WRITE" {
+			t.Errorf("verb: got %q, want %q", req.Verb, "WRITE")
+		}
+		if req.Metadata["author"] != "Fritz" {
+			t.Errorf("author: got %q, want %q", req.Metadata["author"], "Fritz")
+		}
+		if req.Body != "# Hello\n\nBody text.\n" {
+			t.Errorf("body: got %q, want %q", req.Body, "# Hello\n\nBody text.\n")
+		}
+	})
+
+	t.Run("body without frontmatter", func(t *testing.T) {
+		input := "WRITE /doc.md\n# Hello\n"
+		req, err := ParseRequest(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Body != "# Hello\n" {
+			t.Errorf("body: got %q, want %q", req.Body, "# Hello\n")
+		}
+	})
+
+	t.Run("empty body", func(t *testing.T) {
+		input := "WRITE /doc.md\n"
+		req, err := ParseRequest(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Body != "" {
+			t.Errorf("body: got %q, want empty", req.Body)
+		}
+	})
+}
+
+func TestWriteRequestRoundTrip(t *testing.T) {
+	original := Request{
+		Verb: "WRITE",
+		Path: "/doc.md",
+		Metadata: map[string]string{
+			"author": "Fritz",
+		},
+		Body: "# Hello\n\nSome content.\n",
+	}
+
+	var buf bytes.Buffer
+	if _, err := original.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+
+	parsed, err := ParseRequest(&buf)
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+
+	if parsed.Verb != original.Verb {
+		t.Errorf("verb: got %q, want %q", parsed.Verb, original.Verb)
+	}
+	if parsed.Path != original.Path {
+		t.Errorf("path: got %q, want %q", parsed.Path, original.Path)
+	}
+	if parsed.Metadata["author"] != original.Metadata["author"] {
+		t.Errorf("author: got %q, want %q", parsed.Metadata["author"], original.Metadata["author"])
+	}
+	if parsed.Body != original.Body {
+		t.Errorf("body: got %q, want %q", parsed.Body, original.Body)
+	}
+}
+
 func TestRequestRoundTripWithMetadata(t *testing.T) {
 	original := Request{
 		Verb: "FETCH",

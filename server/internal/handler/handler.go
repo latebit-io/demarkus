@@ -58,6 +58,8 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handleList(stream, req.Path)
 	case protocol.VerbVersions:
 		h.handleVersions(stream, req.Path)
+	case protocol.VerbWrite:
+		h.handleWrite(stream, req)
 	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
@@ -355,13 +357,58 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 			v.Modified.Format(time.RFC3339)))
 	}
 
+	meta := map[string]string{
+		"total":   fmt.Sprintf("%d", len(versions)),
+		"current": fmt.Sprintf("%d", versions[0].Version),
+	}
+
+	// Verify hash chain integrity and report result.
+	if err := h.Store.VerifyChain(reqPath); err != nil {
+		log.Printf("[WARN] chain verification failed for %s: %v", sanitize(reqPath), err)
+		meta["chain-valid"] = "false"
+		meta["chain-error"] = err.Error()
+	} else {
+		meta["chain-valid"] = "true"
+	}
+
 	resp := protocol.Response{
-		Status: protocol.StatusOK,
+		Status:   protocol.StatusOK,
+		Metadata: meta,
+		Body:     body.String(),
+	}
+	writeResponse(w, resp)
+}
+
+func (h *Handler) handleWrite(w io.Writer, req protocol.Request) {
+	if h.Store == nil {
+		h.writeError(w, protocol.StatusServerError, "writing not configured")
+		return
+	}
+	if int64(len(req.Body)) > store.MaxFileSize {
+		log.Printf("[ERROR] body too large: %s (%d bytes)", sanitize(req.Path), len(req.Body))
+		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+		return
+	}
+
+	doc, err := h.Store.Write(req.Path, []byte(req.Body))
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("[SECURITY] path traversal attempt: %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
+		log.Printf("[ERROR] write %s: %v", sanitize(req.Path), err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	log.Printf("[WRITE] %s v%d", sanitize(req.Path), doc.Version)
+	resp := protocol.Response{
+		Status: protocol.StatusCreated,
 		Metadata: map[string]string{
-			"total":   fmt.Sprintf("%d", len(versions)),
-			"current": fmt.Sprintf("%d", versions[0].Version),
+			"version":  strconv.Itoa(doc.Version),
+			"modified": doc.Modified.Format(time.RFC3339),
 		},
-		Body: body.String(),
 	}
 	writeResponse(w, resp)
 }
