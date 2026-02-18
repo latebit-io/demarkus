@@ -190,18 +190,14 @@ func (s *Store) resolve(reqPath string) (string, error) {
 
 	absPath, err := filepath.EvalSymlinks(joined)
 	if err != nil {
-		// Path doesn't exist yet — resolve symlinks on the parent directory
-		// (which should exist) to get a canonical base, then append the filename.
-		// This prevents the /var → /private/var mismatch on macOS.
-		parent := filepath.Dir(joined)
-		resolvedParent, perr := filepath.EvalSymlinks(parent)
-		if perr != nil {
-			resolvedParent, perr = filepath.Abs(parent)
-			if perr != nil {
-				return "", perr
-			}
+		// Path doesn't exist yet — walk up to find the closest existing
+		// ancestor, resolve its symlinks, then append the remaining segments.
+		// This prevents both the /var → /private/var mismatch on macOS and
+		// symlink escapes through intermediate directories.
+		absPath, err = resolveNonExistent(joined)
+		if err != nil {
+			return "", err
 		}
-		absPath = filepath.Join(resolvedParent, filepath.Base(joined))
 	}
 	if !filepath.IsAbs(absPath) {
 		absPath, err = filepath.Abs(absPath)
@@ -322,7 +318,10 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 
 	// Validate path stays within the store root (resolve handles traversal + symlinks).
 	if _, err := s.resolve(reqPath); err != nil {
-		return nil, os.ErrNotExist
+		if os.IsNotExist(err) {
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
 	cleaned := filepath.Clean(reqPath)
@@ -339,8 +338,12 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 	// file on disk), start at 1. Otherwise increment from the current version.
 	currentFile := filepath.Join(s.root, dir, base)
 	var next int
-	if _, err := os.Stat(currentFile); os.IsNotExist(err) {
-		next = 1
+	if _, err := os.Stat(currentFile); err != nil {
+		if os.IsNotExist(err) {
+			next = 1
+		} else {
+			return nil, fmt.Errorf("stat current file: %w", err)
+		}
 	} else {
 		next = s.CurrentVersion(reqPath) + 1
 	}
@@ -357,18 +360,28 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 			var v1sb strings.Builder
 			v1sb.WriteString("---\nversion: 1\n---\n")
 			v1Data := append([]byte(v1sb.String()), flatData...)
-			if err := os.WriteFile(v1File, v1Data, 0o644); err != nil {
+			// Use exclusive create to prevent overwriting a v1 that appeared
+			// between the Stat check and now (TOCTOU race).
+			f, err := os.OpenFile(v1File, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+			if err != nil && !os.IsExist(err) {
 				return nil, fmt.Errorf("migrate flat file to v1: %w", err)
 			}
+			if err == nil {
+				if _, werr := f.Write(v1Data); werr != nil {
+					f.Close()
+					os.Remove(v1File)
+					return nil, fmt.Errorf("migrate flat file to v1: %w", werr)
+				}
+				if cerr := f.Close(); cerr != nil {
+					os.Remove(v1File)
+					return nil, fmt.Errorf("migrate flat file to v1: %w", cerr)
+				}
+			}
+			// If os.IsExist: v1 was created concurrently, proceed with the write.
 		}
 	}
 
 	versionFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next))
-
-	// Immutability guard: never overwrite an existing version.
-	if _, err := os.Stat(versionFile); err == nil {
-		return nil, fmt.Errorf("version %d already exists", next)
-	}
 
 	// Build stored bytes: store frontmatter + original content.
 	var sb strings.Builder
@@ -391,24 +404,23 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 		return nil, fmt.Errorf("content exceeds size limit")
 	}
 
-	// Write atomically: temp file in the same directory, then rename.
-	tmp, err := os.CreateTemp(versionsDir, ".tmp-")
+	// Immutability guard + atomic write: O_CREATE|O_EXCL fails if the file
+	// already exists, preventing TOCTOU races between a stat check and rename.
+	f, err := os.OpenFile(versionFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("create temp file: %w", err)
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("version %d already exists", next)
+		}
+		return nil, fmt.Errorf("create version file: %w", err)
 	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(stored); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+	if _, err := f.Write(stored); err != nil {
+		f.Close()
+		os.Remove(versionFile)
 		return nil, fmt.Errorf("write version file: %w", err)
 	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+	if err := f.Close(); err != nil {
+		os.Remove(versionFile)
 		return nil, fmt.Errorf("close version file: %w", err)
-	}
-	if err := os.Rename(tmpName, versionFile); err != nil {
-		os.Remove(tmpName)
-		return nil, fmt.Errorf("rename version file: %w", err)
 	}
 
 	// Update the current file: symlink to the version file.
@@ -482,6 +494,32 @@ func (s *Store) VerifyChain(reqPath string) error {
 		}
 	}
 	return nil
+}
+
+// resolveNonExistent resolves a path that doesn't exist yet by walking up
+// to find the closest existing ancestor, resolving its symlinks, then
+// appending the remaining path segments. This ensures symlink escapes
+// through intermediate directories are detected.
+func resolveNonExistent(path string) (string, error) {
+	var tail []string
+	current := path
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			break
+		}
+		tail = append([]string{filepath.Base(current)}, tail...)
+		parent := filepath.Dir(current)
+		if parent == current {
+			// Reached filesystem root without finding an existing dir.
+			return filepath.Abs(path)
+		}
+		current = parent
+	}
+	resolved, err := filepath.EvalSymlinks(current)
+	if err != nil {
+		return filepath.Abs(path)
+	}
+	return filepath.Join(append([]string{resolved}, tail...)...), nil
 }
 
 // containsDotDot reports whether the path contains a ".." segment.
