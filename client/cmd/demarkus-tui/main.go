@@ -282,7 +282,7 @@ func (m model) doFetch(raw string) tea.Cmd {
 		if err != nil {
 			return fetchResult{err: err, url: raw}
 		}
-		result, err := m.client.Fetch(host, path, protocol.VerbFetch)
+		result, err := m.client.Fetch(host, path, protocol.VerbFetch, "")
 		return fetchResult{result: result, err: err, url: raw}
 	}
 }
