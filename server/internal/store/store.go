@@ -168,6 +168,14 @@ func (s *Store) Versions(reqPath string) ([]VersionInfo, error) {
 func (s *Store) resolve(reqPath string) (string, error) {
 	cleaned := filepath.Clean(reqPath)
 	cleaned = strings.TrimLeft(cleaned, "/")
+
+	// Reject paths that contain .. segments. filepath.Clean collapses traversal
+	// attempts into valid-looking paths (e.g., /../etc/passwd → etc/passwd), so
+	// we check the original path for traversal intent as defense-in-depth.
+	if containsDotDot(reqPath) {
+		return "", os.ErrNotExist
+	}
+
 	joined := filepath.Join(s.root, cleaned)
 
 	absRoot, err := filepath.Abs(s.root)
@@ -474,6 +482,16 @@ func (s *Store) VerifyChain(reqPath string) error {
 		}
 	}
 	return nil
+}
+
+// containsDotDot reports whether the path contains a ".." segment.
+func containsDotDot(path string) bool {
+	for _, seg := range strings.Split(path, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // extractPreviousHash parses the store frontmatter from raw version file bytes
