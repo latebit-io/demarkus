@@ -808,8 +808,12 @@ func TestVersionsChainValid(t *testing.T) {
 	s := store.New(dir)
 
 	// Write versions through the store to get proper hash chain.
-	s.Write("/doc.md", []byte("# V1\n"))
-	s.Write("/doc.md", []byte("# V2\n"))
+	if _, err := s.Write("/doc.md", []byte("# V1\n")); err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+	if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
 
 	h := &Handler{ContentDir: dir, Store: s}
 

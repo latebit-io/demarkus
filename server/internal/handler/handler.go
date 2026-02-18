@@ -101,18 +101,11 @@ func (h *Handler) resolvePath(reqPath string) string {
 	// Resolve symlinks in the target path to detect escapes.
 	absPath, err := filepath.EvalSymlinks(joined)
 	if err != nil {
-		// Path doesn't exist yet — resolve symlinks on the parent directory
-		// (which should exist) to get a canonical base, then append the filename.
-		// This prevents the /var → /private/var mismatch on macOS.
-		parent := filepath.Dir(joined)
-		resolvedParent, perr := filepath.EvalSymlinks(parent)
-		if perr != nil {
-			resolvedParent, perr = filepath.Abs(parent)
-			if perr != nil {
-				return ""
-			}
-		}
-		absPath = filepath.Join(resolvedParent, filepath.Base(joined))
+		// Path doesn't exist yet — walk up to find the closest existing
+		// ancestor, resolve its symlinks, then append the remaining segments.
+		// This prevents both the /var → /private/var mismatch on macOS and
+		// symlink escapes through intermediate directories.
+		absPath = resolveNonExistent(joined)
 	}
 	// EvalSymlinks may return a relative path; ensure it's absolute.
 	if !filepath.IsAbs(absPath) {
@@ -126,6 +119,32 @@ func (h *Handler) resolvePath(reqPath string) string {
 		return ""
 	}
 	return absPath
+}
+
+// resolveNonExistent resolves a path that doesn't exist yet by walking up
+// to find the closest existing ancestor, resolving its symlinks, then
+// appending the remaining path segments.
+func resolveNonExistent(path string) string {
+	var tail []string
+	current := path
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			break
+		}
+		tail = append([]string{filepath.Base(current)}, tail...)
+		parent := filepath.Dir(current)
+		if parent == current {
+			abs, _ := filepath.Abs(path)
+			return abs
+		}
+		current = parent
+	}
+	resolved, err := filepath.EvalSymlinks(current)
+	if err != nil {
+		abs, _ := filepath.Abs(path)
+		return abs
+	}
+	return filepath.Join(append([]string{resolved}, tail...)...)
 }
 
 // containsDotDot reports whether the path contains a ".." segment.
@@ -389,7 +408,7 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 	if err := h.Store.VerifyChain(reqPath); err != nil {
 		log.Printf("[WARN] chain verification failed for %s: %v", sanitize(reqPath), err)
 		meta["chain-valid"] = "false"
-		meta["chain-error"] = err.Error()
+		meta["chain-error"] = "hash chain verification failed"
 	} else {
 		meta["chain-valid"] = "true"
 	}

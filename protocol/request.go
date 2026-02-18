@@ -25,18 +25,20 @@ const MaxRequestLineLength = 4096
 const MaxRequestFrontmatterLength = 65536 // 64KB
 
 // ParseRequest reads a request from r.
-// Format: "VERB /path\n" followed by optional YAML frontmatter.
+// Format: "VERB /path\n" followed by optional YAML frontmatter and body.
+// The body is read as raw bytes to preserve content verbatim.
 func ParseRequest(r io.Reader) (Request, error) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1024), MaxRequestLineLength)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return Request{}, fmt.Errorf("reading request: %w", err)
-		}
-		return Request{}, fmt.Errorf("reading request: unexpected EOF")
+	br := bufio.NewReader(r)
+
+	// Read the request line.
+	line, err := readLine(br)
+	if err != nil {
+		return Request{}, fmt.Errorf("reading request: %w", err)
+	}
+	if len(line) > MaxRequestLineLength {
+		return Request{}, fmt.Errorf("request line exceeds limit: %d > %d bytes", len(line), MaxRequestLineLength)
 	}
 
-	line := scanner.Text()
 	verb, path, ok := strings.Cut(line, " ")
 	if !ok {
 		return Request{}, fmt.Errorf("malformed request: %q", line)
@@ -61,56 +63,79 @@ func ParseRequest(r io.Reader) (Request, error) {
 
 	req := Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
-	// Check for optional frontmatter followed by optional body.
-	if scanner.Scan() {
-		if scanner.Text() == "---" {
-			var fmBuf strings.Builder
-			for scanner.Scan() {
-				if scanner.Text() == "---" {
-					break
-				}
-				fmBuf.WriteString(scanner.Text())
-				fmBuf.WriteByte('\n')
+	// Peek at the next line to check for frontmatter.
+	nextLine, err := readLine(br)
+	if err != nil {
+		// No more data after request line — that's fine.
+		return req, nil
+	}
 
-				// Enforce frontmatter size limit
-				if fmBuf.Len() > MaxRequestFrontmatterLength {
-					return Request{}, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", fmBuf.Len(), MaxRequestFrontmatterLength)
-				}
+	if nextLine == "---" {
+		// Parse frontmatter lines until closing ---.
+		var fmBuf strings.Builder
+		closedFrontmatter := false
+		for {
+			fmLine, err := readLine(br)
+			if err != nil {
+				break
 			}
-			if err := scanner.Err(); err != nil {
-				return Request{}, fmt.Errorf("reading request metadata: %w", err)
+			if fmLine == "---" {
+				closedFrontmatter = true
+				break
 			}
-			if fmBuf.Len() > 0 {
-				var raw map[string]string
-				if err := yaml.Unmarshal([]byte(fmBuf.String()), &raw); err != nil {
-					return Request{}, fmt.Errorf("parsing request metadata: %w", err)
-				}
-				req.Metadata = raw
+			fmBuf.WriteString(fmLine)
+			fmBuf.WriteByte('\n')
+
+			if fmBuf.Len() > MaxRequestFrontmatterLength {
+				return Request{}, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", fmBuf.Len(), MaxRequestFrontmatterLength)
 			}
-			// Read body: remaining lines after closing ---.
-			var bodyBuf strings.Builder
-			for scanner.Scan() {
-				bodyBuf.WriteString(scanner.Text())
-				bodyBuf.WriteByte('\n')
-			}
-			req.Body = bodyBuf.String()
-		} else {
-			// No frontmatter — first scanned line is part of the body.
-			var bodyBuf strings.Builder
-			bodyBuf.WriteString(scanner.Text())
-			bodyBuf.WriteByte('\n')
-			for scanner.Scan() {
-				bodyBuf.WriteString(scanner.Text())
-				bodyBuf.WriteByte('\n')
-			}
-			req.Body = bodyBuf.String()
 		}
-		if err := scanner.Err(); err != nil {
+		if !closedFrontmatter {
+			return Request{}, fmt.Errorf("malformed request: unclosed frontmatter")
+		}
+		if fmBuf.Len() > 0 {
+			var raw map[string]string
+			if err := yaml.Unmarshal([]byte(fmBuf.String()), &raw); err != nil {
+				return Request{}, fmt.Errorf("parsing request metadata: %w", err)
+			}
+			req.Metadata = raw
+		}
+		// Read remaining bytes as body verbatim.
+		body, err := io.ReadAll(br)
+		if err != nil {
 			return Request{}, fmt.Errorf("reading request body: %w", err)
 		}
+		req.Body = string(body)
+	} else {
+		// No frontmatter — first line plus remaining bytes are the body.
+		body, err := io.ReadAll(br)
+		if err != nil {
+			return Request{}, fmt.Errorf("reading request body: %w", err)
+		}
+		req.Body = nextLine + "\n" + string(body)
 	}
 
 	return req, nil
+}
+
+// readLine reads a single newline-terminated line from a bufio.Reader,
+// returning the line without the trailing newline. Returns io.EOF if no
+// data is available.
+func readLine(br *bufio.Reader) (string, error) {
+	var line []byte
+	for {
+		fragment, isPrefix, err := br.ReadLine()
+		line = append(line, fragment...)
+		if err != nil {
+			if len(line) > 0 {
+				return string(line), nil
+			}
+			return "", err
+		}
+		if !isPrefix {
+			return string(line), nil
+		}
+	}
 }
 
 // WriteTo writes the request to w in wire format.

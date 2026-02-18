@@ -164,16 +164,28 @@ func TestRequestWriteToWithMetadata(t *testing.T) {
 	}
 }
 
-func TestParseRequestScannerErrorInFrontmatter(t *testing.T) {
-	// Frontmatter opened but never closed, with a line exceeding the scanner buffer.
-	// This triggers a scanner error (token too long) inside the frontmatter loop.
+func TestParseRequestLongLineInFrontmatter(t *testing.T) {
+	// Frontmatter with a very long line — should be handled gracefully
+	// and rejected as unclosed frontmatter (no closing ---).
 	input := "FETCH /index.md\n---\n" + strings.Repeat("x", MaxRequestLineLength+1) + "\n"
 
 	_, err := ParseRequest(strings.NewReader(input))
 	if err == nil {
-		t.Fatal("expected error for scanner failure in frontmatter, got nil")
+		t.Fatal("expected error for unclosed frontmatter, got nil")
 	}
-	if !strings.Contains(err.Error(), "reading request metadata") {
+	if !strings.Contains(err.Error(), "unclosed frontmatter") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseRequestUnclosedFrontmatter(t *testing.T) {
+	input := "FETCH /index.md\n---\nkey: value\n"
+
+	_, err := ParseRequest(strings.NewReader(input))
+	if err == nil {
+		t.Fatal("expected error for unclosed frontmatter, got nil")
+	}
+	if !strings.Contains(err.Error(), "unclosed frontmatter") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
