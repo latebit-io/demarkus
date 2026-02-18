@@ -1,7 +1,7 @@
 ---
 version: 2
+previous-hash: sha256-c4fc5d6f26b82125e993209719c1a7341d9978adcd26679080662691b2d6f374
 ---
-
 # Welcome to Demarkus
 
 This is an example markdown site served over the Mark Protocol.

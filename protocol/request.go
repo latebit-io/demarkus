@@ -15,6 +15,7 @@ type Request struct {
 	Verb     string
 	Path     string
 	Metadata map[string]string
+	Body     string
 }
 
 // MaxRequestLineLength is the maximum allowed length for a request line.
@@ -60,30 +61,52 @@ func ParseRequest(r io.Reader) (Request, error) {
 
 	req := Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
-	// Check for optional frontmatter.
-	if scanner.Scan() && scanner.Text() == "---" {
-		var fmBuf strings.Builder
-		for scanner.Scan() {
-			if scanner.Text() == "---" {
-				break
-			}
-			fmBuf.WriteString(scanner.Text())
-			fmBuf.WriteByte('\n')
+	// Check for optional frontmatter followed by optional body.
+	if scanner.Scan() {
+		if scanner.Text() == "---" {
+			var fmBuf strings.Builder
+			for scanner.Scan() {
+				if scanner.Text() == "---" {
+					break
+				}
+				fmBuf.WriteString(scanner.Text())
+				fmBuf.WriteByte('\n')
 
-			// Enforce frontmatter size limit
-			if fmBuf.Len() > MaxRequestFrontmatterLength {
-				return Request{}, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", fmBuf.Len(), MaxRequestFrontmatterLength)
+				// Enforce frontmatter size limit
+				if fmBuf.Len() > MaxRequestFrontmatterLength {
+					return Request{}, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", fmBuf.Len(), MaxRequestFrontmatterLength)
+				}
 			}
+			if err := scanner.Err(); err != nil {
+				return Request{}, fmt.Errorf("reading request metadata: %w", err)
+			}
+			if fmBuf.Len() > 0 {
+				var raw map[string]string
+				if err := yaml.Unmarshal([]byte(fmBuf.String()), &raw); err != nil {
+					return Request{}, fmt.Errorf("parsing request metadata: %w", err)
+				}
+				req.Metadata = raw
+			}
+			// Read body: remaining lines after closing ---.
+			var bodyBuf strings.Builder
+			for scanner.Scan() {
+				bodyBuf.WriteString(scanner.Text())
+				bodyBuf.WriteByte('\n')
+			}
+			req.Body = bodyBuf.String()
+		} else {
+			// No frontmatter — first scanned line is part of the body.
+			var bodyBuf strings.Builder
+			bodyBuf.WriteString(scanner.Text())
+			bodyBuf.WriteByte('\n')
+			for scanner.Scan() {
+				bodyBuf.WriteString(scanner.Text())
+				bodyBuf.WriteByte('\n')
+			}
+			req.Body = bodyBuf.String()
 		}
 		if err := scanner.Err(); err != nil {
-			return Request{}, fmt.Errorf("reading request metadata: %w", err)
-		}
-		if fmBuf.Len() > 0 {
-			var raw map[string]string
-			if err := yaml.Unmarshal([]byte(fmBuf.String()), &raw); err != nil {
-				return Request{}, fmt.Errorf("parsing request metadata: %w", err)
-			}
-			req.Metadata = raw
+			return Request{}, fmt.Errorf("reading request body: %w", err)
 		}
 	}
 
@@ -106,6 +129,10 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 		buf.WriteString("---\n")
 	}
 
+	if req.Body != "" {
+		buf.WriteString(req.Body)
+	}
+
 	n, err := w.Write(buf.Bytes())
 	return int64(n), err
 }
@@ -113,7 +140,7 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 // isValidVerb returns true if verb is a known Mark Protocol verb.
 func isValidVerb(verb string) bool {
 	switch verb {
-	case VerbFetch, VerbList, VerbVersions:
+	case VerbFetch, VerbList, VerbVersions, VerbWrite:
 		return true
 	default:
 		return false
