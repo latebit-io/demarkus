@@ -1036,6 +1036,146 @@ callback: mark://subscriber.com:6309/updates
 
 Server notifies subscriber when content changes.
 
+## Agent-Native Protocol
+
+Markdown is the lingua franca of AI. Training data, prompts, responses, tool outputs, and documentation are all markdown-formatted. This makes Demarkus a natural protocol for AI agent communication — agents already "think" in markdown, so no translation layer is needed.
+
+### Why Markdown is the Agent Format
+
+LLMs process markdown natively. Every major AI system uses markdown for:
+
+- Training data and knowledge bases
+- Prompt and response formatting
+- Tool output and function results
+- Documentation and specifications
+- Generated content and reports
+
+When an agent fetches a document over HTTP, it must parse HTML, strip ads, remove tracking scripts, and extract content. Over Mark Protocol, the agent receives clean, structured markdown — the format it already works in.
+
+### Agent Interaction Model
+
+```
+Agent discovers service via mark://api.example.com/
+↓
+Reads markdown-based API docs natively
+↓
+Calls endpoints, receives markdown responses
+↓
+Processes without HTML parsing overhead
+↓
+Caches results in distributed markdown cache
+```
+
+### Advantages Over HTTP/HTML for Agents
+
+- **No parsing complexity** — Agents already think in markdown, no HTML-to-text conversion
+- **Token efficiency** — Markdown is more compact than HTML, reducing LLM context usage
+- **Semantic clarity** — Headers, lists, and code blocks map directly to reasoning structures
+- **Machine-readable metadata** — YAML frontmatter provides structured data alongside content
+- **Cacheable knowledge** — Distributed markdown cache acts as shared agent memory
+- **Privacy-first** — No cookies, no tracking, no JavaScript execution risks
+- **Version control** — Git-native format enables change tracking and verification
+- **Composability** — Agents can remix and recombine markdown documents
+- **Validation** — Easier to verify agent-generated outputs against markdown schemas
+
+### Use Cases
+
+**Information Retrieval**:
+```
+mark://wikipedia.org/Quantum_Computing
+→ Returns pure markdown, no ads, no scripts, no bloat
+→ Agent parses natively, no extraction step
+```
+
+**API Documentation**:
+```
+mark://api.stripe.com/docs/payments
+→ Markdown API specs with structured parameters
+→ Agent reads, understands, and implements directly
+```
+
+**Collaborative Agent Networks**:
+```
+Agent A: mark://cache.network/topic/climate-data
+Agent B: Reads same cached markdown
+Agent C: Contributes updates via WRITE/APPEND
+→ Distributed knowledge graph in markdown
+```
+
+**Skills and Tool Definitions**:
+```
+mark://tools.example.com/weather/SKILL.md
+→ Agent fetches skill definition in markdown
+→ Parameters, endpoints, and response formats are already structured
+→ Direct execution without parsing
+```
+
+### Agent-First Features (Future)
+
+These features would make Demarkus a first-class protocol for agent ecosystems:
+
+- **Agent manifest discovery** — `.well-known/agent-manifest.md` describes available capabilities, rate limits, and authentication requirements
+- **Markdown-based function schemas** — Tool definitions as structured markdown with typed parameters
+- **Semantic versioning in frontmatter** — Agents can pin to specific API versions
+- **Agent authentication** — Capability tokens scoped to agent operations
+- **Rate limiting metadata** — Frontmatter communicates limits so agents self-throttle
+
+**Example: Agent-Capable Endpoint**:
+
+```markdown
+---
+agent-capable: true
+rate-limit: 100/hour
+auth-required: api-key
+---
+
+# Weather API
+
+## Get Current Weather
+
+**Endpoint:** `mark://weather.api/current`
+
+**Parameters:**
+- `location` (string): City name
+- `units` (string): `metric` or `imperial`
+
+**Response Format:**
+- Temperature: 5C
+- Conditions: Cloudy
+- Updated: 2026-02-17T00:30:00Z
+```
+
+### The Protocol Stack for Agents
+
+```
+Application Layer:  AI Skills/Tools (markdown)
+Protocol Layer:     Mark Protocol (markdown transfer)
+Cache Layer:        Distributed markdown cache
+Transport Layer:    QUIC (Go implementation)
+```
+
+This positions Demarkus as the transport layer for AI-native communication — human-readable AND machine-readable, with no translation layer between what agents process and what the protocol delivers.
+
+An information superhighway for both humans and agents: the same protocol, the same content format, the same caching infrastructure. Humans browse markdown documents in a TUI. Agents fetch markdown knowledge programmatically. Neither needs a different protocol or a translation step. The web bifurcated into human-facing HTML and machine-facing APIs — Demarkus unifies them.
+
+### Versioning for Agents
+
+Immutable versioning is particularly powerful in agent workflows:
+
+**Knowledge Consistency** — An agent can pin to a specific version when reasoning. Fetching `mark://api.stripe.com/docs/payments/v12` guarantees the exact content it's working with. If the API docs change, the agent's cached reasoning doesn't silently break.
+
+**Change Detection** — An agent monitoring a knowledge source can use `VERSIONS /doc.md` to detect when content changes, then fetch only the new version. This is cheaper than re-reading entire documents and re-processing them.
+
+**Audit Trail for Agent Actions** — When agents write content, every write creates an immutable version. You can trace exactly what an agent produced, when, and what it changed. If an agent edits a document, you can always diff v41 against v42 to see exactly what it did. This is critical for trust in autonomous systems.
+
+**Reproducible Workflows** — An agent can reference specific versions in its outputs: "Based on [API spec v12](/docs/api.md/v12), here's the implementation." Another agent or a human can verify the source hasn't changed since the recommendation was made.
+
+**Rollback** — If an agent writes something incorrect, the previous version is always there. No data is lost. This maps directly to the protocol's core invariant: version immutability is vital.
+
+**Distributed Verification** — Multiple agents reading the same versioned document from different mirrors can verify they're working with identical content. Same version number, same document. This enables trust in multi-agent networks without a central authority.
+
+Versions give agents the same guarantees that Git gives developers — you always know what you're looking at, you can always go back, and you can always prove what changed.
+
 ## Implementation Roadmap
 
 ### Phase 1: MVP (Read-Only)
