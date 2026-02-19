@@ -220,8 +220,8 @@ jobs:
             });
             console.log(`Created tag: ${tag}`);
 
-      - name: Create clean tag for GoReleaser
-        run: git tag "v${{ needs.semver-server.outputs.new_version }}"
+      - name: Create local tag for GoReleaser
+        run: git tag -f "v${{ needs.semver-server.outputs.new_version }}"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -268,8 +268,8 @@ jobs:
             });
             console.log(`Created tag: ${tag}`);
 
-      - name: Create clean tag for GoReleaser
-        run: git tag "v${{ needs.semver-client.outputs.new_version }}"
+      - name: Create local tag for GoReleaser
+        run: git tag -f "v${{ needs.semver-client.outputs.new_version }}"
 
       - uses: goreleaser/goreleaser-action@v6
         with:
