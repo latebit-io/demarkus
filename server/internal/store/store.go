@@ -423,11 +423,19 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 		return nil, fmt.Errorf("close version file: %w", err)
 	}
 
-	// Update the current file: symlink to the version file.
-	// Remove any existing file/symlink first (os.Symlink fails if target exists).
-	os.Remove(currentFile)
-	if err := os.Symlink(versionFile, currentFile); err != nil {
+	// Atomically update the current file to point at the new version.
+	// Create a temp symlink then rename over the current path so readers
+	// never see a missing file. Use a relative target so the content
+	// directory can be relocated without breaking links.
+	relTarget := filepath.Join("versions", fmt.Sprintf("%s.v%d", base, next))
+	tmpLink := currentFile + ".tmp"
+	os.Remove(tmpLink) // clean up any stale temp link
+	if err := os.Symlink(relTarget, tmpLink); err != nil {
 		return nil, fmt.Errorf("symlink current file: %w", err)
+	}
+	if err := os.Rename(tmpLink, currentFile); err != nil {
+		os.Remove(tmpLink)
+		return nil, fmt.Errorf("rename current file: %w", err)
 	}
 
 	info, err := os.Stat(versionFile)

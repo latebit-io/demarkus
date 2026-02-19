@@ -408,7 +408,7 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 	if err := h.Store.VerifyChain(reqPath); err != nil {
 		log.Printf("[WARN] chain verification failed for %s: %v", sanitize(reqPath), err)
 		meta["chain-valid"] = "false"
-		meta["chain-error"] = "hash chain verification failed"
+		meta["chain-error"] = err.Error()
 	} else {
 		meta["chain-valid"] = "true"
 	}
