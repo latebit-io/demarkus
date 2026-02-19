@@ -57,8 +57,19 @@ func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
 	filePath := c.filePath(host, path, verb)
 	metaPath := filePath + ".meta"
 
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return err
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		// A stale flat-file cache entry may block directory creation.
+		// Remove it and retry once.
+		if os.Remove(dir) == nil {
+			// Also remove the companion .meta file from the old layout.
+			os.Remove(dir + ".meta")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
 	}
 
 	m := meta{
@@ -132,20 +143,31 @@ func (c *Cache) Get(host, path, verb string) (*Entry, error) {
 }
 
 // filePath returns the cache file path for a given host, request path, and verb.
+//
+// Each path gets its own directory with verb-specific sentinel files inside,
+// so FETCH and LIST for the same path never collide on the filesystem:
+//
+//	cache/host/index.md/.fetch      ← FETCH /index.md
+//	cache/host/index.md/.list       ← LIST  /index.md
+//	cache/host/.fetch               ← FETCH /
+//	cache/host/.list                ← LIST  /
 func (c *Cache) filePath(host, reqPath, verb string) string {
 	safeHost := strings.ReplaceAll(host, "..", "_")
 	safeHost = strings.ReplaceAll(safeHost, string(filepath.Separator), "_")
 
 	cleaned := filepath.Clean(reqPath)
 	cleaned = strings.TrimLeft(cleaned, "/")
-
-	switch {
-	case verb == protocol.VerbList:
-		cleaned = filepath.Join(cleaned, ".list")
-	case cleaned == "" || cleaned == ".":
-		// Root FETCH — use a sentinel filename to avoid colliding with the directory.
-		cleaned = ".index"
+	if cleaned == "." {
+		cleaned = ""
 	}
 
-	return filepath.Join(c.Dir, safeHost, cleaned)
+	var sentinel string
+	switch verb {
+	case protocol.VerbList:
+		sentinel = ".list"
+	default:
+		sentinel = ".fetch"
+	}
+
+	return filepath.Join(c.Dir, safeHost, cleaned, sentinel)
 }
