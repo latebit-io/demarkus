@@ -63,56 +63,53 @@ func ParseRequest(r io.Reader) (Request, error) {
 
 	req := Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
-	// Peek at the next line to check for frontmatter.
-	nextLine, err := readLine(br)
+	// Read all remaining bytes after the request line.
+	rest, err := io.ReadAll(br)
 	if err != nil {
-		// No more data after request line — that's fine.
+		return Request{}, fmt.Errorf("reading request body: %w", err)
+	}
+	if len(rest) == 0 {
 		return req, nil
 	}
 
-	if nextLine == "---" {
-		// Parse frontmatter lines until closing ---.
-		var fmBuf strings.Builder
-		closedFrontmatter := false
-		for {
-			fmLine, err := readLine(br)
-			if err != nil {
-				break
-			}
-			if fmLine == "---" {
-				closedFrontmatter = true
-				break
-			}
-			fmBuf.WriteString(fmLine)
-			fmBuf.WriteByte('\n')
+	// Check for frontmatter opening delimiter.
+	if !bytes.HasPrefix(rest, []byte("---\n")) {
+		req.Body = string(rest)
+		return req, nil
+	}
 
-			if fmBuf.Len() > MaxRequestFrontmatterLength {
-				return Request{}, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", fmBuf.Len(), MaxRequestFrontmatterLength)
-			}
-		}
-		if !closedFrontmatter {
+	// Strip the opening --- and parse frontmatter until closing ---.
+	rest = rest[4:] // skip "---\n"
+	closeIdx := bytes.Index(rest, []byte("\n---\n"))
+	if closeIdx == -1 {
+		// Check for closing --- at end of input (no trailing newline after ---).
+		if bytes.HasSuffix(rest, []byte("\n---")) {
+			closeIdx = len(rest) - 3
+		} else {
 			return Request{}, fmt.Errorf("malformed request: unclosed frontmatter")
 		}
-		if fmBuf.Len() > 0 {
-			var raw map[string]string
-			if err := yaml.Unmarshal([]byte(fmBuf.String()), &raw); err != nil {
-				return Request{}, fmt.Errorf("parsing request metadata: %w", err)
-			}
-			req.Metadata = raw
+	}
+
+	fmBytes := rest[:closeIdx]
+	if len(fmBytes) > MaxRequestFrontmatterLength {
+		return Request{}, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", len(fmBytes), MaxRequestFrontmatterLength)
+	}
+
+	if len(fmBytes) > 0 {
+		var raw map[string]string
+		if err := yaml.Unmarshal(fmBytes, &raw); err != nil {
+			return Request{}, fmt.Errorf("parsing request metadata: %w", err)
 		}
-		// Read remaining bytes as body verbatim.
-		body, err := io.ReadAll(br)
-		if err != nil {
-			return Request{}, fmt.Errorf("reading request body: %w", err)
-		}
-		req.Body = string(body)
+		req.Metadata = raw
+	}
+
+	// Body is everything after the closing "---\n".
+	afterClose := rest[closeIdx:]
+	if bytes.HasPrefix(afterClose, []byte("\n---\n")) {
+		req.Body = string(afterClose[5:]) // skip "\n---\n"
 	} else {
-		// No frontmatter — first line plus remaining bytes are the body.
-		body, err := io.ReadAll(br)
-		if err != nil {
-			return Request{}, fmt.Errorf("reading request body: %w", err)
-		}
-		req.Body = nextLine + "\n" + string(body)
+		// Closing --- was at end of input with no body.
+		req.Body = ""
 	}
 
 	return req, nil

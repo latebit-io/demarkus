@@ -257,6 +257,17 @@ func TestParseWriteRequestWithBody(t *testing.T) {
 		}
 	})
 
+	t.Run("body without trailing newline", func(t *testing.T) {
+		input := "WRITE /doc.md\n# Hello"
+		req, err := ParseRequest(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Body != "# Hello" {
+			t.Errorf("body: got %q, want %q", req.Body, "# Hello")
+		}
+	})
+
 	t.Run("empty body", func(t *testing.T) {
 		input := "WRITE /doc.md\n"
 		req, err := ParseRequest(strings.NewReader(input))
