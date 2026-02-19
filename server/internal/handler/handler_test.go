@@ -100,9 +100,8 @@ func TestHandleFetch(t *testing.T) {
 		}
 	})
 
-	t.Run("path traversal contained", func(t *testing.T) {
-		// ../../etc/passwd resolves inside the content dir (filepath.Join handles this).
-		// The file doesn't exist there, so it returns not-found — path cannot escape.
+	t.Run("path traversal blocked", func(t *testing.T) {
+		// Paths with .. segments are rejected outright as defense-in-depth.
 		stream := newMockStream("FETCH /../../etc/passwd\n")
 		h.HandleStream(stream)
 
@@ -389,9 +388,8 @@ func TestHandleList(t *testing.T) {
 		}
 	})
 
-	t.Run("path traversal resolves to root", func(t *testing.T) {
-		// /../../ resolves to / via filepath.Clean, which maps to the content root.
-		// This is safe — the path cannot escape the content directory.
+	t.Run("path traversal blocked in list", func(t *testing.T) {
+		// Paths with .. segments are rejected outright as defense-in-depth.
 		stream := newMockStream("LIST /../../\n")
 		h.HandleStream(stream)
 
@@ -399,8 +397,8 @@ func TestHandleList(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
 		}
-		if resp.Status != protocol.StatusOK {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
 		}
 	})
 }
@@ -664,6 +662,11 @@ func TestHandleVersions(t *testing.T) {
 		if !strings.Contains(resp.Body, "v1") || !strings.Contains(resp.Body, "v2") {
 			t.Errorf("body should list both versions: %q", resp.Body)
 		}
+		// These version files were manually placed without store frontmatter,
+		// so chain-valid will be false (v2 has no previous-hash).
+		if resp.Metadata["chain-valid"] != "false" {
+			t.Errorf("chain-valid: got %q, want %q", resp.Metadata["chain-valid"], "false")
+		}
 	})
 
 	t.Run("flat file single version", func(t *testing.T) {
@@ -796,6 +799,131 @@ func TestFetchVersion(t *testing.T) {
 		}
 		if resp.Status == protocol.StatusOK {
 			t.Error("expected error status, got ok")
+		}
+	})
+}
+
+func TestVersionsChainValid(t *testing.T) {
+	dir := t.TempDir()
+	s := store.New(dir)
+
+	// Write versions through the store to get proper hash chain.
+	if _, err := s.Write("/doc.md", []byte("# V1\n")); err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+	if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+
+	h := &Handler{ContentDir: dir, Store: s}
+
+	t.Run("valid chain", func(t *testing.T) {
+		stream := newMockStream("VERSIONS /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Metadata["chain-valid"] != "true" {
+			t.Errorf("chain-valid: got %q, want %q", resp.Metadata["chain-valid"], "true")
+		}
+	})
+
+	t.Run("tampered chain", func(t *testing.T) {
+		// Corrupt v1 on disk.
+		v1Path := filepath.Join(dir, "versions", "doc.md.v1")
+		os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644)
+
+		stream := newMockStream("VERSIONS /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Metadata["chain-valid"] != "false" {
+			t.Errorf("chain-valid: got %q, want %q", resp.Metadata["chain-valid"], "false")
+		}
+		if resp.Metadata["chain-error"] == "" {
+			t.Error("expected chain-error in metadata")
+		}
+	})
+}
+
+func TestHandleWrite(t *testing.T) {
+	t.Run("creates new document", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir)}
+
+		stream := newMockStream("WRITE /new.md\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+		if resp.Metadata["version"] != "1" {
+			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "1")
+		}
+		if resp.Metadata["modified"] == "" {
+			t.Error("expected modified in response metadata")
+		}
+	})
+
+	t.Run("creates new version of existing document", func(t *testing.T) {
+		dir := setupContentDir(t, map[string]string{
+			"doc.md": "# Original\n",
+		})
+		h := &Handler{ContentDir: dir, Store: store.New(dir)}
+
+		stream := newMockStream("WRITE /doc.md\n# Updated\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+		if resp.Metadata["version"] != "2" {
+			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "2")
+		}
+	})
+
+	t.Run("no store configured", func(t *testing.T) {
+		dir := setupContentDir(t, map[string]string{"doc.md": "# Doc\n"})
+		h := &Handler{ContentDir: dir}
+
+		stream := newMockStream("WRITE /doc.md\n# New\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusServerError {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusServerError)
+		}
+	})
+
+	t.Run("path traversal blocked", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir)}
+
+		stream := newMockStream("WRITE /../../etc/passwd\n# evil\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status == protocol.StatusCreated {
+			t.Error("SECURITY: path traversal not blocked")
 		}
 	})
 }

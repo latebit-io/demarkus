@@ -164,16 +164,28 @@ func TestRequestWriteToWithMetadata(t *testing.T) {
 	}
 }
 
-func TestParseRequestScannerErrorInFrontmatter(t *testing.T) {
-	// Frontmatter opened but never closed, with a line exceeding the scanner buffer.
-	// This triggers a scanner error (token too long) inside the frontmatter loop.
+func TestParseRequestLongLineInFrontmatter(t *testing.T) {
+	// Frontmatter with a very long line — should be handled gracefully
+	// and rejected as unclosed frontmatter (no closing ---).
 	input := "FETCH /index.md\n---\n" + strings.Repeat("x", MaxRequestLineLength+1) + "\n"
 
 	_, err := ParseRequest(strings.NewReader(input))
 	if err == nil {
-		t.Fatal("expected error for scanner failure in frontmatter, got nil")
+		t.Fatal("expected error for unclosed frontmatter, got nil")
 	}
-	if !strings.Contains(err.Error(), "reading request metadata") {
+	if !strings.Contains(err.Error(), "unclosed frontmatter") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseRequestUnclosedFrontmatter(t *testing.T) {
+	input := "FETCH /index.md\n---\nkey: value\n"
+
+	_, err := ParseRequest(strings.NewReader(input))
+	if err == nil {
+		t.Fatal("expected error for unclosed frontmatter, got nil")
+	}
+	if !strings.Contains(err.Error(), "unclosed frontmatter") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
@@ -213,6 +225,92 @@ func TestRequestRoundTrip(t *testing.T) {
 
 	if parsed.Verb != original.Verb || parsed.Path != original.Path {
 		t.Errorf("round-trip failed: got %+v, want %+v", parsed, original)
+	}
+}
+
+func TestParseWriteRequestWithBody(t *testing.T) {
+	t.Run("body with frontmatter", func(t *testing.T) {
+		input := "WRITE /doc.md\n---\nauthor: Fritz\n---\n# Hello\n\nBody text.\n"
+		req, err := ParseRequest(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Verb != "WRITE" {
+			t.Errorf("verb: got %q, want %q", req.Verb, "WRITE")
+		}
+		if req.Metadata["author"] != "Fritz" {
+			t.Errorf("author: got %q, want %q", req.Metadata["author"], "Fritz")
+		}
+		if req.Body != "# Hello\n\nBody text.\n" {
+			t.Errorf("body: got %q, want %q", req.Body, "# Hello\n\nBody text.\n")
+		}
+	})
+
+	t.Run("body without frontmatter", func(t *testing.T) {
+		input := "WRITE /doc.md\n# Hello\n"
+		req, err := ParseRequest(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Body != "# Hello\n" {
+			t.Errorf("body: got %q, want %q", req.Body, "# Hello\n")
+		}
+	})
+
+	t.Run("body without trailing newline", func(t *testing.T) {
+		input := "WRITE /doc.md\n# Hello"
+		req, err := ParseRequest(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Body != "# Hello" {
+			t.Errorf("body: got %q, want %q", req.Body, "# Hello")
+		}
+	})
+
+	t.Run("empty body", func(t *testing.T) {
+		input := "WRITE /doc.md\n"
+		req, err := ParseRequest(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Body != "" {
+			t.Errorf("body: got %q, want empty", req.Body)
+		}
+	})
+}
+
+func TestWriteRequestRoundTrip(t *testing.T) {
+	original := Request{
+		Verb: "WRITE",
+		Path: "/doc.md",
+		Metadata: map[string]string{
+			"author": "Fritz",
+		},
+		Body: "# Hello\n\nSome content.\n",
+	}
+
+	var buf bytes.Buffer
+	if _, err := original.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+
+	parsed, err := ParseRequest(&buf)
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+
+	if parsed.Verb != original.Verb {
+		t.Errorf("verb: got %q, want %q", parsed.Verb, original.Verb)
+	}
+	if parsed.Path != original.Path {
+		t.Errorf("path: got %q, want %q", parsed.Path, original.Path)
+	}
+	if parsed.Metadata["author"] != original.Metadata["author"] {
+		t.Errorf("author: got %q, want %q", parsed.Metadata["author"], original.Metadata["author"])
+	}
+	if parsed.Body != original.Body {
+		t.Errorf("body: got %q, want %q", parsed.Body, original.Body)
 	}
 }
 

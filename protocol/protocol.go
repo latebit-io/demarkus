@@ -16,4 +16,7 @@ const (
 
 	// VerbVersions retrieves the version history of a document.
 	VerbVersions = "VERSIONS"
+
+	// VerbWrite creates or updates a document, creating a new immutable version.
+	VerbWrite = "WRITE"
 )

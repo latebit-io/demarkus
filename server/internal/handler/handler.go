@@ -58,23 +58,31 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handleList(stream, req.Path)
 	case protocol.VerbVersions:
 		h.handleVersions(stream, req.Path)
+	case protocol.VerbWrite:
+		h.handleWrite(stream, req)
 	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
 }
 
 // resolvePath validates and resolves a request path to an absolute filesystem path
-// within the content directory. Returns empty string if the path escapes the root.
+// within the content directory. Returns empty string if the path is invalid.
 //
-// Security (race conditions): This function is safe from TOCTOU races because:
-//  1. filepath.Clean prevents .. escapes at the string level.
-//  2. filepath.EvalSymlinks resolves all symlinks to detect escape attempts.
-//  3. The bounds check is done after symlink resolution, so even if a symlink
-//     is changed between EvalSymlinks and the caller's os.Stat, the path is still valid.
-//  4. If EvalSymlinks fails (ENOENT), we use filepath.Abs which only does string ops.
+// Security: paths containing ".." segments are rejected outright. For valid paths,
+// symlinks are resolved via EvalSymlinks and the result is bounds-checked against
+// the content root. For non-existent paths, the parent directory's symlinks are
+// resolved to handle platform-specific symlink indirection (e.g., /var → /private/var).
 func (h *Handler) resolvePath(reqPath string) string {
 	cleaned := filepath.Clean(reqPath)
 	cleaned = strings.TrimLeft(cleaned, "/")
+
+	// Reject paths that contain .. segments. filepath.Clean collapses traversal
+	// attempts into valid-looking paths (e.g., /../etc/passwd → etc/passwd), so
+	// we check the original path for traversal intent as defense-in-depth.
+	if containsDotDot(reqPath) {
+		return ""
+	}
+
 	joined := filepath.Join(h.ContentDir, cleaned)
 
 	absRoot, err := filepath.Abs(h.ContentDir)
@@ -93,11 +101,11 @@ func (h *Handler) resolvePath(reqPath string) string {
 	// Resolve symlinks in the target path to detect escapes.
 	absPath, err := filepath.EvalSymlinks(joined)
 	if err != nil {
-		// Path doesn't exist yet — fall back to Abs for structural validation.
-		absPath, err = filepath.Abs(joined)
-		if err != nil {
-			return ""
-		}
+		// Path doesn't exist yet — walk up to find the closest existing
+		// ancestor, resolve its symlinks, then append the remaining segments.
+		// This prevents both the /var → /private/var mismatch on macOS and
+		// symlink escapes through intermediate directories.
+		absPath = resolveNonExistent(joined)
 	}
 	// EvalSymlinks may return a relative path; ensure it's absolute.
 	if !filepath.IsAbs(absPath) {
@@ -111,6 +119,42 @@ func (h *Handler) resolvePath(reqPath string) string {
 		return ""
 	}
 	return absPath
+}
+
+// resolveNonExistent resolves a path that doesn't exist yet by walking up
+// to find the closest existing ancestor, resolving its symlinks, then
+// appending the remaining path segments.
+func resolveNonExistent(path string) string {
+	var tail []string
+	current := path
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			break
+		}
+		tail = append([]string{filepath.Base(current)}, tail...)
+		parent := filepath.Dir(current)
+		if parent == current {
+			abs, _ := filepath.Abs(path)
+			return abs
+		}
+		current = parent
+	}
+	resolved, err := filepath.EvalSymlinks(current)
+	if err != nil {
+		abs, _ := filepath.Abs(path)
+		return abs
+	}
+	return filepath.Join(append([]string{resolved}, tail...)...)
+}
+
+// containsDotDot reports whether the path contains a ".." segment.
+func containsDotDot(path string) bool {
+	for _, seg := range strings.Split(path, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // parseVersionPath checks if a path ends with /vN (e.g., /doc.md/v3).
@@ -355,13 +399,58 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 			v.Modified.Format(time.RFC3339)))
 	}
 
+	meta := map[string]string{
+		"total":   fmt.Sprintf("%d", len(versions)),
+		"current": fmt.Sprintf("%d", versions[0].Version),
+	}
+
+	// Verify hash chain integrity and report result.
+	if err := h.Store.VerifyChain(reqPath); err != nil {
+		log.Printf("[WARN] chain verification failed for %s: %v", sanitize(reqPath), err)
+		meta["chain-valid"] = "false"
+		meta["chain-error"] = err.Error()
+	} else {
+		meta["chain-valid"] = "true"
+	}
+
 	resp := protocol.Response{
-		Status: protocol.StatusOK,
+		Status:   protocol.StatusOK,
+		Metadata: meta,
+		Body:     body.String(),
+	}
+	writeResponse(w, resp)
+}
+
+func (h *Handler) handleWrite(w io.Writer, req protocol.Request) {
+	if h.Store == nil {
+		h.writeError(w, protocol.StatusServerError, "writing not configured")
+		return
+	}
+	if int64(len(req.Body)) > store.MaxFileSize {
+		log.Printf("[ERROR] body too large: %s (%d bytes)", sanitize(req.Path), len(req.Body))
+		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+		return
+	}
+
+	doc, err := h.Store.Write(req.Path, []byte(req.Body))
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("[SECURITY] path traversal attempt: %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
+		log.Printf("[ERROR] write %s: %v", sanitize(req.Path), err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	log.Printf("[WRITE] %s v%d", sanitize(req.Path), doc.Version)
+	resp := protocol.Response{
+		Status: protocol.StatusCreated,
 		Metadata: map[string]string{
-			"total":   fmt.Sprintf("%d", len(versions)),
-			"current": fmt.Sprintf("%d", versions[0].Version),
+			"version":  strconv.Itoa(doc.Version),
+			"modified": doc.Modified.Format(time.RFC3339),
 		},
-		Body: body.String(),
 	}
 	writeResponse(w, resp)
 }

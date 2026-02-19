@@ -1,8 +1,11 @@
 package store
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -176,5 +179,196 @@ func TestGetVersion_NotFound(t *testing.T) {
 	_, err := s.Get("/doc.md", 99)
 	if err == nil {
 		t.Fatal("expected error for missing version")
+	}
+}
+
+func TestWrite_NewDocument(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	doc, err := s.Write("/new.md", []byte("# Hello\n"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+	if string(doc.Content) != "# Hello\n" {
+		t.Errorf("content = %q, want %q", doc.Content, "# Hello\n")
+	}
+
+	// Version file should exist with store frontmatter.
+	vData, err := os.ReadFile(filepath.Join(root, "versions", "new.md.v1"))
+	if err != nil {
+		t.Fatalf("read version file: %v", err)
+	}
+	if !strings.HasPrefix(string(vData), "---\nversion: 1\n---\n") {
+		t.Errorf("v1 should have store frontmatter without previous-hash, got: %q", string(vData))
+	}
+
+	// Current file should match version file.
+	cData, err := os.ReadFile(filepath.Join(root, "new.md"))
+	if err != nil {
+		t.Fatalf("read current file: %v", err)
+	}
+	if string(cData) != string(vData) {
+		t.Errorf("current file should match version file")
+	}
+}
+
+func TestWrite_CreatesVersion(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "doc.md"), []byte("# V1\n"), 0o644)
+	s := New(root)
+
+	doc, err := s.Write("/doc.md", []byte("# V2\n"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version = %d, want 2", doc.Version)
+	}
+
+	// versions/doc.md.v2 must exist.
+	if _, err := os.Stat(filepath.Join(root, "versions", "doc.md.v2")); err != nil {
+		t.Errorf("version file not created: %v", err)
+	}
+}
+
+func TestWrite_Increments(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	for i := 1; i <= 3; i++ {
+		doc, err := s.Write("/doc.md", []byte(fmt.Sprintf("# V%d\n", i)))
+		if err != nil {
+			t.Fatalf("Write v%d: %v", i, err)
+		}
+		if doc.Version != i {
+			t.Errorf("version = %d, want %d", doc.Version, i)
+		}
+	}
+
+	// All three version files must exist.
+	for i := 1; i <= 3; i++ {
+		path := filepath.Join(root, "versions", fmt.Sprintf("doc.md.v%d", i))
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("missing version file v%d: %v", i, err)
+		}
+	}
+}
+
+func TestWrite_PathTraversal(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	_, err := s.Write("/../etc/passwd", []byte("evil"))
+	if err == nil {
+		t.Fatal("expected error for path traversal")
+	}
+}
+
+func TestWrite_TooLarge(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	big := make([]byte, MaxFileSize+1)
+	_, err := s.Write("/doc.md", big)
+	if err == nil {
+		t.Fatal("expected error for oversized content")
+	}
+}
+
+func TestWrite_ImmutabilityGuard(t *testing.T) {
+	root := t.TempDir()
+	versionsDir := filepath.Join(root, "versions")
+	os.MkdirAll(versionsDir, 0o755)
+
+	// No doc.md on disk → next=1. Pre-create v1 to simulate a concurrent writer
+	// that won the race and already wrote v1 before we get to the atomic rename.
+	os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# already there\n"), 0o644)
+
+	s := New(root)
+	_, err := s.Write("/doc.md", []byte("# New\n"))
+	if err == nil {
+		t.Fatal("expected error: version 1 already exists")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestWrite_HashChain(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Write v1.
+	if _, err := s.Write("/doc.md", []byte("# V1\n")); err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+
+	// Write v2.
+	if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+
+	v1Data, err := os.ReadFile(filepath.Join(root, "versions", "doc.md.v1"))
+	if err != nil {
+		t.Fatalf("read v1: %v", err)
+	}
+	v2Data, err := os.ReadFile(filepath.Join(root, "versions", "doc.md.v2"))
+	if err != nil {
+		t.Fatalf("read v2: %v", err)
+	}
+
+	// v1 must not have previous-hash.
+	if strings.Contains(string(v1Data), "previous-hash") {
+		t.Errorf("v1 should not have previous-hash, got: %q", string(v1Data))
+	}
+
+	// v2 must have previous-hash matching sha256 of v1 raw bytes.
+	h := sha256.Sum256(v1Data)
+	expected := fmt.Sprintf("sha256-%x", h)
+	if !strings.Contains(string(v2Data), "previous-hash: "+expected) {
+		t.Errorf("v2 previous-hash mismatch\nwant: %s\ngot:  %s", expected, string(v2Data))
+	}
+}
+
+func TestVerifyChain_Valid(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	for i := 1; i <= 3; i++ {
+		if _, err := s.Write("/doc.md", []byte(fmt.Sprintf("# V%d\n", i))); err != nil {
+			t.Fatalf("write v%d: %v", i, err)
+		}
+	}
+
+	if err := s.VerifyChain("/doc.md"); err != nil {
+		t.Errorf("expected valid chain, got error: %v", err)
+	}
+}
+
+func TestVerifyChain_Tampered(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	if _, err := s.Write("/doc.md", []byte("# V1\n")); err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+	if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+
+	// Tamper with v1 after the chain is formed.
+	v1Path := filepath.Join(root, "versions", "doc.md.v1")
+	os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644)
+
+	err := s.VerifyChain("/doc.md")
+	if err == nil {
+		t.Fatal("expected chain verification error after tampering")
+	}
+	if !strings.Contains(err.Error(), "chain broken") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

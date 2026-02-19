@@ -194,6 +194,45 @@ version: 1
 Welcome to Demarkus!
 ```
 
+## Version Integrity (Hash Chain)
+
+Every document write creates a new immutable version. Versions are linked by a hash chain that guarantees tamper detection.
+
+**On-disk layout**:
+```
+root/
+  doc.md              ← symlink to versions/doc.md.v3
+  versions/
+    doc.md.v1         ← genesis (no previous-hash)
+    doc.md.v2         ← contains sha256 of v1's raw bytes
+    doc.md.v3         ← contains sha256 of v2's raw bytes
+```
+
+**Each version file** includes store-managed frontmatter:
+```markdown
+---
+version: 2
+previous-hash: sha256-a1b2c3d4e5f6...
+---
+# Document content
+```
+
+**Verification**: the `VERSIONS` response includes a `chain-valid` metadata field. The server walks the chain from oldest to newest — for each version, it computes `sha256(raw bytes of vN-1)` and compares it against the `previous-hash` recorded in `vN`. If any version has been modified, the hash won't match and the chain is reported as broken:
+
+```
+versions/doc.md.v1          versions/doc.md.v2          versions/doc.md.v3
+┌──────────────────┐        ┌──────────────────┐        ┌──────────────────┐
+│ ---              │        │ ---              │        │ ---              │
+│ version: 1       │        │ version: 2       │        │ version: 3       │
+│ ---              │   ──►  │ previous-hash:   │   ──►  │ previous-hash:   │
+│ # Hello          │  hash  │   sha256-a1b2... │  hash  │   sha256-f6e5... │
+│                  │  of    │ ---              │  of    │ ---              │
+│                  │  this  │ # Updated Hello  │  this  │ # Third revision │
+└──────────────────┘  file  └──────────────────┘  file  └──────────────────┘
+```
+
+This gives the same guarantees as a git commit chain — you can always detect if any version in the history has been altered.
+
 ## Philosophy
 
 Demarkus embodies the **library model** rather than the **platform model**:
