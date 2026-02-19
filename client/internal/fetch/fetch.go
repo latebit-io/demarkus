@@ -132,7 +132,8 @@ func (c *Client) removeConn(host string) {
 
 // Fetch retrieves a document from a Mark Protocol server with automatic retry.
 // Retries transient failures up to 3 times with exponential backoff + jitter.
-func (c *Client) Fetch(host, path, verb string) (Result, error) {
+// The body parameter is sent as the request body (used by WRITE).
+func (c *Client) Fetch(host, path, verb, body string) (Result, error) {
 	const maxRetries = 3
 	const baseBackoff = 100 * time.Millisecond
 
@@ -150,7 +151,7 @@ func (c *Client) Fetch(host, path, verb string) (Result, error) {
 			return Result{}, err
 		}
 
-		result, err := c.fetchOnConn(conn, host, path, verb)
+		result, err := c.fetchOnConn(conn, host, path, verb, body)
 		if err == nil {
 			return result, nil
 		}
@@ -172,7 +173,7 @@ func (c *Client) Fetch(host, path, verb string) (Result, error) {
 	return Result{}, lastErr
 }
 
-func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb string) (Result, error) {
+func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb, body string) (Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.opts.RequestTimeout)
 	defer cancel()
 
@@ -182,10 +183,12 @@ func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb string) (Result, 
 	}
 	defer stream.Close()
 
-	req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
+	req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string), Body: body}
 
+	// Only use caching for read verbs (FETCH, LIST).
+	cacheable := verb == protocol.VerbFetch || verb == protocol.VerbList
 	var cached *cache.Entry
-	if c.opts.Cache != nil {
+	if cacheable && c.opts.Cache != nil {
 		cached, _ = c.opts.Cache.Get(host, path, verb)
 		if cached != nil {
 			if etag := cached.Response.Metadata["etag"]; etag != "" {
@@ -214,7 +217,7 @@ func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb string) (Result, 
 		fromCache = true
 	}
 
-	if c.opts.Cache != nil && resp.Status == protocol.StatusOK {
+	if cacheable && c.opts.Cache != nil && resp.Status == protocol.StatusOK {
 		if err := c.opts.Cache.Put(host, path, verb, resp); err != nil {
 			log.Printf("[WARN] cache write: %v", err)
 		}

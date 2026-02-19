@@ -13,6 +13,8 @@ func TestValidateVerb(t *testing.T) {
 	}{
 		{protocol.VerbFetch, false},
 		{protocol.VerbList, false},
+		{protocol.VerbVersions, false},
+		{protocol.VerbWrite, false},
 		{"DELETE", true},
 		{"", true},
 		{"fetch", true},

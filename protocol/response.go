@@ -12,6 +12,7 @@ import (
 // Standard status values.
 const (
 	StatusOK          = "ok"
+	StatusCreated     = "created"
 	StatusNotModified = "not-modified"
 	StatusNotFound    = "not-found"
 	StatusServerError = "server-error"
