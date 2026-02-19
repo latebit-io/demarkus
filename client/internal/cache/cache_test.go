@@ -98,6 +98,79 @@ func TestListAndFetchSeparate(t *testing.T) {
 	}
 }
 
+func TestFetchThenListSamePath(t *testing.T) {
+	c := New(t.TempDir())
+
+	fetchResp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{"version": "1"},
+		Body:     "# Hello\n",
+	}
+	listResp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{"total": "3"},
+		Body:     "# Versions\n",
+	}
+
+	// FETCH first, then LIST the same .md path. Previously this failed
+	// because FETCH created index.md as a file and LIST needed it as a dir.
+	if err := c.Put("localhost:6309", "/index.md", protocol.VerbFetch, fetchResp); err != nil {
+		t.Fatalf("put fetch: %v", err)
+	}
+	if err := c.Put("localhost:6309", "/index.md", protocol.VerbList, listResp); err != nil {
+		t.Fatalf("put list: %v", err)
+	}
+
+	fetchEntry, _ := c.Get("localhost:6309", "/index.md", protocol.VerbFetch)
+	listEntry, _ := c.Get("localhost:6309", "/index.md", protocol.VerbList)
+
+	if fetchEntry == nil || listEntry == nil {
+		t.Fatal("expected both entries to be cached")
+	}
+	if fetchEntry.Response.Body != "# Hello\n" {
+		t.Errorf("fetch body: got %q", fetchEntry.Response.Body)
+	}
+	if listEntry.Response.Body != "# Versions\n" {
+		t.Errorf("list body: got %q", listEntry.Response.Body)
+	}
+}
+
+func TestStaleFlatFileCache(t *testing.T) {
+	c := New(t.TempDir())
+
+	// Simulate a stale flat-file cache entry from the old layout:
+	// old layout stored FETCH /index.md as a regular file at host/index.md.
+	hostDir := filepath.Join(c.Dir, "localhost:6309")
+	if err := os.MkdirAll(hostDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staleFile := filepath.Join(hostDir, "index.md")
+	if err := os.WriteFile(staleFile, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staleFile+".meta", []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Put with new layout should succeed despite the stale file.
+	resp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{"version": "1"},
+		Body:     "# Hello\n",
+	}
+	if err := c.Put("localhost:6309", "/index.md", protocol.VerbFetch, resp); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	entry, _ := c.Get("localhost:6309", "/index.md", protocol.VerbFetch)
+	if entry == nil {
+		t.Fatal("expected cached entry")
+	}
+	if entry.Response.Body != "# Hello\n" {
+		t.Errorf("body: got %q", entry.Response.Body)
+	}
+}
+
 func TestPathSanitisation(t *testing.T) {
 	c := New(t.TempDir())
 
