@@ -64,6 +64,20 @@ func TestNewConfig_MissingRoot(t *testing.T) {
 	}
 }
 
+func TestNewConfig_TokensFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEMARKUS_ROOT", dir)
+	t.Setenv("DEMARKUS_TOKENS", "/path/to/tokens.toml")
+
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TokensFile != "/path/to/tokens.toml" {
+		t.Errorf("tokens file: got %q, want %q", cfg.TokensFile, "/path/to/tokens.toml")
+	}
+}
+
 func TestNewConfig_InvalidInt(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DEMARKUS_ROOT", dir)

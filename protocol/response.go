@@ -11,11 +11,13 @@ import (
 
 // Standard status values.
 const (
-	StatusOK          = "ok"
-	StatusCreated     = "created"
-	StatusNotModified = "not-modified"
-	StatusNotFound    = "not-found"
-	StatusServerError = "server-error"
+	StatusOK           = "ok"
+	StatusCreated      = "created"
+	StatusNotModified  = "not-modified"
+	StatusNotFound     = "not-found"
+	StatusUnauthorized = "unauthorized"
+	StatusNotPermitted = "not-permitted"
+	StatusServerError  = "server-error"
 )
 
 // Response represents a Mark Protocol response.

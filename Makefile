@@ -25,7 +25,8 @@ protocol:
 server: protocol
 	@echo "Building demarkus-server..."
 	cd server && go build -o bin/demarkus-server ./cmd/demarkus-server
-	@echo "✓ Server built: server/bin/demarkus-server"
+	cd server && go build -o bin/demarkus-token ./cmd/demarkus-token
+	@echo "✓ Server built: server/bin/demarkus-server, server/bin/demarkus-token"
 
 # Build client
 client: protocol
