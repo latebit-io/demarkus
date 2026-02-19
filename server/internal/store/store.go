@@ -1,15 +1,10 @@
 // Package store provides versioned document storage for the Demarkus server.
 //
-// The store manages documents in a content directory, supporting both flat-file
-// layouts (single version per document) and versioned layouts (multiple immutable
-// versions per document).
+// The store manages documents in a content directory. Only documents written
+// through the protocol (with a versions directory) are served. Flat files
+// without version history are treated as non-existent.
 //
-// Flat layout (current, read-only):
-//
-//	root/
-//	  doc.md              ← plain file, treated as version 1
-//
-// Versioned layout (future, write-enabled):
+// Layout:
 //
 //	root/
 //	  doc.md              ← symlink to versions/doc.md.v3
@@ -62,7 +57,8 @@ func (s *Store) Root() string {
 }
 
 // Get retrieves a document at the given path. If version is 0, returns the
-// current version. Returns os.ErrNotExist if the document is not found.
+// current version. Only serves documents with a versions directory — flat files
+// without version history are treated as non-existent.
 func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	if version > 0 {
 		return s.getVersion(reqPath, version)
@@ -82,6 +78,12 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	}
 	if info.Size() > MaxFileSize {
 		return nil, fmt.Errorf("file exceeds size limit")
+	}
+
+	// Only serve documents written through the protocol (with version history).
+	versions := s.findVersions(reqPath)
+	if len(versions) == 0 {
+		return nil, os.ErrNotExist
 	}
 
 	data, err := os.ReadFile(filePath)
@@ -131,9 +133,8 @@ func (s *Store) ListDir(reqPath string) ([]os.DirEntry, error) {
 }
 
 // Versions returns the version history for a document, newest first.
-// For flat files (no versions directory), returns a single entry.
+// Returns os.ErrNotExist if the document has no version history.
 func (s *Store) Versions(reqPath string) ([]VersionInfo, error) {
-	// Check the document exists at all.
 	filePath, err := s.resolve(reqPath)
 	if err != nil {
 		return nil, err
@@ -146,21 +147,15 @@ func (s *Store) Versions(reqPath string) ([]VersionInfo, error) {
 		return nil, os.ErrNotExist
 	}
 
-	// Look for versioned files in the versions directory.
 	versions := s.findVersions(reqPath)
-	if len(versions) > 0 {
-		// Sort newest first.
-		sort.Slice(versions, func(i, j int) bool {
-			return versions[i].Version > versions[j].Version
-		})
-		return versions, nil
+	if len(versions) == 0 {
+		return nil, os.ErrNotExist
 	}
 
-	// Flat file: report as version 1.
-	return []VersionInfo{{
-		Version:  1,
-		Modified: info.ModTime().UTC().Truncate(time.Second),
-	}}, nil
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].Version > versions[j].Version
+	})
+	return versions, nil
 }
 
 // resolve validates and resolves a request path to an absolute filesystem path
@@ -213,11 +208,11 @@ func (s *Store) resolve(reqPath string) (string, error) {
 }
 
 // CurrentVersion returns the latest version number for a document.
-// For flat files, returns 1. For versioned documents, returns the highest version.
+// Returns 0 if no version history exists.
 func (s *Store) CurrentVersion(reqPath string) int {
 	versions := s.findVersions(reqPath)
 	if len(versions) == 0 {
-		return 1
+		return 0
 	}
 	max := 0
 	for _, v := range versions {

@@ -20,6 +20,7 @@ type Config struct {
 	RequestTimeout time.Duration // Timeout for handling a single request
 	TLSCert        string        // Path to TLS certificate PEM file (empty = dev mode)
 	TLSKey         string        // Path to TLS private key PEM file (empty = dev mode)
+	TokensFile     string        // Path to TOML tokens file (empty = no auth)
 }
 
 // NewConfig loads configuration from environment variables.
@@ -34,6 +35,7 @@ func NewConfig() (*Config, error) {
 	config.RequestTimeout = getEnvAsDuration("DEMARKUS_REQUEST_TIMEOUT", 10*time.Second)
 	config.TLSCert = getEnv("DEMARKUS_TLS_CERT", "")
 	config.TLSKey = getEnv("DEMARKUS_TLS_KEY", "")
+	config.TokensFile = getEnv("DEMARKUS_TOKENS", "")
 
 	if config.ContentDir == "" {
 		return config, errors.New("DEMARKUS_ROOT environment variable is required")

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit/demarkus/server/internal/auth"
 	"github.com/latebit/demarkus/server/internal/config"
 	"github.com/latebit/demarkus/server/internal/handler"
 	"github.com/latebit/demarkus/server/internal/store"
@@ -25,6 +26,7 @@ func main() {
 	port := flag.Int("port", 0, "port to listen on (overrides DEMARKUS_PORT)")
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
+	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
 	flag.Parse()
 
 	cfg, err := config.NewConfig()
@@ -44,6 +46,9 @@ func main() {
 	}
 	if *tlsKey != "" {
 		cfg.TLSKey = *tlsKey
+	}
+	if *tokens != "" {
+		cfg.TokensFile = *tokens
 	}
 	if cfg.ContentDir == "" {
 		log.Fatal("[ERROR] content directory is required (set DEMARKUS_ROOT or use -root flag)")
@@ -68,7 +73,20 @@ func main() {
 	defer listener.Close()
 
 	s := store.New(cfg.ContentDir)
-	h := &handler.Handler{ContentDir: cfg.ContentDir, Store: s}
+
+	var tokenStore *auth.TokenStore
+	if cfg.TokensFile != "" {
+		ts, err := auth.LoadTokens(cfg.TokensFile)
+		if err != nil {
+			log.Fatalf("[ERROR] %v", err)
+		}
+		tokenStore = ts
+		log.Printf("[INFO] auth: loaded tokens from %s", cfg.TokensFile)
+	} else {
+		log.Printf("[INFO] auth: no tokens file configured, writes disabled")
+	}
+
+	h := &handler.Handler{ContentDir: cfg.ContentDir, Store: s, TokenStore: tokenStore}
 
 	log.Printf("[INFO] demarkus-server listening on %s (root: %s, idle_timeout: %v, request_timeout: %v)",
 		addr, cfg.ContentDir, cfg.IdleTimeout, cfg.RequestTimeout)
