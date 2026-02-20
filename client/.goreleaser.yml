@@ -1,6 +1,9 @@
 version: 2
 
-project_name: demarkus
+project_name: demarkus-client
+
+monorepo:
+  tag_prefix: client/
 
 builds:
   - id: demarkus
@@ -49,7 +52,7 @@ archives:
   - id: demarkus
     builds:
       - demarkus
-    name_template: "demarkus_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "demarkus-client_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
   - id: demarkus-tui
     builds:
@@ -57,7 +60,7 @@ archives:
     name_template: "demarkus-tui_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
-  name_template: "checksums.txt"
+  name_template: "demarkus-client_checksums.txt"
 
 changelog:
   use: github-native
