@@ -89,7 +89,13 @@ This prints the raw token (give to the client, shown once) and appends the hashe
 
 **2. Start the server with auth**:
 ```bash
-./server/bin/demarkus-server -root /srv/site -tokens tokens.toml
+./server/bin/demarkus-server -root /srv/site -tokens /path/to/tokens.toml
+```
+
+The `-tokens` flag accepts any file path. You can also use the `DEMARKUS_TOKENS` environment variable:
+```bash
+export DEMARKUS_TOKENS=/etc/demarkus/tokens.toml
+./server/bin/demarkus-server -root /srv/site
 ```
 
 **3. Write content through the protocol**:
