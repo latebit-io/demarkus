@@ -49,7 +49,7 @@ FETCH /hello.md
 WRITE /doc.md
 
 ---
-auth: sha256-abc123def456
+auth: <raw-token>
 timestamp: 2025-02-14T10:30:00Z
 ---
 
@@ -61,7 +61,7 @@ New text here
 APPEND /article/comments.md
 
 ---
-auth: sha256-abc123def456
+auth: <raw-token>
 timestamp: 2025-02-14T10:30:00Z
 parent: /article.md
 ---
@@ -73,7 +73,7 @@ Great article! Here's my thought...
 ARCHIVE /doc.md
 
 ---
-auth: sha256-abc123def456
+auth: <raw-token>
 timestamp: 2025-02-14T10:30:00Z
 reason: "Outdated information"
 ---
@@ -213,7 +213,7 @@ include-metadata: true
 **Client Error States**:
 - `not-found` - Document doesn't exist
 - `unauthorized` - Missing or invalid auth
-- `forbidden` - Valid auth but insufficient capability
+- `not-permitted` - Valid auth but insufficient capability
 - `conflict` - Version conflict (simultaneous edits)
 - `bad-request` - Malformed request
 - `too-large` - Document exceeds size limit
@@ -275,20 +275,15 @@ Your token does not have write access to this path.
 Contact the server administrator to request write permissions.
 ```
 
-**Forbidden**:
+**Not Permitted**:
 ```markdown
 ---
-status: forbidden
-reason: "Token does not grant write access to /private/*"
-required-capability: write
-your-capabilities: [read]
+status: not-permitted
 ---
 
-# Access Forbidden
+# Not permitted
 
-Your authentication token grants read-only access to this path.
-
-To write to this path, you need a token with write capability.
+Your authentication token does not grant write access to this path.
 ```
 
 **Version Conflict**:
@@ -379,24 +374,28 @@ acl:
 
 **Philosophy**: Tokens grant capabilities, not identities. The server doesn't need to know who you are, only what you're allowed to do.
 
-**Token Structure**:
-```toml
-# Server configuration: /etc/mark-server/tokens.toml
-[tokens]
-"sha256-abc123def456..." = {
-  paths = ["/docs/*", "/public/*"],
-  operations = ["read", "write"],
-  expires = "2026-02-14T10:30:00Z"  # optional
-}
+**Token Generation**:
+```bash
+# Generate a token and append to tokens file
+demarkus-token generate -paths "/docs/*,/public/*" -ops write -tokens tokens.toml
+# Prints raw token (give to client, shown once)
+# Appends SHA-256 hash to tokens.toml
 ```
 
-**Token Usage**:
+**Token Store** (server stores hashes, never raw tokens):
+```toml
+# tokens.toml
+[tokens]
+"sha256-a1b2c3d4..." = { paths = ["/docs/*", "/public/*"], operations = ["write"] }
+"sha256-e5f6a7b8..." = { paths = ["/*"], operations = ["read", "write"], expires = "2026-12-31T23:59:59Z" }
+```
+
+**Token Usage** (client sends raw token, server hashes before lookup):
 ```markdown
 WRITE /docs/article.md
 
 ---
-auth: sha256-abc123def456...
-timestamp: 2025-02-14T10:30:00Z
+auth: <raw-token>
 ---
 
 # Content
@@ -472,19 +471,16 @@ Or via directory-level `.mark-acl` files:
 
 ### Versioning & Audit Trail
 
-**Every write creates a new version** (immutable history):
+**Every write creates a new version** (immutable history). Only documents written through the protocol are served — flat files without version history are treated as non-existent.
 
 ```
-/var/mark-server/
-  data/
-    doc.md -> versions/doc.md.v42  # symlink to current
+content-root/
+  doc.md -> versions/doc.md.v42  # symlink to current
   versions/
     doc.md.v1
     doc.md.v2
     ...
     doc.md.v42
-  audit/
-    doc.md.log  # security audit log
 ```
 
 **Security Audit Log** (server-side only, not public):
@@ -1254,9 +1250,9 @@ Versions give agents the same guarantees that Git gives developers — you alway
 
 **Token Generation**:
 ```bash
-# Generate secure token
-openssl rand -hex 32
-# Server stores SHA256 hash of this token
+# Generate a token and append to the server's tokens file
+demarkus-token generate -paths "/*" -ops write -tokens tokens.toml
+# Prints raw token once; server stores only the SHA-256 hash
 ```
 
 ### Encryption at Rest

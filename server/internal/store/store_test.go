@@ -9,20 +9,14 @@ import (
 	"testing"
 )
 
-func TestGet_FlatFile(t *testing.T) {
+func TestGet_FlatFileRejected(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "doc.md"), []byte("# Hello"), 0o644)
 
 	s := New(root)
-	doc, err := s.Get("/doc.md", 0)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if string(doc.Content) != "# Hello" {
-		t.Errorf("content = %q, want %q", doc.Content, "# Hello")
-	}
-	if doc.Version != 1 {
-		t.Errorf("version = %d, want 1", doc.Version)
+	_, err := s.Get("/doc.md", 0)
+	if err == nil {
+		t.Fatal("expected error: flat files without version history should not be served")
 	}
 }
 
@@ -118,20 +112,14 @@ func TestListDir_NotADirectory(t *testing.T) {
 	}
 }
 
-func TestVersions_FlatFile(t *testing.T) {
+func TestVersions_FlatFileRejected(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "doc.md"), []byte("# Hello"), 0o644)
 
 	s := New(root)
-	versions, err := s.Versions("/doc.md")
-	if err != nil {
-		t.Fatalf("Versions: %v", err)
-	}
-	if len(versions) != 1 {
-		t.Fatalf("versions count = %d, want 1", len(versions))
-	}
-	if versions[0].Version != 1 {
-		t.Errorf("version = %d, want 1", versions[0].Version)
+	_, err := s.Versions("/doc.md")
+	if err == nil {
+		t.Fatal("expected error: flat files without version history should not be served")
 	}
 }
 
@@ -218,12 +206,17 @@ func TestWrite_NewDocument(t *testing.T) {
 
 func TestWrite_CreatesVersion(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "doc.md"), []byte("# V1\n"), 0o644)
 	s := New(root)
 
+	// Write v1 through the protocol.
+	if _, err := s.Write("/doc.md", []byte("# V1\n")); err != nil {
+		t.Fatalf("Write v1: %v", err)
+	}
+
+	// Write v2.
 	doc, err := s.Write("/doc.md", []byte("# V2\n"))
 	if err != nil {
-		t.Fatalf("Write: %v", err)
+		t.Fatalf("Write v2: %v", err)
 	}
 	if doc.Version != 2 {
 		t.Errorf("version = %d, want 2", doc.Version)

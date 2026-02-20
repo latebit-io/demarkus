@@ -16,11 +16,12 @@ import (
 func main() {
 	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, WRITE)")
 	body := flag.String("body", "", "request body (for WRITE); reads stdin if omitted")
+	authToken := flag.String("auth", "", "auth token for WRITE requests (env: DEMARKUS_AUTH)")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus [-X VERB] [-body TEXT] mark://host:port/path\n\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus [-X VERB] [-body TEXT] [-auth TOKEN] mark://host:port/path\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -45,6 +46,12 @@ func main() {
 		opts.Cache = cache.New(*cacheDir)
 	}
 
+	// Auth token: flag takes precedence over env var.
+	token := *authToken
+	if token == "" {
+		token = os.Getenv("DEMARKUS_AUTH")
+	}
+
 	// For WRITE: read body from -body flag or stdin.
 	reqBody := *body
 	if *verb == protocol.VerbWrite && reqBody == "" {
@@ -58,7 +65,17 @@ func main() {
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
-	result, err := client.Fetch(host, path, *verb, reqBody)
+	var result fetch.Result
+	switch *verb {
+	case protocol.VerbFetch:
+		result, err = client.Fetch(host, path)
+	case protocol.VerbList:
+		result, err = client.List(host, path)
+	case protocol.VerbVersions:
+		result, err = client.Versions(host, path)
+	case protocol.VerbWrite:
+		result, err = client.Write(host, path, reqBody, token)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}

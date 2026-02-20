@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit/demarkus/server/internal/auth"
 	"github.com/latebit/demarkus/server/internal/store"
 )
 
@@ -39,12 +40,25 @@ func setupContentDir(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// setupVersionedDir creates a content directory and writes files through the
+// store so they have proper version history. Returns the dir and store.
+func setupVersionedDir(t *testing.T, files map[string]string) (string, *store.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	s := store.New(dir)
+	for name, content := range files {
+		if _, err := s.Write("/"+name, []byte(content)); err != nil {
+			t.Fatalf("setupVersionedDir: write %s: %v", name, err)
+		}
+	}
+	return dir, s
+}
+
 func TestHandleFetch(t *testing.T) {
-	dir := setupContentDir(t, map[string]string{
-		"hello.md":            "# Hello World\n",
-		"with-frontmatter.md": "---\nversion: 5\nauthor: Fritz\n---\n# Doc\n",
+	dir, s := setupVersionedDir(t, map[string]string{
+		"hello.md": "# Hello World\n",
 	})
-	h := &Handler{ContentDir: dir}
+	h := &Handler{ContentDir: dir, Store: s}
 
 	t.Run("existing file", func(t *testing.T) {
 		stream := newMockStream("FETCH /hello.md\n")
@@ -68,22 +82,21 @@ func TestHandleFetch(t *testing.T) {
 		}
 	})
 
-	t.Run("file with existing frontmatter", func(t *testing.T) {
-		stream := newMockStream("FETCH /with-frontmatter.md\n")
-		h.HandleStream(stream)
+	t.Run("flat file not served", func(t *testing.T) {
+		flatDir := setupContentDir(t, map[string]string{
+			"flat.md": "# Flat\n",
+		})
+		flatH := &Handler{ContentDir: flatDir, Store: store.New(flatDir)}
+
+		stream := newMockStream("FETCH /flat.md\n")
+		flatH.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
 		}
-		if resp.Status != protocol.StatusOK {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
-		}
-		if resp.Metadata["version"] != "5" {
-			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "5")
-		}
-		if strings.Contains(resp.Body, "---") {
-			t.Error("body should not contain frontmatter delimiters")
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
 		}
 	})
 
@@ -101,7 +114,6 @@ func TestHandleFetch(t *testing.T) {
 	})
 
 	t.Run("path traversal blocked", func(t *testing.T) {
-		// Paths with .. segments are rejected outright as defense-in-depth.
 		stream := newMockStream("FETCH /../../etc/passwd\n")
 		h.HandleStream(stream)
 
@@ -129,10 +141,10 @@ func TestHandleFetch(t *testing.T) {
 }
 
 func TestHealthCheck(t *testing.T) {
-	dir := setupContentDir(t, map[string]string{
+	dir, s := setupVersionedDir(t, map[string]string{
 		"hello.md": "# Hello\n",
 	})
-	h := &Handler{ContentDir: dir}
+	h := &Handler{ContentDir: dir, Store: s}
 
 	stream := newMockStream("FETCH /health\n")
 	h.HandleStream(stream)
@@ -150,10 +162,10 @@ func TestHealthCheck(t *testing.T) {
 }
 
 func TestEtagInResponse(t *testing.T) {
-	dir := setupContentDir(t, map[string]string{
+	dir, s := setupVersionedDir(t, map[string]string{
 		"hello.md": "# Hello World\n",
 	})
-	h := &Handler{ContentDir: dir}
+	h := &Handler{ContentDir: dir, Store: s}
 
 	stream := newMockStream("FETCH /hello.md\n")
 	h.HandleStream(stream)
@@ -171,10 +183,10 @@ func TestEtagInResponse(t *testing.T) {
 }
 
 func TestConditionalFetch(t *testing.T) {
-	dir := setupContentDir(t, map[string]string{
+	dir, s := setupVersionedDir(t, map[string]string{
 		"hello.md": "# Hello World\n",
 	})
-	h := &Handler{ContentDir: dir}
+	h := &Handler{ContentDir: dir, Store: s}
 
 	// First fetch to get etag and modified time.
 	stream := newMockStream("FETCH /hello.md\n")
@@ -258,8 +270,8 @@ func TestSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create content directory with a symlink pointing outside.
-	dir := setupContentDir(t, map[string]string{
+	// Create content directory with a versioned file and a symlink pointing outside.
+	dir, s := setupVersionedDir(t, map[string]string{
 		"public.md": "# Public\n",
 	})
 	symlinkPath := filepath.Join(dir, "evil.md")
@@ -267,7 +279,7 @@ func TestSymlinkEscape(t *testing.T) {
 		t.Skipf("cannot create symlink: %v", err)
 	}
 
-	h := &Handler{ContentDir: dir}
+	h := &Handler{ContentDir: dir, Store: s}
 
 	t.Run("symlink escape blocked", func(t *testing.T) {
 		stream := newMockStream("FETCH /evil.md\n")
@@ -306,14 +318,20 @@ func TestSymlinkEscape(t *testing.T) {
 }
 
 func TestHandleList(t *testing.T) {
-	dir := setupContentDir(t, map[string]string{
-		"index.md":          "# Index\n",
-		"about.md":          "# About\n",
-		"docs/guide.md":     "# Guide\n",
-		"docs/reference.md": "# Reference\n",
-		".hidden":           "secret\n",
-	})
-	h := &Handler{ContentDir: dir}
+	dir := t.TempDir()
+	s := store.New(dir)
+	for _, f := range []struct{ path, content string }{
+		{"/index.md", "# Index\n"},
+		{"/about.md", "# About\n"},
+		{"/docs/guide.md", "# Guide\n"},
+		{"/docs/reference.md", "# Reference\n"},
+	} {
+		if _, err := s.Write(f.path, []byte(f.content)); err != nil {
+			t.Fatalf("write %s: %v", f.path, err)
+		}
+	}
+	os.WriteFile(filepath.Join(dir, ".hidden"), []byte("secret\n"), 0o644)
+	h := &Handler{ContentDir: dir, Store: s}
 
 	t.Run("list root directory", func(t *testing.T) {
 		stream := newMockStream("LIST /\n")
@@ -404,11 +422,15 @@ func TestHandleList(t *testing.T) {
 }
 
 func TestMultipleLeadingSlashes(t *testing.T) {
-	dir := setupContentDir(t, map[string]string{
-		"hello.md":      "# Hello\n",
-		"docs/guide.md": "# Guide\n",
-	})
-	h := &Handler{ContentDir: dir}
+	dir := t.TempDir()
+	s := store.New(dir)
+	if _, err := s.Write("/hello.md", []byte("# Hello\n")); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n")); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+	h := &Handler{ContentDir: dir, Store: s}
 
 	fetchPaths := []string{"///hello.md", "//hello.md", "////hello.md"}
 	for _, p := range fetchPaths {
@@ -444,10 +466,10 @@ func TestMultipleLeadingSlashes(t *testing.T) {
 }
 
 func TestDeeplyNestedTraversal(t *testing.T) {
-	dir := setupContentDir(t, map[string]string{
+	dir, s := setupVersionedDir(t, map[string]string{
 		"safe.md": "# Safe\n",
 	})
-	h := &Handler{ContentDir: dir}
+	h := &Handler{ContentDir: dir, Store: s}
 
 	paths := []string{
 		"/a/../../b/../../etc/passwd",
@@ -483,12 +505,17 @@ func TestDeeplyNestedTraversal(t *testing.T) {
 }
 
 func TestRelativeContentDir(t *testing.T) {
-	// Create a temp dir and work from inside it.
+	// Create a temp dir, write versioned files, then use a relative path.
 	tmpDir := t.TempDir()
 	contentDir := filepath.Join(tmpDir, "site")
-	os.MkdirAll(filepath.Join(contentDir, "docs"), 0o755)
-	os.WriteFile(filepath.Join(contentDir, "page.md"), []byte("# Page\n"), 0o644)
-	os.WriteFile(filepath.Join(contentDir, "docs/guide.md"), []byte("# Guide\n"), 0o644)
+	os.MkdirAll(contentDir, 0o755)
+	s := store.New(contentDir)
+	if _, err := s.Write("/page.md", []byte("# Page\n")); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n")); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
 
 	// Use a relative path for ContentDir.
 	origWd, err := os.Getwd()
@@ -498,7 +525,8 @@ func TestRelativeContentDir(t *testing.T) {
 	defer os.Chdir(origWd)
 	os.Chdir(tmpDir)
 
-	h := &Handler{ContentDir: "./site"}
+	relStore := store.New("./site")
+	h := &Handler{ContentDir: "./site", Store: relStore}
 
 	t.Run("fetch works with relative content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /page.md\n")
@@ -558,11 +586,15 @@ func TestRelativeContentDir(t *testing.T) {
 }
 
 func TestContentDirAsSymlink(t *testing.T) {
-	// Create actual content directory.
+	// Create actual content directory with versioned files.
 	actualDir := t.TempDir()
-	os.MkdirAll(filepath.Join(actualDir, "docs"), 0o755)
-	os.WriteFile(filepath.Join(actualDir, "file.md"), []byte("# Content\n"), 0o644)
-	os.WriteFile(filepath.Join(actualDir, "docs/guide.md"), []byte("# Guide\n"), 0o644)
+	s := store.New(actualDir)
+	if _, err := s.Write("/file.md", []byte("# Content\n")); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n")); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
 
 	// Symlink another path to it.
 	symlinkDir := filepath.Join(t.TempDir(), "link")
@@ -570,7 +602,8 @@ func TestContentDirAsSymlink(t *testing.T) {
 		t.Skipf("cannot create symlink: %v", err)
 	}
 
-	h := &Handler{ContentDir: symlinkDir}
+	symlinkStore := store.New(symlinkDir)
+	h := &Handler{ContentDir: symlinkDir, Store: symlinkStore}
 
 	t.Run("fetch through symlinked content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /file.md\n")
@@ -628,19 +661,15 @@ func TestContentDirAsSymlink(t *testing.T) {
 }
 
 func TestHandleVersions(t *testing.T) {
-	dir := setupContentDir(t, map[string]string{
-		"doc.md": "# Current\n",
+	dir, s := setupVersionedDir(t, map[string]string{
+		"doc.md": "# V1\n",
 	})
-	// Create versioned files.
-	versionsDir := filepath.Join(dir, "versions")
-	os.Mkdir(versionsDir, 0o755)
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# V1\n"), 0o644)
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), []byte("# V2\n"), 0o644)
-
-	h := &Handler{
-		ContentDir: dir,
-		Store:      store.New(dir),
+	// Write a second version.
+	if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+		t.Fatalf("write v2: %v", err)
 	}
+
+	h := &Handler{ContentDir: dir, Store: s}
 
 	t.Run("version history", func(t *testing.T) {
 		stream := newMockStream("VERSIONS /doc.md\n")
@@ -662,14 +691,12 @@ func TestHandleVersions(t *testing.T) {
 		if !strings.Contains(resp.Body, "v1") || !strings.Contains(resp.Body, "v2") {
 			t.Errorf("body should list both versions: %q", resp.Body)
 		}
-		// These version files were manually placed without store frontmatter,
-		// so chain-valid will be false (v2 has no previous-hash).
-		if resp.Metadata["chain-valid"] != "false" {
-			t.Errorf("chain-valid: got %q, want %q", resp.Metadata["chain-valid"], "false")
+		if resp.Metadata["chain-valid"] != "true" {
+			t.Errorf("chain-valid: got %q, want %q", resp.Metadata["chain-valid"], "true")
 		}
 	})
 
-	t.Run("flat file single version", func(t *testing.T) {
+	t.Run("flat file not found", func(t *testing.T) {
 		flatDir := setupContentDir(t, map[string]string{
 			"flat.md": "# Flat\n",
 		})
@@ -685,11 +712,8 @@ func TestHandleVersions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
 		}
-		if resp.Status != protocol.StatusOK {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
-		}
-		if resp.Metadata["total"] != "1" {
-			t.Errorf("total: got %q, want %q", resp.Metadata["total"], "1")
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
 		}
 	})
 
@@ -723,18 +747,14 @@ func TestHandleVersions(t *testing.T) {
 }
 
 func TestFetchVersion(t *testing.T) {
-	dir := setupContentDir(t, map[string]string{
-		"doc.md": "# Current\n",
+	dir, s := setupVersionedDir(t, map[string]string{
+		"doc.md": "# Version One\n",
 	})
-	versionsDir := filepath.Join(dir, "versions")
-	os.Mkdir(versionsDir, 0o755)
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# Version One\n"), 0o644)
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), []byte("# Version Two\n"), 0o644)
-
-	h := &Handler{
-		ContentDir: dir,
-		Store:      store.New(dir),
+	if _, err := s.Write("/doc.md", []byte("# Version Two\n")); err != nil {
+		t.Fatalf("write v2: %v", err)
 	}
+
+	h := &Handler{ContentDir: dir, Store: s}
 
 	t.Run("fetch specific version", func(t *testing.T) {
 		stream := newMockStream("FETCH /doc.md/v1\n")
@@ -781,24 +801,6 @@ func TestFetchVersion(t *testing.T) {
 		}
 		if resp.Status != protocol.StatusNotFound {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
-		}
-	})
-
-	t.Run("version path without store falls through to normal fetch", func(t *testing.T) {
-		noStoreH := &Handler{ContentDir: dir}
-
-		// Without a store, /doc.md/v1 is treated as a regular path.
-		// Result varies by OS: "not-found" or "server-error" depending on
-		// how the OS handles stat on a path through a regular file.
-		stream := newMockStream("FETCH /doc.md/v1\n")
-		noStoreH.HandleStream(stream)
-
-		resp, err := protocol.ParseResponse(&stream.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		if resp.Status == protocol.StatusOK {
-			t.Error("expected error status, got ok")
 		}
 	})
 }
@@ -852,11 +854,21 @@ func TestVersionsChainValid(t *testing.T) {
 }
 
 func TestHandleWrite(t *testing.T) {
+	// A permissive token store for tests that need to exercise write logic.
+	const testSecret = "test-write-secret"
+	writeTokenStore := auth.NewTokenStore(map[string]auth.Token{
+		auth.HashToken(testSecret): {
+			Paths:      []string{"/*"},
+			Operations: []string{"write"},
+		},
+	})
+	authMeta := "---\nauth: " + testSecret + "\n---\n"
+
 	t.Run("creates new document", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir)}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: writeTokenStore}
 
-		stream := newMockStream("WRITE /new.md\n# Hello\n")
+		stream := newMockStream("WRITE /new.md\n" + authMeta + "# Hello\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -875,12 +887,14 @@ func TestHandleWrite(t *testing.T) {
 	})
 
 	t.Run("creates new version of existing document", func(t *testing.T) {
-		dir := setupContentDir(t, map[string]string{
-			"doc.md": "# Original\n",
-		})
-		h := &Handler{ContentDir: dir, Store: store.New(dir)}
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Original\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, TokenStore: writeTokenStore}
 
-		stream := newMockStream("WRITE /doc.md\n# Updated\n")
+		stream := newMockStream("WRITE /doc.md\n" + authMeta + "# Updated\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -896,10 +910,10 @@ func TestHandleWrite(t *testing.T) {
 	})
 
 	t.Run("no store configured", func(t *testing.T) {
-		dir := setupContentDir(t, map[string]string{"doc.md": "# Doc\n"})
-		h := &Handler{ContentDir: dir}
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, TokenStore: writeTokenStore}
 
-		stream := newMockStream("WRITE /doc.md\n# New\n")
+		stream := newMockStream("WRITE /doc.md\n" + authMeta + "# New\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -913,9 +927,9 @@ func TestHandleWrite(t *testing.T) {
 
 	t.Run("path traversal blocked", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir)}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: writeTokenStore}
 
-		stream := newMockStream("WRITE /../../etc/passwd\n# evil\n")
+		stream := newMockStream("WRITE /../../etc/passwd\n" + authMeta + "# evil\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -924,6 +938,121 @@ func TestHandleWrite(t *testing.T) {
 		}
 		if resp.Status == protocol.StatusCreated {
 			t.Error("SECURITY: path traversal not blocked")
+		}
+	})
+}
+
+func TestHandleWriteAuth(t *testing.T) {
+	// Raw secrets used in requests. Store keys are their hashes.
+	const (
+		writerSecret   = "writer-secret"
+		readonlySecret = "readonly-secret"
+	)
+
+	ts := auth.NewTokenStore(map[string]auth.Token{
+		auth.HashToken(writerSecret): {
+			Paths:      []string{"/docs/*"},
+			Operations: []string{"write"},
+		},
+		auth.HashToken(readonlySecret): {
+			Paths:      []string{"/*"},
+			Operations: []string{"read"},
+		},
+	})
+
+	t.Run("no token store denies writes", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir)}
+
+		stream := newMockStream("WRITE /doc.md\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotPermitted {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotPermitted)
+		}
+	})
+
+	t.Run("missing token returns unauthorized", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+
+		stream := newMockStream("WRITE /docs/test.md\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusUnauthorized {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusUnauthorized)
+		}
+	})
+
+	t.Run("invalid token returns unauthorized", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+
+		stream := newMockStream("WRITE /docs/test.md\n---\nauth: wrong-secret\n---\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusUnauthorized {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusUnauthorized)
+		}
+	})
+
+	t.Run("valid token wrong path returns not-permitted", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+
+		stream := newMockStream("WRITE /private/secret.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotPermitted {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotPermitted)
+		}
+	})
+
+	t.Run("valid token wrong operation returns not-permitted", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+
+		stream := newMockStream("WRITE /docs/test.md\n---\nauth: " + readonlySecret + "\n---\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotPermitted {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotPermitted)
+		}
+	})
+
+	t.Run("valid token correct path succeeds", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+
+		stream := newMockStream("WRITE /docs/test.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
 	})
 }
