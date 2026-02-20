@@ -1,0 +1,101 @@
+---
+version: 1
+---
+---
+modified: 2025-02-14T10:30:00Z
+version: 1
+---
+
+# Getting Started with Demarkus
+
+## Installation
+
+### Server
+
+```bash
+# Clone the repository
+git clone https://github.com/demarkus/demarkus.git
+cd demarkus
+
+# Build the server
+make server
+
+# Run the server
+cd server
+./bin/demarkus-server --config config.example.toml
+```
+
+### Client
+
+```bash
+# Build the client
+make client
+
+# Run the client
+cd client
+./bin/demarkus mark://localhost:6309/index.md
+```
+
+## Creating Your First Site
+
+1. **Create markdown files** in a directory:
+
+```
+my-site/
+├── index.md
+├── about.md
+└── blog/
+    ├── post-1.md
+    └── post-2.md
+```
+
+2. **Configure the server** to serve this directory
+
+3. **Start the server** on port 6309
+
+4. **Browse with the client** at `mark://localhost:6309/`
+
+## Writing Markdown Documents
+
+Documents can include YAML frontmatter:
+
+```markdown
+---
+modified: 2025-02-14T10:30:00Z
+version: 1
+author: Fritz
+---
+
+# My Document
+
+Content goes here...
+```
+
+## Version History
+
+Access old versions:
+
+- Current: `mark://example.com/doc.md`
+- Version 5: `mark://example.com/doc.md/v5`
+- History: Use `VERSIONS /doc.md` verb
+
+## Authentication
+
+For write access, get a capability token from the server admin. The admin generates tokens using the `demarkus-token` tool — the server stores only the SHA-256 hash, never the raw token.
+
+Include the raw token in requests:
+
+```markdown
+WRITE /doc.md
+
+---
+auth: your-raw-token-here
+---
+
+# Updated content
+```
+
+## Links
+
+- [Back to home](index.md)
+- [About the protocol](about.md)

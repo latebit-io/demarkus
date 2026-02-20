@@ -4,6 +4,7 @@ package handler
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit/demarkus/server/internal/auth"
 	"github.com/latebit/demarkus/server/internal/store"
 )
 
@@ -25,6 +27,7 @@ const MaxDirectoryEntries = 1000
 type Handler struct {
 	ContentDir string
 	Store      *store.Store
+	TokenStore *auth.TokenStore // nil means writes are denied (secure by default)
 }
 
 // Stream represents a bidirectional stream that can be read, written, and closed.
@@ -65,98 +68,6 @@ func (h *Handler) HandleStream(stream Stream) {
 	}
 }
 
-// resolvePath validates and resolves a request path to an absolute filesystem path
-// within the content directory. Returns empty string if the path is invalid.
-//
-// Security: paths containing ".." segments are rejected outright. For valid paths,
-// symlinks are resolved via EvalSymlinks and the result is bounds-checked against
-// the content root. For non-existent paths, the parent directory's symlinks are
-// resolved to handle platform-specific symlink indirection (e.g., /var → /private/var).
-func (h *Handler) resolvePath(reqPath string) string {
-	cleaned := filepath.Clean(reqPath)
-	cleaned = strings.TrimLeft(cleaned, "/")
-
-	// Reject paths that contain .. segments. filepath.Clean collapses traversal
-	// attempts into valid-looking paths (e.g., /../etc/passwd → etc/passwd), so
-	// we check the original path for traversal intent as defense-in-depth.
-	if containsDotDot(reqPath) {
-		return ""
-	}
-
-	joined := filepath.Join(h.ContentDir, cleaned)
-
-	absRoot, err := filepath.Abs(h.ContentDir)
-	if err != nil {
-		log.Printf("[ERROR] resolve content directory: %v", err)
-		return ""
-	}
-	// Resolve symlinks in root for consistent comparison.
-	resolved, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		log.Printf("[ERROR] resolve content directory symlinks: %v", err)
-		return ""
-	}
-	absRoot = resolved
-
-	// Resolve symlinks in the target path to detect escapes.
-	absPath, err := filepath.EvalSymlinks(joined)
-	if err != nil {
-		// Path doesn't exist yet — walk up to find the closest existing
-		// ancestor, resolve its symlinks, then append the remaining segments.
-		// This prevents both the /var → /private/var mismatch on macOS and
-		// symlink escapes through intermediate directories.
-		absPath = resolveNonExistent(joined)
-	}
-	// EvalSymlinks may return a relative path; ensure it's absolute.
-	if !filepath.IsAbs(absPath) {
-		absPath, err = filepath.Abs(absPath)
-		if err != nil {
-			return ""
-		}
-	}
-
-	if absPath != absRoot && !strings.HasPrefix(absPath, absRoot+string(filepath.Separator)) {
-		return ""
-	}
-	return absPath
-}
-
-// resolveNonExistent resolves a path that doesn't exist yet by walking up
-// to find the closest existing ancestor, resolving its symlinks, then
-// appending the remaining path segments.
-func resolveNonExistent(path string) string {
-	var tail []string
-	current := path
-	for {
-		if _, err := os.Lstat(current); err == nil {
-			break
-		}
-		tail = append([]string{filepath.Base(current)}, tail...)
-		parent := filepath.Dir(current)
-		if parent == current {
-			abs, _ := filepath.Abs(path)
-			return abs
-		}
-		current = parent
-	}
-	resolved, err := filepath.EvalSymlinks(current)
-	if err != nil {
-		abs, _ := filepath.Abs(path)
-		return abs
-	}
-	return filepath.Join(append([]string{resolved}, tail...)...)
-}
-
-// containsDotDot reports whether the path contains a ".." segment.
-func containsDotDot(path string) bool {
-	for _, seg := range strings.Split(path, "/") {
-		if seg == ".." {
-			return true
-		}
-	}
-	return false
-}
-
 // parseVersionPath checks if a path ends with /vN (e.g., /doc.md/v3).
 // Returns the base path and version number, or the original path and 0.
 func parseVersionPath(reqPath string) (string, int) {
@@ -178,48 +89,25 @@ func parseVersionPath(reqPath string) (string, int) {
 
 func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 	// Check for path-based version access: FETCH /doc.md/v3
-	if basePath, version := parseVersionPath(req.Path); version > 0 && h.Store != nil {
+	if basePath, version := parseVersionPath(req.Path); version > 0 {
 		h.handleFetchVersion(w, req, basePath, version)
 		return
 	}
 
-	filePath := h.resolvePath(req.Path)
-	if filePath == "" {
-		log.Printf("[SECURITY] path traversal attempt: %s", sanitize(req.Path))
-		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
-		return
-	}
-
-	info, err := os.Stat(filePath)
-	if os.IsNotExist(err) {
-		log.Printf("[NOTFOUND] %s", sanitize(req.Path))
-		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
-		return
-	}
+	doc, err := h.Store.Get(req.Path, 0)
 	if err != nil {
-		log.Printf("[ERROR] stat %s: %v", sanitize(req.Path), err)
-		h.writeError(w, protocol.StatusServerError, "internal error")
-		return
-	}
-	if info.IsDir() {
-		h.writeError(w, protocol.StatusNotFound, req.Path+" is a directory")
-		return
-	}
-	if info.Size() > store.MaxFileSize {
-		log.Printf("[ERROR] file too large: %s (%d bytes)", sanitize(req.Path), info.Size())
-		h.writeError(w, protocol.StatusServerError, "file exceeds size limit")
-		return
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		log.Printf("[ERROR] read %s: %v", sanitize(req.Path), err)
+		if os.IsNotExist(err) {
+			log.Printf("[NOTFOUND] %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
+		log.Printf("[ERROR] fetch %s: %v", sanitize(req.Path), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
 
-	etag := computeEtag(data)
-	modified := info.ModTime().UTC().Truncate(time.Second)
+	etag := computeEtag(doc.Content)
+	modified := doc.Modified
 
 	// Check conditional: etag first, then modified-since.
 	if ifNoneMatch, ok := req.Metadata["if-none-match"]; ok && ifNoneMatch == etag {
@@ -235,16 +123,15 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		}
 	}
 
-	body, existingMeta := stripFrontmatter(string(data))
+	body, existingMeta := stripFrontmatter(string(doc.Content))
 
 	meta := map[string]string{
 		"modified": modified.Format(time.RFC3339),
 		"etag":     etag,
+		"version":  strconv.Itoa(doc.Version),
 	}
 	if v, ok := existingMeta["version"]; ok {
 		meta["version"] = v
-	} else {
-		meta["version"] = "1"
 	}
 
 	resp := protocol.Response{
@@ -269,32 +156,14 @@ func computeEtag(data []byte) string {
 }
 
 func (h *Handler) handleList(w io.Writer, reqPath string) {
-	dirPath := h.resolvePath(reqPath)
-	if dirPath == "" {
-		log.Printf("[SECURITY] path traversal attempt: %s", sanitize(reqPath))
-		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
-		return
-	}
-
-	info, err := os.Stat(dirPath)
-	if os.IsNotExist(err) {
-		log.Printf("[NOTFOUND] %s", sanitize(reqPath))
-		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
-		return
-	}
+	entries, err := h.Store.ListDir(reqPath)
 	if err != nil {
-		log.Printf("[ERROR] stat %s: %v", sanitize(reqPath), err)
-		h.writeError(w, protocol.StatusServerError, "internal error")
-		return
-	}
-	if !info.IsDir() {
-		h.writeError(w, protocol.StatusNotFound, reqPath+" is not a directory")
-		return
-	}
-
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		log.Printf("[ERROR] readdir %s: %v", sanitize(reqPath), err)
+		if os.IsNotExist(err) {
+			log.Printf("[NOTFOUND] %s", sanitize(reqPath))
+			h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
+			return
+		}
+		log.Printf("[ERROR] list %s: %v", sanitize(reqPath), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -304,17 +173,13 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 
 	entryCount := 0
 	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
 		entryCount++
 		if entryCount > MaxDirectoryEntries {
 			body.WriteString("\n*...truncated, too many entries*\n")
 			break
 		}
-		display := escapeMD(name)
-		link := escapeURL(name)
+		display := escapeMD(entry.Name())
+		link := escapeURL(entry.Name())
 		if entry.IsDir() {
 			body.WriteString("- [" + display + "/](" + link + "/)\n")
 		} else {
@@ -429,6 +294,24 @@ func (h *Handler) handleWrite(w io.Writer, req protocol.Request) {
 	if int64(len(req.Body)) > store.MaxFileSize {
 		log.Printf("[ERROR] body too large: %s (%d bytes)", sanitize(req.Path), len(req.Body))
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+		return
+	}
+
+	if h.TokenStore == nil {
+		h.writeError(w, protocol.StatusNotPermitted, "writes require auth configuration")
+		return
+	}
+
+	token := req.Metadata["auth"]
+	if err := h.TokenStore.Authorize(token, req.Path, "write"); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken):
+			log.Printf("[AUTH] unauthorized write attempt: %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
+		default:
+			log.Printf("[AUTH] not permitted write attempt: %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
+		}
 		return
 	}
 

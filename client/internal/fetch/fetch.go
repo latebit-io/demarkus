@@ -1,4 +1,4 @@
-// Package fetch provides shared Mark Protocol fetch logic for CLI and TUI clients.
+// Package fetch provides shared Mark Protocol client logic for CLI and TUI clients.
 package fetch
 
 import (
@@ -37,7 +37,7 @@ func ParseMarkURL(raw string) (host, path string, err error) {
 	return host, path, nil
 }
 
-// Result holds a fetch response and metadata about how it was served.
+// Result holds a response and metadata about how it was served.
 type Result struct {
 	Response  protocol.Response
 	FromCache bool
@@ -47,11 +47,10 @@ type Result struct {
 type Options struct {
 	Cache          *cache.Cache
 	Insecure       bool
-	DialTimeout    time.Duration // Timeout for establishing connection
-	RequestTimeout time.Duration // Timeout for individual requests
+	DialTimeout    time.Duration
+	RequestTimeout time.Duration
 }
 
-// applyDefaults sets default timeout values if not specified.
 func (o *Options) applyDefaults() {
 	if o.DialTimeout == 0 {
 		o.DialTimeout = 10 * time.Second
@@ -61,7 +60,7 @@ func (o *Options) applyDefaults() {
 	}
 }
 
-// Client manages QUIC connections and fetches Mark Protocol documents.
+// Client manages QUIC connections and performs Mark Protocol operations.
 type Client struct {
 	opts    Options
 	tlsConf *tls.Config
@@ -69,7 +68,7 @@ type Client struct {
 	conns   map[string]*quic.Conn
 }
 
-// NewClient creates a new fetch client with the given options.
+// NewClient creates a new client with the given options.
 func NewClient(opts Options) *Client {
 	opts.applyDefaults()
 	return &Client{
@@ -92,15 +91,142 @@ func (c *Client) Close() {
 	}
 }
 
-// getConn returns a pooled connection to host, or dials a new one.
-// Stale connections (closed by idle timeout) are detected and removed.
+// Fetch retrieves a document from a Mark Protocol server.
+func (c *Client) Fetch(host, path string) (Result, error) {
+	return c.cachedRequest(host, path, protocol.VerbFetch)
+}
+
+// List retrieves a directory listing from a Mark Protocol server.
+func (c *Client) List(host, path string) (Result, error) {
+	return c.cachedRequest(host, path, protocol.VerbList)
+}
+
+// Versions retrieves the version history of a document.
+func (c *Client) Versions(host, path string) (Result, error) {
+	req := protocol.Request{Verb: protocol.VerbVersions, Path: path, Metadata: make(map[string]string)}
+	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
+		return c.requestOnConn(conn, req)
+	})
+}
+
+// Write creates or updates a document on a Mark Protocol server.
+// If token is non-empty, it is sent as the auth metadata for capability-based auth.
+func (c *Client) Write(host, path, body, token string) (Result, error) {
+	req := protocol.Request{Verb: protocol.VerbWrite, Path: path, Metadata: make(map[string]string), Body: body}
+	if token != "" {
+		req.Metadata["auth"] = token
+	}
+	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
+		return c.requestOnConn(conn, req)
+	})
+}
+
+// cachedRequest handles FETCH and LIST with conditional caching.
+func (c *Client) cachedRequest(host, path, verb string) (Result, error) {
+	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
+		req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
+
+		var cached *cache.Entry
+		if c.opts.Cache != nil {
+			cached, _ = c.opts.Cache.Get(host, path, verb)
+			if cached != nil {
+				if etag := cached.Response.Metadata["etag"]; etag != "" {
+					req.Metadata["if-none-match"] = etag
+				}
+				if mod := cached.Response.Metadata["modified"]; mod != "" {
+					req.Metadata["if-modified-since"] = mod
+				}
+			}
+		}
+
+		result, err := c.requestOnConn(conn, req)
+		if err != nil {
+			return Result{}, err
+		}
+
+		if result.Response.Status == protocol.StatusNotModified && cached != nil && cached.Response.Status == protocol.StatusOK {
+			return Result{Response: cached.Response, FromCache: true}, nil
+		}
+
+		if c.opts.Cache != nil && result.Response.Status == protocol.StatusOK {
+			if err := c.opts.Cache.Put(host, path, verb, result.Response); err != nil {
+				log.Printf("[WARN] cache write: %v", err)
+			}
+		}
+
+		return result, nil
+	})
+}
+
+// requestOnConn opens a stream, sends a request, and reads the response.
+func (c *Client) requestOnConn(conn *quic.Conn, req protocol.Request) (Result, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.opts.RequestTimeout)
+	defer cancel()
+
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("open stream: %w", err)
+	}
+	defer stream.Close()
+
+	if _, err := req.WriteTo(stream); err != nil {
+		return Result{}, fmt.Errorf("send request: %w", err)
+	}
+	stream.Close()
+
+	resp, err := protocol.ParseResponse(stream)
+	if err != nil {
+		return Result{}, fmt.Errorf("read response: %w", err)
+	}
+
+	return Result{Response: resp}, nil
+}
+
+// doWithRetry retries transient failures up to 3 times with exponential backoff + jitter.
+func (c *Client) doWithRetry(host string, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
+	const maxRetries = 3
+	const baseBackoff = 100 * time.Millisecond
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		conn, err := c.getConn(host)
+		if err != nil {
+			if attempt < maxRetries-1 && isTransientError(err) {
+				backoff := baseBackoff * time.Duration(1<<uint(attempt))
+				jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+				time.Sleep(backoff + jitter)
+				c.removeConn(host)
+				continue
+			}
+			return Result{}, err
+		}
+
+		result, err := fn(conn)
+		if err == nil {
+			return result, nil
+		}
+
+		lastErr = err
+		if attempt < maxRetries-1 && isTransientError(err) {
+			backoff := baseBackoff * time.Duration(1<<uint(attempt))
+			jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+			time.Sleep(backoff + jitter)
+			c.removeConn(host)
+			continue
+		}
+
+		return Result{}, err
+	}
+
+	return Result{}, lastErr
+}
+
 func (c *Client) getConn(host string) (*quic.Conn, error) {
 	c.mu.Lock()
 	conn, ok := c.conns[host]
 	c.mu.Unlock()
 
 	if ok {
-		// Check if the pooled connection is still alive.
 		if conn.Context().Err() != nil {
 			c.removeConn(host)
 		} else {
@@ -123,110 +249,12 @@ func (c *Client) getConn(host string) (*quic.Conn, error) {
 	return conn, nil
 }
 
-// removeConn removes a stale connection from the pool.
 func (c *Client) removeConn(host string) {
 	c.mu.Lock()
 	delete(c.conns, host)
 	c.mu.Unlock()
 }
 
-// Fetch retrieves a document from a Mark Protocol server with automatic retry.
-// Retries transient failures up to 3 times with exponential backoff + jitter.
-// The body parameter is sent as the request body (used by WRITE).
-func (c *Client) Fetch(host, path, verb, body string) (Result, error) {
-	const maxRetries = 3
-	const baseBackoff = 100 * time.Millisecond
-
-	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		conn, err := c.getConn(host)
-		if err != nil {
-			if attempt < maxRetries-1 && isTransientError(err) {
-				backoff := baseBackoff * time.Duration(1<<uint(attempt)) // 100ms, 200ms, 400ms
-				jitter := time.Duration(rand.Int63n(int64(backoff / 2))) // 0-50% jitter
-				time.Sleep(backoff + jitter)
-				c.removeConn(host)
-				continue
-			}
-			return Result{}, err
-		}
-
-		result, err := c.fetchOnConn(conn, host, path, verb, body)
-		if err == nil {
-			return result, nil
-		}
-
-		lastErr = err
-		if attempt < maxRetries-1 && isTransientError(err) {
-			// Connection may be stale — backoff and retry
-			backoff := baseBackoff * time.Duration(1<<uint(attempt))
-			jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
-			time.Sleep(backoff + jitter)
-			c.removeConn(host)
-			continue
-		}
-
-		// Non-transient error, don't retry
-		return Result{}, err
-	}
-
-	return Result{}, lastErr
-}
-
-func (c *Client) fetchOnConn(conn *quic.Conn, host, path, verb, body string) (Result, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.opts.RequestTimeout)
-	defer cancel()
-
-	stream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		return Result{}, fmt.Errorf("open stream: %w", err)
-	}
-	defer stream.Close()
-
-	req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string), Body: body}
-
-	// Only use caching for read verbs (FETCH, LIST).
-	cacheable := verb == protocol.VerbFetch || verb == protocol.VerbList
-	var cached *cache.Entry
-	if cacheable && c.opts.Cache != nil {
-		cached, _ = c.opts.Cache.Get(host, path, verb)
-		if cached != nil {
-			if etag := cached.Response.Metadata["etag"]; etag != "" {
-				req.Metadata["if-none-match"] = etag
-			}
-			if mod := cached.Response.Metadata["modified"]; mod != "" {
-				req.Metadata["if-modified-since"] = mod
-			}
-		}
-	}
-
-	if _, err := req.WriteTo(stream); err != nil {
-		return Result{}, fmt.Errorf("send request: %w", err)
-	}
-	// Send FIN so the server knows the request is complete.
-	stream.Close()
-
-	resp, err := protocol.ParseResponse(stream)
-	if err != nil {
-		return Result{}, fmt.Errorf("read response: %w", err)
-	}
-
-	fromCache := false
-	if resp.Status == protocol.StatusNotModified && cached != nil && cached.Response.Status == protocol.StatusOK {
-		resp = cached.Response
-		fromCache = true
-	}
-
-	if cacheable && c.opts.Cache != nil && resp.Status == protocol.StatusOK {
-		if err := c.opts.Cache.Put(host, path, verb, resp); err != nil {
-			log.Printf("[WARN] cache write: %v", err)
-		}
-	}
-
-	return Result{Response: resp, FromCache: fromCache}, nil
-}
-
-// isTransientError returns true if an error is likely transient and worth retrying.
 func isTransientError(err error) bool {
 	if err == nil {
 		return false
@@ -234,7 +262,6 @@ func isTransientError(err error) bool {
 	if isTimeoutError(err) || isTemporaryError(err) {
 		return true
 	}
-	// Match common transient error strings from QUIC and network layers.
 	errStr := err.Error()
 	switch {
 	case errStr == "EOF":
@@ -249,7 +276,6 @@ func isTransientError(err error) bool {
 	return false
 }
 
-// isTimeoutError checks if an error is a timeout.
 func isTimeoutError(err error) bool {
 	type timeoutError interface {
 		Timeout() bool
@@ -258,7 +284,6 @@ func isTimeoutError(err error) bool {
 	return ok && te.Timeout()
 }
 
-// isTemporaryError checks if an error is temporary.
 func isTemporaryError(err error) bool {
 	type temporaryError interface {
 		Temporary() bool

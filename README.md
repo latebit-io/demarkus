@@ -10,10 +10,8 @@ Demarkus reimagines the web around markdown, with privacy and security as founda
 
 ## Quick Links
 
-- **Protocol Specification**: [docs/protocol-spec.md](docs/protocol-spec.md)
+- **Protocol Specification**: [docs/SPEC.md](docs/SPEC.md)
 - **Design Document**: [docs/DESIGN.md](docs/DESIGN.md)
-- **Server Documentation**: [server/README.md](server/README.md)
-- **Client Documentation**: [client/README.md](client/README.md)
 
 ## Components
 
@@ -62,19 +60,71 @@ cd client && go build -o bin/demarkus ./cmd/demarkus
 
 ### Running
 
-**Start a server (dev mode)**:
+**Start a server (dev mode, read-only)**:
 ```bash
 ./server/bin/demarkus-server -root ./examples/demo-site
 ```
 
 **Run the client**:
 ```bash
-./client/bin/demarkus -insecure mark://localhost:6309/index.md
+./client/bin/demarkus --insecure mark://localhost:6309/index.md
 ```
 
 **List directory contents**:
 ```bash
-./client/bin/demarkus -insecure -X LIST mark://localhost:6309/
+./client/bin/demarkus --insecure -X LIST mark://localhost:6309/
+```
+
+### Setting Up Authentication
+
+The server is **secure by default** — writes are denied unless you configure a tokens file. Tokens are capability-based: they grant specific operations on specific paths, not identities.
+
+**1. Generate a token**:
+```bash
+# Generate a token with write access to all paths
+./server/bin/demarkus-token generate -paths "/*" -ops write -tokens tokens.toml
+```
+
+This prints the raw token (give to the client, shown once) and appends the hashed entry to `tokens.toml`. The server never stores the raw token — only its SHA-256 hash.
+
+**2. Start the server with auth**:
+```bash
+./server/bin/demarkus-server -root /srv/site -tokens tokens.toml
+```
+
+**3. Write content through the protocol**:
+```bash
+./client/bin/demarkus --insecure -X WRITE -auth <raw-token> mark://localhost:6309/hello.md -body "# Hello World"
+```
+
+You can also set the token via environment variable:
+```bash
+export DEMARKUS_AUTH=<raw-token>
+./client/bin/demarkus --insecure -X WRITE mark://localhost:6309/hello.md -body "# Hello World"
+```
+
+**Token scoping examples**:
+```bash
+# Write-only to /docs/*
+./server/bin/demarkus-token generate -paths "/docs/*" -ops write -tokens tokens.toml
+
+# Read and write to everything
+./server/bin/demarkus-token generate -paths "/*" -ops "read,write" -tokens tokens.toml
+```
+
+### Adding Content
+
+All content must be written through the protocol. **Files copied directly to the filesystem are not served** — only documents with proper version history (written via WRITE) are accessible. This ensures every document has an immutable version chain and tamper detection.
+
+```bash
+# Write a new document (creates version 1)
+./client/bin/demarkus --insecure -X WRITE -auth $TOKEN mark://localhost:6309/about.md -body "# About\n\nWelcome."
+
+# Update it (creates version 2, linked by hash chain)
+./client/bin/demarkus --insecure -X WRITE -auth $TOKEN mark://localhost:6309/about.md -body "# About\n\nUpdated content."
+
+# Verify the version history
+./client/bin/demarkus --insecure -X VERSIONS mark://localhost:6309/about.md
 ```
 
 ### Deploying with Let's Encrypt
@@ -169,12 +219,12 @@ sudo systemctl enable --now demarkus
 
 **Verbs**:
 - `FETCH` - Retrieve documents
-- `WRITE` - Create/update documents
-- `APPEND` - Add content (comments, logs)
-- `ARCHIVE` - Remove from serving (preserves versions)
+- `WRITE` - Create/update documents (requires auth token)
 - `LIST` - Directory contents
-- `SEARCH` - Find documents
 - `VERSIONS` - Version history
+- `APPEND` - Add content (future)
+- `ARCHIVE` - Remove from serving (future)
+- `SEARCH` - Find documents (future)
 
 **Example Request**:
 ```
@@ -255,7 +305,7 @@ This is early-stage development. The protocol specification is still evolving. C
 ## Links
 
 - **Website**: [To be determined]
-- **Specification**: [docs/protocol-spec.md](docs/protocol-spec.md)
+- **Specification**: [docs/SPEC.md](docs/SPEC.md)
 - **Design Rationale**: [docs/DESIGN.md](docs/DESIGN.md)
 
 ---

@@ -292,24 +292,26 @@ The body MUST list all versions from newest to oldest:
 - `chain-valid`: `"true"` if the hash chain is intact; `"false"` if any link is broken.
 - `chain-error`: Present only when `chain-valid` is `"false"`. Contains a human-readable description of the first broken chain link.
 
-For flat files with no version history, a single version (version 1) MUST be reported with the file's modification time.
+Only documents with version history (written through the protocol) are served. Flat files without a `versions/` directory are treated as non-existent.
 
 **Errors**:
-- `not-found`: The document does not exist.
+- `not-found`: The document does not exist or has no version history.
 - `server-error`: Internal error or versioning not configured.
 
 ### 6.4. WRITE
 
-Creates a new immutable version of a document.
+Creates a new immutable version of a document. Requires authentication.
 
 **Request**:
 ```
 WRITE /path\n
-[---\n
-metadata...\n
----\n]
+---\n
+auth: <raw-token>\n
+---\n
 <document content>
 ```
+
+The `auth` metadata field is REQUIRED. The server hashes the raw token with SHA-256 and looks up the resulting hash in its token store. The token must grant the `write` operation on the requested path.
 
 The request body is the document content. It is stored as-is (the server prepends its own store frontmatter; the original content is preserved verbatim).
 
@@ -330,7 +332,12 @@ The `created` response MUST NOT include a body.
 - If the document exists, the version number is incremented from the current highest version.
 - If the document exists as a flat file (no version history), the server MUST migrate the flat file to version 1 before creating version 2.
 
-**Errors**:
+**Authentication errors**:
+- `not-permitted`: No token store configured on the server (writes disabled).
+- `unauthorized`: Missing `auth` field or token not recognised.
+- `not-permitted`: Token does not grant `write` on the requested path.
+
+**Other errors**:
 - `not-found`: Path validation failed (e.g., path traversal attempt).
 - `server-error`: Internal error, content exceeds size limit, or writing not configured.
 
@@ -344,6 +351,8 @@ Status values are text strings. There are no numeric status codes.
 | `created` | Write succeeded. A new version was created. |
 | `not-modified` | Conditional request: the resource has not changed. No body. |
 | `not-found` | The requested resource does not exist. |
+| `unauthorized` | Missing or invalid authentication token. |
+| `not-permitted` | Valid authentication but insufficient capability for the requested operation or path. |
 | `server-error` | The server encountered an error processing the request. |
 
 ### 7.1. Future Status Values
@@ -352,8 +361,6 @@ The following status values are reserved for future use:
 
 | Value | Intended meaning |
 |---|---|
-| `unauthorized` | Missing or invalid authentication. |
-| `forbidden` | Valid authentication but insufficient capability. |
 | `conflict` | Version conflict (e.g., simultaneous writes). |
 | `bad-request` | Malformed request. |
 | `too-large` | Document exceeds the size limit. |
@@ -367,6 +374,7 @@ The following status values are reserved for future use:
 |---|---|---|---|
 | `if-none-match` | FETCH | 64-char hex string | ETag from a previous response. Enables conditional fetch. |
 | `if-modified-since` | FETCH | RFC 3339 timestamp | Timestamp from a previous response. Enables conditional fetch. |
+| `auth` | WRITE | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
 
 ### 8.2. Response Metadata
 
@@ -517,7 +525,7 @@ Servers MUST validate all request paths to prevent directory traversal attacks. 
 2. Resolve symbolic links in the target path to detect symlink-based escapes.
 3. Verify that the resolved absolute path is within the content root directory.
 
-Servers MUST return `not-found` (not `forbidden` or any other status) for path traversal attempts to avoid disclosing information about the filesystem structure outside the content root.
+Servers MUST return `not-found` (not `not-permitted` or any other status) for path traversal attempts to avoid disclosing information about the filesystem structure outside the content root.
 
 ### 11.3. Size Limits
 
@@ -552,6 +560,44 @@ Servers MUST reject paths containing null bytes or control characters (codepoint
 
 When the content directory or any document path involves symbolic links, the server MUST resolve all symlinks and verify that the final resolved path remains within the content root. Symlinks that escape the content root MUST be treated as `not-found`.
 
+### 11.8. Authentication
+
+The Mark Protocol uses capability-based token authentication. Tokens grant specific operations on specific path patterns — they do not identify users.
+
+**Secure by default**: Servers MUST deny all write operations when no token store is configured. Reads do not require authentication.
+
+**Token storage**: The server stores SHA-256 hashes of tokens, never the raw tokens themselves. The token store is a TOML file:
+
+```toml
+[tokens]
+"sha256-a1b2c3d4..." = { paths = ["/docs/*"], operations = ["write"] }
+"sha256-e5f6a7b8..." = { paths = ["/*"], operations = ["read", "write"], expires = "2026-12-31T23:59:59Z" }
+```
+
+**Token fields**:
+- `paths`: Array of glob patterns. `*` matches any single path segment (not recursive).
+- `operations`: Array of permitted operations (`read`, `write`).
+- `expires`: OPTIONAL RFC 3339 timestamp. If present, the token is invalid after this time.
+
+**Authentication flow**:
+1. Client includes `auth: <raw-token>` in request metadata.
+2. Server computes `sha256-<hex of SHA-256(raw-token)>`.
+3. Server looks up the hash in its token store.
+4. If not found: respond with `unauthorized`.
+5. If found but the token does not grant the requested operation on the requested path: respond with `not-permitted`.
+6. If authorised: proceed with the request.
+
+**Token generation**: The `demarkus-token generate` tool creates cryptographically random tokens and appends their hashed entries to the token store file. The raw token is printed once and never stored by the server.
+
+### 11.9. Versioned-Only Serving
+
+Servers MUST only serve documents that have been written through the protocol (i.e., documents with a `versions/` directory containing at least one version file). Flat files placed directly on the filesystem without version history MUST be treated as `not-found`.
+
+This ensures every served document has:
+- An immutable version chain
+- SHA-256 hash chain for tamper detection
+- Proper store frontmatter
+
 ## 12. Future Extensions
 
 The following features are planned but not part of this specification:
@@ -559,7 +605,6 @@ The following features are planned but not part of this specification:
 - **APPEND**: Add content to the end of a document.
 - **ARCHIVE**: Remove a document from active serving while preserving version history.
 - **SEARCH**: Full-text search across documents.
-- **Authentication**: Capability-based token authentication.
 - **Content addressing**: Hash-based document retrieval independent of location.
 - **Federation**: Cross-server content mirroring and discovery.
 - **Subscriptions**: Notification of document changes.
