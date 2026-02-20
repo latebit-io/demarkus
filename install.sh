@@ -651,9 +651,11 @@ do_update() {
 
   log_step "Updating Demarkus from v${current_version} to v${version}"
 
-  # First, update this script itself from the new version
+  # First, update this script itself.
+  # Fetch from main — migrations are always committed alongside code changes,
+  # so main always has the latest migration blocks.
   log_info "Updating install script..."
-  local script_url="https://raw.githubusercontent.com/${GITHUB_REPO}/server/v${version}/install.sh"
+  local script_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh"
   local new_script
   new_script=$(curl -fsSL "$script_url" 2>/dev/null) || {
     log_warn "Could not fetch updated install script, continuing with current version"
