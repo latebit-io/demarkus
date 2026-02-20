@@ -2,6 +2,9 @@ version: 2
 
 project_name: demarkus-server
 
+monorepo:
+  tag_prefix: server/
+
 builds:
   - id: demarkus-server
     main: ./cmd/demarkus-server
@@ -31,7 +34,7 @@ archives:
     name_template: "demarkus-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
-  name_template: "checksums.txt"
+  name_template: "demarkus-server_checksums.txt"
 
 dockers:
   - id: demarkus-server-amd64
