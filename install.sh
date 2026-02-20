@@ -473,14 +473,14 @@ do_install() {
     log_info "Existing installation detected (v${existing_version})"
   fi
 
+  # Create user before directories (chown needs the user to exist)
+  create_system_user
+
   # Set up directories and config
   setup_config_dir
   setup_content_dir "$content_root"
 
   local tokens_file="${CONFIG_DIR}/tokens.toml"
-
-  # Create user (Linux only)
-  create_system_user
 
   # Generate initial token only on fresh install
   local raw_token=""
