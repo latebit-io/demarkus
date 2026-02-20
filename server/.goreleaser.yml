@@ -27,10 +27,32 @@ builds:
     ldflags:
       - -s -w
 
+  - id: demarkus-token
+    main: ./cmd/demarkus-token
+    binary: demarkus-token
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: windows
+        goarch: arm
+    ldflags:
+      - -s -w
+
 archives:
   - id: demarkus-server
     builds:
       - demarkus-server
+      - demarkus-token
     name_template: "demarkus-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
