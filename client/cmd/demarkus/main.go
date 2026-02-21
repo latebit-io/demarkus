@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -10,10 +11,19 @@ import (
 
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
+	"github.com/latebit/demarkus/client/internal/graph"
 	"github.com/latebit/demarkus/protocol"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "graph" {
+		graphMain(os.Args[2:])
+		return
+	}
+	requestMain()
+}
+
+func requestMain() {
 	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH)")
 	body := flag.String("body", "", "request body (for PUBLISH); reads stdin if omitted")
 	authToken := flag.String("auth", "", "auth token for PUBLISH requests (env: DEMARKUS_AUTH)")
@@ -21,7 +31,8 @@ func main() {
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus [-X VERB] [-body TEXT] [-auth TOKEN] mark://host:port/path\n\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus [-X VERB] [-body TEXT] [-auth TOKEN] mark://host:port/path\n")
+		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -89,6 +100,78 @@ func main() {
 	}
 	fmt.Println()
 	fmt.Print(result.Response.Body)
+}
+
+func graphMain(args []string) {
+	fs := flag.NewFlagSet("graph", flag.ExitOnError)
+	depth := fs.Int("depth", 2, "maximum crawl depth (link hops from start)")
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+	noCache := fs.Bool("no-cache", false, "disable caching")
+	cacheDir := fs.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: demarkus graph [-depth N] [-insecure] mark://host:port/path\n\n")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	rawURL := fs.Arg(0)
+
+	opts := fetch.Options{Insecure: *insecure}
+	if !*noCache {
+		opts.Cache = cache.New(*cacheDir)
+	}
+	client := fetch.NewClient(opts)
+	defer client.Close()
+
+	fetcher := &graph.ClientFetcher{
+		FetchFunc: func(host, path string) (string, string, error) {
+			r, err := client.Fetch(host, path)
+			if err != nil {
+				return "", "", err
+			}
+			return r.Response.Status, r.Response.Body, nil
+		},
+	}
+
+	fmt.Printf("Crawling %s (depth %d)...\n", rawURL, *depth)
+
+	g, err := graph.Crawl(context.Background(), rawURL, fetcher, func(raw string) (string, string, error) {
+		return fetch.ParseMarkURL(raw)
+	}, graph.CrawlOptions{
+		MaxDepth: *depth,
+		OnNode: func(n *graph.Node) {
+			title := n.Title
+			if title == "" {
+				title = n.URL
+			}
+			fmt.Printf("  [%s] %s (%d links)\n", n.Status, title, n.LinkCount)
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("\nGraph: %d nodes, %d edges\n", g.NodeCount(), g.EdgeCount())
+	if g.EdgeCount() > 0 {
+		fmt.Println("\nEdges:")
+		for _, e := range g.Edges {
+			from := nodeLabel(g, e.From)
+			to := nodeLabel(g, e.To)
+			fmt.Printf("  %s -> %s\n", from, to)
+		}
+	}
+}
+
+func nodeLabel(g *graph.Graph, url string) string {
+	if n := g.GetNode(url); n != nil && n.Title != "" {
+		return n.Title
+	}
+	return url
 }
 
 var validVerbs = map[string]bool{
