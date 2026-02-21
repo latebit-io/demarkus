@@ -92,12 +92,17 @@ fi
 
 # --- GitHub API ---
 
+github_api() {
+  local url="$1"
+  curl -fsSL "${CURL_AUTH_ARGS[@]}" "$url" 2>/dev/null
+}
+
 fetch_latest_version() {
   local component="$1" # "server" or "client"
   local url="https://api.github.com/repos/${GITHUB_REPO}/releases"
   local releases
 
-  releases=$(curl -fsSL "${CURL_AUTH_ARGS[@]}" "$url" 2>/dev/null) || {
+  releases=$(github_api "$url") || {
     log_error "Failed to fetch releases from GitHub"
     exit 1
   }
@@ -108,13 +113,58 @@ fetch_latest_version() {
     | sed "s/\"tag_name\": \"${component}\/v\(.*\)\"/\1/"
 }
 
+# Download a release asset. For private repos (GITHUB_TOKEN set), uses the
+# GitHub API to resolve asset IDs and download via the API endpoint.
+# For public repos, uses the direct github.com download URL.
+download_asset_file() {
+  local tag="$1"
+  local filename="$2"
+  local output_path="$3"
+
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    # Private repo: resolve asset ID via API, then download with octet-stream accept
+    local encoded_tag
+    encoded_tag=$(printf '%s' "$tag" | sed 's|/|%2F|g')
+    local release_url="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${encoded_tag}"
+    local release_json
+
+    release_json=$(github_api "$release_url") || {
+      log_error "Failed to fetch release for tag ${tag}"
+      return 1
+    }
+
+    # Extract the asset API URL for the given filename.
+    # Look for the assets/NNNN URL that appears near our filename in the JSON.
+    local asset_url
+    asset_url=$(echo "$release_json" \
+      | grep -B10 "\"name\": \"${filename}\"" \
+      | grep '"url":.*releases/assets/' \
+      | head -1 \
+      | sed 's/.*"url": "\([^"]*\)".*/\1/')
+
+    if [ -z "$asset_url" ]; then
+      log_error "Asset ${filename} not found in release ${tag}"
+      return 1
+    fi
+
+    curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" \
+      -H "Accept: application/octet-stream" \
+      -o "$output_path" "$asset_url" || return 1
+  else
+    # Public repo: direct download URL
+    local encoded_tag
+    encoded_tag=$(printf '%s' "$tag" | sed 's|/|%2F|g')
+    local url="https://github.com/${GITHUB_REPO}/releases/download/${encoded_tag}/${filename}"
+    curl -fsSL -o "$output_path" "$url" || return 1
+  fi
+}
+
 download_and_verify() {
   local component="$1" # "server" or "client"
   local version="$2"
   local tmpdir="$3"
 
   local tag="${component}/v${version}"
-  local encoded_tag="${component}%2Fv${version}"
   local archive_name="demarkus-${component}_${version}_${PLATFORM}_${GOARCH}"
   local archive_ext="tar.gz"
   if [ "$PLATFORM" = "windows" ]; then
@@ -122,18 +172,17 @@ download_and_verify() {
   fi
   local archive_file="${archive_name}.${archive_ext}"
   local checksums_file="demarkus-${component}_checksums.txt"
-  local base_url="https://github.com/${GITHUB_REPO}/releases/download/${encoded_tag}"
 
   log_info "Downloading ${component} v${version} for ${PLATFORM}/${GOARCH}..."
 
-  curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${tmpdir}/${archive_file}" "${base_url}/${archive_file}" || {
+  download_asset_file "$tag" "$archive_file" "${tmpdir}/${archive_file}" || {
     log_error "Failed to download ${archive_file}"
-    log_error "URL: ${base_url}/${archive_file}"
     exit 1
   }
 
-  curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${tmpdir}/${checksums_file}" "${base_url}/${checksums_file}" || {
+  download_asset_file "$tag" "$checksums_file" "${tmpdir}/${checksums_file}" || {
     log_warn "Could not download checksums file, skipping verification"
+    tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
     return 0
   }
 
@@ -142,6 +191,7 @@ download_and_verify() {
   expected=$(grep "${archive_file}" "${tmpdir}/${checksums_file}" | awk '{print $1}')
   if [ -z "$expected" ]; then
     log_warn "No checksum found for ${archive_file}, skipping verification"
+    tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
     return 0
   fi
 
@@ -152,6 +202,7 @@ download_and_verify() {
     actual=$(shasum -a 256 "${tmpdir}/${archive_file}" | awk '{print $1}')
   else
     log_warn "No sha256sum or shasum available, skipping verification"
+    tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
     return 0
   fi
 
@@ -174,7 +225,6 @@ download_and_verify_asset() {
   local tmpdir="$4"
 
   local tag="${component}/v${version}"
-  local encoded_tag="${component}%2Fv${version}"
   local archive_name="${asset_prefix}_${version}_${PLATFORM}_${GOARCH}"
   local archive_ext="tar.gz"
   if [ "$PLATFORM" = "windows" ]; then
@@ -182,13 +232,11 @@ download_and_verify_asset() {
   fi
   local archive_file="${archive_name}.${archive_ext}"
   local checksums_file="demarkus-${component}_checksums.txt"
-  local base_url="https://github.com/${GITHUB_REPO}/releases/download/${encoded_tag}"
 
   log_info "Downloading ${asset_prefix} v${version} for ${PLATFORM}/${GOARCH}..."
 
-  curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${tmpdir}/${archive_file}" "${base_url}/${archive_file}" || {
+  download_asset_file "$tag" "$archive_file" "${tmpdir}/${archive_file}" || {
     log_error "Failed to download ${archive_file}"
-    log_error "URL: ${base_url}/${archive_file}"
     exit 1
   }
 
