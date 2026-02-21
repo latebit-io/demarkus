@@ -221,7 +221,7 @@ jobs:
             console.log(`Created tag: ${tag}`);
 
       - name: Create local tag for GoReleaser
-        run: git tag -f "server/v${{ needs.semver-server.outputs.new_version }}"
+        run: git tag -f "v${{ needs.semver-server.outputs.new_version }}"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -240,7 +240,7 @@ jobs:
           workdir: server
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GORELEASER_CURRENT_TAG: "server/v${{ needs.semver-server.outputs.new_version }}"
+          GORELEASER_CURRENT_TAG: "v${{ needs.semver-server.outputs.new_version }}"
 
   release-client:
     needs: semver-client
@@ -269,7 +269,7 @@ jobs:
             console.log(`Created tag: ${tag}`);
 
       - name: Create local tag for GoReleaser
-        run: git tag -f "client/v${{ needs.semver-client.outputs.new_version }}"
+        run: git tag -f "v${{ needs.semver-client.outputs.new_version }}"
 
       - uses: goreleaser/goreleaser-action@v6
         with:
@@ -279,4 +279,4 @@ jobs:
           workdir: client
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GORELEASER_CURRENT_TAG: "client/v${{ needs.semver-client.outputs.new_version }}"
+          GORELEASER_CURRENT_TAG: "v${{ needs.semver-client.outputs.new_version }}"
