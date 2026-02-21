@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -14,6 +15,9 @@ import (
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/protocol"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
 )
 
 type focus int
@@ -37,12 +41,93 @@ type model struct {
 	width       int
 	height      int
 	ready       bool
+
+	// History navigation
+	history    []string
+	histIdx    int
+	navigating bool
+
+	// Link navigation
+	rawBody string   // raw markdown body of current page
+	links   []string // resolved absolute mark:// URLs
+	linkIdx int      // -1 = none selected
 }
 
 type fetchResult struct {
 	result fetch.Result
 	err    error
 	url    string
+}
+
+// pushHistory appends url to history after histIdx, truncating forward entries.
+// Caps at 50 entries; returns updated (history, histIdx).
+func pushHistory(history []string, idx int, url string) ([]string, int) {
+	// Truncate forward entries (everything after idx).
+	history = history[:idx+1]
+	history = append(history, url)
+	// Cap at 50: drop oldest.
+	if len(history) > 50 {
+		history = history[len(history)-50:]
+	}
+	return history, len(history) - 1
+}
+
+// currentURL returns the URL at the current history position, or "" if history is empty.
+func (m model) currentURL() string {
+	if m.histIdx < 0 || m.histIdx >= len(m.history) {
+		return ""
+	}
+	return m.history[m.histIdx]
+}
+
+// canGoBack reports whether backward navigation is possible.
+func (m model) canGoBack() bool {
+	return m.histIdx > 0
+}
+
+// canGoForward reports whether forward navigation is possible.
+func (m model) canGoForward() bool {
+	return m.histIdx < len(m.history)-1
+}
+
+// extractLinks parses body with goldmark and returns all non-fragment link destinations.
+func extractLinks(body string) []string {
+	src := []byte(body)
+	reader := text.NewReader(src)
+	doc := goldmark.DefaultParser().Parse(reader)
+
+	var links []string
+	ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		link, ok := n.(*ast.Link)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		dest := string(link.Destination)
+		if dest != "" && !strings.HasPrefix(dest, "#") {
+			links = append(links, dest)
+		}
+		return ast.WalkContinue, nil
+	})
+	return links
+}
+
+// resolveLink resolves a possibly-relative link dest against currentURL.
+func resolveLink(currentURL, dest string) string {
+	if strings.Contains(dest, "://") {
+		return dest // already absolute
+	}
+	base, err := url.Parse(currentURL)
+	if err != nil || currentURL == "" {
+		return dest
+	}
+	ref, err := url.Parse(dest)
+	if err != nil {
+		return dest
+	}
+	return base.ResolveReference(ref).String()
 }
 
 func initialModel(initialURL string, client *fetch.Client) model {
@@ -57,6 +142,8 @@ func initialModel(initialURL string, client *fetch.Client) model {
 		focus:      focusAddressBar,
 		client:     client,
 		loading:    initialURL != "",
+		histIdx:    -1,
+		linkIdx:    -1,
 	}
 }
 
@@ -130,6 +217,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = ""
 			m.metadata = nil
 			m.fromCache = false
+			m.links = nil
+			m.linkIdx = -1
 			if m.ready {
 				m.viewport.SetContent(errorView(msg.err))
 			}
@@ -139,6 +228,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = msg.result.Response.Status
 		m.metadata = msg.result.Response.Metadata
 		m.fromCache = msg.result.FromCache
+
+		// Push to history unless we're navigating (back/forward).
+		shouldPush := !m.navigating
+		m.navigating = false
+		if shouldPush {
+			m.history, m.histIdx = pushHistory(m.history, m.histIdx, msg.url)
+		}
+
+		// Extract and resolve links from raw body.
+		m.rawBody = msg.result.Response.Body
+		raw := extractLinks(m.rawBody)
+		m.links = make([]string, 0, len(raw))
+		for _, dest := range raw {
+			m.links = append(m.links, resolveLink(msg.url, dest))
+		}
+		m.linkIdx = -1
 
 		if m.ready {
 			rendered, err := renderMarkdown(msg.result.Response.Body, m.width)
@@ -163,8 +268,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit
-	case tea.KeyTab:
-		return m.toggleFocus(), nil
 	}
 
 	if m.focus == focusAddressBar {
@@ -181,6 +284,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = focusViewport
 			m.addressBar.Blur()
 			return m, nil
+		case tea.KeyTab:
+			return m.toggleFocus(), nil
 		}
 		var cmd tea.Cmd
 		m.addressBar, cmd = m.addressBar.Update(msg)
@@ -188,9 +293,57 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Viewport focused.
-	if msg.String() == "q" {
+	switch msg.String() {
+	case "q":
 		return m, tea.Quit
+	case "f":
+		return m.toggleFocus(), textinput.Blink
+	case "g":
+		m.viewport.GotoTop()
+		return m, nil
+	case "G":
+		m.viewport.GotoBottom()
+		return m, nil
+	case "[", "alt+left":
+		if m.canGoBack() {
+			m.histIdx--
+			url := m.currentURL()
+			m.addressBar.SetValue(url)
+			m.loading = true
+			m.navigating = true
+			return m, m.doFetch(url)
+		}
+		return m, nil
+	case "]", "alt+right":
+		if m.canGoForward() {
+			m.histIdx++
+			url := m.currentURL()
+			m.addressBar.SetValue(url)
+			m.loading = true
+			m.navigating = true
+			return m, m.doFetch(url)
+		}
+		return m, nil
+	case "tab":
+		if len(m.links) > 0 {
+			m.linkIdx = (m.linkIdx + 1) % (len(m.links) + 1)
+			if m.linkIdx == len(m.links) {
+				m.linkIdx = -1 // wrap back to no selection
+			}
+		}
+		return m, nil
+	case "enter":
+		if m.linkIdx >= 0 && m.linkIdx < len(m.links) {
+			url := m.links[m.linkIdx]
+			m.addressBar.SetValue(url)
+			m.loading = true
+			m.links = nil
+			m.linkIdx = -1
+			return m, m.doFetch(url)
+		}
+		return m, nil
 	}
+
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	return m, cmd
@@ -249,6 +402,13 @@ func (m model) statusBarView() string {
 	if m.err != nil {
 		return style.Foreground(lipgloss.Color("9")).Render("Error: " + m.err.Error())
 	}
+
+	// Show selected link in status bar (link navigation mode).
+	if m.linkIdx >= 0 && m.linkIdx < len(m.links) {
+		hint := fmt.Sprintf("[%d/%d] %s", m.linkIdx+1, len(m.links), m.links[m.linkIdx])
+		return style.Foreground(lipgloss.Color("12")).Render(hint)
+	}
+
 	if m.status == "" {
 		return style.Faint(true).Render("Enter a mark:// URL and press Enter")
 	}
