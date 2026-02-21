@@ -654,6 +654,27 @@ do_install() {
 
   log_step "Installing Demarkus server v${version}"
 
+  # Detect existing installation FIRST (before stopping anything)
+  local is_reinstall=false
+  if [ -f "${CONFIG_DIR}/version" ]; then
+    is_reinstall=true
+    local existing_version
+    existing_version=$(cat "${CONFIG_DIR}/version")
+    log_info "Existing installation detected (v${existing_version})"
+  fi
+
+  # Stop service before binary replacement (avoids "Text file busy")
+  if [ "$is_reinstall" = true ]; then
+    if [ "$PLATFORM" = "linux" ]; then
+      systemctl stop demarkus 2>/dev/null || true
+    elif [ "$PLATFORM" = "darwin" ]; then
+      local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
+      if [ -f "$plist" ]; then
+        launchctl unload "$plist" 2>/dev/null || true
+      fi
+    fi
+  fi
+
   local tmpdir
   tmpdir=$(mktemp -d) || {
     log_error "Failed to create temporary directory"
@@ -675,15 +696,6 @@ do_install() {
     install_binaries "$tmpdir" "demarkus-tui"
   else
     log_warn "Could not find client release, skipping client install"
-  fi
-
-  # Detect existing installation
-  local is_reinstall=false
-  if [ -f "${CONFIG_DIR}/version" ]; then
-    is_reinstall=true
-    local existing_version
-    existing_version=$(cat "${CONFIG_DIR}/version")
-    log_info "Existing installation detected (v${existing_version})"
   fi
 
   # Create user before directories (chown needs the user to exist)
