@@ -4,6 +4,10 @@ set -e
 echo "Running code formatting and linting..."
 make fmt
 make vet
-golangci-lint run ./...
+
+for mod in protocol server client; do
+  echo "Linting ${mod}..."
+  (cd "$mod" && golangci-lint run ./...)
+done
 
 echo "✓ All checks passed"
