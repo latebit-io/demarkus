@@ -111,7 +111,17 @@ func (m *model) restoreHistory() {
 	m.loading = false
 	m.fromCache = false
 	if m.ready {
-		m.viewport.SetContent(entry.rendered)
+		content := entry.rendered
+		if content == "" && entry.rawBody != "" {
+			r, err := renderMarkdown(entry.rawBody, m.viewport.Width)
+			if err != nil {
+				content = entry.rawBody
+			} else {
+				content = r
+			}
+			m.history[m.histIdx].rendered = content
+		}
+		m.viewport.SetContent(content)
 		m.viewport.GotoTop()
 	}
 }
