@@ -7,6 +7,11 @@
 #   curl -fsSL ... | bash -s -- --domain example.com --root /srv/site
 #   curl -fsSL ... | bash -s -- --client-only
 #
+# For private repos, set GITHUB_TOKEN:
+#   curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
+#     https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh \
+#     | GITHUB_TOKEN=$GITHUB_TOKEN bash
+#
 # After install:
 #   demarkus-install update          # update to latest version
 #   demarkus-install uninstall       # remove everything
@@ -76,6 +81,15 @@ version_num() {
 version_lt() { [ "$(version_num "$1")" -lt "$(version_num "$2")" ]; }
 version_gte() { [ "$(version_num "$1")" -ge "$(version_num "$2")" ]; }
 
+# --- GitHub auth ---
+
+# Auth args for curl when GITHUB_TOKEN is set (for private repos).
+# Used as: curl -fsSL "${CURL_AUTH_ARGS[@]}" "$url"
+CURL_AUTH_ARGS=()
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  CURL_AUTH_ARGS=(-H "Authorization: token ${GITHUB_TOKEN}")
+fi
+
 # --- GitHub API ---
 
 fetch_latest_version() {
@@ -83,7 +97,7 @@ fetch_latest_version() {
   local url="https://api.github.com/repos/${GITHUB_REPO}/releases"
   local releases
 
-  releases=$(curl -fsSL "$url" 2>/dev/null) || {
+  releases=$(curl -fsSL "${CURL_AUTH_ARGS[@]}" "$url" 2>/dev/null) || {
     log_error "Failed to fetch releases from GitHub"
     exit 1
   }
@@ -112,13 +126,13 @@ download_and_verify() {
 
   log_info "Downloading ${component} v${version} for ${PLATFORM}/${GOARCH}..."
 
-  curl -fsSL -o "${tmpdir}/${archive_file}" "${base_url}/${archive_file}" || {
+  curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${tmpdir}/${archive_file}" "${base_url}/${archive_file}" || {
     log_error "Failed to download ${archive_file}"
     log_error "URL: ${base_url}/${archive_file}"
     exit 1
   }
 
-  curl -fsSL -o "${tmpdir}/${checksums_file}" "${base_url}/${checksums_file}" || {
+  curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${tmpdir}/${checksums_file}" "${base_url}/${checksums_file}" || {
     log_warn "Could not download checksums file, skipping verification"
     return 0
   }
@@ -172,7 +186,7 @@ download_and_verify_asset() {
 
   log_info "Downloading ${asset_prefix} v${version} for ${PLATFORM}/${GOARCH}..."
 
-  curl -fsSL -o "${tmpdir}/${archive_file}" "${base_url}/${archive_file}" || {
+  curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${tmpdir}/${archive_file}" "${base_url}/${archive_file}" || {
     log_error "Failed to download ${archive_file}"
     log_error "URL: ${base_url}/${archive_file}"
     exit 1
@@ -722,7 +736,7 @@ do_update() {
   log_info "Updating install script..."
   local script_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh"
   local new_script
-  new_script=$(curl -fsSL "$script_url" 2>/dev/null) || {
+  new_script=$(curl -fsSL "${CURL_AUTH_ARGS[@]}" "$script_url" 2>/dev/null) || {
     log_warn "Could not fetch updated install script, continuing with current version"
     new_script=""
   }
