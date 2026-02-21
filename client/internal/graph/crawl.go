@@ -22,9 +22,9 @@ type FetchResult struct {
 
 // CrawlOptions configures the graph crawler.
 type CrawlOptions struct {
-	MaxDepth int           // maximum link hops from start (default: 2)
-	Workers  int           // concurrent fetch goroutines (default: 5)
-	OnNode   func(*Node)   // called when a node is discovered, may be nil
+	MaxDepth int         // maximum link hops from start (default: 2)
+	Workers  int         // concurrent fetch goroutines (default: 5)
+	OnNode   func(*Node) // called when a node is discovered, may be nil
 }
 
 func (o *CrawlOptions) applyDefaults() {
@@ -59,7 +59,7 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 	var visitMu sync.Mutex
 
 	// tryEnqueue returns true if the URL was not yet visited and enqueues it.
-	tryEnqueue := func(url string, depth int) bool {
+	tryEnqueue := func(url string, _ int) bool {
 		visitMu.Lock()
 		defer visitMu.Unlock()
 		if visited[url] {

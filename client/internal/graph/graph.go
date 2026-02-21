@@ -21,15 +21,17 @@ type Edge struct {
 
 // Graph is a concurrency-safe directed graph of document nodes and link edges.
 type Graph struct {
-	Nodes map[string]*Node
-	Edges []Edge
-	mu    sync.RWMutex
+	Nodes   map[string]*Node
+	Edges   []Edge
+	edgeSet map[Edge]struct{}
+	mu      sync.RWMutex
 }
 
 // New creates an empty graph.
 func New() *Graph {
 	return &Graph{
-		Nodes: make(map[string]*Node),
+		Nodes:   make(map[string]*Node),
+		edgeSet: make(map[Edge]struct{}),
 	}
 }
 
@@ -42,10 +44,16 @@ func (g *Graph) AddNode(n *Node) {
 }
 
 // AddEdge adds a directed edge from one URL to another.
+// Duplicate edges are ignored.
 func (g *Graph) AddEdge(from, to string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.Edges = append(g.Edges, Edge{From: from, To: to})
+	e := Edge{From: from, To: to}
+	if _, exists := g.edgeSet[e]; exists {
+		return
+	}
+	g.edgeSet[e] = struct{}{}
+	g.Edges = append(g.Edges, e)
 }
 
 // GetNode returns the node for a URL, or nil if not found.

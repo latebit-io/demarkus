@@ -57,7 +57,7 @@ func ExtractTitle(body string) string {
 	reader := text.NewReader(src)
 	doc := goldmark.DefaultParser().Parse(reader)
 
-	var title string
+	var title strings.Builder
 	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -66,8 +66,12 @@ func ExtractTitle(body string) string {
 		if !ok || heading.Level != 1 {
 			return ast.WalkContinue, nil
 		}
-		title = string(heading.Text(src))
+		for child := heading.FirstChild(); child != nil; child = child.NextSibling() {
+			if t, ok := child.(*ast.Text); ok {
+				title.Write(t.Value(src))
+			}
+		}
 		return ast.WalkStop, nil
 	})
-	return title
+	return title.String()
 }

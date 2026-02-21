@@ -34,7 +34,7 @@ func (m *mockFetcher) Fetch(host, path string) (FetchResult, error) {
 	return r, nil
 }
 
-func mockParseURL(raw string) (string, string, error) {
+func mockParseURL(raw string) (host, path string, err error) {
 	// Minimal parser for mark://host:6309/path
 	if len(raw) < 7 || raw[:7] != "mark://" {
 		return "", "", fmt.Errorf("not a mark URL: %s", raw)

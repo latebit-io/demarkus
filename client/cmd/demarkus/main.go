@@ -140,9 +140,7 @@ func graphMain(args []string) {
 
 	fmt.Printf("Crawling %s (depth %d)...\n", rawURL, *depth)
 
-	g, err := graph.Crawl(context.Background(), rawURL, fetcher, func(raw string) (string, string, error) {
-		return fetch.ParseMarkURL(raw)
-	}, graph.CrawlOptions{
+	g, err := graph.Crawl(context.Background(), rawURL, fetcher, fetch.ParseMarkURL, graph.CrawlOptions{
 		MaxDepth: *depth,
 		OnNode: func(n *graph.Node) {
 			title := n.Title

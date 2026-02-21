@@ -62,6 +62,19 @@ func TestAddEdge(t *testing.T) {
 	}
 }
 
+func TestAddEdgeIgnoresDuplicates(t *testing.T) {
+	g := New()
+	g.AddNode(&Node{URL: "mark://host/a.md"})
+	g.AddNode(&Node{URL: "mark://host/b.md"})
+	g.AddEdge("mark://host/a.md", "mark://host/b.md")
+	g.AddEdge("mark://host/a.md", "mark://host/b.md")
+	g.AddEdge("mark://host/a.md", "mark://host/b.md")
+
+	if g.EdgeCount() != 1 {
+		t.Fatalf("EdgeCount() = %d, want 1", g.EdgeCount())
+	}
+}
+
 func TestNeighbors(t *testing.T) {
 	g := New()
 	g.AddNode(&Node{URL: "mark://host/a.md", Title: "A"})
