@@ -153,6 +153,67 @@ download_and_verify() {
   tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
 }
 
+download_and_verify_asset() {
+  local asset_prefix="$1" # e.g. "demarkus-tui"
+  local version="$2"
+  local component="$3"    # release component for tag, e.g. "client"
+  local tmpdir="$4"
+
+  local tag="${component}/v${version}"
+  local encoded_tag="${component}%2Fv${version}"
+  local archive_name="${asset_prefix}_${version}_${PLATFORM}_${GOARCH}"
+  local archive_ext="tar.gz"
+  if [ "$PLATFORM" = "windows" ]; then
+    archive_ext="zip"
+  fi
+  local archive_file="${archive_name}.${archive_ext}"
+  local checksums_file="demarkus-${component}_checksums.txt"
+  local base_url="https://github.com/${GITHUB_REPO}/releases/download/${encoded_tag}"
+
+  log_info "Downloading ${asset_prefix} v${version} for ${PLATFORM}/${GOARCH}..."
+
+  curl -fsSL -o "${tmpdir}/${archive_file}" "${base_url}/${archive_file}" || {
+    log_error "Failed to download ${archive_file}"
+    log_error "URL: ${base_url}/${archive_file}"
+    exit 1
+  }
+
+  # Checksums file may already be downloaded by a prior download_and_verify call
+  if [ -f "${tmpdir}/${checksums_file}" ]; then
+    log_info "Verifying checksum..."
+    local expected
+    expected=$(grep "${archive_file}" "${tmpdir}/${checksums_file}" | awk '{print $1}')
+    if [ -z "$expected" ]; then
+      log_warn "No checksum found for ${archive_file}, skipping verification"
+    else
+      local actual
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "${tmpdir}/${archive_file}" | awk '{print $1}')
+      elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "${tmpdir}/${archive_file}" | awk '{print $1}')
+      else
+        log_warn "No sha256sum or shasum available, skipping verification"
+        actual=""
+      fi
+
+      if [ -n "$actual" ] && [ "$expected" != "$actual" ]; then
+        log_error "Checksum mismatch!"
+        log_error "  Expected: $expected"
+        log_error "  Actual:   $actual"
+        exit 1
+      fi
+      if [ -n "$actual" ]; then
+        log_info "Checksum verified"
+      fi
+    fi
+  else
+    log_warn "No checksums file available, skipping verification"
+  fi
+
+  # Extract
+  tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
+}
+
 # --- Install functions ---
 
 install_binaries() {
@@ -454,12 +515,14 @@ do_install() {
   download_and_verify "server" "$version" "$tmpdir"
   install_binaries "$tmpdir" "demarkus-server" "demarkus-token"
 
-  # Download and install client
+  # Download and install client binaries (separate archives)
   local client_version
   client_version=$(fetch_latest_version "client")
   if [ -n "$client_version" ]; then
     download_and_verify "client" "$client_version" "$tmpdir"
-    install_binaries "$tmpdir" "demarkus" "demarkus-tui"
+    install_binaries "$tmpdir" "demarkus"
+    download_and_verify_asset "demarkus-tui" "$client_version" "client" "$tmpdir"
+    install_binaries "$tmpdir" "demarkus-tui"
   else
     log_warn "Could not find client release, skipping client install"
   fi
@@ -599,7 +662,9 @@ do_install_client() {
   trap 'rm -rf "$tmpdir"' EXIT
 
   download_and_verify "client" "$version" "$tmpdir"
-  install_binaries "$tmpdir" "demarkus" "demarkus-tui"
+  install_binaries "$tmpdir" "demarkus"
+  download_and_verify_asset "demarkus-tui" "$version" "client" "$tmpdir"
+  install_binaries "$tmpdir" "demarkus-tui"
 
   echo ""
   log_step "Client installed"
@@ -692,11 +757,12 @@ _do_update_inner() {
   # Download new server binaries
   download_and_verify "server" "$to" "$tmpdir"
 
-  # Download new client binaries
+  # Download new client binaries (separate archives)
   local client_version
   client_version=$(fetch_latest_version "client")
   if [ -n "$client_version" ]; then
     download_and_verify "client" "$client_version" "$tmpdir"
+    download_and_verify_asset "demarkus-tui" "$client_version" "client" "$tmpdir"
   fi
 
   # Run migrations before replacing binaries
@@ -705,7 +771,8 @@ _do_update_inner() {
   # Replace binaries
   install_binaries "$tmpdir" "demarkus-server" "demarkus-token"
   if [ -n "$client_version" ]; then
-    install_binaries "$tmpdir" "demarkus" "demarkus-tui"
+    install_binaries "$tmpdir" "demarkus"
+    install_binaries "$tmpdir" "demarkus-tui"
   fi
 
   # Restart service

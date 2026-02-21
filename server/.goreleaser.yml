@@ -2,6 +2,10 @@ version: 2
 
 project_name: demarkus-server
 
+monorepo:
+  tag_prefix: server/
+  dir: server
+
 builds:
   - id: demarkus-server
     main: ./cmd/demarkus-server
