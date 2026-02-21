@@ -370,19 +370,23 @@ setup_tls() {
     exit 1
   }
 
-  # Grant demarkus user access to cert files
-  if [ "$PLATFORM" = "linux" ] && [ -d "/etc/letsencrypt/live/${domain}" ]; then
-    # certbot stores certs readable by root only. Add demarkus to the ssl-cert
-    # group or adjust permissions on the live/ and archive/ dirs.
-    chmod 750 /etc/letsencrypt/live /etc/letsencrypt/archive
-    chgrp "$SERVICE_NAME" /etc/letsencrypt/live /etc/letsencrypt/archive
-    log_info "Certificate permissions updated for ${SERVICE_NAME} user"
-  fi
+  fix_cert_permissions "$domain"
 
   # Set up auto-renewal with SIGHUP reload
   setup_cert_renewal "$domain"
 
   log_info "TLS configured for ${domain}"
+}
+
+fix_cert_permissions() {
+  local domain="$1"
+
+  if [ "$PLATFORM" != "linux" ]; then return; fi
+  if [ ! -d "/etc/letsencrypt/live/${domain}" ]; then return; fi
+
+  chmod 750 /etc/letsencrypt/live /etc/letsencrypt/archive
+  chgrp "$SERVICE_NAME" /etc/letsencrypt/live /etc/letsencrypt/archive
+  log_info "Certificate permissions updated for ${SERVICE_NAME} user"
 }
 
 setup_cert_renewal() {
@@ -615,13 +619,15 @@ do_install() {
     raw_token=$(generate_token "$tokens_file")
   fi
 
-  # TLS setup only on fresh install or if no certs exist yet
+  # TLS setup
   if [ -n "$domain" ] && [ "$no_tls" = false ]; then
     if [ -d "/etc/letsencrypt/live/${domain}" ]; then
       log_info "TLS certificates already exist for ${domain}, skipping cert setup"
     else
       setup_tls "$domain"
     fi
+    # Always ensure the demarkus user can read the certs
+    fix_cert_permissions "$domain"
   fi
 
   # Open firewall (Linux, if ufw is available)
