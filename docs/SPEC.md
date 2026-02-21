@@ -123,7 +123,7 @@ key2: value2\n
 Everything after the metadata closing delimiter (or after the request line if no metadata is present) constitutes the request body.
 
 - The body is OPTIONAL for all verbs.
-- For WRITE requests, the body contains the document content.
+- For PUBLISH requests, the body contains the document content.
 - There is no protocol-level size limit on the body; servers SHOULD enforce a maximum document size (see Section 12.3).
 
 ## 5. Response Format
@@ -298,20 +298,20 @@ Only documents with version history (written through the protocol) are served. F
 - `not-found`: The document does not exist or has no version history.
 - `server-error`: Internal error or versioning not configured.
 
-### 6.4. WRITE
+### 6.4. PUBLISH
 
 Creates a new immutable version of a document. Requires authentication.
 
 **Request**:
 ```
-WRITE /path\n
+PUBLISH /path\n
 ---\n
 auth: <raw-token>\n
 ---\n
 <document content>
 ```
 
-The `auth` metadata field is REQUIRED. The server hashes the raw token with SHA-256 and looks up the resulting hash in its token store. The token must grant the `write` operation on the requested path.
+The `auth` metadata field is REQUIRED. The server hashes the raw token with SHA-256 and looks up the resulting hash in its token store. The token must grant the `publish` operation on the requested path.
 
 The request body is the document content. It is stored as-is (the server prepends its own store frontmatter; the original content is preserved verbatim).
 
@@ -327,19 +327,19 @@ modified: <RFC 3339 timestamp>
 The `created` response MUST NOT include a body.
 
 **Behaviour**:
-- Every WRITE creates a new version. The server MUST NOT modify or overwrite any existing version.
+- Every PUBLISH creates a new version. The server MUST NOT modify or overwrite any existing version.
 - If the document does not exist, version 1 is created.
 - If the document exists, the version number is incremented from the current highest version.
 - If the document exists as a flat file (no version history), the server MUST migrate the flat file to version 1 before creating version 2.
 
 **Authentication errors**:
-- `not-permitted`: No token store configured on the server (writes disabled).
+- `not-permitted`: No token store configured on the server (publishing disabled).
 - `unauthorized`: Missing `auth` field or token not recognised.
-- `not-permitted`: Token does not grant `write` on the requested path.
+- `not-permitted`: Token does not grant `publish` on the requested path.
 
 **Other errors**:
 - `not-found`: Path validation failed (e.g., path traversal attempt).
-- `server-error`: Internal error, content exceeds size limit, or writing not configured.
+- `server-error`: Internal error, content exceeds size limit, or publishing not configured.
 
 ## 7. Status Values
 
@@ -348,7 +348,7 @@ Status values are text strings. There are no numeric status codes.
 | Value | Meaning |
 |---|---|
 | `ok` | Request succeeded. Body contains the requested content. |
-| `created` | Write succeeded. A new version was created. |
+| `created` | Publish succeeded. A new version was created. |
 | `not-modified` | Conditional request: the resource has not changed. No body. |
 | `not-found` | The requested resource does not exist. |
 | `unauthorized` | Missing or invalid authentication token. |
@@ -361,7 +361,7 @@ The following status values are reserved for future use:
 
 | Value | Intended meaning |
 |---|---|
-| `conflict` | Version conflict (e.g., simultaneous writes). |
+| `conflict` | Version conflict (e.g., simultaneous publishes). |
 | `bad-request` | Malformed request. |
 | `too-large` | Document exceeds the size limit. |
 | `unavailable` | Server temporarily cannot fulfil the request. |
@@ -374,15 +374,15 @@ The following status values are reserved for future use:
 |---|---|---|---|
 | `if-none-match` | FETCH | 64-char hex string | ETag from a previous response. Enables conditional fetch. |
 | `if-modified-since` | FETCH | RFC 3339 timestamp | Timestamp from a previous response. Enables conditional fetch. |
-| `auth` | WRITE | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
+| `auth` | PUBLISH | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
 
 ### 8.2. Response Metadata
 
 | Field | Applicable verbs | Format | Description |
 |---|---|---|---|
-| `modified` | FETCH, WRITE | RFC 3339 timestamp | Document modification time (UTC, second precision). |
+| `modified` | FETCH, PUBLISH | RFC 3339 timestamp | Document modification time (UTC, second precision). |
 | `etag` | FETCH | 64-char lowercase hex | SHA-256 hash of the raw file bytes. |
-| `version` | FETCH, WRITE | Decimal integer | Version number of the returned or created document. |
+| `version` | FETCH, PUBLISH | Decimal integer | Version number of the returned or created document. |
 | `current-version` | FETCH (version access) | Decimal integer | Highest available version number. |
 | `entries` | LIST | Decimal integer | Number of entries in the directory listing. |
 | `total` | VERSIONS | Decimal integer | Total number of versions. |
@@ -485,7 +485,7 @@ Servers MUST NOT overwrite existing version files. Before writing a new version 
 
 ### 9.8. Flat File Migration
 
-When a WRITE is performed on a document that exists as a flat file (no version history), the server MUST:
+When a PUBLISH is performed on a document that exists as a flat file (no version history), the server MUST:
 
 1. Create the versions directory if it does not exist.
 2. Migrate the flat file content to `versions/<filename>.v1` with store frontmatter (`version: 1`, no `previous-hash`).
@@ -535,7 +535,7 @@ Servers MUST enforce the following limits:
 |---|---|
 | Request line | 4096 bytes |
 | Request metadata | 65536 bytes (64 KB) |
-| Document size (read and write) | 10 MB (RECOMMENDED) |
+| Document size (read and publish) | 10 MB (RECOMMENDED) |
 | Directory listing entries | 1000 (RECOMMENDED) |
 
 ### 11.4. No Tracking
@@ -564,19 +564,19 @@ When the content directory or any document path involves symbolic links, the ser
 
 The Mark Protocol uses capability-based token authentication. Tokens grant specific operations on specific path patterns — they do not identify users.
 
-**Secure by default**: Servers MUST deny all write operations when no token store is configured. Reads do not require authentication.
+**Secure by default**: Servers MUST deny all publish operations when no token store is configured. Reads do not require authentication.
 
 **Token storage**: The server stores SHA-256 hashes of tokens, never the raw tokens themselves. The token store is a TOML file:
 
 ```toml
 [tokens]
-"sha256-a1b2c3d4..." = { paths = ["/docs/*"], operations = ["write"] }
-"sha256-e5f6a7b8..." = { paths = ["/*"], operations = ["read", "write"], expires = "2026-12-31T23:59:59Z" }
+"sha256-a1b2c3d4..." = { paths = ["/docs/*"], operations = ["publish"] }
+"sha256-e5f6a7b8..." = { paths = ["/*"], operations = ["read", "publish"], expires = "2026-12-31T23:59:59Z" }
 ```
 
 **Token fields**:
 - `paths`: Array of glob patterns. `*` matches any single path segment (not recursive).
-- `operations`: Array of permitted operations (`read`, `write`).
+- `operations`: Array of permitted operations (`read`, `publish`).
 - `expires`: OPTIONAL RFC 3339 timestamp. If present, the token is invalid after this time.
 
 **Authentication flow**:

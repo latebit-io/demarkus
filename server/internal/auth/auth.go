@@ -1,7 +1,7 @@
 // Package auth provides capability-based token authentication for the Mark Protocol.
 //
 // Tokens are loaded from a TOML file at startup. Each token grants specific
-// operations (read, write) on specific path patterns. Tokens are capability-based:
+// operations (read, publish) on specific path patterns. Tokens are capability-based:
 // they grant what you can do, not who you are.
 //
 // This design supports both human and AI/agent access — tokens can be scoped
@@ -11,7 +11,7 @@
 // TOML format:
 //
 //	[tokens]
-//	"sha256-abc123..." = { paths = ["/docs/*"], operations = ["write"] }
+//	"sha256-abc123..." = { paths = ["/docs/*"], operations = ["publish"] }
 package auth
 
 import (

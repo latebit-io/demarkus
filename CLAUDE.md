@@ -94,7 +94,7 @@ Each module is versioned and released independently using **conventional commits
 ```
 feat(server): add config file support     → server minor bump
 fix(client): handle connection timeout     → client patch bump
-feat(protocol): add WRITE verb             → protocol minor bump
+feat(protocol): add PUBLISH verb           → protocol minor bump
 feat!: breaking change                     → major bump
 ```
 

@@ -46,7 +46,7 @@ FETCH /hello.md
 ```
 
 ```
-WRITE /doc.md
+PUBLISH /doc.md
 
 ---
 auth: <raw-token>
@@ -132,7 +132,7 @@ This is a [link](other.md)
 Document-centric operations that align with markdown usage:
 
 - **FETCH**: Retrieve a document
-- **WRITE**: Create or update a document (creates new version)
+- **PUBLISH**: Create or update a document (creates new version)
 - **APPEND**: Add content to end of document (comments, logs, notes)
 - **ARCHIVE**: Remove a document from active serving (preserves in version history)
 - **LIST**: Get directory contents or document index
@@ -386,13 +386,13 @@ demarkus-token generate -paths "/docs/*,/public/*" -ops write -tokens tokens.tom
 ```toml
 # tokens.toml
 [tokens]
-"sha256-a1b2c3d4..." = { paths = ["/docs/*", "/public/*"], operations = ["write"] }
-"sha256-e5f6a7b8..." = { paths = ["/*"], operations = ["read", "write"], expires = "2026-12-31T23:59:59Z" }
+"sha256-a1b2c3d4..." = { paths = ["/docs/*", "/public/*"], operations = ["publish"] }
+"sha256-e5f6a7b8..." = { paths = ["/*"], operations = ["read", "publish"], expires = "2026-12-31T23:59:59Z" }
 ```
 
 **Token Usage** (client sends raw token, server hashes before lookup):
 ```markdown
-WRITE /docs/article.md
+PUBLISH /docs/article.md
 
 ---
 auth: <raw-token>
@@ -416,7 +416,7 @@ auth: <raw-token>
 
 **0-RTT Security**:
 - Only allow idempotent operations (FETCH, LIST, VERSIONS) in 0-RTT packets
-- Reject WRITE/APPEND/ARCHIVE in 0-RTT to prevent replay attacks
+- Reject PUBLISH/APPEND/ARCHIVE in 0-RTT to prevent replay attacks
 
 **Certificate Pinning** (optional):
 - Clients can pin server certificates for high-security scenarios
@@ -460,11 +460,11 @@ Or via directory-level `.mark-acl` files:
 {
   "/docs/private.md": {
     "read": ["sha256-token-hash-1"],
-    "write": ["sha256-token-hash-1"]
+    "publish": ["sha256-token-hash-1"]
   },
   "/docs/public/*": {
     "read": ["public"],
-    "write": ["sha256-token-hash-2"]
+    "publish": ["sha256-token-hash-2"]
   }
 }
 ```
@@ -488,7 +488,7 @@ content-root/
 ```json
 {
   "timestamp": "2025-02-14T10:30:00Z",
-  "operation": "WRITE",
+  "operation": "PUBLISH",
   "path": "/doc.md",
   "version": 42,
   "auth_fingerprint": "sha256-abc...",
@@ -585,7 +585,7 @@ This is content-level attribution, not protocol-level tracking.
 
 ```
 2025-02-14T10:30:00Z FETCH /doc.md 200
-2025-02-14T10:31:15Z WRITE /doc.md 201
+2025-02-14T10:31:15Z PUBLISH /doc.md 201
 2025-02-14T10:32:00Z APPEND /doc/comments.md 201
 ```
 
@@ -1094,7 +1094,7 @@ mark://api.stripe.com/docs/payments
 ```
 Agent A: mark://cache.network/topic/climate-data
 Agent B: Reads same cached markdown
-Agent C: Contributes updates via WRITE/APPEND
+Agent C: Contributes updates via PUBLISH/APPEND
 → Distributed knowledge graph in markdown
 ```
 
@@ -1195,10 +1195,10 @@ Versions give agents the same guarantees that Git gives developers — you alway
 - Glamour (markdown rendering)
 - Lip Gloss (styling)
 
-### Phase 2: Write Operations
+### Phase 2: Publish Operations
 
 **Server**:
-- WRITE/APPEND/ARCHIVE support
+- PUBLISH/APPEND/ARCHIVE support
 - Capability-based authentication
 - Versioning system
 - Audit logging

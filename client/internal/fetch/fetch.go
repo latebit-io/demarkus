@@ -109,10 +109,10 @@ func (c *Client) Versions(host, path string) (Result, error) {
 	})
 }
 
-// Write creates or updates a document on a Mark Protocol server.
+// Publish creates or updates a document on a Mark Protocol server.
 // If token is non-empty, it is sent as the auth metadata for capability-based auth.
-func (c *Client) Write(host, path, body, token string) (Result, error) {
-	req := protocol.Request{Verb: protocol.VerbWrite, Path: path, Metadata: make(map[string]string), Body: body}
+func (c *Client) Publish(host, path, body, token string) (Result, error) {
+	req := protocol.Request{Verb: protocol.VerbPublish, Path: path, Metadata: make(map[string]string), Body: body}
 	if token != "" {
 		req.Metadata["auth"] = token
 	}
