@@ -667,11 +667,16 @@ do_install() {
   if [ "$is_reinstall" = true ]; then
     if [ "$PLATFORM" = "linux" ]; then
       systemctl stop demarkus 2>/dev/null || true
+      sleep 1
+      pkill -f demarkus-server 2>/dev/null || true
+      sleep 1
     elif [ "$PLATFORM" = "darwin" ]; then
       local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
       if [ -f "$plist" ]; then
         launchctl unload "$plist" 2>/dev/null || true
       fi
+      pkill -f demarkus-server 2>/dev/null || true
+      sleep 1
     fi
   fi
 
@@ -950,11 +955,16 @@ _do_update_inner() {
   # Stop service before replacing binaries (avoids "Text file busy")
   if [ "$PLATFORM" = "linux" ]; then
     systemctl stop demarkus 2>/dev/null || true
+    sleep 1
+    pkill -f demarkus-server 2>/dev/null || true
+    sleep 1
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
     if [ -f "$plist" ]; then
       launchctl unload "$plist" 2>/dev/null || true
     fi
+    pkill -f demarkus-server 2>/dev/null || true
+    sleep 1
   fi
 
   # Replace binaries
