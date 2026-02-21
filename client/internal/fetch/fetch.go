@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/url"
 	"strings"
 	"sync"
@@ -182,19 +181,17 @@ func (c *Client) requestOnConn(conn *quic.Conn, req protocol.Request) (Result, e
 	return Result{Response: resp}, nil
 }
 
-// doWithRetry retries transient failures up to 3 times with exponential backoff + jitter.
+// doWithRetry retries transient failures up to 5 times with a fixed 100ms delay.
 func (c *Client) doWithRetry(host string, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
-	const maxRetries = 3
-	const baseBackoff = 100 * time.Millisecond
+	const maxRetries = 5
+	const retryDelay = 100 * time.Millisecond
 
 	var lastErr error
 	for attempt := range maxRetries {
 		conn, err := c.getConn(host)
 		if err != nil {
 			if attempt < maxRetries-1 && isTransientError(err) {
-				backoff := baseBackoff * time.Duration(1<<uint(attempt))
-				jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
-				time.Sleep(backoff + jitter)
+				time.Sleep(retryDelay)
 				c.removeConn(host)
 				continue
 			}
@@ -208,9 +205,7 @@ func (c *Client) doWithRetry(host string, fn func(conn *quic.Conn) (Result, erro
 
 		lastErr = err
 		if attempt < maxRetries-1 && isTransientError(err) {
-			backoff := baseBackoff * time.Duration(1<<uint(attempt))
-			jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
-			time.Sleep(backoff + jitter)
+			time.Sleep(retryDelay)
 			c.removeConn(host)
 			continue
 		}
