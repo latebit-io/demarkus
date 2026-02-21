@@ -1,8 +1,8 @@
 # Demarkus
 
-**A privacy-first, markdown-native web protocol**
+**A protocol for agents and humans, optimized for information**
 
-Demarkus reimagines the web around markdown, with privacy and security as foundational principles. Built on QUIC, it provides a lightweight, human-readable protocol for document-centric communication free from tracking, commercialization, and unnecessary complexity.
+Demarkus reimagines the web around markdown — a format structured enough for machines, readable enough for people. Built for a world where humans and AI agents read and write together, it delivers information directly over QUIC: no rendering pipeline, no tracking, no commercialization, no unnecessary complexity. Privacy and security are foundational. Just content, fast and clean.
 
 ## Project Status
 
@@ -211,11 +211,12 @@ sudo systemctl enable --now demarkus
 
 ## Core Principles
 
-1. **Privacy First**: No user tracking, minimal logging, anonymity by default
-2. **Security Minded**: Encryption mandatory, capability-based auth
-3. **Simplicity**: Human-readable protocol, minimal complexity
-4. **Anti-Commercialization**: No ads, no tracking, no central authority
-5. **Federation**: Anyone can run a server, content can be mirrored freely
+1. **Optimized for Information**: Markdown is the common language — structured enough for agents, readable enough for humans
+2. **Privacy First**: No user tracking, minimal logging, anonymity by default
+3. **Security Minded**: Encryption mandatory, capability-based auth
+4. **Simplicity**: Human-readable protocol, minimal complexity
+5. **Anti-Commercialization**: No ads, no tracking, no central authority
+6. **Federation**: Anyone can run a server, content can be mirrored freely
 
 ## Protocol Overview
 
