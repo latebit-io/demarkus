@@ -1173,6 +1173,30 @@ Immutable versioning is particularly powerful in agent workflows:
 
 Versions give agents the same guarantees that Git gives developers — you always know what you're looking at, you can always go back, and you can always prove what changed.
 
+## Document Graph Navigation
+
+The web always had a graph — nobody ever let you see it. Browsers give you a viewport into one node at a time with a flat history list. Demarkus exposes the actual information space.
+
+### Core Concept
+
+When reading a document, the TUI can show a graph view with the current document as the center node and outbound links as edges to other documents. You navigate the graph directly — move to an adjacent node and jump to it — rather than browsing linearly. This flips the mental model from browsing pages to traversing knowledge.
+
+### How It Works
+
+The client crawls outbound `mark://` links from the current document (up to a configurable depth) and builds a directed graph of nodes (documents) and edges (links). Each node carries the document's title, fetch status, and link count. Duplicate edges are deduplicated. The crawl is concurrent and respects visited-URL tracking to avoid cycles.
+
+### Graph Enrichment (Future)
+
+The basic graph is link relationships. Over time it can be enriched with:
+
+- **Visit history** — nodes you've read are dimmed or marked
+- **Link density** — documents with many connections appear more prominent, like a PageRank signal
+- **Document type hints** — frontmatter metadata drives different node shapes or colors (data doc vs narrative doc)
+
+### Why This Matters
+
+This is what Tim Berners-Lee originally imagined — the web as a navigable information graph. Demarkus is a browser that shows you where you are in the information space, not just what page you're on.
+
 ## Implementation Roadmap
 
 ### Phase 1: MVP (Read-Only)
@@ -1189,6 +1213,7 @@ Versions give agents the same guarantees that Git gives developers — you alway
 - Follow links
 - Navigation history (back/forward)
 - Basic caching
+- Document graph — crawl outbound links and display as a navigable node graph
 
 **Tech Stack**:
 - Go with quic-go
