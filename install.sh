@@ -406,6 +406,48 @@ setup_cert_renewal() {
   fi
 }
 
+# --- System tuning ---
+
+setup_udp_buffers() {
+  if [ "$PLATFORM" != "linux" ]; then return; fi
+
+  local current
+  current=$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)
+  if [ "$current" -ge 7500000 ]; then
+    log_info "UDP buffer sizes already configured"
+    return
+  fi
+
+  log_info "Configuring UDP buffer sizes for QUIC..."
+  sysctl -w net.core.rmem_max=7500000 >/dev/null 2>&1 || true
+  sysctl -w net.core.wmem_max=7500000 >/dev/null 2>&1 || true
+
+  # Persist across reboots
+  local conf="/etc/sysctl.d/99-demarkus-quic.conf"
+  cat > "$conf" << 'EOF'
+net.core.rmem_max=7500000
+net.core.wmem_max=7500000
+EOF
+  log_info "UDP buffer sizes set (persistent via ${conf})"
+}
+
+# --- Health check ---
+
+verify_service_running() {
+  if [ "$PLATFORM" != "linux" ]; then return; fi
+
+  log_info "Verifying service is running..."
+  sleep 2
+
+  if systemctl is-active --quiet demarkus 2>/dev/null; then
+    log_info "Service is running"
+  else
+    log_error "Service failed to start. Check logs with: journalctl -u demarkus -n 20 --no-pager"
+    journalctl -u demarkus -n 5 --no-pager 2>/dev/null || true
+    exit 1
+  fi
+}
+
 # --- Service management ---
 
 setup_systemd() {
@@ -492,6 +534,34 @@ EOF
   log_info "Service loaded (logs: ${log_dir}/)"
 }
 
+# --- Existing config detection ---
+
+# Read values from an existing systemd unit or launchd plist.
+# Sets EXISTING_ROOT and EXISTING_DOMAIN if found.
+read_existing_config() {
+  EXISTING_ROOT=""
+  EXISTING_DOMAIN=""
+
+  if [ "$PLATFORM" = "linux" ] && [ -f /etc/systemd/system/demarkus.service ]; then
+    EXISTING_ROOT=$(grep 'DEMARKUS_ROOT=' /etc/systemd/system/demarkus.service 2>/dev/null \
+      | sed 's/.*DEMARKUS_ROOT=//' || true)
+    local cert_path
+    cert_path=$(grep 'DEMARKUS_TLS_CERT=' /etc/systemd/system/demarkus.service 2>/dev/null \
+      | sed 's/.*DEMARKUS_TLS_CERT=//' || true)
+    if [ -n "$cert_path" ]; then
+      # Extract domain from /etc/letsencrypt/live/DOMAIN/fullchain.pem
+      EXISTING_DOMAIN=$(echo "$cert_path" | sed 's|.*/live/\([^/]*\)/.*|\1|')
+    fi
+  elif [ "$PLATFORM" = "darwin" ]; then
+    local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
+    if [ -f "$plist" ]; then
+      # Simple extraction — look for the string after DEMARKUS_ROOT key
+      EXISTING_ROOT=$(grep -A1 'DEMARKUS_ROOT' "$plist" 2>/dev/null \
+        | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/' || true)
+    fi
+  fi
+}
+
 # --- Migration ---
 
 migrate() {
@@ -549,7 +619,18 @@ do_install() {
     exit 1
   fi
 
-  # Interactive prompts for missing values
+  # On reinstall, recover values from existing service config
+  read_existing_config
+  if [ -n "$EXISTING_ROOT" ] && [ -z "$content_root" ]; then
+    content_root="$EXISTING_ROOT"
+    log_info "Using existing content directory: ${content_root}"
+  fi
+  if [ -n "$EXISTING_DOMAIN" ] && [ -z "$domain" ]; then
+    domain="$EXISTING_DOMAIN"
+    log_info "Using existing domain: ${domain}"
+  fi
+
+  # Interactive prompts for missing values (fresh install only)
   if [ -z "$content_root" ]; then
     printf "Content directory [${DEFAULT_ROOT}]: "
     read -r content_root
@@ -615,6 +696,11 @@ do_install() {
   local raw_token=""
   if [ "$is_reinstall" = true ] && [ -f "$tokens_file" ]; then
     log_info "Keeping existing tokens file: ${tokens_file}"
+    # Ensure permissions are correct (may have been wrong from earlier installs)
+    if [ "$PLATFORM" = "linux" ]; then
+      chown root:"$SERVICE_NAME" "$tokens_file"
+      chmod 640 "$tokens_file"
+    fi
   else
     raw_token=$(generate_token "$tokens_file")
   fi
@@ -630,6 +716,9 @@ do_install() {
     fix_cert_permissions "$domain"
   fi
 
+  # System tuning
+  setup_udp_buffers
+
   # Open firewall (Linux, if ufw is available)
   if [ "$PLATFORM" = "linux" ] && command -v ufw >/dev/null 2>&1; then
     ufw allow 6309/udp >/dev/null 2>&1 || true
@@ -642,13 +731,11 @@ do_install() {
     # Restart to pick up new binaries
     if [ "$PLATFORM" = "linux" ]; then
       systemctl restart demarkus 2>/dev/null || log_warn "Could not restart service"
-      log_info "Service restarted with new binaries"
     elif [ "$PLATFORM" = "darwin" ]; then
       local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
       if [ -f "$plist" ]; then
         launchctl unload "$plist" 2>/dev/null || true
         launchctl load "$plist" 2>/dev/null || true
-        log_info "Service restarted with new binaries"
       fi
     fi
   else
@@ -658,6 +745,9 @@ do_install() {
       setup_launchd "$content_root" "$tokens_file"
     fi
   fi
+
+  # Verify the service actually started
+  verify_service_running
 
   # Write version marker
   echo "$version" > "${CONFIG_DIR}/version"
