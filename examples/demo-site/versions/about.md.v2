@@ -1,8 +1,10 @@
 ---
-version: 1
+version: 2
+previous-hash: sha256-2c04efaaf27fcde7b8ef85c8515f23c6fddf8465abfc2c805c44943af04148a2
 ---
-
 # About the Mark Protocol
+
+Awesome! 
 
 The Mark Protocol is built on several core principles:
 

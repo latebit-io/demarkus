@@ -17,7 +17,7 @@ Demarkus reimagines the web around markdown, with privacy and security as founda
 
 ### Protocol (`protocol/`)
 Core Go library implementing the Mark Protocol specification.
-- Message parsing (FETCH, WRITE, APPEND, etc.)
+- Message parsing (FETCH, PUBLISH, APPEND, etc.)
 - QUIC transport layer
 - Authentication & capability system
 - Version management
@@ -100,13 +100,13 @@ export DEMARKUS_TOKENS=/etc/demarkus/tokens.toml
 
 **3. Write content through the protocol**:
 ```bash
-./client/bin/demarkus --insecure -X WRITE -auth <raw-token> mark://localhost:6309/hello.md -body "# Hello World"
+./client/bin/demarkus --insecure -X PUBLISH -auth <raw-token> mark://localhost:6309/hello.md -body "# Hello World"
 ```
 
 You can also set the token via environment variable:
 ```bash
 export DEMARKUS_AUTH=<raw-token>
-./client/bin/demarkus --insecure -X WRITE mark://localhost:6309/hello.md -body "# Hello World"
+./client/bin/demarkus --insecure -X PUBLISH mark://localhost:6309/hello.md -body "# Hello World"
 ```
 
 **Token scoping examples**:
@@ -120,14 +120,14 @@ export DEMARKUS_AUTH=<raw-token>
 
 ### Adding Content
 
-All content must be written through the protocol. **Files copied directly to the filesystem are not served** — only documents with proper version history (written via WRITE) are accessible. This ensures every document has an immutable version chain and tamper detection.
+All content must be published through the protocol. **Files copied directly to the filesystem are not served** — only documents with proper version history (published via PUBLISH) are accessible. This ensures every document has an immutable version chain and tamper detection.
 
 ```bash
 # Write a new document (creates version 1)
-./client/bin/demarkus --insecure -X WRITE -auth $TOKEN mark://localhost:6309/about.md -body "# About\n\nWelcome."
+./client/bin/demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/about.md -body "# About\n\nWelcome."
 
 # Update it (creates version 2, linked by hash chain)
-./client/bin/demarkus --insecure -X WRITE -auth $TOKEN mark://localhost:6309/about.md -body "# About\n\nUpdated content."
+./client/bin/demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/about.md -body "# About\n\nUpdated content."
 
 # Verify the version history
 ./client/bin/demarkus --insecure -X VERSIONS mark://localhost:6309/about.md
@@ -225,7 +225,7 @@ sudo systemctl enable --now demarkus
 
 **Verbs**:
 - `FETCH` - Retrieve documents
-- `WRITE` - Create/update documents (requires auth token)
+- `PUBLISH` - Create/update documents (requires auth token)
 - `LIST` - Directory contents
 - `VERSIONS` - Version history
 - `APPEND` - Add content (future)

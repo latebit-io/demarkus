@@ -853,22 +853,22 @@ func TestVersionsChainValid(t *testing.T) {
 	})
 }
 
-func TestHandleWrite(t *testing.T) {
+func TestHandlePublish(t *testing.T) {
 	// A permissive token store for tests that need to exercise write logic.
-	const testSecret = "test-write-secret"
-	writeTokenStore := auth.NewTokenStore(map[string]auth.Token{
+	const testSecret = "test-publish-secret"
+	publishTokenStore := auth.NewTokenStore(map[string]auth.Token{
 		auth.HashToken(testSecret): {
 			Paths:      []string{"/*"},
-			Operations: []string{"write"},
+			Operations: []string{"publish"},
 		},
 	})
 	authMeta := "---\nauth: " + testSecret + "\n---\n"
 
 	t.Run("creates new document", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: writeTokenStore}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: publishTokenStore}
 
-		stream := newMockStream("WRITE /new.md\n" + authMeta + "# Hello\n")
+		stream := newMockStream("PUBLISH /new.md\n" + authMeta + "# Hello\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -892,9 +892,9 @@ func TestHandleWrite(t *testing.T) {
 		if _, err := s.Write("/doc.md", []byte("# Original\n")); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
-		h := &Handler{ContentDir: dir, Store: s, TokenStore: writeTokenStore}
+		h := &Handler{ContentDir: dir, Store: s, TokenStore: publishTokenStore}
 
-		stream := newMockStream("WRITE /doc.md\n" + authMeta + "# Updated\n")
+		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# Updated\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -911,9 +911,9 @@ func TestHandleWrite(t *testing.T) {
 
 	t.Run("no store configured", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, TokenStore: writeTokenStore}
+		h := &Handler{ContentDir: dir, TokenStore: publishTokenStore}
 
-		stream := newMockStream("WRITE /doc.md\n" + authMeta + "# New\n")
+		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# New\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -927,9 +927,9 @@ func TestHandleWrite(t *testing.T) {
 
 	t.Run("path traversal blocked", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: writeTokenStore}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: publishTokenStore}
 
-		stream := newMockStream("WRITE /../../etc/passwd\n" + authMeta + "# evil\n")
+		stream := newMockStream("PUBLISH /../../etc/passwd\n" + authMeta + "# evil\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -942,7 +942,7 @@ func TestHandleWrite(t *testing.T) {
 	})
 }
 
-func TestHandleWriteAuth(t *testing.T) {
+func TestHandlePublishAuth(t *testing.T) {
 	// Raw secrets used in requests. Store keys are their hashes.
 	const (
 		writerSecret   = "writer-secret"
@@ -952,7 +952,7 @@ func TestHandleWriteAuth(t *testing.T) {
 	ts := auth.NewTokenStore(map[string]auth.Token{
 		auth.HashToken(writerSecret): {
 			Paths:      []string{"/docs/*"},
-			Operations: []string{"write"},
+			Operations: []string{"publish"},
 		},
 		auth.HashToken(readonlySecret): {
 			Paths:      []string{"/*"},
@@ -960,11 +960,11 @@ func TestHandleWriteAuth(t *testing.T) {
 		},
 	})
 
-	t.Run("no token store denies writes", func(t *testing.T) {
+	t.Run("no token store denies publishing", func(t *testing.T) {
 		dir := t.TempDir()
 		h := &Handler{ContentDir: dir, Store: store.New(dir)}
 
-		stream := newMockStream("WRITE /doc.md\n# Hello\n")
+		stream := newMockStream("PUBLISH /doc.md\n# Hello\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -980,7 +980,7 @@ func TestHandleWriteAuth(t *testing.T) {
 		dir := t.TempDir()
 		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
 
-		stream := newMockStream("WRITE /docs/test.md\n# Hello\n")
+		stream := newMockStream("PUBLISH /docs/test.md\n# Hello\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -996,7 +996,7 @@ func TestHandleWriteAuth(t *testing.T) {
 		dir := t.TempDir()
 		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
 
-		stream := newMockStream("WRITE /docs/test.md\n---\nauth: wrong-secret\n---\n# Hello\n")
+		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: wrong-secret\n---\n# Hello\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -1012,7 +1012,7 @@ func TestHandleWriteAuth(t *testing.T) {
 		dir := t.TempDir()
 		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
 
-		stream := newMockStream("WRITE /private/secret.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
+		stream := newMockStream("PUBLISH /private/secret.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -1028,7 +1028,7 @@ func TestHandleWriteAuth(t *testing.T) {
 		dir := t.TempDir()
 		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
 
-		stream := newMockStream("WRITE /docs/test.md\n---\nauth: " + readonlySecret + "\n---\n# Hello\n")
+		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + readonlySecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -1044,7 +1044,7 @@ func TestHandleWriteAuth(t *testing.T) {
 		dir := t.TempDir()
 		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
 
-		stream := newMockStream("WRITE /docs/test.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
+		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)

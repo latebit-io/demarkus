@@ -206,7 +206,7 @@ generate_token() {
   local token
 
   log_step "Generating auth token"
-  token=$("${INSTALL_DIR}/demarkus-token" generate -paths "/*" -ops write -tokens "$tokens_file")
+  token=$("${INSTALL_DIR}/demarkus-token" generate -paths "/*" -ops publish -tokens "$tokens_file")
 
   if [ "$PLATFORM" = "linux" ]; then
     chown root:"$SERVICE_NAME" "$tokens_file"
@@ -564,16 +564,16 @@ do_install() {
     echo ""
     echo "  $raw_token"
     echo ""
-    log_info "Write your first document:"
+    log_info "Publish your first document:"
     if [ -n "$domain" ] && [ "$no_tls" = false ]; then
-      echo "  demarkus -X WRITE -auth \$TOKEN mark://${domain}/index.md -body \"# Hello World\""
+      echo "  demarkus -X PUBLISH -auth \$TOKEN mark://${domain}/index.md -body \"# Hello World\""
     else
-      echo "  demarkus --insecure -X WRITE -auth \$TOKEN mark://localhost:6309/index.md -body \"# Hello World\""
+      echo "  demarkus --insecure -X PUBLISH -auth \$TOKEN mark://localhost:6309/index.md -body \"# Hello World\""
     fi
   fi
   echo ""
   log_info "Generate additional tokens:"
-  echo "  demarkus-token generate -paths \"/*\" -ops write -tokens ${tokens_file}"
+  echo "  demarkus-token generate -paths \"/*\" -ops publish -tokens ${tokens_file}"
   echo ""
   log_info "Update later with: demarkus-install update"
 }

@@ -228,15 +228,15 @@ func TestRequestRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParseWriteRequestWithBody(t *testing.T) {
+func TestParsePublishRequestWithBody(t *testing.T) {
 	t.Run("body with frontmatter", func(t *testing.T) {
-		input := "WRITE /doc.md\n---\nauthor: Fritz\n---\n# Hello\n\nBody text.\n"
+		input := "PUBLISH /doc.md\n---\nauthor: Fritz\n---\n# Hello\n\nBody text.\n"
 		req, err := ParseRequest(strings.NewReader(input))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if req.Verb != "WRITE" {
-			t.Errorf("verb: got %q, want %q", req.Verb, "WRITE")
+		if req.Verb != "PUBLISH" {
+			t.Errorf("verb: got %q, want %q", req.Verb, "PUBLISH")
 		}
 		if req.Metadata["author"] != "Fritz" {
 			t.Errorf("author: got %q, want %q", req.Metadata["author"], "Fritz")
@@ -247,7 +247,7 @@ func TestParseWriteRequestWithBody(t *testing.T) {
 	})
 
 	t.Run("body without frontmatter", func(t *testing.T) {
-		input := "WRITE /doc.md\n# Hello\n"
+		input := "PUBLISH /doc.md\n# Hello\n"
 		req, err := ParseRequest(strings.NewReader(input))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -258,7 +258,7 @@ func TestParseWriteRequestWithBody(t *testing.T) {
 	})
 
 	t.Run("body without trailing newline", func(t *testing.T) {
-		input := "WRITE /doc.md\n# Hello"
+		input := "PUBLISH /doc.md\n# Hello"
 		req, err := ParseRequest(strings.NewReader(input))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -269,7 +269,7 @@ func TestParseWriteRequestWithBody(t *testing.T) {
 	})
 
 	t.Run("empty body", func(t *testing.T) {
-		input := "WRITE /doc.md\n"
+		input := "PUBLISH /doc.md\n"
 		req, err := ParseRequest(strings.NewReader(input))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -280,9 +280,9 @@ func TestParseWriteRequestWithBody(t *testing.T) {
 	})
 }
 
-func TestWriteRequestRoundTrip(t *testing.T) {
+func TestPublishRequestRoundTrip(t *testing.T) {
 	original := Request{
-		Verb: "WRITE",
+		Verb: "PUBLISH",
 		Path: "/doc.md",
 		Metadata: map[string]string{
 			"author": "Fritz",

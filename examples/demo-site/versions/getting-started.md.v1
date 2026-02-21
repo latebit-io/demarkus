@@ -1,10 +1,6 @@
 ---
 version: 1
 ---
----
-modified: 2025-02-14T10:30:00Z
-version: 1
----
 
 # Getting Started with Demarkus
 
@@ -81,12 +77,12 @@ Access old versions:
 
 ## Authentication
 
-For write access, get a capability token from the server admin. The admin generates tokens using the `demarkus-token` tool — the server stores only the SHA-256 hash, never the raw token.
+For publish access, get a capability token from the server admin. The admin generates tokens using the `demarkus-token` tool — the server stores only the SHA-256 hash, never the raw token.
 
 Include the raw token in requests:
 
 ```markdown
-WRITE /doc.md
+PUBLISH /doc.md
 
 ---
 auth: your-raw-token-here

@@ -12,7 +12,7 @@ func TestLoadTokens(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "tokens.toml")
 		data := `[tokens]
-"sha256-abc" = { paths = ["/docs/*"], operations = ["write"] }
+"sha256-abc" = { paths = ["/docs/*"], operations = ["publish"] }
 "sha256-readonly" = { paths = ["/*"], operations = ["read"] }
 `
 		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
@@ -68,7 +68,7 @@ func TestLoadTokens(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "tokens.toml")
 		data := `[tokens]
-"sha256-expiring" = { paths = ["/*"], operations = ["write"], expires = "2026-12-31T23:59:59Z" }
+"sha256-expiring" = { paths = ["/*"], operations = ["publish"], expires = "2026-12-31T23:59:59Z" }
 `
 		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 			t.Fatal(err)
@@ -115,11 +115,11 @@ func TestAuthorize(t *testing.T) {
 	ts := NewTokenStore(map[string]Token{
 		HashToken(writerSecret): {
 			Paths:      []string{"/docs/*"},
-			Operations: []string{"write"},
+			Operations: []string{"publish"},
 		},
 		HashToken(readwriteSecret): {
 			Paths:      []string{"/*"},
-			Operations: []string{"read", "write"},
+			Operations: []string{"read", "publish"},
 		},
 		HashToken(readonlySecret): {
 			Paths:      []string{"/*"},
@@ -134,14 +134,14 @@ func TestAuthorize(t *testing.T) {
 		operation string
 		wantErr   error
 	}{
-		{"valid write", writerSecret, "/docs/test.md", "write", nil},
-		{"valid readwrite", readwriteSecret, "/anything.md", "write", nil},
-		{"empty token", "", "/docs/test.md", "write", ErrNoToken},
-		{"unknown token", "unknown-secret", "/docs/test.md", "write", ErrInvalidToken},
-		{"wrong operation", readonlySecret, "/docs/test.md", "write", ErrNotPermitted},
-		{"wrong path", writerSecret, "/private/secret.md", "write", ErrNotPermitted},
-		{"glob match", writerSecret, "/docs/nested.md", "write", nil},
-		{"glob no match nested", writerSecret, "/docs/sub/file.md", "write", ErrNotPermitted},
+		{"valid publish", writerSecret, "/docs/test.md", "publish", nil},
+		{"valid readpublish", readwriteSecret, "/anything.md", "publish", nil},
+		{"empty token", "", "/docs/test.md", "publish", ErrNoToken},
+		{"unknown token", "unknown-secret", "/docs/test.md", "publish", ErrInvalidToken},
+		{"wrong operation", readonlySecret, "/docs/test.md", "publish", ErrNotPermitted},
+		{"wrong path", writerSecret, "/private/secret.md", "publish", ErrNotPermitted},
+		{"glob match", writerSecret, "/docs/nested.md", "publish", nil},
+		{"glob no match nested", writerSecret, "/docs/sub/file.md", "publish", ErrNotPermitted},
 	}
 
 	for _, tt := range tests {
