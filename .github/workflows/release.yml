@@ -221,6 +221,9 @@ jobs:
             });
             console.log(`Created tag: ${tag}`);
 
+      - name: Fetch tags
+        run: git fetch --tags --force
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -265,6 +268,9 @@ jobs:
               sha: context.sha
             });
             console.log(`Created tag: ${tag}`);
+
+      - name: Fetch tags
+        run: git fetch --tags --force
 
       - uses: goreleaser/goreleaser-action@v6
         with:
