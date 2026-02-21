@@ -108,9 +108,11 @@ func main() {
 				errChan <- err
 				return
 			}
-			wg.Go(func() {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				handleConn(conn, h, cfg.RequestTimeout)
-			})
+			}()
 		}
 	}()
 
