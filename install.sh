@@ -285,20 +285,8 @@ install_binaries() {
 
   for bin in "${binaries[@]}"; do
     if [ -f "${tmpdir}/${bin}" ]; then
-      # Copy to temp name first, then atomically replace. This avoids
-      # "Text file busy" errors when updating running binaries on Linux.
-      local dest="${INSTALL_DIR}/${bin}"
-      local temp_dest="${dest}.tmp.$$"
-      cp "${tmpdir}/${bin}" "$temp_dest" || {
-        log_error "Failed to copy ${bin}"
-        return 1
-      }
-      chmod 755 "$temp_dest"
-      mv "$temp_dest" "$dest" || {
-        log_error "Failed to move ${bin} into place"
-        rm -f "$temp_dest"
-        return 1
-      }
+      cp "${tmpdir}/${bin}" "${INSTALL_DIR}/${bin}"
+      chmod 755 "${INSTALL_DIR}/${bin}"
       log_info "Installed ${INSTALL_DIR}/${bin}"
     else
       log_warn "Binary ${bin} not found in archive"
@@ -946,6 +934,16 @@ _do_update_inner() {
 
   # Run migrations before replacing binaries
   migrate "$from" "$to"
+
+  # Stop service before replacing binaries (avoids "Text file busy")
+  if [ "$PLATFORM" = "linux" ]; then
+    systemctl stop demarkus 2>/dev/null || true
+  elif [ "$PLATFORM" = "darwin" ]; then
+    local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
+    if [ -f "$plist" ]; then
+      launchctl unload "$plist" 2>/dev/null || true
+    fi
+  fi
 
   # Replace binaries
   install_binaries "$tmpdir" "demarkus-server" "demarkus-token"
