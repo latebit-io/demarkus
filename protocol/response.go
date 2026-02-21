@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -81,9 +82,7 @@ func (resp Response) WriteTo(w io.Writer) (int64, error) {
 
 	fm := make(map[string]string, len(resp.Metadata)+1)
 	fm["status"] = resp.Status
-	for k, v := range resp.Metadata {
-		fm[k] = v
-	}
+	maps.Copy(fm, resp.Metadata)
 
 	yamlBytes, err := yaml.Marshal(fm)
 	if err != nil {

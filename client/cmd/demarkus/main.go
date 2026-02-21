@@ -95,7 +95,7 @@ var validVerbs = map[string]bool{
 	protocol.VerbFetch:    true,
 	protocol.VerbList:     true,
 	protocol.VerbVersions: true,
-	protocol.VerbPublish:    true,
+	protocol.VerbPublish:  true,
 }
 
 func validateVerb(verb string) error {

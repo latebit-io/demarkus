@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/BurntSushi/toml"
 )
@@ -106,12 +107,7 @@ func (ts *TokenStore) Authorize(token, reqPath, operation string) error {
 }
 
 func hasOperation(ops []string, target string) bool {
-	for _, op := range ops {
-		if op == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ops, target)
 }
 
 // matchesAnyPath checks if reqPath matches any of the glob patterns.

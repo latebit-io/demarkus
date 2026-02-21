@@ -70,7 +70,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("[ERROR] listen on %s: %v", addr, err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	s := store.New(cfg.ContentDir)
 
@@ -125,7 +125,7 @@ func main() {
 	}
 
 	// Close the listener to stop accepting new connections
-	listener.Close()
+	_ = listener.Close()
 
 	// Wait for in-flight connections to drain with a timeout
 	done := make(chan struct{})
@@ -151,7 +151,7 @@ func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duratio
 			return // connection closed
 		}
 		if requestTimeout > 0 {
-			stream.SetReadDeadline(time.Now().Add(requestTimeout))
+			_ = stream.SetReadDeadline(time.Now().Add(requestTimeout))
 		}
 		go h.HandleStream(stream)
 	}

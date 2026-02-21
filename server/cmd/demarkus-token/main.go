@@ -27,7 +27,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Generates a cryptographically random auth token for the Mark Protocol server.\n\n")
 		fs.PrintDefaults()
 	}
-	fs.Parse(os.Args[2:])
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		log.Fatalf("parse flags: %v", err)
+	}
 
 	// Generate 32 random bytes → 64 hex chars.
 	secret := make([]byte, 32)
@@ -56,15 +58,17 @@ func main() {
 		info, _ := f.Stat()
 		if info.Size() == 0 {
 			if _, err := f.WriteString("[tokens]\n"); err != nil {
-				f.Close()
+				_ = f.Close()
 				log.Fatalf("write tokens header: %v", err)
 			}
 		}
 		if _, err := f.WriteString(entry); err != nil {
-			f.Close()
+			_ = f.Close()
 			log.Fatalf("write token entry: %v", err)
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			log.Fatalf("close tokens file: %v", err)
+		}
 		fmt.Fprintf(os.Stderr, "Token appended to %s\n", *tokensFile)
 	} else {
 		fmt.Fprintln(os.Stderr, "Add this to your tokens.toml under [tokens]:")

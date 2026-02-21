@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -11,7 +12,9 @@ import (
 
 func TestGet_FlatFileRejected(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "doc.md"), []byte("# Hello"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("# Hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	s := New(root)
 	_, err := s.Get("/doc.md", 0)
@@ -23,11 +26,19 @@ func TestGet_FlatFileRejected(t *testing.T) {
 func TestGet_VersionedFile(t *testing.T) {
 	root := t.TempDir()
 	versionsDir := filepath.Join(root, "versions")
-	os.Mkdir(versionsDir, 0o755)
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# V1"), 0o644)
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), []byte("# V2"), 0o644)
+	if err := os.Mkdir(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# V1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), []byte("# V2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// Current file (would be a symlink in production)
-	os.WriteFile(filepath.Join(root, "doc.md"), []byte("# V2"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("# V2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	s := New(root)
 
@@ -75,7 +86,9 @@ func TestGet_PathTraversal(t *testing.T) {
 
 func TestGet_Directory(t *testing.T) {
 	root := t.TempDir()
-	os.Mkdir(filepath.Join(root, "subdir"), 0o755)
+	if err := os.Mkdir(filepath.Join(root, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	s := New(root)
 
 	_, err := s.Get("/subdir", 0)
@@ -86,10 +99,16 @@ func TestGet_Directory(t *testing.T) {
 
 func TestListDir(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "a.md"), []byte("a"), 0o644)
-	os.WriteFile(filepath.Join(root, "b.md"), []byte("b"), 0o644)
-	os.WriteFile(filepath.Join(root, ".hidden"), []byte("hidden"), 0o644)
-	os.Mkdir(filepath.Join(root, "versions"), 0o755)
+	for _, f := range []struct{ name, content string }{
+		{"a.md", "a"}, {"b.md", "b"}, {".hidden", "hidden"},
+	} {
+		if err := os.WriteFile(filepath.Join(root, f.name), []byte(f.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "versions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	s := New(root)
 	entries, err := s.ListDir("/")
@@ -103,7 +122,9 @@ func TestListDir(t *testing.T) {
 
 func TestListDir_NotADirectory(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "file.md"), []byte("content"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "file.md"), []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	s := New(root)
 
 	_, err := s.ListDir("/file.md")
@@ -114,7 +135,9 @@ func TestListDir_NotADirectory(t *testing.T) {
 
 func TestVersions_FlatFileRejected(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "doc.md"), []byte("# Hello"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("# Hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	s := New(root)
 	_, err := s.Versions("/doc.md")
@@ -126,11 +149,19 @@ func TestVersions_FlatFileRejected(t *testing.T) {
 func TestVersions_MultipleVersions(t *testing.T) {
 	root := t.TempDir()
 	versionsDir := filepath.Join(root, "versions")
-	os.Mkdir(versionsDir, 0o755)
-	os.WriteFile(filepath.Join(root, "doc.md"), []byte("current"), 0o644)
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("v1"), 0o644)
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), []byte("v2"), 0o644)
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v3"), []byte("v3"), 0o644)
+	if err := os.Mkdir(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []struct{ name, content string }{
+		{filepath.Join(root, "doc.md"), "current"},
+		{filepath.Join(versionsDir, "doc.md.v1"), "v1"},
+		{filepath.Join(versionsDir, "doc.md.v2"), "v2"},
+		{filepath.Join(versionsDir, "doc.md.v3"), "v3"},
+	} {
+		if err := os.WriteFile(f.name, []byte(f.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	s := New(root)
 	versions, err := s.Versions("/doc.md")
@@ -161,7 +192,9 @@ func TestVersions_NotFound(t *testing.T) {
 
 func TestGetVersion_NotFound(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "doc.md"), []byte("current"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("current"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	s := New(root)
 	_, err := s.Get("/doc.md", 99)
@@ -199,7 +232,7 @@ func TestWrite_NewDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read current file: %v", err)
 	}
-	if string(cData) != string(vData) {
+	if !bytes.Equal(cData, vData) {
 		t.Errorf("current file should match version file")
 	}
 }
@@ -233,7 +266,7 @@ func TestWrite_Increments(t *testing.T) {
 	s := New(root)
 
 	for i := 1; i <= 3; i++ {
-		doc, err := s.Write("/doc.md", []byte(fmt.Sprintf("# V%d\n", i)))
+		doc, err := s.Write("/doc.md", fmt.Appendf(nil, "# V%d\n", i))
 		if err != nil {
 			t.Fatalf("Write v%d: %v", i, err)
 		}
@@ -275,11 +308,15 @@ func TestWrite_TooLarge(t *testing.T) {
 func TestWrite_ImmutabilityGuard(t *testing.T) {
 	root := t.TempDir()
 	versionsDir := filepath.Join(root, "versions")
-	os.MkdirAll(versionsDir, 0o755)
+	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	// No doc.md on disk → next=1. Pre-create v1 to simulate a concurrent writer
 	// that won the race and already wrote v1 before we get to the atomic rename.
-	os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# already there\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# already there\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	s := New(root)
 	_, err := s.Write("/doc.md", []byte("# New\n"))
@@ -332,7 +369,7 @@ func TestVerifyChain_Valid(t *testing.T) {
 	s := New(root)
 
 	for i := 1; i <= 3; i++ {
-		if _, err := s.Write("/doc.md", []byte(fmt.Sprintf("# V%d\n", i))); err != nil {
+		if _, err := s.Write("/doc.md", fmt.Appendf(nil, "# V%d\n", i)); err != nil {
 			t.Fatalf("write v%d: %v", i, err)
 		}
 	}
@@ -355,7 +392,9 @@ func TestVerifyChain_Tampered(t *testing.T) {
 
 	// Tamper with v1 after the chain is formed.
 	v1Path := filepath.Join(root, "versions", "doc.md.v1")
-	os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644)
+	if err := os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := s.VerifyChain("/doc.md")
 	if err == nil {

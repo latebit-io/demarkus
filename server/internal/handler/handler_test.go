@@ -32,7 +32,9 @@ func setupContentDir(t *testing.T, files map[string]string) string {
 	dir := t.TempDir()
 	for name, content := range files {
 		path := filepath.Join(dir, name)
-		os.MkdirAll(filepath.Dir(path), 0o755)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -330,7 +332,9 @@ func TestHandleList(t *testing.T) {
 			t.Fatalf("write %s: %v", f.path, err)
 		}
 	}
-	os.WriteFile(filepath.Join(dir, ".hidden"), []byte("secret\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".hidden"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	h := &Handler{ContentDir: dir, Store: s}
 
 	t.Run("list root directory", func(t *testing.T) {
@@ -508,7 +512,9 @@ func TestRelativeContentDir(t *testing.T) {
 	// Create a temp dir, write versioned files, then use a relative path.
 	tmpDir := t.TempDir()
 	contentDir := filepath.Join(tmpDir, "site")
-	os.MkdirAll(contentDir, 0o755)
+	if err := os.MkdirAll(contentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	s := store.New(contentDir)
 	if _, err := s.Write("/page.md", []byte("# Page\n")); err != nil {
 		t.Fatalf("write page: %v", err)
@@ -522,8 +528,10 @@ func TestRelativeContentDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(origWd)
-	os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(origWd) }()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
 
 	relStore := store.New("./site")
 	h := &Handler{ContentDir: "./site", Store: relStore}
@@ -835,7 +843,9 @@ func TestVersionsChainValid(t *testing.T) {
 	t.Run("tampered chain", func(t *testing.T) {
 		// Corrupt v1 on disk.
 		v1Path := filepath.Join(dir, "versions", "doc.md.v1")
-		os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644)
+		if err := os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		stream := newMockStream("VERSIONS /doc.md\n")
 		h.HandleStream(stream)
