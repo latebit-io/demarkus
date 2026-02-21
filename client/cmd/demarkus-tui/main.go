@@ -99,10 +99,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		headerHeight := 2 // address bar + divider
 		footerHeight := 1 // status bar
-		viewportHeight := m.height - headerHeight - footerHeight
-		if viewportHeight < 1 {
-			viewportHeight = 1
-		}
+		viewportHeight := max(m.height-headerHeight-footerHeight, 1)
 
 		if !m.ready {
 			m.viewport = viewport.New(m.width, viewportHeight)
@@ -191,8 +188,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Viewport focused.
-	switch msg.String() {
-	case "q":
+	if msg.String() == "q" {
 		return m, tea.Quit
 	}
 	var cmd tea.Cmd

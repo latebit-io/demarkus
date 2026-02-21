@@ -12,6 +12,9 @@ import (
 	"github.com/latebit/demarkus/protocol"
 )
 
+// DemarkusCacheDir is the environment variable for overriding the cache directory.
+const DemarkusCacheDir = "DEMARKUS_CACHE_DIR"
+
 // Cache stores Mark Protocol responses on the local filesystem.
 type Cache struct {
 	Dir string
@@ -35,14 +38,14 @@ type meta struct {
 // DefaultDir returns the default cache directory.
 // It checks DEMARKUS_CACHE_DIR first, then falls back to ~/.mark/cache.
 func DefaultDir() string {
-	if dir := os.Getenv("DEMARKUS_CACHE_DIR"); dir != "" {
+	if dir := os.Getenv(DemarkusCacheDir); dir != "" {
 		return dir
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".", ".mark", "cache")
+		return filepath.Join(".", "."+protocol.ALPN, "cache")
 	}
-	return filepath.Join(home, ".mark", "cache")
+	return filepath.Join(home, "."+protocol.ALPN, "cache")
 }
 
 // New creates a cache rooted at the given directory.
@@ -63,7 +66,7 @@ func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
 		// Remove it and retry once.
 		if os.Remove(dir) == nil {
 			// Also remove the companion .meta file from the old layout.
-			os.Remove(dir + ".meta")
+			_ = os.Remove(dir + ".meta")
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
@@ -73,7 +76,7 @@ func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
 	}
 
 	m := meta{
-		URL:      "mark://" + host + path,
+		URL:      protocol.ALPN + "://" + host + path,
 		Verb:     verb,
 		Status:   resp.Status,
 		CachedAt: time.Now().UTC(),
@@ -92,7 +95,7 @@ func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
 	// Then write body. If this fails, metadata still exists as a marker.
 	if err := os.WriteFile(filePath, []byte(resp.Body), 0o644); err != nil {
 		// Best effort cleanup if body write fails.
-		os.Remove(metaPath)
+		_ = os.Remove(metaPath)
 		return err
 	}
 
@@ -113,7 +116,7 @@ func (c *Cache) Get(host, path, verb string) (*Entry, error) {
 			// Metadata missing. Check if body exists (corrupted cache).
 			if _, err := os.Stat(filePath); err == nil {
 				// Body exists but metadata doesn't — clean it up.
-				os.Remove(filePath)
+				_ = os.Remove(filePath)
 			}
 			return nil, nil
 		}
@@ -125,7 +128,7 @@ func (c *Cache) Get(host, path, verb string) (*Entry, error) {
 	body, err := os.ReadFile(filePath)
 	if os.IsNotExist(err) {
 		// Body missing but metadata exists (corrupted cache). Clean up metadata.
-		os.Remove(metaPath)
+		_ = os.Remove(metaPath)
 		return nil, nil
 	}
 	if err != nil {
@@ -164,9 +167,9 @@ func (c *Cache) filePath(host, reqPath, verb string) string {
 	var sentinel string
 	switch verb {
 	case protocol.VerbList:
-		sentinel = ".list"
+		sentinel = "." + strings.ToLower(protocol.VerbList)
 	default:
-		sentinel = ".fetch"
+		sentinel = "." + strings.ToLower(protocol.VerbFetch)
 	}
 
 	return filepath.Join(c.Dir, safeHost, cleaned, sentinel)

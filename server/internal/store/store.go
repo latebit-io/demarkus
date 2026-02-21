@@ -214,13 +214,13 @@ func (s *Store) CurrentVersion(reqPath string) int {
 	if len(versions) == 0 {
 		return 0
 	}
-	max := 0
+	latest := 0
 	for _, v := range versions {
-		if v.Version > max {
-			max = v.Version
+		if v.Version > latest {
+			latest = v.Version
 		}
 	}
-	return max
+	return latest
 }
 
 // findVersions looks for versioned files in the versions directory.
@@ -363,12 +363,12 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 			}
 			if err == nil {
 				if _, werr := f.Write(v1Data); werr != nil {
-					f.Close()
-					os.Remove(v1File)
+					_ = f.Close()
+					_ = os.Remove(v1File)
 					return nil, fmt.Errorf("migrate flat file to v1: %w", werr)
 				}
 				if cerr := f.Close(); cerr != nil {
-					os.Remove(v1File)
+					_ = os.Remove(v1File)
 					return nil, fmt.Errorf("migrate flat file to v1: %w", cerr)
 				}
 			}
@@ -409,12 +409,12 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 		return nil, fmt.Errorf("create version file: %w", err)
 	}
 	if _, err := f.Write(stored); err != nil {
-		f.Close()
-		os.Remove(versionFile)
+		_ = f.Close()
+		_ = os.Remove(versionFile)
 		return nil, fmt.Errorf("write version file: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(versionFile)
+		_ = os.Remove(versionFile)
 		return nil, fmt.Errorf("close version file: %w", err)
 	}
 
@@ -424,12 +424,12 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 	// directory can be relocated without breaking links.
 	relTarget := filepath.Join("versions", fmt.Sprintf("%s.v%d", base, next))
 	tmpLink := currentFile + ".tmp"
-	os.Remove(tmpLink) // clean up any stale temp link
+	_ = os.Remove(tmpLink) // clean up any stale temp link
 	if err := os.Symlink(relTarget, tmpLink); err != nil {
 		return nil, fmt.Errorf("symlink current file: %w", err)
 	}
 	if err := os.Rename(tmpLink, currentFile); err != nil {
-		os.Remove(tmpLink)
+		_ = os.Remove(tmpLink)
 		return nil, fmt.Errorf("rename current file: %w", err)
 	}
 
@@ -527,7 +527,7 @@ func resolveNonExistent(path string) (string, error) {
 
 // containsDotDot reports whether the path contains a ".." segment.
 func containsDotDot(path string) bool {
-	for _, seg := range strings.Split(path, "/") {
+	for seg := range strings.SplitSeq(path, "/") {
 		if seg == ".." {
 			return true
 		}
@@ -547,7 +547,7 @@ func extractPreviousHash(data []byte) string {
 		return ""
 	}
 	block := content[4 : 4+end]
-	for _, line := range strings.Split(block, "\n") {
+	for line := range strings.SplitSeq(block, "\n") {
 		key, val, ok := strings.Cut(line, ": ")
 		if ok && strings.TrimSpace(key) == "previous-hash" {
 			return strings.TrimSpace(val)
