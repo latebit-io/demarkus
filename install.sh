@@ -309,7 +309,7 @@ create_system_user() {
 setup_config_dir() {
   mkdir -p "$CONFIG_DIR"
   if [ "$PLATFORM" = "linux" ]; then
-    chown root:root "$CONFIG_DIR"
+    chown root:"$SERVICE_NAME" "$CONFIG_DIR"
     chmod 750 "$CONFIG_DIR"
   fi
   log_info "Config directory: ${CONFIG_DIR}"
