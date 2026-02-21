@@ -1,0 +1,62 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - gocritic
+    - revive
+    - misspell
+    - gocyclo
+    - prealloc
+    - modernize
+    - unconvert
+
+  settings:
+    gocyclo:
+      min-complexity: 25
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - exitAfterDefer
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: range
+        - name: receiver-naming
+        - name: indent-error-flow
+        - name: superfluous-else
+        - name: redefines-builtin-id
+        - name: unreachable-code
+        - name: unused-parameter
+
+  exclusions:
+    rules:
+      # main packages don't need package comments
+      - path: cmd/
+        linters: [revive]
+        text: "package-comments"
+      # internal/tls package name conflict is intentional
+      - path: internal/tls/
+        linters: [revive]
+        text: "var-naming"
+      # test functions with subtests naturally have high complexity
+      - path: _test\.go
+        linters: [gocyclo]
+      # staticcheck SA5011 false positive: test fatals on nil before dereference
+      - path: _test\.go
+        linters: [staticcheck]
+        text: "SA5011"
+      # Bubbletea tea.Model interface requires value receivers
+      - path: cmd/demarkus-tui/
+        linters: [gocritic]
+        text: "hugeParam"

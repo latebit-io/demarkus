@@ -50,7 +50,9 @@ func TestNewConfig_EnvOverrides(t *testing.T) {
 }
 
 func TestNewConfig_MissingRoot(t *testing.T) {
-	os.Unsetenv("DEMARKUS_ROOT")
+	if err := os.Unsetenv("DEMARKUS_ROOT"); err != nil {
+		t.Fatalf("unsetenv: %v", err)
+	}
 
 	cfg, err := NewConfig()
 	if err == nil {

@@ -86,7 +86,7 @@ func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for host, conn := range c.conns {
-		conn.CloseWithError(0, "")
+		_ = conn.CloseWithError(0, "")
 		delete(c.conns, host)
 	}
 }
@@ -167,12 +167,12 @@ func (c *Client) requestOnConn(conn *quic.Conn, req protocol.Request) (Result, e
 	if err != nil {
 		return Result{}, fmt.Errorf("open stream: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	if _, err := req.WriteTo(stream); err != nil {
 		return Result{}, fmt.Errorf("send request: %w", err)
 	}
-	stream.Close()
+	_ = stream.Close()
 
 	resp, err := protocol.ParseResponse(stream)
 	if err != nil {
@@ -188,7 +188,7 @@ func (c *Client) doWithRetry(host string, fn func(conn *quic.Conn) (Result, erro
 	const baseBackoff = 100 * time.Millisecond
 
 	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		conn, err := c.getConn(host)
 		if err != nil {
 			if attempt < maxRetries-1 && isTransientError(err) {

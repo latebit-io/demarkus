@@ -123,7 +123,7 @@ export DEMARKUS_AUTH=<raw-token>
 All content must be published through the protocol. **Files copied directly to the filesystem are not served** — only documents with proper version history (published via PUBLISH) are accessible. This ensures every document has an immutable version chain and tamper detection.
 
 ```bash
-# Write a new document (creates version 1)
+# Publish a new document (creates version 1)
 ./client/bin/demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/about.md -body "# About\n\nWelcome."
 
 # Update it (creates version 2, linked by hash chain)

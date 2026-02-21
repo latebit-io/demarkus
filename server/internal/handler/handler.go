@@ -37,7 +37,7 @@ type Stream interface {
 
 // HandleStream reads a request from the stream and writes a response.
 func (h *Handler) HandleStream(stream Stream) {
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	req, err := protocol.ParseRequest(stream)
 	if err != nil {
@@ -70,7 +70,7 @@ func (h *Handler) HandleStream(stream Stream) {
 
 // parseVersionPath checks if a path ends with /vN (e.g., /doc.md/v3).
 // Returns the base path and version number, or the original path and 0.
-func parseVersionPath(reqPath string) (string, int) {
+func parseVersionPath(reqPath string) (basePath string, version int) {
 	dir, last := filepath.Split(reqPath)
 	if !strings.HasPrefix(last, "v") {
 		return reqPath, 0
@@ -376,8 +376,8 @@ func statusTitle(s string) string {
 	return strings.ToUpper(s[:1]) + strings.ReplaceAll(s[1:], "-", " ")
 }
 
-func stripFrontmatter(content string) (string, map[string]string) {
-	meta := make(map[string]string)
+func stripFrontmatter(content string) (body string, meta map[string]string) {
+	meta = make(map[string]string)
 
 	if !strings.HasPrefix(content, "---\n") {
 		return content, meta
@@ -389,14 +389,14 @@ func stripFrontmatter(content string) (string, map[string]string) {
 	}
 
 	fmBlock := content[4 : 4+end]
-	for _, line := range strings.Split(fmBlock, "\n") {
+	for line := range strings.SplitSeq(fmBlock, "\n") {
 		key, val, ok := strings.Cut(line, ": ")
 		if ok {
 			meta[strings.TrimSpace(key)] = strings.TrimSpace(val)
 		}
 	}
 
-	body := content[4+end+5:]
+	body = content[4+end+5:]
 	return body, meta
 }
 
