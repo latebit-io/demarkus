@@ -157,7 +157,7 @@ func graphMain(args []string) {
 	fmt.Printf("\nGraph: %d nodes, %d edges\n", g.NodeCount(), g.EdgeCount())
 	if g.EdgeCount() > 0 {
 		fmt.Println("\nEdges:")
-		for _, e := range g.Edges {
+		for _, e := range g.GetEdges() {
 			from := nodeLabel(g, e.From)
 			to := nodeLabel(g, e.To)
 			fmt.Printf("  %s -> %s\n", from, to)
