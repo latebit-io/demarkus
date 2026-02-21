@@ -285,8 +285,20 @@ install_binaries() {
 
   for bin in "${binaries[@]}"; do
     if [ -f "${tmpdir}/${bin}" ]; then
-      cp "${tmpdir}/${bin}" "${INSTALL_DIR}/${bin}"
-      chmod 755 "${INSTALL_DIR}/${bin}"
+      # Copy to temp name first, then atomically replace. This avoids
+      # "Text file busy" errors when updating running binaries on Linux.
+      local dest="${INSTALL_DIR}/${bin}"
+      local temp_dest="${dest}.tmp.$$"
+      cp "${tmpdir}/${bin}" "$temp_dest" || {
+        log_error "Failed to copy ${bin}"
+        return 1
+      }
+      chmod 755 "$temp_dest"
+      mv "$temp_dest" "$dest" || {
+        log_error "Failed to move ${bin} into place"
+        rm -f "$temp_dest"
+        return 1
+      }
       log_info "Installed ${INSTALL_DIR}/${bin}"
     else
       log_warn "Binary ${bin} not found in archive"
@@ -655,7 +667,10 @@ do_install() {
   log_step "Installing Demarkus server v${version}"
 
   local tmpdir
-  tmpdir=$(mktemp -d)
+  tmpdir=$(mktemp -d) || {
+    log_error "Failed to create temporary directory"
+    exit 1
+  }
   trap 'rm -rf "$tmpdir"' EXIT
 
   # Download and install server binaries
@@ -816,7 +831,10 @@ do_install_client() {
   log_step "Installing Demarkus client v${version}"
 
   local tmpdir
-  tmpdir=$(mktemp -d)
+  tmpdir=$(mktemp -d) || {
+    log_error "Failed to create temporary directory"
+    exit 1
+  }
   trap 'rm -rf "$tmpdir"' EXIT
 
   download_and_verify "client" "$version" "$tmpdir"
@@ -909,7 +927,10 @@ _do_update_inner() {
   detect_platform
 
   local tmpdir
-  tmpdir=$(mktemp -d)
+  tmpdir=$(mktemp -d) || {
+    log_error "Failed to create temporary directory"
+    exit 1
+  }
   trap 'rm -rf "$tmpdir"' EXIT
 
   # Download new server binaries
