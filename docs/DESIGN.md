@@ -115,7 +115,7 @@ if-none-match: "abc123"
 
 ### Response Format
 
-Responses are markdown with optional YAML frontmatter:
+Responses are markdown with mandatory YAML frontmatter:
 
 ```markdown
 ---

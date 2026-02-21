@@ -2,6 +2,10 @@ version: 2
 
 project_name: demarkus-client
 
+monorepo:
+  tag_prefix: client/
+  dir: client
+
 builds:
   - id: demarkus
     main: ./cmd/demarkus
