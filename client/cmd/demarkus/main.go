@@ -14,9 +14,9 @@ import (
 )
 
 func main() {
-	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, WRITE)")
-	body := flag.String("body", "", "request body (for WRITE); reads stdin if omitted")
-	authToken := flag.String("auth", "", "auth token for WRITE requests (env: DEMARKUS_AUTH)")
+	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH)")
+	body := flag.String("body", "", "request body (for PUBLISH); reads stdin if omitted")
+	authToken := flag.String("auth", "", "auth token for PUBLISH requests (env: DEMARKUS_AUTH)")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
@@ -52,9 +52,9 @@ func main() {
 		token = os.Getenv("DEMARKUS_AUTH")
 	}
 
-	// For WRITE: read body from -body flag or stdin.
+	// For PUBLISH: read body from -body flag or stdin.
 	reqBody := *body
-	if *verb == protocol.VerbWrite && reqBody == "" {
+	if *verb == protocol.VerbPublish && reqBody == "" {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			log.Fatalf("read stdin: %v", err)
@@ -73,8 +73,8 @@ func main() {
 		result, err = client.List(host, path)
 	case protocol.VerbVersions:
 		result, err = client.Versions(host, path)
-	case protocol.VerbWrite:
-		result, err = client.Write(host, path, reqBody, token)
+	case protocol.VerbPublish:
+		result, err = client.Publish(host, path, reqBody, token)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -95,12 +95,12 @@ var validVerbs = map[string]bool{
 	protocol.VerbFetch:    true,
 	protocol.VerbList:     true,
 	protocol.VerbVersions: true,
-	protocol.VerbWrite:    true,
+	protocol.VerbPublish:    true,
 }
 
 func validateVerb(verb string) error {
 	if !validVerbs[verb] {
-		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, WRITE)", verb)
+		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH)", verb)
 	}
 	return nil
 }

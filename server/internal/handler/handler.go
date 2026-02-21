@@ -61,8 +61,8 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handleList(stream, req.Path)
 	case protocol.VerbVersions:
 		h.handleVersions(stream, req.Path)
-	case protocol.VerbWrite:
-		h.handleWrite(stream, req)
+	case protocol.VerbPublish:
+		h.handlePublish(stream, req)
 	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
@@ -286,9 +286,9 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 	writeResponse(w, resp)
 }
 
-func (h *Handler) handleWrite(w io.Writer, req protocol.Request) {
+func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	if h.Store == nil {
-		h.writeError(w, protocol.StatusServerError, "writing not configured")
+		h.writeError(w, protocol.StatusServerError, "publishing not configured")
 		return
 	}
 	if int64(len(req.Body)) > store.MaxFileSize {
@@ -298,18 +298,18 @@ func (h *Handler) handleWrite(w io.Writer, req protocol.Request) {
 	}
 
 	if h.TokenStore == nil {
-		h.writeError(w, protocol.StatusNotPermitted, "writes require auth configuration")
+		h.writeError(w, protocol.StatusNotPermitted, "publishing requires auth configuration")
 		return
 	}
 
 	token := req.Metadata["auth"]
-	if err := h.TokenStore.Authorize(token, req.Path, "write"); err != nil {
+	if err := h.TokenStore.Authorize(token, req.Path, "publish"); err != nil {
 		switch {
 		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken):
-			log.Printf("[AUTH] unauthorized write attempt: %s", sanitize(req.Path))
+			log.Printf("[AUTH] unauthorized publish attempt: %s", sanitize(req.Path))
 			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
 		default:
-			log.Printf("[AUTH] not permitted write attempt: %s", sanitize(req.Path))
+			log.Printf("[AUTH] not permitted publish attempt: %s", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
 		}
 		return
@@ -322,12 +322,12 @@ func (h *Handler) handleWrite(w io.Writer, req protocol.Request) {
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
 		}
-		log.Printf("[ERROR] write %s: %v", sanitize(req.Path), err)
+		log.Printf("[ERROR] publish %s: %v", sanitize(req.Path), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
 
-	log.Printf("[WRITE] %s v%d", sanitize(req.Path), doc.Version)
+	log.Printf("[PUBLISH] %s v%d", sanitize(req.Path), doc.Version)
 	resp := protocol.Response{
 		Status: protocol.StatusCreated,
 		Metadata: map[string]string{
