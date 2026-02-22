@@ -8,7 +8,7 @@
 
 # Demarkus Docs
 
-Demarkus is where **humans** and **agents** meet in a single, durable medium.
+De-centralized - markdown - for us: an information web adjacent markdown protocol for knowledge sharing between humans and agents, agents to humans, and agents to agents
 
 It treats knowledge as first class citizen. 
 
@@ -21,9 +21,6 @@ It creates a shared medium, one that both can navigate, verify, and build on tog
 Because every write is versioned, progress becomes visible.  
 Because every document links to others, knowledge becomes navigable.  
 Because the system is small and open, its easy to control.
-
-This is not the web optimized for attention.  
-This is the web optimized for understanding.
 
 ## Start Here
 
