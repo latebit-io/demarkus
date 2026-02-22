@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 
@@ -14,10 +13,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
+	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/protocol"
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
 )
 
 type focus int
@@ -124,46 +121,6 @@ func (m *model) restoreHistory() {
 		m.viewport.SetContent(content)
 		m.viewport.GotoTop()
 	}
-}
-
-// extractLinks parses body with goldmark and returns all non-fragment link destinations.
-func extractLinks(body string) []string {
-	src := []byte(body)
-	reader := text.NewReader(src)
-	doc := goldmark.DefaultParser().Parse(reader)
-
-	var links []string
-	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
-		link, ok := n.(*ast.Link)
-		if !ok {
-			return ast.WalkContinue, nil
-		}
-		dest := string(link.Destination)
-		if dest != "" && !strings.HasPrefix(dest, "#") {
-			links = append(links, dest)
-		}
-		return ast.WalkContinue, nil
-	})
-	return links
-}
-
-// resolveLink resolves a possibly-relative link dest against currentURL.
-func resolveLink(currentURL, dest string) string {
-	if strings.Contains(dest, "://") {
-		return dest // already absolute
-	}
-	base, err := url.Parse(currentURL)
-	if err != nil || currentURL == "" {
-		return dest
-	}
-	ref, err := url.Parse(dest)
-	if err != nil {
-		return dest
-	}
-	return base.ResolveReference(ref).String()
 }
 
 const helpText = `
@@ -293,10 +250,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Extract and resolve links from raw body.
 		m.rawBody = msg.result.Response.Body
-		raw := extractLinks(m.rawBody)
+		raw := links.Extract(m.rawBody)
 		m.links = make([]string, 0, len(raw))
 		for _, dest := range raw {
-			m.links = append(m.links, resolveLink(msg.url, dest))
+			m.links = append(m.links, links.Resolve(msg.url, dest))
 		}
 		m.linkIdx = -1
 
