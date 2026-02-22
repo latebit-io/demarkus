@@ -69,11 +69,11 @@ func markFetchTool() mcp.Tool {
 		mcp.WithDescription(
 			"Fetch a document from a Mark Protocol server. "+
 				"Returns the document status and markdown body. "+
-				"Accepts a full mark:// URL or a bare path if -host is configured.",
+				"Use bare paths like /index.md — the server host is pre-configured.",
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("mark:// URL or bare path of the document"),
+			mcp.Description("bare path of the document, e.g. /index.md or /docs/intro.md"),
 		),
 	)
 }
@@ -83,11 +83,11 @@ func markListTool() mcp.Tool {
 		mcp.WithDescription(
 			"List documents and subdirectories on a Mark Protocol server. "+
 				"Use this to discover what documents exist. "+
-				"Accepts a full mark:// URL or a bare path if -host is configured.",
+				"Use bare paths like / or /docs/ — the server host is pre-configured.",
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("mark:// URL or bare path of the directory"),
+			mcp.Description("bare path of the directory, e.g. / or /docs/"),
 		),
 	)
 }
@@ -98,11 +98,12 @@ func markGraphTool() mcp.Tool {
 			"Crawl outbound links from a document and return the link graph. "+
 				"Follows mark:// links up to the specified depth. External links are "+
 				"recorded but not followed. Use this to understand document relationships "+
-				"or find broken links.",
+				"or find broken links. "+
+				"Use bare paths like /index.md — the server host is pre-configured.",
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("mark:// URL or bare path of the starting document"),
+			mcp.Description("bare path of the starting document, e.g. /index.md"),
 		),
 		mcp.WithNumber("depth",
 			mcp.Description("Maximum link depth to follow (default 2, max 5)"),
@@ -116,11 +117,11 @@ func markPublishTool() mcp.Tool {
 			"Publish or update a document on a Mark Protocol server. "+
 				"Requires an auth token configured via the -token flag. "+
 				"The body should be valid markdown content. "+
-				"Accepts a full mark:// URL or a bare path if -host is configured.",
+				"Use bare paths like /docs/new.md — the server host is pre-configured.",
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("mark:// URL or bare path of the document to publish"),
+			mcp.Description("bare path of the document to publish, e.g. /docs/new.md"),
 		),
 		mcp.WithString("body",
 			mcp.Required(),
