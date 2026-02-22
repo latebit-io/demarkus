@@ -74,6 +74,12 @@ func LoadTokens(path string) (*TokenStore, error) {
 	byHash := make(map[string]Token, len(tf.Tokens))
 	for label, tok := range tf.Tokens {
 		tok.Label = label
+		if tok.Hash == "" {
+			return nil, fmt.Errorf("token %q has empty hash", label)
+		}
+		if existing, ok := byHash[tok.Hash]; ok {
+			return nil, fmt.Errorf("duplicate hash for labels %q and %q", existing.Label, label)
+		}
 		byHash[tok.Hash] = tok
 	}
 	return &TokenStore{tokens: byHash}, nil

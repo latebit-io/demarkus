@@ -42,8 +42,11 @@ func DefaultPath() string {
 }
 
 // Load reads a tokens file from disk. Returns an empty store if the file
-// does not exist yet.
+// does not exist yet. Returns an error if path is empty.
 func Load(path string) (*Store, error) {
+	if path == "" {
+		return nil, fmt.Errorf("tokens file path is empty (could not determine home directory)")
+	}
 	s := &Store{path: path, tokens: make(map[string]entry)}
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -81,6 +82,17 @@ func cmdGenerate(args []string) {
 	)
 
 	if *tokensFile != "" {
+		// Check for duplicate label in existing file.
+		var tf tokensFileData
+		if _, err := os.Stat(*tokensFile); err == nil {
+			if _, err := toml.DecodeFile(*tokensFile, &tf); err != nil {
+				log.Fatalf("read tokens file: %v", err)
+			}
+			if _, exists := tf.Tokens[*label]; exists {
+				log.Fatalf("label %q already exists in %s", *label, *tokensFile)
+			}
+		}
+
 		f, err := os.OpenFile(*tokensFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			log.Fatalf("open tokens file: %v", err)
@@ -141,7 +153,13 @@ func cmdList(args []string) {
 		return
 	}
 
-	for label, tok := range tf.Tokens {
+	labels := make([]string, 0, len(tf.Tokens))
+	for label := range tf.Tokens {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	for _, label := range labels {
+		tok := tf.Tokens[label]
 		paths := strings.Join(tok.Paths, ", ")
 		ops := strings.Join(tok.Operations, ", ")
 		fmt.Printf("%-20s  paths: %-20s  ops: %s\n", label, paths, ops)
@@ -176,16 +194,24 @@ func cmdRevoke(args []string) {
 
 	delete(tf.Tokens, *label)
 
-	f, err := os.Create(*tokensFile)
+	// Atomic write: write to temp file, then rename to avoid truncating on failure.
+	tmpFile := *tokensFile + ".tmp"
+	f, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		log.Fatalf("open tokens file for writing: %v", err)
+		log.Fatalf("open temp tokens file: %v", err)
 	}
 	if err := toml.NewEncoder(f).Encode(tf); err != nil {
 		_ = f.Close()
+		_ = os.Remove(tmpFile)
 		log.Fatalf("write tokens file: %v", err)
 	}
 	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpFile)
 		log.Fatalf("close tokens file: %v", err)
+	}
+	if err := os.Rename(tmpFile, *tokensFile); err != nil {
+		_ = os.Remove(tmpFile)
+		log.Fatalf("rename tokens file: %v", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Revoked token %q\n", *label)
