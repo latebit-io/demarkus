@@ -53,8 +53,12 @@ func main() {
 	if cfg.ContentDir == "" {
 		log.Fatal("[ERROR] content directory is required (set DEMARKUS_ROOT or use -root flag)")
 	}
-	if info, err := os.Stat(cfg.ContentDir); err != nil {
-		log.Fatalf("[ERROR] content directory %q does not exist", cfg.ContentDir)
+	info, err := os.Stat(cfg.ContentDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Fatalf("[ERROR] content directory %q does not exist", cfg.ContentDir)
+		}
+		log.Fatalf("[ERROR] cannot stat content directory %q: %v", cfg.ContentDir, err)
 	} else if !info.IsDir() {
 		log.Fatalf("[ERROR] content directory %q is not a directory", cfg.ContentDir)
 	}
