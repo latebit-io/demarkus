@@ -114,6 +114,10 @@ While in `0.x.x`, breaking changes bump minor (not major). Major `1.0.0` will be
 
 **Security is foundational.** No tracking, no telemetry, no client-side execution. Transport is always encrypted. Paths are always validated. Auth grants capabilities, not identities.
 
+## Build Rules
+
+**Always use `make client` or `go build -o bin/<name> ./cmd/<name>/` when building.** Never run bare `go build ./cmd/<name>/` — it drops binaries in the working directory, which can accidentally get committed. The `client/bin/`, `server/bin/`, and `tools/bin/` directories are gitignored.
+
 ## Current State
 
 Phase 1 MVP (read-only). `FETCH` and `LIST` verbs are implemented. Server uses env-based config (`DEMARKUS_` prefix) with flag overrides for dev. No auth, no versioning, no caching, no TUI — just QUIC transport serving markdown files end-to-end. See `docs/DESIGN.md` for the full protocol specification and roadmap.
