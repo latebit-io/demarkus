@@ -2,7 +2,7 @@
 
 **A protocol for agents and humans, optimized for information**
 
-Demarkus reimagines the web around markdown — a format structured enough for machines, readable enough for people. Built for a world where humans and AI agents read and write together, it delivers information directly over QUIC: no rendering pipeline, no tracking, no commercialization, no unnecessary complexity. Privacy and security are foundational. Just content, fast and clean.
+Demarkus reimagines the web around markdown — a format structured optimized for machines, beautiful text for people. Built for a world where humans and AI agents read and write together, it delivers information directly over QUIC: no rendering pipeline, no tracking, no commercialization, no unnecessary complexity. Privacy and security are foundational. Just content, fast and clean.
 
 ## Project Status
 
