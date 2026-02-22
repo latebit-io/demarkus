@@ -18,7 +18,7 @@ Demarkus replaces that with a simple protocol for **plain, structured text** del
 ### 1) Durable Knowledge
 Every write produces a new immutable version. History is append‑only, so you can always verify what changed and when.
 
-### 1a) AI + Human Collaboration (Examples)
+#### AI + Human Collaboration (Examples)
 Demarkus makes it easy to build agent workflows that humans can verify and curate:
 
 - **Agent auto‑summaries**: publish summaries alongside source docs for fast review.

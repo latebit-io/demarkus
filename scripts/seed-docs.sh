@@ -38,13 +38,17 @@ fi
 publish() {
   local path="$1"
   local file="$2"
-  local args=(-X PUBLISH -insecure -body "$(cat "$file")")
+  local args=(-X PUBLISH)
+  # Only skip TLS verification for localhost development
+  if [[ "${HOST}" == localhost* ]] || [[ "${HOST}" == 127.0.0.1* ]]; then
+    args+=(-insecure)
+  fi
   if [[ -n "${TOKEN}" ]]; then
     args+=(-auth "${TOKEN}")
   fi
   echo "  PUBLISH ${path}"
   local output
-  output=$("${DEMARKUS}" "${args[@]}" "mark://${HOST}${path}" 2>&1)
+  output=$("${DEMARKUS}" "${args[@]}" "mark://${HOST}${path}" < "$file" 2>&1)
   echo "${output%%$'\n'*}"
 }
 
@@ -65,7 +69,14 @@ echo
 echo "Done! Seeded docs on ${HOST}${BASE_PATH}."
 echo
 echo "Try fetching:"
-echo "  ${DEMARKUS} --insecure mark://${HOST}${BASE_PATH}/index.md"
-echo
-echo "Crawl the graph:"
-echo "  ${DEMARKUS} graph -insecure -depth 2 mark://${HOST}${BASE_PATH}/index.md"
+if [[ "${HOST}" == localhost* ]] || [[ "${HOST}" == 127.0.0.1* ]]; then
+  echo "  ${DEMARKUS} --insecure mark://${HOST}${BASE_PATH}/index.md"
+  echo
+  echo "Crawl the graph:"
+  echo "  ${DEMARKUS} graph -insecure -depth 2 mark://${HOST}${BASE_PATH}/index.md"
+else
+  echo "  ${DEMARKUS} mark://${HOST}${BASE_PATH}/index.md"
+  echo
+  echo "Crawl the graph:"
+  echo "  ${DEMARKUS} graph -depth 2 mark://${HOST}${BASE_PATH}/index.md"
+fi
