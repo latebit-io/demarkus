@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -134,7 +135,7 @@ func TestToolDefinitions(t *testing.T) {
 			}
 			schema := tt.tool.InputSchema
 			for _, req := range tt.wantRequired {
-				if !contains(schema.Required, req) {
+				if !slices.Contains(schema.Required, req) {
 					t.Errorf("required params %v missing %q", schema.Required, req)
 				}
 				if _, ok := schema.Properties[req]; !ok {
@@ -263,13 +264,4 @@ func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) 
 	if !strings.Contains(text.Text, substr) {
 		t.Errorf("error text %q does not contain %q", text.Text, substr)
 	}
-}
-
-func contains(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

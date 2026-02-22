@@ -188,144 +188,153 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
-
 	case tea.MouseMsg:
-		// Handle clicks to switch focus.
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			if msg.Y == 0 {
-				m.focus = focusAddressBar
-				m.addressBar.Focus()
-				return m, textinput.Blink
-			}
-			if msg.Y >= 2 {
-				m.focus = focusViewport
-				m.addressBar.Blur()
-			}
-		}
-		// Forward all mouse events to viewport (scroll wheel, etc).
-		if m.ready {
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
-		}
-		return m, nil
-
+		return m.handleMouse(msg)
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		headerHeight := 2 // address bar + divider
-		footerHeight := 1 // status bar
-		viewportHeight := max(m.height-headerHeight-footerHeight, 1)
-
-		if !m.ready {
-			m.viewport = viewport.New(m.width, viewportHeight)
-			m.ready = true
-			if m.pendingBody != "" {
-				rendered, err := m.renderMarkdown(m.pendingBody)
-				if err != nil {
-					m.viewport.SetContent(m.pendingBody)
-				} else {
-					m.viewport.SetContent(rendered)
-				}
-				m.pendingBody = ""
-			}
-			if m.err != nil {
-				m.viewport.SetContent(errorView(m.err))
-			}
-		} else {
-			m.viewport.Width = m.width
-			m.viewport.Height = viewportHeight
-			// Re-render graph view with new width for correct truncation.
-			if m.viewMode == viewGraph && len(m.graphNodes) > 0 {
-				m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
-			}
-		}
-		m.addressBar.Width = m.width - 2
-		return m, nil
-
+		return m.handleWindowSize(msg)
 	case crawlResult:
-		if msg.seq != m.crawlSeq {
-			return m, nil
-		}
-		m.crawling = false
-		if msg.err != nil {
-			m.viewMode = viewDocument
-			m.err = msg.err
-			if m.ready {
-				m.viewport.SetContent(errorView(msg.err))
-			}
-			return m, nil
-		}
-		m.graphData = msg.graph
-		m.graphNodes = flattenGraph(msg.graph, msg.url)
-		m.graphIdx = 0
-		if m.ready {
-			m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
-			m.viewport.GotoTop()
-		}
-		return m, nil
-
+		return m.handleCrawlResult(msg)
 	case fetchResult:
-		// Ignore stale results from superseded fetches.
-		if msg.seq != m.fetchSeq {
-			return m, nil
-		}
-		m.loading = false
-		if msg.err != nil {
-			m.err = msg.err
-			m.status = ""
-			m.metadata = nil
-			m.fromCache = false
-			m.links = nil
-			m.linkIdx = -1
-			if m.ready {
-				m.viewport.SetContent(errorView(msg.err))
-			}
-			return m, nil
-		}
-		m.err = nil
-		m.status = msg.result.Response.Status
-		m.metadata = msg.result.Response.Metadata
-		m.fromCache = msg.result.FromCache
+		return m.handleFetchResult(msg)
+	}
+	return m, nil
+}
 
-		// Extract and resolve links from raw body.
-		m.rawBody = msg.result.Response.Body
-		raw := links.Extract(m.rawBody)
-		m.links = make([]string, 0, len(raw))
-		for _, dest := range raw {
-			m.links = append(m.links, links.Resolve(msg.url, dest))
+func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+		if msg.Y == 0 {
+			m.focus = focusAddressBar
+			m.addressBar.Focus()
+			return m, textinput.Blink
 		}
-		m.linkIdx = -1
+		if msg.Y >= 2 {
+			m.focus = focusViewport
+			m.addressBar.Blur()
+		}
+	}
+	if m.ready {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
 
-		// Render markdown.
-		var rendered string
-		if m.ready {
-			r, err := m.renderMarkdown(msg.result.Response.Body)
+func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	m.width = msg.Width
+	m.height = msg.Height
+	headerHeight := 2 // address bar + divider
+	footerHeight := 1 // status bar
+	viewportHeight := max(m.height-headerHeight-footerHeight, 1)
+
+	if !m.ready {
+		m.viewport = viewport.New(m.width, viewportHeight)
+		m.ready = true
+		if m.pendingBody != "" {
+			rendered, err := m.renderMarkdown(m.pendingBody)
 			if err != nil {
-				rendered = msg.result.Response.Body
+				m.viewport.SetContent(m.pendingBody)
 			} else {
-				rendered = r
+				m.viewport.SetContent(rendered)
 			}
-			m.viewport.SetContent(rendered)
-			m.viewport.GotoTop()
-		} else {
-			m.pendingBody = msg.result.Response.Body
+			m.pendingBody = ""
 		}
+		if m.err != nil {
+			m.viewport.SetContent(errorView(m.err))
+		}
+	} else {
+		m.viewport.Width = m.width
+		m.viewport.Height = viewportHeight
+		// Re-render graph view with new width for correct truncation.
+		if m.viewMode == viewGraph && len(m.graphNodes) > 0 {
+			m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+		}
+	}
+	m.addressBar.Width = m.width - 2
+	return m, nil
+}
 
-		m.history, m.histIdx = pushHistory(m.history, m.histIdx, historyEntry{
-			url:      msg.url,
-			rendered: rendered,
-			rawBody:  m.rawBody,
-			status:   m.status,
-			metadata: m.metadata,
-			links:    m.links,
-		})
-
-		m.focus = focusViewport
-		m.addressBar.Blur()
+func (m model) handleCrawlResult(msg crawlResult) (tea.Model, tea.Cmd) {
+	if msg.seq != m.crawlSeq {
 		return m, nil
 	}
+	m.crawling = false
+	if msg.err != nil {
+		m.viewMode = viewDocument
+		m.err = msg.err
+		if m.ready {
+			m.viewport.SetContent(errorView(msg.err))
+		}
+		return m, nil
+	}
+	m.graphData = msg.graph
+	m.graphNodes = flattenGraph(msg.graph, msg.url)
+	m.graphIdx = 0
+	if m.ready {
+		m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+		m.viewport.GotoTop()
+	}
+	return m, nil
+}
 
+func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
+	// Ignore stale results from superseded fetches.
+	if msg.seq != m.fetchSeq {
+		return m, nil
+	}
+	m.loading = false
+	if msg.err != nil {
+		m.err = msg.err
+		m.status = ""
+		m.metadata = nil
+		m.fromCache = false
+		m.links = nil
+		m.linkIdx = -1
+		if m.ready {
+			m.viewport.SetContent(errorView(msg.err))
+		}
+		return m, nil
+	}
+	m.err = nil
+	m.status = msg.result.Response.Status
+	m.metadata = msg.result.Response.Metadata
+	m.fromCache = msg.result.FromCache
+
+	// Extract and resolve links from raw body.
+	m.rawBody = msg.result.Response.Body
+	raw := links.Extract(m.rawBody)
+	m.links = make([]string, 0, len(raw))
+	for _, dest := range raw {
+		m.links = append(m.links, links.Resolve(msg.url, dest))
+	}
+	m.linkIdx = -1
+
+	// Render markdown.
+	var rendered string
+	if m.ready {
+		r, err := m.renderMarkdown(msg.result.Response.Body)
+		if err != nil {
+			rendered = msg.result.Response.Body
+		} else {
+			rendered = r
+		}
+		m.viewport.SetContent(rendered)
+		m.viewport.GotoTop()
+	} else {
+		m.pendingBody = msg.result.Response.Body
+	}
+
+	m.history, m.histIdx = pushHistory(m.history, m.histIdx, historyEntry{
+		url:      msg.url,
+		rendered: rendered,
+		rawBody:  m.rawBody,
+		status:   m.status,
+		metadata: m.metadata,
+		links:    m.links,
+	})
+
+	m.focus = focusViewport
+	m.addressBar.Blur()
 	return m, nil
 }
 
