@@ -2,244 +2,52 @@
 
 **A protocol for agents and humans, optimized for information**
 
-Demarkus reimagines the web around markdown — a format structured optimized for machines, beautiful text for people. Built for a world where humans and AI agents read and write together, it delivers information directly over QUIC: no rendering pipeline, no tracking, no commercialization, no unnecessary complexity. Privacy and security are foundational. Just content, fast and clean.
+Demarkus reimagines the web around markdown — a format structured and optimized for machines, familiar and loved by humans. Built for a world where humans and AI agents read and write together, it delivers content directly over QUIC: no rendering pipeline, no tracking, no commercialization, no unnecessary complexity. Privacy and security are foundational.
 
 ## Project Status
 
-🚧 **Early Development** - MVP in progress
+🟡 **Phase 2 — Read/Write MVP** — `FETCH`, `LIST`, `VERSIONS`, and `PUBLISH` are all working. Auth, caching, TUI browser, MCP server, and link-graph crawler are implemented.
 
-## Quick Links
-
-- **Protocol Specification**: [docs/SPEC.md](docs/SPEC.md)
-- **Design Document**: [docs/DESIGN.md](docs/DESIGN.md)
-
-## Components
-
-### Protocol (`protocol/`)
-Core Go library implementing the Mark Protocol specification.
-- Message parsing (FETCH, PUBLISH, APPEND, etc.)
-- QUIC transport layer
-- Authentication & capability system
-- Version management
-
-### Server (`server/`)
-Reference implementation of a Demarkus server.
-- Serves markdown files over QUIC
-- File-based storage with versioning
-- Capability-based authentication
-- Privacy-focused logging
-
-### Client (`client/`)
-Terminal-based browser for the Mark Protocol.
-- TUI interface built with Bubble Tea
-- Markdown rendering with Glamour
-- Local caching for offline reading
-- Navigation history
-
-### Tools (`tools/`)
-Development and testing utilities.
-
-## Getting Started
-
-### Prerequisites
-
-- Go 1.26 or later
-- Make (optional)
-
-### Building
+## Quick Start
 
 ```bash
+# Prerequisites: Go 1.26+, Make (optional)
+
 # Build everything
 make all
 
-# Or build individually
-cd protocol && go build ./...
-cd server && go build -o bin/demarkus-server ./cmd/demarkus-server
-cd client && go build -o bin/demarkus ./cmd/demarkus
-```
-
-### Running
-
-**Start a server (dev mode, read-only)**:
-```bash
+# Start a server (dev mode — self-signed cert)
 ./server/bin/demarkus-server -root ./examples/demo-site
-```
 
-**Run the client**:
-```bash
+# Fetch a document
 ./client/bin/demarkus --insecure mark://localhost:6309/index.md
-```
 
-**List directory contents**:
-```bash
+# List a directory
 ./client/bin/demarkus --insecure -X LIST mark://localhost:6309/
+
+# Browse in the terminal
+./client/bin/demarkus-tui --insecure mark://localhost:6309/index.md
 ```
 
-### Setting Up Authentication
+## What's Included
 
-The server is **secure by default** — writes are denied unless you configure a tokens file. Tokens are capability-based: they grant specific operations on specific paths, not identities.
+- **`protocol/`** — Pure Go library for the Mark Protocol wire format. Parsing, serialization, shared constants. No network code.
+- **`server/`** — QUIC server with versioned document store, capability-based auth, conditional responses, path traversal protection, and hot TLS reload.
+- **`client/demarkus`** — CLI for scripting and automation (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `graph`). Response caching with etag revalidation.
+- **`client/demarkus-tui`** — Terminal browser with markdown rendering, link navigation, back/forward history, and document graph view.
+- **`client/demarkus-mcp`** — MCP server exposing `mark_fetch`, `mark_list`, `mark_graph`, and `mark_publish` tools for LLM agents. Compatible with Claude Desktop.
 
-**1. Generate a token**:
-```bash
-# Generate a token with write access to all paths
-./server/bin/demarkus-token generate -paths "/*" -ops write -tokens tokens.toml
-```
+## Protocol at a Glance
 
-This prints the raw token (give to the client, shown once) and appends the hashed entry to `tokens.toml`. The server never stores the raw token — only its SHA-256 hash.
+**Transport**: QUIC (UDP port 6309) | **Scheme**: `mark://` | **Content**: Markdown with YAML frontmatter
 
-**2. Start the server with auth**:
-```bash
-./server/bin/demarkus-server -root /srv/site -tokens /path/to/tokens.toml
-```
-
-The `-tokens` flag accepts any file path. You can also use the `DEMARKUS_TOKENS` environment variable:
-```bash
-export DEMARKUS_TOKENS=/etc/demarkus/tokens.toml
-./server/bin/demarkus-server -root /srv/site
-```
-
-**3. Write content through the protocol**:
-```bash
-./client/bin/demarkus --insecure -X PUBLISH -auth <raw-token> mark://localhost:6309/hello.md -body "# Hello World"
-```
-
-You can also set the token via environment variable:
-```bash
-export DEMARKUS_AUTH=<raw-token>
-./client/bin/demarkus --insecure -X PUBLISH mark://localhost:6309/hello.md -body "# Hello World"
-```
-
-**Token scoping examples**:
-```bash
-# Write-only to /docs/*
-./server/bin/demarkus-token generate -paths "/docs/*" -ops write -tokens tokens.toml
-
-# Read and write to everything
-./server/bin/demarkus-token generate -paths "/*" -ops "read,write" -tokens tokens.toml
-```
-
-### Adding Content
-
-All content must be published through the protocol. **Files copied directly to the filesystem are not served** — only documents with proper version history (published via PUBLISH) are accessible. This ensures every document has an immutable version chain and tamper detection.
-
-```bash
-# Publish a new document (creates version 1)
-./client/bin/demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/about.md -body "# About\n\nWelcome."
-
-# Update it (creates version 2, linked by hash chain)
-./client/bin/demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/about.md -body "# About\n\nUpdated content."
-
-# Verify the version history
-./client/bin/demarkus --insecure -X VERSIONS mark://localhost:6309/about.md
-```
-
-### Deploying with Let's Encrypt
-
-The server supports loading TLS certificates from disk for production deployments.
-
-**1. Install certbot and obtain a certificate**:
-```bash
-# Install certbot (Ubuntu/Debian)
-sudo apt install certbot
-
-# Obtain a certificate (standalone mode, requires port 80 open temporarily)
-sudo certbot certonly --standalone -d yourdomain.com
-```
-
-Certificates are saved to `/etc/letsencrypt/live/yourdomain.com/`.
-
-**2. Start the server with real certificates**:
-```bash
-./demarkus-server \
-  -root /srv/blog \
-  -tls-cert /etc/letsencrypt/live/demarkus.latebit.io/fullchain.pem \
-  -tls-key /etc/letsencrypt/live/demarkus.latebit.io/privkey.pem
-```
-
-Or using environment variables:
-```bash
-export DEMARKUS_ROOT=/srv/blog
-export DEMARKUS_TLS_CERT=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
-export DEMARKUS_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
-./demarkus-server
-```
-
-**3. Open the QUIC port** (UDP 6309):
-```bash
-sudo ufw allow 6309/udp
-```
-
-**4. Connect from a client**:
-```bash
-./demarkus mark://yourdomain.com/index.md
-```
-
-**5. Auto-renew certificates** with a cron job or systemd timer:
-```bash
-# Add to crontab (runs twice daily, reloads cert on renewal — no downtime)
-0 */12 * * * certbot renew --quiet --deploy-hook "pidof demarkus-server | xargs -r kill -HUP"
-```
-
-The server reloads certificates on `SIGHUP` without dropping connections. If you prefer a full restart instead:
-```bash
-0 */12 * * * certbot renew --quiet --deploy-hook "systemctl restart demarkus"
-```
-
-**Example systemd service** (`/etc/systemd/system/demarkus.service`):
-```ini
-[Unit]
-Description=Demarkus Mark Protocol Server
-After=network.target
-
-[Service]
-Type=simple
-User=demarkus
-ExecStart=/usr/local/bin/demarkus-server
-Environment=DEMARKUS_ROOT=/srv/blog
-Environment=DEMARKUS_TLS_CERT=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
-Environment=DEMARKUS_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable --now demarkus
-```
-
-## Core Principles
-
-1. **Optimized for Information**: Markdown is the common language — structured enough for agents, readable enough for humans
-2. **Privacy First**: No user tracking, minimal logging, anonymity by default
-3. **Security Minded**: Encryption mandatory, capability-based auth
-4. **Simplicity**: Human-readable protocol, minimal complexity
-5. **Anti-Commercialization**: No ads, no tracking, no central authority
-6. **Federation**: Anyone can run a server, content can be mirrored freely
-
-## Protocol Overview
-
-**Transport**: QUIC (port 6309)  
-**Scheme**: `mark://`  
-**Content**: Markdown with YAML frontmatter  
-
-**Verbs**:
-- `FETCH` - Retrieve documents
-- `PUBLISH` - Create/update documents (requires auth token)
-- `LIST` - Directory contents
-- `VERSIONS` - Version history
-- `APPEND` - Add content (future)
-- `ARCHIVE` - Remove from serving (future)
-- `SEARCH` - Find documents (future)
-
-**Example Request**:
+Request — a single newline-terminated line:
 ```
 FETCH /hello.md
 ```
 
-**Example Response**:
-```markdown
+Response — YAML frontmatter + markdown body:
+```
 ---
 status: ok
 modified: 2025-02-14T10:30:00Z
@@ -251,69 +59,39 @@ version: 1
 Welcome to Demarkus!
 ```
 
-## Version Integrity (Hash Chain)
+**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `PUBLISH`
+**Planned**: `APPEND` · `ARCHIVE` · `SEARCH`
+**Status values**: `ok` · `created` · `not-modified` · `not-found` · `unauthorized` · `not-permitted` · `server-error`
 
-Every document write creates a new immutable version. Versions are linked by a hash chain that guarantees tamper detection.
+## Core Principles
 
-**On-disk layout**:
-```
-root/
-  doc.md              ← symlink to versions/doc.md.v3
-  versions/
-    doc.md.v1         ← genesis (no previous-hash)
-    doc.md.v2         ← contains sha256 of v1's raw bytes
-    doc.md.v3         ← contains sha256 of v2's raw bytes
-```
+1. **Optimized for Information**: Markdown is the common language — structured enough for agents, readable enough for humans
+2. **Privacy First**: No user tracking, minimal logging, anonymity by default
+3. **Security Minded**: Encryption mandatory, capability-based auth, secure by default
+4. **Simplicity**: Human-readable protocol, minimal complexity
+5. **Anti-Commercialization**: No ads, no tracking, no central authority
+6. **Federation**: Anyone can run a server, content can be mirrored freely
 
-**Each version file** includes store-managed frontmatter:
-```markdown
----
-version: 2
-previous-hash: sha256-a1b2c3d4e5f6...
----
-# Document content
+## Documentation
+
+Browse the docs over the protocol itself:
+```bash
+./client/bin/demarkus-tui mark://demarkus.latebit.io/index.md
 ```
 
-**Verification**: the `VERSIONS` response includes a `chain-valid` metadata field. The server walks the chain from oldest to newest — for each version, it computes `sha256(raw bytes of vN-1)` and compares it against the `previous-hash` recorded in `vN`. If any version has been modified, the hash won't match and the chain is reported as broken:
-
-```
-versions/doc.md.v1          versions/doc.md.v2          versions/doc.md.v3
-┌──────────────────┐        ┌──────────────────┐        ┌──────────────────┐
-│ ---              │        │ ---              │        │ ---              │
-│ version: 1       │        │ version: 2       │        │ version: 3       │
-│ ---              │   ──►  │ previous-hash:   │   ──►  │ previous-hash:   │
-│ # Hello          │  hash  │   sha256-a1b2... │  hash  │   sha256-f6e5... │
-│                  │  of    │ ---              │  of    │ ---              │
-│                  │  this  │ # Updated Hello  │  this  │ # Third revision │
-└──────────────────┘  file  └──────────────────┘  file  └──────────────────┘
-```
-
-This gives the same guarantees as a git commit chain — you can always detect if any version in the history has been altered.
-
-## Philosophy
-
-Demarkus embodies the **library model** rather than the **platform model**:
-- Anyone can copy documents (like books)
-- Anyone can run a server (like a library)
-- Knowledge wants to be free
-- Preservation over profit
-
-Content persists through distributed caching - every client is a potential mirror. This creates natural censorship resistance without requiring complex distributed systems.
+Or read locally:
+- **[Full Documentation](docs/site/)** — install, server setup, client tools, deployment, architecture, and more
+- **[Protocol Specification](docs/SPEC.md)** — the complete wire format spec
+- **[Design Rationale](docs/DESIGN.md)** — why things are built the way they are
 
 ## Contributing
 
-This is early-stage development. The protocol specification is still evolving. Contributions, feedback, and critiques are welcome!
+Early-stage development. The protocol specification is still evolving. Contributions, feedback, and critiques are welcome!
 
 ## License
 
 - Protocol Specification: CC0 (Public Domain)
 - Implementation Code: MIT (TBD)
-
-## Links
-
-- **Website**: [To be determined]
-- **Specification**: [docs/SPEC.md](docs/SPEC.md)
-- **Design Rationale**: [docs/DESIGN.md](docs/DESIGN.md)
 
 ---
 
