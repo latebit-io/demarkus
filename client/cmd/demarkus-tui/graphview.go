@@ -183,6 +183,8 @@ func (m model) handleGraphKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = viewDocument
 		if m.histIdx >= 0 {
 			m.restoreHistory()
+		} else if m.ready {
+			m.viewport.SetContent("\n  No document loaded.\n  Use the address bar to load a document.\n")
 		}
 		return m, nil
 	case "j", "down":
