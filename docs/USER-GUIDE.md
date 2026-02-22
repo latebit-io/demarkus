@@ -14,13 +14,14 @@ cd demarkus
 make all
 ```
 
-This produces three binaries:
+This produces four binaries:
 
 | Binary | Location | Purpose |
 |--------|----------|---------|
 | `demarkus-server` | `server/bin/demarkus-server` | Serves documents |
 | `demarkus-token` | `server/bin/demarkus-token` | Generates auth tokens (server-side tool) |
 | `demarkus` | `client/bin/demarkus` | Reads and publishes documents |
+| `demarkus-mcp` | `client/bin/demarkus-mcp` | MCP server for LLM agent integration |
 
 ### Pre-built binaries
 
@@ -695,6 +696,201 @@ The client also handles `not-modified` internally — it resolves to the cached 
 - `version` — the version number created
 - `modified` — RFC 3339 timestamp
 
+## MCP Server (Agent Integration)
+
+The MCP server exposes the Mark Protocol as tools that LLM agents can call. It runs locally as a stdio process — the agent desktop or IDE launches it and communicates over JSON-RPC.
+
+### Build
+
+```bash
+make client
+```
+
+The binary is at `client/bin/demarkus-mcp`.
+
+### Flags
+
+```
+demarkus-mcp [-host URL] [-token TOKEN] [-insecure] [-no-cache] [-cache-dir DIR]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-host` | (none) | Default Mark server, e.g. `mark://example.com` |
+| `-token` | (none) | Auth token for publish operations |
+| `-insecure` | `false` | Skip TLS certificate verification |
+| `-no-cache` | `false` | Disable response caching |
+| `-cache-dir` | `~/.mark/cache` | Cache directory |
+
+The `-host` flag is important: it lets the agent use bare paths like `/index.md` instead of constructing full `mark://` URLs. Always set this when configuring for a specific server.
+
+### Tools
+
+The MCP server exposes four tools:
+
+| Tool | Description |
+|------|-------------|
+| `mark_fetch` | Fetch a document, returns status and markdown body |
+| `mark_list` | List documents and subdirectories |
+| `mark_graph` | Crawl outbound links and return the link graph |
+| `mark_publish` | Publish or update a document (requires `-token`) |
+
+### Configuring Clients
+
+All examples below assume:
+- The binary is at `/usr/local/bin/demarkus-mcp` (adjust the path to where you built or installed it)
+- Your Mark server is at `mark://example.com`
+- You have an auth token for publishing
+
+#### Claude Desktop
+
+Config file:
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "demarkus": {
+      "command": "/usr/local/bin/demarkus-mcp",
+      "args": ["-host", "mark://example.com", "-token", "your-token"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop after editing.
+
+#### Claude Code
+
+```bash
+claude mcp add --transport stdio demarkus -- \
+  /usr/local/bin/demarkus-mcp \
+  -host mark://example.com -token your-token
+```
+
+Or add a `.mcp.json` at the project root (committable to VCS):
+
+```json
+{
+  "mcpServers": {
+    "demarkus": {
+      "command": "/usr/local/bin/demarkus-mcp",
+      "args": ["-host", "mark://example.com", "-token", "your-token"]
+    }
+  }
+}
+```
+
+#### Cursor
+
+Config file:
+- Global: `~/.cursor/mcp.json`
+- Project: `.cursor/mcp.json` at project root
+
+```json
+{
+  "mcpServers": {
+    "demarkus": {
+      "command": "/usr/local/bin/demarkus-mcp",
+      "args": ["-host", "mark://example.com", "-token", "your-token"]
+    }
+  }
+}
+```
+
+#### Windsurf
+
+Config file: `~/.codeium/windsurf/mcp_config.json`
+
+```json
+{
+  "mcpServers": {
+    "demarkus": {
+      "command": "/usr/local/bin/demarkus-mcp",
+      "args": ["-host", "mark://example.com", "-token", "${env:DEMARKUS_TOKEN}"]
+    }
+  }
+}
+```
+
+Windsurf supports `${env:VAR}` expansion — use it to keep tokens out of the config file.
+
+#### VS Code (GitHub Copilot)
+
+Config file: `.vscode/mcp.json` at project root.
+
+Note: VS Code uses `"servers"` (not `"mcpServers"`) and requires `"type": "stdio"`.
+
+```json
+{
+  "servers": {
+    "demarkus": {
+      "type": "stdio",
+      "command": "/usr/local/bin/demarkus-mcp",
+      "args": ["-host", "mark://example.com", "-token", "your-token"]
+    }
+  }
+}
+```
+
+#### Cline
+
+Open the Cline panel in VS Code, click the MCP Servers icon, then "Configure MCP Servers". The config file is at:
+- macOS: `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+
+```json
+{
+  "mcpServers": {
+    "demarkus": {
+      "command": "/usr/local/bin/demarkus-mcp",
+      "args": ["-host", "mark://example.com", "-token", "your-token"],
+      "disabled": false
+    }
+  }
+}
+```
+
+#### Continue.dev
+
+Config file: `~/.continue/config.yaml`
+
+```yaml
+mcpServers:
+  - name: demarkus
+    command: /usr/local/bin/demarkus-mcp
+    args:
+      - "-host"
+      - "mark://example.com"
+      - "-token"
+      - "your-token"
+```
+
+MCP tools in Continue only work in agent mode, not chat mode.
+
+### Dev mode vs. production
+
+For local development with a self-signed server, add `-insecure` to the args:
+
+```json
+"args": ["-host", "mark://localhost:6309", "-insecure"]
+```
+
+For production servers with valid TLS certificates, omit `-insecure`:
+
+```json
+"args": ["-host", "mark://example.com", "-token", "your-token"]
+```
+
+### Testing manually
+
+You can test the MCP server by piping JSON-RPC messages:
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | \
+  ./client/bin/demarkus-mcp -host mark://example.com
+```
+
 ## Quick Reference
 
 ### Server
@@ -728,6 +924,20 @@ demarkus [-X VERB] [-body TEXT] [-auth TOKEN] [--insecure] [--no-cache] [--cache
 | `--insecure` | — | `false` |
 | `--no-cache` | — | `false` |
 | `--cache-dir` | `DEMARKUS_CACHE_DIR` | `~/.mark/cache` |
+
+### MCP server
+
+```
+demarkus-mcp [-host URL] [-token TOKEN] [-insecure] [-no-cache] [-cache-dir DIR]
+```
+
+| Flag | Default |
+|------|---------|
+| `-host` | (none) |
+| `-token` | (none) |
+| `-insecure` | `false` |
+| `-no-cache` | `false` |
+| `-cache-dir` | `~/.mark/cache` |
 
 ### Token tool
 

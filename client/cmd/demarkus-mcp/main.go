@@ -35,10 +35,10 @@ func main() {
 	s := server.NewMCPServer("demarkus-mcp", "0.1.0")
 
 	h := &handler{client: client, defaultHost: *defaultHost, token: *token}
-	s.AddTool(markFetchTool(), h.markFetch)
-	s.AddTool(markListTool(), h.markList)
-	s.AddTool(markGraphTool(), h.markGraph)
-	s.AddTool(markPublishTool(), h.markPublish)
+	s.AddTool(markFetchTool(*defaultHost), h.markFetch)
+	s.AddTool(markListTool(*defaultHost), h.markList)
+	s.AddTool(markGraphTool(*defaultHost), h.markGraph)
+	s.AddTool(markPublishTool(*defaultHost), h.markPublish)
 
 	if err := server.ServeStdio(s); err != nil {
 		log.Fatal(err)
@@ -64,46 +64,63 @@ func (h *handler) resolveURL(rawURL string) (host, path string, err error) {
 
 // Tool definitions.
 
-func markFetchTool() mcp.Tool {
+// urlHint returns a description suffix telling the LLM how to format URLs.
+// When a default host is configured, it tells the LLM to use bare paths.
+// Otherwise, it tells the LLM to use full mark:// URLs.
+func urlHint(host string) string {
+	if host != "" {
+		return fmt.Sprintf("Connected to %s. Use bare paths like /index.md.", host)
+	}
+	return "Use full mark:// URLs, e.g. mark://host/index.md."
+}
+
+func urlDesc(host string) string {
+	if host != "" {
+		return "bare path, e.g. /index.md or /docs/"
+	}
+	return "mark:// URL, e.g. mark://host/index.md"
+}
+
+func markFetchTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_fetch",
 		mcp.WithDescription(
 			"Fetch a document from a Mark Protocol server. "+
 				"Returns the document status and markdown body. "+
-				"Use bare paths like /index.md — the server host is pre-configured.",
+				urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("bare path of the document, e.g. /index.md or /docs/intro.md"),
+			mcp.Description(urlDesc(host)),
 		),
 	)
 }
 
-func markListTool() mcp.Tool {
+func markListTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_list",
 		mcp.WithDescription(
 			"List documents and subdirectories on a Mark Protocol server. "+
 				"Use this to discover what documents exist. "+
-				"Use bare paths like / or /docs/ — the server host is pre-configured.",
+				urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("bare path of the directory, e.g. / or /docs/"),
+			mcp.Description(urlDesc(host)),
 		),
 	)
 }
 
-func markGraphTool() mcp.Tool {
+func markGraphTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_graph",
 		mcp.WithDescription(
 			"Crawl outbound links from a document and return the link graph. "+
 				"Follows mark:// links up to the specified depth. External links are "+
 				"recorded but not followed. Use this to understand document relationships "+
 				"or find broken links. "+
-				"Use bare paths like /index.md — the server host is pre-configured.",
+				urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("bare path of the starting document, e.g. /index.md"),
+			mcp.Description(urlDesc(host)),
 		),
 		mcp.WithNumber("depth",
 			mcp.Description("Maximum link depth to follow (default 2, max 5)"),
@@ -111,17 +128,17 @@ func markGraphTool() mcp.Tool {
 	)
 }
 
-func markPublishTool() mcp.Tool {
+func markPublishTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
 			"Publish or update a document on a Mark Protocol server. "+
 				"Requires an auth token configured via the -token flag. "+
 				"The body should be valid markdown content. "+
-				"Use bare paths like /docs/new.md — the server host is pre-configured.",
+				urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("bare path of the document to publish, e.g. /docs/new.md"),
+			mcp.Description(urlDesc(host)),
 		),
 		mcp.WithString("body",
 			mcp.Required(),
