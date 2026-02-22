@@ -148,8 +148,9 @@ func markPublishTool(host string) mcp.Tool {
 }
 
 // Tool handlers.
+// Handler signatures are dictated by mcp-go's ToolHandlerFunc type.
 
-func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -168,7 +169,7 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	return mcp.NewToolResultText(fmt.Sprintf("status: %s\n\n%s", result.Response.Status, result.Response.Body)), nil
 }
 
-func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -187,7 +188,7 @@ func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	return mcp.NewToolResultText(fmt.Sprintf("status: %s\n\n%s", result.Response.Status, result.Response.Body)), nil
 }
 
-func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	if h.token == "" {
 		return mcp.NewToolResultError("publish requires -token flag"), nil
 	}
@@ -215,19 +216,13 @@ func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.
 	return mcp.NewToolResultText(fmt.Sprintf("status: %s", result.Response.Status)), nil
 }
 
-func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
 
-	depth := req.GetInt("depth", 2)
-	if depth < 1 {
-		depth = 1
-	}
-	if depth > 5 {
-		depth = 5
-	}
+	depth := max(1, min(req.GetInt("depth", 2), 5))
 
 	if _, _, err := h.resolveURL(rawURL); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
