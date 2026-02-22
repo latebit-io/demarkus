@@ -36,6 +36,11 @@ func TestExtract(t *testing.T) {
 			want: []string{"guide.md"},
 		},
 		{
+			name: "fragment stripped from destination",
+			body: "See [intro](doc.md#intro) and [doc](doc.md).",
+			want: []string{"doc.md", "doc.md"},
+		},
+		{
 			name: "empty body",
 			body: "",
 			want: nil,
@@ -137,6 +142,16 @@ func TestExtractTitle(t *testing.T) {
 			name: "h1 after h2",
 			body: "## Sub\n\n# Main Title\n\nContent.",
 			want: "Main Title",
+		},
+		{
+			name: "heading with emphasis",
+			body: "# Hello **world**\n\nContent.",
+			want: "Hello world",
+		},
+		{
+			name: "heading with code span",
+			body: "# The `mark` Protocol\n\nContent.",
+			want: "The mark Protocol",
 		},
 		{
 			name: "empty body",

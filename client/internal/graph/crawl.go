@@ -58,8 +58,8 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 	visited := make(map[string]bool)
 	var visitMu sync.Mutex
 
-	// tryEnqueue returns true if the URL was not yet visited and enqueues it.
-	tryEnqueue := func(url string, _ int) bool {
+	// markVisited returns true if the URL was not yet visited, and marks it.
+	markVisited := func(url string) bool {
 		visitMu.Lock()
 		defer visitMu.Unlock()
 		if visited[url] {
@@ -70,7 +70,7 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 	}
 
 	// Seed the queue.
-	if !tryEnqueue(startURL, 0) {
+	if !markVisited(startURL) {
 		return g, nil
 	}
 	wg.Add(1)
@@ -132,9 +132,10 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 							resolved := links.Resolve(item.url, dest)
 							g.AddEdge(item.url, resolved)
 
-							if item.depth < opts.MaxDepth && tryEnqueue(resolved, item.depth+1) {
+							if item.depth < opts.MaxDepth && markVisited(resolved) {
 								wg.Add(1)
-								queue <- crawlItem{url: resolved, depth: item.depth + 1}
+								child := crawlItem{url: resolved, depth: item.depth + 1}
+								go func() { queue <- child }()
 							}
 						}
 					}

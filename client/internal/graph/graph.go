@@ -9,7 +9,7 @@ type Node struct {
 	URL       string
 	Title     string
 	Depth     int
-	Status    string // "ok", "not-found", "error", or "" for undiscovered
+	Status    string // protocol status (e.g. "ok", "not-found"), "error", "external", or "" for undiscovered
 	LinkCount int
 }
 
@@ -35,8 +35,7 @@ func New() *Graph {
 	}
 }
 
-// AddNode adds or updates a node in the graph.
-// If the node already exists, it is updated in place.
+// AddNode adds or replaces a node in the graph.
 func (g *Graph) AddNode(n *Node) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

@@ -10,7 +10,9 @@ import (
 	"github.com/yuin/goldmark/text"
 )
 
-// Extract parses body as markdown and returns all non-fragment link destinations.
+// Extract parses body as markdown and returns all link destinations,
+// excluding fragment-only links. Fragments are stripped from destinations
+// so that doc.md#section is returned as doc.md.
 func Extract(body string) []string {
 	src := []byte(body)
 	reader := text.NewReader(src)
@@ -26,9 +28,13 @@ func Extract(body string) []string {
 			return ast.WalkContinue, nil
 		}
 		dest := string(link.Destination)
-		if dest != "" && !strings.HasPrefix(dest, "#") {
-			links = append(links, dest)
+		if dest == "" || strings.HasPrefix(dest, "#") {
+			return ast.WalkContinue, nil
 		}
+		if idx := strings.Index(dest, "#"); idx != -1 {
+			dest = dest[:idx]
+		}
+		links = append(links, dest)
 		return ast.WalkContinue, nil
 	})
 	return links
@@ -66,11 +72,15 @@ func ExtractTitle(body string) string {
 		if !ok || heading.Level != 1 {
 			return ast.WalkContinue, nil
 		}
-		for child := heading.FirstChild(); child != nil; child = child.NextSibling() {
+		_ = ast.Walk(heading, func(child ast.Node, entering bool) (ast.WalkStatus, error) {
+			if !entering {
+				return ast.WalkContinue, nil
+			}
 			if t, ok := child.(*ast.Text); ok {
 				title.Write(t.Value(src))
 			}
-		}
+			return ast.WalkContinue, nil
+		})
 		return ast.WalkStop, nil
 	})
 	return title.String()
