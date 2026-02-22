@@ -53,6 +53,11 @@ func main() {
 	if cfg.ContentDir == "" {
 		log.Fatal("[ERROR] content directory is required (set DEMARKUS_ROOT or use -root flag)")
 	}
+	if info, err := os.Stat(cfg.ContentDir); err != nil {
+		log.Fatalf("[ERROR] content directory %q does not exist", cfg.ContentDir)
+	} else if !info.IsDir() {
+		log.Fatalf("[ERROR] content directory %q is not a directory", cfg.ContentDir)
+	}
 
 	tlsConfig, prodMode, err := loadTLS(cfg)
 	if err != nil {
