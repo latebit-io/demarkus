@@ -104,3 +104,29 @@ func TestNeighbors(t *testing.T) {
 		t.Fatalf("Neighbors(c) = %d nodes, want 0", len(neighbors))
 	}
 }
+
+func TestAllNodes(t *testing.T) {
+	g := New()
+	if len(g.AllNodes()) != 0 {
+		t.Errorf("AllNodes() on empty graph = %d, want 0", len(g.AllNodes()))
+	}
+
+	g.AddNode(&Node{URL: "mark://host/a.md", Title: "A"})
+	g.AddNode(&Node{URL: "mark://host/b.md", Title: "B"})
+	g.AddNode(&Node{URL: "mark://host/c.md", Title: "C"})
+
+	nodes := g.AllNodes()
+	if len(nodes) != 3 {
+		t.Fatalf("AllNodes() = %d, want 3", len(nodes))
+	}
+
+	urls := make(map[string]bool)
+	for _, n := range nodes {
+		urls[n.URL] = true
+	}
+	for _, url := range []string{"mark://host/a.md", "mark://host/b.md", "mark://host/c.md"} {
+		if !urls[url] {
+			t.Errorf("AllNodes() missing %q", url)
+		}
+	}
+}

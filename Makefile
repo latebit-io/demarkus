@@ -33,7 +33,8 @@ client: protocol
 	@echo "Building demarkus client..."
 	cd client && go build -o bin/demarkus ./cmd/demarkus
 	cd client && go build -o bin/demarkus-tui ./cmd/demarkus-tui
-	@echo "✓ Client built: client/bin/demarkus, client/bin/demarkus-tui"
+	cd client && go build -o bin/demarkus-mcp ./cmd/demarkus-mcp
+	@echo "✓ Client built: client/bin/demarkus, client/bin/demarkus-tui, client/bin/demarkus-mcp"
 
 # Build tools
 tools:
@@ -77,6 +78,10 @@ run-client: client
 # Run TUI (for development)
 run-tui: client
 	./client/bin/demarkus-tui --insecure $(URL)
+
+# Run MCP server (for development)
+run-mcp: client
+	./client/bin/demarkus-mcp -host mark://localhost:6309 -insecure
 
 # Format code
 fmt:

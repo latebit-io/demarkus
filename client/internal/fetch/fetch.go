@@ -232,7 +232,15 @@ func (c *Client) getConn(host string) (*quic.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.opts.DialTimeout)
 	defer cancel()
 
-	conn, err := quic.DialAddr(ctx, host, c.tlsConf, nil)
+	// Clone TLS config and set ServerName for certificate validation.
+	tlsConf := c.tlsConf.Clone()
+	if hostname, _, ok := strings.Cut(host, ":"); ok {
+		tlsConf.ServerName = hostname
+	} else {
+		tlsConf.ServerName = host
+	}
+
+	conn, err := quic.DialAddr(ctx, host, tlsConf, nil)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", host, err)
 	}

@@ -100,3 +100,14 @@ func (g *Graph) EdgeCount() int {
 	defer g.mu.RUnlock()
 	return len(g.edges)
 }
+
+// AllNodes returns a copy of all nodes in the graph.
+func (g *Graph) AllNodes() []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	nodes := make([]*Node, 0, len(g.nodes))
+	for _, n := range g.nodes {
+		nodes = append(nodes, n)
+	}
+	return nodes
+}
