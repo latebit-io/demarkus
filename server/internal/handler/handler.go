@@ -25,9 +25,9 @@ const MaxDirectoryEntries = 1000
 
 // Handler serves markdown files from a content directory.
 type Handler struct {
-	ContentDir string
-	Store      *store.Store
-	TokenStore *auth.TokenStore // nil means writes are denied (secure by default)
+	ContentDir    string
+	Store         *store.Store
+	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
 }
 
 // Stream represents a bidirectional stream that can be read, written, and closed.
@@ -297,13 +297,17 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	if h.TokenStore == nil {
+	var ts *auth.TokenStore
+	if h.GetTokenStore != nil {
+		ts = h.GetTokenStore()
+	}
+	if ts == nil {
 		h.writeError(w, protocol.StatusNotPermitted, "publishing requires auth configuration")
 		return
 	}
 
 	token := req.Metadata["auth"]
-	if err := h.TokenStore.Authorize(token, req.Path, "publish"); err != nil {
+	if err := ts.Authorize(token, req.Path, "publish"); err != nil {
 		switch {
 		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken):
 			log.Printf("[AUTH] unauthorized publish attempt: %s", sanitize(req.Path))

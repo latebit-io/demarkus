@@ -223,7 +223,7 @@ func TestHandlerMarkPublish_NoToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
-	assertIsToolError(t, result, "requires -token")
+	assertIsToolError(t, result, "requires a token")
 }
 
 func TestHandlerMarkFetch_MissingURL(t *testing.T) {

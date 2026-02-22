@@ -83,19 +83,24 @@ func main() {
 
 	s := store.New(cfg.ContentDir)
 
-	var tokenStore *auth.TokenStore
 	if cfg.TokensFile != "" {
-		ts, err := auth.LoadTokens(cfg.TokensFile)
-		if err != nil {
+		if err := loadTokenStore(cfg.TokensFile); err != nil {
 			log.Fatalf("[ERROR] %v", err)
 		}
-		tokenStore = ts
 		log.Printf("[INFO] auth: loaded tokens from %s", cfg.TokensFile)
 	} else {
 		log.Printf("[INFO] auth: no tokens file configured, writes disabled")
 	}
 
-	h := &handler.Handler{ContentDir: cfg.ContentDir, Store: s, TokenStore: tokenStore}
+	h := &handler.Handler{
+		ContentDir: cfg.ContentDir,
+		Store:      s,
+		GetTokenStore: func() *auth.TokenStore {
+			tokenMu.RLock()
+			defer tokenMu.RUnlock()
+			return currentTokenStore
+		},
+	}
 
 	log.Printf("[INFO] demarkus-server listening on %s (root: %s, idle_timeout: %v, request_timeout: %v)",
 		addr, cfg.ContentDir, cfg.IdleTimeout, cfg.RequestTimeout)
@@ -167,6 +172,9 @@ func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duratio
 var (
 	certMu      sync.RWMutex
 	currentCert *tls.Certificate
+
+	tokenMu           sync.RWMutex
+	currentTokenStore *auth.TokenStore
 )
 
 // loadCert loads a TLS certificate from disk and stores it for serving.
@@ -178,6 +186,18 @@ func loadCert(certFile, keyFile string) error {
 	certMu.Lock()
 	currentCert = &cert
 	certMu.Unlock()
+	return nil
+}
+
+// loadTokenStore reads the tokens file and atomically replaces the current store.
+func loadTokenStore(path string) error {
+	ts, err := auth.LoadTokens(path)
+	if err != nil {
+		return err
+	}
+	tokenMu.Lock()
+	currentTokenStore = ts
+	tokenMu.Unlock()
 	return nil
 }
 

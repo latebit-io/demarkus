@@ -1199,21 +1199,30 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 
 ## Implementation Roadmap
 
-### Phase 1: MVP (Read-Only)
+### Phase 1: MVP (Read-Only) — COMPLETE
 
 **Server**:
-- Serve markdown files from directory over QUIC
-- Basic FETCH support
-- Frontmatter with modified timestamps
-- Simple logging
+- ~~Serve markdown files from directory over QUIC~~
+- ~~Basic FETCH support~~
+- ~~Frontmatter with modified timestamps~~
+- ~~Simple logging~~
 
 **Client (TUI)**:
-- Connect to `mark://` URLs
-- Render markdown with Glamour
-- Follow links
-- Navigation history (back/forward)
-- Basic caching
-- Document graph — crawl outbound links and display as a navigable node graph
+- ~~Connect to `mark://` URLs~~
+- ~~Render markdown with Glamour~~
+- ~~Follow links~~
+- ~~Navigation history (back/forward)~~
+- ~~Basic caching~~
+- ~~Document graph — crawl outbound links and display as a navigable node graph~~
+
+**Bonus (not in original roadmap)**:
+- ~~LIST verb for directory browsing~~
+- ~~CLI client (non-TUI) with all verbs~~
+- ~~MCP integration for LLM agent access~~
+- ~~Docker multi-arch images~~
+- ~~GoReleaser CI/CD with per-module versioning~~
+- ~~Conditional fetch (if-none-match, if-modified-since)~~
+- ~~SIGHUP certificate reload for zero-downtime TLS rotation~~
 
 **Tech Stack**:
 - Go with quic-go
@@ -1221,17 +1230,19 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 - Glamour (markdown rendering)
 - Lip Gloss (styling)
 
-### Phase 2: Publish Operations
+### Phase 2: Publish Operations — IN PROGRESS
 
 **Server**:
-- PUBLISH/APPEND/ARCHIVE support
-- Capability-based authentication
-- Versioning system
-- Audit logging
+- ~~PUBLISH support~~
+- APPEND support
+- ARCHIVE support
+- ~~Capability-based authentication~~
+- ~~Versioning system (immutable versions with hash chain verification)~~
+- Audit logging (basic console logging done, structured persistence remaining)
 
 **Client**:
 - Document editing (open in $EDITOR)
-- Token management
+- Client-side token management (server-side token generation done via `demarkus-token`)
 - Conflict resolution
 
 ### Phase 3: Advanced Features

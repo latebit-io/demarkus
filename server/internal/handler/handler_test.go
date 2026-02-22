@@ -876,7 +876,7 @@ func TestHandlePublish(t *testing.T) {
 
 	t.Run("creates new document", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: publishTokenStore}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /new.md\n" + authMeta + "# Hello\n")
 		h.HandleStream(stream)
@@ -902,7 +902,7 @@ func TestHandlePublish(t *testing.T) {
 		if _, err := s.Write("/doc.md", []byte("# Original\n")); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
-		h := &Handler{ContentDir: dir, Store: s, TokenStore: publishTokenStore}
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# Updated\n")
 		h.HandleStream(stream)
@@ -921,7 +921,7 @@ func TestHandlePublish(t *testing.T) {
 
 	t.Run("no store configured", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, TokenStore: publishTokenStore}
+		h := &Handler{ContentDir: dir, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# New\n")
 		h.HandleStream(stream)
@@ -937,7 +937,7 @@ func TestHandlePublish(t *testing.T) {
 
 	t.Run("path traversal blocked", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: publishTokenStore}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /../../etc/passwd\n" + authMeta + "# evil\n")
 		h.HandleStream(stream)
@@ -988,7 +988,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("missing token returns unauthorized", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /docs/test.md\n# Hello\n")
 		h.HandleStream(stream)
@@ -1004,7 +1004,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("invalid token returns unauthorized", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: wrong-secret\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1020,7 +1020,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("valid token wrong path returns not-permitted", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /private/secret.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1036,7 +1036,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("valid token wrong operation returns not-permitted", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + readonlySecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1052,7 +1052,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("valid token correct path succeeds", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), TokenStore: ts}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
