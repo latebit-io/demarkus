@@ -34,6 +34,9 @@ type graphListItem struct {
 	depth  int
 }
 
+// maxCrawlNodes caps the number of documents crawled to prevent runaway graphs.
+const maxCrawlNodes = 200
+
 // startCrawl returns a tea.Cmd that crawls outbound links from url.
 func (m model) startCrawl(url string) tea.Cmd {
 	seq := m.crawlSeq
@@ -48,9 +51,21 @@ func (m model) startCrawl(url string) tea.Cmd {
 				return r.Response.Status, r.Response.Body, nil
 			},
 		}
-		g, err := graph.Crawl(context.Background(), url, fetcher, fetch.ParseMarkURL, graph.CrawlOptions{
+
+		// Cancel the crawl once we hit the node cap.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var nodeCount int
+
+		g, err := graph.Crawl(ctx, url, fetcher, fetch.ParseMarkURL, graph.CrawlOptions{
 			MaxDepth: 10,
 			Workers:  5,
+			OnNode: func(_ *graph.Node) {
+				nodeCount++
+				if nodeCount >= maxCrawlNodes {
+					cancel()
+				}
+			},
 		})
 		return crawlResult{graph: g, err: err, url: url, seq: seq}
 	}
@@ -132,7 +147,7 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 		line := fmt.Sprintf("%s%s%s%s %s", cursor, indent, connector, icon, label)
 
 		// Truncate to width.
-		if len(line) > width-2 {
+		if width > 5 && len(line) > width-2 {
 			line = line[:width-5] + "..."
 		}
 

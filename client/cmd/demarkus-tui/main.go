@@ -235,6 +235,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.viewport.Width = m.width
 			m.viewport.Height = viewportHeight
+			// Re-render graph view with new width for correct truncation.
+			if m.viewMode == viewGraph && len(m.graphNodes) > 0 {
+				m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+			}
 		}
 		m.addressBar.Width = m.width - 2
 		return m, nil
@@ -245,6 +249,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.crawling = false
 		if msg.err != nil {
+			m.viewMode = viewDocument
 			m.err = msg.err
 			if m.ready {
 				m.viewport.SetContent(errorView(msg.err))
