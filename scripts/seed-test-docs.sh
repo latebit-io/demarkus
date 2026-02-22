@@ -29,7 +29,9 @@ publish() {
     args+=(-auth "$TOKEN")
   fi
   echo "  PUBLISH $path"
-  "$DEMARKUS" "${args[@]}" "mark://${HOST}${path}" 2>&1 | head -1
+  local output
+  output=$("$DEMARKUS" "${args[@]}" "mark://${HOST}${path}" 2>&1)
+  echo "${output%%$'\n'*}"
 }
 
 echo "Seeding test documents on ${HOST}..."

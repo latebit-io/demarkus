@@ -22,13 +22,13 @@ type FetchResult struct {
 
 // CrawlOptions configures the graph crawler.
 type CrawlOptions struct {
-	MaxDepth int         // maximum link hops from start (default: 2)
+	MaxDepth int         // maximum link hops from start (default: 2, 0 = start node only, -1 = use default)
 	Workers  int         // concurrent fetch goroutines (default: 5)
 	OnNode   func(*Node) // called when a node is discovered, may be nil
 }
 
 func (o *CrawlOptions) applyDefaults() {
-	if o.MaxDepth <= 0 {
+	if o.MaxDepth < 0 {
 		o.MaxDepth = 2
 	}
 	if o.Workers <= 0 {

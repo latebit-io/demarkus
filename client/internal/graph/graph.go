@@ -21,7 +21,7 @@ type Edge struct {
 
 // Graph is a concurrency-safe directed graph of document nodes and link edges.
 type Graph struct {
-	Nodes   map[string]*Node
+	nodes   map[string]*Node
 	edges   []Edge
 	edgeSet map[Edge]struct{}
 	mu      sync.RWMutex
@@ -30,7 +30,7 @@ type Graph struct {
 // New creates an empty graph.
 func New() *Graph {
 	return &Graph{
-		Nodes:   make(map[string]*Node),
+		nodes:   make(map[string]*Node),
 		edgeSet: make(map[Edge]struct{}),
 	}
 }
@@ -39,7 +39,7 @@ func New() *Graph {
 func (g *Graph) AddNode(n *Node) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.Nodes[n.URL] = n
+	g.nodes[n.URL] = n
 }
 
 // AddEdge adds a directed edge from one URL to another.
@@ -59,7 +59,7 @@ func (g *Graph) AddEdge(from, to string) {
 func (g *Graph) GetNode(url string) *Node {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.Nodes[url]
+	return g.nodes[url]
 }
 
 // Neighbors returns all nodes that the given URL links to.
@@ -70,7 +70,7 @@ func (g *Graph) Neighbors(url string) []*Node {
 	var result []*Node
 	for _, e := range g.edges {
 		if e.From == url {
-			if n, ok := g.Nodes[e.To]; ok {
+			if n, ok := g.nodes[e.To]; ok {
 				result = append(result, n)
 			}
 		}
@@ -82,7 +82,7 @@ func (g *Graph) Neighbors(url string) []*Node {
 func (g *Graph) NodeCount() int {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return len(g.Nodes)
+	return len(g.nodes)
 }
 
 // GetEdges returns a copy of the edge list.
