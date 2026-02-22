@@ -11,9 +11,15 @@ func TestLoadTokens(t *testing.T) {
 	t.Run("valid file", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "tokens.toml")
-		data := `[tokens]
-"sha256-abc" = { paths = ["/docs/*"], operations = ["publish"] }
-"sha256-readonly" = { paths = ["/*"], operations = ["read"] }
+		data := `[tokens.writer]
+hash = "sha256-abc"
+paths = ["/docs/*"]
+operations = ["publish"]
+
+[tokens.readonly]
+hash = "sha256-readonly"
+paths = ["/*"]
+operations = ["read"]
 `
 		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 			t.Fatal(err)
@@ -25,6 +31,14 @@ func TestLoadTokens(t *testing.T) {
 		}
 		if len(ts.tokens) != 2 {
 			t.Errorf("token count: got %d, want 2", len(ts.tokens))
+		}
+		// Verify tokens are keyed by hash.
+		tok, ok := ts.tokens["sha256-abc"]
+		if !ok {
+			t.Fatal("token sha256-abc not found")
+		}
+		if tok.Label != "writer" {
+			t.Errorf("label: got %q, want %q", tok.Label, "writer")
 		}
 	})
 
@@ -67,8 +81,11 @@ func TestLoadTokens(t *testing.T) {
 	t.Run("token with expires field", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "tokens.toml")
-		data := `[tokens]
-"sha256-expiring" = { paths = ["/*"], operations = ["publish"], expires = "2026-12-31T23:59:59Z" }
+		data := `[tokens.expiring]
+hash = "sha256-expiring"
+paths = ["/*"]
+operations = ["publish"]
+expires = "2026-12-31T23:59:59Z"
 `
 		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 			t.Fatal(err)

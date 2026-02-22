@@ -13,6 +13,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -189,10 +190,6 @@ func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 }
 
 func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	if h.token == "" {
-		return mcp.NewToolResultError("publish requires -token flag"), nil
-	}
-
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -208,7 +205,18 @@ func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	result, err := h.client.Publish(host, path, body, h.token)
+	// Token resolution: flag > stored token for host.
+	token := h.token
+	if token == "" {
+		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
+			token = ts.Get(host)
+		}
+	}
+	if token == "" {
+		return mcp.NewToolResultError("publish requires a token (-token flag or stored via 'demarkus token add')"), nil
+	}
+
+	result, err := h.client.Publish(host, path, body, token)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}

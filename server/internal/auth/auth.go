@@ -10,8 +10,10 @@
 //
 // TOML format:
 //
-//	[tokens]
-//	"sha256-abc123..." = { paths = ["/docs/*"], operations = ["publish"] }
+//	[tokens.fritz-laptop]
+//	hash = "sha256-abc123..."
+//	paths = ["/docs/*"]
+//	operations = ["publish"]
 package auth
 
 import (
@@ -27,8 +29,10 @@ import (
 
 // Token represents a single capability token's permissions.
 type Token struct {
+	Hash       string   `toml:"hash"`
 	Paths      []string `toml:"paths"`
 	Operations []string `toml:"operations"`
+	Label      string   `toml:"-"` // set from TOML key, not stored in file
 	// TODO: enforce token expiration. The field is loaded from TOML but
 	// not checked by Authorize. Future increment.
 	Expires string `toml:"expires"`
@@ -41,7 +45,7 @@ type tokensFile struct {
 
 // TokenStore holds loaded tokens and provides authorization checks.
 type TokenStore struct {
-	tokens map[string]Token
+	tokens map[string]Token // keyed by hash for fast lookup
 }
 
 // Sentinel errors for authorization results.
@@ -52,6 +56,12 @@ var (
 )
 
 // LoadTokens reads a TOML tokens file and returns a TokenStore.
+// The file uses labeled entries where the key is a human-readable label:
+//
+//	[tokens.fritz-laptop]
+//	hash = "sha256-abc123..."
+//	paths = ["/docs/*"]
+//	operations = ["publish"]
 func LoadTokens(path string) (*TokenStore, error) {
 	var tf tokensFile
 	if _, err := toml.DecodeFile(path, &tf); err != nil {
@@ -60,16 +70,28 @@ func LoadTokens(path string) (*TokenStore, error) {
 	if tf.Tokens == nil {
 		tf.Tokens = make(map[string]Token)
 	}
-	return &TokenStore{tokens: tf.Tokens}, nil
+	// Re-key from label → token to hash → token for fast authorize lookups.
+	byHash := make(map[string]Token, len(tf.Tokens))
+	for label, tok := range tf.Tokens {
+		tok.Label = label
+		if tok.Hash == "" {
+			return nil, fmt.Errorf("token %q has empty hash", label)
+		}
+		if existing, ok := byHash[tok.Hash]; ok {
+			return nil, fmt.Errorf("duplicate hash for labels %q and %q", existing.Label, label)
+		}
+		byHash[tok.Hash] = tok
+	}
+	return &TokenStore{tokens: byHash}, nil
 }
 
-// NewTokenStore creates a TokenStore from an in-memory token map.
+// NewTokenStore creates a TokenStore from an in-memory token map keyed by hash.
 func NewTokenStore(tokens map[string]Token) *TokenStore {
 	return &TokenStore{tokens: tokens}
 }
 
 // HashToken returns the SHA-256 hash of a raw token in the format "sha256-<hex>".
-// The TOML tokens file stores these hashes as keys. Clients send the raw secret,
+// The TOML tokens file stores these hashes. Clients send the raw secret,
 // and the server hashes it before lookup — so the tokens file never contains
 // plaintext secrets.
 func HashToken(raw string) string {

@@ -12,13 +12,20 @@ import (
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "graph" {
-		graphMain(os.Args[2:])
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "graph":
+			graphMain(os.Args[2:])
+			return
+		case "token":
+			tokenMain(os.Args[2:])
+			return
+		}
 	}
 	requestMain()
 }
@@ -57,10 +64,15 @@ func requestMain() {
 		opts.Cache = cache.New(*cacheDir)
 	}
 
-	// Auth token: flag takes precedence over env var.
+	// Auth token: flag > env var > stored token for host.
 	token := *authToken
 	if token == "" {
 		token = os.Getenv("DEMARKUS_AUTH")
+	}
+	if token == "" {
+		if ts, err := tokens.Load(tokens.DefaultPath()); err == nil {
+			token = ts.Get(host)
+		}
 	}
 
 	// For PUBLISH: read body from -body flag or stdin.
@@ -170,6 +182,69 @@ func nodeLabel(g *graph.Graph, url string) string {
 		return n.Title
 	}
 	return url
+}
+
+func tokenMain(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintf(os.Stderr, "usage: demarkus token <add|remove|list>\n")
+		fmt.Fprintf(os.Stderr, "  add    mark://host:port <token>  Store a token for a server\n")
+		fmt.Fprintf(os.Stderr, "  remove mark://host:port          Remove a stored token\n")
+		fmt.Fprintf(os.Stderr, "  list                             List servers with stored tokens\n")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "add":
+		if len(args) < 3 {
+			log.Fatal("usage: demarkus token add mark://host:port <token>")
+		}
+		host, _, err := fetch.ParseMarkURL(args[1])
+		if err != nil {
+			log.Fatalf("invalid URL: %v", err)
+		}
+		ts, err := tokens.Load(tokens.DefaultPath())
+		if err != nil {
+			log.Fatalf("load tokens: %v", err)
+		}
+		if err := ts.Set(host, args[2]); err != nil {
+			log.Fatalf("save token: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "Token stored for %s\n", host)
+
+	case "remove":
+		if len(args) < 2 {
+			log.Fatal("usage: demarkus token remove mark://host:port")
+		}
+		host, _, err := fetch.ParseMarkURL(args[1])
+		if err != nil {
+			log.Fatalf("invalid URL: %v", err)
+		}
+		ts, err := tokens.Load(tokens.DefaultPath())
+		if err != nil {
+			log.Fatalf("load tokens: %v", err)
+		}
+		if err := ts.Remove(host); err != nil {
+			log.Fatalf("remove token: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "Token removed for %s\n", host)
+
+	case "list":
+		ts, err := tokens.Load(tokens.DefaultPath())
+		if err != nil {
+			log.Fatalf("load tokens: %v", err)
+		}
+		hosts := ts.Hosts()
+		if len(hosts) == 0 {
+			fmt.Println("No stored tokens.")
+			return
+		}
+		for _, h := range hosts {
+			fmt.Println(h)
+		}
+
+	default:
+		log.Fatalf("unknown token command: %s", args[0])
+	}
 }
 
 var validVerbs = map[string]bool{
