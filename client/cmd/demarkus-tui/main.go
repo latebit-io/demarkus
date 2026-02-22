@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
+	"github.com/latebit/demarkus/client/internal/graph"
 	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/protocol"
 )
@@ -64,6 +65,14 @@ type model struct {
 
 	// Fetch sequencing: ignore stale results from superseded fetches.
 	fetchSeq uint64
+
+	// Graph view
+	viewMode   viewMode
+	graphData  *graph.Graph
+	graphNodes []graphListItem
+	graphIdx   int
+	crawling   bool
+	crawlSeq   uint64
 
 	showHelp bool
 }
@@ -135,6 +144,7 @@ const helpText = `
     [ / Alt+Left   Go back
     ] / Alt+Right  Go forward
     Tab          Cycle through links on page
+    d            Document graph view
     f            Focus address bar
 
   Scrolling
@@ -225,8 +235,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.viewport.Width = m.width
 			m.viewport.Height = viewportHeight
+			// Re-render graph view with new width for correct truncation.
+			if m.viewMode == viewGraph && len(m.graphNodes) > 0 {
+				m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+			}
 		}
 		m.addressBar.Width = m.width - 2
+		return m, nil
+
+	case crawlResult:
+		if msg.seq != m.crawlSeq {
+			return m, nil
+		}
+		m.crawling = false
+		if msg.err != nil {
+			m.viewMode = viewDocument
+			m.err = msg.err
+			if m.ready {
+				m.viewport.SetContent(errorView(msg.err))
+			}
+			return m, nil
+		}
+		m.graphData = msg.graph
+		m.graphNodes = flattenGraph(msg.graph, msg.url)
+		m.graphIdx = 0
+		if m.ready {
+			m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+			m.viewport.GotoTop()
+		}
 		return m, nil
 
 	case fetchResult:
@@ -326,6 +362,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleViewportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Delegate to graph key handler when in graph view.
+	if m.viewMode == viewGraph {
+		return m.handleGraphKey(msg)
+	}
+
 	// When help is showing, any key dismisses it.
 	if m.showHelp {
 		switch msg.String() {
@@ -391,6 +432,21 @@ func (m model) handleViewportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.doFetch(target)
 		}
 		return m, nil
+	case "d":
+		if m.addressBar.Value() != "" {
+			m.viewMode = viewGraph
+			m.crawling = true
+			m.crawlSeq++
+			m.graphIdx = 0
+			m.graphNodes = nil
+			m.graphData = nil
+			if m.ready {
+				m.viewport.SetContent("\n  Crawling document links...")
+				m.viewport.GotoTop()
+			}
+			return m, m.startCrawl(m.addressBar.Value())
+		}
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -445,6 +501,17 @@ func (m model) statusBarView() string {
 		Width(m.width).
 		Padding(0, 1)
 
+	if m.viewMode == viewGraph {
+		if m.crawling {
+			return style.Render("Crawling...")
+		}
+		if m.graphData != nil {
+			hint := fmt.Sprintf("Graph: %d nodes, %d edges  |  d close  |  ↑↓ select  |  Enter navigate",
+				m.graphData.NodeCount(), m.graphData.EdgeCount())
+			return style.Foreground(lipgloss.Color("14")).Render(hint)
+		}
+		return style.Render("")
+	}
 	if m.showHelp {
 		return style.Faint(true).Render("Press any key to dismiss")
 	}
