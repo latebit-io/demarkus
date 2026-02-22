@@ -49,6 +49,10 @@ type model struct {
 	height      int
 	ready       bool
 
+	// Cached markdown renderer (re-created only when width changes).
+	renderer      *glamour.TermRenderer
+	rendererWidth int
+
 	// History navigation
 	history []historyEntry
 	histIdx int
@@ -110,7 +114,7 @@ func (m *model) restoreHistory() {
 	if m.ready {
 		content := entry.rendered
 		if content == "" && entry.rawBody != "" {
-			r, err := renderMarkdown(entry.rawBody, m.viewport.Width)
+			r, err := m.renderMarkdown(entry.rawBody)
 			if err != nil {
 				content = entry.rawBody
 			} else {
@@ -207,7 +211,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport = viewport.New(m.width, viewportHeight)
 			m.ready = true
 			if m.pendingBody != "" {
-				rendered, err := renderMarkdown(m.pendingBody, m.width)
+				rendered, err := m.renderMarkdown(m.pendingBody)
 				if err != nil {
 					m.viewport.SetContent(m.pendingBody)
 				} else {
@@ -260,7 +264,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Render markdown.
 		var rendered string
 		if m.ready {
-			r, err := renderMarkdown(msg.result.Response.Body, m.width)
+			r, err := m.renderMarkdown(msg.result.Response.Body)
 			if err != nil {
 				rendered = msg.result.Response.Body
 			} else {
@@ -283,7 +287,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.focus = focusViewport
 		m.addressBar.Blur()
-		return m, tea.ClearScreen
+		return m, nil
 	}
 
 	return m, nil
@@ -492,15 +496,20 @@ func (m model) doFetch(raw string) tea.Cmd {
 	}
 }
 
-func renderMarkdown(body string, width int) (string, error) {
-	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(width-4),
-	)
-	if err != nil {
-		return "", err
+func (m *model) renderMarkdown(body string) (string, error) {
+	wrapWidth := m.width - 4
+	if m.renderer == nil || m.rendererWidth != wrapWidth {
+		r, err := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(wrapWidth),
+		)
+		if err != nil {
+			return "", err
+		}
+		m.renderer = r
+		m.rendererWidth = wrapWidth
 	}
-	return r.Render(body)
+	return m.renderer.Render(body)
 }
 
 func errorView(err error) string {
