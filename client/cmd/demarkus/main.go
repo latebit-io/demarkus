@@ -80,7 +80,11 @@ func requestMain() {
 	// (used for unarchiving).
 	reqBody := *body
 	if *verb == protocol.VerbPublish && reqBody == "" {
-		if info, _ := os.Stdin.Stat(); info.Mode()&os.ModeCharDevice == 0 {
+		info, err := os.Stdin.Stat()
+		if err != nil {
+			log.Fatalf("stat stdin: %v", err)
+		}
+		if info.Mode()&os.ModeCharDevice == 0 {
 			data, err := io.ReadAll(os.Stdin)
 			if err != nil {
 				log.Fatalf("read stdin: %v", err)
