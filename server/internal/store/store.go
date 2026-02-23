@@ -368,9 +368,14 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 	newFrontmatter := strings.Join(lines, "\n")
 	newContent := "---\n" + newFrontmatter + "\n---\n" + rest
 
-	// Write back to the version file
-	if err := os.WriteFile(versionFile, []byte(newContent), 0o644); err != nil {
-		return fmt.Errorf("write version file: %w", err)
+	// Atomic write: temp file + rename to avoid partial reads on concurrent FETCH.
+	tmp := versionFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
+		return fmt.Errorf("write temp version file: %w", err)
+	}
+	if err := os.Rename(tmp, versionFile); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename version file: %w", err)
 	}
 
 	return nil
