@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/latebit/demarkus/protocol"
@@ -93,7 +92,7 @@ func getEnvAsFloat64(key string, defaultValue float64) float64 {
 	if valueStr == "" {
 		return defaultValue
 	}
-	value, err := strconv.ParseFloat(strings.TrimSpace(valueStr), 64)
+	value, err := strconv.ParseFloat(valueStr, 64)
 	if err != nil {
 		return defaultValue
 	}
