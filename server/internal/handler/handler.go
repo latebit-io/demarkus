@@ -418,21 +418,13 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	// Check if document is archived and body is provided: reject with archived status
-	doc, err := h.Store.Get(req.Path, 0)
-	if err == nil && doc.Archived {
-		log.Printf("[PUBLISH_ARCHIVED] attempted to publish to archived doc: %s", sanitize(req.Path))
-		h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
-		return
-	}
-	if err != nil && !os.IsNotExist(err) {
-		log.Printf("[ERROR] publish %s: %v", sanitize(req.Path), err)
-		h.writeError(w, protocol.StatusServerError, "internal error")
-		return
-	}
-
-	doc, err = h.Store.Write(req.Path, []byte(req.Body))
+	doc, err := h.Store.Write(req.Path, []byte(req.Body))
 	if err != nil {
+		if errors.Is(err, store.ErrArchived) {
+			log.Printf("[PUBLISH_ARCHIVED] attempted to publish to archived doc: %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
+			return
+		}
 		if os.IsNotExist(err) {
 			log.Printf("[SECURITY] path traversal attempt: %s", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")

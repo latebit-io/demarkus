@@ -364,6 +364,145 @@ func TestWrite_HashChain(t *testing.T) {
 	}
 }
 
+func TestArchive(t *testing.T) {
+	setup := func(t *testing.T) (*Store, string) {
+		t.Helper()
+		root := t.TempDir()
+		s := New(root)
+		if _, err := s.Write("/doc.md", []byte("# Hello\n")); err != nil {
+			t.Fatalf("setup Write: %v", err)
+		}
+		return s, root
+	}
+
+	t.Run("archive document", func(t *testing.T) {
+		s, _ := setup(t)
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatalf("Archive: %v", err)
+		}
+		doc, err := s.Get("/doc.md", 0)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if !doc.Archived {
+			t.Error("expected doc to be archived")
+		}
+	})
+
+	t.Run("unarchive document", func(t *testing.T) {
+		s, _ := setup(t)
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatalf("Archive: %v", err)
+		}
+		if err := s.Archive("/doc.md", false); err != nil {
+			t.Fatalf("Unarchive: %v", err)
+		}
+		doc, err := s.Get("/doc.md", 0)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if doc.Archived {
+			t.Error("expected doc to be unarchived")
+		}
+	})
+
+	t.Run("archive already archived", func(t *testing.T) {
+		s, _ := setup(t)
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatalf("Archive first: %v", err)
+		}
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatalf("Archive second: %v", err)
+		}
+		doc, err := s.Get("/doc.md", 0)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if !doc.Archived {
+			t.Error("expected doc to remain archived")
+		}
+	})
+
+	t.Run("unarchive already active", func(t *testing.T) {
+		s, _ := setup(t)
+		if err := s.Archive("/doc.md", false); err != nil {
+			t.Fatalf("Unarchive: %v", err)
+		}
+		doc, err := s.Get("/doc.md", 0)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if doc.Archived {
+			t.Error("expected doc to remain active")
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		s, _ := setup(t)
+		err := s.Archive("/missing.md", true)
+		if !os.IsNotExist(err) {
+			t.Errorf("expected not-exist error, got: %v", err)
+		}
+	})
+
+	t.Run("path traversal", func(t *testing.T) {
+		s, _ := setup(t)
+		err := s.Archive("/../etc/passwd", true)
+		if !os.IsNotExist(err) {
+			t.Errorf("expected not-exist error for traversal, got: %v", err)
+		}
+	})
+
+	t.Run("version pinning ignores archive flag", func(t *testing.T) {
+		s, _ := setup(t)
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatalf("Archive: %v", err)
+		}
+		doc, err := s.Get("/doc.md", 1)
+		if err != nil {
+			t.Fatalf("Get v1: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("version = %d, want 1", doc.Version)
+		}
+		if !strings.Contains(string(doc.Content), "# Hello") {
+			t.Errorf("expected content to contain '# Hello', got: %q", doc.Content)
+		}
+	})
+
+	t.Run("hash chain valid after archive", func(t *testing.T) {
+		s, _ := setup(t)
+		if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+			t.Fatalf("Write v2: %v", err)
+		}
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatalf("Archive: %v", err)
+		}
+		// Unarchive and write v3 — the chain should still verify because
+		// v3's previous-hash covers v2's on-disk bytes (including archived flag).
+		if err := s.Archive("/doc.md", false); err != nil {
+			t.Fatalf("Unarchive: %v", err)
+		}
+		if _, err := s.Write("/doc.md", []byte("# V3\n")); err != nil {
+			t.Fatalf("Write v3: %v", err)
+		}
+		if err := s.VerifyChain("/doc.md"); err != nil {
+			t.Errorf("chain verification failed after archive cycle: %v", err)
+		}
+	})
+
+	t.Run("write rejected on archived document", func(t *testing.T) {
+		s, _ := setup(t)
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatalf("Archive: %v", err)
+		}
+		_, err := s.Write("/doc.md", []byte("# New content\n"))
+		if err != ErrArchived {
+			t.Errorf("expected ErrArchived, got: %v", err)
+		}
+	})
+}
+
 func TestVerifyChain_Valid(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
