@@ -117,6 +117,13 @@ func TestToolDefinitions(t *testing.T) {
 			wantDesc:     "Crawl outbound links",
 		},
 		{
+			name:         "mark_versions",
+			tool:         markVersionsTool(""),
+			wantName:     "mark_versions",
+			wantRequired: []string{"url"},
+			wantDesc:     "version history",
+		},
+		{
 			name:         "mark_publish",
 			tool:         markPublishTool(""),
 			wantName:     "mark_publish",
@@ -231,6 +238,28 @@ func TestHandlerMarkFetch_MissingURL(t *testing.T) {
 	ctx := context.Background()
 
 	result, err := h.markFetch(ctx, newCallToolRequest(map[string]any{}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "url is required")
+}
+
+func TestHandlerMarkVersions_InvalidURL(t *testing.T) {
+	h := &handler{}
+	ctx := context.Background()
+
+	result, err := h.markVersions(ctx, newCallToolRequest(map[string]any{"url": "/bare-path"}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "requires -host flag")
+}
+
+func TestHandlerMarkVersions_MissingURL(t *testing.T) {
+	h := &handler{}
+	ctx := context.Background()
+
+	result, err := h.markVersions(ctx, newCallToolRequest(map[string]any{}))
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
 	}

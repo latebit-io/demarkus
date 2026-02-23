@@ -4,8 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## code style 
 server/internal/ratelimit/limiter_test.go:69:6: rangeint: for loop can be modernized using range over int (modernize)
+do not do: 
+
+```
 	for i := 0; i < 5; i++ {
 	    ^
+```
 
 ## Development Philosophy
 

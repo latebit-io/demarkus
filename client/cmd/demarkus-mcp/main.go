@@ -39,6 +39,7 @@ func main() {
 	s.AddTool(markFetchTool(*defaultHost), h.markFetch)
 	s.AddTool(markListTool(*defaultHost), h.markList)
 	s.AddTool(markGraphTool(*defaultHost), h.markGraph)
+	s.AddTool(markVersionsTool(*defaultHost), h.markVersions)
 	s.AddTool(markPublishTool(*defaultHost), h.markPublish)
 	s.AddTool(markArchiveTool(*defaultHost), h.markArchive)
 
@@ -130,6 +131,20 @@ func markGraphTool(host string) mcp.Tool {
 	)
 }
 
+func markVersionsTool(host string) mcp.Tool {
+	return mcp.NewTool("mark_versions",
+		mcp.WithDescription(
+			"Retrieve the version history of a document. "+
+				"Returns a list of all versions with timestamps and hash chain validation status. "+
+				urlHint(host),
+		),
+		mcp.WithString("url",
+			mcp.Required(),
+			mcp.Description(urlDesc(host)),
+		),
+	)
+}
+
 func markPublishTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
@@ -200,6 +215,25 @@ func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	result, err := h.client.List(host, path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("list failed: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("status: %s\n\n%s", result.Response.Status, result.Response.Body)), nil
+}
+
+func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	rawURL, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError("url is required"), nil
+	}
+
+	host, path, err := h.resolveURL(rawURL)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
+	}
+
+	result, err := h.client.Versions(host, path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("versions failed: %v", err)), nil
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("status: %s\n\n%s", result.Response.Status, result.Response.Body)), nil
