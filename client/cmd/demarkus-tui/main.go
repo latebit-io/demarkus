@@ -84,6 +84,11 @@ type fetchResult struct {
 	seq    uint64
 }
 
+// viewportReady is sent after the viewport is created to process any
+// pending content in a separate update cycle, avoiding a rendering
+// issue where SetContent during viewport creation doesn't display.
+type viewportReady struct{}
+
 // pushHistory appends entry to history after histIdx, truncating forward entries.
 // Caps at 50 entries; returns updated (history, histIdx).
 func pushHistory(history []historyEntry, idx int, entry historyEntry) (updated []historyEntry, newIdx int) {
@@ -196,6 +201,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleCrawlResult(msg)
 	case fetchResult:
 		return m.handleFetchResult(msg)
+	case viewportReady:
+		return m.handleViewportReady()
 	}
 	return m, nil
 }
@@ -230,17 +237,13 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	if !m.ready {
 		m.viewport = viewport.New(m.width, viewportHeight)
 		m.ready = true
-		if m.pendingBody != "" {
-			rendered, err := m.renderMarkdown(m.pendingBody)
-			if err != nil {
-				m.viewport.SetContent(m.pendingBody)
-			} else {
-				m.viewport.SetContent(rendered)
-			}
-			m.pendingBody = ""
-		}
-		if m.err != nil {
-			m.viewport.SetContent(errorView(m.err))
+		// Defer pending content to a separate update cycle so the
+		// viewport has a chance to fully initialise before receiving
+		// content. Setting content in the same cycle as creation can
+		// leave the viewport blank until the next event (e.g. scroll).
+		if m.pendingBody != "" || m.err != nil {
+			m.addressBar.Width = m.width - 2
+			return m, func() tea.Msg { return viewportReady{} }
 		}
 	} else {
 		m.viewport.Width = m.width
@@ -251,6 +254,23 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.addressBar.Width = m.width - 2
+	return m, nil
+}
+
+func (m model) handleViewportReady() (tea.Model, tea.Cmd) {
+	if m.pendingBody != "" {
+		rendered, err := m.renderMarkdown(m.pendingBody)
+		if err != nil {
+			m.viewport.SetContent(m.pendingBody)
+		} else {
+			m.viewport.SetContent(rendered)
+		}
+		m.pendingBody = ""
+		m.viewport.GotoTop()
+	} else if m.err != nil {
+		m.viewport.SetContent(errorView(m.err))
+		m.viewport.GotoTop()
+	}
 	return m, nil
 }
 
@@ -285,6 +305,7 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	m.loading = false
 	if msg.err != nil {
 		m.err = msg.err
+		m.pendingBody = ""
 		m.status = ""
 		m.metadata = nil
 		m.fromCache = false
@@ -351,6 +372,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.loading = true
 				m.fetchSeq++
 				m.err = nil
+				m.pendingBody = ""
 				return m, m.doFetch(raw)
 			}
 			return m, nil
