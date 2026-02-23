@@ -105,6 +105,24 @@ expires = "2026-12-31T23:59:59Z"
 		}
 	})
 
+	t.Run("invalid path pattern", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "tokens.toml")
+		data := `[tokens.bad]
+hash = "sha256-bad"
+paths = ["/docs/[invalid"]
+operations = ["publish"]
+`
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := LoadTokens(path)
+		if err == nil {
+			t.Fatal("expected error for invalid path pattern")
+		}
+	})
+
 	t.Run("invalid expires format", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "tokens.toml")

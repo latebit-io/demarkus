@@ -65,10 +65,10 @@ var (
 //	hash = "sha256-abc123..."
 //	paths = ["/docs/*"]
 //	operations = ["publish"]
-func LoadTokens(path string) (*TokenStore, error) {
+func LoadTokens(filePath string) (*TokenStore, error) {
 	var tf tokensFile
-	if _, err := toml.DecodeFile(path, &tf); err != nil {
-		return nil, fmt.Errorf("load tokens file %q: %w", path, err)
+	if _, err := toml.DecodeFile(filePath, &tf); err != nil {
+		return nil, fmt.Errorf("load tokens file %q: %w", filePath, err)
 	}
 	if tf.Tokens == nil {
 		tf.Tokens = make(map[string]Token)
@@ -86,6 +86,11 @@ func LoadTokens(path string) (*TokenStore, error) {
 				return nil, fmt.Errorf("token %q has invalid expires %q: %w", label, tok.Expires, err)
 			}
 			tok.expiresAt = t
+		}
+		for _, p := range tok.Paths {
+			if err := validatePattern(p); err != nil {
+				return nil, fmt.Errorf("token %q has invalid path pattern %q: %w", label, p, err)
+			}
 		}
 		if existing, ok := byHash[tok.Hash]; ok {
 			return nil, fmt.Errorf("duplicate hash for labels %q and %q", existing.Label, label)
@@ -153,6 +158,8 @@ func hasOperation(ops []string, target string) bool {
 //   - /docs/**/a.md  matches /docs/sub/a.md, /docs/a/b/a.md, etc.
 //   - /**            matches everything
 //
+// Only one ** wildcard is supported per pattern.
+//
 // Uses path.Match (not filepath.Match) because token paths are URL-style
 // forward slashes, and filepath.Match behavior varies by OS.
 func matchesAnyPath(patterns []string, reqPath string) bool {
@@ -167,6 +174,8 @@ func matchesAnyPath(patterns []string, reqPath string) bool {
 // matchPath checks a single pattern against a path. It handles ** globs
 // by splitting on /**/ and checking prefix + suffix, falling back to
 // path.Match for patterns without **.
+// Patterns are validated at load time by validatePattern, so path.Match
+// errors are unreachable here and safely ignored.
 func matchPath(pattern, reqPath string) bool {
 	if !strings.Contains(pattern, "**") {
 		matched, _ := path.Match(pattern, reqPath)
@@ -199,4 +208,13 @@ func matchPath(pattern, reqPath string) bool {
 	}
 
 	return false
+}
+
+// validatePattern checks that a glob pattern has valid syntax. For patterns
+// containing **, the non-** portions are validated with path.Match.
+func validatePattern(pattern string) error {
+	// Strip ** segments and validate the remaining parts.
+	clean := strings.ReplaceAll(pattern, "**", "placeholder")
+	_, err := path.Match(clean, clean)
+	return err
 }
