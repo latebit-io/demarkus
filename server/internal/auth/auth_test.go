@@ -305,6 +305,10 @@ func TestMatchesAnyPath(t *testing.T) {
 		{"infix glob matches deep", []string{"/docs/**/file.md"}, "/docs/a/b/file.md", true},
 		{"infix glob no match wrong suffix", []string{"/docs/**/file.md"}, "/docs/sub/other.md", false},
 		{"infix glob no match wrong prefix", []string{"/docs/**/file.md"}, "/other/sub/file.md", false},
+		// Multi-segment suffix after **.
+		{"infix glob multi-segment suffix", []string{"/docs/**/sub/*.md"}, "/docs/a/sub/x.md", true},
+		{"infix glob multi-segment suffix deep", []string{"/docs/**/sub/*.md"}, "/docs/a/b/sub/notes.md", true},
+		{"infix glob multi-segment suffix no match", []string{"/docs/**/sub/*.md"}, "/docs/a/other/x.md", false},
 	}
 
 	for _, tt := range tests {

@@ -21,7 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -147,11 +147,14 @@ func hasOperation(ops []string, target string) bool {
 }
 
 // matchesAnyPath checks if reqPath matches any of the glob patterns.
-// Supports single-level * and ? wildcards via filepath.Match, plus
+// Supports single-level * and ? wildcards via path.Match, plus
 // recursive ** wildcards for matching across directory levels:
 //   - /docs/**       matches anything under /docs/
 //   - /docs/**/a.md  matches /docs/sub/a.md, /docs/a/b/a.md, etc.
 //   - /**            matches everything
+//
+// Uses path.Match (not filepath.Match) because token paths are URL-style
+// forward slashes, and filepath.Match behavior varies by OS.
 func matchesAnyPath(patterns []string, reqPath string) bool {
 	for _, pattern := range patterns {
 		if matchPath(pattern, reqPath) {
@@ -163,10 +166,10 @@ func matchesAnyPath(patterns []string, reqPath string) bool {
 
 // matchPath checks a single pattern against a path. It handles ** globs
 // by splitting on /**/ and checking prefix + suffix, falling back to
-// filepath.Match for patterns without **.
+// path.Match for patterns without **.
 func matchPath(pattern, reqPath string) bool {
 	if !strings.Contains(pattern, "**") {
-		matched, _ := filepath.Match(pattern, reqPath)
+		matched, _ := path.Match(pattern, reqPath)
 		return matched
 	}
 
@@ -175,15 +178,24 @@ func matchPath(pattern, reqPath string) bool {
 		return strings.HasPrefix(reqPath, prefix+"/")
 	}
 
-	// Infix /**/ — prefix must match the start, suffix must match the end.
+	// Infix /**/ — prefix must match the start, suffix must match a trailing
+	// subpath. The suffix can span multiple segments (e.g. /**/sub/*.md).
 	if prefix, suffix, ok := strings.Cut(pattern, "/**/"); ok {
 		if !strings.HasPrefix(reqPath, prefix+"/") {
 			return false
 		}
-		// Match the suffix against the last segment(s) using filepath.Match.
 		remaining := reqPath[len(prefix)+1:]
-		matched, _ := filepath.Match(suffix, filepath.Base(remaining))
-		return matched
+		// Try matching the suffix against every possible tail starting at
+		// a segment boundary, so /docs/**/sub/*.md matches /docs/a/sub/x.md.
+		for i := range len(remaining) {
+			if i > 0 && remaining[i-1] != '/' {
+				continue
+			}
+			if matched, _ := path.Match(suffix, remaining[i:]); matched {
+				return true
+			}
+		}
+		return false
 	}
 
 	return false
