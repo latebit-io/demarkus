@@ -317,8 +317,14 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 		return os.ErrNotExist
 	}
 
-	versionsDir := filepath.Join(s.root, dir, "versions")
-	versionFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, currentVersion))
+	versionRelPath := "/" + filepath.Join(dir, "versions", fmt.Sprintf("%s.v%d", base, currentVersion))
+	versionFile, err := s.resolve(versionRelPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.ErrNotExist
+		}
+		return fmt.Errorf("resolve version file: %w", err)
+	}
 
 	// Read current version file
 	data, err := os.ReadFile(versionFile)

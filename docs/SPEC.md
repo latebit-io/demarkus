@@ -11,7 +11,7 @@ The Mark Protocol is an application-layer protocol for the transfer of markdown 
 
 ## Status of This Document
 
-This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here — including APPEND, ARCHIVE, SEARCH, authentication, and federation — are considered future extensions and are not part of this specification.
+This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here — including APPEND, SEARCH, and federation — are considered future extensions and are not part of this specification.
 
 ## 1. Terminology
 
@@ -337,9 +337,48 @@ The `created` response MUST NOT include a body.
 - `unauthorized`: Missing `auth` field or token not recognised.
 - `not-permitted`: Token does not grant `publish` on the requested path.
 
+**Archived documents**:
+- PUBLISH with a body on an archived document MUST return `archived` and MUST NOT create a new version. The document must be unarchived first.
+- PUBLISH with an empty body on an archived document MUST unarchive the document and return `ok`.
+- PUBLISH with an empty body on an active document MUST return `ok` (no-op).
+
 **Other errors**:
 - `not-found`: Path validation failed (e.g., path traversal attempt).
 - `server-error`: Internal error, content exceeds size limit, or publishing not configured.
+
+### 6.5. ARCHIVE
+
+Marks a document as archived. Archived documents return `status: archived` on FETCH, but version history is preserved. Version-pinned fetches (e.g., `/doc.md/v3`) continue to work. Requires authentication with the `publish` capability.
+
+**Request**:
+```
+ARCHIVE /path\n
+---\n
+auth: <raw-token>\n
+---\n
+```
+
+**Success response**:
+```
+---
+status: ok
+---
+```
+
+**Behaviour**:
+- ARCHIVE sets the `archived` flag on the current version file. It does NOT create a new version.
+- FETCH on an archived document MUST return `status: archived` with no body.
+- Version-pinned FETCH (e.g., `/doc.md/v3`) MUST still return the content regardless of archive status.
+- To unarchive a document, PUBLISH with an empty body (see section 6.4).
+
+**Authentication errors**:
+- `not-permitted`: No token store configured on the server (archiving disabled).
+- `unauthorized`: Missing `auth` field or token not recognised.
+- `not-permitted`: Token does not grant `publish` on the requested path.
+
+**Other errors**:
+- `not-found`: Document does not exist or path validation failed.
+- `server-error`: Internal error.
 
 ## 7. Status Values
 
@@ -351,6 +390,7 @@ Status values are text strings. There are no numeric status codes.
 | `created` | Publish succeeded. A new version was created. |
 | `not-modified` | Conditional request: the resource has not changed. No body. |
 | `not-found` | The requested resource does not exist. |
+| `archived` | The document has been archived. Version-pinned fetches still succeed. |
 | `unauthorized` | Missing or invalid authentication token. |
 | `not-permitted` | Valid authentication but insufficient capability for the requested operation or path. |
 | `server-error` | The server encountered an error processing the request. |
@@ -602,8 +642,7 @@ This ensures every served document has:
 
 The following features are planned but not part of this specification:
 
-- **APPEND**: Add content to the end of a document.
-- **ARCHIVE**: Remove a document from active serving while preserving version history.
+- **APPEND**: Add content to the end of a document. Under evaluation — the versioning overhead (each append creates a separate version chain) may not justify the complexity. Deferred until a concrete use case emerges.
 - **SEARCH**: Full-text search across documents.
 - **Content addressing**: Hash-based document retrieval independent of location.
 - **Federation**: Cross-server content mirroring and discovery.
