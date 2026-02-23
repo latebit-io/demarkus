@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## code style 
+server/internal/ratelimit/limiter_test.go:69:6: rangeint: for loop can be modernized using range over int (modernize)
+	for i := 0; i < 5; i++ {
+	    ^
+
 ## Development Philosophy
 
 **Small, incremental changes.** Robustness and stability are the highest priorities. Every change should be minimal, tested, and working before moving to the next step. Do not combine unrelated changes. Do not skip tests. Do not rush ahead — build on solid ground.

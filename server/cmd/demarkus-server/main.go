@@ -107,7 +107,7 @@ func main() {
 	if cfg.RateLimit > 0 {
 		rl = ratelimit.New(cfg.RateLimit, cfg.RateBurst)
 		defer rl.Stop()
-		log.Printf("[INFO] rate limit: %.0f req/s per IP, burst %d", cfg.RateLimit, cfg.RateBurst)
+		log.Printf("[INFO] rate limit: %g req/s per IP, burst %d", cfg.RateLimit, cfg.RateBurst)
 	}
 
 	log.Printf("[INFO] demarkus-server listening on %s (root: %s, idle_timeout: %v, request_timeout: %v)",

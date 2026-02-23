@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 func TestAllow(t *testing.T) {
@@ -39,6 +40,39 @@ func TestSeparateIPs(t *testing.T) {
 	// Different IP has its own bucket.
 	if !l.Allow("10.0.0.2") {
 		t.Fatal("second IP first request should be allowed")
+	}
+}
+
+func TestCleanup(t *testing.T) {
+	// Cleanup every 10ms, evict entries idle for 20ms.
+	l := NewWithCleanup(1000, 1000, 10*time.Millisecond, 20*time.Millisecond)
+	defer l.Stop()
+
+	l.Allow("10.0.0.1")
+	if _, ok := l.ips.Load("10.0.0.1"); !ok {
+		t.Fatal("entry should exist after Allow")
+	}
+
+	// Wait long enough for the entry to become stale and be cleaned up.
+	time.Sleep(100 * time.Millisecond)
+
+	if _, ok := l.ips.Load("10.0.0.1"); ok {
+		t.Fatal("stale entry should have been cleaned up")
+	}
+}
+
+func TestCleanupKeepsActive(t *testing.T) {
+	l := NewWithCleanup(1000, 1000, 10*time.Millisecond, 50*time.Millisecond)
+	defer l.Stop()
+
+	// Keep the entry alive by calling Allow repeatedly.
+	for range 5 {
+		l.Allow("10.0.0.1")
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if _, ok := l.ips.Load("10.0.0.1"); !ok {
+		t.Fatal("active entry should not be cleaned up")
 	}
 }
 

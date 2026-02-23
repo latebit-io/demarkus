@@ -17,9 +17,11 @@ type entry struct {
 
 // Limiter tracks per-IP request rates using a token bucket algorithm.
 type Limiter struct {
-	rate  rate.Limit
-	burst int
-	ips   sync.Map // map[string]*entry
+	rate         rate.Limit
+	burst        int
+	cleanupEvery time.Duration // how often the cleanup goroutine runs
+	staleAfter   time.Duration // evict entries idle longer than this
+	ips          sync.Map      // map[string]*entry
 
 	stop chan struct{}
 }
@@ -28,10 +30,17 @@ type Limiter struct {
 // A background goroutine evicts stale entries every 60 seconds.
 // Call Stop to release resources.
 func New(r float64, burst int) *Limiter {
+	return NewWithCleanup(r, burst, 60*time.Second, 5*time.Minute)
+}
+
+// NewWithCleanup is like New but allows configuring the cleanup interval and stale threshold.
+func NewWithCleanup(r float64, burst int, cleanupEvery, staleAfter time.Duration) *Limiter {
 	l := &Limiter{
-		rate:  rate.Limit(r),
-		burst: burst,
-		stop:  make(chan struct{}),
+		rate:         rate.Limit(r),
+		burst:        burst,
+		cleanupEvery: cleanupEvery,
+		staleAfter:   staleAfter,
+		stop:         make(chan struct{}),
 	}
 	go l.cleanup()
 	return l
@@ -40,9 +49,17 @@ func New(r float64, burst int) *Limiter {
 // Allow reports whether a request from the given IP should be permitted.
 func (l *Limiter) Allow(ip string) bool {
 	now := time.Now().UnixNano()
+
+	// Fast path: reuse existing entry without allocating a new limiter.
+	if v, ok := l.ips.Load(ip); ok {
+		e := v.(*entry)
+		e.lastSeen.Store(now)
+		return e.limiter.Allow()
+	}
+
+	// Slow path: create entry and attempt to store it.
 	e := &entry{limiter: rate.NewLimiter(l.rate, l.burst)}
 	e.lastSeen.Store(now)
-
 	v, _ := l.ips.LoadOrStore(ip, e)
 	actual := v.(*entry)
 	actual.lastSeen.Store(now)
@@ -54,17 +71,15 @@ func (l *Limiter) Stop() {
 	close(l.stop)
 }
 
-const staleAfter = 5 * time.Minute
-
 func (l *Limiter) cleanup() {
-	ticker := time.NewTicker(60 * time.Second)
+	ticker := time.NewTicker(l.cleanupEvery)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-l.stop:
 			return
 		case now := <-ticker.C:
-			cutoff := now.Add(-staleAfter).UnixNano()
+			cutoff := now.Add(-l.staleAfter).UnixNano()
 			l.ips.Range(func(key, value any) bool {
 				e := value.(*entry)
 				if e.lastSeen.Load() < cutoff {
