@@ -1092,3 +1092,198 @@ func TestParseVersionPath(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleArchive(t *testing.T) {
+	writerSecret := "test-secret-key"
+	ts := auth.NewTokenStore(map[string]auth.Token{
+		auth.HashToken(writerSecret): {
+			Paths:      []string{"/*"},
+			Operations: []string{"publish"},
+		},
+	})
+
+	t.Run("archive not found", func(t *testing.T) {
+		dir, s := setupVersionedDir(t, map[string]string{})
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+		stream := newMockStream("ARCHIVE /missing.md\n---\nauth: " + writerSecret + "\n---\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
+		}
+	})
+
+	t.Run("archive requires auth", func(t *testing.T) {
+		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+		stream := newMockStream("ARCHIVE /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusUnauthorized {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusUnauthorized)
+		}
+	})
+
+	t.Run("archive with valid token succeeds", func(t *testing.T) {
+		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if resp.Metadata["archived"] != "true" {
+			t.Errorf("archived metadata: got %q, want %q", resp.Metadata["archived"], "true")
+		}
+	})
+
+	t.Run("fetch archived document returns archived status", func(t *testing.T) {
+		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+		// Archive the document
+		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
+		h.HandleStream(stream)
+
+		// Try to fetch it
+		stream = newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusArchived {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusArchived)
+		}
+	})
+
+	t.Run("publish with body to archived document fails", func(t *testing.T) {
+		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+		// Archive the document
+		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
+		h.HandleStream(stream)
+
+		// Try to publish to archived document
+		stream = newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n# New Content\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusArchived {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusArchived)
+		}
+	})
+
+	t.Run("publish with empty body unarchives document", func(t *testing.T) {
+		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+		// Archive the document
+		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
+		h.HandleStream(stream)
+
+		// Publish with empty body to unarchive
+		stream = newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+
+		// Now FETCH should succeed
+		stream = newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+
+	t.Run("fetch specific version of archived document succeeds", func(t *testing.T) {
+		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+		// Archive the document
+		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
+		h.HandleStream(stream)
+
+		// Fetch specific version should still work
+		stream = newMockStream("FETCH /doc.md/v1\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+
+	t.Run("publish with body to active document still works", func(t *testing.T) {
+		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n# New Content\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+		if resp.Metadata["version"] != "2" {
+			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "2")
+		}
+	})
+
+	t.Run("publish with empty body to active document is no-op", func(t *testing.T) {
+		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
+		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if resp.Metadata["version"] != "1" {
+			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "1")
+		}
+	})
+}

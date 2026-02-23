@@ -19,4 +19,7 @@ const (
 
 	// VerbPublish creates or updates a document, creating a new immutable version.
 	VerbPublish = "PUBLISH"
+
+	// VerbArchive marks a document as archived, preventing it from being served.
+	VerbArchive = "ARCHIVE"
 )

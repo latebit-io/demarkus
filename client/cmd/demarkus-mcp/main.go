@@ -40,6 +40,7 @@ func main() {
 	s.AddTool(markListTool(*defaultHost), h.markList)
 	s.AddTool(markGraphTool(*defaultHost), h.markGraph)
 	s.AddTool(markPublishTool(*defaultHost), h.markPublish)
+	s.AddTool(markArchiveTool(*defaultHost), h.markArchive)
 
 	if err := server.ServeStdio(s); err != nil {
 		log.Fatal(err)
@@ -148,6 +149,21 @@ func markPublishTool(host string) mcp.Tool {
 	)
 }
 
+func markArchiveTool(host string) mcp.Tool {
+	return mcp.NewTool("mark_archive",
+		mcp.WithDescription(
+			"Archive a document on a Mark Protocol server. "+
+				"Archived documents return 'archived' status on FETCH but version history is preserved. "+
+				"Requires an auth token configured via the -token flag. "+
+				urlHint(host),
+		),
+		mcp.WithString("url",
+			mcp.Required(),
+			mcp.Description(urlDesc(host)),
+		),
+	)
+}
+
 // Tool handlers.
 // Handler signatures are dictated by mcp-go's ToolHandlerFunc type.
 
@@ -219,6 +235,35 @@ func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.
 	result, err := h.client.Publish(host, path, body, token)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("status: %s", result.Response.Status)), nil
+}
+
+func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	rawURL, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError("url is required"), nil
+	}
+
+	host, path, err := h.resolveURL(rawURL)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
+	}
+
+	token := h.token
+	if token == "" {
+		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
+			token = ts.Get(host)
+		}
+	}
+	if token == "" {
+		return mcp.NewToolResultError("archive requires a token (-token flag or stored via 'demarkus token add')"), nil
+	}
+
+	result, err := h.client.Archive(host, path, token)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("archive failed: %v", err)), nil
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("status: %s", result.Response.Status)), nil

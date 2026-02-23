@@ -30,6 +30,7 @@ type Document struct {
 	Content  []byte
 	Modified time.Time
 	Version  int
+	Archived bool
 }
 
 // VersionInfo describes a single version of a document.
@@ -37,6 +38,9 @@ type VersionInfo struct {
 	Version  int
 	Modified time.Time
 }
+
+// ErrArchived is returned by Write when the document is archived.
+var ErrArchived = fmt.Errorf("document is archived")
 
 // MaxFileSize is the maximum file size the store will read (10 MB).
 const MaxFileSize = 10 * 1024 * 1024
@@ -97,6 +101,7 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 		Content:  data,
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  ver,
+		Archived: isArchived(data),
 	}, nil
 }
 
@@ -290,7 +295,105 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 		Content:  data,
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  version,
+		Archived: isArchived(data),
 	}, nil
+}
+
+// Archive marks the current version of a document as archived by updating
+// the archived flag in its frontmatter. This prevents FETCH from serving
+// the document but preserves all version history.
+//
+// This intentionally modifies the current version file in-place rather than
+// creating a new version. The archived flag is operational metadata, not
+// content — creating a new version would pollute the history with identical
+// content. The hash chain remains valid because only subsequent versions
+// hash their predecessor, and the current version (tip) has no successor yet.
+func (s *Store) Archive(reqPath string, archived bool) error {
+	if _, err := s.resolve(reqPath); err != nil {
+		if os.IsNotExist(err) {
+			return os.ErrNotExist
+		}
+		return fmt.Errorf("resolve path: %w", err)
+	}
+
+	cleaned := filepath.Clean(reqPath)
+	cleaned = strings.TrimLeft(cleaned, "/")
+	base := filepath.Base(cleaned)
+	dir := filepath.Dir(cleaned)
+
+	currentVersion := s.CurrentVersion(reqPath)
+	if currentVersion == 0 {
+		return os.ErrNotExist
+	}
+
+	versionRelPath := "/" + filepath.Join(dir, "versions", fmt.Sprintf("%s.v%d", base, currentVersion))
+	versionFile, err := s.resolve(versionRelPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.ErrNotExist
+		}
+		return fmt.Errorf("resolve version file: %w", err)
+	}
+
+	// Read current version file
+	data, err := os.ReadFile(versionFile)
+	if err != nil {
+		return fmt.Errorf("read version file: %w", err)
+	}
+
+	// Update archived flag in frontmatter
+	content := string(data)
+	if !strings.HasPrefix(content, "---\n") {
+		return fmt.Errorf("invalid version file format")
+	}
+
+	end := strings.Index(content[4:], "\n---\n")
+	if end == -1 {
+		return fmt.Errorf("invalid version file format")
+	}
+
+	frontmatter := content[4 : 4+end]
+	rest := content[4+end+5:]
+
+	// Parse and update frontmatter
+	lines := strings.Split(frontmatter, "\n")
+	found := false
+	for i, line := range lines {
+		key, _, ok := strings.Cut(line, ": ")
+		if ok && strings.TrimSpace(key) == "archived" {
+			if archived {
+				lines[i] = "archived: true"
+			} else {
+				lines[i] = "archived: false"
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		// Add archived field if not present
+		if archived {
+			lines = append(lines, "archived: true")
+		} else {
+			lines = append(lines, "archived: false")
+		}
+	}
+
+	// Reconstruct the file
+	newFrontmatter := strings.Join(lines, "\n")
+	newContent := "---\n" + newFrontmatter + "\n---\n" + rest
+
+	// Atomic write: temp file + rename to avoid partial reads on concurrent FETCH.
+	tmp := versionFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
+		return fmt.Errorf("write temp version file: %w", err)
+	}
+	if err := os.Rename(tmp, versionFile); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename version file: %w", err)
+	}
+
+	return nil
 }
 
 // Write creates a new version of a document. Every call produces a new
@@ -343,36 +446,14 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 		next = s.CurrentVersion(reqPath) + 1
 	}
 
-	// Flat file migration: if this is a versioned write (next > 1) but v1 doesn't
-	// exist in the versions dir yet, migrate the flat file content to v1 first.
+	// For existing documents: reject writes to archived documents (closes
+	// TOCTOU gap with handler) and migrate flat files to v1 if needed.
 	if next > 1 {
-		v1File := filepath.Join(versionsDir, fmt.Sprintf("%s.v1", base))
-		if _, err := os.Stat(v1File); os.IsNotExist(err) {
-			flatData, err := os.ReadFile(currentFile)
-			if err != nil {
-				return nil, fmt.Errorf("read flat file for migration: %w", err)
-			}
-			var v1sb strings.Builder
-			v1sb.WriteString("---\nversion: 1\n---\n")
-			v1Data := append([]byte(v1sb.String()), flatData...)
-			// Use exclusive create to prevent overwriting a v1 that appeared
-			// between the Stat check and now (TOCTOU race).
-			f, err := os.OpenFile(v1File, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-			if err != nil && !os.IsExist(err) {
-				return nil, fmt.Errorf("migrate flat file to v1: %w", err)
-			}
-			if err == nil {
-				if _, werr := f.Write(v1Data); werr != nil {
-					_ = f.Close()
-					_ = os.Remove(v1File)
-					return nil, fmt.Errorf("migrate flat file to v1: %w", werr)
-				}
-				if cerr := f.Close(); cerr != nil {
-					_ = os.Remove(v1File)
-					return nil, fmt.Errorf("migrate flat file to v1: %w", cerr)
-				}
-			}
-			// If os.IsExist: v1 was created concurrently, proceed with the write.
+		if s.isCurrentArchived(versionsDir, base, next-1) {
+			return nil, ErrArchived
+		}
+		if err := s.migrateFlatFile(versionsDir, base, currentFile); err != nil {
+			return nil, err
 		}
 	}
 
@@ -382,6 +463,7 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 	var sb strings.Builder
 	sb.WriteString("---\n")
 	sb.WriteString(fmt.Sprintf("version: %d\n", next))
+	sb.WriteString("archived: false\n")
 	if next > 1 {
 		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next-1))
 		prevData, err := os.ReadFile(prevFile)
@@ -442,6 +524,7 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 		Content:  content,
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  next,
+		Archived: false,
 	}, nil
 }
 
@@ -469,9 +552,8 @@ func (s *Store) VerifyChain(reqPath string) error {
 	dir := filepath.Dir(cleaned)
 	versionsDir := filepath.Join(s.root, dir, "versions")
 
-	for i := 1; i < len(versions); i++ {
-		prev := versions[i-1]
-		curr := versions[i]
+	for i, curr := range versions[1:] {
+		prev := versions[i]
 
 		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, prev.Version))
 		currFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, curr.Version))
@@ -554,4 +636,68 @@ func extractPreviousHash(data []byte) string {
 		}
 	}
 	return ""
+}
+
+// isArchived checks if a version file is marked as archived in its frontmatter.
+func isArchived(data []byte) bool {
+	content := string(data)
+	if !strings.HasPrefix(content, "---\n") {
+		return false
+	}
+	end := strings.Index(content[4:], "\n---\n")
+	if end == -1 {
+		return false
+	}
+	block := content[4 : 4+end]
+	for line := range strings.SplitSeq(block, "\n") {
+		key, val, ok := strings.Cut(line, ": ")
+		if ok && strings.TrimSpace(key) == "archived" {
+			return strings.TrimSpace(val) == "true"
+		}
+	}
+	return false
+}
+
+// migrateFlatFile promotes a flat file (no version history) to v1 in the
+// versions directory. If v1 already exists (concurrent write), it is a no-op.
+func (s *Store) migrateFlatFile(versionsDir, base, currentFile string) error {
+	v1File := filepath.Join(versionsDir, fmt.Sprintf("%s.v1", base))
+	if _, err := os.Stat(v1File); !os.IsNotExist(err) {
+		return nil // v1 already exists
+	}
+	flatData, err := os.ReadFile(currentFile)
+	if err != nil {
+		return fmt.Errorf("read flat file for migration: %w", err)
+	}
+	v1Data := []byte("---\nversion: 1\n---\n")
+	v1Data = append(v1Data, flatData...)
+	// Use exclusive create to prevent overwriting a v1 that appeared
+	// between the Stat check and now (TOCTOU race).
+	f, err := os.OpenFile(v1File, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil // v1 was created concurrently
+		}
+		return fmt.Errorf("migrate flat file to v1: %w", err)
+	}
+	if _, err := f.Write(v1Data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(v1File)
+		return fmt.Errorf("migrate flat file to v1: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(v1File)
+		return fmt.Errorf("migrate flat file to v1: %w", err)
+	}
+	return nil
+}
+
+// isCurrentArchived checks whether the given version file is archived.
+func (s *Store) isCurrentArchived(versionsDir, base string, version int) bool {
+	path := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, version))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return isArchived(data)
 }

@@ -16,6 +16,7 @@ const (
 	StatusCreated      = "created"
 	StatusNotModified  = "not-modified"
 	StatusNotFound     = "not-found"
+	StatusArchived     = "archived"
 	StatusUnauthorized = "unauthorized"
 	StatusNotPermitted = "not-permitted"
 	StatusServerError  = "server-error"

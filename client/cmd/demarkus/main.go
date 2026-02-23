@@ -31,9 +31,9 @@ func main() {
 }
 
 func requestMain() {
-	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH)")
+	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE)")
 	body := flag.String("body", "", "request body (for PUBLISH); reads stdin if omitted")
-	authToken := flag.String("auth", "", "auth token for PUBLISH requests (env: DEMARKUS_AUTH)")
+	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE requests (env: DEMARKUS_AUTH)")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
@@ -98,6 +98,8 @@ func requestMain() {
 		result, err = client.Versions(host, path)
 	case protocol.VerbPublish:
 		result, err = client.Publish(host, path, reqBody, token)
+	case protocol.VerbArchive:
+		result, err = client.Archive(host, path, token)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -252,11 +254,12 @@ var validVerbs = map[string]bool{
 	protocol.VerbList:     true,
 	protocol.VerbVersions: true,
 	protocol.VerbPublish:  true,
+	protocol.VerbArchive:  true,
 }
 
 func validateVerb(verb string) error {
 	if !validVerbs[verb] {
-		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH)", verb)
+		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE)", verb)
 	}
 	return nil
 }

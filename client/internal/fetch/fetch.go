@@ -120,6 +120,17 @@ func (c *Client) Publish(host, path, body, token string) (Result, error) {
 	})
 }
 
+// Archive marks a document as archived on a Mark Protocol server.
+func (c *Client) Archive(host, path, token string) (Result, error) {
+	req := protocol.Request{Verb: protocol.VerbArchive, Path: path, Metadata: make(map[string]string)}
+	if token != "" {
+		req.Metadata["auth"] = token
+	}
+	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
+		return c.requestOnConn(conn, req)
+	})
+}
+
 // cachedRequest handles FETCH and LIST with conditional caching.
 func (c *Client) cachedRequest(host, path, verb string) (Result, error) {
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {

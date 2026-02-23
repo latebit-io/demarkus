@@ -63,6 +63,8 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handleVersions(stream, req.Path)
 	case protocol.VerbPublish:
 		h.handlePublish(stream, req)
+	case protocol.VerbArchive:
+		h.handleArchive(stream, req)
 	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
@@ -103,6 +105,12 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		}
 		log.Printf("[ERROR] fetch %s: %v", sanitize(req.Path), err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	if doc.Archived {
+		log.Printf("[ARCHIVED] %s", sanitize(req.Path))
+		h.writeError(w, protocol.StatusArchived, req.Path+" is archived")
 		return
 	}
 
@@ -286,6 +294,63 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 	writeResponse(w, resp)
 }
 
+func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
+	if h.Store == nil {
+		h.writeError(w, protocol.StatusServerError, "archiving not configured")
+		return
+	}
+
+	var ts *auth.TokenStore
+	if h.GetTokenStore != nil {
+		ts = h.GetTokenStore()
+	}
+	if ts == nil {
+		h.writeError(w, protocol.StatusNotPermitted, "archiving requires auth configuration")
+		return
+	}
+
+	token := req.Metadata["auth"]
+	if err := ts.Authorize(token, req.Path, "publish"); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken):
+			log.Printf("[AUTH] unauthorized archive attempt: %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
+		default:
+			log.Printf("[AUTH] not permitted archive attempt: %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
+		}
+		return
+	}
+
+	doc, err := h.Store.Get(req.Path, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("[NOTFOUND] %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
+		log.Printf("[ERROR] archive %s: %v", sanitize(req.Path), err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	if err := h.Store.Archive(req.Path, true); err != nil {
+		log.Printf("[ERROR] archive %s: %v", sanitize(req.Path), err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	log.Printf("[ARCHIVE] %s v%d", sanitize(req.Path), doc.Version)
+	resp := protocol.Response{
+		Status: protocol.StatusOK,
+		Metadata: map[string]string{
+			"version":  strconv.Itoa(doc.Version),
+			"archived": "true",
+		},
+	}
+	writeResponse(w, resp)
+}
+
 func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	if h.Store == nil {
 		h.writeError(w, protocol.StatusServerError, "publishing not configured")
@@ -319,8 +384,47 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 
+	// Handle empty body case: unarchive if archived, no-op if active
+	if req.Body == "" {
+		doc, err := h.Store.Get(req.Path, 0)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Printf("[NOTFOUND] %s", sanitize(req.Path))
+				h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+				return
+			}
+			log.Printf("[ERROR] publish %s: %v", sanitize(req.Path), err)
+			h.writeError(w, protocol.StatusServerError, "internal error")
+			return
+		}
+
+		if doc.Archived {
+			if err := h.Store.Archive(req.Path, false); err != nil {
+				log.Printf("[ERROR] unarchive %s: %v", sanitize(req.Path), err)
+				h.writeError(w, protocol.StatusServerError, "internal error")
+				return
+			}
+			log.Printf("[UNARCHIVE] %s v%d", sanitize(req.Path), doc.Version)
+		}
+
+		// Return OK (no-op for active documents, or unarchive response)
+		resp := protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{
+				"version": strconv.Itoa(doc.Version),
+			},
+		}
+		writeResponse(w, resp)
+		return
+	}
+
 	doc, err := h.Store.Write(req.Path, []byte(req.Body))
 	if err != nil {
+		if errors.Is(err, store.ErrArchived) {
+			log.Printf("[PUBLISH_ARCHIVED] attempted to publish to archived doc: %s", sanitize(req.Path))
+			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
+			return
+		}
 		if os.IsNotExist(err) {
 			log.Printf("[SECURITY] path traversal attempt: %s", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
