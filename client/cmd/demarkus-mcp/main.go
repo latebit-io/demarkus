@@ -88,7 +88,7 @@ func markFetchTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_fetch",
 		mcp.WithDescription(
 			"Fetch a document from a Mark Protocol server. "+
-				"Returns the document status and markdown body. "+
+				"Returns the document status, version, modified timestamp, etag, and markdown body. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -150,6 +150,7 @@ func markPublishTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
 			"Publish or update a document on a Mark Protocol server. "+
+				"Returns the created version number and modified timestamp. "+
 				"Requires an auth token configured via the -token flag. "+
 				"The body should be valid markdown content. "+
 				urlHint(host),
@@ -169,6 +170,7 @@ func markArchiveTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_archive",
 		mcp.WithDescription(
 			"Archive a document on a Mark Protocol server. "+
+				"Returns the archived version number. "+
 				"Archived documents return 'archived' status on FETCH but version history is preserved. "+
 				"Requires an auth token configured via the -token flag. "+
 				urlHint(host),
@@ -178,6 +180,22 @@ func markArchiveTool(host string) mcp.Tool {
 			mcp.Description(urlDesc(host)),
 		),
 	)
+}
+
+// formatResult builds a text response with status, selected metadata keys, and body.
+func formatResult(r fetch.Result, keys ...string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "status: %s\n", r.Response.Status)
+	for _, key := range keys {
+		if v, ok := r.Response.Metadata[key]; ok {
+			fmt.Fprintf(&b, "%s: %s\n", key, v)
+		}
+	}
+	if r.Response.Body != "" {
+		b.WriteString("\n")
+		b.WriteString(r.Response.Body)
+	}
+	return b.String()
 }
 
 // Tool handlers.
@@ -199,7 +217,7 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		return mcp.NewToolResultError(fmt.Sprintf("fetch failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("status: %s\n\n%s", result.Response.Status, result.Response.Body)), nil
+	return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
 }
 
 func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -218,7 +236,7 @@ func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		return mcp.NewToolResultError(fmt.Sprintf("list failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("status: %s\n\n%s", result.Response.Status, result.Response.Body)), nil
+	return mcp.NewToolResultText(formatResult(result, "modified")), nil
 }
 
 func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -237,17 +255,7 @@ func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("versions failed: %v", err)), nil
 	}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "status: %s\n", result.Response.Status)
-	for _, key := range []string{"total", "current", "chain-valid", "chain-error"} {
-		if v, ok := result.Response.Metadata[key]; ok {
-			fmt.Fprintf(&b, "%s: %s\n", key, v)
-		}
-	}
-	b.WriteString("\n")
-	b.WriteString(result.Response.Body)
-
-	return mcp.NewToolResultText(b.String()), nil
+	return mcp.NewToolResultText(formatResult(result, "total", "current", "chain-valid", "chain-error")), nil
 }
 
 func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -282,7 +290,7 @@ func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("status: %s", result.Response.Status)), nil
+	return mcp.NewToolResultText(formatResult(result, "version", "modified")), nil
 }
 
 func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -311,7 +319,7 @@ func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(fmt.Sprintf("archive failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("status: %s", result.Response.Status)), nil
+	return mcp.NewToolResultText(formatResult(result, "version")), nil
 }
 
 func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

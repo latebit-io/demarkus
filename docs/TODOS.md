@@ -14,7 +14,7 @@
 
 ### MCP
 - [x] `mark_versions` tool missing from `demarkus-mcp` — added tool definition, handler, and tests
-- [ ] MCP handlers drop response metadata — `mark_fetch` should expose `version`, `modified`, `etag`; `mark_publish`/`mark_archive` should expose `version`
+- [x] MCP handlers drop response metadata — added `formatResult` helper; all handlers now surface relevant metadata (version, modified, etag, chain-valid, etc.)
 
 ### CI/CD
 - [ ] CI does not build TUI or MCP — only `demarkus` (CLI) is built, so build regressions in `demarkus-tui` and `demarkus-mcp` pass CI silently

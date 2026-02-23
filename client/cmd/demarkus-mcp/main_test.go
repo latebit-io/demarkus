@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit/demarkus/client/internal/fetch"
+	"github.com/latebit/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -275,6 +277,62 @@ func TestHandlerMarkGraph_InvalidURL(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	assertIsToolError(t, result, "requires -host flag")
+}
+
+func TestFormatResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   fetch.Result
+		keys     []string
+		wantSubs []string
+	}{
+		{
+			name: "status and metadata keys present",
+			result: fetch.Result{
+				Response: protocol.Response{
+					Status:   "ok",
+					Metadata: map[string]string{"version": "3", "modified": "2026-02-23T10:00:00Z", "etag": "abc123"},
+					Body:     "# Hello",
+				},
+			},
+			keys:     []string{"version", "modified", "etag"},
+			wantSubs: []string{"status: ok", "version: 3", "modified: 2026-02-23T10:00:00Z", "etag: abc123", "# Hello"},
+		},
+		{
+			name: "missing metadata keys are skipped",
+			result: fetch.Result{
+				Response: protocol.Response{
+					Status:   "ok",
+					Metadata: map[string]string{"version": "1"},
+					Body:     "content",
+				},
+			},
+			keys:     []string{"version", "etag"},
+			wantSubs: []string{"status: ok", "version: 1", "content"},
+		},
+		{
+			name: "no body omits trailing newline",
+			result: fetch.Result{
+				Response: protocol.Response{
+					Status:   "created",
+					Metadata: map[string]string{"version": "5"},
+				},
+			},
+			keys:     []string{"version"},
+			wantSubs: []string{"status: created", "version: 5"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatResult(tt.result, tt.keys...)
+			for _, sub := range tt.wantSubs {
+				if !strings.Contains(got, sub) {
+					t.Errorf("output %q does not contain %q", got, sub)
+				}
+			}
+		})
+	}
 }
 
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.
