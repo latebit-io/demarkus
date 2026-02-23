@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/latebit/demarkus/protocol"
@@ -21,6 +22,8 @@ type Config struct {
 	TLSCert        string        // Path to TLS certificate PEM file (empty = dev mode)
 	TLSKey         string        // Path to TLS private key PEM file (empty = dev mode)
 	TokensFile     string        // Path to TOML tokens file (empty = no auth)
+	RateLimit      float64       // Requests per second per IP (0 = disabled)
+	RateBurst      int           // Burst size for rate limiter
 }
 
 // NewConfig loads configuration from environment variables.
@@ -36,6 +39,8 @@ func NewConfig() (*Config, error) {
 	config.TLSCert = getEnv("DEMARKUS_TLS_CERT", "")
 	config.TLSKey = getEnv("DEMARKUS_TLS_KEY", "")
 	config.TokensFile = getEnv("DEMARKUS_TOKENS", "")
+	config.RateLimit = getEnvAsFloat64("DEMARKUS_RATE_LIMIT", 50)
+	config.RateBurst = getEnvAsInt("DEMARKUS_RATE_BURST", 100)
 
 	if config.ContentDir == "" {
 		return config, errors.New("DEMARKUS_ROOT environment variable is required")
@@ -67,6 +72,18 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvAsFloat64(key string, defaultValue float64) float64 {
+	valueStr := getEnv(key, "")
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(valueStr), 64)
 	if err != nil {
 		return defaultValue
 	}
