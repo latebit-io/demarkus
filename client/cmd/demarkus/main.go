@@ -75,14 +75,18 @@ func requestMain() {
 		}
 	}
 
-	// For PUBLISH: read body from -body flag or stdin.
+	// For PUBLISH: read body from -body flag or stdin (if piped).
+	// When stdin is a terminal and no -body is given, send an empty body
+	// (used for unarchiving).
 	reqBody := *body
 	if *verb == protocol.VerbPublish && reqBody == "" {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			log.Fatalf("read stdin: %v", err)
+		if info, _ := os.Stdin.Stat(); info.Mode()&os.ModeCharDevice == 0 {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				log.Fatalf("read stdin: %v", err)
+			}
+			reqBody = string(data)
 		}
-		reqBody = string(data)
 	}
 
 	client := fetch.NewClient(opts)
