@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -146,13 +147,44 @@ func hasOperation(ops []string, target string) bool {
 }
 
 // matchesAnyPath checks if reqPath matches any of the glob patterns.
-// Uses filepath.Match which supports single-level * and ? wildcards.
-// TODO: support recursive glob (**) for matching nested paths.
+// Supports single-level * and ? wildcards via filepath.Match, plus
+// recursive ** wildcards for matching across directory levels:
+//   - /docs/**       matches anything under /docs/
+//   - /docs/**/a.md  matches /docs/sub/a.md, /docs/a/b/a.md, etc.
+//   - /**            matches everything
 func matchesAnyPath(patterns []string, reqPath string) bool {
 	for _, pattern := range patterns {
-		if matched, _ := filepath.Match(pattern, reqPath); matched {
+		if matchPath(pattern, reqPath) {
 			return true
 		}
 	}
+	return false
+}
+
+// matchPath checks a single pattern against a path. It handles ** globs
+// by splitting on /**/ and checking prefix + suffix, falling back to
+// filepath.Match for patterns without **.
+func matchPath(pattern, reqPath string) bool {
+	if !strings.Contains(pattern, "**") {
+		matched, _ := filepath.Match(pattern, reqPath)
+		return matched
+	}
+
+	// Trailing /** — matches anything under the prefix.
+	if prefix, ok := strings.CutSuffix(pattern, "/**"); ok {
+		return strings.HasPrefix(reqPath, prefix+"/")
+	}
+
+	// Infix /**/ — prefix must match the start, suffix must match the end.
+	if prefix, suffix, ok := strings.Cut(pattern, "/**/"); ok {
+		if !strings.HasPrefix(reqPath, prefix+"/") {
+			return false
+		}
+		// Match the suffix against the last segment(s) using filepath.Match.
+		remaining := reqPath[len(prefix)+1:]
+		matched, _ := filepath.Match(suffix, filepath.Base(remaining))
+		return matched
+	}
+
 	return false
 }

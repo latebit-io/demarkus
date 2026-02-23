@@ -247,6 +247,38 @@ func TestAuthorizeExpiration(t *testing.T) {
 	})
 }
 
+func TestAuthorizeRecursiveGlob(t *testing.T) {
+	const secret = "recursive-secret"
+
+	ts := NewTokenStore(map[string]Token{
+		HashToken(secret): {
+			Paths:      []string{"/docs/**"},
+			Operations: []string{"publish"},
+		},
+	})
+
+	tests := []struct {
+		name    string
+		path    string
+		wantErr error
+	}{
+		{"child path", "/docs/file.md", nil},
+		{"nested path", "/docs/sub/file.md", nil},
+		{"deeply nested", "/docs/a/b/c/file.md", nil},
+		{"wrong prefix", "/other/file.md", ErrNotPermitted},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ts.Authorize(secret, tt.path, "publish")
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Authorize(%q, %q): got %v, want %v",
+					tt.path, "publish", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestMatchesAnyPath(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -262,6 +294,17 @@ func TestMatchesAnyPath(t *testing.T) {
 		{"exact match", []string{"/index.md"}, "/index.md", true},
 		{"exact no match", []string{"/index.md"}, "/other.md", false},
 		{"empty patterns", []string{}, "/docs/file.md", false},
+		// Recursive glob (**) tests.
+		{"recursive glob matches child", []string{"/docs/**"}, "/docs/file.md", true},
+		{"recursive glob matches nested", []string{"/docs/**"}, "/docs/sub/file.md", true},
+		{"recursive glob matches deeply nested", []string{"/docs/**"}, "/docs/a/b/c/file.md", true},
+		{"recursive glob no match other dir", []string{"/docs/**"}, "/other/file.md", false},
+		{"recursive glob root", []string{"/**"}, "/anything.md", true},
+		{"recursive glob root nested", []string{"/**"}, "/a/b/c.md", true},
+		{"infix glob matches", []string{"/docs/**/file.md"}, "/docs/sub/file.md", true},
+		{"infix glob matches deep", []string{"/docs/**/file.md"}, "/docs/a/b/file.md", true},
+		{"infix glob no match wrong suffix", []string{"/docs/**/file.md"}, "/docs/sub/other.md", false},
+		{"infix glob no match wrong prefix", []string{"/docs/**/file.md"}, "/other/sub/file.md", false},
 	}
 
 	for _, tt := range tests {
