@@ -9,8 +9,8 @@
 ### Auth
 - [x] Token expiration not enforced — `expires` field is loaded from TOML but `Authorize()` never checks it
 - [x] No recursive glob (`**`) in path matching — `/docs/**` now matches nested paths
-- [ ] No replay protection — auth tokens have no timestamp validation or nonce mechanism
-- [ ] No rate limiting — public-facing servers have no request flood protection
+- [x] No replay protection — not needed: QUIC uses TLS 1.3 1-RTT handshakes (0-RTT is not enabled), so the transport layer prevents replay attacks
+- [x] No rate limiting — per-IP token bucket rate limiter via `golang.org/x/time/rate`, configurable with `DEMARKUS_RATE_LIMIT` and `DEMARKUS_RATE_BURST`
 
 ### MCP
 - [ ] `mark_versions` tool missing from `demarkus-mcp` — documented in README/CLAUDE.md but not implemented. Either add the tool or update docs to match actual tool set

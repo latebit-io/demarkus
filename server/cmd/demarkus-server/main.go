@@ -16,6 +16,7 @@ import (
 	"github.com/latebit/demarkus/server/internal/auth"
 	"github.com/latebit/demarkus/server/internal/config"
 	"github.com/latebit/demarkus/server/internal/handler"
+	"github.com/latebit/demarkus/server/internal/ratelimit"
 	"github.com/latebit/demarkus/server/internal/store"
 	servertls "github.com/latebit/demarkus/server/internal/tls"
 	"github.com/quic-go/quic-go"
@@ -102,6 +103,13 @@ func main() {
 		},
 	}
 
+	var rl *ratelimit.Limiter
+	if cfg.RateLimit > 0 {
+		rl = ratelimit.New(cfg.RateLimit, cfg.RateBurst)
+		defer rl.Stop()
+		log.Printf("[INFO] rate limit: %g req/s per IP, burst %d", cfg.RateLimit, cfg.RateBurst)
+	}
+
 	log.Printf("[INFO] demarkus-server listening on %s (root: %s, idle_timeout: %v, request_timeout: %v)",
 		addr, cfg.ContentDir, cfg.IdleTimeout, cfg.RequestTimeout)
 
@@ -123,7 +131,7 @@ func main() {
 				return
 			}
 			wg.Go(func() {
-				handleConn(conn, h, cfg.RequestTimeout)
+				handleConn(conn, h, cfg.RequestTimeout, rl)
 			})
 		}
 	}()
@@ -156,11 +164,19 @@ func main() {
 	log.Printf("[INFO] demarkus-server stopped")
 }
 
-func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duration) {
+func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duration, rl *ratelimit.Limiter) {
 	for {
 		stream, err := conn.AcceptStream(context.Background())
 		if err != nil {
 			return // connection closed
+		}
+		if rl != nil {
+			ip := ratelimit.ExtractIP(conn.RemoteAddr())
+			if !rl.Allow(ip) {
+				log.Printf("[RATELIMIT] %s", ip)
+				_ = stream.Close()
+				continue
+			}
 		}
 		if requestTimeout > 0 {
 			_ = stream.SetReadDeadline(time.Now().Add(requestTimeout))

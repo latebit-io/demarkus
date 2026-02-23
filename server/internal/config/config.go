@@ -21,6 +21,8 @@ type Config struct {
 	TLSCert        string        // Path to TLS certificate PEM file (empty = dev mode)
 	TLSKey         string        // Path to TLS private key PEM file (empty = dev mode)
 	TokensFile     string        // Path to TOML tokens file (empty = no auth)
+	RateLimit      float64       // Requests per second per IP (0 = disabled)
+	RateBurst      int           // Burst size for rate limiter
 }
 
 // NewConfig loads configuration from environment variables.
@@ -36,6 +38,18 @@ func NewConfig() (*Config, error) {
 	config.TLSCert = getEnv("DEMARKUS_TLS_CERT", "")
 	config.TLSKey = getEnv("DEMARKUS_TLS_KEY", "")
 	config.TokensFile = getEnv("DEMARKUS_TOKENS", "")
+	config.RateLimit = getEnvAsFloat64("DEMARKUS_RATE_LIMIT", 50)
+	config.RateBurst = getEnvAsInt("DEMARKUS_RATE_BURST", 100)
+
+	if config.RateLimit < 0 {
+		return config, fmt.Errorf("DEMARKUS_RATE_LIMIT must be non-negative (got %v)", config.RateLimit)
+	}
+	if config.RateBurst < 0 {
+		return config, fmt.Errorf("DEMARKUS_RATE_BURST must be non-negative (got %d)", config.RateBurst)
+	}
+	if config.RateLimit > 0 && config.RateBurst < 1 {
+		return config, fmt.Errorf("DEMARKUS_RATE_BURST must be at least 1 when rate limiting is enabled (got %d)", config.RateBurst)
+	}
 
 	if config.ContentDir == "" {
 		return config, errors.New("DEMARKUS_ROOT environment variable is required")
@@ -67,6 +81,18 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvAsFloat64(key string, defaultValue float64) float64 {
+	valueStr := getEnv(key, "")
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseFloat(valueStr, 64)
 	if err != nil {
 		return defaultValue
 	}
