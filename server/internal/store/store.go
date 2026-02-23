@@ -30,6 +30,7 @@ type Document struct {
 	Content  []byte
 	Modified time.Time
 	Version  int
+	Archived bool
 }
 
 // VersionInfo describes a single version of a document.
@@ -97,6 +98,7 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 		Content:  data,
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  ver,
+		Archived: isArchived(data),
 	}, nil
 }
 
@@ -290,7 +292,88 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 		Content:  data,
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  version,
+		Archived: isArchived(data),
 	}, nil
+}
+
+// Archive marks the current version of a document as archived by updating
+// the archived flag in its frontmatter. This prevents FETCH from serving
+// the document but preserves all version history.
+func (s *Store) Archive(reqPath string, archived bool) error {
+	if _, err := s.resolve(reqPath); err != nil {
+		if os.IsNotExist(err) {
+			return os.ErrNotExist
+		}
+		return fmt.Errorf("resolve path: %w", err)
+	}
+
+	cleaned := filepath.Clean(reqPath)
+	cleaned = strings.TrimLeft(cleaned, "/")
+	base := filepath.Base(cleaned)
+	dir := filepath.Dir(cleaned)
+
+	currentVersion := s.CurrentVersion(reqPath)
+	if currentVersion == 0 {
+		return os.ErrNotExist
+	}
+
+	versionsDir := filepath.Join(s.root, dir, "versions")
+	versionFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, currentVersion))
+
+	// Read current version file
+	data, err := os.ReadFile(versionFile)
+	if err != nil {
+		return fmt.Errorf("read version file: %w", err)
+	}
+
+	// Update archived flag in frontmatter
+	content := string(data)
+	if !strings.HasPrefix(content, "---\n") {
+		return fmt.Errorf("invalid version file format")
+	}
+
+	end := strings.Index(content[4:], "\n---\n")
+	if end == -1 {
+		return fmt.Errorf("invalid version file format")
+	}
+
+	frontmatter := content[4 : 4+end]
+	rest := content[4+end+5:]
+
+	// Parse and update frontmatter
+	lines := strings.Split(frontmatter, "\n")
+	found := false
+	for i, line := range lines {
+		key, _, ok := strings.Cut(line, ": ")
+		if ok && strings.TrimSpace(key) == "archived" {
+			if archived {
+				lines[i] = "archived: true"
+			} else {
+				lines[i] = "archived: false"
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		// Add archived field if not present
+		if archived {
+			lines = append(lines, "archived: true")
+		} else {
+			lines = append(lines, "archived: false")
+		}
+	}
+
+	// Reconstruct the file
+	newFrontmatter := strings.Join(lines, "\n")
+	newContent := "---\n" + newFrontmatter + "\n---\n" + rest
+
+	// Write back to the version file
+	if err := os.WriteFile(versionFile, []byte(newContent), 0o644); err != nil {
+		return fmt.Errorf("write version file: %w", err)
+	}
+
+	return nil
 }
 
 // Write creates a new version of a document. Every call produces a new
@@ -382,6 +465,7 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 	var sb strings.Builder
 	sb.WriteString("---\n")
 	sb.WriteString(fmt.Sprintf("version: %d\n", next))
+	sb.WriteString("archived: false\n")
 	if next > 1 {
 		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next-1))
 		prevData, err := os.ReadFile(prevFile)
@@ -554,4 +638,24 @@ func extractPreviousHash(data []byte) string {
 		}
 	}
 	return ""
+}
+
+// isArchived checks if a version file is marked as archived in its frontmatter.
+func isArchived(data []byte) bool {
+	content := string(data)
+	if !strings.HasPrefix(content, "---\n") {
+		return false
+	}
+	end := strings.Index(content[4:], "\n---\n")
+	if end == -1 {
+		return false
+	}
+	block := content[4 : 4+end]
+	for line := range strings.SplitSeq(block, "\n") {
+		key, val, ok := strings.Cut(line, ": ")
+		if ok && strings.TrimSpace(key) == "archived" {
+			return strings.TrimSpace(val) == "true"
+		}
+	}
+	return false
 }

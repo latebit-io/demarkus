@@ -223,7 +223,7 @@ func TestWrite_NewDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read version file: %v", err)
 	}
-	if !strings.HasPrefix(string(vData), "---\nversion: 1\n---\n") {
+	if !strings.HasPrefix(string(vData), "---\nversion: 1\narchived: false\n---\n") {
 		t.Errorf("v1 should have store frontmatter without previous-hash, got: %q", string(vData))
 	}
 
