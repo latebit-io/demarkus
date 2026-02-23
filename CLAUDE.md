@@ -63,15 +63,18 @@ version: 1
 # Content here
 ```
 
-Status values are text-based strings (`ok`, `not-found`, `server-error`), not numeric codes.
+Status values are text-based strings (`ok`, `created`, `not-modified`, `not-found`, `archived`, `unauthorized`, `not-permitted`, `server-error`), not numeric codes.
 
 ### Key Design Decisions
 
 - **`handler.Stream` interface** (`io.ReadWriteCloser`): decouples handler from QUIC, enabling fast unit tests with mock streams (no network needed)
 - **YAML frontmatter parsed as `map[string]string`**: avoids YAML auto-typing timestamps/numbers into Go types
 - **Server strips file frontmatter and re-emits protocol frontmatter**: preserves `version` from files, adds `modified` from filesystem mtime
-- **Ed25519 self-signed TLS certs generated in-memory** for dev (`server/internal/tls/`). Client uses `InsecureSkipVerify` in dev mode
+- **Versioned store with symlinks**: `doc.md` is a symlink to `versions/doc.md.v<N>`. Each version includes a SHA-256 hash chain linking to its predecessor for integrity verification
+- **Capability-based auth**: SHA-256 hashed tokens in TOML config, per-path glob matching, per-operation grants (`read`, `publish`). Server stores hashes, never raw tokens
+- **Ed25519 self-signed TLS certs generated in-memory** for dev (`server/internal/tls/`). Production TLS via PEM cert/key loading with SIGHUP live reload. Client uses `InsecureSkipVerify` only with `--insecure` flag
 - **Path traversal protection**: `filepath.Clean` + explicit `..` check, returns `not-found` (not `forbidden`) to avoid info disclosure
+- **Client-side caching**: filesystem-backed at `~/.mark/cache` with etag and `if-modified-since` conditional requests for revalidation
 
 ### Protocol Constants
 
@@ -120,4 +123,23 @@ While in `0.x.x`, breaking changes bump minor (not major). Major `1.0.0` will be
 
 ## Current State
 
-Phase 1 MVP (read-only). `FETCH` and `LIST` verbs are implemented. Server uses env-based config (`DEMARKUS_` prefix) with flag overrides for dev. No auth, no versioning, no caching, no TUI — just QUIC transport serving markdown files end-to-end. See `docs/DESIGN.md` for the full protocol specification and roadmap.
+Phase 2 Read/Write MVP. All core verbs are implemented: `FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `ARCHIVE`.
+
+**Server** (`server/`):
+- Versioned document store with append-only history and SHA-256 hash chain verification
+- Capability-based auth with per-path glob matching and per-operation grants (`server/internal/auth/`)
+- Conditional responses (etag, if-modified-since)
+- Production TLS with PEM cert/key and SIGHUP live reload
+- Env-based config (`DEMARKUS_` prefix) with flag overrides
+- Graceful shutdown with 10-second drain timeout
+- QUIC stream retry (up to 5 attempts for transient errors)
+- 10MB max file size enforced at handler and store layers
+
+**Client** (`client/`):
+- `demarkus` — CLI supporting all verbs, response caching with etag revalidation, token management
+- `demarkus-tui` — Bubble Tea terminal browser with markdown rendering (Glamour), link navigation, back/forward history, document graph view, address bar, mouse support
+- `demarkus-mcp` — MCP server exposing `mark_fetch`, `mark_list`, `mark_versions`, `mark_graph`, `mark_publish`, `mark_archive` for LLM agents
+
+**Verbs under review**: `SEARCH` — use case not yet clear enough to implement.
+
+See `docs/DESIGN.md` for the full protocol specification and roadmap.

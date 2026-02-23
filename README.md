@@ -6,7 +6,7 @@ Demarkus reimagines the web around markdown — a format structured and optimize
 
 ## Project Status
 
-🟡 **Phase 2 — Read/Write MVP** — `FETCH`, `LIST`, `VERSIONS`, and `PUBLISH` are all working. Auth, caching, TUI browser, MCP server, and link-graph crawler are implemented.
+🟡 **Phase 2 — Read/Write MVP** — `FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, and `ARCHIVE` are all working. Auth, caching, TUI browser, MCP server, and link-graph crawler are implemented.
 
 ## Quick Start
 
@@ -35,7 +35,7 @@ make all
 - **`server/`** — QUIC server with versioned document store, capability-based auth, conditional responses, path traversal protection, and hot TLS reload.
 - **`client/demarkus`** — CLI for scripting and automation (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `graph`). Response caching with etag revalidation.
 - **`client/demarkus-tui`** — Terminal browser with markdown rendering, link navigation, back/forward history, and document graph view.
-- **`client/demarkus-mcp`** — MCP server exposing `mark_fetch`, `mark_list`, `mark_graph`, and `mark_publish` tools for LLM agents. Compatible with Claude Desktop.
+- **`client/demarkus-mcp`** — MCP server exposing `mark_fetch`, `mark_list`, `mark_versions`, `mark_graph`, `mark_publish`, and `mark_archive` tools for LLM agents. Compatible with Claude Desktop.
 
 ## Protocol at a Glance
 
@@ -59,9 +59,10 @@ version: 1
 Welcome to Demarkus!
 ```
 
-**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `PUBLISH`
-**Planned**: `APPEND` · `ARCHIVE` · `SEARCH`
-**Status values**: `ok` · `created` · `not-modified` · `not-found` · `unauthorized` · `not-permitted` · `server-error`
+**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `PUBLISH` · `ARCHIVE`
+**Planned**: `APPEND`
+**Under review**: `SEARCH`
+**Status values**: `ok` · `created` · `not-modified` · `not-found` · `archived` · `unauthorized` · `not-permitted` · `server-error`
 
 ## Core Principles
 

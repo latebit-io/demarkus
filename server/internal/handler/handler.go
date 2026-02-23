@@ -312,7 +312,7 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 	token := req.Metadata["auth"]
 	if err := ts.Authorize(token, req.Path, "publish"); err != nil {
 		switch {
-		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken):
+		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken), errors.Is(err, auth.ErrTokenExpired):
 			log.Printf("[AUTH] unauthorized archive attempt: %s", sanitize(req.Path))
 			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
 		default:
@@ -374,7 +374,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	token := req.Metadata["auth"]
 	if err := ts.Authorize(token, req.Path, "publish"); err != nil {
 		switch {
-		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken):
+		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken), errors.Is(err, auth.ErrTokenExpired):
 			log.Printf("[AUTH] unauthorized publish attempt: %s", sanitize(req.Path))
 			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
 		default:

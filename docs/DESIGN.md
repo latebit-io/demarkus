@@ -137,7 +137,7 @@ Document-centric operations that align with markdown usage:
 - **APPEND**: Add content to end of document (comments, logs, notes) — *under evaluation, deferred until a concrete use case emerges*
 - **ARCHIVE**: Remove a document from active serving (preserves in version history)
 - **LIST**: Get directory contents or document index
-- **SEARCH**: Find documents matching query
+- **SEARCH**: Find documents matching query — *under review, use case not yet clear*
 - **VERSIONS**: Get version history for a document
 
 ### Path Structure & Parameters
@@ -1236,20 +1236,20 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 **Server**:
 - ~~PUBLISH support~~
 - APPEND support
-- ARCHIVE support
+- ~~ARCHIVE support~~
 - ~~Capability-based authentication~~
 - ~~Versioning system (immutable versions with hash chain verification)~~
 - Audit logging (basic console logging done, structured persistence remaining)
 
 **Client**:
 - Document editing (open in $EDITOR)
-- Client-side token management (server-side token generation done via `demarkus-token`)
+- ~~Client-side token management~~
 - Conflict resolution
 
 ### Phase 3: Advanced Features
 
 **Server**:
-- Full-text search
+- Full-text search — *SEARCH verb under review, use case not yet clear*
 - Directory indexes
 - Content addressing
 - Federation support
