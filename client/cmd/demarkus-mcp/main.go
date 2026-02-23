@@ -134,8 +134,9 @@ func markGraphTool(host string) mcp.Tool {
 func markVersionsTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_versions",
 		mcp.WithDescription(
-			"Retrieve the version history of a document. "+
-				"Returns a list of all versions with timestamps and hash chain validation status. "+
+			"Retrieve the version history of a document from a Mark Protocol server. "+
+				"Returns total and current version numbers, hash chain validation status, "+
+				"and a list of all versions with timestamps. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -236,7 +237,17 @@ func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("versions failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("status: %s\n\n%s", result.Response.Status, result.Response.Body)), nil
+	var b strings.Builder
+	fmt.Fprintf(&b, "status: %s\n", result.Response.Status)
+	for _, key := range []string{"total", "current", "chain-valid", "chain-error"} {
+		if v, ok := result.Response.Metadata[key]; ok {
+			fmt.Fprintf(&b, "%s: %s\n", key, v)
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString(result.Response.Body)
+
+	return mcp.NewToolResultText(b.String()), nil
 }
 
 func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
