@@ -123,6 +123,42 @@ operations = ["publish"]
 		}
 	})
 
+	t.Run("bare double star pattern", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "tokens.toml")
+		data := `[tokens.bad]
+hash = "sha256-bad"
+paths = ["/docs**"]
+operations = ["publish"]
+`
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := LoadTokens(path)
+		if err == nil {
+			t.Fatal("expected error for bare ** without slash delimiters")
+		}
+	})
+
+	t.Run("multiple double star pattern", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "tokens.toml")
+		data := `[tokens.bad]
+hash = "sha256-bad"
+paths = ["/a/**/b/**/c"]
+operations = ["publish"]
+`
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := LoadTokens(path)
+		if err == nil {
+			t.Fatal("expected error for multiple ** wildcards")
+		}
+	})
+
 	t.Run("invalid expires format", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "tokens.toml")
@@ -317,12 +353,14 @@ func TestMatchesAnyPath(t *testing.T) {
 		{"recursive glob matches nested", []string{"/docs/**"}, "/docs/sub/file.md", true},
 		{"recursive glob matches deeply nested", []string{"/docs/**"}, "/docs/a/b/c/file.md", true},
 		{"recursive glob no match other dir", []string{"/docs/**"}, "/other/file.md", false},
+		{"recursive glob no match prefix itself", []string{"/docs/**"}, "/docs", false},
 		{"recursive glob root", []string{"/**"}, "/anything.md", true},
 		{"recursive glob root nested", []string{"/**"}, "/a/b/c.md", true},
 		{"infix glob matches", []string{"/docs/**/file.md"}, "/docs/sub/file.md", true},
 		{"infix glob matches deep", []string{"/docs/**/file.md"}, "/docs/a/b/file.md", true},
 		{"infix glob no match wrong suffix", []string{"/docs/**/file.md"}, "/docs/sub/other.md", false},
 		{"infix glob no match wrong prefix", []string{"/docs/**/file.md"}, "/other/sub/file.md", false},
+		{"infix glob no intermediate dir", []string{"/docs/**/file.md"}, "/docs/file.md", true},
 		// Multi-segment suffix after **.
 		{"infix glob multi-segment suffix", []string{"/docs/**/sub/*.md"}, "/docs/a/sub/x.md", true},
 		{"infix glob multi-segment suffix deep", []string{"/docs/**/sub/*.md"}, "/docs/a/b/sub/notes.md", true},
