@@ -21,8 +21,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -64,10 +65,10 @@ var (
 //	hash = "sha256-abc123..."
 //	paths = ["/docs/*"]
 //	operations = ["publish"]
-func LoadTokens(path string) (*TokenStore, error) {
+func LoadTokens(filePath string) (*TokenStore, error) {
 	var tf tokensFile
-	if _, err := toml.DecodeFile(path, &tf); err != nil {
-		return nil, fmt.Errorf("load tokens file %q: %w", path, err)
+	if _, err := toml.DecodeFile(filePath, &tf); err != nil {
+		return nil, fmt.Errorf("load tokens file %q: %w", filePath, err)
 	}
 	if tf.Tokens == nil {
 		tf.Tokens = make(map[string]Token)
@@ -85,6 +86,11 @@ func LoadTokens(path string) (*TokenStore, error) {
 				return nil, fmt.Errorf("token %q has invalid expires %q: %w", label, tok.Expires, err)
 			}
 			tok.expiresAt = t
+		}
+		for _, p := range tok.Paths {
+			if err := validatePattern(p); err != nil {
+				return nil, fmt.Errorf("token %q has invalid path pattern %q: %w", label, p, err)
+			}
 		}
 		if existing, ok := byHash[tok.Hash]; ok {
 			return nil, fmt.Errorf("duplicate hash for labels %q and %q", existing.Label, label)
@@ -146,13 +152,80 @@ func hasOperation(ops []string, target string) bool {
 }
 
 // matchesAnyPath checks if reqPath matches any of the glob patterns.
-// Uses filepath.Match which supports single-level * and ? wildcards.
-// TODO: support recursive glob (**) for matching nested paths.
+// Supports single-level * and ? wildcards via path.Match, plus
+// recursive ** wildcards for matching across directory levels:
+//   - /docs/**       matches anything under /docs/
+//   - /docs/**/a.md  matches /docs/sub/a.md, /docs/a/b/a.md, etc.
+//   - /**            matches everything
+//
+// Only one ** wildcard is supported per pattern.
+//
+// Uses path.Match (not filepath.Match) because token paths are URL-style
+// forward slashes, and filepath.Match behavior varies by OS.
 func matchesAnyPath(patterns []string, reqPath string) bool {
 	for _, pattern := range patterns {
-		if matched, _ := filepath.Match(pattern, reqPath); matched {
+		if matchPath(pattern, reqPath) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchPath checks a single pattern against a path. It handles ** globs
+// by splitting on /**/ and checking prefix + suffix, falling back to
+// path.Match for patterns without **.
+// Patterns are validated at load time by validatePattern, so path.Match
+// errors are unreachable here and safely ignored.
+func matchPath(pattern, reqPath string) bool {
+	if !strings.Contains(pattern, "**") {
+		matched, _ := path.Match(pattern, reqPath)
+		return matched
+	}
+
+	// Trailing /** — matches anything under the prefix.
+	if prefix, ok := strings.CutSuffix(pattern, "/**"); ok {
+		return strings.HasPrefix(reqPath, prefix+"/")
+	}
+
+	// Infix /**/ — prefix must match the start, suffix must match a trailing
+	// subpath. The suffix can span multiple segments (e.g. /**/sub/*.md).
+	if prefix, suffix, ok := strings.Cut(pattern, "/**/"); ok {
+		if !strings.HasPrefix(reqPath, prefix+"/") {
+			return false
+		}
+		remaining := reqPath[len(prefix)+1:]
+		// Try matching the suffix against every possible tail starting at
+		// a segment boundary, so /docs/**/sub/*.md matches /docs/a/sub/x.md.
+		for i := range len(remaining) {
+			if i > 0 && remaining[i-1] != '/' {
+				continue
+			}
+			if matched, _ := path.Match(suffix, remaining[i:]); matched {
+				return true
+			}
+		}
+		return false
+	}
+
+	return false
+}
+
+// validatePattern checks that a glob pattern has valid syntax. At most one
+// ** wildcard is supported, and it must appear as /** (trailing) or /**/
+// (infix). Bare ** without surrounding slashes is rejected.
+func validatePattern(pattern string) error {
+	if n := strings.Count(pattern, "**"); n > 1 {
+		return fmt.Errorf("only one ** wildcard is supported per pattern")
+	} else if n == 1 {
+		// The single ** must be slash-delimited: /**/ or /**.
+		stripped := strings.ReplaceAll(pattern, "/**/", "/")
+		stripped = strings.TrimSuffix(stripped, "/**")
+		if strings.Contains(stripped, "**") {
+			return fmt.Errorf("** must be delimited by slashes (use /** or /**/)")
+		}
+	}
+	// Validate the non-** portions with path.Match.
+	clean := strings.ReplaceAll(pattern, "**", "placeholder")
+	_, err := path.Match(clean, clean)
+	return err
 }

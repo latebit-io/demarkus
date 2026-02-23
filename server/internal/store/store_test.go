@@ -294,6 +294,68 @@ func TestWrite_PathTraversal(t *testing.T) {
 	}
 }
 
+func TestWrite_CreatesSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Publish to a path whose parent directory does not exist yet.
+	doc, err := s.Write("/newdir/doc.md", []byte("# Hello\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version: got %d, want 1", doc.Version)
+	}
+
+	// Verify the version file was created on disk.
+	versionFile := filepath.Join(root, "newdir", "versions", "doc.md.v1")
+	if _, err := os.Stat(versionFile); err != nil {
+		t.Errorf("version file not found: %v", err)
+	}
+}
+
+func TestWrite_SubdirectoryTraversal(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Traversal via nested subdirectory path.
+	traversals := []string{
+		"/subdir/../../etc/passwd",
+		"/newdir/../../../tmp/evil.md",
+		"/../outside/doc.md",
+	}
+	for _, p := range traversals {
+		_, err := s.Write(p, []byte("evil"))
+		if err == nil {
+			t.Errorf("expected error for traversal path %q", p)
+		}
+	}
+}
+
+func TestWrite_SymlinkSubdirectoryEscape(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	s := New(root)
+
+	// Create a symlink inside the content root pointing outside.
+	symlinkDir := filepath.Join(root, "escaped")
+	if err := os.Symlink(outsideDir, symlinkDir); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	// Writing through the symlink should be blocked — the resolved path
+	// is outside the content root.
+	_, err := s.Write("/escaped/doc.md", []byte("# Escaped\n"))
+	if err == nil {
+		t.Fatal("expected error for symlink escape write")
+	}
+
+	// Verify nothing was written outside the root.
+	if _, err := os.Stat(filepath.Join(outsideDir, "versions")); err == nil {
+		t.Error("directory was created outside content root via symlink escape")
+	}
+}
+
 func TestWrite_TooLarge(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
