@@ -267,9 +267,9 @@ func (m model) handleViewportReady() (tea.Model, tea.Cmd) {
 		}
 		m.pendingBody = ""
 		m.viewport.GotoTop()
-	}
-	if m.err != nil {
+	} else if m.err != nil {
 		m.viewport.SetContent(errorView(m.err))
+		m.viewport.GotoTop()
 	}
 	return m, nil
 }
@@ -305,6 +305,7 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	m.loading = false
 	if msg.err != nil {
 		m.err = msg.err
+		m.pendingBody = ""
 		m.status = ""
 		m.metadata = nil
 		m.fromCache = false
@@ -371,6 +372,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.loading = true
 				m.fetchSeq++
 				m.err = nil
+				m.pendingBody = ""
 				return m, m.doFetch(raw)
 			}
 			return m, nil
