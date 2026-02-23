@@ -89,6 +89,18 @@ func TestNewConfig_RateLimitDisabled(t *testing.T) {
 	}
 }
 
+func TestNewConfig_RateBurstZeroWithLimitEnabled(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEMARKUS_ROOT", dir)
+	t.Setenv("DEMARKUS_RATE_LIMIT", "50")
+	t.Setenv("DEMARKUS_RATE_BURST", "0")
+
+	_, err := NewConfig()
+	if err == nil {
+		t.Fatal("expected error for zero burst with rate limiting enabled")
+	}
+}
+
 func TestNewConfig_MissingRoot(t *testing.T) {
 	if err := os.Unsetenv("DEMARKUS_ROOT"); err != nil {
 		t.Fatalf("unsetenv: %v", err)
