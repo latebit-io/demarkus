@@ -13,7 +13,8 @@
 - [x] No rate limiting — per-IP token bucket rate limiter via `golang.org/x/time/rate`, configurable with `DEMARKUS_RATE_LIMIT` and `DEMARKUS_RATE_BURST`
 
 ### MCP
-- [ ] `mark_versions` tool missing from `demarkus-mcp` — documented in README/CLAUDE.md but not implemented. Either add the tool or update docs to match actual tool set
+- [x] `mark_versions` tool missing from `demarkus-mcp` — added tool definition, handler, and tests
+- [ ] MCP handlers drop response metadata — `mark_fetch` should expose `version`, `modified`, `etag`; `mark_publish`/`mark_archive` should expose `version`
 
 ### CI/CD
 - [ ] CI does not build TUI or MCP — only `demarkus` (CLI) is built, so build regressions in `demarkus-tui` and `demarkus-mcp` pass CI silently
