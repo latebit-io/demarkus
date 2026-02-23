@@ -553,9 +553,8 @@ func (s *Store) VerifyChain(reqPath string) error {
 	dir := filepath.Dir(cleaned)
 	versionsDir := filepath.Join(s.root, dir, "versions")
 
-	for i := 1; i < len(versions); i++ {
-		prev := versions[i-1]
-		curr := versions[i]
+	for i, curr := range versions[1:] {
+		prev := versions[i]
 
 		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, prev.Version))
 		currFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, curr.Version))
