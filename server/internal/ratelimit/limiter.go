@@ -4,6 +4,7 @@ package ratelimit
 import (
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -11,7 +12,7 @@ import (
 
 type entry struct {
 	limiter  *rate.Limiter
-	lastSeen time.Time
+	lastSeen atomic.Int64 // UnixNano timestamp
 }
 
 // Limiter tracks per-IP request rates using a token bucket algorithm.
@@ -38,14 +39,14 @@ func New(r float64, burst int) *Limiter {
 
 // Allow reports whether a request from the given IP should be permitted.
 func (l *Limiter) Allow(ip string) bool {
-	now := time.Now()
-	v, _ := l.ips.LoadOrStore(ip, &entry{
-		limiter:  rate.NewLimiter(l.rate, l.burst),
-		lastSeen: now,
-	})
-	e := v.(*entry)
-	e.lastSeen = now
-	return e.limiter.Allow()
+	now := time.Now().UnixNano()
+	e := &entry{limiter: rate.NewLimiter(l.rate, l.burst)}
+	e.lastSeen.Store(now)
+
+	v, _ := l.ips.LoadOrStore(ip, e)
+	actual := v.(*entry)
+	actual.lastSeen.Store(now)
+	return actual.limiter.Allow()
 }
 
 // Stop terminates the background cleanup goroutine.
@@ -63,9 +64,10 @@ func (l *Limiter) cleanup() {
 		case <-l.stop:
 			return
 		case now := <-ticker.C:
+			cutoff := now.Add(-staleAfter).UnixNano()
 			l.ips.Range(func(key, value any) bool {
 				e := value.(*entry)
-				if now.Sub(e.lastSeen) > staleAfter {
+				if e.lastSeen.Load() < cutoff {
 					l.ips.Delete(key)
 				}
 				return true

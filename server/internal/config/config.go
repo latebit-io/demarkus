@@ -42,6 +42,12 @@ func NewConfig() (*Config, error) {
 	config.RateLimit = getEnvAsFloat64("DEMARKUS_RATE_LIMIT", 50)
 	config.RateBurst = getEnvAsInt("DEMARKUS_RATE_BURST", 100)
 
+	if config.RateLimit < 0 {
+		return config, fmt.Errorf("DEMARKUS_RATE_LIMIT must be non-negative (got %v)", config.RateLimit)
+	}
+	if config.RateBurst < 0 {
+		return config, fmt.Errorf("DEMARKUS_RATE_BURST must be non-negative (got %d)", config.RateBurst)
+	}
 	if config.RateLimit > 0 && config.RateBurst < 1 {
 		return config, fmt.Errorf("DEMARKUS_RATE_BURST must be at least 1 when rate limiting is enabled (got %d)", config.RateBurst)
 	}

@@ -101,6 +101,42 @@ func TestNewConfig_RateBurstZeroWithLimitEnabled(t *testing.T) {
 	}
 }
 
+func TestNewConfig_NegativeRateLimit(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEMARKUS_ROOT", dir)
+	t.Setenv("DEMARKUS_RATE_LIMIT", "-10")
+
+	_, err := NewConfig()
+	if err == nil {
+		t.Fatal("expected error for negative rate limit")
+	}
+}
+
+func TestNewConfig_NegativeRateBurst(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEMARKUS_ROOT", dir)
+	t.Setenv("DEMARKUS_RATE_BURST", "-5")
+
+	_, err := NewConfig()
+	if err == nil {
+		t.Fatal("expected error for negative rate burst")
+	}
+}
+
+func TestNewConfig_InvalidRateLimit(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEMARKUS_ROOT", dir)
+	t.Setenv("DEMARKUS_RATE_LIMIT", "not-a-number")
+
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RateLimit != 50 {
+		t.Errorf("rate limit: got %v, want default %v", cfg.RateLimit, 50.0)
+	}
+}
+
 func TestNewConfig_MissingRoot(t *testing.T) {
 	if err := os.Unsetenv("DEMARKUS_ROOT"); err != nil {
 		t.Fatalf("unsetenv: %v", err)

@@ -58,6 +58,16 @@ func TestExtractIP(t *testing.T) {
 			addr: &net.UDPAddr{IP: net.ParseIP("::1"), Port: 443},
 			want: "::1",
 		},
+		{
+			name: "tcp addr",
+			addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 8080},
+			want: "10.0.0.1",
+		},
+		{
+			name: "ipv6 with zone",
+			addr: &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 443, Zone: "eth0"},
+			want: "fe80::1%eth0",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
