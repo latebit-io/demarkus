@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadTokens(t *testing.T) {
@@ -99,6 +100,28 @@ expires = "2026-12-31T23:59:59Z"
 		if tok.Expires != "2026-12-31T23:59:59Z" {
 			t.Errorf("expires: got %q, want %q", tok.Expires, "2026-12-31T23:59:59Z")
 		}
+		if tok.expiresAt.IsZero() {
+			t.Error("expiresAt should be parsed, got zero")
+		}
+	})
+
+	t.Run("invalid expires format", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "tokens.toml")
+		data := `[tokens.bad]
+hash = "sha256-bad"
+paths = ["/*"]
+operations = ["publish"]
+expires = "not-a-date"
+`
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := LoadTokens(path)
+		if err == nil {
+			t.Fatal("expected error for invalid expires format")
+		}
 	})
 }
 
@@ -170,6 +193,58 @@ func TestAuthorize(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAuthorizeExpiration(t *testing.T) {
+	const secret = "expiring-secret"
+
+	t.Run("expired token", func(t *testing.T) {
+		ts := NewTokenStore(map[string]Token{
+			HashToken(secret): {
+				Paths:      []string{"/*"},
+				Operations: []string{"publish"},
+				expiresAt:  time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+			},
+		})
+		ts.now = func() time.Time { return time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC) }
+
+		err := ts.Authorize(secret, "/doc.md", "publish")
+		if !errors.Is(err, ErrTokenExpired) {
+			t.Errorf("got %v, want ErrTokenExpired", err)
+		}
+	})
+
+	t.Run("not yet expired token", func(t *testing.T) {
+		ts := NewTokenStore(map[string]Token{
+			HashToken(secret): {
+				Paths:      []string{"/*"},
+				Operations: []string{"publish"},
+				expiresAt:  time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+			},
+		})
+		ts.now = func() time.Time { return time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC) }
+
+		err := ts.Authorize(secret, "/doc.md", "publish")
+		if err != nil {
+			t.Errorf("got %v, want nil", err)
+		}
+	})
+
+	t.Run("no expiry set", func(t *testing.T) {
+		ts := NewTokenStore(map[string]Token{
+			HashToken(secret): {
+				Paths:      []string{"/*"},
+				Operations: []string{"publish"},
+				// expiresAt is zero value — no expiry
+			},
+		})
+		ts.now = func() time.Time { return time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+		err := ts.Authorize(secret, "/doc.md", "publish")
+		if err != nil {
+			t.Errorf("got %v, want nil", err)
+		}
+	})
 }
 
 func TestMatchesAnyPath(t *testing.T) {

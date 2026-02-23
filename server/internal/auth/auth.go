@@ -23,19 +23,19 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
 // Token represents a single capability token's permissions.
 type Token struct {
-	Hash       string   `toml:"hash"`
-	Paths      []string `toml:"paths"`
-	Operations []string `toml:"operations"`
-	Label      string   `toml:"-"` // set from TOML key, not stored in file
-	// TODO: enforce token expiration. The field is loaded from TOML but
-	// not checked by Authorize. Future increment.
-	Expires string `toml:"expires"`
+	Hash       string    `toml:"hash"`
+	Paths      []string  `toml:"paths"`
+	Operations []string  `toml:"operations"`
+	Label      string    `toml:"-"`       // set from TOML key, not stored in file
+	Expires    string    `toml:"expires"` // RFC 3339 timestamp, empty means no expiry
+	expiresAt  time.Time // parsed from Expires at load time
 }
 
 // tokensFile is the top-level TOML structure.
@@ -46,6 +46,7 @@ type tokensFile struct {
 // TokenStore holds loaded tokens and provides authorization checks.
 type TokenStore struct {
 	tokens map[string]Token // keyed by hash for fast lookup
+	now    func() time.Time // injectable clock for testing
 }
 
 // Sentinel errors for authorization results.
@@ -53,6 +54,7 @@ var (
 	ErrNoToken      = errors.New("no auth token provided")
 	ErrInvalidToken = errors.New("invalid auth token")
 	ErrNotPermitted = errors.New("insufficient permissions")
+	ErrTokenExpired = errors.New("token has expired")
 )
 
 // LoadTokens reads a TOML tokens file and returns a TokenStore.
@@ -77,17 +79,24 @@ func LoadTokens(path string) (*TokenStore, error) {
 		if tok.Hash == "" {
 			return nil, fmt.Errorf("token %q has empty hash", label)
 		}
+		if tok.Expires != "" {
+			t, err := time.Parse(time.RFC3339, tok.Expires)
+			if err != nil {
+				return nil, fmt.Errorf("token %q has invalid expires %q: %w", label, tok.Expires, err)
+			}
+			tok.expiresAt = t
+		}
 		if existing, ok := byHash[tok.Hash]; ok {
 			return nil, fmt.Errorf("duplicate hash for labels %q and %q", existing.Label, label)
 		}
 		byHash[tok.Hash] = tok
 	}
-	return &TokenStore{tokens: byHash}, nil
+	return &TokenStore{tokens: byHash, now: time.Now}, nil
 }
 
 // NewTokenStore creates a TokenStore from an in-memory token map keyed by hash.
 func NewTokenStore(tokens map[string]Token) *TokenStore {
-	return &TokenStore{tokens: tokens}
+	return &TokenStore{tokens: tokens, now: time.Now}
 }
 
 // HashToken returns the SHA-256 hash of a raw token in the format "sha256-<hex>".
@@ -105,6 +114,7 @@ func HashToken(raw string) string {
 // Returns nil if authorized, or one of the sentinel errors:
 //   - ErrNoToken: token is empty
 //   - ErrInvalidToken: token not recognized
+//   - ErrTokenExpired: token has passed its expiration time
 //   - ErrNotPermitted: token exists but lacks permission for this path/operation
 //
 // TODO: timestamp validation for replay protection (±5 min window, nonce per token).
@@ -118,6 +128,9 @@ func (ts *TokenStore) Authorize(token, reqPath, operation string) error {
 	t, ok := ts.tokens[hashed]
 	if !ok {
 		return ErrInvalidToken
+	}
+	if !t.expiresAt.IsZero() && ts.now().After(t.expiresAt) {
+		return ErrTokenExpired
 	}
 	if !hasOperation(t.Operations, operation) {
 		return ErrNotPermitted
