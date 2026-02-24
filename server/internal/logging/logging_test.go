@@ -78,9 +78,9 @@ func TestNew(t *testing.T) {
 			name:       "unknown level defaults to info",
 			format:     "text",
 			level:      "banana",
-			logLevel:   "info",
-			msg:        "hello",
-			wantOutput: true,
+			logLevel:   "debug",
+			msg:        "filtered",
+			wantOutput: false,
 		},
 	}
 
