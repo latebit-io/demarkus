@@ -12,7 +12,7 @@ If you're new, start with the CLI and confirm you can fetch a document.
 
 ## CLI (`demarkus`)
 
-The CLI supports `FETCH`, `LIST`, `VERSIONS`, and `PUBLISH`, plus a `graph` subcommand.
+The CLI supports `FETCH`, `LIST`, `VERSIONS`, and `PUBLISH`, plus `edit` and `graph` subcommands.
 
 ### Common commands
 
@@ -31,6 +31,18 @@ demarkus --insecure -X VERSIONS mark://localhost:6309/hello.md
 
 # Fetch a specific version
 demarkus --insecure mark://localhost:6309/hello.md/v1
+```
+
+### Edit a document
+
+Opens a document in `$EDITOR` (falls back to `vi`), then publishes changes on save. If the document doesn't exist, creates a new one. Empty documents are rejected.
+
+```bash
+# Edit an existing document
+demarkus edit --insecure -auth $TOKEN mark://localhost:6309/hello.md
+
+# Create a new document (opens empty editor)
+demarkus edit --insecure -auth $TOKEN mark://localhost:6309/new-doc.md
 ```
 
 ### Graph crawl

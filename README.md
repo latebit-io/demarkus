@@ -25,6 +25,9 @@ make all
 # List a directory
 ./client/bin/demarkus --insecure -X LIST mark://localhost:6309/
 
+# Edit a document in $EDITOR
+./client/bin/demarkus edit --insecure -auth $TOKEN mark://localhost:6309/index.md
+
 # Browse in the terminal
 ./client/bin/demarkus-tui --insecure mark://localhost:6309/index.md
 ```
@@ -33,7 +36,7 @@ make all
 
 - **`protocol/`** — Pure Go library for the Mark Protocol wire format. Parsing, serialization, shared constants. No network code.
 - **`server/`** — QUIC server with versioned document store, capability-based auth, conditional responses, path traversal protection, and hot TLS reload.
-- **`client/demarkus`** — CLI for scripting and automation (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `graph`). Response caching with etag revalidation.
+- **`client/demarkus`** — CLI for scripting and automation (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `edit`, `graph`). Response caching with etag revalidation.
 - **`client/demarkus-tui`** — Terminal browser with markdown rendering, link navigation, back/forward history, and document graph view.
 - **`client/demarkus-mcp`** — MCP server exposing `mark_fetch`, `mark_list`, `mark_versions`, `mark_graph`, `mark_publish`, and `mark_archive` tools for LLM agents. Compatible with Claude Desktop.
 
@@ -60,7 +63,7 @@ Welcome to Demarkus!
 ```
 
 **Verbs**: `FETCH` · `LIST` · `VERSIONS` · `PUBLISH` · `ARCHIVE`
-**Planned**: `APPEND`
+**Deferred**: `APPEND`
 **Under review**: `SEARCH`
 **Status values**: `ok` · `created` · `not-modified` · `not-found` · `archived` · `unauthorized` · `not-permitted` · `server-error`
 

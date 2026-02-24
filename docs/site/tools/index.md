@@ -44,6 +44,23 @@ export DEMARKUS_AUTH=<raw-token>
 ./client/bin/demarkus --insecure -X PUBLISH mark://localhost:6309/hello.md -body "# Hello World"
 ```
 
+### Client-side token management
+
+The CLI can store tokens per-server so you don't need to pass `-auth` every time:
+
+```bash
+# Store a token for a server
+demarkus token add mark://localhost:6309 <raw-token>
+
+# List servers with stored tokens
+demarkus token list
+
+# Remove a stored token
+demarkus token remove mark://localhost:6309
+```
+
+Stored tokens are saved to `~/.mark/tokens.toml` (permissions `0600`). When making requests, the CLI resolves tokens in order: `-auth` flag > `DEMARKUS_AUTH` env var > stored token for the host.
+
 ## Best Practices
 
 - **Store tokens securely** (password manager or encrypted secrets store).

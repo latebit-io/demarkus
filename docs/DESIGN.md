@@ -1236,14 +1236,14 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 
 **Server**:
 - ~~PUBLISH support~~
-- APPEND support
+- APPEND support — *deferred until a concrete use case emerges*
 - ~~ARCHIVE support~~
 - ~~Capability-based authentication~~
 - ~~Versioning system (immutable versions with hash chain verification)~~
 - Audit logging (basic console logging done, structured persistence remaining)
 
 **Client**:
-- Document editing (open in $EDITOR)
+- ~~Document editing (open in $EDITOR)~~
 - ~~Client-side token management~~
 - Conflict resolution
 
