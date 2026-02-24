@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -423,6 +424,57 @@ func TestWrite_HashChain(t *testing.T) {
 	expected := fmt.Sprintf("sha256-%x", h)
 	if !strings.Contains(string(v2Data), "previous-hash: "+expected) {
 		t.Errorf("v2 previous-hash mismatch\nwant: %s\ngot:  %s", expected, string(v2Data))
+	}
+}
+
+func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	content := []byte("# Hello\n")
+
+	doc1, err := s.Write("/doc.md", content)
+	if err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+	if doc1.Version != 1 {
+		t.Fatalf("version = %d, want 1", doc1.Version)
+	}
+
+	// Publishing identical content should return ErrNotModified.
+	doc2, err := s.Write("/doc.md", content)
+	if !errors.Is(err, ErrNotModified) {
+		t.Fatalf("expected ErrNotModified, got: %v", err)
+	}
+	if doc2.Version != 1 {
+		t.Errorf("version = %d, want 1", doc2.Version)
+	}
+	if !bytes.Equal(doc2.Content, content) {
+		t.Errorf("content = %q, want %q", doc2.Content, content)
+	}
+
+	// No v2 file should exist.
+	v2Path := filepath.Join(root, "versions", "doc.md.v2")
+	if _, err := os.Stat(v2Path); !os.IsNotExist(err) {
+		t.Error("v2 file should not exist for duplicate content")
+	}
+
+	// Different content should still create v2.
+	doc3, err := s.Write("/doc.md", []byte("# Updated\n"))
+	if err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+	if doc3.Version != 2 {
+		t.Errorf("version = %d, want 2", doc3.Version)
+	}
+
+	// Publishing the v2 content again should be a no-op.
+	doc4, err := s.Write("/doc.md", []byte("# Updated\n"))
+	if !errors.Is(err, ErrNotModified) {
+		t.Fatalf("expected ErrNotModified, got: %v", err)
+	}
+	if doc4.Version != 2 {
+		t.Errorf("version = %d, want 2", doc4.Version)
 	}
 }
 

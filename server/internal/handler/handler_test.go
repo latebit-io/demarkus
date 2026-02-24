@@ -939,6 +939,29 @@ func TestHandlePublish(t *testing.T) {
 		}
 	})
 
+	t.Run("duplicate content is no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Same\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# Same\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if resp.Metadata["version"] != "1" {
+			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "1")
+		}
+	})
+
 	t.Run("path traversal blocked", func(t *testing.T) {
 		dir := t.TempDir()
 		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}

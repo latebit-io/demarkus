@@ -428,6 +428,18 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 
 	doc, err := h.Store.Write(req.Path, []byte(req.Body))
 	if err != nil {
+		if errors.Is(err, store.ErrNotModified) {
+			h.logger().Info("publish unchanged", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "success", true)
+			resp := protocol.Response{
+				Status: protocol.StatusOK,
+				Metadata: map[string]string{
+					"version":  strconv.Itoa(doc.Version),
+					"modified": doc.Modified.Format(time.RFC3339),
+				},
+			}
+			h.writeResponse(w, resp)
+			return
+		}
 		if errors.Is(err, store.ErrArchived) {
 			h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "success", false, "reason", "archived")
 			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
