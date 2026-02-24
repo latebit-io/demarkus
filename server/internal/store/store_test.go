@@ -516,7 +516,7 @@ func TestWriteVersion(t *testing.T) {
 		}
 	})
 
-	t.Run("zero expected version skips check", func(t *testing.T) {
+	t.Run("negative expected version skips check", func(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
@@ -524,16 +524,16 @@ func TestWriteVersion(t *testing.T) {
 			t.Fatalf("write v1: %v", err)
 		}
 
-		doc, err := s.WriteVersion("/doc.md", 0, []byte("# v2\n"))
+		doc, err := s.WriteVersion("/doc.md", -1, []byte("# v2\n"))
 		if err != nil {
-			t.Fatalf("WriteVersion with 0: %v", err)
+			t.Fatalf("WriteVersion with -1: %v", err)
 		}
 		if doc.Version != 2 {
 			t.Errorf("version = %d, want 2", doc.Version)
 		}
 	})
 
-	t.Run("new document with zero expected version", func(t *testing.T) {
+	t.Run("zero expected version creates new document", func(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
@@ -543,6 +543,23 @@ func TestWriteVersion(t *testing.T) {
 		}
 		if doc.Version != 1 {
 			t.Errorf("version = %d, want 1", doc.Version)
+		}
+	})
+
+	t.Run("zero expected version conflicts if document exists", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+
+		doc, err := s.WriteVersion("/doc.md", 0, []byte("# should conflict\n"))
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("expected ErrConflict, got: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("conflict doc version = %d, want 1", doc.Version)
 		}
 	})
 }

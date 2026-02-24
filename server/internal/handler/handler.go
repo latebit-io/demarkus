@@ -426,7 +426,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	var expectedVersion int
+	expectedVersion := -1 // default: no check when expected-version is absent
 	if ev := req.Metadata["expected-version"]; ev != "" {
 		v, err := strconv.Atoi(ev)
 		if err != nil || v < 0 {

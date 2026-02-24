@@ -111,15 +111,16 @@ func (c *Client) Versions(host, path string) (Result, error) {
 
 // Publish creates or updates a document on a Mark Protocol server.
 // If token is non-empty, it is sent as the auth metadata for capability-based auth.
-// If expectedVersion > 0, it is sent as the expected-version metadata for
-// optimistic concurrency control; the server will reject the write with a
-// conflict status if the document's current version doesn't match.
+// expectedVersion controls optimistic concurrency:
+//   - < 0: no check (server accepts unconditionally)
+//   - 0: create-only (server rejects if document already exists)
+//   - > 0: update-only (server rejects if current version doesn't match)
 func (c *Client) Publish(host, path, body, token string, expectedVersion int) (Result, error) {
 	req := protocol.Request{Verb: protocol.VerbPublish, Path: path, Metadata: make(map[string]string), Body: body}
 	if token != "" {
 		req.Metadata["auth"] = token
 	}
-	if expectedVersion > 0 {
+	if expectedVersion >= 0 {
 		req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
 	}
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {

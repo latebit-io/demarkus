@@ -556,18 +556,29 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 }
 
 // WriteVersion is like Write but performs an optimistic concurrency check.
-// If expectedVersion > 0, it verifies that the document's current version
-// matches expectedVersion before writing. Returns ErrConflict if the
-// versions don't match. If expectedVersion is 0, no check is performed
-// (equivalent to calling Write directly).
+// expectedVersion semantics:
+//   - < 0: skip check (equivalent to calling Write directly)
+//   - 0: expect the document does not exist yet (create-only)
+//   - > 0: expect this specific version (update-only)
+//
+// Returns ErrConflict if the expectation is violated.
+// A concurrent writer that passes the pre-check but loses the O_EXCL race
+// inside Write will also receive ErrConflict (not a generic error).
 func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte) (*Document, error) {
-	if expectedVersion > 0 {
+	if expectedVersion >= 0 {
 		current := s.CurrentVersion(reqPath)
 		if current != expectedVersion {
 			return &Document{Version: current}, ErrConflict
 		}
 	}
-	return s.Write(reqPath, content)
+	doc, err := s.Write(reqPath, content)
+	if err != nil && expectedVersion >= 0 && strings.Contains(err.Error(), "already exists") {
+		// Lost the O_EXCL race: another writer created the version between
+		// our check and the file create. Return ErrConflict with the latest version.
+		current := s.CurrentVersion(reqPath)
+		return &Document{Version: current}, ErrConflict
+	}
+	return doc, err
 }
 
 // VerifyChain checks the hash chain integrity for a document.

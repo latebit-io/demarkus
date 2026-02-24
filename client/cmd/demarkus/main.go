@@ -112,7 +112,7 @@ func requestMain() {
 	case protocol.VerbVersions:
 		result, err = client.Versions(host, path)
 	case protocol.VerbPublish:
-		result, err = client.Publish(host, path, reqBody, token, 0)
+		result, err = client.Publish(host, path, reqBody, token, -1)
 	case protocol.VerbArchive:
 		result, err = client.Archive(host, path, token)
 	}
