@@ -15,6 +15,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -41,6 +42,10 @@ type VersionInfo struct {
 
 // ErrArchived is returned by Write when the document is archived.
 var ErrArchived = fmt.Errorf("document is archived")
+
+// ErrNotModified is returned by Write when the content is identical
+// to the current version, making the publish a no-op.
+var ErrNotModified = fmt.Errorf("content not modified")
 
 // MaxFileSize is the maximum file size the store will read (10 MB).
 const MaxFileSize = 10 * 1024 * 1024
@@ -455,6 +460,23 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 		if err := s.migrateFlatFile(versionsDir, base, currentFile); err != nil {
 			return nil, err
 		}
+
+		// Skip creating a new version if content is identical to current.
+		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next-1))
+		prevData, err := os.ReadFile(prevFile)
+		if err == nil {
+			if bytes.Equal(extractBody(prevData), content) {
+				info, err := os.Stat(prevFile)
+				if err != nil {
+					return nil, fmt.Errorf("stat current version: %w", err)
+				}
+				return &Document{
+					Content:  prevData,
+					Modified: info.ModTime().UTC().Truncate(time.Second),
+					Version:  next - 1,
+				}, ErrNotModified
+			}
+		}
 	}
 
 	versionFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next))
@@ -656,6 +678,20 @@ func isArchived(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// extractBody returns the content after the store frontmatter.
+// If no frontmatter is found, the entire data is returned.
+func extractBody(data []byte) []byte {
+	s := string(data)
+	if !strings.HasPrefix(s, "---\n") {
+		return data
+	}
+	end := strings.Index(s[4:], "\n---\n")
+	if end == -1 {
+		return data
+	}
+	return []byte(s[4+end+5:])
 }
 
 // migrateFlatFile promotes a flat file (no version history) to v1 in the
