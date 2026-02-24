@@ -478,6 +478,75 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 	}
 }
 
+func TestWriteVersion(t *testing.T) {
+	t.Run("matching version succeeds", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+
+		doc, err := s.WriteVersion("/doc.md", 1, []byte("# v2\n"))
+		if err != nil {
+			t.Fatalf("WriteVersion: %v", err)
+		}
+		if doc.Version != 2 {
+			t.Errorf("version = %d, want 2", doc.Version)
+		}
+	})
+
+	t.Run("mismatched version returns ErrConflict", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+		if _, err := s.Write("/doc.md", []byte("# v2\n")); err != nil {
+			t.Fatalf("write v2: %v", err)
+		}
+
+		doc, err := s.WriteVersion("/doc.md", 1, []byte("# stale edit\n"))
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("expected ErrConflict, got: %v", err)
+		}
+		if doc.Version != 2 {
+			t.Errorf("conflict doc version = %d, want 2", doc.Version)
+		}
+	})
+
+	t.Run("zero expected version skips check", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+
+		doc, err := s.WriteVersion("/doc.md", 0, []byte("# v2\n"))
+		if err != nil {
+			t.Fatalf("WriteVersion with 0: %v", err)
+		}
+		if doc.Version != 2 {
+			t.Errorf("version = %d, want 2", doc.Version)
+		}
+	})
+
+	t.Run("new document with zero expected version", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		doc, err := s.WriteVersion("/new.md", 0, []byte("# Hello\n"))
+		if err != nil {
+			t.Fatalf("WriteVersion: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("version = %d, want 1", doc.Version)
+		}
+	})
+}
+
 func TestArchive(t *testing.T) {
 	setup := func(t *testing.T) (*Store, string) {
 		t.Helper()

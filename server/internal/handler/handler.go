@@ -426,8 +426,30 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	doc, err := h.Store.Write(req.Path, []byte(req.Body))
+	var expectedVersion int
+	if ev := req.Metadata["expected-version"]; ev != "" {
+		v, err := strconv.Atoi(ev)
+		if err != nil || v < 0 {
+			h.writeError(w, protocol.StatusServerError, "invalid expected-version")
+			return
+		}
+		expectedVersion = v
+	}
+
+	doc, err := h.Store.WriteVersion(req.Path, expectedVersion, []byte(req.Body))
 	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			h.logger().Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "success", false)
+			resp := protocol.Response{
+				Status: protocol.StatusConflict,
+				Metadata: map[string]string{
+					"server-version": strconv.Itoa(doc.Version),
+				},
+				Body: fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nPlease fetch the latest version and reapply your edits.\n", expectedVersion, doc.Version),
+			}
+			h.writeResponse(w, resp)
+			return
+		}
 		if errors.Is(err, store.ErrNotModified) {
 			h.logger().Info("publish unchanged", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "success", true)
 			resp := protocol.Response{

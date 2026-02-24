@@ -285,7 +285,7 @@ func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("publish requires a token (-token flag or stored via 'demarkus token add')"), nil
 	}
 
-	result, err := h.client.Publish(host, path, body, token)
+	result, err := h.client.Publish(host, path, body, token, 0)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}

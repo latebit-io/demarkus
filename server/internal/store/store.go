@@ -47,6 +47,10 @@ var ErrArchived = fmt.Errorf("document is archived")
 // to the current version, making the publish a no-op.
 var ErrNotModified = fmt.Errorf("content not modified")
 
+// ErrConflict is returned by WriteVersion when the expected version
+// does not match the current version (optimistic concurrency check).
+var ErrConflict = fmt.Errorf("version conflict")
+
 // MaxFileSize is the maximum file size the store will read (10 MB).
 const MaxFileSize = 10 * 1024 * 1024
 
@@ -549,6 +553,21 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 		Version:  next,
 		Archived: false,
 	}, nil
+}
+
+// WriteVersion is like Write but performs an optimistic concurrency check.
+// If expectedVersion > 0, it verifies that the document's current version
+// matches expectedVersion before writing. Returns ErrConflict if the
+// versions don't match. If expectedVersion is 0, no check is performed
+// (equivalent to calling Write directly).
+func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte) (*Document, error) {
+	if expectedVersion > 0 {
+		current := s.CurrentVersion(reqPath)
+		if current != expectedVersion {
+			return &Document{Version: current}, ErrConflict
+		}
+	}
+	return s.Write(reqPath, content)
 }
 
 // VerifyChain checks the hash chain integrity for a document.

@@ -977,6 +977,75 @@ func TestHandlePublish(t *testing.T) {
 			t.Error("SECURITY: path traversal not blocked")
 		}
 	})
+
+	t.Run("conflict on stale expected-version", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+		if _, err := s.Write("/doc.md", []byte("# v2\n")); err != nil {
+			t.Fatalf("write v2: %v", err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n# stale edit\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusConflict {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusConflict)
+		}
+		if resp.Metadata["server-version"] != "2" {
+			t.Errorf("server-version: got %q, want %q", resp.Metadata["server-version"], "2")
+		}
+	})
+
+	t.Run("matching expected-version succeeds", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n# v2\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+		if resp.Metadata["version"] != "2" {
+			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "2")
+		}
+	})
+
+	t.Run("no expected-version is backward compatible", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# v2 no check\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+	})
 }
 
 func TestHandlePublishAuth(t *testing.T) {
