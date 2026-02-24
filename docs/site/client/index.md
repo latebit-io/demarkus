@@ -35,7 +35,7 @@ demarkus --insecure mark://localhost:6309/hello.md/v1
 
 ### Edit a document
 
-Opens a document in `$EDITOR` (falls back to `vi`), then publishes changes on save. If the document doesn't exist, creates a new one. Empty documents are rejected.
+Opens a document in `$EDITOR` (falls back to `vi`), then publishes changes when you exit the editor. If the document doesn't exist, creates a new one. Empty documents are rejected.
 
 ```bash
 # Edit an existing document
@@ -48,7 +48,7 @@ demarkus edit --insecure -auth $TOKEN mark://localhost:6309/new-doc.md
 ### Graph crawl
 
 ```bash
-demarkus --insecure graph -depth 3 mark://localhost:6309/index.md
+demarkus graph --insecure -depth 3 mark://localhost:6309/index.md
 ```
 
 ## TUI (`demarkus-tui`)

@@ -25,6 +25,8 @@ cd server && go test -run TestHandleFetch/path_traversal_blocked ./internal/hand
 
 **Build rule**: Always use `make client` or `go build -o bin/<name> ./cmd/<name>/`. Never bare `go build ./cmd/<name>/`.
 
+**After completing a task**: Run `bash pre-commit.sh` to format, vet, and lint all modules before committing.
+
 ## Architecture
 
 Go monorepo, four modules with local `replace` directives:

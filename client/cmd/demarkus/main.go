@@ -133,6 +133,7 @@ func editMain(args []string) {
 	fs := flag.NewFlagSet("edit", flag.ExitOnError)
 	authToken := fs.String("auth", "", "auth token (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+	useCache := fs.Bool("cache", false, "enable caching (disabled by default for edit)")
 	cacheDir := fs.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus edit [-auth TOKEN] [-insecure] mark://host:port/path.md\n\n")
@@ -152,10 +153,11 @@ func editMain(args []string) {
 		log.Fatal(err)
 	}
 
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vi"
+	editorEnv := os.Getenv("EDITOR")
+	if editorEnv == "" {
+		editorEnv = "vi"
 	}
+	editorFields := strings.Fields(editorEnv)
 
 	// Resolve auth token: flag > env > stored token.
 	token := *authToken
@@ -168,10 +170,11 @@ func editMain(args []string) {
 		}
 	}
 
-	client := fetch.NewClient(fetch.Options{
-		Insecure: *insecure,
-		Cache:    cache.New(*cacheDir),
-	})
+	opts := fetch.Options{Insecure: *insecure}
+	if *useCache {
+		opts.Cache = cache.New(*cacheDir)
+	}
+	client := fetch.NewClient(opts)
 	defer client.Close()
 
 	// Fetch the current document content.
@@ -205,7 +208,8 @@ func editMain(args []string) {
 	}
 
 	// Open the editor.
-	cmd := exec.Command(editor, tmpFile.Name())
+	name, args := editorCommand(editorFields, tmpFile.Name())
+	cmd := exec.Command(name, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -377,6 +381,15 @@ func tokenMain(args []string) {
 	default:
 		log.Fatalf("unknown token command: %s", args[0])
 	}
+}
+
+// editorCommand splits $EDITOR fields and appends the file path.
+// Returns the executable name and its arguments.
+func editorCommand(fields []string, file string) (name string, args []string) {
+	args = make([]string, len(fields)-1, len(fields))
+	copy(args, fields[1:])
+	args = append(args, file)
+	return fields[0], args
 }
 
 var validVerbs = map[string]bool{
