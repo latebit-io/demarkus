@@ -29,3 +29,52 @@ func TestValidateVerb(t *testing.T) {
 		})
 	}
 }
+
+func TestEditorCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		fields   []string
+		file     string
+		wantName string
+		wantArgs []string
+	}{
+		{
+			name:     "simple editor",
+			fields:   []string{"vi"},
+			file:     "/tmp/doc.md",
+			wantName: "vi",
+			wantArgs: []string{"/tmp/doc.md"},
+		},
+		{
+			name:     "editor with one arg",
+			fields:   []string{"code", "-w"},
+			file:     "/tmp/doc.md",
+			wantName: "code",
+			wantArgs: []string{"-w", "/tmp/doc.md"},
+		},
+		{
+			name:     "editor with multiple args",
+			fields:   []string{"nvim", "--cmd", "set ft=markdown"},
+			file:     "/tmp/doc.md",
+			wantName: "nvim",
+			wantArgs: []string{"--cmd", "set ft=markdown", "/tmp/doc.md"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, args := editorCommand(tt.fields, tt.file)
+			if name != tt.wantName {
+				t.Errorf("name: got %q, want %q", name, tt.wantName)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("args length: got %d, want %d", len(args), len(tt.wantArgs))
+			}
+			for i := range args {
+				if args[i] != tt.wantArgs[i] {
+					t.Errorf("args[%d]: got %q, want %q", i, args[i], tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}

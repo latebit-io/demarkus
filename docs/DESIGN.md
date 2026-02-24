@@ -1117,6 +1117,7 @@ These features would make Demarkus a first-class protocol for agent ecosystems:
 - **Semantic versioning in frontmatter** — Agents can pin to specific API versions
 - **Agent authentication** — Capability tokens scoped to agent operations
 - **Rate limiting metadata** — Frontmatter communicates limits so agents self-throttle
+- **Agent-to-agent document collaboration** — Agents negotiate document content before committing to the permanent record. Rather than a DRAFT verb, this can be achieved with convention: agents collaborate on a scratch path (e.g. `/drafts/proposal.md`) using PUBLISH, with auth tokens scoped to collaborators. Once agreed, the final content is PUBLISHed to the real path. The draft path retains the full negotiation history (who proposed what), ARCHIVE cleans up when done, and no new verbs or states are needed. Revisit if real agent collaboration patterns reveal gaps in this approach.
 
 **Example: Agent-Capable Endpoint**:
 
@@ -1235,14 +1236,14 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 
 **Server**:
 - ~~PUBLISH support~~
-- APPEND support
+- APPEND support — *deferred until a concrete use case emerges*
 - ~~ARCHIVE support~~
 - ~~Capability-based authentication~~
 - ~~Versioning system (immutable versions with hash chain verification)~~
 - Audit logging (basic console logging done, structured persistence remaining)
 
 **Client**:
-- Document editing (open in $EDITOR)
+- ~~Document editing (open in $EDITOR)~~
 - ~~Client-side token management~~
 - Conflict resolution
 
