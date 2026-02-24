@@ -35,6 +35,22 @@ func TestNew(t *testing.T) {
 			wantJSON:   true,
 		},
 		{
+			name:       "debug level logs debug",
+			format:     "text",
+			level:      "debug",
+			logLevel:   "debug",
+			msg:        "trace detail",
+			wantOutput: true,
+		},
+		{
+			name:       "info level filters debug",
+			format:     "text",
+			level:      "info",
+			logLevel:   "debug",
+			msg:        "filtered",
+			wantOutput: false,
+		},
+		{
 			name:       "warn level filters info",
 			format:     "text",
 			level:      "warn",
@@ -74,6 +90,8 @@ func TestNew(t *testing.T) {
 			logger := New(tt.format, tt.level, &buf)
 
 			switch tt.logLevel {
+			case "debug":
+				logger.Debug(tt.msg)
 			case "info":
 				logger.Info(tt.msg)
 			case "warn":
