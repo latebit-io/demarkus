@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/latebit/demarkus/client/internal/cache"
@@ -19,6 +20,9 @@ import (
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "edit":
+			editMain(os.Args[2:])
+			return
 		case "graph":
 			graphMain(os.Args[2:])
 			return
@@ -39,6 +43,7 @@ func requestMain() {
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus [-X VERB] [-body TEXT] [-auth TOKEN] mark://host:port/path\n")
+		fmt.Fprintf(os.Stderr, "       demarkus edit [-auth TOKEN] [-insecure] mark://host:port/path.md\n")
 		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n\n")
 		flag.PrintDefaults()
 	}
@@ -122,6 +127,123 @@ func requestMain() {
 	}
 	fmt.Println()
 	fmt.Print(result.Response.Body)
+}
+
+func editMain(args []string) {
+	fs := flag.NewFlagSet("edit", flag.ExitOnError)
+	authToken := fs.String("auth", "", "auth token (env: DEMARKUS_AUTH)")
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+	cacheDir := fs.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: demarkus edit [-auth TOKEN] [-insecure] mark://host:port/path.md\n\n")
+		fmt.Fprintf(os.Stderr, "Fetch a document, open it in $EDITOR, and publish changes.\n")
+		fmt.Fprintf(os.Stderr, "Creates a new document if it doesn't exist.\n\n")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	host, path, err := fetch.ParseMarkURL(fs.Arg(0))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+
+	// Resolve auth token: flag > env > stored token.
+	token := *authToken
+	if token == "" {
+		token = os.Getenv("DEMARKUS_AUTH")
+	}
+	if token == "" {
+		if ts, err := tokens.Load(tokens.DefaultPath()); err == nil {
+			token = ts.Get(host)
+		}
+	}
+
+	client := fetch.NewClient(fetch.Options{
+		Insecure: *insecure,
+		Cache:    cache.New(*cacheDir),
+	})
+	defer client.Close()
+
+	// Fetch the current document content.
+	var original string
+	result, err := client.Fetch(host, path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	switch result.Response.Status {
+	case protocol.StatusOK:
+		original = result.Response.Body
+	case protocol.StatusNotFound:
+		// New document — start with empty content.
+		fmt.Fprintf(os.Stderr, "Document not found, creating new document.\n")
+	default:
+		log.Fatalf("fetch failed: %s", result.Response.Status)
+	}
+
+	// Write content to a temp file for editing.
+	tmpFile, err := os.CreateTemp("", "demarkus-edit-*.md")
+	if err != nil {
+		log.Fatalf("create temp file: %v", err)
+	}
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	if _, err := tmpFile.WriteString(original); err != nil {
+		log.Fatalf("write temp file: %v", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		log.Fatalf("close temp file: %v", err)
+	}
+
+	// Open the editor.
+	cmd := exec.Command(editor, tmpFile.Name())
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("editor exited with error: %v", err)
+	}
+
+	// Read back the edited content.
+	edited, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		log.Fatalf("read temp file: %v", err)
+	}
+	newBody := string(edited)
+
+	if strings.TrimSpace(newBody) == "" {
+		fmt.Fprintln(os.Stderr, "Document is empty, skipping publish.")
+		os.Exit(1)
+	}
+
+	if newBody == original {
+		fmt.Fprintln(os.Stderr, "No changes, skipping publish.")
+		return
+	}
+
+	// Publish the edited content.
+	result, err = client.Publish(host, path, newBody, token)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("[%s]", result.Response.Status)
+	for k, v := range result.Response.Metadata {
+		fmt.Printf(" %s=%s", k, v)
+	}
+	fmt.Println()
+	if result.Response.Body != "" {
+		fmt.Print(result.Response.Body)
+	}
 }
 
 func graphMain(args []string) {
