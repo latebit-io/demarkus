@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -28,6 +28,14 @@ type Handler struct {
 	ContentDir    string
 	Store         *store.Store
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
+	Logger        *slog.Logger
+}
+
+func (h *Handler) logger() *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
 }
 
 // Stream represents a bidirectional stream that can be read, written, and closed.
@@ -41,12 +49,12 @@ func (h *Handler) HandleStream(stream Stream) {
 
 	req, err := protocol.ParseRequest(stream)
 	if err != nil {
-		log.Printf("[ERROR] parse request: %v", err)
+		h.logger().Error("parse request failed", "error", err)
 		h.writeError(stream, protocol.StatusServerError, "bad request")
 		return
 	}
 
-	log.Printf("[REQUEST] %s %s", sanitize(req.Verb), sanitize(req.Path))
+	h.logger().Info("request", "verb", sanitize(req.Verb), "path", sanitize(req.Path))
 
 	// Health check endpoint: responds to FETCH /health with OK
 	if req.Path == "/health" && req.Verb == protocol.VerbFetch {
@@ -99,17 +107,17 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 	doc, err := h.Store.Get(req.Path, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("[NOTFOUND] %s", sanitize(req.Path))
+			h.logger().Info("not found", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
 		}
-		log.Printf("[ERROR] fetch %s: %v", sanitize(req.Path), err)
+		h.logger().Error("fetch failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
 
 	if doc.Archived {
-		log.Printf("[ARCHIVED] %s", sanitize(req.Path))
+		h.logger().Info("archived", "path", sanitize(req.Path))
 		h.writeError(w, protocol.StatusArchived, req.Path+" is archived")
 		return
 	}
@@ -147,7 +155,7 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		Metadata: meta,
 		Body:     body,
 	}
-	writeResponse(w, resp)
+	h.writeResponse(w, resp)
 }
 
 func (h *Handler) writeNotModified(w io.Writer) {
@@ -155,7 +163,7 @@ func (h *Handler) writeNotModified(w io.Writer) {
 		Status:   protocol.StatusNotModified,
 		Metadata: map[string]string{},
 	}
-	writeResponse(w, resp)
+	h.writeResponse(w, resp)
 }
 
 func computeEtag(data []byte) string {
@@ -167,11 +175,11 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 	entries, err := h.Store.ListDir(reqPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("[NOTFOUND] %s", sanitize(reqPath))
+			h.logger().Info("not found", "path", sanitize(reqPath))
 			h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 			return
 		}
-		log.Printf("[ERROR] list %s: %v", sanitize(reqPath), err)
+		h.logger().Error("list failed", "path", sanitize(reqPath), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -202,24 +210,24 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 		},
 		Body: body.String(),
 	}
-	writeResponse(w, resp)
+	h.writeResponse(w, resp)
 }
 
 func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath string, version int) {
 	doc, err := h.Store.Get(basePath, version)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("[NOTFOUND] %s (v%d)", sanitize(basePath), version)
+			h.logger().Info("not found", "path", sanitize(basePath), "version", version)
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
 		}
-		log.Printf("[ERROR] fetch version %s v%d: %v", sanitize(basePath), version, err)
+		h.logger().Error("fetch version failed", "path", sanitize(basePath), "version", version, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
 
 	if int64(len(doc.Content)) > store.MaxFileSize {
-		log.Printf("[ERROR] file too large: %s v%d (%d bytes)", sanitize(basePath), version, len(doc.Content))
+		h.logger().Error("file too large", "path", sanitize(basePath), "version", version, "size_bytes", len(doc.Content))
 		h.writeError(w, protocol.StatusServerError, "file exceeds size limit")
 		return
 	}
@@ -243,7 +251,7 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 		Metadata: meta,
 		Body:     body,
 	}
-	writeResponse(w, resp)
+	h.writeResponse(w, resp)
 }
 
 func (h *Handler) handleVersions(w io.Writer, reqPath string) {
@@ -255,11 +263,11 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 	versions, err := h.Store.Versions(reqPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("[NOTFOUND] %s", sanitize(reqPath))
+			h.logger().Info("not found", "path", sanitize(reqPath))
 			h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 			return
 		}
-		log.Printf("[ERROR] versions %s: %v", sanitize(reqPath), err)
+		h.logger().Error("versions failed", "path", sanitize(reqPath), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -279,7 +287,7 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 
 	// Verify hash chain integrity and report result.
 	if err := h.Store.VerifyChain(reqPath); err != nil {
-		log.Printf("[WARN] chain verification failed for %s: %v", sanitize(reqPath), err)
+		h.logger().Warn("chain verification failed", "path", sanitize(reqPath), "error", err)
 		meta["chain-valid"] = "false"
 		meta["chain-error"] = err.Error()
 	} else {
@@ -291,7 +299,7 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 		Metadata: meta,
 		Body:     body.String(),
 	}
-	writeResponse(w, resp)
+	h.writeResponse(w, resp)
 }
 
 func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
@@ -313,10 +321,10 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 	if err := ts.Authorize(token, req.Path, "publish"); err != nil {
 		switch {
 		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken), errors.Is(err, auth.ErrTokenExpired):
-			log.Printf("[AUTH] unauthorized archive attempt: %s", sanitize(req.Path))
+			h.logger().Warn("unauthorized", "operation", "ARCHIVE", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
 		default:
-			log.Printf("[AUTH] not permitted archive attempt: %s", sanitize(req.Path))
+			h.logger().Warn("not permitted", "operation", "ARCHIVE", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
 		}
 		return
@@ -325,22 +333,22 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 	doc, err := h.Store.Get(req.Path, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("[NOTFOUND] %s", sanitize(req.Path))
+			h.logger().Info("not found", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
 		}
-		log.Printf("[ERROR] archive %s: %v", sanitize(req.Path), err)
+		h.logger().Error("archive failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
 
 	if err := h.Store.Archive(req.Path, true); err != nil {
-		log.Printf("[ERROR] archive %s: %v", sanitize(req.Path), err)
+		h.logger().Error("archive failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
 
-	log.Printf("[ARCHIVE] %s v%d", sanitize(req.Path), doc.Version)
+	h.logger().Info("archive", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "success", true)
 	resp := protocol.Response{
 		Status: protocol.StatusOK,
 		Metadata: map[string]string{
@@ -348,7 +356,7 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 			"archived": "true",
 		},
 	}
-	writeResponse(w, resp)
+	h.writeResponse(w, resp)
 }
 
 func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
@@ -357,7 +365,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 	if int64(len(req.Body)) > store.MaxFileSize {
-		log.Printf("[ERROR] body too large: %s (%d bytes)", sanitize(req.Path), len(req.Body))
+		h.logger().Error("body too large", "path", sanitize(req.Path), "size_bytes", len(req.Body))
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 		return
 	}
@@ -375,10 +383,10 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	if err := ts.Authorize(token, req.Path, "publish"); err != nil {
 		switch {
 		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken), errors.Is(err, auth.ErrTokenExpired):
-			log.Printf("[AUTH] unauthorized publish attempt: %s", sanitize(req.Path))
+			h.logger().Warn("unauthorized", "operation", "PUBLISH", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
 		default:
-			log.Printf("[AUTH] not permitted publish attempt: %s", sanitize(req.Path))
+			h.logger().Warn("not permitted", "operation", "PUBLISH", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
 		}
 		return
@@ -389,22 +397,22 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		doc, err := h.Store.Get(req.Path, 0)
 		if err != nil {
 			if os.IsNotExist(err) {
-				log.Printf("[NOTFOUND] %s", sanitize(req.Path))
+				h.logger().Info("not found", "path", sanitize(req.Path))
 				h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 				return
 			}
-			log.Printf("[ERROR] publish %s: %v", sanitize(req.Path), err)
+			h.logger().Error("publish failed", "path", sanitize(req.Path), "error", err)
 			h.writeError(w, protocol.StatusServerError, "internal error")
 			return
 		}
 
 		if doc.Archived {
 			if err := h.Store.Archive(req.Path, false); err != nil {
-				log.Printf("[ERROR] unarchive %s: %v", sanitize(req.Path), err)
+				h.logger().Error("unarchive failed", "path", sanitize(req.Path), "error", err)
 				h.writeError(w, protocol.StatusServerError, "internal error")
 				return
 			}
-			log.Printf("[UNARCHIVE] %s v%d", sanitize(req.Path), doc.Version)
+			h.logger().Info("unarchive", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "success", true)
 		}
 
 		// Return OK (no-op for active documents, or unarchive response)
@@ -414,28 +422,28 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 				"version": strconv.Itoa(doc.Version),
 			},
 		}
-		writeResponse(w, resp)
+		h.writeResponse(w, resp)
 		return
 	}
 
 	doc, err := h.Store.Write(req.Path, []byte(req.Body))
 	if err != nil {
 		if errors.Is(err, store.ErrArchived) {
-			log.Printf("[PUBLISH_ARCHIVED] attempted to publish to archived doc: %s", sanitize(req.Path))
+			h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "success", false, "reason", "archived")
 			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
 			return
 		}
 		if os.IsNotExist(err) {
-			log.Printf("[SECURITY] path traversal attempt: %s", sanitize(req.Path))
+			h.logger().Warn("path traversal attempt", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
 		}
-		log.Printf("[ERROR] publish %s: %v", sanitize(req.Path), err)
+		h.logger().Error("publish failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
 
-	log.Printf("[PUBLISH] %s v%d", sanitize(req.Path), doc.Version)
+	h.logger().Info("publish", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "success", true, "size_bytes", len(req.Body))
 	resp := protocol.Response{
 		Status: protocol.StatusCreated,
 		Metadata: map[string]string{
@@ -443,7 +451,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 			"modified": doc.Modified.Format(time.RFC3339),
 		},
 	}
-	writeResponse(w, resp)
+	h.writeResponse(w, resp)
 }
 
 func (h *Handler) handleHealth(w io.Writer) {
@@ -452,7 +460,7 @@ func (h *Handler) handleHealth(w io.Writer) {
 		Metadata: map[string]string{},
 		Body:     "# Health Check\n\nServer is healthy.\n",
 	}
-	writeResponse(w, resp)
+	h.writeResponse(w, resp)
 }
 
 func (h *Handler) writeError(w io.Writer, status, message string) {
@@ -461,12 +469,12 @@ func (h *Handler) writeError(w io.Writer, status, message string) {
 		Metadata: map[string]string{},
 		Body:     fmt.Sprintf("\n# %s\n\n%s\n", statusTitle(status), message),
 	}
-	writeResponse(w, resp)
+	h.writeResponse(w, resp)
 }
 
-func writeResponse(w io.Writer, resp protocol.Response) {
+func (h *Handler) writeResponse(w io.Writer, resp protocol.Response) {
 	if _, err := resp.WriteTo(w); err != nil {
-		log.Printf("[ERROR] write response: %v", err)
+		h.logger().Error("write response failed", "error", err)
 	}
 }
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/latebit/demarkus/server/internal/auth"
 	"github.com/latebit/demarkus/server/internal/store"
 )
+
+var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 // mockStream implements handler.Stream for testing.
 type mockStream struct {
@@ -60,7 +63,7 @@ func TestHandleFetch(t *testing.T) {
 	dir, s := setupVersionedDir(t, map[string]string{
 		"hello.md": "# Hello World\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	t.Run("existing file", func(t *testing.T) {
 		stream := newMockStream("FETCH /hello.md\n")
@@ -88,7 +91,7 @@ func TestHandleFetch(t *testing.T) {
 		flatDir := setupContentDir(t, map[string]string{
 			"flat.md": "# Flat\n",
 		})
-		flatH := &Handler{ContentDir: flatDir, Store: store.New(flatDir)}
+		flatH := &Handler{ContentDir: flatDir, Store: store.New(flatDir), Logger: discardLogger}
 
 		stream := newMockStream("FETCH /flat.md\n")
 		flatH.HandleStream(stream)
@@ -146,7 +149,7 @@ func TestHealthCheck(t *testing.T) {
 	dir, s := setupVersionedDir(t, map[string]string{
 		"hello.md": "# Hello\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	stream := newMockStream("FETCH /health\n")
 	h.HandleStream(stream)
@@ -167,7 +170,7 @@ func TestEtagInResponse(t *testing.T) {
 	dir, s := setupVersionedDir(t, map[string]string{
 		"hello.md": "# Hello World\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	stream := newMockStream("FETCH /hello.md\n")
 	h.HandleStream(stream)
@@ -188,7 +191,7 @@ func TestConditionalFetch(t *testing.T) {
 	dir, s := setupVersionedDir(t, map[string]string{
 		"hello.md": "# Hello World\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	// First fetch to get etag and modified time.
 	stream := newMockStream("FETCH /hello.md\n")
@@ -281,7 +284,7 @@ func TestSymlinkEscape(t *testing.T) {
 		t.Skipf("cannot create symlink: %v", err)
 	}
 
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	t.Run("symlink escape blocked", func(t *testing.T) {
 		stream := newMockStream("FETCH /evil.md\n")
@@ -335,7 +338,7 @@ func TestHandleList(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".hidden"), []byte("secret\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	t.Run("list root directory", func(t *testing.T) {
 		stream := newMockStream("LIST /\n")
@@ -434,7 +437,7 @@ func TestMultipleLeadingSlashes(t *testing.T) {
 	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n")); err != nil {
 		t.Fatalf("write guide: %v", err)
 	}
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	fetchPaths := []string{"///hello.md", "//hello.md", "////hello.md"}
 	for _, p := range fetchPaths {
@@ -473,7 +476,7 @@ func TestDeeplyNestedTraversal(t *testing.T) {
 	dir, s := setupVersionedDir(t, map[string]string{
 		"safe.md": "# Safe\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	paths := []string{
 		"/a/../../b/../../etc/passwd",
@@ -534,7 +537,7 @@ func TestRelativeContentDir(t *testing.T) {
 	}
 
 	relStore := store.New("./site")
-	h := &Handler{ContentDir: "./site", Store: relStore}
+	h := &Handler{ContentDir: "./site", Store: relStore, Logger: discardLogger}
 
 	t.Run("fetch works with relative content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /page.md\n")
@@ -611,7 +614,7 @@ func TestContentDirAsSymlink(t *testing.T) {
 	}
 
 	symlinkStore := store.New(symlinkDir)
-	h := &Handler{ContentDir: symlinkDir, Store: symlinkStore}
+	h := &Handler{ContentDir: symlinkDir, Store: symlinkStore, Logger: discardLogger}
 
 	t.Run("fetch through symlinked content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /file.md\n")
@@ -677,7 +680,7 @@ func TestHandleVersions(t *testing.T) {
 		t.Fatalf("write v2: %v", err)
 	}
 
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	t.Run("version history", func(t *testing.T) {
 		stream := newMockStream("VERSIONS /doc.md\n")
@@ -711,6 +714,7 @@ func TestHandleVersions(t *testing.T) {
 		flatH := &Handler{
 			ContentDir: flatDir,
 			Store:      store.New(flatDir),
+			Logger:     discardLogger,
 		}
 
 		stream := newMockStream("VERSIONS /flat.md\n")
@@ -739,7 +743,7 @@ func TestHandleVersions(t *testing.T) {
 	})
 
 	t.Run("no store configured", func(t *testing.T) {
-		noStoreH := &Handler{ContentDir: dir}
+		noStoreH := &Handler{ContentDir: dir, Logger: discardLogger}
 
 		stream := newMockStream("VERSIONS /doc.md\n")
 		noStoreH.HandleStream(stream)
@@ -762,7 +766,7 @@ func TestFetchVersion(t *testing.T) {
 		t.Fatalf("write v2: %v", err)
 	}
 
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	t.Run("fetch specific version", func(t *testing.T) {
 		stream := newMockStream("FETCH /doc.md/v1\n")
@@ -825,7 +829,7 @@ func TestVersionsChainValid(t *testing.T) {
 		t.Fatalf("write v2: %v", err)
 	}
 
-	h := &Handler{ContentDir: dir, Store: s}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
 
 	t.Run("valid chain", func(t *testing.T) {
 		stream := newMockStream("VERSIONS /doc.md\n")
@@ -876,7 +880,7 @@ func TestHandlePublish(t *testing.T) {
 
 	t.Run("creates new document", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /new.md\n" + authMeta + "# Hello\n")
 		h.HandleStream(stream)
@@ -902,7 +906,7 @@ func TestHandlePublish(t *testing.T) {
 		if _, err := s.Write("/doc.md", []byte("# Original\n")); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# Updated\n")
 		h.HandleStream(stream)
@@ -921,7 +925,7 @@ func TestHandlePublish(t *testing.T) {
 
 	t.Run("no store configured", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		h := &Handler{ContentDir: dir, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# New\n")
 		h.HandleStream(stream)
@@ -937,7 +941,7 @@ func TestHandlePublish(t *testing.T) {
 
 	t.Run("path traversal blocked", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /../../etc/passwd\n" + authMeta + "# evil\n")
 		h.HandleStream(stream)
@@ -972,7 +976,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("no token store denies publishing", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir)}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger}
 
 		stream := newMockStream("PUBLISH /doc.md\n# Hello\n")
 		h.HandleStream(stream)
@@ -988,7 +992,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("missing token returns unauthorized", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /docs/test.md\n# Hello\n")
 		h.HandleStream(stream)
@@ -1004,7 +1008,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("invalid token returns unauthorized", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: wrong-secret\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1020,7 +1024,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("valid token wrong path returns not-permitted", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /private/secret.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1036,7 +1040,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("valid token wrong operation returns not-permitted", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + readonlySecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1052,7 +1056,7 @@ func TestHandlePublishAuth(t *testing.T) {
 
 	t.Run("valid token correct path succeeds", func(t *testing.T) {
 		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1104,7 +1108,7 @@ func TestHandleArchive(t *testing.T) {
 
 	t.Run("archive not found", func(t *testing.T) {
 		dir, s := setupVersionedDir(t, map[string]string{})
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("ARCHIVE /missing.md\n---\nauth: " + writerSecret + "\n---\n")
 		h.HandleStream(stream)
@@ -1120,7 +1124,7 @@ func TestHandleArchive(t *testing.T) {
 
 	t.Run("archive requires auth", func(t *testing.T) {
 		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("ARCHIVE /doc.md\n")
 		h.HandleStream(stream)
@@ -1136,7 +1140,7 @@ func TestHandleArchive(t *testing.T) {
 
 	t.Run("archive with valid token succeeds", func(t *testing.T) {
 		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
 		h.HandleStream(stream)
@@ -1155,7 +1159,7 @@ func TestHandleArchive(t *testing.T) {
 
 	t.Run("fetch archived document returns archived status", func(t *testing.T) {
 		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
@@ -1176,7 +1180,7 @@ func TestHandleArchive(t *testing.T) {
 
 	t.Run("publish with body to archived document fails", func(t *testing.T) {
 		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
@@ -1197,7 +1201,7 @@ func TestHandleArchive(t *testing.T) {
 
 	t.Run("publish with empty body unarchives document", func(t *testing.T) {
 		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
@@ -1230,7 +1234,7 @@ func TestHandleArchive(t *testing.T) {
 
 	t.Run("fetch specific version of archived document succeeds", func(t *testing.T) {
 		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
@@ -1251,7 +1255,7 @@ func TestHandleArchive(t *testing.T) {
 
 	t.Run("publish with body to active document still works", func(t *testing.T) {
 		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n# New Content\n")
 		h.HandleStream(stream)
@@ -1270,7 +1274,7 @@ func TestHandleArchive(t *testing.T) {
 
 	t.Run("publish with empty body to active document is no-op", func(t *testing.T) {
 		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, GetTokenStore: func() *auth.TokenStore { return ts }}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n")
 		h.HandleStream(stream)

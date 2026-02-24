@@ -3,7 +3,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,23 +11,23 @@ import (
 	"github.com/latebit/demarkus/server/internal/config"
 )
 
-func startCertReloader(cfg *config.Config, prodMode bool) {
+func startCertReloader(cfg *config.Config, prodMode bool, logger *slog.Logger) {
 	sighupChan := make(chan os.Signal, 1)
 	signal.Notify(sighupChan, syscall.SIGHUP)
 	go func() {
 		for range sighupChan {
 			if prodMode {
 				if err := loadCert(cfg.TLSCert, cfg.TLSKey); err != nil {
-					log.Printf("[ERROR] tls: certificate reload failed: %v", err)
+					logger.Error("tls: certificate reload failed", "error", err)
 				} else {
-					log.Printf("[INFO] tls: certificate reloaded from %s", cfg.TLSCert)
+					logger.Info("tls: certificate reloaded", "path", cfg.TLSCert)
 				}
 			}
 			if cfg.TokensFile != "" {
 				if err := loadTokenStore(cfg.TokensFile); err != nil {
-					log.Printf("[ERROR] auth: token reload failed: %v", err)
+					logger.Error("auth: token reload failed", "error", err)
 				} else {
-					log.Printf("[INFO] auth: tokens reloaded from %s", cfg.TokensFile)
+					logger.Info("auth: tokens reloaded", "path", cfg.TokensFile)
 				}
 			}
 		}

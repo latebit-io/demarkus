@@ -23,6 +23,8 @@ type Config struct {
 	TokensFile     string        // Path to TOML tokens file (empty = no auth)
 	RateLimit      float64       // Requests per second per IP (0 = disabled)
 	RateBurst      int           // Burst size for rate limiter
+	LogFormat      string        // Log format: "text" (default) or "json"
+	LogLevel       string        // Log level: "debug", "info" (default), "warn", "error"
 }
 
 // NewConfig loads configuration from environment variables.
@@ -40,6 +42,8 @@ func NewConfig() (*Config, error) {
 	config.TokensFile = getEnv("DEMARKUS_TOKENS", "")
 	config.RateLimit = getEnvAsFloat64("DEMARKUS_RATE_LIMIT", 50)
 	config.RateBurst = getEnvAsInt("DEMARKUS_RATE_BURST", 100)
+	config.LogFormat = getEnv("DEMARKUS_LOG_FORMAT", "text")
+	config.LogLevel = getEnv("DEMARKUS_LOG_LEVEL", "info")
 
 	if config.RateLimit < 0 {
 		return config, fmt.Errorf("DEMARKUS_RATE_LIMIT must be non-negative (got %v)", config.RateLimit)
