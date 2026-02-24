@@ -17,10 +17,7 @@
 - [x] MCP handlers drop response metadata — added `formatResult` helper; all handlers now surface relevant metadata (version, modified, etag, chain-valid, etc.)
 
 ### CI/CD
-- [ ] CI does not build TUI or MCP — only `demarkus` (CLI) is built, so build regressions in `demarkus-tui` and `demarkus-mcp` pass CI silently
-
-### Testing
-- [ ] No end-to-end tests — all tests use mock streams; no test exercises an actual QUIC connection
+- [x] CI does not build TUI or MCP — added `demarkus-tui` and `demarkus-mcp` build steps to CI workflow
 
 ### Under review
 - [ ] `SEARCH` verb — use case not yet clear enough to implement

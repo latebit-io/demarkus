@@ -71,5 +71,9 @@ jobs:
         run: cd client && go test ./...
       - name: Vet
         run: cd client && go vet ./...
-      - name: Build
+      - name: Build CLI
         run: cd client && go build -o /dev/null ./cmd/demarkus
+      - name: Build TUI
+        run: cd client && go build -o /dev/null ./cmd/demarkus-tui
+      - name: Build MCP
+        run: cd client && go build -o /dev/null ./cmd/demarkus-mcp
