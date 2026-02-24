@@ -5,7 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -16,6 +16,7 @@ import (
 	"github.com/latebit/demarkus/server/internal/auth"
 	"github.com/latebit/demarkus/server/internal/config"
 	"github.com/latebit/demarkus/server/internal/handler"
+	"github.com/latebit/demarkus/server/internal/logging"
 	"github.com/latebit/demarkus/server/internal/ratelimit"
 	"github.com/latebit/demarkus/server/internal/store"
 	servertls "github.com/latebit/demarkus/server/internal/tls"
@@ -31,8 +32,12 @@ func main() {
 	flag.Parse()
 
 	cfg, err := config.NewConfig()
+
+	// Create logger early so all subsequent output is structured.
+	logger := logging.New(cfg.LogFormat, cfg.LogLevel, nil)
+
 	if err != nil {
-		log.Printf("[WARN] config: %v", err)
+		logger.Warn("config", "error", err)
 	}
 
 	// Flag overrides take precedence over env vars
@@ -52,21 +57,26 @@ func main() {
 		cfg.TokensFile = *tokens
 	}
 	if cfg.ContentDir == "" {
-		log.Fatal("[ERROR] content directory is required (set DEMARKUS_ROOT or use -root flag)")
+		logger.Error("content directory is required (set DEMARKUS_ROOT or use -root flag)")
+		os.Exit(1)
 	}
 	info, err := os.Stat(cfg.ContentDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Fatalf("[ERROR] content directory %q does not exist", cfg.ContentDir)
+			logger.Error("content directory does not exist", "path", cfg.ContentDir)
+			os.Exit(1)
 		}
-		log.Fatalf("[ERROR] cannot stat content directory %q: %v", cfg.ContentDir, err)
+		logger.Error("cannot stat content directory", "path", cfg.ContentDir, "error", err)
+		os.Exit(1)
 	} else if !info.IsDir() {
-		log.Fatalf("[ERROR] content directory %q is not a directory", cfg.ContentDir)
+		logger.Error("content directory is not a directory", "path", cfg.ContentDir)
+		os.Exit(1)
 	}
 
-	tlsConfig, prodMode, err := loadTLS(cfg)
+	tlsConfig, prodMode, err := loadTLS(cfg, logger)
 	if err != nil {
-		log.Fatalf("[ERROR] %v", err)
+		logger.Error("tls setup failed", "error", err)
+		os.Exit(1)
 	}
 
 	quicConfig := &quic.Config{
@@ -78,7 +88,8 @@ func main() {
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	listener, err := quic.ListenAddr(addr, tlsConfig, quicConfig)
 	if err != nil {
-		log.Fatalf("[ERROR] listen on %s: %v", addr, err)
+		logger.Error("listen failed", "addr", addr, "error", err)
+		os.Exit(1)
 	}
 	defer func() { _ = listener.Close() }()
 
@@ -86,16 +97,18 @@ func main() {
 
 	if cfg.TokensFile != "" {
 		if err := loadTokenStore(cfg.TokensFile); err != nil {
-			log.Fatalf("[ERROR] %v", err)
+			logger.Error("token loading failed", "error", err)
+			os.Exit(1)
 		}
-		log.Printf("[INFO] auth: loaded tokens from %s", cfg.TokensFile)
+		logger.Info("auth: loaded tokens", "path", cfg.TokensFile)
 	} else {
-		log.Printf("[INFO] auth: no tokens file configured, writes disabled")
+		logger.Info("auth: no tokens file configured, writes disabled")
 	}
 
 	h := &handler.Handler{
 		ContentDir: cfg.ContentDir,
 		Store:      s,
+		Logger:     logger,
 		GetTokenStore: func() *auth.TokenStore {
 			tokenMu.RLock()
 			defer tokenMu.RUnlock()
@@ -107,18 +120,21 @@ func main() {
 	if cfg.RateLimit > 0 {
 		rl = ratelimit.New(cfg.RateLimit, cfg.RateBurst)
 		defer rl.Stop()
-		log.Printf("[INFO] rate limit: %g req/s per IP, burst %d", cfg.RateLimit, cfg.RateBurst)
+		logger.Info("rate limit configured", "req_per_sec", cfg.RateLimit, "burst", cfg.RateBurst)
 	}
 
-	log.Printf("[INFO] demarkus-server listening on %s (root: %s, idle_timeout: %v, request_timeout: %v)",
-		addr, cfg.ContentDir, cfg.IdleTimeout, cfg.RequestTimeout)
+	logger.Info("server started",
+		"addr", addr,
+		"root", cfg.ContentDir,
+		"idle_timeout", cfg.IdleTimeout.String(),
+		"request_timeout", cfg.RequestTimeout.String())
 
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Start SIGHUP handler for certificate reload (Unix only, no-op on Windows)
-	startCertReloader(cfg, prodMode)
+	startCertReloader(cfg, prodMode, logger)
 
 	// Accept connections in a goroutine so we can listen for shutdown signals
 	var wg sync.WaitGroup
@@ -131,7 +147,7 @@ func main() {
 				return
 			}
 			wg.Go(func() {
-				handleConn(conn, h, cfg.RequestTimeout, rl)
+				handleConn(conn, h, cfg.RequestTimeout, rl, logger)
 			})
 		}
 	}()
@@ -139,9 +155,9 @@ func main() {
 	// Wait for shutdown signal or listener error
 	select {
 	case sig := <-sigChan:
-		log.Printf("[INFO] received signal %v, initiating graceful shutdown", sig)
+		logger.Info("received signal, initiating graceful shutdown", "signal", sig.String())
 	case err := <-errChan:
-		log.Printf("[ERROR] listener error: %v", err)
+		logger.Error("listener error", "error", err)
 	}
 
 	// Close the listener to stop accepting new connections
@@ -156,15 +172,15 @@ func main() {
 
 	select {
 	case <-done:
-		log.Printf("[INFO] all connections drained")
+		logger.Info("all connections drained")
 	case <-time.After(10 * time.Second):
-		log.Printf("[WARN] shutdown timeout: some connections did not finish")
+		logger.Warn("shutdown timeout: some connections did not finish")
 	}
 
-	log.Printf("[INFO] demarkus-server stopped")
+	logger.Info("server stopped")
 }
 
-func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duration, rl *ratelimit.Limiter) {
+func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duration, rl *ratelimit.Limiter, logger *slog.Logger) {
 	for {
 		stream, err := conn.AcceptStream(context.Background())
 		if err != nil {
@@ -173,7 +189,7 @@ func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duratio
 		if rl != nil {
 			ip := ratelimit.ExtractIP(conn.RemoteAddr())
 			if !rl.Allow(ip) {
-				log.Printf("[RATELIMIT] %s", ip)
+				logger.Warn("rate limited")
 				_ = stream.Close()
 				continue
 			}
@@ -222,13 +238,13 @@ func loadTokenStore(path string) error {
 // so certificates can be reloaded at runtime via SIGHUP.
 // If neither is set, generates a self-signed dev certificate.
 // Returns an error if only one of cert/key is provided.
-func loadTLS(cfg *config.Config) (tlsConfig *tls.Config, prodMode bool, err error) {
+func loadTLS(cfg *config.Config, logger *slog.Logger) (tlsConfig *tls.Config, prodMode bool, err error) {
 	haveCert := cfg.TLSCert != ""
 	haveKey := cfg.TLSKey != ""
 
 	switch {
 	case haveCert && haveKey:
-		log.Printf("[INFO] tls: loading certificate from %s", cfg.TLSCert)
+		logger.Info("tls: loading certificate", "path", cfg.TLSCert)
 		if err := loadCert(cfg.TLSCert, cfg.TLSKey); err != nil {
 			return nil, false, err
 		}
@@ -247,7 +263,7 @@ func loadTLS(cfg *config.Config) (tlsConfig *tls.Config, prodMode bool, err erro
 	case haveCert != haveKey:
 		return nil, false, fmt.Errorf("both -tls-cert and -tls-key must be provided (got cert=%q, key=%q)", cfg.TLSCert, cfg.TLSKey)
 	default:
-		log.Printf("[INFO] tls: using self-signed dev certificate (set DEMARKUS_TLS_CERT and DEMARKUS_TLS_KEY for production)")
+		logger.Info("tls: using self-signed dev certificate (set DEMARKUS_TLS_CERT and DEMARKUS_TLS_KEY for production)")
 		tc, err := servertls.GenerateDevConfig()
 		return tc, false, err
 	}

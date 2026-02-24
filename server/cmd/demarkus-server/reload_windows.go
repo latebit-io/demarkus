@@ -2,8 +2,12 @@
 
 package main
 
-import "github.com/latebit/demarkus/server/internal/config"
+import (
+	"log/slog"
 
-func startCertReloader(_ *config.Config, _ bool) {
+	"github.com/latebit/demarkus/server/internal/config"
+)
+
+func startCertReloader(_ *config.Config, _ bool, _ *slog.Logger) {
 	// SIGHUP is not available on Windows. Certificate reload requires a server restart.
 }
