@@ -154,10 +154,10 @@ func editMain(args []string) {
 	}
 
 	editorEnv := os.Getenv("EDITOR")
-	if editorEnv == "" {
-		editorEnv = "vi"
-	}
 	editorFields := strings.Fields(editorEnv)
+	if len(editorFields) == 0 {
+		editorFields = []string{"vi"}
+	}
 
 	// Resolve auth token: flag > env > stored token.
 	token := *authToken
