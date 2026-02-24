@@ -939,7 +939,7 @@ func TestHandlePublish(t *testing.T) {
 		}
 	})
 
-	t.Run("duplicate content returns not-modified", func(t *testing.T) {
+	t.Run("duplicate content is no-op", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
 		if _, err := s.Write("/doc.md", []byte("# Same\n")); err != nil {
@@ -954,8 +954,8 @@ func TestHandlePublish(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
 		}
-		if resp.Status != protocol.StatusNotModified {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotModified)
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
 		}
 		if resp.Metadata["version"] != "1" {
 			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "1")

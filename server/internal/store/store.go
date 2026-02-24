@@ -471,9 +471,10 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 					return nil, fmt.Errorf("stat current version: %w", err)
 				}
 				return &Document{
-					Content:  prevData,
+					Content:  content,
 					Modified: info.ModTime().UTC().Truncate(time.Second),
 					Version:  next - 1,
+					Archived: false,
 				}, ErrNotModified
 			}
 		}
@@ -683,15 +684,15 @@ func isArchived(data []byte) bool {
 // extractBody returns the content after the store frontmatter.
 // If no frontmatter is found, the entire data is returned.
 func extractBody(data []byte) []byte {
-	s := string(data)
-	if !strings.HasPrefix(s, "---\n") {
+	delim := []byte("---\n")
+	if !bytes.HasPrefix(data, delim) {
 		return data
 	}
-	end := strings.Index(s[4:], "\n---\n")
+	end := bytes.Index(data[4:], []byte("\n---\n"))
 	if end == -1 {
 		return data
 	}
-	return []byte(s[4+end+5:])
+	return data[4+end+5:]
 }
 
 // migrateFlatFile promotes a flat file (no version history) to v1 in the

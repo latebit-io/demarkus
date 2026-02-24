@@ -449,6 +449,9 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 	if doc2.Version != 1 {
 		t.Errorf("version = %d, want 1", doc2.Version)
 	}
+	if !bytes.Equal(doc2.Content, content) {
+		t.Errorf("content = %q, want %q", doc2.Content, content)
+	}
 
 	// No v2 file should exist.
 	v2Path := filepath.Join(root, "versions", "doc.md.v2")

@@ -327,7 +327,8 @@ modified: <RFC 3339 timestamp>
 The `created` response MUST NOT include a body.
 
 **Behaviour**:
-- Every PUBLISH creates a new version. The server MUST NOT modify or overwrite any existing version.
+- PUBLISH creates a new version unless the body is identical to the current version. The server MUST NOT modify or overwrite any existing version.
+- If the body is byte-for-byte identical to the current version's content, the server MUST NOT create a new version. It MUST respond with `ok` and the current version's `version` and `modified` metadata.
 - If the document does not exist, version 1 is created.
 - If the document exists, the version number is incremented from the current highest version.
 - If the document exists as a flat file (no version history), the server MUST migrate the flat file to version 1 before creating version 2.
