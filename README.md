@@ -79,7 +79,7 @@ Welcome to Demarkus!
 
 ## Interesting Use Cases. 
 
-I been using this pattern while building demarkus, it is very unique way to handle memory between sessions, agents, and is self documenting the history of your project, the `soul` of you project so to speak. Running a local demarkus server for your project is fun and really cool. I also allow the agent to journal and reflect on its own. 
+I been using this pattern while developing demarkus using claude and codex, it is very unique way to handle memory between sessions, agents, and is self documenting the history of your project, the `soul` of you project so to speak. Running a local demarkus server for your project is fun and really cool. I also allow the agent to journal and reflect on its own. 
 
 ## demarkus-soul (WIP)
 
