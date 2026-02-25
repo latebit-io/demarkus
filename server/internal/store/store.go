@@ -591,16 +591,11 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 	// Post-check: if a concurrent writer slipped in between our pre-check
 	// and Write's internal version computation, Write may have created a
 	// version beyond expectedVersion+1 (e.g. v3 instead of v2). Detect
-	// this and treat it as a conflict.
+	// this and treat it as a conflict. The written version file is kept
+	// to avoid leaving a dangling symlink — it's a valid version with a
+	// correct hash chain, just created under stale assumptions.
 	if doc.Version != expectedVersion+1 {
-		// Remove the orphaned version file we just wrote.
-		cleaned := strings.TrimLeft(filepath.Clean(reqPath), "/")
-		base := filepath.Base(cleaned)
-		dir := filepath.Dir(cleaned)
-		orphan := filepath.Join(s.root, dir, "versions", fmt.Sprintf("%s.v%d", base, doc.Version))
-		_ = os.Remove(orphan)
-		current = s.CurrentVersion(reqPath)
-		return &Document{Version: current}, ErrConflict
+		return &Document{Version: doc.Version}, ErrConflict
 	}
 
 	return doc, nil

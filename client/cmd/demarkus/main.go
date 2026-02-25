@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -180,8 +179,10 @@ func editMain(args []string) {
 	defer client.Close()
 
 	// Fetch the current document content and version for conflict detection.
+	// Default to -1 (no check) so a missing/malformed version doesn't cause
+	// a false create-only conflict on an existing document.
 	var original string
-	var fetchedVersion int
+	fetchedVersion := -1
 	result, err := client.Fetch(host, path)
 	if err != nil {
 		log.Fatal(err)
@@ -193,7 +194,8 @@ func editMain(args []string) {
 			fetchedVersion = v
 		}
 	case protocol.StatusNotFound:
-		// New document — start with empty content.
+		// New document — start with empty content; 0 means create-only.
+		fetchedVersion = 0
 		fmt.Fprintf(os.Stderr, "Document not found, creating new document.\n")
 	default:
 		log.Fatalf("fetch failed: %s", result.Response.Status)
@@ -247,10 +249,18 @@ func editMain(args []string) {
 	}
 
 	if result.Response.Status == protocol.StatusConflict {
-		// Save the user's edits so they aren't lost.
+		// Save the user's edits so they aren't lost. Use CreateTemp for
+		// safe file creation (avoids symlink attacks on predictable names).
 		safeName := strings.ReplaceAll(strings.TrimLeft(path, "/"), "/", "-")
-		conflictFile := filepath.Join(os.TempDir(), "demarkus-conflict-"+safeName)
-		if writeErr := os.WriteFile(conflictFile, []byte(newBody), 0o644); writeErr != nil {
+		f, writeErr := os.CreateTemp("", "demarkus-conflict-"+safeName+"-*.md")
+		if writeErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to save edits: %v\n", writeErr)
+			os.Exit(1)
+		}
+		conflictFile := f.Name()
+		_, writeErr = f.WriteString(newBody)
+		_ = f.Close()
+		if writeErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to save edits: %v\n", writeErr)
 			os.Exit(1)
 		}
