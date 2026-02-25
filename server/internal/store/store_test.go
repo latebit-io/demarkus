@@ -386,8 +386,8 @@ func TestWrite_ImmutabilityGuard(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: version 1 already exists")
 	}
-	if !strings.Contains(err.Error(), "already exists") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, ErrVersionExists) {
+		t.Errorf("expected ErrVersionExists, got: %v", err)
 	}
 }
 

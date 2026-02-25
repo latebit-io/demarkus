@@ -129,7 +129,7 @@ func TestToolDefinitions(t *testing.T) {
 			name:         "mark_publish",
 			tool:         markPublishTool(""),
 			wantName:     "mark_publish",
-			wantRequired: []string{"url", "body"},
+			wantRequired: []string{"url", "body", "expected_version"},
 			wantDesc:     "Publish or update",
 		},
 	}
