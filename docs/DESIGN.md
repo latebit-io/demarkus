@@ -80,6 +80,32 @@ reason: "Outdated information"
 ---
 ```
 
+### Optimistic Concurrency (expected-version)
+
+PUBLISH supports optimistic concurrency control via the `expected-version` metadata field. This prevents silent data loss from concurrent edits without requiring locks.
+
+**Semantics**:
+- **`expected-version: 0`** — Create-only. The publish succeeds only if the document does not yet exist. If another writer created it first, the server returns `conflict`.
+- **`expected-version: N`** (positive) — Update with version check. The publish succeeds only if the document's current version is exactly N. If the document has been modified since version N, the server returns `conflict` with the current `server-version`.
+- **Omitted** — No check. The write proceeds unconditionally (last-write-wins). This preserves backward compatibility for raw protocol usage.
+
+**Workflow**:
+```
+1. FETCH /doc.md          → status: ok, version: 42
+2. Edit content locally
+3. PUBLISH /doc.md
+   ---
+   auth: <token>
+   expected-version: 42
+   ---
+   # Updated content
+
+4a. If version still 42  → status: created, version: 43
+4b. If version now 44    → status: conflict, server-version: 44
+```
+
+On conflict, the client should fetch the latest version and reapply edits. The CLI `edit` command handles this automatically by saving unsaved edits to a temp file so no work is lost.
+
 **Directory Operations**:
 ```
 LIST /docs/
@@ -133,7 +159,7 @@ This is a [link](other.md)
 Document-centric operations that align with markdown usage:
 
 - **FETCH**: Retrieve a document
-- **PUBLISH**: Create or update a document (creates new version)
+- **PUBLISH**: Create or update a document (creates new version, supports optimistic concurrency via `expected-version`)
 - **APPEND**: Add content to end of document (comments, logs, notes) — *under evaluation, deferred until a concrete use case emerges*
 - **ARCHIVE**: Remove a document from active serving (preserves in version history)
 - **LIST**: Get directory contents or document index

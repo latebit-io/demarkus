@@ -293,7 +293,10 @@ func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("publish requires a token (-token flag or stored via 'demarkus token add')"), nil
 	}
 
-	expectedVersion := req.GetInt("expected_version", 0)
+	expectedVersion, err := req.RequireInt("expected_version")
+	if err != nil {
+		return mcp.NewToolResultError("expected_version is required"), nil
+	}
 
 	result, err := h.client.Publish(host, path, body, token, expectedVersion)
 	if err != nil {

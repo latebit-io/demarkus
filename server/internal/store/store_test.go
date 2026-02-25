@@ -562,6 +562,40 @@ func TestWriteVersion(t *testing.T) {
 			t.Errorf("conflict doc version = %d, want 1", doc.Version)
 		}
 	})
+
+	t.Run("concurrent create race returns ErrConflict", func(t *testing.T) {
+		// Two writers both try to create a new document (expectedVersion=0).
+		// Writer A wins and creates v1. Writer B's pre-check now sees
+		// current=1 != 0, returning ErrConflict.
+		//
+		// The tighter O_EXCL race (both pass pre-check, one loses the
+		// file create) and the post-check race (version jump detection)
+		// cannot be triggered deterministically without injecting hooks
+		// between WriteVersion's pre-check and Write call. These paths
+		// are tested indirectly: TestWrite_ImmutabilityGuard verifies
+		// Write returns ErrVersionExists on O_EXCL collision, and the
+		// post-check is a defensive guard for the same class of race.
+		root := t.TempDir()
+		s := New(root)
+
+		// Writer A wins.
+		doc, err := s.WriteVersion("/doc.md", 0, []byte("# writer A\n"))
+		if err != nil {
+			t.Fatalf("writer A: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("writer A version = %d, want 1", doc.Version)
+		}
+
+		// Writer B arrives with stale expectedVersion=0.
+		doc, err = s.WriteVersion("/doc.md", 0, []byte("# writer B\n"))
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("writer B: expected ErrConflict, got: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("writer B conflict version = %d, want 1", doc.Version)
+		}
+	})
 }
 
 func TestArchive(t *testing.T) {
