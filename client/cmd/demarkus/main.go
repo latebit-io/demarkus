@@ -259,11 +259,12 @@ func editMain(args []string) {
 		}
 		conflictFile := f.Name()
 		_, writeErr = f.WriteString(newBody)
-		_ = f.Close()
 		if writeErr != nil {
+			_ = f.Close()
 			fmt.Fprintf(os.Stderr, "failed to save edits: %v\n", writeErr)
 			os.Exit(1)
 		}
+		_ = f.Close()
 		serverVersion := result.Response.Metadata["server-version"]
 		fmt.Fprintf(os.Stderr, "Conflict: document updated to version %s since you fetched version %d.\n", serverVersion, fetchedVersion)
 		fmt.Fprintf(os.Stderr, "Your edits saved to %s\n", conflictFile)
