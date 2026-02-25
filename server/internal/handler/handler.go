@@ -426,8 +426,37 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	doc, err := h.Store.Write(req.Path, []byte(req.Body))
+	expectedVersion := -1 // default: no check when expected-version is absent
+	if ev := req.Metadata["expected-version"]; ev != "" {
+		v, err := strconv.Atoi(ev)
+		if err != nil || v < 0 {
+			h.writeError(w, protocol.StatusBadRequest, "invalid expected-version")
+			return
+		}
+		expectedVersion = v
+	}
+
+	doc, err := h.Store.WriteVersion(req.Path, expectedVersion, []byte(req.Body))
 	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			h.logger().Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "success", false)
+			var body string
+			if expectedVersion == 0 {
+				body = fmt.Sprintf("# Version Conflict\n\nA document already exists at this path (version %d).\n\nFetch the current version and publish with the correct expected-version to update it.\n", doc.Version)
+			} else {
+				body = fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nPlease fetch the latest version and reapply your edits.\n", expectedVersion, doc.Version)
+			}
+			resp := protocol.Response{
+				Status: protocol.StatusConflict,
+				Metadata: map[string]string{
+					"your-version":   strconv.Itoa(expectedVersion),
+					"server-version": strconv.Itoa(doc.Version),
+				},
+				Body: body,
+			}
+			h.writeResponse(w, resp)
+			return
+		}
 		if errors.Is(err, store.ErrNotModified) {
 			h.logger().Info("publish unchanged", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "success", true)
 			resp := protocol.Response{

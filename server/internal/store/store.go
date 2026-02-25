@@ -17,6 +17,7 @@ package store
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,6 +47,14 @@ var ErrArchived = fmt.Errorf("document is archived")
 // ErrNotModified is returned by Write when the content is identical
 // to the current version, making the publish a no-op.
 var ErrNotModified = fmt.Errorf("content not modified")
+
+// ErrConflict is returned by WriteVersion when the expected version
+// does not match the current version (optimistic concurrency check).
+var ErrConflict = fmt.Errorf("version conflict")
+
+// ErrVersionExists is returned by Write when the computed next version
+// file already exists (O_EXCL race with a concurrent writer).
+var ErrVersionExists = fmt.Errorf("version already exists")
 
 // MaxFileSize is the maximum file size the store will read (10 MB).
 const MaxFileSize = 10 * 1024 * 1024
@@ -509,7 +518,7 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 	f, err := os.OpenFile(versionFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
-			return nil, fmt.Errorf("version %d already exists", next)
+			return nil, fmt.Errorf("version %d: %w", next, ErrVersionExists)
 		}
 		return nil, fmt.Errorf("create version file: %w", err)
 	}
@@ -549,6 +558,56 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 		Version:  next,
 		Archived: false,
 	}, nil
+}
+
+// WriteVersion is like Write but performs an optimistic concurrency check.
+// expectedVersion semantics:
+//   - < 0: skip check (equivalent to calling Write directly)
+//   - 0: expect the document does not exist yet (create-only)
+//   - > 0: expect this specific version (update-only)
+//
+// Returns ErrConflict if the expectation is violated.
+func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte) (*Document, error) {
+	if expectedVersion < 0 {
+		return s.Write(reqPath, content)
+	}
+
+	current := s.CurrentVersion(reqPath)
+	if current != expectedVersion {
+		return &Document{Version: current}, ErrConflict
+	}
+
+	doc, err := s.Write(reqPath, content)
+	if err != nil {
+		if errors.Is(err, ErrVersionExists) {
+			// Lost the O_EXCL race: another writer created the expected
+			// next version between our check and the file create.
+			current = s.CurrentVersion(reqPath)
+			return &Document{Version: current}, ErrConflict
+		}
+		if errors.Is(err, ErrNotModified) && doc != nil {
+			// Content matches current version — but if a concurrent writer
+			// created intervening versions, the "current" version may have
+			// moved past expectedVersion+1. Allow not-modified only when
+			// the version is what we'd expect.
+			if doc.Version != expectedVersion && doc.Version != expectedVersion+1 {
+				return &Document{Version: doc.Version}, ErrConflict
+			}
+		}
+		return doc, err
+	}
+
+	// Post-check: if a concurrent writer slipped in between our pre-check
+	// and Write's internal version computation, Write may have created a
+	// version beyond expectedVersion+1 (e.g. v3 instead of v2). Detect
+	// this and treat it as a conflict. The written version file is kept
+	// to avoid leaving a dangling symlink — it's a valid version with a
+	// correct hash chain, just created under stale assumptions.
+	if doc.Version != expectedVersion+1 {
+		return &Document{Version: doc.Version}, ErrConflict
+	}
+
+	return doc, nil
 }
 
 // VerifyChain checks the hash chain integrity for a document.

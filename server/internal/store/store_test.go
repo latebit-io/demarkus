@@ -386,8 +386,8 @@ func TestWrite_ImmutabilityGuard(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: version 1 already exists")
 	}
-	if !strings.Contains(err.Error(), "already exists") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, ErrVersionExists) {
+		t.Errorf("expected ErrVersionExists, got: %v", err)
 	}
 }
 
@@ -476,6 +476,146 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 	if doc4.Version != 2 {
 		t.Errorf("version = %d, want 2", doc4.Version)
 	}
+}
+
+func TestWriteVersion(t *testing.T) {
+	t.Run("matching version succeeds", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+
+		doc, err := s.WriteVersion("/doc.md", 1, []byte("# v2\n"))
+		if err != nil {
+			t.Fatalf("WriteVersion: %v", err)
+		}
+		if doc.Version != 2 {
+			t.Errorf("version = %d, want 2", doc.Version)
+		}
+	})
+
+	t.Run("mismatched version returns ErrConflict", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+		if _, err := s.Write("/doc.md", []byte("# v2\n")); err != nil {
+			t.Fatalf("write v2: %v", err)
+		}
+
+		doc, err := s.WriteVersion("/doc.md", 1, []byte("# stale edit\n"))
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("expected ErrConflict, got: %v", err)
+		}
+		if doc.Version != 2 {
+			t.Errorf("conflict doc version = %d, want 2", doc.Version)
+		}
+	})
+
+	t.Run("negative expected version skips check", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+
+		doc, err := s.WriteVersion("/doc.md", -1, []byte("# v2\n"))
+		if err != nil {
+			t.Fatalf("WriteVersion with -1: %v", err)
+		}
+		if doc.Version != 2 {
+			t.Errorf("version = %d, want 2", doc.Version)
+		}
+	})
+
+	t.Run("zero expected version creates new document", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		doc, err := s.WriteVersion("/new.md", 0, []byte("# Hello\n"))
+		if err != nil {
+			t.Fatalf("WriteVersion: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("version = %d, want 1", doc.Version)
+		}
+	})
+
+	t.Run("zero expected version conflicts if document exists", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+
+		doc, err := s.WriteVersion("/doc.md", 0, []byte("# should conflict\n"))
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("expected ErrConflict, got: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("conflict doc version = %d, want 1", doc.Version)
+		}
+	})
+
+	t.Run("concurrent create race returns ErrConflict", func(t *testing.T) {
+		// Two writers both try to create a new document (expectedVersion=0).
+		// Writer A wins and creates v1. Writer B's pre-check now sees
+		// current=1 != 0, returning ErrConflict.
+		//
+		// The tighter O_EXCL race (both pass pre-check, one loses the
+		// file create) and the post-check race (version jump detection)
+		// cannot be triggered deterministically without injecting hooks
+		// between WriteVersion's pre-check and Write call. These paths
+		// are tested indirectly: TestWrite_ImmutabilityGuard verifies
+		// Write returns ErrVersionExists on O_EXCL collision, and the
+		// post-check is a defensive guard for the same class of race.
+		root := t.TempDir()
+		s := New(root)
+
+		// Writer A wins.
+		doc, err := s.WriteVersion("/doc.md", 0, []byte("# writer A\n"))
+		if err != nil {
+			t.Fatalf("writer A: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("writer A version = %d, want 1", doc.Version)
+		}
+
+		// Writer B arrives with stale expectedVersion=0.
+		doc, err = s.WriteVersion("/doc.md", 0, []byte("# writer B\n"))
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("writer B: expected ErrConflict, got: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("writer B conflict version = %d, want 1", doc.Version)
+		}
+	})
+
+	t.Run("not-modified at expected version passes through", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		content := []byte("# Hello\n")
+		if _, err := s.Write("/doc.md", content); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+
+		// Publishing identical content with correct expectedVersion
+		// should return ErrNotModified (not ErrConflict).
+		doc, err := s.WriteVersion("/doc.md", 1, content)
+		if !errors.Is(err, ErrNotModified) {
+			t.Fatalf("expected ErrNotModified, got: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("version = %d, want 1", doc.Version)
+		}
+	})
 }
 
 func TestArchive(t *testing.T) {

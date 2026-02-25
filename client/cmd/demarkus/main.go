@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/latebit/demarkus/client/internal/cache"
@@ -110,7 +111,7 @@ func requestMain() {
 	case protocol.VerbVersions:
 		result, err = client.Versions(host, path)
 	case protocol.VerbPublish:
-		result, err = client.Publish(host, path, reqBody, token)
+		result, err = client.Publish(host, path, reqBody, token, -1)
 	case protocol.VerbArchive:
 		result, err = client.Archive(host, path, token)
 	}
@@ -177,8 +178,11 @@ func editMain(args []string) {
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
-	// Fetch the current document content.
+	// Fetch the current document content and version for conflict detection.
+	// Default to -1 (no check) so a missing/malformed version doesn't cause
+	// a false create-only conflict on an existing document.
 	var original string
+	fetchedVersion := -1
 	result, err := client.Fetch(host, path)
 	if err != nil {
 		log.Fatal(err)
@@ -186,8 +190,12 @@ func editMain(args []string) {
 	switch result.Response.Status {
 	case protocol.StatusOK:
 		original = result.Response.Body
+		if v, err := strconv.Atoi(result.Response.Metadata["version"]); err == nil {
+			fetchedVersion = v
+		}
 	case protocol.StatusNotFound:
-		// New document — start with empty content.
+		// New document — start with empty content; 0 means create-only.
+		fetchedVersion = 0
 		fmt.Fprintf(os.Stderr, "Document not found, creating new document.\n")
 	default:
 		log.Fatalf("fetch failed: %s", result.Response.Status)
@@ -234,10 +242,34 @@ func editMain(args []string) {
 		return
 	}
 
-	// Publish the edited content.
-	result, err = client.Publish(host, path, newBody, token)
+	// Publish the edited content with optimistic concurrency check.
+	result, err = client.Publish(host, path, newBody, token, fetchedVersion)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if result.Response.Status == protocol.StatusConflict {
+		// Save the user's edits so they aren't lost. Use CreateTemp for
+		// safe file creation (avoids symlink attacks on predictable names).
+		safeName := strings.ReplaceAll(strings.TrimLeft(path, "/"), "/", "-")
+		f, writeErr := os.CreateTemp("", "demarkus-conflict-"+safeName+"-*.md")
+		if writeErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to save edits: %v\n", writeErr)
+			os.Exit(1)
+		}
+		conflictFile := f.Name()
+		_, writeErr = f.WriteString(newBody)
+		if writeErr != nil {
+			_ = f.Close()
+			fmt.Fprintf(os.Stderr, "failed to save edits: %v\n", writeErr)
+			os.Exit(1)
+		}
+		_ = f.Close()
+		serverVersion := result.Response.Metadata["server-version"]
+		fmt.Fprintf(os.Stderr, "Conflict: document updated to version %s since you fetched version %d.\n", serverVersion, fetchedVersion)
+		fmt.Fprintf(os.Stderr, "Your edits saved to %s\n", conflictFile)
+		fmt.Fprintf(os.Stderr, "Re-fetch and reapply your changes.\n")
+		os.Exit(1)
 	}
 
 	fmt.Printf("[%s]", result.Response.Status)

@@ -51,7 +51,7 @@ PUBLISH /doc.md
 
 ---
 auth: <raw-token>
-timestamp: 2025-02-14T10:30:00Z
+expected-version: 42
 ---
 
 # Updated Content
@@ -79,6 +79,32 @@ timestamp: 2025-02-14T10:30:00Z
 reason: "Outdated information"
 ---
 ```
+
+### Optimistic Concurrency (expected-version)
+
+PUBLISH supports optimistic concurrency control via the `expected-version` metadata field. This prevents silent data loss from concurrent edits without requiring locks.
+
+**Semantics**:
+- **`expected-version: 0`** — Create-only. The publish succeeds only if the document does not yet exist. If another writer created it first, the server returns `conflict`.
+- **`expected-version: N`** (positive) — Update with version check. The publish succeeds only if the document's current version is exactly N. If the document has been modified since version N, the server returns `conflict` with the current `server-version`.
+- **Omitted** — No check. The write proceeds unconditionally (last-write-wins). This preserves backward compatibility for raw protocol usage.
+
+**Workflow**:
+```
+1. FETCH /doc.md          → status: ok, version: 42
+2. Edit content locally
+3. PUBLISH /doc.md
+   ---
+   auth: <token>
+   expected-version: 42
+   ---
+   # Updated content
+
+4a. If version still 42  → status: created, version: 43
+4b. If version now 44    → status: conflict, server-version: 44
+```
+
+On conflict, the client should fetch the latest version and reapply edits. The CLI `edit` command handles this automatically by saving unsaved edits to a temp file so no work is lost.
 
 **Directory Operations**:
 ```
@@ -133,7 +159,7 @@ This is a [link](other.md)
 Document-centric operations that align with markdown usage:
 
 - **FETCH**: Retrieve a document
-- **PUBLISH**: Create or update a document (creates new version)
+- **PUBLISH**: Create or update a document (creates new version, supports optimistic concurrency via `expected-version`)
 - **APPEND**: Add content to end of document (comments, logs, notes) — *under evaluation, deferred until a concrete use case emerges*
 - **ARCHIVE**: Remove a document from active serving (preserves in version history)
 - **LIST**: Get directory contents or document index
@@ -294,17 +320,16 @@ Your authentication token does not grant write access to this path.
 status: conflict
 your-version: 41
 server-version: 43
-conflict-resolution: "server-wins"
 ---
 
 # Version Conflict
 
 The document has been modified since you last fetched it.
 
-Your changes were not applied. Please fetch the latest version and reapply your edits.
+Your version: 41
+Server version: 43
 
-Current version: 43 (modified 2025-02-14T11:00:00Z)
-Your version: 41 (modified 2025-02-14T10:30:00Z)
+Please fetch the latest version and reapply your edits.
 ```
 
 **Server Error**:
@@ -1245,7 +1270,7 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 **Client**:
 - ~~Document editing (open in $EDITOR)~~
 - ~~Client-side token management~~
-- Conflict resolution
+- ~~Conflict resolution~~
 
 ### Phase 3: Advanced Features
 

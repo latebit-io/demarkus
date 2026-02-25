@@ -19,6 +19,8 @@ const (
 	StatusArchived     = "archived"
 	StatusUnauthorized = "unauthorized"
 	StatusNotPermitted = "not-permitted"
+	StatusConflict     = "conflict"
+	StatusBadRequest   = "bad-request"
 	StatusServerError  = "server-error"
 )
 

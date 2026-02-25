@@ -153,6 +153,10 @@ func markPublishTool(host string) mcp.Tool {
 				"Returns the created version number and modified timestamp. "+
 				"Requires an auth token configured via the -token flag. "+
 				"The body should be valid markdown content. "+
+				"expected_version is required for optimistic concurrency: set it to the version "+
+				"number from a prior fetch to detect conflicts. If the document has been "+
+				"modified since that version, the server returns a conflict status. "+
+				"Use 0 when creating a new document. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -162,6 +166,10 @@ func markPublishTool(host string) mcp.Tool {
 		mcp.WithString("body",
 			mcp.Required(),
 			mcp.Description("markdown content to publish"),
+		),
+		mcp.WithNumber("expected_version",
+			mcp.Required(),
+			mcp.Description("version number from a prior fetch for conflict detection; use 0 when creating a new document"),
 		),
 	)
 }
@@ -285,12 +293,17 @@ func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("publish requires a token (-token flag or stored via 'demarkus token add')"), nil
 	}
 
-	result, err := h.client.Publish(host, path, body, token)
+	expectedVersion, err := req.RequireInt("expected_version")
+	if err != nil {
+		return mcp.NewToolResultError("expected_version is required"), nil
+	}
+
+	result, err := h.client.Publish(host, path, body, token, expectedVersion)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(formatResult(result, "version", "modified")), nil
+	return mcp.NewToolResultText(formatResult(result, "version", "modified", "server-version")), nil
 }
 
 func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
