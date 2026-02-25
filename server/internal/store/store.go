@@ -17,6 +17,7 @@ package store
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,6 +51,10 @@ var ErrNotModified = fmt.Errorf("content not modified")
 // ErrConflict is returned by WriteVersion when the expected version
 // does not match the current version (optimistic concurrency check).
 var ErrConflict = fmt.Errorf("version conflict")
+
+// ErrVersionExists is returned by Write when the computed next version
+// file already exists (O_EXCL race with a concurrent writer).
+var ErrVersionExists = fmt.Errorf("version already exists")
 
 // MaxFileSize is the maximum file size the store will read (10 MB).
 const MaxFileSize = 10 * 1024 * 1024
@@ -513,7 +518,7 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 	f, err := os.OpenFile(versionFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
-			return nil, fmt.Errorf("version %d already exists", next)
+			return nil, fmt.Errorf("version %d: %w", next, ErrVersionExists)
 		}
 		return nil, fmt.Errorf("create version file: %w", err)
 	}
@@ -562,23 +567,43 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 //   - > 0: expect this specific version (update-only)
 //
 // Returns ErrConflict if the expectation is violated.
-// A concurrent writer that passes the pre-check but loses the O_EXCL race
-// inside Write will also receive ErrConflict (not a generic error).
 func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte) (*Document, error) {
-	if expectedVersion >= 0 {
-		current := s.CurrentVersion(reqPath)
-		if current != expectedVersion {
-			return &Document{Version: current}, ErrConflict
-		}
+	if expectedVersion < 0 {
+		return s.Write(reqPath, content)
 	}
-	doc, err := s.Write(reqPath, content)
-	if err != nil && expectedVersion >= 0 && strings.Contains(err.Error(), "already exists") {
-		// Lost the O_EXCL race: another writer created the version between
-		// our check and the file create. Return ErrConflict with the latest version.
-		current := s.CurrentVersion(reqPath)
+
+	current := s.CurrentVersion(reqPath)
+	if current != expectedVersion {
 		return &Document{Version: current}, ErrConflict
 	}
-	return doc, err
+
+	doc, err := s.Write(reqPath, content)
+	if err != nil {
+		if errors.Is(err, ErrVersionExists) {
+			// Lost the O_EXCL race: another writer created the expected
+			// next version between our check and the file create.
+			current = s.CurrentVersion(reqPath)
+			return &Document{Version: current}, ErrConflict
+		}
+		return doc, err
+	}
+
+	// Post-check: if a concurrent writer slipped in between our pre-check
+	// and Write's internal version computation, Write may have created a
+	// version beyond expectedVersion+1 (e.g. v3 instead of v2). Detect
+	// this and treat it as a conflict.
+	if doc.Version != expectedVersion+1 {
+		// Remove the orphaned version file we just wrote.
+		cleaned := strings.TrimLeft(filepath.Clean(reqPath), "/")
+		base := filepath.Base(cleaned)
+		dir := filepath.Dir(cleaned)
+		orphan := filepath.Join(s.root, dir, "versions", fmt.Sprintf("%s.v%d", base, doc.Version))
+		_ = os.Remove(orphan)
+		current = s.CurrentVersion(reqPath)
+		return &Document{Version: current}, ErrConflict
+	}
+
+	return doc, nil
 }
 
 // VerifyChain checks the hash chain integrity for a document.

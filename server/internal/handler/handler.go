@@ -430,7 +430,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	if ev := req.Metadata["expected-version"]; ev != "" {
 		v, err := strconv.Atoi(ev)
 		if err != nil || v < 0 {
-			h.writeError(w, protocol.StatusServerError, "invalid expected-version")
+			h.writeError(w, protocol.StatusBadRequest, "invalid expected-version")
 			return
 		}
 		expectedVersion = v
@@ -443,6 +443,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 			resp := protocol.Response{
 				Status: protocol.StatusConflict,
 				Metadata: map[string]string{
+					"your-version":   strconv.Itoa(expectedVersion),
 					"server-version": strconv.Itoa(doc.Version),
 				},
 				Body: fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nPlease fetch the latest version and reapply your edits.\n", expectedVersion, doc.Version),

@@ -51,7 +51,7 @@ PUBLISH /doc.md
 
 ---
 auth: <raw-token>
-timestamp: 2025-02-14T10:30:00Z
+expected-version: 42
 ---
 
 # Updated Content
@@ -294,17 +294,16 @@ Your authentication token does not grant write access to this path.
 status: conflict
 your-version: 41
 server-version: 43
-conflict-resolution: "server-wins"
 ---
 
 # Version Conflict
 
 The document has been modified since you last fetched it.
 
-Your changes were not applied. Please fetch the latest version and reapply your edits.
+Your version: 41
+Server version: 43
 
-Current version: 43 (modified 2025-02-14T11:00:00Z)
-Your version: 41 (modified 2025-02-14T10:30:00Z)
+Please fetch the latest version and reapply your edits.
 ```
 
 **Server Error**:
@@ -1245,7 +1244,7 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 **Client**:
 - ~~Document editing (open in $EDITOR)~~
 - ~~Client-side token management~~
-- Conflict resolution
+- ~~Conflict resolution~~
 
 ### Phase 3: Advanced Features
 
