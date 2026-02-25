@@ -596,6 +596,26 @@ func TestWriteVersion(t *testing.T) {
 			t.Errorf("writer B conflict version = %d, want 1", doc.Version)
 		}
 	})
+
+	t.Run("not-modified at expected version passes through", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		content := []byte("# Hello\n")
+		if _, err := s.Write("/doc.md", content); err != nil {
+			t.Fatalf("write v1: %v", err)
+		}
+
+		// Publishing identical content with correct expectedVersion
+		// should return ErrNotModified (not ErrConflict).
+		doc, err := s.WriteVersion("/doc.md", 1, content)
+		if !errors.Is(err, ErrNotModified) {
+			t.Fatalf("expected ErrNotModified, got: %v", err)
+		}
+		if doc.Version != 1 {
+			t.Errorf("version = %d, want 1", doc.Version)
+		}
+	})
 }
 
 func TestArchive(t *testing.T) {

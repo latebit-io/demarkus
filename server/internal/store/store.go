@@ -585,6 +585,15 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 			current = s.CurrentVersion(reqPath)
 			return &Document{Version: current}, ErrConflict
 		}
+		if errors.Is(err, ErrNotModified) && doc != nil {
+			// Content matches current version — but if a concurrent writer
+			// created intervening versions, the "current" version may have
+			// moved past expectedVersion+1. Allow not-modified only when
+			// the version is what we'd expect.
+			if doc.Version != expectedVersion && doc.Version != expectedVersion+1 {
+				return &Document{Version: doc.Version}, ErrConflict
+			}
+		}
 		return doc, err
 	}
 
