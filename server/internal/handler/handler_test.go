@@ -1046,6 +1046,24 @@ func TestHandlePublish(t *testing.T) {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
 	})
+
+	t.Run("invalid expected-version returns bad-request", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+
+		for _, ev := range []string{"abc", "-1", "1.5"} {
+			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"" + ev + "\"\n---\n# content\n")
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response for %q: %v", ev, err)
+			}
+			if resp.Status != protocol.StatusBadRequest {
+				t.Errorf("expected-version=%q: status got %q, want %q", ev, resp.Status, protocol.StatusBadRequest)
+			}
+		}
+	})
 }
 
 func TestHandlePublishAuth(t *testing.T) {
