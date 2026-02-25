@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "demarkus-soul": {
+      "command": "./client/bin/demarkus-mcp",
+      "args": [
+        "-host", "mark://localhost:6310",
+        "-token", "<your-soul-token>",
+        "-insecure"
+      ]
+    }
+  }
+}

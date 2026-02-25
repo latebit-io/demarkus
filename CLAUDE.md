@@ -66,6 +66,44 @@ Tags: `server/v0.1.0`, `client/v0.1.0`, `protocol/v0.1.0`. Push to main triggers
 - **Version immutability**: every write creates a new version, published versions are permanent
 - **Security**: no tracking, no telemetry, encrypted transport, capability-based auth
 
+## demarkus-soul
+
+A living knowledge base served by demarkus itself — the agent's persistent memory across sessions. It runs as a separate demarkus server on port `6310` and is accessed via MCP.
+
+### Connecting
+
+1. Build the MCP binary: `make client`
+2. Copy `.mcp.json.example` to `.mcp.json` and fill in your token
+3. The MCP server connects to `mark://localhost:6310`
+
+### How to Use It
+
+- **Start of session**: Fetch `/index.md` and key pages to load context
+- **During work**: Update pages when learning something new
+- **End of session**: Add a journal entry to `/journal.md` if something significant happened
+- **Always**: Use `expected_version` from a prior fetch when publishing
+
+### Content Structure
+
+```
+/index.md          — Hub page, links to all sections
+/architecture.md   — System design, module boundaries, key decisions
+/patterns.md       — Code patterns, conventions, idioms
+/debugging.md      — Lessons from bugs and investigations
+/roadmap.md        — What's done, what's next
+/journal.md        — Session notes and evolution log
+/guide.md          — Setup instructions
+```
+
+### Running the Soul Server
+
+The soul lives in a separate repo (`demarkus-soul`) which pulls demarkus as a dependency. See that repo for server setup. The short version:
+
+```bash
+# In the demarkus-soul repo
+./server/bin/demarkus-server -root ./soul-root -port 6310
+```
+
 ## Roadmap
 
 See `docs/DESIGN.md` for full spec and roadmap.

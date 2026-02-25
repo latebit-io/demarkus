@@ -39,3 +39,6 @@ tools/bin/
 # .idea/
 # .vscode/
 tokens.toml
+
+# MCP config (contains auth tokens)
+.mcp.json
