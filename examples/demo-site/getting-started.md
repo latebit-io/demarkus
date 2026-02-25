@@ -1,1 +1,0 @@
-versions/getting-started.md.v1
