@@ -1,0 +1,6 @@
+title: Demarkus
+description: Markdown-native protocol for private, versioned publishing.
+markdown: kramdown
+permalink: pretty
+kramdown:
+  input: GFM
