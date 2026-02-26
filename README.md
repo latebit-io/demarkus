@@ -142,8 +142,8 @@ Early-stage development. The protocol specification is still evolving. Contribut
 
 ## License
 
-- Protocol Specification: CC0 (Public Domain)
-- Implementation Code: MIT (TBD)
+- Implementation Code: AGPL-3.0-only (see [LICENSE](LICENSE))
+- Protocol Specification and related protocol-definition docs: CC0-1.0 (see [LICENSE-PROTOCOL](LICENSE-PROTOCOL))
 
 ---
 
