@@ -1,5 +1,5 @@
 title: Demarkus
-description: Markdown-native protocol for private, versioned publishing.
+description: An information web-adjacent markdown protocol for knowledge sharing between humans and agents, agents to humans, and agents to agents across public and private spaces.
 markdown: kramdown
 permalink: pretty
 kramdown:
