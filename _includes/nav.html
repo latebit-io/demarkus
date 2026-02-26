@@ -1,5 +1,28 @@
 <nav class="top-nav" aria-label="Primary">
-  <a class="{% if page.url == '/' %}is-active{% endif %}" href="{{ '/' | relative_url }}">Home</a>
-  <a class="{% if page.url == '/about/' %}is-active{% endif %}" href="{{ '/about/' | relative_url }}">About</a>
-  <a class="{% if page.url == '/getting-started/' %}is-active{% endif %}" href="{{ '/getting-started/' | relative_url }}">Getting Started</a>
+    <a
+        class="{% if page.url == '/' %}is-active{% endif %}"
+        href="{{ '/' | relative_url }}"
+        >Home</a
+    >
+    <a
+        class="{% if page.url == '/about/' %}is-active{% endif %}"
+        href="{{ '/about/' | relative_url }}"
+        >About</a
+    >
+    <a
+        class="{% if page.url == '/getting-started/' %}is-active{% endif %}"
+        href="{{ '/getting-started/' | relative_url }}"
+        >Getting Started</a
+    >
+    <a
+        class="{% if page.url == '/setup/' %}is-active{% endif %}"
+        href="{{ '/setup/' | relative_url }}"
+        >Setup</a
+    >
+    <a
+        href="https://github.com/latebit-io/demarkus"
+        target="_blank"
+        rel="noreferrer"
+        >GitHub</a
+    >
 </nav>
