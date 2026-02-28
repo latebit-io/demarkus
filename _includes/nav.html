@@ -20,6 +20,11 @@
         >Setup</a
     >
     <a
+        class="{% if page.url == '/soul/' %}is-active{% endif %}"
+        href="{{ '/soul/' | relative_url }}"
+        >Soul</a
+    >
+    <a
         href="https://github.com/latebit-io/demarkus"
         target="_blank"
         rel="noreferrer"
