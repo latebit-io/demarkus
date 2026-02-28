@@ -6,10 +6,38 @@ This section covers production deployment of Demarkus with real TLS certificates
 
 For production you should:
 
-1. Obtain a trusted TLS certificate (e.g. Let's Encrypt).
+1. Obtain a trusted TLS certificate (Let's Encrypt or your own).
 2. Run the server with `-tls-cert` and `-tls-key`.
 3. Open UDP port `6309`.
-4. Set up auto-renewal with zero downtime.
+4. Set up auto-renewal with zero downtime (if using Let's Encrypt).
+
+## TLS with Custom Certificates
+
+If you already have TLS certificates (from your CA, Cloudflare Origin, etc.), you can provide them directly.
+
+### Via Install Script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh \
+  | bash -s -- --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
+```
+
+The script copies the certificates into the config directory (`/etc/demarkus/tls/` on Linux, `~/.demarkus/tls/` on macOS) and configures the service to use them.
+
+### Manual Setup
+
+```bash
+demarkus-server \
+  -root /srv/site \
+  -tls-cert /path/to/cert.pem \
+  -tls-key /path/to/key.pem
+```
+
+To update certificates later, replace the files and send `SIGHUP` to reload without downtime:
+
+```bash
+kill -HUP $(pidof demarkus-server)
+```
 
 ## TLS with Let's Encrypt
 

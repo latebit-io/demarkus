@@ -56,8 +56,11 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 Common options:
 
 ```bash
-# Install server + client with a custom root and domain
+# Install server + client with Let's Encrypt TLS
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --domain example.com --root /srv/site
+
+# Install server + client with your own certificates
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --tls-cert /path/cert.pem --tls-key /path/key.pem
 
 # Install client-only
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only

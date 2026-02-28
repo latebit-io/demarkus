@@ -5,6 +5,7 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
 #   curl -fsSL ... | bash -s -- --domain example.com --root /srv/site
+#   curl -fsSL ... | bash -s -- --tls-cert /path/cert.pem --tls-key /path/key.pem
 #   curl -fsSL ... | bash -s -- --client-only
 #
 # For private repos, set GITHUB_TOKEN:
@@ -406,6 +407,30 @@ setup_cert_renewal() {
   fi
 }
 
+setup_custom_tls() {
+  local cert_src="$1"
+  local key_src="$2"
+
+  log_step "Setting up TLS with provided certificates"
+
+  local tls_dir="${CONFIG_DIR}/tls"
+  mkdir -p "$tls_dir"
+
+  cp "$cert_src" "${tls_dir}/cert.pem"
+  cp "$key_src" "${tls_dir}/key.pem"
+
+  if [ "$PLATFORM" = "linux" ]; then
+    chown root:"$SERVICE_NAME" "$tls_dir" "${tls_dir}/cert.pem" "${tls_dir}/key.pem"
+    chmod 750 "$tls_dir"
+    chmod 640 "${tls_dir}/cert.pem" "${tls_dir}/key.pem"
+  else
+    chmod 700 "$tls_dir"
+    chmod 600 "${tls_dir}/cert.pem" "${tls_dir}/key.pem"
+  fi
+
+  log_info "Certificates installed to ${tls_dir}/"
+}
+
 # --- System tuning ---
 
 setup_udp_buffers() {
@@ -453,17 +478,18 @@ verify_service_running() {
 setup_systemd() {
   local content_root="$1"
   local tokens_file="$2"
-  local domain="${3:-}"
+  local cert_path="${3:-}"
+  local key_path="${4:-}"
 
   log_step "Setting up systemd service"
 
   local env_lines="Environment=DEMARKUS_ROOT=${content_root}
 Environment=DEMARKUS_TOKENS=${tokens_file}"
 
-  if [ -n "$domain" ]; then
+  if [ -n "$cert_path" ] && [ -n "$key_path" ]; then
     env_lines="${env_lines}
-Environment=DEMARKUS_TLS_CERT=/etc/letsencrypt/live/${domain}/fullchain.pem
-Environment=DEMARKUS_TLS_KEY=/etc/letsencrypt/live/${domain}/privkey.pem"
+Environment=DEMARKUS_TLS_CERT=${cert_path}
+Environment=DEMARKUS_TLS_KEY=${key_path}"
   fi
 
   cat > /etc/systemd/system/demarkus.service << EOF
@@ -492,6 +518,8 @@ EOF
 setup_launchd() {
   local content_root="$1"
   local tokens_file="$2"
+  local cert_path="${3:-}"
+  local key_path="${4:-}"
 
   log_step "Setting up launchd service"
 
@@ -499,6 +527,14 @@ setup_launchd() {
   local plist_file="${plist_dir}/io.latebit.demarkus.plist"
   local log_dir="$HOME/.demarkus/logs"
   mkdir -p "$plist_dir" "$log_dir"
+
+  local tls_env=""
+  if [ -n "$cert_path" ] && [ -n "$key_path" ]; then
+    tls_env="    <key>DEMARKUS_TLS_CERT</key>
+    <string>${cert_path}</string>
+    <key>DEMARKUS_TLS_KEY</key>
+    <string>${key_path}</string>"
+  fi
 
   cat > "$plist_file" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -517,6 +553,7 @@ setup_launchd() {
     <string>${content_root}</string>
     <key>DEMARKUS_TOKENS</key>
     <string>${tokens_file}</string>
+${tls_env}
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -541,6 +578,8 @@ EOF
 read_existing_config() {
   EXISTING_ROOT=""
   EXISTING_DOMAIN=""
+  EXISTING_TLS_CERT=""
+  EXISTING_TLS_KEY=""
 
   if [ "$PLATFORM" = "linux" ] && [ -f /etc/systemd/system/demarkus.service ]; then
     EXISTING_ROOT=$(grep 'DEMARKUS_ROOT=' /etc/systemd/system/demarkus.service 2>/dev/null \
@@ -549,14 +588,25 @@ read_existing_config() {
     cert_path=$(grep 'DEMARKUS_TLS_CERT=' /etc/systemd/system/demarkus.service 2>/dev/null \
       | sed 's/.*DEMARKUS_TLS_CERT=//' || true)
     if [ -n "$cert_path" ]; then
-      # Extract domain from /etc/letsencrypt/live/DOMAIN/fullchain.pem
-      EXISTING_DOMAIN=$(echo "$cert_path" | sed 's|.*/live/\([^/]*\)/.*|\1|')
+      case "$cert_path" in
+        */letsencrypt/*)
+          EXISTING_DOMAIN=$(echo "$cert_path" | sed 's|.*/live/\([^/]*\)/.*|\1|')
+          ;;
+        *)
+          EXISTING_TLS_CERT="$cert_path"
+          EXISTING_TLS_KEY=$(grep 'DEMARKUS_TLS_KEY=' /etc/systemd/system/demarkus.service 2>/dev/null \
+            | sed 's/.*DEMARKUS_TLS_KEY=//' || true)
+          ;;
+      esac
     fi
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
     if [ -f "$plist" ]; then
-      # Simple extraction — look for the string after DEMARKUS_ROOT key
       EXISTING_ROOT=$(grep -A1 'DEMARKUS_ROOT' "$plist" 2>/dev/null \
+        | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/' || true)
+      EXISTING_TLS_CERT=$(grep -A1 'DEMARKUS_TLS_CERT' "$plist" 2>/dev/null \
+        | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/' || true)
+      EXISTING_TLS_KEY=$(grep -A1 'DEMARKUS_TLS_KEY' "$plist" 2>/dev/null \
         | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/' || true)
     fi
   fi
@@ -592,18 +642,38 @@ do_install() {
   local version=""
   local client_only=false
   local no_tls=false
+  local tls_cert=""
+  local tls_key=""
 
   # Parse flags
   while [ $# -gt 0 ]; do
     case "$1" in
-      --domain)     domain="$2"; shift 2 ;;
-      --root)       content_root="$2"; shift 2 ;;
-      --version)    version="$2"; shift 2 ;;
+      --domain)      domain="$2"; shift 2 ;;
+      --root)        content_root="$2"; shift 2 ;;
+      --version)     version="$2"; shift 2 ;;
       --client-only) client_only=true; shift ;;
-      --no-tls)     no_tls=true; shift ;;
-      *)            log_error "Unknown option: $1"; exit 1 ;;
+      --no-tls)      no_tls=true; shift ;;
+      --tls-cert)    tls_cert="$2"; shift 2 ;;
+      --tls-key)     tls_key="$2"; shift 2 ;;
+      *)             log_error "Unknown option: $1"; exit 1 ;;
     esac
   done
+
+  # Validate TLS flag combinations
+  if [ -n "$tls_cert" ] || [ -n "$tls_key" ]; then
+    if [ -z "$tls_cert" ] || [ -z "$tls_key" ]; then
+      log_error "--tls-cert and --tls-key must be used together"
+      exit 1
+    fi
+    if [ ! -f "$tls_cert" ]; then
+      log_error "TLS certificate not found: ${tls_cert}"
+      exit 1
+    fi
+    if [ ! -f "$tls_key" ]; then
+      log_error "TLS key not found: ${tls_key}"
+      exit 1
+    fi
+  fi
 
   detect_platform
 
@@ -637,7 +707,7 @@ do_install() {
     content_root="${content_root:-$DEFAULT_ROOT}"
   fi
 
-  if [ -z "$domain" ] && [ "$no_tls" = false ]; then
+  if [ -z "$domain" ] && [ "$no_tls" = false ] && [ -z "$tls_cert" ]; then
     printf "Domain name (leave empty to skip TLS): "
     read -r domain
   fi
@@ -726,14 +796,29 @@ do_install() {
   fi
 
   # TLS setup
-  if [ -n "$domain" ] && [ "$no_tls" = false ]; then
+  local tls_cert_path=""
+  local tls_key_path=""
+
+  if [ -n "$tls_cert" ] && [ -n "$tls_key" ]; then
+    # User-provided certificates
+    setup_custom_tls "$tls_cert" "$tls_key"
+    tls_cert_path="${CONFIG_DIR}/tls/cert.pem"
+    tls_key_path="${CONFIG_DIR}/tls/key.pem"
+  elif [ -n "$domain" ] && [ "$no_tls" = false ]; then
+    # Let's Encrypt
     if [ -d "/etc/letsencrypt/live/${domain}" ]; then
       log_info "TLS certificates already exist for ${domain}, skipping cert setup"
     else
       setup_tls "$domain"
     fi
-    # Always ensure the demarkus user can read the certs
     fix_cert_permissions "$domain"
+    tls_cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
+    tls_key_path="/etc/letsencrypt/live/${domain}/privkey.pem"
+  elif [ -d "${CONFIG_DIR}/tls" ] && [ -f "${CONFIG_DIR}/tls/cert.pem" ]; then
+    # Existing custom certs from a previous install
+    log_info "Using existing custom certificates from ${CONFIG_DIR}/tls/"
+    tls_cert_path="${CONFIG_DIR}/tls/cert.pem"
+    tls_key_path="${CONFIG_DIR}/tls/key.pem"
   fi
 
   # System tuning
@@ -760,9 +845,9 @@ do_install() {
     fi
   else
     if [ "$PLATFORM" = "linux" ]; then
-      setup_systemd "$content_root" "$tokens_file" "$domain"
+      setup_systemd "$content_root" "$tokens_file" "$tls_cert_path" "$tls_key_path"
     else
-      setup_launchd "$content_root" "$tokens_file"
+      setup_launchd "$content_root" "$tokens_file" "$tls_cert_path" "$tls_key_path"
     fi
   fi
 
@@ -793,8 +878,12 @@ do_install() {
   log_info "Content:   ${content_root}"
   log_info "Config:    ${CONFIG_DIR}/"
   log_info "Tokens:    ${tokens_file}"
-  if [ -n "$domain" ] && [ "$no_tls" = false ]; then
+  if [ -n "$tls_cert" ] && [ -n "$tls_key" ]; then
+    log_info "TLS:       Custom certificates (${CONFIG_DIR}/tls/)"
+  elif [ -n "$domain" ] && [ "$no_tls" = false ]; then
     log_info "TLS:       Let's Encrypt (${domain})"
+  elif [ -n "$tls_cert_path" ]; then
+    log_info "TLS:       Custom certificates (${CONFIG_DIR}/tls/)"
   else
     log_info "TLS:       Self-signed dev certificate"
   fi
@@ -1100,10 +1189,12 @@ main() {
       echo ""
       echo "Install options:"
       echo "  --domain DOMAIN    Domain name for Let's Encrypt TLS"
+      echo "  --tls-cert FILE    Path to TLS certificate (PEM)"
+      echo "  --tls-key FILE     Path to TLS private key (PEM)"
       echo "  --root DIR         Content directory (default: platform-specific)"
       echo "  --version X.Y.Z    Install specific version (default: latest)"
       echo "  --client-only      Only install the client binary"
-      echo "  --no-tls           Skip Let's Encrypt setup"
+      echo "  --no-tls           Skip TLS setup"
       echo ""
       echo "Update options:"
       echo "  --version X.Y.Z    Update to specific version (default: latest)"
