@@ -330,7 +330,10 @@ generate_token() {
   local token
 
   log_step "Generating auth token"
-  token=$("${INSTALL_DIR}/demarkus-token" generate -paths "/*" -ops publish -tokens "$tokens_file")
+  token=$("${INSTALL_DIR}/demarkus-token" generate -label "install" -paths "/*" -ops publish -tokens "$tokens_file") || {
+    log_error "Failed to generate auth token"
+    exit 1
+  }
 
   if [ "$PLATFORM" = "linux" ]; then
     chown root:"$SERVICE_NAME" "$tokens_file"
@@ -835,25 +838,11 @@ do_install() {
     log_info "Opened UDP port 6309 in firewall"
   fi
 
-  # Set up service only on fresh install
-  if [ "$is_reinstall" = true ]; then
-    log_info "Keeping existing service configuration"
-    # Restart to pick up new binaries
-    if [ "$PLATFORM" = "linux" ]; then
-      systemctl restart demarkus 2>/dev/null || log_warn "Could not restart service"
-    elif [ "$PLATFORM" = "darwin" ]; then
-      local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
-      if [ -f "$plist" ]; then
-        launchctl unload "$plist" 2>/dev/null || true
-        launchctl load "$plist" 2>/dev/null || true
-      fi
-    fi
+  # Always (re)generate service config to pick up new binaries, TLS paths, etc.
+  if [ "$PLATFORM" = "linux" ]; then
+    setup_systemd "$content_root" "$tokens_file" "$tls_cert_path" "$tls_key_path"
   else
-    if [ "$PLATFORM" = "linux" ]; then
-      setup_systemd "$content_root" "$tokens_file" "$tls_cert_path" "$tls_key_path"
-    else
-      setup_launchd "$content_root" "$tokens_file" "$tls_cert_path" "$tls_key_path"
-    fi
+    setup_launchd "$content_root" "$tokens_file" "$tls_cert_path" "$tls_key_path"
   fi
 
   # Verify the service actually started
