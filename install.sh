@@ -701,15 +701,20 @@ do_install() {
   fi
 
   # Interactive prompts for missing values (fresh install only)
+  # When piped (curl | bash), stdin is not a terminal — use defaults silently.
   if [ -z "$content_root" ]; then
-    printf "Content directory [${DEFAULT_ROOT}]: "
-    read -r content_root
+    if [ -t 0 ]; then
+      printf "Content directory [${DEFAULT_ROOT}]: "
+      read -r content_root
+    fi
     content_root="${content_root:-$DEFAULT_ROOT}"
   fi
 
   if [ -z "$domain" ] && [ "$no_tls" = false ] && [ -z "$tls_cert" ]; then
-    printf "Domain name (leave empty to skip TLS): "
-    read -r domain
+    if [ -t 0 ]; then
+      printf "Domain name (leave empty to skip TLS): "
+      read -r domain
+    fi
   fi
 
   # Fetch latest version if not specified
