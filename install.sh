@@ -390,6 +390,11 @@ fix_cert_permissions() {
 
   chmod 750 /etc/letsencrypt/live /etc/letsencrypt/archive
   chgrp "$SERVICE_NAME" /etc/letsencrypt/live /etc/letsencrypt/archive
+  # The private key files in archive/ also need to be group-readable
+  if [ -d "/etc/letsencrypt/archive/${domain}" ]; then
+    chgrp -R "$SERVICE_NAME" "/etc/letsencrypt/archive/${domain}"
+    chmod 640 "/etc/letsencrypt/archive/${domain}"/privkey*.pem
+  fi
   log_info "Certificate permissions updated for ${SERVICE_NAME} user"
 }
 
