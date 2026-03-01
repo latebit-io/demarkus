@@ -58,6 +58,9 @@ var ErrConflict = fmt.Errorf("version conflict")
 // file already exists (O_EXCL race with a concurrent writer).
 var ErrVersionExists = fmt.Errorf("version already exists")
 
+// ErrSizeLimit is returned when combined content exceeds protocol.MaxBodyLength.
+var ErrSizeLimit = fmt.Errorf("combined content exceeds size limit")
+
 // maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
 // adds to a version file (version, archived, previous-hash, delimiters).
 const maxStoreFrontmatter = 256
@@ -615,6 +618,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 
 // Append reads the current version of a document, appends content to the end
 // (separated by a newline), and writes a new version. The document must exist.
+// Uses WriteVersion internally to detect concurrent modifications.
 func (s *Store) Append(reqPath string, content []byte) (*Document, error) {
 	doc, err := s.Get(reqPath, 0)
 	if err != nil {
@@ -631,10 +635,10 @@ func (s *Store) Append(reqPath string, content []byte) (*Document, error) {
 	combined = append(combined, content...)
 
 	if int64(len(combined)) > protocol.MaxBodyLength {
-		return nil, fmt.Errorf("combined content exceeds size limit")
+		return nil, ErrSizeLimit
 	}
 
-	return s.Write(reqPath, combined)
+	return s.WriteVersion(reqPath, doc.Version, combined)
 }
 
 // AppendVersion appends content with optimistic concurrency control.
@@ -667,7 +671,7 @@ func (s *Store) AppendVersion(reqPath string, expectedVersion int, content []byt
 	combined = append(combined, content...)
 
 	if int64(len(combined)) > protocol.MaxBodyLength {
-		return nil, fmt.Errorf("combined content exceeds size limit")
+		return nil, ErrSizeLimit
 	}
 
 	return s.WriteVersion(reqPath, expectedVersion, combined)

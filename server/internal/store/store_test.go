@@ -840,6 +840,24 @@ func TestAppend_NotFound(t *testing.T) {
 	}
 }
 
+func TestAppend_Archived(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	_, err := s.Write("/doc.md", []byte("# Hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Archive("/doc.md", true); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Append("/doc.md", []byte("More text."))
+	if !errors.Is(err, ErrArchived) {
+		t.Fatalf("expected ErrArchived, got: %v", err)
+	}
+}
+
 func TestAppend_ExceedsMaxBody(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
@@ -859,8 +877,8 @@ func TestAppend_ExceedsMaxBody(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for combined content exceeding size limit")
 	}
-	if !strings.Contains(err.Error(), "exceeds size limit") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, ErrSizeLimit) {
+		t.Errorf("expected ErrSizeLimit, got: %v", err)
 	}
 }
 

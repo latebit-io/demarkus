@@ -1536,4 +1536,29 @@ func TestHandleAppend(t *testing.T) {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusArchived)
 		}
 	})
+
+	t.Run("combined content exceeds size limit", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		initial := make([]byte, protocol.MaxBodyLength-100)
+		for i := range initial {
+			initial[i] = 'x'
+		}
+		if _, err := s.Write("/doc.md", initial); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		appendBody := strings.Repeat("y", 200)
+		stream := newMockStream("APPEND /doc.md\n" + authMeta + appendBody)
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusServerError {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusServerError)
+		}
+	})
 }

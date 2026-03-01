@@ -56,6 +56,13 @@ func (h *Handler) HandleStream(stream Stream) {
 
 	h.logger().Info("request", "verb", sanitize(req.Verb), "path", sanitize(req.Path))
 
+	// Reject path traversal attempts before any handler logic (including auth)
+	// to prevent scope bypass via paths like /allowed/../secret.md.
+	if containsDotDot(req.Path) {
+		h.writeError(stream, protocol.StatusNotFound, req.Path+" not found")
+		return
+	}
+
 	// Health check endpoint: responds to FETCH /health with OK
 	if req.Path == "/health" && req.Verb == protocol.VerbFetch {
 		h.handleHealth(stream)
@@ -570,6 +577,11 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
 		}
+		if errors.Is(err, store.ErrSizeLimit) {
+			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "success", false, "reason", "size limit exceeded")
+			h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+			return
+		}
 		h.logger().Error("append failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
@@ -608,6 +620,16 @@ func (h *Handler) writeResponse(w io.Writer, resp protocol.Response) {
 	if _, err := resp.WriteTo(w); err != nil {
 		h.logger().Error("write response failed", "error", err)
 	}
+}
+
+// containsDotDot reports whether the path contains a ".." segment.
+func containsDotDot(path string) bool {
+	for seg := range strings.SplitSeq(path, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // sanitize strips control characters from a string for safe logging.
