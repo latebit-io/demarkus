@@ -73,6 +73,8 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handlePublish(stream, req)
 	case protocol.VerbArchive:
 		h.handleArchive(stream, req)
+	case protocol.VerbAppend:
+		h.handleAppend(stream, req)
 	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
@@ -485,6 +487,95 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	}
 
 	h.logger().Info("publish", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "success", true, "size_bytes", len(req.Body))
+	resp := protocol.Response{
+		Status: protocol.StatusCreated,
+		Metadata: map[string]string{
+			"version":  strconv.Itoa(doc.Version),
+			"modified": doc.Modified.Format(time.RFC3339),
+		},
+	}
+	h.writeResponse(w, resp)
+}
+
+func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
+	if h.Store == nil {
+		h.writeError(w, protocol.StatusServerError, "appending not configured")
+		return
+	}
+	if int64(len(req.Body)) > protocol.MaxBodyLength {
+		h.logger().Error("body too large", "path", sanitize(req.Path), "size_bytes", len(req.Body))
+		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+		return
+	}
+	if req.Body == "" {
+		h.writeError(w, protocol.StatusServerError, "append requires a body")
+		return
+	}
+
+	var ts *auth.TokenStore
+	if h.GetTokenStore != nil {
+		ts = h.GetTokenStore()
+	}
+	if ts == nil {
+		h.writeError(w, protocol.StatusNotPermitted, "appending requires auth configuration")
+		return
+	}
+
+	token := req.Metadata["auth"]
+	if err := ts.Authorize(token, req.Path, "publish"); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken), errors.Is(err, auth.ErrTokenExpired):
+			h.logger().Warn("unauthorized", "operation", "APPEND", "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
+		default:
+			h.logger().Warn("not permitted", "operation", "APPEND", "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
+		}
+		return
+	}
+
+	expectedVersion := -1
+	if ev := req.Metadata["expected-version"]; ev != "" {
+		v, err := strconv.Atoi(ev)
+		if err != nil || v < 0 {
+			h.writeError(w, protocol.StatusBadRequest, "invalid expected-version")
+			return
+		}
+		expectedVersion = v
+	}
+
+	doc, err := h.Store.AppendVersion(req.Path, expectedVersion, []byte(req.Body))
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "success", false)
+			body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nPlease fetch the latest version and retry your append.\n", expectedVersion, doc.Version)
+			resp := protocol.Response{
+				Status: protocol.StatusConflict,
+				Metadata: map[string]string{
+					"your-version":   strconv.Itoa(expectedVersion),
+					"server-version": strconv.Itoa(doc.Version),
+				},
+				Body: body,
+			}
+			h.writeResponse(w, resp)
+			return
+		}
+		if errors.Is(err, store.ErrArchived) {
+			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "success", false, "reason", "archived")
+			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
+			return
+		}
+		if os.IsNotExist(err) {
+			h.logger().Info("not found", "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
+		h.logger().Error("append failed", "path", sanitize(req.Path), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	h.logger().Info("append", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "version", doc.Version, "success", true, "size_bytes", len(req.Body))
 	resp := protocol.Response{
 		Status: protocol.StatusCreated,
 		Metadata: map[string]string{

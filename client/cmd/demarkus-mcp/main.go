@@ -42,6 +42,7 @@ func main() {
 	s.AddTool(markVersionsTool(*defaultHost), h.markVersions)
 	s.AddTool(markPublishTool(*defaultHost), h.markPublish)
 	s.AddTool(markArchiveTool(*defaultHost), h.markArchive)
+	s.AddTool(markAppendTool(*defaultHost), h.markAppend)
 
 	if err := server.ServeStdio(s); err != nil {
 		log.Fatal(err)
@@ -190,6 +191,33 @@ func markArchiveTool(host string) mcp.Tool {
 	)
 }
 
+func markAppendTool(host string) mcp.Tool {
+	return mcp.NewTool("mark_append",
+		mcp.WithDescription(
+			"Append content to the end of an existing document on a Mark Protocol server. "+
+				"The server concatenates the new content after the existing document body. "+
+				"Returns the created version number and modified timestamp. "+
+				"Requires an auth token configured via the -token flag. "+
+				"The body should be valid markdown content to append. "+
+				"expected_version is required for optimistic concurrency: set it to the version "+
+				"number from a prior fetch to detect conflicts. "+
+				urlHint(host),
+		),
+		mcp.WithString("url",
+			mcp.Required(),
+			mcp.Description(urlDesc(host)),
+		),
+		mcp.WithString("body",
+			mcp.Required(),
+			mcp.Description("markdown content to append"),
+		),
+		mcp.WithNumber("expected_version",
+			mcp.Required(),
+			mcp.Description("version number from a prior fetch for conflict detection"),
+		),
+	)
+}
+
 // formatResult builds a text response with status, selected metadata keys, and body.
 func formatResult(r fetch.Result, keys ...string) string {
 	var b strings.Builder
@@ -333,6 +361,45 @@ func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	return mcp.NewToolResultText(formatResult(result, "version")), nil
+}
+
+func (h *handler) markAppend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	rawURL, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError("url is required"), nil
+	}
+
+	body, err := req.RequireString("body")
+	if err != nil {
+		return mcp.NewToolResultError("body is required"), nil
+	}
+
+	host, path, err := h.resolveURL(rawURL)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
+	}
+
+	token := h.token
+	if token == "" {
+		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
+			token = ts.Get(host)
+		}
+	}
+	if token == "" {
+		return mcp.NewToolResultError("append requires a token (-token flag or stored via 'demarkus token add')"), nil
+	}
+
+	expectedVersion, err := req.RequireInt("expected_version")
+	if err != nil {
+		return mcp.NewToolResultError("expected_version is required"), nil
+	}
+
+	result, err := h.client.Append(host, path, body, token, expectedVersion)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("append failed: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(formatResult(result, "version", "modified", "server-version")), nil
 }
 
 func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

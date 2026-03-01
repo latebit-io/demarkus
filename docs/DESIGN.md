@@ -160,7 +160,7 @@ Document-centric operations that align with markdown usage:
 
 - **FETCH**: Retrieve a document
 - **PUBLISH**: Create or update a document (creates new version, supports optimistic concurrency via `expected-version`)
-- **APPEND**: Add content to end of document (comments, logs, notes) — *under evaluation, deferred until a concrete use case emerges*
+- **APPEND**: Add content to end of document (journals, changelogs, notes)
 - **ARCHIVE**: Remove a document from active serving (preserves in version history)
 - **LIST**: Get directory contents or document index
 - **SEARCH**: Find documents matching query — *under review, use case not yet clear*

@@ -22,4 +22,7 @@ const (
 
 	// VerbArchive marks a document as archived, preventing it from being served.
 	VerbArchive = "ARCHIVE"
+
+	// VerbAppend appends content to the end of an existing document.
+	VerbAppend = "APPEND"
 )

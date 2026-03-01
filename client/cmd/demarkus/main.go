@@ -36,8 +36,8 @@ func main() {
 }
 
 func requestMain() {
-	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE)")
-	body := flag.String("body", "", "request body (for PUBLISH); reads stdin if omitted")
+	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)")
+	body := flag.String("body", "", "request body (for PUBLISH/APPEND); reads stdin if omitted")
 	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE requests (env: DEMARKUS_AUTH)")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
@@ -85,7 +85,7 @@ func requestMain() {
 	// When stdin is a terminal and no -body is given, send an empty body
 	// (used for unarchiving).
 	reqBody := *body
-	if *verb == protocol.VerbPublish && reqBody == "" {
+	if (*verb == protocol.VerbPublish || *verb == protocol.VerbAppend) && reqBody == "" {
 		info, err := os.Stdin.Stat()
 		if err != nil {
 			log.Fatalf("stat stdin: %v", err)
@@ -114,6 +114,8 @@ func requestMain() {
 		result, err = client.Publish(host, path, reqBody, token, -1)
 	case protocol.VerbArchive:
 		result, err = client.Archive(host, path, token)
+	case protocol.VerbAppend:
+		result, err = client.Append(host, path, reqBody, token, -1)
 	}
 	if err != nil {
 		log.Fatal(err)

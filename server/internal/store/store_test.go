@@ -799,3 +799,94 @@ func TestVerifyChain_Tampered(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestAppend(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Create initial document.
+	_, err := s.Write("/doc.md", []byte("# Hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Append content.
+	doc, err := s.Append("/doc.md", []byte("More text."))
+	if err != nil {
+		t.Fatalf("append failed: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version: got %d, want 2", doc.Version)
+	}
+
+	// Verify combined content.
+	got, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(extractBody(got.Content))
+	if body != "# Hello\nMore text." {
+		t.Errorf("body: got %q, want %q", body, "# Hello\nMore text.")
+	}
+}
+
+func TestAppend_NotFound(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	_, err := s.Append("/missing.md", []byte("content"))
+	if !os.IsNotExist(err) {
+		t.Fatalf("expected not-exist error, got: %v", err)
+	}
+}
+
+func TestAppend_ExceedsMaxBody(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Create a document near the size limit.
+	initial := make([]byte, protocol.MaxBodyLength-100)
+	for i := range initial {
+		initial[i] = 'x'
+	}
+	_, err := s.Write("/doc.md", initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Append enough to exceed the limit.
+	_, err = s.Append("/doc.md", make([]byte, 200))
+	if err == nil {
+		t.Fatal("expected error for combined content exceeding size limit")
+	}
+	if !strings.Contains(err.Error(), "exceeds size limit") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestAppendVersion(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	_, err := s.Write("/doc.md", []byte("# Start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("matching version succeeds", func(t *testing.T) {
+		doc, err := s.AppendVersion("/doc.md", 1, []byte("Added."))
+		if err != nil {
+			t.Fatalf("append failed: %v", err)
+		}
+		if doc.Version != 2 {
+			t.Errorf("version: got %d, want 2", doc.Version)
+		}
+	})
+
+	t.Run("stale version conflicts", func(t *testing.T) {
+		_, err := s.AppendVersion("/doc.md", 1, []byte("Late."))
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("expected ErrConflict, got: %v", err)
+		}
+	})
+}

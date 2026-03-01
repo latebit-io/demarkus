@@ -128,6 +128,22 @@ func (c *Client) Publish(host, path, body, token string, expectedVersion int) (R
 	})
 }
 
+// Append adds content to the end of an existing document.
+// If token is non-empty, it is sent as the auth metadata for capability-based auth.
+// expectedVersion controls optimistic concurrency (same semantics as Publish).
+func (c *Client) Append(host, path, body, token string, expectedVersion int) (Result, error) {
+	req := protocol.Request{Verb: protocol.VerbAppend, Path: path, Metadata: make(map[string]string), Body: body}
+	if token != "" {
+		req.Metadata["auth"] = token
+	}
+	if expectedVersion >= 0 {
+		req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
+	}
+	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
+		return c.requestOnConn(conn, req)
+	})
+}
+
 // Archive marks a document as archived on a Mark Protocol server.
 func (c *Client) Archive(host, path, token string) (Result, error) {
 	req := protocol.Request{Verb: protocol.VerbArchive, Path: path, Metadata: make(map[string]string)}

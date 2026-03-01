@@ -613,6 +613,63 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 	return doc, nil
 }
 
+// Append reads the current version of a document, appends content to the end
+// (separated by a newline), and writes a new version. The document must exist.
+func (s *Store) Append(reqPath string, content []byte) (*Document, error) {
+	doc, err := s.Get(reqPath, 0)
+	if err != nil {
+		return nil, err
+	}
+	if doc.Archived {
+		return nil, ErrArchived
+	}
+
+	existing := extractBody(doc.Content)
+	combined := make([]byte, 0, len(existing)+1+len(content))
+	combined = append(combined, existing...)
+	combined = append(combined, '\n')
+	combined = append(combined, content...)
+
+	if int64(len(combined)) > protocol.MaxBodyLength {
+		return nil, fmt.Errorf("combined content exceeds size limit")
+	}
+
+	return s.Write(reqPath, combined)
+}
+
+// AppendVersion appends content with optimistic concurrency control.
+// expectedVersion semantics match WriteVersion.
+func (s *Store) AppendVersion(reqPath string, expectedVersion int, content []byte) (*Document, error) {
+	if expectedVersion < 0 {
+		return s.Append(reqPath, content)
+	}
+
+	current := s.CurrentVersion(reqPath)
+	if current != expectedVersion {
+		return &Document{Version: current}, ErrConflict
+	}
+
+	doc, err := s.Append(reqPath, content)
+	if err != nil {
+		if errors.Is(err, ErrVersionExists) {
+			current = s.CurrentVersion(reqPath)
+			return &Document{Version: current}, ErrConflict
+		}
+		if errors.Is(err, ErrNotModified) && doc != nil {
+			if doc.Version != expectedVersion && doc.Version != expectedVersion+1 {
+				return &Document{Version: doc.Version}, ErrConflict
+			}
+		}
+		return doc, err
+	}
+
+	if doc.Version != expectedVersion+1 {
+		return &Document{Version: doc.Version}, ErrConflict
+	}
+
+	return doc, nil
+}
+
 // VerifyChain checks the hash chain integrity for a document.
 // It reads each version file from oldest to newest and verifies that
 // the previous-hash recorded in vN matches the SHA-256 of vN-1's raw bytes.

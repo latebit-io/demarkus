@@ -381,6 +381,46 @@ status: ok
 - `not-found`: Document does not exist or path validation failed.
 - `server-error`: Internal error.
 
+### 6.6. APPEND
+
+Appends content to the end of an existing document. Creates a new immutable version where the body is the existing content followed by a newline and the appended content. Requires authentication with the `publish` capability.
+
+**Request**:
+```
+APPEND /path\n
+---\n
+auth: <raw-token>\n
+---\n
+<content to append>
+```
+
+The `auth` metadata field is REQUIRED. The request body MUST NOT be empty.
+
+**Success response** (`created`):
+```
+---
+status: created
+version: <new version number>
+modified: <RFC 3339 timestamp>
+---
+```
+
+**Behaviour**:
+- APPEND reads the current document, concatenates the request body after a newline separator, and writes the result as a new version.
+- The document MUST already exist. APPEND does not create new documents — use PUBLISH for that.
+- The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
+- APPEND supports optimistic concurrency via `expected-version` metadata (same semantics as PUBLISH, see section 6.4).
+
+**Authentication errors**:
+- `not-permitted`: No token store configured on the server.
+- `unauthorized`: Missing `auth` field or token not recognised.
+- `not-permitted`: Token does not grant `publish` on the requested path.
+
+**Other errors**:
+- `not-found`: Document does not exist or path validation failed.
+- `archived`: Document is archived. Unarchive first via PUBLISH with empty body.
+- `server-error`: Internal error, empty body, or combined content exceeds size limit.
+
 ## 7. Status Values
 
 Status values are text strings. There are no numeric status codes.
