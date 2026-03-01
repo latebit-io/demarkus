@@ -576,7 +576,7 @@ Servers MUST enforce the following limits:
 |---|---|
 | Request line | 4096 bytes |
 | Request metadata | 65536 bytes (64 KB) |
-| Document size (read and publish) | 10 MB (RECOMMENDED) |
+| Document size (read and publish) | 1 MB (RECOMMENDED) |
 | Directory listing entries | 1000 (RECOMMENDED) |
 
 ### 11.4. No Tracking
@@ -661,7 +661,7 @@ These will be specified in future versions of this document.
 | TLS minimum version | 1.3 |
 | Max request line | 4096 bytes |
 | Max request metadata | 65536 bytes |
-| Recommended max document size | 10 MB |
+| Recommended max document size | 1 MB |
 | Recommended max directory entries | 1000 |
 | Hash algorithm | SHA-256 |
 | Hash format | `sha256-<64 lowercase hex chars>` |

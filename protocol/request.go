@@ -24,6 +24,9 @@ const MaxRequestLineLength = 4096
 // MaxRequestFrontmatterLength is the maximum allowed size for request metadata.
 const MaxRequestFrontmatterLength = 65536 // 64KB
 
+// MaxBodyLength is the maximum allowed size for a document body (1 MiB).
+const MaxBodyLength = 1 * 1024 * 1024
+
 // ParseRequest reads a request from r.
 // Format: "VERB /path\n" followed by optional YAML frontmatter and body.
 // The body is read as raw bytes to preserve content verbatim.
@@ -63,10 +66,15 @@ func ParseRequest(r io.Reader) (Request, error) {
 
 	req := Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
-	// Read all remaining bytes after the request line.
-	rest, err := io.ReadAll(br)
+	// Read remaining bytes with a size limit to prevent unbounded allocation.
+	// The limit accounts for frontmatter overhead on top of the body.
+	maxRequest := int64(MaxRequestFrontmatterLength + MaxBodyLength + 64) // 64 bytes for delimiters
+	rest, err := io.ReadAll(io.LimitReader(br, maxRequest+1))
 	if err != nil {
 		return Request{}, fmt.Errorf("reading request body: %w", err)
+	}
+	if int64(len(rest)) > maxRequest {
+		return Request{}, fmt.Errorf("request payload exceeds limit: %d bytes", len(rest))
 	}
 	if len(rest) == 0 {
 		return req, nil
@@ -74,6 +82,9 @@ func ParseRequest(r io.Reader) (Request, error) {
 
 	// Check for frontmatter opening delimiter.
 	if !bytes.HasPrefix(rest, []byte("---\n")) {
+		if len(rest) > MaxBodyLength {
+			return Request{}, fmt.Errorf("body exceeds limit: %d > %d bytes", len(rest), MaxBodyLength)
+		}
 		req.Body = string(rest)
 		return req, nil
 	}
@@ -106,7 +117,11 @@ func ParseRequest(r io.Reader) (Request, error) {
 	// Body is everything after the closing "---\n".
 	afterClose := rest[closeIdx:]
 	if bytes.HasPrefix(afterClose, []byte("\n---\n")) {
-		req.Body = string(afterClose[5:]) // skip "\n---\n"
+		body := afterClose[5:] // skip "\n---\n"
+		if len(body) > MaxBodyLength {
+			return Request{}, fmt.Errorf("body exceeds limit: %d > %d bytes", len(body), MaxBodyLength)
+		}
+		req.Body = string(body)
 	} else {
 		// Closing --- was at end of input with no body.
 		req.Body = ""

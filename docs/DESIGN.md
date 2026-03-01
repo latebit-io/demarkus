@@ -452,7 +452,7 @@ auth: <raw-token>
 ### Content Security
 
 **Input Validation**:
-- Size limits: 10MB per document (configurable)
+- Size limits: 1MB per document (configurable)
 - Validate markdown syntax
 - Sanitize links (prevent injection)
 - No executable content allowed

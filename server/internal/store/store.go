@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/latebit/demarkus/protocol"
 )
 
 // Document holds a document's content and metadata.
@@ -56,8 +58,9 @@ var ErrConflict = fmt.Errorf("version conflict")
 // file already exists (O_EXCL race with a concurrent writer).
 var ErrVersionExists = fmt.Errorf("version already exists")
 
-// MaxFileSize is the maximum file size the store will read (10 MB).
-const MaxFileSize = 10 * 1024 * 1024
+// maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
+// adds to a version file (version, archived, previous-hash, delimiters).
+const maxStoreFrontmatter = 256
 
 // Store provides read access to a versioned document directory.
 type Store struct {
@@ -94,7 +97,7 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	if info.IsDir() {
 		return nil, os.ErrNotExist
 	}
-	if info.Size() > MaxFileSize {
+	if info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
 		return nil, fmt.Errorf("file exceeds size limit")
 	}
 
@@ -296,7 +299,7 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	if info.Size() > MaxFileSize {
+	if info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
 		return nil, fmt.Errorf("file exceeds size limit")
 	}
 
@@ -424,7 +427,7 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 // The previous-hash is the SHA-256 of the raw on-disk bytes of version N-1,
 // forming a hash chain that allows chain integrity to be verified later.
 func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
-	if int64(len(content)) > MaxFileSize {
+	if int64(len(content)) > protocol.MaxBodyLength {
 		return nil, fmt.Errorf("content exceeds size limit")
 	}
 
@@ -509,7 +512,7 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 	stored := append([]byte(sb.String()), content...)
 
 	// Validate stored size after prepending frontmatter.
-	if int64(len(stored)) > MaxFileSize {
+	if int64(len(stored)) > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
 		return nil, fmt.Errorf("content exceeds size limit")
 	}
 

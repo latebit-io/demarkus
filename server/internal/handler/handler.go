@@ -226,7 +226,7 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 		return
 	}
 
-	if int64(len(doc.Content)) > store.MaxFileSize {
+	if int64(len(doc.Content)) > protocol.MaxBodyLength {
 		h.logger().Error("file too large", "path", sanitize(basePath), "version", version, "size_bytes", len(doc.Content))
 		h.writeError(w, protocol.StatusServerError, "file exceeds size limit")
 		return
@@ -364,7 +364,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "publishing not configured")
 		return
 	}
-	if int64(len(req.Body)) > store.MaxFileSize {
+	if int64(len(req.Body)) > protocol.MaxBodyLength {
 		h.logger().Error("body too large", "path", sanitize(req.Path), "size_bytes", len(req.Body))
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 		return
