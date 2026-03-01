@@ -63,7 +63,7 @@ A healthy server returns:
 - Logs requests as: `[REQUEST] VERB /path`
 - Denies writes when no tokens file is set
 - Enforces path traversal protection
-- Limits file size to 10 MB
+- Limits file size to 1 MB
 
 ## Next Steps
 

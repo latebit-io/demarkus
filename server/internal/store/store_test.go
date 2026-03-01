@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/latebit/demarkus/protocol"
 )
 
 func TestGet_FlatFileRejected(t *testing.T) {
@@ -361,7 +363,7 @@ func TestWrite_TooLarge(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	big := make([]byte, MaxFileSize+1)
+	big := make([]byte, protocol.MaxBodyLength+1)
 	_, err := s.Write("/doc.md", big)
 	if err == nil {
 		t.Fatal("expected error for oversized content")

@@ -24,6 +24,9 @@ const MaxRequestLineLength = 4096
 // MaxRequestFrontmatterLength is the maximum allowed size for request metadata.
 const MaxRequestFrontmatterLength = 65536 // 64KB
 
+// MaxBodyLength is the maximum allowed size for a document body (1 MB).
+const MaxBodyLength = 1 * 1024 * 1024
+
 // ParseRequest reads a request from r.
 // Format: "VERB /path\n" followed by optional YAML frontmatter and body.
 // The body is read as raw bytes to preserve content verbatim.
