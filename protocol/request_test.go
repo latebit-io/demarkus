@@ -314,6 +314,37 @@ func TestPublishRequestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestParseRequestPayloadTooLarge(t *testing.T) {
+	t.Run("body without frontmatter", func(t *testing.T) {
+		var input strings.Builder
+		input.WriteString("PUBLISH /doc.md\n")
+		input.WriteString(strings.Repeat("x", MaxBodyLength+1))
+
+		_, err := ParseRequest(strings.NewReader(input.String()))
+		if err == nil {
+			t.Fatal("expected error for oversized payload, got nil")
+		}
+		if !strings.Contains(err.Error(), "exceeds limit") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("body with frontmatter", func(t *testing.T) {
+		var input strings.Builder
+		input.WriteString("PUBLISH /doc.md\n---\nauthor: Fritz\n---\n")
+		input.WriteString(strings.Repeat("x", MaxBodyLength+1))
+
+		_, err := ParseRequest(strings.NewReader(input.String()))
+		if err == nil {
+			t.Fatal("expected error for oversized payload, got nil")
+		}
+		if !strings.Contains(err.Error(), "exceeds limit") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+}
+
 func TestRequestRoundTripWithMetadata(t *testing.T) {
 	original := Request{
 		Verb: "FETCH",
