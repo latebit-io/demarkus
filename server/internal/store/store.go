@@ -58,6 +58,10 @@ var ErrConflict = fmt.Errorf("version conflict")
 // file already exists (O_EXCL race with a concurrent writer).
 var ErrVersionExists = fmt.Errorf("version already exists")
 
+// maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
+// adds to a version file (version, archived, previous-hash, delimiters).
+const maxStoreFrontmatter = 256
+
 // Store provides read access to a versioned document directory.
 type Store struct {
 	root string
@@ -93,7 +97,7 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	if info.IsDir() {
 		return nil, os.ErrNotExist
 	}
-	if info.Size() > protocol.MaxBodyLength {
+	if info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
 		return nil, fmt.Errorf("file exceeds size limit")
 	}
 
@@ -295,7 +299,7 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	if info.Size() > protocol.MaxBodyLength {
+	if info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
 		return nil, fmt.Errorf("file exceeds size limit")
 	}
 
@@ -508,7 +512,7 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 	stored := append([]byte(sb.String()), content...)
 
 	// Validate stored size after prepending frontmatter.
-	if int64(len(stored)) > protocol.MaxBodyLength {
+	if int64(len(stored)) > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
 		return nil, fmt.Errorf("content exceeds size limit")
 	}
 
