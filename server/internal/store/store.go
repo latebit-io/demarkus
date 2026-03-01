@@ -644,30 +644,33 @@ func (s *Store) AppendVersion(reqPath string, expectedVersion int, content []byt
 		return s.Append(reqPath, content)
 	}
 
-	current := s.CurrentVersion(reqPath)
-	if current != expectedVersion {
-		return &Document{Version: current}, ErrConflict
-	}
-
-	doc, err := s.Append(reqPath, content)
+	// Read the document at the expected version so the append is built
+	// against the exact base the client saw, avoiding TOCTOU races.
+	baseDoc, err := s.Get(reqPath, expectedVersion)
 	if err != nil {
-		if errors.Is(err, ErrVersionExists) {
-			current = s.CurrentVersion(reqPath)
+		// If the requested version doesn't exist, check whether the
+		// document simply moved past it (conflict) or doesn't exist at all.
+		current := s.CurrentVersion(reqPath)
+		if current > 0 && current != expectedVersion {
 			return &Document{Version: current}, ErrConflict
 		}
-		if errors.Is(err, ErrNotModified) && doc != nil {
-			if doc.Version != expectedVersion && doc.Version != expectedVersion+1 {
-				return &Document{Version: doc.Version}, ErrConflict
-			}
-		}
-		return doc, err
+		return nil, err
+	}
+	if baseDoc.Archived {
+		return nil, ErrArchived
 	}
 
-	if doc.Version != expectedVersion+1 {
-		return &Document{Version: doc.Version}, ErrConflict
+	existing := extractBody(baseDoc.Content)
+	combined := make([]byte, 0, len(existing)+1+len(content))
+	combined = append(combined, existing...)
+	combined = append(combined, '\n')
+	combined = append(combined, content...)
+
+	if int64(len(combined)) > protocol.MaxBodyLength {
+		return nil, fmt.Errorf("combined content exceeds size limit")
 	}
 
-	return doc, nil
+	return s.WriteVersion(reqPath, expectedVersion, combined)
 }
 
 // VerifyChain checks the hash chain integrity for a document.

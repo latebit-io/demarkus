@@ -432,11 +432,12 @@ var validVerbs = map[string]bool{
 	protocol.VerbVersions: true,
 	protocol.VerbPublish:  true,
 	protocol.VerbArchive:  true,
+	protocol.VerbAppend:   true,
 }
 
 func validateVerb(verb string) error {
 	if !validVerbs[verb] {
-		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE)", verb)
+		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)", verb)
 	}
 	return nil
 }
