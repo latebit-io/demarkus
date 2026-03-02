@@ -1410,7 +1410,7 @@ func TestHandleAppend(t *testing.T) {
 			Operations: []string{"publish"},
 		},
 	})
-	authMeta := "---\nauth: " + testSecret + "\n---\n"
+	authMetaV1 := "---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n"
 
 	t.Run("appends to existing document", func(t *testing.T) {
 		dir := t.TempDir()
@@ -1420,7 +1420,7 @@ func TestHandleAppend(t *testing.T) {
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
 
-		stream := newMockStream("APPEND /doc.md\n" + authMeta + "More text.")
+		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + "More text.")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -1439,7 +1439,7 @@ func TestHandleAppend(t *testing.T) {
 		dir := t.TempDir()
 		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
 
-		stream := newMockStream("APPEND /missing.md\n" + authMeta + "content")
+		stream := newMockStream("APPEND /missing.md\n" + authMetaV1 + "content")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -1459,7 +1459,7 @@ func TestHandleAppend(t *testing.T) {
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
 
-		stream := newMockStream("APPEND /doc.md\n" + authMeta)
+		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -1471,6 +1471,26 @@ func TestHandleAppend(t *testing.T) {
 		}
 	})
 
+	t.Run("requires expected-version", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Existing")); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\n---\nMore text.")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusBadRequest {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusBadRequest)
+		}
+	})
+
 	t.Run("auth required", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
@@ -1479,7 +1499,7 @@ func TestHandleAppend(t *testing.T) {
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
 
-		stream := newMockStream("APPEND /doc.md\nMore text.")
+		stream := newMockStream("APPEND /doc.md\n---\nexpected-version: \"1\"\n---\nMore text.")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -1525,7 +1545,7 @@ func TestHandleAppend(t *testing.T) {
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
 
-		stream := newMockStream("APPEND /doc.md\n" + authMeta + "More.")
+		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + "More.")
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -1550,7 +1570,7 @@ func TestHandleAppend(t *testing.T) {
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
 
 		appendBody := strings.Repeat("y", 200)
-		stream := newMockStream("APPEND /doc.md\n" + authMeta + appendBody)
+		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + appendBody)
 		h.HandleStream(stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)

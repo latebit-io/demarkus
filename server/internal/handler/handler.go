@@ -542,37 +542,31 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	expectedVersion := -1
-	if ev := req.Metadata["expected-version"]; ev != "" {
-		v, err := strconv.Atoi(ev)
-		if err != nil || v < 1 {
-			h.writeError(w, protocol.StatusBadRequest, "invalid expected-version for APPEND (must be >= 1)")
-			return
-		}
-		expectedVersion = v
+	ev := req.Metadata["expected-version"]
+	if ev == "" {
+		h.writeError(w, protocol.StatusBadRequest, "APPEND requires expected-version metadata")
+		return
+	}
+	expectedVersion, err := strconv.Atoi(ev)
+	if err != nil || expectedVersion < 1 {
+		h.writeError(w, protocol.StatusBadRequest, "invalid expected-version for APPEND (must be >= 1)")
+		return
 	}
 
-	doc, err := h.Store.AppendVersion(req.Path, expectedVersion, []byte(req.Body))
+	doc, err := h.Store.Append(req.Path, expectedVersion, []byte(req.Body))
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			if expectedVersion >= 0 {
-				// Client-supplied expected-version didn't match — report conflict.
-				h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "success", false)
-				body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nFetch the latest version and verify whether your append was applied before retrying.\n", expectedVersion, doc.Version)
-				resp := protocol.Response{
-					Status: protocol.StatusConflict,
-					Metadata: map[string]string{
-						"your-version":   strconv.Itoa(expectedVersion),
-						"server-version": strconv.Itoa(doc.Version),
-					},
-					Body: body,
-				}
-				h.writeResponse(w, resp)
-			} else {
-				// No expected-version — retries exhausted due to contention.
-				h.logger().Error("append contention", "path", sanitize(req.Path))
-				h.writeError(w, protocol.StatusServerError, "too much contention, please retry")
+			h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "success", false)
+			body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nFetch the latest version and verify whether your append was applied before retrying.\n", expectedVersion, doc.Version)
+			resp := protocol.Response{
+				Status: protocol.StatusConflict,
+				Metadata: map[string]string{
+					"your-version":   strconv.Itoa(expectedVersion),
+					"server-version": strconv.Itoa(doc.Version),
+				},
+				Body: body,
 			}
+			h.writeResponse(w, resp)
 			return
 		}
 		if errors.Is(err, store.ErrArchived) {

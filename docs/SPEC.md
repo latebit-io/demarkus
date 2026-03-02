@@ -343,7 +343,7 @@ The request MAY include an `expected-version` metadata field containing a decima
   - `server-version`: The current version on the server.
 - If `expected-version` is absent, the server writes unconditionally (no conflict detection).
 
-**Note**: Due to the append-only version model, a conflict may be detected after a version file has been written (e.g., a concurrent writer advanced the version between the pre-check and the write). In this case the server still returns `conflict`, but the written version is preserved to maintain hash chain integrity. Since PUBLISH is idempotent (identical content produces a no-op), clients can safely retry on `conflict` by fetching the latest version and re-publishing. For non-idempotent operations like APPEND, the server handles conflict detection and retry internally (see section 6.6).
+**Note**: Due to the append-only version model, a conflict may be detected after a version file has been written (e.g., a concurrent writer advanced the version between the pre-check and the write). In this case the server still returns `conflict`, but the written version is preserved to maintain hash chain integrity. Since PUBLISH is idempotent (identical content produces a no-op), clients can safely retry on `conflict` by fetching the latest version and re-publishing. For non-idempotent operations like APPEND, clients MUST fetch the latest version and verify whether their append was applied before retrying (see section 6.6).
 
 **Authentication errors**:
 - `not-permitted`: No token store configured on the server (publishing disabled).
@@ -422,8 +422,8 @@ modified: <RFC 3339 timestamp>
 - APPEND reads the current document, concatenates the request body after a newline separator, and writes the result as a new version.
 - The document MUST already exist. APPEND does not create new documents — use PUBLISH for that.
 - The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
-- APPEND supports optimistic concurrency via `expected-version` metadata (same semantics as PUBLISH, see section 6.4). Since APPEND requires an existing document, `expected-version` MUST be >= 1; the server MUST reject `expected-version: 0` as a bad request.
-- When `expected-version` is absent, the server retries internally on transient conflicts to avoid exposing non-idempotent retry complexity to clients. If retries are exhausted due to sustained contention, the server returns `server-error`.
+- The `expected-version` metadata field is REQUIRED for APPEND (unlike PUBLISH where it is optional). Since APPEND is non-idempotent, the server cannot safely retry internally. The value MUST be >= 1; the server MUST reject `expected-version: 0` or absent `expected-version` as a bad request.
+- Conflict semantics match PUBLISH (see section 6.4). On conflict, fetch the latest version and verify whether your append was applied before retrying.
 
 **Authentication errors**:
 - `not-permitted`: No token store configured on the server.
@@ -431,9 +431,10 @@ modified: <RFC 3339 timestamp>
 - `not-permitted`: Token does not grant `publish` on the requested path.
 
 **Other errors**:
+- `bad-request`: Missing or invalid `expected-version` (must be >= 1).
 - `not-found`: Document does not exist or path validation failed.
 - `archived`: Document is archived. Unarchive first via PUBLISH with empty body.
-- `conflict`: `expected-version` does not match the current version. Response includes `your-version` and `server-version` metadata. Fetch the latest version and retry.
+- `conflict`: `expected-version` does not match the current version. Response includes `your-version` and `server-version` metadata.
 - `server-error`: Internal error, empty body, or combined content exceeds size limit.
 
 ## 7. Status Values
@@ -471,7 +472,7 @@ The following status values are reserved for future use:
 | `if-none-match` | FETCH | 64-char hex string | ETag from a previous response. Enables conditional fetch. |
 | `if-modified-since` | FETCH | RFC 3339 timestamp | Timestamp from a previous response. Enables conditional fetch. |
 | `auth` | PUBLISH, ARCHIVE, APPEND | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
-| `expected-version` | PUBLISH, APPEND | Decimal integer | Expected current version for optimistic concurrency. If present and does not match the server's current version, the server returns `conflict`. |
+| `expected-version` | PUBLISH (optional), APPEND (required) | Decimal integer | Expected current version for optimistic concurrency. If present and does not match the server's current version, the server returns `conflict`. APPEND requires this field (>= 1). |
 
 ### 8.2. Response Metadata
 

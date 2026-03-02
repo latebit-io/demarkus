@@ -616,53 +616,13 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 	return doc, nil
 }
 
-// Append reads the current version of a document, appends content to the end
-// (separated by a newline), and writes a new version. The document must exist.
-// Retries on transient conflicts from concurrent writers (up to 3 attempts).
-func (s *Store) Append(reqPath string, content []byte) (*Document, error) {
-	const maxRetries = 3
-	for range maxRetries {
-		doc, err := s.Get(reqPath, 0)
-		if err != nil {
-			return nil, err
-		}
-
-		// Archived check is deferred to Write, which reads the on-disk state
-		// at write time. Checking here would be racy: archive/unarchive toggles
-		// the flag in-place without creating a new version.
-
-		existing := extractBody(doc.Content)
-		combined, err := joinContent(existing, content)
-		if err != nil {
-			return nil, err
-		}
-
-		baseVersion := doc.Version
-		newDoc, err := s.WriteVersion(reqPath, baseVersion, combined)
-		if errors.Is(err, ErrConflict) {
-			if newDoc != nil && newDoc.Version > baseVersion {
-				// WriteVersion's post-check: a version was written but
-				// at a higher number than expected. The append succeeded;
-				// retrying would duplicate content.
-				return newDoc, nil
-			}
-			// Pre-check conflict or O_EXCL race: no write occurred, safe to retry.
-			continue
-		}
-		return newDoc, err
-	}
-	return nil, ErrConflict
-}
-
-// AppendVersion appends content with optimistic concurrency control.
-// expectedVersion semantics match WriteVersion.
-func (s *Store) AppendVersion(reqPath string, expectedVersion int, content []byte) (*Document, error) {
+// Append reads the document at expectedVersion, appends content to the end
+// (separated by a newline), and writes the result as a new version.
+// The document must already exist. expectedVersion must be >= 1.
+// Returns ErrConflict if expectedVersion does not match the current version.
+func (s *Store) Append(reqPath string, expectedVersion int, content []byte) (*Document, error) {
 	if containsDotDot(reqPath) {
 		return nil, os.ErrNotExist
-	}
-
-	if expectedVersion < 0 {
-		return s.Append(reqPath, content)
 	}
 
 	// Read the document at the expected version so the append is built
@@ -677,6 +637,7 @@ func (s *Store) AppendVersion(reqPath string, expectedVersion int, content []byt
 		}
 		return nil, err
 	}
+
 	existing := extractBody(baseDoc.Content)
 	combined, err := joinContent(existing, content)
 	if err != nil {

@@ -63,6 +63,7 @@ APPEND /article/comments.md
 
 ---
 auth: <raw-token>
+expected-version: 3
 timestamp: 2025-02-14T10:30:00Z
 parent: /article.md
 ---
@@ -105,6 +106,8 @@ PUBLISH supports optimistic concurrency control via the `expected-version` metad
 ```
 
 On conflict, the client should fetch the latest version and reapply edits. The CLI `edit` command handles this automatically by saving unsaved edits to a temp file so no work is lost.
+
+**APPEND**: `expected-version` is **mandatory** for APPEND (must be >= 1). Since APPEND is non-idempotent — appending the same content twice produces a different result — the server cannot safely retry internally, and omitting the version check would risk silent duplication. The client must always fetch first to obtain the current version.
 
 **Directory Operations**:
 ```
@@ -1261,7 +1264,7 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 
 **Server**:
 - ~~PUBLISH support~~
-- APPEND support — *deferred until a concrete use case emerges*
+- ~~APPEND support~~
 - ~~ARCHIVE support~~
 - ~~Capability-based authentication~~
 - ~~Versioning system (immutable versions with hash chain verification)~~

@@ -129,17 +129,14 @@ func (c *Client) Publish(host, path, body, token string, expectedVersion int) (R
 }
 
 // Append adds content to the end of an existing document.
+// expectedVersion is required and must be >= 1 (the document must already exist).
 // If token is non-empty, it is sent as the auth metadata for capability-based auth.
-// expectedVersion controls optimistic concurrency: use -1 to skip conflict
-// detection, or a value >= 1 (the document must already exist).
 func (c *Client) Append(host, path, body, token string, expectedVersion int) (Result, error) {
 	req := protocol.Request{Verb: protocol.VerbAppend, Path: path, Metadata: make(map[string]string), Body: body}
 	if token != "" {
 		req.Metadata["auth"] = token
 	}
-	if expectedVersion >= 1 {
-		req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
-	}
+	req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConn(conn, req)
 	})
