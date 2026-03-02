@@ -59,6 +59,7 @@ func (h *Handler) HandleStream(stream Stream) {
 	// Reject path traversal attempts before any handler logic (including auth)
 	// to prevent scope bypass via paths like /allowed/../secret.md.
 	if containsDotDot(req.Path) {
+		h.logger().Warn("path traversal attempt blocked", "path", sanitize(req.Path))
 		h.writeError(stream, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
