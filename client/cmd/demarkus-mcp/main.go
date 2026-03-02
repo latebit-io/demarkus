@@ -393,6 +393,9 @@ func (h *handler) markAppend(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return mcp.NewToolResultError("expected_version is required"), nil
 	}
+	if expectedVersion < 1 {
+		return mcp.NewToolResultError("expected_version must be >= 1"), nil
+	}
 
 	result, err := h.client.Append(host, path, body, token, expectedVersion)
 	if err != nil {

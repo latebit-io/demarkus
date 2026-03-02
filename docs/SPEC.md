@@ -403,11 +403,12 @@ Appends content to the end of an existing document. Creates a new immutable vers
 APPEND /path\n
 ---\n
 auth: <raw-token>\n
+expected-version: <N>\n
 ---\n
 <content to append>
 ```
 
-The `auth` metadata field is REQUIRED. The request body MUST NOT be empty.
+The `auth` and `expected-version` metadata fields are REQUIRED. The `expected-version` value MUST be >= 1. The request body MUST NOT be empty.
 
 **Success response** (`created`):
 ```
