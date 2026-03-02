@@ -629,13 +629,9 @@ func (s *Store) Append(reqPath string, content []byte) (*Document, error) {
 	}
 
 	existing := extractBody(doc.Content)
-	combined := make([]byte, 0, len(existing)+1+len(content))
-	combined = append(combined, existing...)
-	combined = append(combined, '\n')
-	combined = append(combined, content...)
-
-	if int64(len(combined)) > protocol.MaxBodyLength {
-		return nil, ErrSizeLimit
+	combined, err := joinContent(existing, content)
+	if err != nil {
+		return nil, err
 	}
 
 	return s.WriteVersion(reqPath, doc.Version, combined)
@@ -665,13 +661,9 @@ func (s *Store) AppendVersion(reqPath string, expectedVersion int, content []byt
 	}
 
 	existing := extractBody(baseDoc.Content)
-	combined := make([]byte, 0, len(existing)+1+len(content))
-	combined = append(combined, existing...)
-	combined = append(combined, '\n')
-	combined = append(combined, content...)
-
-	if int64(len(combined)) > protocol.MaxBodyLength {
-		return nil, ErrSizeLimit
+	combined, err := joinContent(existing, content)
+	if err != nil {
+		return nil, err
 	}
 
 	return s.WriteVersion(reqPath, expectedVersion, combined)
@@ -809,6 +801,27 @@ func isArchived(data []byte) bool {
 
 // extractBody returns the content after the store frontmatter.
 // If no frontmatter is found, the entire data is returned.
+// joinContent concatenates existing and new content with a newline separator.
+// A separator is only added when existing content is non-empty and does not
+// already end with a newline. Returns ErrSizeLimit if the result exceeds
+// protocol.MaxBodyLength.
+func joinContent(existing, content []byte) ([]byte, error) {
+	sep := 0
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		sep = 1
+	}
+	combined := make([]byte, 0, len(existing)+sep+len(content))
+	combined = append(combined, existing...)
+	if sep == 1 {
+		combined = append(combined, '\n')
+	}
+	combined = append(combined, content...)
+	if int64(len(combined)) > protocol.MaxBodyLength {
+		return nil, ErrSizeLimit
+	}
+	return combined, nil
+}
+
 func extractBody(data []byte) []byte {
 	delim := []byte("---\n")
 	if !bytes.HasPrefix(data, delim) {

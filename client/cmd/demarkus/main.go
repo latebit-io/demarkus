@@ -38,7 +38,7 @@ func main() {
 func requestMain() {
 	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)")
 	body := flag.String("body", "", "request body (for PUBLISH/APPEND); reads stdin if omitted")
-	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE requests (env: DEMARKUS_AUTH)")
+	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE/APPEND requests (env: DEMARKUS_AUTH)")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")

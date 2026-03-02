@@ -830,6 +830,33 @@ func TestAppend(t *testing.T) {
 	}
 }
 
+func TestAppend_TrailingNewline(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Create a document that already ends with a newline.
+	_, err := s.Write("/doc.md", []byte("# Hello\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Append("/doc.md", []byte("More text."))
+	if err != nil {
+		t.Fatalf("append failed: %v", err)
+	}
+
+	got, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(extractBody(got.Content))
+	// Should not produce a double newline.
+	want := "# Hello\nMore text."
+	if body != want {
+		t.Errorf("body: got %q, want %q", body, want)
+	}
+}
+
 func TestAppend_NotFound(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
