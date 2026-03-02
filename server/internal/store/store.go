@@ -808,6 +808,9 @@ func isArchived(data []byte) bool {
 // already end with a newline. Returns ErrSizeLimit if the result exceeds
 // protocol.MaxBodyLength.
 func joinContent(existing, content []byte) ([]byte, error) {
+	if len(content) == 0 {
+		return existing, nil
+	}
 	sep := 0
 	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
 		sep = 1

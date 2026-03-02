@@ -98,6 +98,9 @@ func requestMain() {
 			reqBody = string(data)
 		}
 	}
+	if *verb == protocol.VerbAppend && reqBody == "" {
+		log.Fatal("APPEND requires a body: use -body or pipe content via stdin")
+	}
 
 	client := fetch.NewClient(opts)
 	defer client.Close()
