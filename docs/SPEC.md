@@ -419,6 +419,7 @@ modified: <RFC 3339 timestamp>
 **Other errors**:
 - `not-found`: Document does not exist or path validation failed.
 - `archived`: Document is archived. Unarchive first via PUBLISH with empty body.
+- `conflict`: `expected-version` does not match the current version. Response includes `your-version` and `server-version` metadata. Fetch the latest version and retry.
 - `server-error`: Internal error, empty body, or combined content exceeds size limit.
 
 ## 7. Status Values

@@ -799,8 +799,6 @@ func isArchived(data []byte) bool {
 	return false
 }
 
-// extractBody returns the content after the store frontmatter.
-// If no frontmatter is found, the entire data is returned.
 // joinContent concatenates existing and new content with a newline separator.
 // A separator is only added when existing content is non-empty and does not
 // already end with a newline. Returns ErrSizeLimit if the result exceeds
@@ -810,18 +808,21 @@ func joinContent(existing, content []byte) ([]byte, error) {
 	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
 		sep = 1
 	}
-	combined := make([]byte, 0, len(existing)+sep+len(content))
+	n := int64(len(existing)) + int64(sep) + int64(len(content))
+	if n > protocol.MaxBodyLength {
+		return nil, ErrSizeLimit
+	}
+	combined := make([]byte, 0, int(n))
 	combined = append(combined, existing...)
 	if sep == 1 {
 		combined = append(combined, '\n')
 	}
 	combined = append(combined, content...)
-	if int64(len(combined)) > protocol.MaxBodyLength {
-		return nil, ErrSizeLimit
-	}
 	return combined, nil
 }
 
+// extractBody returns the content after the store frontmatter.
+// If no frontmatter is found, the entire data is returned.
 func extractBody(data []byte) []byte {
 	delim := []byte("---\n")
 	if !bytes.HasPrefix(data, delim) {
