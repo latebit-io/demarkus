@@ -335,13 +335,15 @@ The `created` response MUST NOT include a body.
 
 **Optimistic concurrency** (OPTIONAL):
 
-The request MAY include an `expected-version` metadata field containing a decimal integer. If present, the server MUST compare it to the current document version before writing:
+The request MAY include an `expected-version` metadata field containing a decimal integer. If present, the server compares it to the current document version:
 
 - If `expected-version` matches the current version, the write proceeds normally.
-- If `expected-version` does not match, the server MUST NOT write and MUST return a `conflict` status with the following metadata:
+- If `expected-version` does not match, the server MUST return a `conflict` status with the following metadata:
   - `your-version`: The `expected-version` value the client sent.
   - `server-version`: The current version on the server.
 - If `expected-version` is absent, the server writes unconditionally (no conflict detection).
+
+**Note**: Due to the append-only version model, a conflict may be detected after a version file has been written (e.g., a concurrent writer advanced the version between the pre-check and the write). In this case the server still returns `conflict`, but the written version is preserved to maintain hash chain integrity. Clients MUST treat `conflict` responses as requiring a retry regardless of server-side state.
 
 **Authentication errors**:
 - `not-permitted`: No token store configured on the server (publishing disabled).

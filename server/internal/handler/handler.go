@@ -555,23 +555,24 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 	doc, err := h.Store.AppendVersion(req.Path, expectedVersion, []byte(req.Body))
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "success", false)
-			meta := map[string]string{
-				"server-version": strconv.Itoa(doc.Version),
-			}
-			var body string
 			if expectedVersion >= 0 {
-				meta["your-version"] = strconv.Itoa(expectedVersion)
-				body = fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nPlease fetch the latest version and retry your append.\n", expectedVersion, doc.Version)
+				// Client-supplied expected-version didn't match — report conflict.
+				h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "success", false)
+				body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nPlease fetch the latest version and retry your append.\n", expectedVersion, doc.Version)
+				resp := protocol.Response{
+					Status: protocol.StatusConflict,
+					Metadata: map[string]string{
+						"your-version":   strconv.Itoa(expectedVersion),
+						"server-version": strconv.Itoa(doc.Version),
+					},
+					Body: body,
+				}
+				h.writeResponse(w, resp)
 			} else {
-				body = fmt.Sprintf("# Version Conflict\n\nThe document was modified while your append was being processed.\n\nServer version: %d\n\nPlease fetch the latest version and retry your append.\n", doc.Version)
+				// No expected-version — retries exhausted due to contention.
+				h.logger().Error("append contention", "path", sanitize(req.Path))
+				h.writeError(w, protocol.StatusServerError, "too much contention, please retry")
 			}
-			resp := protocol.Response{
-				Status:   protocol.StatusConflict,
-				Metadata: meta,
-				Body:     body,
-			}
-			h.writeResponse(w, resp)
 			return
 		}
 		if errors.Is(err, store.ErrArchived) {

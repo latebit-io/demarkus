@@ -618,24 +618,32 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 
 // Append reads the current version of a document, appends content to the end
 // (separated by a newline), and writes a new version. The document must exist.
-// Uses WriteVersion internally to detect concurrent modifications.
+// Retries on transient conflicts from concurrent writers (up to 3 attempts).
 func (s *Store) Append(reqPath string, content []byte) (*Document, error) {
-	doc, err := s.Get(reqPath, 0)
-	if err != nil {
-		return nil, err
+	const maxRetries = 3
+	for range maxRetries {
+		doc, err := s.Get(reqPath, 0)
+		if err != nil {
+			return nil, err
+		}
+
+		// Archived check is deferred to Write, which reads the on-disk state
+		// at write time. Checking here would be racy: archive/unarchive toggles
+		// the flag in-place without creating a new version.
+
+		existing := extractBody(doc.Content)
+		combined, err := joinContent(existing, content)
+		if err != nil {
+			return nil, err
+		}
+
+		newDoc, err := s.WriteVersion(reqPath, doc.Version, combined)
+		if errors.Is(err, ErrConflict) {
+			continue
+		}
+		return newDoc, err
 	}
-
-	// Archived check is deferred to Write, which reads the on-disk state
-	// at write time. Checking here would be racy: archive/unarchive toggles
-	// the flag in-place without creating a new version.
-
-	existing := extractBody(doc.Content)
-	combined, err := joinContent(existing, content)
-	if err != nil {
-		return nil, err
-	}
-
-	return s.WriteVersion(reqPath, doc.Version, combined)
+	return nil, ErrConflict
 }
 
 // AppendVersion appends content with optimistic concurrency control.
