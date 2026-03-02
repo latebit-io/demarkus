@@ -640,6 +640,10 @@ func (s *Store) Append(reqPath string, content []byte) (*Document, error) {
 // AppendVersion appends content with optimistic concurrency control.
 // expectedVersion semantics match WriteVersion.
 func (s *Store) AppendVersion(reqPath string, expectedVersion int, content []byte) (*Document, error) {
+	if containsDotDot(reqPath) {
+		return nil, os.ErrNotExist
+	}
+
 	if expectedVersion < 0 {
 		return s.Append(reqPath, content)
 	}
