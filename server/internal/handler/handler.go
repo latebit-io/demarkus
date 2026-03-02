@@ -56,6 +56,14 @@ func (h *Handler) HandleStream(stream Stream) {
 
 	h.logger().Info("request", "verb", sanitize(req.Verb), "path", sanitize(req.Path))
 
+	// Reject path traversal attempts before any handler logic (including auth)
+	// to prevent scope bypass via paths like /allowed/../secret.md.
+	if containsDotDot(req.Path) {
+		h.logger().Warn("path traversal attempt blocked", "path", sanitize(req.Path))
+		h.writeError(stream, protocol.StatusNotFound, req.Path+" not found")
+		return
+	}
+
 	// Health check endpoint: responds to FETCH /health with OK
 	if req.Path == "/health" && req.Verb == protocol.VerbFetch {
 		h.handleHealth(stream)
@@ -73,6 +81,8 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handlePublish(stream, req)
 	case protocol.VerbArchive:
 		h.handleArchive(stream, req)
+	case protocol.VerbAppend:
+		h.handleAppend(stream, req)
 	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
@@ -495,6 +505,101 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	h.writeResponse(w, resp)
 }
 
+func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
+	if h.Store == nil {
+		h.writeError(w, protocol.StatusServerError, "appending not configured")
+		return
+	}
+	if int64(len(req.Body)) > protocol.MaxBodyLength {
+		h.logger().Error("body too large", "path", sanitize(req.Path), "size_bytes", len(req.Body))
+		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+		return
+	}
+	if req.Body == "" {
+		h.writeError(w, protocol.StatusServerError, "append requires a body")
+		return
+	}
+
+	var ts *auth.TokenStore
+	if h.GetTokenStore != nil {
+		ts = h.GetTokenStore()
+	}
+	if ts == nil {
+		h.writeError(w, protocol.StatusNotPermitted, "appending requires auth configuration")
+		return
+	}
+
+	token := req.Metadata["auth"]
+	if err := ts.Authorize(token, req.Path, "publish"); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken), errors.Is(err, auth.ErrTokenExpired):
+			h.logger().Warn("unauthorized", "operation", "APPEND", "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
+		default:
+			h.logger().Warn("not permitted", "operation", "APPEND", "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
+		}
+		return
+	}
+
+	ev := req.Metadata["expected-version"]
+	if ev == "" {
+		h.writeError(w, protocol.StatusBadRequest, "APPEND requires expected-version metadata")
+		return
+	}
+	expectedVersion, err := strconv.Atoi(ev)
+	if err != nil || expectedVersion < 1 {
+		h.writeError(w, protocol.StatusBadRequest, "invalid expected-version for APPEND (must be >= 1)")
+		return
+	}
+
+	doc, err := h.Store.Append(req.Path, expectedVersion, []byte(req.Body))
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "success", false)
+			body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nFetch the latest version and verify whether your append was applied before retrying.\n", expectedVersion, doc.Version)
+			resp := protocol.Response{
+				Status: protocol.StatusConflict,
+				Metadata: map[string]string{
+					"your-version":   strconv.Itoa(expectedVersion),
+					"server-version": strconv.Itoa(doc.Version),
+				},
+				Body: body,
+			}
+			h.writeResponse(w, resp)
+			return
+		}
+		if errors.Is(err, store.ErrArchived) {
+			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "success", false, "reason", "archived")
+			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
+			return
+		}
+		if os.IsNotExist(err) {
+			h.logger().Info("not found", "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
+		if errors.Is(err, store.ErrSizeLimit) {
+			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "success", false, "reason", "size limit exceeded")
+			h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+			return
+		}
+		h.logger().Error("append failed", "path", sanitize(req.Path), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	h.logger().Info("append", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "version", doc.Version, "success", true, "size_bytes", len(req.Body))
+	resp := protocol.Response{
+		Status: protocol.StatusCreated,
+		Metadata: map[string]string{
+			"version":  strconv.Itoa(doc.Version),
+			"modified": doc.Modified.Format(time.RFC3339),
+		},
+	}
+	h.writeResponse(w, resp)
+}
+
 func (h *Handler) handleHealth(w io.Writer) {
 	resp := protocol.Response{
 		Status:   protocol.StatusOK,
@@ -517,6 +622,16 @@ func (h *Handler) writeResponse(w io.Writer, resp protocol.Response) {
 	if _, err := resp.WriteTo(w); err != nil {
 		h.logger().Error("write response failed", "error", err)
 	}
+}
+
+// containsDotDot reports whether the path contains a ".." segment.
+func containsDotDot(path string) bool {
+	for seg := range strings.SplitSeq(path, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // sanitize strips control characters from a string for safe logging.

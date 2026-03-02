@@ -1401,3 +1401,184 @@ func TestHandleArchive(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleAppend(t *testing.T) {
+	const testSecret = "test-append-secret"
+	appendTokenStore := auth.NewTokenStore(map[string]auth.Token{
+		auth.HashToken(testSecret): {
+			Paths:      []string{"/*"},
+			Operations: []string{"publish"},
+		},
+	})
+	authMetaV1 := "---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n"
+
+	t.Run("appends to existing document", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Start")); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + "More text.")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+		if resp.Metadata["version"] != "2" {
+			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "2")
+		}
+	})
+
+	t.Run("not found when document does not exist", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		stream := newMockStream("APPEND /missing.md\n" + authMetaV1 + "content")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
+		}
+	})
+
+	t.Run("rejects empty body", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Existing")); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusServerError {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusServerError)
+		}
+	})
+
+	t.Run("requires expected-version", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Existing")); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\n---\nMore text.")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusBadRequest {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusBadRequest)
+		}
+	})
+
+	t.Run("auth required", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Existing")); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n---\nexpected-version: \"1\"\n---\nMore text.")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusUnauthorized {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusUnauthorized)
+		}
+	})
+
+	t.Run("conflict on stale expected-version", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# V1")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Write("/doc.md", []byte("# V2")); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\nLate append.")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusConflict {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusConflict)
+		}
+	})
+
+	t.Run("archived document rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Content")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + "More.")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusArchived {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusArchived)
+		}
+	})
+
+	t.Run("combined content exceeds size limit", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		initial := make([]byte, protocol.MaxBodyLength-100)
+		for i := range initial {
+			initial[i] = 'x'
+		}
+		if _, err := s.Write("/doc.md", initial); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+
+		appendBody := strings.Repeat("y", 200)
+		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + appendBody)
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusServerError {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusServerError)
+		}
+	})
+}

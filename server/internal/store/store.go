@@ -58,6 +58,9 @@ var ErrConflict = fmt.Errorf("version conflict")
 // file already exists (O_EXCL race with a concurrent writer).
 var ErrVersionExists = fmt.Errorf("version already exists")
 
+// ErrSizeLimit is returned when combined content exceeds protocol.MaxBodyLength.
+var ErrSizeLimit = fmt.Errorf("combined content exceeds size limit")
+
 // maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
 // adds to a version file (version, archived, previous-hash, delimiters).
 const maxStoreFrontmatter = 256
@@ -613,6 +616,43 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 	return doc, nil
 }
 
+// Append reads the document at expectedVersion, appends content to the end
+// (separated by a newline), and writes the result as a new version.
+// The document must already exist. expectedVersion must be >= 1.
+// Returns ErrConflict if expectedVersion does not match the current version.
+func (s *Store) Append(reqPath string, expectedVersion int, content []byte) (*Document, error) {
+	if expectedVersion < 1 {
+		return nil, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expectedVersion)
+	}
+	if len(content) == 0 {
+		return nil, fmt.Errorf("APPEND requires non-empty content")
+	}
+	if containsDotDot(reqPath) {
+		return nil, os.ErrNotExist
+	}
+
+	// Read the document at the expected version so the append is built
+	// against the exact base the client saw, avoiding TOCTOU races.
+	baseDoc, err := s.Get(reqPath, expectedVersion)
+	if err != nil {
+		// If the requested version doesn't exist, check whether the
+		// document simply moved past it (conflict) or doesn't exist at all.
+		current := s.CurrentVersion(reqPath)
+		if current > 0 && current != expectedVersion {
+			return &Document{Version: current}, ErrConflict
+		}
+		return nil, err
+	}
+
+	existing := extractBody(baseDoc.Content)
+	combined, err := joinContent(existing, content)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.WriteVersion(reqPath, expectedVersion, combined)
+}
+
 // VerifyChain checks the hash chain integrity for a document.
 // It reads each version file from oldest to newest and verifies that
 // the previous-hash recorded in vN matches the SHA-256 of vN-1's raw bytes.
@@ -741,6 +781,31 @@ func isArchived(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// joinContent concatenates existing and new content with a newline separator.
+// A separator is only added when existing content is non-empty and does not
+// already end with a newline. Returns ErrSizeLimit if the result exceeds
+// protocol.MaxBodyLength.
+func joinContent(existing, content []byte) ([]byte, error) {
+	if len(content) == 0 {
+		return existing, nil
+	}
+	sep := 0
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		sep = 1
+	}
+	n := int64(len(existing)) + int64(sep) + int64(len(content))
+	if n > protocol.MaxBodyLength {
+		return nil, ErrSizeLimit
+	}
+	combined := make([]byte, 0, int(n))
+	combined = append(combined, existing...)
+	if sep == 1 {
+		combined = append(combined, '\n')
+	}
+	combined = append(combined, content...)
+	return combined, nil
 }
 
 // extractBody returns the content after the store frontmatter.

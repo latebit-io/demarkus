@@ -799,3 +799,129 @@ func TestVerifyChain_Tampered(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestAppend(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Create initial document.
+	_, err := s.Write("/doc.md", []byte("# Hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Append content.
+	doc, err := s.Append("/doc.md", 1, []byte("More text."))
+	if err != nil {
+		t.Fatalf("append failed: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version: got %d, want 2", doc.Version)
+	}
+
+	// Verify combined content.
+	got, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(extractBody(got.Content))
+	if body != "# Hello\nMore text." {
+		t.Errorf("body: got %q, want %q", body, "# Hello\nMore text.")
+	}
+}
+
+func TestAppend_TrailingNewline(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	_, err := s.Write("/doc.md", []byte("# Hello\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Append("/doc.md", 1, []byte("More text."))
+	if err != nil {
+		t.Fatalf("append failed: %v", err)
+	}
+
+	got, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(extractBody(got.Content))
+	want := "# Hello\nMore text."
+	if body != want {
+		t.Errorf("body: got %q, want %q", body, want)
+	}
+}
+
+func TestAppend_NotFound(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	_, err := s.Append("/missing.md", 1, []byte("content"))
+	if !os.IsNotExist(err) {
+		t.Fatalf("expected not-exist error, got: %v", err)
+	}
+}
+
+func TestAppend_Archived(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	_, err := s.Write("/doc.md", []byte("# Hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Archive("/doc.md", true); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Append("/doc.md", 1, []byte("More text."))
+	if !errors.Is(err, ErrArchived) {
+		t.Fatalf("expected ErrArchived, got: %v", err)
+	}
+}
+
+func TestAppend_ExceedsMaxBody(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	initial := make([]byte, protocol.MaxBodyLength-100)
+	for i := range initial {
+		initial[i] = 'x'
+	}
+	_, err := s.Write("/doc.md", initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Append("/doc.md", 1, make([]byte, 200))
+	if err == nil {
+		t.Fatal("expected error for combined content exceeding size limit")
+	}
+	if !errors.Is(err, ErrSizeLimit) {
+		t.Errorf("expected ErrSizeLimit, got: %v", err)
+	}
+}
+
+func TestAppend_Conflict(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	_, err := s.Write("/doc.md", []byte("# Start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Advance to v2.
+	_, err = s.Write("/doc.md", []byte("# Updated"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Append with stale version.
+	_, err = s.Append("/doc.md", 1, []byte("Late."))
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict, got: %v", err)
+	}
+}

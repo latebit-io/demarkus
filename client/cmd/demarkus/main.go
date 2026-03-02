@@ -36,9 +36,10 @@ func main() {
 }
 
 func requestMain() {
-	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE)")
-	body := flag.String("body", "", "request body (for PUBLISH); reads stdin if omitted")
-	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE requests (env: DEMARKUS_AUTH)")
+	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)")
+	body := flag.String("body", "", "request body (for PUBLISH/APPEND); reads stdin if omitted")
+	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE/APPEND requests (env: DEMARKUS_AUTH)")
+	expectedVersion := flag.Int("expected-version", -1, "expected current version for APPEND (required)")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
@@ -70,32 +71,14 @@ func requestMain() {
 		opts.Cache = cache.New(*cacheDir)
 	}
 
-	// Auth token: flag > env var > stored token for host.
-	token := *authToken
-	if token == "" {
-		token = os.Getenv("DEMARKUS_AUTH")
-	}
-	if token == "" {
-		if ts, err := tokens.Load(tokens.DefaultPath()); err == nil {
-			token = ts.Get(host)
+	token := resolveAuthToken(*authToken, host)
+	reqBody := resolveBody(*verb, *body)
+	if *verb == protocol.VerbAppend {
+		if reqBody == "" {
+			log.Fatal("APPEND requires a body: use -body or pipe content via stdin")
 		}
-	}
-
-	// For PUBLISH: read body from -body flag or stdin (if piped).
-	// When stdin is a terminal and no -body is given, send an empty body
-	// (used for unarchiving).
-	reqBody := *body
-	if *verb == protocol.VerbPublish && reqBody == "" {
-		info, err := os.Stdin.Stat()
-		if err != nil {
-			log.Fatalf("stat stdin: %v", err)
-		}
-		if info.Mode()&os.ModeCharDevice == 0 {
-			data, err := io.ReadAll(os.Stdin)
-			if err != nil {
-				log.Fatalf("read stdin: %v", err)
-			}
-			reqBody = string(data)
+		if *expectedVersion < 1 {
+			log.Fatal("APPEND requires -expected-version >= 1")
 		}
 	}
 
@@ -114,6 +97,8 @@ func requestMain() {
 		result, err = client.Publish(host, path, reqBody, token, -1)
 	case protocol.VerbArchive:
 		result, err = client.Archive(host, path, token)
+	case protocol.VerbAppend:
+		result, err = client.Append(host, path, reqBody, token, *expectedVersion)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -415,6 +400,42 @@ func tokenMain(args []string) {
 	}
 }
 
+// resolveAuthToken returns the auth token from flag, env, or stored tokens.
+func resolveAuthToken(flagValue, host string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if env := os.Getenv("DEMARKUS_AUTH"); env != "" {
+		return env
+	}
+	if ts, err := tokens.Load(tokens.DefaultPath()); err == nil {
+		return ts.Get(host)
+	}
+	return ""
+}
+
+// resolveBody returns the request body from the flag or stdin for write verbs.
+func resolveBody(verb, flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if verb != protocol.VerbPublish && verb != protocol.VerbAppend {
+		return ""
+	}
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		log.Fatalf("stat stdin: %v", err)
+	}
+	if info.Mode()&os.ModeCharDevice == 0 {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			log.Fatalf("read stdin: %v", err)
+		}
+		return string(data)
+	}
+	return ""
+}
+
 // editorCommand splits $EDITOR fields and appends the file path.
 // Returns the executable name and its arguments.
 func editorCommand(fields []string, file string) (name string, args []string) {
@@ -430,11 +451,12 @@ var validVerbs = map[string]bool{
 	protocol.VerbVersions: true,
 	protocol.VerbPublish:  true,
 	protocol.VerbArchive:  true,
+	protocol.VerbAppend:   true,
 }
 
 func validateVerb(verb string) error {
 	if !validVerbs[verb] {
-		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE)", verb)
+		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)", verb)
 	}
 	return nil
 }

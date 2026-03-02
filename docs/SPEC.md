@@ -333,6 +333,18 @@ The `created` response MUST NOT include a body.
 - If the document exists, the version number is incremented from the current highest version.
 - If the document exists as a flat file (no version history), the server MUST migrate the flat file to version 1 before creating version 2.
 
+**Optimistic concurrency** (OPTIONAL):
+
+The request MAY include an `expected-version` metadata field containing a decimal integer. If present, the server compares it to the current document version:
+
+- If `expected-version` matches the current version, the write proceeds normally.
+- If `expected-version` does not match, the server MUST return a `conflict` status with the following metadata:
+  - `your-version`: The `expected-version` value the client sent.
+  - `server-version`: The current version on the server.
+- If `expected-version` is absent, the server writes unconditionally (no conflict detection).
+
+**Note**: Due to the append-only version model, a conflict may be detected after a version file has been written (e.g., a concurrent writer advanced the version between the pre-check and the write). In this case the server still returns `conflict`, but the written version is preserved to maintain hash chain integrity. Since PUBLISH is idempotent (identical content produces a no-op), clients can safely retry on `conflict` by fetching the latest version and re-publishing. For non-idempotent operations like APPEND, clients MUST fetch the latest version and verify whether their append was applied before retrying (see section 6.6).
+
 **Authentication errors**:
 - `not-permitted`: No token store configured on the server (publishing disabled).
 - `unauthorized`: Missing `auth` field or token not recognised.
@@ -345,6 +357,7 @@ The `created` response MUST NOT include a body.
 
 **Other errors**:
 - `not-found`: Path validation failed (e.g., path traversal attempt).
+- `conflict`: `expected-version` does not match the current version (see optimistic concurrency above).
 - `server-error`: Internal error, content exceeds size limit, or publishing not configured.
 
 ### 6.5. ARCHIVE
@@ -381,6 +394,50 @@ status: ok
 - `not-found`: Document does not exist or path validation failed.
 - `server-error`: Internal error.
 
+### 6.6. APPEND
+
+Appends content to the end of an existing document. Creates a new immutable version where the body is the existing content followed by a newline and the appended content. Requires authentication with the `publish` capability.
+
+**Request**:
+```
+APPEND /path\n
+---\n
+auth: <raw-token>\n
+expected-version: <N>\n
+---\n
+<content to append>
+```
+
+The `auth` and `expected-version` metadata fields are REQUIRED. The `expected-version` value MUST be >= 1. The request body MUST NOT be empty.
+
+**Success response** (`created`):
+```
+---
+status: created
+version: <new version number>
+modified: <RFC 3339 timestamp>
+---
+```
+
+**Behaviour**:
+- APPEND reads the current document, concatenates the request body after a newline separator, and writes the result as a new version.
+- The document MUST already exist. APPEND does not create new documents — use PUBLISH for that.
+- The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
+- The `expected-version` metadata field is REQUIRED for APPEND (unlike PUBLISH where it is optional). Since APPEND is non-idempotent, the server cannot safely retry internally. The value MUST be >= 1; the server MUST reject `expected-version: 0` or absent `expected-version` as a bad request.
+- Conflict semantics match PUBLISH (see section 6.4). On conflict, fetch the latest version and verify whether your append was applied before retrying.
+
+**Authentication errors**:
+- `not-permitted`: No token store configured on the server.
+- `unauthorized`: Missing `auth` field or token not recognised.
+- `not-permitted`: Token does not grant `publish` on the requested path.
+
+**Other errors**:
+- `bad-request`: Missing or invalid `expected-version` (must be >= 1).
+- `not-found`: Document does not exist or path validation failed.
+- `archived`: Document is archived. Unarchive first via PUBLISH with empty body.
+- `conflict`: `expected-version` does not match the current version. Response includes `your-version` and `server-version` metadata.
+- `server-error`: Internal error, empty body, or combined content exceeds size limit.
+
 ## 7. Status Values
 
 Status values are text strings. There are no numeric status codes.
@@ -415,15 +472,18 @@ The following status values are reserved for future use:
 |---|---|---|---|
 | `if-none-match` | FETCH | 64-char hex string | ETag from a previous response. Enables conditional fetch. |
 | `if-modified-since` | FETCH | RFC 3339 timestamp | Timestamp from a previous response. Enables conditional fetch. |
-| `auth` | PUBLISH | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
+| `auth` | PUBLISH, ARCHIVE, APPEND | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
+| `expected-version` | PUBLISH (optional), APPEND (required) | Decimal integer | Expected current version for optimistic concurrency. If present and does not match the server's current version, the server returns `conflict`. APPEND requires this field (>= 1). |
 
 ### 8.2. Response Metadata
 
 | Field | Applicable verbs | Format | Description |
 |---|---|---|---|
-| `modified` | FETCH, PUBLISH | RFC 3339 timestamp | Document modification time (UTC, second precision). |
+| `modified` | FETCH, PUBLISH, APPEND | RFC 3339 timestamp | Document modification time (UTC, second precision). |
 | `etag` | FETCH | 64-char lowercase hex | SHA-256 hash of the raw file bytes. |
-| `version` | FETCH, PUBLISH | Decimal integer | Version number of the returned or created document. |
+| `version` | FETCH, PUBLISH, APPEND | Decimal integer | Version number of the returned or created document. |
+| `your-version` | PUBLISH, APPEND (conflict) | Decimal integer | The `expected-version` the client sent. Present only in `conflict` responses. |
+| `server-version` | PUBLISH, APPEND (conflict) | Decimal integer | The current version on the server. Present only in `conflict` responses. |
 | `current-version` | FETCH (version access) | Decimal integer | Highest available version number. |
 | `entries` | LIST | Decimal integer | Number of entries in the directory listing. |
 | `total` | VERSIONS | Decimal integer | Total number of versions. |
