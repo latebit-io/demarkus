@@ -545,8 +545,8 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 	expectedVersion := -1
 	if ev := req.Metadata["expected-version"]; ev != "" {
 		v, err := strconv.Atoi(ev)
-		if err != nil || v < 0 {
-			h.writeError(w, protocol.StatusBadRequest, "invalid expected-version")
+		if err != nil || v < 1 {
+			h.writeError(w, protocol.StatusBadRequest, "invalid expected-version for APPEND (must be >= 1)")
 			return
 		}
 		expectedVersion = v

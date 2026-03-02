@@ -624,9 +624,10 @@ func (s *Store) Append(reqPath string, content []byte) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	if doc.Archived {
-		return nil, ErrArchived
-	}
+
+	// Archived check is deferred to Write, which reads the on-disk state
+	// at write time. Checking here would be racy: archive/unarchive toggles
+	// the flag in-place without creating a new version.
 
 	existing := extractBody(doc.Content)
 	combined, err := joinContent(existing, content)
@@ -660,10 +661,6 @@ func (s *Store) AppendVersion(reqPath string, expectedVersion int, content []byt
 		}
 		return nil, err
 	}
-	if baseDoc.Archived {
-		return nil, ErrArchived
-	}
-
 	existing := extractBody(baseDoc.Content)
 	combined, err := joinContent(existing, content)
 	if err != nil {
