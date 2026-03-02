@@ -621,6 +621,12 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 // The document must already exist. expectedVersion must be >= 1.
 // Returns ErrConflict if expectedVersion does not match the current version.
 func (s *Store) Append(reqPath string, expectedVersion int, content []byte) (*Document, error) {
+	if expectedVersion < 1 {
+		return nil, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expectedVersion)
+	}
+	if len(content) == 0 {
+		return nil, fmt.Errorf("APPEND requires non-empty content")
+	}
 	if containsDotDot(reqPath) {
 		return nil, os.ErrNotExist
 	}
