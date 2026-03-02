@@ -558,7 +558,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 			if expectedVersion >= 0 {
 				// Client-supplied expected-version didn't match — report conflict.
 				h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "success", false)
-				body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nPlease fetch the latest version and retry your append.\n", expectedVersion, doc.Version)
+				body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nFetch the latest version and verify whether your append was applied before retrying.\n", expectedVersion, doc.Version)
 				resp := protocol.Response{
 					Status: protocol.StatusConflict,
 					Metadata: map[string]string{

@@ -343,7 +343,7 @@ The request MAY include an `expected-version` metadata field containing a decima
   - `server-version`: The current version on the server.
 - If `expected-version` is absent, the server writes unconditionally (no conflict detection).
 
-**Note**: Due to the append-only version model, a conflict may be detected after a version file has been written (e.g., a concurrent writer advanced the version between the pre-check and the write). In this case the server still returns `conflict`, but the written version is preserved to maintain hash chain integrity. Clients MUST treat `conflict` responses as requiring a retry regardless of server-side state.
+**Note**: Due to the append-only version model, a conflict may be detected after a version file has been written (e.g., a concurrent writer advanced the version between the pre-check and the write). In this case the server still returns `conflict`, but the written version is preserved to maintain hash chain integrity. Since PUBLISH is idempotent (identical content produces a no-op), clients can safely retry on `conflict` by fetching the latest version and re-publishing. For non-idempotent operations like APPEND, the server handles conflict detection and retry internally (see section 6.6).
 
 **Authentication errors**:
 - `not-permitted`: No token store configured on the server (publishing disabled).
@@ -423,6 +423,7 @@ modified: <RFC 3339 timestamp>
 - The document MUST already exist. APPEND does not create new documents — use PUBLISH for that.
 - The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
 - APPEND supports optimistic concurrency via `expected-version` metadata (same semantics as PUBLISH, see section 6.4). Since APPEND requires an existing document, `expected-version` MUST be >= 1; the server MUST reject `expected-version: 0` as a bad request.
+- When `expected-version` is absent, the server retries internally on transient conflicts to avoid exposing non-idempotent retry complexity to clients. If retries are exhausted due to sustained contention, the server returns `server-error`.
 
 **Authentication errors**:
 - `not-permitted`: No token store configured on the server.

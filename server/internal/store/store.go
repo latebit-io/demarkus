@@ -637,8 +637,16 @@ func (s *Store) Append(reqPath string, content []byte) (*Document, error) {
 			return nil, err
 		}
 
-		newDoc, err := s.WriteVersion(reqPath, doc.Version, combined)
+		baseVersion := doc.Version
+		newDoc, err := s.WriteVersion(reqPath, baseVersion, combined)
 		if errors.Is(err, ErrConflict) {
+			if newDoc != nil && newDoc.Version > baseVersion {
+				// WriteVersion's post-check: a version was written but
+				// at a higher number than expected. The append succeeded;
+				// retrying would duplicate content.
+				return newDoc, nil
+			}
+			// Pre-check conflict or O_EXCL race: no write occurred, safe to retry.
 			continue
 		}
 		return newDoc, err
