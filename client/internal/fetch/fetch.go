@@ -132,6 +132,12 @@ func (c *Client) Publish(host, path, body, token string, expectedVersion int) (R
 // expectedVersion is required and must be >= 1 (the document must already exist).
 // If token is non-empty, it is sent as the auth metadata for capability-based auth.
 func (c *Client) Append(host, path, body, token string, expectedVersion int) (Result, error) {
+	if expectedVersion < 1 {
+		return Result{}, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expectedVersion)
+	}
+	if body == "" {
+		return Result{}, fmt.Errorf("APPEND requires a non-empty body")
+	}
 	req := protocol.Request{Verb: protocol.VerbAppend, Path: path, Metadata: make(map[string]string), Body: body}
 	if token != "" {
 		req.Metadata["auth"] = token
