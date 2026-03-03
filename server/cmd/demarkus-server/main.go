@@ -29,6 +29,12 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
 	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: demarkus-server [options]\n\n")
+		fmt.Fprintf(os.Stderr, "Serves markdown documents over the Mark Protocol (QUIC, port %d).\n", protocol.DefaultPort)
+		fmt.Fprintf(os.Stderr, "Options can also be set via environment variables (DEMARKUS_ROOT, etc.).\n\n")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	cfg, err := config.NewConfig()

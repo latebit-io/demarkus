@@ -79,5 +79,5 @@ These values drive concrete choices:
 - [Agent Workflow Cookbook](agent-cookbook.md)
 - [Agent Queue Template](agent-queue-template.md)
 - [Architecture & Design](../architecture/index.md)
-- [Protocol Specification](../../spec.md)
+- [Protocol Specification](../../SPEC.md)
 - [Docs Home](../index.md)

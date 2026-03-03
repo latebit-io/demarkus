@@ -37,6 +37,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: protocol
       - name: Test
         run: cd protocol && go test ./...
       - name: Vet
@@ -51,6 +54,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: server
       - name: Test
         run: cd server && go test ./...
       - name: Vet
@@ -67,6 +73,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: client
       - name: Test
         run: cd client && go test ./...
       - name: Vet

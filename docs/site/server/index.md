@@ -75,4 +75,4 @@ A healthy server returns:
 
 - [Install & Build](../install/index.md)
 - [Install Script](../install/index.md#install-script)
-- [Protocol Spec](../../spec.md)
+- [Protocol Spec](../../SPEC.md)
