@@ -359,7 +359,7 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	h.logger().Info("archive", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", tokenLabel, "success", true)
+	h.logger().Info("archive", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
 	resp := protocol.Response{
 		Status: protocol.StatusOK,
 		Metadata: map[string]string{
@@ -424,7 +424,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 				h.writeError(w, protocol.StatusServerError, "internal error")
 				return
 			}
-			h.logger().Info("unarchive", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", tokenLabel, "success", true)
+			h.logger().Info("unarchive", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
 		}
 
 		// Return OK (no-op for active documents, or unarchive response)
@@ -451,7 +451,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	doc, err := h.Store.WriteVersion(req.Path, expectedVersion, []byte(req.Body))
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			h.logger().Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", tokenLabel, "success", false)
+			h.logger().Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
 			var body string
 			if expectedVersion == 0 {
 				body = fmt.Sprintf("# Version Conflict\n\nA document already exists at this path (version %d).\n\nFetch the current version and publish with the correct expected-version to update it.\n", doc.Version)
@@ -470,7 +470,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 			return
 		}
 		if errors.Is(err, store.ErrNotModified) {
-			h.logger().Info("publish unchanged", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", tokenLabel, "success", true)
+			h.logger().Info("publish unchanged", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
 			resp := protocol.Response{
 				Status: protocol.StatusOK,
 				Metadata: map[string]string{
@@ -482,7 +482,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 			return
 		}
 		if errors.Is(err, store.ErrArchived) {
-			h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", tokenLabel, "success", false, "reason", "archived")
+			h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
 			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
 			return
 		}
@@ -496,7 +496,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	h.logger().Info("publish", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", tokenLabel, "success", true, "size_bytes", len(req.Body))
+	h.logger().Info("publish", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body))
 	resp := protocol.Response{
 		Status: protocol.StatusCreated,
 		Metadata: map[string]string{
@@ -559,7 +559,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 	doc, err := h.Store.Append(req.Path, expectedVersion, []byte(req.Body))
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", tokenLabel, "success", false)
+			h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
 			body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nFetch the latest version and verify whether your append was applied before retrying.\n", expectedVersion, doc.Version)
 			resp := protocol.Response{
 				Status: protocol.StatusConflict,
@@ -573,7 +573,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 			return
 		}
 		if errors.Is(err, store.ErrArchived) {
-			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", tokenLabel, "success", false, "reason", "archived")
+			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
 			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
 			return
 		}
@@ -583,7 +583,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 			return
 		}
 		if errors.Is(err, store.ErrSizeLimit) {
-			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", tokenLabel, "success", false, "reason", "size limit exceeded")
+			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
 			h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 			return
 		}
@@ -592,7 +592,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	h.logger().Info("append", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "version", doc.Version, "token_label", tokenLabel, "success", true, "size_bytes", len(req.Body))
+	h.logger().Info("append", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body))
 	resp := protocol.Response{
 		Status: protocol.StatusCreated,
 		Metadata: map[string]string{
