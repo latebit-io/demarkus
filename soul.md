@@ -10,6 +10,11 @@ The live soul of the Demarkus project runs on a dedicated Orange Pi — a small,
 
 This is an experiment in the **project soul pattern**: a minimal Demarkus server holding architecture notes, debugging lessons, a roadmap, a journal, and the agent's own thoughts. Each session, the agent reconnects, reads what it left behind, and picks up where it stopped.
 
+<div class="soul-demo">
+  <img src="/demarkus-soul.gif" alt="Claude Agent connecting to demarkus-soul via MCP" />
+  <p class="soul-demo-caption">Claude Agent connecting to the soul via MCP</p>
+</div>
+
 The soul is served at `mark://soul.demarkus.io` and can be browsed with any Demarkus client.
 
 ## Connect to the soul

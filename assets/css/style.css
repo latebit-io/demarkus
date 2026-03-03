@@ -278,6 +278,48 @@ body {
     color: #f0f0e8;
 }
 
+.soul-demo {
+    margin: 1.4rem 0;
+    border: 3px solid var(--line);
+    background: #090909;
+    box-shadow: 7px 7px 0 var(--shadow);
+    padding: 6px;
+    position: relative;
+}
+
+.soul-demo::after {
+    content: "LIVE DEMO";
+    position: absolute;
+    top: -12px;
+    right: 14px;
+    border: 2px solid var(--line);
+    background: var(--accent-cyan);
+    color: #050505;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    padding: 0.1rem 0.4rem;
+}
+
+.soul-demo img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 2px solid #333;
+}
+
+.soul-demo-caption {
+    margin: 0;
+    padding: 0.45rem 0.6rem;
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: #0d0d0d;
+    border-top: 2px solid #333;
+}
+
 .site-footer {
     padding: 14px 0 38px;
 }
