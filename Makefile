@@ -17,7 +17,7 @@ help:
 	@echo "  install   - Install binaries to /usr/local/bin"
 	@echo ""
 	@echo "Development:"
-	@echo "  run-server - Start dev server with demo site"
+	@echo "  run-server - Start dev server with docs site"
 	@echo "  run-client - Fetch a document (set URL=mark://...)"
 	@echo "  run-tui    - Start TUI browser (set URL=mark://...)"
 	@echo "  run-mcp    - Start MCP server"
@@ -76,7 +76,7 @@ URL ?= mark://localhost:6309/index.md
 
 # Run server (for development)
 run-server: server
-	./server/bin/demarkus-server -root ./examples/demo-site
+	./server/bin/demarkus-server -root ./docs/site
 
 # Run client (for development)
 run-client: client

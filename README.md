@@ -17,7 +17,7 @@ Demarkus reimagines the web around markdown — a format structured and optimize
 make all
 
 # Start a server (dev mode — self-signed cert)
-./server/bin/demarkus-server -root ./examples/demo-site
+./server/bin/demarkus-server -root ./docs/site
 
 # Fetch a document
 ./client/bin/demarkus --insecure mark://localhost:6309/index.md

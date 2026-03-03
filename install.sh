@@ -880,8 +880,15 @@ do_install() {
   fi
 
   if [ -n "$raw_token" ]; then
+    local token_file="${CONFIG_DIR}/initial-token.txt"
+    echo "$raw_token" > "$token_file"
+    chmod 600 "$token_file"
+    if [ "$PLATFORM" = "linux" ]; then
+      chown root:"$SERVICE_NAME" "$token_file"
+      chmod 640 "$token_file"
+    fi
     echo ""
-    printf "${YELLOW}Save this auth token (shown once):${NC}\n"
+    printf "${YELLOW}Auth token (also saved to ${token_file}):${NC}\n"
     echo ""
     echo "  $raw_token"
     echo ""
