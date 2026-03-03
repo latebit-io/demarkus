@@ -39,7 +39,7 @@ func requestMain() {
 	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)")
 	body := flag.String("body", "", "request body (for PUBLISH/APPEND); reads stdin if omitted")
 	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE/APPEND requests (env: DEMARKUS_AUTH)")
-	expectedVersion := flag.Int("expected-version", -1, "expected current version (required for APPEND, optional for PUBLISH)")
+	expectedVersion := flag.Int("expected-version", -1, "version check: -1 skip (default), 0 create-only, >0 require match; required (>0) for APPEND")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
