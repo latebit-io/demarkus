@@ -39,6 +39,7 @@ jobs:
           go-version: "1.26"
       - uses: golangci/golangci-lint-action@v6
         with:
+          version: v2.9.0
           working-directory: protocol
       - name: Test
         run: cd protocol && go test ./...
@@ -56,6 +57,7 @@ jobs:
           go-version: "1.26"
       - uses: golangci/golangci-lint-action@v6
         with:
+          version: v2.9.0
           working-directory: server
       - name: Test
         run: cd server && go test ./...
@@ -75,6 +77,7 @@ jobs:
           go-version: "1.26"
       - uses: golangci/golangci-lint-action@v6
         with:
+          version: v2.9.0
           working-directory: client
       - name: Test
         run: cd client && go test ./...
