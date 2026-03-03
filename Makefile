@@ -1,4 +1,4 @@
-.PHONY: all protocol server client tools test clean install help
+.PHONY: all protocol server client tools test clean install help lint
 
 # Default target
 all: protocol server client
@@ -12,8 +12,15 @@ help:
 	@echo "  client    - Build demarkus TUI client"
 	@echo "  tools     - Build development tools"
 	@echo "  test      - Run all tests"
+	@echo "  lint      - Run golangci-lint on all modules"
 	@echo "  clean     - Remove build artifacts"
 	@echo "  install   - Install binaries to /usr/local/bin"
+	@echo ""
+	@echo "Development:"
+	@echo "  run-server - Start dev server with docs site"
+	@echo "  run-client - Fetch a document (set URL=mark://...)"
+	@echo "  run-tui    - Start TUI browser (set URL=mark://...)"
+	@echo "  run-mcp    - Start MCP server"
 
 # Build protocol library
 protocol:
@@ -69,7 +76,7 @@ URL ?= mark://localhost:6309/index.md
 
 # Run server (for development)
 run-server: server
-	./server/bin/demarkus-server -root ./examples/demo-site
+	./server/bin/demarkus-server -root ./docs/site
 
 # Run client (for development)
 run-client: client
@@ -82,6 +89,19 @@ run-tui: client
 # Run MCP server (for development)
 run-mcp: client
 	./client/bin/demarkus-mcp -host mark://localhost:6309 -insecure
+
+# Lint code
+lint:
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "Error: golangci-lint is not installed."; \
+		echo "Install it: https://golangci-lint.run/welcome/install/"; \
+		exit 1; \
+	fi
+	@echo "Linting code..."
+	@cd protocol && golangci-lint run ./...
+	@cd server && golangci-lint run ./...
+	@cd client && golangci-lint run ./...
+	@echo "✓ Code linted"
 
 # Format code
 fmt:

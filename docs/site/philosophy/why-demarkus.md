@@ -68,5 +68,5 @@ Demarkus chooses **clarity and integrity** over flexibility and client‑side in
 
 - [Philosophy & Intent](index.md)
 - [Architecture & Design](../architecture/index.md)
-- [Protocol Specification](../../spec.md)
+- [Protocol Specification](../../SPEC.md)
 - [Docs Home](../index.md)

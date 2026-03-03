@@ -6,7 +6,7 @@ Demarkus reimagines the web around markdown — a format structured and optimize
 
 ## Project Status
 
-🟡 **Phase 2 — Read/Write MVP** — `FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, and `ARCHIVE` are all working. Auth, caching, TUI browser, MCP server, and link-graph crawler are implemented.
+🟡 **Phase 2 — Read/Write MVP** — `FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `APPEND`, and `ARCHIVE` are all working. Auth, caching, TUI browser, MCP server, and link-graph crawler are implemented.
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ Demarkus reimagines the web around markdown — a format structured and optimize
 make all
 
 # Start a server (dev mode — self-signed cert)
-./server/bin/demarkus-server -root ./examples/demo-site
+./server/bin/demarkus-server -root ./docs/site
 
 # Fetch a document
 ./client/bin/demarkus --insecure mark://localhost:6309/index.md
@@ -38,7 +38,7 @@ make all
 - **`server/`** — QUIC server with versioned document store, capability-based auth, conditional responses, path traversal protection, and hot TLS reload.
 - **`client/demarkus`** — CLI for scripting and automation (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `edit`, `graph`). Response caching with etag revalidation.
 - **`client/demarkus-tui`** — Terminal browser with markdown rendering, link navigation, back/forward history, and document graph view.
-- **`client/demarkus-mcp`** — MCP server exposing `mark_fetch`, `mark_list`, `mark_versions`, `mark_graph`, `mark_publish`, and `mark_archive` tools for LLM agents. Compatible with Claude Desktop.
+- **`client/demarkus-mcp`** — MCP server exposing `mark_fetch`, `mark_list`, `mark_versions`, `mark_graph`, `mark_publish`, `mark_append`, and `mark_archive` tools for LLM agents. Compatible with Claude Desktop.
 
 ## Protocol at a Glance
 
@@ -62,8 +62,7 @@ version: 1
 Welcome to Demarkus!
 ```
 
-**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `PUBLISH` · `ARCHIVE`
-**Deferred**: `APPEND`
+**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `PUBLISH` · `APPEND` · `ARCHIVE`
 **Under review**: `SEARCH`
 **Status values**: `ok` · `created` · `not-modified` · `not-found` · `archived` · `unauthorized` · `not-permitted` · `server-error`
 
@@ -77,9 +76,9 @@ Welcome to Demarkus!
 6. **Federation**: Anyone can run a server, content can be mirrored freely
 
 
-## Interesting Use Cases. 
+## Interesting Use Cases
 
-I been using this pattern while developing demarkus using claude and codex, it is very unique way to handle memory between sessions, agents, and is self documenting the history of your project, the `soul` of you project so to speak. Running a local demarkus server for your project is fun and really cool. I also allow the agent to journal and reflect on its own. 
+I've been using this pattern while developing demarkus with Claude and Codex. It's a unique way to handle memory between sessions and agents, and is self-documenting the history of your project — the `soul` of your project, so to speak. Running a local demarkus server for your project is fun and really cool. I also allow the agent to journal and reflect on its own.
 
 ## demarkus-soul (WIP)
 

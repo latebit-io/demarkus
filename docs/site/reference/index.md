@@ -27,7 +27,7 @@ Notes:
 
 ## Protocol
 
-- [Protocol Specification](../../spec.md)
+- [Protocol Specification](../../SPEC.md)
 
 ## Related
 

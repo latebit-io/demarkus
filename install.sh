@@ -167,11 +167,7 @@ download_and_verify() {
 
   local tag="${component}/v${version}"
   local archive_name="demarkus-${component}_${version}_${PLATFORM}_${GOARCH}"
-  local archive_ext="tar.gz"
-  if [ "$PLATFORM" = "windows" ]; then
-    archive_ext="zip"
-  fi
-  local archive_file="${archive_name}.${archive_ext}"
+  local archive_file="${archive_name}.tar.gz"
   local checksums_file="demarkus-${component}_checksums.txt"
 
   log_info "Downloading ${component} v${version} for ${PLATFORM}/${GOARCH}..."
@@ -227,11 +223,7 @@ download_and_verify_asset() {
 
   local tag="${component}/v${version}"
   local archive_name="${asset_prefix}_${version}_${PLATFORM}_${GOARCH}"
-  local archive_ext="tar.gz"
-  if [ "$PLATFORM" = "windows" ]; then
-    archive_ext="zip"
-  fi
-  local archive_file="${archive_name}.${archive_ext}"
+  local archive_file="${archive_name}.tar.gz"
   local checksums_file="demarkus-${component}_checksums.txt"
 
   log_info "Downloading ${asset_prefix} v${version} for ${PLATFORM}/${GOARCH}..."
@@ -888,8 +880,15 @@ do_install() {
   fi
 
   if [ -n "$raw_token" ]; then
+    local token_file="${CONFIG_DIR}/initial-token.txt"
+    echo "$raw_token" > "$token_file"
+    chmod 600 "$token_file"
+    if [ "$PLATFORM" = "linux" ]; then
+      chown root:"$SERVICE_NAME" "$token_file"
+      chmod 640 "$token_file"
+    fi
     echo ""
-    printf "${YELLOW}Save this auth token (shown once):${NC}\n"
+    printf "${YELLOW}Auth token (also saved to ${token_file}):${NC}\n"
     echo ""
     echo "  $raw_token"
     echo ""

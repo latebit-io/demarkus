@@ -39,14 +39,15 @@ func requestMain() {
 	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)")
 	body := flag.String("body", "", "request body (for PUBLISH/APPEND); reads stdin if omitted")
 	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE/APPEND requests (env: DEMARKUS_AUTH)")
-	expectedVersion := flag.Int("expected-version", -1, "expected current version for APPEND (required)")
+	expectedVersion := flag.Int("expected-version", -1, "version check: -1 skip (default), 0 create-only, >0 require match; required (>0) for APPEND")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus [-X VERB] [-body TEXT] [-auth TOKEN] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus edit [-auth TOKEN] [-insecure] mark://host:port/path.md\n")
-		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n\n")
+		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
+		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -94,7 +95,7 @@ func requestMain() {
 	case protocol.VerbVersions:
 		result, err = client.Versions(host, path)
 	case protocol.VerbPublish:
-		result, err = client.Publish(host, path, reqBody, token, -1)
+		result, err = client.Publish(host, path, reqBody, token, *expectedVersion)
 	case protocol.VerbArchive:
 		result, err = client.Archive(host, path, token)
 	case protocol.VerbAppend:

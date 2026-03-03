@@ -160,5 +160,5 @@ Because each request is independent and the protocol is text‑based, the system
 ## Related
 
 - [Philosophy & Intent](../philosophy/index.md)
-- [Protocol Specification](../../spec.md)
+- [Protocol Specification](../../SPEC.md)
 - [Docs Home](../index.md)

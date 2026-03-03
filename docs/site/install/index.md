@@ -90,6 +90,15 @@ demarkus-server --help
 
 If those run successfully, move on to the next step.
 
+## Try It Out
+
+Serve the project docs locally and browse them over the protocol:
+
+```bash
+./server/bin/demarkus-server -root ./docs/site
+./client/bin/demarkus --insecure mark://localhost:6309/index.md
+```
+
 ## Next Steps
 
 - [Run a Server](../server/index.md)

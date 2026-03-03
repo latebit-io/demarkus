@@ -9,7 +9,7 @@ A Demarkus server serves markdown files over QUIC. It is **read-only by default*
 ## Quick Start (Dev)
 
 ```bash
-./server/bin/demarkus-server -root ./examples/demo-site
+./server/bin/demarkus-server -root ./docs/site
 ```
 
 This uses a self-signed development certificate and listens on UDP port `6309`.
@@ -75,4 +75,4 @@ A healthy server returns:
 
 - [Install & Build](../install/index.md)
 - [Install Script](../install/index.md#install-script)
-- [Protocol Spec](../../spec.md)
+- [Protocol Spec](../../SPEC.md)
