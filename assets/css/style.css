@@ -280,7 +280,7 @@ body {
 
 .soul-demo {
     margin: 1.4rem auto;
-    max-width: 480px;
+    max-width: 580px;
     border: 3px solid var(--line);
     background: #090909;
     box-shadow: 7px 7px 0 var(--shadow);
