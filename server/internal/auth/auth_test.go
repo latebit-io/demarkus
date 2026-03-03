@@ -208,14 +208,17 @@ func TestAuthorize(t *testing.T) {
 	// Token store keys are hashes of raw secrets.
 	ts := NewTokenStore(map[string]Token{
 		HashToken(writerSecret): {
+			Label:      "writer",
 			Paths:      []string{"/docs/*"},
 			Operations: []string{"publish"},
 		},
 		HashToken(readwriteSecret): {
+			Label:      "readwrite",
 			Paths:      []string{"/*"},
 			Operations: []string{"read", "publish"},
 		},
 		HashToken(readonlySecret): {
+			Label:      "readonly",
 			Paths:      []string{"/*"},
 			Operations: []string{"read"},
 		},
@@ -226,24 +229,29 @@ func TestAuthorize(t *testing.T) {
 		token     string
 		path      string
 		operation string
+		wantLabel string
 		wantErr   error
 	}{
-		{"valid publish", writerSecret, "/docs/test.md", "publish", nil},
-		{"valid readpublish", readwriteSecret, "/anything.md", "publish", nil},
-		{"empty token", "", "/docs/test.md", "publish", ErrNoToken},
-		{"unknown token", "unknown-secret", "/docs/test.md", "publish", ErrInvalidToken},
-		{"wrong operation", readonlySecret, "/docs/test.md", "publish", ErrNotPermitted},
-		{"wrong path", writerSecret, "/private/secret.md", "publish", ErrNotPermitted},
-		{"glob match", writerSecret, "/docs/nested.md", "publish", nil},
-		{"glob no match nested", writerSecret, "/docs/sub/file.md", "publish", ErrNotPermitted},
+		{"valid publish", writerSecret, "/docs/test.md", "publish", "writer", nil},
+		{"valid readpublish", readwriteSecret, "/anything.md", "publish", "readwrite", nil},
+		{"empty token", "", "/docs/test.md", "publish", "", ErrNoToken},
+		{"unknown token", "unknown-secret", "/docs/test.md", "publish", "", ErrInvalidToken},
+		{"wrong operation", readonlySecret, "/docs/test.md", "publish", "", ErrNotPermitted},
+		{"wrong path", writerSecret, "/private/secret.md", "publish", "", ErrNotPermitted},
+		{"glob match", writerSecret, "/docs/nested.md", "publish", "writer", nil},
+		{"glob no match nested", writerSecret, "/docs/sub/file.md", "publish", "", ErrNotPermitted},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ts.Authorize(tt.token, tt.path, tt.operation)
+			label, err := ts.Authorize(tt.token, tt.path, tt.operation)
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("Authorize(%q, %q, %q): got %v, want %v",
 					tt.token, tt.path, tt.operation, err, tt.wantErr)
+			}
+			if label != tt.wantLabel {
+				t.Errorf("Authorize(%q, %q, %q): label got %q, want %q",
+					tt.token, tt.path, tt.operation, label, tt.wantLabel)
 			}
 		})
 	}
@@ -262,7 +270,7 @@ func TestAuthorizeExpiration(t *testing.T) {
 		})
 		ts.now = func() time.Time { return time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC) }
 
-		err := ts.Authorize(secret, "/doc.md", "publish")
+		_, err := ts.Authorize(secret, "/doc.md", "publish")
 		if !errors.Is(err, ErrTokenExpired) {
 			t.Errorf("got %v, want ErrTokenExpired", err)
 		}
@@ -278,7 +286,7 @@ func TestAuthorizeExpiration(t *testing.T) {
 		})
 		ts.now = func() time.Time { return time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC) }
 
-		err := ts.Authorize(secret, "/doc.md", "publish")
+		_, err := ts.Authorize(secret, "/doc.md", "publish")
 		if err != nil {
 			t.Errorf("got %v, want nil", err)
 		}
@@ -294,7 +302,7 @@ func TestAuthorizeExpiration(t *testing.T) {
 		})
 		ts.now = func() time.Time { return time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC) }
 
-		err := ts.Authorize(secret, "/doc.md", "publish")
+		_, err := ts.Authorize(secret, "/doc.md", "publish")
 		if err != nil {
 			t.Errorf("got %v, want nil", err)
 		}
@@ -324,7 +332,7 @@ func TestAuthorizeRecursiveGlob(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ts.Authorize(secret, tt.path, "publish")
+			_, err := ts.Authorize(secret, tt.path, "publish")
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("Authorize(%q, %q): got %v, want %v",
 					tt.path, "publish", err, tt.wantErr)

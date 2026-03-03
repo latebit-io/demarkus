@@ -117,7 +117,7 @@ func HashToken(raw string) string {
 // Authorize checks whether the given raw token is allowed to perform the given
 // operation on the given path. The raw token is hashed before lookup.
 //
-// Returns nil if authorized, or one of the sentinel errors:
+// Returns the token label and nil if authorized, or "" and one of the sentinel errors:
 //   - ErrNoToken: token is empty
 //   - ErrInvalidToken: token not recognized
 //   - ErrTokenExpired: token has passed its expiration time
@@ -126,25 +126,25 @@ func HashToken(raw string) string {
 // TODO: timestamp validation for replay protection (±5 min window, nonce per token).
 // TODO: per-document ACLs (.mark-acl files).
 // TODO: rate limiting for public-facing servers.
-func (ts *TokenStore) Authorize(token, reqPath, operation string) error {
+func (ts *TokenStore) Authorize(token, reqPath, operation string) (string, error) {
 	if token == "" {
-		return ErrNoToken
+		return "", ErrNoToken
 	}
 	hashed := HashToken(token)
 	t, ok := ts.tokens[hashed]
 	if !ok {
-		return ErrInvalidToken
+		return "", ErrInvalidToken
 	}
 	if !t.expiresAt.IsZero() && ts.now().After(t.expiresAt) {
-		return ErrTokenExpired
+		return "", ErrTokenExpired
 	}
 	if !hasOperation(t.Operations, operation) {
-		return ErrNotPermitted
+		return "", ErrNotPermitted
 	}
 	if !matchesAnyPath(t.Paths, reqPath) {
-		return ErrNotPermitted
+		return "", ErrNotPermitted
 	}
-	return nil
+	return t.Label, nil
 }
 
 func hasOperation(ops []string, target string) bool {
