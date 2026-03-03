@@ -82,6 +82,8 @@ A living knowledge base served by demarkus itself — the agent's persistent mem
 - **During work**: Update pages when learning something new
 - **End of session**: Add a journal entry to `/journal.md` if something significant happened
 - **Always**: Use `expected_version` from a prior fetch when publishing
+- **Always**: Use `expected_version` from a prior fetch when publishing or appending
+- **Appending**: Use `mark_append` for adding content to existing pages (journal entries, thoughts, incremental notes). It sends only the new content — no need to fetch-concat-republish the entire document. `expected_version` is mandatory.
 
 ### Content Structure
 
