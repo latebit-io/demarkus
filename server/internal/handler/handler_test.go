@@ -514,6 +514,21 @@ func TestFetchDirectory(t *testing.T) {
 		}
 	})
 
+	t.Run("directory without trailing slash generates listing", func(t *testing.T) {
+		stream := newMockStream("FETCH /api\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if !strings.Contains(resp.Body, "# Index of /api") {
+			t.Errorf("body should contain index header, got %q", resp.Body)
+		}
+	})
+
 	t.Run("nonexistent directory returns not-found", func(t *testing.T) {
 		stream := newMockStream("FETCH /nope/\n")
 		h.HandleStream(stream)

@@ -244,7 +244,7 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 		return
 	}
 	if err == nil {
-		h.serveDocument(w, req, doc, indexPath)
+		h.serveDocument(w, req, doc, req.Path)
 		return
 	}
 
