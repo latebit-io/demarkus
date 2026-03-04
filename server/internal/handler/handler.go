@@ -119,7 +119,13 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Check if the path is a directory — serve index.md or auto-generate listing.
-			if isDir, dirErr := h.Store.IsDir(req.Path); dirErr == nil && isDir {
+			isDir, dirErr := h.Store.IsDir(req.Path)
+			if dirErr != nil && !os.IsNotExist(dirErr) {
+				h.logger().Error("isdir check failed", "path", sanitize(req.Path), "error", dirErr)
+				h.writeError(w, protocol.StatusServerError, "internal error")
+				return
+			}
+			if isDir {
 				h.handleFetchDirectory(w, req)
 				return
 			}
