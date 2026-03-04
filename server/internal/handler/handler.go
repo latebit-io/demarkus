@@ -132,23 +132,28 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		return
 	}
 
+	h.serveDocument(w, req, doc, req.Path)
+}
+
+// serveDocument handles the common document-serving logic: archived check,
+// conditional request handling (etag / if-modified-since), frontmatter
+// stripping, and response assembly.
+func (h *Handler) serveDocument(w io.Writer, req protocol.Request, doc *store.Document, logPath string) {
 	if doc.Archived {
-		h.logger().Info("archived", "path", sanitize(req.Path))
-		h.writeError(w, protocol.StatusArchived, req.Path+" is archived")
+		h.logger().Info("archived", "path", sanitize(logPath))
+		h.writeError(w, protocol.StatusArchived, logPath+" is archived")
 		return
 	}
 
 	etag := computeEtag(doc.Content)
-	modified := doc.Modified
 
-	// Check conditional: etag first, then modified-since.
 	if ifNoneMatch, ok := req.Metadata["if-none-match"]; ok && ifNoneMatch == etag {
 		h.writeNotModified(w)
 		return
 	}
 	if ifModSince, ok := req.Metadata["if-modified-since"]; ok {
 		if t, err := time.Parse(time.RFC3339, ifModSince); err == nil {
-			if !modified.After(t) {
+			if !doc.Modified.After(t) {
 				h.writeNotModified(w)
 				return
 			}
@@ -156,22 +161,15 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 	}
 
 	body, existingMeta := stripFrontmatter(string(doc.Content))
-
 	meta := map[string]string{
-		"modified": modified.Format(time.RFC3339),
+		"modified": doc.Modified.Format(time.RFC3339),
 		"etag":     etag,
 		"version":  strconv.Itoa(doc.Version),
 	}
 	if v, ok := existingMeta["version"]; ok {
 		meta["version"] = v
 	}
-
-	resp := protocol.Response{
-		Status:   protocol.StatusOK,
-		Metadata: meta,
-		Body:     body,
-	}
-	h.writeResponse(w, resp)
+	h.writeResponse(w, protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: body})
 }
 
 func (h *Handler) writeNotModified(w io.Writer) {
@@ -219,11 +217,11 @@ func buildDirectoryIndex(reqPath string, entries []os.DirEntry) (body string, en
 	sb.WriteString("\n# Index of " + escapeMD(reqPath) + "\n\n")
 
 	for _, entry := range entries {
-		entryCount++
-		if entryCount > MaxDirectoryEntries {
+		if entryCount >= MaxDirectoryEntries {
 			sb.WriteString("\n*...truncated, too many entries*\n")
 			break
 		}
+		entryCount++
 		display := escapeMD(entry.Name())
 		link := escapeURL(entry.Name())
 		if entry.IsDir() {
@@ -246,36 +244,7 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 		return
 	}
 	if err == nil {
-		if doc.Archived {
-			h.logger().Info("archived", "path", sanitize(indexPath))
-			h.writeError(w, protocol.StatusArchived, indexPath+" is archived")
-			return
-		}
-
-		etag := computeEtag(doc.Content)
-		if ifNoneMatch, ok := req.Metadata["if-none-match"]; ok && ifNoneMatch == etag {
-			h.writeNotModified(w)
-			return
-		}
-		if ifModSince, ok := req.Metadata["if-modified-since"]; ok {
-			if t, err := time.Parse(time.RFC3339, ifModSince); err == nil {
-				if !doc.Modified.After(t) {
-					h.writeNotModified(w)
-					return
-				}
-			}
-		}
-
-		body, existingMeta := stripFrontmatter(string(doc.Content))
-		meta := map[string]string{
-			"modified": doc.Modified.Format(time.RFC3339),
-			"etag":     etag,
-			"version":  strconv.Itoa(doc.Version),
-		}
-		if v, ok := existingMeta["version"]; ok {
-			meta["version"] = v
-		}
-		h.writeResponse(w, protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: body})
+		h.serveDocument(w, req, doc, indexPath)
 		return
 	}
 
