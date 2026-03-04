@@ -239,7 +239,13 @@ func buildDirectoryIndex(reqPath string, entries []os.DirEntry) (body string, en
 func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 	// Try index.md first — if the directory has an explicit index, serve it as a normal document.
 	indexPath := path.Join(req.Path, "index.md")
-	if doc, err := h.Store.Get(indexPath, 0); err == nil {
+	doc, err := h.Store.Get(indexPath, 0)
+	if err != nil && !os.IsNotExist(err) {
+		h.logger().Error("fetch index failed", "path", sanitize(indexPath), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+	if err == nil {
 		if doc.Archived {
 			h.logger().Info("archived", "path", sanitize(indexPath))
 			h.writeError(w, protocol.StatusArchived, indexPath+" is archived")

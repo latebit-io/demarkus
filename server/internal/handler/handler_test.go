@@ -467,6 +467,25 @@ func TestFetchDirectory(t *testing.T) {
 		}
 	})
 
+	t.Run("directory with archived index.md returns archived", func(t *testing.T) {
+		if err := s.Archive("/docs/index.md", true); err != nil {
+			t.Fatalf("archive index.md: %v", err)
+		}
+		stream := newMockStream("FETCH /docs/\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusArchived {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusArchived)
+		}
+		// Unarchive to avoid affecting subsequent tests
+		if err := s.Archive("/docs/index.md", false); err != nil {
+			t.Fatalf("unarchive index.md: %v", err)
+		}
+	})
+
 	t.Run("directory without index.md generates listing", func(t *testing.T) {
 		stream := newMockStream("FETCH /api/\n")
 		h.HandleStream(stream)
