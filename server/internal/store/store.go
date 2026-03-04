@@ -157,6 +157,19 @@ func (s *Store) ListDir(reqPath string) ([]os.DirEntry, error) {
 	return filtered, nil
 }
 
+// IsDir reports whether the given path is a directory within the content root.
+func (s *Store) IsDir(reqPath string) (bool, error) {
+	dirPath, err := s.resolve(reqPath)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		return false, err
+	}
+	return info.IsDir(), nil
+}
+
 // Versions returns the version history for a document, newest first.
 // Returns os.ErrNotExist if the document has no version history.
 func (s *Store) Versions(reqPath string) ([]VersionInfo, error) {
