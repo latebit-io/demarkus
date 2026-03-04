@@ -100,6 +100,43 @@ func TestGet_Directory(t *testing.T) {
 	}
 }
 
+func TestIsDir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "file.md"), []byte("# File"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+
+	tests := []struct {
+		name    string
+		path    string
+		want    bool
+		wantErr bool
+	}{
+		{"directory", "/subdir", true, false},
+		{"file", "/file.md", false, false},
+		{"root", "/", true, false},
+		{"nonexistent", "/nope", false, true},
+		{"path traversal", "/../etc", false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := s.IsDir(tt.path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("IsDir(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("IsDir(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestListDir(t *testing.T) {
 	root := t.TempDir()
 	for _, f := range []struct{ name, content string }{

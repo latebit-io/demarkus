@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -117,6 +118,11 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 	doc, err := h.Store.Get(req.Path, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Check if the path is a directory — serve index.md or auto-generate listing.
+			if isDir, dirErr := h.Store.IsDir(req.Path); dirErr == nil && isDir {
+				h.handleFetchDirectory(w, req)
+				return
+			}
 			h.logger().Info("not found", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
@@ -194,31 +200,99 @@ func (h *Handler) handleList(w io.Writer, reqPath string) {
 		return
 	}
 
-	var body strings.Builder
-	body.WriteString("\n# Index of " + escapeMD(reqPath) + "\n\n")
-
-	entryCount := 0
-	for _, entry := range entries {
-		entryCount++
-		if entryCount > MaxDirectoryEntries {
-			body.WriteString("\n*...truncated, too many entries*\n")
-			break
-		}
-		display := escapeMD(entry.Name())
-		link := escapeURL(entry.Name())
-		if entry.IsDir() {
-			body.WriteString("- [" + display + "/](" + link + "/)\n")
-		} else {
-			body.WriteString("- [" + display + "](" + link + ")\n")
-		}
-	}
+	body, entryCount := buildDirectoryIndex(reqPath, entries)
 
 	resp := protocol.Response{
 		Status: protocol.StatusOK,
 		Metadata: map[string]string{
 			"entries": fmt.Sprintf("%d", entryCount),
 		},
-		Body: body.String(),
+		Body: body,
+	}
+	h.writeResponse(w, resp)
+}
+
+// buildDirectoryIndex renders a markdown listing from directory entries.
+// Returns the markdown body and the number of entries included.
+func buildDirectoryIndex(reqPath string, entries []os.DirEntry) (body string, entryCount int) {
+	var sb strings.Builder
+	sb.WriteString("\n# Index of " + escapeMD(reqPath) + "\n\n")
+
+	for _, entry := range entries {
+		entryCount++
+		if entryCount > MaxDirectoryEntries {
+			sb.WriteString("\n*...truncated, too many entries*\n")
+			break
+		}
+		display := escapeMD(entry.Name())
+		link := escapeURL(entry.Name())
+		if entry.IsDir() {
+			sb.WriteString("- [" + display + "/](" + link + "/)\n")
+		} else {
+			sb.WriteString("- [" + display + "](" + link + ")\n")
+		}
+	}
+
+	return sb.String(), entryCount
+}
+
+func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
+	// Try index.md first — if the directory has an explicit index, serve it as a normal document.
+	indexPath := path.Join(req.Path, "index.md")
+	if doc, err := h.Store.Get(indexPath, 0); err == nil {
+		if doc.Archived {
+			h.logger().Info("archived", "path", sanitize(indexPath))
+			h.writeError(w, protocol.StatusArchived, indexPath+" is archived")
+			return
+		}
+
+		etag := computeEtag(doc.Content)
+		if ifNoneMatch, ok := req.Metadata["if-none-match"]; ok && ifNoneMatch == etag {
+			h.writeNotModified(w)
+			return
+		}
+		if ifModSince, ok := req.Metadata["if-modified-since"]; ok {
+			if t, err := time.Parse(time.RFC3339, ifModSince); err == nil {
+				if !doc.Modified.After(t) {
+					h.writeNotModified(w)
+					return
+				}
+			}
+		}
+
+		body, existingMeta := stripFrontmatter(string(doc.Content))
+		meta := map[string]string{
+			"modified": doc.Modified.Format(time.RFC3339),
+			"etag":     etag,
+			"version":  strconv.Itoa(doc.Version),
+		}
+		if v, ok := existingMeta["version"]; ok {
+			meta["version"] = v
+		}
+		h.writeResponse(w, protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: body})
+		return
+	}
+
+	// No index.md — generate a directory listing.
+	entries, err := h.Store.ListDir(req.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			h.logger().Info("not found", "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
+		h.logger().Error("fetch directory failed", "path", sanitize(req.Path), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	body, entryCount := buildDirectoryIndex(req.Path, entries)
+	resp := protocol.Response{
+		Status: protocol.StatusOK,
+		Metadata: map[string]string{
+			"entries": fmt.Sprintf("%d", entryCount),
+		},
+		Body: body,
 	}
 	h.writeResponse(w, resp)
 }
@@ -628,8 +702,8 @@ func (h *Handler) writeResponse(w io.Writer, resp protocol.Response) {
 }
 
 // containsDotDot reports whether the path contains a ".." segment.
-func containsDotDot(path string) bool {
-	for seg := range strings.SplitSeq(path, "/") {
+func containsDotDot(p string) bool {
+	for seg := range strings.SplitSeq(p, "/") {
 		if seg == ".." {
 			return true
 		}

@@ -428,6 +428,106 @@ func TestHandleList(t *testing.T) {
 	})
 }
 
+func TestFetchDirectory(t *testing.T) {
+	dir := t.TempDir()
+	s := store.New(dir)
+
+	// Create files: docs/ has an index.md, api/ does not
+	for _, f := range []struct{ path, content string }{
+		{"/docs/index.md", "# Docs Home\n"},
+		{"/docs/guide.md", "# Guide\n"},
+		{"/api/users.md", "# Users API\n"},
+		{"/api/auth.md", "# Auth API\n"},
+	} {
+		if _, err := s.Write(f.path, []byte(f.content)); err != nil {
+			t.Fatalf("write %s: %v", f.path, err)
+		}
+	}
+	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+
+	t.Run("directory with index.md serves document", func(t *testing.T) {
+		stream := newMockStream("FETCH /docs/\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if !strings.Contains(resp.Body, "# Docs Home") {
+			t.Errorf("body should contain index.md content, got %q", resp.Body)
+		}
+		if resp.Metadata["version"] == "" {
+			t.Error("expected version metadata for index.md")
+		}
+		if resp.Metadata["etag"] == "" {
+			t.Error("expected etag metadata for index.md")
+		}
+	})
+
+	t.Run("directory without index.md generates listing", func(t *testing.T) {
+		stream := newMockStream("FETCH /api/\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if !strings.Contains(resp.Body, "# Index of /api/") {
+			t.Errorf("body should contain index header, got %q", resp.Body)
+		}
+		if !strings.Contains(resp.Body, "[users.md]") {
+			t.Error("body should list users.md")
+		}
+		if !strings.Contains(resp.Body, "[auth.md]") {
+			t.Error("body should list auth.md")
+		}
+		if resp.Metadata["entries"] == "" {
+			t.Error("expected entries metadata for generated listing")
+		}
+		if resp.Metadata["version"] != "" {
+			t.Error("generated listing should not have version metadata")
+		}
+	})
+
+	t.Run("nonexistent directory returns not-found", func(t *testing.T) {
+		stream := newMockStream("FETCH /nope/\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
+		}
+	})
+
+	t.Run("root directory generates listing", func(t *testing.T) {
+		stream := newMockStream("FETCH /\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if !strings.Contains(resp.Body, "[docs/]") {
+			t.Error("body should list docs/ directory")
+		}
+		if !strings.Contains(resp.Body, "[api/]") {
+			t.Error("body should list api/ directory")
+		}
+	})
+}
+
 func TestMultipleLeadingSlashes(t *testing.T) {
 	dir := t.TempDir()
 	s := store.New(dir)
