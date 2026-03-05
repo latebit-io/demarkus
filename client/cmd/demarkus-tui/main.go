@@ -186,7 +186,11 @@ func initialModel(initialURL string, client *fetch.Client) model {
 	ti.SetValue(initialURL)
 	ti.Focus()
 
-	bs, _ := bookmarks.Load(bookmarks.DefaultPath())
+	bs, err := bookmarks.Load(bookmarks.DefaultPath())
+	var bmMsg string
+	if err != nil {
+		bmMsg = "Failed to load bookmarks: " + err.Error()
+	}
 
 	return model{
 		addressBar:    ti,
@@ -196,6 +200,7 @@ func initialModel(initialURL string, client *fetch.Client) model {
 		histIdx:       -1,
 		linkIdx:       -1,
 		bookmarkStore: bs,
+		bookmarkMsg:   bmMsg,
 	}
 }
 
@@ -549,9 +554,14 @@ func (m model) handleBookmarkToggle() (tea.Model, tea.Cmd) {
 			m.bookmarkMsg = "Bookmark removed"
 		}
 	} else {
-		title := links.ExtractTitle(m.rawBody)
-		if title == "" {
+		var title string
+		if m.status == "bookmarks" {
 			title = url
+		} else {
+			title = links.ExtractTitle(m.rawBody)
+			if title == "" {
+				title = url
+			}
 		}
 		if err := m.bookmarkStore.Add(url, title); err != nil {
 			m.bookmarkMsg = "Failed to bookmark: " + err.Error()
