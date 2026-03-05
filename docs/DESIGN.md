@@ -1077,6 +1077,16 @@ mark://tools.example.com/weather/SKILL.md
 → Direct execution without parsing
 ```
 
+**Demarkus Hubs** (curated link directories):
+```
+mark://go-hub.example.com/index.md
+→ Curated links to Go libraries, tutorials, and specs across many servers
+→ No original content — just organized mark:// links
+→ Anyone can run a hub, no central registry
+→ Versioned history of how the collection evolved
+→ Agents use hubs as entry points to discover the network
+```
+
 ### Agent-First Features (Future)
 
 These features would make Demarkus a first-class protocol for agent ecosystems:
@@ -1227,7 +1237,66 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 - Offline mode
 - Bookmarks/favorites
 - Tab support
-- Search interface
+
+### Phase 4: The Information Graph
+
+Discovery through linking, not searching. Instead of indexing content and querying it, information becomes findable because it's connected. Servers link to each other through documents. Clients and agents traverse the graph to discover content organically — the way the web was supposed to work, but with the graph as a first-class citizen.
+
+**The idea**: Every markdown document is a node. Every `mark://` link is a directed edge. The graph already exists implicitly in the content — Phase 4 makes it explicit, persistent, and navigable across server boundaries.
+
+**Cross-server graph crawling**:
+- The graph crawler already follows `mark://` links across servers
+- Expand this into a persistent, incrementally-built graph that grows as you browse
+- Client remembers the graph across sessions — your personal map of the mark:// universe
+- Agents can crawl the graph programmatically to discover and index content
+
+**The Demarkus Hub pattern**:
+
+A demarkus hub is a server whose sole purpose is linking to content on other demarkus servers. No original content — just curated collections of `mark://` links organized by topic. Think of it as a librarian, not a library.
+
+Anyone can run a hub. A hub for Go documentation links to `mark://go-docs.example.com/...`. A hub for security research links to papers and advisories across dozens of servers. A community hub links to everything its members find valuable. Hubs can link to other hubs, creating a navigable hierarchy of curated knowledge.
+
+Because hubs are just demarkus servers serving markdown, they get everything for free: versioned history of how the collection evolved, capability-based auth for who can curate, immutable audit trail of every link added or removed. The agent manifest describes what the hub covers and how to navigate it.
+
+Hubs are the entry points into the information graph:
+- A hub's `index.md` is a curated map of a topic or community
+- Agent manifests on hubs reference related hubs and servers → seeds for graph expansion
+- Directory listings are themselves navigable graph nodes
+- Hubs emerge naturally — no central registry, no approval process, just someone running a server and curating links
+
+**Backlinks**:
+- Knowing who links *to* you is as valuable as knowing what you link *to*
+- Client-side backlink index: built from crawled graph data, no server changes needed
+- "What links here?" becomes a navigation primitive alongside "What does this link to?"
+- Enables discovery in reverse — find related content by following inbound connections
+
+**Graph-aware navigation**:
+- TUI shows not just the tree from one document, but the broader topology you've explored
+- "Related documents" derived from graph proximity, not keyword matching
+- Shortest-path navigation between known documents
+- Visual indication of graph density — heavily linked documents are likely important
+
+**Why not search?**:
+- Search requires a centralized index or a server-side feature — both add complexity and control points
+- Graph traversal is decentralized by nature — every client builds its own view
+- Linked information has context (the link text, the surrounding content, the linking document's purpose)
+- Search gives you matches; the graph gives you understanding of how information relates
+- The protocol already has all the primitives: FETCH reads content, LIST enumerates, links connect — no new verbs needed
+
+**Graph as content — export, publish, share**:
+- The crawled graph is itself a markdown document — nodes as list items, edges as `mark://` links
+- Export your graph and publish it to a demarkus server: `mark://my-server/graph/index.md`
+- Others fetch your graph document and import it — instant topology without recrawling
+- Because it's versioned, you get a history of how the network evolved over time
+- Agents publish and merge graph fragments from multiple sources to build richer maps
+- The same link extraction the crawler already uses can parse a graph document to reconstruct the topology
+- No special format needed — it's just markdown with links, readable by humans and machines alike
+
+**Agent discovery**:
+- Agents crawl the graph to build knowledge maps of the mark:// network
+- Agent manifest includes links to related servers → seeds for graph expansion
+- Multi-agent collaboration: agents share and merge published graph documents to accelerate discovery
+- An agent's graph becomes its understanding of what exists and how it's connected
 
 ## Security Considerations
 
@@ -1313,10 +1382,7 @@ demarkus-token generate -paths "/*" -ops write -tokens tokens.toml
    - Web-based client (ironic)?
    - Terminal emulator?
 
-4. **Discoverability**: How do users find mark:// sites?
-   - Directory/index sites?
-   - Search engines?
-   - Word of mouth?
+4. **Discoverability**: ~~How do users find mark:// sites?~~ → Answered by Phase 4: The Information Graph. Discovery through linked documents, hub pages, agent manifests, and cross-server graph traversal. No centralized search needed.
 
 5. **Backwards compatibility**: Should there be a mark-to-HTTP gateway?
    - For accessibility?

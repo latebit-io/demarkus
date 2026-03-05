@@ -77,7 +77,15 @@ Welcome to Demarkus!
 
 ## Interesting Use Cases
 
+### demarkus-soul (Agent Memory)
+
 I've been using this pattern while developing demarkus with Claude and Codex. It's a unique way to handle memory between sessions and agents, and is self-documenting the history of your project — the `soul` of your project, so to speak. Running a local demarkus server for your project is fun and really cool. I also allow the agent to journal and reflect on its own.
+
+### Demarkus Hubs (Curated Link Directories)
+
+A demarkus hub is a server whose sole purpose is linking to content on other demarkus servers. No original content — just curated collections of `mark://` links organized by topic. Think of it as a librarian, not a library.
+
+Anyone can run a hub. A hub for Go documentation links to `mark://go-docs.example.com/...`. A community hub links to everything its members find valuable. Hubs can link to other hubs, creating a navigable hierarchy of curated knowledge — all versioned, all verifiable, no central registry needed.
 
 ## demarkus-soul (WIP)
 
