@@ -108,7 +108,7 @@ func (s *Store) Add(url, title string) error {
 
 // Remove deletes the bookmark with the given URL and writes to disk.
 func (s *Store) Remove(url string) error {
-	filtered := s.bookmarks[:0]
+	filtered := make([]Bookmark, 0, len(s.bookmarks))
 	for _, b := range s.bookmarks {
 		if b.URL != url {
 			filtered = append(filtered, b)
