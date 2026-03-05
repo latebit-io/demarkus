@@ -21,7 +21,7 @@ import (
 )
 
 // linkRe matches markdown list items: - [title](url) with optional — date suffix.
-var linkRe = regexp.MustCompile(`^- \[(.+?)\]\((.+?)\)(?:\s*—\s*(\S+))?`)
+var linkRe = regexp.MustCompile(`^- \[((?:[^\]\\]|\\.)+)\]\((.+?)\)(?:\s*—\s*(\S+))?`)
 
 // Bookmark represents a single bookmarked document.
 type Bookmark struct {
@@ -70,7 +70,7 @@ func (s *Store) parse(content string) {
 			continue
 		}
 		s.bookmarks = append(s.bookmarks, Bookmark{
-			Title: m[1],
+			Title: unescapeTitle(m[1]),
 			URL:   m[2],
 			Date:  m[3],
 		})
@@ -123,7 +123,7 @@ func (s *Store) Render() string {
 	var sb strings.Builder
 	sb.WriteString("# Bookmarks\n\n")
 	for _, b := range s.bookmarks {
-		sb.WriteString(fmt.Sprintf("- [%s](%s)", b.Title, b.URL))
+		sb.WriteString(fmt.Sprintf("- [%s](%s)", escapeTitle(b.Title), b.URL))
 		if b.Date != "" {
 			sb.WriteString(fmt.Sprintf(" — %s", b.Date))
 		}
@@ -133,6 +133,16 @@ func (s *Store) Render() string {
 		sb.WriteString("No bookmarks yet. Press `b` on any page to bookmark it.\n")
 	}
 	return sb.String()
+}
+
+// escapeTitle replaces ] with \] so titles don't break markdown link syntax.
+func escapeTitle(t string) string {
+	return strings.ReplaceAll(t, "]", `\]`)
+}
+
+// unescapeTitle reverses escapeTitle.
+func unescapeTitle(t string) string {
+	return strings.ReplaceAll(t, `\]`, "]")
 }
 
 func (s *Store) save() error {

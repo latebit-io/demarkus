@@ -164,3 +164,27 @@ func TestSaveCreatesDirectory(t *testing.T) {
 		t.Fatalf("expected file permissions %v, got %v", want, got)
 	}
 }
+
+func TestBracketInTitle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://localhost:6309/test.md", "Hello [World]"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reload and verify the title survives round-trip
+	s2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s2.List()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 bookmark, got %d", len(got))
+	}
+	if got[0].Title != "Hello [World]" {
+		t.Fatalf("expected title %q, got %q", "Hello [World]", got[0].Title)
+	}
+}

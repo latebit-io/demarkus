@@ -514,6 +514,10 @@ func bookmarkMain(args []string) {
 		if err != nil {
 			log.Fatalf("load bookmarks: %v", err)
 		}
+		if len(bs.List()) == 0 {
+			fmt.Fprintln(os.Stderr, "No bookmarks.")
+			return
+		}
 		fmt.Print(bs.Render())
 
 	default:

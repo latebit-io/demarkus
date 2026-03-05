@@ -209,6 +209,11 @@ func (m model) Init() tea.Cmd {
 	if m.addressBar.Value() != "" {
 		cmds = append(cmds, m.doFetch(m.addressBar.Value()))
 	}
+	if m.bookmarkMsg != "" {
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return clearBookmarkMsg{seq: 0}
+		}))
+	}
 	return tea.Batch(cmds...)
 }
 
