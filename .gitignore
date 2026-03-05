@@ -32,6 +32,13 @@ server/bin/
 client/bin/
 tools/bin/
 
+# Stray binaries (built without -o flag)
+client/demarkus
+client/demarkus-tui
+client/demarkus-mcp
+server/demarkus-server
+tools/demarkus-token
+
 # OS files
 .DS_Store
 
