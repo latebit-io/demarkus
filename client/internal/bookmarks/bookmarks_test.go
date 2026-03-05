@@ -145,3 +145,22 @@ func TestRender(t *testing.T) {
 		t.Fatal("expected non-empty render")
 	}
 }
+
+func TestSaveCreatesDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested", "dir")
+	path := filepath.Join(dir, "bookmarks.md")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://localhost:6309/test.md", "Test"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected bookmarks file to exist: %v", err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o644); got != want {
+		t.Fatalf("expected file permissions %v, got %v", want, got)
+	}
+}

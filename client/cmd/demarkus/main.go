@@ -514,18 +514,7 @@ func bookmarkMain(args []string) {
 		if err != nil {
 			log.Fatalf("load bookmarks: %v", err)
 		}
-		list := bs.List()
-		if len(list) == 0 {
-			fmt.Println("No bookmarks.")
-			return
-		}
-		for _, b := range list {
-			line := fmt.Sprintf("- [%s](%s)", b.Title, b.URL)
-			if b.Date != "" {
-				line += fmt.Sprintf(" — %s", b.Date)
-			}
-			fmt.Println(line)
-		}
+		fmt.Print(bs.Render())
 
 	default:
 		log.Fatalf("unknown bookmark command: %s", args[0])

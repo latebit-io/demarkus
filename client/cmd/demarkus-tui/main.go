@@ -540,15 +540,21 @@ func (m model) handleBookmarkToggle() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.bookmarkStore.Has(url) {
-		_ = m.bookmarkStore.Remove(url)
-		m.bookmarkMsg = "Bookmark removed"
+		if err := m.bookmarkStore.Remove(url); err != nil {
+			m.bookmarkMsg = "Failed to remove bookmark: " + err.Error()
+		} else {
+			m.bookmarkMsg = "Bookmark removed"
+		}
 	} else {
 		title := links.ExtractTitle(m.rawBody)
 		if title == "" {
 			title = url
 		}
-		_ = m.bookmarkStore.Add(url, title)
-		m.bookmarkMsg = "Bookmarked!"
+		if err := m.bookmarkStore.Add(url, title); err != nil {
+			m.bookmarkMsg = "Failed to bookmark: " + err.Error()
+		} else {
+			m.bookmarkMsg = "Bookmarked!"
+		}
 	}
 	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
 		return clearBookmarkMsg{}
@@ -655,7 +661,7 @@ func (m model) statusBarView() string {
 	}
 
 	parts := []string{"[" + m.status + "]"}
-	if m.bookmarkStore != nil && m.bookmarkStore.Has(m.addressBar.Value()) {
+	if m.status != "bookmarks" && m.bookmarkStore != nil && m.bookmarkStore.Has(m.addressBar.Value()) {
 		parts = append(parts, "★")
 	}
 	if m.fromCache {
