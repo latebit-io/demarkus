@@ -81,6 +81,7 @@ type model struct {
 	// Bookmarks
 	bookmarkStore *bookmarks.Store
 	bookmarkMsg   string // transient status message
+	bookmarkSeq   uint64 // sequence counter for stale clear prevention
 }
 
 type fetchResult struct {
@@ -91,7 +92,8 @@ type fetchResult struct {
 }
 
 // clearBookmarkMsg signals the transient bookmark message should be cleared.
-type clearBookmarkMsg struct{}
+// seq must match bookmarkSeq to avoid stale clears from rapid toggling.
+type clearBookmarkMsg struct{ seq uint64 }
 
 // viewportReady is sent after the viewport is created to process any
 // pending content in a separate update cycle, avoiding a rendering
@@ -220,7 +222,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewportReady:
 		return m.handleViewportReady()
 	case clearBookmarkMsg:
-		m.bookmarkMsg = ""
+		if msg.seq == m.bookmarkSeq {
+			m.bookmarkMsg = ""
+		}
 		return m, nil
 	}
 	return m, nil
@@ -555,8 +559,10 @@ func (m model) handleBookmarkToggle() (tea.Model, tea.Cmd) {
 			m.bookmarkMsg = "Bookmarked!"
 		}
 	}
+	m.bookmarkSeq++
+	seq := m.bookmarkSeq
 	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-		return clearBookmarkMsg{}
+		return clearBookmarkMsg{seq: seq}
 	})
 }
 
@@ -574,6 +580,7 @@ func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
 	m.linkIdx = -1
 	m.status = "bookmarks"
 	m.metadata = nil
+	m.fromCache = false
 	m.err = nil
 	if m.ready {
 		rendered, err := m.renderMarkdown(body)
@@ -675,7 +682,7 @@ func (m model) statusBarView() string {
 	scroll := fmt.Sprintf("%d%%", int(m.viewport.ScrollPercent()*100))
 	parts = append(parts, scroll)
 
-	if m.status != protocol.StatusOK {
+	if m.status != protocol.StatusOK && m.status != "bookmarks" {
 		style = style.Foreground(lipgloss.Color("11"))
 	}
 	return style.Render(strings.Join(parts, "  "))
