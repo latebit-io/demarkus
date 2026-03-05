@@ -11,9 +11,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/latebit/demarkus/client/internal/bookmarks"
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
 )
@@ -33,6 +35,9 @@ func main() {
 		case "token":
 			tokenMain(os.Args[2:])
 			return
+		case "bookmark":
+			bookmarkMain(os.Args[2:])
+			return
 		}
 	}
 	requestMain()
@@ -51,6 +56,7 @@ func requestMain() {
 		fmt.Fprintf(os.Stderr, "       demarkus edit [-auth TOKEN] [-insecure] mark://host:port/path.md\n")
 		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
+		fmt.Fprintf(os.Stderr, "       demarkus bookmark <add|list|remove>\n")
 		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
 	}
@@ -443,6 +449,83 @@ func tokenMain(args []string) {
 
 	default:
 		log.Fatalf("unknown token command: %s", args[0])
+	}
+}
+
+func bookmarkMain(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintf(os.Stderr, "usage: demarkus bookmark <add|list|remove>\n")
+		fmt.Fprintf(os.Stderr, "  add    [-insecure] mark://host:port/path  Bookmark a document\n")
+		fmt.Fprintf(os.Stderr, "  remove mark://host:port/path              Remove a bookmark\n")
+		fmt.Fprintf(os.Stderr, "  list                                      List all bookmarks\n")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "add":
+		fs := flag.NewFlagSet("bookmark add", flag.ExitOnError)
+		insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+		_ = fs.Parse(args[1:])
+		if fs.NArg() < 1 {
+			log.Fatal("usage: demarkus bookmark add [-insecure] mark://host:port/path")
+		}
+		rawURL := fs.Arg(0)
+		host, path, err := fetch.ParseMarkURL(rawURL)
+		if err != nil {
+			log.Fatalf("invalid URL: %v", err)
+		}
+
+		// Fetch the document to extract the title.
+		title := path
+		client := fetch.NewClient(fetch.Options{Insecure: *insecure})
+		defer client.Close()
+		result, err := client.Fetch(host, path)
+		if err == nil && result.Response.Status == protocol.StatusOK {
+			if t := links.ExtractTitle(result.Response.Body); t != "" {
+				title = t
+			}
+		}
+
+		bs, err := bookmarks.Load(bookmarks.DefaultPath())
+		if err != nil {
+			log.Fatalf("load bookmarks: %v", err)
+		}
+		if bs.Has(rawURL) {
+			fmt.Fprintln(os.Stderr, "Already bookmarked.")
+			return
+		}
+		if err := bs.Add(rawURL, title); err != nil {
+			log.Fatalf("add bookmark: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "Bookmarked: [%s](%s)\n", title, rawURL)
+
+	case "remove":
+		if len(args) < 2 {
+			log.Fatal("usage: demarkus bookmark remove mark://host:port/path")
+		}
+		rawURL := args[1]
+		bs, err := bookmarks.Load(bookmarks.DefaultPath())
+		if err != nil {
+			log.Fatalf("load bookmarks: %v", err)
+		}
+		if err := bs.Remove(rawURL); err != nil {
+			log.Fatalf("remove bookmark: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "Bookmark removed: %s\n", rawURL)
+
+	case "list":
+		bs, err := bookmarks.Load(bookmarks.DefaultPath())
+		if err != nil {
+			log.Fatalf("load bookmarks: %v", err)
+		}
+		if len(bs.List()) == 0 {
+			fmt.Println("No bookmarks.")
+			return
+		}
+		fmt.Print(bs.Render())
+
+	default:
+		log.Fatalf("unknown bookmark command: %s", args[0])
 	}
 }
 

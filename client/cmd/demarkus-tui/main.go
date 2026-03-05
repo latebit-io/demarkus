@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/latebit/demarkus/client/internal/bookmarks"
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
@@ -75,6 +77,11 @@ type model struct {
 	crawlSeq   uint64
 
 	showHelp bool
+
+	// Bookmarks
+	bookmarkStore *bookmarks.Store
+	bookmarkMsg   string // transient status message
+	bookmarkSeq   uint64 // sequence counter for stale clear prevention
 }
 
 type fetchResult struct {
@@ -83,6 +90,10 @@ type fetchResult struct {
 	url    string
 	seq    uint64
 }
+
+// clearBookmarkMsg signals the transient bookmark message should be cleared.
+// seq must match bookmarkSeq to avoid stale clears from rapid toggling.
+type clearBookmarkMsg struct{ seq uint64 }
 
 // viewportReady is sent after the viewport is created to process any
 // pending content in a separate update cycle, avoiding a rendering
@@ -152,6 +163,10 @@ const helpText = `
     d            Document graph view
     f            Focus address bar
 
+  Bookmarks
+    b            Toggle bookmark for current page
+    B            View all bookmarks
+
   Scrolling
     j / Down     Scroll down
     k / Up       Scroll up
@@ -171,13 +186,21 @@ func initialModel(initialURL string, client *fetch.Client) model {
 	ti.SetValue(initialURL)
 	ti.Focus()
 
+	bs, err := bookmarks.Load(bookmarks.DefaultPath())
+	var bmMsg string
+	if err != nil {
+		bmMsg = "Failed to load bookmarks: " + err.Error()
+	}
+
 	return model{
-		addressBar: ti,
-		focus:      focusAddressBar,
-		client:     client,
-		loading:    initialURL != "",
-		histIdx:    -1,
-		linkIdx:    -1,
+		addressBar:    ti,
+		focus:         focusAddressBar,
+		client:        client,
+		loading:       initialURL != "",
+		histIdx:       -1,
+		linkIdx:       -1,
+		bookmarkStore: bs,
+		bookmarkMsg:   bmMsg,
 	}
 }
 
@@ -185,6 +208,11 @@ func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{textinput.Blink}
 	if m.addressBar.Value() != "" {
 		cmds = append(cmds, m.doFetch(m.addressBar.Value()))
+	}
+	if m.bookmarkMsg != "" {
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return clearBookmarkMsg{seq: 0}
+		}))
 	}
 	return tea.Batch(cmds...)
 }
@@ -203,6 +231,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleFetchResult(msg)
 	case viewportReady:
 		return m.handleViewportReady()
+	case clearBookmarkMsg:
+		if msg.seq == m.bookmarkSeq {
+			m.bookmarkMsg = ""
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -400,18 +433,7 @@ func (m model) handleViewportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// When help is showing, any key dismisses it.
 	if m.showHelp {
-		switch msg.String() {
-		case "q":
-			return m, tea.Quit
-		default:
-			m.showHelp = false
-			if m.histIdx >= 0 {
-				m.restoreHistory()
-			} else if m.ready {
-				m.viewport.SetContent("")
-			}
-			return m, nil
-		}
+		return m.handleHelpDismiss(msg)
 	}
 
 	switch msg.String() {
@@ -445,39 +467,15 @@ func (m model) handleViewportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "tab":
-		if len(m.links) > 0 {
-			m.linkIdx = (m.linkIdx + 1) % (len(m.links) + 1)
-			if m.linkIdx == len(m.links) {
-				m.linkIdx = -1 // wrap back to no selection
-			}
-		}
-		return m, nil
+		return m.handleTabNavigation()
 	case "enter":
-		if m.linkIdx >= 0 && m.linkIdx < len(m.links) {
-			target := m.links[m.linkIdx]
-			m.addressBar.SetValue(target)
-			m.loading = true
-			m.fetchSeq++
-			m.links = nil
-			m.linkIdx = -1
-			return m, m.doFetch(target)
-		}
-		return m, nil
+		return m.handleLinkFollow()
+	case "b":
+		return m.handleBookmarkToggle()
+	case "B":
+		return m.handleBookmarkView()
 	case "d":
-		if m.addressBar.Value() != "" {
-			m.viewMode = viewGraph
-			m.crawling = true
-			m.crawlSeq++
-			m.graphIdx = 0
-			m.graphNodes = nil
-			m.graphData = nil
-			if m.ready {
-				m.viewport.SetContent("\n  Crawling document links...")
-				m.viewport.GotoTop()
-			}
-			return m, m.startCrawl(m.addressBar.Value())
-		}
-		return m, nil
+		return m.handleGraphToggle()
 	}
 
 	var cmd tea.Cmd
@@ -494,6 +492,119 @@ func (m model) toggleFocus() model {
 		m.addressBar.Focus()
 	}
 	return m
+}
+
+func (m model) handleHelpDismiss(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "q" {
+		return m, tea.Quit
+	}
+	m.showHelp = false
+	if m.histIdx >= 0 {
+		m.restoreHistory()
+	} else if m.ready {
+		m.viewport.SetContent("")
+	}
+	return m, nil
+}
+
+func (m model) handleTabNavigation() (tea.Model, tea.Cmd) {
+	if len(m.links) > 0 {
+		m.linkIdx = (m.linkIdx + 1) % (len(m.links) + 1)
+		if m.linkIdx == len(m.links) {
+			m.linkIdx = -1
+		}
+	}
+	return m, nil
+}
+
+func (m model) handleLinkFollow() (tea.Model, tea.Cmd) {
+	if m.linkIdx >= 0 && m.linkIdx < len(m.links) {
+		target := m.links[m.linkIdx]
+		m.addressBar.SetValue(target)
+		m.loading = true
+		m.fetchSeq++
+		m.links = nil
+		m.linkIdx = -1
+		return m, m.doFetch(target)
+	}
+	return m, nil
+}
+
+func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
+	if m.addressBar.Value() != "" {
+		m.viewMode = viewGraph
+		m.crawling = true
+		m.crawlSeq++
+		m.graphIdx = 0
+		m.graphNodes = nil
+		m.graphData = nil
+		if m.ready {
+			m.viewport.SetContent("\n  Crawling document links...")
+			m.viewport.GotoTop()
+		}
+		return m, m.startCrawl(m.addressBar.Value())
+	}
+	return m, nil
+}
+
+func (m model) handleBookmarkToggle() (tea.Model, tea.Cmd) {
+	url := m.addressBar.Value()
+	if url == "" || m.bookmarkStore == nil {
+		return m, nil
+	}
+	if m.bookmarkStore.Has(url) {
+		if err := m.bookmarkStore.Remove(url); err != nil {
+			m.bookmarkMsg = "Failed to remove bookmark: " + err.Error()
+		} else {
+			m.bookmarkMsg = "Bookmark removed"
+		}
+	} else {
+		title := links.ExtractTitle(m.rawBody)
+		if title == "" {
+			title = url
+		}
+		if err := m.bookmarkStore.Add(url, title); err != nil {
+			m.bookmarkMsg = "Failed to bookmark: " + err.Error()
+		} else {
+			m.bookmarkMsg = "Bookmarked!"
+		}
+	}
+	m.bookmarkSeq++
+	seq := m.bookmarkSeq
+	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return clearBookmarkMsg{seq: seq}
+	})
+}
+
+func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
+	if m.bookmarkStore == nil {
+		return m, nil
+	}
+	body := m.bookmarkStore.Render()
+	m.rawBody = body
+	raw := links.Extract(body)
+	m.links = make([]string, 0, len(raw))
+	for _, dest := range raw {
+		m.links = append(m.links, links.Resolve("", dest))
+	}
+	m.linkIdx = -1
+	m.status = "bookmarks"
+	m.addressBar.SetValue("")
+	m.loading = false
+	m.fetchSeq++
+	m.metadata = nil
+	m.fromCache = false
+	m.err = nil
+	if m.ready {
+		rendered, err := m.renderMarkdown(body)
+		if err != nil {
+			m.viewport.SetContent(body)
+		} else {
+			m.viewport.SetContent(rendered)
+		}
+		m.viewport.GotoTop()
+	}
+	return m, nil
 }
 
 func (m model) View() string {
@@ -553,6 +664,11 @@ func (m model) statusBarView() string {
 		return style.Foreground(lipgloss.Color("9")).Render("Error: " + m.err.Error())
 	}
 
+	// Show transient bookmark message.
+	if m.bookmarkMsg != "" {
+		return style.Foreground(lipgloss.Color("10")).Render(m.bookmarkMsg)
+	}
+
 	// Show selected link in status bar (link navigation mode).
 	if m.linkIdx >= 0 && m.linkIdx < len(m.links) {
 		hint := fmt.Sprintf("[%d/%d] %s", m.linkIdx+1, len(m.links), m.links[m.linkIdx])
@@ -564,6 +680,9 @@ func (m model) statusBarView() string {
 	}
 
 	parts := []string{"[" + m.status + "]"}
+	if m.status != "bookmarks" && m.bookmarkStore != nil && m.bookmarkStore.Has(m.addressBar.Value()) {
+		parts = append(parts, "★")
+	}
 	if m.fromCache {
 		parts = append(parts, "(cached)")
 	}
@@ -576,7 +695,7 @@ func (m model) statusBarView() string {
 	scroll := fmt.Sprintf("%d%%", int(m.viewport.ScrollPercent()*100))
 	parts = append(parts, scroll)
 
-	if m.status != protocol.StatusOK {
+	if m.status != protocol.StatusOK && m.status != "bookmarks" {
 		style = style.Foreground(lipgloss.Color("11"))
 	}
 	return style.Render(strings.Join(parts, "  "))
