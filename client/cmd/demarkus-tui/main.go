@@ -176,7 +176,7 @@ const helpText = `
   General
     ?            Toggle this help screen
     q / Ctrl+C   Quit
-    Esc          Dismiss help / focus viewport
+    Esc          Back / dismiss overlay
 `
 
 func initialModel(initialURL string, client *fetch.Client) model {
@@ -439,6 +439,16 @@ func (m model) handleViewportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "esc":
+		if m.status == "bookmarks" {
+			if m.histIdx >= 0 {
+				m.restoreHistory()
+			} else if m.ready {
+				m.viewport.SetContent("")
+				m.status = ""
+			}
+			return m, nil
+		}
 	case "?":
 		m.showHelp = true
 		if m.ready {
