@@ -14,6 +14,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
 	"github.com/latebit/demarkus/client/internal/tokens"
+	"github.com/latebit/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -43,6 +44,7 @@ func main() {
 	s.AddTool(markPublishTool(*defaultHost), h.markPublish)
 	s.AddTool(markArchiveTool(*defaultHost), h.markArchive)
 	s.AddTool(markAppendTool(*defaultHost), h.markAppend)
+	s.AddTool(markDiscoverTool(*defaultHost), h.markDiscover)
 
 	if err := server.ServeStdio(s); err != nil {
 		log.Fatal(err)
@@ -214,6 +216,21 @@ func markAppendTool(host string) mcp.Tool {
 		mcp.WithNumber("expected_version",
 			mcp.Required(),
 			mcp.Description("version number from a prior fetch for conflict detection"),
+		),
+	)
+}
+
+func markDiscoverTool(host string) mcp.Tool {
+	return mcp.NewTool("mark_discover",
+		mcp.WithDescription(
+			"Fetch the agent manifest from a Mark Protocol server. "+
+				"Returns the manifest at /.well-known/agent-manifest.md which describes "+
+				"the server's purpose, key paths, auth requirements, and usage guidelines. "+
+				"Returns not-found if no manifest is published. "+
+				urlHint(host),
+		),
+		mcp.WithString("url",
+			mcp.Description("mark:// URL of the server to discover (optional when -host is set)"),
 		),
 	)
 }
@@ -403,6 +420,35 @@ func (h *handler) markAppend(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	}
 
 	return mcp.NewToolResultText(formatResult(result, "version", "modified", "server-version")), nil
+}
+
+func (h *handler) markDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	rawURL, _ := req.RequireString("url")
+
+	var host, path string
+	var err error
+	if rawURL != "" {
+		host, _, err = h.resolveURL(rawURL)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
+		}
+		path = protocol.WellKnownManifestPath
+	} else {
+		if h.defaultHost == "" {
+			return mcp.NewToolResultError("no server specified: provide a URL or set -host"), nil
+		}
+		host, path, err = fetch.ParseMarkURL(h.defaultHost + protocol.WellKnownManifestPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid host: %v", err)), nil
+		}
+	}
+
+	result, err := h.client.Fetch(host, path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("discover failed: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(formatResult(result, "version", "modified")), nil
 }
 
 func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

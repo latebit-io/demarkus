@@ -28,6 +28,7 @@ Notes:
 ## Protocol
 
 - [Protocol Specification](../../SPEC.md)
+- [Agent Manifest](agent-manifest.md) — discovery convention for AI agents
 
 ## Related
 
