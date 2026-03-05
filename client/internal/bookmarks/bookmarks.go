@@ -114,6 +114,9 @@ func (s *Store) Remove(url string) error {
 			filtered = append(filtered, b)
 		}
 	}
+	if len(filtered) == len(s.bookmarks) {
+		return nil
+	}
 	s.bookmarks = filtered
 	return s.save()
 }
