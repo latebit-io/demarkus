@@ -594,6 +594,7 @@ func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
 	}
 	m.linkIdx = -1
 	m.status = "bookmarks"
+	m.addressBar.SetValue("")
 	m.metadata = nil
 	m.fromCache = false
 	m.err = nil

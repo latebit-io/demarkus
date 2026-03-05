@@ -101,6 +101,18 @@ func TestRemove(t *testing.T) {
 	if !s.Has("mark://localhost:6309/b.md") {
 		t.Fatal("expected other bookmark to remain")
 	}
+
+	// Reload from disk to ensure removal is persisted.
+	s2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.Has("mark://localhost:6309/a.md") {
+		t.Fatal("expected bookmark to be removed after reload")
+	}
+	if !s2.Has("mark://localhost:6309/b.md") {
+		t.Fatal("expected other bookmark to remain after reload")
+	}
 }
 
 func TestPersistence(t *testing.T) {
