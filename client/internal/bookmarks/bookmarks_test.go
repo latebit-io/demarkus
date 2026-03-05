@@ -200,3 +200,27 @@ func TestBracketInTitle(t *testing.T) {
 		t.Fatalf("expected title %q, got %q", "Hello [World]", got[0].Title)
 	}
 }
+
+func TestBackslashBracketInTitle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := `Title with \] in it`
+	if err := s.Add("mark://localhost:6309/test.md", title); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s2.List()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 bookmark, got %d", len(got))
+	}
+	if got[0].Title != title {
+		t.Fatalf("expected title %q, got %q", title, got[0].Title)
+	}
+}

@@ -490,6 +490,10 @@ func bookmarkMain(args []string) {
 		if err != nil {
 			log.Fatalf("load bookmarks: %v", err)
 		}
+		if bs.Has(rawURL) {
+			fmt.Fprintln(os.Stderr, "Already bookmarked.")
+			return
+		}
 		if err := bs.Add(rawURL, title); err != nil {
 			log.Fatalf("add bookmark: %v", err)
 		}

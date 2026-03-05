@@ -559,14 +559,9 @@ func (m model) handleBookmarkToggle() (tea.Model, tea.Cmd) {
 			m.bookmarkMsg = "Bookmark removed"
 		}
 	} else {
-		var title string
-		if m.status == "bookmarks" {
+		title := links.ExtractTitle(m.rawBody)
+		if title == "" {
 			title = url
-		} else {
-			title = links.ExtractTitle(m.rawBody)
-			if title == "" {
-				title = url
-			}
 		}
 		if err := m.bookmarkStore.Add(url, title); err != nil {
 			m.bookmarkMsg = "Failed to bookmark: " + err.Error()

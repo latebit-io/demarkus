@@ -135,14 +135,18 @@ func (s *Store) Render() string {
 	return sb.String()
 }
 
-// escapeTitle replaces ] with \] so titles don't break markdown link syntax.
+// escapeTitle escapes backslashes and ] so titles don't break markdown link syntax.
 func escapeTitle(t string) string {
-	return strings.ReplaceAll(t, "]", `\]`)
+	t = strings.ReplaceAll(t, `\`, `\\`)
+	t = strings.ReplaceAll(t, "]", `\]`)
+	return t
 }
 
 // unescapeTitle reverses escapeTitle.
 func unescapeTitle(t string) string {
-	return strings.ReplaceAll(t, `\]`, "]")
+	t = strings.ReplaceAll(t, `\]`, "]")
+	t = strings.ReplaceAll(t, `\\`, `\`)
+	return t
 }
 
 func (s *Store) save() error {
