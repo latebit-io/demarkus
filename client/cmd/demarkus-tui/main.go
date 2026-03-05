@@ -176,7 +176,7 @@ const helpText = `
   General
     ?            Toggle this help screen
     q / Ctrl+C   Quit
-    Esc          Back / dismiss overlay
+    Esc          Exit bookmarks / dismiss help / blur address bar
 `
 
 func initialModel(initialURL string, client *fetch.Client) model {
@@ -443,9 +443,15 @@ func (m model) handleViewportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.status == "bookmarks" {
 			if m.histIdx >= 0 {
 				m.restoreHistory()
-			} else if m.ready {
-				m.viewport.SetContent("")
+			} else {
 				m.status = ""
+				m.links = nil
+				m.rawBody = ""
+				m.linkIdx = -1
+				m.metadata = nil
+				if m.ready {
+					m.viewport.SetContent("")
+				}
 			}
 			return m, nil
 		}
