@@ -230,7 +230,7 @@ func markDiscoverTool(host string) mcp.Tool {
 				urlHint(host),
 		),
 		mcp.WithString("url",
-			mcp.Description("server URL or bare path to override the default manifest path (optional)"),
+			mcp.Description("mark:// URL of the server to discover (optional when -host is set)"),
 		),
 	)
 }

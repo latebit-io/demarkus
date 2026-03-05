@@ -335,6 +335,43 @@ func TestFormatResult(t *testing.T) {
 	}
 }
 
+func TestToolDefinition_MarkDiscover(t *testing.T) {
+	t.Run("url is optional", func(t *testing.T) {
+		tool := markDiscoverTool("mark://example.com:6309")
+		if tool.Name != "mark_discover" {
+			t.Errorf("name = %q, want mark_discover", tool.Name)
+		}
+		if slices.Contains(tool.InputSchema.Required, "url") {
+			t.Error("url should not be required")
+		}
+		if !strings.Contains(tool.Description, "agent manifest") {
+			t.Error("description should mention agent manifest")
+		}
+	})
+}
+
+func TestHandlerMarkDiscover_NoHostNoURL(t *testing.T) {
+	h := &handler{} // no default host
+	ctx := context.Background()
+
+	result, err := h.markDiscover(ctx, newCallToolRequest(map[string]any{}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "no server specified")
+}
+
+func TestHandlerMarkDiscover_InvalidURL(t *testing.T) {
+	h := &handler{}
+	ctx := context.Background()
+
+	result, err := h.markDiscover(ctx, newCallToolRequest(map[string]any{"url": "/bare-path"}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "requires -host flag")
+}
+
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {
 	t.Helper()

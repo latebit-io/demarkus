@@ -84,8 +84,8 @@ demarkus -X PUBLISH mark://host/.well-known/agent-manifest.md < manifest.md
 The auth token must have the `/.well-known/**` path (or the specific `/.well-known/agent-manifest.md` path) in its allowed paths, with the `publish` operation. Add it to your server's token config:
 
 ```toml
-paths = ["/**", "/.well-known/**"]
-operations = ["publish", "archive", "append"]
+paths = ["/.well-known/agent-manifest.md"]
+operations = ["publish"]
 ```
 
 After updating the token config, restart the server for changes to take effect:
