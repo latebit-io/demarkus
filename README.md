@@ -63,7 +63,6 @@ Welcome to Demarkus!
 ```
 
 **Verbs**: `FETCH` · `LIST` · `VERSIONS` · `PUBLISH` · `APPEND` · `ARCHIVE`
-**Under review**: `SEARCH`
 **Status values**: `ok` · `created` · `not-modified` · `not-found` · `archived` · `unauthorized` · `not-permitted` · `server-error`
 
 ## Core Principles

@@ -121,17 +121,6 @@ FETCH /doc.md/v41                # Specific version
 VERSIONS /doc.md                 # Get version history
 ```
 
-**Search with Parameters** (frontmatter):
-```
-SEARCH /articles/
-
----
-query: "security architecture"
-limit: 10
-after: 2025-01-01
----
-```
-
 **Cache Validation** (frontmatter):
 ```
 FETCH /doc.md
@@ -166,7 +155,6 @@ Document-centric operations that align with markdown usage:
 - **APPEND**: Add content to end of document (journals, changelogs, notes)
 - **ARCHIVE**: Remove a document from active serving (preserves in version history)
 - **LIST**: Get directory contents or document index
-- **SEARCH**: Find documents matching query — *under review, use case not yet clear*
 - **VERSIONS**: Get version history for a document
 
 ### Path Structure & Parameters
@@ -203,17 +191,6 @@ This creates a file system-like hierarchy:
 **Frontmatter for Parameters**:
 
 Complex parameters go in request frontmatter:
-
-```
-SEARCH /articles/
-
----
-query: "security architecture"
-limit: 10
-sort: relevance
-after: 2025-01-01
----
-```
 
 ```
 FETCH /doc.md
@@ -1014,42 +991,6 @@ lock: none
 
 Servers can provide hints about concurrent editing (but don't enforce).
 
-### Search Protocol
-
-```
-SEARCH /docs/
-
----
-query: "security architecture"
-limit: 10
-sort: relevance
----
-```
-
-Server responds with markdown list of results:
-
-```markdown
----
-status: ok
-results: 3
-query: "security architecture"
----
-
-# Search Results
-
-## [Security Architecture](/docs/security.md)
-Modified: 2025-02-14T10:30:00Z
-Excerpt: Our security architecture is built on capability-based authentication...
-
-## [Authentication Model](/docs/auth.md)
-Modified: 2025-02-13T09:15:00Z
-Excerpt: The authentication system uses tokens that grant capabilities...
-
-## [Protocol Design](/docs/protocol.md)
-Modified: 2025-02-12T08:00:00Z
-Excerpt: Security is a foundational principle of the protocol architecture...
-```
-
 ### WebSub-style Subscriptions
 
 ```
@@ -1278,7 +1219,6 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 ### Phase 3: Advanced Features
 
 **Server**:
-- Full-text search — *SEARCH verb under review, use case not yet clear*
 - Directory indexes
 - Content addressing
 - Federation support

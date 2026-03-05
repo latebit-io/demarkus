@@ -11,7 +11,7 @@ The Mark Protocol is an application-layer protocol for the transfer of markdown 
 
 ## Status of This Document
 
-This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here — including APPEND, SEARCH, and federation — are considered future extensions and are not part of this specification.
+This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here — including federation — are considered future extensions and are not part of this specification.
 
 ## 1. Terminology
 
@@ -703,8 +703,6 @@ This ensures every served document has:
 
 The following features are planned but not part of this specification:
 
-- **APPEND**: Add content to the end of a document. Under evaluation — the versioning overhead (each append creates a separate version chain) may not justify the complexity. Deferred until a concrete use case emerges.
-- **SEARCH**: Full-text search across documents.
 - **Content addressing**: Hash-based document retrieval independent of location.
 - **Federation**: Cross-server content mirroring and discovery.
 - **Subscriptions**: Notification of document changes.
