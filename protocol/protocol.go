@@ -25,4 +25,7 @@ const (
 
 	// VerbAppend appends content to the end of an existing document.
 	VerbAppend = "APPEND"
+
+	// WellKnownManifestPath is the conventional path for agent manifest discovery.
+	WellKnownManifestPath = "/.well-known/agent-manifest.md"
 )

@@ -27,6 +27,9 @@ func main() {
 		case "graph":
 			graphMain(os.Args[2:])
 			return
+		case "info":
+			infoMain(os.Args[2:])
+			return
 		case "token":
 			tokenMain(os.Args[2:])
 			return
@@ -47,6 +50,7 @@ func requestMain() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus [-X VERB] [-body TEXT] [-auth TOKEN] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus edit [-auth TOKEN] [-insecure] mark://host:port/path.md\n")
 		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
+		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
 	}
@@ -336,6 +340,47 @@ func nodeLabel(g *graph.Graph, url string) string {
 		return n.Title
 	}
 	return url
+}
+
+func infoMain(args []string) {
+	fs := flag.NewFlagSet("info", flag.ExitOnError)
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: demarkus info [-insecure] mark://host:port\n\n")
+		fmt.Fprintf(os.Stderr, "Fetch the agent manifest from a Mark Protocol server.\n\n")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	host, _, err := fetch.ParseMarkURL(fs.Arg(0))
+	if err != nil {
+		log.Fatalf("invalid URL: %v", err)
+	}
+
+	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
+	defer client.Close()
+
+	result, err := client.Fetch(host, protocol.WellKnownManifestPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if result.Response.Status == protocol.StatusNotFound {
+		fmt.Fprintln(os.Stderr, "No agent manifest found at "+protocol.WellKnownManifestPath)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[%s]", result.Response.Status)
+	for k, v := range result.Response.Metadata {
+		fmt.Printf(" %s=%s", k, v)
+	}
+	fmt.Println()
+	fmt.Print(result.Response.Body)
 }
 
 func tokenMain(args []string) {
