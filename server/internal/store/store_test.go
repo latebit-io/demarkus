@@ -1141,3 +1141,26 @@ func TestExtractMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestWrite_InvalidMetadataRejected(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	tests := []struct {
+		name string
+		meta map[string]string
+	}{
+		{"uppercase key", map[string]string{"Type": "note"}},
+		{"underscore key", map[string]string{"my_key": "val"}},
+		{"newline in value", map[string]string{"type": "note\nevil: injected"}},
+		{"empty key", map[string]string{"": "val"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := s.Write("/doc.md", []byte("# Hello"), tt.meta)
+			if err == nil {
+				t.Error("expected error for invalid metadata, got nil")
+			}
+		})
+	}
+}

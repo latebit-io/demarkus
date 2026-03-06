@@ -1822,6 +1822,44 @@ func TestPublisherMetadata(t *testing.T) {
 		}
 	})
 
+	t.Run("reserved metadata keys rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		for _, key := range []string{"version", "modified", "etag", "current-version", "server-version"} {
+			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": evil\n---\n# Content\n")
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response for key %q: %v", key, err)
+			}
+			if resp.Status != protocol.StatusBadRequest {
+				t.Errorf("key %q: got status %q, want %q", key, resp.Status, protocol.StatusBadRequest)
+			}
+		}
+	})
+
+	t.Run("invalid metadata key characters rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		for _, key := range []string{"UPPER", "under_score", "dot.key", "slash/key"} {
+			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": val\n---\n# Content\n")
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response for key %q: %v", key, err)
+			}
+			if resp.Status != protocol.StatusBadRequest {
+				t.Errorf("key %q: got status %q, want %q", key, resp.Status, protocol.StatusBadRequest)
+			}
+		}
+	})
+
 	t.Run("append with metadata", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)

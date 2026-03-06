@@ -118,13 +118,13 @@ func (c *Client) Versions(host, path string) (Result, error) {
 //   - > 0: update-only (server rejects if current version doesn't match)
 func (c *Client) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (Result, error) {
 	req := protocol.Request{Verb: protocol.VerbPublish, Path: path, Metadata: make(map[string]string), Body: body}
+	maps.Copy(req.Metadata, meta)
 	if token != "" {
 		req.Metadata["auth"] = token
 	}
 	if expectedVersion >= 0 {
 		req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
 	}
-	maps.Copy(req.Metadata, meta)
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConn(conn, req)
 	})
@@ -141,11 +141,11 @@ func (c *Client) Append(host, path, body, token string, expectedVersion int, met
 		return Result{}, fmt.Errorf("APPEND requires a non-empty body")
 	}
 	req := protocol.Request{Verb: protocol.VerbAppend, Path: path, Metadata: make(map[string]string), Body: body}
+	maps.Copy(req.Metadata, meta)
 	if token != "" {
 		req.Metadata["auth"] = token
 	}
 	req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
-	maps.Copy(req.Metadata, meta)
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConn(conn, req)
 	})

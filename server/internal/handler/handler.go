@@ -39,6 +39,19 @@ var controlKeys = map[string]bool{
 	"if-modified-since": true,
 }
 
+// reservedKeys are server-owned response metadata keys that publishers cannot set.
+var reservedKeys = map[string]bool{
+	"version":         true,
+	"modified":        true,
+	"etag":            true,
+	"current-version": true,
+	"server-version":  true,
+	"total":           true,
+	"current":         true,
+	"chain-valid":     true,
+	"chain-error":     true,
+}
+
 // Handler serves markdown files from a content directory.
 type Handler struct {
 	ContentDir    string
@@ -181,16 +194,13 @@ func (h *Handler) serveDocument(w io.Writer, req protocol.Request, doc *store.Do
 		}
 	}
 
-	body, existingMeta := stripFrontmatter(string(doc.Content))
-	meta := map[string]string{
-		"modified": doc.Modified.Format(time.RFC3339),
-		"etag":     etag,
-		"version":  strconv.Itoa(doc.Version),
-	}
-	if v, ok := existingMeta["version"]; ok {
-		meta["version"] = v
-	}
+	body := stripFrontmatter(string(doc.Content))
+	// Copy publisher metadata first, then set server-owned keys so they can't be overwritten.
+	meta := make(map[string]string)
 	maps.Copy(meta, doc.Metadata)
+	meta["modified"] = doc.Modified.Format(time.RFC3339)
+	meta["etag"] = etag
+	meta["version"] = strconv.Itoa(doc.Version)
 	h.writeResponse(w, protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: body})
 }
 
@@ -313,17 +323,13 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 		return
 	}
 
-	body, existingMeta := stripFrontmatter(string(doc.Content))
+	body := stripFrontmatter(string(doc.Content))
 
-	meta := map[string]string{
-		"modified": doc.Modified.Format(time.RFC3339),
-		"version":  strconv.Itoa(doc.Version),
-	}
-	// Preserve version from file frontmatter if present.
-	if v, ok := existingMeta["version"]; ok {
-		meta["version"] = v
-	}
+	// Copy publisher metadata first, then set server-owned keys so they can't be overwritten.
+	meta := make(map[string]string)
 	maps.Copy(meta, doc.Metadata)
+	meta["modified"] = doc.Modified.Format(time.RFC3339)
+	meta["version"] = strconv.Itoa(doc.Version)
 	// Indicate current version so client knows if this is historical.
 	current := h.Store.CurrentVersion(basePath)
 	meta["current-version"] = strconv.Itoa(current)
@@ -735,28 +741,17 @@ func statusTitle(s string) string {
 	return strings.ToUpper(s[:1]) + strings.ReplaceAll(s[1:], "-", " ")
 }
 
-func stripFrontmatter(content string) (body string, meta map[string]string) {
-	meta = make(map[string]string)
-
+func stripFrontmatter(content string) string {
 	if !strings.HasPrefix(content, "---\n") {
-		return content, meta
+		return content
 	}
 
 	end := strings.Index(content[4:], "\n---\n")
 	if end == -1 {
-		return content, meta
+		return content
 	}
 
-	fmBlock := content[4 : 4+end]
-	for line := range strings.SplitSeq(fmBlock, "\n") {
-		key, val, ok := strings.Cut(line, ": ")
-		if ok {
-			meta[strings.TrimSpace(key)] = strings.TrimSpace(val)
-		}
-	}
-
-	body = content[4+end+5:]
-	return body, meta
+	return content[4+end+5:]
 }
 
 var mdReplacer = strings.NewReplacer(
@@ -784,6 +779,15 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 	for k, v := range reqMeta {
 		if controlKeys[k] {
 			continue
+		}
+		if reservedKeys[k] {
+			return nil, fmt.Errorf("metadata key %q is reserved", k)
+		}
+		if !protocol.IsValidMetaKey(k) {
+			return nil, fmt.Errorf("metadata key %q contains invalid characters", k)
+		}
+		if !protocol.IsValidMetaValue(v) {
+			return nil, fmt.Errorf("metadata value for key %q contains newlines", k)
 		}
 		if meta == nil {
 			meta = make(map[string]string)

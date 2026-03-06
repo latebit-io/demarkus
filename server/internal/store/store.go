@@ -823,6 +823,9 @@ func joinContent(existing, content []byte) ([]byte, error) {
 // store frontmatter (version, archived, previous-hash, publisher metadata)
 // followed by the document content.
 func buildVersionFile(versionsDir, base string, version int, content []byte, meta map[string]string) ([]byte, error) {
+	if err := validateMeta(meta); err != nil {
+		return nil, err
+	}
 	var sb strings.Builder
 	sb.WriteString("---\n")
 	sb.WriteString(fmt.Sprintf("version: %d\n", version))
@@ -848,6 +851,21 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 	}
 	sb.WriteString("---\n")
 	return append([]byte(sb.String()), content...), nil
+}
+
+// validateMeta checks that metadata keys and values are safe for frontmatter
+// serialization. This is defense in depth — the handler also validates, but
+// the store is a public API callable outside the network path.
+func validateMeta(meta map[string]string) error {
+	for k, v := range meta {
+		if !protocol.IsValidMetaKey(k) {
+			return fmt.Errorf("metadata key %q contains invalid characters", k)
+		}
+		if !protocol.IsValidMetaValue(v) {
+			return fmt.Errorf("metadata value for key %q contains newlines", k)
+		}
+	}
+	return nil
 }
 
 // extractMetadata parses publisher metadata from store frontmatter.
