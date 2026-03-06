@@ -891,7 +891,7 @@ func extractMetadata(data []byte) map[string]string {
 			if meta == nil {
 				meta = make(map[string]string)
 			}
-			meta[key[len(metaPrefix):]] = strings.TrimSpace(val)
+			meta[key[len(metaPrefix):]] = strings.TrimRight(val, "\r")
 		}
 	}
 	return meta

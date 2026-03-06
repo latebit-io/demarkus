@@ -28,7 +28,8 @@ const MaxDirectoryEntries = 1000
 // maxPublisherMetaKeys is the maximum number of publisher metadata keys.
 const maxPublisherMetaKeys = 10
 
-// maxPublisherMetaBytes is the maximum total serialized size of publisher metadata.
+// maxPublisherMetaBytes is the approximate maximum size of publisher metadata
+// (sum of key and value lengths, excluding serialization overhead).
 const maxPublisherMetaBytes = 512
 
 // controlKeys are request metadata keys consumed by the handler and never stored.
@@ -46,10 +47,13 @@ var reservedKeys = map[string]bool{
 	"etag":            true,
 	"current-version": true,
 	"server-version":  true,
+	"your-version":    true,
 	"total":           true,
 	"current":         true,
 	"chain-valid":     true,
 	"chain-error":     true,
+	"archived":        true,
+	"entries":         true,
 }
 
 // Handler serves markdown files from a content directory.
