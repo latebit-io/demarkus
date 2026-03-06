@@ -445,6 +445,8 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 //	---
 //	version: N
 //	previous-hash: sha256-<hex>   ← omitted for v1
+//	archived: true                ← only when archived
+//	meta.key: value               ← publisher metadata (0–10 keys)
 //	---
 //	<original content>
 //
@@ -885,15 +887,14 @@ func validateMeta(meta map[string]string) error {
 // extractMetadata parses publisher metadata from store frontmatter.
 // Returns keys with the "meta." prefix stripped, or nil if none found.
 func extractMetadata(data []byte) map[string]string {
-	content := string(data)
-	if !strings.HasPrefix(content, "---\n") {
+	if len(data) < 4 || !bytes.HasPrefix(data, []byte("---\n")) {
 		return nil
 	}
-	end := strings.Index(content[4:], "\n---\n")
+	end := bytes.Index(data[4:], []byte("\n---\n"))
 	if end == -1 {
 		return nil
 	}
-	block := content[4 : 4+end]
+	block := string(data[4 : 4+end])
 	var meta map[string]string
 	for line := range strings.SplitSeq(block, "\n") {
 		key, val, ok := strings.Cut(line, ": ")
