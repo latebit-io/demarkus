@@ -1,6 +1,6 @@
 .PHONY: all protocol server client tools test clean install help lint
 
-VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null | tr -cd 'a-zA-Z0-9._-' || echo dev)
+VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
 # Default target
 all: protocol server client
