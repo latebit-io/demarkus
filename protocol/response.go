@@ -84,8 +84,8 @@ func (resp Response) WriteTo(w io.Writer) (int64, error) {
 	var buf bytes.Buffer
 
 	fm := make(map[string]string, len(resp.Metadata)+1)
-	fm["status"] = resp.Status
 	maps.Copy(fm, resp.Metadata)
+	fm["status"] = resp.Status
 
 	yamlBytes, err := yaml.Marshal(fm)
 	if err != nil {

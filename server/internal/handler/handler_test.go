@@ -52,7 +52,7 @@ func setupVersionedDir(t *testing.T, files map[string]string) (string, *store.St
 	dir := t.TempDir()
 	s := store.New(dir)
 	for name, content := range files {
-		if _, err := s.Write("/"+name, []byte(content)); err != nil {
+		if _, err := s.Write("/"+name, []byte(content), nil); err != nil {
 			t.Fatalf("setupVersionedDir: write %s: %v", name, err)
 		}
 	}
@@ -331,7 +331,7 @@ func TestHandleList(t *testing.T) {
 		{"/docs/guide.md", "# Guide\n"},
 		{"/docs/reference.md", "# Reference\n"},
 	} {
-		if _, err := s.Write(f.path, []byte(f.content)); err != nil {
+		if _, err := s.Write(f.path, []byte(f.content), nil); err != nil {
 			t.Fatalf("write %s: %v", f.path, err)
 		}
 	}
@@ -439,7 +439,7 @@ func TestFetchDirectory(t *testing.T) {
 		{"/api/users.md", "# Users API\n"},
 		{"/api/auth.md", "# Auth API\n"},
 	} {
-		if _, err := s.Write(f.path, []byte(f.content)); err != nil {
+		if _, err := s.Write(f.path, []byte(f.content), nil); err != nil {
 			t.Fatalf("write %s: %v", f.path, err)
 		}
 	}
@@ -565,10 +565,10 @@ func TestFetchDirectory(t *testing.T) {
 func TestMultipleLeadingSlashes(t *testing.T) {
 	dir := t.TempDir()
 	s := store.New(dir)
-	if _, err := s.Write("/hello.md", []byte("# Hello\n")); err != nil {
+	if _, err := s.Write("/hello.md", []byte("# Hello\n"), nil); err != nil {
 		t.Fatalf("write hello: %v", err)
 	}
-	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n")); err != nil {
+	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n"), nil); err != nil {
 		t.Fatalf("write guide: %v", err)
 	}
 	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
@@ -653,10 +653,10 @@ func TestRelativeContentDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := store.New(contentDir)
-	if _, err := s.Write("/page.md", []byte("# Page\n")); err != nil {
+	if _, err := s.Write("/page.md", []byte("# Page\n"), nil); err != nil {
 		t.Fatalf("write page: %v", err)
 	}
-	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n")); err != nil {
+	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n"), nil); err != nil {
 		t.Fatalf("write guide: %v", err)
 	}
 
@@ -734,10 +734,10 @@ func TestContentDirAsSymlink(t *testing.T) {
 	// Create actual content directory with versioned files.
 	actualDir := t.TempDir()
 	s := store.New(actualDir)
-	if _, err := s.Write("/file.md", []byte("# Content\n")); err != nil {
+	if _, err := s.Write("/file.md", []byte("# Content\n"), nil); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n")); err != nil {
+	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n"), nil); err != nil {
 		t.Fatalf("write guide: %v", err)
 	}
 
@@ -810,7 +810,7 @@ func TestHandleVersions(t *testing.T) {
 		"doc.md": "# V1\n",
 	})
 	// Write a second version.
-	if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+	if _, err := s.Write("/doc.md", []byte("# V2\n"), nil); err != nil {
 		t.Fatalf("write v2: %v", err)
 	}
 
@@ -896,7 +896,7 @@ func TestFetchVersion(t *testing.T) {
 	dir, s := setupVersionedDir(t, map[string]string{
 		"doc.md": "# Version One\n",
 	})
-	if _, err := s.Write("/doc.md", []byte("# Version Two\n")); err != nil {
+	if _, err := s.Write("/doc.md", []byte("# Version Two\n"), nil); err != nil {
 		t.Fatalf("write v2: %v", err)
 	}
 
@@ -956,10 +956,10 @@ func TestVersionsChainValid(t *testing.T) {
 	s := store.New(dir)
 
 	// Write versions through the store to get proper hash chain.
-	if _, err := s.Write("/doc.md", []byte("# V1\n")); err != nil {
+	if _, err := s.Write("/doc.md", []byte("# V1\n"), nil); err != nil {
 		t.Fatalf("write v1: %v", err)
 	}
-	if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+	if _, err := s.Write("/doc.md", []byte("# V2\n"), nil); err != nil {
 		t.Fatalf("write v2: %v", err)
 	}
 
@@ -1037,7 +1037,7 @@ func TestHandlePublish(t *testing.T) {
 	t.Run("creates new version of existing document", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Original\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# Original\n"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
@@ -1076,7 +1076,7 @@ func TestHandlePublish(t *testing.T) {
 	t.Run("duplicate content is no-op", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Same\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# Same\n"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
@@ -1115,10 +1115,10 @@ func TestHandlePublish(t *testing.T) {
 	t.Run("conflict on stale expected-version", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
-		if _, err := s.Write("/doc.md", []byte("# v2\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# v2\n"), nil); err != nil {
 			t.Fatalf("write v2: %v", err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
@@ -1141,7 +1141,7 @@ func TestHandlePublish(t *testing.T) {
 	t.Run("matching expected-version succeeds", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
@@ -1164,7 +1164,7 @@ func TestHandlePublish(t *testing.T) {
 	t.Run("no expected-version is backward compatible", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
@@ -1549,7 +1549,7 @@ func TestHandleAppend(t *testing.T) {
 	t.Run("appends to existing document", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Start")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# Start"), nil); err != nil {
 			t.Fatal(err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
@@ -1588,7 +1588,7 @@ func TestHandleAppend(t *testing.T) {
 	t.Run("rejects empty body", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Existing")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# Existing"), nil); err != nil {
 			t.Fatal(err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
@@ -1608,7 +1608,7 @@ func TestHandleAppend(t *testing.T) {
 	t.Run("requires expected-version", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Existing")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# Existing"), nil); err != nil {
 			t.Fatal(err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
@@ -1628,7 +1628,7 @@ func TestHandleAppend(t *testing.T) {
 	t.Run("auth required", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Existing")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# Existing"), nil); err != nil {
 			t.Fatal(err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
@@ -1648,10 +1648,10 @@ func TestHandleAppend(t *testing.T) {
 	t.Run("conflict on stale expected-version", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# V1")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# V1"), nil); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Write("/doc.md", []byte("# V2")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# V2"), nil); err != nil {
 			t.Fatal(err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
@@ -1671,7 +1671,7 @@ func TestHandleAppend(t *testing.T) {
 	t.Run("archived document rejected", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Content")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# Content"), nil); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.Archive("/doc.md", true); err != nil {
@@ -1698,7 +1698,7 @@ func TestHandleAppend(t *testing.T) {
 		for i := range initial {
 			initial[i] = 'x'
 		}
-		if _, err := s.Write("/doc.md", initial); err != nil {
+		if _, err := s.Write("/doc.md", initial, nil); err != nil {
 			t.Fatal(err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
@@ -1713,6 +1713,242 @@ func TestHandleAppend(t *testing.T) {
 		}
 		if resp.Status != protocol.StatusServerError {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusServerError)
+		}
+	})
+}
+
+func TestPublisherMetadata(t *testing.T) {
+	const testSecret = "test-meta-secret"
+	tokenStore := auth.NewTokenStore(map[string]auth.Token{
+		auth.HashToken(testSecret): {
+			Paths:      []string{"/*"},
+			Operations: []string{"publish"},
+		},
+	})
+
+	t.Run("publish with metadata and fetch it back", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		// Publish with publisher metadata.
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\ntype: journal\nauthor: claude\n---\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse publish response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Fatalf("publish status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+
+		// Fetch and verify metadata appears in response.
+		stream = newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse fetch response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Fatalf("fetch status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if resp.Metadata["type"] != "journal" {
+			t.Errorf("type: got %q, want %q", resp.Metadata["type"], "journal")
+		}
+		if resp.Metadata["author"] != "claude" {
+			t.Errorf("author: got %q, want %q", resp.Metadata["author"], "claude")
+		}
+	})
+
+	t.Run("control keys not stored", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 0\ntype: note\n---\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+
+		// Fetch back — auth and expected-version should not be in response.
+		stream = newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse fetch response: %v", err)
+		}
+		if _, ok := resp.Metadata["auth"]; ok {
+			t.Error("auth should not be in response metadata")
+		}
+		if _, ok := resp.Metadata["expected-version"]; ok {
+			t.Error("expected-version should not be in response metadata")
+		}
+		if resp.Metadata["type"] != "note" {
+			t.Errorf("type: got %q, want %q", resp.Metadata["type"], "note")
+		}
+	})
+
+	t.Run("too many metadata keys", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		// Build frontmatter with 11 non-control keys.
+		var fm strings.Builder
+		fm.WriteString("---\nauth: " + testSecret + "\n")
+		for i := range 11 {
+			fm.WriteString("key" + strings.Repeat("x", i) + ": val\n")
+		}
+		fm.WriteString("---\n# Content\n")
+
+		stream := newMockStream("PUBLISH /doc.md\n" + fm.String())
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusBadRequest {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusBadRequest)
+		}
+	})
+
+	t.Run("reserved metadata keys rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		for _, key := range []string{"version", "modified", "etag", "current-version", "server-version"} {
+			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": evil\n---\n# Content\n")
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response for key %q: %v", key, err)
+			}
+			if resp.Status != protocol.StatusBadRequest {
+				t.Errorf("key %q: got status %q, want %q", key, resp.Status, protocol.StatusBadRequest)
+			}
+		}
+	})
+
+	t.Run("invalid metadata key characters rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		for _, key := range []string{"UPPER", "under_score", "dot.key", "slash/key"} {
+			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": val\n---\n# Content\n")
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response for key %q: %v", key, err)
+			}
+			if resp.Status != protocol.StatusBadRequest {
+				t.Errorf("key %q: got status %q, want %q", key, resp.Status, protocol.StatusBadRequest)
+			}
+		}
+	})
+
+	t.Run("append with metadata", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Start"), map[string]string{"type": "note"}); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\ntype: journal\n---\nMore content.\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+
+		// Fetch current version — should have the append's metadata.
+		stream = newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse fetch response: %v", err)
+		}
+		if resp.Metadata["type"] != "journal" {
+			t.Errorf("type: got %q, want %q", resp.Metadata["type"], "journal")
+		}
+	})
+
+	t.Run("legacy document without metadata", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Hello\n"), nil); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		// Should have standard metadata but no publisher metadata.
+		if resp.Metadata["version"] != "1" {
+			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "1")
+		}
+		// No extra keys beyond version, modified, etag.
+		for k := range resp.Metadata {
+			switch k {
+			case "version", "modified", "etag":
+				// expected
+			default:
+				t.Errorf("unexpected metadata key %q in legacy document", k)
+			}
+		}
+	})
+
+	t.Run("fetch version preserves metadata", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# V1\n"), map[string]string{"type": "draft"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Write("/doc.md", []byte("# V2\n"), map[string]string{"type": "published"}); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		// Fetch v1 — should have its own metadata.
+		stream := newMockStream("FETCH /doc.md/v1\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if resp.Metadata["type"] != "draft" {
+			t.Errorf("v1 type: got %q, want %q", resp.Metadata["type"], "draft")
 		}
 	})
 }

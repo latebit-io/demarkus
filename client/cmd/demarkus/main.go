@@ -48,11 +48,12 @@ func requestMain() {
 	body := flag.String("body", "", "request body (for PUBLISH/APPEND); reads stdin if omitted")
 	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE/APPEND requests (env: DEMARKUS_AUTH)")
 	expectedVersion := flag.Int("expected-version", -1, "version check: -1 skip (default), 0 create-only, >0 require match; required (>0) for APPEND")
+	verbose := flag.Bool("v", false, "show status and metadata header before body")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus [-X VERB] [-body TEXT] [-auth TOKEN] mark://host:port/path\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus [-v] [-X VERB] [-body TEXT] [-auth TOKEN] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus edit [-auth TOKEN] [-insecure] mark://host:port/path.md\n")
 		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
@@ -105,24 +106,26 @@ func requestMain() {
 	case protocol.VerbVersions:
 		result, err = client.Versions(host, path)
 	case protocol.VerbPublish:
-		result, err = client.Publish(host, path, reqBody, token, *expectedVersion)
+		result, err = client.Publish(host, path, reqBody, token, *expectedVersion, nil)
 	case protocol.VerbArchive:
 		result, err = client.Archive(host, path, token)
 	case protocol.VerbAppend:
-		result, err = client.Append(host, path, reqBody, token, *expectedVersion)
+		result, err = client.Append(host, path, reqBody, token, *expectedVersion, nil)
 	}
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("[%s]", result.Response.Status)
-	for k, v := range result.Response.Metadata {
-		fmt.Printf(" %s=%s", k, v)
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "[%s]", result.Response.Status)
+		for k, v := range result.Response.Metadata {
+			fmt.Fprintf(os.Stderr, " %s=%s", k, v)
+		}
+		if result.FromCache {
+			fmt.Fprint(os.Stderr, " (cached)")
+		}
+		fmt.Fprintln(os.Stderr)
 	}
-	if result.FromCache {
-		fmt.Printf(" (cached)")
-	}
-	fmt.Println()
 	fmt.Print(result.Response.Body)
 }
 
@@ -239,7 +242,7 @@ func editMain(args []string) {
 	}
 
 	// Publish the edited content with optimistic concurrency check.
-	result, err = client.Publish(host, path, newBody, token, fetchedVersion)
+	result, err = client.Publish(host, path, newBody, token, fetchedVersion, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
