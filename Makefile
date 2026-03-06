@@ -1,5 +1,7 @@
 .PHONY: all protocol server client tools test clean install help lint
 
+VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)
+
 # Default target
 all: protocol server client
 
@@ -40,7 +42,7 @@ client: protocol
 	@echo "Building demarkus client..."
 	cd client && go build -o bin/demarkus ./cmd/demarkus
 	cd client && go build -o bin/demarkus-tui ./cmd/demarkus-tui
-	cd client && go build -o bin/demarkus-mcp ./cmd/demarkus-mcp
+	cd client && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-mcp ./cmd/demarkus-mcp
 	@echo "✓ Client built: client/bin/demarkus, client/bin/demarkus-tui, client/bin/demarkus-mcp"
 
 # Build tools

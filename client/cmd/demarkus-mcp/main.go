@@ -19,6 +19,9 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
+// version is set at build time via -ldflags.
+var version = "dev"
+
 func main() {
 	defaultHost := flag.String("host", "", "default Mark server (e.g. mark://localhost:6309)")
 	token := flag.String("token", "", "auth token for capability-based authentication")
@@ -34,7 +37,7 @@ func main() {
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
-	s := mcpserver.NewMCPServer("demarkus-mcp", "0.1.0")
+	s := mcpserver.NewMCPServer("demarkus-mcp", version)
 
 	h := &handler{client: client, defaultHost: *defaultHost, token: *token}
 	s.AddTool(markFetchTool(*defaultHost), h.markFetch)
