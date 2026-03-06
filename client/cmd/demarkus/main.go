@@ -117,14 +117,14 @@ func requestMain() {
 	}
 
 	if *verbose {
-		fmt.Printf("[%s]", result.Response.Status)
+		fmt.Fprintf(os.Stderr, "[%s]", result.Response.Status)
 		for k, v := range result.Response.Metadata {
-			fmt.Printf(" %s=%s", k, v)
+			fmt.Fprintf(os.Stderr, " %s=%s", k, v)
 		}
 		if result.FromCache {
-			fmt.Printf(" (cached)")
+			fmt.Fprint(os.Stderr, " (cached)")
 		}
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
 	}
 	fmt.Print(result.Response.Body)
 }
