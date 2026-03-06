@@ -445,7 +445,7 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 //	---
 //	version: N
 //	previous-hash: sha256-<hex>   ← omitted for v1
-//	archived: true                ← only when archived
+//	archived: true|false
 //	meta.key: value               ← publisher metadata (0–10 keys)
 //	---
 //	<original content>
