@@ -91,30 +91,68 @@ Anyone can run a hub. A hub for Go documentation links to `mark://go-docs.exampl
 
 A living knowledge base served by demarkus itself — the agent's persistent memory across sessions. It runs as a separate demarkus server on port `6310` and is accessed via MCP.
 
+### Quick Start: Writing Documents
+
+Documents in demarkus-soul are **published over the protocol**, not added to the filesystem. Here's the workflow:
+
+1. **Generate a publish token** (one-time, required)
+   ```bash
+   # In the soul's content root
+   ./tools/bin/demarkus-token generate -paths "/*" -ops publish,archive -tokens /path/to/soul-content/tokens.toml
+   ```
+   Save the raw token output — it's shown once.
+
+2. **Publish a new document** using the CLI or MCP
+   ```bash
+   # CLI: publish a new doc
+   ./client/bin/demarkus publish --insecure -auth $TOKEN mark://localhost:6310/mypage.md < content.md
+
+   # MCP: agents use mark_publish (recommended for automation)
+   mark_publish with expected_version=0 to create, or fetch first to get current version
+   ```
+
+3. **Update an existing document** using `mark_publish` or `mark_append`
+   ```bash
+   # CLI: append to existing doc (minimal, efficient for journals)
+   ./client/bin/demarkus append --insecure -auth $TOKEN mark://localhost:6310/journal.md < entry.md
+   ```
+
+**Key point**: Documents are versioned, immutable records on the server. You must always use `expected_version` from a prior fetch when publishing/appending to detect conflicts.
+
 ### Running the Soul Server
 
-The soul lives in a separate repo (`demarkus-soul`) which pulls demarkus as a dependency. See that repo for server setup. The short version:
+The soul lives in a separate repo (`demarkus-soul`) which pulls demarkus as a dependency. See that repo for full setup. The short version:
 
 ```bash
 # In the demarkus-soul repo
 ./server/bin/demarkus-server -root ./soul-root -port 6310
 ```
 
-You will need to create a publish token with `demarkus-token` and give it root access, and config this in the mcp config. 
-
-
-### Connecting
+### Connecting Claude Code
 
 1. Build the MCP binary: `make client`
-2. Copy `.mcp.json.example` to `.mcp.json` and fill in your token
-3. The MCP server connects to `mark://localhost:6310`
+2. **Generate a publish token** (see step 1 above if not done)
+3. Copy `.mcp.json.example` to `.mcp.json` and configure the token:
+   ```json
+   {
+     "mcpServers": {
+       "demarkus-soul": {
+         "command": "/path/to/client/bin/demarkus-mcp",
+         "args": ["-host", "mark://localhost:6310", "-token", "<your-token>", "-insecure"]
+       }
+     }
+   }
+   ```
+4. Claude Code agents can now use `mark_fetch`, `mark_publish`, `mark_append`, etc.
+
+**Without a token**, agents can only read documents. Write access (`mark_publish`, `mark_append`) requires the token.
 
 ### How to Use It
 
 - **Start of session**: Fetch `/index.md` and key pages to load context
-- **During work**: Update pages when learning something new
+- **During work**: Update pages when learning something new (use `mark_publish` for full updates, `mark_append` for journals)
 - **End of session**: Add a journal entry to `/journal.md` if something significant happened
-- **Always**: Use `expected_version` from a prior fetch when publishing
+- **Always**: Use `expected_version` from a prior fetch when publishing/appending
 
 ### Content Structure
 
@@ -125,8 +163,10 @@ You will need to create a publish token with `demarkus-token` and give it root a
 /debugging.md      — Lessons from bugs and investigations
 /roadmap.md        — What's done, what's next
 /journal.md        — Session notes and evolution log
-/guide.md          — Setup instructions
+/guide.md          — Full setup guide for agents
 ```
+
+**Full guide**: See `/guide.md` on the soul for complete setup instructions, including MCP configuration and available tools.
 
 
 
