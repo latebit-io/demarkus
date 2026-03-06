@@ -35,6 +35,7 @@ type Document struct {
 	Modified time.Time
 	Version  int
 	Archived bool
+	Metadata map[string]string
 }
 
 // VersionInfo describes a single version of a document.
@@ -62,8 +63,13 @@ var ErrVersionExists = fmt.Errorf("version already exists")
 var ErrSizeLimit = fmt.Errorf("combined content exceeds size limit")
 
 // maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
-// adds to a version file (version, archived, previous-hash, delimiters).
-const maxStoreFrontmatter = 256
+// adds to a version file (version, archived, previous-hash, publisher
+// metadata, and delimiters).
+const maxStoreFrontmatter = 1024
+
+// metaPrefix is the key prefix for publisher-provided metadata in store
+// frontmatter. On disk: "meta.type: journal". Stripped when returned to clients.
+const metaPrefix = "meta."
 
 // Store provides read access to a versioned document directory.
 type Store struct {
@@ -122,6 +128,7 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  ver,
 		Archived: isArchived(data),
+		Metadata: extractMetadata(data),
 	}, nil
 }
 
@@ -329,6 +336,7 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  version,
 		Archived: isArchived(data),
+		Metadata: extractMetadata(data),
 	}, nil
 }
 
@@ -442,7 +450,7 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 //
 // The previous-hash is the SHA-256 of the raw on-disk bytes of version N-1,
 // forming a hash chain that allows chain integrity to be verified later.
-func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
+func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*Document, error) {
 	if int64(len(content)) > protocol.MaxBodyLength {
 		return nil, fmt.Errorf("content exceeds size limit")
 	}
@@ -489,11 +497,11 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 			return nil, err
 		}
 
-		// Skip creating a new version if content is identical to current.
+		// Skip creating a new version if content and metadata are identical.
 		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next-1))
 		prevData, err := os.ReadFile(prevFile)
 		if err == nil {
-			if bytes.Equal(extractBody(prevData), content) {
+			if bytes.Equal(extractBody(prevData), content) && metaEqual(extractMetadata(prevData), meta) {
 				info, err := os.Stat(prevFile)
 				if err != nil {
 					return nil, fmt.Errorf("stat current version: %w", err)
@@ -503,6 +511,7 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 					Modified: info.ModTime().UTC().Truncate(time.Second),
 					Version:  next - 1,
 					Archived: false,
+					Metadata: meta,
 				}, ErrNotModified
 			}
 		}
@@ -510,22 +519,10 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 
 	versionFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next))
 
-	// Build stored bytes: store frontmatter + original content.
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("version: %d\n", next))
-	sb.WriteString("archived: false\n")
-	if next > 1 {
-		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next-1))
-		prevData, err := os.ReadFile(prevFile)
-		if err != nil {
-			return nil, fmt.Errorf("read previous version for hashing: %w", err)
-		}
-		h := sha256.Sum256(prevData)
-		sb.WriteString(fmt.Sprintf("previous-hash: sha256-%x\n", h))
+	stored, err := buildVersionFile(versionsDir, base, next, content, meta)
+	if err != nil {
+		return nil, err
 	}
-	sb.WriteString("---\n")
-	stored := append([]byte(sb.String()), content...)
 
 	// Validate stored size after prepending frontmatter.
 	if int64(len(stored)) > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
@@ -576,6 +573,7 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  next,
 		Archived: false,
+		Metadata: meta,
 	}, nil
 }
 
@@ -586,9 +584,9 @@ func (s *Store) Write(reqPath string, content []byte) (*Document, error) {
 //   - > 0: expect this specific version (update-only)
 //
 // Returns ErrConflict if the expectation is violated.
-func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte) (*Document, error) {
+func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*Document, error) {
 	if expectedVersion < 0 {
-		return s.Write(reqPath, content)
+		return s.Write(reqPath, content, meta)
 	}
 
 	current := s.CurrentVersion(reqPath)
@@ -596,7 +594,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		return &Document{Version: current}, ErrConflict
 	}
 
-	doc, err := s.Write(reqPath, content)
+	doc, err := s.Write(reqPath, content, meta)
 	if err != nil {
 		if errors.Is(err, ErrVersionExists) {
 			// Lost the O_EXCL race: another writer created the expected
@@ -633,7 +631,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 // (separated by a newline), and writes the result as a new version.
 // The document must already exist. expectedVersion must be >= 1.
 // Returns ErrConflict if expectedVersion does not match the current version.
-func (s *Store) Append(reqPath string, expectedVersion int, content []byte) (*Document, error) {
+func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*Document, error) {
 	if expectedVersion < 1 {
 		return nil, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expectedVersion)
 	}
@@ -663,7 +661,7 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte) (*Do
 		return nil, err
 	}
 
-	return s.WriteVersion(reqPath, expectedVersion, combined)
+	return s.WriteVersion(reqPath, expectedVersion, combined, meta)
 }
 
 // VerifyChain checks the hash chain integrity for a document.
@@ -819,6 +817,80 @@ func joinContent(existing, content []byte) ([]byte, error) {
 	}
 	combined = append(combined, content...)
 	return combined, nil
+}
+
+// buildVersionFile constructs the on-disk bytes for a version file:
+// store frontmatter (version, archived, previous-hash, publisher metadata)
+// followed by the document content.
+func buildVersionFile(versionsDir, base string, version int, content []byte, meta map[string]string) ([]byte, error) {
+	var sb strings.Builder
+	sb.WriteString("---\n")
+	sb.WriteString(fmt.Sprintf("version: %d\n", version))
+	sb.WriteString("archived: false\n")
+	if version > 1 {
+		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, version-1))
+		prevData, err := os.ReadFile(prevFile)
+		if err != nil {
+			return nil, fmt.Errorf("read previous version for hashing: %w", err)
+		}
+		h := sha256.Sum256(prevData)
+		sb.WriteString(fmt.Sprintf("previous-hash: sha256-%x\n", h))
+	}
+	if len(meta) > 0 {
+		keys := make([]string, 0, len(meta))
+		for k := range meta {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			sb.WriteString(fmt.Sprintf("%s%s: %s\n", metaPrefix, k, meta[k]))
+		}
+	}
+	sb.WriteString("---\n")
+	return append([]byte(sb.String()), content...), nil
+}
+
+// extractMetadata parses publisher metadata from store frontmatter.
+// Returns keys with the "meta." prefix stripped, or nil if none found.
+func extractMetadata(data []byte) map[string]string {
+	content := string(data)
+	if !strings.HasPrefix(content, "---\n") {
+		return nil
+	}
+	end := strings.Index(content[4:], "\n---\n")
+	if end == -1 {
+		return nil
+	}
+	block := content[4 : 4+end]
+	var meta map[string]string
+	for line := range strings.SplitSeq(block, "\n") {
+		key, val, ok := strings.Cut(line, ": ")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if strings.HasPrefix(key, metaPrefix) {
+			if meta == nil {
+				meta = make(map[string]string)
+			}
+			meta[key[len(metaPrefix):]] = strings.TrimSpace(val)
+		}
+	}
+	return meta
+}
+
+// metaEqual reports whether two metadata maps are equal.
+// Treats nil and empty maps as equal.
+func metaEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // extractBody returns the content after the store frontmatter.

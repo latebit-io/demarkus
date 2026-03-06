@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
 	"strconv"
 	"strings"
@@ -115,7 +116,7 @@ func (c *Client) Versions(host, path string) (Result, error) {
 //   - < 0: no check (server accepts unconditionally)
 //   - 0: create-only (server rejects if document already exists)
 //   - > 0: update-only (server rejects if current version doesn't match)
-func (c *Client) Publish(host, path, body, token string, expectedVersion int) (Result, error) {
+func (c *Client) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (Result, error) {
 	req := protocol.Request{Verb: protocol.VerbPublish, Path: path, Metadata: make(map[string]string), Body: body}
 	if token != "" {
 		req.Metadata["auth"] = token
@@ -123,6 +124,7 @@ func (c *Client) Publish(host, path, body, token string, expectedVersion int) (R
 	if expectedVersion >= 0 {
 		req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
 	}
+	maps.Copy(req.Metadata, meta)
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConn(conn, req)
 	})
@@ -131,7 +133,7 @@ func (c *Client) Publish(host, path, body, token string, expectedVersion int) (R
 // Append adds content to the end of an existing document.
 // expectedVersion is required and must be >= 1 (the document must already exist).
 // If token is non-empty, it is sent as the auth metadata for capability-based auth.
-func (c *Client) Append(host, path, body, token string, expectedVersion int) (Result, error) {
+func (c *Client) Append(host, path, body, token string, expectedVersion int, meta map[string]string) (Result, error) {
 	if expectedVersion < 1 {
 		return Result{}, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expectedVersion)
 	}
@@ -143,6 +145,7 @@ func (c *Client) Append(host, path, body, token string, expectedVersion int) (Re
 		req.Metadata["auth"] = token
 	}
 	req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
+	maps.Copy(req.Metadata, meta)
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConn(conn, req)
 	})

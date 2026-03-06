@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/url"
 	"os"
 	"path"
@@ -23,6 +24,20 @@ import (
 
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
 const MaxDirectoryEntries = 1000
+
+// maxPublisherMetaKeys is the maximum number of publisher metadata keys.
+const maxPublisherMetaKeys = 10
+
+// maxPublisherMetaBytes is the maximum total serialized size of publisher metadata.
+const maxPublisherMetaBytes = 512
+
+// controlKeys are request metadata keys consumed by the handler and never stored.
+var controlKeys = map[string]bool{
+	"auth":              true,
+	"expected-version":  true,
+	"if-none-match":     true,
+	"if-modified-since": true,
+}
 
 // Handler serves markdown files from a content directory.
 type Handler struct {
@@ -175,6 +190,7 @@ func (h *Handler) serveDocument(w io.Writer, req protocol.Request, doc *store.Do
 	if v, ok := existingMeta["version"]; ok {
 		meta["version"] = v
 	}
+	maps.Copy(meta, doc.Metadata)
 	h.writeResponse(w, protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: body})
 }
 
@@ -307,6 +323,7 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 	if v, ok := existingMeta["version"]; ok {
 		meta["version"] = v
 	}
+	maps.Copy(meta, doc.Metadata)
 	// Indicate current version so client knows if this is historical.
 	current := h.Store.CurrentVersion(basePath)
 	meta["current-version"] = strconv.Itoa(current)
@@ -493,6 +510,12 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 
+	pubMeta, err := extractPublisherMeta(req.Metadata)
+	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+
 	expectedVersion := -1 // default: no check when expected-version is absent
 	if ev := req.Metadata["expected-version"]; ev != "" {
 		v, err := strconv.Atoi(ev)
@@ -503,7 +526,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		expectedVersion = v
 	}
 
-	doc, err := h.Store.WriteVersion(req.Path, expectedVersion, []byte(req.Body))
+	doc, err := h.Store.WriteVersion(req.Path, expectedVersion, []byte(req.Body), pubMeta)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			h.logger().Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
@@ -600,6 +623,12 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 		return
 	}
 
+	pubMeta, err := extractPublisherMeta(req.Metadata)
+	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+
 	ev := req.Metadata["expected-version"]
 	if ev == "" {
 		h.writeError(w, protocol.StatusBadRequest, "APPEND requires expected-version metadata")
@@ -611,7 +640,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	doc, err := h.Store.Append(req.Path, expectedVersion, []byte(req.Body))
+	doc, err := h.Store.Append(req.Path, expectedVersion, []byte(req.Body), pubMeta)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
@@ -745,4 +774,28 @@ func escapeMD(s string) string {
 
 func escapeURL(s string) string {
 	return url.PathEscape(s)
+}
+
+// extractPublisherMeta returns non-control metadata keys from a request.
+// Returns nil if no publisher keys are present.
+func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) {
+	var meta map[string]string
+	size := 0
+	for k, v := range reqMeta {
+		if controlKeys[k] {
+			continue
+		}
+		if meta == nil {
+			meta = make(map[string]string)
+		}
+		meta[k] = v
+		size += len(k) + len(v)
+	}
+	if len(meta) > maxPublisherMetaKeys {
+		return nil, fmt.Errorf("too many metadata keys (max %d)", maxPublisherMetaKeys)
+	}
+	if size > maxPublisherMetaBytes {
+		return nil, fmt.Errorf("metadata too large (max %d bytes)", maxPublisherMetaBytes)
+	}
+	return meta, nil
 }

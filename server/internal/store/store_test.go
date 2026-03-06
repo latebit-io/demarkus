@@ -247,7 +247,7 @@ func TestWrite_NewDocument(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	doc, err := s.Write("/new.md", []byte("# Hello\n"))
+	doc, err := s.Write("/new.md", []byte("# Hello\n"), nil)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -282,12 +282,12 @@ func TestWrite_CreatesVersion(t *testing.T) {
 	s := New(root)
 
 	// Write v1 through the protocol.
-	if _, err := s.Write("/doc.md", []byte("# V1\n")); err != nil {
+	if _, err := s.Write("/doc.md", []byte("# V1\n"), nil); err != nil {
 		t.Fatalf("Write v1: %v", err)
 	}
 
 	// Write v2.
-	doc, err := s.Write("/doc.md", []byte("# V2\n"))
+	doc, err := s.Write("/doc.md", []byte("# V2\n"), nil)
 	if err != nil {
 		t.Fatalf("Write v2: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestWrite_Increments(t *testing.T) {
 	s := New(root)
 
 	for i := 1; i <= 3; i++ {
-		doc, err := s.Write("/doc.md", fmt.Appendf(nil, "# V%d\n", i))
+		doc, err := s.Write("/doc.md", fmt.Appendf(nil, "# V%d\n", i), nil)
 		if err != nil {
 			t.Fatalf("Write v%d: %v", i, err)
 		}
@@ -328,7 +328,7 @@ func TestWrite_PathTraversal(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	_, err := s.Write("/../etc/passwd", []byte("evil"))
+	_, err := s.Write("/../etc/passwd", []byte("evil"), nil)
 	if err == nil {
 		t.Fatal("expected error for path traversal")
 	}
@@ -339,7 +339,7 @@ func TestWrite_CreatesSubdirectory(t *testing.T) {
 	s := New(root)
 
 	// Publish to a path whose parent directory does not exist yet.
-	doc, err := s.Write("/newdir/doc.md", []byte("# Hello\n"))
+	doc, err := s.Write("/newdir/doc.md", []byte("# Hello\n"), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestWrite_SubdirectoryTraversal(t *testing.T) {
 		"/../outside/doc.md",
 	}
 	for _, p := range traversals {
-		_, err := s.Write(p, []byte("evil"))
+		_, err := s.Write(p, []byte("evil"), nil)
 		if err == nil {
 			t.Errorf("expected error for traversal path %q", p)
 		}
@@ -385,7 +385,7 @@ func TestWrite_SymlinkSubdirectoryEscape(t *testing.T) {
 
 	// Writing through the symlink should be blocked — the resolved path
 	// is outside the content root.
-	_, err := s.Write("/escaped/doc.md", []byte("# Escaped\n"))
+	_, err := s.Write("/escaped/doc.md", []byte("# Escaped\n"), nil)
 	if err == nil {
 		t.Fatal("expected error for symlink escape write")
 	}
@@ -401,7 +401,7 @@ func TestWrite_TooLarge(t *testing.T) {
 	s := New(root)
 
 	big := make([]byte, protocol.MaxBodyLength+1)
-	_, err := s.Write("/doc.md", big)
+	_, err := s.Write("/doc.md", big, nil)
 	if err == nil {
 		t.Fatal("expected error for oversized content")
 	}
@@ -421,7 +421,7 @@ func TestWrite_ImmutabilityGuard(t *testing.T) {
 	}
 
 	s := New(root)
-	_, err := s.Write("/doc.md", []byte("# New\n"))
+	_, err := s.Write("/doc.md", []byte("# New\n"), nil)
 	if err == nil {
 		t.Fatal("expected error: version 1 already exists")
 	}
@@ -435,12 +435,12 @@ func TestWrite_HashChain(t *testing.T) {
 	s := New(root)
 
 	// Write v1.
-	if _, err := s.Write("/doc.md", []byte("# V1\n")); err != nil {
+	if _, err := s.Write("/doc.md", []byte("# V1\n"), nil); err != nil {
 		t.Fatalf("write v1: %v", err)
 	}
 
 	// Write v2.
-	if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+	if _, err := s.Write("/doc.md", []byte("# V2\n"), nil); err != nil {
 		t.Fatalf("write v2: %v", err)
 	}
 
@@ -472,7 +472,7 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 
 	content := []byte("# Hello\n")
 
-	doc1, err := s.Write("/doc.md", content)
+	doc1, err := s.Write("/doc.md", content, nil)
 	if err != nil {
 		t.Fatalf("write v1: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 	}
 
 	// Publishing identical content should return ErrNotModified.
-	doc2, err := s.Write("/doc.md", content)
+	doc2, err := s.Write("/doc.md", content, nil)
 	if !errors.Is(err, ErrNotModified) {
 		t.Fatalf("expected ErrNotModified, got: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 	}
 
 	// Different content should still create v2.
-	doc3, err := s.Write("/doc.md", []byte("# Updated\n"))
+	doc3, err := s.Write("/doc.md", []byte("# Updated\n"), nil)
 	if err != nil {
 		t.Fatalf("write v2: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 	}
 
 	// Publishing the v2 content again should be a no-op.
-	doc4, err := s.Write("/doc.md", []byte("# Updated\n"))
+	doc4, err := s.Write("/doc.md", []byte("# Updated\n"), nil)
 	if !errors.Is(err, ErrNotModified) {
 		t.Fatalf("expected ErrNotModified, got: %v", err)
 	}
@@ -522,11 +522,11 @@ func TestWriteVersion(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
 
-		doc, err := s.WriteVersion("/doc.md", 1, []byte("# v2\n"))
+		doc, err := s.WriteVersion("/doc.md", 1, []byte("# v2\n"), nil)
 		if err != nil {
 			t.Fatalf("WriteVersion: %v", err)
 		}
@@ -539,14 +539,14 @@ func TestWriteVersion(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
-		if _, err := s.Write("/doc.md", []byte("# v2\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# v2\n"), nil); err != nil {
 			t.Fatalf("write v2: %v", err)
 		}
 
-		doc, err := s.WriteVersion("/doc.md", 1, []byte("# stale edit\n"))
+		doc, err := s.WriteVersion("/doc.md", 1, []byte("# stale edit\n"), nil)
 		if !errors.Is(err, ErrConflict) {
 			t.Fatalf("expected ErrConflict, got: %v", err)
 		}
@@ -559,11 +559,11 @@ func TestWriteVersion(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
 
-		doc, err := s.WriteVersion("/doc.md", -1, []byte("# v2\n"))
+		doc, err := s.WriteVersion("/doc.md", -1, []byte("# v2\n"), nil)
 		if err != nil {
 			t.Fatalf("WriteVersion with -1: %v", err)
 		}
@@ -576,7 +576,7 @@ func TestWriteVersion(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		doc, err := s.WriteVersion("/new.md", 0, []byte("# Hello\n"))
+		doc, err := s.WriteVersion("/new.md", 0, []byte("# Hello\n"), nil)
 		if err != nil {
 			t.Fatalf("WriteVersion: %v", err)
 		}
@@ -589,11 +589,11 @@ func TestWriteVersion(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		if _, err := s.Write("/doc.md", []byte("# v1\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
 
-		doc, err := s.WriteVersion("/doc.md", 0, []byte("# should conflict\n"))
+		doc, err := s.WriteVersion("/doc.md", 0, []byte("# should conflict\n"), nil)
 		if !errors.Is(err, ErrConflict) {
 			t.Fatalf("expected ErrConflict, got: %v", err)
 		}
@@ -618,7 +618,7 @@ func TestWriteVersion(t *testing.T) {
 		s := New(root)
 
 		// Writer A wins.
-		doc, err := s.WriteVersion("/doc.md", 0, []byte("# writer A\n"))
+		doc, err := s.WriteVersion("/doc.md", 0, []byte("# writer A\n"), nil)
 		if err != nil {
 			t.Fatalf("writer A: %v", err)
 		}
@@ -627,7 +627,7 @@ func TestWriteVersion(t *testing.T) {
 		}
 
 		// Writer B arrives with stale expectedVersion=0.
-		doc, err = s.WriteVersion("/doc.md", 0, []byte("# writer B\n"))
+		doc, err = s.WriteVersion("/doc.md", 0, []byte("# writer B\n"), nil)
 		if !errors.Is(err, ErrConflict) {
 			t.Fatalf("writer B: expected ErrConflict, got: %v", err)
 		}
@@ -641,13 +641,13 @@ func TestWriteVersion(t *testing.T) {
 		s := New(root)
 
 		content := []byte("# Hello\n")
-		if _, err := s.Write("/doc.md", content); err != nil {
+		if _, err := s.Write("/doc.md", content, nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
 
 		// Publishing identical content with correct expectedVersion
 		// should return ErrNotModified (not ErrConflict).
-		doc, err := s.WriteVersion("/doc.md", 1, content)
+		doc, err := s.WriteVersion("/doc.md", 1, content, nil)
 		if !errors.Is(err, ErrNotModified) {
 			t.Fatalf("expected ErrNotModified, got: %v", err)
 		}
@@ -662,7 +662,7 @@ func TestArchive(t *testing.T) {
 		t.Helper()
 		root := t.TempDir()
 		s := New(root)
-		if _, err := s.Write("/doc.md", []byte("# Hello\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# Hello\n"), nil); err != nil {
 			t.Fatalf("setup Write: %v", err)
 		}
 		return s, root
@@ -765,7 +765,7 @@ func TestArchive(t *testing.T) {
 
 	t.Run("hash chain valid after archive", func(t *testing.T) {
 		s, _ := setup(t)
-		if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# V2\n"), nil); err != nil {
 			t.Fatalf("Write v2: %v", err)
 		}
 		if err := s.Archive("/doc.md", true); err != nil {
@@ -776,7 +776,7 @@ func TestArchive(t *testing.T) {
 		if err := s.Archive("/doc.md", false); err != nil {
 			t.Fatalf("Unarchive: %v", err)
 		}
-		if _, err := s.Write("/doc.md", []byte("# V3\n")); err != nil {
+		if _, err := s.Write("/doc.md", []byte("# V3\n"), nil); err != nil {
 			t.Fatalf("Write v3: %v", err)
 		}
 		if err := s.VerifyChain("/doc.md"); err != nil {
@@ -789,7 +789,7 @@ func TestArchive(t *testing.T) {
 		if err := s.Archive("/doc.md", true); err != nil {
 			t.Fatalf("Archive: %v", err)
 		}
-		_, err := s.Write("/doc.md", []byte("# New content\n"))
+		_, err := s.Write("/doc.md", []byte("# New content\n"), nil)
 		if err != ErrArchived {
 			t.Errorf("expected ErrArchived, got: %v", err)
 		}
@@ -801,7 +801,7 @@ func TestVerifyChain_Valid(t *testing.T) {
 	s := New(root)
 
 	for i := 1; i <= 3; i++ {
-		if _, err := s.Write("/doc.md", fmt.Appendf(nil, "# V%d\n", i)); err != nil {
+		if _, err := s.Write("/doc.md", fmt.Appendf(nil, "# V%d\n", i), nil); err != nil {
 			t.Fatalf("write v%d: %v", i, err)
 		}
 	}
@@ -815,10 +815,10 @@ func TestVerifyChain_Tampered(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	if _, err := s.Write("/doc.md", []byte("# V1\n")); err != nil {
+	if _, err := s.Write("/doc.md", []byte("# V1\n"), nil); err != nil {
 		t.Fatalf("write v1: %v", err)
 	}
-	if _, err := s.Write("/doc.md", []byte("# V2\n")); err != nil {
+	if _, err := s.Write("/doc.md", []byte("# V2\n"), nil); err != nil {
 		t.Fatalf("write v2: %v", err)
 	}
 
@@ -842,13 +842,13 @@ func TestAppend(t *testing.T) {
 	s := New(root)
 
 	// Create initial document.
-	_, err := s.Write("/doc.md", []byte("# Hello"))
+	_, err := s.Write("/doc.md", []byte("# Hello"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Append content.
-	doc, err := s.Append("/doc.md", 1, []byte("More text."))
+	doc, err := s.Append("/doc.md", 1, []byte("More text."), nil)
 	if err != nil {
 		t.Fatalf("append failed: %v", err)
 	}
@@ -871,12 +871,12 @@ func TestAppend_TrailingNewline(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	_, err := s.Write("/doc.md", []byte("# Hello\n"))
+	_, err := s.Write("/doc.md", []byte("# Hello\n"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = s.Append("/doc.md", 1, []byte("More text."))
+	_, err = s.Append("/doc.md", 1, []byte("More text."), nil)
 	if err != nil {
 		t.Fatalf("append failed: %v", err)
 	}
@@ -896,7 +896,7 @@ func TestAppend_NotFound(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	_, err := s.Append("/missing.md", 1, []byte("content"))
+	_, err := s.Append("/missing.md", 1, []byte("content"), nil)
 	if !os.IsNotExist(err) {
 		t.Fatalf("expected not-exist error, got: %v", err)
 	}
@@ -906,7 +906,7 @@ func TestAppend_Archived(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	_, err := s.Write("/doc.md", []byte("# Hello"))
+	_, err := s.Write("/doc.md", []byte("# Hello"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -914,7 +914,7 @@ func TestAppend_Archived(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = s.Append("/doc.md", 1, []byte("More text."))
+	_, err = s.Append("/doc.md", 1, []byte("More text."), nil)
 	if !errors.Is(err, ErrArchived) {
 		t.Fatalf("expected ErrArchived, got: %v", err)
 	}
@@ -928,12 +928,12 @@ func TestAppend_ExceedsMaxBody(t *testing.T) {
 	for i := range initial {
 		initial[i] = 'x'
 	}
-	_, err := s.Write("/doc.md", initial)
+	_, err := s.Write("/doc.md", initial, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = s.Append("/doc.md", 1, make([]byte, 200))
+	_, err = s.Append("/doc.md", 1, make([]byte, 200), nil)
 	if err == nil {
 		t.Fatal("expected error for combined content exceeding size limit")
 	}
@@ -946,19 +946,198 @@ func TestAppend_Conflict(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	_, err := s.Write("/doc.md", []byte("# Start"))
+	_, err := s.Write("/doc.md", []byte("# Start"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Advance to v2.
-	_, err = s.Write("/doc.md", []byte("# Updated"))
+	_, err = s.Write("/doc.md", []byte("# Updated"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Append with stale version.
-	_, err = s.Append("/doc.md", 1, []byte("Late."))
+	_, err = s.Append("/doc.md", 1, []byte("Late."), nil)
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected ErrConflict, got: %v", err)
+	}
+}
+
+func TestWrite_WithMetadata(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	meta := map[string]string{"type": "journal", "author": "claude"}
+	doc, err := s.Write("/doc.md", []byte("# Hello\n"), meta)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+	if doc.Metadata["type"] != "journal" {
+		t.Errorf("metadata type = %q, want %q", doc.Metadata["type"], "journal")
+	}
+
+	// Version file should contain meta. prefixed keys.
+	vData, err := os.ReadFile(filepath.Join(root, "versions", "doc.md.v1"))
+	if err != nil {
+		t.Fatalf("read version file: %v", err)
+	}
+	content := string(vData)
+	if !strings.Contains(content, "meta.author: claude") {
+		t.Errorf("expected meta.author in version file, got: %q", content)
+	}
+	if !strings.Contains(content, "meta.type: journal") {
+		t.Errorf("expected meta.type in version file, got: %q", content)
+	}
+
+	// Read back via Get and verify metadata is returned.
+	got, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Metadata["type"] != "journal" {
+		t.Errorf("Get metadata type = %q, want %q", got.Metadata["type"], "journal")
+	}
+	if got.Metadata["author"] != "claude" {
+		t.Errorf("Get metadata author = %q, want %q", got.Metadata["author"], "claude")
+	}
+
+	// Read back specific version.
+	got, err = s.Get("/doc.md", 1)
+	if err != nil {
+		t.Fatalf("Get v1: %v", err)
+	}
+	if got.Metadata["type"] != "journal" {
+		t.Errorf("Get v1 metadata type = %q, want %q", got.Metadata["type"], "journal")
+	}
+}
+
+func TestWrite_NilMetadata(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	doc, err := s.Write("/doc.md", []byte("# Hello\n"), nil)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if doc.Metadata != nil {
+		t.Errorf("expected nil metadata, got: %v", doc.Metadata)
+	}
+
+	// Version file should not contain any meta. lines.
+	vData, err := os.ReadFile(filepath.Join(root, "versions", "doc.md.v1"))
+	if err != nil {
+		t.Fatalf("read version file: %v", err)
+	}
+	if strings.Contains(string(vData), "meta.") {
+		t.Errorf("unexpected meta. in version file: %q", string(vData))
+	}
+
+	got, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Metadata != nil {
+		t.Errorf("expected nil metadata on Get, got: %v", got.Metadata)
+	}
+}
+
+func TestWrite_MetadataChangedCreatesNewVersion(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	content := []byte("# Hello\n")
+
+	// Write v1 with metadata.
+	_, err := s.Write("/doc.md", content, map[string]string{"type": "note"})
+	if err != nil {
+		t.Fatalf("Write v1: %v", err)
+	}
+
+	// Same content, same metadata → ErrNotModified.
+	_, err = s.Write("/doc.md", content, map[string]string{"type": "note"})
+	if !errors.Is(err, ErrNotModified) {
+		t.Fatalf("expected ErrNotModified, got: %v", err)
+	}
+
+	// Same content, different metadata → new version.
+	doc, err := s.Write("/doc.md", content, map[string]string{"type": "journal"})
+	if err != nil {
+		t.Fatalf("Write v2: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version = %d, want 2", doc.Version)
+	}
+	if doc.Metadata["type"] != "journal" {
+		t.Errorf("metadata type = %q, want %q", doc.Metadata["type"], "journal")
+	}
+}
+
+func TestAppend_WithMetadata(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// v1 with metadata.
+	_, err := s.Write("/doc.md", []byte("# Hello"), map[string]string{"type": "note"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Append with different metadata.
+	doc, err := s.Append("/doc.md", 1, []byte("More."), map[string]string{"type": "journal"})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version = %d, want 2", doc.Version)
+	}
+
+	// v2 should have the new metadata.
+	got, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata["type"] != "journal" {
+		t.Errorf("v2 metadata type = %q, want %q", got.Metadata["type"], "journal")
+	}
+
+	// v1 should retain its original metadata.
+	v1, err := s.Get("/doc.md", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1.Metadata["type"] != "note" {
+		t.Errorf("v1 metadata type = %q, want %q", v1.Metadata["type"], "note")
+	}
+}
+
+func TestExtractMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want map[string]string
+	}{
+		{"no frontmatter", "# Hello", nil},
+		{"no meta keys", "---\nversion: 1\narchived: false\n---\n# Hello", nil},
+		{"with meta keys", "---\nversion: 1\nmeta.type: journal\nmeta.author: fritz\n---\n# Hello",
+			map[string]string{"type": "journal", "author": "fritz"}},
+		{"mixed keys", "---\nversion: 2\narchived: false\nmeta.agent: true\n---\ncontent",
+			map[string]string{"agent": "true"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractMetadata([]byte(tt.data))
+			if len(got) != len(tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+				return
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("key %q: got %q, want %q", k, got[k], v)
+				}
+			}
+		})
 	}
 }

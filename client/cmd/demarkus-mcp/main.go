@@ -16,7 +16,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 func main() {
@@ -34,7 +34,7 @@ func main() {
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
-	s := server.NewMCPServer("demarkus-mcp", "0.1.0")
+	s := mcpserver.NewMCPServer("demarkus-mcp", "0.1.0")
 
 	h := &handler{client: client, defaultHost: *defaultHost, token: *token}
 	s.AddTool(markFetchTool(*defaultHost), h.markFetch)
@@ -46,7 +46,7 @@ func main() {
 	s.AddTool(markAppendTool(*defaultHost), h.markAppend)
 	s.AddTool(markDiscoverTool(*defaultHost), h.markDiscover)
 
-	if err := server.ServeStdio(s); err != nil {
+	if err := mcpserver.ServeStdio(s); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -236,12 +236,21 @@ func markDiscoverTool(host string) mcp.Tool {
 }
 
 // formatResult builds a text response with status, selected metadata keys, and body.
+// After the explicitly requested keys, any remaining metadata keys (e.g. publisher
+// metadata) are appended so agents always see the full picture.
 func formatResult(r fetch.Result, keys ...string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "status: %s\n", r.Response.Status)
+	shown := make(map[string]bool, len(keys))
 	for _, key := range keys {
 		if v, ok := r.Response.Metadata[key]; ok {
 			fmt.Fprintf(&b, "%s: %s\n", key, v)
+			shown[key] = true
+		}
+	}
+	for k, v := range r.Response.Metadata {
+		if !shown[k] {
+			fmt.Fprintf(&b, "%s: %s\n", k, v)
 		}
 	}
 	if r.Response.Body != "" {
@@ -249,6 +258,21 @@ func formatResult(r fetch.Result, keys ...string) string {
 		b.WriteString(r.Response.Body)
 	}
 	return b.String()
+}
+
+// agentMeta returns publisher metadata with the "agent" key set to the MCP
+// client name from the session context. If the client name is unavailable,
+// it falls back to "unknown".
+func agentMeta(ctx context.Context) map[string]string {
+	name := "unknown"
+	if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
+		if s, ok := session.(mcpserver.SessionWithClientInfo); ok {
+			if n := s.GetClientInfo().Name; n != "" {
+				name = n
+			}
+		}
+	}
+	return map[string]string{"agent": name}
 }
 
 // Tool handlers.
@@ -311,7 +335,7 @@ func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(formatResult(result, "total", "current", "chain-valid", "chain-error")), nil
 }
 
-func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -343,7 +367,7 @@ func (h *handler) markPublish(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("expected_version is required"), nil
 	}
 
-	result, err := h.client.Publish(host, path, body, token, expectedVersion)
+	result, err := h.client.Publish(host, path, body, token, expectedVersion, agentMeta(ctx))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}
@@ -380,7 +404,7 @@ func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.
 	return mcp.NewToolResultText(formatResult(result, "version")), nil
 }
 
-func (h *handler) markAppend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -414,7 +438,7 @@ func (h *handler) markAppend(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError("expected_version must be >= 1"), nil
 	}
 
-	result, err := h.client.Append(host, path, body, token, expectedVersion)
+	result, err := h.client.Append(host, path, body, token, expectedVersion, agentMeta(ctx))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("append failed: %v", err)), nil
 	}

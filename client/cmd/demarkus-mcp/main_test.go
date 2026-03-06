@@ -9,6 +9,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 func TestResolveURL(t *testing.T) {
@@ -321,6 +322,42 @@ func TestFormatResult(t *testing.T) {
 			keys:     []string{"version"},
 			wantSubs: []string{"status: created", "version: 5"},
 		},
+		{
+			name: "publisher metadata included after explicit keys",
+			result: fetch.Result{
+				Response: protocol.Response{
+					Status:   "ok",
+					Metadata: map[string]string{"version": "2", "type": "journal", "author": "claude"},
+					Body:     "hello",
+				},
+			},
+			keys:     []string{"version"},
+			wantSubs: []string{"status: ok", "version: 2", "type: journal", "author: claude", "hello"},
+		},
+		{
+			name: "publisher metadata only when no explicit keys requested",
+			result: fetch.Result{
+				Response: protocol.Response{
+					Status:   "ok",
+					Metadata: map[string]string{"type": "note"},
+					Body:     "body",
+				},
+			},
+			keys:     nil,
+			wantSubs: []string{"status: ok", "type: note", "body"},
+		},
+		{
+			name: "no duplicate when publisher key also in explicit keys",
+			result: fetch.Result{
+				Response: protocol.Response{
+					Status:   "ok",
+					Metadata: map[string]string{"version": "1", "type": "log"},
+					Body:     "data",
+				},
+			},
+			keys:     []string{"version", "type"},
+			wantSubs: []string{"version: 1", "type: log"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -331,8 +368,47 @@ func TestFormatResult(t *testing.T) {
 					t.Errorf("output %q does not contain %q", got, sub)
 				}
 			}
+			// Verify no metadata key appears more than once.
+			for k := range tt.result.Response.Metadata {
+				prefix := k + ": "
+				if count := strings.Count(got, prefix); count > 1 {
+					t.Errorf("key %q appears %d times in output %q", k, count, got)
+				}
+			}
 		})
 	}
+}
+
+func TestAgentMeta(t *testing.T) {
+	t.Run("returns client name from session", func(t *testing.T) {
+		s := mcpserver.NewMCPServer("test", "0.1.0")
+		session := mcpserver.NewInProcessSession("test-session", nil)
+		session.SetClientInfo(mcp.Implementation{Name: "claude-code", Version: "1.0"})
+		ctx := s.WithContext(context.Background(), session)
+
+		meta := agentMeta(ctx)
+		if meta["agent"] != "claude-code" {
+			t.Errorf("agent = %q, want %q", meta["agent"], "claude-code")
+		}
+	})
+
+	t.Run("falls back to unknown without session", func(t *testing.T) {
+		meta := agentMeta(context.Background())
+		if meta["agent"] != "unknown" {
+			t.Errorf("agent = %q, want %q", meta["agent"], "unknown")
+		}
+	})
+
+	t.Run("falls back to unknown with empty client name", func(t *testing.T) {
+		s := mcpserver.NewMCPServer("test", "0.1.0")
+		session := mcpserver.NewInProcessSession("test-session", nil)
+		ctx := s.WithContext(context.Background(), session)
+
+		meta := agentMeta(ctx)
+		if meta["agent"] != "unknown" {
+			t.Errorf("agent = %q, want %q", meta["agent"], "unknown")
+		}
+	})
 }
 
 func TestToolDefinition_MarkDiscover(t *testing.T) {
