@@ -1129,6 +1129,10 @@ func TestExtractMetadata(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := extractMetadata([]byte(tt.data))
+			if tt.want == nil && got != nil {
+				t.Errorf("got %v, want nil", got)
+				return
+			}
 			if len(got) != len(tt.want) {
 				t.Errorf("got %v, want %v", got, tt.want)
 				return

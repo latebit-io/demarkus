@@ -857,6 +857,7 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 // serialization. This is defense in depth — the handler also validates, but
 // the store is a public API callable outside the network path.
 func validateMeta(meta map[string]string) error {
+	size := 0
 	for k, v := range meta {
 		if !protocol.IsValidMetaKey(k) {
 			return fmt.Errorf("metadata key %q contains invalid characters", k)
@@ -864,6 +865,13 @@ func validateMeta(meta map[string]string) error {
 		if !protocol.IsValidMetaValue(v) {
 			return fmt.Errorf("metadata value for key %q contains newlines", k)
 		}
+		size += len(k) + len(v)
+	}
+	if len(meta) > protocol.MaxMetaKeys {
+		return fmt.Errorf("too many metadata keys (max %d)", protocol.MaxMetaKeys)
+	}
+	if size > protocol.MaxMetaBytes {
+		return fmt.Errorf("metadata too large (max %d bytes)", protocol.MaxMetaBytes)
 	}
 	return nil
 }

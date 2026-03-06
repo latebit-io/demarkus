@@ -30,6 +30,13 @@ const (
 
 	// WellKnownManifestPath is the conventional path for agent manifest discovery.
 	WellKnownManifestPath = "/.well-known/agent-manifest.md"
+
+	// MaxMetaKeys is the maximum number of publisher metadata keys.
+	MaxMetaKeys = 10
+
+	// MaxMetaBytes is the approximate maximum size of publisher metadata
+	// (sum of key and value lengths, excluding serialization overhead).
+	MaxMetaBytes = 512
 )
 
 // IsValidMetaKey checks that a metadata key contains only safe characters

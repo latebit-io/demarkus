@@ -25,13 +25,6 @@ import (
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
 const MaxDirectoryEntries = 1000
 
-// maxPublisherMetaKeys is the maximum number of publisher metadata keys.
-const maxPublisherMetaKeys = 10
-
-// maxPublisherMetaBytes is the approximate maximum size of publisher metadata
-// (sum of key and value lengths, excluding serialization overhead).
-const maxPublisherMetaBytes = 512
-
 // controlKeys are request metadata keys consumed by the handler and never stored.
 var controlKeys = map[string]bool{
 	"auth":              true,
@@ -54,6 +47,7 @@ var reservedKeys = map[string]bool{
 	"chain-error":     true,
 	"archived":        true,
 	"entries":         true,
+	"status":          true,
 }
 
 // Handler serves markdown files from a content directory.
@@ -318,12 +312,6 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 		}
 		h.logger().Error("fetch version failed", "path", sanitize(basePath), "version", version, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
-		return
-	}
-
-	if int64(len(doc.Content)) > protocol.MaxBodyLength {
-		h.logger().Error("file too large", "path", sanitize(basePath), "version", version, "size_bytes", len(doc.Content))
-		h.writeError(w, protocol.StatusServerError, "file exceeds size limit")
 		return
 	}
 
@@ -799,11 +787,11 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 		meta[k] = v
 		size += len(k) + len(v)
 	}
-	if len(meta) > maxPublisherMetaKeys {
-		return nil, fmt.Errorf("too many metadata keys (max %d)", maxPublisherMetaKeys)
+	if len(meta) > protocol.MaxMetaKeys {
+		return nil, fmt.Errorf("too many metadata keys (max %d)", protocol.MaxMetaKeys)
 	}
-	if size > maxPublisherMetaBytes {
-		return nil, fmt.Errorf("metadata too large (max %d bytes)", maxPublisherMetaBytes)
+	if size > protocol.MaxMetaBytes {
+		return nil, fmt.Errorf("metadata too large (max %d bytes)", protocol.MaxMetaBytes)
 	}
 	return meta, nil
 }
