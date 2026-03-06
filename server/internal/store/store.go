@@ -454,6 +454,9 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	if int64(len(content)) > protocol.MaxBodyLength {
 		return nil, fmt.Errorf("content exceeds size limit")
 	}
+	if err := validateMeta(meta); err != nil {
+		return nil, err
+	}
 
 	// Validate path stays within the store root (resolve handles traversal + symlinks).
 	if _, err := s.resolve(reqPath); err != nil {
@@ -637,6 +640,9 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	}
 	if len(content) == 0 {
 		return nil, fmt.Errorf("APPEND requires non-empty content")
+	}
+	if err := validateMeta(meta); err != nil {
+		return nil, err
 	}
 	if containsDotDot(reqPath) {
 		return nil, os.ErrNotExist

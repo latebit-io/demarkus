@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net/url"
 	"os"
 	"path"
@@ -195,7 +194,7 @@ func (h *Handler) serveDocument(w io.Writer, req protocol.Request, doc *store.Do
 	body := stripFrontmatter(string(doc.Content))
 	// Copy publisher metadata first, then set server-owned keys so they can't be overwritten.
 	meta := make(map[string]string)
-	maps.Copy(meta, doc.Metadata)
+	copyPublisherMeta(meta, doc.Metadata)
 	meta["modified"] = doc.Modified.Format(time.RFC3339)
 	meta["etag"] = etag
 	meta["version"] = strconv.Itoa(doc.Version)
@@ -319,7 +318,7 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 
 	// Copy publisher metadata first, then set server-owned keys so they can't be overwritten.
 	meta := make(map[string]string)
-	maps.Copy(meta, doc.Metadata)
+	copyPublisherMeta(meta, doc.Metadata)
 	meta["modified"] = doc.Modified.Format(time.RFC3339)
 	meta["version"] = strconv.Itoa(doc.Version)
 	// Indicate current version so client knows if this is historical.
@@ -794,4 +793,16 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 		return nil, fmt.Errorf("metadata too large (max %d bytes)", protocol.MaxMetaBytes)
 	}
 	return meta, nil
+}
+
+// copyPublisherMeta copies stored metadata into dst, filtering out any
+// reserved or control keys. This prevents tampered version files from
+// leaking server-owned keys into responses.
+func copyPublisherMeta(dst, src map[string]string) {
+	for k, v := range src {
+		if reservedKeys[k] || controlKeys[k] {
+			continue
+		}
+		dst[k] = v
+	}
 }
