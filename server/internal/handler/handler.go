@@ -803,6 +803,9 @@ func copyPublisherMeta(dst, src map[string]string) {
 		if reservedKeys[k] || controlKeys[k] {
 			continue
 		}
+		if !protocol.IsValidMetaKey(k) || !protocol.IsValidMetaValue(v) {
+			continue
+		}
 		dst[k] = v
 	}
 }
