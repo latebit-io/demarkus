@@ -55,8 +55,18 @@ func main() {
 	}
 }
 
+// markClient defines the fetch operations used by MCP tool handlers.
+type markClient interface {
+	Fetch(host, path string) (fetch.Result, error)
+	List(host, path string) (fetch.Result, error)
+	Versions(host, path string) (fetch.Result, error)
+	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	Archive(host, path, token string) (fetch.Result, error)
+}
+
 type handler struct {
-	client      *fetch.Client
+	client      markClient
 	defaultHost string
 	token       string
 }
@@ -205,7 +215,7 @@ func markAppendTool(host string) mcp.Tool {
 				"Returns the created version number and modified timestamp. "+
 				"Requires an auth token configured via the -token flag. "+
 				"The body should be valid markdown content to append. "+
-				"expected_version is optional: when omitted, the tool calls VERSIONS to get the "+
+				"expected_version is optional: when omitted or 0, the tool calls VERSIONS to get the "+
 				"current version automatically. Set it explicitly if you already know the version "+
 				"from a prior fetch. "+
 				urlHint(host),
