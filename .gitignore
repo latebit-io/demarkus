@@ -42,3 +42,4 @@ tokens.toml
 
 # MCP config (contains auth tokens)
 .mcp.json
+.mark
