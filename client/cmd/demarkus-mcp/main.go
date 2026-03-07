@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"github.com/latebit/demarkus/client/internal/cache"
@@ -204,8 +205,9 @@ func markAppendTool(host string) mcp.Tool {
 				"Returns the created version number and modified timestamp. "+
 				"Requires an auth token configured via the -token flag. "+
 				"The body should be valid markdown content to append. "+
-				"expected_version is required for optimistic concurrency: set it to the version "+
-				"number from a prior fetch to detect conflicts. "+
+				"expected_version is optional: when omitted, the tool calls VERSIONS to get the "+
+				"current version automatically. Set it explicitly if you already know the version "+
+				"from a prior fetch. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -217,8 +219,7 @@ func markAppendTool(host string) mcp.Tool {
 			mcp.Description("markdown content to append"),
 		),
 		mcp.WithNumber("expected_version",
-			mcp.Required(),
-			mcp.Description("version number from a prior fetch for conflict detection"),
+			mcp.Description("version number from a prior fetch for conflict detection; when omitted, resolved via VERSIONS"),
 		),
 	)
 }
@@ -433,12 +434,21 @@ func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError("append requires a token (-token flag or stored via 'demarkus token add')"), nil
 	}
 
-	expectedVersion, err := req.RequireInt("expected_version")
-	if err != nil {
-		return mcp.NewToolResultError("expected_version is required"), nil
-	}
-	if expectedVersion < 1 {
-		return mcp.NewToolResultError("expected_version must be >= 1"), nil
+	expectedVersion := req.GetInt("expected_version", 0)
+	if expectedVersion == 0 {
+		// Auto-resolve via VERSIONS.
+		vResult, vErr := h.client.Versions(host, path)
+		if vErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: %v", vErr)), nil
+		}
+		cur, ok := vResult.Response.Metadata["current"]
+		if !ok {
+			return mcp.NewToolResultError("could not resolve version: no current version in response"), nil
+		}
+		expectedVersion, err = strconv.Atoi(cur)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: invalid current version %q", cur)), nil
+		}
 	}
 
 	result, err := h.client.Append(host, path, body, token, expectedVersion, agentMeta(ctx))
