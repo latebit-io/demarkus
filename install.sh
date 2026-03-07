@@ -425,11 +425,16 @@ generate_token() {
   local tokens_file="$1"
   local token
 
-  log_step "Generating auth token"
-  token=$("${INSTALL_DIR}/demarkus-token" generate -label "install" -paths "/*" -ops publish -tokens "$tokens_file" 2>/dev/null) || {
+  log_step "Generating auth token" >&2
+  local token_stderr
+  token_stderr=$(mktemp)
+  token=$("${INSTALL_DIR}/demarkus-token" generate -label "install" -paths "/*" -ops publish -tokens "$tokens_file" 2>"$token_stderr") || {
     log_error "Failed to generate auth token"
+    cat "$token_stderr" >&2
+    rm -f "$token_stderr"
     exit 1
   }
+  rm -f "$token_stderr"
 
   if [ "$PLATFORM" = "linux" ]; then
     chown root:"$SERVICE_NAME" "$tokens_file"
