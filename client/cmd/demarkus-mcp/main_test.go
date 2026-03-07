@@ -448,6 +448,173 @@ func TestHandlerMarkDiscover_InvalidURL(t *testing.T) {
 	assertIsToolError(t, result, "requires -host flag")
 }
 
+func TestToolDefinition_MarkAppend(t *testing.T) {
+	tool := markAppendTool("mark://example.com:6309")
+	if tool.Name != "mark_append" {
+		t.Errorf("name = %q, want mark_append", tool.Name)
+	}
+	if slices.Contains(tool.InputSchema.Required, "expected_version") {
+		t.Error("expected_version should not be required")
+	}
+	if !strings.Contains(tool.Description, "optional") {
+		t.Error("description should mention expected_version is optional")
+	}
+}
+
+func TestHandlerMarkAppend_NoToken(t *testing.T) {
+	h := &handler{}
+	ctx := context.Background()
+
+	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
+		"url":  "mark://example.com/doc.md",
+		"body": "appended content",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "requires a token")
+}
+
+// stubClient is a mock markClient for testing handler logic.
+type stubClient struct {
+	versionsFn func(host, path string) (fetch.Result, error)
+	appendFn   func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+}
+
+func (s *stubClient) Fetch(_, _ string) (fetch.Result, error) { return fetch.Result{}, nil }
+func (s *stubClient) List(_, _ string) (fetch.Result, error)  { return fetch.Result{}, nil }
+func (s *stubClient) Publish(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+	return fetch.Result{}, nil
+}
+func (s *stubClient) Archive(_, _, _ string) (fetch.Result, error) {
+	return fetch.Result{}, nil
+}
+func (s *stubClient) Versions(host, path string) (fetch.Result, error) {
+	if s.versionsFn != nil {
+		return s.versionsFn(host, path)
+	}
+	return fetch.Result{}, nil
+}
+func (s *stubClient) Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	if s.appendFn != nil {
+		return s.appendFn(host, path, body, token, expectedVersion, meta)
+	}
+	return fetch.Result{}, nil
+}
+
+func TestHandlerMarkAppend_AutoResolveVersion(t *testing.T) {
+	var capturedVersion int
+	sc := &stubClient{
+		versionsFn: func(_, _ string) (fetch.Result, error) {
+			return fetch.Result{
+				Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"current": "7", "total": "7"},
+				},
+			}, nil
+		},
+		appendFn: func(_, _, _, _ string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
+			capturedVersion = expectedVersion
+			return fetch.Result{
+				Response: protocol.Response{
+					Status:   "created",
+					Metadata: map[string]string{"version": "8", "modified": "2026-03-07T00:00:00Z"},
+				},
+			}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test-token"}
+	ctx := context.Background()
+
+	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
+		"url":  "mark://example.com/journal.md",
+		"body": "new entry",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	if capturedVersion != 7 {
+		t.Errorf("expected_version passed to Append = %d, want 7", capturedVersion)
+	}
+}
+
+func TestHandlerMarkAppend_AutoResolveVersionNotFound(t *testing.T) {
+	sc := &stubClient{
+		versionsFn: func(_, _ string) (fetch.Result, error) {
+			return fetch.Result{
+				Response: protocol.Response{
+					Status:   "not-found",
+					Metadata: map[string]string{},
+				},
+			}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test-token"}
+	ctx := context.Background()
+
+	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
+		"url":  "mark://example.com/missing.md",
+		"body": "new entry",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "not-found")
+}
+
+func TestHandlerMarkAppend_ExplicitVersion(t *testing.T) {
+	var capturedVersion int
+	sc := &stubClient{
+		appendFn: func(_, _, _, _ string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
+			capturedVersion = expectedVersion
+			return fetch.Result{
+				Response: protocol.Response{
+					Status:   "created",
+					Metadata: map[string]string{"version": "4", "modified": "2026-03-07T00:00:00Z"},
+				},
+			}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test-token"}
+	ctx := context.Background()
+
+	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "appended content",
+		"expected_version": float64(3),
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	if capturedVersion != 3 {
+		t.Errorf("expected_version passed to Append = %d, want 3", capturedVersion)
+	}
+}
+
+func TestHandlerMarkAppend_NegativeVersion(t *testing.T) {
+	h := &handler{token: "test-token"}
+	ctx := context.Background()
+
+	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "appended content",
+		"expected_version": float64(-1),
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "expected_version must be >= 0")
+}
+
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {
 	t.Helper()
