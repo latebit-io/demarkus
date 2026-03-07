@@ -8,6 +8,24 @@ permalink: /scenarios/public-hub/
 
 Run a publicly accessible Demarkus server with TLS, open read access, and optional write tokens. Good for publishing docs, specs, or knowledge bases.
 
+## The Hub Pattern
+
+A **hub** is a demarkus server that acts as a discovery index — it links to other demarkus servers rather than hosting original content. Think of it as a curated directory for the demarkus network.
+
+Hubs organize servers into categories (tools, blogs, projects, other hubs) and publish an agent manifest at `/.well-known/agent-manifest.md` so LLM agents can discover and navigate the network automatically.
+
+The more hubs link to each other, the richer the network becomes. Anyone can run a hub.
+
+### Reference Implementation
+
+The public hub at [`mark://hub.demarkus.io`](https://github.com/latebit-io/demarkus-hub) is a working example. Its content lives in a Git repo and CI publishes to the live server on every push to `main`. Browse it:
+
+```bash
+demarkus mark://hub.demarkus.io/index.md
+```
+
+See the repo for structure, contributing guidelines, and how to list your own server: [github.com/latebit-io/demarkus-hub](https://github.com/latebit-io/demarkus-hub)
+
 ## What you'll have
 
 - A server on a VPS with a real domain and Let's Encrypt certificate
