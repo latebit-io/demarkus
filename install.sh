@@ -49,13 +49,14 @@ log_step()  { printf "${BLUE}==> %s${NC}\n" "$*"; }
 # --- Install permissions ---
 
 check_install_permissions() {
-  if [ -w "$INSTALL_DIR" ]; then
+  if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
     return
   fi
   # Only use sudo when stdin is a TTY (so it can prompt for a password).
   # When piped (curl | bash), stdin is not a TTY — fall back to ~/.local/bin.
   if [ -t 0 ] && command -v sudo >/dev/null 2>&1; then
     SUDO="sudo"
+    $SUDO mkdir -p "$INSTALL_DIR"
     log_info "Will use sudo to install to ${INSTALL_DIR}"
   else
     local user_bin="$HOME/.local/bin"
@@ -913,8 +914,8 @@ do_install() {
   # Copy this script for future updates
   local self="${BASH_SOURCE[0]:-$0}"
   if [ -f "$self" ]; then
-    cp "$self" "${INSTALL_DIR}/demarkus-install"
-    chmod 755 "${INSTALL_DIR}/demarkus-install"
+    $SUDO cp "$self" "${INSTALL_DIR}/demarkus-install"
+    $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
   fi
 
   # Summary
@@ -966,12 +967,24 @@ do_install() {
   echo "  demarkus-token generate -paths \"/*\" -ops publish -tokens ${tokens_file}"
   echo ""
   log_info "Update later with: demarkus-install update"
+
+  # PATH hint if we installed to a non-standard location
+  if [ "$INSTALL_DIR" != "/usr/local/bin" ]; then
+    echo ""
+    log_warn "Binaries installed to ${INSTALL_DIR} — make sure it's in your PATH."
+    if [ "$PLATFORM" = "darwin" ]; then
+      echo "  Add to ~/.zshrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    else
+      echo "  Add to ~/.bashrc: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+  fi
 }
 
 do_install_client() {
   local version="$1"
 
   detect_platform
+  check_install_permissions
 
   if [ -z "$version" ]; then
     log_info "Fetching latest client version..."
@@ -1017,6 +1030,7 @@ do_update() {
   done
 
   detect_platform
+  check_install_permissions
 
   # Read current version
   local version_file="${CONFIG_DIR}/version"
@@ -1060,8 +1074,8 @@ do_update() {
   }
 
   if [ -n "$new_script" ]; then
-    echo "$new_script" > "${INSTALL_DIR}/demarkus-install"
-    chmod 755 "${INSTALL_DIR}/demarkus-install"
+    echo "$new_script" | $SUDO tee "${INSTALL_DIR}/demarkus-install" > /dev/null
+    $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
     # Re-execute with the new script for migrations
     exec "${INSTALL_DIR}/demarkus-install" _do_update_inner \
       --from "$current_version" --to "$version"
@@ -1187,8 +1201,8 @@ do_uninstall() {
   fi
 
   # Remove binaries
-  for bin in demarkus-server demarkus-token demarkus demarkus-tui demarkus-install; do
-    rm -f "${INSTALL_DIR}/${bin}"
+  for bin in demarkus-server demarkus-token demarkus demarkus-tui demarkus-mcp demarkus-install; do
+    $SUDO rm -f "${INSTALL_DIR}/${bin}"
   done
   log_info "Removed binaries from ${INSTALL_DIR}/"
 
