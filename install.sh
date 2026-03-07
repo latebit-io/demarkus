@@ -197,7 +197,7 @@ fi
 
 github_api() {
   local url="$1"
-  curl -fsSL "${CURL_AUTH_ARGS[@]}" "$url" 2>/dev/null
+  curl -fsSL ${CURL_AUTH_ARGS[@]+"${CURL_AUTH_ARGS[@]}"} "$url" 2>/dev/null
 }
 
 fetch_latest_version() {
