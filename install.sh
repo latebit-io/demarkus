@@ -74,7 +74,7 @@ _acquire_sudo() {
   if ! command -v sudo >/dev/null 2>&1; then
     return 1
   fi
-  if sudo -n true 2>/dev/null || { [ -e /dev/tty ] && sudo true </dev/tty 2>/dev/tty; }; then
+  if sudo -n true 2>/dev/null || { ( : </dev/tty ) 2>/dev/null && sudo true </dev/tty 2>/dev/tty; }; then
     SUDO="sudo"
     return 0
   fi
