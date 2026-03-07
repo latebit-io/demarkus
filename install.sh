@@ -1136,7 +1136,7 @@ do_update() {
   log_info "Updating install script..."
   local script_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh"
   local new_script
-  new_script=$(curl -fsSL "${CURL_AUTH_ARGS[@]}" "$script_url" 2>/dev/null) || {
+  new_script=$(curl -fsSL ${CURL_AUTH_ARGS[@]+"${CURL_AUTH_ARGS[@]}"} "$script_url" 2>/dev/null) || {
     log_warn "Could not fetch updated install script, continuing with current version"
     new_script=""
   }
