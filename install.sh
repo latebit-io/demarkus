@@ -25,17 +25,18 @@ INSTALL_DIR="/usr/local/bin"
 # If demarkus is already installed somewhere, use that directory so
 # update/uninstall operate on the same location as the original install.
 _detect_existing_install_dir() {
-  # When running as demarkus-install, use our own location.
+  # type -P returns only filesystem paths, never aliases or shell functions.
+  # -x guard ensures the result is an actual executable before using dirname.
   local self
-  self=$(command -v demarkus-install 2>/dev/null || true)
-  if [ -n "$self" ]; then
+  self=$(type -P demarkus-install 2>/dev/null || true)
+  if [ -x "$self" ]; then
     INSTALL_DIR=$(dirname "$self")
     return
   fi
   # Fall back to where the client binary lives.
   local cli
-  cli=$(command -v demarkus 2>/dev/null || true)
-  if [ -n "$cli" ]; then
+  cli=$(type -P demarkus 2>/dev/null || true)
+  if [ -x "$cli" ]; then
     INSTALL_DIR=$(dirname "$cli")
   fi
 }
@@ -68,12 +69,22 @@ log_step()  { printf "${BLUE}==> %s${NC}\n" "$*"; }
 # --- Install permissions ---
 
 check_install_permissions() {
+  local require=false
+  [ "${1:-}" = "--require" ] && require=true
+
   if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
     return
   fi
+
+  # Running as root: no sudo needed, just create the directory.
+  if [ "$(id -u)" -eq 0 ]; then
+    mkdir -p "$INSTALL_DIR"
+    return
+  fi
+
   # Use sudo if available. sudo can prompt via /dev/tty even in curl|bash pipes
   # where stdin is not a TTY. Try non-interactive first (cached creds), then
-  # fall back to interactive (prompts via /dev/tty), then fall back to ~/.local/bin.
+  # fall back to interactive (prompts via /dev/tty).
   if command -v sudo >/dev/null 2>&1; then
     if sudo -n true 2>/dev/null || { [ -e /dev/tty ] && sudo true </dev/tty 2>/dev/tty; }; then
       SUDO="sudo"
@@ -82,6 +93,14 @@ check_install_permissions() {
       return
     fi
   fi
+
+  # For update/uninstall, switching directories would corrupt the existing install.
+  if [ "$require" = true ]; then
+    log_error "Cannot write to ${INSTALL_DIR} and sudo is not available."
+    log_error "Run as root or with sudo."
+    exit 1
+  fi
+
   local user_bin="$HOME/.local/bin"
   mkdir -p "$user_bin"
   INSTALL_DIR="$user_bin"
@@ -995,9 +1014,9 @@ do_install() {
     echo ""
     log_warn "Binaries installed to ${INSTALL_DIR} — make sure it's in your PATH."
     if [ "$PLATFORM" = "darwin" ]; then
-      echo "  Add to ~/.zshrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+      echo "  Add to ~/.zshrc:  export PATH=\"${INSTALL_DIR}:\$PATH\""
     else
-      echo "  Add to ~/.bashrc: export PATH=\"\$HOME/.local/bin:\$PATH\""
+      echo "  Add to ~/.bashrc: export PATH=\"${INSTALL_DIR}:\$PATH\""
     fi
   fi
 }
@@ -1052,7 +1071,7 @@ do_update() {
   done
 
   detect_platform
-  check_install_permissions
+  check_install_permissions --require
 
   # Read current version
   local version_file="${CONFIG_DIR}/version"
@@ -1117,7 +1136,7 @@ _do_update_inner() {
   done
 
   detect_platform
-  check_install_permissions
+  check_install_permissions --require
 
   _TMPDIR=$(mktemp -d) || {
     log_error "Failed to create temporary directory"
@@ -1141,7 +1160,7 @@ _do_update_inner() {
 
   # Stop service before replacing binaries (avoids "Text file busy")
   if [ "$PLATFORM" = "linux" ]; then
-    systemctl stop demarkus 2>/dev/null || true
+    $SUDO systemctl stop demarkus 2>/dev/null || true
     sleep 1
     pkill -f demarkus-server 2>/dev/null || true
     sleep 1
@@ -1170,7 +1189,7 @@ _do_update_inner() {
 
   # Restart service
   if [ "$PLATFORM" = "linux" ]; then
-    systemctl restart demarkus 2>/dev/null || log_warn "Could not restart service"
+    $SUDO systemctl restart demarkus 2>/dev/null || log_warn "Could not restart service"
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
     if [ -f "$plist" ]; then
@@ -1187,7 +1206,7 @@ _do_update_inner() {
   fi
 
   # Update version marker
-  echo "$to" > "${CONFIG_DIR}/version"
+  echo "$to" | $SUDO tee "${CONFIG_DIR}/version" > /dev/null
 
   log_step "Updated to v${to}"
 }
@@ -1203,9 +1222,16 @@ do_uninstall() {
   done
 
   detect_platform
-  check_install_permissions
+  check_install_permissions --require
 
   log_step "Uninstalling Demarkus"
+
+  # Read content root from service file before removing it
+  local content_root=""
+  if [ "$PLATFORM" = "linux" ] && [ -f /etc/systemd/system/demarkus.service ]; then
+    content_root=$(grep DEMARKUS_ROOT /etc/systemd/system/demarkus.service 2>/dev/null \
+      | sed 's/.*=//' || true)
+  fi
 
   # Stop and disable service
   if [ "$PLATFORM" = "linux" ]; then
@@ -1237,22 +1263,17 @@ do_uninstall() {
 
   # Remove config
   if [ -d "$CONFIG_DIR" ]; then
-    rm -rf "$CONFIG_DIR"
+    $SUDO rm -rf "$CONFIG_DIR"
     log_info "Removed config directory ${CONFIG_DIR}/"
   fi
 
   # Remove content directory
   if [ "$keep_data" = false ]; then
-    local content_root=""
-    if [ "$PLATFORM" = "linux" ] && [ -f /etc/systemd/system/demarkus.service ]; then
-      content_root=$(grep DEMARKUS_ROOT /etc/systemd/system/demarkus.service 2>/dev/null \
-        | sed 's/.*=//' || true)
-    fi
     if [ -n "$content_root" ] && [ -d "$content_root" ]; then
       printf "Remove content directory ${content_root}? [y/N]: "
-      read -r confirm
+      read -r confirm </dev/tty || confirm="N"
       if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-        rm -rf "$content_root"
+        $SUDO rm -rf "$content_root"
         log_info "Removed ${content_root}/"
       fi
     fi
@@ -1260,7 +1281,7 @@ do_uninstall() {
 
   # Remove system user (Linux only)
   if [ "$PLATFORM" = "linux" ] && id "$SERVICE_NAME" >/dev/null 2>&1; then
-    userdel "$SERVICE_NAME" 2>/dev/null || true
+    $SUDO userdel "$SERVICE_NAME" 2>/dev/null || true
     log_info "Removed system user '${SERVICE_NAME}'"
   fi
 
