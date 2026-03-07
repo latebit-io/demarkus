@@ -785,9 +785,8 @@ do_install() {
   fi
 
   detect_platform
-  check_install_permissions
 
-  # Client-only mode
+  # Client-only mode — permissions are handled inside do_install_client
   if [ "$client_only" = true ]; then
     do_install_client "$version"
     return
@@ -798,6 +797,8 @@ do_install() {
     log_error "Server install requires root. Run with sudo or as root."
     exit 1
   fi
+
+  check_install_permissions
 
   # On reinstall, recover values from existing service config
   read_existing_config
@@ -1231,8 +1232,12 @@ _do_update_inner() {
     fi
   fi
 
-  # Update version marker
-  echo "$to" | $SUDO tee "${CONFIG_DIR}/version" > /dev/null
+  # Update version marker (use sudo only when CONFIG_DIR isn't user-writable, e.g. /etc/demarkus on Linux)
+  if [ -w "$CONFIG_DIR" ]; then
+    echo "$to" > "${CONFIG_DIR}/version"
+  else
+    echo "$to" | $SUDO tee "${CONFIG_DIR}/version" > /dev/null
+  fi
 
   log_step "Updated to v${to}"
 }
