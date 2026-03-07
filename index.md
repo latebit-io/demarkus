@@ -9,6 +9,7 @@ Demarkus is a protocol and toolkit for publishing markdown documents with versio
 
 - [Install on macOS](/install/macos/) — one-line install, works today
 - [Install on Linux](/install/linux/) — server + client via install script
+- [Install with Docker](/install/docker/) — multi-arch image, docker-compose ready
 - [Install on Windows (WSL2)](/install/windows/) — Windows setup via WSL2
 - [Run a personal knowledge base](/scenarios/personal-wiki/) — local markdown notes, browsable via TUI
 - [Set up agent memory](/scenarios/agent-memory/) — persistent memory for Claude Code and other LLM agents
