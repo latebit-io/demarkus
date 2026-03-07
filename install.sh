@@ -21,6 +21,25 @@ set -euo pipefail
 
 GITHUB_REPO="latebit-io/demarkus"
 INSTALL_DIR="/usr/local/bin"
+
+# If demarkus is already installed somewhere, use that directory so
+# update/uninstall operate on the same location as the original install.
+_detect_existing_install_dir() {
+  # When running as demarkus-install, use our own location.
+  local self
+  self=$(command -v demarkus-install 2>/dev/null || true)
+  if [ -n "$self" ]; then
+    INSTALL_DIR=$(dirname "$self")
+    return
+  fi
+  # Fall back to where the client binary lives.
+  local cli
+  cli=$(command -v demarkus 2>/dev/null || true)
+  if [ -n "$cli" ]; then
+    INSTALL_DIR=$(dirname "$cli")
+  fi
+}
+_detect_existing_install_dir
 CONFIG_DIR_LINUX="/etc/demarkus"
 CONFIG_DIR_MACOS="$HOME/.demarkus"
 DEFAULT_ROOT_LINUX="/var/lib/demarkus"
@@ -52,18 +71,21 @@ check_install_permissions() {
   if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
     return
   fi
-  # Only use sudo when stdin is a TTY (so it can prompt for a password).
-  # When piped (curl | bash), stdin is not a TTY — fall back to ~/.local/bin.
-  if [ -t 0 ] && command -v sudo >/dev/null 2>&1; then
-    SUDO="sudo"
-    $SUDO mkdir -p "$INSTALL_DIR"
-    log_info "Will use sudo to install to ${INSTALL_DIR}"
-  else
-    local user_bin="$HOME/.local/bin"
-    mkdir -p "$user_bin"
-    INSTALL_DIR="$user_bin"
-    log_info "Installing to ${user_bin} (add to PATH if not already there)"
+  # Use sudo if available. sudo can prompt via /dev/tty even in curl|bash pipes
+  # where stdin is not a TTY. Try non-interactive first (cached creds), then
+  # fall back to interactive (prompts via /dev/tty), then fall back to ~/.local/bin.
+  if command -v sudo >/dev/null 2>&1; then
+    if sudo -n true 2>/dev/null || { [ -e /dev/tty ] && sudo true </dev/tty 2>/dev/tty; }; then
+      SUDO="sudo"
+      $SUDO mkdir -p "$INSTALL_DIR"
+      log_info "Will use sudo to install to ${INSTALL_DIR}"
+      return
+    fi
   fi
+  local user_bin="$HOME/.local/bin"
+  mkdir -p "$user_bin"
+  INSTALL_DIR="$user_bin"
+  log_info "Installing to ${user_bin} (add to PATH if not already there)"
 }
 
 # --- Platform detection ---
@@ -1181,20 +1203,27 @@ do_uninstall() {
   done
 
   detect_platform
+  check_install_permissions
 
   log_step "Uninstalling Demarkus"
 
   # Stop and disable service
   if [ "$PLATFORM" = "linux" ]; then
-    systemctl stop demarkus 2>/dev/null || true
-    systemctl disable demarkus 2>/dev/null || true
-    rm -f /etc/systemd/system/demarkus.service
-    systemctl daemon-reload 2>/dev/null || true
+    $SUDO systemctl stop demarkus 2>/dev/null || true
+    $SUDO systemctl disable demarkus 2>/dev/null || true
+    $SUDO rm -f /etc/systemd/system/demarkus.service
+    $SUDO systemctl daemon-reload 2>/dev/null || true
     log_info "Removed systemd service"
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
     if [ -f "$plist" ]; then
-      launchctl unload "$plist" 2>/dev/null || true
+      local macos_major
+      macos_major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
+      if [ "${macos_major:-0}" -ge 14 ] 2>/dev/null; then
+        launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
+      else
+        launchctl unload "$plist" 2>/dev/null || true
+      fi
       rm -f "$plist"
       log_info "Removed launchd service"
     fi
