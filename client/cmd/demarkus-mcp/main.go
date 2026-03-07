@@ -219,7 +219,7 @@ func markAppendTool(host string) mcp.Tool {
 			mcp.Description("markdown content to append"),
 		),
 		mcp.WithNumber("expected_version",
-			mcp.Description("version number from a prior fetch for conflict detection; when omitted, resolved via VERSIONS"),
+			mcp.Description("version number from a prior fetch for conflict detection; when omitted or 0, resolved via VERSIONS"),
 		),
 	)
 }
@@ -440,6 +440,9 @@ func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		vResult, vErr := h.client.Versions(host, path)
 		if vErr != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: %v", vErr)), nil
+		}
+		if vResult.Response.Status != "ok" {
+			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: %s", vResult.Response.Status)), nil
 		}
 		cur, ok := vResult.Response.Metadata["current"]
 		if !ok {
