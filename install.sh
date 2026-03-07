@@ -426,7 +426,7 @@ generate_token() {
   local token
 
   log_step "Generating auth token"
-  token=$("${INSTALL_DIR}/demarkus-token" generate -label "install" -paths "/*" -ops publish -tokens "$tokens_file") || {
+  token=$("${INSTALL_DIR}/demarkus-token" generate -label "install" -paths "/*" -ops publish -tokens "$tokens_file" 2>/dev/null) || {
     log_error "Failed to generate auth token"
     exit 1
   }
@@ -565,14 +565,19 @@ EOF
 verify_service_running() {
   if [ "$PLATFORM" != "linux" ]; then return; fi
 
-  log_info "Verifying service is running..."
+  log_step "Verifying service is running"
   sleep 2
 
   if systemctl is-active --quiet demarkus 2>/dev/null; then
     log_info "Service is running"
   else
-    log_error "Service failed to start. Check logs with: journalctl -u demarkus -n 20 --no-pager"
-    journalctl -u demarkus -n 5 --no-pager 2>/dev/null || true
+    log_error "Service failed to start"
+    echo ""
+    log_info "Recent logs:"
+    journalctl -u demarkus -n 20 --no-pager 2>/dev/null || true
+    echo ""
+    log_info "Check full logs with: journalctl -u demarkus --no-pager"
+    log_info "Check service status with: systemctl status demarkus"
     exit 1
   fi
 }
@@ -906,11 +911,9 @@ do_install() {
 
   local tokens_file="${CONFIG_DIR}/tokens.toml"
 
-  # Generate initial token only on fresh install
   local raw_token=""
-  if [ "$is_reinstall" = true ] && [ -f "$tokens_file" ]; then
+  if [ -f "$tokens_file" ]; then
     log_info "Keeping existing tokens file: ${tokens_file}"
-    # Ensure permissions are correct (may have been wrong from earlier installs)
     if [ "$PLATFORM" = "linux" ]; then
       chown root:"$SERVICE_NAME" "$tokens_file"
       chmod 640 "$tokens_file"
