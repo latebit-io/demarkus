@@ -862,7 +862,7 @@ do_install() {
   fi
 
   # Stop service before binary replacement (avoids "Text file busy")
-  if pgrep -f demarkus-server >/dev/null 2>&1; then
+  if pgrep -x demarkus-server >/dev/null 2>&1; then
     log_info "Stopping running service before replacing binaries"
     if [ "$PLATFORM" = "linux" ]; then
       $SUDO systemctl stop demarkus 2>/dev/null || true
@@ -880,13 +880,13 @@ do_install() {
     fi
     # Wait for process to actually exit
     local wait_count=0
-    while pgrep -f demarkus-server >/dev/null 2>&1 && [ $wait_count -lt 10 ]; do
+    while pgrep -x demarkus-server >/dev/null 2>&1 && [ $wait_count -lt 10 ]; do
       sleep 1
       wait_count=$((wait_count + 1))
     done
     # Force kill if still running
-    if pgrep -f demarkus-server >/dev/null 2>&1; then
-      $SUDO pkill -9 -f demarkus-server 2>/dev/null || true
+    if pgrep -x demarkus-server >/dev/null 2>&1; then
+      $SUDO pkill -9 -x demarkus-server 2>/dev/null || true
       sleep 1
     fi
   fi
