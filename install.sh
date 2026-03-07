@@ -862,12 +862,10 @@ do_install() {
   fi
 
   # Stop service before binary replacement (avoids "Text file busy")
-  if [ "$is_reinstall" = true ]; then
+  if pgrep -x demarkus-server >/dev/null 2>&1; then
+    log_info "Stopping running service before replacing binaries"
     if [ "$PLATFORM" = "linux" ]; then
       $SUDO systemctl stop demarkus 2>/dev/null || true
-      sleep 1
-      $SUDO pkill -f demarkus-server 2>/dev/null || true
-      sleep 1
     elif [ "$PLATFORM" = "darwin" ]; then
       local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
       if [ -f "$plist" ]; then
@@ -879,7 +877,21 @@ do_install() {
           launchctl unload "$plist" 2>/dev/null || true
         fi
       fi
-      pkill -f demarkus-server 2>/dev/null || true
+    fi
+    # Wait for process to exit, escalate if needed
+    local wait_count=0
+    while pgrep -x demarkus-server >/dev/null 2>&1 && [ $wait_count -lt 5 ]; do
+      sleep 1
+      wait_count=$((wait_count + 1))
+    done
+    # SIGTERM if still running (handles manually started processes)
+    if pgrep -x demarkus-server >/dev/null 2>&1; then
+      $SUDO pkill -x demarkus-server 2>/dev/null || true
+      sleep 2
+    fi
+    # SIGKILL as last resort
+    if pgrep -x demarkus-server >/dev/null 2>&1; then
+      $SUDO pkill -9 -x demarkus-server 2>/dev/null || true
       sleep 1
     fi
   fi
