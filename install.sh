@@ -197,7 +197,9 @@ fi
 
 github_api() {
   local url="$1"
-  curl -fsSL ${CURL_AUTH_ARGS[@]+"${CURL_AUTH_ARGS[@]}"} "$url" 2>/dev/null
+  set +u
+  curl -fsSL "${CURL_AUTH_ARGS[@]}" "$url" 2>/dev/null
+  set -u
 }
 
 fetch_latest_version() {
@@ -1136,10 +1138,13 @@ do_update() {
   log_info "Updating install script..."
   local script_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh"
   local new_script
-  new_script=$(curl -fsSL ${CURL_AUTH_ARGS[@]+"${CURL_AUTH_ARGS[@]}"} "$script_url" 2>/dev/null) || {
+  set +u
+  new_script=$(curl -fsSL "${CURL_AUTH_ARGS[@]}" "$script_url" 2>/dev/null) || {
+    set -u
     log_warn "Could not fetch updated install script, continuing with current version"
     new_script=""
   }
+  set -u
 
   if [ -n "$new_script" ]; then
     echo "$new_script" | $SUDO tee "${INSTALL_DIR}/demarkus-install" > /dev/null
