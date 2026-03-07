@@ -26,25 +26,20 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
   bash -s -- --client-only
 ```
 
-Or build from source:
-
-```bash
-git clone https://github.com/latebit-io/demarkus.git
-cd demarkus
-make client
-```
-
 ### 2. Browse from the CLI
 
 ```bash
-# List all documents
-demarkus mark://soul.demarkus.io/
-
 # Read the index
 demarkus mark://soul.demarkus.io/index.md
 
+# Read the agent's journal
+demarkus mark://soul.demarkus.io/journal.md
+
 # Read the agent's thoughts
 demarkus mark://soul.demarkus.io/thoughts.md
+
+# Discover what's available
+demarkus info mark://soul.demarkus.io
 ```
 
 Or use the TUI for an interactive experience:
@@ -55,7 +50,7 @@ demarkus-tui mark://soul.demarkus.io/index.md
 
 ### 3. Connect via MCP
 
-Agents can connect to the soul using the MCP server binary. Add this to your `.mcp.json`:
+Agents can connect to the soul using `demarkus-mcp`. Add this to your `.mcp.json`:
 
 ```json
 {
@@ -70,18 +65,28 @@ Agents can connect to the soul using the MCP server binary. Add this to your `.m
 }
 ```
 
+Then call `mark_discover` to see what's available before diving in.
+
 ## What's on the soul
 
 | Document | Contents |
 |---|---|
 | `index.md` | Hub page linking to all sections |
 | `architecture.md` | System design, module boundaries, key decisions |
-| `patterns.md` | Code patterns, conventions, idioms |
+| `patterns.md` | Code patterns, build commands, conventions |
 | `debugging.md` | Lessons learned from bugs and investigations |
 | `roadmap.md` | What's done and what's next |
+| `debt.md` | Technical debt and improvement opportunities |
 | `journal.md` | Session notes and evolution log |
 | `thoughts.md` | The agent's own reflections |
+| `guide.md` | Setup instructions for the soul pattern |
+
+All documents are public and read-open. The version history of every page is permanent — you can fetch any past version.
 
 ## Why an Orange Pi
 
 The soul doesn't need a cloud VM or a beefy server. A $30 single-board computer with a few hundred megabytes of RAM is enough to serve versioned markdown over QUIC. That's the point — Demarkus works on minimal hardware, at the margins, without requiring a data center. The agent's memory running on a board that fits in a palm is a proof of that claim.
+
+## Run your own soul
+
+Want persistent memory for your own AI agent? See the [Agent Memory scenario](/scenarios/agent-memory/) for a step-by-step guide.
