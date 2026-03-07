@@ -21,12 +21,37 @@ set -euo pipefail
 
 GITHUB_REPO="latebit-io/demarkus"
 INSTALL_DIR="/usr/local/bin"
+
+# If demarkus is already installed somewhere, use that directory so
+# update/uninstall operate on the same location as the original install.
+_detect_existing_install_dir() {
+  # type -P returns only filesystem paths, never aliases or shell functions.
+  # -x guard ensures the result is an actual executable before using dirname.
+  local self
+  self=$(type -P demarkus-install 2>/dev/null || true)
+  if [ -x "$self" ]; then
+    INSTALL_DIR=$(dirname "$self")
+    return
+  fi
+  # Fall back to where the client binary lives.
+  local cli
+  cli=$(type -P demarkus 2>/dev/null || true)
+  if [ -x "$cli" ]; then
+    INSTALL_DIR=$(dirname "$cli")
+  fi
+}
+_detect_existing_install_dir
 CONFIG_DIR_LINUX="/etc/demarkus"
 CONFIG_DIR_MACOS="$HOME/.demarkus"
 DEFAULT_ROOT_LINUX="/var/lib/demarkus"
 DEFAULT_ROOT_MACOS="$HOME/.demarkus/content"
 SERVICE_NAME="demarkus"
 SCRIPT_VERSION="1"
+
+# Global state
+SUDO=""       # set to "sudo" if needed for INSTALL_DIR writes
+_TMPDIR=""    # global tmpdir for EXIT trap
+trap '[ -n "$_TMPDIR" ] && rm -rf "$_TMPDIR"' EXIT
 
 # --- Logging ---
 
@@ -41,6 +66,69 @@ log_warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$*"; }
 log_error() { printf "${RED}[error]${NC} %s\n" "$*" >&2; }
 log_step()  { printf "${BLUE}==> %s${NC}\n" "$*"; }
 
+# --- Install permissions ---
+
+_acquire_sudo() {
+  # Set SUDO="sudo" if we can get authorization. Works in curl|bash pipes because
+  # sudo opens /dev/tty directly. Returns 0 on success, 1 if unavailable/denied.
+  if ! command -v sudo >/dev/null 2>&1; then
+    return 1
+  fi
+  if sudo -n true 2>/dev/null || { ( : </dev/tty ) 2>/dev/null && sudo true </dev/tty 2>/dev/tty; }; then
+    SUDO="sudo"
+    return 0
+  fi
+  return 1
+}
+
+check_install_permissions() {
+  local require=false
+  [ "${1:-}" = "--require" ] && require=true
+
+  # Running as root: all operations are already privileged, nothing to do.
+  if [ "$(id -u)" -eq 0 ]; then
+    mkdir -p "$INSTALL_DIR"
+    return
+  fi
+
+  # On Linux, update/uninstall also touch CONFIG_DIR (/etc/demarkus) and systemd,
+  # so we need sudo even when INSTALL_DIR happens to be writable by the current user.
+  if [ "$require" = true ] && [ "${PLATFORM:-}" = "linux" ]; then
+    if ! _acquire_sudo; then
+      log_error "Cannot perform privileged operations and sudo is not available."
+      log_error "Run as root or with sudo."
+      exit 1
+    fi
+    mkdir -p "$INSTALL_DIR" 2>/dev/null || $SUDO mkdir -p "$INSTALL_DIR"
+    return
+  fi
+
+  if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
+    return
+  fi
+
+  # Use sudo if available. sudo can prompt via /dev/tty even in curl|bash pipes
+  # where stdin is not a TTY. Try non-interactive first (cached creds), then
+  # fall back to interactive (prompts via /dev/tty).
+  if _acquire_sudo; then
+    $SUDO mkdir -p "$INSTALL_DIR"
+    log_info "Will use sudo to install to ${INSTALL_DIR}"
+    return
+  fi
+
+  # For update/uninstall, switching directories would corrupt the existing install.
+  if [ "$require" = true ]; then
+    log_error "Cannot write to ${INSTALL_DIR} and sudo is not available."
+    log_error "Run as root or with sudo."
+    exit 1
+  fi
+
+  local user_bin="$HOME/.local/bin"
+  mkdir -p "$user_bin"
+  INSTALL_DIR="$user_bin"
+  log_info "Installing to ${user_bin} (add to PATH if not already there)"
+}
+
 # --- Platform detection ---
 
 detect_platform() {
@@ -48,8 +136,22 @@ detect_platform() {
   ARCH=$(uname -m)
 
   case "$OS" in
-    linux)  PLATFORM="linux" ;;
+    linux)
+      # Detect WSL
+      if grep -qi microsoft /proc/version 2>/dev/null; then
+        log_error "Running inside WSL. For Windows/WSL2 setup, see:"
+        log_error "  https://latebit-io.github.io/demarkus/install/windows/"
+        exit 1
+      fi
+      PLATFORM="linux"
+      ;;
     darwin) PLATFORM="darwin" ;;
+    msys*|cygwin*|mingw*)
+      log_error "Windows detected. Download binaries directly from GitHub Releases:"
+      log_error "  https://github.com/${GITHUB_REPO}/releases"
+      log_error "Or use WSL2 — see: https://latebit-io.github.io/demarkus/install/windows/"
+      exit 1
+      ;;
     *)      log_error "Unsupported OS: $OS"; exit 1 ;;
   esac
 
@@ -278,8 +380,8 @@ install_binaries() {
 
   for bin in "${binaries[@]}"; do
     if [ -f "${tmpdir}/${bin}" ]; then
-      cp "${tmpdir}/${bin}" "${INSTALL_DIR}/${bin}"
-      chmod 755 "${INSTALL_DIR}/${bin}"
+      $SUDO cp "${tmpdir}/${bin}" "${INSTALL_DIR}/${bin}"
+      $SUDO chmod 755 "${INSTALL_DIR}/${bin}"
       log_info "Installed ${INSTALL_DIR}/${bin}"
     else
       log_warn "Binary ${bin} not found in archive"
@@ -567,7 +669,14 @@ ${tls_env}
 </plist>
 EOF
 
-  launchctl load "$plist_file" 2>/dev/null || true
+  # macOS 14+ uses bootstrap/bootout; older macOS uses load/unload
+  local macos_major
+  macos_major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
+  if [ "${macos_major:-0}" -ge 14 ] 2>/dev/null; then
+    launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null || true
+  else
+    launchctl load "$plist_file" 2>/dev/null || true
+  fi
   log_info "Service loaded (logs: ${log_dir}/)"
 }
 
@@ -677,7 +786,7 @@ do_install() {
 
   detect_platform
 
-  # Client-only mode
+  # Client-only mode — permissions are handled inside do_install_client
   if [ "$client_only" = true ]; then
     do_install_client "$version"
     return
@@ -688,6 +797,8 @@ do_install() {
     log_error "Server install requires root. Run with sudo or as root."
     exit 1
   fi
+
+  check_install_permissions
 
   # On reinstall, recover values from existing service config
   read_existing_config
@@ -741,39 +852,45 @@ do_install() {
   # Stop service before binary replacement (avoids "Text file busy")
   if [ "$is_reinstall" = true ]; then
     if [ "$PLATFORM" = "linux" ]; then
-      systemctl stop demarkus 2>/dev/null || true
+      $SUDO systemctl stop demarkus 2>/dev/null || true
       sleep 1
-      pkill -f demarkus-server 2>/dev/null || true
+      $SUDO pkill -f demarkus-server 2>/dev/null || true
       sleep 1
     elif [ "$PLATFORM" = "darwin" ]; then
       local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
       if [ -f "$plist" ]; then
-        launchctl unload "$plist" 2>/dev/null || true
+        local macos_major
+        macos_major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
+        if [ "${macos_major:-0}" -ge 14 ] 2>/dev/null; then
+          launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
+        else
+          launchctl unload "$plist" 2>/dev/null || true
+        fi
       fi
       pkill -f demarkus-server 2>/dev/null || true
       sleep 1
     fi
   fi
 
-  local tmpdir
-  tmpdir=$(mktemp -d) || {
+  _TMPDIR=$(mktemp -d) || {
     log_error "Failed to create temporary directory"
     exit 1
   }
-  trap 'rm -rf "$tmpdir"' EXIT
 
   # Download and install server binaries
-  download_and_verify "server" "$version" "$tmpdir"
-  install_binaries "$tmpdir" "demarkus-server" "demarkus-token"
+  download_and_verify "server" "$version" "$_TMPDIR"
+  install_binaries "$_TMPDIR" "demarkus-server" "demarkus-token"
 
   # Download and install client binaries (separate archives)
   local client_version
   client_version=$(fetch_latest_version "client")
   if [ -n "$client_version" ]; then
-    download_and_verify "client" "$client_version" "$tmpdir"
-    install_binaries "$tmpdir" "demarkus"
-    download_and_verify_asset "demarkus-tui" "$client_version" "client" "$tmpdir"
-    install_binaries "$tmpdir" "demarkus-tui"
+    download_and_verify "client" "$client_version" "$_TMPDIR"
+    install_binaries "$_TMPDIR" "demarkus"
+    download_and_verify_asset "demarkus-tui" "$client_version" "client" "$_TMPDIR"
+    install_binaries "$_TMPDIR" "demarkus-tui"
+    download_and_verify_asset "demarkus-mcp" "$client_version" "client" "$_TMPDIR"
+    install_binaries "$_TMPDIR" "demarkus-mcp"
   else
     log_warn "Could not find client release, skipping client install"
   fi
@@ -844,6 +961,20 @@ do_install() {
 
   # Verify the service actually started
   verify_service_running
+  if [ "$PLATFORM" = "darwin" ]; then
+    local log_dir="$HOME/.demarkus/logs"
+    if [ -x "${INSTALL_DIR}/demarkus" ]; then
+      log_info "Verifying server is running..."
+      sleep 2
+      if "${INSTALL_DIR}/demarkus" --insecure mark://localhost:6309/health >/dev/null 2>&1; then
+        log_info "Server is running"
+      else
+        log_warn "Server may not be running yet. Check logs: ${log_dir}/demarkus.err"
+      fi
+    else
+      log_warn "Client binary not found; skipping health check. Check logs: ${log_dir}/demarkus.err"
+    fi
+  fi
 
   # Write version marker
   echo "$version" > "${CONFIG_DIR}/version"
@@ -851,8 +982,8 @@ do_install() {
   # Copy this script for future updates
   local self="${BASH_SOURCE[0]:-$0}"
   if [ -f "$self" ]; then
-    cp "$self" "${INSTALL_DIR}/demarkus-install"
-    chmod 755 "${INSTALL_DIR}/demarkus-install"
+    $SUDO cp "$self" "${INSTALL_DIR}/demarkus-install"
+    $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
   fi
 
   # Summary
@@ -904,12 +1035,24 @@ do_install() {
   echo "  demarkus-token generate -paths \"/*\" -ops publish -tokens ${tokens_file}"
   echo ""
   log_info "Update later with: demarkus-install update"
+
+  # PATH hint if we installed to a non-standard location
+  if [ "$INSTALL_DIR" != "/usr/local/bin" ]; then
+    echo ""
+    log_warn "Binaries installed to ${INSTALL_DIR} — make sure it's in your PATH."
+    if [ "$PLATFORM" = "darwin" ]; then
+      echo "  Add to ~/.zshrc:  export PATH=\"${INSTALL_DIR}:\$PATH\""
+    else
+      echo "  Add to ~/.bashrc: export PATH=\"${INSTALL_DIR}:\$PATH\""
+    fi
+  fi
 }
 
 do_install_client() {
   local version="$1"
 
   detect_platform
+  check_install_permissions
 
   if [ -z "$version" ]; then
     log_info "Fetching latest client version..."
@@ -922,23 +1065,25 @@ do_install_client() {
 
   log_step "Installing Demarkus client v${version}"
 
-  local tmpdir
-  tmpdir=$(mktemp -d) || {
+  _TMPDIR=$(mktemp -d) || {
     log_error "Failed to create temporary directory"
     exit 1
   }
-  trap 'rm -rf "$tmpdir"' EXIT
 
-  download_and_verify "client" "$version" "$tmpdir"
-  install_binaries "$tmpdir" "demarkus"
-  download_and_verify_asset "demarkus-tui" "$version" "client" "$tmpdir"
-  install_binaries "$tmpdir" "demarkus-tui"
+  download_and_verify "client" "$version" "$_TMPDIR"
+  install_binaries "$_TMPDIR" "demarkus"
+  download_and_verify_asset "demarkus-tui" "$version" "client" "$_TMPDIR"
+  install_binaries "$_TMPDIR" "demarkus-tui"
+  download_and_verify_asset "demarkus-mcp" "$version" "client" "$_TMPDIR"
+  install_binaries "$_TMPDIR" "demarkus-mcp"
 
   echo ""
   log_step "Client installed"
   echo ""
+  log_info "Binaries: demarkus, demarkus-tui, demarkus-mcp"
   log_info "Usage: demarkus --insecure mark://localhost:6309/index.md"
-  log_info "       demarkus --insecure -X LIST mark://localhost:6309/"
+  log_info "       demarkus-tui --insecure mark://localhost:6309/index.md"
+  log_info "       demarkus-mcp -host mark://localhost:6309 -insecure"
 }
 
 do_update() {
@@ -953,6 +1098,7 @@ do_update() {
   done
 
   detect_platform
+  check_install_permissions --require
 
   # Read current version
   local version_file="${CONFIG_DIR}/version"
@@ -996,8 +1142,8 @@ do_update() {
   }
 
   if [ -n "$new_script" ]; then
-    echo "$new_script" > "${INSTALL_DIR}/demarkus-install"
-    chmod 755 "${INSTALL_DIR}/demarkus-install"
+    echo "$new_script" | $SUDO tee "${INSTALL_DIR}/demarkus-install" > /dev/null
+    $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
     # Re-execute with the new script for migrations
     exec "${INSTALL_DIR}/demarkus-install" _do_update_inner \
       --from "$current_version" --to "$version"
@@ -1017,23 +1163,23 @@ _do_update_inner() {
   done
 
   detect_platform
+  check_install_permissions --require
 
-  local tmpdir
-  tmpdir=$(mktemp -d) || {
+  _TMPDIR=$(mktemp -d) || {
     log_error "Failed to create temporary directory"
     exit 1
   }
-  trap 'rm -rf "$tmpdir"' EXIT
 
   # Download new server binaries
-  download_and_verify "server" "$to" "$tmpdir"
+  download_and_verify "server" "$to" "$_TMPDIR"
 
   # Download new client binaries (separate archives)
   local client_version
   client_version=$(fetch_latest_version "client")
   if [ -n "$client_version" ]; then
-    download_and_verify "client" "$client_version" "$tmpdir"
-    download_and_verify_asset "demarkus-tui" "$client_version" "client" "$tmpdir"
+    download_and_verify "client" "$client_version" "$_TMPDIR"
+    download_and_verify_asset "demarkus-tui" "$client_version" "client" "$_TMPDIR"
+    download_and_verify_asset "demarkus-mcp" "$client_version" "client" "$_TMPDIR"
   fi
 
   # Run migrations before replacing binaries
@@ -1041,39 +1187,57 @@ _do_update_inner() {
 
   # Stop service before replacing binaries (avoids "Text file busy")
   if [ "$PLATFORM" = "linux" ]; then
-    systemctl stop demarkus 2>/dev/null || true
+    $SUDO systemctl stop demarkus 2>/dev/null || true
     sleep 1
-    pkill -f demarkus-server 2>/dev/null || true
+    $SUDO pkill -f demarkus-server 2>/dev/null || true
     sleep 1
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
     if [ -f "$plist" ]; then
-      launchctl unload "$plist" 2>/dev/null || true
+      local macos_major
+      macos_major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
+      if [ "${macos_major:-0}" -ge 14 ] 2>/dev/null; then
+        launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
+      else
+        launchctl unload "$plist" 2>/dev/null || true
+      fi
     fi
     pkill -f demarkus-server 2>/dev/null || true
     sleep 1
   fi
 
   # Replace binaries
-  install_binaries "$tmpdir" "demarkus-server" "demarkus-token"
+  install_binaries "$_TMPDIR" "demarkus-server" "demarkus-token"
   if [ -n "$client_version" ]; then
-    install_binaries "$tmpdir" "demarkus"
-    install_binaries "$tmpdir" "demarkus-tui"
+    install_binaries "$_TMPDIR" "demarkus"
+    install_binaries "$_TMPDIR" "demarkus-tui"
+    install_binaries "$_TMPDIR" "demarkus-mcp"
   fi
 
   # Restart service
   if [ "$PLATFORM" = "linux" ]; then
-    systemctl restart demarkus 2>/dev/null || log_warn "Could not restart service"
+    $SUDO systemctl restart demarkus 2>/dev/null || log_warn "Could not restart service"
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
     if [ -f "$plist" ]; then
-      launchctl unload "$plist" 2>/dev/null || true
-      launchctl load "$plist" 2>/dev/null || true
+      local macos_major
+      macos_major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
+      if [ "${macos_major:-0}" -ge 14 ] 2>/dev/null; then
+        launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
+        launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || true
+      else
+        launchctl unload "$plist" 2>/dev/null || true
+        launchctl load "$plist" 2>/dev/null || true
+      fi
     fi
   fi
 
-  # Update version marker
-  echo "$to" > "${CONFIG_DIR}/version"
+  # Update version marker (use sudo only when CONFIG_DIR isn't user-writable, e.g. /etc/demarkus on Linux)
+  if [ -w "$CONFIG_DIR" ]; then
+    echo "$to" > "${CONFIG_DIR}/version"
+  else
+    echo "$to" | $SUDO tee "${CONFIG_DIR}/version" > /dev/null
+  fi
 
   log_step "Updated to v${to}"
 }
@@ -1089,49 +1253,58 @@ do_uninstall() {
   done
 
   detect_platform
+  check_install_permissions --require
 
   log_step "Uninstalling Demarkus"
 
+  # Read content root from service file before removing it
+  local content_root=""
+  if [ "$PLATFORM" = "linux" ] && $SUDO test -f /etc/systemd/system/demarkus.service; then
+    content_root=$($SUDO grep DEMARKUS_ROOT /etc/systemd/system/demarkus.service 2>/dev/null \
+      | sed 's/.*=//' || true)
+  fi
+
   # Stop and disable service
   if [ "$PLATFORM" = "linux" ]; then
-    systemctl stop demarkus 2>/dev/null || true
-    systemctl disable demarkus 2>/dev/null || true
-    rm -f /etc/systemd/system/demarkus.service
-    systemctl daemon-reload 2>/dev/null || true
+    $SUDO systemctl stop demarkus 2>/dev/null || true
+    $SUDO systemctl disable demarkus 2>/dev/null || true
+    $SUDO rm -f /etc/systemd/system/demarkus.service
+    $SUDO systemctl daemon-reload 2>/dev/null || true
     log_info "Removed systemd service"
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
     if [ -f "$plist" ]; then
-      launchctl unload "$plist" 2>/dev/null || true
+      local macos_major
+      macos_major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
+      if [ "${macos_major:-0}" -ge 14 ] 2>/dev/null; then
+        launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
+      else
+        launchctl unload "$plist" 2>/dev/null || true
+      fi
       rm -f "$plist"
       log_info "Removed launchd service"
     fi
   fi
 
   # Remove binaries
-  for bin in demarkus-server demarkus-token demarkus demarkus-tui demarkus-install; do
-    rm -f "${INSTALL_DIR}/${bin}"
+  for bin in demarkus-server demarkus-token demarkus demarkus-tui demarkus-mcp demarkus-install; do
+    $SUDO rm -f "${INSTALL_DIR}/${bin}"
   done
   log_info "Removed binaries from ${INSTALL_DIR}/"
 
   # Remove config
-  if [ -d "$CONFIG_DIR" ]; then
-    rm -rf "$CONFIG_DIR"
+  if $SUDO test -d "$CONFIG_DIR"; then
+    $SUDO rm -rf "$CONFIG_DIR"
     log_info "Removed config directory ${CONFIG_DIR}/"
   fi
 
   # Remove content directory
   if [ "$keep_data" = false ]; then
-    local content_root=""
-    if [ "$PLATFORM" = "linux" ] && [ -f /etc/systemd/system/demarkus.service ]; then
-      content_root=$(grep DEMARKUS_ROOT /etc/systemd/system/demarkus.service 2>/dev/null \
-        | sed 's/.*=//' || true)
-    fi
     if [ -n "$content_root" ] && [ -d "$content_root" ]; then
       printf "Remove content directory ${content_root}? [y/N]: "
-      read -r confirm
+      read -r confirm </dev/tty || confirm="N"
       if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-        rm -rf "$content_root"
+        $SUDO rm -rf "$content_root"
         log_info "Removed ${content_root}/"
       fi
     fi
@@ -1139,7 +1312,7 @@ do_uninstall() {
 
   # Remove system user (Linux only)
   if [ "$PLATFORM" = "linux" ] && id "$SERVICE_NAME" >/dev/null 2>&1; then
-    userdel "$SERVICE_NAME" 2>/dev/null || true
+    $SUDO userdel "$SERVICE_NAME" 2>/dev/null || true
     log_info "Removed system user '${SERVICE_NAME}'"
   fi
 
