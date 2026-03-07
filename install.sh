@@ -862,13 +862,25 @@ do_install() {
   fi
 
   # Stop service before binary replacement (avoids "Text file busy")
-  if [ "$is_reinstall" = true ]; then
-    if [ "$PLATFORM" = "linux" ]; then
+  if [ "$PLATFORM" = "linux" ]; then
+    if systemctl is-active --quiet demarkus 2>/dev/null; then
+      log_info "Stopping running service before upgrade"
       $SUDO systemctl stop demarkus 2>/dev/null || true
-      sleep 1
-      $SUDO pkill -f demarkus-server 2>/dev/null || true
-      sleep 1
-    elif [ "$PLATFORM" = "darwin" ]; then
+      # Wait for process to actually exit
+      local wait_count=0
+      while pgrep -f demarkus-server >/dev/null 2>&1 && [ $wait_count -lt 10 ]; do
+        sleep 1
+        wait_count=$((wait_count + 1))
+      done
+      # Force kill if still running
+      if pgrep -f demarkus-server >/dev/null 2>&1; then
+        $SUDO pkill -9 -f demarkus-server 2>/dev/null || true
+        sleep 1
+      fi
+    fi
+  elif [ "$PLATFORM" = "darwin" ]; then
+    if pgrep -f demarkus-server >/dev/null 2>&1; then
+      log_info "Stopping running service before upgrade"
       local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
       if [ -f "$plist" ]; then
         local macos_major
