@@ -1288,7 +1288,7 @@ do_uninstall() {
   log_info "Removed binaries from ${INSTALL_DIR}/"
 
   # Remove config
-  if [ -d "$CONFIG_DIR" ]; then
+  if $SUDO test -d "$CONFIG_DIR"; then
     $SUDO rm -rf "$CONFIG_DIR"
     log_info "Removed config directory ${CONFIG_DIR}/"
   fi
