@@ -24,35 +24,29 @@ Run Demarkus locally as a private markdown wiki — browse with the TUI, publish
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
 ```
 
-This installs the server, client tools, and registers the server as a background service.
+This installs the server, client tools, and registers the server as a background service. The content directory (`~/.demarkus/content` by default, or the path you pass with `--root`) is created automatically.
 
-### 2. Create your content directory
-
-```bash
-mkdir -p ~/wiki
-```
-
-The directory starts empty — you'll populate it through the protocol in the next steps.
-
-### 3. Generate a write token
+### 2. Generate a write token
 
 All writes go through the Mark Protocol. Generate a token to allow publishing:
 
 ```bash
-demarkus-token generate -paths "/*" -ops publish -tokens ~/wiki/tokens.toml
+demarkus-token generate -paths "/*" -ops publish -tokens ~/.demarkus/tokens.toml
 ```
 
 Copy the raw token from the output — you'll use it as `$TOKEN` below.
 
+> If you used the full installer, the tokens file path is already configured. The installer saves an initial token to `~/.demarkus/initial-token.txt`.
+
 ### 4. Start the server with write access
 
+If running manually (the installer starts the server automatically as a background service):
+
 ```bash
-demarkus-server -root ~/wiki -tokens ~/wiki/tokens.toml
+demarkus-server -root ~/.demarkus/content -tokens ~/.demarkus/tokens.toml
 ```
 
 The server uses a built-in self-signed certificate and listens on `localhost:6309`.
-
-> If you used the full installer, edit the launchd/systemd service config to add `-tokens ~/wiki/tokens.toml` and restart.
 
 ### 5. Publish your first documents
 
@@ -108,7 +102,7 @@ If the document doesn't exist yet, it opens an empty editor and creates it on sa
 
 ## Why publish through the protocol?
 
-Writing files directly to `~/wiki` bypasses version history — those changes won't be tracked. Everything published via `demarkus -X PUBLISH` gets a version number, a hash, and an immutable record. That's what makes it a knowledge base rather than just a folder of files.
+Writing files directly to the content directory bypasses version history — those changes won't be tracked. Everything published via `demarkus -X PUBLISH` gets a version number, a hash, and an immutable record. That's what makes it a knowledge base rather than just a folder of files.
 
 ## Running on startup (macOS)
 
