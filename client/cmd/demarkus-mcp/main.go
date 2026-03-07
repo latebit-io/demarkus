@@ -435,13 +435,16 @@ func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	}
 
 	expectedVersion := req.GetInt("expected_version", 0)
+	if expectedVersion < 0 {
+		return mcp.NewToolResultError("expected_version must be >= 0"), nil
+	}
 	if expectedVersion == 0 {
 		// Auto-resolve via VERSIONS.
 		vResult, vErr := h.client.Versions(host, path)
 		if vErr != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: %v", vErr)), nil
 		}
-		if vResult.Response.Status != "ok" {
+		if vResult.Response.Status != protocol.StatusOK {
 			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: %s", vResult.Response.Status)), nil
 		}
 		cur, ok := vResult.Response.Metadata["current"]

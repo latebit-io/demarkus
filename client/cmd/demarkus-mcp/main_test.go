@@ -448,6 +448,48 @@ func TestHandlerMarkDiscover_InvalidURL(t *testing.T) {
 	assertIsToolError(t, result, "requires -host flag")
 }
 
+func TestToolDefinition_MarkAppend(t *testing.T) {
+	tool := markAppendTool("mark://example.com:6309")
+	if tool.Name != "mark_append" {
+		t.Errorf("name = %q, want mark_append", tool.Name)
+	}
+	if slices.Contains(tool.InputSchema.Required, "expected_version") {
+		t.Error("expected_version should not be required")
+	}
+	if !strings.Contains(tool.Description, "optional") {
+		t.Error("description should mention expected_version is optional")
+	}
+}
+
+func TestHandlerMarkAppend_NoToken(t *testing.T) {
+	h := &handler{}
+	ctx := context.Background()
+
+	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
+		"url":  "mark://example.com/doc.md",
+		"body": "appended content",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "requires a token")
+}
+
+func TestHandlerMarkAppend_NegativeVersion(t *testing.T) {
+	h := &handler{token: "test-token"}
+	ctx := context.Background()
+
+	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "appended content",
+		"expected_version": float64(-1),
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "expected_version must be >= 0")
+}
+
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {
 	t.Helper()
