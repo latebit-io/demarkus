@@ -878,13 +878,18 @@ do_install() {
         fi
       fi
     fi
-    # Wait for process to actually exit
+    # Wait for process to exit, escalate if needed
     local wait_count=0
-    while pgrep -x demarkus-server >/dev/null 2>&1 && [ $wait_count -lt 10 ]; do
+    while pgrep -x demarkus-server >/dev/null 2>&1 && [ $wait_count -lt 5 ]; do
       sleep 1
       wait_count=$((wait_count + 1))
     done
-    # Force kill if still running
+    # SIGTERM if still running (handles manually started processes)
+    if pgrep -x demarkus-server >/dev/null 2>&1; then
+      $SUDO pkill -x demarkus-server 2>/dev/null || true
+      sleep 2
+    fi
+    # SIGKILL as last resort
     if pgrep -x demarkus-server >/dev/null 2>&1; then
       $SUDO pkill -9 -x demarkus-server 2>/dev/null || true
       sleep 1
