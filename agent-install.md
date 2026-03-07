@@ -14,20 +14,21 @@ Use this page when you want an AI agent to install and configure Demarkus for yo
 Install and configure Demarkus on this machine.
 
 Goals:
-1. If on macOS, prefer building from source first (until signed binaries are available).
-2. Otherwise, use the official install script from:
-   https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
-3. Support both:
-   - Let's Encrypt mode (if a domain is provided)
-   - self-signed/no-official-cert mode (if no domain is provided)
-4. Start demarkus-server and verify client connectivity.
-5. If requested, configure MCP using demarkus-mcp and create/update .mcp.json.
-6. Report exactly what was installed, where configs were written, and how to run/stop services.
+1. Use the official install script:
+   curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
+   - For client-only: add --client-only flag
+   - For Let's Encrypt TLS: add --domain yourdomain.com --root /srv/site
+   - For custom certs: add --tls-cert /path/cert.pem --tls-key /path/key.pem
+   - On Linux, run with sudo for server installs
+2. Start demarkus-server and verify client connectivity.
+3. If requested, configure MCP using demarkus-mcp and create/update .mcp.json.
+4. Report exactly what was installed, where configs were written, and how to run/stop services.
 
 Constraints:
 - Do not assume trusted TLS certs are available.
 - For self-signed/local certs, use client --insecure where needed.
 - Keep commands idempotent and explain any destructive steps before running them.
+- If INSTALL_DIR (~/.local/bin or /usr/local/bin) is not in PATH, add it.
 ```
 
 ## Human Inputs to Provide
@@ -36,7 +37,7 @@ Constraints:
   - `public` (with domain + Let's Encrypt)
   - `private/local` (self-signed/dev cert)
 - Operating system (`macOS` or `Linux`)
-- Desired content root path (for example `/srv/site` or `./content`)
+- Desired content root path (for example `/srv/site` or `~/my-docs`)
 - Whether MCP should be configured now (`yes/no`)
 - If MCP = yes: host + token values
 
@@ -44,9 +45,15 @@ Constraints:
 
 1. `demarkus-server` starts successfully.
 2. CLI fetch works:
-   - `./client/bin/demarkus --insecure mark://localhost:6309/index.md` (self-signed/local)
+   - `demarkus --insecure mark://localhost:6309/index.md` (self-signed/local)
    - or without `--insecure` when using trusted TLS.
 3. If MCP configured:
    - `demarkus-mcp` can initialize and `mark_list` works.
 
-For manual setup paths and examples, see [Setup options](/setup/).
+## Platform-specific guides
+
+- [macOS](/install/macos/)
+- [Linux](/install/linux/)
+- [Windows (WSL2)](/install/windows/)
+
+For the agent memory (soul) scenario, see [Agent Memory](/scenarios/agent-memory/).

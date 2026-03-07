@@ -5,24 +5,29 @@
         >Home</a
     >
     <a
-        class="{% if page.url == '/about/' %}is-active{% endif %}"
-        href="{{ '/about/' | relative_url }}"
-        >About</a
-    >
-    <a
         class="{% if page.url == '/getting-started/' %}is-active{% endif %}"
         href="{{ '/getting-started/' | relative_url }}"
         >Getting Started</a
     >
     <a
-        class="{% if page.url == '/setup/' %}is-active{% endif %}"
-        href="{{ '/setup/' | relative_url }}"
-        >Setup</a
+        class="{% if page.url contains '/install/' %}is-active{% endif %}"
+        href="{{ '/install/macos/' | relative_url }}"
+        >Install</a
+    >
+    <a
+        class="{% if page.url contains '/scenarios/' %}is-active{% endif %}"
+        href="{{ '/scenarios/personal-wiki/' | relative_url }}"
+        >Scenarios</a
     >
     <a
         class="{% if page.url == '/soul/' %}is-active{% endif %}"
         href="{{ '/soul/' | relative_url }}"
         >Soul</a
+    >
+    <a
+        class="{% if page.url == '/about/' %}is-active{% endif %}"
+        href="{{ '/about/' | relative_url }}"
+        >About</a
     >
     <a
         href="https://github.com/latebit-io/demarkus"
