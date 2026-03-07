@@ -68,30 +68,52 @@ log_step()  { printf "${BLUE}==> %s${NC}\n" "$*"; }
 
 # --- Install permissions ---
 
+_acquire_sudo() {
+  # Set SUDO="sudo" if we can get authorization. Works in curl|bash pipes because
+  # sudo opens /dev/tty directly. Returns 0 on success, 1 if unavailable/denied.
+  if ! command -v sudo >/dev/null 2>&1; then
+    return 1
+  fi
+  if sudo -n true 2>/dev/null || { [ -e /dev/tty ] && sudo true </dev/tty 2>/dev/tty; }; then
+    SUDO="sudo"
+    return 0
+  fi
+  return 1
+}
+
 check_install_permissions() {
   local require=false
   [ "${1:-}" = "--require" ] && require=true
 
-  if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
+  # Running as root: all operations are already privileged, nothing to do.
+  if [ "$(id -u)" -eq 0 ]; then
+    mkdir -p "$INSTALL_DIR"
     return
   fi
 
-  # Running as root: no sudo needed, just create the directory.
-  if [ "$(id -u)" -eq 0 ]; then
-    mkdir -p "$INSTALL_DIR"
+  # On Linux, update/uninstall also touch CONFIG_DIR (/etc/demarkus) and systemd,
+  # so we need sudo even when INSTALL_DIR happens to be writable by the current user.
+  if [ "$require" = true ] && [ "${PLATFORM:-}" = "linux" ]; then
+    if ! _acquire_sudo; then
+      log_error "Cannot perform privileged operations and sudo is not available."
+      log_error "Run as root or with sudo."
+      exit 1
+    fi
+    mkdir -p "$INSTALL_DIR" 2>/dev/null || $SUDO mkdir -p "$INSTALL_DIR"
+    return
+  fi
+
+  if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
     return
   fi
 
   # Use sudo if available. sudo can prompt via /dev/tty even in curl|bash pipes
   # where stdin is not a TTY. Try non-interactive first (cached creds), then
   # fall back to interactive (prompts via /dev/tty).
-  if command -v sudo >/dev/null 2>&1; then
-    if sudo -n true 2>/dev/null || { [ -e /dev/tty ] && sudo true </dev/tty 2>/dev/tty; }; then
-      SUDO="sudo"
-      $SUDO mkdir -p "$INSTALL_DIR"
-      log_info "Will use sudo to install to ${INSTALL_DIR}"
-      return
-    fi
+  if _acquire_sudo; then
+    $SUDO mkdir -p "$INSTALL_DIR"
+    log_info "Will use sudo to install to ${INSTALL_DIR}"
+    return
   fi
 
   # For update/uninstall, switching directories would corrupt the existing install.
@@ -829,9 +851,9 @@ do_install() {
   # Stop service before binary replacement (avoids "Text file busy")
   if [ "$is_reinstall" = true ]; then
     if [ "$PLATFORM" = "linux" ]; then
-      systemctl stop demarkus 2>/dev/null || true
+      $SUDO systemctl stop demarkus 2>/dev/null || true
       sleep 1
-      pkill -f demarkus-server 2>/dev/null || true
+      $SUDO pkill -f demarkus-server 2>/dev/null || true
       sleep 1
     elif [ "$PLATFORM" = "darwin" ]; then
       local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
@@ -940,12 +962,16 @@ do_install() {
   verify_service_running
   if [ "$PLATFORM" = "darwin" ]; then
     local log_dir="$HOME/.demarkus/logs"
-    log_info "Verifying server is running..."
-    sleep 2
-    if "${INSTALL_DIR}/demarkus" --insecure mark://localhost:6309/health >/dev/null 2>&1; then
-      log_info "Server is running"
+    if [ -x "${INSTALL_DIR}/demarkus" ]; then
+      log_info "Verifying server is running..."
+      sleep 2
+      if "${INSTALL_DIR}/demarkus" --insecure mark://localhost:6309/health >/dev/null 2>&1; then
+        log_info "Server is running"
+      else
+        log_warn "Server may not be running yet. Check logs: ${log_dir}/demarkus.err"
+      fi
     else
-      log_warn "Server may not be running yet. Check logs: ${log_dir}/demarkus.err"
+      log_warn "Client binary not found; skipping health check. Check logs: ${log_dir}/demarkus.err"
     fi
   fi
 
@@ -1162,7 +1188,7 @@ _do_update_inner() {
   if [ "$PLATFORM" = "linux" ]; then
     $SUDO systemctl stop demarkus 2>/dev/null || true
     sleep 1
-    pkill -f demarkus-server 2>/dev/null || true
+    $SUDO pkill -f demarkus-server 2>/dev/null || true
     sleep 1
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
@@ -1228,8 +1254,8 @@ do_uninstall() {
 
   # Read content root from service file before removing it
   local content_root=""
-  if [ "$PLATFORM" = "linux" ] && [ -f /etc/systemd/system/demarkus.service ]; then
-    content_root=$(grep DEMARKUS_ROOT /etc/systemd/system/demarkus.service 2>/dev/null \
+  if [ "$PLATFORM" = "linux" ] && $SUDO test -f /etc/systemd/system/demarkus.service; then
+    content_root=$($SUDO grep DEMARKUS_ROOT /etc/systemd/system/demarkus.service 2>/dev/null \
       | sed 's/.*=//' || true)
   fi
 
