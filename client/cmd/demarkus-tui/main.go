@@ -198,7 +198,12 @@ func initialModel(initialURL string, client *fetch.Client) model {
 
 	gs, gsErr := graphstore.Load(graphstore.DefaultPath())
 	if gsErr != nil {
-		bmMsg = "Failed to load graph store: " + gsErr.Error()
+		msg := "Failed to load graph store: " + gsErr.Error()
+		if bmMsg != "" {
+			bmMsg += " | " + msg
+		} else {
+			bmMsg = msg
+		}
 	}
 
 	return model{

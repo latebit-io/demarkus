@@ -45,7 +45,10 @@ func main() {
 
 	s := mcpserver.NewMCPServer("demarkus-mcp", version)
 
-	gs, _ := graphstore.Load(graphstore.DefaultPath())
+	gs, gsErr := graphstore.Load(graphstore.DefaultPath())
+	if gsErr != nil {
+		log.Printf("warning: graph store unavailable: %v", gsErr)
+	}
 	h := &handler{client: client, defaultHost: *defaultHost, token: *token, graphStore: gs}
 	s.AddTool(markFetchTool(*defaultHost), h.markFetch)
 	s.AddTool(markListTool(*defaultHost), h.markList)
@@ -145,8 +148,8 @@ func markGraphTool(host string) mcp.Tool {
 			"Crawl outbound links from a document and return the link graph. "+
 				"Follows mark:// links up to the specified depth. External links are "+
 				"recorded but not followed. Use this to understand document relationships "+
-				"or find broken links. Results are persisted to the local graph store "+
-				"for backlink queries. "+
+				"or find broken links. When a local graph store is available, results are "+
+				"persisted for backlink queries. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
