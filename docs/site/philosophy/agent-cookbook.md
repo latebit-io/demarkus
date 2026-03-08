@@ -39,6 +39,21 @@ The document graph is the navigation system. Keeping it clean preserves usabilit
 
 ---
 
+## Recipe 2b: Backlink Discovery
+
+**Goal:** Find related content by following inbound links.
+
+**Workflow:**
+1. Agent crawls the graph from a starting document using `mark_graph`.
+2. Agent queries `mark_backlinks` for a specific page to find what links to it.
+3. Agent reads the linking documents to gather context and discover related topics.
+4. Graph persists at `~/.mark/graph.json` — each session builds on previous crawls.
+
+**Why it works:**
+Knowing who links *to* a page is as valuable as knowing what it links *to*. Agents build richer knowledge maps over multiple sessions without re-crawling.
+
+---
+
 ## Recipe 3: Knowledge Base Synthesis
 
 **Goal:** Create new pages from existing related content.
@@ -141,7 +156,8 @@ Use a shared queue doc (e.g. `/docs/queue.md`) to coordinate tasks and handoffs:
 - **Use separate summary files** instead of modifying originals.
 - **Prefer small, frequent publishes** to keep history clear.
 - **Keep index pages updated** whenever new docs are added.
-- **Use link graphs** to monitor coverage and discover gaps.
+- **Use link graphs** to monitor coverage and discover gaps. Graph data persists across sessions.
+- **Use backlinks** to find related content and understand document relationships.
 - **Require human review** for externally facing content.
 
 ---

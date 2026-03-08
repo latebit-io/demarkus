@@ -121,7 +121,11 @@ If no tokens file is configured, the server is **read‑only** (secure by defaul
 
 ## Document Graph
 
-Markdown links form a natural **document graph**. The CLI and TUI include graph crawling features to visualize and verify link structure.
+Markdown links form a natural **document graph**. The CLI, TUI, and MCP server include graph crawling features to visualize and verify link structure.
+
+The client-side `graphstore` package persists crawled graph data at `~/.mark/graph.json`. All three tools share this store — a graph built by the CLI is visible in the TUI and queryable via MCP. Each crawl merges new nodes and edges into the existing graph, so knowledge accumulates across sessions.
+
+Backlinks ("what documents link here?") are derived from the stored graph with no server-side changes needed. The MCP `mark_backlinks` tool exposes this as a query for agents.
 
 ## Deployment Topology
 

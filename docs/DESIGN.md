@@ -1298,6 +1298,13 @@ Hubs are the entry points into the information graph:
 - Multi-agent collaboration: agents share and merge published graph documents to accelerate discovery
 - An agent's graph becomes its understanding of what exists and how it's connected
 
+**Implementation status** (shipped):
+- `graphstore` package (`client/internal/graphstore/`) — persistent graph stored at `~/.mark/graph.json` with schema versioning and atomic saves
+- `CrawlAndPersist` — shared crawl path used by CLI (`demarkus graph`), TUI (`d` key), and MCP (`mark_graph`); merges new nodes/edges into the existing store
+- `mark_backlinks` MCP tool — queries the stored graph for reverse links
+- TUI loads the stored graph instantly on `d`, then runs a live crawl in the background to discover new links
+- Hub pattern with `mark_index` — federated content indexing and hash-based resolution across servers
+
 ## Security Considerations
 
 ### Threat Model

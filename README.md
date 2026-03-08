@@ -48,8 +48,8 @@ demarkus edit --insecure -auth $TOKEN mark://localhost:6309/hello.md
 | `demarkus-server` | QUIC server with versioned document store, capability-based auth, hot TLS reload |
 | `demarkus-token` | Generate and manage capability tokens |
 | `demarkus` | CLI: `FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `APPEND`, `ARCHIVE`, `edit`, `graph`, `info` |
-| `demarkus-tui` | Terminal browser with markdown rendering, link navigation, history, graph view |
-| `demarkus-mcp` | MCP server exposing all protocol verbs as tools for LLM agents |
+| `demarkus-tui` | Terminal browser with markdown rendering, link navigation, history, persistent graph view |
+| `demarkus-mcp` | MCP server exposing all protocol verbs plus graph and backlink queries as tools for LLM agents |
 
 ## Protocol at a Glance
 
