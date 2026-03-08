@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -81,12 +82,15 @@ func Load(path string) (*Store, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return s, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("read graph store %q: %w", path, err)
 	}
 
 	var doc document
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse graph store %q: %w", path, err)
+	}
+	if doc.Version != schemaVersion {
+		return nil, fmt.Errorf("graph store %q: unsupported schema version %d (expected %d)", path, doc.Version, schemaVersion)
 	}
 
 	for i := range doc.Nodes {
@@ -104,6 +108,9 @@ func Load(path string) (*Store, error) {
 }
 
 // Save writes the graph store to disk atomically (write tmp, rename).
+// NOTE: holds RLock across marshal + disk I/O. Fine while Save is only called
+// from CrawlAndPersist (infrequent, user-triggered). If concurrent or periodic
+// saves are added, snapshot state under lock and write outside it.
 func (s *Store) Save() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -288,8 +295,13 @@ func (s *Store) CrawlAndPersist(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	maxDepth := opts.MaxDepth
+	if maxDepth == 0 {
+		maxDepth = -1 // graph.Crawl uses -1 for "use default (2)"
+	}
+
 	g, err := graph.Crawl(ctx, startURL, fetcher, parseURL, graph.CrawlOptions{
-		MaxDepth: opts.MaxDepth,
+		MaxDepth: maxDepth,
 		Workers:  opts.Workers,
 		OnNode: func(n *graph.Node) {
 			if opts.OnNode != nil {

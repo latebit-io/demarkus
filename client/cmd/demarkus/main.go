@@ -308,7 +308,10 @@ func graphMain(args []string) {
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
-	gs, _ := graphstore.Load(graphstore.DefaultPath())
+	gs, err := graphstore.Load(graphstore.DefaultPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: graph store unavailable, results will not be persisted: %v\n", err)
+	}
 
 	fmt.Printf("Crawling %s (depth %d)...\n", rawURL, *depth)
 
