@@ -16,6 +16,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/graphstore"
 	"github.com/latebit/demarkus/client/internal/index"
 	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/client/internal/tokens"
@@ -44,7 +45,11 @@ func main() {
 
 	s := mcpserver.NewMCPServer("demarkus-mcp", version)
 
-	h := &handler{client: client, defaultHost: *defaultHost, token: *token}
+	gs, gsErr := graphstore.Load(graphstore.DefaultPath())
+	if gsErr != nil {
+		log.Printf("warning: graph store unavailable: %v", gsErr)
+	}
+	h := &handler{client: client, defaultHost: *defaultHost, token: *token, graphStore: gs}
 	s.AddTool(markFetchTool(*defaultHost), h.markFetch)
 	s.AddTool(markListTool(*defaultHost), h.markList)
 	s.AddTool(markGraphTool(*defaultHost), h.markGraph)
@@ -55,6 +60,7 @@ func main() {
 	s.AddTool(markDiscoverTool(*defaultHost), h.markDiscover)
 	s.AddTool(markResolveTool(*defaultHost), h.markResolve)
 	s.AddTool(markIndexTool(*defaultHost), h.markIndex)
+	s.AddTool(markBacklinksTool(*defaultHost), h.markBacklinks)
 
 	if err := mcpserver.ServeStdio(s); err != nil {
 		log.Fatal(err)
@@ -75,6 +81,7 @@ type handler struct {
 	client      markClient
 	defaultHost string
 	token       string
+	graphStore  *graphstore.Store
 }
 
 // resolveURL parses a mark:// URL or bare path (when -host is set) into host and path.
@@ -141,7 +148,8 @@ func markGraphTool(host string) mcp.Tool {
 			"Crawl outbound links from a document and return the link graph. "+
 				"Follows mark:// links up to the specified depth. External links are "+
 				"recorded but not followed. Use this to understand document relationships "+
-				"or find broken links. "+
+				"or find broken links. When a local graph store is available, results are "+
+				"persisted for backlink queries. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -839,30 +847,16 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		startURL = h.defaultHost + rawURL
 	}
 
-	fetcher := &graph.ClientFetcher{
-		FetchFunc: func(host, path string) (string, string, error) {
-			r, fetchErr := h.client.Fetch(host, path)
-			if fetchErr != nil {
-				return "", "", fetchErr
-			}
-			return r.Response.Status, r.Response.Body, nil
-		},
-	}
-
-	const maxNodes = 200
-	var nodeCount int
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	g, err := graph.Crawl(ctx, startURL, fetcher, fetch.ParseMarkURL, graph.CrawlOptions{
+	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(host, path string) (string, string, string, error) {
+		r, fetchErr := h.client.Fetch(host, path)
+		if fetchErr != nil {
+			return "", "", "", fetchErr
+		}
+		return r.Response.Status, r.Response.Body, r.Response.Metadata["etag"], nil
+	}, fetch.ParseMarkURL, graphstore.CrawlOptions{
 		MaxDepth: depth,
+		MaxNodes: 200,
 		Workers:  5,
-		OnNode: func(_ *graph.Node) {
-			nodeCount++
-			if nodeCount >= maxNodes {
-				cancel()
-			}
-		},
 	})
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
@@ -899,4 +893,55 @@ func formatGraph(g *graph.Graph, startURL string) string {
 	}
 
 	return b.String()
+}
+
+func markBacklinksTool(host string) mcp.Tool {
+	return mcp.NewTool("mark_backlinks",
+		mcp.WithDescription(
+			"Look up which documents link to a given URL, using the local graph store. "+
+				"Returns results from previous crawls — run mark_graph first to populate. "+
+				urlHint(host),
+		),
+		mcp.WithString("url",
+			mcp.Required(),
+			mcp.Description(urlDesc(host)),
+		),
+	)
+}
+
+func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	rawURL, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError("url is required"), nil
+	}
+
+	fullURL := rawURL
+	if strings.HasPrefix(rawURL, "/") {
+		if h.defaultHost == "" {
+			return mcp.NewToolResultError(fmt.Sprintf("bare path %q requires -host flag", rawURL)), nil
+		}
+		fullURL = h.defaultHost + rawURL
+	}
+
+	if h.graphStore == nil {
+		return mcp.NewToolResultError("graph store not available"), nil
+	}
+
+	backlinks := h.graphStore.Backlinks(fullURL)
+	if len(backlinks) == 0 {
+		return mcp.NewToolResultText(
+			fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the graph store.", fullURL),
+		), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", fullURL, len(backlinks))
+	for _, bl := range backlinks {
+		if n := h.graphStore.GetNode(bl); n != nil && n.Title != "" {
+			fmt.Fprintf(&b, "- [%s](%s)\n", n.Title, bl)
+		} else {
+			fmt.Fprintf(&b, "- %s\n", bl)
+		}
+	}
+	return mcp.NewToolResultText(b.String()), nil
 }
