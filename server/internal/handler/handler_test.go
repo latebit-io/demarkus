@@ -2,6 +2,8 @@ package handler
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"log/slog"
 	"os"
@@ -84,6 +86,65 @@ func TestHandleFetch(t *testing.T) {
 		}
 		if !stream.closed {
 			t.Error("stream not closed")
+		}
+	})
+
+	t.Run("content-hash in response", func(t *testing.T) {
+		stream := newMockStream("FETCH /hello.md\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+
+		// content-hash should be sha256 of the body (not the stored content with frontmatter)
+		hash := sha256.Sum256([]byte(resp.Body))
+		want := "sha256-" + hex.EncodeToString(hash[:])
+		if got := resp.Metadata["content-hash"]; got != want {
+			t.Errorf("content-hash: got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("fetch by content hash", func(t *testing.T) {
+		// Build the hash index so hash lookup works
+		if err := s.BuildHashIndex(); err != nil {
+			t.Fatalf("BuildHashIndex: %v", err)
+		}
+
+		// First fetch to get the content-hash
+		stream := newMockStream("FETCH /hello.md\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		contentHash := resp.Metadata["content-hash"]
+
+		// Now fetch by hash
+		stream2 := newMockStream("FETCH /" + contentHash + "\n")
+		h.HandleStream(stream2)
+		resp2, err := protocol.ParseResponse(&stream2.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp2.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp2.Status, protocol.StatusOK)
+		}
+		if !strings.Contains(resp2.Body, "# Hello World") {
+			t.Errorf("body missing content: %q", resp2.Body)
+		}
+	})
+
+	t.Run("fetch by unknown hash", func(t *testing.T) {
+		stream := newMockStream("FETCH /sha256-0000000000000000000000000000000000000000000000000000000000000000\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotFound {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
 		}
 	})
 
@@ -1341,6 +1402,30 @@ func TestParseVersionPath(t *testing.T) {
 	}
 }
 
+func TestIsHashPath(t *testing.T) {
+	tests := []struct {
+		path string
+		hash string
+		ok   bool
+	}{
+		{"/sha256-" + strings.Repeat("ab", 32), "sha256-" + strings.Repeat("ab", 32), true},
+		{"/sha256-0000000000000000000000000000000000000000000000000000000000000000", "sha256-0000000000000000000000000000000000000000000000000000000000000000", true},
+		{"/sha256-short", "", false},
+		{"/doc.md", "", false},
+		{"/sha256-" + strings.Repeat("GG", 32), "", false}, // uppercase not valid
+		{"/sha256-" + strings.Repeat("ab", 32) + "extra", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			hash, ok := isHashPath(tt.path)
+			if ok != tt.ok || hash != tt.hash {
+				t.Errorf("isHashPath(%q) = (%q, %v), want (%q, %v)",
+					tt.path, hash, ok, tt.hash, tt.ok)
+			}
+		})
+	}
+}
+
 func TestHandleArchive(t *testing.T) {
 	writerSecret := "test-secret-key"
 	ts := auth.NewTokenStore(map[string]auth.Token{
@@ -1917,7 +2002,7 @@ func TestPublisherMetadata(t *testing.T) {
 		// No extra keys beyond version, modified, etag.
 		for k := range resp.Metadata {
 			switch k {
-			case "version", "modified", "etag":
+			case "version", "modified", "etag", "content-hash":
 				// expected
 			default:
 				t.Errorf("unexpected metadata key %q in legacy document", k)

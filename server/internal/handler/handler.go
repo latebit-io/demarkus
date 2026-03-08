@@ -37,6 +37,7 @@ var reservedKeys = map[string]bool{
 	"version":         true,
 	"modified":        true,
 	"etag":            true,
+	"content-hash":    true,
 	"current-version": true,
 	"server-version":  true,
 	"your-version":    true,
@@ -133,7 +134,46 @@ func parseVersionPath(reqPath string) (basePath string, version int) {
 	return base, num
 }
 
+// isHashPath checks if a path is a content-addressed hash: /sha256-<64 hex chars>.
+func isHashPath(reqPath string) (string, bool) {
+	// /sha256-<64 hex> = 1 + 7 + 64 = 72 characters
+	if len(reqPath) != 72 || !strings.HasPrefix(reqPath, "/sha256-") {
+		return "", false
+	}
+	hash := reqPath[1:] // strip leading /
+	for _, c := range hash[7:] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return "", false
+		}
+	}
+	return hash, true
+}
+
+func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash string) {
+	docPath, ok := h.Store.LookupHash(hash)
+	if !ok {
+		h.logger().Info("hash not found", "hash", hash)
+		h.writeError(w, protocol.StatusNotFound, "content not found for hash "+hash)
+		return
+	}
+
+	doc, err := h.Store.Get(docPath, 0)
+	if err != nil {
+		h.logger().Error("fetch by hash failed", "hash", hash, "path", sanitize(docPath), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	h.serveDocument(w, req, doc, docPath)
+}
+
 func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
+	// Check for content-addressed hash: FETCH /sha256-<64hex>
+	if hash, ok := isHashPath(req.Path); ok {
+		h.handleFetchByHash(w, req, hash)
+		return
+	}
+
 	// Check for path-based version access: FETCH /doc.md/v3
 	if basePath, version := parseVersionPath(req.Path); version > 0 {
 		h.handleFetchVersion(w, req, basePath, version)
@@ -198,6 +238,7 @@ func (h *Handler) serveDocument(w io.Writer, req protocol.Request, doc *store.Do
 	meta["modified"] = doc.Modified.Format(time.RFC3339)
 	meta["etag"] = etag
 	meta["version"] = strconv.Itoa(doc.Version)
+	meta["content-hash"] = computeContentHash(body)
 	h.writeResponse(w, protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: body})
 }
 
@@ -212,6 +253,11 @@ func (h *Handler) writeNotModified(w io.Writer) {
 func computeEtag(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
+}
+
+func computeContentHash(body string) string {
+	hash := sha256.Sum256([]byte(body))
+	return "sha256-" + hex.EncodeToString(hash[:])
 }
 
 func (h *Handler) handleList(w io.Writer, reqPath string) {
@@ -321,6 +367,7 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 	copyPublisherMeta(meta, doc.Metadata)
 	meta["modified"] = doc.Modified.Format(time.RFC3339)
 	meta["version"] = strconv.Itoa(doc.Version)
+	meta["content-hash"] = computeContentHash(body)
 	// Indicate current version so client knows if this is historical.
 	current := h.Store.CurrentVersion(basePath)
 	meta["current-version"] = strconv.Itoa(current)

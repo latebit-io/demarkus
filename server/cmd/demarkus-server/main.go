@@ -100,6 +100,11 @@ func main() {
 	defer func() { _ = listener.Close() }()
 
 	s := store.New(cfg.ContentDir)
+	if err := s.BuildHashIndex(); err != nil {
+		logger.Warn("hash index build failed", "error", err)
+	} else {
+		logger.Info("content hash index built", "entries", s.HashIndexSize())
+	}
 
 	if cfg.TokensFile != "" {
 		if err := loadTokenStore(cfg.TokensFile); err != nil {
