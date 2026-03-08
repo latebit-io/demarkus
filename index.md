@@ -26,15 +26,16 @@ Demarkus implements the **Mark Protocol** — a minimal protocol for serving ver
 - **Version-preserving** — every change is kept, nothing is deleted
 - **Privacy-first** — no tracking, no cookies, no user agents logged
 - **Self-hostable** — runs on a $30 single-board computer
+- **Graph-aware** — persistent document graph with backlink queries across sessions
 
 ## Tools
 
 | Tool | Purpose |
 |------|---------|
 | `demarkus-server` | Serve a directory of markdown files |
-| `demarkus` | CLI: fetch, list, publish, edit |
-| `demarkus-tui` | Interactive terminal browser |
-| `demarkus-mcp` | MCP server for LLM agents |
+| `demarkus` | CLI: fetch, list, publish, edit, graph |
+| `demarkus-tui` | Interactive terminal browser with graph view |
+| `demarkus-mcp` | MCP server for LLM agents (graph, backlinks, discovery) |
 | `demarkus-token` | Generate capability-based auth tokens |
 
 ## Learn more

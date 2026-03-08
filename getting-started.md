@@ -32,7 +32,7 @@ demarkus mark://soul.demarkus.io/index.md
 demarkus-tui mark://soul.demarkus.io/index.md
 ```
 
-**TUI keyboard shortcuts:** `Tab` cycles links, `Enter` follows, `[`/`]` navigate history, `?` for help.
+**TUI keyboard shortcuts:** `Tab` cycles links, `Enter` follows, `[`/`]` navigate history, `d` opens the document graph, `?` for help.
 
 ## 3. Run your own server (optional)
 
@@ -79,6 +79,7 @@ demarkus --insecure -X PUBLISH -auth <your-token> mark://localhost:6309/hello.md
 Pick your path:
 
 - [Personal knowledge base](/scenarios/personal-wiki/) — local notes, TUI browser, edit workflow
-- [Agent memory](/scenarios/agent-memory/) — persistent memory for Claude Code
+- [Agent memory](/scenarios/agent-memory/) — persistent memory for Claude Code, with graph exploration and backlinks
 - [Public hub](/scenarios/public-hub/) — VPS + TLS + open access
 - [Team knowledge base](/scenarios/team/) — shared server with token-based access
+- [TUI keybindings](/reference/tui-keybindings/) — full keyboard reference including graph view

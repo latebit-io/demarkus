@@ -13,8 +13,9 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 ## What you'll have
 
 - A Demarkus server holding structured markdown docs
-- MCP tools (`mark_fetch`, `mark_publish`, `mark_list`, `mark_append`) available to the agent
+- MCP tools (`mark_fetch`, `mark_publish`, `mark_list`, `mark_append`, `mark_graph`, `mark_backlinks`, `mark_discover`) available to the agent
 - Version history of every memory update
+- Persistent document graph with backlink queries
 - The agent reads context at session start and writes updates at the end
 
 ## Setup
@@ -124,6 +125,25 @@ Please fetch mark://localhost:6310/index.md and summarize what you find.
 ```
 
 The agent should use `mark_fetch` and return the contents of your index.
+
+## Graph exploration
+
+Agents can map the document graph and query backlinks:
+
+```
+# Crawl links from a document (results are persisted locally)
+mark_graph url="/index.md" depth=3
+
+# Find what links to a specific page
+mark_backlinks url="/architecture.md"
+
+# Discover what a server offers
+mark_discover
+```
+
+`mark_graph` crawls outbound links from a document, building a persistent graph stored at `~/.mark/graph.json`. Each crawl merges into the existing graph — knowledge accumulates across sessions.
+
+`mark_backlinks` queries the stored graph for reverse links: "what documents link here?" This enables agents to understand document relationships without re-crawling.
 
 ## Recommended soul structure
 

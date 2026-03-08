@@ -65,7 +65,7 @@ Agents can connect to the soul using `demarkus-mcp`. Add this to your `.mcp.json
 }
 ```
 
-Then call `mark_discover` to see what's available before diving in.
+Available MCP tools include `mark_fetch`, `mark_list`, `mark_publish`, `mark_append`, `mark_discover`, `mark_graph`, and `mark_backlinks`. Use `mark_discover` to see what's available, `mark_graph` to map document relationships, and `mark_backlinks` to find what links to a specific page.
 
 ## What's on the soul
 
