@@ -438,6 +438,10 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "archiving not configured")
 		return
 	}
+	if _, ok := isHashPath(req.Path); ok {
+		h.writeError(w, protocol.StatusBadRequest, "paths matching /sha256-<hash> are reserved")
+		return
+	}
 
 	var ts *auth.TokenStore
 	if h.GetTokenStore != nil {
@@ -494,6 +498,10 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	if h.Store == nil {
 		h.writeError(w, protocol.StatusServerError, "publishing not configured")
+		return
+	}
+	if _, ok := isHashPath(req.Path); ok {
+		h.writeError(w, protocol.StatusBadRequest, "paths matching /sha256-<hash> are reserved")
 		return
 	}
 	if int64(len(req.Body)) > protocol.MaxBodyLength {
@@ -637,6 +645,10 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 	if h.Store == nil {
 		h.writeError(w, protocol.StatusServerError, "appending not configured")
+		return
+	}
+	if _, ok := isHashPath(req.Path); ok {
+		h.writeError(w, protocol.StatusBadRequest, "paths matching /sha256-<hash> are reserved")
 		return
 	}
 	if int64(len(req.Body)) > protocol.MaxBodyLength {

@@ -110,7 +110,7 @@ func (s *Store) BuildHashIndex() error {
 		return err
 	}
 
-	return filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
+	return filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
 		}
@@ -144,7 +144,7 @@ func (s *Store) BuildHashIndex() error {
 
 		body := extractBody(data)
 		hash := contentHash(body)
-		rel, err := filepath.Rel(s.root, path)
+		rel, err := filepath.Rel(absRoot, path)
 		if err != nil {
 			return nil
 		}

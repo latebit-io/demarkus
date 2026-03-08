@@ -1999,7 +1999,7 @@ func TestPublisherMetadata(t *testing.T) {
 		if resp.Metadata["version"] != "1" {
 			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "1")
 		}
-		// No extra keys beyond version, modified, etag.
+		// No extra keys beyond standard metadata: version, modified, etag, content-hash.
 		for k := range resp.Metadata {
 			switch k {
 			case "version", "modified", "etag", "content-hash":

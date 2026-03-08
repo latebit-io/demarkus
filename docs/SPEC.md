@@ -714,6 +714,8 @@ The server maintains an in-memory index mapping content hashes to document paths
 
 If no document matches the hash, the server returns `not-found`.
 
+Paths matching `/sha256-<64 hex characters>` are reserved for content-addressed fetch. Servers MUST NOT allow documents to be created at these paths.
+
 **Benefits:**
 - Location-independent content retrieval — any server with the content can serve it
 - Client can verify received content matches the requested hash
@@ -781,7 +783,7 @@ These will be specified in future versions of this document.
 | Hash algorithm | SHA-256 |
 | Hash format | `sha256-<64 lowercase hex chars>` |
 
-## 14. References
+## 15. References
 
 - RFC 2119 — Key words for use in RFCs to Indicate Requirement Levels
 - RFC 9000 — QUIC: A UDP-Based Multiplexed and Secure Transport
