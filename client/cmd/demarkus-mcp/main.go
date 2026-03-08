@@ -1029,6 +1029,6 @@ func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest)
 	var b strings.Builder
 	fmt.Fprintf(&b, "Published graph (%d nodes, %d edges) to mark://%s%s\n",
 		h.graphStore.NodeCount(), h.graphStore.EdgeCount(), host, path)
-	b.WriteString(formatResult(result, "version", "modified"))
+	b.WriteString(formatResult(result, "version", "modified", "server-version"))
 	return mcp.NewToolResultText(b.String()), nil
 }
