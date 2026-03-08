@@ -643,6 +643,32 @@ const maxIndexDocuments = 1000
 // errIndexTruncated is returned by walkDir when the document limit is reached.
 var errIndexTruncated = errors.New("document limit reached, index is truncated")
 
+// checkManifests verifies agent manifests on source and target servers.
+// Returns warnings, a tool error result (if blocked), or nil to proceed.
+func (h *handler) checkManifests(sourceHost, targetHost string, dryRun, force bool) (warnings []string, block *mcp.CallToolResult) {
+	// Check source manifest (warn only).
+	srcManifest, err := h.client.Fetch(sourceHost, protocol.WellKnownManifestPath)
+	if err != nil || srcManifest.Response.Status != protocol.StatusOK {
+		warnings = append(warnings, "warning: source server has no agent manifest")
+	}
+
+	// Check target manifest (block unless force or dry run).
+	if !dryRun {
+		tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath)
+		if err != nil || tgtManifest.Response.Status != protocol.StatusOK {
+			if !force {
+				return warnings, mcp.NewToolResultError(
+					"target server has no agent manifest — cannot verify it accepts index publications. " +
+						"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
+				)
+			}
+			warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
+		}
+	}
+
+	return warnings, nil
+}
+
 func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	sourceURL, err := req.RequireString("source")
 	if err != nil {
@@ -672,26 +698,9 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("expected_version must be non-negative"), nil
 	}
 
-	var warnings []string
-
-	// Check source manifest (warn only).
-	srcManifest, err := h.client.Fetch(sourceHost, protocol.WellKnownManifestPath)
-	if err != nil || srcManifest.Response.Status != protocol.StatusOK {
-		warnings = append(warnings, "warning: source server has no agent manifest")
-	}
-
-	// Check target manifest (block unless force).
-	if !dryRun {
-		tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath)
-		if err != nil || tgtManifest.Response.Status != protocol.StatusOK {
-			if !force {
-				return mcp.NewToolResultError(
-					"target server has no agent manifest — cannot verify it accepts index publications. " +
-						"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
-				), nil
-			}
-			warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
-		}
+	warnings, block := h.checkManifests(sourceHost, targetHost, dryRun, force)
+	if block != nil {
+		return block, nil
 	}
 
 	// Crawl source server.
