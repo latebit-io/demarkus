@@ -738,13 +738,17 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	// Merge with existing index if updating.
 	if expectedVersion > 0 {
 		existing, err := h.client.Fetch(targetHost, targetPath)
-		if err == nil && existing.Response.Status == protocol.StatusOK {
-			existingEntries := index.Parse(existing.Response.Body)
-			merged := index.Merge(existingEntries, sourceScheme, entries)
-			// Use the target as source header since this is now an aggregated index.
-			targetScheme := "mark://" + targetHost
-			body = index.Build(targetScheme, timeNow(), merged)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %v", err)), nil
 		}
+		if existing.Response.Status != protocol.StatusOK {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %s", existing.Response.Status)), nil
+		}
+		existingEntries := index.Parse(existing.Response.Body)
+		merged := index.Merge(existingEntries, sourceScheme, entries)
+		// Use the target as source header since this is now an aggregated index.
+		targetScheme := "mark://" + targetHost
+		body = index.Build(targetScheme, timeNow(), merged)
 	}
 
 	result, err := h.client.Publish(targetHost, targetPath, body, token, expectedVersion, agentMeta(ctx))

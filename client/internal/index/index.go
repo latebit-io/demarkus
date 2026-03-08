@@ -95,7 +95,7 @@ func Merge(existing []Entry, sourceServer string, newEntries []Entry) []Entry {
 }
 
 // canonicalServer normalizes a mark:// server URL for comparison.
-// It strips trailing slashes and removes the default port if present.
+// It strips trailing slashes, removes the default port, and lowercases.
 func canonicalServer(s string) string {
 	s = strings.TrimRight(s, "/")
 	defaultSuffix := fmt.Sprintf(":%d", protocol.DefaultPort)
