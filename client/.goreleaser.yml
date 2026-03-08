@@ -15,16 +15,12 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
       - arm
     goarm:
       - "7"
-    ignore:
-      - goos: windows
-        goarch: arm
     ldflags:
       - -s -w
 
@@ -36,16 +32,12 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
       - arm
     goarm:
       - "7"
-    ignore:
-      - goos: windows
-        goarch: arm
     ldflags:
       - -s -w
 
@@ -57,16 +49,12 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
       - arm
     goarm:
       - "7"
-    ignore:
-      - goos: windows
-        goarch: arm
     ldflags:
       - -s -w
 
