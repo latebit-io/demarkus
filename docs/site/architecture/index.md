@@ -127,6 +127,8 @@ The client-side `graphstore` package persists crawled graph data at `~/.mark/gra
 
 Backlinks ("what documents link here?") are derived from the stored graph with no server-side changes needed. The MCP `mark_backlinks` tool exposes this as a query for agents.
 
+The graph itself is exportable as a publishable markdown document containing `mark://` links. `mark_graph_export` renders the graph; `mark_graph_publish` exports and publishes in one step. Other agents can crawl the published graph document to discover the topology without recrawling the original servers — enabling multi-agent discovery where agents share and merge knowledge maps.
+
 ## Deployment Topology
 
 A typical deployment looks like this:

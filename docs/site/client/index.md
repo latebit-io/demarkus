@@ -79,7 +79,7 @@ demarkus-mcp -host mark://localhost:6309 -insecure
 
 When `-host` is provided, tools accept bare paths (e.g. `/index.md`) instead of full URLs.
 
-Available tools include `mark_fetch`, `mark_list`, `mark_publish`, `mark_append`, `mark_archive`, `mark_versions`, `mark_discover`, `mark_graph`, and `mark_backlinks`. The `mark_graph` tool crawls and persists the document graph; `mark_backlinks` queries it for reverse links ("what documents link here?").
+Available tools include `mark_fetch`, `mark_list`, `mark_publish`, `mark_append`, `mark_archive`, `mark_versions`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, `mark_index`, and `mark_resolve`. The `mark_graph` tool crawls and persists the document graph; `mark_backlinks` queries it for reverse links. `mark_graph_export` renders the graph as publishable markdown; `mark_graph_publish` exports and publishes in one step so other agents can discover the topology without recrawling.
 
 ## Related Tools
 

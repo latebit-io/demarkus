@@ -49,7 +49,7 @@ demarkus edit --insecure -auth $TOKEN mark://localhost:6309/hello.md
 | `demarkus-token` | Generate and manage capability tokens |
 | `demarkus` | CLI: `FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `APPEND`, `ARCHIVE`, `edit`, `graph`, `info` |
 | `demarkus-tui` | Terminal browser with markdown rendering, link navigation, history, persistent graph view |
-| `demarkus-mcp` | MCP server exposing all protocol verbs plus graph and backlink queries as tools for LLM agents |
+| `demarkus-mcp` | MCP server exposing all protocol verbs plus graph crawling, backlinks, graph export/publish, and content indexing as tools for LLM agents |
 
 ## Protocol at a Glance
 
