@@ -61,6 +61,7 @@ func main() {
 	s.AddTool(markResolveTool(*defaultHost), h.markResolve)
 	s.AddTool(markIndexTool(*defaultHost), h.markIndex)
 	s.AddTool(markBacklinksTool(*defaultHost), h.markBacklinks)
+	s.AddTool(markGraphExportTool(), h.markGraphExport)
 
 	if err := mcpserver.ServeStdio(s); err != nil {
 		log.Fatal(err)
@@ -944,4 +945,23 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 		}
 	}
 	return mcp.NewToolResultText(b.String()), nil
+}
+
+func markGraphExportTool() mcp.Tool {
+	return mcp.NewTool("mark_graph_export",
+		mcp.WithDescription(
+			"Export the local graph store as a publishable markdown document. "+
+				"The output contains mark:// links so crawling it naturally discovers the topology. "+
+				"Run mark_graph first to populate the store.",
+		),
+	)
+}
+
+func (h *handler) markGraphExport(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	if h.graphStore == nil {
+		return mcp.NewToolResultError("graph store not available"), nil
+	}
+
+	md := h.graphStore.Export()
+	return mcp.NewToolResultText(md), nil
 }

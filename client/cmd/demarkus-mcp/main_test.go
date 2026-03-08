@@ -1107,6 +1107,55 @@ func TestHandlerMarkBacklinks_NilStore(t *testing.T) {
 	assertIsToolError(t, result, "graph store not available")
 }
 
+func TestHandlerMarkGraphExport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	gs, err := graphstore.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://host:6309/a.md", Title: "Page A", Status: "ok", LinkCount: 2})
+	g.AddNode(&graph.Node{URL: "mark://host:6309/b.md", Title: "Page B", Status: "ok", LinkCount: 1})
+	g.AddEdge("mark://host:6309/a.md", "mark://host:6309/b.md")
+	gs.Merge(g, nil)
+
+	h := &handler{graphStore: gs}
+	ctx := context.Background()
+
+	result, err := h.markGraphExport(ctx, newCallToolRequest(nil))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if result.IsError {
+		t.Fatal("expected success result")
+	}
+	text, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", result.Content[0])
+	}
+	if !strings.Contains(text.Text, "# Document Graph") {
+		t.Error("expected markdown title in output")
+	}
+	if !strings.Contains(text.Text, "mark://host:6309/a.md") {
+		t.Error("expected node URL in output")
+	}
+	if !strings.Contains(text.Text, "## Edges") {
+		t.Error("expected edges section in output")
+	}
+}
+
+func TestHandlerMarkGraphExport_NilStore(t *testing.T) {
+	h := &handler{}
+	ctx := context.Background()
+
+	result, err := h.markGraphExport(ctx, newCallToolRequest(nil))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "graph store not available")
+}
+
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {
 	t.Helper()
