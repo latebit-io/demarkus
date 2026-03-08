@@ -10,7 +10,8 @@ import (
 )
 
 // nodeRowRe matches a node table row: | [url](url) | title | status | N |
-var nodeRowRe = regexp.MustCompile(`^\|\s*\[([^\]]+)\]\([^)]+\)\s*\|\s*(.*?)\s*\|\s*(\S+)\s*\|\s*(\d+)\s*\|$`)
+// The title group handles backslash-escaped pipes (\|) so they aren't treated as column delimiters.
+var nodeRowRe = regexp.MustCompile(`^\|\s*\[([^\]]+)\]\([^)]+\)\s*\|\s*((?:[^\\|]|\\.)*?)\s*\|\s*(\S+)\s*\|\s*(\d+)\s*\|$`)
 
 // edgeRowRe matches an edge table row: | from | to |
 var edgeRowRe = regexp.MustCompile(`^\|\s*(\S+)\s*\|\s*(\S+)\s*\|$`)
