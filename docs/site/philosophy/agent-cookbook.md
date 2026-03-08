@@ -117,6 +117,27 @@ Maintains integrity and auditability.
 
 ---
 
+## Recipe 7: Agent Discovery via Published Graphs
+
+**Goal:** Share your crawled graph so other agents can discover the topology without recrawling.
+
+**Workflow:**
+1. Agent crawls a server or set of servers using `mark_graph` to build the local graph store.
+2. Agent publishes the graph using `mark_graph_publish` to a target server (e.g. `/graphs/my-graph.md`).
+3. Another agent fetches the published graph document with `mark_fetch`.
+4. The second agent runs `mark_graph` on the published graph document — the crawler follows all `mark://` links in the node table, reconstructing the topology without re-fetching every original document.
+
+**Multi-agent variant:**
+- Agent A publishes its graph from crawling `mark://server-a.com`
+- Agent B publishes its graph from crawling `mark://server-b.com`
+- Agent C fetches both published graphs and crawls them — instantly inheriting both topologies
+- Each agent's graph is versioned, so you can track how the network evolves
+
+**Why it works:**
+The exported graph is plain markdown with `mark://` links. The same link extraction the crawler already uses parses the graph document naturally. No special import format, no coordination protocol — just documents linking to documents.
+
+---
+
 ## Agent-to-Agent Workflows
 
 Demarkus also supports agent‑to‑agent collaboration through the same read/write protocol:

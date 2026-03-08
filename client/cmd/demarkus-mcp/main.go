@@ -62,6 +62,7 @@ func main() {
 	s.AddTool(markIndexTool(*defaultHost), h.markIndex)
 	s.AddTool(markBacklinksTool(*defaultHost), h.markBacklinks)
 	s.AddTool(markGraphExportTool(), h.markGraphExport)
+	s.AddTool(markGraphPublishTool(*defaultHost), h.markGraphPublish)
 
 	if err := mcpserver.ServeStdio(s); err != nil {
 		log.Fatal(err)
@@ -957,6 +958,28 @@ func markGraphExportTool() mcp.Tool {
 	)
 }
 
+func markGraphPublishTool(host string) mcp.Tool {
+	return mcp.NewTool("mark_graph_publish",
+		mcp.WithDescription(
+			"Export the local graph store and publish it to a Mark Protocol server. "+
+				"Combines mark_graph_export + mark_publish in one step. "+
+				"The published document contains mark:// links so other agents can crawl it "+
+				"to discover the topology without recrawling the original servers. "+
+				"Run mark_graph first to populate the store. "+
+				"Requires an auth token configured via the -token flag. "+
+				urlHint(host),
+		),
+		mcp.WithString("url",
+			mcp.Required(),
+			mcp.Description("target URL where the graph document should be published, e.g. /graph.md or "+urlDesc(host)),
+		),
+		mcp.WithNumber("expected_version",
+			mcp.Required(),
+			mcp.Description("version number from a prior fetch for conflict detection; use 0 when creating a new document"),
+		),
+	)
+}
+
 func (h *handler) markGraphExport(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	if h.graphStore == nil {
 		return mcp.NewToolResultError("graph store not available"), nil
@@ -964,4 +987,48 @@ func (h *handler) markGraphExport(_ context.Context, _ mcp.CallToolRequest) (*mc
 
 	md := h.graphStore.Export()
 	return mcp.NewToolResultText(md), nil
+}
+
+func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	if h.graphStore == nil {
+		return mcp.NewToolResultError("graph store not available"), nil
+	}
+
+	rawURL, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError("url is required"), nil
+	}
+
+	host, path, err := h.resolveURL(rawURL)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
+	}
+
+	token := h.token
+	if token == "" {
+		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
+			token = ts.Get(host)
+		}
+	}
+	if token == "" {
+		return mcp.NewToolResultError("publish requires a token (-token flag or stored via 'demarkus token add')"), nil
+	}
+
+	expectedVersion, err := req.RequireInt("expected_version")
+	if err != nil {
+		return mcp.NewToolResultError("expected_version is required"), nil
+	}
+
+	md := h.graphStore.Export()
+
+	result, err := h.client.Publish(host, path, md, token, expectedVersion, agentMeta(ctx))
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Published graph (%d nodes, %d edges) to mark://%s%s\n",
+		h.graphStore.NodeCount(), h.graphStore.EdgeCount(), host, path)
+	b.WriteString(formatResult(result, "version", "modified", "server-version"))
+	return mcp.NewToolResultText(b.String()), nil
 }

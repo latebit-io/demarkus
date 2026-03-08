@@ -1156,6 +1156,106 @@ func TestHandlerMarkGraphExport_NilStore(t *testing.T) {
 	assertIsToolError(t, result, "graph store not available")
 }
 
+func TestToolDefinition_MarkGraphPublish(t *testing.T) {
+	tool := markGraphPublishTool("")
+	if tool.Name != "mark_graph_publish" {
+		t.Errorf("name = %q, want mark_graph_publish", tool.Name)
+	}
+	if !slices.Contains(tool.InputSchema.Required, "url") {
+		t.Error("url should be required")
+	}
+	if !slices.Contains(tool.InputSchema.Required, "expected_version") {
+		t.Error("expected_version should be required")
+	}
+}
+
+func TestHandlerMarkGraphPublish(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	gs, err := graphstore.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://host:6309/a.md", Title: "Page A", Status: "ok", LinkCount: 2})
+	g.AddNode(&graph.Node{URL: "mark://host:6309/b.md", Title: "Page B", Status: "ok", LinkCount: 1})
+	g.AddEdge("mark://host:6309/a.md", "mark://host:6309/b.md")
+	gs.Merge(g, nil)
+
+	var publishedBody string
+	sc := &stubClient{
+		publishFn: func(_, _, body, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			publishedBody = body
+			return fetch.Result{Response: protocol.Response{
+				Status:   "created",
+				Metadata: map[string]string{"version": "1", "modified": "2026-03-08T12:00:00Z"},
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc, graphStore: gs, token: "test-token"}
+	ctx := context.Background()
+
+	result, err := h.markGraphPublish(ctx, newCallToolRequest(map[string]any{
+		"url":              "mark://target.com/graph.md",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+
+	text := result.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "Published graph") {
+		t.Error("expected 'Published graph' in output")
+	}
+	if !strings.Contains(text, "2 nodes") {
+		t.Errorf("expected node count in output: %s", text)
+	}
+	if !strings.Contains(publishedBody, "# Document Graph") {
+		t.Error("published body should contain graph export")
+	}
+	if !strings.Contains(publishedBody, "mark://host:6309/a.md") {
+		t.Error("published body should contain node URLs")
+	}
+}
+
+func TestHandlerMarkGraphPublish_NilStore(t *testing.T) {
+	h := &handler{}
+	ctx := context.Background()
+
+	result, err := h.markGraphPublish(ctx, newCallToolRequest(map[string]any{
+		"url":              "mark://target.com/graph.md",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "graph store not available")
+}
+
+func TestHandlerMarkGraphPublish_NoToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	gs, err := graphstore.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	h := &handler{graphStore: gs}
+	ctx := context.Background()
+
+	result, err := h.markGraphPublish(ctx, newCallToolRequest(map[string]any{
+		"url":              "mark://target.com/graph.md",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "requires a token")
+}
+
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {
 	t.Helper()

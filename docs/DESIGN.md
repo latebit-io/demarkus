@@ -1304,6 +1304,8 @@ Hubs are the entry points into the information graph:
 - `mark_backlinks` MCP tool — queries the stored graph for reverse links
 - TUI loads the stored graph instantly on `d`, then runs a live crawl in the background to discover new links
 - Hub pattern with `mark_index` — federated content indexing and hash-based resolution across servers
+- Graph as content — `Store.Export()` renders the graph as publishable markdown with `mark://` links; `ParseExport()` parses it back; CLI `demarkus graph export` and MCP `mark_graph_export` tool
+- Agent discovery — `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers
 
 ## Security Considerations
 
