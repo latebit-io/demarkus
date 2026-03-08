@@ -138,7 +138,7 @@ func topologyList(gs *graphstore.Store) []graphListItem {
 		return nil
 	}
 	nodes := gs.AllNodes()
-	degrees := gs.InDegrees()
+	degrees := gs.ToGraph().InDegrees()
 	items := make([]graphListItem, 0, len(nodes))
 	for _, n := range nodes {
 		items = append(items, graphListItem{

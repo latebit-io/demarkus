@@ -280,34 +280,6 @@ func TestBacklinksEnrichedNone(t *testing.T) {
 	}
 }
 
-func TestInDegrees(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "graph.json")
-	s, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md"})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/b.md"})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/c.md"})
-	g.AddEdge("mark://a:6309/a.md", "mark://a:6309/c.md")
-	g.AddEdge("mark://a:6309/b.md", "mark://a:6309/c.md")
-	g.AddEdge("mark://a:6309/a.md", "mark://a:6309/b.md")
-	s.Merge(g, nil)
-
-	degrees := s.InDegrees()
-	if degrees["mark://a:6309/c.md"] != 2 {
-		t.Errorf("c in-degree = %d, want 2", degrees["mark://a:6309/c.md"])
-	}
-	if degrees["mark://a:6309/b.md"] != 1 {
-		t.Errorf("b in-degree = %d, want 1", degrees["mark://a:6309/b.md"])
-	}
-	if degrees["mark://a:6309/a.md"] != 0 {
-		t.Errorf("a in-degree = %d, want 0", degrees["mark://a:6309/a.md"])
-	}
-}
-
 func TestAllNodes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
 	s, err := Load(path)

@@ -228,22 +228,6 @@ func (s *Store) BacklinksEnriched(url string) []BacklinkEntry {
 	return entries
 }
 
-// InDegrees returns a map of URL to inbound edge count for all nodes.
-// This is an efficient single-pass computation over edges.
-func (s *Store) InDegrees() map[string]int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	counts := make(map[string]int, len(s.nodes))
-	for url := range s.nodes {
-		counts[url] = 0
-	}
-	for _, e := range s.edges {
-		counts[e.To]++
-	}
-	return counts
-}
-
 // AllNodes returns a copy of all stored nodes.
 func (s *Store) AllNodes() []StoredNode {
 	s.mu.RLock()

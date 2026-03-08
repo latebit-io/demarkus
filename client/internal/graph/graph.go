@@ -105,7 +105,9 @@ func (g *Graph) InDegrees() map[string]int {
 		counts[url] = 0
 	}
 	for _, e := range g.edges {
-		counts[e.To]++
+		if _, ok := g.nodes[e.To]; ok {
+			counts[e.To]++
+		}
 	}
 	return counts
 }
