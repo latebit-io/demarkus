@@ -13,7 +13,7 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 ## What you'll have
 
 - A Demarkus server holding structured markdown docs
-- MCP tools (`mark_fetch`, `mark_publish`, `mark_list`, `mark_append`, `mark_graph`, `mark_backlinks`, `mark_discover`) available to the agent
+- MCP tools (`mark_fetch`, `mark_publish`, `mark_list`, `mark_append`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, `mark_discover`) available to the agent
 - Version history of every memory update
 - Persistent document graph with backlink queries
 - The agent reads context at session start and writes updates at the end
@@ -144,6 +144,20 @@ mark_discover
 `mark_graph` crawls outbound links from a document, building a persistent graph stored at `~/.mark/graph.json`. Each crawl merges into the existing graph — knowledge accumulates across sessions.
 
 `mark_backlinks` queries the stored graph for reverse links: "what documents link here?" This enables agents to understand document relationships without re-crawling.
+
+### Sharing the graph
+
+Agents can export and publish their crawled graph so other agents can discover the topology without recrawling:
+
+```
+# Export the graph as publishable markdown
+mark_graph_export
+
+# Export and publish in one step
+mark_graph_publish url="/graphs/my-network.md" expected_version=0
+```
+
+The published graph is plain markdown with `mark://` links. Other agents can crawl it with `mark_graph` to inherit the topology instantly. See the [Public Hub](/scenarios/public-hub/) scenario for multi-agent discovery patterns.
 
 ## Recommended soul structure
 

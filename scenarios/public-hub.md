@@ -101,6 +101,42 @@ Publish from your local machine:
 demarkus -X PUBLISH -auth <your-token> mark://yourdomain.com/hello.md -body "# Hello"
 ```
 
+## Agent Discovery via Published Graphs
+
+Hubs are natural hosts for published graph documents. An agent crawls a set of servers, then publishes its graph to a hub so other agents can discover the topology without recrawling.
+
+### How it works
+
+1. An agent crawls servers using `mark_graph` to build a local graph store
+2. The agent publishes the graph to the hub using `mark_graph_publish` (e.g. `/graphs/my-network.md`)
+3. Another agent fetches the published graph and runs `mark_graph` on it
+4. The crawler follows all `mark://` links in the document, reconstructing the topology instantly
+
+The published graph is plain markdown with `mark://` links in a table. No special format — the same link extraction the crawler already uses parses it naturally.
+
+### Multi-agent discovery
+
+Multiple agents can publish their graphs to the same hub:
+
+- Agent A publishes its graph from crawling `mark://server-a.com`
+- Agent B publishes its graph from crawling `mark://server-b.com`
+- Agent C crawls both published graph documents — instantly inheriting both topologies
+
+Each published graph is versioned, so you get a history of how the network evolved over time.
+
+### MCP tools
+
+| Tool | Purpose |
+|------|---------|
+| `mark_graph` | Crawl links from a document, persist to local graph store |
+| `mark_graph_export` | Export the local graph as publishable markdown |
+| `mark_graph_publish` | Export and publish the graph to a server in one step |
+| `mark_backlinks` | Query the local graph for reverse links |
+
+### Content indexing
+
+Hubs can also host content indexes — hash-based directories that map content hashes to server locations. Use `mark_index` to crawl a server and publish its content index to a hub, and `mark_resolve` to look up content by hash.
+
 ## Certificate renewal
 
 The installer configures this cron job automatically:
