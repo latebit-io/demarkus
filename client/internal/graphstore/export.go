@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// nodeRowRe matches a node table row: | [url](url) | title | status | N |
+// nodeRowRe matches a node table row: | [label](url) | title | status | N |
+// Captures the link destination (not the display text) as the canonical URL.
 // The title group handles backslash-escaped pipes (\|) so they aren't treated as column delimiters.
-var nodeRowRe = regexp.MustCompile(`^\|\s*\[([^\]]+)\]\([^)]+\)\s*\|\s*((?:[^\\|]|\\.)*?)\s*\|\s*(\S+)\s*\|\s*(\d+)\s*\|$`)
+var nodeRowRe = regexp.MustCompile(`^\|\s*\[[^\]]+\]\(([^)]+)\)\s*\|\s*((?:[^\\|]|\\.)*?)\s*\|\s*(\S+)\s*\|\s*(\d+)\s*\|$`)
 
 // edgeRowRe matches an edge table row: | from | to |
 var edgeRowRe = regexp.MustCompile(`^\|\s*(\S+)\s*\|\s*(\S+)\s*\|$`)
@@ -70,15 +71,19 @@ func (s *Store) Export() string {
 }
 
 // escapeCell escapes characters that would break markdown table formatting.
+// Backslashes are escaped first so that subsequent escapes are unambiguous.
 func escapeCell(s string) string {
-	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "|", `\|`)
 	s = strings.ReplaceAll(s, "\n", " ")
 	return s
 }
 
-// unescapeCell reverses escapeCell.
+// unescapeCell reverses escapeCell in reverse order.
 func unescapeCell(s string) string {
-	return strings.ReplaceAll(s, "\\|", "|")
+	s = strings.ReplaceAll(s, `\|`, "|")
+	s = strings.ReplaceAll(s, `\\`, `\`)
+	return s
 }
 
 // ParseExport extracts nodes and edges from an exported graph markdown document.

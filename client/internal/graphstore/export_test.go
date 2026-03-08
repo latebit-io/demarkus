@@ -127,7 +127,7 @@ func TestExportParseRoundTrip(t *testing.T) {
 				Status: "ok", LinkCount: 3, CrawledAt: time.Now(),
 			},
 			"mark://b:6309/b.md": {
-				URL: "mark://b:6309/b.md", Title: "Doc B",
+				URL: "mark://b:6309/b.md", Title: `Doc B \| literal`,
 				Status: "ok", LinkCount: 1, CrawledAt: time.Now(),
 			},
 			"https://example.com": {
