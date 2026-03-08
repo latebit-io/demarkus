@@ -477,13 +477,29 @@ func TestHandlerMarkAppend_NoToken(t *testing.T) {
 
 // stubClient is a mock markClient for testing handler logic.
 type stubClient struct {
+	fetchFn    func(host, path string) (fetch.Result, error)
+	listFn     func(host, path string) (fetch.Result, error)
 	versionsFn func(host, path string) (fetch.Result, error)
+	publishFn  func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	appendFn   func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 }
 
-func (s *stubClient) Fetch(_, _ string) (fetch.Result, error) { return fetch.Result{}, nil }
-func (s *stubClient) List(_, _ string) (fetch.Result, error)  { return fetch.Result{}, nil }
-func (s *stubClient) Publish(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+func (s *stubClient) Fetch(host, path string) (fetch.Result, error) {
+	if s.fetchFn != nil {
+		return s.fetchFn(host, path)
+	}
+	return fetch.Result{}, nil
+}
+func (s *stubClient) List(host, path string) (fetch.Result, error) {
+	if s.listFn != nil {
+		return s.listFn(host, path)
+	}
+	return fetch.Result{}, nil
+}
+func (s *stubClient) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	if s.publishFn != nil {
+		return s.publishFn(host, path, body, token, expectedVersion, meta)
+	}
 	return fetch.Result{}, nil
 }
 func (s *stubClient) Archive(_, _, _ string) (fetch.Result, error) {
@@ -613,6 +629,405 @@ func TestHandlerMarkAppend_NegativeVersion(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	assertIsToolError(t, result, "expected_version must be >= 0")
+}
+
+// --- mark_resolve tests ---
+
+func TestHandlerMarkResolve_Success(t *testing.T) {
+	hash := "sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	indexBody := "| Hash | Server | Path |\n|------|--------|------|\n| " + hash + " | mark://docs.example.com | /guide.md |\n"
+
+	sc := &stubClient{
+		fetchFn: func(_, path string) (fetch.Result, error) {
+			if path == "/index.md" {
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   indexBody,
+				}}, nil
+			}
+			if path == "/"+hash {
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"content-hash": hash, "version": "1"},
+					Body:     "# Guide",
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+		},
+	}
+
+	h := &handler{client: sc}
+	result, err := h.markResolve(context.Background(), newCallToolRequest(map[string]any{
+		"hash":  hash,
+		"index": "mark://hub.example.com/index.md",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "# Guide") {
+		t.Errorf("result should contain document body, got: %s", text)
+	}
+}
+
+func TestHandlerMarkResolve_Fallback(t *testing.T) {
+	hash := "sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	indexBody := "| Hash | Server | Path |\n|------|--------|------|\n" +
+		"| " + hash + " | mark://server1.com | /a.md |\n" +
+		"| " + hash + " | mark://server2.com | /b.md |\n"
+
+	sc := &stubClient{
+		fetchFn: func(host, path string) (fetch.Result, error) {
+			if strings.Contains(path, "index") {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: indexBody}}, nil
+			}
+			// First server fails, second succeeds.
+			if host == "server1.com:6309" {
+				return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"content-hash": hash},
+				Body:     "# Found",
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc}
+	result, err := h.markResolve(context.Background(), newCallToolRequest(map[string]any{
+		"hash":  hash,
+		"index": "mark://hub.example.com/index.md",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "# Found") {
+		t.Errorf("should contain document from second server, got: %s", text)
+	}
+}
+
+func TestHandlerMarkResolve_NotFound(t *testing.T) {
+	hash := "sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	indexBody := "| Hash | Server | Path |\n|------|--------|------|\n| " + hash + " | mark://server.com | /a.md |\n"
+
+	sc := &stubClient{
+		fetchFn: func(_, path string) (fetch.Result, error) {
+			if strings.Contains(path, "index") {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: indexBody}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+		},
+	}
+
+	h := &handler{client: sc}
+	result, err := h.markResolve(context.Background(), newCallToolRequest(map[string]any{
+		"hash":  hash,
+		"index": "mark://hub.example.com/index.md",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIsToolError(t, result, "could not resolve hash")
+}
+
+func TestHandlerMarkResolve_InvalidHash(t *testing.T) {
+	h := &handler{}
+	result, err := h.markResolve(context.Background(), newCallToolRequest(map[string]any{
+		"hash":  "not-a-hash",
+		"index": "mark://hub.example.com/index.md",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIsToolError(t, result, "invalid hash format")
+}
+
+// --- mark_index tests ---
+
+func TestHandlerMarkIndex_Success(t *testing.T) {
+	hash := "sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	var publishedBody string
+
+	sc := &stubClient{
+		fetchFn: func(_, path string) (fetch.Result, error) {
+			if path == protocol.WellKnownManifestPath {
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   "# Agent Manifest\nThis is a hub.",
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"content-hash": hash},
+				Body:     "# Doc",
+			}}, nil
+		},
+		listFn: func(_, path string) (fetch.Result, error) {
+			if path == "/" {
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   "# Index of /\n\n- [doc.md](doc.md)\n",
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+		},
+		publishFn: func(_, _, body, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			publishedBody = body
+			return fetch.Result{Response: protocol.Response{
+				Status:   "created",
+				Metadata: map[string]string{"version": "1"},
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test-token"}
+	result, err := h.markIndex(context.Background(), newCallToolRequest(map[string]any{
+		"source":           "mark://source.com",
+		"target":           "mark://hub.com/indexes/source.md",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	if !strings.Contains(publishedBody, hash) {
+		t.Error("published index should contain the content hash")
+	}
+	if !strings.Contains(publishedBody, "/doc.md") {
+		t.Error("published index should contain the document path")
+	}
+}
+
+func TestHandlerMarkIndex_DryRun(t *testing.T) {
+	hash := "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	sc := &stubClient{
+		fetchFn: func(_, path string) (fetch.Result, error) {
+			if path == protocol.WellKnownManifestPath {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# Manifest"}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"content-hash": hash},
+				Body:     "content",
+			}}, nil
+		},
+		listFn: func(_, path string) (fetch.Result, error) {
+			if path == "/" {
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   "- [a.md](a.md)\n",
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+		},
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			t.Fatal("publish should not be called in dry_run mode")
+			return fetch.Result{}, nil
+		},
+	}
+
+	h := &handler{client: sc}
+	result, err := h.markIndex(context.Background(), newCallToolRequest(map[string]any{
+		"source":  "mark://source.com",
+		"target":  "mark://hub.com/indexes/source.md",
+		"dry_run": true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "dry run") {
+		t.Error("dry run output should mention dry run")
+	}
+	if !strings.Contains(text, hash) {
+		t.Error("dry run output should contain the index content")
+	}
+}
+
+func TestHandlerMarkIndex_BlocksWithoutManifest(t *testing.T) {
+	sc := &stubClient{
+		fetchFn: func(_, path string) (fetch.Result, error) {
+			if path == protocol.WellKnownManifestPath {
+				return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
+		},
+		listFn: func(_, _ string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "- [a.md](a.md)\n"}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test-token"}
+	result, err := h.markIndex(context.Background(), newCallToolRequest(map[string]any{
+		"source":           "mark://source.com",
+		"target":           "mark://hub.com/indexes/source.md",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIsToolError(t, result, "no agent manifest")
+}
+
+func TestHandlerMarkIndex_ForceOverridesManifest(t *testing.T) {
+	sc := &stubClient{
+		fetchFn: func(_, path string) (fetch.Result, error) {
+			if path == protocol.WellKnownManifestPath {
+				return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"content-hash": "sha256-aaaa"},
+				Body:     "content",
+			}}, nil
+		},
+		listFn: func(_, path string) (fetch.Result, error) {
+			if path == "/" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "- [a.md](a.md)\n"}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+		},
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   "created",
+				Metadata: map[string]string{"version": "1"},
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test-token"}
+	result, err := h.markIndex(context.Background(), newCallToolRequest(map[string]any{
+		"source":           "mark://source.com",
+		"target":           "mark://hub.com/indexes/source.md",
+		"expected_version": float64(0),
+		"force":            true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "warning") {
+		t.Error("should include warning about missing manifest")
+	}
+}
+
+func TestHandlerMarkIndex_SourceNoManifestWarns(t *testing.T) {
+	hash := "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	sc := &stubClient{
+		fetchFn: func(host, path string) (fetch.Result, error) {
+			if path == protocol.WellKnownManifestPath {
+				if host == "source.com:6309" {
+					return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+				}
+				// Target has manifest.
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# Hub"}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"content-hash": hash},
+				Body:     "content",
+			}}, nil
+		},
+		listFn: func(_, path string) (fetch.Result, error) {
+			if path == "/" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "- [a.md](a.md)\n"}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+		},
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{Status: "created", Metadata: map[string]string{"version": "1"}}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test-token"}
+	result, err := h.markIndex(context.Background(), newCallToolRequest(map[string]any{
+		"source":           "mark://source.com",
+		"target":           "mark://hub.com/indexes/source.md",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "warning: source") {
+		t.Error("should warn about source having no manifest")
+	}
+}
+
+// --- Tool definition tests for new tools ---
+
+func TestToolDefinition_MarkResolve(t *testing.T) {
+	tool := markResolveTool("")
+	if tool.Name != "mark_resolve" {
+		t.Errorf("name = %q, want mark_resolve", tool.Name)
+	}
+	if !slices.Contains(tool.InputSchema.Required, "hash") {
+		t.Error("hash should be required")
+	}
+	if !slices.Contains(tool.InputSchema.Required, "index") {
+		t.Error("index should be required")
+	}
+}
+
+func TestToolDefinition_MarkIndex(t *testing.T) {
+	tool := markIndexTool("")
+	if tool.Name != "mark_index" {
+		t.Errorf("name = %q, want mark_index", tool.Name)
+	}
+	if !slices.Contains(tool.InputSchema.Required, "source") {
+		t.Error("source should be required")
+	}
+	if !slices.Contains(tool.InputSchema.Required, "target") {
+		t.Error("target should be required")
+	}
+	if slices.Contains(tool.InputSchema.Required, "expected_version") {
+		t.Error("expected_version should not be required")
+	}
+	if slices.Contains(tool.InputSchema.Required, "dry_run") {
+		t.Error("dry_run should not be required")
+	}
+	if slices.Contains(tool.InputSchema.Required, "force") {
+		t.Error("force should not be required")
+	}
+}
+
+func TestIsValidHash(t *testing.T) {
+	tests := []struct {
+		hash string
+		want bool
+	}{
+		{"sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", true},
+		{"sha256-0000000000000000000000000000000000000000000000000000000000000000", true},
+		{"sha256-AAAA", false},   // uppercase
+		{"sha256-a1b2c3", false}, // too short
+		{"md5-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", false},      // wrong prefix
+		{"sha256-g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", false},   // invalid hex char
+		{"sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2aa", false}, // too long
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isValidHash(tt.hash); got != tt.want {
+			t.Errorf("isValidHash(%q) = %v, want %v", tt.hash, got, tt.want)
+		}
+	}
 }
 
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.

@@ -5,15 +5,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/index"
+	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -49,6 +53,8 @@ func main() {
 	s.AddTool(markArchiveTool(*defaultHost), h.markArchive)
 	s.AddTool(markAppendTool(*defaultHost), h.markAppend)
 	s.AddTool(markDiscoverTool(*defaultHost), h.markDiscover)
+	s.AddTool(markResolveTool(*defaultHost), h.markResolve)
+	s.AddTool(markIndexTool(*defaultHost), h.markIndex)
 
 	if err := mcpserver.ServeStdio(s); err != nil {
 		log.Fatal(err)
@@ -245,6 +251,53 @@ func markDiscoverTool(host string) mcp.Tool {
 		),
 		mcp.WithString("url",
 			mcp.Description("mark:// URL of the server to discover (optional when -host is set)"),
+		),
+	)
+}
+
+func markResolveTool(host string) mcp.Tool {
+	return mcp.NewTool("mark_resolve",
+		mcp.WithDescription(
+			"Resolve content by its SHA-256 hash using a hub index document. "+
+				"Looks up the hash in the index, finds servers hosting the content, "+
+				"and fetches it by hash. Returns the document content if found. "+
+				urlHint(host),
+		),
+		mcp.WithString("hash",
+			mcp.Required(),
+			mcp.Description("content hash to resolve (sha256-<64 lowercase hex characters>)"),
+		),
+		mcp.WithString("index",
+			mcp.Required(),
+			mcp.Description("mark:// URL of the hash index document on a hub, or "+urlDesc(host)),
+		),
+	)
+}
+
+func markIndexTool(host string) mcp.Tool {
+	return mcp.NewTool("mark_index",
+		mcp.WithDescription(
+			"Crawl a Mark Protocol server, collect content hashes from all documents, "+
+				"and publish a hash index document to a target server (typically a hub). "+
+				"The tool checks the target's agent manifest before publishing. "+
+				urlHint(host),
+		),
+		mcp.WithString("source",
+			mcp.Required(),
+			mcp.Description("mark:// URL of the server to crawl, or "+urlDesc(host)),
+		),
+		mcp.WithString("target",
+			mcp.Required(),
+			mcp.Description("mark:// URL where the index should be published, or "+urlDesc(host)),
+		),
+		mcp.WithNumber("expected_version",
+			mcp.Description("version of existing index at target for conflict detection; use 0 to create new"),
+		),
+		mcp.WithBoolean("dry_run",
+			mcp.Description("if true, return the index document without publishing (default false)"),
+		),
+		mcp.WithBoolean("force",
+			mcp.Description("if true, publish even when target has no hub manifest (default false)"),
 		),
 	)
 }
@@ -503,6 +556,271 @@ func (h *handler) markDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp
 
 	return mcp.NewToolResultText(formatResult(result, "version", "modified")), nil
 }
+
+// isValidHash checks if a string is a valid content hash (sha256- followed by 64 lowercase hex chars).
+func isValidHash(hash string) bool {
+	if len(hash) != 71 || !strings.HasPrefix(hash, "sha256-") {
+		return false
+	}
+	for _, c := range hash[7:] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	hash, err := req.RequireString("hash")
+	if err != nil {
+		return mcp.NewToolResultError("hash is required"), nil
+	}
+	if !isValidHash(hash) {
+		return mcp.NewToolResultError("invalid hash format: expected sha256-<64 lowercase hex characters>"), nil
+	}
+
+	indexURL, err := req.RequireString("index")
+	if err != nil {
+		return mcp.NewToolResultError("index is required"), nil
+	}
+
+	indexHost, indexPath, err := h.resolveURL(indexURL)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid index URL: %v", err)), nil
+	}
+
+	// Fetch the index document.
+	indexResult, err := h.client.Fetch(indexHost, indexPath)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to fetch index: %v", err)), nil
+	}
+	if indexResult.Response.Status != protocol.StatusOK {
+		return mcp.NewToolResultError(fmt.Sprintf("index fetch returned: %s", indexResult.Response.Status)), nil
+	}
+
+	// Parse index and filter for matching hash.
+	entries := index.Parse(indexResult.Response.Body)
+	var matches []index.Entry
+	for _, e := range entries {
+		if e.Hash == hash {
+			matches = append(matches, e)
+		}
+	}
+	if len(matches) == 0 {
+		return mcp.NewToolResultError(fmt.Sprintf("hash %s not found in index", hash)), nil
+	}
+
+	// Try each matching server.
+	var lastErr string
+	for _, m := range matches {
+		serverHost, _, err := fetch.ParseMarkURL(m.Server + "/")
+		if err != nil {
+			lastErr = fmt.Sprintf("invalid server URL %s: %v", m.Server, err)
+			continue
+		}
+		result, err := h.client.Fetch(serverHost, "/"+hash)
+		if err != nil {
+			lastErr = fmt.Sprintf("%s: %v", m.Server, err)
+			continue
+		}
+		if result.Response.Status != protocol.StatusOK {
+			lastErr = fmt.Sprintf("%s: %s", m.Server, result.Response.Status)
+			continue
+		}
+		// Verify content hash matches.
+		if got := result.Response.Metadata["content-hash"]; got != hash {
+			lastErr = fmt.Sprintf("%s: hash mismatch (got %s)", m.Server, got)
+			continue
+		}
+		return mcp.NewToolResultText(formatResult(result, "version", "modified", "content-hash")), nil
+	}
+
+	return mcp.NewToolResultError(fmt.Sprintf("could not resolve hash from any server: %s", lastErr)), nil
+}
+
+const maxIndexDocuments = 1000
+
+// errIndexTruncated is returned by walkDir when the document limit is reached.
+var errIndexTruncated = errors.New("document limit reached, index is truncated")
+
+// checkManifests verifies agent manifests on source and target servers.
+// Returns warnings, a tool error result (if blocked), or nil to proceed.
+func (h *handler) checkManifests(sourceHost, targetHost string, dryRun, force bool) (warnings []string, block *mcp.CallToolResult) {
+	// Check source manifest (warn only).
+	srcManifest, err := h.client.Fetch(sourceHost, protocol.WellKnownManifestPath)
+	if err != nil || srcManifest.Response.Status != protocol.StatusOK {
+		warnings = append(warnings, "warning: source server has no agent manifest")
+	}
+
+	// Check target manifest (block unless force or dry run).
+	if !dryRun {
+		tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath)
+		if err != nil || tgtManifest.Response.Status != protocol.StatusOK {
+			if !force {
+				return warnings, mcp.NewToolResultError(
+					"target server has no agent manifest — cannot verify it accepts index publications. " +
+						"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
+				)
+			}
+			warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
+		}
+	}
+
+	return warnings, nil
+}
+
+func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	sourceURL, err := req.RequireString("source")
+	if err != nil {
+		return mcp.NewToolResultError("source is required"), nil
+	}
+	targetURL, err := req.RequireString("target")
+	if err != nil {
+		return mcp.NewToolResultError("target is required"), nil
+	}
+
+	sourceHost, sourcePath, err := h.resolveURL(sourceURL)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid source URL: %v", err)), nil
+	}
+	if sourcePath == "" {
+		sourcePath = "/"
+	}
+	targetHost, targetPath, err := h.resolveURL(targetURL)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid target URL: %v", err)), nil
+	}
+
+	dryRun := req.GetBool("dry_run", false)
+	force := req.GetBool("force", false)
+	expectedVersion := req.GetInt("expected_version", 0)
+	if expectedVersion < 0 {
+		return mcp.NewToolResultError("expected_version must be non-negative"), nil
+	}
+
+	warnings, block := h.checkManifests(sourceHost, targetHost, dryRun, force)
+	if block != nil {
+		return block, nil
+	}
+
+	// Crawl source server.
+	var entries []index.Entry
+	sourceScheme := "mark://" + sourceHost
+	if err := h.walkDir(sourceHost, sourcePath, sourceScheme, &entries); err != nil && !errors.Is(err, errIndexTruncated) {
+		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
+	} else if errors.Is(err, errIndexTruncated) {
+		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
+	}
+
+	body := index.Build(sourceScheme, timeNow(), entries)
+
+	if dryRun {
+		var b strings.Builder
+		for _, w := range warnings {
+			b.WriteString(w + "\n")
+		}
+		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, not published)\n\n", len(entries), sourceScheme)
+		b.WriteString(body)
+		return mcp.NewToolResultText(b.String()), nil
+	}
+
+	// Token resolution for target.
+	token := h.token
+	if token == "" {
+		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
+			token = ts.Get(targetHost)
+		}
+	}
+	if token == "" {
+		return mcp.NewToolResultError("publishing requires a token (-token flag or stored via 'demarkus token add')"), nil
+	}
+
+	// Merge with existing index if updating.
+	if expectedVersion > 0 {
+		existing, err := h.client.Fetch(targetHost, targetPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %v", err)), nil
+		}
+		if existing.Response.Status != protocol.StatusOK {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %s", existing.Response.Status)), nil
+		}
+		existingEntries := index.Parse(existing.Response.Body)
+		merged := index.Merge(existingEntries, sourceScheme, entries)
+		// Use the target as source header since this is now an aggregated index.
+		targetScheme := "mark://" + targetHost
+		body = index.Build(targetScheme, timeNow(), merged)
+	}
+
+	result, err := h.client.Publish(targetHost, targetPath, body, token, expectedVersion, agentMeta(ctx))
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
+	}
+
+	var b strings.Builder
+	for _, w := range warnings {
+		b.WriteString(w + "\n")
+	}
+	fmt.Fprintf(&b, "Indexed %d documents from %s\n", len(entries), sourceScheme)
+	b.WriteString(formatResult(result, "version", "modified"))
+	return mcp.NewToolResultText(b.String()), nil
+}
+
+// walkDir recursively lists and fetches documents from a server, collecting content hashes.
+func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.Entry) error {
+	if len(*entries) >= maxIndexDocuments {
+		return errIndexTruncated
+	}
+
+	result, err := h.client.List(host, dirPath)
+	if err != nil {
+		return fmt.Errorf("list %s: %w", dirPath, err)
+	}
+	if result.Response.Status != protocol.StatusOK {
+		return nil // skip inaccessible directories
+	}
+
+	for _, dest := range links.Extract(result.Response.Body) {
+		if len(*entries) >= maxIndexDocuments {
+			return errIndexTruncated
+		}
+
+		fullPath := dirPath
+		if !strings.HasSuffix(fullPath, "/") {
+			fullPath += "/"
+		}
+		fullPath += dest
+
+		if strings.HasSuffix(dest, "/") {
+			// Directory — recurse.
+			if err := h.walkDir(host, fullPath, sourceScheme, entries); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// File — fetch and collect content-hash.
+		doc, err := h.client.Fetch(host, fullPath)
+		if err != nil {
+			continue // skip unreachable documents
+		}
+		if doc.Response.Status != protocol.StatusOK {
+			continue
+		}
+		contentHash, ok := doc.Response.Metadata["content-hash"]
+		if !ok || !isValidHash(contentHash) {
+			continue
+		}
+		*entries = append(*entries, index.Entry{
+			Hash:   contentHash,
+			Server: sourceScheme,
+			Path:   fullPath,
+		})
+	}
+	return nil
+}
+
+// timeNow is a variable for testing.
+var timeNow = time.Now
 
 func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
