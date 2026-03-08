@@ -205,7 +205,7 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 		b.WriteByte('\n')
 	}
 
-	b.WriteString("\n  [Enter] navigate  [r] backlinks  [t] topology  [d] close  [q] quit\n")
+	b.WriteString("\n  [Enter] navigate  [r] backlinks  [t] topology  [d/Esc] close  [q] quit\n")
 	return b.String()
 }
 
@@ -327,9 +327,11 @@ func (m model) handleGraphKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		if m.graphSubView != subViewLinks {
 			m.graphSubView = subViewLinks
-			url := m.addressBar.Value()
-			m.graphNodes = flattenGraph(m.graphData, url)
-			m.graphIdx = 0
+			if m.graphData != nil {
+				url := m.addressBar.Value()
+				m.graphNodes = flattenGraph(m.graphData, url)
+				m.graphIdx = 0
+			}
 			if m.ready {
 				m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
 				m.viewport.GotoTop()
