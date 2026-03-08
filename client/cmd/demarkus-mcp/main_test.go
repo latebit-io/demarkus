@@ -1034,7 +1034,6 @@ func TestIsValidHash(t *testing.T) {
 	}
 }
 
-// assertIsToolError checks that a CallToolResult is an error containing the given substring.
 func TestMarkBacklinksTool_URLRequired(t *testing.T) {
 	tool := markBacklinksTool("mark://localhost:6309")
 	props := tool.InputSchema.Properties
@@ -1108,6 +1107,7 @@ func TestHandlerMarkBacklinks_NilStore(t *testing.T) {
 	assertIsToolError(t, result, "graph store not available")
 }
 
+// assertIsToolError checks that a CallToolResult is an error containing the given substring.
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {
 	t.Helper()
 	if !result.IsError {

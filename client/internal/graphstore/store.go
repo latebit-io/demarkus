@@ -272,7 +272,7 @@ func (f *EtagFetcher) Etags() map[string]string {
 
 // CrawlOptions configures a persistent crawl.
 type CrawlOptions struct {
-	MaxDepth int               // crawl depth limit (0 = default 2)
+	MaxDepth int               // max link hops from start (0 = start node only, -1 = default 2)
 	MaxNodes int               // node cap (0 = unlimited)
 	Workers  int               // concurrent workers (0 = default 5)
 	OnNode   func(*graph.Node) // optional per-node callback
@@ -296,13 +296,8 @@ func (s *Store) CrawlAndPersist(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	maxDepth := opts.MaxDepth
-	if maxDepth == 0 {
-		maxDepth = -1 // graph.Crawl uses -1 for "use default (2)"
-	}
-
 	g, err := graph.Crawl(ctx, startURL, fetcher, parseURL, graph.CrawlOptions{
-		MaxDepth: maxDepth,
+		MaxDepth: opts.MaxDepth,
 		Workers:  opts.Workers,
 		OnNode: func(n *graph.Node) {
 			if opts.OnNode != nil {
