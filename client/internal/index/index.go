@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/latebit/demarkus/protocol"
 )
 
 // Entry maps a content hash to a server location.
@@ -79,12 +81,24 @@ func Build(source string, indexed time.Time, entries []Entry) string {
 // then appends newEntries. This allows a single index document to
 // aggregate entries from many servers, with each server's entries
 // independently refreshable.
+// Server URLs are canonicalized before comparison to avoid duplicates
+// from representation differences (trailing slash, default port).
 func Merge(existing []Entry, sourceServer string, newEntries []Entry) []Entry {
+	canonical := canonicalServer(sourceServer)
 	var result []Entry
 	for _, e := range existing {
-		if e.Server != sourceServer {
+		if canonicalServer(e.Server) != canonical {
 			result = append(result, e)
 		}
 	}
 	return append(result, newEntries...)
+}
+
+// canonicalServer normalizes a mark:// server URL for comparison.
+// It strips trailing slashes and removes the default port if present.
+func canonicalServer(s string) string {
+	s = strings.TrimRight(s, "/")
+	defaultSuffix := fmt.Sprintf(":%d", protocol.DefaultPort)
+	s = strings.TrimSuffix(s, defaultSuffix)
+	return strings.ToLower(s)
 }

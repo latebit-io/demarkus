@@ -165,6 +165,45 @@ func TestMerge(t *testing.T) {
 			newEntries:   nil,
 			want:         nil,
 		},
+		{
+			name: "normalizes trailing slash",
+			existing: []Entry{
+				{Hash: "sha256-aaa", Server: "mark://a.com/", Path: "/old.md"},
+			},
+			sourceServer: "mark://a.com",
+			newEntries: []Entry{
+				{Hash: "sha256-bbb", Server: "mark://a.com", Path: "/new.md"},
+			},
+			want: []Entry{
+				{Hash: "sha256-bbb", Server: "mark://a.com", Path: "/new.md"},
+			},
+		},
+		{
+			name: "normalizes default port",
+			existing: []Entry{
+				{Hash: "sha256-aaa", Server: "mark://a.com:6309", Path: "/old.md"},
+			},
+			sourceServer: "mark://a.com",
+			newEntries: []Entry{
+				{Hash: "sha256-bbb", Server: "mark://a.com", Path: "/new.md"},
+			},
+			want: []Entry{
+				{Hash: "sha256-bbb", Server: "mark://a.com", Path: "/new.md"},
+			},
+		},
+		{
+			name: "normalizes case",
+			existing: []Entry{
+				{Hash: "sha256-aaa", Server: "mark://A.COM", Path: "/old.md"},
+			},
+			sourceServer: "mark://a.com",
+			newEntries: []Entry{
+				{Hash: "sha256-bbb", Server: "mark://a.com", Path: "/new.md"},
+			},
+			want: []Entry{
+				{Hash: "sha256-bbb", Server: "mark://a.com", Path: "/new.md"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

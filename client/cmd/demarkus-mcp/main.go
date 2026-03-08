@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -639,6 +640,9 @@ func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.
 
 const maxIndexDocuments = 1000
 
+// errIndexTruncated is returned by walkDir when the document limit is reached.
+var errIndexTruncated = errors.New("document limit reached, index is truncated")
+
 func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	sourceURL, err := req.RequireString("source")
 	if err != nil {
@@ -649,9 +653,12 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("target is required"), nil
 	}
 
-	sourceHost, _, err := h.resolveURL(sourceURL)
+	sourceHost, sourcePath, err := h.resolveURL(sourceURL)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid source URL: %v", err)), nil
+	}
+	if sourcePath == "" {
+		sourcePath = "/"
 	}
 	targetHost, targetPath, err := h.resolveURL(targetURL)
 	if err != nil {
@@ -661,6 +668,9 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	dryRun := req.GetBool("dry_run", false)
 	force := req.GetBool("force", false)
 	expectedVersion := req.GetInt("expected_version", 0)
+	if expectedVersion < 0 {
+		return mcp.NewToolResultError("expected_version must be non-negative"), nil
+	}
 
 	var warnings []string
 
@@ -687,8 +697,10 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	// Crawl source server.
 	var entries []index.Entry
 	sourceScheme := "mark://" + sourceHost
-	if err := h.walkDir(sourceHost, "/", sourceScheme, &entries); err != nil {
+	if err := h.walkDir(sourceHost, sourcePath, sourceScheme, &entries); err != nil && !errors.Is(err, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
+	} else if errors.Is(err, errIndexTruncated) {
+		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
 	}
 
 	body := index.Build(sourceScheme, timeNow(), entries)
@@ -741,7 +753,7 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 // walkDir recursively lists and fetches documents from a server, collecting content hashes.
 func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.Entry) error {
 	if len(*entries) >= maxIndexDocuments {
-		return nil
+		return errIndexTruncated
 	}
 
 	result, err := h.client.List(host, dirPath)
@@ -754,7 +766,7 @@ func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.E
 
 	for _, dest := range links.Extract(result.Response.Body) {
 		if len(*entries) >= maxIndexDocuments {
-			return nil
+			return errIndexTruncated
 		}
 
 		fullPath := dirPath
