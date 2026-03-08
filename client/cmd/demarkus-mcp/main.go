@@ -269,7 +269,7 @@ func markResolveTool(host string) mcp.Tool {
 		),
 		mcp.WithString("index",
 			mcp.Required(),
-			mcp.Description("mark:// URL of the hash index document on a hub"),
+			mcp.Description("mark:// URL of the hash index document on a hub, or "+urlDesc(host)),
 		),
 	)
 }
@@ -284,11 +284,11 @@ func markIndexTool(host string) mcp.Tool {
 		),
 		mcp.WithString("source",
 			mcp.Required(),
-			mcp.Description("mark:// URL of the server to crawl"),
+			mcp.Description("mark:// URL of the server to crawl, or "+urlDesc(host)),
 		),
 		mcp.WithString("target",
 			mcp.Required(),
-			mcp.Description("mark:// URL where the index should be published"),
+			mcp.Description("mark:// URL where the index should be published, or "+urlDesc(host)),
 		),
 		mcp.WithNumber("expected_version",
 			mcp.Description("version of existing index at target for conflict detection; use 0 to create new"),
@@ -741,7 +741,9 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		if err == nil && existing.Response.Status == protocol.StatusOK {
 			existingEntries := index.Parse(existing.Response.Body)
 			merged := index.Merge(existingEntries, sourceScheme, entries)
-			body = index.Build(sourceScheme, timeNow(), merged)
+			// Use the target as source header since this is now an aggregated index.
+			targetScheme := "mark://" + targetHost
+			body = index.Build(targetScheme, timeNow(), merged)
 		}
 	}
 
@@ -801,7 +803,7 @@ func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.E
 			continue
 		}
 		contentHash, ok := doc.Response.Metadata["content-hash"]
-		if !ok {
+		if !ok || !isValidHash(contentHash) {
 			continue
 		}
 		*entries = append(*entries, index.Entry{
