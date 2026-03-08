@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/latebit/demarkus/client/internal/graph"
@@ -291,7 +292,7 @@ func (s *Store) CrawlAndPersist(
 ) (*graph.Graph, error) {
 	fetcher := NewEtagFetcher(fetchFunc)
 
-	var nodeCount int
+	var nodeCount atomic.Int32
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -308,8 +309,7 @@ func (s *Store) CrawlAndPersist(
 				opts.OnNode(n)
 			}
 			if opts.MaxNodes > 0 {
-				nodeCount++
-				if nodeCount >= opts.MaxNodes {
+				if int(nodeCount.Add(1)) >= opts.MaxNodes {
 					cancel()
 				}
 			}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/latebit/demarkus/client/internal/graph"
@@ -266,12 +267,12 @@ func TestCrawlAndPersist(t *testing.T) {
 		return "", "", fmt.Errorf("invalid URL: %s", raw)
 	}
 
-	var nodeCount int
+	var nodeCount atomic.Int32
 	g, err := s.CrawlAndPersist(context.Background(), "mark://host:6309/index.md", fetchFunc, parseURL, CrawlOptions{
 		MaxDepth: 2,
 		MaxNodes: 100,
 		OnNode: func(_ *graph.Node) {
-			nodeCount++
+			nodeCount.Add(1)
 		},
 	})
 	if err != nil {
@@ -281,8 +282,8 @@ func TestCrawlAndPersist(t *testing.T) {
 	if g.NodeCount() < 2 {
 		t.Errorf("graph NodeCount = %d, want >= 2", g.NodeCount())
 	}
-	if nodeCount < 2 {
-		t.Errorf("OnNode called %d times, want >= 2", nodeCount)
+	if nodeCount.Load() < 2 {
+		t.Errorf("OnNode called %d times, want >= 2", nodeCount.Load())
 	}
 
 	// Verify persistence
