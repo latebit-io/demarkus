@@ -52,7 +52,7 @@ func (s *Store) Export() string {
 	b.WriteString("|-----|-------|--------|-------|\n")
 	for _, n := range nodes {
 		b.WriteString(fmt.Sprintf("| [%s](%s) | %s | %s | %d |\n",
-			n.URL, n.URL, n.Title, n.Status, n.LinkCount))
+			n.URL, n.URL, escapeCell(n.Title), n.Status, n.LinkCount))
 	}
 
 	if len(edges) > 0 {
@@ -66,6 +66,18 @@ func (s *Store) Export() string {
 	}
 
 	return b.String()
+}
+
+// escapeCell escapes characters that would break markdown table formatting.
+func escapeCell(s string) string {
+	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
+}
+
+// unescapeCell reverses escapeCell.
+func unescapeCell(s string) string {
+	return strings.ReplaceAll(s, "\\|", "|")
 }
 
 // ParseExport extracts nodes and edges from an exported graph markdown document.
@@ -120,7 +132,7 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 			linkCount, _ := strconv.Atoi(m[4])
 			nodes = append(nodes, StoredNode{
 				URL:       m[1],
-				Title:     m[2],
+				Title:     unescapeCell(m[2]),
 				Status:    m[3],
 				LinkCount: linkCount,
 			})

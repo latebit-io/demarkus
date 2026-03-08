@@ -123,7 +123,7 @@ func TestExportParseRoundTrip(t *testing.T) {
 	s := &Store{
 		nodes: map[string]*StoredNode{
 			"mark://a:6309/a.md": {
-				URL: "mark://a:6309/a.md", Title: "Doc A",
+				URL: "mark://a:6309/a.md", Title: "Doc A | Appendix",
 				Status: "ok", LinkCount: 3, CrawledAt: time.Now(),
 			},
 			"mark://b:6309/b.md": {
