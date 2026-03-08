@@ -195,6 +195,64 @@ func (s *Store) Backlinks(url string) []string {
 	return result
 }
 
+// BacklinkEntry is a backlink with enriched node metadata.
+type BacklinkEntry struct {
+	URL    string
+	Title  string
+	Status string
+}
+
+// BacklinksEnriched returns backlinks for the given URL, enriched with
+// title and status from the store. Sorted alphabetically by URL.
+func (s *Store) BacklinksEnriched(url string) []BacklinkEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var urls []string
+	for _, e := range s.edges {
+		if e.To == url {
+			urls = append(urls, e.From)
+		}
+	}
+	sort.Strings(urls)
+
+	entries := make([]BacklinkEntry, 0, len(urls))
+	for _, u := range urls {
+		entry := BacklinkEntry{URL: u, Status: "ok"}
+		if n := s.nodes[u]; n != nil {
+			entry.Title = n.Title
+			entry.Status = n.Status
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+// InDegrees returns a map of URL to inbound edge count for all nodes.
+// This is an efficient single-pass computation over edges.
+func (s *Store) InDegrees() map[string]int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	counts := make(map[string]int, len(s.nodes))
+	for _, e := range s.edges {
+		counts[e.To]++
+	}
+	return counts
+}
+
+// AllNodes returns a copy of all stored nodes.
+func (s *Store) AllNodes() []StoredNode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nodes := make([]StoredNode, 0, len(s.nodes))
+	for _, n := range s.nodes {
+		nodes = append(nodes, *n)
+	}
+	return nodes
+}
+
 // GetNode returns the stored node for a URL, or nil if not found.
 func (s *Store) GetNode(url string) *StoredNode {
 	s.mu.RLock()

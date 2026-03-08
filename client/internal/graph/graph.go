@@ -78,6 +78,22 @@ func (g *Graph) Neighbors(url string) []*Node {
 	return result
 }
 
+// InNeighbors returns all nodes that link TO the given URL (reverse edges).
+func (g *Graph) InNeighbors(url string) []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	var result []*Node
+	for _, e := range g.edges {
+		if e.To == url {
+			if n, ok := g.nodes[e.From]; ok {
+				result = append(result, n)
+			}
+		}
+	}
+	return result
+}
+
 // NodeCount returns the number of nodes in the graph.
 func (g *Graph) NodeCount() int {
 	g.mu.RLock()

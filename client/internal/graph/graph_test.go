@@ -105,6 +105,27 @@ func TestNeighbors(t *testing.T) {
 	}
 }
 
+func TestInNeighbors(t *testing.T) {
+	g := New()
+	g.AddNode(&Node{URL: "mark://host/a.md", Title: "A"})
+	g.AddNode(&Node{URL: "mark://host/b.md", Title: "B"})
+	g.AddNode(&Node{URL: "mark://host/c.md", Title: "C"})
+	g.AddEdge("mark://host/a.md", "mark://host/c.md")
+	g.AddEdge("mark://host/b.md", "mark://host/c.md")
+
+	// c has two inbound edges
+	in := g.InNeighbors("mark://host/c.md")
+	if len(in) != 2 {
+		t.Fatalf("InNeighbors(c) = %d nodes, want 2", len(in))
+	}
+
+	// a has no inbound edges
+	in = g.InNeighbors("mark://host/a.md")
+	if len(in) != 0 {
+		t.Fatalf("InNeighbors(a) = %d nodes, want 0", len(in))
+	}
+}
+
 func TestAllNodes(t *testing.T) {
 	g := New()
 	if len(g.AllNodes()) != 0 {
