@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/graphstore"
 )
 
 // viewMode distinguishes between document reading and graph exploration.
@@ -41,31 +42,18 @@ const maxCrawlNodes = 200
 func (m model) startCrawl(url string) tea.Cmd {
 	seq := m.crawlSeq
 	client := m.client
+	gs := m.graphStore
 	return func() tea.Msg {
-		fetcher := &graph.ClientFetcher{
-			FetchFunc: func(host, path string) (string, string, error) {
-				r, err := client.Fetch(host, path)
-				if err != nil {
-					return "", "", err
-				}
-				return r.Response.Status, r.Response.Body, nil
-			},
-		}
-
-		// Cancel the crawl once we hit the node cap.
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		var nodeCount int
-
-		g, err := graph.Crawl(ctx, url, fetcher, fetch.ParseMarkURL, graph.CrawlOptions{
+		g, err := gs.CrawlAndPersist(context.Background(), url, func(host, path string) (string, string, string, error) {
+			r, fetchErr := client.Fetch(host, path)
+			if fetchErr != nil {
+				return "", "", "", fetchErr
+			}
+			return r.Response.Status, r.Response.Body, r.Response.Metadata["etag"], nil
+		}, fetch.ParseMarkURL, graphstore.CrawlOptions{
 			MaxDepth: 10,
+			MaxNodes: maxCrawlNodes,
 			Workers:  5,
-			OnNode: func(_ *graph.Node) {
-				nodeCount++
-				if nodeCount >= maxCrawlNodes {
-					cancel()
-				}
-			},
 		})
 		return crawlResult{graph: g, err: err, url: url, seq: seq}
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/graphstore"
 	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/protocol"
 )
@@ -82,6 +83,9 @@ type model struct {
 	bookmarkStore *bookmarks.Store
 	bookmarkMsg   string // transient status message
 	bookmarkSeq   uint64 // sequence counter for stale clear prevention
+
+	// Persistent graph
+	graphStore *graphstore.Store
 }
 
 type fetchResult struct {
@@ -192,6 +196,8 @@ func initialModel(initialURL string, client *fetch.Client) model {
 		bmMsg = "Failed to load bookmarks: " + err.Error()
 	}
 
+	gs, _ := graphstore.Load(graphstore.DefaultPath())
+
 	return model{
 		addressBar:    ti,
 		focus:         focusAddressBar,
@@ -201,6 +207,7 @@ func initialModel(initialURL string, client *fetch.Client) model {
 		linkIdx:       -1,
 		bookmarkStore: bs,
 		bookmarkMsg:   bmMsg,
+		graphStore:    gs,
 	}
 }
 
@@ -323,6 +330,7 @@ func (m model) handleCrawlResult(msg crawlResult) (tea.Model, tea.Cmd) {
 	m.graphData = msg.graph
 	m.graphNodes = flattenGraph(msg.graph, msg.url)
 	m.graphIdx = 0
+
 	if m.ready {
 		m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
 		m.viewport.GotoTop()
@@ -547,20 +555,34 @@ func (m model) handleLinkFollow() (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
-	if m.addressBar.Value() != "" {
-		m.viewMode = viewGraph
-		m.crawling = true
-		m.crawlSeq++
-		m.graphIdx = 0
+	url := m.addressBar.Value()
+	if url == "" {
+		return m, nil
+	}
+
+	m.viewMode = viewGraph
+	m.crawling = true
+	m.crawlSeq++
+	m.graphIdx = 0
+
+	// Seed from persistent store for instant display while crawl runs.
+	if m.graphStore != nil && m.graphStore.NodeCount() > 0 {
+		m.graphData = m.graphStore.ToGraph()
+		m.graphNodes = flattenGraph(m.graphData, url)
+	} else {
 		m.graphNodes = nil
 		m.graphData = nil
-		if m.ready {
-			m.viewport.SetContent("\n  Crawling document links...")
-			m.viewport.GotoTop()
-		}
-		return m, m.startCrawl(m.addressBar.Value())
 	}
-	return m, nil
+
+	if m.ready {
+		if len(m.graphNodes) > 0 {
+			m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+		} else {
+			m.viewport.SetContent("\n  Crawling document links...")
+		}
+		m.viewport.GotoTop()
+	}
+	return m, m.startCrawl(url)
 }
 
 func (m model) handleBookmarkToggle() (tea.Model, tea.Cmd) {

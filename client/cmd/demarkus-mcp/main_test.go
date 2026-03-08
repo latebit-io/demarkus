@@ -1031,6 +1031,28 @@ func TestIsValidHash(t *testing.T) {
 }
 
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.
+func TestMarkBacklinksTool_URLRequired(t *testing.T) {
+	tool := markBacklinksTool("mark://localhost:6309")
+	props := tool.InputSchema.Properties
+	if _, ok := props["url"]; !ok {
+		t.Fatal("expected url property")
+	}
+	if !slices.Contains(tool.InputSchema.Required, "url") {
+		t.Error("url should be required")
+	}
+}
+
+func TestHandlerMarkBacklinks_BarePathWithoutHost(t *testing.T) {
+	h := &handler{}
+	ctx := context.Background()
+
+	result, err := h.markBacklinks(ctx, newCallToolRequest(map[string]any{"url": "/some/path.md"}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "requires -host flag")
+}
+
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {
 	t.Helper()
 	if !result.IsError {

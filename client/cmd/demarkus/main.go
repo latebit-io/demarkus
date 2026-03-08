@@ -15,6 +15,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/graphstore"
 	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
@@ -307,19 +308,17 @@ func graphMain(args []string) {
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
-	fetcher := &graph.ClientFetcher{
-		FetchFunc: func(host, path string) (string, string, error) {
-			r, err := client.Fetch(host, path)
-			if err != nil {
-				return "", "", err
-			}
-			return r.Response.Status, r.Response.Body, nil
-		},
-	}
+	gs, _ := graphstore.Load(graphstore.DefaultPath())
 
 	fmt.Printf("Crawling %s (depth %d)...\n", rawURL, *depth)
 
-	g, err := graph.Crawl(context.Background(), rawURL, fetcher, fetch.ParseMarkURL, graph.CrawlOptions{
+	g, err := gs.CrawlAndPersist(context.Background(), rawURL, func(host, path string) (string, string, string, error) {
+		r, fetchErr := client.Fetch(host, path)
+		if fetchErr != nil {
+			return "", "", "", fetchErr
+		}
+		return r.Response.Status, r.Response.Body, r.Response.Metadata["etag"], nil
+	}, fetch.ParseMarkURL, graphstore.CrawlOptions{
 		MaxDepth: *depth,
 		OnNode: func(n *graph.Node) {
 			title := n.Title
