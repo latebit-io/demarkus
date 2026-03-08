@@ -702,7 +702,7 @@ This ensures every served document has:
 
 ## 12. Content-Addressed Fetch
 
-Every FETCH response includes a `content-hash` field containing the SHA-256 hash of the response body (the document content after stripping store frontmatter). The format is `sha256-<64 hex characters>`.
+Every successful FETCH response that serves a document includes a `content-hash` field containing the SHA-256 hash of the response body (the document content after stripping store frontmatter). The format is `sha256-<64 hex characters>`. Directory listings and error responses do not include `content-hash`.
 
 Clients can fetch a document by its content hash instead of its path:
 

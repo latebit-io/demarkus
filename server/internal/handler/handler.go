@@ -159,6 +159,11 @@ func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash stri
 
 	doc, err := h.Store.Get(docPath, 0)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			h.logger().Info("hash index stale", "hash", hash, "path", sanitize(docPath))
+			h.writeError(w, protocol.StatusNotFound, "content not found for hash "+hash)
+			return
+		}
 		h.logger().Error("fetch by hash failed", "hash", hash, "path", sanitize(docPath), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return

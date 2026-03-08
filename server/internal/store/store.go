@@ -78,11 +78,16 @@ type Store struct {
 	root    string
 	hashMu  sync.RWMutex
 	hashIdx map[string]string // content hash → request path
+	pathIdx map[string]string // request path → content hash (reverse index)
 }
 
 // New creates a store rooted at the given directory.
 func New(root string) *Store {
-	return &Store{root: root, hashIdx: make(map[string]string)}
+	return &Store{
+		root:    root,
+		hashIdx: make(map[string]string),
+		pathIdx: make(map[string]string),
+	}
 }
 
 // contentHash computes the sha256 content hash for a document body.
@@ -98,6 +103,12 @@ func (s *Store) BuildHashIndex() error {
 	defer s.hashMu.Unlock()
 
 	s.hashIdx = make(map[string]string)
+	s.pathIdx = make(map[string]string)
+
+	absRoot, err := s.resolvedRoot()
+	if err != nil {
+		return err
+	}
 
 	return filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -113,13 +124,21 @@ func (s *Store) BuildHashIndex() error {
 		if d.Type()&os.ModeSymlink == 0 {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		// Resolve symlink and ensure target stays within the content root.
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil // skip broken symlinks
+		}
+		if !isContained(resolved, absRoot) {
+			return nil // skip symlinks that escape the content root
+		}
+		data, err := os.ReadFile(resolved)
 		if err != nil {
 			return nil // skip unreadable files
 		}
 
 		// Skip archived documents
-		if bytes.Contains(data[:min(len(data), maxStoreFrontmatter)], []byte("archived: true")) {
+		if isArchived(data) {
 			return nil
 		}
 
@@ -129,7 +148,9 @@ func (s *Store) BuildHashIndex() error {
 		if err != nil {
 			return nil
 		}
-		s.hashIdx[hash] = "/" + rel
+		reqPath := "/" + rel
+		s.hashIdx[hash] = reqPath
+		s.pathIdx[reqPath] = hash
 		return nil
 	})
 }
@@ -147,25 +168,21 @@ func (s *Store) UpdateHashIndex(reqPath string, body []byte) {
 	hash := contentHash(body)
 	s.hashMu.Lock()
 	defer s.hashMu.Unlock()
-	// Remove any old entry for this path (content changed)
-	for k, v := range s.hashIdx {
-		if v == reqPath {
-			delete(s.hashIdx, k)
-			break
-		}
+	// Remove old hash entry for this path (content changed)
+	if oldHash, ok := s.pathIdx[reqPath]; ok {
+		delete(s.hashIdx, oldHash)
 	}
 	s.hashIdx[hash] = reqPath
+	s.pathIdx[reqPath] = hash
 }
 
 // RemoveHashEntry removes the hash index entry for a given request path.
 func (s *Store) RemoveHashEntry(reqPath string) {
 	s.hashMu.Lock()
 	defer s.hashMu.Unlock()
-	for k, v := range s.hashIdx {
-		if v == reqPath {
-			delete(s.hashIdx, k)
-			return
-		}
+	if hash, ok := s.pathIdx[reqPath]; ok {
+		delete(s.hashIdx, hash)
+		delete(s.pathIdx, reqPath)
 	}
 }
 
@@ -298,6 +315,24 @@ func (s *Store) Versions(reqPath string) ([]VersionInfo, error) {
 	return versions, nil
 }
 
+// resolvedRoot returns the absolute, symlink-resolved path for the content root.
+func (s *Store) resolvedRoot() (string, error) {
+	absRoot, err := filepath.Abs(s.root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve root symlinks: %w", err)
+	}
+	return resolved, nil
+}
+
+// isContained reports whether absPath is equal to or beneath absRoot.
+func isContained(absPath, absRoot string) bool {
+	return absPath == absRoot || strings.HasPrefix(absPath, absRoot+string(filepath.Separator))
+}
+
 // resolve validates and resolves a request path to an absolute filesystem path
 // within the content directory. Returns os.ErrNotExist for invalid paths.
 func (s *Store) resolve(reqPath string) (string, error) {
@@ -313,15 +348,10 @@ func (s *Store) resolve(reqPath string) (string, error) {
 
 	joined := filepath.Join(s.root, cleaned)
 
-	absRoot, err := filepath.Abs(s.root)
+	absRoot, err := s.resolvedRoot()
 	if err != nil {
-		return "", fmt.Errorf("resolve root: %w", err)
+		return "", err
 	}
-	resolved, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return "", fmt.Errorf("resolve root symlinks: %w", err)
-	}
-	absRoot = resolved
 
 	absPath, err := filepath.EvalSymlinks(joined)
 	if err != nil {
@@ -341,7 +371,7 @@ func (s *Store) resolve(reqPath string) (string, error) {
 		}
 	}
 
-	if absPath != absRoot && !strings.HasPrefix(absPath, absRoot+string(filepath.Separator)) {
+	if !isContained(absPath, absRoot) {
 		return "", os.ErrNotExist
 	}
 	return absPath, nil
