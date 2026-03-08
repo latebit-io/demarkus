@@ -283,13 +283,20 @@ func editMain(args []string) {
 }
 
 func graphMain(args []string) {
+	// Handle "graph export" subcommand before flag parsing.
+	if len(args) > 0 && args[0] == "export" {
+		graphExportMain(args[1:])
+		return
+	}
+
 	fs := flag.NewFlagSet("graph", flag.ExitOnError)
 	depth := fs.Int("depth", 2, "maximum crawl depth (link hops from start)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	noCache := fs.Bool("no-cache", false, "disable caching")
 	cacheDir := fs.String("cache-dir", cache.DefaultDir(), "cache directory (env: DEMARKUS_CACHE_DIR)")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus graph [-depth N] [-insecure] mark://host:port/path\n\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
+		fmt.Fprintf(os.Stderr, "       demarkus graph export [-o file.md]\n\n")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args)
@@ -351,6 +358,32 @@ func nodeLabel(g *graph.Graph, url string) string {
 		return n.Title
 	}
 	return url
+}
+
+func graphExportMain(args []string) {
+	fs := flag.NewFlagSet("graph export", flag.ExitOnError)
+	outFile := fs.String("o", "", "output file (default: stdout)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: demarkus graph export [-o file.md]\n\nExport the stored graph as a publishable markdown document.\n\n")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	gs, err := graphstore.Load(graphstore.DefaultPath())
+	if err != nil {
+		log.Fatalf("failed to load graph store: %v", err)
+	}
+
+	md := gs.Export()
+
+	if *outFile != "" {
+		if err := os.WriteFile(*outFile, []byte(md), 0o644); err != nil {
+			log.Fatalf("failed to write %s: %v", *outFile, err)
+		}
+		fmt.Fprintf(os.Stderr, "Exported graph (%d nodes, %d edges) to %s\n", gs.NodeCount(), gs.EdgeCount(), *outFile)
+	} else {
+		fmt.Print(md)
+	}
 }
 
 func infoMain(args []string) {
