@@ -929,7 +929,7 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("graph store not available"), nil
 	}
 
-	backlinks := h.graphStore.Backlinks(fullURL)
+	backlinks := h.graphStore.BacklinksEnriched(fullURL)
 	if len(backlinks) == 0 {
 		return mcp.NewToolResultText(
 			fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the graph store.", fullURL),
@@ -939,10 +939,10 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 	var b strings.Builder
 	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", fullURL, len(backlinks))
 	for _, bl := range backlinks {
-		if n := h.graphStore.GetNode(bl); n != nil && n.Title != "" {
-			fmt.Fprintf(&b, "- [%s](%s)\n", n.Title, bl)
+		if bl.Title != "" {
+			fmt.Fprintf(&b, "- [%s](%s)\n", bl.Title, bl.URL)
 		} else {
-			fmt.Fprintf(&b, "- %s\n", bl)
+			fmt.Fprintf(&b, "- %s\n", bl.URL)
 		}
 	}
 	return mcp.NewToolResultText(b.String()), nil

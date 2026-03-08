@@ -233,6 +233,83 @@ func TestSaveAtomic(t *testing.T) {
 	}
 }
 
+func TestBacklinksEnriched(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "A", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "mark://a:6309/b.md", Title: "B", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "mark://a:6309/c.md", Title: "C", Status: "ok"})
+	g.AddEdge("mark://a:6309/a.md", "mark://a:6309/c.md")
+	g.AddEdge("mark://a:6309/b.md", "mark://a:6309/c.md")
+	s.Merge(g, nil)
+
+	entries := s.BacklinksEnriched("mark://a:6309/c.md")
+	if len(entries) != 2 {
+		t.Fatalf("len = %d, want 2", len(entries))
+	}
+	// Sorted alphabetically.
+	if entries[0].URL != "mark://a:6309/a.md" {
+		t.Errorf("entries[0].URL = %q, want a.md", entries[0].URL)
+	}
+	if entries[0].Title != "A" {
+		t.Errorf("entries[0].Title = %q, want A", entries[0].Title)
+	}
+	if entries[0].Status != "ok" {
+		t.Errorf("entries[0].Status = %q, want ok", entries[0].Status)
+	}
+	if entries[1].URL != "mark://a:6309/b.md" {
+		t.Errorf("entries[1].URL = %q, want b.md", entries[1].URL)
+	}
+}
+
+func TestBacklinksEnrichedNone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	entries := s.BacklinksEnriched("mark://a:6309/unknown.md")
+	if len(entries) != 0 {
+		t.Errorf("len = %d, want 0", len(entries))
+	}
+}
+
+func TestAllNodes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if len(s.AllNodes()) != 0 {
+		t.Errorf("AllNodes on empty = %d, want 0", len(s.AllNodes()))
+	}
+
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "A", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "mark://a:6309/b.md", Title: "B", Status: "ok"})
+	s.Merge(g, nil)
+
+	nodes := s.AllNodes()
+	if len(nodes) != 2 {
+		t.Fatalf("AllNodes = %d, want 2", len(nodes))
+	}
+
+	urls := map[string]bool{}
+	for _, n := range nodes {
+		urls[n.URL] = true
+	}
+	if !urls["mark://a:6309/a.md"] || !urls["mark://a:6309/b.md"] {
+		t.Errorf("missing expected URLs: %v", urls)
+	}
+}
+
 func TestCrawlAndPersist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
 	s, err := Load(path)

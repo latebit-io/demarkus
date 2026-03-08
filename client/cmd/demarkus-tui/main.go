@@ -70,12 +70,13 @@ type model struct {
 	fetchSeq uint64
 
 	// Graph view
-	viewMode   viewMode
-	graphData  *graph.Graph
-	graphNodes []graphListItem
-	graphIdx   int
-	crawling   bool
-	crawlSeq   uint64
+	viewMode     viewMode
+	graphSubView graphSubView
+	graphData    *graph.Graph
+	graphNodes   []graphListItem
+	graphIdx     int
+	crawling     bool
+	crawlSeq     uint64
 
 	showHelp bool
 
@@ -298,7 +299,7 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		m.viewport.Height = viewportHeight
 		// Re-render graph view with new width for correct truncation.
 		if m.viewMode == viewGraph && len(m.graphNodes) > 0 {
-			m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+			m.viewport.SetContent(m.renderCurrentGraphSubView())
 		}
 	}
 	m.addressBar.Width = m.width - 2
@@ -336,11 +337,20 @@ func (m model) handleCrawlResult(msg crawlResult) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.graphData = msg.graph
-	m.graphNodes = flattenGraph(msg.graph, msg.url)
+
+	// Recompute display list for the active sub-view.
+	switch m.graphSubView {
+	case subViewBacklinks:
+		m.graphNodes = backlinksList(m.graphStore, msg.url)
+	case subViewTopology:
+		m.graphNodes = topologyList(m.graphStore)
+	default:
+		m.graphNodes = flattenGraph(msg.graph, msg.url)
+	}
 	m.graphIdx = 0
 
 	if m.ready {
-		m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+		m.viewport.SetContent(m.renderCurrentGraphSubView())
 		m.viewport.GotoTop()
 	}
 	return m, nil
@@ -569,6 +579,7 @@ func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
 	}
 
 	m.viewMode = viewGraph
+	m.graphSubView = subViewLinks
 	m.crawling = true
 	m.crawlSeq++
 	m.graphIdx = 0
@@ -693,9 +704,23 @@ func (m model) statusBarView() string {
 		if m.crawling {
 			return style.Render("Crawling...")
 		}
-		if m.graphData != nil {
-			hint := fmt.Sprintf("Graph: %d nodes, %d edges  |  d close  |  ↑↓ select  |  Enter navigate",
-				m.graphData.NodeCount(), m.graphData.EdgeCount())
+		var viewName string
+		switch m.graphSubView {
+		case subViewBacklinks:
+			viewName = "Backlinks"
+		case subViewTopology:
+			viewName = "Topology"
+		default:
+			viewName = "Links"
+		}
+		if m.graphData != nil || m.graphSubView != subViewLinks {
+			var hint string
+			if m.graphData != nil {
+				hint = fmt.Sprintf("%s  |  %d nodes, %d edges  |  d/r/t views  |  ↑↓ select  |  Enter navigate",
+					viewName, m.graphData.NodeCount(), m.graphData.EdgeCount())
+			} else {
+				hint = fmt.Sprintf("%s  |  d/r/t views  |  ↑↓ select  |  Enter navigate", viewName)
+			}
 			return style.Foreground(lipgloss.Color("14")).Render(hint)
 		}
 		return style.Render("")
