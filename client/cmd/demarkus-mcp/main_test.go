@@ -6,7 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"path/filepath"
+
 	"github.com/latebit/demarkus/client/internal/fetch"
+	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/graphstore"
 	"github.com/latebit/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -1051,6 +1055,57 @@ func TestHandlerMarkBacklinks_BarePathWithoutHost(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	assertIsToolError(t, result, "requires -host flag")
+}
+
+func TestHandlerMarkBacklinks_HappyPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	gs, err := graphstore.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://host:6309/a.md", Title: "Page A", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "mark://host:6309/b.md", Title: "Page B", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "mark://host:6309/c.md", Title: "Page C", Status: "ok"})
+	g.AddEdge("mark://host:6309/a.md", "mark://host:6309/c.md")
+	g.AddEdge("mark://host:6309/b.md", "mark://host:6309/c.md")
+	gs.Merge(g, nil)
+
+	h := &handler{graphStore: gs}
+	ctx := context.Background()
+
+	result, err := h.markBacklinks(ctx, newCallToolRequest(map[string]any{"url": "mark://host:6309/c.md"}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if result.IsError {
+		t.Fatal("expected success result")
+	}
+	text, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", result.Content[0])
+	}
+	if !strings.Contains(text.Text, "Page A") {
+		t.Errorf("expected backlink title 'Page A' in output: %s", text.Text)
+	}
+	if !strings.Contains(text.Text, "Page B") {
+		t.Errorf("expected backlink title 'Page B' in output: %s", text.Text)
+	}
+	if !strings.Contains(text.Text, "mark://host:6309/a.md") {
+		t.Errorf("expected backlink URL in output: %s", text.Text)
+	}
+}
+
+func TestHandlerMarkBacklinks_NilStore(t *testing.T) {
+	h := &handler{defaultHost: "mark://host:6309"}
+	ctx := context.Background()
+
+	result, err := h.markBacklinks(ctx, newCallToolRequest(map[string]any{"url": "mark://host:6309/c.md"}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "graph store not available")
 }
 
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {

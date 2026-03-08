@@ -45,7 +45,8 @@ func main() {
 
 	s := mcpserver.NewMCPServer("demarkus-mcp", version)
 
-	h := &handler{client: client, defaultHost: *defaultHost, token: *token}
+	gs, _ := graphstore.Load(graphstore.DefaultPath())
+	h := &handler{client: client, defaultHost: *defaultHost, token: *token, graphStore: gs}
 	s.AddTool(markFetchTool(*defaultHost), h.markFetch)
 	s.AddTool(markListTool(*defaultHost), h.markList)
 	s.AddTool(markGraphTool(*defaultHost), h.markGraph)
@@ -77,6 +78,7 @@ type handler struct {
 	client      markClient
 	defaultHost string
 	token       string
+	graphStore  *graphstore.Store
 }
 
 // resolveURL parses a mark:// URL or bare path (when -host is set) into host and path.
@@ -842,12 +844,7 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		startURL = h.defaultHost + rawURL
 	}
 
-	gs, loadErr := graphstore.Load(graphstore.DefaultPath())
-	if loadErr != nil {
-		log.Printf("[WARN] graph store load: %v", loadErr)
-	}
-
-	g, err := gs.CrawlAndPersist(ctx, startURL, func(host, path string) (string, string, string, error) {
+	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(host, path string) (string, string, string, error) {
 		r, fetchErr := h.client.Fetch(host, path)
 		if fetchErr != nil {
 			return "", "", "", fetchErr
@@ -923,12 +920,11 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 		fullURL = h.defaultHost + rawURL
 	}
 
-	gs, loadErr := graphstore.Load(graphstore.DefaultPath())
-	if loadErr != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("load graph store: %v", loadErr)), nil
+	if h.graphStore == nil {
+		return mcp.NewToolResultError("graph store not available"), nil
 	}
 
-	backlinks := gs.Backlinks(fullURL)
+	backlinks := h.graphStore.Backlinks(fullURL)
 	if len(backlinks) == 0 {
 		return mcp.NewToolResultText(
 			fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the graph store.", fullURL),
@@ -938,7 +934,7 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 	var b strings.Builder
 	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", fullURL, len(backlinks))
 	for _, bl := range backlinks {
-		if n := gs.GetNode(bl); n != nil && n.Title != "" {
+		if n := h.graphStore.GetNode(bl); n != nil && n.Title != "" {
 			fmt.Fprintf(&b, "- [%s](%s)\n", n.Title, bl)
 		} else {
 			fmt.Fprintf(&b, "- %s\n", bl)

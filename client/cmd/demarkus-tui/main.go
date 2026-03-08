@@ -196,7 +196,10 @@ func initialModel(initialURL string, client *fetch.Client) model {
 		bmMsg = "Failed to load bookmarks: " + err.Error()
 	}
 
-	gs, _ := graphstore.Load(graphstore.DefaultPath())
+	gs, gsErr := graphstore.Load(graphstore.DefaultPath())
+	if gsErr != nil {
+		bmMsg = "Failed to load graph store: " + gsErr.Error()
+	}
 
 	return model{
 		addressBar:    ti,
