@@ -132,6 +132,10 @@ func (s *Store) BuildHashIndex() error {
 		if !isContained(resolved, absRoot) {
 			return nil // skip symlinks that escape the content root
 		}
+		info, err := os.Stat(resolved)
+		if err != nil || info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
+			return nil // skip unreadable or oversized files
+		}
 		data, err := os.ReadFile(resolved)
 		if err != nil {
 			return nil // skip unreadable files
