@@ -266,6 +266,10 @@ func computeContentHash(body string) string {
 }
 
 func (h *Handler) handleList(w io.Writer, reqPath string) {
+	if _, ok := isHashPath(reqPath); ok {
+		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
+		return
+	}
 	entries, err := h.Store.ListDir(reqPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -390,6 +394,10 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 		h.writeError(w, protocol.StatusServerError, "versioning not configured")
 		return
 	}
+	if _, ok := isHashPath(reqPath); ok {
+		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
+		return
+	}
 
 	versions, err := h.Store.Versions(reqPath)
 	if err != nil {
@@ -420,7 +428,7 @@ func (h *Handler) handleVersions(w io.Writer, reqPath string) {
 	if err := h.Store.VerifyChain(reqPath); err != nil {
 		h.logger().Warn("chain verification failed", "path", sanitize(reqPath), "error", err)
 		meta["chain-valid"] = "false"
-		meta["chain-error"] = err.Error()
+		meta["chain-error"] = "chain integrity check failed"
 	} else {
 		meta["chain-valid"] = "true"
 	}
