@@ -81,6 +81,8 @@ func flattenGraph(g *graph.Graph, rootURL string) []graphListItem {
 		return nil
 	}
 
+	inDegrees := g.InDegrees()
+
 	var items []graphListItem
 	visited := map[string]bool{rootURL: true}
 	queue := []string{rootURL}
@@ -99,7 +101,7 @@ func flattenGraph(g *graph.Graph, rootURL string) []graphListItem {
 			title:     n.Title,
 			status:    n.Status,
 			depth:     n.Depth,
-			backlinks: len(g.InNeighbors(n.URL)),
+			backlinks: inDegrees[n.URL],
 		})
 
 		for _, neighbor := range g.Neighbors(url) {
@@ -194,9 +196,9 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 
 		line := fmt.Sprintf("%s%s%s%s %s%s", cursor, indent, connector, icon, label, density)
 
-		// Truncate to width.
-		if width > 5 && len(line) > width-2 {
-			line = line[:width-5] + "..."
+		// Truncate to width (rune-safe for multi-byte icons).
+		if width > 5 {
+			line = truncateRunes(line, width-2)
 		}
 
 		b.WriteString(line)
@@ -205,6 +207,18 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 
 	b.WriteString("\n  [Enter] navigate  [r] backlinks  [t] topology  [d] close  [q] quit\n")
 	return b.String()
+}
+
+// truncateRunes truncates s to maxRunes runes, appending "..." if truncated.
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes < 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func statusIcon(status string) string {
@@ -228,7 +242,7 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 	b.WriteString("\n  Backlinks\n\n")
 
 	if len(items) == 0 {
-		b.WriteString("  No backlinks found.\n  Run a graph crawl (d) to populate the store.\n")
+		b.WriteString("  No backlinks found.\n  Navigate to a document and press 'd' to crawl its links.\n")
 		b.WriteString("\n  [d] links  [t] topology  [Esc] close  [q] quit\n")
 		return b.String()
 	}
@@ -246,8 +260,8 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 		}
 
 		line := fmt.Sprintf("%s%s %s", cursor, icon, label)
-		if width > 5 && len(line) > width-2 {
-			line = line[:width-5] + "..."
+		if width > 5 {
+			line = truncateRunes(line, width-2)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
@@ -263,7 +277,7 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 	b.WriteString("\n  Topology (all explored nodes)\n\n")
 
 	if len(items) == 0 {
-		b.WriteString("  No nodes in graph store.\n  Run a graph crawl (d) to populate.\n")
+		b.WriteString("  No nodes in graph store.\n  Navigate to a document and press 'd' to crawl its links.\n")
 		b.WriteString("\n  [d] links  [r] backlinks  [Esc] close  [q] quit\n")
 		return b.String()
 	}
@@ -286,8 +300,8 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 		}
 
 		line := fmt.Sprintf("%s%s %s%s", cursor, icon, label, density)
-		if width > 5 && len(line) > width-2 {
-			line = line[:width-5] + "..."
+		if width > 5 {
+			line = truncateRunes(line, width-2)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')

@@ -218,7 +218,7 @@ func (s *Store) BacklinksEnriched(url string) []BacklinkEntry {
 
 	entries := make([]BacklinkEntry, 0, len(urls))
 	for _, u := range urls {
-		entry := BacklinkEntry{URL: u, Status: "ok"}
+		entry := BacklinkEntry{URL: u}
 		if n := s.nodes[u]; n != nil {
 			entry.Title = n.Title
 			entry.Status = n.Status
@@ -235,6 +235,9 @@ func (s *Store) InDegrees() map[string]int {
 	defer s.mu.RUnlock()
 
 	counts := make(map[string]int, len(s.nodes))
+	for url := range s.nodes {
+		counts[url] = 0
+	}
 	for _, e := range s.edges {
 		counts[e.To]++
 	}

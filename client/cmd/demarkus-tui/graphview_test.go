@@ -315,6 +315,29 @@ func TestRenderTopologyView(t *testing.T) {
 	})
 }
 
+func TestTruncateRunes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		max      int
+		expected string
+	}{
+		{"no truncation", "hello", 10, "hello"},
+		{"exact fit", "hello", 5, "hello"},
+		{"truncate ASCII", "hello world", 8, "hello..."},
+		{"truncate with multi-byte", "> ● Soul Index [5←]", 12, "> ● Soul ..."},
+		{"very short max", "hello", 2, "he"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateRunes(tt.input, tt.max)
+			if got != tt.expected {
+				t.Errorf("truncateRunes(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestStatusIcon(t *testing.T) {
 	tests := []struct {
 		status string

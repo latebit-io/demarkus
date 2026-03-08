@@ -94,6 +94,22 @@ func (g *Graph) InNeighbors(url string) []*Node {
 	return result
 }
 
+// InDegrees returns a map of URL to inbound edge count for all nodes.
+// Single O(E) pass, more efficient than calling InNeighbors per node.
+func (g *Graph) InDegrees() map[string]int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	counts := make(map[string]int, len(g.nodes))
+	for url := range g.nodes {
+		counts[url] = 0
+	}
+	for _, e := range g.edges {
+		counts[e.To]++
+	}
+	return counts
+}
+
 // NodeCount returns the number of nodes in the graph.
 func (g *Graph) NodeCount() int {
 	g.mu.RLock()
