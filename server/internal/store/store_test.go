@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -1167,4 +1168,167 @@ func TestWrite_InvalidMetadataRejected(t *testing.T) {
 			}
 		})
 	}
+}
+
+func wantHash(body string) string {
+	h := sha256.Sum256([]byte(body))
+	return "sha256-" + hex.EncodeToString(h[:])
+}
+
+func TestHashIndex(t *testing.T) {
+	t.Run("build indexes current versions", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/a.md", []byte("alpha"), nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Write("/b.md", []byte("beta"), nil); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := s.BuildHashIndex(); err != nil {
+			t.Fatalf("BuildHashIndex: %v", err)
+		}
+		if s.HashIndexSize() != 2 {
+			t.Fatalf("index size: got %d, want 2", s.HashIndexSize())
+		}
+
+		path, ok := s.LookupHash(wantHash("alpha"))
+		if !ok || path != "/a.md" {
+			t.Errorf("lookup alpha: got %q, %v", path, ok)
+		}
+		path, ok = s.LookupHash(wantHash("beta"))
+		if !ok || path != "/b.md" {
+			t.Errorf("lookup beta: got %q, %v", path, ok)
+		}
+	})
+
+	t.Run("build skips archived", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/live.md", []byte("live"), nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Write("/dead.md", []byte("dead"), nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Archive("/dead.md", true); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := s.BuildHashIndex(); err != nil {
+			t.Fatalf("BuildHashIndex: %v", err)
+		}
+		if s.HashIndexSize() != 1 {
+			t.Fatalf("index size: got %d, want 1", s.HashIndexSize())
+		}
+		if _, ok := s.LookupHash(wantHash("dead")); ok {
+			t.Error("archived doc should not be in index")
+		}
+	})
+
+	t.Run("update replaces old hash", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		s.UpdateHashIndex("/doc.md", []byte("old"))
+		if _, ok := s.LookupHash(wantHash("old")); !ok {
+			t.Fatal("expected old hash to exist")
+		}
+
+		s.UpdateHashIndex("/doc.md", []byte("new"))
+		if _, ok := s.LookupHash(wantHash("old")); ok {
+			t.Error("old hash should be removed after update")
+		}
+		path, ok := s.LookupHash(wantHash("new"))
+		if !ok || path != "/doc.md" {
+			t.Errorf("lookup new: got %q, %v", path, ok)
+		}
+	})
+
+	t.Run("remove deletes entry", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		s.UpdateHashIndex("/doc.md", []byte("content"))
+		s.RemoveHashEntry("/doc.md")
+		if _, ok := s.LookupHash(wantHash("content")); ok {
+			t.Error("entry should be removed")
+		}
+		if s.HashIndexSize() != 0 {
+			t.Errorf("index size: got %d, want 0", s.HashIndexSize())
+		}
+	})
+
+	t.Run("lookup unknown hash", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, ok := s.LookupHash("sha256-0000000000000000000000000000000000000000000000000000000000000000"); ok {
+			t.Error("expected not found for unknown hash")
+		}
+	})
+
+	t.Run("write updates index", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("v1 content"), nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.LookupHash(wantHash("v1 content")); !ok {
+			t.Error("write should add entry to hash index")
+		}
+
+		// Second write replaces the old hash
+		if _, err := s.Write("/doc.md", []byte("v2 content"), nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.LookupHash(wantHash("v1 content")); ok {
+			t.Error("old hash should be removed after new write")
+		}
+		if _, ok := s.LookupHash(wantHash("v2 content")); !ok {
+			t.Error("new hash should be in index")
+		}
+	})
+
+	t.Run("archive removes from index", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("content"), nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.LookupHash(wantHash("content")); !ok {
+			t.Fatal("expected entry before archive")
+		}
+
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.LookupHash(wantHash("content")); ok {
+			t.Error("archived doc should be removed from index")
+		}
+	})
+
+	t.Run("unarchive restores to index", func(t *testing.T) {
+		root := t.TempDir()
+		s := New(root)
+
+		if _, err := s.Write("/doc.md", []byte("content"), nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Archive("/doc.md", true); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Archive("/doc.md", false); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, ok := s.LookupHash(wantHash("content")); !ok {
+			t.Error("unarchived doc should be back in index")
+		}
+	})
 }

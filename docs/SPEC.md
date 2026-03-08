@@ -490,6 +490,7 @@ The following status values are reserved for future use:
 | `current` | VERSIONS | Decimal integer | Highest version number. |
 | `chain-valid` | VERSIONS | `true` or `false` | Whether the version hash chain is intact. |
 | `chain-error` | VERSIONS | String | Description of chain verification failure. Present only when `chain-valid` is `false`. |
+| `content-hash` | FETCH | `sha256-` + 64-char lowercase hex | SHA-256 hash of the response body (stripped of store frontmatter). Enables content-addressed retrieval. |
 
 ## 9. Versioning
 
@@ -699,17 +700,75 @@ This ensures every served document has:
 - SHA-256 hash chain for tamper detection
 - Proper store frontmatter
 
-## 12. Future Extensions
+## 12. Content-Addressed Fetch
+
+Every successful FETCH response that serves a document includes a `content-hash` field containing the SHA-256 hash of the response body (the document content after stripping store frontmatter). The format is `sha256-<64 hex characters>`. Directory listings and error responses do not include `content-hash`.
+
+Clients can fetch a document by its content hash instead of its path:
+
+```
+FETCH /sha256-<64 hex characters>
+```
+
+The server maintains an in-memory index mapping content hashes to document paths. Only current (non-archived) versions are indexed. The server resolves the hash to a path and serves the document normally, including all standard response metadata.
+
+If no document matches the hash, the server returns `not-found`.
+
+Paths matching `/sha256-<64 hex characters>` are reserved for content-addressed fetch. Servers MUST NOT allow documents to be created at these paths.
+
+**Benefits:**
+- Location-independent content retrieval — any server with the content can serve it
+- Client can verify received content matches the requested hash
+- Foundation for distributed mirroring and caching
+
+### 12.1 Agent-Driven Hash Discovery
+
+Servers do not crawl or discover content from other servers. Agents fill this role by building and publishing hash indexes to hubs.
+
+**Workflow:**
+
+1. An agent fetches documents from one or more servers, collecting `content-hash` values from each response.
+2. The agent builds a mapping of content hashes to server locations.
+3. The agent publishes this mapping as a document to a hub server (e.g., a markdown table or structured list).
+
+**Example index document published to a hub:**
+
+```markdown
+# Content Index
+
+| Hash | Server | Path |
+|------|--------|------|
+| sha256-a1b2c3... | mark://docs.example.com | /guide.md |
+| sha256-d4e5f6... | mark://notes.example.com | /readme.md |
+| sha256-d4e5f6... | mark://mirror.example.com | /copy.md |
+```
+
+**Resolution flow when content is missing:**
+
+1. Agent fetches a document by path — server returns `not-found`.
+2. Agent checks a hub's content index for the document's last known `content-hash`.
+3. Agent finds alternative servers hosting that hash.
+4. Agent fetches `FETCH /sha256-<hash>` from one of those servers.
+5. Agent verifies the response body matches the requested hash.
+
+**Key properties:**
+
+- Servers remain simple — they serve content and answer hash lookups, nothing more.
+- Agents own the discovery logic — crawling, indexing, and routing decisions.
+- Hubs are just servers — the index is a regular published document, not a special protocol feature.
+- Multiple agents can maintain independent indexes on the same or different hubs.
+- No single point of failure — if a hub is unavailable, agents can query servers directly by hash.
+
+## 13. Future Extensions
 
 The following features are planned but not part of this specification:
 
-- **Content addressing**: Hash-based document retrieval independent of location.
 - **Federation**: Cross-server content mirroring and discovery.
 - **Subscriptions**: Notification of document changes.
 
 These will be specified in future versions of this document.
 
-## 13. Protocol Constants
+## 14. Protocol Constants
 
 | Constant | Value |
 |---|---|
@@ -724,7 +783,7 @@ These will be specified in future versions of this document.
 | Hash algorithm | SHA-256 |
 | Hash format | `sha256-<64 lowercase hex chars>` |
 
-## 14. References
+## 15. References
 
 - RFC 2119 — Key words for use in RFCs to Indicate Requirement Levels
 - RFC 9000 — QUIC: A UDP-Based Multiplexed and Secure Transport

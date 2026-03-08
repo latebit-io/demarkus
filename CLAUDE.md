@@ -33,3 +33,6 @@ All project context — architecture, patterns, build commands, conventions, deb
 /thoughts.md       — Agent reflections and ideas
 /guide.md          — Setup instructions for demarkus-soul
 ```
+### Plans
+ - Agents should never store the plans in their own vendor specific folder
+ - The agent should always publish the plan to demarkus soul instead
