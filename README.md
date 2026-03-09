@@ -14,7 +14,11 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
 ```
 
-See [full install docs](https://latebit-io.github.io/demarkus/getting-started/) for platform-specific guides.
+See [full install docs](https://latebit-io.github.io/demarkus/getting-started/) for platform-specific guides and other options.
+
+### See it in action
+
+![Client install demo](docs/images/demarkus-client.gif)
 
 ## Quick Start
 
@@ -22,34 +26,24 @@ See [full install docs](https://latebit-io.github.io/demarkus/getting-started/) 
 # Fetch a document from the live soul server
 demarkus mark://soul.demarkus.io/index.md
 
-# Browse interactively
+# Browse interactively with the TUI
 demarkus-tui mark://soul.demarkus.io/index.md
 
-# Run your own server (dev mode — self-signed cert)
+# Run your own local server
 demarkus-server -root ./docs/site
-
-# Fetch from your local server
-demarkus --insecure mark://localhost:6309/index.md
-
-# Generate a write token
-demarkus-token generate -paths "/*" -ops publish -tokens ./tokens.toml
-
-# Publish a document
-demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/hello.md -body "# Hello"
-
-# Edit in $EDITOR, publish on save
-demarkus edit --insecure -auth $TOKEN mark://localhost:6309/hello.md
 ```
+
+For more examples (tokens, publishing, editing), see [full usage guide](https://latebit-io.github.io/demarkus/).
 
 ## What's Included
 
 | Binary | Purpose |
 |--------|---------|
-| `demarkus-server` | QUIC server with versioned document store, capability-based auth, hot TLS reload |
-| `demarkus-token` | Generate and manage capability tokens |
-| `demarkus` | CLI: `FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `APPEND`, `ARCHIVE`, `edit`, `graph`, `info` |
-| `demarkus-tui` | Terminal browser with markdown rendering, link navigation, history, persistent graph view |
-| `demarkus-mcp` | MCP server exposing all protocol verbs plus graph crawling, backlinks, graph export/publish, and content indexing as tools for LLM agents |
+| `demarkus-server` | QUIC server with versioned document store, capability-based auth |
+| `demarkus-token` | Generate and manage write tokens |
+| `demarkus` | CLI tool for all protocol operations (fetch, publish, append, graph, etc.) |
+| `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
+| `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
 
 ## Protocol at a Glance
 
@@ -75,34 +69,13 @@ modified: 2026-01-15T10:30:00Z
 
 ## Use Cases
 
-### Agent Memory (demarkus-soul)
+**Agent Memory** — Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries.
 
-Run a Demarkus server as an AI agent's persistent memory across sessions. The agent reads context at session start and writes updates as work progresses — architecture notes, debugging lessons, journal entries, thoughts.
+**Personal Knowledge Base** — Local server, versioned documents, TUI browser. Everything from first write.
 
-The Demarkus project uses this pattern live at `mark://soul.demarkus.io`. Browse it:
+**Public Documentation** — Deploy on a VPS, share links, gate writes with tokens.
 
-```bash
-demarkus-tui mark://soul.demarkus.io/index.md
-```
-
-See the [Agent Memory guide](https://latebit-io.github.io/demarkus/scenarios/agent-memory/) for setup instructions.
-
-### Personal Knowledge Base
-
-Run a local server, publish markdown through the protocol, browse with the TUI. Every document is versioned from the first write.
-
-### Public Documentation Hub
-
-Deploy on a VPS with Let's Encrypt. Open read access, token-gated writes. One command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
-  bash -s -- --domain yourdomain.com --root /srv/site
-```
-
-### Demarkus Hubs
-
-A hub server links to content on other Demarkus servers — a curated directory, not original content. Hubs link to hubs, creating a navigable hierarchy of knowledge. All versioned, all verifiable, no central registry.
+**Demarkus Hubs** — Link to content on other servers, building a federated directory of knowledge. Hubs can link to hubs.
 
 ## Build from Source
 
