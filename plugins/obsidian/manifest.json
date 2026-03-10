@@ -1,0 +1,10 @@
+{
+  "id": "demarkus",
+  "name": "Demarkus",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Fetch, edit, and publish markdown documents to demarkus servers using the Mark Protocol.",
+  "author": "latebit",
+  "authorUrl": "https://github.com/latebit-io",
+  "isDesktopOnly": true
+}

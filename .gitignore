@@ -50,3 +50,7 @@ tokens.toml
 # MCP config (contains auth tokens)
 .mcp.json
 .clawhub
+node_modules/
+
+# Obsidian plugin settings (contains tokens)
+plugins/obsidian/data.json
