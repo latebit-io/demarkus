@@ -71,6 +71,8 @@ modified: 2026-01-15T10:30:00Z
 
 **Agent Memory** — Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries.
 
+**[OpenClaw](https://demarkus.io/install/openclaw/)** — Install the [demarkus skill](https://clawhub.ai/ontehfritz/demarkus) from ClawHub to give your OpenClaw agent persistent memory instantly.
+
 **Personal Knowledge Base** — Local server, versioned documents, TUI browser. Everything from first write.
 
 **Public Documentation** — Deploy on a VPS, share links, gate writes with tokens.
