@@ -32,7 +32,8 @@ else
   TOKEN=$(sudo cat /etc/demarkus/initial-token.txt)
 fi
 
-jq --arg tok "$TOKEN" '(.mcpServers //= {}) | .mcpServers.demarkus = {"command": "demarkus-mcp", "args": ["-host", "mark://localhost", "-token", $tok, "-insecure"]}' ~/.openclaw/openclaw.json > /tmp/openclaw.json.tmp && mv /tmp/openclaw.json.tmp ~/.openclaw/openclaw.json
+tmp=$(mktemp)
+jq --arg tok "$TOKEN" '(.mcpServers //= {}) | .mcpServers.demarkus = {"command": "demarkus-mcp", "args": ["-host", "mark://localhost", "-token", $tok, "-insecure"]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
 
 echo "Done. Restart the OpenClaw gateway."
 ```
@@ -50,7 +51,8 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 Wire the MCP server into OpenClaw:
 ```bash
-jq --arg host "SERVER_URL" --arg tok "USER_TOKEN" '(.mcpServers //= {}) | .mcpServers.demarkus = {"command": "demarkus-mcp", "args": ["-host", $host, "-token", $tok]}' ~/.openclaw/openclaw.json > /tmp/openclaw.json.tmp && mv /tmp/openclaw.json.tmp ~/.openclaw/openclaw.json
+tmp=$(mktemp)
+jq --arg host "SERVER_URL" --arg tok "USER_TOKEN" '(.mcpServers //= {}) | .mcpServers.demarkus = {"command": "demarkus-mcp", "args": ["-host", $host, "-token", $tok]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
 
 echo "Done. Restart the OpenClaw gateway."
 ```
