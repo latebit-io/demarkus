@@ -2,7 +2,7 @@
 name: demarkus
 description: Persistent agent memory and versioned markdown documents over the Mark Protocol (mark://). Use when asked to remember something across sessions, fetch or publish mark:// documents, keep a journal, store thoughts and reflections, set up agent memory that survives conversations, or give the agent a soul.
 homepage: https://demarkus.io
-metadata: {"openclaw": {"emoji": "📄", "os": ["darwin", "linux"], "requires": {"bins": ["curl", "bash", "jq"], "config": ["~/.demarkus/initial-token.txt", "~/.openclaw/openclaw.json"]}, "install": [{"id": "manual", "kind": "manual", "label": "Install Demarkus", "url": "https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh"}]}}
+metadata: {"openclaw": {"emoji": "📄", "os": ["darwin", "linux"], "requires": {"bins": ["curl", "bash", "jq"], "config": ["~/.demarkus/initial-token.txt", "/etc/demarkus/initial-token.txt", "~/.openclaw/openclaw.json"]}, "install": [{"id": "manual", "kind": "manual", "label": "Install Demarkus", "url": "https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh"}]}}
 ---
 
 ## Setup
@@ -115,5 +115,5 @@ Never publish without fetching first — the server enforces optimistic concurre
 
 - **Token handling**: The installer writes a random token to `~/.demarkus/initial-token.txt` (macOS) or `/etc/demarkus/initial-token.txt` (Linux). The setup script reads this token once to configure the MCP server, then passes it as a CLI argument to `demarkus-mcp`. No tokens are sent to external services.
 - **Config modification**: Setup modifies `~/.openclaw/openclaw.json` to register the MCP server under `mcp.servers.demarkus`. Only this key is added; existing config is preserved.
-- **Network**: The install script downloads binaries from `https://github.com/latebit-io/demarkus`. In local mode, the server binds to `localhost` only. In remote mode, the user provides the server URL explicitly.
+- **Network**: The install script downloads binaries from `https://github.com/latebit-io/demarkus`. The server listens on all interfaces (`:6309`) — on Linux the installer opens UDP 6309 via ufw when available. In remote mode, the user provides the server URL explicitly.
 - **Data storage**: All documents are stored locally on disk (local mode) or on the user-specified remote server. No data is sent to third parties.

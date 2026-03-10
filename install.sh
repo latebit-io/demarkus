@@ -1016,7 +1016,7 @@ do_install() {
     if [ -n "$fetched" ]; then
       echo "$fetched" | $SUDO tee "${INSTALL_DIR}/demarkus-install" > /dev/null
       $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
-    else
+    elif ! [ -x "${INSTALL_DIR}/demarkus-install" ]; then
       log_warn "Could not fetch install script for demarkus-install; update/uninstall won't be available"
     fi
   fi
