@@ -24,7 +24,7 @@ If not found, install the full stack (client, server, MCP binary, daemon):
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
 ```
 
-Wire the MCP server into OpenClaw using the token the installer wrote to disk:
+Store the token from the installer and wire the MCP server into OpenClaw:
 ```bash
 if [ "$(uname)" = "Darwin" ]; then
   TOKEN=$(cat ~/.demarkus/initial-token.txt)
@@ -32,8 +32,10 @@ else
   TOKEN=$(sudo cat /etc/demarkus/initial-token.txt)
 fi
 
+demarkus token add mark://localhost "$TOKEN"
+
 tmp=$(mktemp)
-jq --arg tok "$TOKEN" '(.mcp.servers //= {}) | .mcp.servers.demarkus = {"command": "demarkus-mcp", "args": ["-host", "mark://localhost", "-token", $tok, "-insecure"]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
+jq '(.mcp.servers //= {}) | .mcp.servers.demarkus = {"command": "demarkus-mcp", "args": ["-host", "mark://localhost", "-insecure"]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
 
 echo "Done. Restart the OpenClaw gateway."
 ```
@@ -49,10 +51,12 @@ Install the client binaries (no server, no daemon):
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
 ```
 
-Wire the MCP server into OpenClaw:
+Store the token and wire the MCP server into OpenClaw:
 ```bash
+demarkus token add SERVER_URL USER_TOKEN
+
 tmp=$(mktemp)
-jq --arg host "SERVER_URL" --arg tok "USER_TOKEN" '(.mcp.servers //= {}) | .mcp.servers.demarkus = {"command": "demarkus-mcp", "args": ["-host", $host, "-token", $tok]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
+jq --arg host "SERVER_URL" '(.mcp.servers //= {}) | .mcp.servers.demarkus = {"command": "demarkus-mcp", "args": ["-host", $host]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
 
 echo "Done. Restart the OpenClaw gateway."
 ```
@@ -113,7 +117,7 @@ Never publish without fetching first — the server enforces optimistic concurre
 
 ## Security and Privacy
 
-- **Token handling**: The installer writes a random token to `~/.demarkus/initial-token.txt` (macOS) or `/etc/demarkus/initial-token.txt` (Linux). The setup script reads this token once to configure the MCP server, then passes it as a CLI argument to `demarkus-mcp`. No tokens are sent to external services.
+- **Token handling**: The installer writes a random token to `~/.demarkus/initial-token.txt` (macOS) or `/etc/demarkus/initial-token.txt` (Linux). The setup script stores this token in the demarkus token store via `demarkus token add`, keeping it off the process command line. The MCP binary resolves tokens from the store at runtime. No tokens are sent to external services.
 - **Config modification**: Setup modifies `~/.openclaw/openclaw.json` to register the MCP server under `mcp.servers.demarkus`. Only this key is added; existing config is preserved.
 - **Network**: The install script downloads binaries from `https://github.com/latebit-io/demarkus`. The server listens on all interfaces (`:6309`) — on Linux the installer opens UDP 6309 via ufw when available. In remote mode, the user provides the server URL explicitly.
 - **Data storage**: All documents are stored locally on disk (local mode) or on the user-specified remote server. No data is sent to third parties.
