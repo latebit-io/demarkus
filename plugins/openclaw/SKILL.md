@@ -117,7 +117,7 @@ Never publish without fetching first — the server enforces optimistic concurre
 
 ## Security and Privacy
 
-- **Token handling**: The installer writes a random token to `~/.demarkus/initial-token.txt` (macOS) or `/etc/demarkus/initial-token.txt` (Linux). The setup script stores this token in the demarkus token store via `demarkus token add`, keeping it off the process command line. The MCP binary resolves tokens from the store at runtime. No tokens are sent to external services.
+- **Token handling**: The installer writes a random token to `~/.demarkus/initial-token.txt` (macOS) or `/etc/demarkus/initial-token.txt` (Linux). The setup script stores this token in the demarkus token store via `demarkus token add` so it stays out of `~/.openclaw/openclaw.json` and the long-running MCP process args. The MCP binary resolves tokens from the store at runtime and sends them only to the configured Mark server.
 - **Config modification**: Setup modifies `~/.openclaw/openclaw.json` to register the MCP server under `mcp.servers.demarkus`. Only this key is added; existing config is preserved.
 - **Network**: The install script downloads binaries from `https://github.com/latebit-io/demarkus`. The server listens on all interfaces (`:6309`) — on Linux the installer opens UDP 6309 via ufw when available. In remote mode, the user provides the server URL explicitly.
 - **Data storage**: All documents are stored locally on disk (local mode) or on the user-specified remote server. No data is sent to third parties.
