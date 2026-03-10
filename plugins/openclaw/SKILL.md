@@ -2,7 +2,7 @@
 name: demarkus
 description: Persistent agent memory and versioned markdown documents over the Mark Protocol (mark://). Use when asked to remember something across sessions, fetch or publish mark:// documents, keep a journal, store thoughts and reflections, set up agent memory that survives conversations, or give the agent a soul.
 homepage: https://demarkus.io
-metadata: {"openclaw": {"emoji": "📄", "os": ["darwin", "linux"], "requires": {"bins": ["curl"]}, "install": [{"id": "manual", "kind": "manual", "label": "Install Demarkus", "url": "https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh"}]}}
+metadata: {"openclaw": {"emoji": "📄", "os": ["darwin", "linux"], "requires": {"bins": ["curl", "bash", "jq"]}, "install": [{"id": "manual", "kind": "manual", "label": "Install Demarkus", "url": "https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh"}]}}
 ---
 
 ## Setup
@@ -26,24 +26,15 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 Wire the MCP server into OpenClaw using the token the installer wrote to disk:
 ```bash
-python3 -c "
-import json, os, sys
-cfg_path = os.path.expanduser('~/.openclaw/openclaw.json')
-if sys.platform == 'darwin':
-    token_path = os.path.expanduser('~/.demarkus/initial-token.txt')
-else:
-    token_path = '/etc/demarkus/initial-token.txt'
-tok = open(token_path).read().strip()
-with open(cfg_path) as f:
-    cfg = json.load(f)
-cfg.setdefault('mcpServers', {})['demarkus'] = {
-    'command': 'demarkus-mcp',
-    'args': ['-host', 'mark://localhost', '-token', tok]
-}
-with open(cfg_path, 'w') as f:
-    json.dump(cfg, f, indent=2)
-print('Done. Restart the OpenClaw gateway.')
-"
+if [ "$(uname)" = "Darwin" ]; then
+  TOKEN=$(cat ~/.demarkus/initial-token.txt)
+else
+  TOKEN=$(sudo cat /etc/demarkus/initial-token.txt)
+fi
+
+jq --arg tok "$TOKEN" '.mcpServers.demarkus = {"command": "demarkus-mcp", "args": ["-host", "mark://localhost", "-token", $tok, "-insecure"]}' ~/.openclaw/openclaw.json > /tmp/openclaw.json.tmp && mv /tmp/openclaw.json.tmp ~/.openclaw/openclaw.json
+
+echo "Done. Restart the OpenClaw gateway."
 ```
 
 ### Option B: Remote Server
@@ -59,19 +50,9 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 Wire the MCP server into OpenClaw:
 ```bash
-python3 -c "
-import json, os
-cfg_path = os.path.expanduser('~/.openclaw/openclaw.json')
-with open(cfg_path) as f:
-    cfg = json.load(f)
-cfg.setdefault('mcpServers', {})['demarkus'] = {
-    'command': 'demarkus-mcp',
-    'args': ['-host', 'SERVER_URL', '-token', 'USER_TOKEN']
-}
-with open(cfg_path, 'w') as f:
-    json.dump(cfg, f, indent=2)
-print('Done. Restart the OpenClaw gateway.')
-"
+jq --arg host "SERVER_URL" --arg tok "USER_TOKEN" '.mcpServers.demarkus = {"command": "demarkus-mcp", "args": ["-host", $host, "-token", $tok]}' ~/.openclaw/openclaw.json > /tmp/openclaw.json.tmp && mv /tmp/openclaw.json.tmp ~/.openclaw/openclaw.json
+
+echo "Done. Restart the OpenClaw gateway."
 ```
 
 Replace `SERVER_URL` and `USER_TOKEN` with the values from the user.
@@ -80,10 +61,10 @@ Replace `SERVER_URL` and `USER_TOKEN` with the values from the user.
 
 Restart the OpenClaw gateway, then verify:
 ```bash
-demarkus fetch mark://localhost/index.md
+demarkus -insecure mark://localhost/index.md
 ```
 
-For remote servers, replace `mark://localhost` with the server URL.
+For remote servers, replace `mark://localhost` with the server URL and drop `-insecure`.
 
 ## Tools
 
