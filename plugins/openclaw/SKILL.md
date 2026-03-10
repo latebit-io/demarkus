@@ -2,7 +2,7 @@
 name: demarkus
 description: Persistent agent memory and versioned markdown documents over the Mark Protocol (mark://). Use when asked to remember something across sessions, fetch or publish mark:// documents, keep a journal, store thoughts and reflections, set up agent memory that survives conversations, or give the agent a soul.
 homepage: https://demarkus.io
-license: MIT-0
+license: AGPL-3.0-only
 metadata: {"openclaw": {"emoji": "📄", "os": ["darwin", "linux"], "requires": {"anyBins": ["mcporter", "npx"], "bins": ["curl", "bash"], "config": ["~/.demarkus/initial-token.txt", "/etc/demarkus/initial-token.txt"]}, "install": [{"id": "manual", "kind": "manual", "label": "Install Demarkus", "url": "https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh"}, {"id": "node", "kind": "node", "package": "mcporter", "bins": ["mcporter"], "label": "Install mcporter (node)"}]}}
 ---
 
@@ -120,11 +120,11 @@ On every new session:
 
 ### Journaling
 
-Use `mark_append` to record session notes, key decisions, and what you learned. Each entry should include a date and a brief summary. This is your running log — append freely, never overwrite.
+Use `demarkus.mark_append` to record session notes, key decisions, and what you learned. Each entry should include a date and a brief summary. This is your running log — append freely, never overwrite.
 
 ### Thoughts and Reflections
 
-Use `mark_publish` to store your own reflections, open questions, and ideas. Unlike the journal (which is append-only), thoughts can be rewritten as your understanding evolves. Always fetch first to get the current version.
+Use `demarkus.mark_publish` to store your own reflections, open questions, and ideas. Unlike the journal (which is append-only), thoughts can be rewritten as your understanding evolves. Always fetch first to get the current version.
 
 ### Recommended Structure
 
@@ -138,7 +138,7 @@ Use `mark_publish` to store your own reflections, open questions, and ideas. Unl
 /roadmap.md        — what's done, what's next
 ```
 
-Use `mark_append` for journals and running notes — cheaper than fetch + republish.
+Use `demarkus.mark_append` for journals and running notes — cheaper than fetch + republish.
 Never publish without fetching first — the server enforces optimistic concurrency.
 
 ## Security and Privacy
