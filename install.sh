@@ -1006,6 +1006,23 @@ do_install() {
   if [ -f "$self" ]; then
     $SUDO cp "$self" "${INSTALL_DIR}/demarkus-install"
     $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
+  else
+    # Running from a pipe (curl | bash) — download the script instead
+    local script_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh"
+    local tmp_script
+    tmp_script=$(mktemp)
+    set +u
+    if curl -fsSL "${CURL_AUTH_ARGS[@]}" "$script_url" -o "$tmp_script" 2>/dev/null; then
+      set -u
+      $SUDO mv "$tmp_script" "${INSTALL_DIR}/demarkus-install"
+      $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
+    else
+      set -u
+      rm -f "$tmp_script"
+      if ! [ -x "${INSTALL_DIR}/demarkus-install" ]; then
+        log_warn "Could not fetch install script for demarkus-install; update/uninstall won't be available"
+      fi
+    fi
   fi
 
   # Summary

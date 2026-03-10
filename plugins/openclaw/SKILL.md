@@ -2,7 +2,7 @@
 name: demarkus
 description: Persistent agent memory and versioned markdown documents over the Mark Protocol (mark://). Use when asked to remember something across sessions, fetch or publish mark:// documents, keep a journal, store thoughts and reflections, set up agent memory that survives conversations, or give the agent a soul.
 homepage: https://demarkus.io
-metadata: {"openclaw": {"emoji": "📄", "os": ["darwin", "linux"], "requires": {"bins": ["curl", "bash", "jq"]}, "install": [{"id": "manual", "kind": "manual", "label": "Install Demarkus", "url": "https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh"}]}}
+metadata: {"openclaw": {"emoji": "📄", "os": ["darwin", "linux"], "requires": {"bins": ["curl", "bash", "jq"], "config": ["~/.demarkus/initial-token.txt", "/etc/demarkus/initial-token.txt", "~/.openclaw/openclaw.json"]}, "install": [{"id": "manual", "kind": "manual", "label": "Install Demarkus", "url": "https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh"}]}}
 ---
 
 ## Setup
@@ -24,7 +24,7 @@ If not found, install the full stack (client, server, MCP binary, daemon):
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
 ```
 
-Wire the MCP server into OpenClaw using the token the installer wrote to disk:
+Store the token from the installer and wire the MCP server into OpenClaw:
 ```bash
 if [ "$(uname)" = "Darwin" ]; then
   TOKEN=$(cat ~/.demarkus/initial-token.txt)
@@ -32,8 +32,10 @@ else
   TOKEN=$(sudo cat /etc/demarkus/initial-token.txt)
 fi
 
+demarkus token add mark://localhost "$TOKEN"
+
 tmp=$(mktemp)
-jq --arg tok "$TOKEN" '(.mcpServers //= {}) | .mcpServers.demarkus = {"command": "demarkus-mcp", "args": ["-host", "mark://localhost", "-token", $tok, "-insecure"]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
+jq '(.mcp.servers //= {}) | .mcp.servers.demarkus = {"command": "demarkus-mcp", "args": ["-host", "mark://localhost", "-insecure"]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
 
 echo "Done. Restart the OpenClaw gateway."
 ```
@@ -49,10 +51,12 @@ Install the client binaries (no server, no daemon):
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
 ```
 
-Wire the MCP server into OpenClaw:
+Store the token and wire the MCP server into OpenClaw:
 ```bash
+demarkus token add SERVER_URL USER_TOKEN
+
 tmp=$(mktemp)
-jq --arg host "SERVER_URL" --arg tok "USER_TOKEN" '(.mcpServers //= {}) | .mcpServers.demarkus = {"command": "demarkus-mcp", "args": ["-host", $host, "-token", $tok]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
+jq --arg host "SERVER_URL" '(.mcp.servers //= {}) | .mcp.servers.demarkus = {"command": "demarkus-mcp", "args": ["-host", $host]}' ~/.openclaw/openclaw.json > "$tmp" && mv "$tmp" ~/.openclaw/openclaw.json
 
 echo "Done. Restart the OpenClaw gateway."
 ```
@@ -110,3 +114,10 @@ Use `mark_publish /thoughts.md` to store your own reflections, open questions, a
 
 Use `mark_append` for journals and running notes — cheaper than fetch + republish.
 Never publish without fetching first — the server enforces optimistic concurrency.
+
+## Security and Privacy
+
+- **Token handling**: The installer writes a random token to `~/.demarkus/initial-token.txt` (macOS) or `/etc/demarkus/initial-token.txt` (Linux). The setup script stores this token in the demarkus token store via `demarkus token add` so it stays out of `~/.openclaw/openclaw.json` and the long-running MCP process args. The MCP binary resolves tokens from the store at runtime and sends them only to the configured Mark server.
+- **Config modification**: Setup modifies `~/.openclaw/openclaw.json` to register the MCP server under `mcp.servers.demarkus`. Only this key is added; existing config is preserved.
+- **Network**: The install script downloads binaries from `https://github.com/latebit-io/demarkus`. The server listens on all interfaces (`:6309`) — on Linux the installer opens UDP 6309 via ufw when available. In remote mode, the user provides the server URL explicitly.
+- **Data storage**: All documents are stored locally on disk (local mode) or on the user-specified remote server. No data is sent to third parties.
