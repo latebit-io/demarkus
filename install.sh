@@ -428,7 +428,7 @@ generate_token() {
   log_step "Generating auth token" >&2
   local token_stderr
   token_stderr=$(mktemp)
-  token=$("${INSTALL_DIR}/demarkus-token" generate -label "install" -paths "/*" -ops publish -tokens "$tokens_file" 2>"$token_stderr") || {
+  token=$("${INSTALL_DIR}/demarkus-token" generate -label "install" -paths "/**" -ops publish -tokens "$tokens_file" 2>"$token_stderr") || {
     log_error "Failed to generate auth token"
     cat "$token_stderr" >&2
     rm -f "$token_stderr"
@@ -1054,7 +1054,7 @@ do_install() {
   fi
   echo ""
   log_info "Generate additional tokens:"
-  echo "  demarkus-token generate -paths \"/*\" -ops publish -tokens ${tokens_file}"
+  echo "  demarkus-token generate -paths \"/**\" -ops publish -tokens ${tokens_file}"
   echo ""
   log_info "Update later with: demarkus-install update"
 
