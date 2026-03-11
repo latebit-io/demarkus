@@ -54,6 +54,14 @@ export function stripExistingFrontmatter(content: string): string {
   return content.substring(end + 4).replace(/^\r?\n/, "");
 }
 
+function formatYamlValue(value: any): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (typeof value === "object") return JSON.stringify(value);
+  return JSON.stringify(String(value));
+}
+
 export function buildMergedFrontmatter(
   url: string,
   version: number,
@@ -77,13 +85,13 @@ export function buildMergedFrontmatter(
     merged[MARK_ETAG_KEY] = etag;
   }
 
+  // Obsidian's metadata cache includes internal keys we shouldn't write back
+  delete merged["position"];
+
   const lines = ["---"];
   for (const [key, value] of Object.entries(merged)) {
     if (value === null || value === undefined) continue;
-    // Use JSON.stringify for string values to handle escaping
-    const strValue =
-      typeof value === "string" ? JSON.stringify(value) : String(value);
-    lines.push(`${key}: ${strValue}`);
+    lines.push(`${key}: ${formatYamlValue(value)}`);
   }
   lines.push("---", "");
   return lines.join("\n");
