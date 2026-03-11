@@ -7,7 +7,6 @@ import {
 import * as cli from "./cli";
 import {
   getMarkFrontmatter,
-  buildFrontmatter,
   buildMergedFrontmatter,
   stripExistingFrontmatter,
 } from "./frontmatter";
