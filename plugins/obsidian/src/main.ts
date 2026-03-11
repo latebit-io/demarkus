@@ -97,7 +97,9 @@ export default class DemarkusPlugin extends Plugin {
         this.settings.serverUrl,
         async (url) => {
           await this.doPublish(file, url, -1);
-        }
+        },
+        "Publish",
+        "Publish to Demarkus"
       );
       modal.open();
       return;
@@ -197,9 +199,13 @@ export default class DemarkusPlugin extends Plugin {
   private urlToFileName(url: string): string {
     const match = url.match(/^mark:\/\/([^/]+)(\/.*)?$/);
     if (!match) return "demarkus-doc.md";
-    const host = match[1];
-    const path = match[2] || "/index.md";
-    return `demarkus/${host}${path}`;
+    const rawHost = match[1];
+    const safeHost = rawHost.replace(/:/g, "_");
+    let path = match[2] || "/index.md";
+    if (path.endsWith("/")) {
+      path = `${path}index.md`;
+    }
+    return `demarkus/${safeHost}${path}`;
   }
 
   private async ensureDir(dir: string) {
@@ -225,16 +231,26 @@ export default class DemarkusPlugin extends Plugin {
 class UrlInputModal extends Modal {
   private url: string;
   private onSubmit: (url: string) => void;
+  private buttonText: string;
+  private heading: string;
 
-  constructor(app: App, defaultUrl: string, onSubmit: (url: string) => void) {
+  constructor(
+    app: App,
+    defaultUrl: string,
+    onSubmit: (url: string) => void,
+    buttonText: string = "Fetch",
+    heading: string = "Demarkus URL"
+  ) {
     super(app);
     this.url = defaultUrl;
     this.onSubmit = onSubmit;
+    this.buttonText = buttonText;
+    this.heading = heading;
   }
 
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h3", { text: "Demarkus URL" });
+    contentEl.createEl("h3", { text: this.heading });
 
     new Setting(contentEl).setName("URL").addText((text) => {
       text.setPlaceholder("mark://host:port/path.md").setValue(this.url);
@@ -251,7 +267,7 @@ class UrlInputModal extends Modal {
 
     new Setting(contentEl).addButton((btn) =>
       btn
-        .setButtonText("Fetch")
+        .setButtonText(this.buttonText)
         .setCta()
         .onClick(() => {
           this.close();

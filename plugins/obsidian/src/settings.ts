@@ -56,7 +56,7 @@ export class DemarkusSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("CLI path")
-      .setDesc("Path to demarkus binary (auto-detected if on PATH)")
+      .setDesc("Path to demarkus binary")
       .addText((text) =>
         text
           .setPlaceholder("demarkus")

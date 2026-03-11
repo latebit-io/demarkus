@@ -1,4 +1,5 @@
 import { execFile } from "child_process";
+import { delimiter } from "path";
 
 export interface FetchResult {
   status: string;
@@ -28,7 +29,6 @@ function buildArgs(
 ): string[] {
   const args = ["-v", "-X", verb];
   if (opts.insecure) args.push("-insecure");
-  if (opts.token) args.push("-auth", opts.token);
   if (extra) args.push(...extra);
   args.push(url);
   return args;
@@ -60,25 +60,30 @@ function parseMetadataLine(line: string): {
 function exec(
   cliPath: string,
   args: string[],
-  stdin?: string
+  stdin?: string,
+  token?: string
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    const pathParts: string[] = [];
+    if (process.env.PATH) pathParts.push(process.env.PATH);
+    if (process.platform !== "win32") {
+      pathParts.push("/usr/local/bin", "/opt/homebrew/bin");
+    }
+    const homeDir = process.env.HOME || process.env.USERPROFILE;
+    if (homeDir) {
+      pathParts.push(`${homeDir}/.local/bin`, `${homeDir}/go/bin`);
+    }
+    const env: Record<string, string> = {
+      ...process.env,
+      PATH: pathParts.join(delimiter),
+    };
+    if (token) {
+      env.DEMARKUS_AUTH = token;
+    }
     const child = execFile(
       cliPath,
       args,
-      {
-        maxBuffer: 2 * 1024 * 1024,
-        env: {
-          ...process.env,
-          PATH: [
-            process.env.PATH,
-            "/usr/local/bin",
-            "/opt/homebrew/bin",
-            `${process.env.HOME}/.local/bin`,
-            `${process.env.HOME}/go/bin`,
-          ].join(":"),
-        },
-      },
+      { maxBuffer: 2 * 1024 * 1024, env },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(stderr.trim() || error.message));
@@ -99,7 +104,7 @@ export async function fetch(
   url: string
 ): Promise<FetchResult> {
   const args = buildArgs(opts, "FETCH", url);
-  const { stdout, stderr } = await exec(opts.cliPath, args);
+  const { stdout, stderr } = await exec(opts.cliPath, args, undefined, opts.token);
 
   const { status, metadata } = parseMetadataLine(stderr.trim());
 
@@ -118,7 +123,7 @@ export async function list(
   url: string
 ): Promise<ListEntry[]> {
   const args = buildArgs(opts, "LIST", url);
-  const { stdout } = await exec(opts.cliPath, args);
+  const { stdout } = await exec(opts.cliPath, args, undefined, opts.token);
 
   const entries: ListEntry[] = [];
   for (const line of stdout.split("\n")) {
@@ -140,10 +145,8 @@ export async function publish(
   const args = buildArgs(opts, "PUBLISH", url, [
     "-expected-version",
     String(expectedVersion),
-    "-body",
-    body,
   ]);
-  const { stdout, stderr } = await exec(opts.cliPath, args);
+  const { stdout, stderr } = await exec(opts.cliPath, args, body, opts.token);
 
   const { status, metadata } = parseMetadataLine(stderr.trim());
 
