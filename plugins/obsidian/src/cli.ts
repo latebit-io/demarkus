@@ -12,6 +12,7 @@ export interface FetchResult {
 
 export interface ListEntry {
   name: string;
+  href: string;
   isDir: boolean;
 }
 
@@ -133,8 +134,9 @@ export async function list(
   for (const line of stdout.split("\n")) {
     const match = line.match(/^- \[([^\]]+)\]\(([^)]+)\)/);
     if (match) {
-      const name = match[2];
-      entries.push({ name, isDir: name.endsWith("/") });
+      const name = match[1];
+      const href = match[2];
+      entries.push({ name, href, isDir: href.endsWith("/") });
     }
   }
   return entries;

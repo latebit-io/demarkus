@@ -18,9 +18,18 @@ export function getMarkFrontmatter(
   const fm = cache?.frontmatter;
   if (!fm || !fm[MARK_URL_KEY]) return null;
 
+  const rawVersion = fm[MARK_VERSION_KEY];
+  const parsedVersion = parseInt(
+    rawVersion !== undefined && rawVersion !== null && rawVersion !== ""
+      ? String(rawVersion)
+      : "0",
+    10
+  );
+  const version = Number.isFinite(parsedVersion) ? parsedVersion : 0;
+
   return {
     url: fm[MARK_URL_KEY],
-    version: parseInt(fm[MARK_VERSION_KEY] || "0", 10),
+    version,
     etag: fm[MARK_ETAG_KEY] || "",
   };
 }

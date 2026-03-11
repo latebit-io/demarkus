@@ -158,7 +158,7 @@ export default class DemarkusPlugin extends Plugin {
           new Notice("Directory browsing not yet supported");
           return;
         }
-        const docUrl = url + entry.name;
+        const docUrl = url + entry.href;
         try {
           const result = await cli.fetch(this.cliOpts(), docUrl);
           if (result.status !== "ok") {
@@ -205,7 +205,10 @@ export default class DemarkusPlugin extends Plugin {
     if (path.endsWith("/")) {
       path = `${path}index.md`;
     }
-    return `demarkus/${safeHost}${path}`;
+    // Sanitize path to prevent traversal attacks
+    const segments = path.split("/").filter((seg) => seg && seg !== "." && seg !== "..");
+    const safePath = "/" + segments.join("/");
+    return `demarkus/${safeHost}${safePath}`;
   }
 
   private async ensureDir(dir: string) {
