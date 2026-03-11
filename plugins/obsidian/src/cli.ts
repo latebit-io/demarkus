@@ -84,7 +84,7 @@ function exec(
     const child = execFile(
       cliPath,
       args,
-      { maxBuffer: 2 * 1024 * 1024, env },
+      { maxBuffer: 10 * 1024 * 1024, env },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(stderr.trim() || error.message));

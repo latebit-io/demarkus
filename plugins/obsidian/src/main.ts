@@ -109,11 +109,6 @@ export default class DemarkusPlugin extends Plugin {
   }
 
   private async doPublish(file: TFile, url: string, expectedVersion: number) {
-    if (!this.settings.token) {
-      new Notice("No token configured. Set one in Demarkus settings.");
-      return;
-    }
-
     try {
       const raw = await this.app.vault.read(file);
       const body = stripExistingFrontmatter(raw);
@@ -196,17 +191,33 @@ export default class DemarkusPlugin extends Plugin {
     }
   }
 
+  private sanitizePathSegment(segment: string): string {
+    // Replace control characters and characters invalid/special on common filesystems
+    let safe = segment.replace(/[\x00-\x1F\x7F]/g, "_");
+    safe = safe.replace(/[\\/:*?"<>|]/g, "_");
+    // Normalize whitespace and trim
+    safe = safe.trim().replace(/\s+/g, " ");
+    // Avoid empty segments
+    if (!safe) {
+      safe = "unnamed";
+    }
+    return safe;
+  }
+
   private urlToFileName(url: string): string {
     const match = url.match(/^mark:\/\/([^/]+)(\/.*)?$/);
     if (!match) return "demarkus-doc.md";
     const rawHost = match[1];
-    const safeHost = rawHost.replace(/:/g, "_");
+    const safeHost = this.sanitizePathSegment(rawHost);
     let path = match[2] || "/index.md";
     if (path.endsWith("/")) {
       path = `${path}index.md`;
     }
-    // Sanitize path to prevent traversal attacks
-    const segments = path.split("/").filter((seg) => seg && seg !== "." && seg !== "..");
+    // Sanitize path to prevent traversal attacks and filesystem issues
+    const segments = path
+      .split("/")
+      .filter((seg) => seg && seg !== "." && seg !== "..")
+      .map((seg) => this.sanitizePathSegment(seg));
     const safePath = "/" + segments.join("/");
     return `demarkus/${safeHost}${safePath}`;
   }
