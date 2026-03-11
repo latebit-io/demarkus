@@ -35,12 +35,17 @@ function buildArgs(
   return args;
 }
 
-function parseMetadataLine(line: string): {
+function parseMetadataLine(stderr: string): {
   status: string;
   metadata: Record<string, string>;
 } {
   const metadata: Record<string, string> = {};
   let status = "unknown";
+
+  // stderr may contain multiple lines (warnings, etc.); use the last header line
+  const lines = stderr.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const line =
+    lines.reverse().find((l) => /^\[/.test(l)) || lines[0] || "";
 
   const statusMatch = line.match(/^\[([^\]]+)\]/);
   if (statusMatch) {
