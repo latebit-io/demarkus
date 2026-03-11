@@ -108,9 +108,18 @@ export async function fetch(
 
   const { status, metadata } = parseMetadataLine(stderr.trim());
 
+  const rawVersion = metadata["version"];
+  const parsedVersion = parseInt(
+    rawVersion !== undefined && rawVersion !== null && rawVersion !== ""
+      ? String(rawVersion)
+      : "0",
+    10
+  );
+  const version = Number.isFinite(parsedVersion) ? parsedVersion : 0;
+
   return {
     status,
-    version: parseInt(metadata["version"] || "0", 10),
+    version,
     etag: metadata["etag"] || "",
     modified: metadata["modified"] || "",
     body: stdout,
@@ -156,9 +165,18 @@ export async function publish(
 
   const { status, metadata } = parseMetadataLine(stderr.trim());
 
+  const rawVersion = metadata["version"];
+  const parsedVersion = parseInt(
+    rawVersion !== undefined && rawVersion !== null && rawVersion !== ""
+      ? String(rawVersion)
+      : "0",
+    10
+  );
+  const version = Number.isFinite(parsedVersion) ? parsedVersion : 0;
+
   return {
     status,
-    version: parseInt(metadata["version"] || "0", 10),
+    version,
     etag: metadata["etag"] || "",
     modified: metadata["modified"] || "",
     body: stdout,

@@ -4,8 +4,8 @@
   "description": "Demarkus plugin for Obsidian",
   "main": "main.js",
   "scripts": {
-    "dev": "bun esbuild.config.mjs",
-    "build": "bun x tsc --noEmit --skipLibCheck && bun esbuild.config.mjs production"
+    "dev": "node esbuild.config.mjs",
+    "build": "npx tsc --noEmit --skipLibCheck && node esbuild.config.mjs production"
   },
   "keywords": [
     "obsidian",

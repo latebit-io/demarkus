@@ -37,11 +37,11 @@ export function getMarkFrontmatter(
 export function buildFrontmatter(url: string, version: number, etag: string): string {
   const lines = [
     "---",
-    `${MARK_URL_KEY}: "${url}"`,
+    `${MARK_URL_KEY}: ${JSON.stringify(url)}`,
     `${MARK_VERSION_KEY}: ${version}`,
   ];
   if (etag) {
-    lines.push(`${MARK_ETAG_KEY}: "${etag}"`);
+    lines.push(`${MARK_ETAG_KEY}: ${JSON.stringify(etag)}`);
   }
   lines.push("---", "");
   return lines.join("\n");
@@ -51,5 +51,5 @@ export function stripExistingFrontmatter(content: string): string {
   if (!content.startsWith("---")) return content;
   const end = content.indexOf("\n---", 3);
   if (end === -1) return content;
-  return content.substring(end + 4).replace(/^\n/, "");
+  return content.substring(end + 4).replace(/^\r?\n/, "");
 }
