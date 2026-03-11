@@ -96,7 +96,7 @@ export default class DemarkusPlugin extends Plugin {
         this.app,
         this.settings.serverUrl,
         async (url) => {
-          await this.doPublish(file, url, -1);
+          await this.doPublish(file, url, 0);
         },
         "Publish",
         "Publish to Demarkus"

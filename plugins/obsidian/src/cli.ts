@@ -73,7 +73,7 @@ function exec(
     if (homeDir) {
       pathParts.push(`${homeDir}/.local/bin`, `${homeDir}/go/bin`);
     }
-    const env: Record<string, string> = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       PATH: pathParts.join(delimiter),
     };
@@ -92,9 +92,8 @@ function exec(
         resolve({ stdout, stderr });
       }
     );
-    if (stdin && child.stdin) {
-      child.stdin.write(stdin);
-      child.stdin.end();
+    if (stdin !== undefined && child.stdin) {
+      child.stdin.end(stdin);
     }
   });
 }
@@ -123,7 +122,12 @@ export async function list(
   url: string
 ): Promise<ListEntry[]> {
   const args = buildArgs(opts, "LIST", url);
-  const { stdout } = await exec(opts.cliPath, args, undefined, opts.token);
+  const { stdout, stderr } = await exec(opts.cliPath, args, undefined, opts.token);
+
+  const { status } = parseMetadataLine(stderr.trim());
+  if (status !== "ok") {
+    throw new Error(`LIST request failed with status: ${status}`);
+  }
 
   const entries: ListEntry[] = [];
   for (const line of stdout.split("\n")) {
