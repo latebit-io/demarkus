@@ -123,6 +123,10 @@ export default class DemarkusPlugin extends Plugin {
       const raw = await this.app.vault.read(file);
       const body = stripExistingFrontmatter(raw);
 
+      // Preserve existing user frontmatter (tags, aliases, etc.)
+      const cache = this.app.metadataCache.getFileCache(file);
+      const existingFrontmatter = cache?.frontmatter;
+
       const result = await cli.publish(
         this.cliOpts(),
         url,
@@ -132,7 +136,7 @@ export default class DemarkusPlugin extends Plugin {
 
       if (result.status === "created" || result.status === "ok") {
         const newContent =
-          buildFrontmatter(url, result.version, result.etag) + body;
+          buildMergedFrontmatter(url, result.version, result.etag, existingFrontmatter) + body;
         await this.app.vault.modify(file, newContent);
         new Notice(`Published v${result.version}: ${url}`);
       } else if (result.status === "conflict") {
