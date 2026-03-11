@@ -13,7 +13,7 @@ import {
 } from "./frontmatter";
 
 export default class DemarkusPlugin extends Plugin {
-  settings: DemarkusSettings = DEFAULT_SETTINGS;
+  settings: DemarkusSettings = { ...DEFAULT_SETTINGS };
 
   async onload() {
     await this.loadSettings();
