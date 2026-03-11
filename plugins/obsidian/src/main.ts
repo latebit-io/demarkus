@@ -8,6 +8,7 @@ import * as cli from "./cli";
 import {
   getMarkFrontmatter,
   buildFrontmatter,
+  buildMergedFrontmatter,
   stripExistingFrontmatter,
 } from "./frontmatter";
 
@@ -56,10 +57,19 @@ export default class DemarkusPlugin extends Plugin {
         }
 
         const fileName = this.urlToFileName(url);
-        const content =
-          buildFrontmatter(url, result.version, result.etag) + result.body;
-
         const existing = this.app.vault.getAbstractFileByPath(fileName);
+
+        // Preserve existing frontmatter when updating
+        let existingFrontmatter: Record<string, any> | undefined;
+        if (existing instanceof TFile) {
+          const cache = this.app.metadataCache.getFileCache(existing);
+          existingFrontmatter = cache?.frontmatter;
+        }
+
+        const content =
+          buildMergedFrontmatter(url, result.version, result.etag, existingFrontmatter) +
+          result.body;
+
         if (existing instanceof TFile) {
           await this.app.vault.modify(existing, content);
           new Notice(`Updated: ${fileName}`);
@@ -162,10 +172,19 @@ export default class DemarkusPlugin extends Plugin {
           }
 
           const fileName = this.urlToFileName(docUrl);
-          const content =
-            buildFrontmatter(docUrl, result.version, result.etag) + result.body;
-
           const existing = this.app.vault.getAbstractFileByPath(fileName);
+
+          // Preserve existing frontmatter when updating
+          let existingFrontmatter: Record<string, any> | undefined;
+          if (existing instanceof TFile) {
+            const cache = this.app.metadataCache.getFileCache(existing);
+            existingFrontmatter = cache?.frontmatter;
+          }
+
+          const content =
+            buildMergedFrontmatter(docUrl, result.version, result.etag, existingFrontmatter) +
+            result.body;
+
           if (existing instanceof TFile) {
             await this.app.vault.modify(existing, content);
           } else {

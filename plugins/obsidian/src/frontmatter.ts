@@ -53,3 +53,38 @@ export function stripExistingFrontmatter(content: string): string {
   if (end === -1) return content;
   return content.substring(end + 4).replace(/^\r?\n/, "");
 }
+
+export function buildMergedFrontmatter(
+  url: string,
+  version: number,
+  etag: string,
+  existingFrontmatter?: Record<string, any>
+): string {
+  // Start with existing frontmatter or empty object
+  const merged: Record<string, any> = existingFrontmatter
+    ? { ...existingFrontmatter }
+    : {};
+
+  // Update Demarkus keys (remove old ones that shouldn't exist)
+  delete merged[MARK_URL_KEY];
+  delete merged[MARK_VERSION_KEY];
+  delete merged[MARK_ETAG_KEY];
+
+  // Add new Demarkus keys
+  merged[MARK_URL_KEY] = url;
+  merged[MARK_VERSION_KEY] = version;
+  if (etag) {
+    merged[MARK_ETAG_KEY] = etag;
+  }
+
+  const lines = ["---"];
+  for (const [key, value] of Object.entries(merged)) {
+    if (value === null || value === undefined) continue;
+    // Use JSON.stringify for string values to handle escaping
+    const strValue =
+      typeof value === "string" ? JSON.stringify(value) : String(value);
+    lines.push(`${key}: ${strValue}`);
+  }
+  lines.push("---", "");
+  return lines.join("\n");
+}
