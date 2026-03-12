@@ -54,6 +54,13 @@ export function stripExistingFrontmatter(content: string): string {
   return content.substring(end + 4).replace(/^\r?\n/, "");
 }
 
+const YAML_UNSAFE_KEY = /[:#\[\]{}&*!|>'"%@`?,\-]|^\s|\s$/;
+
+function formatYamlKey(key: string): string {
+  if (YAML_UNSAFE_KEY.test(key)) return JSON.stringify(key);
+  return key;
+}
+
 function formatYamlValue(value: any): string {
   if (typeof value === "string") return JSON.stringify(value);
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -91,7 +98,7 @@ export function buildMergedFrontmatter(
   const lines = ["---"];
   for (const [key, value] of Object.entries(merged)) {
     if (value === null || value === undefined) continue;
-    lines.push(`${key}: ${formatYamlValue(value)}`);
+    lines.push(`${formatYamlKey(key)}: ${formatYamlValue(value)}`);
   }
   lines.push("---", "");
   return lines.join("\n");
