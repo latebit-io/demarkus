@@ -12,6 +12,7 @@ Demarkus is a protocol and toolkit for publishing markdown documents with versio
 - [Install with Docker](/install/docker/) — multi-arch image, docker-compose ready
 - [Install on Windows (WSL2)](/install/windows/) — Windows setup via WSL2
 - [Install via OpenClaw](/install/openclaw/) — ClawHub skill for OpenClaw agents
+- [Install Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus) — fetch and publish from Obsidian via BRAT
 - [Run a personal knowledge base](/scenarios/personal-wiki/) — local markdown notes, browsable via TUI
 - [Set up agent memory](/scenarios/agent-memory/) — persistent memory for Claude Code and other LLM agents
 - [Publish a public hub](/scenarios/public-hub/) — VPS + Let's Encrypt + open read access
