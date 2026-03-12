@@ -28,7 +28,7 @@ function buildArgs(
   url: string,
   extra?: string[]
 ): string[] {
-  const args = ["-v", "-X", verb];
+  const args = ["-v", "-no-cache", "-X", verb];
   if (opts.insecure) args.push("-insecure");
   if (extra) args.push(...extra);
   args.push(url);
