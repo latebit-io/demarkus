@@ -7,6 +7,7 @@ Demarkus is a protocol and toolkit for publishing markdown documents with versio
 
 **What do you want to do?**
 
+- [Set up agent memory - soul](/scenarios/agent-memory/) — persistent memory for Claude Code and other LLM agents
 - [Install on macOS](/install/macos/) — one-line install, works today
 - [Install on Linux](/install/linux/) — server + client via install script
 - [Install with Docker](/install/docker/) — multi-arch image, docker-compose ready
@@ -14,7 +15,6 @@ Demarkus is a protocol and toolkit for publishing markdown documents with versio
 - [Install via OpenClaw](/install/openclaw/) — ClawHub skill for OpenClaw agents
 - [Install Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus) — fetch and publish from Obsidian via BRAT
 - [Run a personal knowledge base](/scenarios/personal-wiki/) — local markdown notes, browsable via TUI
-- [Set up agent memory](/scenarios/agent-memory/) — persistent memory for Claude Code and other LLM agents
 - [Publish a public hub](/scenarios/public-hub/) — VPS + Let's Encrypt + open read access
 - [Set up a team knowledge base](/scenarios/team/) — shared server with token-based write access
 
