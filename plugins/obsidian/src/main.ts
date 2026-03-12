@@ -54,37 +54,7 @@ export default class DemarkusPlugin extends Plugin {
           new Notice(`Fetch failed: ${result.status}`);
           return;
         }
-
-        const fileName = this.urlToFileName(url);
-        const existing = this.app.vault.getAbstractFileByPath(fileName);
-
-        // Preserve existing frontmatter when updating
-        let existingFrontmatter: Record<string, any> | undefined;
-        if (existing instanceof TFile) {
-          const cache = this.app.metadataCache.getFileCache(existing);
-          existingFrontmatter = cache?.frontmatter;
-        }
-
-        const content =
-          buildMergedFrontmatter(url, result.version, result.etag, existingFrontmatter) +
-          result.body;
-
-        if (existing instanceof TFile) {
-          await this.app.vault.modify(existing, content);
-          new Notice(`Updated: ${fileName}`);
-        } else {
-          const dir = fileName.substring(0, fileName.lastIndexOf("/"));
-          if (dir) {
-            await this.ensureDir(dir);
-          }
-          await this.app.vault.create(fileName, content);
-          new Notice(`Created: ${fileName}`);
-        }
-
-        const file = this.app.vault.getAbstractFileByPath(fileName);
-        if (file instanceof TFile) {
-          await this.app.workspace.getLeaf().openFile(file);
-        }
+        await this.writeFetchedDocument(url, result);
       } catch (e) {
         new Notice(`Error: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -173,36 +143,7 @@ export default class DemarkusPlugin extends Plugin {
             new Notice(`Fetch failed: ${result.status}`);
             return;
           }
-
-          const fileName = this.urlToFileName(docUrl);
-          const existing = this.app.vault.getAbstractFileByPath(fileName);
-
-          // Preserve existing frontmatter when updating
-          let existingFrontmatter: Record<string, any> | undefined;
-          if (existing instanceof TFile) {
-            const cache = this.app.metadataCache.getFileCache(existing);
-            existingFrontmatter = cache?.frontmatter;
-          }
-
-          const content =
-            buildMergedFrontmatter(docUrl, result.version, result.etag, existingFrontmatter) +
-            result.body;
-
-          if (existing instanceof TFile) {
-            await this.app.vault.modify(existing, content);
-          } else {
-            const dir = fileName.substring(0, fileName.lastIndexOf("/"));
-            if (dir) {
-              await this.ensureDir(dir);
-            }
-            await this.app.vault.create(fileName, content);
-          }
-
-          const file = this.app.vault.getAbstractFileByPath(fileName);
-          if (file instanceof TFile) {
-            await this.app.workspace.getLeaf().openFile(file);
-          }
-          new Notice(`Fetched: ${fileName}`);
+          await this.writeFetchedDocument(docUrl, result);
         } catch (e) {
           new Notice(`Error: ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -210,6 +151,38 @@ export default class DemarkusPlugin extends Plugin {
       modal.open();
     } catch (e) {
       new Notice(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  private async writeFetchedDocument(url: string, result: cli.FetchResult) {
+    const fileName = this.urlToFileName(url);
+    const existing = this.app.vault.getAbstractFileByPath(fileName);
+
+    let existingFrontmatter: Record<string, any> | undefined;
+    if (existing instanceof TFile) {
+      const cache = this.app.metadataCache.getFileCache(existing);
+      existingFrontmatter = cache?.frontmatter;
+    }
+
+    const content =
+      buildMergedFrontmatter(url, result.version, result.etag, existingFrontmatter) +
+      result.body;
+
+    if (existing instanceof TFile) {
+      await this.app.vault.modify(existing, content);
+      new Notice(`Updated: ${fileName}`);
+    } else {
+      const dir = fileName.substring(0, fileName.lastIndexOf("/"));
+      if (dir) {
+        await this.ensureDir(dir);
+      }
+      await this.app.vault.create(fileName, content);
+      new Notice(`Created: ${fileName}`);
+    }
+
+    const file = this.app.vault.getAbstractFileByPath(fileName);
+    if (file instanceof TFile) {
+      await this.app.workspace.getLeaf().openFile(file);
     }
   }
 
