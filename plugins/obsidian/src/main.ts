@@ -164,9 +164,10 @@ export default class DemarkusPlugin extends Plugin {
       existingFrontmatter = cache?.frontmatter;
     }
 
+    const body = stripExistingFrontmatter(result.body);
     const content =
       buildMergedFrontmatter(url, result.version, result.etag, existingFrontmatter) +
-      result.body;
+      body;
 
     if (existing instanceof TFile) {
       await this.app.vault.modify(existing, content);
