@@ -22,27 +22,49 @@ The only required setting is the content directory:
 demarkus-server -root /srv/site
 ```
 
-## Authentication (Write Access)
+## Authentication
 
-Writes are denied unless you provide a tokens file.
+Writes are denied unless you provide a tokens file. Reads are public by default.
 
-### 1) Generate a token
+### Write Access
+
+#### 1) Generate a token
 
 ```bash
 ./server/bin/demarkus-token generate -paths "/*" -ops publish -tokens /etc/demarkus/tokens.toml
 ```
 
-### 2) Start the server with tokens
+#### 2) Start the server with tokens
 
 ```bash
 demarkus-server -root /srv/site -tokens /etc/demarkus/tokens.toml
 ```
 
-### 3) Publish with the token
+#### 3) Publish with the token
 
 ```bash
 demarkus --insecure -X PUBLISH -auth <raw-token> mark://localhost:6309/hello.md -body "# Hello World"
 ```
+
+### Read Access (Private Paths)
+
+By default, all paths are public. To protect specific paths, create a token with the `read` operation. Any path covered by a read token requires authentication for FETCH, LIST, and VERSIONS.
+
+#### Protect a subtree
+
+```bash
+./server/bin/demarkus-token generate -paths "/internal/**" -ops read -tokens /etc/demarkus/tokens.toml
+```
+
+Now `/internal/**` requires a read token. Everything else stays public.
+
+#### Full private server
+
+```bash
+./server/bin/demarkus-token generate -paths "/**" -ops "read,publish" -tokens /etc/demarkus/tokens.toml
+```
+
+This protects all paths. The well-known manifest (`/.well-known/agent-manifest.md`) is always public.
 
 ## Health Check
 

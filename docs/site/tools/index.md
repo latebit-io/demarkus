@@ -23,7 +23,24 @@ The server is secure by default and **denies writes** unless you configure a tok
 
 # Read + publish to everything
 ./server/bin/demarkus-token generate -paths "/*" -ops "read,publish" -tokens tokens.toml
+
+# Read-only access to private paths
+./server/bin/demarkus-token generate -paths "/internal/**" -ops read -tokens tokens.toml
 ```
+
+### Read tokens (private paths)
+
+By default all paths are public. To protect paths, create a token with the `read` operation:
+
+```bash
+# Protect /internal/** — requires a read token for FETCH, LIST, VERSIONS
+./server/bin/demarkus-token generate -paths "/internal/**" -ops read -tokens tokens.toml
+
+# Full private server — protect everything
+./server/bin/demarkus-token generate -paths "/**" -ops "read,publish" -tokens tokens.toml
+```
+
+Paths not covered by any read token remain public. The well-known manifest (`/.well-known/agent-manifest.md`) is always accessible.
 
 ### Run the server with tokens
 

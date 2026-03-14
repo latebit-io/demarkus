@@ -666,7 +666,11 @@ When the content directory or any document path involves symbolic links, the ser
 
 The Mark Protocol uses capability-based token authentication. Tokens grant specific operations on specific path patterns — they do not identify users.
 
-**Secure by default**: Servers MUST deny all publish operations when no token store is configured. Reads do not require authentication.
+**Secure by default**: Servers MUST deny all publish operations when no token store is configured. Reads are public by default — read authentication is opt-in per path.
+
+**Read authentication**: Tokens with the `read` operation protect specific paths. When any token grants `read` on a path pattern, requests to matching paths require a valid read token. Paths not covered by any read token remain public. This enables private intranets (protect `/**`) and mixed public/private servers (protect `/internal/**` while leaving the rest open).
+
+Servers MUST enforce read auth on FETCH, LIST, and VERSIONS operations. Content-addressed FETCH (by hash) MUST resolve the hash to a path and check read auth on that path. Versioned paths (e.g., `/doc.md/v2`) MUST check auth on the base path (`/doc.md`). The well-known manifest path (`/.well-known/agent-manifest.md`) is always public.
 
 **Token storage**: The server stores SHA-256 hashes of tokens, never the raw tokens themselves. The token store is a TOML file:
 
