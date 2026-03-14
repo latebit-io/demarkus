@@ -385,3 +385,78 @@ func TestMatchesAnyPath(t *testing.T) {
 		})
 	}
 }
+
+func TestRequiresReadAuth(t *testing.T) {
+	tests := []struct {
+		name   string
+		tokens map[string]Token
+		path   string
+		want   bool
+	}{
+		{
+			"path covered by read token",
+			map[string]Token{
+				"sha256-read": {Paths: []string{"/private/**"}, Operations: []string{"read"}},
+			},
+			"/private/doc.md",
+			true,
+		},
+		{
+			"path not covered by any read token",
+			map[string]Token{
+				"sha256-read": {Paths: []string{"/private/**"}, Operations: []string{"read"}},
+			},
+			"/public/doc.md",
+			false,
+		},
+		{
+			"publish-only token does not protect reads",
+			map[string]Token{
+				"sha256-write": {Paths: []string{"/docs/**"}, Operations: []string{"publish"}},
+			},
+			"/docs/file.md",
+			false,
+		},
+		{
+			"no tokens",
+			map[string]Token{},
+			"/anything.md",
+			false,
+		},
+		{
+			"read token with single-level glob",
+			map[string]Token{
+				"sha256-read": {Paths: []string{"/secret/*"}, Operations: []string{"read"}},
+			},
+			"/secret/notes.md",
+			true,
+		},
+		{
+			"read token does not match nested without recursive glob",
+			map[string]Token{
+				"sha256-read": {Paths: []string{"/secret/*"}, Operations: []string{"read"}},
+			},
+			"/secret/sub/notes.md",
+			false,
+		},
+		{
+			"mixed tokens only read paths count",
+			map[string]Token{
+				"sha256-write": {Paths: []string{"/**"}, Operations: []string{"publish"}},
+				"sha256-read":  {Paths: []string{"/internal/**"}, Operations: []string{"read"}},
+			},
+			"/public/doc.md",
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := NewTokenStore(tt.tokens)
+			got := ts.RequiresReadAuth(tt.path)
+			if got != tt.want {
+				t.Errorf("RequiresReadAuth(%q): got %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}

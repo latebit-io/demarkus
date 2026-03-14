@@ -2037,3 +2037,168 @@ func TestPublisherMetadata(t *testing.T) {
 		}
 	})
 }
+
+func TestReadAuth(t *testing.T) {
+	const readSecret = "read-secret"
+
+	tokenStore := auth.NewTokenStore(map[string]auth.Token{
+		auth.HashToken(readSecret): {
+			Label:      "reader",
+			Paths:      []string{"/private/**"},
+			Operations: []string{"read"},
+		},
+	})
+
+	dir, s := setupVersionedDir(t, map[string]string{
+		"private/secret.md": "# Secret\n",
+		"public/open.md":    "# Open\n",
+	})
+
+	// Write the well-known manifest so we can test it's always accessible.
+	if _, err := s.Write("/.well-known/agent-manifest.md", []byte("# Manifest\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &Handler{
+		ContentDir:    dir,
+		Store:         s,
+		GetTokenStore: func() *auth.TokenStore { return tokenStore },
+		Logger:        discardLogger,
+	}
+
+	tests := []struct {
+		name       string
+		request    string
+		wantStatus string
+	}{
+		{
+			"FETCH protected path without token",
+			"FETCH /private/secret.md\n",
+			protocol.StatusUnauthorized,
+		},
+		{
+			"FETCH protected path with valid token",
+			"FETCH /private/secret.md\n---\nauth: " + readSecret + "\n---\n",
+			protocol.StatusOK,
+		},
+		{
+			"FETCH protected path with wrong token",
+			"FETCH /private/secret.md\n---\nauth: wrong-token\n---\n",
+			protocol.StatusUnauthorized,
+		},
+		{
+			"FETCH public path without token",
+			"FETCH /public/open.md\n",
+			protocol.StatusOK,
+		},
+		{
+			"LIST protected path without token",
+			"LIST /private/\n",
+			protocol.StatusUnauthorized,
+		},
+		{
+			"LIST protected path with valid token",
+			"LIST /private/\n---\nauth: " + readSecret + "\n---\n",
+			protocol.StatusOK,
+		},
+		{
+			"FETCH protected versioned path without token",
+			"FETCH /private/secret.md/v1\n",
+			protocol.StatusUnauthorized,
+		},
+		{
+			"FETCH protected versioned path with valid token",
+			"FETCH /private/secret.md/v1\n---\nauth: " + readSecret + "\n---\n",
+			protocol.StatusOK,
+		},
+		{
+			"VERSIONS protected path without token",
+			"VERSIONS /private/secret.md\n",
+			protocol.StatusUnauthorized,
+		},
+		{
+			"VERSIONS protected path with valid token",
+			"VERSIONS /private/secret.md\n---\nauth: " + readSecret + "\n---\n",
+			protocol.StatusOK,
+		},
+		{
+			"FETCH well-known manifest without token on protected server",
+			"FETCH /.well-known/agent-manifest.md\n",
+			protocol.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := newMockStream(tt.request)
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status != tt.wantStatus {
+				t.Errorf("status: got %q, want %q", resp.Status, tt.wantStatus)
+			}
+		})
+	}
+
+	t.Run("no token store means all reads public", func(t *testing.T) {
+		noAuth := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+		stream := newMockStream("FETCH /private/secret.md\n")
+		noAuth.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+
+	t.Run("FETCH by hash protected path without token", func(t *testing.T) {
+		// First fetch the doc with auth to get its content hash.
+		stream := newMockStream("FETCH /private/secret.md\n---\nauth: " + readSecret + "\n---\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		hash := resp.Metadata["content-hash"]
+		if hash == "" {
+			t.Fatal("no content-hash in response")
+		}
+
+		// Now try fetching by hash without auth — should be denied.
+		stream = newMockStream("FETCH /" + hash + "\n")
+		h.HandleStream(stream)
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusUnauthorized {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusUnauthorized)
+		}
+	})
+
+	t.Run("FETCH by hash protected path with valid token", func(t *testing.T) {
+		stream := newMockStream("FETCH /private/secret.md\n---\nauth: " + readSecret + "\n---\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		hash := resp.Metadata["content-hash"]
+
+		stream = newMockStream("FETCH /" + hash + "\n---\nauth: " + readSecret + "\n---\n")
+		h.HandleStream(stream)
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+}

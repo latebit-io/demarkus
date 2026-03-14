@@ -46,8 +46,9 @@ type tokensFile struct {
 
 // TokenStore holds loaded tokens and provides authorization checks.
 type TokenStore struct {
-	tokens map[string]Token // keyed by hash for fast lookup
-	now    func() time.Time // injectable clock for testing
+	tokens    map[string]Token // keyed by hash for fast lookup
+	readPaths []string         // pre-computed path patterns from tokens with "read" op
+	now       func() time.Time // injectable clock for testing
 }
 
 // Sentinel errors for authorization results.
@@ -97,12 +98,32 @@ func LoadTokens(filePath string) (*TokenStore, error) {
 		}
 		byHash[tok.Hash] = tok
 	}
-	return &TokenStore{tokens: byHash, now: time.Now}, nil
+	return &TokenStore{tokens: byHash, readPaths: collectReadPaths(byHash), now: time.Now}, nil
 }
 
 // NewTokenStore creates a TokenStore from an in-memory token map keyed by hash.
 func NewTokenStore(tokens map[string]Token) *TokenStore {
-	return &TokenStore{tokens: tokens, now: time.Now}
+	return &TokenStore{tokens: tokens, readPaths: collectReadPaths(tokens), now: time.Now}
+}
+
+// collectReadPaths extracts path patterns from all tokens that have "read"
+// in their operations. Called once at load time so RequiresReadAuth avoids
+// iterating tokens on every request.
+func collectReadPaths(tokens map[string]Token) []string {
+	var paths []string
+	for _, tok := range tokens {
+		if hasOperation(tok.Operations, "read") {
+			paths = append(paths, tok.Paths...)
+		}
+	}
+	return paths
+}
+
+// RequiresReadAuth reports whether any read token covers the given path.
+// If true, the caller must authorize the request with a valid read token.
+// If false, the path is public.
+func (ts *TokenStore) RequiresReadAuth(reqPath string) bool {
+	return matchesAnyPath(ts.readPaths, reqPath)
 }
 
 // HashToken returns the SHA-256 hash of a raw token in the format "sha256-<hex>".

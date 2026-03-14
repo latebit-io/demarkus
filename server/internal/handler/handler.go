@@ -101,9 +101,9 @@ func (h *Handler) HandleStream(stream Stream) {
 	case protocol.VerbFetch:
 		h.handleFetch(stream, req)
 	case protocol.VerbList:
-		h.handleList(stream, req.Path)
+		h.handleList(stream, req)
 	case protocol.VerbVersions:
-		h.handleVersions(stream, req.Path)
+		h.handleVersions(stream, req)
 	case protocol.VerbPublish:
 		h.handlePublish(stream, req)
 	case protocol.VerbArchive:
@@ -157,6 +157,13 @@ func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash stri
 		return
 	}
 
+	// Check read auth on the resolved path — knowing a hash must not bypass access control.
+	pathReq := req
+	pathReq.Path = docPath
+	if !h.authorizeRead(w, pathReq) {
+		return
+	}
+
 	doc, err := h.Store.Get(docPath, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -172,16 +179,61 @@ func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash stri
 	h.serveDocument(w, req, doc, docPath)
 }
 
+// authorizeRead checks whether a read request is allowed. Returns true if the
+// request may proceed. If the path is not covered by any read token, access is
+// public and the request proceeds without auth. Returns false and writes an
+// error response if auth is required but missing or invalid.
+func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
+	var ts *auth.TokenStore
+	if h.GetTokenStore != nil {
+		ts = h.GetTokenStore()
+	}
+	if ts == nil {
+		return true
+	}
+	if req.Path == protocol.WellKnownManifestPath {
+		return true
+	}
+	if !ts.RequiresReadAuth(req.Path) {
+		return true
+	}
+	token := req.Metadata["auth"]
+	_, err := ts.Authorize(token, req.Path, "read")
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken), errors.Is(err, auth.ErrTokenExpired):
+			h.logger().Warn("unauthorized", "operation", req.Verb, "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
+		default:
+			h.logger().Warn("not permitted", "operation", req.Verb, "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
+		}
+		return false
+	}
+	return true
+}
+
 func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 	// Check for content-addressed hash: FETCH /sha256-<64hex>
+	// Read auth for hash paths is checked after resolving to a real path.
 	if hash, ok := isHashPath(req.Path); ok {
 		h.handleFetchByHash(w, req, hash)
 		return
 	}
 
-	// Check for path-based version access: FETCH /doc.md/v3
+	// For versioned paths, check read auth on the base path so that
+	// /doc.md/v2 is gated by the same token as /doc.md.
 	if basePath, version := parseVersionPath(req.Path); version > 0 {
+		authReq := req
+		authReq.Path = basePath
+		if !h.authorizeRead(w, authReq) {
+			return
+		}
 		h.handleFetchVersion(w, req, basePath, version)
+		return
+	}
+
+	if !h.authorizeRead(w, req) {
 		return
 	}
 
@@ -265,7 +317,11 @@ func computeContentHash(body string) string {
 	return "sha256-" + hex.EncodeToString(hash[:])
 }
 
-func (h *Handler) handleList(w io.Writer, reqPath string) {
+func (h *Handler) handleList(w io.Writer, req protocol.Request) {
+	if !h.authorizeRead(w, req) {
+		return
+	}
+	reqPath := req.Path
 	if _, ok := isHashPath(reqPath); ok {
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
@@ -389,7 +445,11 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 	h.writeResponse(w, resp)
 }
 
-func (h *Handler) handleVersions(w io.Writer, reqPath string) {
+func (h *Handler) handleVersions(w io.Writer, req protocol.Request) {
+	if !h.authorizeRead(w, req) {
+		return
+	}
+	reqPath := req.Path
 	if h.Store == nil {
 		h.writeError(w, protocol.StatusServerError, "versioning not configured")
 		return
