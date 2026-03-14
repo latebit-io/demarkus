@@ -221,13 +221,19 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	if !h.authorizeRead(w, req) {
+	// For versioned paths, check read auth on the base path so that
+	// /doc.md/v2 is gated by the same token as /doc.md.
+	if basePath, version := parseVersionPath(req.Path); version > 0 {
+		authReq := req
+		authReq.Path = basePath
+		if !h.authorizeRead(w, authReq) {
+			return
+		}
+		h.handleFetchVersion(w, req, basePath, version)
 		return
 	}
 
-	// Check for path-based version access: FETCH /doc.md/v3
-	if basePath, version := parseVersionPath(req.Path); version > 0 {
-		h.handleFetchVersion(w, req, basePath, version)
+	if !h.authorizeRead(w, req) {
 		return
 	}
 

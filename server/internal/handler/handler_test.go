@@ -2102,6 +2102,16 @@ func TestReadAuth(t *testing.T) {
 			protocol.StatusOK,
 		},
 		{
+			"FETCH protected versioned path without token",
+			"FETCH /private/secret.md/v1\n",
+			protocol.StatusUnauthorized,
+		},
+		{
+			"FETCH protected versioned path with valid token",
+			"FETCH /private/secret.md/v1\n---\nauth: " + readSecret + "\n---\n",
+			protocol.StatusOK,
+		},
+		{
 			"VERSIONS protected path without token",
 			"VERSIONS /private/secret.md\n",
 			protocol.StatusUnauthorized,
