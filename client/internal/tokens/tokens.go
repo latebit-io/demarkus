@@ -64,8 +64,35 @@ func Load(path string) (*Store, error) {
 	return s, nil
 }
 
+// LoadDefault loads tokens from the default path (~/.mark/tokens.toml).
+// Returns an empty store if the file is missing or unreadable.
+func LoadDefault() *Store {
+	s, err := Load(DefaultPath())
+	if err != nil || s == nil {
+		return &Store{tokens: make(map[string]entry)}
+	}
+	return s
+}
+
+// Resolve returns the auth token for a host using a cascading lookup:
+// explicit value (flag/caller) > DEMARKUS_AUTH env var > stored token.
+// The store can be nil (skips stored token lookup).
+func Resolve(explicit, host string, store *Store) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := os.Getenv("DEMARKUS_AUTH"); env != "" {
+		return env
+	}
+	return store.Get(host)
+}
+
 // Get returns the raw token for the given host:port, or empty string if not found.
+// Safe to call on a nil Store.
 func (s *Store) Get(host string) string {
+	if s == nil {
+		return ""
+	}
 	e, ok := s.tokens[host]
 	if !ok {
 		return ""

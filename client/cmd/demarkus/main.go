@@ -84,7 +84,8 @@ func requestMain() {
 		opts.Cache = cache.New(*cacheDir)
 	}
 
-	token := resolveAuthToken(*authToken, host)
+	ts := tokens.LoadDefault()
+	token := tokens.Resolve(*authToken, host, ts)
 	reqBody := resolveBody(*verb, *body)
 	if *verb == protocol.VerbAppend {
 		if reqBody == "" {
@@ -101,11 +102,11 @@ func requestMain() {
 	var result fetch.Result
 	switch *verb {
 	case protocol.VerbFetch:
-		result, err = client.Fetch(host, path)
+		result, err = client.Fetch(host, path, token)
 	case protocol.VerbList:
-		result, err = client.List(host, path)
+		result, err = client.List(host, path, token)
 	case protocol.VerbVersions:
-		result, err = client.Versions(host, path)
+		result, err = client.Versions(host, path, token)
 	case protocol.VerbPublish:
 		result, err = client.Publish(host, path, reqBody, token, *expectedVersion, nil)
 	case protocol.VerbArchive:
@@ -160,16 +161,7 @@ func editMain(args []string) {
 		editorFields = []string{"vi"}
 	}
 
-	// Resolve auth token: flag > env > stored token.
-	token := *authToken
-	if token == "" {
-		token = os.Getenv("DEMARKUS_AUTH")
-	}
-	if token == "" {
-		if ts, err := tokens.Load(tokens.DefaultPath()); err == nil {
-			token = ts.Get(host)
-		}
-	}
+	token := tokens.Resolve(*authToken, host, tokens.LoadDefault())
 
 	opts := fetch.Options{Insecure: *insecure}
 	if *useCache {
@@ -183,7 +175,7 @@ func editMain(args []string) {
 	// a false create-only conflict on an existing document.
 	var original string
 	fetchedVersion := -1
-	result, err := client.Fetch(host, path)
+	result, err := client.Fetch(host, path, token)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -315,6 +307,8 @@ func graphMain(args []string) {
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
+	ts := tokens.LoadDefault()
+
 	gs, err := graphstore.Load(graphstore.DefaultPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: graph store unavailable, results will not be persisted: %v\n", err)
@@ -323,7 +317,7 @@ func graphMain(args []string) {
 	fmt.Printf("Crawling %s (depth %d)...\n", rawURL, *depth)
 
 	g, err := gs.CrawlAndPersist(context.Background(), rawURL, func(host, path string) (string, string, string, error) {
-		r, fetchErr := client.Fetch(host, path)
+		r, fetchErr := client.Fetch(host, path, ts.Get(host))
 		if fetchErr != nil {
 			return "", "", "", fetchErr
 		}
@@ -413,7 +407,7 @@ func infoMain(args []string) {
 	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 	defer client.Close()
 
-	result, err := client.Fetch(host, protocol.WellKnownManifestPath)
+	result, err := client.Fetch(host, protocol.WellKnownManifestPath, tokens.Resolve("", host, tokens.LoadDefault()))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -521,7 +515,8 @@ func bookmarkMain(args []string) {
 		title := path
 		client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 		defer client.Close()
-		result, err := client.Fetch(host, path)
+
+		result, err := client.Fetch(host, path, tokens.Resolve("", host, tokens.LoadDefault()))
 		if err == nil && result.Response.Status == protocol.StatusOK {
 			if t := links.ExtractTitle(result.Response.Body); t != "" {
 				title = t
@@ -569,20 +564,6 @@ func bookmarkMain(args []string) {
 	default:
 		log.Fatalf("unknown bookmark command: %s", args[0])
 	}
-}
-
-// resolveAuthToken returns the auth token from flag, env, or stored tokens.
-func resolveAuthToken(flagValue, host string) string {
-	if flagValue != "" {
-		return flagValue
-	}
-	if env := os.Getenv("DEMARKUS_AUTH"); env != "" {
-		return env
-	}
-	if ts, err := tokens.Load(tokens.DefaultPath()); err == nil {
-		return ts.Get(host)
-	}
-	return ""
 }
 
 // resolveBody returns the request body from the flag or stdin for write verbs.

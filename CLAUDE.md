@@ -14,6 +14,7 @@ All project context — architecture, patterns, build commands, conventions, deb
 ### During Work
 
 - Update soul pages when learning something new
+- Use natural language, avoid too many uses of "-", for bullet points its still preferred 
 - Use `mark_append` for journal entries and incremental notes
 - Always use `expected_version` from a prior fetch when publishing or appending
 

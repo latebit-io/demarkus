@@ -93,18 +93,24 @@ func (c *Client) Close() {
 }
 
 // Fetch retrieves a document from a Mark Protocol server.
-func (c *Client) Fetch(host, path string) (Result, error) {
-	return c.cachedRequest(host, path, protocol.VerbFetch)
+// If token is non-empty, it is sent as the auth metadata for read access to private paths.
+func (c *Client) Fetch(host, path, token string) (Result, error) {
+	return c.cachedRequest(host, path, token, protocol.VerbFetch)
 }
 
 // List retrieves a directory listing from a Mark Protocol server.
-func (c *Client) List(host, path string) (Result, error) {
-	return c.cachedRequest(host, path, protocol.VerbList)
+// If token is non-empty, it is sent as the auth metadata for read access to private paths.
+func (c *Client) List(host, path, token string) (Result, error) {
+	return c.cachedRequest(host, path, token, protocol.VerbList)
 }
 
 // Versions retrieves the version history of a document.
-func (c *Client) Versions(host, path string) (Result, error) {
+// If token is non-empty, it is sent as the auth metadata for read access to private paths.
+func (c *Client) Versions(host, path, token string) (Result, error) {
 	req := protocol.Request{Verb: protocol.VerbVersions, Path: path, Metadata: make(map[string]string)}
+	if token != "" {
+		req.Metadata["auth"] = token
+	}
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConn(conn, req)
 	})
@@ -163,9 +169,13 @@ func (c *Client) Archive(host, path, token string) (Result, error) {
 }
 
 // cachedRequest handles FETCH and LIST with conditional caching.
-func (c *Client) cachedRequest(host, path, verb string) (Result, error) {
+func (c *Client) cachedRequest(host, path, token, verb string) (Result, error) {
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
 		req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
+
+		if token != "" {
+			req.Metadata["auth"] = token
+		}
 
 		var cached *cache.Entry
 		if c.opts.Cache != nil {

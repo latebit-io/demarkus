@@ -143,6 +143,57 @@ func TestHosts(t *testing.T) {
 	}
 }
 
+func TestResolve(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tokens.toml")
+	s, _ := Load(path)
+	_ = s.Set("localhost:6309", "stored-token")
+
+	tests := []struct {
+		name     string
+		explicit string
+		host     string
+		envVal   string
+		store    *Store
+		want     string
+	}{
+		{"explicit wins", "flag-token", "localhost:6309", "", s, "flag-token"},
+		{"env wins over store", "", "localhost:6309", "env-token", s, "env-token"},
+		{"store fallback", "", "localhost:6309", "", s, "stored-token"},
+		{"nil store", "", "localhost:6309", "", nil, ""},
+		{"unknown host", "", "unknown:6309", "", s, ""},
+		{"explicit wins even with env", "flag-token", "localhost:6309", "env-token", s, "flag-token"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envVal != "" {
+				t.Setenv("DEMARKUS_AUTH", tt.envVal)
+			}
+			got := Resolve(tt.explicit, tt.host, tt.store)
+			if got != tt.want {
+				t.Errorf("Resolve() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadDefault(t *testing.T) {
+	s := LoadDefault()
+	if s == nil {
+		t.Fatal("LoadDefault returned nil")
+	}
+	if got := s.Get("nonexistent:6309"); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+func TestGet_NilStore(t *testing.T) {
+	var s *Store
+	if got := s.Get("localhost:6309"); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
 func TestSave_CreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "deep", "tokens.toml")

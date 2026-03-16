@@ -10,6 +10,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
 	"github.com/latebit/demarkus/client/internal/graphstore"
+	"github.com/latebit/demarkus/client/internal/tokens"
 )
 
 // viewMode distinguishes between document reading and graph exploration.
@@ -56,7 +57,7 @@ func (m model) startCrawl(url string) tea.Cmd {
 	gs := m.graphStore
 	return func() tea.Msg {
 		g, err := gs.CrawlAndPersist(context.Background(), url, func(host, path string) (string, string, string, error) {
-			r, fetchErr := client.Fetch(host, path)
+			r, fetchErr := client.Fetch(host, path, tokens.Resolve("", host, tokens.LoadDefault()))
 			if fetchErr != nil {
 				return "", "", "", fetchErr
 			}
