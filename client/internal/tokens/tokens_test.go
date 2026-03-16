@@ -146,8 +146,13 @@ func TestHosts(t *testing.T) {
 func TestResolve(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tokens.toml")
-	s, _ := Load(path)
-	_ = s.Set("localhost:6309", "stored-token")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := s.Set("localhost:6309", "stored-token"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
 
 	tests := []struct {
 		name     string

@@ -63,12 +63,16 @@ demarkus --insecure -X PUBLISH -auth <raw-token> mark://localhost:6309/hello.md 
 ```bash
 # Explicit token
 demarkus --insecure -auth <raw-token> mark://localhost:6309/internal/doc.md
+```
 
+```bash
 # Via environment variable
 export DEMARKUS_AUTH=<raw-token>
 demarkus --insecure mark://localhost:6309/internal/doc.md
+```
 
-# Via stored token (see below) — no flags needed
+```bash
+# Via stored token (see below) — no flags or env needed
 demarkus --insecure mark://localhost:6309/internal/doc.md
 ```
 
