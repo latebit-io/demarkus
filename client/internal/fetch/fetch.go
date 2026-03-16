@@ -177,8 +177,12 @@ func (c *Client) cachedRequest(host, path, token, verb string) (Result, error) {
 			req.Metadata["auth"] = token
 		}
 
+		// Skip cache for authenticated requests to avoid persisting
+		// private content to disk.
+		useCache := c.opts.Cache != nil && token == ""
+
 		var cached *cache.Entry
-		if c.opts.Cache != nil {
+		if useCache {
 			cached, _ = c.opts.Cache.Get(host, path, verb)
 			if cached != nil {
 				if etag := cached.Response.Metadata["etag"]; etag != "" {
@@ -199,7 +203,7 @@ func (c *Client) cachedRequest(host, path, token, verb string) (Result, error) {
 			return Result{Response: cached.Response, FromCache: true}, nil
 		}
 
-		if c.opts.Cache != nil && result.Response.Status == protocol.StatusOK {
+		if useCache && result.Response.Status == protocol.StatusOK {
 			if err := c.opts.Cache.Put(host, path, verb, result.Response); err != nil {
 				log.Printf("[WARN] cache write: %v", err)
 			}

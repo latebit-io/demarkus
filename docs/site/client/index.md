@@ -83,7 +83,7 @@ Available tools include `mark_fetch`, `mark_list`, `mark_publish`, `mark_append`
 
 ## Accessing Private Servers
 
-All three clients support read authentication for servers with protected paths. Tokens are resolved in order: `-auth` flag > `DEMARKUS_AUTH` env var > stored token from `~/.mark/tokens.toml`.
+All three clients support read authentication for servers with protected paths. Tokens are resolved in this order: explicit token flag (CLI: `-auth`, MCP: `-token`; TUI has no token flag) > `DEMARKUS_AUTH` env var > stored token from `~/.mark/tokens.toml`.
 
 ### Store a token once
 

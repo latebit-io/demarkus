@@ -67,9 +67,10 @@ func Load(path string) (*Store, error) {
 // LoadDefault loads tokens from the default path (~/.mark/tokens.toml).
 // Returns an empty store if the file is missing or unreadable.
 func LoadDefault() *Store {
-	s, err := Load(DefaultPath())
+	path := DefaultPath()
+	s, err := Load(path)
 	if err != nil || s == nil {
-		return &Store{tokens: make(map[string]entry)}
+		return &Store{path: path, tokens: make(map[string]entry)}
 	}
 	return s
 }
