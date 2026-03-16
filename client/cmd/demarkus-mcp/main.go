@@ -438,7 +438,7 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 
 	token := h.resolveToken(host)
 	if token == "" {
-		return mcp.NewToolResultError("publish requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("publish requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	expectedVersion, err := req.RequireInt("expected_version")
@@ -467,7 +467,7 @@ func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.
 
 	token := h.resolveToken(host)
 	if token == "" {
-		return mcp.NewToolResultError("archive requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("archive requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	result, err := h.client.Archive(host, path, token)
@@ -496,7 +496,7 @@ func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp
 
 	token := h.resolveToken(host)
 	if token == "" {
-		return mcp.NewToolResultError("append requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("append requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	expectedVersion := req.GetInt("expected_version", 0)
@@ -728,7 +728,7 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 	token := h.resolveToken(targetHost)
 	if token == "" {
-		return mcp.NewToolResultError("publishing requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("publishing requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	// Merge with existing index if updating.
@@ -992,7 +992,7 @@ func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest)
 
 	token := h.resolveToken(host)
 	if token == "" {
-		return mcp.NewToolResultError("publish requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("publish requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	expectedVersion, err := req.RequireInt("expected_version")
