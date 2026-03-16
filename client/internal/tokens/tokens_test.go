@@ -166,6 +166,7 @@ func TestResolve(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DEMARKUS_AUTH", "")
 			if tt.envVal != "" {
 				t.Setenv("DEMARKUS_AUTH", tt.envVal)
 			}
@@ -178,6 +179,7 @@ func TestResolve(t *testing.T) {
 }
 
 func TestLoadDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	s := LoadDefault()
 	if s == nil {
 		t.Fatal("LoadDefault returned nil")

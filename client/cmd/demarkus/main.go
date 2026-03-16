@@ -47,7 +47,7 @@ func main() {
 func requestMain() {
 	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)")
 	body := flag.String("body", "", "request body (for PUBLISH/APPEND); reads stdin if omitted")
-	authToken := flag.String("auth", "", "auth token for PUBLISH/ARCHIVE/APPEND requests (env: DEMARKUS_AUTH)")
+	authToken := flag.String("auth", "", "auth token for all requests including reads on private paths (env: DEMARKUS_AUTH)")
 	expectedVersion := flag.Int("expected-version", -1, "version check: -1 skip (default), 0 create-only, >0 require match; required (>0) for APPEND")
 	verbose := flag.Bool("v", false, "show status and metadata header before body")
 	noCache := flag.Bool("no-cache", false, "disable caching")
@@ -317,7 +317,7 @@ func graphMain(args []string) {
 	fmt.Printf("Crawling %s (depth %d)...\n", rawURL, *depth)
 
 	g, err := gs.CrawlAndPersist(context.Background(), rawURL, func(host, path string) (string, string, string, error) {
-		r, fetchErr := client.Fetch(host, path, ts.Get(host))
+		r, fetchErr := client.Fetch(host, path, tokens.Resolve("", host, ts))
 		if fetchErr != nil {
 			return "", "", "", fetchErr
 		}
