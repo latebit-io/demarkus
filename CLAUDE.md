@@ -29,6 +29,7 @@ All project context — architecture, patterns, build commands, conventions, deb
 /index.md          — Hub page, links to all sections
 /architecture.md   — System design, module boundaries, key decisions
 /patterns.md       — Code patterns, build commands, conventions, workflow
+/guidelines.md     — Hard rules for code quality, must read before writing code
 /debugging.md      — Lessons from bugs and investigations
 /roadmap.md        — What's done, what's next
 /journal.md        — Session notes and evolution log

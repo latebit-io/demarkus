@@ -50,7 +50,7 @@ Paths not covered by any read token remain public. The well-known manifest (`/.w
 
 ### Use the token from the client
 
-Tokens work for **all operations** — reads (FETCH, LIST, VERSIONS) and writes (PUBLISH, APPEND, ARCHIVE). Token resolution follows this precedence: explicit token flag (`-auth` for the CLI, `-token` for MCP) > `DEMARKUS_AUTH` env var > stored token for the host. The TUI has no token flag and relies on `DEMARKUS_AUTH` and stored tokens.
+Clients send a token with any operation — reads (FETCH, LIST, VERSIONS) and writes (PUBLISH, APPEND, ARCHIVE) — but the server only authorizes operations permitted by that token's configured capabilities (`ops`). Token resolution follows this precedence: explicit token flag (`-auth` for the CLI, `-token` for MCP) > `DEMARKUS_AUTH` env var > stored token for the host. The TUI has no token flag and relies on `DEMARKUS_AUTH` and stored tokens.
 
 #### Writing to a server
 
