@@ -49,7 +49,7 @@ func main() {
 	if gsErr != nil {
 		log.Printf("warning: graph store unavailable: %v", gsErr)
 	}
-	h := &handler{client: client, defaultHost: *defaultHost, token: *token, tokenStore: tokens.LoadDefault(), graphStore: gs}
+	h := &handler{client: client, defaultHost: *defaultHost, token: *token, graphStore: gs}
 	s.AddTool(markFetchTool(*defaultHost), h.markFetch)
 	s.AddTool(markListTool(*defaultHost), h.markList)
 	s.AddTool(markGraphTool(*defaultHost), h.markGraph)
@@ -83,14 +83,15 @@ type handler struct {
 	client      markClient
 	defaultHost string
 	token       string
-	tokenStore  *tokens.Store
 	graphStore  *graphstore.Store
 }
 
 // resolveToken returns the auth token for a host using the shared cascade:
 // explicit -token flag > DEMARKUS_AUTH env var > stored token for host.
+// Reloads the token store on each call so changes on disk are picked up
+// without restarting the MCP server.
 func (h *handler) resolveToken(host string) string {
-	return tokens.Resolve(h.token, host, h.tokenStore)
+	return tokens.Resolve(h.token, host, tokens.LoadDefault())
 }
 
 // resolveURL parses a mark:// URL or bare path (when -host is set) into host and path.
