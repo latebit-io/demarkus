@@ -551,7 +551,7 @@ func (h *handler) markDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp
 		}
 	}
 
-	result, err := h.client.Fetch(host, path, h.resolveToken(host))
+	result, err := h.client.Fetch(host, path, "")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("discover failed: %v", err)), nil
 	}
@@ -649,14 +649,14 @@ var errIndexTruncated = errors.New("document limit reached, index is truncated")
 // Returns warnings, a tool error result (if blocked), or nil to proceed.
 func (h *handler) checkManifests(sourceHost, targetHost string, dryRun, force bool) (warnings []string, block *mcp.CallToolResult) {
 	// Check source manifest (warn only).
-	srcManifest, err := h.client.Fetch(sourceHost, protocol.WellKnownManifestPath, h.resolveToken(sourceHost))
+	srcManifest, err := h.client.Fetch(sourceHost, protocol.WellKnownManifestPath, "")
 	if err != nil || srcManifest.Response.Status != protocol.StatusOK {
 		warnings = append(warnings, "warning: source server has no agent manifest")
 	}
 
 	// Check target manifest (block unless force or dry run).
 	if !dryRun {
-		tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath, h.resolveToken(targetHost))
+		tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath, "")
 		if err != nil || tgtManifest.Response.Status != protocol.StatusOK {
 			if !force {
 				return warnings, mcp.NewToolResultError(

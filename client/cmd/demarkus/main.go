@@ -407,7 +407,7 @@ func infoMain(args []string) {
 	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 	defer client.Close()
 
-	result, err := client.Fetch(host, protocol.WellKnownManifestPath, tokens.Resolve("", host, tokens.LoadDefault()))
+	result, err := client.Fetch(host, protocol.WellKnownManifestPath, "")
 	if err != nil {
 		log.Fatal(err)
 	}
