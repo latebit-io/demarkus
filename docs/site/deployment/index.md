@@ -83,6 +83,29 @@ demarkus-server
 sudo ufw allow 6309/udp
 ```
 
+### Redirect UDP 443 to 6309
+
+Some networks block non-standard UDP ports. Since QUIC on UDP 443 is widely permitted (browsers use it for HTTP/3), you can redirect it to the Demarkus port so clients can connect on either:
+
+```bash
+sudo iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-port 6309
+```
+
+To make this persist across reboots:
+
+```bash
+sudo apt install iptables-persistent
+sudo netfilter-persistent save
+```
+
+Clients can then connect on port 443:
+
+```
+demarkus mark://yourdomain.com:443/index.md
+```
+
+This works alongside a TCP web server on port 443 — UDP and TCP don't conflict.
+
 ## Auto-Renew Certificates
 
 Zero‑downtime reloads can be done with `SIGHUP`:
