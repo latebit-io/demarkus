@@ -59,6 +59,34 @@ func TestEditorCommand(t *testing.T) {
 			wantName: "nvim",
 			wantArgs: []string{"--cmd", "set ft=markdown", "/tmp/doc.md"},
 		},
+		{
+			name:     "gui editor gets --wait injected",
+			fields:   []string{"zed"},
+			file:     "/tmp/doc.md",
+			wantName: "zed",
+			wantArgs: []string{"--wait", "/tmp/doc.md"},
+		},
+		{
+			name:     "gui editor already has --wait",
+			fields:   []string{"zed", "--wait"},
+			file:     "/tmp/doc.md",
+			wantName: "zed",
+			wantArgs: []string{"--wait", "/tmp/doc.md"},
+		},
+		{
+			name:     "gui editor already has -w",
+			fields:   []string{"code", "-w"},
+			file:     "/tmp/doc.md",
+			wantName: "code",
+			wantArgs: []string{"-w", "/tmp/doc.md"},
+		},
+		{
+			name:     "full path gui editor gets --wait",
+			fields:   []string{"/usr/bin/zed"},
+			file:     "/tmp/doc.md",
+			wantName: "/usr/bin/zed",
+			wantArgs: []string{"--wait", "/tmp/doc.md"},
+		},
 	}
 
 	for _, tt := range tests {
