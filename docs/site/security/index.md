@@ -81,13 +81,17 @@ Set `ReadWritePaths` to match your `DEMARKUS_ROOT`. The server only reads the to
 
 ## Write Isolation (Optional)
 
-For maximum lockdown, separate read and write access:
+For maximum lockdown, restrict writes to localhost using firewall rules:
 
-1. Bind the server to `127.0.0.1` — only local clients can connect
-2. Publish content locally (CI/CD, scripts, or the `demarkus` CLI on the same machine)
-3. Use iptables to redirect public traffic on UDP 443 to the server port:
+1. Block external access to the Demarkus port
+2. Redirect public traffic on UDP 443 to the server port
+3. Publish content locally (CI/CD, scripts, or the `demarkus` CLI on the same machine)
 
 ```bash
+# Block external writes — only localhost can reach port 6309
+sudo iptables -A INPUT -p udp --dport 6309 ! -s 127.0.0.1 -j DROP
+
+# Expose read access publicly on UDP 443
 sudo iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-port 6309
 ```
 
