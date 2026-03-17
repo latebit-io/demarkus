@@ -598,7 +598,7 @@ setup_systemd() {
   log_step "Setting up systemd service"
 
   # Ensure content_root is absolute for both DEMARKUS_ROOT and ReadWritePaths
-  content_root=$(readlink -f "$content_root")
+  content_root=$(readlink -f "$content_root" 2>/dev/null || echo "$content_root")
 
   local env_lines="Environment=DEMARKUS_ROOT=${content_root}
 Environment=DEMARKUS_TOKENS=${tokens_file}"
@@ -1309,7 +1309,7 @@ _do_update_inner() {
         local apply_hardening="n"
         if [ -t 0 ] || ( : </dev/tty ) 2>/dev/null; then
           printf "Apply security hardening to systemd unit? [Y/n]: " >/dev/tty
-          read -r apply_hardening </dev/tty
+          read -r apply_hardening </dev/tty || apply_hardening=""
           apply_hardening="${apply_hardening:-Y}"
         else
           log_info "Non-interactive mode — skipping. Add hardening manually (see https://latebit-io.github.io/demarkus/security/)."
@@ -1337,13 +1337,13 @@ RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 "
             # Remove blank lines from conditional omission, write via temp file
-            hardening=$(echo "$hardening" | grep -v '^$')
+            hardening=$(echo "$hardening" | grep -v '^[[:space:]]*$')
             local tmpfile
             tmpfile=$(mktemp)
             $SUDO awk -v block="$hardening" '/^\[Install\]/{print block; print ""}1' "$unit" > "$tmpfile"
             $SUDO mv "$tmpfile" "$unit"
             $SUDO systemctl daemon-reload
-            $SUDO systemctl restart demarkus 2>/dev/null
+            $SUDO systemctl restart demarkus 2>/dev/null || true
             # Verify the service started successfully
             sleep 2
             if $SUDO systemctl is-active --quiet demarkus; then
