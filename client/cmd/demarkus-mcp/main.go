@@ -708,7 +708,7 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	// Crawl source server.
 	var entries []index.Entry
 	sourceScheme := "mark://" + sourceHost
-	if err := h.walkDir(sourceHost, sourcePath, sourceScheme, &entries); err != nil && !errors.Is(err, errIndexTruncated) {
+	if err := h.walkDir(sourceHost, sourcePath, sourceScheme, &entries, h.resolveToken(sourceHost)); err != nil && !errors.Is(err, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
 	} else if errors.Is(err, errIndexTruncated) {
 		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
@@ -762,12 +762,13 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 }
 
 // walkDir recursively lists and fetches documents from a server, collecting content hashes.
-func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.Entry) error {
+// The token is resolved once at the call site and threaded through recursion.
+func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.Entry, token string) error {
 	if len(*entries) >= maxIndexDocuments {
 		return errIndexTruncated
 	}
 
-	result, err := h.client.List(host, dirPath, h.resolveToken(host))
+	result, err := h.client.List(host, dirPath, token)
 	if err != nil {
 		return fmt.Errorf("list %s: %w", dirPath, err)
 	}
@@ -788,14 +789,14 @@ func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.E
 
 		if strings.HasSuffix(dest, "/") {
 			// Directory — recurse.
-			if err := h.walkDir(host, fullPath, sourceScheme, entries); err != nil {
+			if err := h.walkDir(host, fullPath, sourceScheme, entries, token); err != nil {
 				return err
 			}
 			continue
 		}
 
 		// File — fetch and collect content-hash.
-		doc, err := h.client.Fetch(host, fullPath, h.resolveToken(host))
+		doc, err := h.client.Fetch(host, fullPath, token)
 		if err != nil {
 			continue // skip unreachable documents
 		}

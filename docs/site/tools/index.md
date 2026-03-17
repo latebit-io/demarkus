@@ -50,7 +50,7 @@ Paths not covered by any read token remain public. The well-known manifest (`/.w
 
 ### Use the token from the client
 
-Clients send a token with any operation — reads (FETCH, LIST, VERSIONS) and writes (PUBLISH, APPEND, ARCHIVE) — but the server only authorizes operations permitted by that token's configured capabilities (`ops`). Token resolution follows this precedence: explicit token flag (`-auth` for the CLI, `-token` for MCP) > `DEMARKUS_AUTH` env var > stored token for the host. The TUI has no token flag and relies on `DEMARKUS_AUTH` and stored tokens.
+When accessing protected paths, clients send a token for reads (FETCH, LIST, VERSIONS) and writes (PUBLISH, APPEND, ARCHIVE). Well-known public endpoints like `/.well-known/agent-manifest.md` are always fetched without auth. The server only authorizes operations permitted by that token's configured capabilities (`ops`). Token resolution follows this precedence: explicit token flag (`-auth` for the CLI, `-token` for MCP) > `DEMARKUS_AUTH` env var > stored token for the host. The TUI has no token flag and relies on `DEMARKUS_AUTH` and stored tokens.
 
 #### Writing to a server
 
@@ -88,7 +88,7 @@ demarkus-mcp -host mark://localhost:6309 -token <raw-token> -insecure
 
 ### Client-side token management
 
-The CLI can store tokens per-server so you don't need to pass `-auth` every time. Stored tokens are used automatically by all three clients (CLI, TUI, MCP) for both reads and writes.
+The CLI can store tokens per-server so you don't need to pass `-auth` every time. Stored tokens are used automatically by all three clients (CLI, TUI, MCP) for protected reads and writes. Public paths remain accessible without a token.
 
 ```bash
 # Store a token for a server
