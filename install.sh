@@ -606,6 +606,15 @@ Environment=DEMARKUS_TLS_CERT=${cert_path}
 Environment=DEMARKUS_TLS_KEY=${key_path}"
   fi
 
+  # Ensure content_root is absolute for systemd ReadWritePaths
+  content_root=$(readlink -f "$content_root")
+
+  # ProtectHome=yes makes /home inaccessible — skip it if content root is there
+  local protect_home="ProtectHome=yes"
+  case "$content_root" in
+    /home/*|/root/*|/run/user/*) protect_home="" ;;
+  esac
+
   cat > /etc/systemd/system/demarkus.service << EOF
 [Unit]
 Description=Demarkus Mark Protocol Server
@@ -624,7 +633,7 @@ ProtectSystem=strict
 ReadWritePaths=${content_root}
 PrivateTmp=yes
 NoNewPrivileges=yes
-ProtectHome=yes
+${protect_home}
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
@@ -1306,22 +1315,32 @@ _do_update_inner() {
         fi
         case "$apply_hardening" in
           [Yy]*)
+            # ProtectHome=yes makes /home inaccessible — skip it if content root is there
+            local protect_home="ProtectHome=yes"
+            case "$content_root" in
+              /home/*|/root/*|/run/user/*) protect_home="" ;;
+            esac
             # Back up the existing unit before modifying
             $SUDO cp "$unit" "${unit}.bak"
-            # Insert hardening directives before [Install] section
-            $SUDO sed -i '/^\[Install\]/i \
-# Security hardening — sandbox the server process\
-ProtectSystem=strict\
-ReadWritePaths='"$content_root"'\
-PrivateTmp=yes\
-NoNewPrivileges=yes\
-ProtectHome=yes\
-ProtectKernelTunables=yes\
-ProtectKernelModules=yes\
-ProtectControlGroups=yes\
-RestrictNamespaces=yes\
-RestrictSUIDSGID=yes\
-' "$unit"
+            # Build hardening block and insert before [Install]
+            local hardening="# Security hardening — sandbox the server process
+ProtectSystem=strict
+ReadWritePaths=${content_root}
+PrivateTmp=yes
+NoNewPrivileges=yes
+${protect_home}
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+"
+            # Remove blank lines from conditional omission, write via temp file
+            hardening=$(echo "$hardening" | grep -v '^$')
+            local tmpfile
+            tmpfile=$(mktemp)
+            $SUDO awk -v block="$hardening" '/^\[Install\]/{print block; print ""}1' "$unit" > "$tmpfile"
+            $SUDO mv "$tmpfile" "$unit"
             $SUDO systemctl daemon-reload
             $SUDO systemctl restart demarkus 2>/dev/null
             # Verify the service started successfully

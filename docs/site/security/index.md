@@ -50,10 +50,11 @@ If an attacker gains control of the server process, they can:
 
 With systemd hardening (see below), they **cannot**:
 
-- Read `/home`, `/etc`, or anything outside the content root
+- Access `/home` (`ProtectHome=yes` makes it inaccessible)
+- Write to `/etc`, `/usr`, or anywhere outside the content root (mounted read-only)
 - Escalate privileges
 - Load kernel modules
-- Access `/tmp` (private mount)
+- See the host `/tmp` (private mount)
 - Create setuid/setgid binaries
 
 ## Systemd Hardening
