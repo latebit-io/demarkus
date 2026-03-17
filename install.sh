@@ -612,7 +612,7 @@ Environment=DEMARKUS_TLS_KEY=${key_path}"
   # ProtectHome=yes makes /home inaccessible — skip it if content root is there
   local protect_home="ProtectHome=yes"
   case "$content_root" in
-    /home/*|/root/*|/run/user/*) protect_home="" ;;
+    /home|/home/*|/root|/root/*|/run/user|/run/user/*) protect_home="" ;;
   esac
 
   cat > /etc/systemd/system/demarkus.service << EOF
@@ -1300,7 +1300,7 @@ _do_update_inner() {
     local unit="/etc/systemd/system/demarkus.service"
     if $SUDO test -f "$unit" && ! $SUDO grep -q 'ProtectSystem' "$unit"; then
       local content_root
-      content_root=$($SUDO grep 'DEMARKUS_ROOT=' "$unit" 2>/dev/null \
+      content_root=$($SUDO grep -m1 'DEMARKUS_ROOT=' "$unit" 2>/dev/null \
         | sed 's/.*DEMARKUS_ROOT=//' || true)
       content_root=$(readlink -f "$content_root" 2>/dev/null || echo "$content_root")
       if [ -n "$content_root" ]; then
@@ -1319,7 +1319,7 @@ _do_update_inner() {
             # ProtectHome=yes makes /home inaccessible — skip it if content root is there
             local protect_home="ProtectHome=yes"
             case "$content_root" in
-              /home/*|/root/*|/run/user/*) protect_home="" ;;
+              /home|/home/*|/root|/root/*|/run/user|/run/user/*) protect_home="" ;;
             esac
             # Back up the existing unit before modifying
             $SUDO cp "$unit" "${unit}.bak"
