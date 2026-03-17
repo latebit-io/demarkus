@@ -139,9 +139,23 @@ Environment=DEMARKUS_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
 Restart=on-failure
 RestartSec=5
 
+# Security hardening — sandbox the server process
+ProtectSystem=strict
+ReadWritePaths=/srv/site
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
 [Install]
 WantedBy=multi-user.target
 ```
+
+These directives make the entire filesystem read-only except the content directory. The kernel enforces the restrictions — even a fully compromised server process cannot read `/home`, escalate privileges, or write outside `/srv/site`. See [Security Model](../security/index.md) for details.
 
 Enable and start:
 

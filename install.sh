@@ -619,6 +619,18 @@ ${env_lines}
 Restart=on-failure
 RestartSec=5
 
+# Security hardening — sandbox the server process
+ProtectSystem=strict
+ReadWritePaths=${content_root}
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -1270,6 +1282,64 @@ _do_update_inner() {
       else
         launchctl unload "$plist" 2>/dev/null || true
         launchctl load "$plist" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  # Harden existing systemd unit if it lacks security directives
+  if [ "$PLATFORM" = "linux" ]; then
+    local unit="/etc/systemd/system/demarkus.service"
+    if $SUDO test -f "$unit" && ! $SUDO grep -q 'ProtectSystem' "$unit"; then
+      local content_root
+      content_root=$($SUDO grep 'DEMARKUS_ROOT=' "$unit" 2>/dev/null \
+        | sed 's/.*DEMARKUS_ROOT=//' || true)
+      if [ -n "$content_root" ]; then
+        log_warn "Systemd unit is missing security hardening (ProtectSystem, NoNewPrivileges, etc.)"
+        log_warn "This sandboxes the server to only write to ${content_root}"
+        local apply_hardening="n"
+        if [ -t 0 ] || ( : </dev/tty ) 2>/dev/null; then
+          printf "Apply security hardening to systemd unit? [Y/n]: " >/dev/tty
+          read -r apply_hardening </dev/tty
+          apply_hardening="${apply_hardening:-Y}"
+        else
+          log_info "Non-interactive mode — skipping. Add hardening manually (see docs/site/security/)."
+        fi
+        case "$apply_hardening" in
+          [Yy]*)
+            # Back up the existing unit before modifying
+            $SUDO cp "$unit" "${unit}.bak"
+            # Insert hardening directives before [Install] section
+            $SUDO sed -i '/^\[Install\]/i \
+# Security hardening — sandbox the server process\
+ProtectSystem=strict\
+ReadWritePaths='"$content_root"'\
+PrivateTmp=yes\
+NoNewPrivileges=yes\
+ProtectHome=yes\
+ProtectKernelTunables=yes\
+ProtectKernelModules=yes\
+ProtectControlGroups=yes\
+RestrictNamespaces=yes\
+RestrictSUIDSGID=yes\
+' "$unit"
+            $SUDO systemctl daemon-reload
+            $SUDO systemctl restart demarkus 2>/dev/null
+            # Verify the service started successfully
+            sleep 2
+            if $SUDO systemctl is-active --quiet demarkus; then
+              log_info "Systemd unit hardened — server sandboxed to ${content_root}"
+              $SUDO rm -f "${unit}.bak"
+            else
+              log_error "Server failed to start with hardened config — rolling back"
+              $SUDO mv "${unit}.bak" "$unit"
+              $SUDO systemctl daemon-reload
+              $SUDO systemctl restart demarkus 2>/dev/null || log_warn "Could not restart service after rollback"
+            fi
+            ;;
+          *)
+            log_info "Skipped — you can add hardening later (see docs/site/security/)"
+            ;;
+        esac
       fi
     fi
   fi
