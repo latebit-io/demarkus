@@ -50,20 +50,45 @@ Paths not covered by any read token remain public. The well-known manifest (`/.w
 
 ### Use the token from the client
 
+When accessing protected paths, clients send a token for reads (FETCH, LIST, VERSIONS) and writes (PUBLISH, APPEND, ARCHIVE). The server always allows unauthenticated access to well-known public endpoints like `/.well-known/agent-manifest.md`. The server only authorizes operations permitted by that token's configured capabilities (`ops`). Token resolution follows this precedence: explicit token flag (`-auth` for the CLI, `-token` for MCP) > `DEMARKUS_AUTH` env var > stored token for the host. The TUI has no token flag and relies on `DEMARKUS_AUTH` and stored tokens.
+
+#### Writing to a server
+
 ```bash
-./client/bin/demarkus --insecure -X PUBLISH -auth <raw-token> mark://localhost:6309/hello.md -body "# Hello World"
+demarkus --insecure -X PUBLISH -auth <raw-token> mark://localhost:6309/hello.md -body "# Hello World"
 ```
 
-You can also set it once via environment variable:
+#### Reading from a private server
 
 ```bash
+# Explicit token
+demarkus --insecure -auth <raw-token> mark://localhost:6309/internal/doc.md
+```
+
+```bash
+# Via environment variable
 export DEMARKUS_AUTH=<raw-token>
-./client/bin/demarkus --insecure -X PUBLISH mark://localhost:6309/hello.md -body "# Hello World"
+demarkus --insecure mark://localhost:6309/internal/doc.md
+```
+
+```bash
+# Via stored token (see below) — no flags or env needed
+demarkus --insecure mark://localhost:6309/internal/doc.md
+```
+
+The TUI and MCP server also use stored tokens automatically:
+
+```bash
+# TUI picks up stored tokens for each host it navigates to
+demarkus-tui --insecure mark://localhost:6309/internal/doc.md
+
+# MCP uses -token flag, DEMARKUS_AUTH, or stored tokens
+demarkus-mcp -host mark://localhost:6309 -token <raw-token> -insecure
 ```
 
 ### Client-side token management
 
-The CLI can store tokens per-server so you don't need to pass `-auth` every time:
+The CLI can store tokens per-server so you don't need to pass `-auth` every time. Stored tokens are used automatically by all three clients (CLI, TUI, MCP) for protected reads and writes. Public paths remain accessible without a token.
 
 ```bash
 # Store a token for a server
@@ -76,7 +101,7 @@ demarkus token list
 demarkus token remove mark://localhost:6309
 ```
 
-Stored tokens are saved to `~/.mark/tokens.toml` (permissions `0600`). When making requests, the CLI resolves tokens in order: `-auth` flag > `DEMARKUS_AUTH` env var > stored token for the host.
+Stored tokens are saved to `~/.mark/tokens.toml` (permissions `0600`).
 
 ## Best Practices
 

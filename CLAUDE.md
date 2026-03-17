@@ -8,12 +8,14 @@ All project context — architecture, patterns, build commands, conventions, deb
 
 1. `mark_fetch` `/index.md` — get the hub page
 2. `mark_fetch` `/patterns.md` — build commands, code style, workflow
-3. Fetch other pages as needed: `/architecture.md`, `/debugging.md`, `/roadmap.md`
-4. If MCP is unavailable, stop and ask the user before proceeding
+3. `mark_fetch` `/guidelines.md` — hard rules for code quality, must read before writing code
+4. Fetch other pages as needed: `/architecture.md`, `/debugging.md`, `/roadmap.md`
+5. If MCP is unavailable, stop and ask the user before proceeding
 
 ### During Work
 
 - Update soul pages when learning something new
+- Use natural language; avoid overusing "-" within sentences. For bullet points, "-" is still preferred.
 - Use `mark_append` for journal entries and incremental notes
 - Always use `expected_version` from a prior fetch when publishing or appending
 
@@ -27,6 +29,7 @@ All project context — architecture, patterns, build commands, conventions, deb
 /index.md          — Hub page, links to all sections
 /architecture.md   — System design, module boundaries, key decisions
 /patterns.md       — Code patterns, build commands, conventions, workflow
+/guidelines.md     — Hard rules for code quality, must read before writing code
 /debugging.md      — Lessons from bugs and investigations
 /roadmap.md        — What's done, what's next
 /journal.md        — Session notes and evolution log

@@ -18,6 +18,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/graph"
 	"github.com/latebit/demarkus/client/internal/graphstore"
 	"github.com/latebit/demarkus/client/internal/links"
+	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
 )
 
@@ -779,7 +780,7 @@ func (m model) doFetch(raw string) tea.Cmd {
 		if err != nil {
 			return fetchResult{err: err, url: raw, seq: seq}
 		}
-		result, err := m.client.Fetch(host, path)
+		result, err := m.client.Fetch(host, path, tokens.Resolve("", host, tokens.LoadDefault()))
 		return fetchResult{result: result, err: err, url: raw, seq: seq}
 	}
 }

@@ -66,6 +66,26 @@ Now `/internal/**` requires a read token. Everything else stays public.
 
 This protects all paths. The well-known manifest (`/.well-known/agent-manifest.md`) is always public.
 
+#### Accessing private paths from clients
+
+Store the read token on the client, then all three clients (CLI, TUI, MCP) use it automatically:
+
+```bash
+# Store once
+demarkus token add mark://private.example:6309 <raw-token>
+
+# CLI — token sent automatically
+demarkus mark://private.example:6309/internal/doc.md
+
+# TUI — token sent automatically
+demarkus-tui mark://private.example:6309/internal/doc.md
+
+# MCP — uses stored token, or pass -token flag
+demarkus-mcp -host mark://private.example:6309
+```
+
+See [Use the Clients](../client/index.md#accessing-private-servers) for full details.
+
 ## Health Check
 
 The server exposes a lightweight health endpoint:

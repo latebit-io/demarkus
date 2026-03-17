@@ -71,9 +71,9 @@ func main() {
 
 // markClient defines the fetch operations used by MCP tool handlers.
 type markClient interface {
-	Fetch(host, path string) (fetch.Result, error)
-	List(host, path string) (fetch.Result, error)
-	Versions(host, path string) (fetch.Result, error)
+	Fetch(host, path, token string) (fetch.Result, error)
+	List(host, path, token string) (fetch.Result, error)
+	Versions(host, path, token string) (fetch.Result, error)
 	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Archive(host, path, token string) (fetch.Result, error)
@@ -84,6 +84,14 @@ type handler struct {
 	defaultHost string
 	token       string
 	graphStore  *graphstore.Store
+}
+
+// resolveToken returns the auth token for a host using the shared cascade:
+// explicit -token flag > DEMARKUS_AUTH env var > stored token for host.
+// Reloads the token store on each call so changes on disk are picked up
+// without restarting the MCP server.
+func (h *handler) resolveToken(host string) string {
+	return tokens.Resolve(h.token, host, tokens.LoadDefault())
 }
 
 // resolveURL parses a mark:// URL or bare path (when -host is set) into host and path.
@@ -366,7 +374,7 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	result, err := h.client.Fetch(host, path)
+	result, err := h.client.Fetch(host, path, h.resolveToken(host))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("fetch failed: %v", err)), nil
 	}
@@ -385,7 +393,7 @@ func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	result, err := h.client.List(host, path)
+	result, err := h.client.List(host, path, h.resolveToken(host))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("list failed: %v", err)), nil
 	}
@@ -404,7 +412,7 @@ func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	result, err := h.client.Versions(host, path)
+	result, err := h.client.Versions(host, path, h.resolveToken(host))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("versions failed: %v", err)), nil
 	}
@@ -428,15 +436,9 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	// Token resolution: flag > stored token for host.
-	token := h.token
+	token := h.resolveToken(host)
 	if token == "" {
-		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
-			token = ts.Get(host)
-		}
-	}
-	if token == "" {
-		return mcp.NewToolResultError("publish requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("publish requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	expectedVersion, err := req.RequireInt("expected_version")
@@ -463,14 +465,9 @@ func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	token := h.token
+	token := h.resolveToken(host)
 	if token == "" {
-		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
-			token = ts.Get(host)
-		}
-	}
-	if token == "" {
-		return mcp.NewToolResultError("archive requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("archive requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	result, err := h.client.Archive(host, path, token)
@@ -497,14 +494,9 @@ func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	token := h.token
+	token := h.resolveToken(host)
 	if token == "" {
-		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
-			token = ts.Get(host)
-		}
-	}
-	if token == "" {
-		return mcp.NewToolResultError("append requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("append requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	expectedVersion := req.GetInt("expected_version", 0)
@@ -513,7 +505,7 @@ func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	}
 	if expectedVersion == 0 {
 		// Auto-resolve via VERSIONS.
-		vResult, vErr := h.client.Versions(host, path)
+		vResult, vErr := h.client.Versions(host, path, h.resolveToken(host))
 		if vErr != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: %v", vErr)), nil
 		}
@@ -559,7 +551,7 @@ func (h *handler) markDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp
 		}
 	}
 
-	result, err := h.client.Fetch(host, path)
+	result, err := h.client.Fetch(host, path, "")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("discover failed: %v", err)), nil
 	}
@@ -600,7 +592,7 @@ func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	// Fetch the index document.
-	indexResult, err := h.client.Fetch(indexHost, indexPath)
+	indexResult, err := h.client.Fetch(indexHost, indexPath, h.resolveToken(indexHost))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to fetch index: %v", err)), nil
 	}
@@ -628,7 +620,7 @@ func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.
 			lastErr = fmt.Sprintf("invalid server URL %s: %v", m.Server, err)
 			continue
 		}
-		result, err := h.client.Fetch(serverHost, "/"+hash)
+		result, err := h.client.Fetch(serverHost, "/"+hash, h.resolveToken(serverHost))
 		if err != nil {
 			lastErr = fmt.Sprintf("%s: %v", m.Server, err)
 			continue
@@ -657,14 +649,14 @@ var errIndexTruncated = errors.New("document limit reached, index is truncated")
 // Returns warnings, a tool error result (if blocked), or nil to proceed.
 func (h *handler) checkManifests(sourceHost, targetHost string, dryRun, force bool) (warnings []string, block *mcp.CallToolResult) {
 	// Check source manifest (warn only).
-	srcManifest, err := h.client.Fetch(sourceHost, protocol.WellKnownManifestPath)
+	srcManifest, err := h.client.Fetch(sourceHost, protocol.WellKnownManifestPath, "")
 	if err != nil || srcManifest.Response.Status != protocol.StatusOK {
 		warnings = append(warnings, "warning: source server has no agent manifest")
 	}
 
 	// Check target manifest (block unless force or dry run).
 	if !dryRun {
-		tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath)
+		tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath, "")
 		if err != nil || tgtManifest.Response.Status != protocol.StatusOK {
 			if !force {
 				return warnings, mcp.NewToolResultError(
@@ -716,7 +708,7 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	// Crawl source server.
 	var entries []index.Entry
 	sourceScheme := "mark://" + sourceHost
-	if err := h.walkDir(sourceHost, sourcePath, sourceScheme, &entries); err != nil && !errors.Is(err, errIndexTruncated) {
+	if err := h.walkDir(sourceHost, sourcePath, sourceScheme, &entries, h.resolveToken(sourceHost)); err != nil && !errors.Is(err, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
 	} else if errors.Is(err, errIndexTruncated) {
 		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
@@ -734,20 +726,14 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultText(b.String()), nil
 	}
 
-	// Token resolution for target.
-	token := h.token
+	token := h.resolveToken(targetHost)
 	if token == "" {
-		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
-			token = ts.Get(targetHost)
-		}
-	}
-	if token == "" {
-		return mcp.NewToolResultError("publishing requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("publishing requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	// Merge with existing index if updating.
 	if expectedVersion > 0 {
-		existing, err := h.client.Fetch(targetHost, targetPath)
+		existing, err := h.client.Fetch(targetHost, targetPath, h.resolveToken(targetHost))
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %v", err)), nil
 		}
@@ -776,12 +762,13 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 }
 
 // walkDir recursively lists and fetches documents from a server, collecting content hashes.
-func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.Entry) error {
+// The token is resolved once at the call site and threaded through recursion.
+func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.Entry, token string) error {
 	if len(*entries) >= maxIndexDocuments {
 		return errIndexTruncated
 	}
 
-	result, err := h.client.List(host, dirPath)
+	result, err := h.client.List(host, dirPath, token)
 	if err != nil {
 		return fmt.Errorf("list %s: %w", dirPath, err)
 	}
@@ -802,14 +789,14 @@ func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.E
 
 		if strings.HasSuffix(dest, "/") {
 			// Directory — recurse.
-			if err := h.walkDir(host, fullPath, sourceScheme, entries); err != nil {
+			if err := h.walkDir(host, fullPath, sourceScheme, entries, token); err != nil {
 				return err
 			}
 			continue
 		}
 
 		// File — fetch and collect content-hash.
-		doc, err := h.client.Fetch(host, fullPath)
+		doc, err := h.client.Fetch(host, fullPath, token)
 		if err != nil {
 			continue // skip unreachable documents
 		}
@@ -850,7 +837,7 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(host, path string) (string, string, string, error) {
-		r, fetchErr := h.client.Fetch(host, path)
+		r, fetchErr := h.client.Fetch(host, path, h.resolveToken(host))
 		if fetchErr != nil {
 			return "", "", "", fetchErr
 		}
@@ -1004,14 +991,9 @@ func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	token := h.token
+	token := h.resolveToken(host)
 	if token == "" {
-		if ts, loadErr := tokens.Load(tokens.DefaultPath()); loadErr == nil {
-			token = ts.Get(host)
-		}
-	}
-	if token == "" {
-		return mcp.NewToolResultError("publish requires a token (-token flag or stored via 'demarkus token add')"), nil
+		return mcp.NewToolResultError("publish requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
 	expectedVersion, err := req.RequireInt("expected_version")

@@ -481,22 +481,22 @@ func TestHandlerMarkAppend_NoToken(t *testing.T) {
 
 // stubClient is a mock markClient for testing handler logic.
 type stubClient struct {
-	fetchFn    func(host, path string) (fetch.Result, error)
-	listFn     func(host, path string) (fetch.Result, error)
-	versionsFn func(host, path string) (fetch.Result, error)
+	fetchFn    func(host, path, token string) (fetch.Result, error)
+	listFn     func(host, path, token string) (fetch.Result, error)
+	versionsFn func(host, path, token string) (fetch.Result, error)
 	publishFn  func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	appendFn   func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 }
 
-func (s *stubClient) Fetch(host, path string) (fetch.Result, error) {
+func (s *stubClient) Fetch(host, path, token string) (fetch.Result, error) {
 	if s.fetchFn != nil {
-		return s.fetchFn(host, path)
+		return s.fetchFn(host, path, token)
 	}
 	return fetch.Result{}, nil
 }
-func (s *stubClient) List(host, path string) (fetch.Result, error) {
+func (s *stubClient) List(host, path, token string) (fetch.Result, error) {
 	if s.listFn != nil {
-		return s.listFn(host, path)
+		return s.listFn(host, path, token)
 	}
 	return fetch.Result{}, nil
 }
@@ -509,9 +509,9 @@ func (s *stubClient) Publish(host, path, body, token string, expectedVersion int
 func (s *stubClient) Archive(_, _, _ string) (fetch.Result, error) {
 	return fetch.Result{}, nil
 }
-func (s *stubClient) Versions(host, path string) (fetch.Result, error) {
+func (s *stubClient) Versions(host, path, token string) (fetch.Result, error) {
 	if s.versionsFn != nil {
-		return s.versionsFn(host, path)
+		return s.versionsFn(host, path, token)
 	}
 	return fetch.Result{}, nil
 }
@@ -525,7 +525,7 @@ func (s *stubClient) Append(host, path, body, token string, expectedVersion int,
 func TestHandlerMarkAppend_AutoResolveVersion(t *testing.T) {
 	var capturedVersion int
 	sc := &stubClient{
-		versionsFn: func(_, _ string) (fetch.Result, error) {
+		versionsFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{
 				Response: protocol.Response{
 					Status:   protocol.StatusOK,
@@ -564,7 +564,7 @@ func TestHandlerMarkAppend_AutoResolveVersion(t *testing.T) {
 
 func TestHandlerMarkAppend_AutoResolveVersionNotFound(t *testing.T) {
 	sc := &stubClient{
-		versionsFn: func(_, _ string) (fetch.Result, error) {
+		versionsFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{
 				Response: protocol.Response{
 					Status:   "not-found",
@@ -642,7 +642,7 @@ func TestHandlerMarkResolve_Success(t *testing.T) {
 	indexBody := "| Hash | Server | Path |\n|------|--------|------|\n| " + hash + " | mark://docs.example.com | /guide.md |\n"
 
 	sc := &stubClient{
-		fetchFn: func(_, path string) (fetch.Result, error) {
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if path == "/index.md" {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
@@ -684,7 +684,7 @@ func TestHandlerMarkResolve_Fallback(t *testing.T) {
 		"| " + hash + " | mark://server2.com | /b.md |\n"
 
 	sc := &stubClient{
-		fetchFn: func(host, path string) (fetch.Result, error) {
+		fetchFn: func(host, path, _ string) (fetch.Result, error) {
 			if strings.Contains(path, "index") {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: indexBody}}, nil
 			}
@@ -722,7 +722,7 @@ func TestHandlerMarkResolve_NotFound(t *testing.T) {
 	indexBody := "| Hash | Server | Path |\n|------|--------|------|\n| " + hash + " | mark://server.com | /a.md |\n"
 
 	sc := &stubClient{
-		fetchFn: func(_, path string) (fetch.Result, error) {
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if strings.Contains(path, "index") {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: indexBody}}, nil
 			}
@@ -760,7 +760,7 @@ func TestHandlerMarkIndex_Success(t *testing.T) {
 	var publishedBody string
 
 	sc := &stubClient{
-		fetchFn: func(_, path string) (fetch.Result, error) {
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if path == protocol.WellKnownManifestPath {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
@@ -773,7 +773,7 @@ func TestHandlerMarkIndex_Success(t *testing.T) {
 				Body:     "# Doc",
 			}}, nil
 		},
-		listFn: func(_, path string) (fetch.Result, error) {
+		listFn: func(_, path, _ string) (fetch.Result, error) {
 			if path == "/" {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
@@ -814,7 +814,7 @@ func TestHandlerMarkIndex_Success(t *testing.T) {
 func TestHandlerMarkIndex_DryRun(t *testing.T) {
 	hash := "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	sc := &stubClient{
-		fetchFn: func(_, path string) (fetch.Result, error) {
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if path == protocol.WellKnownManifestPath {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# Manifest"}}, nil
 			}
@@ -824,7 +824,7 @@ func TestHandlerMarkIndex_DryRun(t *testing.T) {
 				Body:     "content",
 			}}, nil
 		},
-		listFn: func(_, path string) (fetch.Result, error) {
+		listFn: func(_, path, _ string) (fetch.Result, error) {
 			if path == "/" {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
@@ -862,13 +862,13 @@ func TestHandlerMarkIndex_DryRun(t *testing.T) {
 
 func TestHandlerMarkIndex_BlocksWithoutManifest(t *testing.T) {
 	sc := &stubClient{
-		fetchFn: func(_, path string) (fetch.Result, error) {
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if path == protocol.WellKnownManifestPath {
 				return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
 		},
-		listFn: func(_, _ string) (fetch.Result, error) {
+		listFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "- [a.md](a.md)\n"}}, nil
 		},
 	}
@@ -887,7 +887,7 @@ func TestHandlerMarkIndex_BlocksWithoutManifest(t *testing.T) {
 
 func TestHandlerMarkIndex_ForceOverridesManifest(t *testing.T) {
 	sc := &stubClient{
-		fetchFn: func(_, path string) (fetch.Result, error) {
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if path == protocol.WellKnownManifestPath {
 				return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
 			}
@@ -897,7 +897,7 @@ func TestHandlerMarkIndex_ForceOverridesManifest(t *testing.T) {
 				Body:     "content",
 			}}, nil
 		},
-		listFn: func(_, path string) (fetch.Result, error) {
+		listFn: func(_, path, _ string) (fetch.Result, error) {
 			if path == "/" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "- [a.md](a.md)\n"}}, nil
 			}
@@ -933,7 +933,7 @@ func TestHandlerMarkIndex_ForceOverridesManifest(t *testing.T) {
 func TestHandlerMarkIndex_SourceNoManifestWarns(t *testing.T) {
 	hash := "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	sc := &stubClient{
-		fetchFn: func(host, path string) (fetch.Result, error) {
+		fetchFn: func(host, path, _ string) (fetch.Result, error) {
 			if path == protocol.WellKnownManifestPath {
 				if host == "source.com:6309" {
 					return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
@@ -947,7 +947,7 @@ func TestHandlerMarkIndex_SourceNoManifestWarns(t *testing.T) {
 				Body:     "content",
 			}}, nil
 		},
-		listFn: func(_, path string) (fetch.Result, error) {
+		listFn: func(_, path, _ string) (fetch.Result, error) {
 			if path == "/" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "- [a.md](a.md)\n"}}, nil
 			}
