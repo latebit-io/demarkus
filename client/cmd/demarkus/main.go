@@ -601,7 +601,7 @@ var waitEditors = map[string]string{
 }
 
 func editorCommand(fields []string, file string) (name string, args []string) {
-	args = make([]string, len(fields)-1, len(fields))
+	args = make([]string, len(fields)-1, len(fields)+1)
 	copy(args, fields[1:])
 
 	base := filepath.Base(fields[0])

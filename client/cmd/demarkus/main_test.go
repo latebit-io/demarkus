@@ -74,11 +74,11 @@ func TestEditorCommand(t *testing.T) {
 			wantArgs: []string{"--wait", "/tmp/doc.md"},
 		},
 		{
-			name:     "gui editor already has -w",
-			fields:   []string{"code", "-w"},
+			name:     "non-gui editor with one arg",
+			fields:   []string{"nano", "-R"},
 			file:     "/tmp/doc.md",
-			wantName: "code",
-			wantArgs: []string{"-w", "/tmp/doc.md"},
+			wantName: "nano",
+			wantArgs: []string{"-R", "/tmp/doc.md"},
 		},
 		{
 			name:     "full path gui editor gets --wait",
