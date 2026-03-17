@@ -90,12 +90,27 @@ demarkus-tui --insecure mark://localhost:6309/index.md
 | `d` | Document graph view |
 | `?` | Help |
 
-### 7. Edit documents
+### 7. Read and write documents
+
+Fetch a document to stdout:
+
+```bash
+demarkus --insecure mark://localhost:6309/notes.md
+```
+
+Publish from a file:
+
+```bash
+demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/notes.md \
+  -body "$(cat notes.md)"
+```
+
+### 8. Edit documents
 
 The `edit` subcommand opens a document in `$EDITOR` and publishes on save:
 
 ```bash
-demarkus edit --insecure -auth $TOKEN mark://localhost:6309/notes.md
+demarkus edit -auth $TOKEN --insecure mark://localhost:6309/notes.md
 ```
 
 If the document doesn't exist yet, it opens an empty editor and creates it on save.
