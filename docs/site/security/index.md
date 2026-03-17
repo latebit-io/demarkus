@@ -77,11 +77,7 @@ RestrictSUIDSGID=yes
 
 `ProtectSystem=strict` makes the entire filesystem read-only. `ReadWritePaths` grants an exception for the content directory only. The kernel enforces these restrictions — no application changes needed.
 
-Set `ReadWritePaths` to match your `DEMARKUS_ROOT`. If your tokens file is outside the content root, add its path too:
-
-```ini
-ReadWritePaths=/srv/site /etc/demarkus
-```
+Set `ReadWritePaths` to match your `DEMARKUS_ROOT`. The server only reads the tokens file and TLS certificates, so paths like `/etc/demarkus` don't need write access — `ProtectSystem=strict` already allows reads.
 
 ## Write Isolation (Optional)
 

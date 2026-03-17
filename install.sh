@@ -597,6 +597,9 @@ setup_systemd() {
 
   log_step "Setting up systemd service"
 
+  # Ensure content_root is absolute for both DEMARKUS_ROOT and ReadWritePaths
+  content_root=$(readlink -f "$content_root")
+
   local env_lines="Environment=DEMARKUS_ROOT=${content_root}
 Environment=DEMARKUS_TOKENS=${tokens_file}"
 
@@ -605,9 +608,6 @@ Environment=DEMARKUS_TOKENS=${tokens_file}"
 Environment=DEMARKUS_TLS_CERT=${cert_path}
 Environment=DEMARKUS_TLS_KEY=${key_path}"
   fi
-
-  # Ensure content_root is absolute for systemd ReadWritePaths
-  content_root=$(readlink -f "$content_root")
 
   # ProtectHome=yes makes /home inaccessible — skip it if content root is there
   local protect_home="ProtectHome=yes"
@@ -1302,6 +1302,7 @@ _do_update_inner() {
       local content_root
       content_root=$($SUDO grep 'DEMARKUS_ROOT=' "$unit" 2>/dev/null \
         | sed 's/.*DEMARKUS_ROOT=//' || true)
+      content_root=$(readlink -f "$content_root" 2>/dev/null || echo "$content_root")
       if [ -n "$content_root" ]; then
         log_warn "Systemd unit is missing security hardening (ProtectSystem, NoNewPrivileges, etc.)"
         log_warn "This sandboxes the server to only write to ${content_root}"
@@ -1311,7 +1312,7 @@ _do_update_inner() {
           read -r apply_hardening </dev/tty
           apply_hardening="${apply_hardening:-Y}"
         else
-          log_info "Non-interactive mode — skipping. Add hardening manually (see docs/site/security/)."
+          log_info "Non-interactive mode — skipping. Add hardening manually (see https://latebit-io.github.io/demarkus/security/)."
         fi
         case "$apply_hardening" in
           [Yy]*)
@@ -1356,7 +1357,7 @@ RestrictSUIDSGID=yes
             fi
             ;;
           *)
-            log_info "Skipped — you can add hardening later (see docs/site/security/)"
+            log_info "Skipped — you can add hardening later (see https://latebit-io.github.io/demarkus/security/)"
             ;;
         esac
       fi
