@@ -14,6 +14,7 @@ Welcome to the Demarkus documentation site. This is the canonical table of conte
 ## Deployment
 
 - [TLS & Production Deployment](deployment/index.md)
+- [Security Model](security/index.md)
 
 ## Philosophy & Architecture
 
