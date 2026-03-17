@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -590,9 +591,33 @@ func resolveBody(verb, flagValue string) string {
 
 // editorCommand splits $EDITOR fields and appends the file path.
 // Returns the executable name and its arguments.
+// waitEditors maps GUI editor binaries that return immediately to the flag
+// that makes them block until the file is closed.
+var waitEditors = map[string]string{
+	"zed":  "--wait",
+	"code": "--wait",
+	"subl": "--wait",
+	"atom": "--wait",
+}
+
 func editorCommand(fields []string, file string) (name string, args []string) {
-	args = make([]string, len(fields)-1, len(fields))
+	args = make([]string, len(fields)-1, len(fields)+1)
 	copy(args, fields[1:])
+
+	base := filepath.Base(fields[0])
+	if waitFlag, ok := waitEditors[base]; ok {
+		hasWait := false
+		for _, a := range args {
+			if a == waitFlag || a == "-w" {
+				hasWait = true
+				break
+			}
+		}
+		if !hasWait {
+			args = append(args, waitFlag)
+		}
+	}
+
 	args = append(args, file)
 	return fields[0], args
 }
