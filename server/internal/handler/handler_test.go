@@ -2202,3 +2202,78 @@ func TestReadAuth(t *testing.T) {
 		}
 	})
 }
+
+func TestReadOnlyMode(t *testing.T) {
+	dir, s := setupVersionedDir(t, map[string]string{
+		"doc.md": "# Existing\n",
+	})
+	h := &Handler{
+		ContentDir: dir,
+		Store:      s,
+		Logger:     discardLogger,
+		ReadOnly:   true,
+		GetTokenStore: func() *auth.TokenStore {
+			return auth.NewTokenStore(map[string]auth.Token{
+				auth.HashToken("secret"): {Paths: []string{"/*"}, Operations: []string{"publish", "append", "archive"}},
+			})
+		},
+	}
+	authMeta := "---\nauth: secret\n---\n"
+
+	for _, verb := range []string{"PUBLISH", "APPEND", "ARCHIVE"} {
+		t.Run(verb+" rejected", func(t *testing.T) {
+			stream := newMockStream(verb + " /doc.md\n" + authMeta + "# Content\n")
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status != protocol.StatusUnauthorized {
+				t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusUnauthorized)
+			}
+			if !strings.Contains(resp.Body, "read-only") {
+				t.Errorf("body should mention read-only, got %q", resp.Body)
+			}
+		})
+	}
+
+	t.Run("FETCH still works", func(t *testing.T) {
+		stream := newMockStream("FETCH /doc.md\n\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+
+	t.Run("LIST still works", func(t *testing.T) {
+		stream := newMockStream("LIST /\n\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+
+	t.Run("VERSIONS still works", func(t *testing.T) {
+		stream := newMockStream("VERSIONS /doc.md\n\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+	})
+}

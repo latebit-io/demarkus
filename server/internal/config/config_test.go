@@ -181,3 +181,30 @@ func TestNewConfig_InvalidInt(t *testing.T) {
 		t.Errorf("port: got %d, want default %d", cfg.Port, protocol.DefaultPort)
 	}
 }
+
+func TestNewConfig_ReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEMARKUS_ROOT", dir)
+	t.Setenv("DEMARKUS_READ_ONLY", "1")
+
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.ReadOnly {
+		t.Error("expected ReadOnly to be true when DEMARKUS_READ_ONLY is set")
+	}
+}
+
+func TestNewConfig_ReadOnlyDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEMARKUS_ROOT", dir)
+
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ReadOnly {
+		t.Error("expected ReadOnly to be false by default")
+	}
+}
