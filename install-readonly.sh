@@ -210,6 +210,13 @@ do_install() {
     cp "/etc/letsencrypt/live/${domain}/fullchain.pem" "${root}/tls/cert.pem"
     cp "/etc/letsencrypt/live/${domain}/privkey.pem" "${root}/tls/key.pem"
     log_info "Copied Let's Encrypt certificates into chroot"
+  elif [ -n "$domain" ]; then
+    log_warn "No certificates found for ${domain}"
+    log_warn "Server will use a self-signed dev certificate (clients will reject it)"
+    log_warn ""
+    log_warn "Run certbot first, then re-run this installer:"
+    log_warn "  sudo certbot certonly --standalone -d ${domain}"
+    log_warn "  curl -fsSL ... | sudo bash -s -- --domain ${domain}"
   fi
 
   # Set ownership
