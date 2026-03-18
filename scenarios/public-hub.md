@@ -67,8 +67,9 @@ sudo ufw allow 80/tcp    # for Let's Encrypt renewal
 ### 3. Add your initial content
 
 ```bash
-sudo mkdir -p /srv/site
-echo "# Welcome\n\nThis is a public Demarkus hub." | sudo tee /srv/site/index.md
+demarkus-publish -root /srv/site -path /index.md -body "# Welcome
+
+This is a public Demarkus hub."
 ```
 
 ### 4. Verify

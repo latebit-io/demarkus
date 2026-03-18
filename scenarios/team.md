@@ -50,8 +50,8 @@ sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/insta
 
 ```bash
 sudo mkdir -p /srv/team-docs/{runbooks,decisions,onboarding}
-echo "# Team Docs" | sudo tee /srv/team-docs/index.md
-echo "# Runbooks" | sudo tee /srv/team-docs/runbooks/index.md
+demarkus-publish -root /srv/team-docs -path /index.md -body "# Team Docs"
+demarkus-publish -root /srv/team-docs -path /runbooks/index.md -body "# Runbooks"
 ```
 
 ### 3. Generate tokens
