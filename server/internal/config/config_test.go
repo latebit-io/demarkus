@@ -183,16 +183,36 @@ func TestNewConfig_InvalidInt(t *testing.T) {
 }
 
 func TestNewConfig_ReadOnly(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("DEMARKUS_ROOT", dir)
-	t.Setenv("DEMARKUS_READ_ONLY", "1")
+	for _, val := range []string{"1", "true", "yes"} {
+		t.Run("enabled with "+val, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("DEMARKUS_ROOT", dir)
+			t.Setenv("DEMARKUS_READ_ONLY", val)
 
-	cfg, err := NewConfig()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+			cfg, err := NewConfig()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !cfg.ReadOnly {
+				t.Errorf("expected ReadOnly to be true for %q", val)
+			}
+		})
 	}
-	if !cfg.ReadOnly {
-		t.Error("expected ReadOnly to be true when DEMARKUS_READ_ONLY is set")
+
+	for _, val := range []string{"0", "false", "no"} {
+		t.Run("disabled with "+val, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("DEMARKUS_ROOT", dir)
+			t.Setenv("DEMARKUS_READ_ONLY", val)
+
+			cfg, err := NewConfig()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.ReadOnly {
+				t.Errorf("expected ReadOnly to be false for %q", val)
+			}
+		})
 	}
 }
 

@@ -45,7 +45,9 @@ func NewConfig() (*Config, error) {
 	config.RateBurst = getEnvAsInt("DEMARKUS_RATE_BURST", 100)
 	config.LogFormat = getEnv("DEMARKUS_LOG_FORMAT", "text")
 	config.LogLevel = getEnv("DEMARKUS_LOG_LEVEL", "info")
-	config.ReadOnly = getEnv("DEMARKUS_READ_ONLY", "") != ""
+	if v := getEnv("DEMARKUS_READ_ONLY", ""); v != "" {
+		config.ReadOnly = v == "1" || v == "true" || v == "yes"
+	}
 
 	if config.RateLimit < 0 {
 		return config, fmt.Errorf("DEMARKUS_RATE_LIMIT must be non-negative (got %v)", config.RateLimit)

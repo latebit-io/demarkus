@@ -79,18 +79,21 @@ RestrictSUIDSGID=yes
 
 Set `ReadWritePaths` to match your `DEMARKUS_ROOT`. The server only reads the tokens file and TLS certificates, so paths like `/etc/demarkus` don't need write access — `ProtectSystem=strict` already allows reads.
 
-## Write Isolation (Optional)
+## Read-Only Mode (Maximum Lockdown)
 
-For maximum lockdown, don't expose port 6309 externally at all. Only open UDP 443 with a redirect:
+For Gemini-level security, run the server in read-only mode inside a chroot:
 
 ```bash
-# Don't open 6309 in the firewall — only localhost can reach it
-# Redirect public UDP 443 to the server port for read access
-sudo iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-port 6309
-sudo iptables -A INPUT -p udp --dport 443 -j ACCEPT
+curl -fsSL .../install-readonly.sh | sudo bash -s -- --domain example.com
 ```
 
-Local clients publish to `localhost:6309` (loopback bypasses INPUT rules). External traffic only reaches the server via the 443 redirect. This gives you the same trust boundary as a static file server — local writes, public reads — while keeping full protocol versioning.
+This installs the server with `-read-only` flag inside a chroot (`/srv/demarkus`). The process cannot write to the filesystem at all — not even the content directory. Publish content locally with `demarkus-publish`:
+
+```bash
+demarkus-publish -root /srv/demarkus/content -path /index.md -body "# Hello"
+```
+
+Full versioning is preserved because `demarkus-publish` writes directly to the versioned store on disk. The server just serves what's there.
 
 ## Comparison
 

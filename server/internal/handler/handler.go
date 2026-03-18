@@ -107,7 +107,7 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handleVersions(stream, req)
 	case protocol.VerbPublish, protocol.VerbArchive, protocol.VerbAppend:
 		if h.ReadOnly {
-			h.writeError(stream, protocol.StatusUnauthorized, "server is read-only")
+			h.writeError(stream, protocol.StatusNotPermitted, "server is read-only")
 			return
 		}
 		switch req.Verb {

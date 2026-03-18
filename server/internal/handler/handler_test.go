@@ -2229,8 +2229,8 @@ func TestReadOnlyMode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse response: %v", err)
 			}
-			if resp.Status != protocol.StatusUnauthorized {
-				t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusUnauthorized)
+			if resp.Status != protocol.StatusNotPermitted {
+				t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotPermitted)
 			}
 			if !strings.Contains(resp.Body, "read-only") {
 				t.Errorf("body should mention read-only, got %q", resp.Body)

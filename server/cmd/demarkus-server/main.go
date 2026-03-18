@@ -29,7 +29,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
 	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
-	readOnly := flag.Bool("read-only", false, "reject all write operations (overrides DEMARKUS_READ_ONLY)")
+	readOnly := flag.Bool("read-only", false, "reject all write operations (also enabled via DEMARKUS_READ_ONLY)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: demarkus-server [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Serves markdown documents over the Mark Protocol (QUIC, port %d).\n", protocol.DefaultPort)

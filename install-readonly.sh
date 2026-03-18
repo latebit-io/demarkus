@@ -212,6 +212,7 @@ RestartSec=5
 
 # Security hardening — maximum lockdown
 ReadOnlyPaths=/
+BindReadOnlyPaths=/dev/urandom
 NoNewPrivileges=yes
 ProtectHome=yes
 ProtectKernelTunables=yes
@@ -238,11 +239,8 @@ EOF
     exit 1
   fi
 
-  # Open firewall
-  if command -v ufw >/dev/null 2>&1; then
-    ufw allow "${port}/udp" >/dev/null 2>&1 || true
-    log_info "Opened UDP port ${port} in firewall"
-  fi
+  log_info "Firewall not modified — open UDP port ${port} manually if needed:"
+  log_info "  sudo ufw allow ${port}/udp"
 
   log_step "Install complete"
   echo ""
