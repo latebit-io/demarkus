@@ -38,7 +38,6 @@ client/demarkus-tui
 client/demarkus-mcp
 server/demarkus-server
 tools/demarkus-token
-demarkus-publish
 
 # OS files
 .DS_Store
