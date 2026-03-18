@@ -98,21 +98,16 @@ Running `demarkus-install update` detects if the systemd unit is missing hardeni
 
 ## Write Isolation (Optional)
 
-For maximum lockdown, restrict writes to localhost using firewall rules:
-
-1. Block external access to the Demarkus port
-2. Redirect public traffic on UDP 443 to the server port
-3. Publish content locally (CI/CD, scripts, or the `demarkus` CLI on the same machine)
+For maximum lockdown, don't expose port 6309 externally at all. Only open UDP 443 with a redirect:
 
 ```bash
-# Block external writes — only localhost can reach port 6309
-sudo iptables -A INPUT -p udp --dport 6309 ! -s 127.0.0.1 -j DROP
-
-# Expose read access publicly on UDP 443
+# Don't open 6309 in the firewall — only localhost can reach it
+# Redirect public UDP 443 to the server port for read access
 sudo iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-port 6309
+sudo iptables -A INPUT -p udp --dport 443 -j ACCEPT
 ```
 
-This gives you the same trust boundary as a static file server — local writes, public reads — while keeping full protocol versioning.
+Local clients publish to `localhost:6309` (loopback bypasses INPUT rules). External traffic only reaches the server via the 443 redirect. This gives you the same trust boundary as a static file server — local writes, public reads — while keeping full protocol versioning.
 
 ## Comparison
 
