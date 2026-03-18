@@ -86,6 +86,25 @@ demarkus-mcp -host mark://private.example:6309
 
 See [Use the Clients](../client/index.md#accessing-private-servers) for full details.
 
+## Read-Only Mode
+
+For public-facing servers where you don't want any network writes, use the `-read-only` flag:
+
+```bash
+demarkus-server -read-only -root /srv/site
+```
+
+All PUBLISH, APPEND, and ARCHIVE requests are rejected with `not-permitted`. FETCH, LIST, and VERSIONS work normally.
+
+Publish content locally with `demarkus-publish` — it writes directly to the versioned store on disk:
+
+```bash
+demarkus-publish -root /srv/site -path /index.md -body "# Hello"
+echo "# Hello" | demarkus-publish -root /srv/site -path /index.md
+```
+
+For maximum security, combine with the [read-only chroot install](../security/index.md#read-only-mode-maximum-lockdown). See also [Security Model](../security/index.md).
+
 ## Health Check
 
 The server exposes a lightweight health endpoint:

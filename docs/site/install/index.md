@@ -26,6 +26,7 @@ This produces the following binaries:
 | `demarkus` | `client/bin/demarkus` | CLI (fetch/list/publish) |
 | `demarkus-tui` | `client/bin/demarkus-tui` | TUI browser |
 | `demarkus-mcp` | `client/bin/demarkus-mcp` | MCP server |
+| `demarkus-publish` | `server/bin/demarkus-publish` | Local publish (bypasses server) |
 
 > Build note: use `make server` / `make client` or `go build -o bin/<name> ./cmd/<name>/` to avoid dropping binaries in the working directory.
 
@@ -64,7 +65,12 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 # Install client-only
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
+
+# Install read-only server (chrooted, maximum security)
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | sudo bash -s -- --domain example.com
 ```
+
+The read-only install runs the server in a chroot with zero write access. Publish content locally with `demarkus-publish`. See [Security Model](../security/index.md#read-only-mode-maximum-lockdown) for details.
 
 For private repositories, provide a GitHub token:
 

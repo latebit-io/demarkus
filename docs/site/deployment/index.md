@@ -176,5 +176,6 @@ You should see a successful response with status `ok`.
 ## Related
 
 - [Run a Server](../server/index.md)
+- [Security Model](../security/index.md) — read-only mode, chroot install, threat model
 - [Configuration Reference](../reference/index.md)
 - [Install & Build](../install/index.md)

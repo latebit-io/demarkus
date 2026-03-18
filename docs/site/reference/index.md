@@ -17,13 +17,15 @@ All settings are via environment variables; flags override for dev use:
 | `DEMARKUS_TLS_CERT` | `-tls-cert` | *(dev cert)* | Path to TLS certificate PEM |
 | `DEMARKUS_TLS_KEY` | `-tls-key` | *(dev cert)* | Path to TLS private key PEM |
 | `DEMARKUS_TOKENS` | `-tokens` | *(none — writes disabled)* | Path to TOML tokens file |
+| `DEMARKUS_READ_ONLY` | `-read-only` | *(disabled)* | Reject all write operations (`1`, `true`, or `yes`) |
 | `DEMARKUS_MAX_STREAMS` | — | `10` | Max concurrent streams per connection |
 | `DEMARKUS_IDLE_TIMEOUT` | — | `30s` | Idle connection timeout |
 | `DEMARKUS_REQUEST_TIMEOUT` | — | `10s` | Per-request deadline |
 
 Notes:
 - `-tls-cert` and `-tls-key` must be provided together.
-- When no tokens file is configured, the server is read-only.
+- When no tokens file is configured, the server rejects writes (no auth = no writes).
+- `-read-only` explicitly rejects all write operations regardless of tokens. Use this for public-facing servers where content is published locally with `demarkus-publish`.
 
 ## Protocol
 
