@@ -25,6 +25,7 @@ type Config struct {
 	RateBurst      int           // Burst size for rate limiter
 	LogFormat      string        // Log format: "text" (default) or "json"
 	LogLevel       string        // Log level: "debug", "info" (default), "warn", "error"
+	ReadOnly       bool          // Reject all write operations (PUBLISH, APPEND, ARCHIVE)
 }
 
 // NewConfig loads configuration from environment variables.
@@ -44,6 +45,9 @@ func NewConfig() (*Config, error) {
 	config.RateBurst = getEnvAsInt("DEMARKUS_RATE_BURST", 100)
 	config.LogFormat = getEnv("DEMARKUS_LOG_FORMAT", "text")
 	config.LogLevel = getEnv("DEMARKUS_LOG_LEVEL", "info")
+	if v := getEnv("DEMARKUS_READ_ONLY", ""); v != "" {
+		config.ReadOnly = v == "1" || v == "true" || v == "yes"
+	}
 
 	if config.RateLimit < 0 {
 		return config, fmt.Errorf("DEMARKUS_RATE_LIMIT must be non-negative (got %v)", config.RateLimit)

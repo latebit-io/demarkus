@@ -181,3 +181,50 @@ func TestNewConfig_InvalidInt(t *testing.T) {
 		t.Errorf("port: got %d, want default %d", cfg.Port, protocol.DefaultPort)
 	}
 }
+
+func TestNewConfig_ReadOnly(t *testing.T) {
+	for _, val := range []string{"1", "true", "yes"} {
+		t.Run("enabled with "+val, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("DEMARKUS_ROOT", dir)
+			t.Setenv("DEMARKUS_READ_ONLY", val)
+
+			cfg, err := NewConfig()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !cfg.ReadOnly {
+				t.Errorf("expected ReadOnly to be true for %q", val)
+			}
+		})
+	}
+
+	for _, val := range []string{"0", "false", "no"} {
+		t.Run("disabled with "+val, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("DEMARKUS_ROOT", dir)
+			t.Setenv("DEMARKUS_READ_ONLY", val)
+
+			cfg, err := NewConfig()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.ReadOnly {
+				t.Errorf("expected ReadOnly to be false for %q", val)
+			}
+		})
+	}
+}
+
+func TestNewConfig_ReadOnlyDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEMARKUS_ROOT", dir)
+
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ReadOnly {
+		t.Error("expected ReadOnly to be false by default")
+	}
+}

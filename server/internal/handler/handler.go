@@ -56,6 +56,7 @@ type Handler struct {
 	Store         *store.Store
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
 	Logger        *slog.Logger
+	ReadOnly      bool // reject all write operations
 }
 
 func (h *Handler) logger() *slog.Logger {
@@ -104,12 +105,19 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handleList(stream, req)
 	case protocol.VerbVersions:
 		h.handleVersions(stream, req)
-	case protocol.VerbPublish:
-		h.handlePublish(stream, req)
-	case protocol.VerbArchive:
-		h.handleArchive(stream, req)
-	case protocol.VerbAppend:
-		h.handleAppend(stream, req)
+	case protocol.VerbPublish, protocol.VerbArchive, protocol.VerbAppend:
+		if h.ReadOnly {
+			h.writeError(stream, protocol.StatusNotPermitted, "server is read-only")
+			return
+		}
+		switch req.Verb {
+		case protocol.VerbPublish:
+			h.handlePublish(stream, req)
+		case protocol.VerbArchive:
+			h.handleArchive(stream, req)
+		case protocol.VerbAppend:
+			h.handleAppend(stream, req)
+		}
 	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
