@@ -149,6 +149,14 @@ do_install() {
   root="${root:-$DEFAULT_ROOT}"
   root=$(readlink -f "$root" 2>/dev/null || echo "$root")
 
+  # Reject dangerous root paths
+  case "$root" in
+    /|/usr|/etc|/var|/bin|/sbin|/lib|/boot|/root)
+      log_error "Refusing dangerous --root path: ${root}"
+      exit 1
+      ;;
+  esac
+
   # Validate TLS flags
   if [ -n "$tls_cert" ] || [ -n "$tls_key" ]; then
     if [ -z "$tls_cert" ] || [ -z "$tls_key" ]; then
