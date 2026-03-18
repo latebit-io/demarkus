@@ -58,9 +58,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: -path is required\n")
 		os.Exit(1)
 	}
+	for _, r := range *path {
+		if r == 0 || (r < 32 && r != '\t') || r == 127 {
+			fmt.Fprintf(os.Stderr, "error: -path contains control characters\n")
+			os.Exit(1)
+		}
+	}
 	*path = pathpkg.Clean(*path)
 	if !strings.HasPrefix(*path, "/") {
 		fmt.Fprintf(os.Stderr, "error: -path must start with \"/\" (e.g. /index.md)\n")
+		os.Exit(1)
+	}
+	if *path == "/" {
+		fmt.Fprintf(os.Stderr, "error: -path must be a document path, not \"/\"\n")
 		os.Exit(1)
 	}
 	if isHashPath(*path) {
