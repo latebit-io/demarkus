@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/latebit/demarkus/protocol"
 	"github.com/latebit/demarkus/server/internal/store"
@@ -41,6 +42,14 @@ func main() {
 	}
 	if *path == "" {
 		fmt.Fprintf(os.Stderr, "error: -path is required\n")
+		os.Exit(1)
+	}
+	if !strings.HasPrefix(*path, "/") {
+		fmt.Fprintf(os.Stderr, "error: -path must start with \"/\" (e.g. /index.md)\n")
+		os.Exit(1)
+	}
+	if strings.HasPrefix(*path, "/sha256-") {
+		fmt.Fprintf(os.Stderr, "error: /sha256-* paths are reserved for content-addressed fetch\n")
 		os.Exit(1)
 	}
 
