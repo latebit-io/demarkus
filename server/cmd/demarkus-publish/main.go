@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/latebit/demarkus/protocol"
 	"github.com/latebit/demarkus/server/internal/store"
 )
 
@@ -48,13 +49,17 @@ func main() {
 		content = []byte(*body)
 	} else {
 		var err error
-		content, err = io.ReadAll(os.Stdin)
+		content, err = io.ReadAll(io.LimitReader(os.Stdin, protocol.MaxBodyLength+1))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error reading stdin: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
+	if int64(len(content)) > protocol.MaxBodyLength {
+		fmt.Fprintf(os.Stderr, "error: content exceeds %d byte limit\n", protocol.MaxBodyLength)
+		os.Exit(1)
+	}
 	if len(content) == 0 {
 		fmt.Fprintf(os.Stderr, "error: empty content\n")
 		os.Exit(1)
