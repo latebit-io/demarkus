@@ -29,6 +29,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
 	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
+	readOnly := flag.Bool("read-only", false, "reject all write operations (overrides DEMARKUS_READ_ONLY)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: demarkus-server [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Serves markdown documents over the Mark Protocol (QUIC, port %d).\n", protocol.DefaultPort)
@@ -61,6 +62,9 @@ func main() {
 	}
 	if *tokens != "" {
 		cfg.TokensFile = *tokens
+	}
+	if *readOnly {
+		cfg.ReadOnly = true
 	}
 	if cfg.ContentDir == "" {
 		logger.Error("content directory is required (set DEMARKUS_ROOT or use -root flag)")
@@ -120,6 +124,7 @@ func main() {
 		ContentDir: cfg.ContentDir,
 		Store:      s,
 		Logger:     logger,
+		ReadOnly:   cfg.ReadOnly,
 		GetTokenStore: func() *auth.TokenStore {
 			tokenMu.RLock()
 			defer tokenMu.RUnlock()
@@ -132,6 +137,10 @@ func main() {
 		rl = ratelimit.New(cfg.RateLimit, cfg.RateBurst)
 		defer rl.Stop()
 		logger.Info("rate limit configured", "req_per_sec", cfg.RateLimit, "burst", cfg.RateBurst)
+	}
+
+	if cfg.ReadOnly {
+		logger.Info("read-only mode enabled, all write operations will be rejected")
 	}
 
 	logger.Info("server started",
