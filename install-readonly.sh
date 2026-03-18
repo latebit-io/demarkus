@@ -76,11 +76,33 @@ download_binary() {
   local dest="$4"
 
   local tag="${component}/v${version}"
-  local archive="${binary}_${version}_linux_${ARCH}.tar.gz"
-  local url="https://github.com/${GITHUB_REPO}/releases/download/${tag}/${archive}"
+  local archive="demarkus-${component}_${version}_linux_${ARCH}.tar.gz"
+  local checksums="demarkus-${component}_checksums.txt"
+  local base_url="https://github.com/${GITHUB_REPO}/releases/download/${tag}"
 
   log_info "Downloading ${binary} v${version}..."
-  curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${dest}/${archive}" "$url"
+  curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${dest}/${archive}" "${base_url}/${archive}"
+
+  # Verify checksum
+  if curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${dest}/${checksums}" "${base_url}/${checksums}" 2>/dev/null; then
+    local expected actual
+    expected=$(grep "${archive}" "${dest}/${checksums}" | awk '{print $1}')
+    if [ -n "$expected" ]; then
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "${dest}/${archive}" | awk '{print $1}')
+      elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "${dest}/${archive}" | awk '{print $1}')
+      fi
+      if [ -n "$actual" ] && [ "$expected" != "$actual" ]; then
+        log_error "Checksum mismatch for ${archive}"
+        log_error "  Expected: $expected"
+        log_error "  Actual:   $actual"
+        exit 1
+      fi
+      log_info "Checksum verified"
+    fi
+  fi
+
   tar -xzf "${dest}/${archive}" -C "$dest" "$binary" 2>/dev/null || \
     tar -xzf "${dest}/${archive}" -C "$dest"
 }

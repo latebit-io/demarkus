@@ -84,7 +84,7 @@ Set `ReadWritePaths` to match your `DEMARKUS_ROOT`. The server only reads the to
 For Gemini-level security, run the server in read-only mode inside a chroot:
 
 ```bash
-curl -fsSL .../install-readonly.sh | sudo bash -s -- --domain example.com
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | sudo bash -s -- --domain example.com
 ```
 
 This installs the server with `-read-only` flag inside a chroot (`/srv/demarkus`). The process cannot write to the filesystem at all — not even the content directory. Publish content locally with `demarkus-publish`:
