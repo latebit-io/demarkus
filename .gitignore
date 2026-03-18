@@ -46,6 +46,7 @@ tools/demarkus-token
 # .idea/
 # .vscode/
 tokens.toml
+bin
 
 # MCP config (contains auth tokens)
 .mcp.json
