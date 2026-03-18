@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	pathpkg "path"
 	"strings"
 
 	"github.com/latebit/demarkus/protocol"
@@ -44,6 +45,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: -path is required\n")
 		os.Exit(1)
 	}
+	*path = pathpkg.Clean(*path)
 	if !strings.HasPrefix(*path, "/") {
 		fmt.Fprintf(os.Stderr, "error: -path must start with \"/\" (e.g. /index.md)\n")
 		os.Exit(1)
