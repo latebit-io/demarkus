@@ -10,6 +10,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -62,8 +63,12 @@ func main() {
 	s := store.New(*root)
 	doc, err := s.Write(*path, content, nil)
 	if err != nil {
-		if err == store.ErrNotModified {
-			fmt.Fprintf(os.Stderr, "unchanged (v%d)\n", doc.Version)
+		if errors.Is(err, store.ErrNotModified) {
+			if doc != nil {
+				fmt.Fprintf(os.Stderr, "unchanged (v%d)\n", doc.Version)
+			} else {
+				fmt.Fprintf(os.Stderr, "unchanged\n")
+			}
 			return
 		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
