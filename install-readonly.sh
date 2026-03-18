@@ -66,7 +66,7 @@ fetch_latest_version() {
     | grep '"tag_name"' \
     | grep "$tag_prefix" \
     | head -1 \
-    | sed 's/.*"tag_name": *"'"$tag_prefix"'\([^"]*\)".*/\1/'
+    | sed 's|.*"tag_name": *"'"$tag_prefix"'\([^"]*\)".*|\1|'
 }
 
 download_binary() {
