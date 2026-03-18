@@ -25,6 +25,11 @@
         >Soul</a
     >
     <a
+        class="{% if page.url == '/security/' %}is-active{% endif %}"
+        href="{{ '/security/' | relative_url }}"
+        >Security</a
+    >
+    <a
         class="{% if page.url == '/about/' %}is-active{% endif %}"
         href="{{ '/about/' | relative_url }}"
         >About</a
