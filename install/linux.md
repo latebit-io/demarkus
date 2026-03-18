@@ -46,6 +46,15 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 No sudo needed for client-only. Installs to `~/.local/bin` if `/usr/local/bin` is not writable.
 
+## Read-only server (maximum security)
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | \
+  bash -s -- --domain yourdomain.com
+```
+
+Installs the server inside a chroot with zero write access. Publish content locally with `demarkus-publish`. See [Security Model](/security/) for details.
+
 ## What the installer does
 
 - Downloads binaries for `linux/amd64`, `linux/arm64`, or `linux/arm` from GitHub Releases

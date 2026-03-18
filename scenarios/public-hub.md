@@ -81,7 +81,17 @@ demarkus mark://yourdomain.com/index.md
 
 You should see the document with `status: ok`.
 
-### 5. Enable writes (optional)
+### 5. Publish content
+
+**Option A: Local publishing (recommended for public servers)**
+
+Use `demarkus-publish` to write directly to the versioned store on disk. No network write access needed — the server can run in [read-only mode](/security/#read-only-mode-maximum-lockdown) for maximum security:
+
+```bash
+demarkus-publish -root /srv/site -path /hello.md -body "# Hello"
+```
+
+**Option B: Remote publishing via tokens**
 
 Generate a publish token on the server:
 
@@ -163,5 +173,6 @@ demarkus mark://yourdomain.com/health
 ## Related
 
 - [Install on Linux](/install/linux/)
+- [Security Model](/security/) — read-only mode, chroot install, hardening
 - [Getting Started](/getting-started/)
 - [Troubleshooting](/troubleshooting/)

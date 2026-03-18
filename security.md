@@ -96,18 +96,52 @@ systemctl show demarkus -p ProtectSystem,ProtectHome,NoNewPrivileges,ReadWritePa
 
 Running `demarkus-install update` detects if the systemd unit is missing hardening and prompts you to apply it. If the service fails to start after hardening, it automatically rolls back to the previous config.
 
-## Write Isolation (Optional)
+## Read-Only Mode (Maximum Lockdown)
 
-For maximum lockdown, don't expose port 6309 externally at all. Only open UDP 443 with a redirect:
+For Gemini-level security, run the server in read-only mode. All PUBLISH, APPEND, and ARCHIVE requests are rejected — the server needs zero write access to the filesystem.
+
+### Quick setup
 
 ```bash
-# Don't open 6309 in the firewall — only localhost can reach it
-# Redirect public UDP 443 to the server port for read access
-sudo iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-port 6309
-sudo iptables -A INPUT -p udp --dport 443 -j ACCEPT
+demarkus-server -read-only -root /srv/site
 ```
 
-Local clients publish to `localhost:6309` (loopback bypasses INPUT rules). External traffic only reaches the server via the 443 redirect. This gives you the same trust boundary as a static file server — local writes, public reads — while keeping full protocol versioning.
+Or via environment variable:
+
+```bash
+DEMARKUS_READ_ONLY=1 demarkus-server -root /srv/site
+```
+
+### Chroot install
+
+For maximum isolation, use the read-only install script. It runs the server inside a chroot with a fully read-only filesystem:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | sudo bash -s -- --domain example.com
+```
+
+The chroot structure:
+
+```
+/srv/demarkus/
+  bin/demarkus-server    <- binary inside chroot
+  content/               <- documents
+  tls/cert.pem           <- certificates
+  tls/key.pem
+```
+
+The systemd unit uses `RootDirectory` and `ReadOnlyPaths=/` — the process cannot see or write anything outside the chroot.
+
+### Publishing content locally
+
+Publish with `demarkus-publish` — it writes directly to the versioned store on disk, bypassing the server:
+
+```bash
+demarkus-publish -root /srv/demarkus/content -path /index.md -body "# Hello"
+echo "# Hello" | demarkus-publish -root /srv/demarkus/content -path /index.md
+```
+
+Full versioning is preserved — `demarkus-publish` uses the same store code as the server. The server just serves what's on disk.
 
 ## Comparison
 

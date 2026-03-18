@@ -46,3 +46,4 @@ tokens.toml
 client
 .clawhub
 plugins
+server/
