@@ -20,6 +20,8 @@ import (
 	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
+	"github.com/muesli/termenv"
+	"golang.org/x/term"
 )
 
 type focus int
@@ -88,6 +90,9 @@ type model struct {
 
 	// Persistent graph
 	graphStore *graphstore.Store
+
+	// Terminal style — "dark" or "light", resolved once before Bubbletea starts.
+	styleName string
 }
 
 type fetchResult struct {
@@ -185,7 +190,7 @@ const helpText = `
     Esc          Exit bookmarks / dismiss help / blur address bar
 `
 
-func initialModel(initialURL string, client *fetch.Client) model {
+func initialModel(initialURL string, client *fetch.Client, styleName string) model {
 	ti := textinput.New()
 	ti.Placeholder = "mark://host:port/path"
 	ti.Prompt = " "
@@ -218,6 +223,7 @@ func initialModel(initialURL string, client *fetch.Client) model {
 		bookmarkStore: bs,
 		bookmarkMsg:   bmMsg,
 		graphStore:    gs,
+		styleName:     styleName,
 	}
 }
 
@@ -789,7 +795,7 @@ func (m *model) renderMarkdown(body string) (string, error) {
 	wrapWidth := m.width - 4
 	if m.renderer == nil || m.rendererWidth != wrapWidth {
 		r, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStandardStyle(m.styleName),
 			glamour.WithWordWrap(wrapWidth),
 		)
 		if err != nil {
@@ -805,9 +811,33 @@ func errorView(err error) string {
 	return fmt.Sprintf("\n  Error: %s\n", err.Error())
 }
 
+// detectStyle probes the terminal background and returns "dark" or "light".
+// Must be called before Bubbletea starts, since Bubbletea takes over stdin.
+func detectStyle() string {
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		return "dark"
+	}
+	if termenv.HasDarkBackground() {
+		return "dark"
+	}
+	return "light"
+}
+
 func main() {
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
+	style := flag.String("style", "auto", "color style: dark, light, or auto")
 	flag.Parse()
+
+	styleName := *style
+	if styleName == "auto" {
+		styleName = detectStyle()
+	}
+	switch styleName {
+	case "dark", "light":
+	default:
+		fmt.Fprintf(os.Stderr, "invalid style %q: must be dark, light, or auto\n", styleName)
+		os.Exit(1)
+	}
 
 	client := fetch.NewClient(fetch.Options{
 		Cache:    cache.New(cache.DefaultDir()),
@@ -821,7 +851,7 @@ func main() {
 	}
 
 	p := tea.NewProgram(
-		initialModel(initialURL, client),
+		initialModel(initialURL, client, styleName),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
