@@ -814,7 +814,7 @@ func errorView(err error) string {
 // detectStyle probes the terminal background and returns "dark" or "light".
 // Must be called before Bubbletea starts, since Bubbletea takes over stdin.
 func detectStyle() string {
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return "dark"
 	}
 	if termenv.HasDarkBackground() {
