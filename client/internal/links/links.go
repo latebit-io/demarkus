@@ -109,6 +109,14 @@ func ExtractWithPositions(body string) []LinkInfo {
 		})
 
 		if firstStart < 0 {
+			// Link with no text nodes (e.g. [](a.md)) — preserve for navigation
+			// but mark positions as unknown so marker injection skips it.
+			infos = append(infos, LinkInfo{
+				Dest:         dest,
+				Text:         "",
+				OpenBracket:  -1,
+				CloseBracket: -1,
+			})
 			return ast.WalkContinue, nil
 		}
 

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -891,6 +892,8 @@ type linkRegion struct {
 	endCol   int // end column (visual, excluding ANSI codes)
 }
 
+const maxMarkedLinks = 0x1000 // 4096 links max to avoid marker range overlap
+
 // markerStart returns the start marker rune for link index i.
 func markerStart(i int) rune { return rune(0xF0000 + i) }
 
@@ -904,26 +907,42 @@ func injectLinkMarkers(body string, infos []links.LinkInfo) string {
 	if len(infos) == 0 {
 		return body
 	}
-	b := []byte(body)
-	// Process in reverse so earlier offsets stay valid.
-	for i := len(infos) - 1; i >= 0; i-- {
-		info := infos[i]
-		endMarker := string(markerEnd(i))
-		startMarker := string(markerStart(i))
-		// Insert end marker before ']'.
-		b = insertAt(b, info.CloseBracket, []byte(endMarker))
-		// Insert start marker after '['.
-		b = insertAt(b, info.OpenBracket+1, []byte(startMarker))
+	if len(infos) > maxMarkedLinks {
+		infos = infos[:maxMarkedLinks]
 	}
-	return string(b)
-}
 
-func insertAt(b []byte, pos int, insert []byte) []byte {
-	result := make([]byte, len(b)+len(insert))
-	copy(result, b[:pos])
-	copy(result[pos:], insert)
-	copy(result[pos+len(insert):], b[pos:])
-	return result
+	// Build insertion points sorted by byte offset.
+	// Each link needs two insertions: start marker after '[', end marker before ']'.
+	type insertion struct {
+		pos    int
+		marker string
+	}
+	insertions := make([]insertion, 0, len(infos)*2)
+	for i, info := range infos {
+		if info.OpenBracket < 0 {
+			continue // no text nodes — skip marker injection
+		}
+		insertions = append(insertions,
+			insertion{pos: info.OpenBracket + 1, marker: string(markerStart(i))},
+			insertion{pos: info.CloseBracket, marker: string(markerEnd(i))},
+		)
+	}
+	// Sort by position (links are already in document order, but start/end interleave).
+	sort.Slice(insertions, func(a, b int) bool {
+		return insertions[a].pos < insertions[b].pos
+	})
+
+	// Single-pass build.
+	var result strings.Builder
+	result.Grow(len(body) + len(infos)*8)
+	prev := 0
+	for _, ins := range insertions {
+		result.WriteString(body[prev:ins.pos])
+		result.WriteString(ins.marker)
+		prev = ins.pos
+	}
+	result.WriteString(body[prev:])
+	return result.String()
 }
 
 // isHighlighted reports whether a link index should be visually highlighted.
@@ -935,101 +954,106 @@ func isHighlighted(idx, selectedIdx, hoverIdx int) bool {
 // processMarkers scans rendered ANSI output for link markers, records their
 // positions as linkRegions (including the URL glamour renders after the text),
 // and highlights links matching selectedIdx or hoverIdx with reverse video.
+// Marker state is tracked across the entire string to handle line-wrapped links.
 func processMarkers(rendered string, selectedIdx, hoverIdx int) (string, []linkRegion) {
-	lines := strings.Split(rendered, "\n")
 	var regions []linkRegion
 	var result strings.Builder
 	result.Grow(len(rendered))
 
-	for lineNum, line := range lines {
-		if lineNum > 0 {
-			result.WriteByte('\n')
+	lineNum := 0
+	visualCol := 0
+	inEscape := false
+
+	openIdx := -1
+	openCol := 0
+
+	extendingIdx := -1
+	extendingCol := 0
+	seenURLChar := false
+
+	runes := []rune(rendered)
+	for i, r := range runes {
+		// ANSI escape sequence: \x1b[...m
+		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
+			inEscape = true
+			result.WriteRune(r)
+			continue
+		}
+		if inEscape {
+			result.WriteRune(r)
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
 		}
 
-		// Track visual column (skipping ANSI escape sequences).
-		visualCol := 0
-		inEscape := false
-		// Track open marker for this line.
-		openIdx := -1
-		openCol := 0
-		// After end marker, scan forward to include the URL portion.
-		extendingIdx := -1
-		extendingCol := 0
-		seenURLChar := false
-
-		runes := []rune(line)
-		for i, r := range runes {
-
-			// ANSI escape sequence: \x1b[...m
-			if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
-				inEscape = true
-				result.WriteRune(r)
-				continue
-			}
-			if inEscape {
-				result.WriteRune(r)
-				if r == 'm' {
-					inEscape = false
-				}
-				continue
-			}
-
-			// If extending past end marker to capture URL, check for termination.
+		// Newline resets visual column and may terminate URL extension.
+		if r == '\n' {
 			if extendingIdx >= 0 {
-				if r == ' ' && seenURLChar {
-					// Space after URL text — done extending.
-					finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
-					extendingIdx = -1
-					seenURLChar = false
-					result.WriteRune(r)
-					visualCol++
-					continue
-				}
-				if r == ' ' {
-					// Space between link text and URL — include it.
-					extendingCol++
-					result.WriteRune(r)
-					visualCol++
-					continue
-				}
-				// URL character.
-				seenURLChar = true
+				finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
+				extendingIdx = -1
+				seenURLChar = false
+			}
+			result.WriteRune(r)
+			lineNum++
+			visualCol = 0
+			continue
+		}
+
+		// If extending past end marker to capture URL, check for termination.
+		if extendingIdx >= 0 {
+			if r == ' ' && seenURLChar {
+				finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
+				extendingIdx = -1
+				seenURLChar = false
+				result.WriteRune(r)
+				visualCol++
+				continue
+			}
+			if r == ' ' {
 				extendingCol++
 				result.WriteRune(r)
 				visualCol++
 				continue
 			}
-
-			// Check for start marker (U+F0000 + idx).
-			if r >= 0xF0000 && r < 0xF1000 {
-				idx := int(r - 0xF0000)
-				openIdx = idx
-				openCol = visualCol
-				if isHighlighted(idx, selectedIdx, hoverIdx) {
-					result.WriteString("\x1b[7m") // reverse video on
-				}
-				continue
-			}
-
-			// Check for end marker (U+F1000 + idx).
-			if r >= 0xF1000 && r < 0xF2000 {
-				idx := int(r - 0xF1000)
-				if openIdx == idx {
-					// Don't close region yet — extend to capture URL.
-					extendingIdx = idx
-					extendingCol = visualCol
-					openIdx = -1
-				}
-				continue
-			}
-
+			seenURLChar = true
+			extendingCol++
 			result.WriteRune(r)
 			visualCol++
+			continue
 		}
-		// Flush any extending region at end of line.
-		if extendingIdx >= 0 {
-			finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
+
+		// Check for start marker (U+F0000 + idx).
+		if r >= 0xF0000 && r < 0xF1000 {
+			idx := int(r - 0xF0000)
+			openIdx = idx
+			openCol = visualCol
+			if isHighlighted(idx, selectedIdx, hoverIdx) {
+				result.WriteString("\x1b[7m") // reverse video on
+			}
+			continue
 		}
+
+		// Check for end marker (U+F1000 + idx).
+		if r >= 0xF1000 && r < 0xF2000 {
+			idx := int(r - 0xF1000)
+			if openIdx == idx {
+				extendingIdx = idx
+				extendingCol = visualCol
+				openIdx = -1
+			}
+			continue
+		}
+
+		result.WriteRune(r)
+		visualCol++
+	}
+
+	// Flush state at end of input.
+	if extendingIdx >= 0 {
+		finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
+	} else if openIdx >= 0 && isHighlighted(openIdx, selectedIdx, hoverIdx) {
+		result.WriteString("\x1b[27m") // close unclosed highlight
 	}
 
 	return result.String(), regions
