@@ -33,12 +33,14 @@ const (
 
 // historyEntry stores a snapshot of a visited page for instant back/forward.
 type historyEntry struct {
-	url      string
-	rendered string // glamour-rendered content
-	rawBody  string
-	status   string
-	metadata map[string]string
-	links    []string // resolved absolute mark:// URLs
+	url            string
+	rendered       string // glamour-rendered content (cleaned, no markers)
+	markedRendered string // glamour output with markers for re-highlighting
+	rawBody        string
+	status         string
+	metadata       map[string]string
+	links          []string         // resolved absolute mark:// URLs
+	linkInfos      []links.LinkInfo // link positions for marker injection
 }
 
 type model struct {
@@ -65,9 +67,13 @@ type model struct {
 	histIdx int
 
 	// Link navigation
-	rawBody string   // raw markdown body of current page
-	links   []string // resolved absolute mark:// URLs
-	linkIdx int      // -1 = none selected
+	rawBody        string           // raw markdown body of current page
+	links          []string         // resolved absolute mark:// URLs
+	linkIdx        int              // -1 = none selected
+	linkInfos      []links.LinkInfo // extended link info with source positions
+	linkRegions    []linkRegion     // rendered coordinate map for click detection
+	markedRendered string           // glamour output with markers (before highlight)
+	hoverIdx       int              // -1 = no hover, index of link under mouse cursor
 
 	// Fetch sequencing: ignore stale results from superseded fetches.
 	fetchSeq uint64
@@ -143,20 +149,32 @@ func (m *model) restoreHistory() {
 	m.metadata = entry.metadata
 	m.rawBody = entry.rawBody
 	m.links = entry.links
+	m.linkInfos = entry.linkInfos
+	m.markedRendered = entry.markedRendered
 	m.linkIdx = -1
+	m.hoverIdx = -1
 	m.err = nil
 	m.loading = false
 	m.fromCache = false
 	if m.ready {
 		content := entry.rendered
 		if content == "" && entry.rawBody != "" {
-			r, err := m.renderMarkdown(entry.rawBody)
+			marked := injectLinkMarkers(entry.rawBody, entry.linkInfos)
+			r, err := m.renderMarkdown(marked)
 			if err != nil {
 				content = entry.rawBody
 			} else {
-				content = r
+				m.markedRendered = r
+				cleaned, regions := processMarkers(r, m.linkIdx, m.hoverIdx)
+				m.linkRegions = regions
+				content = cleaned
 			}
 			m.history[m.histIdx].rendered = content
+			m.history[m.histIdx].markedRendered = m.markedRendered
+		} else if m.markedRendered != "" {
+			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
+			m.linkRegions = regions
+			content = cleaned
 		}
 		m.viewport.SetContent(content)
 		m.viewport.GotoTop()
@@ -220,6 +238,7 @@ func initialModel(initialURL string, client *fetch.Client, styleName string) mod
 		loading:       initialURL != "",
 		histIdx:       -1,
 		linkIdx:       -1,
+		hoverIdx:      -1,
 		bookmarkStore: bs,
 		bookmarkMsg:   bmMsg,
 		graphStore:    gs,
@@ -264,13 +283,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Handle hover highlighting on mouse motion.
+	if msg.Action == tea.MouseActionMotion && m.ready && m.viewMode == viewDocument && m.markedRendered != "" {
+		contentLine := msg.Y - 2 + m.viewport.YOffset
+		contentCol := msg.X
+		newHover := -1
+		if msg.Y >= 2 {
+			for _, r := range m.linkRegions {
+				if r.line == contentLine && contentCol >= r.startCol && contentCol < r.endCol {
+					newHover = r.idx
+					break
+				}
+			}
+		}
+		if newHover != m.hoverIdx {
+			m.hoverIdx = newHover
+			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
+			m.linkRegions = regions
+			m.viewport.SetContent(cleaned)
+		}
+	}
+
 	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 		if msg.Y == 0 {
 			m.focus = focusAddressBar
 			m.addressBar.Focus()
 			return m, textinput.Blink
 		}
-		if msg.Y >= 2 {
+		if msg.Y >= 2 && m.ready && m.viewMode == viewDocument {
+			// Check if click lands on a link.
+			contentLine := msg.Y - 2 + m.viewport.YOffset
+			contentCol := msg.X
+			for _, r := range m.linkRegions {
+				if r.line != contentLine || contentCol < r.startCol || contentCol >= r.endCol {
+					continue
+				}
+				target := m.links[r.idx]
+				m.addressBar.SetValue(target)
+				m.loading = true
+				m.fetchSeq++
+				m.links = nil
+				m.linkIdx = -1
+				m.hoverIdx = -1
+				return m, m.doFetch(target)
+			}
+			m.focus = focusViewport
+			m.addressBar.Blur()
+		} else if msg.Y >= 2 {
 			m.focus = focusViewport
 			m.addressBar.Blur()
 		}
@@ -315,11 +374,15 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleViewportReady() (tea.Model, tea.Cmd) {
 	if m.pendingBody != "" {
-		rendered, err := m.renderMarkdown(m.pendingBody)
+		marked := injectLinkMarkers(m.pendingBody, m.linkInfos)
+		rendered, err := m.renderMarkdown(marked)
 		if err != nil {
 			m.viewport.SetContent(m.pendingBody)
 		} else {
-			m.viewport.SetContent(rendered)
+			m.markedRendered = rendered
+			cleaned, regions := processMarkers(rendered, m.linkIdx, m.hoverIdx)
+			m.linkRegions = regions
+			m.viewport.SetContent(cleaned)
 		}
 		m.pendingBody = ""
 		m.viewport.GotoTop()
@@ -377,6 +440,7 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 		m.fromCache = false
 		m.links = nil
 		m.linkIdx = -1
+		m.hoverIdx = -1
 		if m.ready {
 			m.viewport.SetContent(errorView(msg.err))
 		}
@@ -389,21 +453,27 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 
 	// Extract and resolve links from raw body.
 	m.rawBody = msg.result.Response.Body
-	raw := links.Extract(m.rawBody)
-	m.links = make([]string, 0, len(raw))
-	for _, dest := range raw {
-		m.links = append(m.links, links.Resolve(msg.url, dest))
+	m.linkInfos = links.ExtractWithPositions(m.rawBody)
+	m.links = make([]string, 0, len(m.linkInfos))
+	for _, li := range m.linkInfos {
+		m.links = append(m.links, links.Resolve(msg.url, li.Dest))
 	}
 	m.linkIdx = -1
+	m.hoverIdx = -1
 
-	// Render markdown.
+	// Render markdown with link markers.
 	var rendered string
 	if m.ready {
-		r, err := m.renderMarkdown(msg.result.Response.Body)
+		marked := injectLinkMarkers(msg.result.Response.Body, m.linkInfos)
+		r, err := m.renderMarkdown(marked)
 		if err != nil {
 			rendered = msg.result.Response.Body
+			m.markedRendered = ""
 		} else {
-			rendered = r
+			m.markedRendered = r
+			cleaned, regions := processMarkers(r, m.linkIdx, m.hoverIdx)
+			m.linkRegions = regions
+			rendered = cleaned
 		}
 		m.viewport.SetContent(rendered)
 		m.viewport.GotoTop()
@@ -412,12 +482,14 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	}
 
 	m.history, m.histIdx = pushHistory(m.history, m.histIdx, historyEntry{
-		url:      msg.url,
-		rendered: rendered,
-		rawBody:  m.rawBody,
-		status:   m.status,
-		metadata: m.metadata,
-		links:    m.links,
+		url:            msg.url,
+		rendered:       rendered,
+		markedRendered: m.markedRendered,
+		rawBody:        m.rawBody,
+		status:         m.status,
+		metadata:       m.metadata,
+		links:          m.links,
+		linkInfos:      m.linkInfos,
 	})
 
 	m.focus = focusViewport
@@ -561,6 +633,26 @@ func (m model) handleTabNavigation() (tea.Model, tea.Cmd) {
 		m.linkIdx = (m.linkIdx + 1) % (len(m.links) + 1)
 		if m.linkIdx == len(m.links) {
 			m.linkIdx = -1
+		}
+		// Re-highlight without re-rendering glamour.
+		if m.markedRendered != "" {
+			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
+			m.linkRegions = regions
+			m.viewport.SetContent(cleaned)
+			// Scroll to keep the selected link visible.
+			if m.linkIdx >= 0 {
+				for _, r := range regions {
+					if r.idx != m.linkIdx {
+						continue
+					}
+					if r.line < m.viewport.YOffset {
+						m.viewport.SetYOffset(r.line)
+					} else if r.line >= m.viewport.YOffset+m.viewport.Height {
+						m.viewport.SetYOffset(r.line - m.viewport.Height + 1)
+					}
+					break
+				}
+			}
 		}
 	}
 	return m, nil
@@ -791,6 +883,171 @@ func (m model) doFetch(raw string) tea.Cmd {
 	}
 }
 
+// linkRegion maps a link index to its position in the rendered output.
+type linkRegion struct {
+	idx      int // index into m.links
+	line     int // 0-based line number in rendered output
+	startCol int // start column (visual, excluding ANSI codes)
+	endCol   int // end column (visual, excluding ANSI codes)
+}
+
+// markerStart returns the start marker rune for link index i.
+func markerStart(i int) rune { return rune(0xF0000 + i) }
+
+// markerEnd returns the end marker rune for link index i.
+func markerEnd(i int) rune { return rune(0xF1000 + i) }
+
+// injectLinkMarkers inserts unique Unicode markers around each link's text in the
+// raw markdown source. Markers are placed inside the brackets: [⟪text⟫](url).
+// Processes in reverse order so earlier byte offsets stay valid.
+func injectLinkMarkers(body string, infos []links.LinkInfo) string {
+	if len(infos) == 0 {
+		return body
+	}
+	b := []byte(body)
+	// Process in reverse so earlier offsets stay valid.
+	for i := len(infos) - 1; i >= 0; i-- {
+		info := infos[i]
+		endMarker := string(markerEnd(i))
+		startMarker := string(markerStart(i))
+		// Insert end marker before ']'.
+		b = insertAt(b, info.CloseBracket, []byte(endMarker))
+		// Insert start marker after '['.
+		b = insertAt(b, info.OpenBracket+1, []byte(startMarker))
+	}
+	return string(b)
+}
+
+func insertAt(b []byte, pos int, insert []byte) []byte {
+	result := make([]byte, len(b)+len(insert))
+	copy(result, b[:pos])
+	copy(result[pos:], insert)
+	copy(result[pos+len(insert):], b[pos:])
+	return result
+}
+
+// isHighlighted reports whether a link index should be visually highlighted.
+// Hover takes priority, but Tab selection is also shown.
+func isHighlighted(idx, selectedIdx, hoverIdx int) bool {
+	return idx == hoverIdx || idx == selectedIdx
+}
+
+// processMarkers scans rendered ANSI output for link markers, records their
+// positions as linkRegions (including the URL glamour renders after the text),
+// and highlights links matching selectedIdx or hoverIdx with reverse video.
+func processMarkers(rendered string, selectedIdx, hoverIdx int) (string, []linkRegion) {
+	lines := strings.Split(rendered, "\n")
+	var regions []linkRegion
+	var result strings.Builder
+	result.Grow(len(rendered))
+
+	for lineNum, line := range lines {
+		if lineNum > 0 {
+			result.WriteByte('\n')
+		}
+
+		// Track visual column (skipping ANSI escape sequences).
+		visualCol := 0
+		inEscape := false
+		// Track open marker for this line.
+		openIdx := -1
+		openCol := 0
+		// After end marker, scan forward to include the URL portion.
+		extendingIdx := -1
+		extendingCol := 0
+		seenURLChar := false
+
+		runes := []rune(line)
+		for i, r := range runes {
+
+			// ANSI escape sequence: \x1b[...m
+			if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
+				inEscape = true
+				result.WriteRune(r)
+				continue
+			}
+			if inEscape {
+				result.WriteRune(r)
+				if r == 'm' {
+					inEscape = false
+				}
+				continue
+			}
+
+			// If extending past end marker to capture URL, check for termination.
+			if extendingIdx >= 0 {
+				if r == ' ' && seenURLChar {
+					// Space after URL text — done extending.
+					finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
+					extendingIdx = -1
+					seenURLChar = false
+					result.WriteRune(r)
+					visualCol++
+					continue
+				}
+				if r == ' ' {
+					// Space between link text and URL — include it.
+					extendingCol++
+					result.WriteRune(r)
+					visualCol++
+					continue
+				}
+				// URL character.
+				seenURLChar = true
+				extendingCol++
+				result.WriteRune(r)
+				visualCol++
+				continue
+			}
+
+			// Check for start marker (U+F0000 + idx).
+			if r >= 0xF0000 && r < 0xF1000 {
+				idx := int(r - 0xF0000)
+				openIdx = idx
+				openCol = visualCol
+				if isHighlighted(idx, selectedIdx, hoverIdx) {
+					result.WriteString("\x1b[7m") // reverse video on
+				}
+				continue
+			}
+
+			// Check for end marker (U+F1000 + idx).
+			if r >= 0xF1000 && r < 0xF2000 {
+				idx := int(r - 0xF1000)
+				if openIdx == idx {
+					// Don't close region yet — extend to capture URL.
+					extendingIdx = idx
+					extendingCol = visualCol
+					openIdx = -1
+				}
+				continue
+			}
+
+			result.WriteRune(r)
+			visualCol++
+		}
+		// Flush any extending region at end of line.
+		if extendingIdx >= 0 {
+			finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
+		}
+	}
+
+	return result.String(), regions
+}
+
+// finishExtend closes an extending link region and turns off highlight if needed.
+func finishExtend(regions *[]linkRegion, result *strings.Builder, idx, lineNum, startCol, endCol, selectedIdx, hoverIdx int) {
+	*regions = append(*regions, linkRegion{
+		idx:      idx,
+		line:     lineNum,
+		startCol: startCol,
+		endCol:   endCol,
+	})
+	if isHighlighted(idx, selectedIdx, hoverIdx) {
+		result.WriteString("\x1b[27m") // reverse video off
+	}
+}
+
 func (m *model) renderMarkdown(body string) (string, error) {
 	wrapWidth := m.width - 4
 	if m.renderer == nil || m.rendererWidth != wrapWidth {
@@ -853,7 +1110,7 @@ func main() {
 	p := tea.NewProgram(
 		initialModel(initialURL, client, styleName),
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
+		tea.WithMouseAllMotion(),
 	)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
