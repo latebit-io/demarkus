@@ -912,7 +912,7 @@ func markerEnd(i int) rune { return rune(0xF1000 + i) }
 
 // injectLinkMarkers inserts unique Unicode markers around each link's text in the
 // raw markdown source. Markers are placed inside the brackets: [⟪text⟫](url).
-// Processes in reverse order so earlier byte offsets stay valid.
+// Builds a sorted list of insertions and applies them in a single forward pass.
 func injectLinkMarkers(body string, infos []links.LinkInfo) string {
 	if len(infos) == 0 {
 		return body
