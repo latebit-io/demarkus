@@ -62,6 +62,77 @@ func TestExtract(t *testing.T) {
 	}
 }
 
+func TestExtractWithPositions(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []LinkInfo
+	}{
+		{
+			name: "no links",
+			body: "Just some text.",
+			want: nil,
+		},
+		{
+			name: "single link",
+			body: "See [other](other.md) for details.",
+			want: []LinkInfo{
+				{Dest: "other.md", Text: "other", OpenBracket: 4, CloseBracket: 10},
+			},
+		},
+		{
+			name: "multiple links",
+			body: "[a](a.md) and [b](/b.md)",
+			want: []LinkInfo{
+				{Dest: "a.md", Text: "a", OpenBracket: 0, CloseBracket: 2},
+				{Dest: "/b.md", Text: "b", OpenBracket: 14, CloseBracket: 16},
+			},
+		},
+		{
+			name: "fragment only excluded",
+			body: "See [section](#overview).",
+			want: nil,
+		},
+		{
+			name: "fragment stripped from destination",
+			body: "[intro](doc.md#intro)",
+			want: []LinkInfo{
+				{Dest: "doc.md", Text: "intro", OpenBracket: 0, CloseBracket: 6},
+			},
+		},
+		{
+			name: "link with bold text",
+			body: "[hello **world**](url.md)",
+			want: []LinkInfo{
+				{Dest: "url.md", Text: "hello world", OpenBracket: 0, CloseBracket: 16},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractWithPositions(tt.body)
+			if len(got) != len(tt.want) {
+				t.Fatalf("ExtractWithPositions() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i].Dest != tt.want[i].Dest {
+					t.Errorf("[%d].Dest = %q, want %q", i, got[i].Dest, tt.want[i].Dest)
+				}
+				if got[i].Text != tt.want[i].Text {
+					t.Errorf("[%d].Text = %q, want %q", i, got[i].Text, tt.want[i].Text)
+				}
+				if got[i].OpenBracket != tt.want[i].OpenBracket {
+					t.Errorf("[%d].OpenBracket = %d, want %d", i, got[i].OpenBracket, tt.want[i].OpenBracket)
+				}
+				if got[i].CloseBracket != tt.want[i].CloseBracket {
+					t.Errorf("[%d].CloseBracket = %d, want %d", i, got[i].CloseBracket, tt.want[i].CloseBracket)
+				}
+			}
+		})
+	}
+}
+
 func TestResolve(t *testing.T) {
 	tests := []struct {
 		name    string
