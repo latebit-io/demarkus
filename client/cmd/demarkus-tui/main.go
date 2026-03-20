@@ -283,26 +283,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// Handle hover highlighting on mouse motion.
-	if msg.Action == tea.MouseActionMotion && m.ready && m.viewMode == viewDocument && m.markedRendered != "" {
+func (m model) handleMouseHover(msg tea.MouseMsg) model {
+	if m.markedRendered == "" || m.showHelp || m.err != nil || m.status == "bookmarks" {
+		return m
+	}
+	newHover := -1
+	if msg.Y >= 2 {
 		contentLine := msg.Y - 2 + m.viewport.YOffset
 		contentCol := msg.X
-		newHover := -1
-		if msg.Y >= 2 {
-			for _, r := range m.linkRegions {
-				if r.line == contentLine && contentCol >= r.startCol && contentCol < r.endCol {
-					newHover = r.idx
-					break
-				}
+		for _, r := range m.linkRegions {
+			if r.line == contentLine && contentCol >= r.startCol && contentCol < r.endCol {
+				newHover = r.idx
+				break
 			}
 		}
-		if newHover != m.hoverIdx {
-			m.hoverIdx = newHover
-			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-			m.linkRegions = regions
-			m.viewport.SetContent(cleaned)
-		}
+	}
+	if newHover != m.hoverIdx {
+		m.hoverIdx = newHover
+		cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
+		m.linkRegions = regions
+		m.viewport.SetContent(cleaned)
+	}
+	return m
+}
+
+func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action == tea.MouseActionMotion && m.ready && m.viewMode == viewDocument {
+		m = m.handleMouseHover(msg)
 	}
 
 	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
@@ -442,6 +449,9 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 		m.links = nil
 		m.linkIdx = -1
 		m.hoverIdx = -1
+		m.markedRendered = ""
+		m.linkRegions = nil
+		m.linkInfos = nil
 		if m.ready {
 			m.viewport.SetContent(errorView(msg.err))
 		}
