@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/latebit/demarkus/client/internal/bookmarks"
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
@@ -21,7 +21,6 @@ import (
 	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
-	"github.com/muesli/termenv"
 	"golang.org/x/term"
 )
 
@@ -261,10 +260,12 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
-	case tea.MouseMsg:
-		return m.handleMouse(msg)
+	case tea.MouseClickMsg:
+		return m.handleMouseClick(msg)
+	case tea.MouseMotionMsg:
+		return m.handleMouseMotion(msg)
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
 	case crawlResult:
@@ -282,13 +283,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleMouseHover(msg tea.MouseMsg) model {
+func (m model) handleMouseHover(msg tea.MouseMotionMsg) model {
 	if m.markedRendered == "" || m.showHelp || m.err != nil || m.status == "bookmarks" {
 		return m
 	}
 	newHover := -1
 	if msg.Y >= 2 {
-		contentLine := msg.Y - 2 + m.viewport.YOffset
+		contentLine := msg.Y - 2 + m.viewport.YOffset()
 		contentCol := msg.X
 		for _, r := range m.linkRegions {
 			if r.line == contentLine && contentCol >= r.startCol && contentCol < r.endCol {
@@ -306,12 +307,20 @@ func (m model) handleMouseHover(msg tea.MouseMsg) model {
 	return m
 }
 
-func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if msg.Action == tea.MouseActionMotion && m.ready && m.viewMode == viewDocument {
+func (m model) handleMouseMotion(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
+	if m.ready && m.viewMode == viewDocument {
 		m = m.handleMouseHover(msg)
 	}
+	if m.ready {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
 
-	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+func (m model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
+	if msg.Button == tea.MouseLeft {
 		if msg.Y == 0 {
 			m.focus = focusAddressBar
 			m.addressBar.Focus()
@@ -319,7 +328,7 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Y >= 2 && m.ready && m.viewMode == viewDocument {
 			// Check if click lands on a link.
-			contentLine := msg.Y - 2 + m.viewport.YOffset
+			contentLine := msg.Y - 2 + m.viewport.YOffset()
 			contentCol := msg.X
 			for _, r := range m.linkRegions {
 				if r.line != contentLine || contentCol < r.startCol || contentCol >= r.endCol {
@@ -357,25 +366,25 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	viewportHeight := max(m.height-headerHeight-footerHeight, 1)
 
 	if !m.ready {
-		m.viewport = viewport.New(m.width, viewportHeight)
+		m.viewport = viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(viewportHeight))
 		m.ready = true
 		// Defer pending content to a separate update cycle so the
 		// viewport has a chance to fully initialise before receiving
 		// content. Setting content in the same cycle as creation can
 		// leave the viewport blank until the next event (e.g. scroll).
 		if m.pendingBody != "" || m.err != nil {
-			m.addressBar.Width = m.width - 2
+			m.addressBar.SetWidth(m.width - 2)
 			return m, func() tea.Msg { return viewportReady{} }
 		}
 	} else {
-		m.viewport.Width = m.width
-		m.viewport.Height = viewportHeight
+		m.viewport.SetWidth(m.width)
+		m.viewport.SetHeight(viewportHeight)
 		// Re-render graph view with new width for correct truncation.
 		if m.viewMode == viewGraph && len(m.graphNodes) > 0 {
 			m.viewport.SetContent(m.renderCurrentGraphSubView())
 		}
 	}
-	m.addressBar.Width = m.width - 2
+	m.addressBar.SetWidth(m.width - 2)
 	return m, nil
 }
 
@@ -505,13 +514,13 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyCtrlC {
+func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.Code == 'c' && msg.Mod == tea.ModCtrl {
 		return m, tea.Quit
 	}
 
 	if m.focus == focusAddressBar {
-		switch msg.Type {
+		switch msg.Code {
 		case tea.KeyEnter:
 			raw := m.addressBar.Value()
 			if raw != "" {
@@ -538,7 +547,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.handleViewportKey(msg)
 }
 
-func (m model) handleViewportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Delegate to graph key handler when in graph view.
 	if m.viewMode == viewGraph {
 		return m.handleGraphKey(msg)
@@ -623,7 +632,7 @@ func (m model) toggleFocus() model {
 	return m
 }
 
-func (m model) handleHelpDismiss(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleHelpDismiss(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "q" {
 		return m, tea.Quit
 	}
@@ -653,10 +662,10 @@ func (m model) handleTabNavigation() (tea.Model, tea.Cmd) {
 					if r.idx != m.linkIdx {
 						continue
 					}
-					if r.line < m.viewport.YOffset {
+					if r.line < m.viewport.YOffset() {
 						m.viewport.SetYOffset(r.line)
-					} else if r.line >= m.viewport.YOffset+m.viewport.Height {
-						m.viewport.SetYOffset(r.line - m.viewport.Height + 1)
+					} else if r.line >= m.viewport.YOffset()+m.viewport.Height() {
+						m.viewport.SetYOffset(r.line - m.viewport.Height() + 1)
 					}
 					break
 				}
@@ -771,9 +780,12 @@ func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	if !m.ready {
-		return "Loading..."
+		v := tea.NewView("Loading...")
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeAllMotion
+		return v
 	}
 
 	var b strings.Builder
@@ -799,7 +811,10 @@ func (m model) View() string {
 	// Status bar.
 	b.WriteString(m.statusBarView())
 
-	return b.String()
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeAllMotion
+	return v
 }
 
 func (m model) statusBarView() string {
@@ -1322,7 +1337,7 @@ func detectStyle() string {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return "dark"
 	}
-	if termenv.HasDarkBackground() {
+	if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
 		return "dark"
 	}
 	return "light"
@@ -1357,8 +1372,6 @@ func main() {
 
 	p := tea.NewProgram(
 		initialModel(initialURL, client, styleName),
-		tea.WithAltScreen(),
-		tea.WithMouseAllMotion(),
 	)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
