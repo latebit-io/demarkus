@@ -4,14 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
+	"charm.land/glamour/v2"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/latebit/demarkus/client/internal/bookmarks"
 	"github.com/latebit/demarkus/client/internal/cache"
@@ -160,13 +159,12 @@ func (m *model) restoreHistory() {
 	if m.ready {
 		content := entry.rendered
 		if content == "" && entry.rawBody != "" {
-			marked := injectLinkMarkers(entry.rawBody, entry.linkInfos)
-			r, err := m.renderMarkdown(marked)
+			r, err := m.renderMarkdown(entry.rawBody)
 			if err != nil {
 				content = entry.rawBody
 			} else {
-				m.markedRendered = r
-				cleaned, regions := processMarkers(r, m.linkIdx, m.hoverIdx)
+				m.markedRendered = injectLinkMarkers(r, entry.linkInfos)
+				cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
 				m.linkRegions = regions
 				content = cleaned
 			}
@@ -382,13 +380,12 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleViewportReady() (tea.Model, tea.Cmd) {
 	if m.pendingBody != "" {
-		marked := injectLinkMarkers(m.pendingBody, m.linkInfos)
-		rendered, err := m.renderMarkdown(marked)
+		rendered, err := m.renderMarkdown(m.pendingBody)
 		if err != nil {
 			m.viewport.SetContent(m.pendingBody)
 		} else {
-			m.markedRendered = rendered
-			cleaned, regions := processMarkers(rendered, m.linkIdx, m.hoverIdx)
+			m.markedRendered = injectLinkMarkers(rendered, m.linkInfos)
+			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
 			m.linkRegions = regions
 			m.viewport.SetContent(cleaned)
 		}
@@ -472,17 +469,16 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	m.linkIdx = -1
 	m.hoverIdx = -1
 
-	// Render markdown with link markers.
+	// Render markdown, then inject link markers into the ANSI output.
 	var rendered string
 	if m.ready {
-		marked := injectLinkMarkers(msg.result.Response.Body, m.linkInfos)
-		r, err := m.renderMarkdown(marked)
+		r, err := m.renderMarkdown(msg.result.Response.Body)
 		if err != nil {
 			rendered = msg.result.Response.Body
 			m.markedRendered = ""
 		} else {
-			m.markedRendered = r
-			cleaned, regions := processMarkers(r, m.linkIdx, m.hoverIdx)
+			m.markedRendered = injectLinkMarkers(r, m.linkInfos)
+			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
 			m.linkRegions = regions
 			rendered = cleaned
 		}
@@ -910,49 +906,106 @@ func markerStart(i int) rune { return rune(0xF0000 + i) }
 // markerEnd returns the end marker rune for link index i.
 func markerEnd(i int) rune { return rune(0xF1000 + i) }
 
-// injectLinkMarkers inserts unique Unicode markers around each link's text in the
-// raw markdown source. Markers are placed inside the brackets: [⟪text⟫](url).
-// Builds a sorted list of insertions and applies them in a single forward pass.
-func injectLinkMarkers(body string, infos []links.LinkInfo) string {
+// injectLinkMarkers inserts unique Unicode markers around each link's rendered text
+// in Glamour's ANSI output. Markers are placed by matching LinkInfo.Text against
+// the visible (non-ANSI) content. This runs AFTER Glamour rendering so markers
+// never affect word wrapping width calculations.
+func injectLinkMarkers(rendered string, infos []links.LinkInfo) string {
 	if len(infos) == 0 {
-		return body
+		return rendered
 	}
 	if len(infos) > maxMarkedLinks {
 		infos = infos[:maxMarkedLinks]
 	}
 
-	// Build insertion points sorted by byte offset.
-	// Each link needs two insertions: start marker after '[', end marker before ']'.
+	runes := []rune(rendered)
+
 	type insertion struct {
-		pos    int
-		marker string
+		runePos int
+		marker  string
 	}
-	insertions := make([]insertion, 0, len(infos)*2)
+	var insertions []insertion
+	searchFrom := 0
+
 	for i, info := range infos {
-		if info.OpenBracket < 0 {
-			continue // no text nodes — skip marker injection
+		if info.Text == "" {
+			continue
+		}
+		start, end := findVisibleText(runes, []rune(info.Text), searchFrom)
+		if start < 0 {
+			continue
 		}
 		insertions = append(insertions,
-			insertion{pos: info.OpenBracket + 1, marker: string(markerStart(i))},
-			insertion{pos: info.CloseBracket, marker: string(markerEnd(i))},
+			insertion{runePos: start, marker: string(markerStart(i))},
+			insertion{runePos: end, marker: string(markerEnd(i))},
 		)
+		searchFrom = end
 	}
-	// Sort by position (links are already in document order, but start/end interleave).
-	sort.Slice(insertions, func(a, b int) bool {
-		return insertions[a].pos < insertions[b].pos
-	})
+	if len(insertions) == 0 {
+		return rendered
+	}
 
-	// Single-pass build.
+	// Build result with marker insertions (already sorted by position).
 	var result strings.Builder
-	result.Grow(len(body) + len(infos)*8)
+	result.Grow(len(rendered) + len(insertions)*4)
 	prev := 0
 	for _, ins := range insertions {
-		result.WriteString(body[prev:ins.pos])
+		for _, r := range runes[prev:ins.runePos] {
+			result.WriteRune(r)
+		}
 		result.WriteString(ins.marker)
-		prev = ins.pos
+		prev = ins.runePos
 	}
-	result.WriteString(body[prev:])
+	for _, r := range runes[prev:] {
+		result.WriteRune(r)
+	}
 	return result.String()
+}
+
+// findVisibleText searches for textRunes in runes starting from the given offset,
+// skipping ANSI escape sequences during matching. Returns the rune indices
+// (start, end) of the match or (-1, -1) if not found.
+func findVisibleText(runes, textRunes []rune, from int) (startRune, endRune int) {
+	if len(textRunes) == 0 {
+		return -1, -1
+	}
+
+	// Build a map of visible character positions (skipping ANSI escape sequences).
+	type visChar struct {
+		runeIdx int
+		r       rune
+	}
+	var visible []visChar
+	inEscape := false
+	for i := from; i < len(runes); i++ {
+		r := runes[i]
+		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		visible = append(visible, visChar{i, r})
+	}
+
+	// Substring search on visible characters.
+	for k := range len(visible) - len(textRunes) + 1 {
+		match := true
+		for j, tr := range textRunes {
+			if visible[k+j].r != tr {
+				match = false
+				break
+			}
+		}
+		if match {
+			return visible[k].runeIdx, visible[k+len(textRunes)-1].runeIdx + 1
+		}
+	}
+	return -1, -1
 }
 
 // isHighlighted reports whether a link index should be visually highlighted.

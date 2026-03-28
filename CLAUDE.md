@@ -3,6 +3,9 @@
 ## demarkus-soul
 
 All project context — architecture, patterns, build commands, conventions, debugging notes, and roadmap — lives on the demarkus-soul MCP server.
+No sycophancy — code or ideas. Critically review code before presenting: layering violations, missing edge cases, state desync, stale references, channel blocking, rune vs byte vs cell-width confusion, silent error paths, leaky abstractions, wrong architectural layer. Challenge ideas and proposals before agreeing: what's the downside? What breaks? What's the simpler alternative? Is this solving the right problem? Push back when something doesn't hold up — disagreement backed by reasoning is expected.
+Never silently swallow errors. Every error must be explicitly handled — logged or surfaced. No _ = fn() without a comment.
+After each implementation run tests and pre-commit.sh.
 
 ### Required Preflight (Every Session)
 
