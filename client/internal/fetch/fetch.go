@@ -302,6 +302,13 @@ func (c *Client) getConn(host string) (*quic.Conn, error) {
 	}
 
 	c.mu.Lock()
+	if existing, ok := c.conns[host]; ok && existing.Context().Err() == nil {
+		// Another goroutine dialed and stored a connection while we were dialing.
+		// Use theirs; close ours.
+		c.mu.Unlock()
+		_ = conn.CloseWithError(0, "")
+		return existing, nil
+	}
 	c.conns[host] = conn
 	c.mu.Unlock()
 

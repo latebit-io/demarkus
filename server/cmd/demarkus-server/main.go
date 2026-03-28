@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -72,7 +73,7 @@ func main() {
 	}
 	info, err := os.Stat(cfg.ContentDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			logger.Error("content directory does not exist", "path", cfg.ContentDir)
 			os.Exit(1)
 		}

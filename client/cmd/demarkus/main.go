@@ -317,13 +317,7 @@ func graphMain(args []string) {
 
 	fmt.Printf("Crawling %s (depth %d)...\n", rawURL, *depth)
 
-	g, err := gs.CrawlAndPersist(context.Background(), rawURL, func(host, path string) (string, string, string, error) {
-		r, fetchErr := client.Fetch(host, path, tokens.Resolve("", host, ts))
-		if fetchErr != nil {
-			return "", "", "", fetchErr
-		}
-		return r.Response.Status, r.Response.Body, r.Response.Metadata["etag"], nil
-	}, fetch.ParseMarkURL, graphstore.CrawlOptions{
+	g, err := gs.CrawlAndPersist(context.Background(), rawURL, graphstore.NewFetchFunc(client, ts), fetch.ParseMarkURL, graphstore.CrawlOptions{
 		MaxDepth: *depth,
 		OnNode: func(n *graph.Node) {
 			title := n.Title
@@ -435,6 +429,11 @@ func tokenMain(args []string) {
 		os.Exit(1)
 	}
 
+	ts, err := tokens.Load(tokens.DefaultPath())
+	if err != nil {
+		log.Fatalf("load tokens: %v", err)
+	}
+
 	switch args[0] {
 	case "add":
 		if len(args) < 3 {
@@ -443,10 +442,6 @@ func tokenMain(args []string) {
 		host, _, err := fetch.ParseMarkURL(args[1])
 		if err != nil {
 			log.Fatalf("invalid URL: %v", err)
-		}
-		ts, err := tokens.Load(tokens.DefaultPath())
-		if err != nil {
-			log.Fatalf("load tokens: %v", err)
 		}
 		if err := ts.Set(host, args[2]); err != nil {
 			log.Fatalf("save token: %v", err)
@@ -461,20 +456,12 @@ func tokenMain(args []string) {
 		if err != nil {
 			log.Fatalf("invalid URL: %v", err)
 		}
-		ts, err := tokens.Load(tokens.DefaultPath())
-		if err != nil {
-			log.Fatalf("load tokens: %v", err)
-		}
 		if err := ts.Remove(host); err != nil {
 			log.Fatalf("remove token: %v", err)
 		}
 		fmt.Fprintf(os.Stderr, "Token removed for %s\n", host)
 
 	case "list":
-		ts, err := tokens.Load(tokens.DefaultPath())
-		if err != nil {
-			log.Fatalf("load tokens: %v", err)
-		}
 		hosts := ts.Hosts()
 		if len(hosts) == 0 {
 			fmt.Println("No stored tokens.")
@@ -622,17 +609,8 @@ func editorCommand(fields []string, file string) (name string, args []string) {
 	return fields[0], args
 }
 
-var validVerbs = map[string]bool{
-	protocol.VerbFetch:    true,
-	protocol.VerbList:     true,
-	protocol.VerbVersions: true,
-	protocol.VerbPublish:  true,
-	protocol.VerbArchive:  true,
-	protocol.VerbAppend:   true,
-}
-
 func validateVerb(verb string) error {
-	if !validVerbs[verb] {
+	if !protocol.IsValidVerb(verb) {
 		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)", verb)
 	}
 	return nil

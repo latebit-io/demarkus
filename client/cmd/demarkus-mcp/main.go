@@ -559,25 +559,12 @@ func (h *handler) markDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(formatResult(result, "version", "modified")), nil
 }
 
-// isValidHash checks if a string is a valid content hash (sha256- followed by 64 lowercase hex chars).
-func isValidHash(hash string) bool {
-	if len(hash) != 71 || !strings.HasPrefix(hash, "sha256-") {
-		return false
-	}
-	for _, c := range hash[7:] {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	hash, err := req.RequireString("hash")
 	if err != nil {
 		return mcp.NewToolResultError("hash is required"), nil
 	}
-	if !isValidHash(hash) {
+	if _, ok := protocol.IsHashPath(hash); !ok {
 		return mcp.NewToolResultError("invalid hash format: expected sha256-<64 lowercase hex characters>"), nil
 	}
 
@@ -804,7 +791,7 @@ func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.E
 			continue
 		}
 		contentHash, ok := doc.Response.Metadata["content-hash"]
-		if !ok || !isValidHash(contentHash) {
+		if _, valid := protocol.IsHashPath(contentHash); !ok || !valid {
 			continue
 		}
 		*entries = append(*entries, index.Entry{
@@ -834,6 +821,10 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	startURL := rawURL
 	if strings.HasPrefix(rawURL, "/") {
 		startURL = h.defaultHost + rawURL
+	}
+
+	if h.graphStore == nil {
+		return mcp.NewToolResultError("graph store not available"), nil
 	}
 
 	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(host, path string) (string, string, string, error) {

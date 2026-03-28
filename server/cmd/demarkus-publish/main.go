@@ -22,19 +22,6 @@ import (
 	"github.com/latebit/demarkus/server/internal/store"
 )
 
-// isHashPath checks if a path is a content-addressed hash: /sha256-<64 hex chars>.
-func isHashPath(p string) bool {
-	if len(p) != 72 || !strings.HasPrefix(p, "/sha256-") {
-		return false
-	}
-	for _, c := range p[8:] {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 func main() {
 	root := flag.String("root", "", "content directory (same as DEMARKUS_ROOT)")
 	path := flag.String("path", "", "document path (e.g. /index.md)")
@@ -73,7 +60,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: -path must be a document path, not \"/\"\n")
 		os.Exit(1)
 	}
-	if isHashPath(*path) {
+	if _, ok := protocol.IsHashPath(*path); ok {
 		fmt.Fprintf(os.Stderr, "error: /sha256-<hash> paths are reserved for content-addressed fetch\n")
 		os.Exit(1)
 	}

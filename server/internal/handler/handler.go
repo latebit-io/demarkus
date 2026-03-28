@@ -142,21 +142,6 @@ func parseVersionPath(reqPath string) (basePath string, version int) {
 	return base, num
 }
 
-// isHashPath checks if a path is a content-addressed hash: /sha256-<64 hex chars>.
-func isHashPath(reqPath string) (string, bool) {
-	// /sha256-<64 hex> = 1 + 7 + 64 = 72 characters
-	if len(reqPath) != 72 || !strings.HasPrefix(reqPath, "/sha256-") {
-		return "", false
-	}
-	hash := reqPath[1:] // strip leading /
-	for _, c := range hash[7:] {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return "", false
-		}
-	}
-	return hash, true
-}
-
 func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash string) {
 	docPath, ok := h.Store.LookupHash(hash)
 	if !ok {
@@ -224,7 +209,7 @@ func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
 func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 	// Check for content-addressed hash: FETCH /sha256-<64hex>
 	// Read auth for hash paths is checked after resolving to a real path.
-	if hash, ok := isHashPath(req.Path); ok {
+	if hash, ok := protocol.IsHashPath(req.Path); ok {
 		h.handleFetchByHash(w, req, hash)
 		return
 	}
@@ -247,10 +232,10 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 
 	doc, err := h.Store.Get(req.Path, 0)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			// Check if the path is a directory — serve index.md or auto-generate listing.
 			isDir, dirErr := h.Store.IsDir(req.Path)
-			if dirErr != nil && !os.IsNotExist(dirErr) {
+			if dirErr != nil && !errors.Is(dirErr, os.ErrNotExist) {
 				h.logger().Error("isdir check failed", "path", sanitize(req.Path), "error", dirErr)
 				h.writeError(w, protocol.StatusServerError, "internal error")
 				return
@@ -330,13 +315,13 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request) {
 		return
 	}
 	reqPath := req.Path
-	if _, ok := isHashPath(reqPath); ok {
+	if _, ok := protocol.IsHashPath(reqPath); ok {
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
 	}
 	entries, err := h.Store.ListDir(reqPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(reqPath))
 			h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 			return
@@ -386,7 +371,7 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 	// Try index.md first — if the directory has an explicit index, serve it as a normal document.
 	indexPath := path.Join(req.Path, "index.md")
 	doc, err := h.Store.Get(indexPath, 0)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		h.logger().Error("fetch index failed", "path", sanitize(indexPath), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
@@ -399,7 +384,7 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 	// No index.md — generate a directory listing.
 	entries, err := h.Store.ListDir(req.Path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
@@ -423,7 +408,7 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath string, version int) {
 	doc, err := h.Store.Get(basePath, version)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(basePath), "version", version)
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
@@ -462,14 +447,14 @@ func (h *Handler) handleVersions(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "versioning not configured")
 		return
 	}
-	if _, ok := isHashPath(reqPath); ok {
+	if _, ok := protocol.IsHashPath(reqPath); ok {
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
 	}
 
 	versions, err := h.Store.Versions(reqPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(reqPath))
 			h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 			return
@@ -514,7 +499,7 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "archiving not configured")
 		return
 	}
-	if _, ok := isHashPath(req.Path); ok {
+	if _, ok := protocol.IsHashPath(req.Path); ok {
 		h.writeError(w, protocol.StatusBadRequest, "paths matching /sha256-<hash> are reserved")
 		return
 	}
@@ -544,7 +529,7 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 
 	doc, err := h.Store.Get(req.Path, 0)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
@@ -576,7 +561,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "publishing not configured")
 		return
 	}
-	if _, ok := isHashPath(req.Path); ok {
+	if _, ok := protocol.IsHashPath(req.Path); ok {
 		h.writeError(w, protocol.StatusBadRequest, "paths matching /sha256-<hash> are reserved")
 		return
 	}
@@ -613,7 +598,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	if req.Body == "" {
 		doc, err := h.Store.Get(req.Path, 0)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				h.logger().Info("not found", "path", sanitize(req.Path))
 				h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 				return
@@ -697,7 +682,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
 			return
 		}
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Warn("path traversal attempt", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
@@ -723,7 +708,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "appending not configured")
 		return
 	}
-	if _, ok := isHashPath(req.Path); ok {
+	if _, ok := protocol.IsHashPath(req.Path); ok {
 		h.writeError(w, protocol.StatusBadRequest, "paths matching /sha256-<hash> are reserved")
 		return
 	}
@@ -798,7 +783,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
 			return
 		}
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return

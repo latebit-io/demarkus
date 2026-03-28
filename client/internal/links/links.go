@@ -14,30 +14,12 @@ import (
 // excluding fragment-only links. Fragments are stripped from destinations
 // so that doc.md#section is returned as doc.md.
 func Extract(body string) []string {
-	src := []byte(body)
-	reader := text.NewReader(src)
-	doc := goldmark.DefaultParser().Parse(reader)
-
-	var links []string
-	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
-		link, ok := n.(*ast.Link)
-		if !ok {
-			return ast.WalkContinue, nil
-		}
-		dest := string(link.Destination)
-		if dest == "" || strings.HasPrefix(dest, "#") {
-			return ast.WalkContinue, nil
-		}
-		if idx := strings.Index(dest, "#"); idx != -1 {
-			dest = dest[:idx]
-		}
-		links = append(links, dest)
-		return ast.WalkContinue, nil
-	})
-	return links
+	infos := ExtractWithPositions(body)
+	out := make([]string, len(infos))
+	for i, info := range infos {
+		out[i] = info.Dest
+	}
+	return out
 }
 
 // Resolve resolves a possibly-relative link dest against baseURL.

@@ -57,13 +57,7 @@ func (m model) startCrawl(url string) tea.Cmd {
 	gs := m.graphStore
 	return func() tea.Msg {
 		store := tokens.LoadDefault()
-		g, err := gs.CrawlAndPersist(context.Background(), url, func(host, path string) (string, string, string, error) {
-			r, fetchErr := client.Fetch(host, path, tokens.Resolve("", host, store))
-			if fetchErr != nil {
-				return "", "", "", fetchErr
-			}
-			return r.Response.Status, r.Response.Body, r.Response.Metadata["etag"], nil
-		}, fetch.ParseMarkURL, graphstore.CrawlOptions{
+		g, err := gs.CrawlAndPersist(context.Background(), url, graphstore.NewFetchFunc(client, store), fetch.ParseMarkURL, graphstore.CrawlOptions{
 			MaxDepth: 10,
 			MaxNodes: maxCrawlNodes,
 			Workers:  5,

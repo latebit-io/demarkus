@@ -51,7 +51,7 @@ func ParseRequest(r io.Reader) (Request, error) {
 	if verb == "" {
 		return Request{}, fmt.Errorf("empty verb")
 	}
-	if !isValidVerb(verb) {
+	if !IsValidVerb(verb) {
 		return Request{}, fmt.Errorf("unknown verb: %q", verb)
 	}
 
@@ -174,8 +174,23 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 	return int64(n), err
 }
 
-// isValidVerb returns true if verb is a known Mark Protocol verb.
-func isValidVerb(verb string) bool {
+// IsHashPath checks if path matches the content-addressed fetch format (sha256-<64hex>).
+// Returns the hash string (without leading /) and true if valid.
+func IsHashPath(path string) (hash string, ok bool) {
+	clean := strings.TrimPrefix(path, "/")
+	if len(clean) != 71 || !strings.HasPrefix(clean, "sha256-") {
+		return "", false
+	}
+	for _, c := range clean[7:] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return "", false
+		}
+	}
+	return clean, true
+}
+
+// IsValidVerb returns true if verb is a known Mark Protocol verb.
+func IsValidVerb(verb string) bool {
 	switch verb {
 	case VerbFetch, VerbList, VerbVersions, VerbPublish, VerbArchive, VerbAppend:
 		return true

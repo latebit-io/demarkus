@@ -480,7 +480,7 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 // hash their predecessor, and the current version (tip) has no successor yet.
 func (s *Store) Archive(reqPath string, archived bool) error {
 	if _, err := s.resolve(reqPath); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return os.ErrNotExist
 		}
 		return fmt.Errorf("resolve path: %w", err)
@@ -499,7 +499,7 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 	versionRelPath := "/" + filepath.Join(dir, "versions", fmt.Sprintf("%s.v%d", base, currentVersion))
 	versionFile, err := s.resolve(versionRelPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return os.ErrNotExist
 		}
 		return fmt.Errorf("resolve version file: %w", err)
@@ -511,7 +511,11 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 		return fmt.Errorf("read version file: %w", err)
 	}
 
-	// Update archived flag in frontmatter
+	// Update archived flag in frontmatter via manual string parsing.
+	// buildVersionFile constructs frontmatter from scratch for new versions but
+	// has no inverse (parse-modify-serialize). Introducing a full round-trip
+	// parser just for this one toggle would add complexity with no benefit, so
+	// we update the single field in-place.
 	content := string(data)
 	if !strings.HasPrefix(content, "---\n") {
 		return fmt.Errorf("invalid version file format")
@@ -598,7 +602,7 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 
 	// Validate path stays within the store root (resolve handles traversal + symlinks).
 	if _, err := s.resolve(reqPath); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, os.ErrNotExist
 		}
 		return nil, fmt.Errorf("resolve path: %w", err)
@@ -619,7 +623,7 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	currentFile := filepath.Join(s.root, dir, base)
 	var next int
 	if _, err := os.Stat(currentFile); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			next = 1
 		} else {
 			return nil, fmt.Errorf("stat current file: %w", err)
@@ -1082,7 +1086,7 @@ func extractBody(data []byte) []byte {
 // versions directory. If v1 already exists (concurrent write), it is a no-op.
 func (s *Store) migrateFlatFile(versionsDir, base, currentFile string) error {
 	v1File := filepath.Join(versionsDir, fmt.Sprintf("%s.v1", base))
-	if _, err := os.Stat(v1File); !os.IsNotExist(err) {
+	if _, err := os.Stat(v1File); !errors.Is(err, os.ErrNotExist) {
 		return nil // v1 already exists
 	}
 	flatData, err := os.ReadFile(currentFile)
