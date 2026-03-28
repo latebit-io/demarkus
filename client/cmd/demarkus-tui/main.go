@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -919,33 +920,45 @@ func injectLinkMarkers(rendered string, infos []links.LinkInfo) string {
 	}
 
 	runes := []rune(rendered)
+	hyperlinks := findHyperlinkRegions(runes)
 
 	type insertion struct {
 		runePos int
 		marker  string
 	}
 	var insertions []insertion
-	searchFrom := 0
 
+	// Match each link to an OSC 8 hyperlink region by URL and visible text.
+	used := make([]bool, len(hyperlinks))
 	for i, info := range infos {
 		if info.Text == "" {
 			continue
 		}
-		start, end := findVisibleText(runes, []rune(info.Text), searchFrom)
-		if start < 0 {
-			continue
+		for j, hl := range hyperlinks {
+			if used[j] {
+				continue
+			}
+			urlMatch := hl.url == info.Dest || strings.HasSuffix(hl.url, info.Dest) || strings.HasSuffix(info.Dest, hl.url)
+			if urlMatch && hl.text == info.Text {
+				insertions = append(insertions,
+					insertion{runePos: hl.textStart, marker: string(markerStart(i))},
+					insertion{runePos: hl.textEnd, marker: string(markerEnd(i))},
+				)
+				used[j] = true
+				break
+			}
 		}
-		insertions = append(insertions,
-			insertion{runePos: start, marker: string(markerStart(i))},
-			insertion{runePos: end, marker: string(markerEnd(i))},
-		)
-		searchFrom = end
 	}
 	if len(insertions) == 0 {
 		return rendered
 	}
 
-	// Build result with marker insertions (already sorted by position).
+	// Sort insertions by position (URL matching may find links out of order).
+	sort.Slice(insertions, func(a, b int) bool {
+		return insertions[a].runePos < insertions[b].runePos
+	})
+
+	// Build result with marker insertions.
 	var result strings.Builder
 	result.Grow(len(rendered) + len(insertions)*4)
 	prev := 0
@@ -962,9 +975,109 @@ func injectLinkMarkers(rendered string, infos []links.LinkInfo) string {
 	return result.String()
 }
 
+// hyperlinkRegion describes an OSC 8 hyperlink in Glamour's rendered output.
+type hyperlinkRegion struct {
+	url       string
+	text      string // visible text between the hyperlink start and reset
+	textStart int    // rune index of the first visible char of the link text
+	textEnd   int    // rune index after the last visible char
+}
+
+// parseOSC extracts the content of an OSC sequence starting at runes[start]
+// (the character after \x1b]). Returns the content string and the rune index
+// to resume scanning from (past the terminator).
+func parseOSC(runes []rune, start int) (content string, resume int) {
+	end := start
+	for end < len(runes) {
+		if runes[end] == '\x07' {
+			break
+		}
+		if runes[end] == '\x1b' && end+1 < len(runes) && runes[end+1] == '\\' {
+			break
+		}
+		end++
+	}
+	content = string(runes[start:end])
+	if end < len(runes) && runes[end] == '\x07' {
+		return content, end
+	}
+	if end+1 < len(runes) {
+		return content, end + 1
+	}
+	return content, end
+}
+
+// textStartAfterOSC returns the rune index where visible text begins after an
+// OSC terminator. end points to the BEL or first byte of ST.
+func textStartAfterOSC(runes []rune, end int) int {
+	if end < len(runes) && runes[end] == '\x07' {
+		return end + 1
+	}
+	return end + 2 // skip \x1b\\
+}
+
+// findHyperlinkRegions scans rendered ANSI output for OSC 8 hyperlink regions.
+// Each region contains the URL, visible text, and rune positions.
+func findHyperlinkRegions(runes []rune) []hyperlinkRegion {
+	var regions []hyperlinkRegion
+	var currentURL string
+	var visibleText strings.Builder
+	textStart := 0
+	inCSI := false
+	inLink := false
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+
+		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == ']' {
+			oscContent, resume := parseOSC(runes, i+2)
+			escPos := i // position of \x1b before the OSC
+
+			if strings.HasPrefix(oscContent, "8;") {
+				if _, url, ok := strings.Cut(oscContent[2:], ";"); ok {
+					if url == "" && currentURL != "" {
+						regions = append(regions, hyperlinkRegion{
+							url:       currentURL,
+							text:      visibleText.String(),
+							textStart: textStart,
+							textEnd:   escPos,
+						})
+						currentURL = ""
+						inLink = false
+						visibleText.Reset()
+					} else if url != "" {
+						currentURL = url
+						inLink = true
+						visibleText.Reset()
+						textStart = textStartAfterOSC(runes, resume)
+					}
+				}
+			}
+			i = resume
+			continue
+		}
+
+		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
+			inCSI = true
+			continue
+		}
+		if inCSI {
+			if r == 'm' {
+				inCSI = false
+			}
+			continue
+		}
+
+		if inLink {
+			visibleText.WriteRune(r)
+		}
+	}
+	return regions
+}
+
 // findVisibleText searches for textRunes in runes starting from the given offset,
-// skipping ANSI escape sequences during matching. Returns the rune indices
-// (start, end) of the match or (-1, -1) if not found.
+// skipping ANSI escape sequences (CSI and OSC) during matching. Returns the rune
+// indices (start, end) of the match or (-1, -1) if not found.
 func findVisibleText(runes, textRunes []rune, from int) (startRune, endRune int) {
 	if len(textRunes) == 0 {
 		return -1, -1
@@ -976,16 +1089,32 @@ func findVisibleText(runes, textRunes []rune, from int) (startRune, endRune int)
 		r       rune
 	}
 	var visible []visChar
-	inEscape := false
+	inCSI := false
+	inOSC := false
 	for i := from; i < len(runes); i++ {
 		r := runes[i]
-		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
-			inEscape = true
+		if r == '\x1b' && i+1 < len(runes) {
+			switch runes[i+1] {
+			case '[':
+				inCSI = true
+				continue
+			case ']':
+				inOSC = true
+				i++ // skip the ']'
+				continue
+			}
+		}
+		if inCSI {
+			if r == 'm' {
+				inCSI = false
+			}
 			continue
 		}
-		if inEscape {
-			if r == 'm' {
-				inEscape = false
+		if inOSC {
+			if r == '\x07' {
+				inOSC = false
+			} else if r == '\\' && i > 0 && runes[i-1] == '\x1b' {
+				inOSC = false
 			}
 			continue
 		}
@@ -1014,6 +1143,47 @@ func isHighlighted(idx, selectedIdx, hoverIdx int) bool {
 	return idx == hoverIdx || idx == selectedIdx
 }
 
+// escapeState tracks whether the scanner is inside a CSI or OSC escape sequence.
+type escapeState struct {
+	inCSI bool
+	inOSC bool
+}
+
+// handleEscape checks if rune r (at index i in runes) is part of an ANSI escape
+// sequence. If so, it writes the rune to result and returns true. Callers should
+// skip all further processing for that rune.
+func (es *escapeState) handleEscape(r rune, i int, runes []rune, result *strings.Builder) bool {
+	if r == '\x1b' && i+1 < len(runes) {
+		switch runes[i+1] {
+		case ']':
+			es.inOSC = true
+			result.WriteRune(r)
+			return true
+		case '[':
+			es.inCSI = true
+			result.WriteRune(r)
+			return true
+		}
+	}
+	if es.inOSC {
+		result.WriteRune(r)
+		if r == '\x07' {
+			es.inOSC = false
+		} else if r == '\\' && i > 0 && runes[i-1] == '\x1b' {
+			es.inOSC = false
+		}
+		return true
+	}
+	if es.inCSI {
+		result.WriteRune(r)
+		if r == 'm' {
+			es.inCSI = false
+		}
+		return true
+	}
+	return false
+}
+
 // processMarkers scans rendered ANSI output for link markers, records their
 // positions as linkRegions (including the URL glamour renders after the text),
 // and highlights links matching selectedIdx or hoverIdx with reverse video.
@@ -1025,7 +1195,6 @@ func processMarkers(rendered string, selectedIdx, hoverIdx int) (string, []linkR
 
 	lineNum := 0
 	visualCol := 0
-	inEscape := false
 
 	openIdx := -1
 	openCol := 0
@@ -1034,19 +1203,11 @@ func processMarkers(rendered string, selectedIdx, hoverIdx int) (string, []linkR
 	extendingCol := 0
 	seenURLChar := false
 
+	var esc escapeState
+
 	runes := []rune(rendered)
 	for i, r := range runes {
-		// ANSI escape sequence: \x1b[...m
-		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
-			inEscape = true
-			result.WriteRune(r)
-			continue
-		}
-		if inEscape {
-			result.WriteRune(r)
-			if r == 'm' {
-				inEscape = false
-			}
+		if esc.handleEscape(r, i, runes, &result) {
 			continue
 		}
 

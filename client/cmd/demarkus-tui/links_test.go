@@ -7,6 +7,11 @@ import (
 	"github.com/latebit/demarkus/client/internal/links"
 )
 
+// osc8 wraps text in an OSC 8 hyperlink sequence, matching Glamour v2 output.
+func osc8(url, text string) string {
+	return "\x1b]8;;" + url + "\x07" + text + "\x1b]8;;\x07"
+}
+
 func TestInjectLinkMarkers(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -25,23 +30,23 @@ func TestInjectLinkMarkers(t *testing.T) {
 			},
 		},
 		{
-			name: "single link gets markers",
-			body: "see hello rest",
+			name: "single link gets markers via OSC 8",
+			body: "see " + osc8("url.md", "hello") + " rest",
 			infos: []links.LinkInfo{
 				{Dest: "url.md", Text: "hello"},
 			},
 			check: func(t *testing.T, result string) {
-				startM := string(markerStart(0))
-				endM := string(markerEnd(0))
-				want := "see " + startM + "hello" + endM + " rest"
-				if result != want {
-					t.Errorf("got %q, want %q", result, want)
+				if !strings.Contains(result, string(markerStart(0))) {
+					t.Error("missing start marker")
+				}
+				if !strings.Contains(result, string(markerEnd(0))) {
+					t.Error("missing end marker")
 				}
 			},
 		},
 		{
 			name: "multiple links get unique markers",
-			body: "first and second end",
+			body: osc8("a.md", "first") + " and " + osc8("b.md", "second") + " end",
 			infos: []links.LinkInfo{
 				{Dest: "a.md", Text: "first"},
 				{Dest: "b.md", Text: "second"},
@@ -62,17 +67,19 @@ func TestInjectLinkMarkers(t *testing.T) {
 			},
 		},
 		{
-			name: "skips ANSI codes when matching",
-			body: "pre \x1b[35mhello\x1b[0m post",
+			name: "matches link not preceding plain text with same word",
+			body: "Hubs link to servers. " + osc8("hubs.md", "Hubs") + " list",
 			infos: []links.LinkInfo{
-				{Dest: "url.md", Text: "hello"},
+				{Dest: "hubs.md", Text: "Hubs"},
 			},
 			check: func(t *testing.T, result string) {
+				// Marker should be inside the OSC 8 region, not on the plain "Hubs".
 				if !strings.Contains(result, string(markerStart(0))) {
 					t.Error("missing start marker")
 				}
-				if !strings.Contains(result, string(markerEnd(0))) {
-					t.Error("missing end marker")
+				// The plain "Hubs" at position 0 should NOT have a marker before it.
+				if strings.HasPrefix(result, string(markerStart(0))) {
+					t.Error("marker incorrectly placed on plain text instead of hyperlink")
 				}
 			},
 		},
@@ -142,6 +149,20 @@ func TestFindVisibleText(t *testing.T) {
 			text:      "",
 			wantStart: -1,
 			wantEnd:   -1,
+		},
+		{
+			name:      "skips OSC 8 hyperlink with BEL terminator",
+			runes:     "pre \x1b]8;;http://example.com\x07hello\x1b]8;;\x07 post",
+			text:      "hello",
+			wantStart: 28,
+			wantEnd:   33,
+		},
+		{
+			name:      "skips OSC 8 hyperlink with ST terminator",
+			runes:     "pre \x1b]8;;http://example.com\x1b\\hello\x1b]8;;\x1b\\ post",
+			text:      "hello",
+			wantStart: 29,
+			wantEnd:   34,
 		},
 	}
 
