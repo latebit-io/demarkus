@@ -4,14 +4,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/latebit/demarkus/client/internal/bookmarks"
 	"github.com/latebit/demarkus/client/internal/cache"
 	"github.com/latebit/demarkus/client/internal/fetch"
@@ -20,7 +21,6 @@ import (
 	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
-	"github.com/muesli/termenv"
 	"golang.org/x/term"
 )
 
@@ -260,10 +260,12 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
-	case tea.MouseMsg:
-		return m.handleMouse(msg)
+	case tea.MouseClickMsg:
+		return m.handleMouseClick(msg)
+	case tea.MouseMotionMsg:
+		return m.handleMouseMotion(msg)
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
 	case crawlResult:
@@ -281,13 +283,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleMouseHover(msg tea.MouseMsg) model {
+func (m model) handleMouseHover(msg tea.MouseMotionMsg) model {
 	if m.markedRendered == "" || m.showHelp || m.err != nil || m.status == "bookmarks" {
 		return m
 	}
 	newHover := -1
 	if msg.Y >= 2 {
-		contentLine := msg.Y - 2 + m.viewport.YOffset
+		contentLine := msg.Y - 2 + m.viewport.YOffset()
 		contentCol := msg.X
 		for _, r := range m.linkRegions {
 			if r.line == contentLine && contentCol >= r.startCol && contentCol < r.endCol {
@@ -305,12 +307,20 @@ func (m model) handleMouseHover(msg tea.MouseMsg) model {
 	return m
 }
 
-func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if msg.Action == tea.MouseActionMotion && m.ready && m.viewMode == viewDocument {
+func (m model) handleMouseMotion(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
+	if m.ready && m.viewMode == viewDocument {
 		m = m.handleMouseHover(msg)
 	}
+	if m.ready {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
 
-	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+func (m model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
+	if msg.Button == tea.MouseLeft {
 		if msg.Y == 0 {
 			m.focus = focusAddressBar
 			m.addressBar.Focus()
@@ -318,7 +328,7 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Y >= 2 && m.ready && m.viewMode == viewDocument {
 			// Check if click lands on a link.
-			contentLine := msg.Y - 2 + m.viewport.YOffset
+			contentLine := msg.Y - 2 + m.viewport.YOffset()
 			contentCol := msg.X
 			for _, r := range m.linkRegions {
 				if r.line != contentLine || contentCol < r.startCol || contentCol >= r.endCol {
@@ -356,25 +366,25 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	viewportHeight := max(m.height-headerHeight-footerHeight, 1)
 
 	if !m.ready {
-		m.viewport = viewport.New(m.width, viewportHeight)
+		m.viewport = viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(viewportHeight))
 		m.ready = true
 		// Defer pending content to a separate update cycle so the
 		// viewport has a chance to fully initialise before receiving
 		// content. Setting content in the same cycle as creation can
 		// leave the viewport blank until the next event (e.g. scroll).
 		if m.pendingBody != "" || m.err != nil {
-			m.addressBar.Width = m.width - 2
+			m.addressBar.SetWidth(m.width - 2)
 			return m, func() tea.Msg { return viewportReady{} }
 		}
 	} else {
-		m.viewport.Width = m.width
-		m.viewport.Height = viewportHeight
+		m.viewport.SetWidth(m.width)
+		m.viewport.SetHeight(viewportHeight)
 		// Re-render graph view with new width for correct truncation.
 		if m.viewMode == viewGraph && len(m.graphNodes) > 0 {
 			m.viewport.SetContent(m.renderCurrentGraphSubView())
 		}
 	}
-	m.addressBar.Width = m.width - 2
+	m.addressBar.SetWidth(m.width - 2)
 	return m, nil
 }
 
@@ -504,13 +514,13 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyCtrlC {
+func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.Code == 'c' && msg.Mod == tea.ModCtrl {
 		return m, tea.Quit
 	}
 
 	if m.focus == focusAddressBar {
-		switch msg.Type {
+		switch msg.Code {
 		case tea.KeyEnter:
 			raw := m.addressBar.Value()
 			if raw != "" {
@@ -537,7 +547,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.handleViewportKey(msg)
 }
 
-func (m model) handleViewportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Delegate to graph key handler when in graph view.
 	if m.viewMode == viewGraph {
 		return m.handleGraphKey(msg)
@@ -622,7 +632,7 @@ func (m model) toggleFocus() model {
 	return m
 }
 
-func (m model) handleHelpDismiss(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleHelpDismiss(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "q" {
 		return m, tea.Quit
 	}
@@ -652,10 +662,10 @@ func (m model) handleTabNavigation() (tea.Model, tea.Cmd) {
 					if r.idx != m.linkIdx {
 						continue
 					}
-					if r.line < m.viewport.YOffset {
+					if r.line < m.viewport.YOffset() {
 						m.viewport.SetYOffset(r.line)
-					} else if r.line >= m.viewport.YOffset+m.viewport.Height {
-						m.viewport.SetYOffset(r.line - m.viewport.Height + 1)
+					} else if r.line >= m.viewport.YOffset()+m.viewport.Height() {
+						m.viewport.SetYOffset(r.line - m.viewport.Height() + 1)
 					}
 					break
 				}
@@ -770,9 +780,12 @@ func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	if !m.ready {
-		return "Loading..."
+		v := tea.NewView("Loading...")
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeAllMotion
+		return v
 	}
 
 	var b strings.Builder
@@ -798,7 +811,10 @@ func (m model) View() string {
 	// Status bar.
 	b.WriteString(m.statusBarView())
 
-	return b.String()
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeAllMotion
+	return v
 }
 
 func (m model) statusBarView() string {
@@ -919,33 +935,49 @@ func injectLinkMarkers(rendered string, infos []links.LinkInfo) string {
 	}
 
 	runes := []rune(rendered)
+	hyperlinks := findHyperlinkRegions(runes)
 
 	type insertion struct {
 		runePos int
 		marker  string
 	}
 	var insertions []insertion
-	searchFrom := 0
 
+	// Match each link to an OSC 8 hyperlink region by URL and visible text.
+	used := make([]bool, len(hyperlinks))
 	for i, info := range infos {
 		if info.Text == "" {
 			continue
 		}
-		start, end := findVisibleText(runes, []rune(info.Text), searchFrom)
-		if start < 0 {
-			continue
+		for j, hl := range hyperlinks {
+			if used[j] {
+				continue
+			}
+			hlURL := hl.url
+			if idx := strings.IndexByte(hlURL, '#'); idx != -1 {
+				hlURL = hlURL[:idx]
+			}
+			urlMatch := hlURL == info.Dest || strings.HasSuffix(hlURL, info.Dest) || strings.HasSuffix(info.Dest, hlURL)
+			if urlMatch && hl.text == info.Text {
+				insertions = append(insertions,
+					insertion{runePos: hl.textStart, marker: string(markerStart(i))},
+					insertion{runePos: hl.textEnd, marker: string(markerEnd(i))},
+				)
+				used[j] = true
+				break
+			}
 		}
-		insertions = append(insertions,
-			insertion{runePos: start, marker: string(markerStart(i))},
-			insertion{runePos: end, marker: string(markerEnd(i))},
-		)
-		searchFrom = end
 	}
 	if len(insertions) == 0 {
 		return rendered
 	}
 
-	// Build result with marker insertions (already sorted by position).
+	// Sort insertions by position (URL matching may find links out of order).
+	sort.Slice(insertions, func(a, b int) bool {
+		return insertions[a].runePos < insertions[b].runePos
+	})
+
+	// Build result with marker insertions.
 	var result strings.Builder
 	result.Grow(len(rendered) + len(insertions)*4)
 	prev := 0
@@ -962,9 +994,110 @@ func injectLinkMarkers(rendered string, infos []links.LinkInfo) string {
 	return result.String()
 }
 
+// hyperlinkRegion describes an OSC 8 hyperlink in Glamour's rendered output.
+type hyperlinkRegion struct {
+	url       string
+	text      string // visible text between the hyperlink start and reset
+	textStart int    // rune index of the first visible char of the link text
+	textEnd   int    // rune index after the last visible char
+}
+
+// parseOSC extracts the content of an OSC sequence starting at runes[start]
+// (the character after \x1b]). Returns the content string and the rune index
+// to resume scanning from (past the terminator).
+func parseOSC(runes []rune, start int) (content string, resume int) {
+	end := start
+	for end < len(runes) {
+		if runes[end] == '\x07' {
+			break
+		}
+		if runes[end] == '\x1b' && end+1 < len(runes) && runes[end+1] == '\\' {
+			break
+		}
+		end++
+	}
+	content = string(runes[start:end])
+	if end < len(runes) && runes[end] == '\x07' {
+		return content, end
+	}
+	if end+1 < len(runes) {
+		return content, end + 1
+	}
+	return content, end
+}
+
+// textStartAfterOSC returns the rune index where visible text begins after an
+// OSC terminator. resume is the value returned by parseOSC: the BEL index or
+// the trailing '\' of an ST sequence.
+func textStartAfterOSC(runes []rune, resume int) int {
+	if resume < len(runes) && runes[resume] == '\x07' {
+		return resume + 1
+	}
+	return resume + 1 // parseOSC already advanced past \x1b
+}
+
+// findHyperlinkRegions scans rendered ANSI output for OSC 8 hyperlink regions.
+// Each region contains the URL, visible text, and rune positions.
+func findHyperlinkRegions(runes []rune) []hyperlinkRegion {
+	var regions []hyperlinkRegion
+	var currentURL string
+	var visibleText strings.Builder
+	textStart := 0
+	inCSI := false
+	inLink := false
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+
+		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == ']' {
+			oscContent, resume := parseOSC(runes, i+2)
+			escPos := i // position of \x1b before the OSC
+
+			if strings.HasPrefix(oscContent, "8;") {
+				if _, url, ok := strings.Cut(oscContent[2:], ";"); ok {
+					if url == "" && currentURL != "" {
+						regions = append(regions, hyperlinkRegion{
+							url:       currentURL,
+							text:      visibleText.String(),
+							textStart: textStart,
+							textEnd:   escPos,
+						})
+						currentURL = ""
+						inLink = false
+						visibleText.Reset()
+					} else if url != "" {
+						currentURL = url
+						inLink = true
+						visibleText.Reset()
+						textStart = textStartAfterOSC(runes, resume)
+					}
+				}
+			}
+			i = resume
+			continue
+		}
+
+		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
+			inCSI = true
+			continue
+		}
+		if inCSI {
+			if r == 'm' {
+				inCSI = false
+			}
+			continue
+		}
+
+		if inLink {
+			visibleText.WriteRune(r)
+		}
+	}
+	return regions
+}
+
 // findVisibleText searches for textRunes in runes starting from the given offset,
-// skipping ANSI escape sequences during matching. Returns the rune indices
-// (start, end) of the match or (-1, -1) if not found.
+// skipping ANSI escape sequences (CSI and OSC) during matching. Returns the rune
+// indices (start, end) of the match or (-1, -1) if not found.
 func findVisibleText(runes, textRunes []rune, from int) (startRune, endRune int) {
 	if len(textRunes) == 0 {
 		return -1, -1
@@ -976,16 +1109,32 @@ func findVisibleText(runes, textRunes []rune, from int) (startRune, endRune int)
 		r       rune
 	}
 	var visible []visChar
-	inEscape := false
+	inCSI := false
+	inOSC := false
 	for i := from; i < len(runes); i++ {
 		r := runes[i]
-		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
-			inEscape = true
+		if r == '\x1b' && i+1 < len(runes) {
+			switch runes[i+1] {
+			case '[':
+				inCSI = true
+				continue
+			case ']':
+				inOSC = true
+				i++ // skip the ']'
+				continue
+			}
+		}
+		if inCSI {
+			if r == 'm' {
+				inCSI = false
+			}
 			continue
 		}
-		if inEscape {
-			if r == 'm' {
-				inEscape = false
+		if inOSC {
+			if r == '\x07' {
+				inOSC = false
+			} else if r == '\\' && i > 0 && runes[i-1] == '\x1b' {
+				inOSC = false
 			}
 			continue
 		}
@@ -1014,6 +1163,47 @@ func isHighlighted(idx, selectedIdx, hoverIdx int) bool {
 	return idx == hoverIdx || idx == selectedIdx
 }
 
+// escapeState tracks whether the scanner is inside a CSI or OSC escape sequence.
+type escapeState struct {
+	inCSI bool
+	inOSC bool
+}
+
+// handleEscape checks if rune r (at index i in runes) is part of an ANSI escape
+// sequence. If so, it writes the rune to result and returns true. Callers should
+// skip all further processing for that rune.
+func (es *escapeState) handleEscape(r rune, i int, runes []rune, result *strings.Builder) bool {
+	if r == '\x1b' && i+1 < len(runes) {
+		switch runes[i+1] {
+		case ']':
+			es.inOSC = true
+			result.WriteRune(r)
+			return true
+		case '[':
+			es.inCSI = true
+			result.WriteRune(r)
+			return true
+		}
+	}
+	if es.inOSC {
+		result.WriteRune(r)
+		if r == '\x07' {
+			es.inOSC = false
+		} else if r == '\\' && i > 0 && runes[i-1] == '\x1b' {
+			es.inOSC = false
+		}
+		return true
+	}
+	if es.inCSI {
+		result.WriteRune(r)
+		if r == 'm' {
+			es.inCSI = false
+		}
+		return true
+	}
+	return false
+}
+
 // processMarkers scans rendered ANSI output for link markers, records their
 // positions as linkRegions (including the URL glamour renders after the text),
 // and highlights links matching selectedIdx or hoverIdx with reverse video.
@@ -1025,7 +1215,6 @@ func processMarkers(rendered string, selectedIdx, hoverIdx int) (string, []linkR
 
 	lineNum := 0
 	visualCol := 0
-	inEscape := false
 
 	openIdx := -1
 	openCol := 0
@@ -1034,19 +1223,11 @@ func processMarkers(rendered string, selectedIdx, hoverIdx int) (string, []linkR
 	extendingCol := 0
 	seenURLChar := false
 
+	var esc escapeState
+
 	runes := []rune(rendered)
 	for i, r := range runes {
-		// ANSI escape sequence: \x1b[...m
-		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
-			inEscape = true
-			result.WriteRune(r)
-			continue
-		}
-		if inEscape {
-			result.WriteRune(r)
-			if r == 'm' {
-				inEscape = false
-			}
+		if esc.handleEscape(r, i, runes, &result) {
 			continue
 		}
 
@@ -1161,7 +1342,7 @@ func detectStyle() string {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return "dark"
 	}
-	if termenv.HasDarkBackground() {
+	if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
 		return "dark"
 	}
 	return "light"
@@ -1196,8 +1377,6 @@ func main() {
 
 	p := tea.NewProgram(
 		initialModel(initialURL, client, styleName),
-		tea.WithAltScreen(),
-		tea.WithMouseAllMotion(),
 	)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

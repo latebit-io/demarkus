@@ -13,7 +13,7 @@ After each implementation run tests and pre-commit.sh.
 2. `mark_fetch` `/patterns.md` — build commands, code style, workflow
 3. `mark_fetch` `/guidelines.md` — hard rules for code quality, must read before writing code
 4. Fetch other pages as needed: `/architecture.md`, `/debugging.md`, `/roadmap.md`
-5. If MCP is unavailable, stop and ask the user before proceeding
+5. If MCP is unavailable, stop and ask the developer before proceeding
 
 ### During Work
 

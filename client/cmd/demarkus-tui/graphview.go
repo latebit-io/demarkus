@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
 	"github.com/latebit/demarkus/client/internal/graphstore"
@@ -308,7 +308,7 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 }
 
 // handleGraphKey processes key events when the graph view is active.
-func (m model) handleGraphKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
