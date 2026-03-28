@@ -1,0 +1,177 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+tone_instructions: >
+  Be direct and technical. No pleasantries. Focus on correctness, concurrency
+  safety, and simplicity. Challenge complexity; the project values the minimum
+  solution that works. Flag silent error paths and unbounded operations.
+early_access: true
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  auto_title_placeholder: "@coderabbitai"
+  review_status: true
+  collapse_walkthrough: false
+  sequence_diagrams: true
+  poem: false
+  changed_files_summary: true
+  labeling_instructions: []
+  path_filters:
+    - "!**/bin/**"
+    - "!plugins/obsidian/node_modules/**"
+  path_instructions:
+    - path: "protocol/**"
+      instructions: >
+        Shared wire format library used by both server and client. Zero network
+        code allowed here. Changes affect all consumers.
+
+        Key contracts to verify:
+        - No breaking changes to exported types or function signatures
+        - Size limit constants (MaxBodyLength, MaxRequestLineLength, etc.)
+          must be consistent across all layers that reference them
+        - Frontmatter is map[string]string, not typed structs. No YAML
+          auto-typing. Type conversion belongs in the handler layer
+
+    - path: "server/**"
+      instructions: >
+        QUIC server. The server is a bookshelf, not a librarian. It holds
+        documents and hands them back. All intelligence belongs in the client.
+
+        Key contracts to verify:
+        - Every error must be explicitly handled (no _ = fn() without comment)
+        - Versioned store: every write creates a new immutable version.
+          Published versions are permanent
+        - Auth is capability-based: tokens grant operations, not identities.
+          Token labels stay in server-side logs only, never in version files
+          or protocol responses
+        - Path traversal defense: filepath.Clean + ".." check, return
+          not-found (not forbidden) to avoid leaking structure
+        - Content-hash index is in-memory only, rebuilt on startup, updated
+          incrementally on Write/Archive
+        - Size limits enforced at every trust boundary (parser, handler, store)
+
+    - path: "server/internal/handler/**"
+      instructions: >
+        Request handlers for all 6 protocol verbs (FETCH, LIST, VERSIONS,
+        PUBLISH, APPEND, ARCHIVE). Audit logging on all write operations.
+
+        Check for:
+        - Optimistic concurrency: expected-version is mandatory for APPEND,
+          required (>=1) for updates via PUBLISH
+        - Content-addressed fetch resolves hash to path, then checks read
+          auth on that path. Knowing a hash must not bypass access control
+        - Versioned path requests (/doc.md/v2) check auth on the base path
+        - /.well-known/agent-manifest.md is always public
+
+    - path: "server/internal/store/**"
+      instructions: >
+        Versioned document store using symlinks and SHA-256 hash chains.
+        Each version is immutable once written.
+
+        Check for:
+        - Hash chain integrity between versions
+        - No-op detection on duplicate content (don't create empty versions)
+        - Store frontmatter allowance (maxStoreFrontmatter) when checking
+          on-disk file sizes against MaxBodyLength
+        - Concurrent access safety
+
+    - path: "client/cmd/demarkus-tui/**"
+      instructions: >
+        Bubble Tea TUI client. Renders markdown via Glamour, supports link
+        highlighting, graph visualization, and document navigation.
+
+        Check for:
+        - Link marker injection must happen AFTER Glamour rendering to avoid
+          affecting word wrap width calculations
+        - Renderer caching: only recreated when viewport width changes
+        - Graph views (links, backlinks, topology) use the persistent
+          graphstore
+        - Navigation history management (pushHistory, restoreHistory)
+
+    - path: "client/cmd/demarkus-mcp/**"
+      instructions: >
+        MCP server for LLM agent access. Exposes Mark Protocol operations
+        as MCP tools.
+
+        Check for:
+        - mark_append auto-resolves expected_version when omitted (calls
+          VERSIONS internally). This convenience is in the MCP layer only,
+          not the client library
+        - URL resolution and token lookup happen at this layer
+        - Error messages must be clear for LLM consumption
+
+    - path: "client/cmd/demarkus/**"
+      instructions: >
+        CLI client. Shares internal packages with TUI and MCP.
+
+        Check for:
+        - Consistent behavior across CLI, TUI, and MCP (shared logic in
+          client/internal/, not duplicated per cmd/)
+        - Proper exit codes and error messages
+
+    - path: "client/internal/**"
+      instructions: >
+        Shared client libraries: fetch (protocol client), graph, graphstore,
+        links, tokens, bookmarks, cache, index.
+
+        Check for:
+        - fetch.Client is a faithful protocol client with no convenience
+          logic (that belongs in cmd/ layers)
+        - graphstore.Save() lock scope: holds RLock across marshal + disk I/O.
+          Fine for infrequent calls, but flag if concurrent/periodic saves
+          are introduced
+        - Token resolution: consistent across CLI, TUI, MCP
+
+    - path: "plugins/obsidian/**"
+      instructions: >
+        TypeScript Obsidian plugin. Shells out to the demarkus CLI binary.
+        Token passed via DEMARKUS_AUTH env var, never CLI args. Uses -no-cache
+        for fresh fetches. Built with tsc + esbuild, NOT bun.
+
+  auto_review:
+    enabled: true
+    drafts: false
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+
+  tools:
+    golangci-lint:
+      enabled: true
+    eslint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    gitleaks:
+      enabled: true
+    markdownlint:
+      enabled: true
+    hadolint:
+      enabled: false
+    phpstan:
+      enabled: false
+
+  pre_merge_checks:
+    title:
+      mode: error
+      requirements: >
+        Title must follow Conventional Commits format:
+        type(scope): description. Valid types: feat, fix, docs, style,
+        refactor, perf, test, build, ci, chore, revert.
+        Valid scopes: protocol, server, client, tui, mcp, tools, obsidian,
+        install, publish.
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto
+  issues:
+    scope: auto
+  jira:
+    project_keys: []
+  linear:
+    team_keys: []
