@@ -26,14 +26,14 @@ func TestInjectLinkMarkers(t *testing.T) {
 		},
 		{
 			name: "single link gets markers",
-			body: "[hello](url.md)",
+			body: "see hello rest",
 			infos: []links.LinkInfo{
-				{Dest: "url.md", Text: "hello", OpenBracket: 0, CloseBracket: 6},
+				{Dest: "url.md", Text: "hello"},
 			},
 			check: func(t *testing.T, result string) {
 				startM := string(markerStart(0))
 				endM := string(markerEnd(0))
-				want := "[" + startM + "hello" + endM + "](url.md)"
+				want := "see " + startM + "hello" + endM + " rest"
 				if result != want {
 					t.Errorf("got %q, want %q", result, want)
 				}
@@ -41,10 +41,10 @@ func TestInjectLinkMarkers(t *testing.T) {
 		},
 		{
 			name: "multiple links get unique markers",
-			body: "[a](a.md) and [b](b.md)",
+			body: "first and second end",
 			infos: []links.LinkInfo{
-				{Dest: "a.md", Text: "a", OpenBracket: 0, CloseBracket: 2},
-				{Dest: "b.md", Text: "b", OpenBracket: 14, CloseBracket: 16},
+				{Dest: "a.md", Text: "first"},
+				{Dest: "b.md", Text: "second"},
 			},
 			check: func(t *testing.T, result string) {
 				if !strings.Contains(result, string(markerStart(0))) {
@@ -61,12 +61,99 @@ func TestInjectLinkMarkers(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "skips ANSI codes when matching",
+			body: "pre \x1b[35mhello\x1b[0m post",
+			infos: []links.LinkInfo{
+				{Dest: "url.md", Text: "hello"},
+			},
+			check: func(t *testing.T, result string) {
+				if !strings.Contains(result, string(markerStart(0))) {
+					t.Error("missing start marker")
+				}
+				if !strings.Contains(result, string(markerEnd(0))) {
+					t.Error("missing end marker")
+				}
+			},
+		},
+		{
+			name: "empty text skipped",
+			body: "some text",
+			infos: []links.LinkInfo{
+				{Dest: "url.md", Text: "", OpenBracket: -1, CloseBracket: -1},
+			},
+			check: func(t *testing.T, result string) {
+				if result != "some text" {
+					t.Errorf("got %q, want %q", result, "some text")
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := injectLinkMarkers(tt.body, tt.infos)
 			tt.check(t, result)
+		})
+	}
+}
+
+func TestFindVisibleText(t *testing.T) {
+	tests := []struct {
+		name      string
+		runes     string
+		text      string
+		from      int
+		wantStart int
+		wantEnd   int
+	}{
+		{
+			name:      "plain text",
+			runes:     "hello world",
+			text:      "world",
+			wantStart: 6,
+			wantEnd:   11,
+		},
+		{
+			name:      "with ANSI codes",
+			runes:     "pre \x1b[35mhello\x1b[0m post",
+			text:      "hello",
+			wantStart: 9,
+			wantEnd:   14,
+		},
+		{
+			name:      "not found",
+			runes:     "hello world",
+			text:      "missing",
+			wantStart: -1,
+			wantEnd:   -1,
+		},
+		{
+			name:      "from offset",
+			runes:     "hello hello",
+			text:      "hello",
+			from:      5,
+			wantStart: 6,
+			wantEnd:   11,
+		},
+		{
+			name:      "empty text",
+			runes:     "hello",
+			text:      "",
+			wantStart: -1,
+			wantEnd:   -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start, end := findVisibleText([]rune(tt.runes), []rune(tt.text), tt.from)
+			if start != tt.wantStart {
+				t.Errorf("start = %d, want %d", start, tt.wantStart)
+			}
+			if end != tt.wantEnd {
+				t.Errorf("end = %d, want %d", end, tt.wantEnd)
+			}
 		})
 	}
 }
