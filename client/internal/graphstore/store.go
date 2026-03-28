@@ -18,7 +18,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/internal/tokens"
 )
 
 // schemaVersion is the on-disk format version. Increment on breaking changes.
@@ -321,6 +323,19 @@ type CrawlOptions struct {
 	MaxNodes int               // node cap (0 = unlimited)
 	Workers  int               // concurrent workers (0 = default 5)
 	OnNode   func(*graph.Node) // optional per-node callback
+}
+
+// NewFetchFunc creates a fetch function for CrawlAndPersist from a protocol
+// client and token store. It resolves tokens per host and unpacks the result
+// into (status, body, etag, error).
+func NewFetchFunc(client *fetch.Client, tokenStore *tokens.Store) func(host, path string) (status, body, etag string, err error) {
+	return func(host, path string) (string, string, string, error) {
+		r, fetchErr := client.Fetch(host, path, tokens.Resolve("", host, tokenStore))
+		if fetchErr != nil {
+			return "", "", "", fetchErr
+		}
+		return r.Response.Status, r.Response.Body, r.Response.Metadata["etag"], nil
+	}
 }
 
 // CrawlAndPersist runs a graph crawl, merges results into the store, and saves.

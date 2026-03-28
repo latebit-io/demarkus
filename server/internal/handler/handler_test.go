@@ -1417,9 +1417,9 @@ func TestIsHashPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			hash, ok := isHashPath(tt.path)
+			hash, ok := protocol.IsHashPath(tt.path)
 			if ok != tt.ok || hash != tt.hash {
-				t.Errorf("isHashPath(%q) = (%q, %v), want (%q, %v)",
+				t.Errorf("IsHashPath(%q) = (%q, %v), want (%q, %v)",
 					tt.path, hash, ok, tt.hash, tt.ok)
 			}
 		})

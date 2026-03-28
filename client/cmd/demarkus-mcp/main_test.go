@@ -1013,23 +1013,25 @@ func TestToolDefinition_MarkIndex(t *testing.T) {
 	}
 }
 
-func TestIsValidHash(t *testing.T) {
+func TestIsHashPath(t *testing.T) {
 	tests := []struct {
-		hash string
-		want bool
+		input    string
+		wantHash string
+		wantOK   bool
 	}{
-		{"sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", true},
-		{"sha256-0000000000000000000000000000000000000000000000000000000000000000", true},
-		{"sha256-AAAA", false},   // uppercase
-		{"sha256-a1b2c3", false}, // too short
-		{"md5-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", false},      // wrong prefix
-		{"sha256-g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", false},   // invalid hex char
-		{"sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2aa", false}, // too long
-		{"", false},
+		{"sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", true},
+		{"/sha256-0000000000000000000000000000000000000000000000000000000000000000", "sha256-0000000000000000000000000000000000000000000000000000000000000000", true},
+		{"sha256-AAAA", "", false},
+		{"sha256-a1b2c3", "", false},
+		{"md5-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "", false},
+		{"sha256-g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "", false},
+		{"sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2aa", "", false},
+		{"", "", false},
 	}
 	for _, tt := range tests {
-		if got := isValidHash(tt.hash); got != tt.want {
-			t.Errorf("isValidHash(%q) = %v, want %v", tt.hash, got, tt.want)
+		hash, ok := protocol.IsHashPath(tt.input)
+		if ok != tt.wantOK || hash != tt.wantHash {
+			t.Errorf("protocol.IsHashPath(%q) = (%q, %v), want (%q, %v)", tt.input, hash, ok, tt.wantHash, tt.wantOK)
 		}
 	}
 }

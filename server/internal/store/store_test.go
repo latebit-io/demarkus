@@ -495,7 +495,7 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 
 	// No v2 file should exist.
 	v2Path := filepath.Join(root, "versions", "doc.md.v2")
-	if _, err := os.Stat(v2Path); !os.IsNotExist(err) {
+	if _, err := os.Stat(v2Path); !errors.Is(err, os.ErrNotExist) {
 		t.Error("v2 file should not exist for duplicate content")
 	}
 
@@ -734,7 +734,7 @@ func TestArchive(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		s, _ := setup(t)
 		err := s.Archive("/missing.md", true)
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("expected not-exist error, got: %v", err)
 		}
 	})
@@ -742,7 +742,7 @@ func TestArchive(t *testing.T) {
 	t.Run("path traversal", func(t *testing.T) {
 		s, _ := setup(t)
 		err := s.Archive("/../etc/passwd", true)
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("expected not-exist error for traversal, got: %v", err)
 		}
 	})
@@ -898,7 +898,7 @@ func TestAppend_NotFound(t *testing.T) {
 	s := New(root)
 
 	_, err := s.Append("/missing.md", 1, []byte("content"), nil)
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected not-exist error, got: %v", err)
 	}
 }
