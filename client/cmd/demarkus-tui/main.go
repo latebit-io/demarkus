@@ -953,7 +953,11 @@ func injectLinkMarkers(rendered string, infos []links.LinkInfo) string {
 			if used[j] {
 				continue
 			}
-			urlMatch := hl.url == info.Dest || strings.HasSuffix(hl.url, info.Dest) || strings.HasSuffix(info.Dest, hl.url)
+			hlURL := hl.url
+			if idx := strings.IndexByte(hlURL, '#'); idx != -1 {
+				hlURL = hlURL[:idx]
+			}
+			urlMatch := hlURL == info.Dest || strings.HasSuffix(hlURL, info.Dest) || strings.HasSuffix(info.Dest, hlURL)
 			if urlMatch && hl.text == info.Text {
 				insertions = append(insertions,
 					insertion{runePos: hl.textStart, marker: string(markerStart(i))},
@@ -1023,12 +1027,13 @@ func parseOSC(runes []rune, start int) (content string, resume int) {
 }
 
 // textStartAfterOSC returns the rune index where visible text begins after an
-// OSC terminator. end points to the BEL or first byte of ST.
-func textStartAfterOSC(runes []rune, end int) int {
-	if end < len(runes) && runes[end] == '\x07' {
-		return end + 1
+// OSC terminator. resume is the value returned by parseOSC: the BEL index or
+// the trailing '\' of an ST sequence.
+func textStartAfterOSC(runes []rune, resume int) int {
+	if resume < len(runes) && runes[resume] == '\x07' {
+		return resume + 1
 	}
-	return end + 2 // skip \x1b\\
+	return resume + 1 // parseOSC already advanced past \x1b
 }
 
 // findHyperlinkRegions scans rendered ANSI output for OSC 8 hyperlink regions.
