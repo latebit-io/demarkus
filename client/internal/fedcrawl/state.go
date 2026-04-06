@@ -15,18 +15,18 @@ const schemaVersion = 1
 
 // ServerState tracks crawl state for a single server.
 type ServerState struct {
-	Host         string    `json:"host"`          // host:port (e.g., "example.com:6309")
-	DiscoveredAt time.Time `json:"discovered_at"` // When this server was first seen
-	LastCrawled  time.Time `json:"last_crawled"`  // When this server was last crawled
-	DocumentCount int     `json:"document_count"` // Documents discovered on this server
+	Host          string    `json:"host"`           // host:port (e.g., "example.com:6309")
+	DiscoveredAt  time.Time `json:"discovered_at"`  // When this server was first seen
+	LastCrawled   time.Time `json:"last_crawled"`   // When this server was last crawled
+	DocumentCount int       `json:"document_count"` // Documents discovered on this server
 }
 
 // URLState tracks visit state for a single URL.
 type URLState struct {
 	URL         string    `json:"url"`
-	Etag        string    `json:"etag,omitempty"`        // For conditional fetch
-	LastVisited time.Time `json:"last_visited"`          // When this URL was last fetched
-	Status      string    `json:"status"`                // Last known status (ok, not-found, error)
+	Etag        string    `json:"etag,omitempty"`         // For conditional fetch
+	LastVisited time.Time `json:"last_visited"`           // When this URL was last fetched
+	Status      string    `json:"status"`                 // Last known status (ok, not-found, error)
 	ContentHash string    `json:"content_hash,omitempty"` // SHA-256 content hash
 }
 
@@ -83,8 +83,13 @@ func LoadState(path string) (*State, error) {
 		return nil, fmt.Errorf("state %q: unsupported schema version %d (expected %d)", path, doc.Version, schemaVersion)
 	}
 
-	s.servers = doc.Servers
-	s.urls = doc.URLs
+	// Guard against nil maps from JSON (null/omitted keys)
+	if doc.Servers != nil {
+		s.servers = doc.Servers
+	}
+	if doc.URLs != nil {
+		s.urls = doc.URLs
+	}
 
 	return s, nil
 }

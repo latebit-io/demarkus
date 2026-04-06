@@ -2,6 +2,7 @@ package fedcrawl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -32,14 +33,16 @@ type Crawler struct {
 	tokens *tokens.Store
 
 	// Crawl results
-	mu        sync.Mutex
-	hashes    map[string]index.Entry // content-hash -> entry
-	servers   map[string]bool         // discovered servers (host)
-	docCount  int                     // total documents crawled
+	mu       sync.Mutex
+	hashes   map[string]index.Entry // content-hash -> entry
+	servers  map[string]bool        // discovered servers (host)
+	docCount int                    // total documents crawled
 }
 
 // NewCrawler creates a new federation crawler.
-func NewCrawler(cfg Config, client FetchClient, state *State, tokenStore *tokens.Store) *Crawler {
+// The state and tokenStore parameters are optional (may be nil).
+// Crawler methods guard access via c.state != nil and c.tokens != nil checks.
+func NewCrawler(cfg Config, client FetchClient, state *State, tokenStore *tokens.Store) *Crawler { //nolint:gocritic // hugeParam: Config by value is intentional for immutability
 	return &Crawler{
 		cfg:     cfg,
 		client:  client,
@@ -63,11 +66,11 @@ type CrawlResult struct {
 func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	result := &CrawlResult{}
 
-	// Initialize queue with seed servers.
-	queue := make(chan string, 100)
+	// Buffer queue to handle discovery bursts. Size based on max servers.
+	bufSize := max(c.cfg.Crawl.MaxServers, 100)
+	queue := make(chan string, bufSize)
 	var wg sync.WaitGroup
 
-	var activeServers atomic.Int32
 	var docCount atomic.Int32
 	var errorsMu sync.Mutex
 	var crawlErrors []string
@@ -85,16 +88,10 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 			func() {
 				defer wg.Done()
 
-				// Check context and limits.
+				// Check context cancellation.
 				if ctx.Err() != nil {
 					return
 				}
-				if int(activeServers.Load()) >= c.cfg.Crawl.MaxServers {
-					return
-				}
-
-				activeServers.Add(1)
-				defer activeServers.Add(-1)
 
 				// Crawl this server.
 				count, err := c.crawlServer(ctx, host, &docCount, queue, &wg)
@@ -153,7 +150,8 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	// Build result.
 	c.mu.Lock()
 	result.ServersDiscovered = len(c.servers)
-	result.DocumentsCrawled = int(docCount.Load())
+	c.docCount = int(docCount.Load())
+	result.DocumentsCrawled = c.docCount
 	result.HashesCollected = len(c.hashes)
 	result.Errors = crawlErrors
 	c.mu.Unlock()
@@ -168,7 +166,8 @@ func (c *Crawler) crawlServer(ctx context.Context, host string, docCount *atomic
 	var count int
 
 	// Start from root.
-	return count, c.walkDir(ctx, host, "/", token, docCount, queue, wg, &count)
+	err := c.walkDir(ctx, host, "/", token, docCount, queue, wg, &count)
+	return count, err
 }
 
 // walkDir recursively walks a directory on a server, collecting hashes and discovering links.
@@ -288,18 +287,24 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 			continue
 		}
 
-		// Queue if not seen and under limit.
+		// Check if we should queue this host.
+		// Only hold mutex while checking/updating shared state.
 		c.mu.Lock()
 		if len(c.servers) >= c.cfg.Crawl.MaxServers {
 			c.mu.Unlock()
 			return // Stop discovering once we hit the limit
 		}
-		if !c.servers[host] {
+		newHost := !c.servers[host]
+		if newHost {
 			c.servers[host] = true
+		}
+		c.mu.Unlock()
+
+		// Enqueue outside the mutex to avoid blocking.
+		if newHost {
 			wg.Add(1)
 			queue <- host
 		}
-		c.mu.Unlock()
 	}
 }
 
@@ -368,10 +373,12 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 
 	now := time.Now().UTC()
 	successCount := 0
+	var publishErrs []error
 
 	for _, hub := range c.cfg.Hubs {
 		host, _, err := fetch.ParseMarkURL(hub + "/")
 		if err != nil {
+			publishErrs = append(publishErrs, fmt.Errorf("parse hub URL %q: %w", hub, err))
 			continue
 		}
 
@@ -384,6 +391,7 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 				idxPath := "/index/" + serverHost + ".md"
 
 				if err := c.publishIndex(ctx, client, host, idxPath, idxBody, token); err != nil {
+					publishErrs = append(publishErrs, fmt.Errorf("publish %s to hub %s: %w", idxPath, hub, err))
 					continue
 				}
 				successCount++
@@ -394,13 +402,14 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 			idxPath := "/index.md"
 
 			if err := c.publishIndex(ctx, client, host, idxPath, idxBody, token); err != nil {
+				publishErrs = append(publishErrs, fmt.Errorf("publish %s to hub %s: %w", idxPath, hub, err))
 				continue
 			}
 			successCount++
 		}
 	}
 
-	return successCount, nil
+	return successCount, errors.Join(publishErrs...)
 }
 
 // PublishClient wraps the operations needed for publishing.

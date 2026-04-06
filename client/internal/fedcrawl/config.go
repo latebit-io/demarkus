@@ -15,8 +15,8 @@ type Config struct {
 	Seeds []string `toml:"seeds"` // Initial servers to crawl (mark://host:port)
 	Hubs  []string `toml:"hubs"`  // Servers to publish indexes to
 
-	Crawl CrawlConfig `toml:"crawl"`
-	Schedule ScheduleConfig `toml:"schedule"`
+	Crawl      CrawlConfig      `toml:"crawl"`
+	Schedule   ScheduleConfig   `toml:"schedule"`
 	Politeness PolitenessConfig `toml:"politeness"`
 }
 
@@ -63,17 +63,20 @@ func DefaultConfig() Config {
 // Missing fields inherit from defaults.
 func Load(path string, seeds []string) (Config, error) {
 	cfg := DefaultConfig()
-	if len(seeds) > 0 {
-		cfg.Seeds = seeds
-	}
 
 	if path == "" {
+		if len(seeds) > 0 {
+			cfg.Seeds = seeds
+		}
 		return cfg, nil
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if len(seeds) > 0 {
+				cfg.Seeds = seeds
+			}
 			return cfg, nil
 		}
 		return Config{}, fmt.Errorf("read config %q: %w", path, err)
@@ -83,34 +86,16 @@ func Load(path string, seeds []string) (Config, error) {
 		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
 	}
 
-	// Apply defaults for zero values.
-	if cfg.Crawl.MaxDepth == 0 {
-		cfg.Crawl.MaxDepth = 2
-	}
-	if cfg.Crawl.MaxServers == 0 {
-		cfg.Crawl.MaxServers = 50
-	}
-	if cfg.Crawl.MaxDocuments == 0 {
-		cfg.Crawl.MaxDocuments = 1000
-	}
-	if cfg.Crawl.Workers == 0 {
-		cfg.Crawl.Workers = 5
-	}
-	if cfg.Schedule.Interval == 0 {
-		cfg.Schedule.Interval = 6 * time.Hour
-	}
-	if cfg.Politeness.RequestDelay == 0 {
-		cfg.Politeness.RequestDelay = 100 * time.Millisecond
-	}
-	if cfg.Politeness.PerServerConcurrency == 0 {
-		cfg.Politeness.PerServerConcurrency = 2
+	// CLI seeds override config file.
+	if len(seeds) > 0 {
+		cfg.Seeds = seeds
 	}
 
 	return cfg, nil
 }
 
 // Validate checks that the configuration is valid.
-func (c Config) Validate() error {
+func (c *Config) Validate() error {
 	if len(c.Seeds) == 0 {
 		return fmt.Errorf("at least one seed server is required")
 	}
@@ -138,6 +123,9 @@ func (c Config) Validate() error {
 	}
 	if c.Schedule.Interval < 0 {
 		return fmt.Errorf("schedule.interval must be non-negative")
+	}
+	if c.Politeness.RequestDelay < 0 {
+		return fmt.Errorf("politeness.request_delay must be non-negative")
 	}
 	if c.Politeness.PerServerConcurrency < 1 {
 		return fmt.Errorf("politeness.per_server_concurrency must be at least 1")

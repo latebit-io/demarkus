@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-
 	"github.com/latebit/demarkus/client/internal/fedcrawl"
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/tokens"
@@ -54,7 +53,9 @@ func crawlMain(args []string) {
 		fmt.Fprintf(os.Stderr, "Runs a single federation crawl.\n\n")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Fatalf("parse flags: %v", err)
+	}
 
 	// Parse seeds from flag or config.
 	var seedList []string
@@ -151,7 +152,14 @@ func daemonMain(args []string) {
 		fmt.Fprintf(os.Stderr, "Runs federation crawl as a daemon on a schedule.\n\n")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Fatalf("parse flags: %v", err)
+	}
+
+	// Validate required flags.
+	if *configPath == "" {
+		log.Fatal("config path is required; use -config flag")
+	}
 
 	// Parse seeds from flag.
 	var seedList []string
@@ -211,7 +219,7 @@ func daemonMain(args []string) {
 	}
 }
 
-func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, state *fedcrawl.State, tokenStore *tokens.Store, publish bool, perServer bool) {
+func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, state *fedcrawl.State, tokenStore *tokens.Store, publish, perServer bool) {
 	crawler := fedcrawl.NewCrawler(*cfg, client, state, tokenStore)
 
 	start := time.Now()

@@ -205,4 +205,13 @@ func TestValidate(t *testing.T) {
 			t.Error("expected error for negative max depth")
 		}
 	})
+
+	t.Run("negative request delay", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://example.com"}
+		cfg.Politeness.RequestDelay = -1
+		if err := cfg.Validate(); err == nil {
+			t.Error("expected error for negative request delay")
+		}
+	})
 }

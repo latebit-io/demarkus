@@ -12,15 +12,15 @@ import (
 
 // mockClient implements FetchClient for testing.
 type mockClient struct {
-	mu     sync.Mutex
-	pages  map[string]mockPage // keyed by "host/path"
-	lists  map[string]mockPage // keyed by "host/path" for LIST results
-	calls  []string
+	mu    sync.Mutex
+	pages map[string]mockPage // keyed by "host/path"
+	lists map[string]mockPage // keyed by "host/path" for LIST results
+	calls []string
 }
 
 type mockPage struct {
-	status  string
-	body    string
+	status   string
+	body     string
 	metadata map[string]string
 }
 
@@ -36,8 +36,8 @@ func (m *mockClient) addDoc(host, path, body, hash string) {
 		status: protocol.StatusOK,
 		body:   body,
 		metadata: map[string]string{
-			"etag":          "etag-" + path,
-			"content-hash":  hash,
+			"etag":         "etag-" + path,
+			"content-hash": hash,
 		},
 	}
 }
@@ -49,7 +49,7 @@ func (m *mockClient) addList(host, path, entries string) {
 	}
 }
 
-func (m *mockClient) Fetch(host, path, token string) (fetch.Result, error) {
+func (m *mockClient) Fetch(host, path, _ string) (fetch.Result, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, "FETCH "+host+path)
 	m.mu.Unlock()
@@ -65,7 +65,7 @@ func (m *mockClient) Fetch(host, path, token string) (fetch.Result, error) {
 	}}, nil
 }
 
-func (m *mockClient) List(host, path, token string) (fetch.Result, error) {
+func (m *mockClient) List(host, path, _ string) (fetch.Result, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, "LIST "+host+path)
 	m.mu.Unlock()
@@ -301,7 +301,7 @@ func TestCrawlerWithState(t *testing.T) {
 }
 
 func contains(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsMiddle(s, substr)))
+	return s != "" && substr != "" && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsMiddle(s, substr)))
 }
 
 func containsMiddle(s, substr string) bool {
