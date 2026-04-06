@@ -206,17 +206,46 @@ demarkus resolve sha256-abc123... mark://hub.example:6309/index.md
 
 The crawler uses the same token resolution as other clients:
 
-1. **Explicit token** — not available via flag (use stored tokens)
-2. **`DEMARKUS_AUTH` env var** — fallback for all servers
-3. **Stored tokens** — `~/.mark/tokens.toml` per-host tokens
+1. **`DEMARKUS_AUTH` env var** — fallback for all servers
+2. **Stored tokens** — `~/.mark/tokens.toml` per-host tokens
 
-For private servers, store tokens before crawling:
+Store tokens before crawling:
 
 ```bash
-demarkus token add mark://private.example:6309 <raw-token>
+# Read access to private servers being crawled
+demarkus token add mark://private.example:6309 <read-token>
+
+# Publish access to hubs (required for -publish flag)
+demarkus token add mark://my-hub.example:6309 <publish-token>
 ```
 
-The crawler automatically uses stored tokens for both reads (FETCH, LIST) and writes (PUBLISH to hubs).
+The crawler automatically uses stored tokens for:
+- **Reads** (FETCH, LIST) on private servers being crawled
+- **Writes** (PUBLISH) to hubs when using `-publish`
+
+### Token Requirements
+
+| Operation | Token Required | Capability |
+|-----------|----------------|------------|
+| Crawl public servers | No | — |
+| Crawl private servers | Yes | `read` |
+| Publish to hub | Yes | `publish` |
+
+### Hub Tokens
+
+When using `-publish`, ensure you have `publish` capability tokens stored for each hub in your config:
+
+```toml
+hubs = ["mark://hub1.example:6309", "mark://hub2.example:6309"]
+```
+
+```bash
+# Store publish tokens for each hub
+demarkus token add mark://hub1.example:6309 <hub1-publish-token>
+demarkus token add mark://hub2.example:6309 <hub2-publish-token>
+```
+
+Without hub tokens, the crawler will still complete but index publishing will fail with unauthorized errors.
 
 ## Examples
 
