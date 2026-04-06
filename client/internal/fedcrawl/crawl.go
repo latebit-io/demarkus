@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 
 	"slices"
 	"strings"
@@ -157,7 +156,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	// Save state.
 	if c.state != nil {
 		if err := c.state.Save(); err != nil {
-			log.Printf("[WARN] save state: %v", err)
+			recordError("save state: %v", err)
 		}
 	}
 
@@ -224,7 +223,11 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 		if strings.HasSuffix(dest, "/") {
 			// Directory — recurse.
 			if err := c.walkDir(ctx, host, fullPath, token, docCount, queue, wg, count, recordError); err != nil {
-				return err
+				// Only abort on cancellation; record other errors and continue.
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return err
+				}
+				recordError("dir %s%s: %v", host, fullPath, err)
 			}
 			continue
 		}
@@ -389,7 +392,10 @@ func (c *Crawler) GlobalIndex(indexed time.Time) string {
 		if cmp := strings.Compare(a.Hash, b.Hash); cmp != 0 {
 			return cmp
 		}
-		return strings.Compare(a.Server, b.Server)
+		if cmp := strings.Compare(a.Server, b.Server); cmp != 0 {
+			return cmp
+		}
+		return strings.Compare(a.Path, b.Path)
 	})
 
 	// Use empty source since this is aggregated.
