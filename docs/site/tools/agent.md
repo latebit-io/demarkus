@@ -1,0 +1,277 @@
+# Federation Crawler (`demarkus-agent`)
+
+The federation crawler discovers Mark Protocol servers, collects content hashes, and publishes indexes to hubs. It's a Go binary that handles the mechanical work of crawling — no LLM required.
+
+## Overview
+
+The crawler implements the core federation loop:
+
+1. **Seed** — start from configured servers
+2. **Crawl** — follow `mark://` links, discover new servers
+3. **Hash** — collect content hashes from every document
+4. **Index** — publish hash indexes to configured hubs
+5. **Repeat** — on a configurable schedule
+
+## Installation
+
+The `demarkus-agent` binary is built alongside other clients:
+
+```bash
+# Build from source
+cd client && go build ./cmd/demarkus-agent
+
+# Binary location
+./client/bin/demarkus-agent
+```
+
+## Quick Start
+
+### Single Crawl
+
+Crawl a single server with inline configuration:
+
+```bash
+demarkus-agent crawl -seeds "mark://localhost:6309" -insecure -v
+```
+
+Output shows servers discovered, documents crawled, hashes collected, and any errors.
+
+### With Config File
+
+Create `fedcrawl.toml`:
+
+```toml
+seeds = ["mark://localhost:6309"]
+hubs = ["mark://hub.example:6309"]
+
+[crawl]
+max_servers = 50
+max_documents = 1000
+workers = 5
+
+[politeness]
+request_delay = "100ms"
+
+[schedule]
+interval = "6h"
+```
+
+Run the crawl:
+
+```bash
+demarkus-agent crawl -config fedcrawl.toml -insecure -v
+```
+
+### Daemon Mode
+
+Run continuously on a schedule:
+
+```bash
+demarkus-agent daemon -config fedcrawl.toml -insecure
+```
+
+The daemon runs an initial crawl immediately, then repeats at the configured interval.
+
+## CLI Reference
+
+### `crawl` — Single Crawl Run
+
+```bash
+demarkus-agent crawl [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-config` | — | Path to TOML config file |
+| `-seeds` | — | Comma-separated seed servers (overrides config) |
+| `-state` | `~/.mark/fedcrawl.json` | Path to state file |
+| `-insecure` | false | Skip TLS certificate verification |
+| `-publish` | false | Publish indexes to hubs after crawl |
+| `-per-server` | false | Publish per-server indexes (not aggregated) |
+| `-v` | false | Verbose output |
+
+### `daemon` — Scheduled Crawling
+
+```bash
+demarkus-agent daemon -config <path> [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-config` | — | Path to TOML config file (required) |
+| `-seeds` | — | Comma-separated seed servers (overrides config) |
+| `-state` | `~/.mark/fedcrawl.json` | Path to state file |
+| `-insecure` | false | Skip TLS certificate verification |
+| `-publish` | false | Publish indexes to hubs after each crawl |
+| `-per-server` | false | Publish per-server indexes (not aggregated) |
+
+Daemon mode requires a config file with `schedule.interval` set.
+
+### `version` — Version Info
+
+```bash
+demarkus-agent version
+```
+
+## Configuration
+
+Configuration is via TOML file. All fields have sensible defaults.
+
+### Top-Level Fields
+
+```toml
+seeds = ["mark://server1:6309", "mark://server2:6309"]
+hubs = ["mark://hub.example:6309"]
+```
+
+- `seeds` — Initial servers to crawl (required unless `-seeds` flag provided)
+- `hubs` — Servers to publish hash indexes to
+
+### `[crawl]` Section
+
+```toml
+[crawl]
+max_servers = 50      # Max servers to discover
+max_documents = 1000  # Max documents per crawl run
+workers = 5           # Concurrent fetch goroutines
+```
+
+### `[schedule]` Section
+
+```toml
+[schedule]
+interval = "6h"  # Time between crawl runs (daemon mode)
+```
+
+Interval must be > 0 for daemon mode. Use `1h`, `30m`, etc.
+
+### `[politeness]` Section
+
+```toml
+[politeness]
+request_delay = "100ms"           # Delay between requests to same server
+per_server_concurrency = 2        # Max concurrent requests per server (future)
+```
+
+## State Persistence
+
+The crawler maintains state in `~/.mark/fedcrawl.json`:
+
+- **Visited URLs** — etag, status, content hash for each document
+- **Known servers** — when discovered, last crawled, document count
+
+State enables:
+- Conditional fetch (skip unchanged documents)
+- Resume after interruption
+- Track crawl coverage over time
+
+To start fresh, delete the state file:
+
+```bash
+rm ~/.mark/fedcrawl.json
+```
+
+## Hub Index Publishing
+
+When `-publish` is set, the crawler publishes hash indexes to configured hubs.
+
+### Aggregated Index
+
+By default, publishes a single `/index.md` containing entries from all servers:
+
+```bash
+demarkus-agent crawl -config fedcrawl.toml -publish -insecure
+```
+
+### Per-Server Indexes
+
+With `-per-server`, publishes a separate index for each discovered server:
+
+```bash
+demarkus-agent crawl -config fedcrawl.toml -publish -per-server -insecure
+```
+
+Indexes are published to `/index/<host>.md` on each hub.
+
+### Content-Addressed Discovery
+
+Published indexes enable content-addressed fetching. A hub can resolve a content hash to servers hosting that content:
+
+```bash
+# Resolve content by hash (requires hub with index)
+demarkus resolve sha256-abc123... mark://hub.example:6309/index.md
+```
+
+## Authentication
+
+The crawler uses the same token resolution as other clients:
+
+1. **Explicit token** — not available via flag (use stored tokens)
+2. **`DEMARKUS_AUTH` env var** — fallback for all servers
+3. **Stored tokens** — `~/.mark/tokens.toml` per-host tokens
+
+For private servers, store tokens before crawling:
+
+```bash
+demarkus token add mark://private.example:6309 <raw-token>
+```
+
+The crawler automatically uses stored tokens for both reads (FETCH, LIST) and writes (PUBLISH to hubs).
+
+## Examples
+
+### Crawl a Hub and Index
+
+```bash
+# Crawl the demarkus hub and publish to your own hub
+demarkus-agent crawl \
+  -seeds "mark://hub.demarkus.io" \
+  -config my-hub.toml \
+  -publish \
+  -insecure \
+  -v
+```
+
+### Development Crawl
+
+```bash
+# Quick test against local server
+demarkus-agent crawl -seeds "mark://localhost:6309" -insecure -v
+```
+
+Output:
+
+```
+servers=1 docs=5 hashes=5 errors=0
+```
+
+### Production Daemon
+
+```toml
+# /etc/demarkus/fedcrawl.toml
+seeds = ["mark://hub.demarkus.io", "mark://soul.demarkus.io"]
+hubs = ["mark://my-hub.example:6309"]
+
+[crawl]
+max_servers = 100
+max_documents = 5000
+workers = 10
+
+[politeness]
+request_delay = "200ms"
+
+[schedule]
+interval = "12h"
+```
+
+Run as a systemd service (see deployment docs) or directly:
+
+```bash
+demarkus-agent daemon -config /etc/demarkus/fedcrawl.toml -publish
+```
+
+## Related
+
+- [Tools Overview](../tools/index.md)
+- [Run a Server](../server/index.md)
+- [Deployment](../deployment/index.md)
