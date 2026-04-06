@@ -33,10 +33,9 @@ type Crawler struct {
 	tokens *tokens.Store
 
 	// Crawl results
-	mu       sync.Mutex
-	hashes   map[string]index.Entry // content-hash -> entry
-	servers  map[string]bool        // discovered servers (host)
-	docCount int                    // total documents crawled
+	mu      sync.Mutex
+	hashes  map[string]index.Entry // content-hash -> entry
+	servers map[string]bool        // discovered servers (host)
 }
 
 // NewCrawler creates a new federation crawler.
@@ -150,8 +149,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	// Build result.
 	c.mu.Lock()
 	result.ServersDiscovered = len(c.servers)
-	c.docCount = int(docCount.Load())
-	result.DocumentsCrawled = c.docCount
+	result.DocumentsCrawled = int(docCount.Load())
 	result.HashesCollected = len(c.hashes)
 	result.Errors = crawlErrors
 	c.mu.Unlock()
