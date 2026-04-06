@@ -5,6 +5,7 @@ package fedcrawl
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -86,7 +87,7 @@ func Load(path string, seeds []string) (Config, error) {
 		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
 	}
 
-	// CLI seeds override config file.
+	// CLI seeds override config file (applied after TOML decode to ensure precedence).
 	if len(seeds) > 0 {
 		cfg.Seeds = seeds
 	}
@@ -100,12 +101,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at least one seed server is required")
 	}
 	for i, seed := range c.Seeds {
-		if len(seed) < 7 || seed[:7] != "mark://" {
+		if !strings.HasPrefix(seed, "mark://") {
 			return fmt.Errorf("seed %d %q must be a mark:// URL", i, seed)
 		}
 	}
 	for i, hub := range c.Hubs {
-		if len(hub) < 7 || hub[:7] != "mark://" {
+		if !strings.HasPrefix(hub, "mark://") {
 			return fmt.Errorf("hub %d %q must be a mark:// URL", i, hub)
 		}
 	}

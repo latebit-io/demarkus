@@ -332,9 +332,7 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 
 // resolveToken returns the auth token for a host.
 func (c *Crawler) resolveToken(host string) string {
-	if c.tokens == nil {
-		return ""
-	}
+
 	return tokens.Resolve("", host, c.tokens)
 }
 

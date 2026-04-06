@@ -197,6 +197,11 @@ func daemonMain(args []string) {
 
 	log.Printf("demarkus-agent daemon starting (interval: %s)", cfg.Schedule.Interval)
 
+	// Validate interval for daemon mode before starting.
+	if cfg.Schedule.Interval <= 0 {
+		log.Fatal("schedule.interval must be > 0 in daemon mode")
+	}
+
 	// Signal handling.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -205,9 +210,6 @@ func daemonMain(args []string) {
 	runCrawl(ctx, &cfg, client, state, tokenStore, *publish, *perServer)
 
 	// Schedule subsequent crawls.
-	if cfg.Schedule.Interval <= 0 {
-		log.Fatal("schedule.interval must be > 0 in daemon mode")
-	}
 	ticker := time.NewTicker(cfg.Schedule.Interval)
 	defer ticker.Stop()
 
