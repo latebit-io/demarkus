@@ -376,7 +376,12 @@ func (c *Crawler) GlobalIndex(indexed time.Time) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var entries []index.Entry
+	// Count total entries for preallocation.
+	total := 0
+	for _, entriesForHash := range c.hashes {
+		total += len(entriesForHash)
+	}
+	entries := make([]index.Entry, 0, total)
 	for _, entriesForHash := range c.hashes {
 		entries = append(entries, entriesForHash...)
 	}
