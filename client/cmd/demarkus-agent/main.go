@@ -205,6 +205,9 @@ func daemonMain(args []string) {
 	runCrawl(ctx, &cfg, client, state, tokenStore, *publish, *perServer)
 
 	// Schedule subsequent crawls.
+	if cfg.Schedule.Interval <= 0 {
+		log.Fatal("schedule.interval must be > 0 in daemon mode")
+	}
 	ticker := time.NewTicker(cfg.Schedule.Interval)
 	defer ticker.Stop()
 

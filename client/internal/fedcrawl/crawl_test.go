@@ -143,46 +143,95 @@ func TestCrawlerMultiServer(t *testing.T) {
 }
 
 func TestCrawlerMaxDocuments(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Seeds = []string{"mark://example.com"}
-	cfg.Crawl.MaxDocuments = 1
+	t.Run("single_server", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://example.com"}
+		cfg.Crawl.MaxDocuments = 1
 
-	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [a.md](a.md)\n- [b.md](b.md)\n")
-	client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	client.addDoc("example.com:6309", "/b.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+		client := newMockClient()
+		client.addList("example.com:6309", "/", "- [a.md](a.md)\n- [b.md](b.md)\n")
+		client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		client.addDoc("example.com:6309", "/b.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
-	crawler := NewCrawler(cfg, client, nil, nil)
-	result, err := crawler.Run(context.Background())
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
+		crawler := NewCrawler(cfg, client, nil, nil)
+		result, err := crawler.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
 
-	if result.DocumentsCrawled > 1 {
-		t.Errorf("DocumentsCrawled = %d, should be capped at 1", result.DocumentsCrawled)
-	}
+		if result.DocumentsCrawled > 1 {
+			t.Errorf("DocumentsCrawled = %d, should be capped at 1", result.DocumentsCrawled)
+		}
+	})
+
+	t.Run("cross_server", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://server1.com"}
+		cfg.Crawl.MaxDocuments = 1
+		cfg.Crawl.Workers = 2 // Multiple workers to test concurrent cap
+
+		client := newMockClient()
+		client.addList("server1.com:6309", "/", "- [a.md](a.md)\n")
+		client.addDoc("server1.com:6309", "/a.md", "Link to [server2](mark://server2.com/b.md).", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		client.addList("server2.com:6309", "/", "- [b.md](b.md)\n")
+		client.addDoc("server2.com:6309", "/b.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+		crawler := NewCrawler(cfg, client, nil, nil)
+		result, err := crawler.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+
+		if result.DocumentsCrawled > 1 {
+			t.Errorf("DocumentsCrawled = %d, should be capped at 1 across servers", result.DocumentsCrawled)
+		}
+	})
 }
 
 func TestCrawlerMaxServers(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Seeds = []string{"mark://server1.com"}
-	cfg.Crawl.MaxServers = 1
+	t.Run("discovery_cap", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://server1.com"}
+		cfg.Crawl.MaxServers = 1
 
-	client := newMockClient()
-	client.addList("server1.com:6309", "/", "- [index.md](index.md)\n")
-	client.addDoc("server1.com:6309", "/index.md", "See [other](mark://server2.com/other.md).", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	client.addList("server2.com:6309", "/", "- [other.md](other.md)\n")
-	client.addDoc("server2.com:6309", "/other.md", "Content.", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+		client := newMockClient()
+		client.addList("server1.com:6309", "/", "- [index.md](index.md)\n")
+		client.addDoc("server1.com:6309", "/index.md", "See [other](mark://server2.com/other.md).", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		client.addList("server2.com:6309", "/", "- [other.md](other.md)\n")
+		client.addDoc("server2.com:6309", "/other.md", "Content.", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
-	crawler := NewCrawler(cfg, client, nil, nil)
-	result, err := crawler.Run(context.Background())
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
+		crawler := NewCrawler(cfg, client, nil, nil)
+		result, err := crawler.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
 
-	if result.ServersDiscovered > 1 {
-		t.Errorf("ServersDiscovered = %d, should be capped at 1", result.ServersDiscovered)
-	}
+		if result.ServersDiscovered > 1 {
+			t.Errorf("ServersDiscovered = %d, should be capped at 1", result.ServersDiscovered)
+		}
+	})
+
+	t.Run("seed_cap", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://server1.com", "mark://server2.com"}
+		cfg.Crawl.MaxServers = 1
+
+		client := newMockClient()
+		client.addList("server1.com:6309", "/", "- [index.md](index.md)\n")
+		client.addDoc("server1.com:6309", "/index.md", "Content.", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		client.addList("server2.com:6309", "/", "- [index.md](index.md)\n")
+		client.addDoc("server2.com:6309", "/index.md", "Content.", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+		crawler := NewCrawler(cfg, client, nil, nil)
+		result, err := crawler.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+
+		if result.ServersDiscovered > 1 {
+			t.Errorf("ServersDiscovered = %d, should be capped at 1 even with multiple seeds", result.ServersDiscovered)
+		}
+	})
 }
 
 func TestCrawlerCancellation(t *testing.T) {

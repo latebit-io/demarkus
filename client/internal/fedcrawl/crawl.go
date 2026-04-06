@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"maps"
+
 	"slices"
 	"strings"
 	"sync"
@@ -34,8 +34,8 @@ type Crawler struct {
 
 	// Crawl results
 	mu      sync.Mutex
-	hashes  map[string]index.Entry // content-hash -> entry
-	servers map[string]bool        // discovered servers (host)
+	hashes  map[string][]index.Entry // content-hash -> all observed locations
+	servers map[string]bool          // discovered servers (host)
 }
 
 // NewCrawler creates a new federation crawler.
@@ -47,7 +47,7 @@ func NewCrawler(cfg Config, client FetchClient, state *State, tokenStore *tokens
 		client:  client,
 		state:   state,
 		tokens:  tokenStore,
-		hashes:  make(map[string]index.Entry),
+		hashes:  make(map[string][]index.Entry),
 		servers: make(map[string]bool),
 	}
 }
@@ -63,6 +63,17 @@ type CrawlResult struct {
 // Run executes the federation crawl starting from configured seeds.
 // It discovers servers, collects content hashes, and returns results.
 func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
+	// Validate workers to prevent deadlock.
+	if c.cfg.Crawl.Workers <= 0 {
+		return nil, fmt.Errorf("crawl.workers must be > 0")
+	}
+
+	// Reset crawl state for each invocation.
+	c.mu.Lock()
+	c.hashes = make(map[string][]index.Entry)
+	c.servers = make(map[string]bool)
+	c.mu.Unlock()
+
 	result := &CrawlResult{}
 
 	// Buffer queue to handle discovery bursts. Size based on max servers.
@@ -93,7 +104,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 				}
 
 				// Crawl this server.
-				count, err := c.crawlServer(ctx, host, &docCount, queue, &wg)
+				count, err := c.crawlServer(ctx, host, &docCount, queue, &wg, recordError)
 				if err != nil {
 					recordError("server %s: %v", host, err)
 					return
@@ -124,6 +135,10 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 		}
 
 		c.mu.Lock()
+		if len(c.servers) >= c.cfg.Crawl.MaxServers {
+			c.mu.Unlock()
+			break // Stop seeding once we hit the cap
+		}
 		if c.servers[host] {
 			c.mu.Unlock()
 			continue
@@ -159,17 +174,17 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 
 // crawlServer crawls a single server, collecting hashes and discovering new servers.
 // Returns the number of documents successfully crawled.
-func (c *Crawler) crawlServer(ctx context.Context, host string, docCount *atomic.Int32, queue chan<- string, wg *sync.WaitGroup) (int, error) {
+func (c *Crawler) crawlServer(ctx context.Context, host string, docCount *atomic.Int32, queue chan<- string, wg *sync.WaitGroup, recordError func(string, ...any)) (int, error) {
 	token := c.resolveToken(host)
 	var count int
 
 	// Start from root.
-	err := c.walkDir(ctx, host, "/", token, docCount, queue, wg, &count)
+	err := c.walkDir(ctx, host, "/", token, docCount, queue, wg, &count, recordError)
 	return count, err
 }
 
 // walkDir recursively walks a directory on a server, collecting hashes and discovering links.
-func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docCount *atomic.Int32, queue chan<- string, wg *sync.WaitGroup, count *int) error {
+func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docCount *atomic.Int32, queue chan<- string, wg *sync.WaitGroup, count *int, recordError func(string, ...any)) error {
 	// Check limits.
 	if int(docCount.Load()) >= c.cfg.Crawl.MaxDocuments {
 		return nil
@@ -194,10 +209,7 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 
 	// Process each entry.
 	for _, dest := range links.Extract(result.Response.Body) {
-		// Check limits.
-		if int(docCount.Load()) >= c.cfg.Crawl.MaxDocuments {
-			return nil
-		}
+		// Check context cancellation.
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -211,20 +223,28 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 
 		if strings.HasSuffix(dest, "/") {
 			// Directory — recurse.
-			if err := c.walkDir(ctx, host, fullPath, token, docCount, queue, wg, count); err != nil {
+			if err := c.walkDir(ctx, host, fullPath, token, docCount, queue, wg, count, recordError); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// File — fetch and collect hash.
+		// File — atomically reserve a slot before Fetch.
+		newCount := int(docCount.Add(1))
+		if newCount > c.cfg.Crawl.MaxDocuments {
+			docCount.Add(-1) // Roll back reservation
+			return nil
+		}
+
+		// Apply politeness delay.
 		if c.cfg.Politeness.RequestDelay > 0 {
 			time.Sleep(c.cfg.Politeness.RequestDelay)
 		}
 
 		doc, err := c.client.Fetch(host, fullPath, token)
 		if err != nil {
-			log.Printf("[WARN] fetch %s%s: %v", host, fullPath, err)
+			docCount.Add(-1) // Roll back reservation
+			recordError("fetch %s%s: %v", host, fullPath, err)
 			continue
 		}
 
@@ -238,25 +258,26 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 		}
 
 		if doc.Response.Status != protocol.StatusOK {
+			docCount.Add(-1) // Roll back reservation
 			continue
 		}
 
 		// Collect content hash.
 		contentHash := doc.Response.Metadata["content-hash"]
 		if _, ok := protocol.IsHashPath(contentHash); ok {
-			c.mu.Lock()
-			c.hashes[contentHash] = index.Entry{
+			entry := index.Entry{
 				Hash:   contentHash,
 				Server: "mark://" + host,
 				Path:   fullPath,
 			}
+			c.mu.Lock()
+			c.hashes[contentHash] = append(c.hashes[contentHash], entry)
 			c.mu.Unlock()
 		}
 
 		// Discover cross-server links.
 		c.discoverServers(doc.Response.Body, host, queue, wg)
 
-		docCount.Add(1)
 		*count++
 	}
 
@@ -314,12 +335,17 @@ func (c *Crawler) resolveToken(host string) string {
 	return tokens.Resolve("", host, c.tokens)
 }
 
-// Hashes returns all collected content hashes.
+// Hashes returns all collected content hashes flattened to single entries.
+// When the same content appears at multiple locations, the first location is returned.
 func (c *Crawler) Hashes() map[string]index.Entry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cp := make(map[string]index.Entry, len(c.hashes))
-	maps.Copy(cp, c.hashes)
+	for hash, entries := range c.hashes {
+		if len(entries) > 0 {
+			cp[hash] = entries[0]
+		}
+	}
 	return cp
 }
 
@@ -329,9 +355,11 @@ func (c *Crawler) IndexForServer(host string, indexed time.Time) string {
 	defer c.mu.Unlock()
 
 	var entries []index.Entry
-	for _, e := range c.hashes {
-		if e.Server == "mark://"+host {
-			entries = append(entries, e)
+	for _, entriesForHash := range c.hashes {
+		for _, e := range entriesForHash {
+			if e.Server == "mark://"+host {
+				entries = append(entries, e)
+			}
 		}
 	}
 
@@ -348,7 +376,10 @@ func (c *Crawler) GlobalIndex(indexed time.Time) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	entries := slices.Collect(maps.Values(c.hashes))
+	var entries []index.Entry
+	for _, entriesForHash := range c.hashes {
+		entries = append(entries, entriesForHash...)
+	}
 	slices.SortFunc(entries, func(a, b index.Entry) int {
 		if cmp := strings.Compare(a.Hash, b.Hash); cmp != 0 {
 			return cmp
