@@ -1,6 +1,22 @@
 # Tools
 
-This section covers the supporting tools that ship with Demarkus. Today that primarily means **token generation** for capability-based authentication.
+This section covers the supporting tools that ship with Demarkus: the **federation crawler** for discovering servers and building indexes, and **token generation** for capability-based authentication.
+
+## Federation Crawler (`demarkus-agent`)
+
+The federation crawler discovers Mark Protocol servers, collects content hashes, and publishes indexes to hubs. It runs the core federation loop: seed → crawl → hash → index → repeat.
+
+See [Federation Crawler](./agent.md) for full documentation.
+
+### Quick start
+
+```bash
+# Single crawl
+demarkus-agent crawl -seeds "mark://localhost:6309" -insecure -v
+
+# Daemon mode with config
+demarkus-agent daemon -config fedcrawl.toml -insecure
+```
 
 ## Token Generation (`demarkus-token`)
 

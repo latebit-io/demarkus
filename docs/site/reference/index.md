@@ -5,6 +5,7 @@ This section is a stable reference for configuration, environment variables, and
 ## Configuration
 
 - [Server configuration & env vars](#server-configuration)
+- [Federation crawler configuration](#federation-crawler)
 
 ### Server configuration
 
@@ -26,6 +27,62 @@ Notes:
 - `-tls-cert` and `-tls-key` must be provided together.
 - When no tokens file is configured, the server rejects writes (no auth = no writes).
 - `-read-only` explicitly rejects all write operations regardless of tokens. Use this for public-facing servers where content is published locally with `demarkus-publish`.
+
+### Federation crawler configuration
+
+The federation crawler (`demarkus-agent`) uses a TOML configuration file:
+
+```toml
+seeds = ["mark://server1:6309", "mark://server2:6309"]
+hubs = ["mark://hub.example:6309"]
+
+[crawl]
+max_servers = 50      # Maximum servers to discover
+max_documents = 1000  # Maximum documents per crawl run
+workers = 5           # Concurrent fetch goroutines
+
+[politeness]
+request_delay = "100ms"  # Delay between requests to same server
+
+[schedule]
+interval = "6h"  # Time between crawl runs (daemon mode)
+```
+
+#### Config fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `seeds` | *(required)* | Initial servers to crawl |
+| `hubs` | *(empty)* | Servers to publish hash indexes to |
+| `crawl.max_servers` | `50` | Maximum servers to discover per run |
+| `crawl.max_documents` | `1000` | Maximum documents to fetch per run |
+| `crawl.workers` | `5` | Concurrent fetch goroutines |
+| `politeness.request_delay` | `100ms` | Delay between requests to same server |
+| `schedule.interval` | — | Time between runs (daemon mode, required) |
+
+#### CLI flags
+
+Flags override config file values:
+
+| Flag | Description |
+|------|-------------|
+| `-config <path>` | Path to TOML config file |
+| `-seeds <urls>` | Comma-separated seed servers (overrides config) |
+| `-state <path>` | State file path (default `~/.mark/fedcrawl.json`) |
+| `-insecure` | Skip TLS certificate verification |
+| `-publish` | Publish indexes to hubs after crawl |
+| `-per-server` | Publish per-server indexes (not aggregated) |
+| `-v` | Verbose output |
+
+#### Environment variables
+
+The crawler uses the same token resolution as other clients:
+
+| Env var | Description |
+|---------|-------------|
+| `DEMARKUS_AUTH` | Fallback auth token for all servers |
+
+For per-server tokens, use `demarkus token add mark://host:6309 <token>` before crawling.
 
 ## Protocol
 

@@ -23,6 +23,7 @@ Welcome to the Demarkus documentation site. This is the canonical table of conte
 
 ## Tools
 
+- [Federation Crawler](tools/agent.md) — discover servers and build hash indexes
 - [Token Tooling](tools/index.md)
 
 ## Reference

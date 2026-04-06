@@ -127,6 +127,7 @@ The MCP server resolves tokens per-host: the `-token` flag takes precedence, the
 
 ## Related Tools
 
+- [Federation Crawler](../tools/agent.md) — discover servers and build hash indexes
 - [Token Tooling](../tools/index.md)
 
 ## Next Steps
