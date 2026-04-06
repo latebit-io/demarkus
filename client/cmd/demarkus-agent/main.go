@@ -195,12 +195,12 @@ func daemonMain(args []string) {
 	// Load tokens.
 	tokenStore := tokens.LoadDefault()
 
-	log.Printf("demarkus-agent daemon starting (interval: %s)", cfg.Schedule.Interval)
-
 	// Validate interval for daemon mode before starting.
 	if cfg.Schedule.Interval <= 0 {
 		log.Fatal("schedule.interval must be > 0 in daemon mode")
 	}
+
+	log.Printf("demarkus-agent daemon starting (interval: %s)", cfg.Schedule.Interval)
 
 	// Signal handling.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
