@@ -1040,8 +1040,8 @@ func TestVersionsChainValid(t *testing.T) {
 	})
 
 	t.Run("tampered chain", func(t *testing.T) {
-		// Corrupt v1 on disk.
-		v1Path := filepath.Join(dir, "versions", "doc.md.v1")
+		// Corrupt v1 on disk (per-document subdirectory layout).
+		v1Path := filepath.Join(dir, "versions", "doc.md", "v1")
 		if err := os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}

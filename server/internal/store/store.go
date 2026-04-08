@@ -4,14 +4,20 @@
 // through the protocol (with a versions directory) are served. Flat files
 // without version history are treated as non-existent.
 //
-// Layout:
+// Layout (per-document subdirectory):
 //
 //	root/
-//	  doc.md              ← symlink to versions/doc.md.v3
+//	  doc.md              ← symlink to versions/doc.md/v3
 //	  versions/
-//	    doc.md.v1
-//	    doc.md.v2
-//	    doc.md.v3
+//	    doc.md/
+//	      v1
+//	      v2
+//	      v3
+//
+// The store also supports a legacy flat layout (versions/doc.md.v{N}) for
+// backward compatibility. Old-layout documents are migrated to the per-document
+// subdirectory layout on the next write.
+// TODO(v1): remove flat layout support and migration code.
 package store
 
 import (
@@ -72,6 +78,43 @@ const maxStoreFrontmatter = 1024
 // metaPrefix is the key prefix for publisher-provided metadata in store
 // frontmatter. On disk: "meta.type: journal". Stripped when returned to clients.
 const metaPrefix = "meta."
+
+// isPerDocLayout reports whether a document uses the per-document subdirectory
+// layout (versions/{base}/v{N}) rather than the flat layout (versions/{base}.v{N}).
+// TODO(v1): remove once all stores have been migrated; assume per-doc layout.
+func isPerDocLayout(versionsDir, base string) bool {
+	info, err := os.Stat(filepath.Join(versionsDir, base))
+	return err == nil && info.IsDir()
+}
+
+// resolveVersionFile returns the absolute path to an existing version file,
+// checking per-doc layout first then falling back to flat layout. This handles
+// partially-migrated stores where some versions may still be in the old layout.
+// TODO(v1): remove flat layout fallback; always use per-doc path directly.
+func resolveVersionFile(versionsDir, base string, version int) string {
+	perDoc := filepath.Join(versionsDir, base, fmt.Sprintf("v%d", version))
+	if _, err := os.Stat(perDoc); err == nil {
+		return perDoc
+	}
+	flat := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, version))
+	if _, err := os.Stat(flat); err == nil {
+		return flat
+	}
+	// Neither exists; return per-doc path so callers get a meaningful error.
+	return perDoc
+}
+
+// newVersionFilePath returns the absolute path for a new version file,
+// always using the per-document subdirectory layout.
+func newVersionFilePath(versionsDir, base string, version int) string {
+	return filepath.Join(versionsDir, base, fmt.Sprintf("v%d", version))
+}
+
+// newVersionSymlinkTarget returns the relative symlink target for a new version,
+// always using the per-document subdirectory layout.
+func newVersionSymlinkTarget(base string, version int) string {
+	return filepath.Join("versions", base, fmt.Sprintf("v%d", version))
+}
 
 // Store provides read access to a versioned document directory.
 type Store struct {
@@ -398,6 +441,8 @@ func (s *Store) CurrentVersion(reqPath string) int {
 }
 
 // findVersions looks for versioned files in the versions directory.
+// Supports both per-document subdirectory layout (versions/{base}/v{N})
+// and flat layout (versions/{base}.v{N}).
 // Returns nil if no versions directory or no matching files exist.
 func (s *Store) findVersions(reqPath string) []VersionInfo {
 	cleaned := filepath.Clean(reqPath)
@@ -405,6 +450,46 @@ func (s *Store) findVersions(reqPath string) []VersionInfo {
 	base := filepath.Base(cleaned)
 
 	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
+
+	if isPerDocLayout(versionsDir, base) {
+		return s.findVersionsPerDoc(versionsDir, base)
+	}
+	return s.findVersionsFlat(versionsDir, base)
+}
+
+// findVersionsPerDoc reads versions from the per-document subdirectory layout.
+func (s *Store) findVersionsPerDoc(versionsDir, base string) []VersionInfo {
+	docDir := filepath.Join(versionsDir, base)
+	entries, err := os.ReadDir(docDir)
+	if err != nil {
+		return nil
+	}
+
+	var versions []VersionInfo
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "v") {
+			continue
+		}
+		numStr := e.Name()[1:] // strip "v" prefix
+		num, err := strconv.Atoi(numStr)
+		if err != nil || num < 1 {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		versions = append(versions, VersionInfo{
+			Version:  num,
+			Modified: info.ModTime().UTC().Truncate(time.Second),
+		})
+	}
+	return versions
+}
+
+// findVersionsFlat reads versions from the flat layout.
+// TODO(v1): remove this function; all stores will use per-doc layout.
+func (s *Store) findVersionsFlat(versionsDir, base string) []VersionInfo {
 	entries, err := os.ReadDir(versionsDir)
 	if err != nil {
 		return nil
@@ -440,11 +525,22 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 	cleaned = strings.TrimLeft(cleaned, "/")
 	base := filepath.Base(cleaned)
 
-	// Build path relative to root: versions/doc.md.v1
-	versionPath := filepath.Join(filepath.Dir(cleaned), "versions", fmt.Sprintf("%s.v%d", base, version))
-	filePath, err := s.resolve("/" + versionPath)
-	if err != nil {
-		return nil, err
+	// Try per-doc layout first, fall back to flat layout for backward compatibility.
+	// TODO(v1): remove flat layout fallback.
+	dir := filepath.Dir(cleaned)
+	perDocPath := "/" + filepath.Join(dir, "versions", base, fmt.Sprintf("v%d", version))
+	filePath, err := s.resolve(perDocPath)
+	if err == nil {
+		if _, statErr := os.Stat(filePath); statErr != nil {
+			filePath = "" // per-doc path resolved but file doesn't exist; try flat
+		}
+	}
+	if filePath == "" {
+		flatPath := "/" + filepath.Join(dir, "versions", fmt.Sprintf("%s.v%d", base, version))
+		filePath, err = s.resolve(flatPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	info, err := os.Stat(filePath)
@@ -496,7 +592,12 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 		return os.ErrNotExist
 	}
 
-	versionRelPath := "/" + filepath.Join(dir, "versions", fmt.Sprintf("%s.v%d", base, currentVersion))
+	// Resolve the version file path, trying per-doc layout first.
+	// TODO(v1): remove flat layout fallback.
+	versionsDir := filepath.Join(s.root, dir, "versions")
+	resolvedFile := resolveVersionFile(versionsDir, base, currentVersion)
+	rel, _ := filepath.Rel(s.root, resolvedFile)
+	versionRelPath := "/" + rel
 	versionFile, err := s.resolve(versionRelPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -633,36 +734,21 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	}
 
 	// For existing documents: reject writes to archived documents (closes
-	// TOCTOU gap with handler) and migrate flat files to v1 if needed.
+	// TOCTOU gap with handler), run migrations, and check for duplicate content.
 	if next > 1 {
-		if s.isCurrentArchived(versionsDir, base, next-1) {
-			return nil, ErrArchived
-		}
-		if err := s.migrateFlatFile(versionsDir, base, currentFile); err != nil {
-			return nil, err
-		}
-
-		// Skip creating a new version if content and metadata are identical.
-		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next-1))
-		prevData, err := os.ReadFile(prevFile)
-		if err == nil {
-			if bytes.Equal(extractBody(prevData), content) && metaEqual(extractMetadata(prevData), meta) {
-				info, err := os.Stat(prevFile)
-				if err != nil {
-					return nil, fmt.Errorf("stat current version: %w", err)
-				}
-				return &Document{
-					Content:  content,
-					Modified: info.ModTime().UTC().Truncate(time.Second),
-					Version:  next - 1,
-					Archived: false,
-					Metadata: meta,
-				}, ErrNotModified
-			}
+		doc, err := s.prepareExistingDoc(versionsDir, base, currentFile, next, content, meta)
+		if doc != nil || err != nil {
+			return doc, err
 		}
 	}
 
-	versionFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, next))
+	// Create per-document subdirectory for new documents.
+	docDir := filepath.Join(versionsDir, base)
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create per-doc versions dir: %w", err)
+	}
+
+	vFile := newVersionFilePath(versionsDir, base, next)
 
 	stored, err := buildVersionFile(versionsDir, base, next, content, meta)
 	if err != nil {
@@ -676,7 +762,7 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 
 	// Immutability guard + atomic write: O_CREATE|O_EXCL fails if the file
 	// already exists, preventing TOCTOU races between a stat check and rename.
-	f, err := os.OpenFile(versionFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := os.OpenFile(vFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
 			return nil, fmt.Errorf("version %d: %w", next, ErrVersionExists)
@@ -685,11 +771,11 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	}
 	if _, err := f.Write(stored); err != nil {
 		_ = f.Close()
-		_ = os.Remove(versionFile)
+		_ = os.Remove(vFile)
 		return nil, fmt.Errorf("write version file: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(versionFile)
+		_ = os.Remove(vFile)
 		return nil, fmt.Errorf("close version file: %w", err)
 	}
 
@@ -697,7 +783,7 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	// Create a temp symlink then rename over the current path so readers
 	// never see a missing file. Use a relative target so the content
 	// directory can be relocated without breaking links.
-	relTarget := filepath.Join("versions", fmt.Sprintf("%s.v%d", base, next))
+	relTarget := newVersionSymlinkTarget(base, next)
 	tmpLink := currentFile + ".tmp"
 	_ = os.Remove(tmpLink) // clean up any stale temp link
 	if err := os.Symlink(relTarget, tmpLink); err != nil {
@@ -708,7 +794,7 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 		return nil, fmt.Errorf("rename current file: %w", err)
 	}
 
-	info, err := os.Stat(versionFile)
+	info, err := os.Stat(vFile)
 	if err != nil {
 		return nil, fmt.Errorf("stat version file: %w", err)
 	}
@@ -722,6 +808,54 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 		Archived: false,
 		Metadata: meta,
 	}, nil
+}
+
+// prepareExistingDoc handles pre-write checks for existing documents:
+// rejects archived documents, migrates flat files and old layout to per-doc
+// subdirectories, and returns ErrNotModified if content is unchanged.
+// Returns (nil, nil) when the caller should proceed with writing a new version.
+func (s *Store) prepareExistingDoc(versionsDir, base, currentFile string, next int, content []byte, meta map[string]string) (*Document, error) {
+	archived, err := s.isCurrentArchived(versionsDir, base, next-1)
+	if err != nil {
+		return nil, err
+	}
+	if archived {
+		return nil, ErrArchived
+	}
+	if err := s.migrateFlatFile(versionsDir, base, currentFile); err != nil {
+		return nil, err
+	}
+	if !isPerDocLayout(versionsDir, base) {
+		if err := s.migrateToPerDocDir(versionsDir, base, currentFile); err != nil {
+			return nil, err
+		}
+	}
+
+	// Skip creating a new version if content and metadata are identical.
+	// After migration, always use per-doc layout for reads.
+	prevFile := newVersionFilePath(versionsDir, base, next-1)
+	prevData, err := os.ReadFile(prevFile)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("read previous version: %w", err)
+		}
+		// File doesn't exist — proceed with writing the new version.
+		return nil, nil
+	}
+	if bytes.Equal(extractBody(prevData), content) && metaEqual(extractMetadata(prevData), meta) {
+		info, err := os.Stat(prevFile)
+		if err != nil {
+			return nil, fmt.Errorf("stat current version: %w", err)
+		}
+		return &Document{
+			Content:  content,
+			Modified: info.ModTime().UTC().Truncate(time.Second),
+			Version:  next - 1,
+			Archived: false,
+			Metadata: meta,
+		}, ErrNotModified
+	}
+	return nil, nil
 }
 
 // WriteVersion is like Write but performs an optimistic concurrency check.
@@ -841,8 +975,8 @@ func (s *Store) VerifyChain(reqPath string) error {
 	for i, curr := range versions[1:] {
 		prev := versions[i]
 
-		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, prev.Version))
-		currFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, curr.Version))
+		prevFile := resolveVersionFile(versionsDir, base, prev.Version)
+		currFile := resolveVersionFile(versionsDir, base, curr.Version)
 
 		prevData, err := os.ReadFile(prevFile)
 		if err != nil {
@@ -981,7 +1115,7 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 	sb.WriteString(fmt.Sprintf("version: %d\n", version))
 	sb.WriteString("archived: false\n")
 	if version > 1 {
-		prevFile := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, version-1))
+		prevFile := resolveVersionFile(versionsDir, base, version-1)
 		prevData, err := os.ReadFile(prevFile)
 		if err != nil {
 			return nil, fmt.Errorf("read previous version for hashing: %w", err)
@@ -1083,16 +1217,31 @@ func extractBody(data []byte) []byte {
 }
 
 // migrateFlatFile promotes a flat file (no version history) to v1 in the
-// versions directory. If v1 already exists (concurrent write), it is a no-op.
+// versions directory using the per-document subdirectory layout.
+// If v1 already exists (concurrent write), it is a no-op.
+// TODO(v1): remove this function; flat files without version history won't exist.
 func (s *Store) migrateFlatFile(versionsDir, base, currentFile string) error {
-	v1File := filepath.Join(versionsDir, fmt.Sprintf("%s.v1", base))
-	if _, err := os.Stat(v1File); !errors.Is(err, os.ErrNotExist) {
-		return nil // v1 already exists
+	// Check both layouts for an existing v1.
+	perDocV1 := newVersionFilePath(versionsDir, base, 1)
+	if _, err := os.Stat(perDocV1); !errors.Is(err, os.ErrNotExist) {
+		return nil // v1 already exists (new layout)
+	}
+	flatV1 := filepath.Join(versionsDir, fmt.Sprintf("%s.v1", base))
+	if _, err := os.Stat(flatV1); !errors.Is(err, os.ErrNotExist) {
+		return nil // v1 already exists (old layout, will be migrated by migrateToPerDocDir)
 	}
 	flatData, err := os.ReadFile(currentFile)
 	if err != nil {
 		return fmt.Errorf("read flat file for migration: %w", err)
 	}
+
+	// Create per-document subdirectory.
+	docDir := filepath.Join(versionsDir, base)
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
+		return fmt.Errorf("create per-doc dir for migration: %w", err)
+	}
+
+	v1File := newVersionFilePath(versionsDir, base, 1)
 	v1Data := []byte("---\nversion: 1\n---\n")
 	v1Data = append(v1Data, flatData...)
 	// Use exclusive create to prevent overwriting a v1 that appeared
@@ -1116,12 +1265,84 @@ func (s *Store) migrateFlatFile(versionsDir, base, currentFile string) error {
 	return nil
 }
 
+// migrateToPerDocDir moves version files from the flat layout (versions/{base}.v{N})
+// to the per-document subdirectory layout (versions/{base}/v{N}).
+// Updates the current symlink to point at the new location.
+// No-op if already using per-document layout or no flat files exist.
+// TODO(v1): remove this function; all stores will use per-doc layout.
+func (s *Store) migrateToPerDocDir(versionsDir, base, currentFile string) error {
+	// Create per-document subdirectory.
+	docDir := filepath.Join(versionsDir, base)
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
+		return fmt.Errorf("create per-doc dir for migration: %w", err)
+	}
+
+	// Find all flat-layout version files for this document.
+	entries, err := os.ReadDir(versionsDir)
+	if err != nil {
+		return fmt.Errorf("read versions dir for migration: %w", err)
+	}
+
+	prefix := base + ".v"
+	var highestVersion int
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
+			continue
+		}
+		numStr := strings.TrimPrefix(e.Name(), prefix)
+		num, err := strconv.Atoi(numStr)
+		if err != nil || num < 1 {
+			continue
+		}
+
+		oldPath := filepath.Join(versionsDir, e.Name())
+		newPath := newVersionFilePath(versionsDir, base, num)
+
+		// Skip if already migrated (e.g. concurrent migration).
+		if _, err := os.Stat(newPath); err == nil {
+			_ = os.Remove(oldPath)
+			if num > highestVersion {
+				highestVersion = num
+			}
+			continue
+		}
+
+		if err := os.Rename(oldPath, newPath); err != nil {
+			return fmt.Errorf("migrate version %d: %w", num, err)
+		}
+		if num > highestVersion {
+			highestVersion = num
+		}
+	}
+
+	// Update symlink to point at the new location.
+	if highestVersion > 0 {
+		relTarget := newVersionSymlinkTarget(base, highestVersion)
+		tmpLink := currentFile + ".tmp"
+		_ = os.Remove(tmpLink)
+		if err := os.Symlink(relTarget, tmpLink); err != nil {
+			return fmt.Errorf("symlink during migration: %w", err)
+		}
+		if err := os.Rename(tmpLink, currentFile); err != nil {
+			_ = os.Remove(tmpLink)
+			return fmt.Errorf("rename symlink during migration: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // isCurrentArchived checks whether the given version file is archived.
-func (s *Store) isCurrentArchived(versionsDir, base string, version int) bool {
-	path := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, version))
+// Returns (false, nil) if the file doesn't exist (new document).
+// Returns an error for non-ErrNotExist read failures.
+func (s *Store) isCurrentArchived(versionsDir, base string, version int) (bool, error) {
+	path := resolveVersionFile(versionsDir, base, version)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read version file for archive check: %w", err)
 	}
-	return isArchived(data)
+	return isArchived(data), nil
 }
