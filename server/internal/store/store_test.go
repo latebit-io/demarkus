@@ -920,6 +920,168 @@ func TestWrite_MigratesOldLayoutToPerDoc(t *testing.T) {
 	}
 }
 
+func TestWrite_SubdirectoryPerDocLayout(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Write to a deeply nested path.
+	doc, err := s.Write("/a/b/c/doc.md", []byte("# Deep\n"), nil)
+	if err != nil {
+		t.Fatalf("Write v1: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+
+	// Verify per-doc layout at the correct nesting.
+	vFile := filepath.Join(root, "a", "b", "c", "versions", "doc.md", "v1")
+	if _, err := os.Stat(vFile); err != nil {
+		t.Fatalf("version file not found: %v", err)
+	}
+
+	// Write v2.
+	doc, err = s.Write("/a/b/c/doc.md", []byte("# Deep v2\n"), nil)
+	if err != nil {
+		t.Fatalf("Write v2: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version = %d, want 2", doc.Version)
+	}
+
+	// Symlink should point to per-doc layout.
+	target, err := os.Readlink(filepath.Join(root, "a", "b", "c", "doc.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != filepath.Join("versions", "doc.md", "v2") {
+		t.Errorf("symlink = %q, want %q", target, filepath.Join("versions", "doc.md", "v2"))
+	}
+
+	// Read back via Get.
+	got, err := s.Get("/a/b/c/doc.md", 0)
+	if err != nil {
+		t.Fatalf("Get current: %v", err)
+	}
+	if got.Version != 2 {
+		t.Errorf("Get version = %d, want 2", got.Version)
+	}
+
+	// Read specific version.
+	got, err = s.Get("/a/b/c/doc.md", 1)
+	if err != nil {
+		t.Fatalf("Get v1: %v", err)
+	}
+	if got.Version != 1 {
+		t.Errorf("Get v1 version = %d, want 1", got.Version)
+	}
+
+	// Versions listing.
+	versions, err := s.Versions("/a/b/c/doc.md")
+	if err != nil {
+		t.Fatalf("Versions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("versions count = %d, want 2", len(versions))
+	}
+
+	// Hash chain integrity.
+	if err := s.VerifyChain("/a/b/c/doc.md"); err != nil {
+		t.Errorf("chain verification failed: %v", err)
+	}
+
+	// Append.
+	doc, err = s.Append("/a/b/c/doc.md", 2, []byte("Appended."), nil)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if doc.Version != 3 {
+		t.Errorf("version = %d, want 3", doc.Version)
+	}
+}
+
+func TestWrite_SubdirectoryMigration(t *testing.T) {
+	root := t.TempDir()
+
+	// Set up old flat layout in a subdirectory.
+	subdir := filepath.Join(root, "docs", "guides")
+	versionsDir := filepath.Join(subdir, "versions")
+	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	v1Content := []byte("---\nversion: 1\narchived: false\n---\n# Guide\n")
+	if err := os.WriteFile(filepath.Join(versionsDir, "setup.md.v1"), v1Content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("versions", "setup.md.v1"), filepath.Join(subdir, "setup.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+
+	// Read should work with old layout.
+	doc, err := s.Get("/docs/guides/setup.md", 0)
+	if err != nil {
+		t.Fatalf("Get before migration: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+
+	// Write v2 triggers migration.
+	doc, err = s.Write("/docs/guides/setup.md", []byte("# Updated Guide\n"), nil)
+	if err != nil {
+		t.Fatalf("Write v2: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version = %d, want 2", doc.Version)
+	}
+
+	// Old flat file should be gone.
+	if _, err := os.Stat(filepath.Join(versionsDir, "setup.md.v1")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("old flat v1 should have been removed")
+	}
+
+	// New per-doc files should exist.
+	docDir := filepath.Join(versionsDir, "setup.md")
+	for i := 1; i <= 2; i++ {
+		if _, err := os.Stat(filepath.Join(docDir, fmt.Sprintf("v%d", i))); err != nil {
+			t.Errorf("missing per-doc v%d: %v", i, err)
+		}
+	}
+
+	// Symlink updated.
+	target, err := os.Readlink(filepath.Join(subdir, "setup.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != filepath.Join("versions", "setup.md", "v2") {
+		t.Errorf("symlink = %q, want %q", target, filepath.Join("versions", "setup.md", "v2"))
+	}
+
+	// Hash chain valid.
+	if err := s.VerifyChain("/docs/guides/setup.md"); err != nil {
+		t.Errorf("chain verification failed: %v", err)
+	}
+
+	// Multiple documents in same subdirectory.
+	doc, err = s.Write("/docs/guides/install.md", []byte("# Install\n"), nil)
+	if err != nil {
+		t.Fatalf("Write install.md: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+
+	// Both documents should have independent per-doc dirs.
+	if _, err := os.Stat(filepath.Join(versionsDir, "install.md", "v1")); err != nil {
+		t.Errorf("install.md per-doc v1 not found: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(versionsDir, "setup.md", "v2")); err != nil {
+		t.Errorf("setup.md per-doc v2 not found: %v", err)
+	}
+}
+
 func TestAppend(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
