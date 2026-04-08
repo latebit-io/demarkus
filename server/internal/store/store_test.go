@@ -27,6 +27,7 @@ func TestGet_FlatFileRejected(t *testing.T) {
 	}
 }
 
+// TODO(v1): update this test to use per-doc layout once flat layout support is removed.
 func TestGet_VersionedFile(t *testing.T) {
 	root := t.TempDir()
 	versionsDir := filepath.Join(root, "versions")
@@ -187,6 +188,7 @@ func TestVersions_FlatFileRejected(t *testing.T) {
 	}
 }
 
+// TODO(v1): update this test to use per-doc layout once flat layout support is removed.
 func TestVersions_MultipleVersions(t *testing.T) {
 	root := t.TempDir()
 	versionsDir := filepath.Join(root, "versions")
@@ -259,8 +261,8 @@ func TestWrite_NewDocument(t *testing.T) {
 		t.Errorf("content = %q, want %q", doc.Content, "# Hello\n")
 	}
 
-	// Version file should exist with store frontmatter.
-	vData, err := os.ReadFile(filepath.Join(root, "versions", "new.md.v1"))
+	// Version file should exist with store frontmatter (per-doc layout).
+	vData, err := os.ReadFile(filepath.Join(root, "versions", "new.md", "v1"))
 	if err != nil {
 		t.Fatalf("read version file: %v", err)
 	}
@@ -296,8 +298,8 @@ func TestWrite_CreatesVersion(t *testing.T) {
 		t.Errorf("version = %d, want 2", doc.Version)
 	}
 
-	// versions/doc.md.v2 must exist.
-	if _, err := os.Stat(filepath.Join(root, "versions", "doc.md.v2")); err != nil {
+	// versions/doc.md/v2 must exist.
+	if _, err := os.Stat(filepath.Join(root, "versions", "doc.md", "v2")); err != nil {
 		t.Errorf("version file not created: %v", err)
 	}
 }
@@ -318,7 +320,7 @@ func TestWrite_Increments(t *testing.T) {
 
 	// All three version files must exist.
 	for i := 1; i <= 3; i++ {
-		path := filepath.Join(root, "versions", fmt.Sprintf("doc.md.v%d", i))
+		path := filepath.Join(root, "versions", "doc.md", fmt.Sprintf("v%d", i))
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("missing version file v%d: %v", i, err)
 		}
@@ -349,7 +351,7 @@ func TestWrite_CreatesSubdirectory(t *testing.T) {
 	}
 
 	// Verify the version file was created on disk.
-	versionFile := filepath.Join(root, "newdir", "versions", "doc.md.v1")
+	versionFile := filepath.Join(root, "newdir", "versions", "doc.md", "v1")
 	if _, err := os.Stat(versionFile); err != nil {
 		t.Errorf("version file not found: %v", err)
 	}
@@ -415,9 +417,13 @@ func TestWrite_ImmutabilityGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No doc.md on disk → next=1. Pre-create v1 to simulate a concurrent writer
-	// that won the race and already wrote v1 before we get to the atomic rename.
-	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# already there\n"), 0o644); err != nil {
+	// No doc.md on disk → next=1. Pre-create v1 in per-doc layout to simulate
+	// a concurrent writer that won the race and already wrote v1.
+	docDir := filepath.Join(versionsDir, "doc.md")
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(docDir, "v1"), []byte("# already there\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -445,11 +451,11 @@ func TestWrite_HashChain(t *testing.T) {
 		t.Fatalf("write v2: %v", err)
 	}
 
-	v1Data, err := os.ReadFile(filepath.Join(root, "versions", "doc.md.v1"))
+	v1Data, err := os.ReadFile(filepath.Join(root, "versions", "doc.md", "v1"))
 	if err != nil {
 		t.Fatalf("read v1: %v", err)
 	}
-	v2Data, err := os.ReadFile(filepath.Join(root, "versions", "doc.md.v2"))
+	v2Data, err := os.ReadFile(filepath.Join(root, "versions", "doc.md", "v2"))
 	if err != nil {
 		t.Fatalf("read v2: %v", err)
 	}
@@ -494,7 +500,7 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 	}
 
 	// No v2 file should exist.
-	v2Path := filepath.Join(root, "versions", "doc.md.v2")
+	v2Path := filepath.Join(root, "versions", "doc.md", "v2")
 	if _, err := os.Stat(v2Path); !errors.Is(err, os.ErrNotExist) {
 		t.Error("v2 file should not exist for duplicate content")
 	}
@@ -824,7 +830,7 @@ func TestVerifyChain_Tampered(t *testing.T) {
 	}
 
 	// Tamper with v1 after the chain is formed.
-	v1Path := filepath.Join(root, "versions", "doc.md.v1")
+	v1Path := filepath.Join(root, "versions", "doc.md", "v1")
 	if err := os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -835,6 +841,244 @@ func TestVerifyChain_Tampered(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "chain broken") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TODO(v1): remove this test once flat layout support and migration code are removed.
+func TestWrite_MigratesOldLayoutToPerDoc(t *testing.T) {
+	root := t.TempDir()
+
+	// Set up old flat layout manually: versions/doc.md.v1 and versions/doc.md.v2.
+	versionsDir := filepath.Join(root, "versions")
+	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1Content := []byte("---\nversion: 1\narchived: false\n---\n# V1\n")
+	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), v1Content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := sha256.Sum256(v1Content)
+	v2Content := fmt.Appendf(nil, "---\nversion: 2\narchived: false\nprevious-hash: sha256-%x\n---\n# V2\n", h)
+	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), v2Content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create symlink in old layout.
+	if err := os.Symlink(filepath.Join("versions", "doc.md.v2"), filepath.Join(root, "doc.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+
+	// Reads should work with old layout.
+	doc, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatalf("Get before migration: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version = %d, want 2", doc.Version)
+	}
+
+	// Write v3, which should trigger migration.
+	doc, err = s.Write("/doc.md", []byte("# V3\n"), nil)
+	if err != nil {
+		t.Fatalf("Write v3: %v", err)
+	}
+	if doc.Version != 3 {
+		t.Errorf("version = %d, want 3", doc.Version)
+	}
+
+	// Old flat files should be gone.
+	if _, err := os.Stat(filepath.Join(versionsDir, "doc.md.v1")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("old flat v1 should have been removed")
+	}
+	if _, err := os.Stat(filepath.Join(versionsDir, "doc.md.v2")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("old flat v2 should have been removed")
+	}
+
+	// New per-doc files should exist.
+	docDir := filepath.Join(versionsDir, "doc.md")
+	for i := 1; i <= 3; i++ {
+		if _, err := os.Stat(filepath.Join(docDir, fmt.Sprintf("v%d", i))); err != nil {
+			t.Errorf("missing per-doc v%d: %v", i, err)
+		}
+	}
+
+	// Symlink should point to new layout.
+	target, err := os.Readlink(filepath.Join(root, "doc.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != filepath.Join("versions", "doc.md", "v3") {
+		t.Errorf("symlink target = %q, want %q", target, filepath.Join("versions", "doc.md", "v3"))
+	}
+
+	// Hash chain should be valid across the migration boundary.
+	if err := s.VerifyChain("/doc.md"); err != nil {
+		t.Errorf("chain verification failed after migration: %v", err)
+	}
+}
+
+func TestWrite_SubdirectoryPerDocLayout(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Write to a deeply nested path.
+	doc, err := s.Write("/a/b/c/doc.md", []byte("# Deep\n"), nil)
+	if err != nil {
+		t.Fatalf("Write v1: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+
+	// Verify per-doc layout at the correct nesting.
+	vFile := filepath.Join(root, "a", "b", "c", "versions", "doc.md", "v1")
+	if _, err := os.Stat(vFile); err != nil {
+		t.Fatalf("version file not found: %v", err)
+	}
+
+	// Write v2.
+	doc, err = s.Write("/a/b/c/doc.md", []byte("# Deep v2\n"), nil)
+	if err != nil {
+		t.Fatalf("Write v2: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version = %d, want 2", doc.Version)
+	}
+
+	// Symlink should point to per-doc layout.
+	target, err := os.Readlink(filepath.Join(root, "a", "b", "c", "doc.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != filepath.Join("versions", "doc.md", "v2") {
+		t.Errorf("symlink = %q, want %q", target, filepath.Join("versions", "doc.md", "v2"))
+	}
+
+	// Read back via Get.
+	got, err := s.Get("/a/b/c/doc.md", 0)
+	if err != nil {
+		t.Fatalf("Get current: %v", err)
+	}
+	if got.Version != 2 {
+		t.Errorf("Get version = %d, want 2", got.Version)
+	}
+
+	// Read specific version.
+	got, err = s.Get("/a/b/c/doc.md", 1)
+	if err != nil {
+		t.Fatalf("Get v1: %v", err)
+	}
+	if got.Version != 1 {
+		t.Errorf("Get v1 version = %d, want 1", got.Version)
+	}
+
+	// Versions listing.
+	versions, err := s.Versions("/a/b/c/doc.md")
+	if err != nil {
+		t.Fatalf("Versions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("versions count = %d, want 2", len(versions))
+	}
+
+	// Hash chain integrity.
+	if err := s.VerifyChain("/a/b/c/doc.md"); err != nil {
+		t.Errorf("chain verification failed: %v", err)
+	}
+
+	// Append.
+	doc, err = s.Append("/a/b/c/doc.md", 2, []byte("Appended."), nil)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if doc.Version != 3 {
+		t.Errorf("version = %d, want 3", doc.Version)
+	}
+}
+
+func TestWrite_SubdirectoryMigration(t *testing.T) {
+	root := t.TempDir()
+
+	// Set up old flat layout in a subdirectory.
+	subdir := filepath.Join(root, "docs", "guides")
+	versionsDir := filepath.Join(subdir, "versions")
+	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	v1Content := []byte("---\nversion: 1\narchived: false\n---\n# Guide\n")
+	if err := os.WriteFile(filepath.Join(versionsDir, "setup.md.v1"), v1Content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("versions", "setup.md.v1"), filepath.Join(subdir, "setup.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+
+	// Read should work with old layout.
+	doc, err := s.Get("/docs/guides/setup.md", 0)
+	if err != nil {
+		t.Fatalf("Get before migration: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+
+	// Write v2 triggers migration.
+	doc, err = s.Write("/docs/guides/setup.md", []byte("# Updated Guide\n"), nil)
+	if err != nil {
+		t.Fatalf("Write v2: %v", err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("version = %d, want 2", doc.Version)
+	}
+
+	// Old flat file should be gone.
+	if _, err := os.Stat(filepath.Join(versionsDir, "setup.md.v1")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("old flat v1 should have been removed")
+	}
+
+	// New per-doc files should exist.
+	docDir := filepath.Join(versionsDir, "setup.md")
+	for i := 1; i <= 2; i++ {
+		if _, err := os.Stat(filepath.Join(docDir, fmt.Sprintf("v%d", i))); err != nil {
+			t.Errorf("missing per-doc v%d: %v", i, err)
+		}
+	}
+
+	// Symlink updated.
+	target, err := os.Readlink(filepath.Join(subdir, "setup.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != filepath.Join("versions", "setup.md", "v2") {
+		t.Errorf("symlink = %q, want %q", target, filepath.Join("versions", "setup.md", "v2"))
+	}
+
+	// Hash chain valid.
+	if err := s.VerifyChain("/docs/guides/setup.md"); err != nil {
+		t.Errorf("chain verification failed: %v", err)
+	}
+
+	// Multiple documents in same subdirectory.
+	doc, err = s.Write("/docs/guides/install.md", []byte("# Install\n"), nil)
+	if err != nil {
+		t.Fatalf("Write install.md: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+
+	// Both documents should have independent per-doc dirs.
+	if _, err := os.Stat(filepath.Join(versionsDir, "install.md", "v1")); err != nil {
+		t.Errorf("install.md per-doc v1 not found: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(versionsDir, "setup.md", "v2")); err != nil {
+		t.Errorf("setup.md per-doc v2 not found: %v", err)
 	}
 }
 
@@ -981,7 +1225,7 @@ func TestWrite_WithMetadata(t *testing.T) {
 	}
 
 	// Version file should contain meta. prefixed keys.
-	vData, err := os.ReadFile(filepath.Join(root, "versions", "doc.md.v1"))
+	vData, err := os.ReadFile(filepath.Join(root, "versions", "doc.md", "v1"))
 	if err != nil {
 		t.Fatalf("read version file: %v", err)
 	}
@@ -1028,7 +1272,7 @@ func TestWrite_NilMetadata(t *testing.T) {
 	}
 
 	// Version file should not contain any meta. lines.
-	vData, err := os.ReadFile(filepath.Join(root, "versions", "doc.md.v1"))
+	vData, err := os.ReadFile(filepath.Join(root, "versions", "doc.md", "v1"))
 	if err != nil {
 		t.Fatalf("read version file: %v", err)
 	}
