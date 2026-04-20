@@ -1120,9 +1120,9 @@ do_install() {
     echo ""
     log_info "Publish your first document:"
     if [ -n "$domain" ] && [ "$no_tls" = false ]; then
-      echo "  demarkus -X PUBLISH -auth \$TOKEN mark://${domain}/index.md -body \"# Hello World\""
+      echo "  demarkus -X PUBLISH -auth \$TOKEN -body \"# Hello World\" mark://${domain}/index.md"
     else
-      echo "  demarkus --insecure -X PUBLISH -auth \$TOKEN mark://localhost:6309/index.md -body \"# Hello World\""
+      echo "  demarkus --insecure -X PUBLISH -auth \$TOKEN -body \"# Hello World\" mark://localhost:6309/index.md"
     fi
   fi
   echo ""
