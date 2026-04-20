@@ -828,13 +828,8 @@ do_install() {
     return
   fi
 
-  # Server install requires elevated privileges on Linux
-  if [ "$PLATFORM" = "linux" ] && [ "$(id -u)" -ne 0 ]; then
-    log_error "Server install requires root. Run with sudo or as root."
-    exit 1
-  fi
-
-  # WSL: server requires WSL2 with systemd
+  # WSL: server requires WSL2 with systemd. Check this BEFORE the root check
+  # so WSL1 / no-systemd users aren't told to sudo-retry a run that can't succeed.
   if [ "$IS_WSL" = true ]; then
     if [ "$IS_WSL2" != true ]; then
       log_error "WSL1 detected. Demarkus server requires WSL2."
@@ -863,6 +858,12 @@ do_install() {
     log_warn "Running inside WSL2."
     log_warn "UDP port 6309 (QUIC) does not auto-forward from the Windows host."
     log_warn "For external access, see: https://latebit-io.github.io/demarkus/install/windows/"
+  fi
+
+  # Server install requires elevated privileges on Linux
+  if [ "$PLATFORM" = "linux" ] && [ "$(id -u)" -ne 0 ]; then
+    log_error "Server install requires root. Run with sudo or as root."
+    exit 1
   fi
 
   check_install_permissions
