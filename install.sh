@@ -134,16 +134,14 @@ check_install_permissions() {
 detect_platform() {
   OS=$(uname -s | tr '[:upper:]' '[:lower:]')
   ARCH=$(uname -m)
+  IS_WSL=false
 
   case "$OS" in
     linux)
-      # Detect WSL
-      if grep -qi microsoft /proc/version 2>/dev/null; then
-        log_error "Running inside WSL. For Windows/WSL2 setup, see:"
-        log_error "  https://latebit-io.github.io/demarkus/install/windows/"
-        exit 1
-      fi
       PLATFORM="linux"
+      if grep -qi microsoft /proc/version 2>/dev/null; then
+        IS_WSL=true
+      fi
       ;;
     darwin) PLATFORM="darwin" ;;
     msys*|cygwin*|mingw*)
@@ -829,6 +827,27 @@ do_install() {
   if [ "$PLATFORM" = "linux" ] && [ "$(id -u)" -ne 0 ]; then
     log_error "Server install requires root. Run with sudo or as root."
     exit 1
+  fi
+
+  # WSL2 server install requires systemd to be enabled
+  if [ "$IS_WSL" = true ]; then
+    if [ ! -d /run/systemd/system ]; then
+      log_error "Running inside WSL2 without systemd enabled."
+      log_error ""
+      log_error "Enable systemd:"
+      log_error "  1. Add to /etc/wsl.conf:"
+      log_error "       [boot]"
+      log_error "       systemd=true"
+      log_error "  2. From PowerShell:  wsl --shutdown"
+      log_error "  3. Re-open WSL and retry."
+      log_error ""
+      log_error "Or install the client only:"
+      log_error "  curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh | bash -s -- --client-only"
+      exit 1
+    fi
+    log_warn "Running inside WSL2."
+    log_warn "UDP port 6309 (QUIC) does not auto-forward from the Windows host."
+    log_warn "For external access, see: https://latebit-io.github.io/demarkus/install/windows/"
   fi
 
   check_install_permissions
