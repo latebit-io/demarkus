@@ -134,16 +134,19 @@ check_install_permissions() {
 detect_platform() {
   OS=$(uname -s | tr '[:upper:]' '[:lower:]')
   ARCH=$(uname -m)
+  IS_WSL=false
+  IS_WSL2=false
 
   case "$OS" in
     linux)
-      # Detect WSL
-      if grep -qi microsoft /proc/version 2>/dev/null; then
-        log_error "Running inside WSL. For Windows/WSL2 setup, see:"
-        log_error "  https://latebit-io.github.io/demarkus/install/windows/"
-        exit 1
-      fi
       PLATFORM="linux"
+      if grep -qi microsoft /proc/version 2>/dev/null; then
+        IS_WSL=true
+        # WSL2's kernel osrelease contains "WSL2"; WSL1 does not
+        if grep -qi 'wsl2' /proc/sys/kernel/osrelease 2>/dev/null; then
+          IS_WSL2=true
+        fi
+      fi
       ;;
     darwin) PLATFORM="darwin" ;;
     msys*|cygwin*|mingw*)
@@ -825,6 +828,38 @@ do_install() {
     return
   fi
 
+  # WSL: server requires WSL2 with systemd. Check this BEFORE the root check
+  # so WSL1 / no-systemd users aren't told to sudo-retry a run that can't succeed.
+  if [ "$IS_WSL" = true ]; then
+    if [ "$IS_WSL2" != true ]; then
+      log_error "WSL1 detected. Demarkus server requires WSL2."
+      log_error ""
+      log_error "Convert your distro to WSL2 from PowerShell:"
+      log_error "  wsl --list --verbose         # find your distro name"
+      log_error "  wsl --set-version <distro> 2"
+      log_error ""
+      log_error "Then re-run this installer."
+      exit 1
+    fi
+    if [ ! -d /run/systemd/system ]; then
+      log_error "Running inside WSL2 without systemd enabled."
+      log_error ""
+      log_error "Enable systemd:"
+      log_error "  1. Add to /etc/wsl.conf:"
+      log_error "       [boot]"
+      log_error "       systemd=true"
+      log_error "  2. From PowerShell:  wsl --shutdown"
+      log_error "  3. Re-open WSL and retry."
+      log_error ""
+      log_error "Or install the client only:"
+      log_error "  curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh | bash -s -- --client-only"
+      exit 1
+    fi
+    log_warn "Running inside WSL2."
+    log_warn "UDP port 6309 (QUIC) does not auto-forward from the Windows host."
+    log_warn "For external access, see: https://latebit-io.github.io/demarkus/install/windows/"
+  fi
+
   # Server install requires elevated privileges on Linux
   if [ "$PLATFORM" = "linux" ] && [ "$(id -u)" -ne 0 ]; then
     log_error "Server install requires root. Run with sudo or as root."
@@ -1085,9 +1120,9 @@ do_install() {
     echo ""
     log_info "Publish your first document:"
     if [ -n "$domain" ] && [ "$no_tls" = false ]; then
-      echo "  demarkus -X PUBLISH -auth \$TOKEN mark://${domain}/index.md -body \"# Hello World\""
+      echo "  demarkus -X PUBLISH -auth \$TOKEN -body \"# Hello World\" mark://${domain}/index.md"
     else
-      echo "  demarkus --insecure -X PUBLISH -auth \$TOKEN mark://localhost:6309/index.md -body \"# Hello World\""
+      echo "  demarkus --insecure -X PUBLISH -auth \$TOKEN -body \"# Hello World\" mark://localhost:6309/index.md"
     fi
   fi
   echo ""

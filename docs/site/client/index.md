@@ -24,7 +24,7 @@ demarkus --insecure mark://localhost:6309/index.md
 demarkus --insecure -X LIST mark://localhost:6309/
 
 # Publish a document
-demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/hello.md -body "# Hello"
+demarkus --insecure -X PUBLISH -auth $TOKEN -body "# Hello" mark://localhost:6309/hello.md
 
 # View version history
 demarkus --insecure -X VERSIONS mark://localhost:6309/hello.md

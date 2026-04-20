@@ -43,7 +43,7 @@ demarkus-server -root /srv/site -tokens /etc/demarkus/tokens.toml
 #### 3) Publish with the token
 
 ```bash
-demarkus --insecure -X PUBLISH -auth <raw-token> mark://localhost:6309/hello.md -body "# Hello World"
+demarkus --insecure -X PUBLISH -auth <raw-token> -body "# Hello World" mark://localhost:6309/hello.md
 ```
 
 ### Read Access (Private Paths)

@@ -71,7 +71,7 @@ When accessing protected paths, clients send a token for reads (FETCH, LIST, VER
 #### Writing to a server
 
 ```bash
-demarkus --insecure -X PUBLISH -auth <raw-token> mark://localhost:6309/hello.md -body "# Hello World"
+demarkus --insecure -X PUBLISH -auth <raw-token> -body "# Hello World" mark://localhost:6309/hello.md
 ```
 
 #### Reading from a private server
