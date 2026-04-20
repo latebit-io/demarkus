@@ -135,12 +135,17 @@ detect_platform() {
   OS=$(uname -s | tr '[:upper:]' '[:lower:]')
   ARCH=$(uname -m)
   IS_WSL=false
+  IS_WSL2=false
 
   case "$OS" in
     linux)
       PLATFORM="linux"
       if grep -qi microsoft /proc/version 2>/dev/null; then
         IS_WSL=true
+        # WSL2's kernel osrelease contains "WSL2"; WSL1 does not
+        if grep -qi 'wsl2' /proc/sys/kernel/osrelease 2>/dev/null; then
+          IS_WSL2=true
+        fi
       fi
       ;;
     darwin) PLATFORM="darwin" ;;
@@ -829,8 +834,18 @@ do_install() {
     exit 1
   fi
 
-  # WSL2 server install requires systemd to be enabled
+  # WSL: server requires WSL2 with systemd
   if [ "$IS_WSL" = true ]; then
+    if [ "$IS_WSL2" != true ]; then
+      log_error "WSL1 detected. Demarkus server requires WSL2."
+      log_error ""
+      log_error "Convert your distro to WSL2 from PowerShell:"
+      log_error "  wsl --list --verbose         # find your distro name"
+      log_error "  wsl --set-version <distro> 2"
+      log_error ""
+      log_error "Then re-run this installer."
+      exit 1
+    fi
     if [ ! -d /run/systemd/system ]; then
       log_error "Running inside WSL2 without systemd enabled."
       log_error ""
