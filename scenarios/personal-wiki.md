@@ -55,16 +55,18 @@ Everything goes through the protocol — no writing files directly to disk:
 ```bash
 export TOKEN=<your-token>
 
-demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/index.md \
+demarkus --insecure -X PUBLISH -auth $TOKEN \
   -body "# My Wiki
 
 - [Notes](notes.md)
-- [Ideas](ideas.md)"
+- [Ideas](ideas.md)" \
+  mark://localhost:6309/index.md
 
-demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/notes.md \
+demarkus --insecure -X PUBLISH -auth $TOKEN \
   -body "# Notes
 
-Start writing here."
+Start writing here." \
+  mark://localhost:6309/notes.md
 ```
 
 Each publish creates a new immutable version. Run `demarkus -X VERSIONS` to see the history:
@@ -101,8 +103,9 @@ demarkus --insecure mark://localhost:6309/notes.md
 Publish from a file:
 
 ```bash
-demarkus --insecure -X PUBLISH -auth $TOKEN mark://localhost:6309/notes.md \
-  -body "$(cat notes.md)"
+demarkus --insecure -X PUBLISH -auth $TOKEN \
+  -body "$(cat notes.md)" \
+  mark://localhost:6309/notes.md
 ```
 
 ### 8. Edit documents

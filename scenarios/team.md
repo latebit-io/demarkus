@@ -113,8 +113,8 @@ Publish directly:
 
 ```bash
 demarkus -X PUBLISH -auth <token> \
-  mark://docs.internal.example.com/decisions/001-use-demarkus.md \
-  -body "# ADR 001: Use Demarkus for team docs"
+  -body "# ADR 001: Use Demarkus for team docs" \
+  mark://docs.internal.example.com/decisions/001-use-demarkus.md
 ```
 
 ### 6. View version history

@@ -109,7 +109,7 @@ sudo systemctl restart demarkus
 Publish from your local machine:
 
 ```bash
-demarkus -X PUBLISH -auth <your-token> mark://yourdomain.com/hello.md -body "# Hello"
+demarkus -X PUBLISH -auth <your-token> -body "# Hello" mark://yourdomain.com/hello.md
 ```
 
 ## Agent Discovery via Published Graphs

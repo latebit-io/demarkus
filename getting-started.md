@@ -71,7 +71,7 @@ demarkus-server -root ~/my-docs -tokens ~/my-docs/tokens.toml
 Now publish:
 
 ```bash
-demarkus --insecure -X PUBLISH -auth <your-token> mark://localhost:6309/hello.md -body "# Hello World"
+demarkus --insecure -X PUBLISH -auth <your-token> -body "# Hello World" mark://localhost:6309/hello.md
 ```
 
 ## What's next?
