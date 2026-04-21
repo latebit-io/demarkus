@@ -60,7 +60,7 @@ tags: [architecture, notes]
 # Actual document starts here
 ```
 
-Frontmatter is parsed by the server and **stripped before rendering**. It's metadata, not content. The protocol reserves a handful of keys (`version`, `modified`, `etag`, `content-hash`, `archived`); publishers can send up to 10 additional keys totaling 512 bytes.
+Frontmatter is parsed by the server and **stripped before rendering**. It's metadata, not content. The server's own on-disk frontmatter reserves `version`, `previous-hash`, and `archived`, plus any `meta.*` keys supplied by the publisher. Response fields like `modified`, `etag`, and `content-hash` are computed at read time and returned as protocol metadata — they are not stored in frontmatter. Publishers can send up to 10 additional meta keys totaling 512 bytes.
 
 ## What is not supported
 
