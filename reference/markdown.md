@@ -76,7 +76,7 @@ Reserved keys: `version`, `previous-hash`, `archived`, plus any `meta.*` keys su
 
 ### Publisher metadata
 
-To attach structured metadata to a document, pass it as request metadata on `PUBLISH` — **not** by writing YAML inside the body. The server records it under `meta.*` in the on-disk frontmatter and surfaces it in response headers on FETCH.
+To attach structured metadata to a document, pass it as request metadata on `PUBLISH` — **not** by writing YAML inside the body. The server records it under `meta.*` in the on-disk frontmatter and surfaces it in response metadata on FETCH.
 
 Limits: up to 10 keys totaling 512 bytes.
 
