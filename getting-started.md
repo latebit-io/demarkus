@@ -83,3 +83,4 @@ Pick your path:
 - [Public hub](/scenarios/public-hub/) — VPS + TLS + open access
 - [Team knowledge base](/scenarios/team/) — shared server with token-based access
 - [TUI keybindings](/reference/tui-keybindings/) — full keyboard reference including graph view
+- [Markdown features](/reference/markdown/) — what markdown syntax demarkus renders and tracks
