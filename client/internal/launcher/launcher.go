@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"runtime"
 	"slices"
+	"strings"
 )
 
 // ErrDisallowedScheme is returned when the URL's scheme is not in the allowlist.
@@ -76,8 +77,12 @@ func openWith(rawURL string, allowed []string, goos string, run runner) error {
 	return run(name, args...)
 }
 
+// schemeAllowed reports whether scheme is in allowed, comparing
+// case-insensitively per RFC 3986 §3.1.
 func schemeAllowed(scheme string, allowed []string) bool {
-	return slices.Contains(allowed, scheme)
+	return slices.ContainsFunc(allowed, func(a string) bool {
+		return strings.EqualFold(a, scheme)
+	})
 }
 
 // handlerFor returns the launcher binary and argv for the given platform.

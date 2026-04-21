@@ -755,9 +755,11 @@ func isExternalURL(raw string) bool {
 	return scheme != "" && scheme != "mark"
 }
 
-// schemeOf returns the scheme component of raw, or the empty string if raw
-// has no scheme. Matches RFC 3986 scheme syntax: ALPHA *( ALPHA / DIGIT / + / - / . )
-// terminated by a colon, before any /, ?, #, or end of string.
+// schemeOf returns the scheme component of raw in canonical lowercase form,
+// or the empty string if raw has no scheme. Matches RFC 3986 scheme syntax:
+// ALPHA *( ALPHA / DIGIT / + / - / . ) terminated by a colon, before any /, ?,
+// #, or end of string. Schemes are case-insensitive per RFC 3986 §3.1; we
+// normalise to lowercase here so callers can compare directly.
 func schemeOf(raw string) string {
 	for i, r := range raw {
 		switch {
@@ -766,7 +768,7 @@ func schemeOf(raw string) string {
 				return ""
 			}
 		case r == ':':
-			return raw[:i]
+			return strings.ToLower(raw[:i])
 		case isAlpha(r) || isDigit(r) || r == '+' || r == '-' || r == '.':
 			// valid scheme char, continue
 		default:
@@ -1462,6 +1464,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	externalSchemes, err := parseSchemeList(*externalLinks)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid -external-links value: %v\n", err)
+		os.Exit(1)
+	}
+
 	client := fetch.NewClient(fetch.Options{
 		Cache:    cache.New(cache.DefaultDir()),
 		Insecure: *insecure,
@@ -1474,7 +1482,7 @@ func main() {
 	}
 
 	p := tea.NewProgram(
-		initialModel(initialURL, client, styleName, parseSchemeList(*externalLinks)),
+		initialModel(initialURL, client, styleName, externalSchemes),
 	)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -1484,17 +1492,44 @@ func main() {
 
 // parseSchemeList splits a comma-separated scheme list, trimming whitespace
 // and dropping empty entries. Returns nil for an empty input (disables external
-// launching).
-func parseSchemeList(csv string) []string {
+// launching). Invalid entries fail the whole parse — a misconfigured flag must
+// not silently swallow unrecognisable schemes, because the user would assume
+// the scheme is enabled when it never matches anything.
+func parseSchemeList(csv string) ([]string, error) {
 	if csv == "" {
-		return nil
+		return nil, nil
 	}
 	parts := strings.Split(csv, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		if s := strings.TrimSpace(p); s != "" {
-			out = append(out, s)
+		s := strings.TrimSpace(p)
+		if s == "" {
+			continue
+		}
+		if !isValidScheme(s) {
+			return nil, fmt.Errorf("invalid URL scheme %q (schemes must match ALPHA *( ALPHA / DIGIT / \"+\" / \"-\" / \".\" ))", s)
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// isValidScheme reports whether s is a syntactically valid URL scheme per
+// RFC 3986: starts with ALPHA, followed by any of ALPHA / DIGIT / + / - / .
+func isValidScheme(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 {
+			if !isAlpha(r) {
+				return false
+			}
+			continue
+		}
+		if !isAlpha(r) && !isDigit(r) && r != '+' && r != '-' && r != '.' {
+			return false
 		}
 	}
-	return out
+	return true
 }

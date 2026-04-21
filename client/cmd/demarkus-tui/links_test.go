@@ -12,6 +12,47 @@ func osc8(url, text string) string {
 	return "\x1b]8;;" + url + "\x07" + text + "\x1b]8;;\x07"
 }
 
+func TestParseSchemeList(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    []string
+		wantErr bool
+	}{
+		{"empty disables", "", nil, false},
+		{"default set", "http,https,gemini,mailto", []string{"http", "https", "gemini", "mailto"}, false},
+		{"trims whitespace", "  http ,  https  ", []string{"http", "https"}, false},
+		{"drops empty entries", "http,,https,", []string{"http", "https"}, false},
+		{"preserves scheme special chars", "coap+tcp,svn-ssh,soap.beep", []string{"coap+tcp", "svn-ssh", "soap.beep"}, false},
+		{"rejects space in entry", "http, foo bar, https", nil, true},
+		{"rejects digit-leading scheme", "1http", nil, true},
+		{"rejects special chars", "http@s", nil, true},
+		{"rejects slash", "http/s", nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseSchemeList(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("want error for %q, got nil with result %v", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("got[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestIsExternalURL(t *testing.T) {
 	tests := []struct {
 		url  string
@@ -19,6 +60,8 @@ func TestIsExternalURL(t *testing.T) {
 	}{
 		{"mark://localhost/doc.md", false},
 		{"mark://host:6309/path", false},
+		{"MARK://host/doc.md", false}, // case-insensitive scheme matching
+		{"Mark://host/doc.md", false},
 		{"/index.md", false},
 		{"./doc.md", false},
 		{"doc.md", false},

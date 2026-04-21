@@ -38,6 +38,9 @@ func TestOpen_SchemeAllowlist(t *testing.T) {
 		{"vscode rejected by default", "vscode://open?file=/etc/passwd", DefaultAllowlist, ErrDisallowedScheme},
 		{"bare path rejected", "/index.md", DefaultAllowlist, ErrDisallowedScheme},
 		{"empty url rejected", "", DefaultAllowlist, ErrDisallowedScheme},
+		{"uppercase URL scheme matches lowercase allowlist", "HTTPS://example.com", []string{"https"}, nil},
+		{"uppercase allowlist entry matches lowercase URL scheme", "https://example.com", []string{"HTTPS"}, nil},
+		{"mixed case on both sides", "HtTpS://example.com", []string{"Https"}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
