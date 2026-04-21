@@ -34,18 +34,20 @@ Everything in the [CommonMark spec](https://commonmark.org/) works:
 ## GitHub Flavored Markdown (GFM)
 
 - **Tables** — pipe-delimited with a separator row:
-  ```
+
+  ```md
   | Column | Value |
   |--------|-------|
   | a      | 1     |
   ```
+
 - **Strikethrough** — `~~text~~`
 - **Task lists** — `- [ ]` and `- [x]`
 - **Linkify / bare URLs** — `https://example.com` is rendered as a clickable link without needing angle brackets
 
 ## Definition lists
 
-```
+```md
 Term
 : Definition for the term
 : A second definition
@@ -55,7 +57,7 @@ Term
 
 Optional YAML frontmatter at the top of a document, delimited by `---`:
 
-```
+```yaml
 ---
 author: Fritz
 tags: [architecture, notes]
