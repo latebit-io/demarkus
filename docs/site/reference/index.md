@@ -84,6 +84,10 @@ The crawler uses the same token resolution as other clients:
 
 For per-server tokens, use `demarkus token add mark://host:6309 <token>` before crawling.
 
+## Authoring
+
+- [Supported Markdown Features](markdown.md) — what the TUI renders and what the link graph tracks
+
 ## Protocol
 
 - [Protocol Specification](../../SPEC.md)
