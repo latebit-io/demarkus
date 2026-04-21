@@ -10,7 +10,7 @@ What you can rely on when authoring documents for demarkus.
 
 ## The short version
 
-Demarkus stores documents as raw markdown bytes — the server does not parse or validate the body. What you see in the TUI depends entirely on the renderer. `demarkus-tui` uses [Glamour](https://github.com/charmbracelet/glamour) (v2), which is built on [goldmark](https://github.com/yuin/goldmark) and enables **CommonMark + GitHub Flavored Markdown + definition lists** by default.
+Demarkus does not parse or validate the markdown you write — the server treats your document body as an opaque blob and defers all rendering to the client. (On disk, the server prepends its own YAML frontmatter for `version`, `previous-hash`, `archived`, and any publisher `meta.*` keys, but that's stripped before the body is returned to clients.) What you see in the TUI depends entirely on the renderer. `demarkus-tui` uses [Glamour](https://github.com/charmbracelet/glamour) (v2), which is built on [goldmark](https://github.com/yuin/goldmark) and enables **CommonMark + GitHub Flavored Markdown + definition lists** by default.
 
 Everything on this page is what Glamour renders. Other clients (plain CLI, MCP, Obsidian) hand back raw markdown unchanged — so the consumer of that markdown decides what features it understands.
 
