@@ -95,6 +95,19 @@ demarkus-publish -root /srv/demarkus/content -path /index.md -body "# Hello"
 
 Full versioning is preserved because `demarkus-publish` writes directly to the versioned store on disk. The server just serves what's there.
 
+## External Links in the TUI
+
+The TUI (`demarkus-tui`) can follow links whose scheme is not `mark://` — for example `https://`, `gemini://`, or `mailto:` — by handing the URL to the operating system's default handler (`open` on macOS, `xdg-open` on Linux, `rundll32 url.dll,FileProtocolHandler` on Windows).
+
+The security-relevant properties of this path:
+
+- **Scheme allowlist, narrow by default.** Only `http`, `https`, `gemini`, and `mailto` are opened. Dangerous schemes like `file:`, `javascript:`, `data:`, and custom handlers (`vscode:`, `steam:`, `ms-*:`) are rejected. Configure with `-external-links "http,https"` or disable entirely with `-external-links ""`.
+- **URL is passed as an argv argument, never through a shell.** Shell metacharacters in a URL (`;`, `$(…)`, backticks, `|`, newlines) cannot escape into command execution because no shell is ever invoked.
+- **Content-served URLs are not fetched automatically.** Following an external link is a deliberate user action (Enter on a selected link or a mouse click) — documents cannot auto-open external URLs.
+- **The CLI and MCP server never launch external handlers.** They are non-interactive and must not spawn GUI processes on the user's behalf. Only the TUI does this.
+
+The residual risk is the external handler itself. If your browser, email client, or Gemini reader has a vulnerability that can be triggered by a crafted URL, that vulnerability is reachable via external links in a demarkus document. Keeping the default scheme allowlist narrow limits which handlers a malicious document can reach.
+
 ## Comparison
 
 | | SSH | Web + CGI | Gemini | Demarkus |

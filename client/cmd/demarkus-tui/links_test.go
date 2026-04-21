@@ -12,6 +12,35 @@ func osc8(url, text string) string {
 	return "\x1b]8;;" + url + "\x07" + text + "\x1b]8;;\x07"
 }
 
+func TestIsExternalURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"mark://localhost/doc.md", false},
+		{"mark://host:6309/path", false},
+		{"/index.md", false},
+		{"./doc.md", false},
+		{"doc.md", false},
+		{"", false},
+		{"http://example.com", true},
+		{"https://example.com/path", true},
+		{"gemini://example.org/", true},
+		{"mailto:alice@example.com", true}, // opaque form, no //
+		{"mailto://alice@example.com", true},
+		{"file:///etc/passwd", true},
+		{"javascript:alert(1)", true},
+		{"1http://starts-with-digit", false}, // scheme must start with alpha
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			if got := isExternalURL(tt.url); got != tt.want {
+				t.Errorf("isExternalURL(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestInjectLinkMarkers(t *testing.T) {
 	tests := []struct {
 		name  string

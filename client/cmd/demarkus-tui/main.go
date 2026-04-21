@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
 	"github.com/latebit/demarkus/client/internal/graphstore"
+	"github.com/latebit/demarkus/client/internal/launcher"
 	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
@@ -99,6 +101,11 @@ type model struct {
 
 	// Terminal style — "dark" or "light", resolved once before Bubbletea starts.
 	styleName string
+
+	// External links: URL schemes (e.g. "http", "https") to open in the system
+	// handler when followed. mark:// is always handled internally. Empty slice
+	// disables external launching entirely.
+	externalSchemes []string
 }
 
 type fetchResult struct {
@@ -106,6 +113,12 @@ type fetchResult struct {
 	err    error
 	url    string
 	seq    uint64
+}
+
+// externalOpenResult is sent after an attempt to open a URL in the system handler.
+type externalOpenResult struct {
+	url string
+	err error
 }
 
 // clearBookmarkMsg signals the transient bookmark message should be cleared.
@@ -207,7 +220,7 @@ const helpText = `
     Esc          Exit bookmarks / dismiss help / blur address bar
 `
 
-func initialModel(initialURL string, client *fetch.Client, styleName string) model {
+func initialModel(initialURL string, client *fetch.Client, styleName string, externalSchemes []string) model {
 	ti := textinput.New()
 	ti.Placeholder = "mark://host:port/path"
 	ti.Prompt = " "
@@ -231,17 +244,18 @@ func initialModel(initialURL string, client *fetch.Client, styleName string) mod
 	}
 
 	return model{
-		addressBar:    ti,
-		focus:         focusAddressBar,
-		client:        client,
-		loading:       initialURL != "",
-		histIdx:       -1,
-		linkIdx:       -1,
-		hoverIdx:      -1,
-		bookmarkStore: bs,
-		bookmarkMsg:   bmMsg,
-		graphStore:    gs,
-		styleName:     styleName,
+		addressBar:      ti,
+		focus:           focusAddressBar,
+		client:          client,
+		loading:         initialURL != "",
+		histIdx:         -1,
+		linkIdx:         -1,
+		hoverIdx:        -1,
+		bookmarkStore:   bs,
+		bookmarkMsg:     bmMsg,
+		graphStore:      gs,
+		styleName:       styleName,
+		externalSchemes: externalSchemes,
 	}
 }
 
@@ -272,6 +286,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleCrawlResult(msg)
 	case fetchResult:
 		return m.handleFetchResult(msg)
+	case externalOpenResult:
+		return m.handleExternalOpenResult(msg)
 	case viewportReady:
 		return m.handleViewportReady()
 	case clearBookmarkMsg:
@@ -281,6 +297,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m model) handleExternalOpenResult(msg externalOpenResult) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.err == nil:
+		m.bookmarkMsg = "Opened in system handler"
+	case errors.Is(msg.err, launcher.ErrDisallowedScheme):
+		m.bookmarkMsg = "Scheme not allowed: " + msg.url
+	case errors.Is(msg.err, launcher.ErrNoHandler):
+		m.bookmarkMsg = "No URL handler available on this system"
+	default:
+		m.bookmarkMsg = "Failed to open: " + msg.err.Error()
+	}
+	return m.startBookmarkMsgClear()
 }
 
 func (m model) handleMouseHover(msg tea.MouseMotionMsg) model {
@@ -334,14 +364,7 @@ func (m model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 				if r.line != contentLine || contentCol < r.startCol || contentCol >= r.endCol {
 					continue
 				}
-				target := m.links[r.idx]
-				m.addressBar.SetValue(target)
-				m.loading = true
-				m.fetchSeq++
-				m.links = nil
-				m.linkIdx = -1
-				m.hoverIdx = -1
-				return m, m.doFetch(target)
+				return m.followLink(m.links[r.idx])
 			}
 			m.focus = focusViewport
 			m.addressBar.Blur()
@@ -677,16 +700,84 @@ func (m model) handleTabNavigation() (tea.Model, tea.Cmd) {
 
 func (m model) handleLinkFollow() (tea.Model, tea.Cmd) {
 	if m.linkIdx >= 0 && m.linkIdx < len(m.links) {
-		target := m.links[m.linkIdx]
-		m.addressBar.SetValue(target)
-		m.loading = true
-		m.fetchSeq++
-		m.links = nil
-		m.linkIdx = -1
-		return m, m.doFetch(target)
+		return m.followLink(m.links[m.linkIdx])
 	}
 	return m, nil
 }
+
+// followLink dispatches the target URL based on its scheme. mark:// URLs
+// fetch normally; allowlisted external schemes are handed to the system
+// handler without changing the current document.
+func (m model) followLink(target string) (tea.Model, tea.Cmd) {
+	if isExternalURL(target) {
+		return m.openExternal(target)
+	}
+	m.addressBar.SetValue(target)
+	m.loading = true
+	m.fetchSeq++
+	m.links = nil
+	m.linkIdx = -1
+	m.hoverIdx = -1
+	return m, m.doFetch(target)
+}
+
+// openExternal launches target in the user's system handler if its scheme
+// is in the allowlist. Current page state is preserved — the TUI stays on
+// the document that contained the link.
+func (m model) openExternal(target string) (tea.Model, tea.Cmd) {
+	if len(m.externalSchemes) == 0 {
+		m.bookmarkMsg = "External links disabled"
+		return m.startBookmarkMsgClear()
+	}
+	return m, func() tea.Msg {
+		err := launcher.Open(target, m.externalSchemes)
+		return externalOpenResult{url: target, err: err}
+	}
+}
+
+// startBookmarkMsgClear schedules the transient status message to be cleared.
+// Reuses the bookmarkMsg/bookmarkSeq machinery since it already implements
+// exactly the "show for 2s, clear on sequence match" pattern we need.
+func (m model) startBookmarkMsgClear() (tea.Model, tea.Cmd) {
+	m.bookmarkSeq++
+	seq := m.bookmarkSeq
+	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return clearBookmarkMsg{seq: seq}
+	})
+}
+
+// isExternalURL reports whether raw has a non-empty, non-mark scheme.
+// Bare paths, relative references, and mark:// URLs are treated as internal.
+// Both authority-form (scheme://...) and opaque-form (mailto:user@...) are
+// recognised.
+func isExternalURL(raw string) bool {
+	scheme := schemeOf(raw)
+	return scheme != "" && scheme != "mark"
+}
+
+// schemeOf returns the scheme component of raw, or the empty string if raw
+// has no scheme. Matches RFC 3986 scheme syntax: ALPHA *( ALPHA / DIGIT / + / - / . )
+// terminated by a colon, before any /, ?, #, or end of string.
+func schemeOf(raw string) string {
+	for i, r := range raw {
+		switch {
+		case i == 0:
+			if !isAlpha(r) {
+				return ""
+			}
+		case r == ':':
+			return raw[:i]
+		case isAlpha(r) || isDigit(r) || r == '+' || r == '-' || r == '.':
+			// valid scheme char, continue
+		default:
+			return ""
+		}
+	}
+	return ""
+}
+
+func isAlpha(r rune) bool { return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') }
+func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 
 func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
 	url := m.addressBar.Value()
@@ -864,7 +955,12 @@ func (m model) statusBarView() string {
 
 	// Show selected link in status bar (link navigation mode).
 	if m.linkIdx >= 0 && m.linkIdx < len(m.links) {
-		hint := fmt.Sprintf("[%d/%d] %s", m.linkIdx+1, len(m.links), m.links[m.linkIdx])
+		target := m.links[m.linkIdx]
+		prefix := ""
+		if isExternalURL(target) {
+			prefix = "↗ "
+		}
+		hint := fmt.Sprintf("[%d/%d] %s%s", m.linkIdx+1, len(m.links), prefix, target)
 		return style.Foreground(lipgloss.Color("12")).Render(hint)
 	}
 
@@ -1351,6 +1447,8 @@ func detectStyle() string {
 func main() {
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	style := flag.String("style", "auto", "color style: dark, light, or auto")
+	externalLinks := flag.String("external-links", strings.Join(launcher.DefaultAllowlist, ","),
+		"comma-separated URL schemes to open in the system handler; empty string disables")
 	flag.Parse()
 
 	styleName := *style
@@ -1376,10 +1474,27 @@ func main() {
 	}
 
 	p := tea.NewProgram(
-		initialModel(initialURL, client, styleName),
+		initialModel(initialURL, client, styleName, parseSchemeList(*externalLinks)),
 	)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// parseSchemeList splits a comma-separated scheme list, trimming whitespace
+// and dropping empty entries. Returns nil for an empty input (disables external
+// launching).
+func parseSchemeList(csv string) []string {
+	if csv == "" {
+		return nil
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
