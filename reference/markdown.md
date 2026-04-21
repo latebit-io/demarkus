@@ -6,7 +6,7 @@ permalink: /reference/markdown/
 
 # Supported Markdown Features
 
-What you can rely on when authoring documents for demarkus.
+What you can rely on when authoring documents for Demarkus.
 
 ## The short version
 
