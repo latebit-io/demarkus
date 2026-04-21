@@ -25,6 +25,11 @@
         >Soul</a
     >
     <a
+        class="{% if page.url contains '/reference/' %}is-active{% endif %}"
+        href="{{ '/reference/' | relative_url }}"
+        >Reference</a
+    >
+    <a
         class="{% if page.url == '/security/' %}is-active{% endif %}"
         href="{{ '/security/' | relative_url }}"
         >Security</a
