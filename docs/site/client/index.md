@@ -69,6 +69,25 @@ demarkus-tui --insecure mark://localhost:6309/index.md
 - `d` — document graph view (loads stored graph instantly, live crawl updates in background)
 - `?` — help
 
+### External links
+
+The TUI follows `mark://` links internally. Links to `http`, `https`, `gemini`, and `mailto` URLs are opened in the system's default handler (`open` / `xdg-open` / `rundll32`). Selected external links are shown in the status bar with an `↗` prefix to distinguish them from internal navigation.
+
+Configure the scheme allowlist with `-external-links`:
+
+```bash
+# default: open http/https/gemini/mailto
+demarkus-tui mark://localhost:6309/
+
+# only http and https
+demarkus-tui -external-links "http,https" mark://localhost:6309/
+
+# disable external launching entirely — non-mark links report an error
+demarkus-tui -external-links "" mark://localhost:6309/
+```
+
+URLs are passed as argv arguments to the system handler — no shell is invoked. Schemes not in the allowlist (including `file:`, `javascript:`, `data:`) are rejected before any process is spawned. See [Security Model](../security/index.md#external-links-in-the-tui) for details.
+
 ## MCP (`demarkus-mcp`)
 
 The MCP server exposes Demarkus as tools for LLM agents over stdio.
