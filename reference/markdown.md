@@ -53,20 +53,40 @@ Term
 : A second definition
 ```
 
-## Frontmatter
+## Metadata
 
-Optional YAML frontmatter at the top of a document, delimited by `---`:
+Demarkus separates *document content* (what you author) from *metadata* (attributes about the document). Metadata does not belong in the body.
+
+### Server-managed frontmatter
+
+The server persists each version with its own YAML frontmatter block prepended to the body:
 
 ```yaml
 ---
-author: Fritz
-tags: [architecture, notes]
+version: 3
+archived: false
+previous-hash: sha256-abc123…
+meta.author: Fritz
+meta.tags: architecture,notes
 ---
-
-# Actual document starts here
+<your body here>
 ```
 
-Frontmatter is parsed by the server and **stripped before rendering**. It's metadata, not content. The server's own on-disk frontmatter reserves `version`, `previous-hash`, and `archived`, plus any `meta.*` keys supplied by the publisher. Response fields like `modified`, `etag`, and `content-hash` are computed at read time and returned as protocol metadata — they are not stored in frontmatter. Publishers can send up to 10 additional meta keys totaling 512 bytes.
+Reserved keys: `version`, `previous-hash`, `archived`, plus any `meta.*` keys supplied by the publisher. The handler strips this block before returning the body to clients, so you never see it when you FETCH.
+
+### Publisher metadata
+
+To attach structured metadata to a document, pass it as request metadata on `PUBLISH` — **not** by writing YAML inside the body. The server records it under `meta.*` in the on-disk frontmatter and surfaces it in response headers on FETCH.
+
+Limits: up to 10 keys totaling 512 bytes.
+
+### Response fields (computed, not stored)
+
+On FETCH, the server returns `modified`, `etag`, and `content-hash` as protocol metadata. These are derived from the version file at read time and are not stored in frontmatter.
+
+### If you write `---` at the top of your body
+
+It's treated as body content — the server does not parse it and does not strip it. Glamour will render `---` as a horizontal rule, so an in-body frontmatter block shows up as two horizontal rules with text between them. Use publisher metadata instead.
 
 ## What is not supported
 
