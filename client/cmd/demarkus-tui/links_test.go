@@ -643,3 +643,48 @@ func TestHandleWindowSizeDoesNotPersistBookmarksToHistory(t *testing.T) {
 		t.Errorf("history leaked bookmark content into markedRendered: %q", got.history[0].markedRendered)
 	}
 }
+
+// TestHandleMouseWheelClearsStaleHover verifies that a wheel scroll that
+// actually moves the viewport clears m.hoverIdx. Hover state is built from
+// the last MouseMotion's screen coords; if the content scrolls, those coords
+// now point at a different link and the pre-scroll highlight is stale.
+func TestHandleMouseWheelClearsStaleHover(t *testing.T) {
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(5))
+	// Content is taller than the viewport so wheel-down actually moves YOffset.
+	vp.SetContent(strings.Repeat("line\n", 50))
+
+	m := model{
+		viewport:       vp,
+		ready:          true,
+		markedRendered: "some marked content",
+		linkIdx:        -1,
+		hoverIdx:       3,
+	}
+	out, _ := m.handleMouseWheel(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	got := out.(model)
+	if got.hoverIdx != -1 {
+		t.Errorf("hoverIdx = %d after wheel scroll, want -1", got.hoverIdx)
+	}
+}
+
+// TestHandleMouseWheelPreservesHoverWhenNoScroll verifies that a wheel event
+// that doesn't actually change YOffset (content fits in viewport) leaves
+// hoverIdx alone — the link under the cursor hasn't moved.
+func TestHandleMouseWheelPreservesHoverWhenNoScroll(t *testing.T) {
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(50))
+	// Content is shorter than the viewport — wheel-down is a no-op.
+	vp.SetContent(strings.Repeat("line\n", 3))
+
+	m := model{
+		viewport:       vp,
+		ready:          true,
+		markedRendered: "some marked content",
+		linkIdx:        -1,
+		hoverIdx:       3,
+	}
+	out, _ := m.handleMouseWheel(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	got := out.(model)
+	if got.hoverIdx != 3 {
+		t.Errorf("hoverIdx = %d when no scroll occurred, want 3 (preserved)", got.hoverIdx)
+	}
+}

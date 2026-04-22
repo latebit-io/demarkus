@@ -355,8 +355,18 @@ func (m model) handleMouseWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	if !m.ready {
 		return m, nil
 	}
+	prevOffset := m.viewport.YOffset()
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
+	// If the scroll moved the content, the link under the cursor changed but
+	// hoverIdx still refers to the pre-scroll target. Drop the stale hover and
+	// re-render so we don't highlight the wrong link until the next motion event.
+	if m.viewport.YOffset() != prevOffset && m.hoverIdx != -1 && m.markedRendered != "" {
+		m.hoverIdx = -1
+		cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
+		m.linkRegions = regions
+		m.viewport.SetContent(cleaned)
+	}
 	return m, cmd
 }
 
@@ -413,7 +423,7 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.viewport.SetWidth(m.width)
 		m.viewport.SetHeight(viewportHeight)
-		m.rewrapContent(viewportHeight)
+		m.rewrapContent()
 	}
 	m.addressBar.SetWidth(m.width - 2)
 	return m, nil
@@ -422,7 +432,7 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 // rewrapContent re-renders the viewport content at the current width,
 // preserving the approximate scroll position and link selection.
 // Called on window resize so markdown re-wraps to the new width.
-func (m *model) rewrapContent(viewportHeight int) {
+func (m *model) rewrapContent() {
 	switch {
 	case m.viewMode == viewGraph:
 		switch {
@@ -461,8 +471,10 @@ func (m *model) rewrapContent(viewportHeight int) {
 			m.history[m.histIdx].rendered = cleaned
 			m.history[m.histIdx].markedRendered = m.markedRendered
 		}
-		totalLines := strings.Count(cleaned, "\n")
-		if maxOffset := totalLines - viewportHeight; maxOffset > 0 {
+		// Use the viewport's own line count so the restored offset matches
+		// its internal maxYOffset math exactly. strings.Count(cleaned, "\n")
+		// is off-by-one for non-empty buffers without a trailing newline.
+		if maxOffset := m.viewport.TotalLineCount() - m.viewport.Height(); maxOffset > 0 {
 			m.viewport.SetYOffset(int(percent * float64(maxOffset)))
 		} else {
 			m.viewport.SetYOffset(0)
