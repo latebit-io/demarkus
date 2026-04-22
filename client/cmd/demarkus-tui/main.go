@@ -359,9 +359,13 @@ func (m model) handleMouseWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	// If the scroll moved the content, the link under the cursor changed but
-	// hoverIdx still refers to the pre-scroll target. Drop the stale hover and
-	// re-render so we don't highlight the wrong link until the next motion event.
-	if m.viewport.YOffset() != prevOffset && m.hoverIdx != -1 && m.markedRendered != "" {
+	// hoverIdx still refers to the pre-scroll target. Drop the stale hover
+	// and re-render so we don't highlight the wrong link until the next
+	// motion event. Gated to document view — graph/help/error modes don't
+	// own m.markedRendered, and running processMarkers there would paste the
+	// previous document over the unrelated content currently in the viewport.
+	if m.viewMode == viewDocument && !m.showHelp && m.err == nil && m.status != "bookmarks" &&
+		m.viewport.YOffset() != prevOffset && m.hoverIdx != -1 && m.markedRendered != "" {
 		m.hoverIdx = -1
 		cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
 		m.linkRegions = regions
@@ -429,10 +433,38 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// rewrapHistoryEntry re-renders the active history snapshot at the current
+// width so restoreHistory brings the document back wrapped for the current
+// terminal, even if the resize happened while the viewport was showing
+// something else (help, graph, bookmarks, error). No-op when there's no
+// history entry to refresh.
+func (m *model) rewrapHistoryEntry() {
+	if m.histIdx < 0 || m.histIdx >= len(m.history) {
+		return
+	}
+	entry := &m.history[m.histIdx]
+	if entry.rawBody == "" {
+		return
+	}
+	r, err := m.renderMarkdown(entry.rawBody)
+	if err != nil {
+		return
+	}
+	entry.markedRendered = injectLinkMarkers(r, entry.linkInfos)
+	cleaned, _ := processMarkers(entry.markedRendered, -1, -1)
+	entry.rendered = cleaned
+}
+
 // rewrapContent re-renders the viewport content at the current width,
 // preserving the approximate scroll position and link selection.
 // Called on window resize so markdown re-wraps to the new width.
 func (m *model) rewrapContent() {
+	// Always refresh the active history entry so restoreHistory (called
+	// from help dismiss, back/forward, and graph/bookmarks esc) returns the
+	// document at the current width — regardless of what the viewport is
+	// displaying right now.
+	m.rewrapHistoryEntry()
+
 	switch {
 	case m.viewMode == viewGraph:
 		switch {
@@ -444,7 +476,9 @@ func (m *model) rewrapContent() {
 			m.viewport.SetContent("")
 		}
 	case m.showHelp:
-		// Static plain text; no re-render needed.
+		// Static plain text; no viewport re-render needed. The history
+		// entry was already refreshed above so dismissing help restores
+		// the document at the new width.
 	case m.err != nil:
 		m.viewport.SetContent(errorView(m.err))
 	case m.rawBody != "":
@@ -462,15 +496,6 @@ func (m *model) rewrapContent() {
 			m.linkRegions = regions
 		}
 		m.viewport.SetContent(cleaned)
-		// Persist the new-width render into the active history snapshot so
-		// back/forward navigation and help dismissal (which call
-		// restoreHistory) don't revert to the pre-resize wrap. Skip when
-		// viewing bookmarks — that rawBody doesn't belong to the history
-		// entry at m.histIdx.
-		if m.histIdx >= 0 && m.histIdx < len(m.history) && m.status != "bookmarks" {
-			m.history[m.histIdx].rendered = cleaned
-			m.history[m.histIdx].markedRendered = m.markedRendered
-		}
 		// Use the viewport's own line count so the restored offset matches
 		// its internal maxYOffset math exactly. strings.Count(cleaned, "\n")
 		// is off-by-one for non-empty buffers without a trailing newline.

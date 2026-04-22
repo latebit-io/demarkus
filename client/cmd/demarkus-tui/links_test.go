@@ -608,39 +608,94 @@ func TestHandleWindowSizePersistsRewrapToHistory(t *testing.T) {
 	}
 }
 
-// TestHandleWindowSizeDoesNotPersistBookmarksToHistory guards the inverse:
-// resizing in bookmarks view must not overwrite the history snapshot of the
-// underlying document. handleBookmarkView does not advance histIdx, so a
-// blind write would clobber the last document entry with bookmark markup.
-func TestHandleWindowSizeDoesNotPersistBookmarksToHistory(t *testing.T) {
+// TestHandleWindowSizeRefreshesHistoryFromEntryBody verifies that a resize
+// rewraps the history snapshot from the entry's own rawBody — not whatever
+// the model's current rawBody happens to be. Without this, resizing while
+// viewing bookmarks (or graph, or help) would either leave history at the
+// pre-resize wrap (so esc/back snaps back) or, worse, write the bookmark
+// body into the document's history slot. The right invariant: history is
+// refreshed from entry.rawBody, independent of display mode.
+func TestHandleWindowSizeRefreshesHistoryFromEntryBody(t *testing.T) {
 	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
 	bookmarkBody := "# Bookmarks\n\n- [A](mark://host/a.md) — 2026-01-01\n"
+	// Long paragraph in the entry so we can detect rewrapping by line count.
+	docBody := "# Doc\n\n" + strings.Repeat("word ", 200) + "\n"
 	m := model{
 		viewport:  vp,
 		ready:     true,
 		width:     100,
 		height:    24,
 		styleName: "dark",
-		rawBody:   bookmarkBody,
+		rawBody:   bookmarkBody, // displayed content is bookmarks
 		linkInfos: links.ExtractWithPositions(bookmarkBody),
 		linkIdx:   -1,
 		hoverIdx:  -1,
 		status:    "bookmarks",
 		history: []historyEntry{{
 			url:            "mark://host/doc.md",
-			rendered:       "DOC-RENDER",
-			markedRendered: "DOC-MARKED",
-			rawBody:        "# Doc\n",
+			rendered:       "STALE-RENDER",
+			markedRendered: "STALE-MARKED",
+			rawBody:        docBody,
+			linkInfos:      links.ExtractWithPositions(docBody),
 		}},
 		histIdx: 0,
 	}
 	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
 	got := out.(model)
-	if got.history[0].rendered != "DOC-RENDER" {
-		t.Errorf("history leaked bookmark content into rendered: %q", got.history[0].rendered)
+
+	// Stale entries must be replaced.
+	if got.history[0].rendered == "STALE-RENDER" {
+		t.Error("history[0].rendered was not refreshed on resize")
 	}
-	if got.history[0].markedRendered != "DOC-MARKED" {
-		t.Errorf("history leaked bookmark content into markedRendered: %q", got.history[0].markedRendered)
+	if got.history[0].markedRendered == "STALE-MARKED" {
+		t.Error("history[0].markedRendered was not refreshed on resize")
+	}
+	// The refresh must come from entry.rawBody (docBody), not m.rawBody (bookmarkBody).
+	if strings.Contains(got.history[0].rendered, "Bookmarks") ||
+		strings.Contains(got.history[0].markedRendered, "Bookmarks") {
+		t.Error("history refresh leaked bookmark content; should be sourced from entry.rawBody")
+	}
+	// Sanity: the refresh should contain markers of the doc body.
+	if !strings.Contains(got.history[0].rendered, "Doc") {
+		t.Errorf("history[0].rendered missing doc title; got:\n%s", got.history[0].rendered)
+	}
+}
+
+// TestHandleWindowSizeRefreshesHistoryWhileHelpVisible simulates the exact
+// scenario: open doc → press `?` → resize. The viewport keeps showing help
+// (static), but history must still be rewrapped so dismissing help returns
+// the document at the new width, not the pre-resize wrap.
+func TestHandleWindowSizeRefreshesHistoryWhileHelpVisible(t *testing.T) {
+	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
+	docBody := "# Doc\n\n" + strings.Repeat("word ", 200) + "\n"
+	m := model{
+		viewport:  vp,
+		ready:     true,
+		width:     100,
+		height:    24,
+		styleName: "dark",
+		showHelp:  true,
+		rawBody:   docBody,
+		linkInfos: links.ExtractWithPositions(docBody),
+		linkIdx:   -1,
+		hoverIdx:  -1,
+		status:    "ok",
+		history: []historyEntry{{
+			url:            "mark://host/doc.md",
+			rendered:       "WIDE-WIDTH-RENDER",
+			markedRendered: "WIDE-WIDTH-MARKED",
+			rawBody:        docBody,
+			linkInfos:      links.ExtractWithPositions(docBody),
+		}},
+		histIdx: 0,
+	}
+	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
+	got := out.(model)
+	if got.history[0].rendered == "WIDE-WIDTH-RENDER" {
+		t.Error("history not refreshed while help was showing; dismissing help would snap back to pre-resize wrap")
+	}
+	if got.history[0].markedRendered == "WIDE-WIDTH-MARKED" {
+		t.Error("history markedRendered not refreshed while help was showing")
 	}
 }
 
@@ -664,6 +719,50 @@ func TestHandleMouseWheelClearsStaleHover(t *testing.T) {
 	got := out.(model)
 	if got.hoverIdx != -1 {
 		t.Errorf("hoverIdx = %d after wheel scroll, want -1", got.hoverIdx)
+	}
+}
+
+// TestHandleMouseWheelDoesNotRehighlightOutsideDocumentView guards against
+// processMarkers replaying a stale m.markedRendered over unrelated content.
+// handleGraphToggle leaves markedRendered/hoverIdx intact when leaving the
+// document, so a wheel scroll in graph/help mode must not run the rehighlight
+// branch or the viewport gets overwritten with the previous document body.
+func TestHandleMouseWheelDoesNotRehighlightOutsideDocumentView(t *testing.T) {
+	tests := []struct {
+		name     string
+		viewMode viewMode
+		showHelp bool
+		status   string
+	}{
+		{"graph view", viewGraph, false, "ok"},
+		{"help view", viewDocument, true, "ok"},
+		{"bookmarks view", viewDocument, false, "bookmarks"},
+	}
+	const graphContent = "GRAPH-OR-HELP-CONTENT\n"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(5))
+			vp.SetContent(graphContent + strings.Repeat("x\n", 50))
+			m := model{
+				viewport: vp,
+				ready:    true,
+				viewMode: tt.viewMode,
+				showHelp: tt.showHelp,
+				status:   tt.status,
+				// Stale state left over from the previous document view.
+				markedRendered: "PREVIOUS-DOCUMENT-MARKED",
+				linkIdx:        -1,
+				hoverIdx:       3,
+			}
+			out, _ := m.handleMouseWheel(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+			got := out.(model)
+			if got.hoverIdx != 3 {
+				t.Errorf("hoverIdx = %d, want 3 (preserved outside document view)", got.hoverIdx)
+			}
+			if strings.Contains(got.viewport.View(), "PREVIOUS-DOCUMENT-MARKED") {
+				t.Errorf("wheel scroll leaked stale markedRendered into %s viewport", tt.name)
+			}
+		})
 	}
 }
 
