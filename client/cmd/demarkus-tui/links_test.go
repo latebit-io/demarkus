@@ -534,3 +534,112 @@ func TestHandleWindowSizeRewrapsMarkdown(t *testing.T) {
 			narrowLines, wideLines)
 	}
 }
+
+// TestHandleWindowSizeStaysInGraphModeWhileCrawling guards against a regression
+// where resizing during the initial graph crawl (viewMode=viewGraph,
+// graphNodes empty, crawling=true) fell through to the document rewrap branch
+// and overwrote the "Crawling..." placeholder with the previous page body.
+func TestHandleWindowSizeStaysInGraphModeWhileCrawling(t *testing.T) {
+	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
+	m := model{
+		viewport:  vp,
+		ready:     true,
+		width:     100,
+		height:    24,
+		styleName: "dark",
+		viewMode:  viewGraph,
+		crawling:  true,
+		// Simulate a prior document still in rawBody — the bug was letting this leak through.
+		rawBody:   "# Previous page\n\nThis should NOT be shown during crawl.\n",
+		linkInfos: nil,
+		linkIdx:   -1,
+		hoverIdx:  -1,
+	}
+	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
+	got := out.(model)
+	if got.markedRendered != "" {
+		t.Errorf("markedRendered = %q, want empty (graph mode should not touch it)", got.markedRendered)
+	}
+	view := got.viewport.View()
+	if !strings.Contains(view, "Crawling") {
+		t.Errorf("viewport content missing Crawling placeholder after resize; got:\n%s", view)
+	}
+	if strings.Contains(view, "Previous page") {
+		t.Errorf("viewport leaked previous document body during graph crawl; got:\n%s", view)
+	}
+}
+
+// TestHandleWindowSizePersistsRewrapToHistory verifies that a resize updates
+// the active history snapshot. Without this, restoreHistory (called by help
+// dismiss, back, and forward) would restore the pre-resize wrap.
+func TestHandleWindowSizePersistsRewrapToHistory(t *testing.T) {
+	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
+	body := "# Title\n\n" + strings.Repeat("word ", 200) + "\n"
+	m := model{
+		viewport:  vp,
+		ready:     true,
+		width:     100,
+		height:    24,
+		styleName: "dark",
+		rawBody:   body,
+		linkInfos: links.ExtractWithPositions(body),
+		linkIdx:   -1,
+		hoverIdx:  -1,
+		status:    "ok",
+		history: []historyEntry{{
+			url:            "mark://host/a.md",
+			rendered:       "OLD-WIDTH-RENDER",
+			markedRendered: "OLD-WIDTH-MARKED",
+			rawBody:        body,
+		}},
+		histIdx: 0,
+	}
+	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
+	got := out.(model)
+	if got.history[0].rendered == "OLD-WIDTH-RENDER" {
+		t.Error("history[0].rendered was not refreshed on resize")
+	}
+	if got.history[0].markedRendered == "OLD-WIDTH-MARKED" {
+		t.Error("history[0].markedRendered was not refreshed on resize")
+	}
+	if got.history[0].rendered == "" || got.history[0].markedRendered == "" {
+		t.Errorf("history fields unexpectedly empty after resize: rendered=%q markedRendered=%q",
+			got.history[0].rendered, got.history[0].markedRendered)
+	}
+}
+
+// TestHandleWindowSizeDoesNotPersistBookmarksToHistory guards the inverse:
+// resizing in bookmarks view must not overwrite the history snapshot of the
+// underlying document. handleBookmarkView does not advance histIdx, so a
+// blind write would clobber the last document entry with bookmark markup.
+func TestHandleWindowSizeDoesNotPersistBookmarksToHistory(t *testing.T) {
+	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
+	bookmarkBody := "# Bookmarks\n\n- [A](mark://host/a.md) — 2026-01-01\n"
+	m := model{
+		viewport:  vp,
+		ready:     true,
+		width:     100,
+		height:    24,
+		styleName: "dark",
+		rawBody:   bookmarkBody,
+		linkInfos: links.ExtractWithPositions(bookmarkBody),
+		linkIdx:   -1,
+		hoverIdx:  -1,
+		status:    "bookmarks",
+		history: []historyEntry{{
+			url:            "mark://host/doc.md",
+			rendered:       "DOC-RENDER",
+			markedRendered: "DOC-MARKED",
+			rawBody:        "# Doc\n",
+		}},
+		histIdx: 0,
+	}
+	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
+	got := out.(model)
+	if got.history[0].rendered != "DOC-RENDER" {
+		t.Errorf("history leaked bookmark content into rendered: %q", got.history[0].rendered)
+	}
+	if got.history[0].markedRendered != "DOC-MARKED" {
+		t.Errorf("history leaked bookmark content into markedRendered: %q", got.history[0].markedRendered)
+	}
+}

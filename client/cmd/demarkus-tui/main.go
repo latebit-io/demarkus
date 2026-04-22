@@ -424,8 +424,15 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 // Called on window resize so markdown re-wraps to the new width.
 func (m *model) rewrapContent(viewportHeight int) {
 	switch {
-	case m.viewMode == viewGraph && len(m.graphNodes) > 0:
-		m.viewport.SetContent(m.renderCurrentGraphSubView())
+	case m.viewMode == viewGraph:
+		switch {
+		case len(m.graphNodes) > 0:
+			m.viewport.SetContent(m.renderCurrentGraphSubView())
+		case m.crawling:
+			m.viewport.SetContent("\n  Crawling document links...")
+		default:
+			m.viewport.SetContent("")
+		}
 	case m.showHelp:
 		// Static plain text; no re-render needed.
 	case m.err != nil:
@@ -445,6 +452,15 @@ func (m *model) rewrapContent(viewportHeight int) {
 			m.linkRegions = regions
 		}
 		m.viewport.SetContent(cleaned)
+		// Persist the new-width render into the active history snapshot so
+		// back/forward navigation and help dismissal (which call
+		// restoreHistory) don't revert to the pre-resize wrap. Skip when
+		// viewing bookmarks — that rawBody doesn't belong to the history
+		// entry at m.histIdx.
+		if m.histIdx >= 0 && m.histIdx < len(m.history) && m.status != "bookmarks" {
+			m.history[m.histIdx].rendered = cleaned
+			m.history[m.histIdx].markedRendered = m.markedRendered
+		}
 		totalLines := strings.Count(cleaned, "\n")
 		if maxOffset := totalLines - viewportHeight; maxOffset > 0 {
 			m.viewport.SetYOffset(int(percent * float64(maxOffset)))
