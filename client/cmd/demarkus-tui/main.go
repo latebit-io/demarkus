@@ -280,6 +280,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouseClick(msg)
 	case tea.MouseMotionMsg:
 		return m.handleMouseMotion(msg)
+	case tea.MouseWheelMsg:
+		return m.handleMouseWheel(msg)
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
 	case crawlResult:
@@ -349,6 +351,29 @@ func (m model) handleMouseMotion(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handleMouseWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
+	if !m.ready {
+		return m, nil
+	}
+	prevOffset := m.viewport.YOffset()
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	// If the scroll moved the content, the link under the cursor changed but
+	// hoverIdx still refers to the pre-scroll target. Drop the stale hover
+	// and re-render so we don't highlight the wrong link until the next
+	// motion event. Gated to document view — graph/help/error modes don't
+	// own m.markedRendered, and running processMarkers there would paste the
+	// previous document over the unrelated content currently in the viewport.
+	if m.viewMode == viewDocument && !m.showHelp && m.err == nil && m.status != "bookmarks" &&
+		m.viewport.YOffset() != prevOffset && m.hoverIdx != -1 && m.markedRendered != "" {
+		m.hoverIdx = -1
+		cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
+		m.linkRegions = regions
+		m.viewport.SetContent(cleaned)
+	}
+	return m, cmd
+}
+
 func (m model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if msg.Button == tea.MouseLeft {
 		if msg.Y == 0 {
@@ -402,13 +427,84 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.viewport.SetWidth(m.width)
 		m.viewport.SetHeight(viewportHeight)
-		// Re-render graph view with new width for correct truncation.
-		if m.viewMode == viewGraph && len(m.graphNodes) > 0 {
-			m.viewport.SetContent(m.renderCurrentGraphSubView())
-		}
+		m.rewrapContent()
 	}
 	m.addressBar.SetWidth(m.width - 2)
 	return m, nil
+}
+
+// rewrapHistoryEntry re-renders the active history snapshot at the current
+// width so restoreHistory brings the document back wrapped for the current
+// terminal, even if the resize happened while the viewport was showing
+// something else (help, graph, bookmarks, error). No-op when there's no
+// history entry to refresh.
+func (m *model) rewrapHistoryEntry() {
+	if m.histIdx < 0 || m.histIdx >= len(m.history) {
+		return
+	}
+	entry := &m.history[m.histIdx]
+	if entry.rawBody == "" {
+		return
+	}
+	r, err := m.renderMarkdown(entry.rawBody)
+	if err != nil {
+		return
+	}
+	entry.markedRendered = injectLinkMarkers(r, entry.linkInfos)
+	cleaned, _ := processMarkers(entry.markedRendered, -1, -1)
+	entry.rendered = cleaned
+}
+
+// rewrapContent re-renders the viewport content at the current width,
+// preserving the approximate scroll position and link selection.
+// Called on window resize so markdown re-wraps to the new width.
+func (m *model) rewrapContent() {
+	// Always refresh the active history entry so restoreHistory (called
+	// from help dismiss, back/forward, and graph/bookmarks esc) returns the
+	// document at the current width — regardless of what the viewport is
+	// displaying right now.
+	m.rewrapHistoryEntry()
+
+	switch {
+	case m.viewMode == viewGraph:
+		switch {
+		case len(m.graphNodes) > 0:
+			m.viewport.SetContent(m.renderCurrentGraphSubView())
+		case m.crawling:
+			m.viewport.SetContent("\n  Crawling document links...")
+		default:
+			m.viewport.SetContent("")
+		}
+	case m.showHelp:
+		// Static plain text; no viewport re-render needed. The history
+		// entry was already refreshed above so dismissing help restores
+		// the document at the new width.
+	case m.err != nil:
+		m.viewport.SetContent(errorView(m.err))
+	case m.rawBody != "":
+		percent := m.viewport.ScrollPercent()
+		r, err := m.renderMarkdown(m.rawBody)
+		var cleaned string
+		if err != nil {
+			cleaned = m.rawBody
+			m.markedRendered = ""
+			m.linkRegions = nil
+		} else {
+			m.markedRendered = injectLinkMarkers(r, m.linkInfos)
+			var regions []linkRegion
+			cleaned, regions = processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
+			m.linkRegions = regions
+		}
+		m.viewport.SetContent(cleaned)
+		// Use the viewport's own line count so the restored offset matches
+		// its internal maxYOffset math exactly. strings.Count(cleaned, "\n")
+		// is off-by-one for non-empty buffers without a trailing newline.
+		if maxOffset := m.viewport.TotalLineCount() - m.viewport.Height(); maxOffset > 0 {
+			m.viewport.SetYOffset(int(percent * float64(maxOffset)))
+		} else {
+			m.viewport.SetYOffset(0)
+		}
+	}
 }
 
 func (m model) handleViewportReady() (tea.Model, tea.Cmd) {
@@ -668,8 +764,44 @@ func (m model) handleHelpDismiss(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// linkVisible reports whether link idx's rendered region is within the
+// current viewport window. Returns false if the link has no region (e.g.
+// an empty-text link that was skipped by marker injection).
+func (m model) linkVisible(idx int) bool {
+	top := m.viewport.YOffset()
+	bottom := top + m.viewport.Height()
+	for _, r := range m.linkRegions {
+		if r.idx == idx {
+			return r.line >= top && r.line < bottom
+		}
+	}
+	return false
+}
+
+// firstVisibleLinkIdx returns the index (into m.links) of the first link
+// whose rendered region falls inside the current viewport window, or -1
+// if no link is currently visible.
+func (m model) firstVisibleLinkIdx() int {
+	top := m.viewport.YOffset()
+	bottom := top + m.viewport.Height()
+	for _, r := range m.linkRegions {
+		if r.line >= top && r.line < bottom {
+			return r.idx
+		}
+	}
+	return -1
+}
+
 func (m model) handleTabNavigation() (tea.Model, tea.Cmd) {
 	if len(m.links) > 0 {
+		// If the current selection is outside the viewport (typically because
+		// the user wheel-scrolled away), resume tabbing from the first link
+		// visible in the current scroll window rather than snapping back.
+		if m.markedRendered != "" && (m.linkIdx < 0 || !m.linkVisible(m.linkIdx)) {
+			if first := m.firstVisibleLinkIdx(); first >= 0 {
+				m.linkIdx = first - 1
+			}
+		}
 		m.linkIdx = (m.linkIdx + 1) % (len(m.links) + 1)
 		if m.linkIdx == len(m.links) {
 			m.linkIdx = -1
@@ -848,12 +980,15 @@ func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
 	}
 	body := m.bookmarkStore.Render()
 	m.rawBody = body
-	raw := links.Extract(body)
-	m.links = make([]string, 0, len(raw))
-	for _, dest := range raw {
-		m.links = append(m.links, links.Resolve("", dest))
+	m.linkInfos = links.ExtractWithPositions(body)
+	m.links = make([]string, 0, len(m.linkInfos))
+	for _, li := range m.linkInfos {
+		m.links = append(m.links, links.Resolve("", li.Dest))
 	}
 	m.linkIdx = -1
+	m.hoverIdx = -1
+	m.markedRendered = ""
+	m.linkRegions = nil
 	m.status = "bookmarks"
 	m.addressBar.SetValue("")
 	m.loading = false
@@ -862,11 +997,14 @@ func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
 	m.fromCache = false
 	m.err = nil
 	if m.ready {
-		rendered, err := m.renderMarkdown(body)
+		r, err := m.renderMarkdown(body)
 		if err != nil {
 			m.viewport.SetContent(body)
 		} else {
-			m.viewport.SetContent(rendered)
+			m.markedRendered = injectLinkMarkers(r, m.linkInfos)
+			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
+			m.linkRegions = regions
+			m.viewport.SetContent(cleaned)
 		}
 		m.viewport.GotoTop()
 	}
