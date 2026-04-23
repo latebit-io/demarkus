@@ -25,6 +25,10 @@ fi
 
 if [[ -f "${PLUGIN_TOKEN_FILE}" ]]; then
   DEMARKUS_AUTH="$(cat "${PLUGIN_TOKEN_FILE}")"
+  if [[ -z "${DEMARKUS_AUTH}" ]]; then
+    echo "[demarkus-memory] token file ${PLUGIN_TOKEN_FILE} exists but is empty — run /soul-init to regenerate" >&2
+    exit 1
+  fi
   export DEMARKUS_AUTH
 fi
 

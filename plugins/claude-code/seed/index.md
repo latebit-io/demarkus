@@ -15,6 +15,7 @@ Ask the agent to "remember X" or "what do I know about Y" and it will route thro
 
 ## Technical
 
-- Served from `~/.demarkus/soul/` on `mark://localhost:6310`
-- Token and server pid live under the same directory
-- Browse the same soul from the demarkus TUI: `demarkus-tui -host mark://localhost:6310`
+- The soul directory and port depend on the setup mode (shared by default, isolated when 6310 is taken, or reuse of an existing server). See `~/.demarkus/plugin-memory.conf` for `SOUL_DIR`, `PORT`, and `MODE`.
+- The plugin's auth token is at `~/.demarkus/plugin-memory.token` (mode 0600).
+- Browse the same soul from the demarkus TUI using the port from the config: `demarkus-tui -host mark://localhost:$PORT`.
+- Run `/soul-init` in Claude Code to reconfigure (switch modes, adopt an existing server, etc.).

@@ -26,9 +26,9 @@ Read intents → start with `mark_fetch` on the most likely path. If the user is
 4. If nothing relevant is found, say so honestly rather than fabricating
 
 Write intents — decide between append and publish:
-- **Append** (`mark_append /notes.md`, `expected_version` left unset to auto-resolve): quick notes, observations, one-liners, fleeting thoughts
-- **Publish** (`mark_publish`): when the content is structured enough to deserve its own page — a topic, a person, an ongoing project. Suggest a path like `/topics/<slug>.md` or `/projects/<slug>.md` and ask the user if unsure. Use `expected_version: 0` for new documents; fetch first to get the version when updating existing pages
-- **Journal** (`mark_append /journal.md`): dated session notes, "today I learned" entries. Prefix with a `## YYYY-MM-DD` heading when starting a new day
+- **Append** (`mark_append /notes.md`, `expected_version` left unset to auto-resolve): quick notes, observations, one-liners, fleeting thoughts. If `/notes.md` does not exist yet, create it first with `mark_publish` and `expected_version: 0`, then append on subsequent calls.
+- **Publish** (`mark_publish`): when the content is structured enough to deserve its own page — a topic, a person, an ongoing project. Suggest a path like `/topics/<slug>.md` or `/projects/<slug>.md` and ask the user if unsure. Use `expected_version: 0` for new documents; fetch first to get the version when updating existing pages.
+- **Journal** (`mark_append /journal.md`): dated session notes, "today I learned" entries. Prefix with a `## YYYY-MM-DD` heading when starting a new day. If `/journal.md` is missing, create it with `mark_publish` (`expected_version: 0`) before appending — or just use the `/soul-journal` command which handles this.
 
 Always reference what you saved by path so the user can find it again.
 

@@ -43,8 +43,8 @@ do_reuse() {
   local port="" root=""
   while (( $# )); do
     case "$1" in
-      --port) port="$2"; shift 2 ;;
-      --root) root="$2"; shift 2 ;;
+      --port) [[ -n "${2:-}" ]] || die "--port requires a value"; port="$2"; shift 2 ;;
+      --root) [[ -n "${2:-}" ]] || die "--root requires a value"; root="$2"; shift 2 ;;
       *) die "unknown arg: $1" ;;
     esac
   done
@@ -57,7 +57,7 @@ do_reuse() {
   # Ask the adopted server to reload tokens. It may not be ours, but SIGHUP
   # is the documented mechanism and has no effect on other signal handlers.
   local target_pid
-  target_pid=$(pgrep -f "demarkus-server.*-root +${root}\b" 2>/dev/null | head -1 || true)
+  target_pid=$(pid_of_server_at_root "${root}" 2>/dev/null || true)
   if [[ -n "${target_pid}" ]]; then
     if kill -HUP "${target_pid}" 2>/dev/null; then
       log "sent SIGHUP to adopted server (pid=${target_pid}) to reload tokens"

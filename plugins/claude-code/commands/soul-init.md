@@ -14,7 +14,7 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run this
 
    - If the output is exactly `NO_SERVER`, no demarkus-server is running. Run:
      `bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh" default`
-     Then tell the user: "no existing soul detected — created a fresh install at `~/.demarkus/soul/`."
+     Do not assume the install landed at `~/.demarkus/soul/` — `default` falls back to isolated mode on a different root and port when 6310 is taken. Use step 3 to report the actual mode, soul path, and port from the script's stderr or `~/.demarkus/plugin-memory.conf`.
 
    - If the output starts with `SERVERS`, one or more demarkus-server processes are running. Each following line is `PID PORT ROOT`. Show all of them to the user in a clean list, then ask:
 

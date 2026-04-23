@@ -21,6 +21,7 @@ SCRIPTS_DIR="${HOOK_DIR}/../scripts"
 seed_index() {
   local seed_file="${HOOK_DIR}/../seed/index.md"
   local target="${SOUL_DIR}/index.md"
+  [[ -d "${SOUL_DIR}" && -w "${SOUL_DIR}" ]] || return 0
   [[ -f "${target}"    ]] && return 0
   [[ -f "${seed_file}" ]] || return 0
   cp "${seed_file}" "${target}"
@@ -42,7 +43,7 @@ main() {
       ;;
     reuse)
       # User-managed server; verify it's still up but don't try to start it.
-      if ! pgrep -f "demarkus-server.*-root +${SOUL_DIR}\b" >/dev/null 2>&1; then
+      if [[ -z "$(pid_of_server_at_root "${SOUL_DIR}")" ]]; then
         warn "configured to reuse server at ${SOUL_DIR} but none is running; run /soul-init to reconfigure"
       fi
       ;;

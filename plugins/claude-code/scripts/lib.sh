@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Shared helpers for the demarkus-memory plugin scripts.
 # Source this file; do not execute it directly.
+# shellcheck disable=SC2034  # many constants are consumed only by sourcing scripts (setup.sh, session-start.sh, mcp-wrapper.sh)
+
+# Requires Bash 3.2+ (macOS stock bash). No Bash 4+ features are used.
+if [ -n "${BASH_VERSINFO:-}" ] && [ "${BASH_VERSINFO[0]}" -lt 3 ]; then
+  echo "[demarkus-memory] error: bash 3.2+ required (got ${BASH_VERSION:-unknown})" >&2
+  return 1 2>/dev/null || exit 1
+fi
 
 # Paths — always the same regardless of mode.
 readonly PLUGIN_HOME="${HOME}/.demarkus"
@@ -39,11 +46,16 @@ load_config() {
 save_config() {
   local soul="$1" port="$2" mode="$3"
   mkdir -p "${PLUGIN_HOME}"
+  # printf '%q' produces bash-re-parseable quoted values (Bash 2+) — safer than
+  # ${var@Q} which requires Bash 4.4+ (macOS stock bash is 3.2).
+  local soul_q mode_q
+  soul_q=$(printf '%q' "${soul}")
+  mode_q=$(printf '%q' "${mode}")
   cat > "${PLUGIN_CONFIG}.tmp" <<EOF
 # demarkus-memory plugin config — managed by scripts/setup.sh
-SOUL_DIR=${soul@Q}
+SOUL_DIR=${soul_q}
 PORT=${port}
-MODE=${mode@Q}
+MODE=${mode_q}
 EOF
   mv "${PLUGIN_CONFIG}.tmp" "${PLUGIN_CONFIG}"
 }
@@ -132,6 +144,35 @@ _proc_env() {
   ps eww -p "${pid}" 2>/dev/null | tr ' ' '\n' | awk -F= -v v="${var}" '$1==v {print substr($0, length(v)+2); exit}'
 }
 
+# pid_of_server_at_root ROOT — emits the PID of a demarkus-server whose
+# -root flag or DEMARKUS_ROOT env var equals ROOT (literal match, no regex).
+# Empty output when none match. Handles paths containing regex metacharacters
+# or spaces safely.
+pid_of_server_at_root() {
+  local target="$1"
+  local pids pid args env_root
+  pids=$(pgrep -f demarkus-server 2>/dev/null || true)
+  [[ -z "${pids}" ]] && return 0
+  while read -r pid; do
+    [[ -z "${pid}" ]] && continue
+    args=$(ps -p "${pid}" -o args= 2>/dev/null || true)
+    # Literal substring match across both "-root TARGET" and "-root=TARGET" forms,
+    # at end of args or followed by more args.
+    case "${args}" in
+      *" -root ${target} "* | *" -root ${target}" | \
+      *" -root=${target} "* | *" -root=${target}")
+        echo "${pid}"
+        return 0
+        ;;
+    esac
+    env_root=$(_proc_env "${pid}" DEMARKUS_ROOT)
+    if [[ "${env_root}" == "${target}" ]]; then
+      echo "${pid}"
+      return 0
+    fi
+  done <<< "${pids}"
+}
+
 # find_running_demarkus — emits "PID PORT ROOT" per process, one per line.
 # Empty output when no demarkus-server is running. Args take precedence over
 # env vars; falls back to DEMARKUS_PORT/DEMARKUS_ROOT env when flags are absent.
@@ -144,12 +185,13 @@ find_running_demarkus() {
     [[ -z "${pid}" ]] && continue
     args=$(ps -p "${pid}" -o args= 2>/dev/null || true)
     [[ -z "${args}" ]] && continue
-    port=$(echo "${args}" | grep -oE -- '-port +[0-9]+' | awk '{print $2}')
+    # Accept both "-port 6310" and "-port=6310" (Go flag package supports both).
+    port=$(echo "${args}" | grep -oE -- '-port[= ]+[0-9]+' | sed -E 's/.*[= ]//')
     if [[ -z "${port}" ]]; then
       port=$(_proc_env "${pid}" DEMARKUS_PORT)
     fi
     port="${port:-${DEMARKUS_PROTOCOL_PORT}}"
-    root=$(echo "${args}" | grep -oE -- '-root +[^ ]+' | awk '{print $2}')
+    root=$(echo "${args}" | grep -oE -- '-root[= ]+[^ ]+' | sed -E 's/^-root[= ]+//')
     if [[ -z "${root}" ]]; then
       root=$(_proc_env "${pid}" DEMARKUS_ROOT)
     fi
@@ -158,14 +200,28 @@ find_running_demarkus() {
   done <<< "${pids}"
 }
 
-# port_is_free PORT — true if nothing appears to own UDP PORT. Best-effort
-# (lsof is most reliable; falls back to permissive true if lsof is missing).
+# port_is_free PORT — true if nothing appears to own UDP PORT. Uses lsof when
+# available (macOS + many Linux), falls back to ss (Linux default), and warns
+# once before degrading to permissive when neither is installed. If the check
+# is wrong, the caller's spawn will fail loudly via the post-spawn PID probe in
+# ensure_managed_server.
 port_is_free() {
   local port="$1"
   if command -v lsof >/dev/null 2>&1; then
     if lsof -iUDP:"${port}" -nP 2>/dev/null | grep -q 'UDP'; then
       return 1
     fi
+    return 0
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    if ss -lunH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}\$"; then
+      return 1
+    fi
+    return 0
+  fi
+  if [[ -z "${_PORT_CHECK_WARNED:-}" ]]; then
+    warn "no lsof or ss available; port availability checks are best-effort (server bind will fail loudly if the port is actually taken)"
+    _PORT_CHECK_WARNED=1
   fi
   return 0
 }
@@ -229,6 +285,11 @@ ensure_managed_server() {
   local pid_file="${soul_dir}/.pid"
   local log_file="${soul_dir}/.log"
 
+  # Note: the read+kill below is not atomic (classic TOCTOU), but the PID-reuse
+  # window is microseconds and the worst-case failure is "plugin thinks a stale
+  # PID is alive, skips spawn, MCP connections fail, user reruns /soul-init" —
+  # not data loss. flock would add a macOS/Linux portability burden that isn't
+  # worth closing this theoretical race.
   if [[ -f "${pid_file}" ]] && kill -0 "$(cat "${pid_file}")" 2>/dev/null; then
     return 0
   fi
@@ -245,12 +306,24 @@ ensure_managed_server() {
   echo "${pid}" > "${pid_file}"
   disown || true
 
-  sleep 0.3
-  if ! kill -0 "${pid}" 2>/dev/null; then
-    rm -f "${pid_file}"
-    local tail_info=""
-    [[ -f "${log_file}" ]] && tail_info=$'\n'"recent log:"$'\n'"$(tail -5 "${log_file}")"
-    die "demarkus-server failed to start (port ${port} may be in use; re-run /soul-init)${tail_info}"
-  fi
+  # Bounded poll: fail fast if the process died (bind or startup error),
+  # succeed once the port is observed as bound, or accept once we reach the
+  # attempt cap with the process still alive (permissive when no lsof/ss is
+  # available to probe the port).
+  local attempts=0
+  local max_attempts=20  # ~2s at 100ms intervals
+  while (( attempts < max_attempts )); do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      rm -f "${pid_file}"
+      local tail_info=""
+      [[ -f "${log_file}" ]] && tail_info=$'\n'"recent log:"$'\n'"$(tail -5 "${log_file}")"
+      die "demarkus-server failed to start (port ${port} may be in use; re-run /soul-init)${tail_info}"
+    fi
+    if ! port_is_free "${port}"; then
+      break
+    fi
+    sleep 0.1
+    attempts=$((attempts + 1))
+  done
   log "spawned demarkus-server (pid=${pid}, port=${port}, root=${soul_dir})"
 }
