@@ -205,6 +205,23 @@ func TestParseRequestLineExceedsLimit(t *testing.T) {
 	}
 }
 
+func TestParseRequestRejectsTouchingFenceEmptyFrontmatter(t *testing.T) {
+	// `---\n---\n` with zero bytes between the fences is intentionally rejected
+	// (the canonical empty form is `---\n\n---\n`). This matches response.go's
+	// parser — both sides of the wire agree that some content, even just a
+	// newline, must appear between the delimiters. Pin it so future parser
+	// tweaks can't silently widen the accepted set.
+	input := "FETCH /index.md\n---\n---\n"
+
+	_, err := ParseRequest(strings.NewReader(input))
+	if err == nil {
+		t.Fatal("expected error for touching-fence empty frontmatter, got nil")
+	}
+	if !strings.Contains(err.Error(), "unclosed frontmatter") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
 func TestParseRequestFrontmatterCommentOnly(t *testing.T) {
 	// Valid YAML with no key-value pairs (comment only) must still yield a
 	// non-nil Metadata map so callers can safely write to it.
