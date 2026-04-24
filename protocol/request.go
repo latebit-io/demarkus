@@ -27,13 +27,18 @@ const MaxRequestFrontmatterLength = 65536 // 64KB
 // MaxBodyLength is the maximum allowed size for a document body (1 MiB).
 const MaxBodyLength = 1 * 1024 * 1024
 
-// Frontmatter delimiters as they appear on the wire.
+// Frontmatter delimiters as they appear on the wire. Parser and serializer
+// share these so the two sides of the wire format cannot drift.
 const (
-	// frontmatterOpen marks the start of a YAML frontmatter block.
-	frontmatterOpen = "---\n"
-	// frontmatterClose marks the end of a frontmatter block when a body follows
-	// (leading newline from prior content + "---\n").
-	frontmatterClose = "\n---\n"
+	// frontmatterFence is the bare fence line that opens and closes a
+	// YAML frontmatter block on the wire.
+	frontmatterFence = "---\n"
+	// frontmatterOpen is the opening delimiter at the start of a request
+	// payload (no leading newline).
+	frontmatterOpen = frontmatterFence
+	// frontmatterClose is the closing delimiter with a body following
+	// (leading newline from prior content + fence).
+	frontmatterClose = "\n" + frontmatterFence
 	// frontmatterTrim matches a closing "---" at end-of-input, no trailing newline.
 	frontmatterTrim = "\n---"
 )
@@ -210,9 +215,9 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("encoding request metadata: %w", err)
 		}
-		buf.WriteString("---\n")
+		buf.WriteString(frontmatterFence)
 		buf.Write(yamlBytes)
-		buf.WriteString("---\n")
+		buf.WriteString(frontmatterFence)
 	}
 
 	if req.Body != "" {
