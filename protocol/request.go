@@ -38,6 +38,13 @@ const (
 	frontmatterTrim = "\n---"
 )
 
+// requestWireOverhead is generous slack allowed above the frontmatter and body
+// limits when reading the request payload, so we get a clean
+// "payload exceeds limit" error rather than truncating mid-read. The real
+// budgets are MaxRequestFrontmatterLength and MaxBodyLength; this covers
+// delimiter bytes plus any trailing bytes the client may send.
+const requestWireOverhead = 64
+
 // ParseRequest reads a request from r.
 // Format: "VERB /path\n" followed by optional YAML frontmatter and body.
 // The body is read as raw bytes to preserve content verbatim.
@@ -115,7 +122,7 @@ func parseRequestLine(br *bufio.Reader) (verb, path string, err error) {
 // readBoundedPayload reads everything after the request line, rejecting payloads
 // that would exceed the combined frontmatter + body + delimiter budget.
 func readBoundedPayload(br *bufio.Reader) ([]byte, error) {
-	limit := int64(MaxRequestFrontmatterLength + MaxBodyLength + 64) // 64 bytes for delimiters
+	limit := int64(MaxRequestFrontmatterLength + MaxBodyLength + requestWireOverhead)
 	rest, err := io.ReadAll(io.LimitReader(br, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading request body: %w", err)
