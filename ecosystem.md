@@ -12,7 +12,7 @@ Software that implements or integrates with the Mark Protocol. First-party tooli
 
 ### Caztor
 
-Cross-platform Java GUI browser for Gemini, Spartan, Gopher, `nex`, and **Demarkus**. By Kevin Boone.
+Cross-platform Java GUI browser for Gemini, Spartan, Gopher, Nex, and **Demarkus**. By Kevin Boone.
 
 - Project page: [kevinboone/caztor](https://github.com/kevinboone/caztor)
 - Preliminary, view-only Demarkus support (FETCH latest version)
