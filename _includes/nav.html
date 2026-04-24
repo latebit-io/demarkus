@@ -35,6 +35,11 @@
         >Security</a
     >
     <a
+        class="{% if page.url == '/ecosystem/' %}is-active{% endif %}"
+        href="{{ '/ecosystem/' | relative_url }}"
+        >Ecosystem</a
+    >
+    <a
         class="{% if page.url == '/about/' %}is-active{% endif %}"
         href="{{ '/about/' | relative_url }}"
         >About</a

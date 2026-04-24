@@ -44,6 +44,7 @@ Demarkus implements the **Mark Protocol** — a minimal protocol for serving ver
 
 - [About the Mark Protocol](/about/)
 - [Security Model](/security/) — attack surface, hardening, threat model
+- [Ecosystem](/ecosystem/) — browsers, plugins, and tools that speak Demarkus
 - [Soul — the project's live AI memory](/soul/)
 - [Public Hub](https://github.com/latebit-io/demarkus-hub) — discovery index at `mark://hub.demarkus.io`
 - [GitHub](https://github.com/latebit-io/demarkus)
