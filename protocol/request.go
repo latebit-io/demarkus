@@ -94,12 +94,9 @@ func ParseRequest(r io.Reader) (Request, error) {
 
 // parseRequestLine reads and validates the request line ("VERB /path\n").
 func parseRequestLine(br *bufio.Reader) (verb, path string, err error) {
-	line, err := readLine(br)
+	line, err := readLineLimited(br, MaxRequestLineLength)
 	if err != nil {
 		return "", "", fmt.Errorf("reading request: %w", err)
-	}
-	if len(line) > MaxRequestLineLength {
-		return "", "", fmt.Errorf("request line exceeds limit: %d > %d bytes", len(line), MaxRequestLineLength)
 	}
 
 	verb, path, ok := strings.Cut(line, " ")
@@ -184,13 +181,17 @@ func decodeFrontmatter(fm []byte) (map[string]string, error) {
 	return meta, nil
 }
 
-// readLine reads a single newline-terminated line from a bufio.Reader,
-// returning the line without the trailing newline. Returns io.EOF if no
-// data is available.
-func readLine(br *bufio.Reader) (string, error) {
+// readLineLimited reads a single newline-terminated line from a bufio.Reader,
+// rejecting any line that would exceed maxBytes before the full line is
+// accumulated. Returns the line without the trailing newline. Returns io.EOF
+// if no data is available.
+func readLineLimited(br *bufio.Reader, maxBytes int) (string, error) {
 	var line []byte
 	for {
 		fragment, isPrefix, err := br.ReadLine()
+		if len(line)+len(fragment) > maxBytes {
+			return "", fmt.Errorf("request line exceeds limit: %d > %d bytes", len(line)+len(fragment), maxBytes)
+		}
 		line = append(line, fragment...)
 		if err != nil {
 			if len(line) > 0 {

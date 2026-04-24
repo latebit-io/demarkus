@@ -190,6 +190,21 @@ func TestParseRequestUnclosedFrontmatter(t *testing.T) {
 	}
 }
 
+func TestParseRequestLineExceedsLimit(t *testing.T) {
+	// A pathological long "line" (no newline) should be rejected by the
+	// bounded reader without accumulating all the input in memory.
+	// We send MaxRequestLineLength+1 bytes of non-newline data.
+	input := strings.Repeat("A", MaxRequestLineLength+1)
+
+	_, err := ParseRequest(strings.NewReader(input))
+	if err == nil {
+		t.Fatal("expected error for oversized request line, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds limit") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
 func TestParseRequestFrontmatterCommentOnly(t *testing.T) {
 	// Valid YAML with no key-value pairs (comment only) must still yield a
 	// non-nil Metadata map so callers can safely write to it.
