@@ -1,0 +1,23 @@
+{
+  "name": "demarkus-memory",
+  "version": "0.1.0",
+  "description": "Local, versioned memory for Claude Code via demarkus. Zero-config install: spawns a local demarkus-server, auto-generates a token, wires MCP tools for fetch/publish/append/graph.",
+  "author": {
+    "name": "latebit",
+    "url": "https://github.com/latebit-io"
+  },
+  "homepage": "https://github.com/latebit-io/demarkus",
+  "license": "MIT",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
