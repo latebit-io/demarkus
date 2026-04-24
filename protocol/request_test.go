@@ -190,6 +190,23 @@ func TestParseRequestUnclosedFrontmatter(t *testing.T) {
 	}
 }
 
+func TestParseRequestFrontmatterNoTrailingNewline(t *testing.T) {
+	// Frontmatter closed with "---" at end-of-input (no trailing newline, no body).
+	// This path hits the frontmatterTrim branch in splitFrontmatterAndBody.
+	input := "FETCH /index.md\n---\nkey: value\n---"
+
+	req, err := ParseRequest(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Metadata["key"] != "value" {
+		t.Errorf("metadata: got %q, want %q", req.Metadata["key"], "value")
+	}
+	if req.Body != "" {
+		t.Errorf("body: got %q, want empty", req.Body)
+	}
+}
+
 func TestParseRequestFrontmatterTooLarge(t *testing.T) {
 	// Build frontmatter that exceeds MaxRequestFrontmatterLength.
 	// Each line is "key: value\n" — repeat enough to exceed 64KB.

@@ -27,107 +27,144 @@ const MaxRequestFrontmatterLength = 65536 // 64KB
 // MaxBodyLength is the maximum allowed size for a document body (1 MiB).
 const MaxBodyLength = 1 * 1024 * 1024
 
+// Frontmatter delimiters as they appear on the wire.
+const (
+	// frontmatterOpen marks the start of a YAML frontmatter block.
+	frontmatterOpen = "---\n"
+	// frontmatterClose marks the end of a frontmatter block when a body follows
+	// (leading newline from prior content + "---\n").
+	frontmatterClose = "\n---\n"
+	// frontmatterTrim matches a closing "---" at end-of-input, no trailing newline.
+	frontmatterTrim = "\n---"
+)
+
 // ParseRequest reads a request from r.
 // Format: "VERB /path\n" followed by optional YAML frontmatter and body.
 // The body is read as raw bytes to preserve content verbatim.
 func ParseRequest(r io.Reader) (Request, error) {
 	br := bufio.NewReader(r)
 
-	// Read the request line.
-	line, err := readLine(br)
+	verb, path, err := parseRequestLine(br)
 	if err != nil {
-		return Request{}, fmt.Errorf("reading request: %w", err)
-	}
-	if len(line) > MaxRequestLineLength {
-		return Request{}, fmt.Errorf("request line exceeds limit: %d > %d bytes", len(line), MaxRequestLineLength)
-	}
-
-	verb, path, ok := strings.Cut(line, " ")
-	if !ok {
-		return Request{}, fmt.Errorf("malformed request: %q", line)
-	}
-
-	// Validate verb is non-empty and is a known verb
-	if verb == "" {
-		return Request{}, fmt.Errorf("empty verb")
-	}
-	if !IsValidVerb(verb) {
-		return Request{}, fmt.Errorf("unknown verb: %q", verb)
-	}
-
-	// Validate path is non-empty and starts with /
-	if path == "" || !strings.HasPrefix(path, "/") {
-		return Request{}, fmt.Errorf("invalid path: %q", path)
-	}
-	// Reject null bytes and control characters in paths.
-	if containsControlChars(path) {
-		return Request{}, fmt.Errorf("invalid path: contains control characters")
+		return Request{}, err
 	}
 
 	req := Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
-	// Read remaining bytes with a size limit to prevent unbounded allocation.
-	// The limit accounts for frontmatter overhead on top of the body.
-	maxRequest := int64(MaxRequestFrontmatterLength + MaxBodyLength + 64) // 64 bytes for delimiters
-	rest, err := io.ReadAll(io.LimitReader(br, maxRequest+1))
+	rest, err := readBoundedPayload(br)
 	if err != nil {
-		return Request{}, fmt.Errorf("reading request body: %w", err)
-	}
-	if int64(len(rest)) > maxRequest {
-		return Request{}, fmt.Errorf("request payload exceeds limit: %d bytes", len(rest))
+		return Request{}, err
 	}
 	if len(rest) == 0 {
 		return req, nil
 	}
 
-	// Check for frontmatter opening delimiter.
-	if !bytes.HasPrefix(rest, []byte("---\n")) {
-		if len(rest) > MaxBodyLength {
-			return Request{}, fmt.Errorf("body exceeds limit: %d > %d bytes", len(rest), MaxBodyLength)
-		}
-		req.Body = string(rest)
-		return req, nil
+	fm, body, err := splitFrontmatterAndBody(rest)
+	if err != nil {
+		return Request{}, err
 	}
 
-	// Strip the opening --- and parse frontmatter until closing ---.
-	rest = rest[4:] // skip "---\n"
-	closeIdx := bytes.Index(rest, []byte("\n---\n"))
-	if closeIdx == -1 {
-		// Check for closing --- at end of input (no trailing newline after ---).
-		if bytes.HasSuffix(rest, []byte("\n---")) {
-			closeIdx = len(rest) - 3
-		} else {
-			return Request{}, fmt.Errorf("malformed request: unclosed frontmatter")
+	if len(fm) > 0 {
+		meta, err := decodeFrontmatter(fm)
+		if err != nil {
+			return Request{}, err
 		}
+		req.Metadata = meta
 	}
 
-	fmBytes := rest[:closeIdx]
-	if len(fmBytes) > MaxRequestFrontmatterLength {
-		return Request{}, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", len(fmBytes), MaxRequestFrontmatterLength)
+	if len(body) > MaxBodyLength {
+		return Request{}, fmt.Errorf("body exceeds limit: %d > %d bytes", len(body), MaxBodyLength)
 	}
-
-	if len(fmBytes) > 0 {
-		var raw map[string]string
-		if err := yaml.Unmarshal(fmBytes, &raw); err != nil {
-			return Request{}, fmt.Errorf("parsing request metadata: %w", err)
-		}
-		req.Metadata = raw
-	}
-
-	// Body is everything after the closing "---\n".
-	afterClose := rest[closeIdx:]
-	if bytes.HasPrefix(afterClose, []byte("\n---\n")) {
-		body := afterClose[5:] // skip "\n---\n"
-		if len(body) > MaxBodyLength {
-			return Request{}, fmt.Errorf("body exceeds limit: %d > %d bytes", len(body), MaxBodyLength)
-		}
-		req.Body = string(body)
-	} else {
-		// Closing --- was at end of input with no body.
-		req.Body = ""
-	}
+	req.Body = string(body)
 
 	return req, nil
+}
+
+// parseRequestLine reads and validates the request line ("VERB /path\n").
+func parseRequestLine(br *bufio.Reader) (verb, path string, err error) {
+	line, err := readLine(br)
+	if err != nil {
+		return "", "", fmt.Errorf("reading request: %w", err)
+	}
+	if len(line) > MaxRequestLineLength {
+		return "", "", fmt.Errorf("request line exceeds limit: %d > %d bytes", len(line), MaxRequestLineLength)
+	}
+
+	verb, path, ok := strings.Cut(line, " ")
+	if !ok {
+		return "", "", fmt.Errorf("malformed request: %q", line)
+	}
+
+	if verb == "" {
+		return "", "", fmt.Errorf("empty verb")
+	}
+	if !IsValidVerb(verb) {
+		return "", "", fmt.Errorf("unknown verb: %q", verb)
+	}
+
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return "", "", fmt.Errorf("invalid path: %q", path)
+	}
+	if containsControlChars(path) {
+		return "", "", fmt.Errorf("invalid path: contains control characters")
+	}
+
+	return verb, path, nil
+}
+
+// readBoundedPayload reads everything after the request line, rejecting payloads
+// that would exceed the combined frontmatter + body + delimiter budget.
+func readBoundedPayload(br *bufio.Reader) ([]byte, error) {
+	limit := int64(MaxRequestFrontmatterLength + MaxBodyLength + 64) // 64 bytes for delimiters
+	rest, err := io.ReadAll(io.LimitReader(br, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading request body: %w", err)
+	}
+	if int64(len(rest)) > limit {
+		return nil, fmt.Errorf("request payload exceeds limit: %d bytes", len(rest))
+	}
+	return rest, nil
+}
+
+// splitFrontmatterAndBody separates a request payload into its frontmatter and
+// body components. When no frontmatter is present the whole payload is the body.
+// The frontmatter length is checked against MaxRequestFrontmatterLength here;
+// the body length is checked by the caller against MaxBodyLength.
+func splitFrontmatterAndBody(data []byte) (fm, body []byte, err error) {
+	if !bytes.HasPrefix(data, []byte(frontmatterOpen)) {
+		return nil, data, nil
+	}
+
+	inner := data[len(frontmatterOpen):]
+
+	// Closing form 1: "\n---\n" with possibly more bytes after (the body).
+	// Closing form 2: "\n---" at end of input, no body.
+	var fmEnd, bodyStart int
+	if idx := bytes.Index(inner, []byte(frontmatterClose)); idx >= 0 {
+		fmEnd = idx
+		bodyStart = idx + len(frontmatterClose)
+	} else if bytes.HasSuffix(inner, []byte(frontmatterTrim)) {
+		fmEnd = len(inner) - len(frontmatterTrim)
+		bodyStart = len(inner)
+	} else {
+		return nil, nil, fmt.Errorf("malformed request: unclosed frontmatter")
+	}
+
+	fm = inner[:fmEnd]
+	if len(fm) > MaxRequestFrontmatterLength {
+		return nil, nil, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", len(fm), MaxRequestFrontmatterLength)
+	}
+	body = inner[bodyStart:]
+	return fm, body, nil
+}
+
+// decodeFrontmatter parses a YAML frontmatter block into a string-to-string map.
+func decodeFrontmatter(fm []byte) (map[string]string, error) {
+	var meta map[string]string
+	if err := yaml.Unmarshal(fm, &meta); err != nil {
+		return nil, fmt.Errorf("parsing request metadata: %w", err)
+	}
+	return meta, nil
 }
 
 // readLine reads a single newline-terminated line from a bufio.Reader,
