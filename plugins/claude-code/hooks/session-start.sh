@@ -32,7 +32,7 @@ main() {
   if ! load_config; then
     log "no plugin config — running default setup"
     "${SCRIPTS_DIR}/setup.sh" default
-    load_config
+    load_config || die "setup.sh completed but ${PLUGIN_CONFIG} is missing or invalid"
   fi
 
   ensure_binaries
