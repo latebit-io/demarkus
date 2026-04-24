@@ -107,29 +107,36 @@ ensure_binaries() {
   local plat
   plat=$(detect_platform)
 
-  local tmp
-  tmp=$(mktemp -d)
-  trap 'rm -rf "${tmp}"' RETURN
+  # Download + verify + extract + install happens inside a subshell so the
+  # EXIT trap cleans up the tmpdir deterministically on any failure path
+  # (curl/tar/sha256 failure, die, etc.). RETURN traps can't be used here:
+  # bash's default RETURN traps persist globally and would fire for every
+  # subsequent function return with `tmp` out of scope.
+  (
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf "${tmp}"' EXIT
 
-  log "downloading demarkus binaries (server v${SERVER_VERSION}, client v${CLIENT_VERSION}, ${plat})"
+    log "downloading demarkus binaries (server v${SERVER_VERSION}, client v${CLIENT_VERSION}, ${plat})"
 
-  local server_archive="demarkus-server_${SERVER_VERSION}_${plat}.tar.gz"
-  local server_base="https://github.com/latebit-io/demarkus/releases/download/server%2Fv${SERVER_VERSION}"
-  curl -fsSL -o "${tmp}/${server_archive}"    "${server_base}/${server_archive}"              || die "download ${server_archive}"
-  curl -fsSL -o "${tmp}/server_checksums.txt" "${server_base}/demarkus-server_checksums.txt"  || die "download server checksums"
-  (cd "${tmp}" && sha256_verify server_checksums.txt "${server_archive}")
-  tar -xzf "${tmp}/${server_archive}" -C "${tmp}"
+    local server_archive="demarkus-server_${SERVER_VERSION}_${plat}.tar.gz"
+    local server_base="https://github.com/latebit-io/demarkus/releases/download/server%2Fv${SERVER_VERSION}"
+    curl -fsSL -o "${tmp}/${server_archive}"    "${server_base}/${server_archive}"              || die "download ${server_archive}"
+    curl -fsSL -o "${tmp}/server_checksums.txt" "${server_base}/demarkus-server_checksums.txt"  || die "download server checksums"
+    (cd "${tmp}" && sha256_verify server_checksums.txt "${server_archive}")
+    tar -xzf "${tmp}/${server_archive}" -C "${tmp}"
 
-  local mcp_archive="demarkus-mcp_${CLIENT_VERSION}_${plat}.tar.gz"
-  local client_base="https://github.com/latebit-io/demarkus/releases/download/client%2Fv${CLIENT_VERSION}"
-  curl -fsSL -o "${tmp}/${mcp_archive}"       "${client_base}/${mcp_archive}"                 || die "download ${mcp_archive}"
-  curl -fsSL -o "${tmp}/client_checksums.txt" "${client_base}/demarkus-client_checksums.txt"  || die "download client checksums"
-  (cd "${tmp}" && sha256_verify client_checksums.txt "${mcp_archive}")
-  tar -xzf "${tmp}/${mcp_archive}" -C "${tmp}"
+    local mcp_archive="demarkus-mcp_${CLIENT_VERSION}_${plat}.tar.gz"
+    local client_base="https://github.com/latebit-io/demarkus/releases/download/client%2Fv${CLIENT_VERSION}"
+    curl -fsSL -o "${tmp}/${mcp_archive}"       "${client_base}/${mcp_archive}"                 || die "download ${mcp_archive}"
+    curl -fsSL -o "${tmp}/client_checksums.txt" "${client_base}/demarkus-client_checksums.txt"  || die "download client checksums"
+    (cd "${tmp}" && sha256_verify client_checksums.txt "${mcp_archive}")
+    tar -xzf "${tmp}/${mcp_archive}" -C "${tmp}"
 
-  install -m 0755 "${tmp}/demarkus-server" "${PLUGIN_BIN_DIR}/demarkus-server"
-  install -m 0755 "${tmp}/demarkus-token"  "${PLUGIN_BIN_DIR}/demarkus-token"
-  install -m 0755 "${tmp}/demarkus-mcp"    "${PLUGIN_BIN_DIR}/demarkus-mcp"
+    install -m 0755 "${tmp}/demarkus-server" "${PLUGIN_BIN_DIR}/demarkus-server"
+    install -m 0755 "${tmp}/demarkus-token"  "${PLUGIN_BIN_DIR}/demarkus-token"
+    install -m 0755 "${tmp}/demarkus-mcp"    "${PLUGIN_BIN_DIR}/demarkus-mcp"
+  )
   log "binaries installed to ${PLUGIN_BIN_DIR}"
 }
 
