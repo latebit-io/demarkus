@@ -24,11 +24,12 @@ Because the system is small and open, its easy to control.
 
 ## Start Here
 
-- [Documentation Site](docs/index.md)
+- [Documentation Site](https://latebit-io.github.io/demarkus/)
 
 ## Protocol
 
-- [Protocol Specification](spec.md)
+- [Protocol Specification](SPEC.md)
+- [Design Rationale](DESIGN.md)
 
 ## Highlights
 
@@ -37,4 +38,4 @@ Because the system is small and open, its easy to control.
 - **Immutable version history**
 - **Agent + human collaboration**
 
-If you're new, begin with the [Documentation Site](docs/index.md).
+If you're new, begin with the [Documentation Site](https://latebit-io.github.io/demarkus/).

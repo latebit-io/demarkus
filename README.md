@@ -41,6 +41,7 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 |--------|---------|
 | `demarkus-server` | QUIC server with versioned document store, capability-based auth |
 | `demarkus-token` | Generate and manage write tokens |
+| `demarkus-publish` | Direct-to-store writer for read-only server installs (chroot/RO mode) |
 | `demarkus` | CLI tool for all protocol operations (fetch, publish, append, graph, etc.) |
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
@@ -71,13 +72,20 @@ modified: 2026-01-15T10:30:00Z
 
 **Agent Memory** — Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries.
 
-**[OpenClaw](https://demarkus.io/install/openclaw/)** — Install the [demarkus skill](https://clawhub.ai/ontehfritz/demarkus) from ClawHub to give your OpenClaw agent persistent memory instantly.
-
 **Personal Knowledge Base** — Local server, versioned documents, TUI browser. Everything from first write.
 
 **Public Documentation** — Deploy on a VPS, share links, gate writes with tokens.
 
 **Demarkus Hubs** — Link to content on other servers, building a federated directory of knowledge. Hubs can link to hubs.
+
+## Ecosystem
+
+- [Caztor](https://github.com/kevinboone/caztor) — cross-platform Java GUI browser with preliminary Demarkus support
+- [Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus) — publish and browse from Obsidian
+- [Claude Code plugin](plugins/claude-code/) — zero-config local memory for Claude Code
+- [OpenClaw skill](https://clawhub.ai/ontehfritz/demarkus) — ClawHub skill for OpenClaw agents (see [install guide](https://demarkus.io/install/openclaw/))
+
+See [demarkus.io/ecosystem](https://demarkus.io/ecosystem/) for the full list.
 
 ## Build from Source
 
@@ -87,7 +95,7 @@ cd demarkus
 make all   # or: make server / make client
 ```
 
-Requires Go 1.22+. Binaries land in `server/bin/` and `client/bin/`.
+Requires Go 1.26+. Binaries land in `server/bin/` and `client/bin/`.
 
 ## Documentation
 
