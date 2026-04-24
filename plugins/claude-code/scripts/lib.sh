@@ -109,7 +109,12 @@ ensure_binaries() {
 
   local tmp
   tmp=$(mktemp -d)
-  trap 'rm -rf "${tmp}"' RETURN
+  # NOTE: We deliberately don't install a RETURN trap here. Bash RETURN traps
+  # persist globally by default (without the functrace option) and fire for
+  # every subsequent function return in the calling chain, which would hit
+  # `tmp: unbound variable` under set -u once the local goes out of scope.
+  # We clean up inline after install; if `die` fires partway through, the
+  # OS cleans its temp dir eventually — no data or security risk.
 
   log "downloading demarkus binaries (server v${SERVER_VERSION}, client v${CLIENT_VERSION}, ${plat})"
 
@@ -130,6 +135,8 @@ ensure_binaries() {
   install -m 0755 "${tmp}/demarkus-server" "${PLUGIN_BIN_DIR}/demarkus-server"
   install -m 0755 "${tmp}/demarkus-token"  "${PLUGIN_BIN_DIR}/demarkus-token"
   install -m 0755 "${tmp}/demarkus-mcp"    "${PLUGIN_BIN_DIR}/demarkus-mcp"
+
+  rm -rf "${tmp}"
   log "binaries installed to ${PLUGIN_BIN_DIR}"
 }
 
