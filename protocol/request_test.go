@@ -190,6 +190,74 @@ func TestParseRequestUnclosedFrontmatter(t *testing.T) {
 	}
 }
 
+func TestParseRequestLineExceedsLimit(t *testing.T) {
+	// A pathological long "line" (no newline) should be rejected by the
+	// bounded reader without accumulating all the input in memory.
+	// We send MaxRequestLineLength+1 bytes of non-newline data.
+	input := strings.Repeat("A", MaxRequestLineLength+1)
+
+	_, err := ParseRequest(strings.NewReader(input))
+	if err == nil {
+		t.Fatal("expected error for oversized request line, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds limit") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseRequestRejectsTouchingFenceEmptyFrontmatter(t *testing.T) {
+	// `---\n---\n` with zero bytes between the fences is intentionally rejected
+	// (the canonical empty form is `---\n\n---\n`). This matches response.go's
+	// parser — both sides of the wire agree that some content, even just a
+	// newline, must appear between the delimiters. Pin it so future parser
+	// tweaks can't silently widen the accepted set.
+	input := "FETCH /index.md\n---\n---\n"
+
+	_, err := ParseRequest(strings.NewReader(input))
+	if err == nil {
+		t.Fatal("expected error for touching-fence empty frontmatter, got nil")
+	}
+	if !strings.Contains(err.Error(), "unclosed frontmatter") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseRequestFrontmatterCommentOnly(t *testing.T) {
+	// Valid YAML with no key-value pairs (comment only) must still yield a
+	// non-nil Metadata map so callers can safely write to it.
+	input := "FETCH /index.md\n---\n# just a comment\n---\n"
+
+	req, err := ParseRequest(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Metadata == nil {
+		t.Fatal("Metadata is nil; expected a non-nil empty map")
+	}
+	if len(req.Metadata) != 0 {
+		t.Errorf("Metadata: expected empty, got %v", req.Metadata)
+	}
+	// Writing to the returned map must not panic.
+	req.Metadata["added-by-caller"] = "ok"
+}
+
+func TestParseRequestFrontmatterNoTrailingNewline(t *testing.T) {
+	// Frontmatter closed with "---" at end-of-input (no trailing newline, no body).
+	// This path hits the frontmatterTrim branch in splitFrontmatterAndBody.
+	input := "FETCH /index.md\n---\nkey: value\n---"
+
+	req, err := ParseRequest(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Metadata["key"] != "value" {
+		t.Errorf("metadata: got %q, want %q", req.Metadata["key"], "value")
+	}
+	if req.Body != "" {
+		t.Errorf("body: got %q, want empty", req.Body)
+	}
+}
+
 func TestParseRequestFrontmatterTooLarge(t *testing.T) {
 	// Build frontmatter that exceeds MaxRequestFrontmatterLength.
 	// Each line is "key: value\n" — repeat enough to exceed 64KB.
