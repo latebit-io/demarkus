@@ -190,6 +190,25 @@ func TestParseRequestUnclosedFrontmatter(t *testing.T) {
 	}
 }
 
+func TestParseRequestFrontmatterCommentOnly(t *testing.T) {
+	// Valid YAML with no key-value pairs (comment only) must still yield a
+	// non-nil Metadata map so callers can safely write to it.
+	input := "FETCH /index.md\n---\n# just a comment\n---\n"
+
+	req, err := ParseRequest(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Metadata == nil {
+		t.Fatal("Metadata is nil; expected a non-nil empty map")
+	}
+	if len(req.Metadata) != 0 {
+		t.Errorf("Metadata: expected empty, got %v", req.Metadata)
+	}
+	// Writing to the returned map must not panic.
+	req.Metadata["added-by-caller"] = "ok"
+}
+
 func TestParseRequestFrontmatterNoTrailingNewline(t *testing.T) {
 	// Frontmatter closed with "---" at end-of-input (no trailing newline, no body).
 	// This path hits the frontmatterTrim branch in splitFrontmatterAndBody.

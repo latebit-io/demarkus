@@ -159,10 +159,15 @@ func splitFrontmatterAndBody(data []byte) (fm, body []byte, err error) {
 }
 
 // decodeFrontmatter parses a YAML frontmatter block into a string-to-string map.
+// Always returns a non-nil map on success; YAML with no key-value pairs (e.g. a
+// comment-only block) yields an empty map rather than nil.
 func decodeFrontmatter(fm []byte) (map[string]string, error) {
 	var meta map[string]string
 	if err := yaml.Unmarshal(fm, &meta); err != nil {
 		return nil, fmt.Errorf("parsing request metadata: %w", err)
+	}
+	if meta == nil {
+		meta = make(map[string]string)
 	}
 	return meta, nil
 }
