@@ -20,7 +20,6 @@ reviews:
   labeling_instructions: []
   path_filters:
     - "!**/bin/**"
-    - "!plugins/obsidian/node_modules/**"
   path_instructions:
     - path: "protocol/**"
       instructions: >
@@ -123,12 +122,6 @@ reviews:
           Fine for infrequent calls, but flag if concurrent/periodic saves
           are introduced
         - Token resolution: consistent across CLI, TUI, MCP
-
-    - path: "plugins/obsidian/**"
-      instructions: >
-        TypeScript Obsidian plugin. Shells out to the demarkus CLI binary.
-        Token passed via DEMARKUS_AUTH env var, never CLI args. Uses -no-cache
-        for fresh fetches. Built with tsc + esbuild, NOT bun.
 
   auto_review:
     enabled: true

@@ -930,7 +930,7 @@ cached_at = "2025-02-14T10:35:00Z"
 
 ### Anyone Can Run a Server
 
-- Reference implementation in Go (GPL/MIT licensed)
+- Reference implementation in Go (AGPL-3.0-only)
 - Protocol specification is public domain (CC0)
 - No central authority or registry
 - No commercial control
@@ -1364,7 +1364,7 @@ demarkus-token generate -paths "/*" -ops write -tokens tokens.toml
 ### Licensing Strategy
 
 **Protocol Specification**: CC0 (public domain)
-**Reference Implementation**: GPL v3 or MIT (TBD)
+**Reference Implementation**: AGPL-3.0-only
 **Explicitly prohibit**: Commercial control or proprietary extensions to protocol
 
 ### Governance

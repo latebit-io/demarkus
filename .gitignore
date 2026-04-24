@@ -48,8 +48,11 @@ tools/demarkus-token
 tokens.toml
 bin
 
-# MCP config (contains auth tokens)
+# MCP config (may contain auth tokens)
 .mcp.json
+# The Claude Code plugin ships its own .mcp.json (no tokens — just points at the
+# plugin's wrapper script). It must be tracked for the plugin to work.
+!plugins/claude-code/.mcp.json
 .clawhub
 node_modules/
 
