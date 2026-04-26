@@ -47,3 +47,9 @@ client
 .clawhub
 plugins
 server/
+
+# Claude Code project state (contains memory tokens)
+.project/
+
+# Top-level bin/ from main branch checkout
+/bin/

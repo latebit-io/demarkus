@@ -40,6 +40,11 @@
         >Ecosystem</a
     >
     <a
+        class="{% if page.url contains '/blog/' %}is-active{% endif %}"
+        href="{{ '/blog/' | relative_url }}"
+        >Blog</a
+    >
+    <a
         class="{% if page.url == '/about/' %}is-active{% endif %}"
         href="{{ '/about/' | relative_url }}"
         >About</a
