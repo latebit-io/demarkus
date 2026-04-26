@@ -7,15 +7,15 @@ permalink: /blog/creating-an-automated-knowledge-universe/
 
 # Creating an automated knowledge universe
 
-Humans are bad at documentation. Not some of us, most of us. Maybe 1% of engineers consistently write and maintain accurate docs. The rest write it once, let it rot, and hope nobody asks.
+Humans are bad at documentation. Really bad. Not some of us, most of us. Maybe 1% of engineers consistently write and maintain accurate docs. The rest write it once and have intention of maintaining, but never do.
 
-We keep designing systems that assume otherwise. Wikis, Confluence spaces, Notion databases, README files, all betting on the 1%.
+We develop or use systems that assume otherwise. Wikis, Confluence spaces, Notion databases, README files, all with intention to create up-to-date knowledge bases.
 
-There is a second problem that has grown quietly alongside the first. Knowledge is scattered across too many tools, each with its own structure, its own search, its own way of keeping information locked up. When AI agents arrived, we bolted them onto this mess as an afterthought, expecting them to navigate systems that were never designed for machines.
+There is a another problem that has grown quietly alongside the first. Knowledge is scattered across too many tools, each with its own structure, its own search, its own way of keeping information locked up. When AI agents arrived, we bolted some MCP on expecting them to navigate systems that were never designed for machines.
 
-The result is predictable. Agents with no memory. Every session starts cold. Context that lives in one team is invisible to another. An agent working on a feature has no idea what a neighbouring team decided last week, even when that decision changes everything about what it should build.
+To compound knowledge issues Agents have short lived memories. Every session starts cold. Context that lives in one team is invisible to another. An agent working on a feature has no idea what a neighbouring team decided last week, even when that decision spans over many teams or users and can have implications on them. 
 
-We keep asking how to get context across teams, how to give agents better memory. And we keep reaching for human tools to solve it.
+We keep asking how to get context across teams? How to we give agents better memory? We keep reaching for tools developed for legacy ways of humans interacting with knowledge to solve it.
 
 Time to stop doing that.
 
@@ -33,19 +33,19 @@ That is what demarkus is.
 
 ## What is demarkus
 
-demarkus (de-centralized markup for us) is a protocol built for agents reading and writing markdown documents. Not a platform, not a SaaS product, not a knowledge base you buy and configure. A protocol, like HTTP, but for knowledge.
+demarkus (de-centralized markdown for us) is a protocol built for agents and humans reading and writing markdown documents. Not a platform, not a SaaS product, not a knowledge base you buy and configure. A protocol, like HTTP, but for knowledge.
 
-Think of a demarkus server as a bookshelf. Not a database, not version control. A bookshelf. You put documents on it, you take documents off it, you see what is there. That is the whole mental model. The simplicity is the point.
+Think of a demarkus server as a bookshelf. Not a database, not version control. A bookshelf. You put documents on it, you take documents off it, you easily see what is in the library. That is the whole mental model. The simplicity is the point.
 
-When a server is simple you can build complex things on top of it. When a server starts complex it can only do that one complex thing and stays rigid forever. Agents also understand simple very well. A complete, predictable interface fits in a single context window and agents become genuine experts at using it fast.
+When a server is simple you can solve complexities on top of it. When a server starts complex it can only do that one complex thing and stays rigid forever. Agents also understand simple very well. A complete, predictable interface fits in a single context window and agents become genuine experts at using it fast.
 
 ### Versioning is Non-Negotiable
 
-demarkus versions every document. Agents hallucinate. Agents make mistakes. When an agent publishes something wrong you want to know exactly what changed, when, and be able to go back. Every write creates a new immutable version, v1, v2, v3, with a content hash chain. No branching, no merge conflicts, no reconciliation. Just an auditable history of everything any agent wrote.
+demarkus versions every document. Agents hallucinate. Agents make mistakes. People make mistakes. When an agent publishes something wrong you want to know exactly what changed, when, and be able to go back. Every write creates a new immutable version, v1, v2, v3, with a content hash chain. No branching, no merge conflicts, no reconciliation. Just an auditable history of everything any agent wrote.
 
 ### The Wire Format
 
-Every interaction has three parts. A verb and a path telling the server what you want to do. A YAML frontmatter block with metadata like auth tokens and version numbers. A markdown body with the content. Responses come back the same way, frontmatter with the status, body with the content. Agents understand this immediately. It maps to how they already think.
+Every interaction has three parts. A verb and a path telling the server what you want to do. A YAML frontmatter block with metadata like who published and version numbers. A markdown body with the content. Responses come back the same way, frontmatter with the status, body with the content. Agents understand this immediately. It maps to how they already think.
 
 ### Six Verbs
 
@@ -70,7 +70,7 @@ A demarkus server is a single binary. No database to configure, no cloud depende
 
 Once you have simple servers everywhere, you build worlds.
 
-A world is a team's server. Their knowledge base, their decisions, their documents. The compiler team has a world. The API team has a world. The infra team has a world. Each one is isolated by default, owned by that team, written to by their agents.
+A world can be team's or group's server. Their knowledge base, their decisions, their documents. The compiler team has a world. The API team has a world. The infra team has a world. Each one is isolated by default, owned by that team, written to by their agents.
 
 Worlds are not locked. Documents in one world can link directly to documents in another using mark:// URIs. Worlds can copy documents when they need local context from a neighbouring domain. Because every server speaks the same protocol, agents move between them without friction.
 
@@ -84,7 +84,7 @@ The hub is a formal way of connecting worlds, but it is not the only way. Worlds
 
 ### Developer Souls
 
-Around each world orbit the developers, their own personal servers, their local agent memory. These are scratch pads.
+Around each world orbit the developers or knowledge creators, they have their own personal servers, their local agent memory. These are scratch pads.
 
 An engineer working on a feature drafts notes on their local soul first. The agent refines across sessions, building context, connecting to decisions from other domains. When the work is ready the agent publishes to the team world. The local soul remembers everything across sessions. The team world holds what has been agreed. The hub makes it all discoverable.
 
@@ -124,8 +124,8 @@ Everything you need to get up and running is at [demarkus.io](https://demarkus.i
 
 ## The Point
 
-Stop building knowledge systems for the 1% of humans who maintain documentation diligently. Build for agents who will do it continuously.
+Stop building knowledge systems that will never be maintained. Build for agents who will do it continuously.
 
 Give agents a protocol they can master. Give them servers simple enough to reason about completely. Give them the tools to read, write, version, and connect knowledge across any boundary.
 
-The knowledge base that results will not be the one you designed. It will be the one your agents built. And it will stay current because agents, unlike most humans, do not forget to update the documentation.
+The knowledge base that results will not be the one you designed. It will be the one your agents built with your guidance. And it will stay current because agents, unlike most humans, do not forget to update the documentation.
