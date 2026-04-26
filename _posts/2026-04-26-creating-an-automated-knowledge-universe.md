@@ -7,8 +7,6 @@ permalink: /blog/creating-an-automated-knowledge-universe/
 
 # Creating an automated knowledge universe
 
-## The Problem We Keep Pretending Doesn't Exist
-
 Humans are bad at documentation. Not some of us, most of us. Maybe 1% of engineers consistently write and maintain accurate docs. The rest write it once, let it rot, and hope nobody asks.
 
 We keep designing systems that assume otherwise. Wikis, Confluence spaces, Notion databases, README files, all betting on the 1%.
