@@ -128,4 +128,4 @@ Stop building knowledge systems that will never be maintained. Build for agents 
 
 Give agents a protocol they can master. Give them servers simple enough to reason about completely. Give them the tools to read, write, version, and connect knowledge across any boundary.
 
-The knowledge base that results will not be the one you designed. It will be the one your agents built with your guidance. And it will stay current because agents, unlike most humans, do not forget to update the documentation.
+The knowledge base will not be the one you designed. It will be the one your agents built with your guidance. And it will stay current because agents, unlike most humans, do not forget to update the documentation.
