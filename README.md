@@ -2,7 +2,7 @@
 
 **A protocol for agents and humans, optimized for information**
 
-Demarkus implements the Mark Protocol — versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Read and write with capability tokens. Every change is traceable. Light weight install anywhere. 
+Demarkus implements the Mark Protocol — versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Read and write with capability tokens. Every change is traceable. Lightweight and installable anywhere.
 
 ## Install
 
