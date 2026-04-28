@@ -2,7 +2,7 @@
 
 **A protocol for agents and humans, optimized for information**
 
-Demarkus implements the Mark Protocol — versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Read and write with capability tokens. Every change is permanent.
+Demarkus implements the Mark Protocol — versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Read and write with capability tokens. Every change is traceable. Lightweight and installable anywhere.
 
 ## Install
 
@@ -70,7 +70,7 @@ modified: 2026-01-15T10:30:00Z
 
 ## Use Cases
 
-**Agent Memory** — Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries.
+**Agent Memory** — Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/) or install via [OpenClaw](https://demarkus.io/install/openclaw/).
 
 **Personal Knowledge Base** — Local server, versioned documents, TUI browser. Everything from first write.
 
