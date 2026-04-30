@@ -155,6 +155,5 @@ Full versioning is preserved — `demarkus-publish` uses the same store code as 
 
 ## Related
 
-- [Getting Started](/getting-started/)
 - [Install on Linux](/install/linux/)
 - [Publish a Public Hub](/scenarios/public-hub/)

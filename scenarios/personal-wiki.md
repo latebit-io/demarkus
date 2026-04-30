@@ -38,7 +38,7 @@ Copy the raw token from the output — you'll use it as `$TOKEN` below.
 
 > If you used the full installer, the tokens file path is already configured. The installer saves an initial token to `~/.demarkus/initial-token.txt`.
 
-### 4. Start the server with write access
+### 3. Start the server with write access
 
 If running manually (the installer starts the server automatically as a background service):
 
@@ -48,7 +48,7 @@ demarkus-server -root ~/.demarkus/content -tokens ~/.demarkus/tokens.toml
 
 The server uses a built-in self-signed certificate and listens on `localhost:6309`.
 
-### 5. Publish your first documents
+### 4. Publish your first documents
 
 Everything goes through the protocol — no writing files directly to disk:
 
@@ -75,7 +75,7 @@ Each publish creates a new immutable version. Run `demarkus -X VERSIONS` to see 
 demarkus --insecure -X VERSIONS mark://localhost:6309/index.md
 ```
 
-### 6. Browse with the TUI
+### 5. Browse with the TUI
 
 ```bash
 demarkus-tui --insecure mark://localhost:6309/index.md
@@ -92,7 +92,7 @@ demarkus-tui --insecure mark://localhost:6309/index.md
 | `d` | Document graph view |
 | `?` | Help |
 
-### 7. Read and write documents
+### 6. Read and write documents
 
 Fetch a document to stdout:
 
@@ -108,7 +108,7 @@ demarkus --insecure -X PUBLISH -auth $TOKEN \
   mark://localhost:6309/notes.md
 ```
 
-### 8. Edit documents
+### 7. Edit documents
 
 The `edit` subcommand opens a document in `$EDITOR` and publishes on save:
 
@@ -141,6 +141,5 @@ sudo systemctl status demarkus
 
 ## Related
 
-- [Getting Started](/getting-started/)
 - [Install on macOS](/install/macos/)
 - [Install on Linux](/install/linux/)

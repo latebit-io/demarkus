@@ -101,5 +101,4 @@ WSL2's virtual IP changes on each reboot. For a stable external address, either 
 ## Related
 
 - [Linux install](/install/linux/)
-- [Getting started](/getting-started/)
 - [Troubleshooting](/troubleshooting/)

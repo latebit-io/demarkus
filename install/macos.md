@@ -92,6 +92,5 @@ demarkus-install uninstall
 
 ## Related
 
-- [Getting Started](/getting-started/)
 - [Personal knowledge base scenario](/scenarios/personal-wiki/)
 - [Troubleshooting](/troubleshooting/)

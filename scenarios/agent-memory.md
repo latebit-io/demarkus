@@ -199,6 +199,5 @@ demarkus-tui mark://soul.demarkus.io/index.md
 
 ## Related
 
-- [Getting Started](/getting-started/)
 - [Soul page](/soul/)
 - [Agent Install](/agent-install/)

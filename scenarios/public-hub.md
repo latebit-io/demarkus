@@ -175,5 +175,4 @@ demarkus mark://yourdomain.com/health
 
 - [Install on Linux](/install/linux/)
 - [Security Model](/security/) — read-only mode, chroot install, hardening
-- [Getting Started](/getting-started/)
 - [Troubleshooting](/troubleshooting/)

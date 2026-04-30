@@ -140,4 +140,3 @@ demarkus mark://docs.internal.example.com/runbooks/deploy.md/v3
 
 - [Install on Linux](/install/linux/)
 - [Public hub scenario](/scenarios/public-hub/)
-- [Getting Started](/getting-started/)

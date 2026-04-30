@@ -5,11 +5,6 @@
         >Home</a
     >
     <a
-        class="{% if page.url == '/getting-started/' %}is-active{% endif %}"
-        href="{{ '/getting-started/' | relative_url }}"
-        >Getting Started</a
-    >
-    <a
         class="{% if page.url contains '/install/' %}is-active{% endif %}"
         href="{{ '/install/macos/' | relative_url }}"
         >Install</a

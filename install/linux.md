@@ -105,7 +105,6 @@ Requires Go 1.22+.
 
 ## Related
 
-- [Getting Started](/getting-started/)
 - [Public hub scenario](/scenarios/public-hub/)
 - [Deployment & TLS](/setup/) (full reference)
 - [Troubleshooting](/troubleshooting/)
