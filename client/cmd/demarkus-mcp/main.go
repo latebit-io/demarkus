@@ -19,6 +19,7 @@ import (
 	"github.com/latebit/demarkus/client/internal/graphstore"
 	"github.com/latebit/demarkus/client/internal/index"
 	"github.com/latebit/demarkus/client/internal/links"
+	"github.com/latebit/demarkus/client/internal/merge"
 	"github.com/latebit/demarkus/client/internal/tokens"
 	"github.com/latebit/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -198,6 +199,10 @@ func markPublishTool(host string) mcp.Tool {
 				"number from a prior fetch to detect conflicts. If the document has been "+
 				"modified since that version, the server returns a conflict status. "+
 				"Use 0 when creating a new document. "+
+				"on_conflict controls behavior when the version check fails: \"fail\" (default) "+
+				"returns the conflict as today; \"merge\" returns a structurally-merged candidate "+
+				"body (with git-style conflict markers if both sides edited the same lines) for "+
+				"the agent to semantically verify and republish at publish-at-version. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -211,6 +216,9 @@ func markPublishTool(host string) mcp.Tool {
 		mcp.WithNumber("expected_version",
 			mcp.Required(),
 			mcp.Description("version number from a prior fetch for conflict detection; use 0 when creating a new document"),
+		),
+		mcp.WithString("on_conflict",
+			mcp.Description("conflict behavior: \"fail\" (default) or \"merge\" (diff3 merge with retry, escalates to git-style markers on overlap)"),
 		),
 	)
 }
@@ -446,12 +454,137 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("expected_version is required"), nil
 	}
 
+	onConflict := req.GetString("on_conflict", "fail")
+	switch onConflict {
+	case "fail":
+		// fall through to plain publish
+	case "merge":
+		adapter := &mergeClientAdapter{inner: h.client, host: host, token: token}
+		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, agentMeta(ctx))
+		if mErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", mErr)), nil
+		}
+		return mcp.NewToolResultText(formatOutcome(&outcome)), nil
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"fail\" or \"merge\"", onConflict)), nil
+	}
+
 	result, err := h.client.Publish(host, path, body, token, expectedVersion, agentMeta(ctx))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}
 
 	return mcp.NewToolResultText(formatResult(result, "version", "modified", "server-version")), nil
+}
+
+// mergeClientAdapter exposes the markClient interface as a merge.Client. It
+// turns versioned fetches into the path/vN suffix the server understands and
+// extracts version metadata from the protocol response.
+type mergeClientAdapter struct {
+	inner markClient
+	host  string
+	token string
+}
+
+// FetchVersion fetches a specific historical version via the /path/vN route.
+func (a *mergeClientAdapter) FetchVersion(path string, version int) (merge.Doc, error) {
+	versionedPath := strings.TrimRight(path, "/") + "/v" + strconv.Itoa(version)
+	r, err := a.inner.Fetch(a.host, versionedPath, a.token)
+	if err != nil {
+		return merge.Doc{}, err
+	}
+	return docFromResponse(r)
+}
+
+// FetchCurrent fetches the current head version of path.
+func (a *mergeClientAdapter) FetchCurrent(path string) (merge.Doc, error) {
+	r, err := a.inner.Fetch(a.host, path, a.token)
+	if err != nil {
+		return merge.Doc{}, err
+	}
+	return docFromResponse(r)
+}
+
+// Publish forwards to the underlying client and lifts the protocol response
+// into a merge.PublishResult, parsing version and server-version metadata.
+func (a *mergeClientAdapter) Publish(path, body string, expectedVersion int, meta map[string]string) (merge.PublishResult, error) {
+	r, err := a.inner.Publish(a.host, path, body, a.token, expectedVersion, meta)
+	if err != nil {
+		return merge.PublishResult{}, err
+	}
+	v, err := optionalInt(r.Response.Metadata, "version")
+	if err != nil {
+		return merge.PublishResult{}, err
+	}
+	sv, err := optionalInt(r.Response.Metadata, "server-version")
+	if err != nil {
+		return merge.PublishResult{}, err
+	}
+	return merge.PublishResult{
+		Status:        r.Response.Status,
+		Version:       v,
+		ServerVersion: sv,
+		Metadata:      r.Response.Metadata,
+	}, nil
+}
+
+// docFromResponse converts a fetch.Result into the merge package's Doc type,
+// extracting the integer version from response metadata.
+func docFromResponse(r fetch.Result) (merge.Doc, error) {
+	v, err := optionalInt(r.Response.Metadata, "version")
+	if err != nil {
+		return merge.Doc{}, err
+	}
+	return merge.Doc{
+		Status:  r.Response.Status,
+		Body:    r.Response.Body,
+		Version: v,
+	}, nil
+}
+
+// optionalInt parses metadata[key] as an int. A missing or empty value
+// returns 0 with no error (the natural sentinel for absent versions). A
+// present but malformed value returns a wrapped parse error so the caller
+// surfaces server-side corruption rather than silently treating it as 0.
+func optionalInt(meta map[string]string, key string) (int, error) {
+	s, ok := meta[key]
+	if !ok || s == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("response metadata %q = %q: %w", key, s, err)
+	}
+	return n, nil
+}
+
+// formatOutcome renders a merge.Candidate outcome in the same key:value text
+// shape as formatResult. On OutcomeOK it delegates to formatResult so the
+// success response is byte-for-byte identical to a plain mark_publish — the
+// on_conflict=merge opt-in does not change the success contract. On
+// OutcomeCandidate it surfaces merge metadata followed by the candidate body
+// (with or without conflict markers) after a blank line.
+func formatOutcome(o *merge.Outcome) string {
+	switch o.Status {
+	case merge.OutcomeOK:
+		return formatResult(fetch.Result{
+			Response: protocol.Response{
+				Status:   o.Publish.Status,
+				Metadata: o.Publish.Metadata,
+			},
+		}, "version", "modified", "server-version")
+	case merge.OutcomeCandidate:
+		var b strings.Builder
+		b.WriteString("status: merge-candidate\n")
+		fmt.Fprintf(&b, "your-version: %d\n", o.BaseVersion)
+		fmt.Fprintf(&b, "current-version: %d\n", o.TheirVersion)
+		fmt.Fprintf(&b, "publish-at-version: %d\n", o.PublishAtVersion)
+		fmt.Fprintf(&b, "has-markers: %t\n", o.HasMarkers)
+		b.WriteString("\n")
+		b.WriteString(o.Body)
+		return b.String()
+	}
+	return ""
 }
 
 func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
