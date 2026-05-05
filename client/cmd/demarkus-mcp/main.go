@@ -490,30 +490,40 @@ type mergeClientAdapter struct {
 	token string
 }
 
+// FetchVersion fetches a specific historical version via the /path/vN route.
 func (a *mergeClientAdapter) FetchVersion(path string, version int) (merge.Doc, error) {
 	versionedPath := strings.TrimRight(path, "/") + "/v" + strconv.Itoa(version)
 	r, err := a.inner.Fetch(a.host, versionedPath, a.token)
 	if err != nil {
 		return merge.Doc{}, err
 	}
-	return docFromResponse(r), nil
+	return docFromResponse(r)
 }
 
+// FetchCurrent fetches the current head version of path.
 func (a *mergeClientAdapter) FetchCurrent(path string) (merge.Doc, error) {
 	r, err := a.inner.Fetch(a.host, path, a.token)
 	if err != nil {
 		return merge.Doc{}, err
 	}
-	return docFromResponse(r), nil
+	return docFromResponse(r)
 }
 
+// Publish forwards to the underlying client and lifts the protocol response
+// into a merge.PublishResult, parsing version and server-version metadata.
 func (a *mergeClientAdapter) Publish(path, body string, expectedVersion int, meta map[string]string) (merge.PublishResult, error) {
 	r, err := a.inner.Publish(a.host, path, body, a.token, expectedVersion, meta)
 	if err != nil {
 		return merge.PublishResult{}, err
 	}
-	v, _ := strconv.Atoi(r.Response.Metadata["version"])
-	sv, _ := strconv.Atoi(r.Response.Metadata["server-version"])
+	v, err := optionalInt(r.Response.Metadata, "version")
+	if err != nil {
+		return merge.PublishResult{}, err
+	}
+	sv, err := optionalInt(r.Response.Metadata, "server-version")
+	if err != nil {
+		return merge.PublishResult{}, err
+	}
 	return merge.PublishResult{
 		Status:        r.Response.Status,
 		Version:       v,
@@ -522,13 +532,34 @@ func (a *mergeClientAdapter) Publish(path, body string, expectedVersion int, met
 	}, nil
 }
 
-func docFromResponse(r fetch.Result) merge.Doc {
-	v, _ := strconv.Atoi(r.Response.Metadata["version"])
+// docFromResponse converts a fetch.Result into the merge package's Doc type,
+// extracting the integer version from response metadata.
+func docFromResponse(r fetch.Result) (merge.Doc, error) {
+	v, err := optionalInt(r.Response.Metadata, "version")
+	if err != nil {
+		return merge.Doc{}, err
+	}
 	return merge.Doc{
 		Status:  r.Response.Status,
 		Body:    r.Response.Body,
 		Version: v,
+	}, nil
+}
+
+// optionalInt parses metadata[key] as an int. A missing or empty value
+// returns 0 with no error (the natural sentinel for absent versions). A
+// present but malformed value returns a wrapped parse error so the caller
+// surfaces server-side corruption rather than silently treating it as 0.
+func optionalInt(meta map[string]string, key string) (int, error) {
+	s, ok := meta[key]
+	if !ok || s == "" {
+		return 0, nil
 	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("response metadata %q = %q: %w", key, s, err)
+	}
+	return n, nil
 }
 
 // formatOutcome renders a MergeAndPublish outcome in the same key:value text

@@ -165,6 +165,7 @@ func editHunks(base, side []string) []editHunk {
 	return hunks
 }
 
+// lineMatch records that base[baseIdx] equals side[sideIdx] in an LCS pairing.
 type lineMatch struct{ baseIdx, sideIdx int }
 
 // lcsMatches returns the longest common subsequence of base and side as
@@ -214,7 +215,9 @@ func lcsMatches(base, side []string) []lineMatch {
 
 // emitChunk merges a single unstable region of base/ours/theirs and writes
 // the result to out. If both sides made conflicting edits, conflict markers
-// are written and *conflict is set.
+// are written and *conflict is set. Stable-merge paths emit lines verbatim
+// (preserving the input's trailing-newline state); the conflict path pads
+// each side's chunk with a newline so the marker line stays line-aligned.
 func emitChunk(baseChunk, oursChunk, theirsChunk []string, out *strings.Builder, conflict *bool) {
 	oursEqualsBase := equalLines(oursChunk, baseChunk)
 	theirsEqualsBase := equalLines(theirsChunk, baseChunk)
@@ -231,33 +234,38 @@ func emitChunk(baseChunk, oursChunk, theirsChunk []string, out *strings.Builder,
 	default:
 		*conflict = true
 		out.WriteString("<<<<<<< ours\n")
-		writeLines(out, oursChunk)
-		ensureNewline(out)
+		writeLinesPadded(out, oursChunk)
 		out.WriteString("=======\n")
-		writeLines(out, theirsChunk)
-		ensureNewline(out)
+		writeLinesPadded(out, theirsChunk)
 		out.WriteString(">>>>>>> theirs\n")
 	}
 }
 
+// writeLines writes lines verbatim, preserving each line's original line
+// ending (or lack of one).
 func writeLines(out *strings.Builder, lines []string) {
 	for _, l := range lines {
 		out.WriteString(l)
 	}
 }
 
-// ensureNewline appends a newline if the buffer does not already end with one.
-// Conflict markers must start at the beginning of a line, so a chunk whose
-// last line is missing its trailing newline would otherwise run into the
-// next marker.
-func ensureNewline(out *strings.Builder) {
-	s := out.String()
-	if s == "" || s[len(s)-1] == '\n' {
+// writeLinesPadded writes lines and ensures the result ends with a newline.
+// Used inside conflict marker blocks so the next marker starts at column 0
+// even when the chunk's last line lacks a trailing newline. Inspecting the
+// chunk directly is clearer than reading state back from the builder.
+func writeLinesPadded(out *strings.Builder, lines []string) {
+	writeLines(out, lines)
+	if len(lines) == 0 {
+		return
+	}
+	last := lines[len(lines)-1]
+	if last == "" || last[len(last)-1] == '\n' {
 		return
 	}
 	out.WriteByte('\n')
 }
 
+// equalLines reports whether a and b have the same length and matching elements.
 func equalLines(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
