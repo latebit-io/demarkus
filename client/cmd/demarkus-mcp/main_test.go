@@ -1258,6 +1258,177 @@ func TestHandlerMarkGraphPublish_NoToken(t *testing.T) {
 	assertIsToolError(t, result, "requires a token")
 }
 
+func TestHandlerMarkPublish_OnConflictMergeDisjoint(t *testing.T) {
+	// Agent edited base v5 ("a\nb\nc\n") into "a\nB\nc\n".
+	// Latest is v6 ("a\nb\nC\n"). diff3 produces "a\nB\nC\n", republish at v6 succeeds.
+	var publishCalls int
+	sc := &stubClient{
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			switch path {
+			case "/doc.md/v5":
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "5"},
+					Body:     "a\nb\nc\n",
+				}}, nil
+			case "/doc.md":
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "6"},
+					Body:     "a\nb\nC\n",
+				}}, nil
+			}
+			return fetch.Result{}, nil
+		},
+		publishFn: func(_, _, body, _ string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
+			publishCalls++
+			if publishCalls == 1 {
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusConflict,
+					Metadata: map[string]string{"server-version": "6"},
+				}}, nil
+			}
+			if expectedVersion != 6 {
+				t.Errorf("merged publish expected_version = %d, want 6", expectedVersion)
+			}
+			if body != "a\nB\nC\n" {
+				t.Errorf("merged body = %q, want %q", body, "a\nB\nC\n")
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusCreated,
+				Metadata: map[string]string{"version": "7", "modified": "2026-05-05T00:00:00Z"},
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test"}
+	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "a\nB\nc\n",
+		"expected_version": float64(5),
+		"on_conflict":      "merge",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	for _, want := range []string{"status: created", "version: 7", "merged: true", "base-version: 5", "their-version: 6"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing %q\n%s", want, text)
+		}
+	}
+}
+
+func TestHandlerMarkPublish_OnConflictMergeOverlap(t *testing.T) {
+	// Agent edited base v5 ("a\nb\nc\n") into "a\nB\nc\n".
+	// Latest is v6 ("a\nXX\nc\n"). diff3 produces conflict markers.
+	sc := &stubClient{
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			switch path {
+			case "/doc.md/v5":
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "5"},
+					Body:     "a\nb\nc\n",
+				}}, nil
+			case "/doc.md":
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "6"},
+					Body:     "a\nXX\nc\n",
+				}}, nil
+			}
+			return fetch.Result{}, nil
+		},
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusConflict,
+				Metadata: map[string]string{"server-version": "6"},
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test"}
+	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "a\nB\nc\n",
+		"expected_version": float64(5),
+		"on_conflict":      "merge",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	for _, want := range []string{
+		"status: conflict",
+		"mergeable: false",
+		"your-version: 5",
+		"current-version: 6",
+		"<<<<<<< ours",
+		">>>>>>> theirs",
+		"B",
+		"XX",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing %q\n%s", want, text)
+		}
+	}
+}
+
+func TestHandlerMarkPublish_OnConflictInvalid(t *testing.T) {
+	h := &handler{client: &stubClient{}, token: "test"}
+	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "x",
+		"expected_version": float64(1),
+		"on_conflict":      "bogus",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertIsToolError(t, result, "invalid on_conflict")
+}
+
+func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess(t *testing.T) {
+	// When the initial publish succeeds, the merge path returns a plain
+	// success without merged metadata.
+	sc := &stubClient{
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusCreated,
+				Metadata: map[string]string{"version": "6", "modified": "2026-05-05T00:00:00Z"},
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test"}
+	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "x",
+		"expected_version": float64(5),
+		"on_conflict":      "merge",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "status: created") || !strings.Contains(text, "version: 6") {
+		t.Errorf("response missing expected fields\n%s", text)
+	}
+	if strings.Contains(text, "merged: true") {
+		t.Errorf("first-try success should not be marked merged\n%s", text)
+	}
+}
+
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {
 	t.Helper()
