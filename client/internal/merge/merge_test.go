@@ -2,6 +2,7 @@ package merge
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -194,6 +195,30 @@ func TestCandidate(t *testing.T) {
 		}
 		if got := c.publishedMeta[0]["agent"]; got != "test" {
 			t.Errorf("agent metadata lost: %q", got)
+		}
+	})
+
+	t.Run("missing head version is rejected", func(t *testing.T) {
+		// FetchCurrent returns ok with no version metadata. A candidate with
+		// PublishAtVersion=0 would silently switch the agent's follow-up
+		// publish to create-only mode, so we fail fast.
+		c := &stubClient{
+			versionedDocs: map[int]Doc{
+				5: {Status: "ok", Body: "x\n", Version: 5},
+			},
+			currentDocs: []Doc{
+				{Status: "ok", Body: "x\n", Version: 0},
+			},
+			publishResults: []PublishResult{
+				{Status: "conflict", ServerVersion: 6},
+			},
+		}
+		_, err := Candidate(c, "/p", "x\nB\n", 5, nil)
+		if err == nil {
+			t.Fatal("expected error for missing head version")
+		}
+		if !strings.Contains(err.Error(), "version metadata") {
+			t.Errorf("error should mention version metadata, got: %v", err)
 		}
 	})
 

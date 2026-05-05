@@ -112,6 +112,13 @@ func Candidate(c Client, path, body string, expectedVersion int, meta map[string
 	if latest.Status != statusOK {
 		return Outcome{}, fmt.Errorf("fetch current: status %s", latest.Status)
 	}
+	// A candidate without a real head version would force the agent's
+	// follow-up publish into create-only semantics (expected_version=0),
+	// which would either silently change behavior or fail at the server.
+	// Fail fast instead of returning an unusable PublishAtVersion.
+	if latest.Version <= 0 {
+		return Outcome{}, fmt.Errorf("fetch current: missing or invalid version metadata")
+	}
 
 	merged := Diff3(base, body, latest.Body)
 	return Outcome{

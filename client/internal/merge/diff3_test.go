@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -147,6 +148,47 @@ func TestDiff3(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDiff3_OversizedInputsFallBackToSingleHunk(t *testing.T) {
+	// Build inputs whose product exceeds maxLCSCells. lcsMatches returns nil,
+	// editHunks emits a single whole-range hunk, and diff3 then handles the
+	// chunk normally — identical inputs collapse to base, divergent inputs
+	// produce one big conflict block. Either way, no allocation explosion.
+	side := func(line string, n int) string {
+		var b strings.Builder
+		for i := range n {
+			fmt.Fprintf(&b, "%s %d\n", line, i)
+		}
+		return b.String()
+	}
+	// 1500 * 1500 = 2.25M > maxLCSCells (2M).
+	const n = 1500
+
+	t.Run("identical large inputs merge cleanly", func(t *testing.T) {
+		body := side("line", n)
+		got := Diff3(body, body, body)
+		if got.Conflict {
+			t.Error("identical inputs should never conflict")
+		}
+		if got.Body != body {
+			t.Errorf("identical merge corrupted body (len got=%d want=%d)", len(got.Body), len(body))
+		}
+	})
+
+	t.Run("divergent large inputs yield one conflict block", func(t *testing.T) {
+		base := side("base", n)
+		ours := side("ours", n)
+		theirs := side("theirs", n)
+		got := Diff3(base, ours, theirs)
+		if !got.Conflict {
+			t.Error("divergent inputs should conflict")
+		}
+		// Exactly one conflict block since the fallback emits one big hunk.
+		if c := strings.Count(got.Body, "<<<<<<< ours"); c != 1 {
+			t.Errorf("want exactly 1 conflict block, got %d", c)
+		}
+	})
 }
 
 func TestDiff3_NoConflictsHaveMarkers(t *testing.T) {

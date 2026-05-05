@@ -1429,6 +1429,53 @@ func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess(t *testing.T) {
 	}
 }
 
+func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess_PreservesAllMetadata(t *testing.T) {
+	// on_conflict=merge must not change the success contract — every
+	// metadata key the server returned should reach the agent, just like a
+	// plain mark_publish would do via formatResult.
+	sc := &stubClient{
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status: protocol.StatusCreated,
+				Metadata: map[string]string{
+					"version":      "6",
+					"modified":     "2026-05-05T00:00:00Z",
+					"content-hash": "sha256-deadbeef",
+					"etag":         "abc123",
+					"custom-key":   "preserved",
+				},
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test"}
+	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "x",
+		"expected_version": float64(5),
+		"on_conflict":      "merge",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	for _, want := range []string{
+		"status: created",
+		"version: 6",
+		"modified: 2026-05-05T00:00:00Z",
+		"content-hash: sha256-deadbeef",
+		"etag: abc123",
+		"custom-key: preserved",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing %q\n%s", want, text)
+		}
+	}
+}
+
 // assertIsToolError checks that a CallToolResult is an error containing the given substring.
 func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) {
 	t.Helper()

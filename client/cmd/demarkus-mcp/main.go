@@ -558,25 +558,23 @@ func optionalInt(meta map[string]string, key string) (int, error) {
 	return n, nil
 }
 
-// formatOutcome renders a Candidate outcome in the same key:value text
-// shape as formatResult. The candidate body (with or without conflict
-// markers) follows the metadata after a blank line; the agent uses
-// publish-at-version for the follow-up publish.
+// formatOutcome renders a merge.Candidate outcome in the same key:value text
+// shape as formatResult. On OutcomeOK it delegates to formatResult so the
+// success response is byte-for-byte identical to a plain mark_publish — the
+// on_conflict=merge opt-in does not change the success contract. On
+// OutcomeCandidate it surfaces merge metadata followed by the candidate body
+// (with or without conflict markers) after a blank line.
 func formatOutcome(o *merge.Outcome) string {
-	var b strings.Builder
 	switch o.Status {
 	case merge.OutcomeOK:
-		fmt.Fprintf(&b, "status: %s\n", o.Publish.Status)
-		if v, ok := o.Publish.Metadata["version"]; ok {
-			fmt.Fprintf(&b, "version: %s\n", v)
-		}
-		if mod, ok := o.Publish.Metadata["modified"]; ok {
-			fmt.Fprintf(&b, "modified: %s\n", mod)
-		}
-		if ch, ok := o.Publish.Metadata["content-hash"]; ok {
-			fmt.Fprintf(&b, "content-hash: %s\n", ch)
-		}
+		return formatResult(fetch.Result{
+			Response: protocol.Response{
+				Status:   o.Publish.Status,
+				Metadata: o.Publish.Metadata,
+			},
+		}, "version", "modified", "server-version")
 	case merge.OutcomeCandidate:
+		var b strings.Builder
 		b.WriteString("status: merge-candidate\n")
 		fmt.Fprintf(&b, "your-version: %d\n", o.BaseVersion)
 		fmt.Fprintf(&b, "current-version: %d\n", o.TheirVersion)
@@ -584,8 +582,9 @@ func formatOutcome(o *merge.Outcome) string {
 		fmt.Fprintf(&b, "has-markers: %t\n", o.HasMarkers)
 		b.WriteString("\n")
 		b.WriteString(o.Body)
+		return b.String()
 	}
-	return b.String()
+	return ""
 }
 
 func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

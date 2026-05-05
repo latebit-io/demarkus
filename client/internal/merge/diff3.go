@@ -168,12 +168,24 @@ func editHunks(base, side []string) []editHunk {
 // lineMatch records that base[baseIdx] equals side[sideIdx] in an LCS pairing.
 type lineMatch struct{ baseIdx, sideIdx int }
 
+// maxLCSCells caps the LCS dp table at ~16 MB (2M ints × 8 bytes) to bound
+// memory use on pathological inputs (e.g. 100K short lines, which would
+// otherwise allocate gigabytes). Inputs that exceed the cap fall through to
+// a single-hunk merge: editHunks treats the entire range as one replacement,
+// which diff3 surfaces as one big conflict block — coarser than line-level
+// granularity but still correct, and the agent can resolve manually.
+const maxLCSCells = 2_000_000
+
 // lcsMatches returns the longest common subsequence of base and side as
-// (baseIdx, sideIdx) pairs in ascending order. O(n*m) time and space; for
-// markdown documents under the 1 MiB body limit this is microseconds.
+// (baseIdx, sideIdx) pairs in ascending order. O(m*n) time and space.
+// Returns nil when m*n would exceed maxLCSCells, leaving callers to fall
+// back to whole-range hunk semantics.
 func lcsMatches(base, side []string) []lineMatch {
 	m, n := len(base), len(side)
 	if m == 0 || n == 0 {
+		return nil
+	}
+	if int64(m)*int64(n) > maxLCSCells {
 		return nil
 	}
 	dp := make([][]int, m+1)
