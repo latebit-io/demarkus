@@ -200,9 +200,9 @@ func markPublishTool(host string) mcp.Tool {
 				"modified since that version, the server returns a conflict status. "+
 				"Use 0 when creating a new document. "+
 				"on_conflict controls behavior when the version check fails: \"fail\" (default) "+
-				"returns the conflict; \"merge\" runs a three-way diff3 merge against the latest "+
-				"version and republishes if changes are disjoint, or returns a body with git-style "+
-				"conflict markers if they overlap. "+
+				"returns the conflict as today; \"merge\" returns a structurally-merged candidate "+
+				"body (with git-style conflict markers if both sides edited the same lines) for "+
+				"the agent to semantically verify and republish at publish-at-version. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -428,10 +428,6 @@ func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(formatResult(result, "total", "current", "chain-valid", "chain-error")), nil
 }
 
-// mergeMaxRetries is how many times the diff3 merge loop retries before
-// giving up with a contention conflict. See /plans/conflict-merge.md.
-const mergeMaxRetries = 3
-
 func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
@@ -464,7 +460,7 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		// fall through to plain publish
 	case "merge":
 		adapter := &mergeClientAdapter{inner: h.client, host: host, token: token}
-		outcome, mErr := merge.MergeAndPublish(adapter, path, body, expectedVersion, mergeMaxRetries, agentMeta(ctx))
+		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, agentMeta(ctx))
 		if mErr != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", mErr)), nil
 		}
@@ -562,9 +558,10 @@ func optionalInt(meta map[string]string, key string) (int, error) {
 	return n, nil
 }
 
-// formatOutcome renders a MergeAndPublish outcome in the same key:value text
-// shape as formatResult. Conflict and contention outcomes carry the merged
-// body or marker payload after a blank line.
+// formatOutcome renders a Candidate outcome in the same key:value text
+// shape as formatResult. The candidate body (with or without conflict
+// markers) follows the metadata after a blank line; the agent uses
+// publish-at-version for the follow-up publish.
 func formatOutcome(o *merge.Outcome) string {
 	var b strings.Builder
 	switch o.Status {
@@ -579,33 +576,14 @@ func formatOutcome(o *merge.Outcome) string {
 		if ch, ok := o.Publish.Metadata["content-hash"]; ok {
 			fmt.Fprintf(&b, "content-hash: %s\n", ch)
 		}
-		if o.Merged {
-			b.WriteString("merged: true\n")
-			fmt.Fprintf(&b, "base-version: %d\n", o.BaseVersion)
-			fmt.Fprintf(&b, "their-version: %d\n", o.TheirVersion)
-			fmt.Fprintf(&b, "retries: %d\n", o.Retries)
-		}
-	case merge.OutcomeConflict:
-		b.WriteString("status: conflict\n")
-		b.WriteString("mergeable: false\n")
+	case merge.OutcomeCandidate:
+		b.WriteString("status: merge-candidate\n")
 		fmt.Fprintf(&b, "your-version: %d\n", o.BaseVersion)
-		if o.TheirVersion > 0 {
-			fmt.Fprintf(&b, "current-version: %d\n", o.TheirVersion)
-		}
-		if o.Merged {
-			b.WriteString("merged: true\n")
-			b.WriteString("\n")
-			b.WriteString(o.ConflictBody)
-		}
-	case merge.OutcomeContention:
-		b.WriteString("status: conflict\n")
-		b.WriteString("reason: contention\n")
-		fmt.Fprintf(&b, "retries: %d\n", o.Retries)
-		fmt.Fprintf(&b, "your-version: %d\n", o.BaseVersion)
-		if o.TheirVersion > 0 {
-			fmt.Fprintf(&b, "current-version: %d\n", o.TheirVersion)
-		}
-		b.WriteString("mergeable: false\n")
+		fmt.Fprintf(&b, "current-version: %d\n", o.TheirVersion)
+		fmt.Fprintf(&b, "publish-at-version: %d\n", o.PublishAtVersion)
+		fmt.Fprintf(&b, "has-markers: %t\n", o.HasMarkers)
+		b.WriteString("\n")
+		b.WriteString(o.Body)
 	}
 	return b.String()
 }

@@ -22,7 +22,7 @@ type PublishResult struct {
 	Metadata      map[string]string
 }
 
-// Client is the subset of fetch.Client operations MergeAndPublish needs.
+// Client is the subset of fetch.Client operations Candidate needs.
 // Defined here so the merge package is testable without QUIC.
 type Client interface {
 	FetchVersion(path string, version int) (Doc, error)
@@ -30,30 +30,29 @@ type Client interface {
 	Publish(path, body string, expectedVersion int, meta map[string]string) (PublishResult, error)
 }
 
-// OutcomeStatus describes the final state of a MergeAndPublish call.
+// OutcomeStatus describes the result of a Candidate call.
 type OutcomeStatus string
 
 const (
-	// OutcomeOK means the publish succeeded. Merged is true if a diff3
-	// merge happened along the way.
+	// OutcomeOK means the initial publish succeeded — no merge was needed.
 	OutcomeOK OutcomeStatus = "ok"
-	// OutcomeConflict means diff3 produced conflict markers and the
-	// caller's LLM must resolve them. ConflictBody holds the marked merge.
-	OutcomeConflict OutcomeStatus = "conflict"
-	// OutcomeContention means the merge loop exhausted maxRetries against
-	// a path that kept advancing. The caller may retry.
-	OutcomeContention OutcomeStatus = "contention"
+	// OutcomeCandidate means the publish conflicted and the tool produced a
+	// diff3 merge candidate. The agent should semantically review the body
+	// (resolving any markers) and republish at PublishAtVersion.
+	OutcomeCandidate OutcomeStatus = "merge-candidate"
 )
 
-// Outcome is the result of a MergeAndPublish call.
+// Outcome is the result of a Candidate call. Fields are populated based
+// on Status — Publish on OutcomeOK; Body, HasMarkers, BaseVersion,
+// TheirVersion, and PublishAtVersion on OutcomeCandidate.
 type Outcome struct {
-	Status       OutcomeStatus
-	Publish      PublishResult // populated when Status == OutcomeOK
-	Merged       bool          // true when at least one diff3 merge happened
-	BaseVersion  int           // the version we merged from (Status != OutcomeOK or Merged)
-	TheirVersion int           // the latest version we merged against
-	ConflictBody string        // diff3 output with markers (Status == OutcomeConflict)
-	Retries      int           // number of merge attempts (0 if first publish succeeded)
+	Status           OutcomeStatus
+	Publish          PublishResult
+	Body             string
+	HasMarkers       bool
+	BaseVersion      int
+	TheirVersion     int
+	PublishAtVersion int
 }
 
 // ErrInvalidExpectedVersion is returned when expectedVersion is < 0.
@@ -66,103 +65,61 @@ const statusConflict = "conflict"
 // statusOK matches protocol.StatusOK for fetch responses.
 const statusOK = "ok"
 
-// MergeAndPublish publishes body to path with optimistic concurrency. On
-// version conflict, it fetches the base version (the one the agent edited
-// from) and the current version, runs diff3, and republishes the merged
-// body. It retries up to maxRetries times when the republish itself
-// conflicts (a third writer slipped in). Returns OutcomeConflict if diff3
-// produces markers; OutcomeContention when retries are exhausted.
+// Candidate publishes body to path with optimistic concurrency. On a
+// version mismatch it produces a diff3 merge candidate (base = the version
+// the agent edited from, theirs = the current latest, ours = body) and
+// returns it for the agent to semantically verify and republish. The tool
+// never auto-publishes the merge — line-level disjoint ≠ semantically
+// disjoint, so the agent must always inspect the candidate before it
+// becomes the new head.
 //
-// expectedVersion = 0 means create-only, identical to fetch.Client.Publish.
-// In that mode, conflicts are not eligible for diff3 merge — there is no
-// base to merge from — and the conflict is returned as-is.
+// Iteration is the agent's responsibility: if the agent's follow-up publish
+// itself conflicts (a third writer slipped in), the agent simply calls
+// Candidate again with the new body and version.
 //
-//nolint:revive // MergeAndPublish reads more clearly at call sites than merge.AndPublish or merge.Publish.
-func MergeAndPublish(c Client, path, body string, expectedVersion, maxRetries int, meta map[string]string) (Outcome, error) {
+// expectedVersion = 0 means create-only. Conflicts in that mode merge
+// against an empty base — non-overlapping insertions on both sides make it
+// through cleanly; overlapping insertions get markers.
+func Candidate(c Client, path, body string, expectedVersion int, meta map[string]string) (Outcome, error) {
 	if expectedVersion < 0 {
 		return Outcome{}, ErrInvalidExpectedVersion
 	}
 
-	first, err := c.Publish(path, body, expectedVersion, meta)
+	pub, err := c.Publish(path, body, expectedVersion, meta)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("initial publish: %w", err)
+		return Outcome{}, fmt.Errorf("publish: %w", err)
 	}
-	if first.Status != statusConflict {
-		return Outcome{Status: OutcomeOK, Publish: first}, nil
-	}
-	// expectedVersion == 0 means "create only". A conflict here means the
-	// document already exists; there is no base to merge from.
-	if expectedVersion == 0 {
-		return Outcome{
-			Status:       OutcomeConflict,
-			TheirVersion: first.ServerVersion,
-		}, nil
+	if pub.Status != statusConflict {
+		return Outcome{Status: OutcomeOK, Publish: pub}, nil
 	}
 
-	base, err := c.FetchVersion(path, expectedVersion)
+	base := ""
+	if expectedVersion > 0 {
+		baseDoc, err := c.FetchVersion(path, expectedVersion)
+		if err != nil {
+			return Outcome{}, fmt.Errorf("fetch base v%d: %w", expectedVersion, err)
+		}
+		if baseDoc.Status != statusOK {
+			return Outcome{}, fmt.Errorf("fetch base v%d: status %s", expectedVersion, baseDoc.Status)
+		}
+		base = baseDoc.Body
+	}
+
+	latest, err := c.FetchCurrent(path)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("fetch base v%d: %w", expectedVersion, err)
+		return Outcome{}, fmt.Errorf("fetch current: %w", err)
 	}
-	if base.Status != statusOK {
-		return Outcome{}, fmt.Errorf("fetch base v%d: status %s", expectedVersion, base.Status)
-	}
-
-	// mergeBase advances forward with each retry: after a successful diff3
-	// the merged body is "based on" whatever latest we just merged with,
-	// so the next iteration uses that as base. Otherwise we'd re-conflict
-	// on the prior iteration's already-resolved changes.
-	mergeBase := base.Body
-	mergeOurs := body
-	merged := false
-	lastLatestVersion := 0
-
-	for attempt := range maxRetries {
-		latest, err := c.FetchCurrent(path)
-		if err != nil {
-			return Outcome{}, fmt.Errorf("fetch latest: %w", err)
-		}
-		if latest.Status != statusOK {
-			return Outcome{}, fmt.Errorf("fetch latest: status %s", latest.Status)
-		}
-		lastLatestVersion = latest.Version
-
-		mergeRes := Diff3(mergeBase, mergeOurs, latest.Body)
-		merged = true
-		if mergeRes.Conflict {
-			return Outcome{
-				Status:       OutcomeConflict,
-				Merged:       true,
-				BaseVersion:  expectedVersion,
-				TheirVersion: latest.Version,
-				ConflictBody: mergeRes.Body,
-				Retries:      attempt,
-			}, nil
-		}
-
-		next, err := c.Publish(path, mergeRes.Body, latest.Version, meta)
-		if err != nil {
-			return Outcome{}, fmt.Errorf("publish merged (attempt %d): %w", attempt+1, err)
-		}
-		if next.Status != statusConflict {
-			return Outcome{
-				Status:       OutcomeOK,
-				Publish:      next,
-				Merged:       merged,
-				BaseVersion:  expectedVersion,
-				TheirVersion: latest.Version,
-				Retries:      attempt + 1,
-			}, nil
-		}
-
-		mergeBase = latest.Body
-		mergeOurs = mergeRes.Body
+	if latest.Status != statusOK {
+		return Outcome{}, fmt.Errorf("fetch current: status %s", latest.Status)
 	}
 
+	merged := Diff3(base, body, latest.Body)
 	return Outcome{
-		Status:       OutcomeContention,
-		Merged:       merged,
-		BaseVersion:  expectedVersion,
-		TheirVersion: lastLatestVersion,
-		Retries:      maxRetries,
+		Status:           OutcomeCandidate,
+		Body:             merged.Body,
+		HasMarkers:       merged.Conflict,
+		BaseVersion:      expectedVersion,
+		TheirVersion:     latest.Version,
+		PublishAtVersion: latest.Version,
 	}, nil
 }
