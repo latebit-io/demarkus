@@ -201,10 +201,11 @@ func markPublishTool(host string) mcp.Tool {
 				"Use 0 when creating a new document. "+
 				"on_conflict controls behavior when the version check fails. Default \"merge\" "+
 				"returns a structurally-merged candidate body (with git-style conflict markers "+
-				"if both sides edited the same lines) for the agent to semantically verify and "+
-				"republish at publish-at-version — preventing the silent content loss that "+
-				"happens when callers naively republish their stale body. Pass \"fail\" to opt "+
-				"out and get the strict conflict response with no merge attempt. "+
+				"if both sides edited the same lines) for the agent to semantically verify, "+
+				"then call mark_publish again with expected_version set to the returned "+
+				"publish-at-version. This prevents the silent content loss that happens when "+
+				"callers naively republish their stale body. Pass \"fail\" to opt out and get "+
+				"the strict conflict response with no merge attempt. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -220,7 +221,7 @@ func markPublishTool(host string) mcp.Tool {
 			mcp.Description("version number from a prior fetch for conflict detection; use 0 when creating a new document"),
 		),
 		mcp.WithString("on_conflict",
-			mcp.Description("conflict behavior: \"merge\" (default) returns a structurally-merged candidate body the agent verifies and republishes; \"fail\" opts out and returns the raw conflict status"),
+			mcp.Description("conflict behavior: \"merge\" (default) returns a merge-candidate body; the agent reviews it (resolving any conflict markers) and calls mark_publish again with expected_version set to the returned publish-at-version. \"fail\" opts out and returns the raw conflict status."),
 		),
 	)
 }
