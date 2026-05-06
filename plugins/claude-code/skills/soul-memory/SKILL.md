@@ -1,9 +1,9 @@
 ---
-name: memory
+name: soul-memory
 description: Use when the user wants to remember, save, recall, or query personal notes that should persist across Claude Code sessions. Routes through the demarkus-memory MCP tools against a local versioned markdown store organized by project.
 ---
 
-# Memory
+# Soul Memory
 
 This skill routes "remember" / "recall" intents through the `demarkus-memory` MCP server (a local demarkus-server), which provides a versioned, link-graph-aware personal memory store. The store is organized by project: top-level `/index.md` is a project list, and each project lives at `/<slug>/` with a consistent internal structure.
 
