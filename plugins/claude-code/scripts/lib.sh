@@ -162,6 +162,14 @@ ensure_binaries() {
     install -m 0755 "${tmp}/demarkus-token"  "${PLUGIN_BIN_DIR}/demarkus-token"
     install -m 0755 "${tmp}/demarkus-mcp"    "${PLUGIN_BIN_DIR}/demarkus-mcp"
   )
+  # Check the subshell exit explicitly rather than relying on the caller's
+  # set -e. If any download or install step failed, drop the sentinel so the
+  # next ensure_binaries call retries instead of trusting partial binaries.
+  local install_rc=$?
+  if (( install_rc != 0 )); then
+    rm -f "${PLUGIN_VERSION_FILE}"
+    return "${install_rc}"
+  fi
 
   # Record installed versions so subsequent ensure_binaries calls can detect
   # drift after a plugin update bumps SERVER_VERSION / CLIENT_VERSION.
