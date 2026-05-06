@@ -26,7 +26,13 @@ readonly ISOLATED_PORT_START=16310
 readonly ISOLATED_PORT_END=16509
 
 readonly SERVER_VERSION="0.17.4"
-readonly CLIENT_VERSION="0.12.24"
+readonly CLIENT_VERSION="0.12.26"
+
+# Sentinel file recording the SERVER/CLIENT versions of the binaries currently
+# installed at PLUGIN_BIN_DIR. ensure_binaries compares this against the
+# pinned versions above and re-downloads on drift, so a plugin update that
+# bumps the pins propagates to existing installs on next session start.
+readonly PLUGIN_VERSION_FILE="${PLUGIN_BIN_DIR}/.versions"
 
 log()  { echo "[demarkus-memory] $*" >&2; }
 warn() { echo "[demarkus-memory] warning: $*" >&2; }
@@ -92,12 +98,31 @@ sha256_verify() {
     || die "checksum mismatch for ${archive} (expected ${expected}, got ${actual})"
 }
 
-# ensure_binaries — download + install to PLUGIN_BIN_DIR if any are missing.
+# _installed_versions — emits the recorded versions string (or empty).
+_installed_versions() {
+  [[ -f "${PLUGIN_VERSION_FILE}" ]] && cat "${PLUGIN_VERSION_FILE}" || echo ""
+}
+
+# _desired_versions — the version pin the plugin currently expects.
+_desired_versions() {
+  echo "server=${SERVER_VERSION},client=${CLIENT_VERSION}"
+}
+
+# ensure_binaries — download + install to PLUGIN_BIN_DIR if any are missing
+# or if the recorded versions don't match the pins above. The version
+# sentinel lets a CLIENT_VERSION/SERVER_VERSION bump propagate to existing
+# installs on the next session start; without it, ensure_binaries would
+# never re-fetch and users would silently stay on an old release.
 ensure_binaries() {
   if [[ -x "${PLUGIN_BIN_DIR}/demarkus-server" \
      && -x "${PLUGIN_BIN_DIR}/demarkus-mcp" \
-     && -x "${PLUGIN_BIN_DIR}/demarkus-token" ]]; then
+     && -x "${PLUGIN_BIN_DIR}/demarkus-token" \
+     && "$(_installed_versions)" == "$(_desired_versions)" ]]; then
     return 0
+  fi
+
+  if [[ -n "$(_installed_versions)" && "$(_installed_versions)" != "$(_desired_versions)" ]]; then
+    log "binary version drift detected (installed=$(_installed_versions), desired=$(_desired_versions)); re-downloading"
   fi
 
   mkdir -p "${PLUGIN_BIN_DIR}"
@@ -137,6 +162,19 @@ ensure_binaries() {
     install -m 0755 "${tmp}/demarkus-token"  "${PLUGIN_BIN_DIR}/demarkus-token"
     install -m 0755 "${tmp}/demarkus-mcp"    "${PLUGIN_BIN_DIR}/demarkus-mcp"
   )
+  # Check the subshell exit explicitly rather than relying on the caller's
+  # set -e. If any download or install step failed, drop the sentinel so the
+  # next ensure_binaries call retries instead of trusting partial binaries.
+  local install_rc=$?
+  if (( install_rc != 0 )); then
+    rm -f "${PLUGIN_VERSION_FILE}"
+    return "${install_rc}"
+  fi
+
+  # Record installed versions so subsequent ensure_binaries calls can detect
+  # drift after a plugin update bumps SERVER_VERSION / CLIENT_VERSION.
+  printf 'server=%s,client=%s\n' "${SERVER_VERSION}" "${CLIENT_VERSION}" > "${PLUGIN_VERSION_FILE}"
+
   log "binaries installed to ${PLUGIN_BIN_DIR}"
 }
 
