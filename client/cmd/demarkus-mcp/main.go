@@ -199,10 +199,12 @@ func markPublishTool(host string) mcp.Tool {
 				"number from a prior fetch to detect conflicts. If the document has been "+
 				"modified since that version, the server returns a conflict status. "+
 				"Use 0 when creating a new document. "+
-				"on_conflict controls behavior when the version check fails: \"fail\" (default) "+
-				"returns the conflict as today; \"merge\" returns a structurally-merged candidate "+
-				"body (with git-style conflict markers if both sides edited the same lines) for "+
-				"the agent to semantically verify and republish at publish-at-version. "+
+				"on_conflict controls behavior when the version check fails. Default \"merge\" "+
+				"returns a structurally-merged candidate body (with git-style conflict markers "+
+				"if both sides edited the same lines) for the agent to semantically verify and "+
+				"republish at publish-at-version — preventing the silent content loss that "+
+				"happens when callers naively republish their stale body. Pass \"fail\" to opt "+
+				"out and get the strict conflict response with no merge attempt. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -454,7 +456,13 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("expected_version is required"), nil
 	}
 
-	onConflict := req.GetString("on_conflict", "fail")
+	// Default is "merge": on conflict, return a structurally-merged candidate
+	// for the agent to verify and republish. Callers wanting the strict
+	// optimistic-concurrency behavior (a hard conflict response with no merge
+	// attempt) opt out with on_conflict: "fail". Default flipped because the
+	// whole point of the feature is preventing content loss; "fail" left as
+	// default would mean naive callers never benefit.
+	onConflict := req.GetString("on_conflict", "merge")
 	switch onConflict {
 	case "fail":
 		// fall through to plain publish
