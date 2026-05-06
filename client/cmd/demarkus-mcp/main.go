@@ -220,7 +220,7 @@ func markPublishTool(host string) mcp.Tool {
 			mcp.Description("version number from a prior fetch for conflict detection; use 0 when creating a new document"),
 		),
 		mcp.WithString("on_conflict",
-			mcp.Description("conflict behavior: \"fail\" (default) or \"merge\" (diff3 merge with retry, escalates to git-style markers on overlap)"),
+			mcp.Description("conflict behavior: \"merge\" (default) returns a structurally-merged candidate body the agent verifies and republishes; \"fail\" opts out and returns the raw conflict status"),
 		),
 	)
 }
