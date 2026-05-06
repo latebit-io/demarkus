@@ -468,8 +468,14 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 	// optimistic-concurrency behavior (a hard conflict response with no merge
 	// attempt) opt out with on_conflict: "fail". Default flipped because the
 	// whole point of the feature is preventing content loss; "fail" left as
-	// default would mean naive callers never benefit.
-	onConflict := req.GetString("on_conflict", "merge")
+	// default would mean naive callers never benefit. An explicit empty or
+	// whitespace-only value is normalized to the default — MCP clients
+	// commonly send blank strings for optional fields, and rejecting them
+	// would turn the default path into a needless tool error.
+	onConflict := strings.TrimSpace(req.GetString("on_conflict", "merge"))
+	if onConflict == "" {
+		onConflict = "merge"
+	}
 	switch onConflict {
 	case "fail":
 		// fall through to plain publish

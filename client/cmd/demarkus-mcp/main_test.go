@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -1416,6 +1417,41 @@ func TestHandlerMarkPublish_NegativeExpectedVersionRejected(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			assertIsToolError(t, result, "expected_version must be >= 0")
+		})
+	}
+}
+
+func TestHandlerMarkPublish_BlankOnConflictUsesDefault(t *testing.T) {
+	// MCP clients commonly send blank strings for optional fields. An
+	// explicit empty or whitespace-only on_conflict should behave like
+	// omission (default "merge"), not produce an invalid-value error.
+	for _, blank := range []string{"", " ", "\t"} {
+		t.Run(fmt.Sprintf("on_conflict=%q", blank), func(t *testing.T) {
+			sc := &stubClient{
+				publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+					// Return ok so we don't need fetch fixtures — we just
+					// want to verify the request was routed to the merge
+					// branch (which short-circuits to OutcomeOK on success)
+					// rather than rejected as invalid.
+					return fetch.Result{Response: protocol.Response{
+						Status:   protocol.StatusCreated,
+						Metadata: map[string]string{"version": "1"},
+					}}, nil
+				},
+			}
+			h := &handler{client: sc, token: "test"}
+			result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+				"url":              "mark://example.com/doc.md",
+				"body":             "x",
+				"expected_version": float64(0),
+				"on_conflict":      blank,
+			}))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.IsError {
+				t.Fatalf("blank on_conflict should not error; got: %v", result.Content)
+			}
 		})
 	}
 }
