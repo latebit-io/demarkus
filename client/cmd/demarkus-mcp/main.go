@@ -456,6 +456,12 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 	if err != nil {
 		return mcp.NewToolResultError("expected_version is required"), nil
 	}
+	// Validate before the on_conflict switch so both branches (merge and
+	// fail) reject invalid input the same way and surface a clear local
+	// error rather than forwarding it to the server.
+	if expectedVersion < 0 {
+		return mcp.NewToolResultError("expected_version must be >= 0"), nil
+	}
 
 	// Default is "merge": on conflict, return a structurally-merged candidate
 	// for the agent to verify and republish. Callers wanting the strict

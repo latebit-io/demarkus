@@ -1395,6 +1395,31 @@ func TestHandlerMarkPublish_OnConflictInvalid(t *testing.T) {
 	assertIsToolError(t, result, "invalid on_conflict")
 }
 
+func TestHandlerMarkPublish_NegativeExpectedVersionRejected(t *testing.T) {
+	// expected_version < 0 must be rejected at the handler level on both
+	// the merge path (where merge.Candidate would catch it) and the fail
+	// path (which would otherwise forward the invalid value to the server).
+	// Same input, same error, regardless of on_conflict.
+	for _, onConflict := range []string{"", "merge", "fail"} {
+		t.Run("on_conflict="+onConflict, func(t *testing.T) {
+			args := map[string]any{
+				"url":              "mark://example.com/doc.md",
+				"body":             "x",
+				"expected_version": float64(-1),
+			}
+			if onConflict != "" {
+				args["on_conflict"] = onConflict
+			}
+			h := &handler{client: &stubClient{}, token: "test"}
+			result, err := h.markPublish(context.Background(), newCallToolRequest(args))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assertIsToolError(t, result, "expected_version must be >= 0")
+		})
+	}
+}
+
 func TestHandlerMarkPublish_DefaultIsMerge(t *testing.T) {
 	// Omitting on_conflict should follow the merge path: a server conflict
 	// returns a structurally-merged candidate, not a flat conflict response.
