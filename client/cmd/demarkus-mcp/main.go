@@ -199,10 +199,13 @@ func markPublishTool(host string) mcp.Tool {
 				"number from a prior fetch to detect conflicts. If the document has been "+
 				"modified since that version, the server returns a conflict status. "+
 				"Use 0 when creating a new document. "+
-				"on_conflict controls behavior when the version check fails: \"fail\" (default) "+
-				"returns the conflict as today; \"merge\" returns a structurally-merged candidate "+
-				"body (with git-style conflict markers if both sides edited the same lines) for "+
-				"the agent to semantically verify and republish at publish-at-version. "+
+				"on_conflict controls behavior when the version check fails. Default \"merge\" "+
+				"returns a structurally-merged candidate body (with git-style conflict markers "+
+				"if both sides edited the same lines) for the agent to semantically verify, "+
+				"then call mark_publish again with expected_version set to the returned "+
+				"publish-at-version. This prevents the silent content loss that happens when "+
+				"callers naively republish their stale body. Pass \"fail\" to opt out and get "+
+				"the strict conflict response with no merge attempt. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -218,7 +221,7 @@ func markPublishTool(host string) mcp.Tool {
 			mcp.Description("version number from a prior fetch for conflict detection; use 0 when creating a new document"),
 		),
 		mcp.WithString("on_conflict",
-			mcp.Description("conflict behavior: \"fail\" (default) or \"merge\" (diff3 merge with retry, escalates to git-style markers on overlap)"),
+			mcp.Description("conflict behavior: \"merge\" (default) returns a merge-candidate body; the agent reviews it (resolving any conflict markers) and calls mark_publish again with expected_version set to the returned publish-at-version. \"fail\" opts out and returns the raw conflict status."),
 		),
 	)
 }
@@ -453,8 +456,26 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 	if err != nil {
 		return mcp.NewToolResultError("expected_version is required"), nil
 	}
+	// Validate before the on_conflict switch so both branches (merge and
+	// fail) reject invalid input the same way and surface a clear local
+	// error rather than forwarding it to the server.
+	if expectedVersion < 0 {
+		return mcp.NewToolResultError("expected_version must be >= 0"), nil
+	}
 
-	onConflict := req.GetString("on_conflict", "fail")
+	// Default is "merge": on conflict, return a structurally-merged candidate
+	// for the agent to verify and republish. Callers wanting the strict
+	// optimistic-concurrency behavior (a hard conflict response with no merge
+	// attempt) opt out with on_conflict: "fail". Default flipped because the
+	// whole point of the feature is preventing content loss; "fail" left as
+	// default would mean naive callers never benefit. An explicit empty or
+	// whitespace-only value is normalized to the default — MCP clients
+	// commonly send blank strings for optional fields, and rejecting them
+	// would turn the default path into a needless tool error.
+	onConflict := strings.TrimSpace(req.GetString("on_conflict", "merge"))
+	if onConflict == "" {
+		onConflict = "merge"
+	}
 	switch onConflict {
 	case "fail":
 		// fall through to plain publish

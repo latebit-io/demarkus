@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -1393,6 +1394,157 @@ func TestHandlerMarkPublish_OnConflictInvalid(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertIsToolError(t, result, "invalid on_conflict")
+}
+
+func TestHandlerMarkPublish_NegativeExpectedVersionRejected(t *testing.T) {
+	// expected_version < 0 must be rejected at the handler level on both
+	// the merge path (where merge.Candidate would catch it) and the fail
+	// path (which would otherwise forward the invalid value to the server).
+	// Same input, same error, regardless of on_conflict.
+	for _, onConflict := range []string{"", "merge", "fail"} {
+		t.Run("on_conflict="+onConflict, func(t *testing.T) {
+			args := map[string]any{
+				"url":              "mark://example.com/doc.md",
+				"body":             "x",
+				"expected_version": float64(-1),
+			}
+			if onConflict != "" {
+				args["on_conflict"] = onConflict
+			}
+			h := &handler{client: &stubClient{}, token: "test"}
+			result, err := h.markPublish(context.Background(), newCallToolRequest(args))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assertIsToolError(t, result, "expected_version must be >= 0")
+		})
+	}
+}
+
+func TestHandlerMarkPublish_BlankOnConflictUsesDefault(t *testing.T) {
+	// MCP clients commonly send blank strings for optional fields. An
+	// explicit empty or whitespace-only on_conflict should behave like
+	// omission (default "merge"), not produce an invalid-value error.
+	for _, blank := range []string{"", " ", "\t"} {
+		t.Run(fmt.Sprintf("on_conflict=%q", blank), func(t *testing.T) {
+			sc := &stubClient{
+				publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+					// Return ok so we don't need fetch fixtures — we just
+					// want to verify the request was routed to the merge
+					// branch (which short-circuits to OutcomeOK on success)
+					// rather than rejected as invalid.
+					return fetch.Result{Response: protocol.Response{
+						Status:   protocol.StatusCreated,
+						Metadata: map[string]string{"version": "1"},
+					}}, nil
+				},
+			}
+			h := &handler{client: sc, token: "test"}
+			result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+				"url":              "mark://example.com/doc.md",
+				"body":             "x",
+				"expected_version": float64(0),
+				"on_conflict":      blank,
+			}))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.IsError {
+				t.Fatalf("blank on_conflict should not error; got: %v", result.Content)
+			}
+		})
+	}
+}
+
+func TestHandlerMarkPublish_DefaultIsMerge(t *testing.T) {
+	// Omitting on_conflict should follow the merge path: a server conflict
+	// returns a structurally-merged candidate, not a flat conflict response.
+	// This is the default-flip in v0.12.26 — protective behavior by default.
+	sc := &stubClient{
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			switch path {
+			case "/doc.md/v5":
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "5"},
+					Body:     "a\nb\nc\n",
+				}}, nil
+			case "/doc.md":
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "6"},
+					Body:     "a\nb\nC\n",
+				}}, nil
+			}
+			return fetch.Result{}, nil
+		},
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusConflict,
+				Metadata: map[string]string{"server-version": "6"},
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test"}
+	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "a\nB\nc\n",
+		"expected_version": float64(5),
+		// on_conflict deliberately omitted — default should be merge.
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "status: merge-candidate") {
+		t.Errorf("default behavior should be merge, got:\n%s", text)
+	}
+}
+
+func TestHandlerMarkPublish_OnConflictFail_OptOut(t *testing.T) {
+	// Explicit on_conflict: "fail" preserves strict optimistic-concurrency
+	// semantics — a server conflict reaches the agent verbatim, no diff3.
+	var fetchCalls int
+	sc := &stubClient{
+		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+			fetchCalls++
+			return fetch.Result{}, nil
+		},
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusConflict,
+				Metadata: map[string]string{"server-version": "6", "your-version": "5"},
+			}}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test"}
+	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "x",
+		"expected_version": float64(5),
+		"on_conflict":      "fail",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	if fetchCalls != 0 {
+		t.Errorf("fail mode must not fetch base/current; saw %d fetches", fetchCalls)
+	}
+	text := result.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "status: conflict") {
+		t.Errorf("fail mode should surface raw conflict status, got:\n%s", text)
+	}
+	if strings.Contains(text, "merge-candidate") {
+		t.Errorf("fail mode must not produce a merge candidate, got:\n%s", text)
+	}
 }
 
 func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess(t *testing.T) {
