@@ -20,6 +20,11 @@ type File struct {
 // definitive collision; minting must not silently overwrite.
 var ErrLabelExists = errors.New("label already exists")
 
+// ErrNilEntry is returned by AppendEntry when the provided entry pointer
+// is nil. Returning rather than panicking lets the broker recover from a
+// programming error without crashing its issuance loop.
+var ErrNilEntry = errors.New("entry is required")
+
 // ReadFile decodes a tokens.toml from disk. A non-existent file is reported
 // as os.ErrNotExist via errors.Is; callers can treat that as an empty File.
 // The Tokens map on the returned File is always non-nil.
@@ -44,8 +49,12 @@ func ReadFile(path string) (File, error) {
 // from the same host are safe; concurrent writers across NFS or other
 // filesystems without working flock are not.
 //
-// Returns ErrLabelExists if the label is already present.
+// Returns ErrLabelExists if the label is already present, or ErrNilEntry
+// if entry is nil.
 func AppendEntry(path, label string, entry *Entry) error {
+	if entry == nil {
+		return ErrNilEntry
+	}
 	return withLockedFile(path, func() error {
 		if existing, err := ReadFile(path); err == nil {
 			if _, present := existing.Tokens[label]; present {
@@ -124,17 +133,27 @@ func withLockedFile(path string, fn func() error) error {
 // whitespace, or other characters are emitted as quoted keys, e.g.
 // `[tokens."with.dot"]`, which is otherwise valid TOML and round-trips
 // through ReadFile to the same map key.
+//
+// Entry.Expires is emitted only when non-empty, matching the `omitempty`
+// semantics of the struct tag. Callers must pass a non-nil entry; panics
+// on nil are a programmer error and the call site in AppendEntry guards
+// against that path.
 func FormatEntry(label string, entry *Entry) string {
 	keyExpr := label
 	if !isBareTOMLKey(label) {
 		keyExpr = strconv.Quote(label)
 	}
-	return fmt.Sprintf("\n[tokens.%s]\nhash = %q\npaths = [%s]\noperations = [%s]\n",
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n[tokens.%s]\nhash = %q\npaths = [%s]\noperations = [%s]\n",
 		keyExpr,
 		entry.Hash,
 		quotedList(entry.Paths),
 		quotedList(entry.Operations),
 	)
+	if entry.Expires != "" {
+		fmt.Fprintf(&b, "expires = %q\n", entry.Expires)
+	}
+	return b.String()
 }
 
 // isBareTOMLKey reports whether s is a valid TOML bare key — the unquoted

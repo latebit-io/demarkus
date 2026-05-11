@@ -215,6 +215,79 @@ func TestFormatEntryShape(t *testing.T) {
 	}
 }
 
+// TestFormatEntryExpires verifies the `expires` line is emitted when
+// Entry.Expires is set, and omitted otherwise (matching `omitempty` on the
+// struct tag). The broker depends on this — short-lived tokens with a
+// non-empty Expires field would otherwise be silently written as
+// never-expiring entries.
+func TestFormatEntryExpires(t *testing.T) {
+	t.Run("emitted when non-empty", func(t *testing.T) {
+		entry := Entry{
+			Hash:       "sha256-aaa",
+			Paths:      []string{"/*"},
+			Operations: []string{"publish"},
+			Expires:    "2026-05-12T15:04:05Z",
+		}
+		got := FormatEntry("writer", &entry)
+		want := "\n[tokens.writer]\nhash = \"sha256-aaa\"\npaths = [\"/*\"]\noperations = [\"publish\"]\nexpires = \"2026-05-12T15:04:05Z\"\n"
+		if got != want {
+			t.Errorf("FormatEntry with Expires:\ngot:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("omitted when empty", func(t *testing.T) {
+		entry := Entry{
+			Hash:       "sha256-aaa",
+			Paths:      []string{"/*"},
+			Operations: []string{"publish"},
+		}
+		got := FormatEntry("writer", &entry)
+		if strings.Contains(got, "expires") {
+			t.Errorf("FormatEntry emitted expires line for empty value:\n%s", got)
+		}
+	})
+}
+
+// TestAppendEntryExpiresRoundTrip verifies an Expires value survives
+// AppendEntry → ReadFile. This is the broker's primary write path; a
+// regression here would silently produce never-expiring tokens.
+func TestAppendEntryExpiresRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.toml")
+	entry := Entry{
+		Hash:       "sha256-aaa",
+		Paths:      []string{"/team/*"},
+		Operations: []string{"publish"},
+		Expires:    "2026-05-12T15:04:05Z",
+	}
+	if err := AppendEntry(path, "broker-issued", &entry); err != nil {
+		t.Fatalf("AppendEntry: %v", err)
+	}
+	got, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	stored, ok := got.Tokens["broker-issued"]
+	if !ok {
+		t.Fatal("label missing after round-trip")
+	}
+	if stored.Expires != entry.Expires {
+		t.Errorf("Expires lost in round-trip: got %q, want %q", stored.Expires, entry.Expires)
+	}
+}
+
+// TestAppendEntryNil verifies AppendEntry rejects a nil entry with
+// ErrNilEntry rather than panicking.
+func TestAppendEntryNil(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.toml")
+	if err := AppendEntry(path, "writer", nil); !errors.Is(err, ErrNilEntry) {
+		t.Errorf("AppendEntry(nil): err = %v, want ErrNilEntry", err)
+	}
+	// The file must not be created as a side effect of the nil-entry call.
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("tokens file should not exist after nil-entry rejection: stat err = %v", err)
+	}
+}
+
 // TestFormatEntryQuotedKeyRoundTrip verifies that a label written with a
 // quoted TOML key reads back as the same map key — protecting against the
 // regression where unquoted dotted labels parsed as nested tables.
