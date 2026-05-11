@@ -1,0 +1,130 @@
+# Default values for demarkus-server.
+# Override with --values or --set on `helm install`.
+
+image:
+  # Must include demarkus-server, demarkus (CLI for probes), and demarkus-token.
+  repository: ghcr.io/latebit-io/demarkus-server
+  # tag defaults to .Chart.appVersion when empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Pod count. Multi-replica with shared content is a Phase 7 concern; keep at 1.
+replicaCount: 1
+
+server:
+  # UDP port the server listens on. Default protocol port. Override to 443 for
+  # VPN/middlebox-hostile networks (Cloudflare Warp, corp firewalls that filter
+  # non-standard UDP).
+  udpPort: 6309
+
+  # Reject all write operations (FETCH/LIST/VERSIONS only).
+  readOnly: false
+
+  # Extra args appended to the server command line.
+  extraArgs: []
+
+# Service exposing the server. LoadBalancer with protocol UDP is the standard
+# path on managed Kubernetes (GKE, EKS); use ClusterIP/NodePort for local dev.
+service:
+  type: LoadBalancer
+  # Optional: bind LB to a specific external IP (if your cloud supports it).
+  loadBalancerIP: ""
+  # Cloud-specific Service annotations (e.g. AWS NLB selection).
+  annotations: {}
+  #   service.beta.kubernetes.io/aws-load-balancer-type: nlb
+
+# Persistent storage for the versioned content store.
+storage:
+  className: ""        # cluster-default if empty
+  size: 5Gi
+  accessMode: ReadWriteOnce
+
+# TLS — server speaks QUIC, so TLS is mandatory. Three modes:
+#   1. existingSecret: reference a pre-existing tls Secret (cert-manager, etc.)
+#   2. certManager.enabled=true: chart provisions a cert-manager Certificate
+#   3. neither set: server auto-generates a self-signed dev cert at startup
+tls:
+  existingSecret: ""
+
+  certManager:
+    enabled: false
+    issuerRef:
+      kind: ClusterIssuer
+      name: letsencrypt-prod
+    # If empty, defaults to <release>.<namespace>.svc.cluster.local
+    dnsNames: []
+    # Annotations on the Certificate resource.
+    annotations: {}
+
+# Initial admin token.
+# - If you provide tokens.admin.token (raw), the chart uses it as-is.
+# - Otherwise the chart auto-generates one on first install and preserves it
+#   across helm upgrades via `lookup` on the existing Secret.
+# - The chart writes TWO Secrets:
+#     <release>-tokens         server-mounted, contains TOML with hash only
+#     <release>-token-values   raw token, for the broker to read/revoke
+#   These are kept separate so the server never mounts raw token bytes.
+tokens:
+  admin:
+    label: admin
+    paths: ["/*"]
+    operations: ["publish", "read"]
+    # Explicit token value; if empty, auto-generated on first install.
+    token: ""
+
+  # When true, also emit the <release>-token-values Secret with the raw value.
+  # Required when the broker manages this world. Default true.
+  emitRawValues: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+
+# Liveness + readiness use the demarkus CLI fetching /.well-known/agent-manifest.md
+# (always public per /architecture.md). Cache disabled via -no-cache so probe
+# does not write to the read-only root filesystem.
+probes:
+  enabled: true
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  workloadIdentity:
+    gsa: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}

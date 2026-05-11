@@ -1,0 +1,23 @@
+{{- if .Values.tls.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "demarkus-server.fullname" . }}-tls
+  labels:
+    {{- include "demarkus-server.labels" . | nindent 4 }}
+  {{- with .Values.tls.certManager.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  secretName: {{ include "demarkus-server.tlsSecretName" . }}
+  issuerRef:
+    kind: {{ .Values.tls.certManager.issuerRef.kind }}
+    name: {{ .Values.tls.certManager.issuerRef.name }}
+  dnsNames:
+    {{- if .Values.tls.certManager.dnsNames }}
+    {{- toYaml .Values.tls.certManager.dnsNames | nindent 4 }}
+    {{- else }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "demarkus-server.fullname" .) .Release.Namespace | quote }}
+    {{- end }}
+{{- end }}

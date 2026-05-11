@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "demarkus-server.fullname" . }}
+  labels:
+    {{- include "demarkus-server.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP | quote }}
+  {{- end }}
+  selector:
+    {{- include "demarkus-server.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: mark
+      protocol: UDP
+      port: {{ .Values.server.udpPort }}
+      targetPort: mark

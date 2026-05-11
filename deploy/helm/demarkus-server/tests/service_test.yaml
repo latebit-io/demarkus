@@ -1,0 +1,43 @@
+suite: service
+templates:
+  - service.yaml
+tests:
+  - it: renders a LoadBalancer UDP Service by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: spec.ports[0].port
+          value: 6309
+      - equal:
+          path: spec.ports[0].protocol
+          value: UDP
+
+  - it: service.type override switches to ClusterIP
+    set:
+      service.type: ClusterIP
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: loadBalancerIP set when type is LoadBalancer and IP provided
+    set:
+      service.loadBalancerIP: 34.10.20.30
+    asserts:
+      - equal:
+          path: spec.loadBalancerIP
+          value: 34.10.20.30
+
+  - it: cloud annotations propagate
+    set:
+      service.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-type: nlb
+    asserts:
+      - equal:
+          path: metadata.annotations["service.beta.kubernetes.io/aws-load-balancer-type"]
+          value: nlb
