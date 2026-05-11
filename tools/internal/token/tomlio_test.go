@@ -145,27 +145,69 @@ func TestAppendEntry(t *testing.T) {
 }
 
 func TestWriteFileAtomic(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tokens.toml")
-	file := File{Tokens: map[string]Entry{
-		"writer": {Hash: "sha256-aaa", Paths: []string{"/docs/*"}, Operations: []string{"publish"}},
-	}}
-	if err := WriteFile(path, file); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	t.Run("creates file when missing", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "tokens.toml")
+		file := File{Tokens: map[string]Entry{
+			"writer": {Hash: "sha256-aaa", Paths: []string{"/docs/*"}, Operations: []string{"publish"}},
+		}}
+		if err := WriteFile(path, file); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf(".tmp file not cleaned up: stat err = %v", err)
+		}
+		got, err := ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile after WriteFile: %v", err)
+		}
+		if got.Tokens["writer"].Hash != "sha256-aaa" {
+			t.Errorf("round-trip hash = %q, want sha256-aaa", got.Tokens["writer"].Hash)
+		}
+	})
 
-	// Temp file must be gone after successful rename.
-	if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf(".tmp file not cleaned up: stat err = %v", err)
-	}
+	t.Run("overwrites existing file completely", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "tokens.toml")
 
-	// Round-trip: read it back and confirm the entry.
-	got, err := ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile after WriteFile: %v", err)
-	}
-	if got.Tokens["writer"].Hash != "sha256-aaa" {
-		t.Errorf("round-trip hash = %q, want sha256-aaa", got.Tokens["writer"].Hash)
-	}
+		// Seed: file with one label.
+		seed := File{Tokens: map[string]Entry{
+			"old-writer": {Hash: "sha256-old", Paths: []string{"/old/*"}, Operations: []string{"publish"}},
+		}}
+		if err := WriteFile(path, seed); err != nil {
+			t.Fatalf("WriteFile seed: %v", err)
+		}
+
+		// Overwrite: a completely different file.
+		replacement := File{Tokens: map[string]Entry{
+			"new-writer": {Hash: "sha256-new", Paths: []string{"/new/*"}, Operations: []string{"read"}},
+		}}
+		if err := WriteFile(path, replacement); err != nil {
+			t.Fatalf("WriteFile overwrite: %v", err)
+		}
+		if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf(".tmp file not cleaned up after overwrite: stat err = %v", err)
+		}
+
+		got, err := ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile after overwrite: %v", err)
+		}
+		if _, present := got.Tokens["old-writer"]; present {
+			t.Error("old label survived overwrite; WriteFile must replace, not merge")
+		}
+		stored, ok := got.Tokens["new-writer"]
+		if !ok {
+			t.Fatal("new label missing after overwrite")
+		}
+		if stored.Hash != "sha256-new" {
+			t.Errorf("new hash = %q, want sha256-new", stored.Hash)
+		}
+		if len(stored.Paths) != 1 || stored.Paths[0] != "/new/*" {
+			t.Errorf("new paths = %v, want [/new/*]", stored.Paths)
+		}
+		if len(stored.Operations) != 1 || stored.Operations[0] != "read" {
+			t.Errorf("new operations = %v, want [read]", stored.Operations)
+		}
+	})
 }
 
 func TestFormatEntryShape(t *testing.T) {

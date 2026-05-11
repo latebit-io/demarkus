@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -107,6 +108,13 @@ func WriteFile(path string, file File) error {
 // io.Writer pointing at the temp file. The temp file is removed on any
 // failure path; on success only the destination remains.
 //
+// The publish is both atomic (concurrent readers see either the old file
+// or the new one, never a partial write) and durable (an fsync(2) on the
+// data file before close plus an fsync(2) on the containing directory
+// after rename ensures the update survives an OS-level crash immediately
+// after the call returns). Both are properties operators expect from
+// `demarkus-token revoke` and the broker's issuance loop.
+//
 // Callers are expected to hold the appropriate advisory lock via
 // withLockedFile. writeAtomic itself does not lock — locking and
 // atomic-publish are separate concerns combined at the call sites.
@@ -121,6 +129,11 @@ func writeAtomic(path string, fn func(io.Writer) error) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("fsync temp tokens file %q: %w", tmp, err)
+	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("close temp tokens file %q: %w", tmp, err)
@@ -128,6 +141,21 @@ func writeAtomic(path string, fn func(io.Writer) error) error {
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("rename %q to %q: %w", tmp, path, err)
+	}
+	// fsync the containing directory so the rename's directory-entry
+	// update is durable. Without this, an OS crash immediately after
+	// Rename returns can leave the destination missing or pointing at
+	// the old inode after recovery — fatal for revoke confirmations.
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open parent dir of %q for fsync: %w", path, err)
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return fmt.Errorf("fsync parent dir of %q: %w", path, err)
+	}
+	if err := dir.Close(); err != nil {
+		return fmt.Errorf("close parent dir of %q: %w", path, err)
 	}
 	return nil
 }
