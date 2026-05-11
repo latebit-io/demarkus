@@ -1,0 +1,41 @@
+{{/*
+Both token Secrets are emitted from one file so a single $rawToken value flows
+into both (within the same template render pass). This avoids the trap where
+randAlphaNum runs separately per file and produces mismatched raw/hash.
+*/}}
+{{- $rawToken := include "demarkus-server.resolveAdminToken" . -}}
+{{- $hash := printf "sha256-%s" (sha256sum $rawToken) -}}
+{{- $admin := .Values.tokens.admin -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "demarkus-server.tokensSecretName" . }}
+  labels:
+    {{- include "demarkus-server.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  tokens.toml: |
+    [tokens.{{ $admin.label }}]
+    hash = {{ $hash | quote }}
+    paths = [
+      {{- range $i, $p := $admin.paths }}{{ if $i }}, {{ end }}{{ $p | quote }}{{ end -}}
+    ]
+    operations = [
+      {{- range $i, $o := $admin.operations }}{{ if $i }}, {{ end }}{{ $o | quote }}{{ end -}}
+    ]
+{{- if .Values.tokens.emitRawValues }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "demarkus-server.tokenValuesSecretName" . }}
+  labels:
+    {{- include "demarkus-server.labels" . | nindent 4 }}
+  annotations:
+    # This Secret contains raw tokens. Intended for broker consumption (read +
+    # revoke). The server never mounts this Secret.
+    demarkus.io/raw-tokens: "true"
+type: Opaque
+data:
+  {{ $admin.label }}: {{ $rawToken | b64enc }}
+{{- end }}

@@ -1,0 +1,159 @@
+suite: statefulset
+templates:
+  - statefulset.yaml
+tests:
+  - it: renders a StatefulSet with correct name + replicas
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: StatefulSet
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-server
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.serviceName
+          value: RELEASE-NAME-demarkus-server
+
+  - it: container args include -port and -root by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-port"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "6309"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-root"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: /var/lib/demarkus/content
+
+  - it: -read-only added when server.readOnly=true
+    set:
+      server.readOnly: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-read-only"
+
+  - it: -read-only absent when server.readOnly=false (default)
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "-read-only"
+
+  - it: TLS args + volume absent when no TLS configured
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "-tls-cert"
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: tls
+            secret:
+              secretName: RELEASE-NAME-demarkus-server-tls
+
+  - it: TLS args + volume present when cert-manager enabled
+    set:
+      tls.certManager.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-tls-cert"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: /etc/demarkus/tls/tls.crt
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tls
+            secret:
+              secretName: RELEASE-NAME-demarkus-server-tls
+
+  - it: TLS uses existingSecret when set
+    set:
+      tls.existingSecret: my-corp-tls
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tls
+            secret:
+              secretName: my-corp-tls
+
+  - it: udpPort knob propagates to args and port
+    set:
+      server.udpPort: 443
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "443"
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 443
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].protocol
+          value: UDP
+
+  - it: pod-level securityContext has runAsNonRoot + seccompProfile
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+
+  - it: container-level securityContext locks down container
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: probes disabled when probes.enabled=false
+    set:
+      probes.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe
+      - notExists:
+          path: spec.template.spec.containers[0].readinessProbe
+
+  - it: probes use demarkus CLI fetching agent-manifest
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].livenessProbe.exec.command
+          content: "/demarkus"
+      - contains:
+          path: spec.template.spec.containers[0].livenessProbe.exec.command
+          content: "-no-cache"
+      - contains:
+          path: spec.template.spec.containers[0].livenessProbe.exec.command
+          content: "mark://localhost:6309/.well-known/agent-manifest.md"
+
+  - it: volumeClaimTemplates provisions content PVC
+    set:
+      storage.className: premium-rwo
+      storage.size: 10Gi
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].metadata.name
+          value: content
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.resources.requests.storage
+          value: 10Gi
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+          value: premium-rwo

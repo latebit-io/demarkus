@@ -1,0 +1,56 @@
+suite: certificate
+templates:
+  - certificate.yaml
+tests:
+  - it: not rendered when certManager.enabled=false (default)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: rendered with default dnsName when enabled
+    set:
+      tls.certManager.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.secretName
+          value: RELEASE-NAME-demarkus-server-tls
+      - equal:
+          path: spec.issuerRef.kind
+          value: ClusterIssuer
+      - equal:
+          path: spec.issuerRef.name
+          value: letsencrypt-prod
+      - contains:
+          path: spec.dnsNames
+          content: RELEASE-NAME-demarkus-server.NAMESPACE.svc.cluster.local
+
+  - it: dnsNames override when configured
+    set:
+      tls.certManager.enabled: true
+      tls.certManager.dnsNames:
+        - team-a.library.example.com
+        - team-a-alt.library.example.com
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: team-a.library.example.com
+      - contains:
+          path: spec.dnsNames
+          content: team-a-alt.library.example.com
+
+  - it: custom issuerRef propagates
+    set:
+      tls.certManager.enabled: true
+      tls.certManager.issuerRef.kind: Issuer
+      tls.certManager.issuerRef.name: corp-ca
+    asserts:
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.issuerRef.name
+          value: corp-ca

@@ -1,0 +1,94 @@
+suite: tokens
+templates:
+  - tokens.yaml
+tests:
+  - it: renders both tokens.toml hash Secret and raw token-values Secret by default
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: Secret
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-server-tokens
+      - documentIndex: 1
+        isKind:
+          of: Secret
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-server-token-values
+
+  - it: tokens.toml uses configured admin label
+    set:
+      tokens.admin.label: bootstrap-admin
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-demarkus-server-tokens
+    asserts:
+      - matchRegex:
+          path: stringData["tokens.toml"]
+          pattern: '\[tokens\.bootstrap-admin\]'
+
+  - it: tokens.toml stores hash with sha256- prefix
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-demarkus-server-tokens
+    asserts:
+      - matchRegex:
+          path: stringData["tokens.toml"]
+          pattern: 'hash = "sha256-[0-9a-f]{64}"'
+
+  - it: tokens.toml includes paths and operations from values
+    set:
+      tokens.admin.paths: ["/docs/**", "/public/**"]
+      tokens.admin.operations: ["publish", "read"]
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-demarkus-server-tokens
+    asserts:
+      - matchRegex:
+          path: stringData["tokens.toml"]
+          pattern: '"/docs/\*\*"'
+      - matchRegex:
+          path: stringData["tokens.toml"]
+          pattern: '"/public/\*\*"'
+      - matchRegex:
+          path: stringData["tokens.toml"]
+          pattern: '"publish"'
+      - matchRegex:
+          path: stringData["tokens.toml"]
+          pattern: '"read"'
+
+  - it: token-values Secret omitted when emitRawValues=false
+    set:
+      tokens.emitRawValues: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-server-tokens
+
+  - it: token-values Secret has raw-tokens annotation for broker discovery
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-demarkus-server-token-values
+    asserts:
+      - equal:
+          path: metadata.annotations["demarkus.io/raw-tokens"]
+          value: "true"
+
+  - it: user-supplied admin token is used as-is
+    set:
+      tokens.admin.token: my-literal-raw-token
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-demarkus-server-token-values
+    asserts:
+      - equal:
+          path: data.admin
+          value: bXktbGl0ZXJhbC1yYXctdG9rZW4=  # base64 of "my-literal-raw-token"

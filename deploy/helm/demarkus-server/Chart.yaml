@@ -1,0 +1,19 @@
+apiVersion: v2
+name: demarkus-server
+description: |
+  Mark Protocol server. Serves markdown over QUIC, with capability-based auth,
+  versioned content store, and TLS. One Helm release = one world.
+type: application
+version: 0.1.0
+appVersion: "0.7.1"
+keywords:
+  - demarkus
+  - mark-protocol
+  - markdown
+  - quic
+home: https://demarkus.io
+sources:
+  - https://github.com/latebit-io/demarkus
+maintainers:
+  - name: latebit-io
+    url: https://github.com/latebit-io

@@ -1,0 +1,146 @@
+{{- $tlsSecret := include "demarkus-server.tlsSecretName" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "demarkus-server.fullname" . }}
+  labels:
+    {{- include "demarkus-server.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "demarkus-server.fullname" . }}
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      {{- include "demarkus-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "demarkus-server.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/tokens: {{ include (print $.Template.BasePath "/tokens.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "demarkus-server.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - -port
+            - {{ .Values.server.udpPort | quote }}
+            - -root
+            - /var/lib/demarkus/content
+            - -tokens
+            - /etc/demarkus/tokens/tokens.toml
+            {{- if $tlsSecret }}
+            - -tls-cert
+            - /etc/demarkus/tls/tls.crt
+            - -tls-key
+            - /etc/demarkus/tls/tls.key
+            {{- end }}
+            {{- if .Values.server.readOnly }}
+            - -read-only
+            {{- end }}
+            {{- with .Values.server.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: HOME
+              value: /home/demarkus
+          ports:
+            - name: mark
+              protocol: UDP
+              containerPort: {{ .Values.server.udpPort }}
+          {{- if .Values.probes.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - /demarkus
+                - -insecure
+                - -no-cache
+                - {{ printf "mark://localhost:%d/.well-known/agent-manifest.md" (int .Values.server.udpPort) | quote }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            exec:
+              command:
+                - /demarkus
+                - -insecure
+                - -no-cache
+                - {{ printf "mark://localhost:%d/.well-known/agent-manifest.md" (int .Values.server.udpPort) | quote }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          volumeMounts:
+            - name: content
+              mountPath: /var/lib/demarkus/content
+            - name: tokens
+              mountPath: /etc/demarkus/tokens
+              readOnly: true
+            {{- if $tlsSecret }}
+            - name: tls
+              mountPath: /etc/demarkus/tls
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/demarkus
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tokens
+          secret:
+            secretName: {{ include "demarkus-server.tokensSecretName" . }}
+        {{- if $tlsSecret }}
+        - name: tls
+          secret:
+            secretName: {{ $tlsSecret }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: content
+        labels:
+          {{- include "demarkus-server.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.storage.accessMode }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.size }}
+        {{- if .Values.storage.className }}
+        storageClassName: {{ .Values.storage.className | quote }}
+        {{- end }}
