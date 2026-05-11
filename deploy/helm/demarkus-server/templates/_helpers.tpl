@@ -88,8 +88,9 @@ should not assert on exact token values, only on structure.
 {{- .Values.tokens.admin.token -}}
 {{- else -}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "demarkus-server.tokenValuesSecretName" .) -}}
-{{- if and $existing $existing.data.admin -}}
-{{- $existing.data.admin | b64dec -}}
+{{- $label := .Values.tokens.admin.label -}}
+{{- if and $existing (index $existing.data $label) -}}
+{{- index $existing.data $label | b64dec -}}
 {{- else -}}
 {{- randAlphaNum 64 -}}
 {{- end -}}

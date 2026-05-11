@@ -37,6 +37,7 @@ helm install team-a ./deploy/helm/demarkus-server \
 ## Values
 
 ### Image
+
 | Key | Default | Notes |
 |---|---|---|
 | `image.repository` | `ghcr.io/latebit-io/demarkus-server` | Must contain `demarkus-server`, `demarkus` (CLI for probes), and `demarkus-token` |
@@ -44,6 +45,7 @@ helm install team-a ./deploy/helm/demarkus-server \
 | `image.pullPolicy` | `IfNotPresent` | |
 
 ### Server
+
 | Key | Default | Notes |
 |---|---|---|
 | `server.udpPort` | `6309` | Override to `443` for VPN/middlebox-hostile networks (Warp Zero Trust, etc.) |
@@ -51,6 +53,7 @@ helm install team-a ./deploy/helm/demarkus-server \
 | `server.extraArgs` | `[]` | Appended to the server command line |
 
 ### Service
+
 | Key | Default | Notes |
 |---|---|---|
 | `service.type` | `LoadBalancer` | `LoadBalancer` for prod; `ClusterIP`/`NodePort` for local dev |
@@ -58,6 +61,7 @@ helm install team-a ./deploy/helm/demarkus-server \
 | `service.annotations` | `{}` | E.g. `service.beta.kubernetes.io/aws-load-balancer-type: nlb` |
 
 ### Storage
+
 | Key | Default | Notes |
 |---|---|---|
 | `storage.className` | `""` (cluster default) | Often `premium-rwo` (GKE), `gp3` (EKS), etc. |
@@ -90,12 +94,15 @@ Three modes — pick one:
 On `helm upgrade`, the chart uses `lookup` to read the existing `-token-values` and preserves the admin token — no churn, no surprise rotation.
 
 ### Probes
+
 Liveness/readiness exec `demarkus -insecure -no-cache mark://localhost:<port>/.well-known/agent-manifest.md`. The manifest is always public per `/architecture.md`. Probe disabled root-fs writes via `-no-cache`. The image must include the `demarkus` CLI binary.
 
 ### Security defaults
+
 Pod runs as non-root user 65532, with `seccompProfile: RuntimeDefault`. Container has read-only root filesystem, no privilege escalation, all capabilities dropped. `/tmp` and `/home/demarkus` are emptyDir for writable scratch space.
 
 ### Workload Identity (GKE)
+
 Set `serviceAccount.workloadIdentity.gsa` to the GCP service account email. The chart annotates the ServiceAccount with `iam.gke.io/gcp-service-account: <gsa>`. Use `mergeOverwrite`, so this binding wins over any user-supplied annotations.
 
 ## Auth bootstrap walkthrough
