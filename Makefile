@@ -50,7 +50,8 @@ client: protocol
 tools: protocol
 	@echo "Building tools..."
 	cd tools && go build ./...
-	@echo "✓ Tools built"
+	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-broker ./demarkus-broker
+	@echo "✓ Tools built: tools/bin/demarkus-broker"
 
 # Run tests
 test:
