@@ -456,23 +456,25 @@ type PublishClient interface {
 }
 
 // publishIndex publishes a single index document to a hub.
+// Hub indexes are regenerated whole-doc each crawl cycle, so we use
+// expected_version=-1 (no check) for idempotent re-publish. The server's
+// no-op-on-duplicate-content behavior prevents version churn when the
+// computed index is identical to the previous run.
 func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, path, body, token string) error {
-	// Check context
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 
-	// For now, we create new indexes (expected_version=0)
-	// In the future, we could fetch existing and merge
-	result, err := client.Publish(host, path, body, token, 0, map[string]string{
+	result, err := client.Publish(host, path, body, token, -1, map[string]string{
 		"agent": "demarkus-agent",
 	})
 	if err != nil {
 		return err
 	}
 
-	if result.Response.Status != protocol.StatusOK {
-		return fmt.Errorf("publish returned %s", result.Response.Status)
+	status := result.Response.Status
+	if status != protocol.StatusOK && status != protocol.StatusCreated {
+		return fmt.Errorf("publish returned %s", status)
 	}
 
 	return nil

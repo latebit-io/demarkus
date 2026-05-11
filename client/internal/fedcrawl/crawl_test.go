@@ -10,12 +10,17 @@ import (
 	"github.com/latebit/demarkus/protocol"
 )
 
-// mockClient implements FetchClient for testing.
+// mockClient implements FetchClient and PublishClient for testing.
 type mockClient struct {
 	mu    sync.Mutex
 	pages map[string]mockPage // keyed by "host/path"
 	lists map[string]mockPage // keyed by "host/path" for LIST results
 	calls []string
+
+	// publishStatuses overrides the default created-on-publish behavior.
+	// Map from path -> status returned by Publish.
+	publishStatuses map[string]string
+	publishes       []publishCall
 }
 
 type mockPage struct {
@@ -24,11 +29,38 @@ type mockPage struct {
 	metadata map[string]string
 }
 
+type publishCall struct {
+	Host            string
+	Path            string
+	Body            string
+	Token           string
+	ExpectedVersion int
+}
+
 func newMockClient() *mockClient {
 	return &mockClient{
-		pages: make(map[string]mockPage),
-		lists: make(map[string]mockPage),
+		pages:           make(map[string]mockPage),
+		lists:           make(map[string]mockPage),
+		publishStatuses: make(map[string]string),
 	}
+}
+
+func (m *mockClient) Publish(host, path, body, token string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, "PUBLISH "+host+path)
+	m.publishes = append(m.publishes, publishCall{
+		Host:            host,
+		Path:            path,
+		Body:            body,
+		Token:           token,
+		ExpectedVersion: expectedVersion,
+	})
+	status := protocol.StatusCreated
+	if s, ok := m.publishStatuses[path]; ok {
+		status = s
+	}
+	return fetch.Result{Response: protocol.Response{Status: status}}, nil
 }
 
 func (m *mockClient) addDoc(host, path, body, hash string) {
@@ -347,6 +379,152 @@ func TestCrawlerWithState(t *testing.T) {
 	if u.ContentHash != "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Errorf("ContentHash = %q, want sha256-aaa...", u.ContentHash)
 	}
+}
+
+func TestPublishIndex(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		wantErr    bool
+		wantErrSub string
+	}{
+		{name: "created status accepted (first publish)", status: protocol.StatusCreated},
+		{name: "ok status accepted (re-publish or no-op)", status: protocol.StatusOK},
+		{name: "conflict status surfaces error", status: protocol.StatusConflict, wantErr: true, wantErrSub: "conflict"},
+		{name: "not-found status surfaces error", status: protocol.StatusNotFound, wantErr: true, wantErrSub: "not-found"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newMockClient()
+			client.publishStatuses["/index.md"] = tt.status
+
+			crawler := NewCrawler(DefaultConfig(), client, nil, nil)
+			err := crawler.publishIndex(context.Background(), client, "hub.example.com:6309", "/index.md", "# Index\n", "tok")
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if tt.wantErrSub != "" && !containsMiddle(err.Error(), tt.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(client.publishes) != 1 {
+				t.Fatalf("expected 1 publish, got %d", len(client.publishes))
+			}
+			call := client.publishes[0]
+			if call.ExpectedVersion != -1 {
+				t.Errorf("ExpectedVersion = %d, want -1 (no-check) for idempotent re-publish", call.ExpectedVersion)
+			}
+			if call.Path != "/index.md" {
+				t.Errorf("Path = %q, want /index.md", call.Path)
+			}
+			if call.Token != "tok" {
+				t.Errorf("Token = %q, want tok", call.Token)
+			}
+		})
+	}
+}
+
+func TestPublishIndexRePublish(t *testing.T) {
+	// Two consecutive publishes to the same path: first returns created,
+	// second returns ok. Both must succeed (the daemon-mode case).
+	client := newMockClient()
+	crawler := NewCrawler(DefaultConfig(), client, nil, nil)
+
+	if err := crawler.publishIndex(context.Background(), client, "hub.example.com:6309", "/index.md", "# v1\n", "tok"); err != nil {
+		t.Fatalf("first publish: %v", err)
+	}
+
+	client.mu.Lock()
+	client.publishStatuses["/index.md"] = protocol.StatusOK
+	client.mu.Unlock()
+
+	if err := crawler.publishIndex(context.Background(), client, "hub.example.com:6309", "/index.md", "# v2\n", "tok"); err != nil {
+		t.Fatalf("second publish: %v", err)
+	}
+
+	if len(client.publishes) != 2 {
+		t.Fatalf("expected 2 publishes, got %d", len(client.publishes))
+	}
+}
+
+func TestPublishToHubs(t *testing.T) {
+	t.Run("no hubs returns zero publishes", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://example.com"}
+		// no hubs configured
+		client := newMockClient()
+		crawler := NewCrawler(cfg, client, nil, nil)
+		count, err := crawler.PublishToHubs(context.Background(), client, false)
+		if err != nil {
+			t.Fatalf("PublishToHubs() error: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("count = %d, want 0", count)
+		}
+		if len(client.publishes) != 0 {
+			t.Errorf("expected 0 publishes, got %d", len(client.publishes))
+		}
+	})
+
+	t.Run("aggregated mode publishes single /index.md", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://example.com"}
+		cfg.Hubs = []string{"mark://hub.example.com"}
+
+		client := newMockClient()
+		client.addList("example.com:6309", "/", "- [a.md](a.md)\n")
+		client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+		crawler := NewCrawler(cfg, client, nil, nil)
+		if _, err := crawler.Run(context.Background()); err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+		count, err := crawler.PublishToHubs(context.Background(), client, false)
+		if err != nil {
+			t.Fatalf("PublishToHubs() error: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("count = %d, want 1", count)
+		}
+		if len(client.publishes) != 1 {
+			t.Fatalf("expected 1 publish, got %d", len(client.publishes))
+		}
+		if client.publishes[0].Path != "/index.md" {
+			t.Errorf("publish path = %q, want /index.md", client.publishes[0].Path)
+		}
+	})
+
+	t.Run("per-server mode publishes one index per discovered server", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://a.example.com", "mark://b.example.com"}
+		cfg.Hubs = []string{"mark://hub.example.com"}
+
+		client := newMockClient()
+		client.addList("a.example.com:6309", "/", "- [doc.md](doc.md)\n")
+		client.addDoc("a.example.com:6309", "/doc.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		client.addList("b.example.com:6309", "/", "- [doc.md](doc.md)\n")
+		client.addDoc("b.example.com:6309", "/doc.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+		crawler := NewCrawler(cfg, client, nil, nil)
+		if _, err := crawler.Run(context.Background()); err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+		count, err := crawler.PublishToHubs(context.Background(), client, true)
+		if err != nil {
+			t.Fatalf("PublishToHubs() error: %v", err)
+		}
+		if count != 2 {
+			t.Errorf("count = %d, want 2", count)
+		}
+	})
 }
 
 func contains(s, substr string) bool {
