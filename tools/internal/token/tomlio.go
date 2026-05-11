@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -38,67 +39,122 @@ func ReadFile(path string) (File, error) {
 // CLI's on-disk format byte-for-byte), so any pre-existing comments and
 // formatting in the file are preserved.
 //
+// The read-check-then-append sequence is serialized across processes by an
+// advisory flock(2) on a sidecar `<path>.lock` file. Concurrent invocations
+// from the same host are safe; concurrent writers across NFS or other
+// filesystems without working flock are not.
+//
 // Returns ErrLabelExists if the label is already present.
 func AppendEntry(path, label string, entry *Entry) error {
-	if existing, err := ReadFile(path); err == nil {
-		if _, present := existing.Tokens[label]; present {
-			return fmt.Errorf("%s: %w", label, ErrLabelExists)
+	return withLockedFile(path, func() error {
+		if existing, err := ReadFile(path); err == nil {
+			if _, present := existing.Tokens[label]; present {
+				return fmt.Errorf("%s: %w", label, ErrLabelExists)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
 
-	text := FormatEntry(label, entry)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("open tokens file %q: %w", path, err)
-	}
-	if _, err := f.WriteString(text); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("write tokens file %q: %w", path, err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close tokens file %q: %w", path, err)
-	}
-	return nil
+		text := FormatEntry(label, entry)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return fmt.Errorf("open tokens file %q: %w", path, err)
+		}
+		if _, err := f.WriteString(text); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write tokens file %q: %w", path, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close tokens file %q: %w", path, err)
+		}
+		return nil
+	})
 }
 
-// WriteFile writes a File to disk atomically (write to temp + rename).
-// Existing on-disk formatting (comments, ordering, quoting style) is not
-// preserved — this is the rewrite path used by revoke, not the append path.
+// WriteFile writes a File to disk atomically (write to temp + rename) under
+// the same advisory flock as AppendEntry, so revoke and generate cannot
+// interleave across processes. Existing on-disk formatting (comments,
+// ordering, quoting style) is not preserved — this is the rewrite path used
+// by revoke, not the append path.
 func WriteFile(path string, file File) error {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	return withLockedFile(path, func() error {
+		tmp := path + ".tmp"
+		f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return fmt.Errorf("open temp tokens file %q: %w", tmp, err)
+		}
+		if err := toml.NewEncoder(f).Encode(file); err != nil {
+			_ = f.Close()
+			_ = os.Remove(tmp)
+			return fmt.Errorf("encode tokens file %q: %w", tmp, err)
+		}
+		if err := f.Close(); err != nil {
+			_ = os.Remove(tmp)
+			return fmt.Errorf("close temp tokens file %q: %w", tmp, err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			_ = os.Remove(tmp)
+			return fmt.Errorf("rename %q to %q: %w", tmp, path, err)
+		}
+		return nil
+	})
+}
+
+// withLockedFile holds an exclusive advisory lock on a sidecar `<path>.lock`
+// while fn runs, serializing AppendEntry/WriteFile across processes on the
+// same host. The sidecar is preferred over locking the data file directly
+// so the data file is never created as a side effect of acquiring the lock.
+func withLockedFile(path string, fn func() error) error {
+	lockPath := path + ".lock"
+	lf, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return fmt.Errorf("open temp tokens file %q: %w", tmp, err)
+		return fmt.Errorf("open lock file %q: %w", lockPath, err)
 	}
-	if err := toml.NewEncoder(f).Encode(file); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("encode tokens file %q: %w", tmp, err)
+	defer func() { _ = lf.Close() }()
+	if err := lockExclusive(lf); err != nil {
+		return fmt.Errorf("acquire lock on %q: %w", lockPath, err)
 	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close temp tokens file %q: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename %q to %q: %w", tmp, path, err)
-	}
-	return nil
+	return fn()
 }
 
 // FormatEntry returns the TOML text representation of a single labeled
-// entry, matching the on-disk byte shape the legacy demarkus-token CLI
-// produced. Used by AppendEntry and also by the CLI when printing to stdout
-// for the no-`-tokens` case.
+// entry. Labels that satisfy TOML's bare-key grammar (alphanumeric, `_`,
+// `-`) are emitted unquoted — the common case for human-chosen labels and
+// the format the legacy demarkus-token CLI produces. Labels with dots,
+// whitespace, or other characters are emitted as quoted keys, e.g.
+// `[tokens."with.dot"]`, which is otherwise valid TOML and round-trips
+// through ReadFile to the same map key.
 func FormatEntry(label string, entry *Entry) string {
+	keyExpr := label
+	if !isBareTOMLKey(label) {
+		keyExpr = strconv.Quote(label)
+	}
 	return fmt.Sprintf("\n[tokens.%s]\nhash = %q\npaths = [%s]\noperations = [%s]\n",
-		label,
+		keyExpr,
 		entry.Hash,
 		quotedList(entry.Paths),
 		quotedList(entry.Operations),
 	)
+}
+
+// isBareTOMLKey reports whether s is a valid TOML bare key — the unquoted
+// key syntax that accepts only alphanumerics, underscore, and hyphen.
+// Empty strings are rejected.
+func isBareTOMLKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func quotedList(items []string) string {

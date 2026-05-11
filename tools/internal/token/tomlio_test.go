@@ -118,7 +118,10 @@ func TestAppendEntry(t *testing.T) {
 		if err := AppendEntry(path, "second", &entry); err != nil {
 			t.Fatalf("AppendEntry: %v", err)
 		}
-		data, _ := os.ReadFile(path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read after append: %v", err)
+		}
 		s := string(data)
 		if !strings.Contains(s, "# existing comment, must survive") {
 			t.Errorf("comment lost:\n%s", s)
@@ -171,9 +174,78 @@ func TestFormatEntryShape(t *testing.T) {
 		Paths:      []string{"/docs/*", "/public/*"},
 		Operations: []string{"read", "publish"},
 	}
-	got := FormatEntry("fritz-laptop", &entry)
-	want := "\n[tokens.fritz-laptop]\nhash = \"sha256-deadbeef\"\npaths = [\"/docs/*\", \"/public/*\"]\noperations = [\"read\", \"publish\"]\n"
-	if got != want {
-		t.Errorf("FormatEntry mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	tests := []struct {
+		name  string
+		label string
+		want  string
+	}{
+		{
+			name:  "bare key — alphanumeric with hyphen",
+			label: "fritz-laptop",
+			want:  "\n[tokens.fritz-laptop]\nhash = \"sha256-deadbeef\"\npaths = [\"/docs/*\", \"/public/*\"]\noperations = [\"read\", \"publish\"]\n",
+		},
+		{
+			name:  "bare key — underscore allowed",
+			label: "team_a_2026",
+			want:  "\n[tokens.team_a_2026]\nhash = \"sha256-deadbeef\"\npaths = [\"/docs/*\", \"/public/*\"]\noperations = [\"read\", \"publish\"]\n",
+		},
+		{
+			name:  "quoted key — contains dot",
+			label: "fritz.laptop",
+			want:  "\n[tokens.\"fritz.laptop\"]\nhash = \"sha256-deadbeef\"\npaths = [\"/docs/*\", \"/public/*\"]\noperations = [\"read\", \"publish\"]\n",
+		},
+		{
+			name:  "quoted key — contains whitespace",
+			label: "team a",
+			want:  "\n[tokens.\"team a\"]\nhash = \"sha256-deadbeef\"\npaths = [\"/docs/*\", \"/public/*\"]\noperations = [\"read\", \"publish\"]\n",
+		},
+		{
+			name:  "quoted key — contains @ for email-style labels",
+			label: "fritz@example.com",
+			want:  "\n[tokens.\"fritz@example.com\"]\nhash = \"sha256-deadbeef\"\npaths = [\"/docs/*\", \"/public/*\"]\noperations = [\"read\", \"publish\"]\n",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatEntry(tt.label, &entry)
+			if got != tt.want {
+				t.Errorf("FormatEntry(%q):\ngot:\n%s\nwant:\n%s", tt.label, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFormatEntryQuotedKeyRoundTrip verifies that a label written with a
+// quoted TOML key reads back as the same map key — protecting against the
+// regression where unquoted dotted labels parsed as nested tables.
+func TestFormatEntryQuotedKeyRoundTrip(t *testing.T) {
+	tricky := []string{"fritz.laptop", "team a", "fritz@example.com"}
+	for _, label := range tricky {
+		t.Run(label, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "tokens.toml")
+			entry := Entry{
+				Hash:       "sha256-aaa",
+				Paths:      []string{"/*"},
+				Operations: []string{"publish"},
+			}
+			if err := AppendEntry(path, label, &entry); err != nil {
+				t.Fatalf("AppendEntry: %v", err)
+			}
+			got, err := ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			if _, ok := got.Tokens[label]; !ok {
+				t.Errorf("round-trip lost label %q; got keys: %v", label, mapKeys(got.Tokens))
+			}
+		})
+	}
+}
+
+func mapKeys(m map[string]Entry) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

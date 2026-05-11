@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/latebit/demarkus/protocol"
 )
@@ -60,13 +61,17 @@ func Generate(label string, paths, operations []string) (Minted, error) {
 		return Minted{}, fmt.Errorf("mint %s: generate random bytes: %w", label, err)
 	}
 	raw := hex.EncodeToString(secret)
+	// Clone the caller's slices so later mutation by the caller cannot
+	// silently corrupt Minted.Entry. The broker may build paths/ops from
+	// shared config values, and the CLI passes through user-parsed flags —
+	// both could be reused after Generate returns.
 	return Minted{
 		Label: label,
 		Raw:   raw,
 		Entry: Entry{
 			Hash:       protocol.HashToken(raw),
-			Paths:      paths,
-			Operations: operations,
+			Paths:      slices.Clone(paths),
+			Operations: slices.Clone(operations),
 		},
 	}, nil
 }

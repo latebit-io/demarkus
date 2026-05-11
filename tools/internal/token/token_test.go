@@ -52,7 +52,7 @@ func TestGenerate(t *testing.T) {
 				t.Errorf("Raw length = %d, want 64", len(m.Raw))
 			}
 			if !strings.HasPrefix(m.Entry.Hash, "sha256-") {
-				t.Errorf("Hash prefix = %q, want sha256-", m.Entry.Hash[:7])
+				t.Errorf("Hash = %q, want prefix sha256-", m.Entry.Hash)
 			}
 			if m.Entry.Hash != protocol.HashToken(m.Raw) {
 				t.Error("Entry.Hash does not match protocol.HashToken(Raw)")
@@ -64,6 +64,29 @@ func TestGenerate(t *testing.T) {
 				t.Errorf("Operations len = %d, want %d", len(m.Entry.Operations), len(tt.operations))
 			}
 		})
+	}
+}
+
+// TestGenerateDefensiveCopy verifies that mutating the slices passed to
+// Generate after the call does not corrupt the returned Minted.Entry.
+// Without slices.Clone in Generate this test would catch caller aliasing.
+func TestGenerateDefensiveCopy(t *testing.T) {
+	paths := []string{"/docs/*"}
+	ops := []string{"publish"}
+
+	m, err := Generate("label", paths, ops)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	paths[0] = "/mutated/*"
+	ops[0] = "delete"
+
+	if m.Entry.Paths[0] != "/docs/*" {
+		t.Errorf("Entry.Paths aliased caller slice: got %q, want \"/docs/*\"", m.Entry.Paths[0])
+	}
+	if m.Entry.Operations[0] != "publish" {
+		t.Errorf("Entry.Operations aliased caller slice: got %q, want \"publish\"", m.Entry.Operations[0])
 	}
 }
 
