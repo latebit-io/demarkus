@@ -150,9 +150,12 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		// HTTP clients drop the body on non-2xx codes that aren't 200.
 		if len(results) > 0 {
 			s.log.WarnContext(r.Context(), "broker: partial mint", "err", err, "subject", hashSubject(claims.Subject), "minted", len(results))
+			// Stable client-safe code; full err detail stays in the log
+			// above so we don't leak internal Secret names or backend
+			// failure modes to API consumers.
 			writeJSON(w, http.StatusOK, map[string]any{
 				"tokens":         results,
-				"partialFailure": err.Error(),
+				"partialFailure": "one_or_more_worlds_failed",
 			})
 			return
 		}
@@ -244,11 +247,13 @@ func bearerToken(r *http.Request) string {
 	if h == "" {
 		return ""
 	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(h, prefix) {
+	// RFC 6750 §2.1: the scheme is case-insensitive. Clients in the wild
+	// send "Bearer", "bearer", and even "BEARER"; accept all of them.
+	parts := strings.Fields(h)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return ""
 	}
-	return strings.TrimSpace(h[len(prefix):])
+	return parts[1]
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

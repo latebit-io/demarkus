@@ -194,8 +194,14 @@ func (i *Issuer) mintForWorld(ctx context.Context, w *WorldConfig, claims Claims
 			// World secret already activated the token; without an
 			// issuance record the broker can't revoke or sweep it.
 			// Best-effort rollback so we don't leave an active
-			// untracked token. If rollback also fails, surface both.
-			if rbErr := i.removeFromWorldSecret(ctx, w, label); rbErr != nil {
+			// untracked token. Detach from the caller's cancelable
+			// context: if the request was canceled (client hung up),
+			// the rollback still needs to land. Bounded timeout so a
+			// stuck k8s API doesn't wedge the handler.
+			rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			rbErr := i.removeFromWorldSecret(rbCtx, w, label)
+			cancel()
+			if rbErr != nil {
 				return MintResult{}, fmt.Errorf("record issuance: %w (rollback failed: %v)", err, rbErr)
 			}
 			return MintResult{}, fmt.Errorf("record issuance: %w", err)
