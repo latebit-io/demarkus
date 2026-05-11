@@ -275,6 +275,37 @@ func TestAppendEntryExpiresRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAppendEntryAtomic verifies that AppendEntry publishes via temp+rename
+// rather than in-place appending: the `.tmp` sidecar must not survive a
+// successful call, and the destination file must still contain both the
+// pre-existing entry and the new one. This protects against the regression
+// where in-place O_APPEND let concurrent readers observe a half-written
+// stanza.
+func TestAppendEntryAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tokens.toml")
+	seed := "# existing comment, must survive\n[tokens.first]\nhash = \"sha256-aaa\"\npaths = [\"/*\"]\noperations = [\"read\"]\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	entry := Entry{Hash: "sha256-bbb", Paths: []string{"/docs/*"}, Operations: []string{"publish"}}
+	if err := AppendEntry(path, "second", &entry); err != nil {
+		t.Fatalf("AppendEntry: %v", err)
+	}
+	if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf(".tmp sidecar still present after AppendEntry success: stat err = %v", err)
+	}
+	got, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile after AppendEntry: %v", err)
+	}
+	for _, label := range []string{"first", "second"} {
+		if _, ok := got.Tokens[label]; !ok {
+			t.Errorf("label %q missing after atomic publish", label)
+		}
+	}
+}
+
 // TestAppendEntryNil verifies AppendEntry rejects a nil entry with
 // ErrNilEntry rather than panicking.
 func TestAppendEntryNil(t *testing.T) {

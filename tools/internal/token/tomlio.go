@@ -3,6 +3,7 @@ package token
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -40,11 +41,13 @@ func ReadFile(path string) (File, error) {
 }
 
 // AppendEntry adds a new labeled entry to a tokens.toml file. If the file
-// does not exist it is created. The append is text-style (matches the legacy
-// CLI's on-disk format byte-for-byte), so any pre-existing comments and
-// formatting in the file are preserved.
+// does not exist it is created. Existing comments and formatting in the
+// file are preserved byte-for-byte — the append works by reading the raw
+// file bytes, concatenating FormatEntry(...), and publishing the result
+// via an atomic temp+rename. Readers see either the pre-append file or
+// the post-append file, never a half-written stanza.
 //
-// The read-check-then-append sequence is serialized across processes by an
+// The read-modify-write sequence is serialized across processes by an
 // advisory flock(2) on a sidecar `<path>.lock` file. Concurrent invocations
 // from the same host are safe; concurrent writers across NFS or other
 // filesystems without working flock are not.
@@ -56,27 +59,30 @@ func AppendEntry(path, label string, entry *Entry) error {
 		return ErrNilEntry
 	}
 	return withLockedFile(path, func() error {
-		if existing, err := ReadFile(path); err == nil {
-			if _, present := existing.Tokens[label]; present {
+		existing, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read tokens file %q: %w", path, err)
+		}
+		if len(existing) > 0 {
+			var current File
+			if err := toml.Unmarshal(existing, &current); err != nil {
+				return fmt.Errorf("decode tokens file %q: %w", path, err)
+			}
+			if _, present := current.Tokens[label]; present {
 				return fmt.Errorf("%s: %w", label, ErrLabelExists)
 			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
 		}
-
-		text := FormatEntry(label, entry)
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("open tokens file %q: %w", path, err)
-		}
-		if _, err := f.WriteString(text); err != nil {
-			_ = f.Close()
-			return fmt.Errorf("write tokens file %q: %w", path, err)
-		}
-		if err := f.Close(); err != nil {
-			return fmt.Errorf("close tokens file %q: %w", path, err)
-		}
-		return nil
+		return writeAtomic(path, func(w io.Writer) error {
+			if len(existing) > 0 {
+				if _, err := w.Write(existing); err != nil {
+					return fmt.Errorf("copy existing tokens file content: %w", err)
+				}
+			}
+			if _, err := io.WriteString(w, FormatEntry(label, entry)); err != nil {
+				return fmt.Errorf("write new token entry: %w", err)
+			}
+			return nil
+		})
 	})
 }
 
@@ -87,26 +93,43 @@ func AppendEntry(path, label string, entry *Entry) error {
 // by revoke, not the append path.
 func WriteFile(path string, file File) error {
 	return withLockedFile(path, func() error {
-		tmp := path + ".tmp"
-		f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-		if err != nil {
-			return fmt.Errorf("open temp tokens file %q: %w", tmp, err)
-		}
-		if err := toml.NewEncoder(f).Encode(file); err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmp)
-			return fmt.Errorf("encode tokens file %q: %w", tmp, err)
-		}
-		if err := f.Close(); err != nil {
-			_ = os.Remove(tmp)
-			return fmt.Errorf("close temp tokens file %q: %w", tmp, err)
-		}
-		if err := os.Rename(tmp, path); err != nil {
-			_ = os.Remove(tmp)
-			return fmt.Errorf("rename %q to %q: %w", tmp, path, err)
-		}
-		return nil
+		return writeAtomic(path, func(w io.Writer) error {
+			if err := toml.NewEncoder(w).Encode(file); err != nil {
+				return fmt.Errorf("encode tokens file: %w", err)
+			}
+			return nil
+		})
 	})
+}
+
+// writeAtomic publishes a file at path by writing to a sibling temp file
+// and renaming it into place. Callers supply fn, which receives an
+// io.Writer pointing at the temp file. The temp file is removed on any
+// failure path; on success only the destination remains.
+//
+// Callers are expected to hold the appropriate advisory lock via
+// withLockedFile. writeAtomic itself does not lock — locking and
+// atomic-publish are separate concerns combined at the call sites.
+func writeAtomic(path string, fn func(io.Writer) error) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("open temp tokens file %q: %w", tmp, err)
+	}
+	if err := fn(f); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close temp tokens file %q: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename %q to %q: %w", tmp, path, err)
+	}
+	return nil
 }
 
 // withLockedFile holds an exclusive advisory lock on a sidecar `<path>.lock`
