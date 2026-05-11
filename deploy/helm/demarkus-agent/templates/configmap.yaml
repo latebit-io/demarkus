@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "demarkus-agent.fullname" . }}-config
+  labels:
+    {{- include "demarkus-agent.labels" . | nindent 4 }}
+data:
+  agent.toml: |
+    {{- if .Values.config.seeds }}
+    seeds = [
+      {{- range .Values.config.seeds }}
+      {{ . | quote }},
+      {{- end }}
+    ]
+    {{- else }}
+    seeds = []
+    {{- end }}
+
+    {{- if .Values.config.hubs }}
+    hubs = [
+      {{- range .Values.config.hubs }}
+      {{ . | quote }},
+      {{- end }}
+    ]
+    {{- else }}
+    hubs = []
+    {{- end }}
+
+    [crawl]
+    max_depth = {{ .Values.config.crawl.maxDepth }}
+    max_servers = {{ .Values.config.crawl.maxServers }}
+    max_documents = {{ .Values.config.crawl.maxDocuments }}
+    workers = {{ .Values.config.crawl.workers }}
+
+    [schedule]
+    interval = {{ .Values.config.schedule.interval | quote }}
+
+    [politeness]
+    request_delay = {{ .Values.config.politeness.requestDelay | quote }}
+    per_server_concurrency = {{ .Values.config.politeness.perServerConcurrency }}

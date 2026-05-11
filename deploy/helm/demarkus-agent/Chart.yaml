@@ -1,0 +1,19 @@
+apiVersion: v2
+name: demarkus-agent
+description: |
+  Federation crawler for the Mark Protocol. Discovers servers, collects content
+  hashes, and publishes aggregated or per-server indexes to one or more hubs.
+type: application
+version: 0.1.0
+appVersion: "0.7.1"
+keywords:
+  - demarkus
+  - mark-protocol
+  - federation
+  - crawler
+home: https://demarkus.io
+sources:
+  - https://github.com/latebit-io/demarkus
+maintainers:
+  - name: latebit-io
+    url: https://github.com/latebit-io

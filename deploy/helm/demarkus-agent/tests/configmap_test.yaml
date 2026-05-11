@@ -1,0 +1,50 @@
+suite: configmap
+templates:
+  - configmap.yaml
+tests:
+  - it: renders agent.toml with seeds and hubs
+    set:
+      config.seeds:
+        - mark://team-a:6309
+        - mark://team-b:6309
+      config.hubs:
+        - mark://hub:6309
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'seeds = \['
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: '"mark://team-a:6309"'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: '"mark://hub:6309"'
+
+  - it: renders crawl + schedule + politeness blocks with defaults
+    set:
+      config.seeds:
+        - mark://team-a:6309
+    asserts:
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'max_workers? = 5|workers = 5'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'interval = "6h"'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'request_delay = "100ms"'
+
+  - it: emits empty arrays when no seeds/hubs configured
+    set:
+      config.seeds: []
+      config.hubs: []
+    asserts:
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'seeds = \[\]'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'hubs = \[\]'
