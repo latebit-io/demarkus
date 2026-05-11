@@ -43,7 +43,8 @@ client: protocol
 	cd client && go build -o bin/demarkus ./cmd/demarkus
 	cd client && go build -o bin/demarkus-tui ./cmd/demarkus-tui
 	cd client && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-mcp ./cmd/demarkus-mcp
-	@echo "✓ Client built: client/bin/demarkus, client/bin/demarkus-tui, client/bin/demarkus-mcp"
+	cd client && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-agent ./cmd/demarkus-agent
+	@echo "✓ Client built: client/bin/demarkus, client/bin/demarkus-tui, client/bin/demarkus-mcp, client/bin/demarkus-agent"
 
 # Build tools
 tools:
