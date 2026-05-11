@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/latebit/demarkus/protocol"
 )
 
 func TestLoadTokens(t *testing.T) {
@@ -179,24 +181,6 @@ expires = "not-a-date"
 	})
 }
 
-func TestHashToken(t *testing.T) {
-	hash := HashToken("my-secret")
-	if hash[:7] != "sha256-" {
-		t.Errorf("hash prefix: got %q, want sha256- prefix", hash[:7])
-	}
-	if len(hash) != 7+64 { // "sha256-" + 64 hex chars
-		t.Errorf("hash length: got %d, want %d", len(hash), 7+64)
-	}
-	// Same input produces same hash.
-	if HashToken("my-secret") != hash {
-		t.Error("HashToken is not deterministic")
-	}
-	// Different input produces different hash.
-	if HashToken("other-secret") == hash {
-		t.Error("different inputs produced same hash")
-	}
-}
-
 func TestAuthorize(t *testing.T) {
 	// Raw secrets used by clients.
 	const (
@@ -207,17 +191,17 @@ func TestAuthorize(t *testing.T) {
 
 	// Token store keys are hashes of raw secrets.
 	ts := NewTokenStore(map[string]Token{
-		HashToken(writerSecret): {
+		protocol.HashToken(writerSecret): {
 			Label:      "writer",
 			Paths:      []string{"/docs/*"},
 			Operations: []string{"publish"},
 		},
-		HashToken(readwriteSecret): {
+		protocol.HashToken(readwriteSecret): {
 			Label:      "readwrite",
 			Paths:      []string{"/*"},
 			Operations: []string{"read", "publish"},
 		},
-		HashToken(readonlySecret): {
+		protocol.HashToken(readonlySecret): {
 			Label:      "readonly",
 			Paths:      []string{"/*"},
 			Operations: []string{"read"},
@@ -262,7 +246,7 @@ func TestAuthorizeExpiration(t *testing.T) {
 
 	t.Run("expired token", func(t *testing.T) {
 		ts := NewTokenStore(map[string]Token{
-			HashToken(secret): {
+			protocol.HashToken(secret): {
 				Paths:      []string{"/*"},
 				Operations: []string{"publish"},
 				expiresAt:  time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -278,7 +262,7 @@ func TestAuthorizeExpiration(t *testing.T) {
 
 	t.Run("not yet expired token", func(t *testing.T) {
 		ts := NewTokenStore(map[string]Token{
-			HashToken(secret): {
+			protocol.HashToken(secret): {
 				Paths:      []string{"/*"},
 				Operations: []string{"publish"},
 				expiresAt:  time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
@@ -294,7 +278,7 @@ func TestAuthorizeExpiration(t *testing.T) {
 
 	t.Run("no expiry set", func(t *testing.T) {
 		ts := NewTokenStore(map[string]Token{
-			HashToken(secret): {
+			protocol.HashToken(secret): {
 				Paths:      []string{"/*"},
 				Operations: []string{"publish"},
 				// expiresAt is zero value — no expiry
@@ -313,7 +297,7 @@ func TestAuthorizeRecursiveGlob(t *testing.T) {
 	const secret = "recursive-secret"
 
 	ts := NewTokenStore(map[string]Token{
-		HashToken(secret): {
+		protocol.HashToken(secret): {
 			Paths:      []string{"/docs/**"},
 			Operations: []string{"publish"},
 		},

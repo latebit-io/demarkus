@@ -11,7 +11,7 @@ if ! command -v golangci-lint &>/dev/null; then
   exit 1
 fi
 
-for mod in protocol server client; do
+for mod in protocol server client tools; do
   echo "Linting ${mod}..."
   (cd "$mod" && golangci-lint run ./...)
 done

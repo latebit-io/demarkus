@@ -1066,7 +1066,7 @@ func TestHandlePublish(t *testing.T) {
 	// A permissive token store for tests that need to exercise write logic.
 	const testSecret = "test-publish-secret"
 	publishTokenStore := auth.NewTokenStore(map[string]auth.Token{
-		auth.HashToken(testSecret): {
+		protocol.HashToken(testSecret): {
 			Paths:      []string{"/*"},
 			Operations: []string{"publish"},
 		},
@@ -1269,11 +1269,11 @@ func TestHandlePublishAuth(t *testing.T) {
 	)
 
 	ts := auth.NewTokenStore(map[string]auth.Token{
-		auth.HashToken(writerSecret): {
+		protocol.HashToken(writerSecret): {
 			Paths:      []string{"/docs/*"},
 			Operations: []string{"publish"},
 		},
-		auth.HashToken(readonlySecret): {
+		protocol.HashToken(readonlySecret): {
 			Paths:      []string{"/*"},
 			Operations: []string{"read"},
 		},
@@ -1429,7 +1429,7 @@ func TestIsHashPath(t *testing.T) {
 func TestHandleArchive(t *testing.T) {
 	writerSecret := "test-secret-key"
 	ts := auth.NewTokenStore(map[string]auth.Token{
-		auth.HashToken(writerSecret): {
+		protocol.HashToken(writerSecret): {
 			Paths:      []string{"/*"},
 			Operations: []string{"publish"},
 		},
@@ -1624,7 +1624,7 @@ func TestHandleArchive(t *testing.T) {
 func TestHandleAppend(t *testing.T) {
 	const testSecret = "test-append-secret"
 	appendTokenStore := auth.NewTokenStore(map[string]auth.Token{
-		auth.HashToken(testSecret): {
+		protocol.HashToken(testSecret): {
 			Paths:      []string{"/*"},
 			Operations: []string{"publish"},
 		},
@@ -1805,7 +1805,7 @@ func TestHandleAppend(t *testing.T) {
 func TestPublisherMetadata(t *testing.T) {
 	const testSecret = "test-meta-secret"
 	tokenStore := auth.NewTokenStore(map[string]auth.Token{
-		auth.HashToken(testSecret): {
+		protocol.HashToken(testSecret): {
 			Paths:      []string{"/*"},
 			Operations: []string{"publish"},
 		},
@@ -2042,7 +2042,7 @@ func TestReadAuth(t *testing.T) {
 	const readSecret = "read-secret"
 
 	tokenStore := auth.NewTokenStore(map[string]auth.Token{
-		auth.HashToken(readSecret): {
+		protocol.HashToken(readSecret): {
 			Label:      "reader",
 			Paths:      []string{"/private/**"},
 			Operations: []string{"read"},
@@ -2214,7 +2214,7 @@ func TestReadOnlyMode(t *testing.T) {
 		ReadOnly:   true,
 		GetTokenStore: func() *auth.TokenStore {
 			return auth.NewTokenStore(map[string]auth.Token{
-				auth.HashToken("secret"): {Paths: []string{"/*"}, Operations: []string{"publish", "append", "archive"}},
+				protocol.HashToken("secret"): {Paths: []string{"/*"}, Operations: []string{"publish", "append", "archive"}},
 			})
 		},
 	}

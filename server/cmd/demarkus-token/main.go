@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/latebit/demarkus/server/internal/auth"
+	"github.com/latebit/demarkus/protocol"
 )
 
 func main() {
@@ -68,7 +68,7 @@ func cmdGenerate(args []string) {
 		log.Fatalf("generate random bytes: %v", err)
 	}
 	rawToken := hex.EncodeToString(secret)
-	hashedToken := auth.HashToken(rawToken)
+	hashedToken := protocol.HashToken(rawToken)
 
 	pathList := splitTrimmed(*paths)
 	opsList := splitTrimmed(*ops)
