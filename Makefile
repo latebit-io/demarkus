@@ -3,7 +3,7 @@
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
 # Default target
-all: protocol server client
+all: protocol server client tools
 
 # Help target
 help:
@@ -47,7 +47,7 @@ client: protocol
 	@echo "✓ Client built: client/bin/demarkus, client/bin/demarkus-tui, client/bin/demarkus-mcp, client/bin/demarkus-agent"
 
 # Build tools
-tools:
+tools: protocol
 	@echo "Building tools..."
 	cd tools && go build ./...
 	@echo "✓ Tools built"
@@ -58,6 +58,7 @@ test:
 	@cd protocol && go test ./... && echo "✓ Protocol tests passed"
 	@cd server && go test ./... && echo "✓ Server tests passed"
 	@cd client && go test ./... && echo "✓ Client tests passed"
+	@cd tools && go test ./... && echo "✓ Tools tests passed"
 
 # Clean build artifacts
 clean:
@@ -66,6 +67,7 @@ clean:
 	@cd protocol && go clean
 	@cd server && go clean
 	@cd client && go clean
+	@cd tools && go clean
 	@echo "✓ Clean complete"
 
 # Install binaries
@@ -104,6 +106,7 @@ lint:
 	@cd protocol && golangci-lint run ./...
 	@cd server && golangci-lint run ./...
 	@cd client && golangci-lint run ./...
+	@cd tools && golangci-lint run ./...
 	@echo "✓ Code linted"
 
 # Format code
@@ -112,6 +115,7 @@ fmt:
 	@cd protocol && go fmt ./...
 	@cd server && go fmt ./...
 	@cd client && go fmt ./...
+	@cd tools && go fmt ./...
 	@echo "✓ Code formatted"
 
 # Vet code
@@ -120,6 +124,7 @@ vet:
 	@cd protocol && go vet ./...
 	@cd server && go vet ./...
 	@cd client && go vet ./...
+	@cd tools && go vet ./...
 	@echo "✓ Code vetted"
 
 # Update dependencies
@@ -128,4 +133,5 @@ deps:
 	@cd protocol && go mod tidy
 	@cd server && go mod tidy && go mod download
 	@cd client && go mod tidy && go mod download
+	@cd tools && go mod tidy && go mod download
 	@echo "✓ Dependencies updated"

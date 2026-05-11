@@ -17,8 +17,6 @@
 package auth
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
@@ -27,6 +25,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/latebit/demarkus/protocol"
 )
 
 // Token represents a single capability token's permissions.
@@ -126,15 +125,6 @@ func (ts *TokenStore) RequiresReadAuth(reqPath string) bool {
 	return matchesAnyPath(ts.readPaths, reqPath)
 }
 
-// HashToken returns the SHA-256 hash of a raw token in the format "sha256-<hex>".
-// The TOML tokens file stores these hashes. Clients send the raw secret,
-// and the server hashes it before lookup — so the tokens file never contains
-// plaintext secrets.
-func HashToken(raw string) string {
-	h := sha256.Sum256([]byte(raw))
-	return "sha256-" + hex.EncodeToString(h[:])
-}
-
 // Authorize checks whether the given raw token is allowed to perform the given
 // operation on the given path. The raw token is hashed before lookup.
 //
@@ -151,7 +141,7 @@ func (ts *TokenStore) Authorize(token, reqPath, operation string) (string, error
 	if token == "" {
 		return "", ErrNoToken
 	}
-	hashed := HashToken(token)
+	hashed := protocol.HashToken(token)
 	t, ok := ts.tokens[hashed]
 	if !ok {
 		return "", ErrInvalidToken
