@@ -9,8 +9,8 @@ image:
 
 imagePullSecrets: []
 
-# Pod count. The agent is stateless modulo its on-disk crawl-politeness cache;
-# multiple replicas would re-do the same work. Keep at 1.
+# Pod count. The agent maintains a crawl-politeness cache on disk;
+# multiple replicas would duplicate work. Keep at 1.
 replicaCount: 1
 
 # Crawler config. Becomes the contents of /etc/demarkus/agent.toml.
@@ -101,6 +101,8 @@ podSecurityContext:
   runAsUser: 65532
   runAsGroup: 65532
   fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
 
 # Container-level securityContext (the agent container).
 securityContext:

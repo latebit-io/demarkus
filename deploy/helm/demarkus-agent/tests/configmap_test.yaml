@@ -29,7 +29,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["agent.toml"]
-          pattern: 'max_workers? = 5|workers = 5'
+          pattern: 'workers = 5'
       - matchRegex:
           path: data["agent.toml"]
           pattern: 'interval = "6h"'

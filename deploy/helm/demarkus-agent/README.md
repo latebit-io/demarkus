@@ -50,7 +50,7 @@ For private seeds (read-auth enabled), add a token entry for that host as well.
 
 The agent uses the protocol-client tokens convention. On startup it calls `tokens.LoadDefault()` which reads `~/.mark/tokens.toml`. The chart mounts the tokens Secret at `/home/demarkus/.mark/tokens.toml` and sets `HOME=/home/demarkus`, so the existing code path Just Works.
 
-For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env var via `podAnnotations` or by patching the Deployment — but the file path is preferred for multi-host setups.
+For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env var by patching the Deployment container `env` — but the file path is preferred for multi-host setups.
 
 ## How publishing modes interact
 

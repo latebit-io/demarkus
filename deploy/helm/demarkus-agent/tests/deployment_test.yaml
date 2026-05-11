@@ -113,6 +113,9 @@ tests:
       - equal:
           path: spec.template.spec.securityContext.runAsNonRoot
           value: true
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
       - notExists:
           path: spec.template.spec.securityContext.readOnlyRootFilesystem
       - notExists:
