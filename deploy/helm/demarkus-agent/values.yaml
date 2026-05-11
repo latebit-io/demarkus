@@ -1,0 +1,112 @@
+# Default values for demarkus-agent.
+# Override with --values or --set on `helm install`.
+
+image:
+  repository: ghcr.io/latebit-io/demarkus-agent
+  # tag defaults to .Chart.appVersion when empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Pod count. The agent maintains a crawl-politeness cache on disk;
+# multiple replicas would duplicate work. Keep at 1.
+replicaCount: 1
+
+# Crawler config. Becomes the contents of /etc/demarkus/agent.toml.
+# See client/internal/fedcrawl/config.go for the full schema.
+config:
+  # mark:// URLs of servers to crawl from on each tick. Required.
+  seeds: []
+  #  - mark://team-a.example.com:6309
+  #  - mark://team-b.example.com:6309
+
+  # mark:// URLs of hubs to publish indexes to. Empty means crawl only.
+  hubs: []
+  #  - mark://hub.example.com:6309
+
+  crawl:
+    maxDepth: 2
+    maxServers: 50
+    maxDocuments: 1000
+    workers: 5
+  schedule:
+    interval: 6h
+  politeness:
+    requestDelay: 100ms
+    perServerConcurrency: 2
+
+# Publishing mode. false = single aggregated /index.md per hub.
+# true = one index per discovered server at /index/<host>.md.
+perServer: false
+
+# Skip TLS certificate verification on outbound mark:// connections.
+# Useful for self-signed dev clusters. Leave false in production.
+insecure: false
+
+# Tokens for publishing to hubs / reading private servers.
+# Mounted as ~/.mark/tokens.toml inside the container.
+# Provide either an existing Secret name OR an inline tokens map.
+tokens:
+  # Name of an existing Secret with a "tokens.toml" key. If set, takes precedence.
+  existingSecret: ""
+
+  # Inline tokens, generates Secret <release>-tokens with key tokens.toml.
+  # Format: hostPort -> raw token.
+  inline: {}
+  #   "hub.example.com:6309": "abc123..."
+
+# Persist the crawl-politeness state file across pod restarts.
+# Losing it just means a fresh crawl on next tick — no data loss on the hub.
+# Default: ephemeral (emptyDir).
+state:
+  persistent: false
+  storageClassName: ""
+  size: 1Gi
+  accessMode: ReadWriteOnce
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Pod-level overrides.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Liveness/readiness probes are intentionally omitted: the agent is an outbound
+# scheduled job, not a service. K8s restarts on process exit, which is the
+# correct behavior — the daemon loop logs and continues on transient crawl
+# errors, and exits only on configuration/unrecoverable failures.
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # GKE Workload Identity: when set, annotates the SA with the GCP service
+  # account binding. Not needed for the agent unless your hubs require it.
+  workloadIdentity:
+    gsa: ""
+
+# Pod-level securityContext (applies to all containers, supports a limited
+# subset of fields: runAs*, fsGroup, seccompProfile, etc.).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level securityContext (the agent container).
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]

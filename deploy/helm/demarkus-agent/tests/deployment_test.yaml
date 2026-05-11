@@ -1,0 +1,160 @@
+suite: deployment
+templates:
+  - deployment.yaml
+tests:
+  - it: renders a Deployment with correct name and labels
+    set:
+      config.seeds:
+        - mark://team-a:6309
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-agent
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: omits --publish when no hubs configured
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      config.hubs: []
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --publish
+
+  - it: includes --publish when hubs configured
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      config.hubs:
+        - mark://hub:6309
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --publish
+
+  - it: includes --per-server when perServer=true
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      config.hubs:
+        - mark://hub:6309
+      perServer: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --per-server
+
+  - it: includes --insecure when insecure=true
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      insecure: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --insecure
+
+  - it: state volume is emptyDir by default
+    set:
+      config.seeds:
+        - mark://team-a:6309
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - exists:
+          path: spec.template.spec.volumes[?(@.name=="state")].emptyDir
+      - notExists:
+          path: spec.template.spec.volumes[?(@.name=="state")].persistentVolumeClaim
+
+  - it: state volume is PVC when persistent=true and emits PVC document
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      state.persistent: true
+      state.storageClassName: premium-rwo
+      state.size: 5Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: Deployment
+      - documentIndex: 1
+        isKind:
+          of: PersistentVolumeClaim
+      - documentIndex: 1
+        equal:
+          path: spec.resources.requests.storage
+          value: 5Gi
+      - documentIndex: 1
+        equal:
+          path: spec.storageClassName
+          value: premium-rwo
+
+  - it: pod-level securityContext only contains pod-supported fields
+    set:
+      config.seeds:
+        - mark://team-a:6309
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - notExists:
+          path: spec.template.spec.securityContext.readOnlyRootFilesystem
+      - notExists:
+          path: spec.template.spec.securityContext.allowPrivilegeEscalation
+
+  - it: container-level securityContext locks down the container
+    set:
+      config.seeds:
+        - mark://team-a:6309
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: tokens volume mounts at /home/demarkus/.mark for tokens.LoadDefault
+    set:
+      config.seeds:
+        - mark://team-a:6309
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tokens
+            mountPath: /home/demarkus/.mark
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: HOME
+            value: /home/demarkus

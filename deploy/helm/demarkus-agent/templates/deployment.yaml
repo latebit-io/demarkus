@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "demarkus-agent.fullname" . }}
+  labels:
+    {{- include "demarkus-agent.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "demarkus-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "demarkus-agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if or (not .Values.tokens.existingSecret) .Values.tokens.inline }}
+        checksum/tokens: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "demarkus-agent.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - daemon
+            - --config
+            - /etc/demarkus/agent.toml
+            - --state
+            - /var/lib/demarkus/state.json
+            {{- if .Values.config.hubs }}
+            - --publish
+            {{- end }}
+            {{- if .Values.perServer }}
+            - --per-server
+            {{- end }}
+            {{- if .Values.insecure }}
+            - --insecure
+            {{- end }}
+          env:
+            # Ensure tokens.LoadDefault() finds the mounted Secret at ~/.mark/tokens.toml.
+            - name: HOME
+              value: /home/demarkus
+          volumeMounts:
+            - name: config
+              mountPath: /etc/demarkus
+              readOnly: true
+            - name: tokens
+              mountPath: /home/demarkus/.mark
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/demarkus
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "demarkus-agent.fullname" . }}-config
+        - name: tokens
+          secret:
+            secretName: {{ include "demarkus-agent.tokensSecretName" . }}
+            optional: true
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.state.persistent }}
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ include "demarkus-agent.fullname" . }}-state
+        {{- else }}
+        - name: state
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.state.persistent }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "demarkus-agent.fullname" . }}-state
+  labels:
+    {{- include "demarkus-agent.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.state.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.state.size }}
+  {{- if .Values.state.storageClassName }}
+  storageClassName: {{ .Values.state.storageClassName | quote }}
+  {{- end }}
+{{- end }}
