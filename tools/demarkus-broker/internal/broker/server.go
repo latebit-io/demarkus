@@ -1,6 +1,8 @@
 package broker
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -140,16 +142,35 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	results, err := s.issuer.Mint(r.Context(), claims)
 	if err != nil {
+		// Partial mint: some worlds succeeded before a later one failed.
+		// Hand back the minted tokens so the client persists them; the
+		// failed worlds are absent from both Secrets, so a re-login
+		// retries them cleanly. Status 200 with a partialFailure field
+		// — 207 Multi-Status would be more standards-correct but most
+		// HTTP clients drop the body on non-2xx codes that aren't 200.
+		if len(results) > 0 {
+			s.log.WarnContext(r.Context(), "broker: partial mint", "err", err, "subject", hashSubject(claims.Subject), "minted", len(results))
+			writeJSON(w, http.StatusOK, map[string]any{
+				"tokens":         results,
+				"partialFailure": err.Error(),
+			})
+			return
+		}
 		if errors.Is(err, ErrNotAuthorized) {
-			s.log.InfoContext(r.Context(), "broker: identity not authorized for any world", "email", claims.Email)
+			s.log.InfoContext(r.Context(), "broker: identity not authorized for any world", "subject", hashSubject(claims.Subject))
 			http.Error(w, "no authorized worlds", http.StatusForbidden)
 			return
 		}
-		s.log.ErrorContext(r.Context(), "broker: mint failed", "err", err, "email", claims.Email)
+		if errors.Is(err, ErrEmailUnverified) {
+			s.log.InfoContext(r.Context(), "broker: rejected unverified identity", "subject", hashSubject(claims.Subject))
+			http.Error(w, "email not verified", http.StatusForbidden)
+			return
+		}
+		s.log.ErrorContext(r.Context(), "broker: mint failed", "err", err, "subject", hashSubject(claims.Subject))
 		http.Error(w, "mint failed", http.StatusInternalServerError)
 		return
 	}
-	s.log.InfoContext(r.Context(), "broker: mint succeeded", "email", claims.Email, "worlds", len(results))
+	s.log.InfoContext(r.Context(), "broker: mint succeeded", "subject", hashSubject(claims.Subject), "worlds", len(results))
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": results})
 }
 
@@ -167,7 +188,7 @@ func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	issuances, err := s.issuer.List(r.Context(), claims.Email)
 	if err != nil {
-		s.log.ErrorContext(r.Context(), "broker: list issuances", "err", err, "email", claims.Email)
+		s.log.ErrorContext(r.Context(), "broker: list issuances", "err", err, "subject", hashSubject(claims.Subject))
 		http.Error(w, "list failed", http.StatusInternalServerError)
 		return
 	}
@@ -187,12 +208,12 @@ func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
 	err := s.issuer.Revoke(r.Context(), claims.Email, label)
 	switch {
 	case err == nil:
-		s.log.InfoContext(r.Context(), "broker: revoke succeeded", "label", label, "email", claims.Email)
+		s.log.InfoContext(r.Context(), "broker: revoke succeeded", "label", label, "subject", hashSubject(claims.Subject))
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, ErrNotFound):
 		http.Error(w, "label not found", http.StatusNotFound)
 	case errors.Is(err, ErrNotOwner):
-		s.log.WarnContext(r.Context(), "broker: revoke owner mismatch", "label", label, "caller", claims.Email)
+		s.log.WarnContext(r.Context(), "broker: revoke owner mismatch", "label", label, "subject", hashSubject(claims.Subject))
 		http.Error(w, "not the token owner", http.StatusForbidden)
 	default:
 		s.log.ErrorContext(r.Context(), "broker: revoke failed", "label", label, "err", err)
@@ -234,4 +255,18 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// hashSubject returns a short, stable, non-reversible identifier suitable
+// for log correlation without exposing the raw OIDC subject (which often
+// embeds the user's email or external IdP ID). 8 hex chars of SHA-256 is
+// enough to disambiguate users in a single broker's audit trail while
+// keeping aggregated log stores PII-light. The full identity lives in the
+// broker's issuances Secret; logs only need a fingerprint.
+func hashSubject(subject string) string {
+	if subject == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(subject))
+	return "sha256-" + hex.EncodeToString(h[:4])
 }

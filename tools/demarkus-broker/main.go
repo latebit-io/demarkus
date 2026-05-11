@@ -68,10 +68,10 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	}
 
 	// OIDC discovery is performed eagerly so a misconfigured broker fails
-	// to start rather than failing the first user login.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	verifier, err := broker.NewVerifier(ctx, cfg.OIDC)
+	// to start rather than failing the first user login. coreos/go-oidc
+	// does not use this context for ongoing JWKS refresh (it builds its
+	// own background context internally), so a plain Background suffices.
+	verifier, err := broker.NewVerifier(context.Background(), cfg.OIDC)
 	if err != nil {
 		return err
 	}

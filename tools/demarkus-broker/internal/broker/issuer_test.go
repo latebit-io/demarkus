@@ -128,6 +128,23 @@ func TestMintAppendsToExistingTokensSecret(t *testing.T) {
 	}
 }
 
+func TestMintRejectsUnverifiedEmail(t *testing.T) {
+	k8s := fake.NewSimpleClientset()
+	i := newIssuer(t, testConfig(), k8s)
+
+	// Matching domain — would otherwise be authorized — but the IdP did
+	// not assert email_verified=true. Mint must refuse before reaching
+	// authorizedWorlds; otherwise an attacker controlling an unverified
+	// alias at an allowlisted domain could mint tokens.
+	_, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: false})
+	if !errors.Is(err, ErrEmailUnverified) {
+		t.Errorf("err = %v, want ErrEmailUnverified", err)
+	}
+	if list, _ := k8s.CoreV1().Secrets("team-a").List(context.Background(), metav1.ListOptions{}); len(list.Items) != 0 {
+		t.Errorf("expected no Secrets written, got %d", len(list.Items))
+	}
+}
+
 func TestMintRejectsUnauthorizedDomain(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
 	i := newIssuer(t, testConfig(), k8s)

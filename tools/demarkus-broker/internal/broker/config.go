@@ -138,6 +138,9 @@ func (c *Config) validate() error {
 	if c.Server.StateTTL == 0 {
 		c.Server.StateTTL = 5 * time.Minute
 	}
+	if c.Server.StateTTL < 0 {
+		return fmt.Errorf("server.stateTTL must be > 0 (got %s)", c.Server.StateTTL)
+	}
 	if c.OIDC.Issuer == "" {
 		return fmt.Errorf("oidc.issuer is required")
 	}

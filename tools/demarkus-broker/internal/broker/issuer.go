@@ -107,6 +107,13 @@ var ErrNotFound = errors.New("broker: label not found in issuances")
 // hand back what was actually minted — the unfinished worlds are not
 // reflected in either Secret.
 func (i *Issuer) Mint(ctx context.Context, claims Claims) ([]MintResult, error) {
+	// Defense in depth: the production Verifier rejects unverified claims
+	// before Mint is reached, but a test double (or future Verifier impl)
+	// might not. Authorization by email domain is meaningless on an
+	// unverified address.
+	if !claims.EmailVerified {
+		return nil, ErrEmailUnverified
+	}
 	worlds := i.authorizedWorlds(claims.Email)
 	if len(worlds) == 0 {
 		return nil, ErrNotAuthorized
@@ -184,6 +191,13 @@ func (i *Issuer) mintForWorld(ctx context.Context, w *WorldConfig, claims Claims
 			ExpiresAt:  expiresAt,
 		}
 		if err := i.appendIssuance(ctx, &issuance); err != nil {
+			// World secret already activated the token; without an
+			// issuance record the broker can't revoke or sweep it.
+			// Best-effort rollback so we don't leave an active
+			// untracked token. If rollback also fails, surface both.
+			if rbErr := i.removeFromWorldSecret(ctx, w, label); rbErr != nil {
+				return MintResult{}, fmt.Errorf("record issuance: %w (rollback failed: %v)", err, rbErr)
+			}
 			return MintResult{}, fmt.Errorf("record issuance: %w", err)
 		}
 		return MintResult{
@@ -241,10 +255,15 @@ func (i *Issuer) Revoke(ctx context.Context, callerEmail, label string) error {
 		return ErrNotOwner
 	}
 	world := i.lookupWorld(found.World)
-	if world != nil {
-		if err := i.removeFromWorldSecret(ctx, world, label); err != nil {
-			return fmt.Errorf("remove from world %s: %w", world.Name, err)
-		}
+	if world == nil {
+		// The issuance points at a world the broker is no longer
+		// configured for. Silently dropping the issuance entry would
+		// report success while leaving a still-valid token in that
+		// world's tokens Secret. Surface the misconfiguration instead.
+		return fmt.Errorf("world %q not configured for label %q", found.World, label)
+	}
+	if err := i.removeFromWorldSecret(ctx, world, label); err != nil {
+		return fmt.Errorf("remove from world %s: %w", world.Name, err)
 	}
 	return i.removeIssuance(ctx, label)
 }
