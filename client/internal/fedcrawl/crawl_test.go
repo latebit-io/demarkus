@@ -18,7 +18,8 @@ type mockClient struct {
 	calls []string
 
 	// publishStatuses overrides the default created-on-publish behavior.
-	// Map from path -> status returned by Publish.
+	// Keyed by host+path so multi-hub tests can model per-hub status differences
+	// when several hubs share the same target path (e.g. /index.md).
 	publishStatuses map[string]string
 	publishes       []publishCall
 }
@@ -57,7 +58,7 @@ func (m *mockClient) Publish(host, path, body, token string, expectedVersion int
 		ExpectedVersion: expectedVersion,
 	})
 	status := protocol.StatusCreated
-	if s, ok := m.publishStatuses[path]; ok {
+	if s, ok := m.publishStatuses[host+path]; ok {
 		status = s
 	}
 	return fetch.Result{Response: protocol.Response{Status: status}}, nil
@@ -397,7 +398,7 @@ func TestPublishIndex(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := newMockClient()
-			client.publishStatuses["/index.md"] = tt.status
+			client.publishStatuses["hub.example.com:6309/index.md"] = tt.status
 
 			crawler := NewCrawler(DefaultConfig(), client, nil, nil)
 			err := crawler.publishIndex(context.Background(), client, "hub.example.com:6309", "/index.md", "# Index\n", "tok")
@@ -443,7 +444,7 @@ func TestPublishIndexRePublish(t *testing.T) {
 	}
 
 	client.mu.Lock()
-	client.publishStatuses["/index.md"] = protocol.StatusOK
+	client.publishStatuses["hub.example.com:6309/index.md"] = protocol.StatusOK
 	client.mu.Unlock()
 
 	if err := crawler.publishIndex(context.Background(), client, "hub.example.com:6309", "/index.md", "# v2\n", "tok"); err != nil {
@@ -528,6 +529,14 @@ func TestPublishToHubs(t *testing.T) {
 		}
 		if count != 2 {
 			t.Errorf("count = %d, want 2", count)
+		}
+		if len(client.publishes) != 2 {
+			t.Fatalf("expected 2 publishes, got %d", len(client.publishes))
+		}
+		for i, call := range client.publishes {
+			if call.ExpectedVersion != -1 {
+				t.Errorf("publishes[%d].ExpectedVersion = %d, want -1 (no-check)", i, call.ExpectedVersion)
+			}
 		}
 	})
 }
