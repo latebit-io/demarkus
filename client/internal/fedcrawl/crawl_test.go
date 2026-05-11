@@ -453,6 +453,11 @@ func TestPublishIndexRePublish(t *testing.T) {
 	if len(client.publishes) != 2 {
 		t.Fatalf("expected 2 publishes, got %d", len(client.publishes))
 	}
+	for i, call := range client.publishes {
+		if call.ExpectedVersion != -1 {
+			t.Errorf("publishes[%d].ExpectedVersion = %d, want -1 (no-check) for idempotent re-publish", i, call.ExpectedVersion)
+		}
+	}
 }
 
 func TestPublishToHubs(t *testing.T) {
