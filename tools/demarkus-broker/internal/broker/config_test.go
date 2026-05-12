@@ -190,25 +190,25 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "allow.groups trimmed but case preserved",
-			// Groups are trim-only at load (no lowercase) because
-			// group-name case sensitivity is IdP-dependent — keep the
-			// configured case for debug-log readability while still
-			// catching whitespace typos.
+			name: "allow.groups normalized to lowercase",
+			// Groups are lowercased+trimmed at load, same as domains and
+			// emails. Match is case-insensitive because our target IdP
+			// set treats group-name uniqueness case-insensitively;
+			// see the AllowConfig.Groups doc for why.
 			body: strings.Replace(validConfig,
 				`allow:
       domains: ["example.com"]`,
 				`allow:
-      groups: ["  Engineering  ", " ops"]`, 1),
+      groups: ["  Engineering  ", " OPS"]`, 1),
 			validate: func(t *testing.T, c *Config) {
 				got := c.Worlds[0].Allow.Groups
-				want := []string{"Engineering", "ops"}
+				want := []string{"engineering", "ops"}
 				if len(got) != len(want) {
 					t.Fatalf("groups = %v, want %v", got, want)
 				}
 				for j, g := range got {
 					if g != want[j] {
-						t.Errorf("groups[%d] = %q, want %q (trim only, case preserved)", j, g, want[j])
+						t.Errorf("groups[%d] = %q, want %q (must be lowercased + trimmed at load)", j, g, want[j])
 					}
 				}
 			},

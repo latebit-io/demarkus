@@ -223,15 +223,18 @@ func domainMatches(email string, allowed []string) bool {
 // IdPs that don't surface groups in the ID token send a nil claims.Groups;
 // in that case the match fails (unless the allowlist is also empty),
 // which is the operator's signal to use AllowEmails as a carve-out.
+//
+// Match is case-insensitive: the allowlist is lowercased at config load
+// (validate in config.go) and the claim's groups are lowercased here.
+// See the AllowConfig.Groups doc for why our target IdPs (Google, Okta,
+// Entra ID, Auth0) make case-insensitive the safe default.
 func groupsMatch(have, allowed []string) bool {
 	if len(allowed) == 0 {
 		return true
 	}
 	for _, g := range have {
-		for _, want := range allowed {
-			if strings.EqualFold(g, want) {
-				return true
-			}
+		if slices.Contains(allowed, strings.ToLower(g)) {
+			return true
 		}
 	}
 	return false

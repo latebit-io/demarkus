@@ -107,11 +107,16 @@ type AllowConfig struct {
 	Domains []string `yaml:"domains"`
 	// Groups is the OIDC `groups`-claim allowlist. The identity must
 	// have at least one group in this list for the domain-and-groups
-	// predicate to match. IdP-specific: Okta and Auth0 emit `groups` in
-	// the ID token when configured; Entra needs the optional `groups`
-	// claim enabled; Google does not surface groups in the ID token
-	// (use Emails as a carve-out, or wait for a userinfo-based Verifier
-	// — backlogged).
+	// predicate to match. Match is case-insensitive: entries are
+	// lowercased+trimmed at config load, and groupsMatch lowercases the
+	// claim's groups for compare. Our validated IdP set (Google, Okta,
+	// Entra ID, Auth0) treats group names case-insensitively; case-
+	// sensitive providers like Keycloak with deliberately distinct
+	// case-variant groups are out of scope. IdP-specific: Okta and
+	// Auth0 emit `groups` in the ID token when configured; Entra needs
+	// the optional `groups` claim enabled; Google does not surface
+	// groups in the ID token (use Emails as a carve-out, or wait for a
+	// userinfo-based Verifier — backlogged).
 	Groups []string `yaml:"groups"`
 	// Emails is the per-user carve-out. A login whose verified email
 	// matches an entry here qualifies regardless of Domains and Groups.
@@ -228,30 +233,28 @@ func validateWorld(i int, w *WorldConfig) error {
 	case w.DefaultToken.ExpiresAfter <= 0:
 		return fmt.Errorf("worlds[%d] (%s): defaultToken.expiresAfter must be > 0", i, w.Name)
 	}
-	// Domains and Emails are lowercased+trimmed so authorizedWorlds can
-	// do plain string compares on every login. Groups are trim-only
-	// because group-name case sensitivity is IdP-dependent (Okta can
-	// hold distinct "Engineering" / "engineering" entities, Entra ID
-	// preserves case for display, Google's directory is
-	// case-insensitive); groupsMatch uses EqualFold at runtime so case
-	// differences still match, but we keep the configured case for
-	// debug-log readability. Empty entries are always config typos and
+	// All three lists are lowercased+trimmed at load so authorizedWorlds
+	// can do plain string compares on every login. Group-name match is
+	// case-insensitive because our validated IdP set (Google, Okta,
+	// Entra ID, Auth0) enforces case-insensitive group-name uniqueness;
+	// an operator writing "Engineering" while the IdP emits
+	// "engineering" after upstream normalization would otherwise fail
+	// silently. Case-sensitive providers like Keycloak with
+	// deliberately distinct case-variant groups are out of scope; revisit
+	// if a customer asks. Empty entries are always config typos and
 	// surface here at load time rather than silently never matching.
-	if err := normalizeAllowList(i, w.Name, "domains", w.Allow.Domains, true); err != nil {
+	if err := normalizeAllowList(i, w.Name, "domains", w.Allow.Domains); err != nil {
 		return err
 	}
-	if err := normalizeAllowList(i, w.Name, "emails", w.Allow.Emails, true); err != nil {
+	if err := normalizeAllowList(i, w.Name, "emails", w.Allow.Emails); err != nil {
 		return err
 	}
-	return normalizeAllowList(i, w.Name, "groups", w.Allow.Groups, false)
+	return normalizeAllowList(i, w.Name, "groups", w.Allow.Groups)
 }
 
-func normalizeAllowList(worldIdx int, worldName, field string, list []string, lower bool) error {
+func normalizeAllowList(worldIdx int, worldName, field string, list []string) error {
 	for j, s := range list {
-		norm := strings.TrimSpace(s)
-		if lower {
-			norm = strings.ToLower(norm)
-		}
+		norm := strings.ToLower(strings.TrimSpace(s))
 		if norm == "" {
 			return fmt.Errorf("worlds[%d] (%s): allow.%s[%d] is empty", worldIdx, worldName, field, j)
 		}

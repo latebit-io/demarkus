@@ -318,6 +318,21 @@ func TestMintAuthorizationPredicate(t *testing.T) {
 			accept: false,
 		},
 		{
+			name: "groups_case_insensitive_claim_side",
+			// The allowlist arrives pre-normalized (lowercased+trimmed)
+			// from config load — see TestLoadConfig/allow.groups_normalized_to_lowercase
+			// for the load-side half. This row asserts the runtime half:
+			// the IdP can emit any case in the claim and still match.
+			// Together the two cover the end-to-end "operator writes
+			// any case, IdP emits any case" story. Regressing this to a
+			// case-sensitive compare would silently break the common
+			// case where Okta/Entra/Auth0 normalize group casing
+			// upstream and must fail this test.
+			allow:  AllowConfig{Groups: []string{"engineering"}},
+			claims: Claims{Email: "any@anywhere.test", EmailVerified: true, Groups: []string{"Engineering"}},
+			accept: true,
+		},
+		{
 			name:   "domain_and_groups_both_match",
 			allow:  AllowConfig{Domains: []string{"example.com"}, Groups: []string{"engineering"}},
 			claims: Claims{Email: "alice@example.com", EmailVerified: true, Groups: []string{"engineering"}},
