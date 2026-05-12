@@ -3,11 +3,12 @@
 // per-world Kubernetes Secrets while tracking ownership in its own
 // broker-namespace Secret.
 //
-// Slice B scope (this binary): single broker, multi-world support behind
-// per-world domain allowlists, browser code-flow for /auth/login +
-// /auth/callback, bearer-token (ID token) authentication for /tokens and
-// DELETE /tokens/:label. No expiry sweeper, no leader election, no
-// rotate, no rate limit — those land in Slice C/D.
+// Current scope: single broker, multi-world support with
+// domain/groups/emails allowlists (Slice C.1), browser code-flow for
+// /auth/login + /auth/callback, bearer-token (ID token) authentication
+// for /tokens and DELETE /tokens/:label, leader-elected expiry/drift
+// sweeper (Slice C.2). No rotate endpoint, no rate limit — Slice C.3
+// and C.4 respectively.
 package main
 
 import (
@@ -18,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -101,6 +103,27 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 		errs <- nil
 	}()
 
+	// Sweeper runs alongside HTTP — leader election keeps it singleton
+	// across replicas. Its lifecycle hangs off sweepCtx so the signal
+	// path below can cancel it cleanly before HTTP shutdown begins.
+	// ReleaseOnCancel inside RunLeaderElected gives the lease back so a
+	// rolling restart's successor takes over in milliseconds.
+	sweepCtx, cancelSweep := context.WithCancel(context.Background())
+	defer cancelSweep()
+	var sweepWG sync.WaitGroup
+	if !cfg.Sweeper.Disabled {
+		sweeper := broker.NewSweeper(issuer, cfg.Sweeper.Interval, log)
+		identity := brokerIdentity()
+		log.Info("broker: starting sweeper",
+			"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,
+			"namespace", cfg.Server.BrokerNamespace, "identity", identity)
+		sweepWG.Go(func() {
+			sweeper.RunLeaderElected(sweepCtx, cfg.Sweeper.LeaseName, cfg.Server.BrokerNamespace, identity)
+		})
+	} else {
+		log.Info("broker: sweeper disabled (sweeper.disabled=true)")
+	}
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	select {
@@ -108,13 +131,33 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 		log.Info("broker: received signal, shutting down", "signal", sig.String())
 	case err := <-errs:
 		if err != nil {
+			cancelSweep()
+			sweepWG.Wait()
 			return err
 		}
 	}
 
+	cancelSweep()
+	sweepWG.Wait()
+
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
 	return httpSrv.Shutdown(shutdownCtx)
+}
+
+// brokerIdentity returns the holder identity stamped onto the leader-
+// election Lease. In-cluster the operator wires POD_NAME via the
+// downward API; out-of-cluster runs fall back to the host's hostname,
+// or a literal "broker" string for unconfigured developer environments
+// where Hostname() can return empty.
+func brokerIdentity() string {
+	if v := os.Getenv("POD_NAME"); v != "" {
+		return v
+	}
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "broker"
 }
 
 // newKubeClient builds a kubernetes client. When kubeconfigPath is empty

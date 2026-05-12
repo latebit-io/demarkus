@@ -325,12 +325,8 @@ func (i *Issuer) List(ctx context.Context, email string) ([]Issuance, error) {
 // Revoke removes a label from both the world's tokens Secret and the
 // broker's issuances Secret. Returns ErrNotFound if the label has no
 // issuance record, ErrNotOwner if the caller's email does not match the
-// issuance.
-//
-// World Secret is removed first so the token stops working immediately;
-// the issuance entry is the second write, which means a transient failure
-// between the two writes leaves an orphan in issuances. The Slice D
-// sweeper prunes such orphans by comparing both Secrets every tick.
+// issuance. User-initiated revocation path; the sweeper uses
+// revokeIssuance directly (no owner check, already holds the entry).
 func (i *Issuer) Revoke(ctx context.Context, callerEmail, label string) error {
 	all, err := i.readIssuances(ctx)
 	if err != nil {
@@ -349,18 +345,29 @@ func (i *Issuer) Revoke(ctx context.Context, callerEmail, label string) error {
 	if !strings.EqualFold(found.Email, callerEmail) {
 		return ErrNotOwner
 	}
-	world := i.lookupWorld(found.World)
+	return i.revokeIssuance(ctx, found)
+}
+
+// revokeIssuance executes the two-Secret mutation that retires a token:
+// remove from the world's tokens Secret first so the token stops working
+// immediately, then remove from the broker's issuances Secret. A
+// transient failure between the two writes leaves an orphan in
+// issuances; the expiry sweeper's drift-pruning catches those next tick
+// by comparing both Secrets.
+//
+// Shared between Revoke (after the owner check) and the sweeper (which
+// already holds the entry from its iteration). Surfaces the
+// world-not-configured case as an explicit error so silently dropping
+// the issuance can't leave a still-valid token in an orphaned world.
+func (i *Issuer) revokeIssuance(ctx context.Context, iss *Issuance) error {
+	world := i.lookupWorld(iss.World)
 	if world == nil {
-		// The issuance points at a world the broker is no longer
-		// configured for. Silently dropping the issuance entry would
-		// report success while leaving a still-valid token in that
-		// world's tokens Secret. Surface the misconfiguration instead.
-		return fmt.Errorf("world %q not configured for label %q", found.World, label)
+		return fmt.Errorf("world %q not configured for label %q", iss.World, iss.Label)
 	}
-	if err := i.removeFromWorldSecret(ctx, world, label); err != nil {
+	if err := i.removeFromWorldSecret(ctx, world, iss.Label); err != nil {
 		return fmt.Errorf("remove from world %s: %w", world.Name, err)
 	}
-	return i.removeIssuance(ctx, label)
+	return i.removeIssuance(ctx, iss.Label)
 }
 
 func (i *Issuer) lookupWorld(name string) *WorldConfig {

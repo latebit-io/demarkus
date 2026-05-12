@@ -723,3 +723,90 @@ func TestTokenStoredHashMatchesProtocolContract(t *testing.T) {
 		t.Errorf("stored hash does not match HashToken(raw):\n%s", secret.Data[TokensSecretKey])
 	}
 }
+
+func TestMintRBACDeniedNoPartialState(t *testing.T) {
+	// Slice C.2 RBAC-denied guard. Multi-world config: alice qualifies
+	// for team-a and team-b. The broker SA has write permission on
+	// team-a's tokens Secret but is denied on team-b's. Mint must
+	// return partial results (team-a) plus an error, AND leave team-b
+	// with zero state in either the world Secret or the issuances
+	// Secret. The latter is the "no partial state" property the plan
+	// §6.2 partial-mint edge case promises: a failed world's mint
+	// rolls back any half-written state before returning.
+	//
+	// Implementation detail: we pre-seed team-b's tokens Secret with
+	// empty data so mutateSecret takes the Update path (rather than
+	// Create), which matches the real-world RBAC failure mode of "SA
+	// can patch but only on the listed Secrets in its Role." Deny the
+	// update via a fake.Clientset reactor returning Forbidden.
+	cfg := testConfig()
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{
+		Name:         "team-b",
+		Namespace:    "team-b",
+		TokensSecret: "team-b-tokens",
+		Allow:        AllowConfig{Domains: []string{"example.com"}},
+		DefaultToken: TokenScope{
+			Paths:        []string{"/team-b/*"},
+			Operations:   []string{"read"},
+			ExpiresAfter: 12 * time.Hour,
+		},
+	})
+	k8s := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-b-tokens", Namespace: "team-b"},
+		Data:       map[string][]byte{TokensSecretKey: {}},
+	})
+	k8s.PrependReactor("update", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ua, ok := action.(k8stesting.UpdateAction)
+		if !ok {
+			return false, nil, nil
+		}
+		if ua.GetNamespace() == "team-b" {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Resource: "secrets"},
+				"team-b-tokens",
+				errors.New("broker SA lacks update on team-b/team-b-tokens"),
+			)
+		}
+		return false, nil, nil
+	})
+	i := newIssuer(t, cfg, k8s)
+
+	results, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err == nil {
+		t.Fatal("Mint returned nil err, want RBAC-denied")
+	}
+	if len(results) != 1 || results[0].World != "team-a" {
+		t.Fatalf("results = %+v, want only team-a (partial mint)", results)
+	}
+	if !strings.Contains(err.Error(), "team-b") {
+		t.Errorf("err %q does not name the failing world team-b", err)
+	}
+
+	// team-b's tokens Secret was seeded empty and must STAY empty —
+	// every Update was Forbidden, so neither the initial write nor any
+	// retry could land. (mutateSecret's optimistic-concurrency retry
+	// only re-fires on Conflict, not Forbidden, so the budget isn't
+	// burned and the call returns promptly.)
+	teamB, err := k8s.CoreV1().Secrets("team-b").Get(context.Background(), "team-b-tokens", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get team-b Secret: %v", err)
+	}
+	if len(teamB.Data[TokensSecretKey]) != 0 {
+		t.Errorf("team-b tokens Secret leaked data despite RBAC denial:\n%s", teamB.Data[TokensSecretKey])
+	}
+
+	// Issuances Secret records team-a only — team-b never made it
+	// past the world-Secret write, so the per-world rollback in
+	// mintForWorld (which only fires after a successful world write
+	// followed by a failed issuance append) didn't even need to run.
+	live, err := i.List(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(live) != 1 {
+		t.Fatalf("issuances after RBAC denial = %d, want 1 (team-a)", len(live))
+	}
+	if live[0].World != "team-a" {
+		t.Errorf("issuance world = %q, want team-a", live[0].World)
+	}
+}
