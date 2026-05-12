@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -140,9 +141,7 @@ func TestMintRejectsUnverifiedEmail(t *testing.T) {
 	if !errors.Is(err, ErrEmailUnverified) {
 		t.Errorf("err = %v, want ErrEmailUnverified", err)
 	}
-	if list, _ := k8s.CoreV1().Secrets("team-a").List(context.Background(), metav1.ListOptions{}); len(list.Items) != 0 {
-		t.Errorf("expected no Secrets written, got %d", len(list.Items))
-	}
+	assertNoSecretsWritten(t, k8s)
 }
 
 func TestMintRejectsUnauthorizedDomain(t *testing.T) {
@@ -153,9 +152,38 @@ func TestMintRejectsUnauthorizedDomain(t *testing.T) {
 	if !errors.Is(err, ErrNotAuthorized) {
 		t.Errorf("err = %v, want ErrNotAuthorized", err)
 	}
+	assertNoSecretsWritten(t, k8s)
+}
 
+func TestMintRejectsEmptyEmail(t *testing.T) {
+	// World allowlist-empty would otherwise authorize anyone, including
+	// an empty/whitespace-only email — collapsing every future caller
+	// with no identity into the same "owner" in the issuances Secret.
+	// Mint must refuse before that ownership record is written.
+	cfg := testConfig()
+	cfg.Worlds[0].AllowDomains = nil
+	for _, email := range []string{"", "   ", "\t"} {
+		k8s := fake.NewSimpleClientset()
+		i := newIssuer(t, cfg, k8s)
+		_, err := i.Mint(context.Background(), Claims{Email: email, EmailVerified: true})
+		if !errors.Is(err, ErrNotAuthorized) {
+			t.Errorf("email=%q: err = %v, want ErrNotAuthorized", email, err)
+		}
+		assertNoSecretsWritten(t, k8s)
+	}
+}
+
+// assertNoSecretsWritten verifies the rejection paths leave both the
+// world namespace and the broker namespace untouched. Bug regressions
+// that write the issuances Secret before returning an error would
+// otherwise slip past a world-only check.
+func assertNoSecretsWritten(t *testing.T, k8s *fake.Clientset) {
+	t.Helper()
 	if list, _ := k8s.CoreV1().Secrets("team-a").List(context.Background(), metav1.ListOptions{}); len(list.Items) != 0 {
-		t.Errorf("expected no Secrets written, got %d", len(list.Items))
+		t.Errorf("team-a Secrets unexpectedly written: %d", len(list.Items))
+	}
+	if _, err := k8s.CoreV1().Secrets(testBrokerNS).Get(context.Background(), testIssuancesNS, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("issuances secret unexpectedly created: %v", err)
 	}
 }
 
@@ -398,6 +426,52 @@ func TestRevokeUnknownLabel(t *testing.T) {
 	err := i.Revoke(context.Background(), "alice@example.com", "usr_nope")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRevokeMissingWorldPreservesIssuance(t *testing.T) {
+	// Seed the issuances Secret with a record pointing at a world the
+	// broker is no longer configured for (operator removed it from the
+	// YAML between mint and revoke). Revoke must surface the
+	// misconfiguration rather than silently dropping the issuance entry
+	// while leaving a still-valid token in the orphaned world's
+	// tokens.toml. The issuance record must stay so an operator can
+	// investigate.
+	cfg := testConfig()
+	orphan := Issuance{
+		Label:      "usr_orphan",
+		Email:      "alice@example.com",
+		World:      "team-removed",
+		Paths:      []string{"/team-removed/*"},
+		Operations: []string{"read"},
+		IssuedAt:   time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC),
+		ExpiresAt:  time.Date(2026, 5, 12, 10, 0, 0, 0, time.UTC),
+	}
+	payload, err := json.Marshal(Issuances{Entries: []Issuance{orphan}})
+	if err != nil {
+		t.Fatalf("marshal seed: %v", err)
+	}
+	k8s := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: testIssuancesNS, Namespace: testBrokerNS},
+		Data:       map[string][]byte{IssuancesSecretKey: payload},
+	})
+	i := newIssuer(t, cfg, k8s)
+
+	err = i.Revoke(context.Background(), "alice@example.com", "usr_orphan")
+	if err == nil {
+		t.Fatalf("Revoke returned nil, want error for missing world")
+	}
+	if !strings.Contains(err.Error(), "team-removed") {
+		t.Errorf("error %q does not name the orphaned world", err)
+	}
+
+	// Issuance must still be there for the operator to find.
+	got, err := i.List(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 || got[0].Label != "usr_orphan" {
+		t.Errorf("issuance dropped or mutated: %+v", got)
 	}
 }
 

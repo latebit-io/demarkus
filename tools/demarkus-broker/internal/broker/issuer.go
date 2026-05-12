@@ -114,6 +114,15 @@ func (i *Issuer) Mint(ctx context.Context, claims Claims) ([]MintResult, error) 
 	if !claims.EmailVerified {
 		return nil, ErrEmailUnverified
 	}
+	// An empty (or whitespace-only) email evades domain authorization
+	// because domainMatches short-circuits to true when a world's
+	// AllowDomains is empty. Worse, the empty string would land as the
+	// "owner" of the issuance record, collapsing every future caller
+	// with no email into the same identity for List/Revoke. Reject
+	// explicitly at this boundary.
+	if strings.TrimSpace(claims.Email) == "" {
+		return nil, ErrNotAuthorized
+	}
 	worlds := i.authorizedWorlds(claims.Email)
 	if len(worlds) == 0 {
 		return nil, ErrNotAuthorized
