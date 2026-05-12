@@ -190,6 +190,10 @@ func emailMatches(email string, allowed []string) bool {
 // domainMatches reports whether the identity email's domain part is in
 // the allowlist. Returns true on an empty allowlist — the "no
 // restriction on the domain dimension" semantic worldAllows depends on.
+//
+// The allowlist is lowercased+trimmed at config load (validate in
+// config.go), so a plain compare against the lowercased domain part of
+// the email is sufficient — no EqualFold needed on the hot path.
 func domainMatches(email string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return true
@@ -199,12 +203,7 @@ func domainMatches(email string, allowed []string) bool {
 		return false
 	}
 	domain := strings.ToLower(email[at+1:])
-	for _, d := range allowed {
-		if strings.EqualFold(d, domain) {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, domain)
 }
 
 // groupsMatch reports whether the identity has at least one group in

@@ -213,11 +213,18 @@ func (c *Config) validate() error {
 		case w.DefaultToken.ExpiresAfter <= 0:
 			return fmt.Errorf("worlds[%d] (%s): defaultToken.expiresAfter must be > 0", i, w.Name)
 		}
-		// Normalize Allow.Emails to lowercase+trim so authorizedWorlds can
-		// do a plain string compare on every login. Reject empty entries
-		// here rather than silently matching the empty-email reject path
-		// inside Mint — that fails for the right reason but blames the
-		// caller for a config bug.
+		// Normalize Allow.Domains and Allow.Emails to lowercase+trim so
+		// authorizedWorlds can do plain string compares on every login.
+		// Reject empty entries here rather than silently never matching;
+		// an empty list entry is always a config typo, and surfacing it
+		// at load time blames the right person.
+		for j, d := range w.Allow.Domains {
+			norm := strings.ToLower(strings.TrimSpace(d))
+			if norm == "" {
+				return fmt.Errorf("worlds[%d] (%s): allow.domains[%d] is empty", i, w.Name, j)
+			}
+			w.Allow.Domains[j] = norm
+		}
 		for j, e := range w.Allow.Emails {
 			norm := strings.ToLower(strings.TrimSpace(e))
 			if norm == "" {

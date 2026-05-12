@@ -117,6 +117,35 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "field extraField not found",
 		},
 		{
+			name: "allow.domains normalized to lowercase",
+			body: strings.Replace(validConfig,
+				`allow:
+      domains: ["example.com"]`,
+				`allow:
+      domains: ["  Example.COM  ", "OTHER.example"]`, 1),
+			validate: func(t *testing.T, c *Config) {
+				got := c.Worlds[0].Allow.Domains
+				want := []string{"example.com", "other.example"}
+				if len(got) != len(want) {
+					t.Fatalf("domains = %v, want %v", got, want)
+				}
+				for j, d := range got {
+					if d != want[j] {
+						t.Errorf("domains[%d] = %q, want %q (must be lowercased + trimmed at load)", j, d, want[j])
+					}
+				}
+			},
+		},
+		{
+			name: "allow.domains empty entry rejected",
+			body: strings.Replace(validConfig,
+				`allow:
+      domains: ["example.com"]`,
+				`allow:
+      domains: ["example.com", ""]`, 1),
+			wantErr: "allow.domains[1] is empty",
+		},
+		{
 			name: "allow.emails normalized to lowercase",
 			body: strings.Replace(validConfig,
 				`allow:
