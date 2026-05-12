@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -60,7 +61,7 @@ type OIDCConfig struct {
 
 // WorldConfig describes one demarkus world the broker is authorized to
 // mint tokens for. Authorization is per-world; an OIDC identity may
-// qualify for some worlds and not others depending on AllowDomains.
+// qualify for some worlds and not others depending on Allow.
 type WorldConfig struct {
 	// Name is the world's logical name (also the value in the
 	// "world" field of issuances records).
@@ -70,16 +71,58 @@ type WorldConfig struct {
 	// TokensSecret is the name of the world's tokens.toml Secret. The
 	// broker requires get/patch on this Secret in that namespace.
 	TokensSecret string `yaml:"tokensSecret"`
-	// AllowDomains is the email-domain allowlist used for authorization
-	// in Slice B. A login's id_token.email must end with one of these
-	// domains for the broker to mint a token for this world. Empty list
-	// = no domain restriction (any verified user qualifies); the operator
-	// must opt out explicitly to avoid surprise authorization.
-	AllowDomains []string `yaml:"allowDomains"`
+	// Allow is the per-world authorization predicate. See AllowConfig for
+	// the rules. When every list is empty the world accepts any verified
+	// identity (back-compat with pre-Slice-C configs that had only
+	// AllowDomains and left it empty).
+	Allow AllowConfig `yaml:"allow"`
 	// DefaultToken describes the capabilities of every token minted for
 	// this world. Slice B treats DefaultToken as the only scope; per-call
 	// narrowing is a Slice C feature.
 	DefaultToken TokenScope `yaml:"defaultToken"`
+}
+
+// AllowConfig describes who qualifies for tokens against a given world.
+// Predicate (Slice C.1):
+//
+//  1. If Domains, Groups, and Emails are all empty, any verified identity
+//     qualifies. This preserves the pre-Slice-C "no allowlist = open
+//     world" behavior so existing configs upgrade without surprise.
+//  2. Otherwise the identity qualifies if its email is in Emails (the
+//     per-user carve-out), OR if its email matches Domains and its
+//     groups intersect Groups. Either Domains or Groups may be empty
+//     individually; an empty list in that dimension means "no
+//     restriction on that dimension." But at least one of {Domains,
+//     Groups, Emails} must match for the world to authorize.
+//
+// Emails exists so worlds can grant access to specific users when the
+// IdP doesn't surface usable groups in the ID token (Google Workspace,
+// some Entra configs). Groups exists so RBAC can live in the IdP
+// instead of the broker config.
+type AllowConfig struct {
+	// Domains is the email-domain allowlist. A login's id_token.email
+	// must end with one of these (case-insensitive) for the
+	// domain-and-groups predicate to match. Empty disables this
+	// dimension only — see the AllowConfig doc for the full rule.
+	Domains []string `yaml:"domains"`
+	// Groups is the OIDC `groups`-claim allowlist. The identity must
+	// have at least one group in this list for the domain-and-groups
+	// predicate to match. Match is case-insensitive: entries are
+	// lowercased+trimmed at config load, and groupsMatch lowercases the
+	// claim's groups for compare. Our validated IdP set (Google, Okta,
+	// Entra ID, Auth0) treats group names case-insensitively; case-
+	// sensitive providers like Keycloak with deliberately distinct
+	// case-variant groups are out of scope. IdP-specific: Okta and
+	// Auth0 emit `groups` in the ID token when configured; Entra needs
+	// the optional `groups` claim enabled; Google does not surface
+	// groups in the ID token (use Emails as a carve-out, or wait for a
+	// userinfo-based Verifier — backlogged).
+	Groups []string `yaml:"groups"`
+	// Emails is the per-user carve-out. A login whose verified email
+	// matches an entry here qualifies regardless of Domains and Groups.
+	// Entries are lowercased + trimmed at config load so the runtime
+	// compare is case-insensitive without per-call normalization.
+	Emails []string `yaml:"emails"`
 }
 
 // TokenScope is the capability bundle every token minted for a given
@@ -159,23 +202,63 @@ func (c *Config) validate() error {
 	seen := make(map[string]bool, len(c.Worlds))
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
-		switch {
-		case w.Name == "":
-			return fmt.Errorf("worlds[%d]: name is required", i)
-		case seen[w.Name]:
+		if err := validateWorld(i, w); err != nil {
+			return err
+		}
+		if seen[w.Name] {
 			return fmt.Errorf("worlds[%d]: duplicate name %q", i, w.Name)
-		case w.Namespace == "":
-			return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)
-		case w.TokensSecret == "":
-			return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
-		case len(w.DefaultToken.Paths) == 0:
-			return fmt.Errorf("worlds[%d] (%s): defaultToken.paths is required", i, w.Name)
-		case len(w.DefaultToken.Operations) == 0:
-			return fmt.Errorf("worlds[%d] (%s): defaultToken.operations is required", i, w.Name)
-		case w.DefaultToken.ExpiresAfter <= 0:
-			return fmt.Errorf("worlds[%d] (%s): defaultToken.expiresAfter must be > 0", i, w.Name)
 		}
 		seen[w.Name] = true
+	}
+	return nil
+}
+
+// validateWorld enforces the per-world invariants and normalizes the
+// AllowConfig string lists in place. Split out of validate() so the
+// gocyclo budget on each function stays inside the linter threshold;
+// the outer loop owns cross-world checks (duplicates), the helper owns
+// single-world checks.
+func validateWorld(i int, w *WorldConfig) error {
+	switch {
+	case w.Name == "":
+		return fmt.Errorf("worlds[%d]: name is required", i)
+	case w.Namespace == "":
+		return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)
+	case w.TokensSecret == "":
+		return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
+	case len(w.DefaultToken.Paths) == 0:
+		return fmt.Errorf("worlds[%d] (%s): defaultToken.paths is required", i, w.Name)
+	case len(w.DefaultToken.Operations) == 0:
+		return fmt.Errorf("worlds[%d] (%s): defaultToken.operations is required", i, w.Name)
+	case w.DefaultToken.ExpiresAfter <= 0:
+		return fmt.Errorf("worlds[%d] (%s): defaultToken.expiresAfter must be > 0", i, w.Name)
+	}
+	// All three lists are lowercased+trimmed at load so authorizedWorlds
+	// can do plain string compares on every login. Group-name match is
+	// case-insensitive because our validated IdP set (Google, Okta,
+	// Entra ID, Auth0) enforces case-insensitive group-name uniqueness;
+	// an operator writing "Engineering" while the IdP emits
+	// "engineering" after upstream normalization would otherwise fail
+	// silently. Case-sensitive providers like Keycloak with
+	// deliberately distinct case-variant groups are out of scope; revisit
+	// if a customer asks. Empty entries are always config typos and
+	// surface here at load time rather than silently never matching.
+	if err := normalizeAllowList(i, w.Name, "domains", w.Allow.Domains); err != nil {
+		return err
+	}
+	if err := normalizeAllowList(i, w.Name, "emails", w.Allow.Emails); err != nil {
+		return err
+	}
+	return normalizeAllowList(i, w.Name, "groups", w.Allow.Groups)
+}
+
+func normalizeAllowList(worldIdx int, worldName, field string, list []string) error {
+	for j, s := range list {
+		norm := strings.ToLower(strings.TrimSpace(s))
+		if norm == "" {
+			return fmt.Errorf("worlds[%d] (%s): allow.%s[%d] is empty", worldIdx, worldName, field, j)
+		}
+		list[j] = norm
 	}
 	return nil
 }
