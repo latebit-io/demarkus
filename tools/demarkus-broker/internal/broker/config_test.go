@@ -117,6 +117,11 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "sweeper.interval must be <= 24h0m0s",
 		},
 		{
+			name:    "sweeper.interval negative rejected",
+			body:    validConfig + "sweeper:\n  interval: -1m\n",
+			wantErr: "sweeper.interval must be > 0",
+		},
+		{
 			name: "sweeper.interval defaults to 5m when omitted",
 			body: validConfig,
 			validate: func(t *testing.T, c *Config) {
