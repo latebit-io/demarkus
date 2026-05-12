@@ -197,42 +197,65 @@ func (c *Config) validate() error {
 	seen := make(map[string]bool, len(c.Worlds))
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
-		switch {
-		case w.Name == "":
-			return fmt.Errorf("worlds[%d]: name is required", i)
-		case seen[w.Name]:
+		if err := validateWorld(i, w); err != nil {
+			return err
+		}
+		if seen[w.Name] {
 			return fmt.Errorf("worlds[%d]: duplicate name %q", i, w.Name)
-		case w.Namespace == "":
-			return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)
-		case w.TokensSecret == "":
-			return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
-		case len(w.DefaultToken.Paths) == 0:
-			return fmt.Errorf("worlds[%d] (%s): defaultToken.paths is required", i, w.Name)
-		case len(w.DefaultToken.Operations) == 0:
-			return fmt.Errorf("worlds[%d] (%s): defaultToken.operations is required", i, w.Name)
-		case w.DefaultToken.ExpiresAfter <= 0:
-			return fmt.Errorf("worlds[%d] (%s): defaultToken.expiresAfter must be > 0", i, w.Name)
-		}
-		// Normalize Allow.Domains and Allow.Emails to lowercase+trim so
-		// authorizedWorlds can do plain string compares on every login.
-		// Reject empty entries here rather than silently never matching;
-		// an empty list entry is always a config typo, and surfacing it
-		// at load time blames the right person.
-		for j, d := range w.Allow.Domains {
-			norm := strings.ToLower(strings.TrimSpace(d))
-			if norm == "" {
-				return fmt.Errorf("worlds[%d] (%s): allow.domains[%d] is empty", i, w.Name, j)
-			}
-			w.Allow.Domains[j] = norm
-		}
-		for j, e := range w.Allow.Emails {
-			norm := strings.ToLower(strings.TrimSpace(e))
-			if norm == "" {
-				return fmt.Errorf("worlds[%d] (%s): allow.emails[%d] is empty", i, w.Name, j)
-			}
-			w.Allow.Emails[j] = norm
 		}
 		seen[w.Name] = true
+	}
+	return nil
+}
+
+// validateWorld enforces the per-world invariants and normalizes the
+// AllowConfig string lists in place. Split out of validate() so the
+// gocyclo budget on each function stays inside the linter threshold;
+// the outer loop owns cross-world checks (duplicates), the helper owns
+// single-world checks.
+func validateWorld(i int, w *WorldConfig) error {
+	switch {
+	case w.Name == "":
+		return fmt.Errorf("worlds[%d]: name is required", i)
+	case w.Namespace == "":
+		return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)
+	case w.TokensSecret == "":
+		return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
+	case len(w.DefaultToken.Paths) == 0:
+		return fmt.Errorf("worlds[%d] (%s): defaultToken.paths is required", i, w.Name)
+	case len(w.DefaultToken.Operations) == 0:
+		return fmt.Errorf("worlds[%d] (%s): defaultToken.operations is required", i, w.Name)
+	case w.DefaultToken.ExpiresAfter <= 0:
+		return fmt.Errorf("worlds[%d] (%s): defaultToken.expiresAfter must be > 0", i, w.Name)
+	}
+	// Domains and Emails are lowercased+trimmed so authorizedWorlds can
+	// do plain string compares on every login. Groups are trim-only
+	// because group-name case sensitivity is IdP-dependent (Okta can
+	// hold distinct "Engineering" / "engineering" entities, Entra ID
+	// preserves case for display, Google's directory is
+	// case-insensitive); groupsMatch uses EqualFold at runtime so case
+	// differences still match, but we keep the configured case for
+	// debug-log readability. Empty entries are always config typos and
+	// surface here at load time rather than silently never matching.
+	if err := normalizeAllowList(i, w.Name, "domains", w.Allow.Domains, true); err != nil {
+		return err
+	}
+	if err := normalizeAllowList(i, w.Name, "emails", w.Allow.Emails, true); err != nil {
+		return err
+	}
+	return normalizeAllowList(i, w.Name, "groups", w.Allow.Groups, false)
+}
+
+func normalizeAllowList(worldIdx int, worldName, field string, list []string, lower bool) error {
+	for j, s := range list {
+		norm := strings.TrimSpace(s)
+		if lower {
+			norm = strings.ToLower(norm)
+		}
+		if norm == "" {
+			return fmt.Errorf("worlds[%d] (%s): allow.%s[%d] is empty", worldIdx, worldName, field, j)
+		}
+		list[j] = norm
 	}
 	return nil
 }

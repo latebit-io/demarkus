@@ -173,6 +173,40 @@ func TestMintRejectsEmptyEmail(t *testing.T) {
 	}
 }
 
+func TestMintCanonicalizesEmail(t *testing.T) {
+	// Mint trims and lowercases claims.Email once before authorization
+	// and persistence. Without that, a domain match on the right side
+	// of the email could be silently dropped because LastIndex("@")
+	// keeps trailing whitespace in the domain slice; and two logins of
+	// the same user with different IdP-side casing would land as two
+	// distinct "owner" records in the issuances Secret. Asserting the
+	// final state covers both halves: domain match succeeded (single
+	// MintResult returned) and the persisted owner is canonical.
+	k8s := fake.NewSimpleClientset()
+	i := newIssuer(t, testConfig(), k8s)
+
+	results, err := i.Mint(context.Background(), Claims{
+		Email:         "  Alice@Example.COM\t",
+		EmailVerified: true,
+	})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	got, err := i.List(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("List got %d, want 1", len(got))
+	}
+	if got[0].Email != "alice@example.com" {
+		t.Errorf("issuance Email = %q, want canonical %q", got[0].Email, "alice@example.com")
+	}
+}
+
 // assertNoSecretsWritten verifies the rejection paths leave both the
 // world namespace and the broker namespace untouched. Bug regressions
 // that write the issuances Secret before returning an error would

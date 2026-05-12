@@ -189,6 +189,39 @@ func TestLoadConfig(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "allow.groups trimmed but case preserved",
+			// Groups are trim-only at load (no lowercase) because
+			// group-name case sensitivity is IdP-dependent — keep the
+			// configured case for debug-log readability while still
+			// catching whitespace typos.
+			body: strings.Replace(validConfig,
+				`allow:
+      domains: ["example.com"]`,
+				`allow:
+      groups: ["  Engineering  ", " ops"]`, 1),
+			validate: func(t *testing.T, c *Config) {
+				got := c.Worlds[0].Allow.Groups
+				want := []string{"Engineering", "ops"}
+				if len(got) != len(want) {
+					t.Fatalf("groups = %v, want %v", got, want)
+				}
+				for j, g := range got {
+					if g != want[j] {
+						t.Errorf("groups[%d] = %q, want %q (trim only, case preserved)", j, g, want[j])
+					}
+				}
+			},
+		},
+		{
+			name: "allow.groups empty entry rejected",
+			body: strings.Replace(validConfig,
+				`allow:
+      domains: ["example.com"]`,
+				`allow:
+      groups: ["engineering", "   "]`, 1),
+			wantErr: "allow.groups[1] is empty",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

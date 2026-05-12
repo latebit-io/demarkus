@@ -115,13 +115,24 @@ func (i *Issuer) Mint(ctx context.Context, claims Claims) ([]MintResult, error) 
 	if !claims.EmailVerified {
 		return nil, ErrEmailUnverified
 	}
-	// An empty (or whitespace-only) email evades domain authorization
-	// because a world with every Allow list empty qualifies any verified
-	// identity (back-compat). Worse, the empty string would land as the
-	// "owner" of the issuance record, collapsing every future caller
-	// with no email into the same identity for List/Revoke. Reject
-	// explicitly at this boundary, before authorizedWorlds runs.
-	if strings.TrimSpace(claims.Email) == "" {
+	// Canonicalize the email once at the boundary: trim + lowercase, then
+	// reject empty. Reasons to do this here, not in the leaf helpers:
+	//
+	//  - An untrimmed email (e.g. "alice@example.com ") evades
+	//    domainMatches because LastIndex("@") splits the local-part from
+	//    the domain *including the trailing whitespace*, and the
+	//    config-side allowlist is trim+lowercase normalized.
+	//  - The canonicalized value is what lands in the issuances Secret
+	//    as the owner. Without normalization here, two logins of the
+	//    same user with different IdP-side casing produce two distinct
+	//    "owners" for List/Revoke, even though EqualFold compares paper
+	//    over the difference on the read path.
+	//  - The empty-email guard prevents the empty string from becoming a
+	//    shared "no identity" owner across every future no-email caller,
+	//    in the path where every Allow list is empty (back-compat
+	//    "any verified user" worlds).
+	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
+	if claims.Email == "" {
 		return nil, ErrNotAuthorized
 	}
 	worlds := i.authorizedWorlds(claims)
