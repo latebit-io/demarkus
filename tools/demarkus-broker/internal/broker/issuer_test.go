@@ -260,6 +260,42 @@ func TestMintLabelCollisionRetries(t *testing.T) {
 	}
 }
 
+func TestMintLabelCollisionExhaustsRetries(t *testing.T) {
+	// All maxLabelRetries attempts return the same already-taken label.
+	// Exercises the terminal error path in mintForWorld after the retry
+	// budget is exhausted — distinct from the successful-retry case in
+	// TestMintLabelCollisionRetries. Counts labelGen calls to verify
+	// the loop actually iterated the full budget rather than bailing
+	// early.
+	k8s := fake.NewSimpleClientset()
+	i := newIssuer(t, testConfig(), k8s)
+	var calls int32
+	i.labelGen = func() (string, error) {
+		atomic.AddInt32(&calls, 1)
+		return "usr_forever", nil
+	}
+	existing := []byte("[tokens.usr_forever]\nhash = \"sha256-aaa\"\npaths = [\"/\"]\noperations = [\"read\"]\n")
+	_, err := k8s.CoreV1().Secrets("team-a").Create(context.Background(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a-tokens", Namespace: "team-a"},
+		Data:       map[string][]byte{TokensSecretKey: existing},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, err = i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err == nil || !strings.Contains(err.Error(), "consecutive label collisions") {
+		t.Errorf("err = %v, want 'consecutive label collisions'", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != int32(maxLabelRetries) {
+		t.Errorf("labelGen called %d times, want %d (full retry budget)", got, maxLabelRetries)
+	}
+	// No issuance record should have been written.
+	if _, err := k8s.CoreV1().Secrets(testBrokerNS).Get(context.Background(), testIssuancesNS, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("issuances secret unexpectedly created: %v", err)
+	}
+}
+
 func TestMintCrossWorldLabelCollisionRetries(t *testing.T) {
 	// Two worlds, one allowed domain each. Alice qualifies for both.
 	// The label generator returns "usr_dup" once, then "usr_unique"
