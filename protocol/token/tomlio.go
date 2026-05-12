@@ -87,6 +87,63 @@ func AppendEntry(path, label string, entry *Entry) error {
 	})
 }
 
+// AppendBytes is the in-memory analogue of AppendEntry: given existing
+// tokens.toml bytes (possibly empty), it returns the bytes with a new
+// labeled entry appended. Used by the demarkus-broker, which writes to a
+// Kubernetes Secret rather than a file and so has no use for the flock +
+// atomic-publish machinery AppendEntry layers on top.
+//
+// Returns ErrLabelExists if the label is already present in existing,
+// ErrNilEntry if entry is nil. The result is byte-equivalent to
+// existing + FormatEntry(label, entry) — comments and prior ordering in
+// existing are preserved.
+func AppendBytes(existing []byte, label string, entry *Entry) ([]byte, error) {
+	if entry == nil {
+		return nil, ErrNilEntry
+	}
+	if len(existing) > 0 {
+		var current File
+		if err := toml.Unmarshal(existing, &current); err != nil {
+			return nil, fmt.Errorf("decode tokens bytes: %w", err)
+		}
+		if _, present := current.Tokens[label]; present {
+			return nil, fmt.Errorf("%s: %w", label, ErrLabelExists)
+		}
+	}
+	formatted := FormatEntry(label, entry)
+	out := make([]byte, 0, len(existing)+len(formatted))
+	out = append(out, existing...)
+	out = append(out, formatted...)
+	return out, nil
+}
+
+// RemoveBytes returns tokens.toml bytes with the given label removed. If
+// the label is not present in existing, the original bytes are returned
+// unchanged with a nil error — revoke-of-missing is not an error condition,
+// matching the broker's expiry-sweeper and idempotent-DELETE semantics.
+//
+// Re-encoding does not preserve original formatting (comments, ordering);
+// this is the rewrite path the broker uses on the Kubernetes Secret, the
+// in-memory analogue of WriteFile, not AppendEntry.
+func RemoveBytes(existing []byte, label string) ([]byte, error) {
+	if len(existing) == 0 {
+		return existing, nil
+	}
+	var current File
+	if err := toml.Unmarshal(existing, &current); err != nil {
+		return nil, fmt.Errorf("decode tokens bytes: %w", err)
+	}
+	if _, present := current.Tokens[label]; !present {
+		return existing, nil
+	}
+	delete(current.Tokens, label)
+	var buf strings.Builder
+	if err := toml.NewEncoder(&buf).Encode(current); err != nil {
+		return nil, fmt.Errorf("encode tokens bytes: %w", err)
+	}
+	return []byte(buf.String()), nil
+}
+
 // WriteFile writes a File to disk atomically (write to temp + rename) under
 // the same advisory flock as AppendEntry, so revoke and generate cannot
 // interleave across processes. Existing on-disk formatting (comments,

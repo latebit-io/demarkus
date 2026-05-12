@@ -1,0 +1,412 @@
+package broker
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"k8s.io/client-go/kubernetes/fake"
+)
+
+// testHTTPTimeout caps every test request against the in-process broker so
+// a deadlocked handler fails the offending test in seconds instead of
+// hanging until Go's overall test timeout (10m by default) and obscuring
+// which case actually broke. Five seconds is generous — every handler is
+// purely in-memory and should complete in microseconds.
+const testHTTPTimeout = 5 * time.Second
+
+// testClient returns an HTTP client that trusts the test server's
+// self-signed certificate and has the test timeout applied. We work on a
+// shallow copy because httptest.Server.Client() returns the same instance
+// across calls; per-test mutations to Jar / CheckRedirect would otherwise
+// leak between tests.
+func testClient(srv *httptest.Server) *http.Client {
+	base := srv.Client()
+	c := *base
+	c.Timeout = testHTTPTimeout
+	return &c
+}
+
+func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clientset) (testSrv *httptest.Server, brokerSrv *Server) {
+	t.Helper()
+	signer := newTestSigner(t)
+	issuer := newIssuer(t, cfg, k8s)
+	// Leave the server's clock at the default time.Now — pinning it to
+	// the issuer's fixed date would expire the OIDC state cookie under
+	// any real wall-clock that is later than that date, breaking the
+	// callback tests. The issuer's clock stays pinned so token-expiry
+	// assertions in issuer tests remain deterministic.
+	brokerSrv = NewServer(cfg, signer, verifier, issuer, nil)
+	// NewTLSServer (not NewServer): the state cookie is set with
+	// Secure=true and Path=/auth/callback, attributes only enforceable
+	// over HTTPS. Without TLS we'd be relying on manual AddCookie calls
+	// in tests, which bypass jar policy and mask regressions where the
+	// cookie scope was accidentally widened.
+	testSrv = httptest.NewTLSServer(brokerSrv.Routes())
+	t.Cleanup(testSrv.Close)
+	return testSrv, brokerSrv
+}
+
+func TestHealthAndReady(t *testing.T) {
+	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		resp, err := testClient(srv).Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s: status = %d", path, resp.StatusCode)
+		}
+	}
+}
+
+func TestAuthLoginRedirectsAndSetsStateCookie(t *testing.T) {
+	verifier := &fakeVerifier{authURL: "https://idp.example.com/authorize"}
+	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+
+	client := testClient(srv)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Get(srv.URL + "/auth/login")
+	if err != nil {
+		t.Fatalf("GET /auth/login: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "https://idp.example.com/authorize") {
+		t.Errorf("Location = %q", loc)
+	}
+	var stateCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == stateCookieName {
+			stateCookie = c
+			break
+		}
+	}
+	if stateCookie == nil {
+		t.Fatal("state cookie not set")
+	}
+	if !stateCookie.HttpOnly || !stateCookie.Secure {
+		t.Errorf("cookie attrs HttpOnly=%v Secure=%v", stateCookie.HttpOnly, stateCookie.Secure)
+	}
+}
+
+// loginAndExtract simulates the /auth/login leg of the OIDC flow and
+// returns a client whose cookie jar holds the state cookie, plus the
+// nonce from the IdP redirect URL. Callers issue the /auth/callback
+// request through the returned client so the jar (not a manual
+// req.AddCookie call) replays the state cookie — that's the only way to
+// exercise the Secure=true + Path=/auth/callback attributes for real.
+func loginAndExtract(t *testing.T, srv *httptest.Server) (client *http.Client, nonce string) {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client = testClient(srv)
+	client.Jar = jar
+	// Stop at the 302 to the IdP — we synthesize the callback ourselves
+	// rather than chasing the redirect off-cluster.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	resp, err := client.Get(srv.URL + "/auth/login")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	_ = resp.Body.Close()
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect Location: %v", err)
+	}
+	nonce = loc.Query().Get("state")
+	if nonce == "" {
+		t.Fatalf("missing state nonce after /auth/login (Location=%q)", resp.Header.Get("Location"))
+	}
+	// Sanity: the jar must have captured the state cookie from the
+	// 302. If it didn't, attributes like Path or Secure are wrong for
+	// the test's HTTPS server.
+	u, _ := url.Parse(srv.URL + "/auth/callback")
+	var has bool
+	for _, c := range jar.Cookies(u) {
+		if c.Name == stateCookieName {
+			has = true
+			break
+		}
+	}
+	if !has {
+		t.Fatalf("state cookie not retained by jar — check Secure/Path attributes")
+	}
+	return client, nonce
+}
+
+func TestAuthCallbackSuccess(t *testing.T) {
+	verifier := &fakeVerifier{
+		authURL: "https://idp.example.com/authorize",
+		claims:  Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|123"},
+	}
+	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+	client, nonce := loginAndExtract(t, srv)
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	var got struct {
+		Tokens []MintResult `json:"tokens"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Count is a precondition for the field-level assertions below;
+	// without it the indexing on Line 0 would panic instead of giving a
+	// useful diff.
+	if len(got.Tokens) != 1 {
+		t.Fatalf("tokens = %+v, want exactly 1", got.Tokens)
+	}
+	if got.Tokens[0].World != "team-a" {
+		t.Errorf("world = %q, want team-a", got.Tokens[0].World)
+	}
+	if got.Tokens[0].RawToken == "" {
+		t.Error("RawToken empty in callback response")
+	}
+}
+
+func TestAuthCallbackStateMismatch(t *testing.T) {
+	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+	client, _ := loginAndExtract(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth/callback?code=abc&state=wrong-nonce", http.NoBody)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestAuthCallbackMissingCookie(t *testing.T) {
+	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+
+	resp, err := testClient(srv).Get(srv.URL + "/auth/callback?code=abc&state=irrelevant")
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestAuthCallbackExchangeFails(t *testing.T) {
+	verifier := &fakeVerifier{exchErr: errors.New("idp said no")}
+	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+	client, nonce := loginAndExtract(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet,
+		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestAuthCallbackUnauthorizedDomain(t *testing.T) {
+	verifier := &fakeVerifier{claims: Claims{Email: "mallory@evil.example", EmailVerified: true}}
+	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+	client, nonce := loginAndExtract(t, srv)
+
+	req, _ := http.NewRequest(http.MethodGet,
+		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestListTokens(t *testing.T) {
+	k8s := fake.NewSimpleClientset()
+	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, testConfig(), verifier, k8s)
+	// Use the issuer directly to seed two issuances for alice; bypasses
+	// the OIDC flow, which is exercised in the callback tests above.
+	i := newIssuer(t, testConfig(), k8s)
+	if _, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}); err != nil {
+		t.Fatalf("seed mint #1: %v", err)
+	}
+	if _, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}); err != nil {
+		t.Fatalf("seed mint #2: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
+	req.Header.Set("Authorization", "Bearer some-id-token")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	var got listTokensResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Tokens) != 2 {
+		t.Errorf("got %d issuances, want 2: %+v", len(got.Tokens), got.Tokens)
+	}
+	for _, iss := range got.Tokens {
+		if iss.Email != "alice@example.com" {
+			t.Errorf("foreign issuance leaked: %+v", iss)
+		}
+	}
+}
+
+func TestListTokensUnauthenticated(t *testing.T) {
+	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+	resp, err := testClient(srv).Get(srv.URL + "/tokens")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestListTokensInvalidBearer(t *testing.T) {
+	verifier := &fakeVerifier{
+		verifyFn: func(_ string) (Claims, error) { return Claims{}, errors.New("bad sig") },
+	}
+	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
+	req.Header.Set("Authorization", "Bearer not-actually-a-jwt")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestDeleteToken(t *testing.T) {
+	k8s := fake.NewSimpleClientset()
+	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, testConfig(), verifier, k8s)
+	i := newIssuer(t, testConfig(), k8s)
+	results, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed mint: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("seed mint returned no results")
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/"+results[0].Label, http.NoBody)
+	req.Header.Set("Authorization", "Bearer some-id-token")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", resp.StatusCode)
+	}
+
+	list, err := i.List(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("expected 0 issuances after delete, got %d", len(list))
+	}
+}
+
+func TestDeleteTokenNotOwner(t *testing.T) {
+	k8s := fake.NewSimpleClientset()
+	cfg := testConfig()
+	i := newIssuer(t, cfg, k8s)
+	results, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("seed mint returned no results")
+	}
+
+	// Verifier returns mallory's identity for the bearer token, so the
+	// owner check inside Revoke should fail.
+	verifier := &fakeVerifier{claims: Claims{Email: "mallory@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, cfg, verifier, k8s)
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/"+results[0].Label, http.NoBody)
+	req.Header.Set("Authorization", "Bearer mallory-id-token")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestDeleteTokenNotFound(t *testing.T) {
+	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/usr_nope", http.NoBody)
+	req.Header.Set("Authorization", "Bearer some-id-token")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// Sanity guard so the clock override on Server is exercised at least once.
+func TestServerClockExposed(t *testing.T) {
+	cfg := testConfig()
+	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), nil)
+	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.clock = func() time.Time { return fixed }
+	if !s.clock().Equal(fixed) {
+		t.Error("clock override not honored")
+	}
+}
