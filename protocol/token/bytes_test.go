@@ -114,3 +114,63 @@ func TestRemoveBytesEmpty(t *testing.T) {
 		t.Errorf("expected nil, got %q", got)
 	}
 }
+
+func TestParseBytesEmpty(t *testing.T) {
+	f, err := ParseBytes(nil)
+	if err != nil {
+		t.Fatalf("ParseBytes: %v", err)
+	}
+	// Tokens map must be non-nil so membership checks (`_, ok := f.Tokens[label]`)
+	// don't need to special-case the empty input — symmetric with ReadFile.
+	if f.Tokens == nil {
+		t.Error("Tokens map nil on empty input")
+	}
+	if len(f.Tokens) != 0 {
+		t.Errorf("Tokens populated on empty input: %+v", f.Tokens)
+	}
+}
+
+func TestParseBytesPopulated(t *testing.T) {
+	existing := []byte("[tokens.admin]\nhash = \"sha256-aaa\"\npaths = [\"/\"]\noperations = [\"read\"]\n\n[tokens.user1]\nhash = \"sha256-bbb\"\npaths = [\"/team-a/*\"]\noperations = [\"read\", \"publish\"]\nexpires = \"2026-05-12T12:00:00Z\"\n")
+	f, err := ParseBytes(existing)
+	if err != nil {
+		t.Fatalf("ParseBytes: %v", err)
+	}
+	if len(f.Tokens) != 2 {
+		t.Fatalf("got %d entries, want 2: %+v", len(f.Tokens), f.Tokens)
+	}
+	admin, ok := f.Tokens["admin"]
+	if !ok {
+		t.Fatalf("admin missing")
+	}
+	if admin.Hash != "sha256-aaa" {
+		t.Errorf("admin.Hash = %q", admin.Hash)
+	}
+	user1, ok := f.Tokens["user1"]
+	if !ok {
+		t.Fatalf("user1 missing")
+	}
+	if user1.Expires != "2026-05-12T12:00:00Z" {
+		t.Errorf("user1.Expires = %q", user1.Expires)
+	}
+}
+
+func TestParseBytesQuotedLabel(t *testing.T) {
+	// Labels that need quoting in TOML (dots, plus signs) must round-trip
+	// through ParseBytes intact — the broker's drift sweep relies on a
+	// labels-map lookup, not a substring search on the serialized form.
+	existing := []byte(`[tokens."alice@example.com"]` + "\nhash = \"sha256-aaa\"\npaths = [\"/\"]\noperations = [\"read\"]\n")
+	f, err := ParseBytes(existing)
+	if err != nil {
+		t.Fatalf("ParseBytes: %v", err)
+	}
+	if _, ok := f.Tokens["alice@example.com"]; !ok {
+		t.Errorf("quoted label missing: %+v", f.Tokens)
+	}
+}
+
+func TestParseBytesMalformed(t *testing.T) {
+	if _, err := ParseBytes([]byte("not = [")); err == nil {
+		t.Error("expected error on malformed TOML")
+	}
+}

@@ -87,6 +87,27 @@ func AppendEntry(path, label string, entry *Entry) error {
 	})
 }
 
+// ParseBytes decodes tokens.toml bytes into a File. An empty input
+// returns an empty File with Tokens initialized to a non-nil map, the
+// same convention ReadFile uses. The broker calls this to inspect a
+// world's tokens Secret directly — drift detection in the expiry
+// sweeper compares broker-side issuance labels against the labels
+// actually present in the world's TOML, and a quoted-key parse here is
+// safer than a substring search on the serialized bytes.
+func ParseBytes(existing []byte) (File, error) {
+	f := File{Tokens: make(map[string]Entry)}
+	if len(existing) == 0 {
+		return f, nil
+	}
+	if err := toml.Unmarshal(existing, &f); err != nil {
+		return File{}, fmt.Errorf("decode tokens bytes: %w", err)
+	}
+	if f.Tokens == nil {
+		f.Tokens = make(map[string]Entry)
+	}
+	return f, nil
+}
+
 // AppendBytes is the in-memory analogue of AppendEntry: given existing
 // tokens.toml bytes (possibly empty), it returns the bytes with a new
 // labeled entry appended. Used by the demarkus-broker, which writes to a

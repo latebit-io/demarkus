@@ -15,9 +15,10 @@ import (
 // is authorized to mint tokens for. The world Tokens Secrets live in each
 // world's namespace; the issuances Secret lives in the broker's namespace.
 type Config struct {
-	Server ServerConfig  `yaml:"server"`
-	OIDC   OIDCConfig    `yaml:"oidc"`
-	Worlds []WorldConfig `yaml:"worlds"`
+	Server  ServerConfig  `yaml:"server"`
+	OIDC    OIDCConfig    `yaml:"oidc"`
+	Worlds  []WorldConfig `yaml:"worlds"`
+	Sweeper SweeperConfig `yaml:"sweeper"`
 }
 
 // ServerConfig holds the broker's own runtime settings — listen address,
@@ -125,6 +126,33 @@ type AllowConfig struct {
 	Emails []string `yaml:"emails"`
 }
 
+// SweeperConfig knobs control the broker's periodic expiry+drift
+// janitor (Slice C.2). The sweeper runs by default in every broker;
+// multi-replica deployments need it so expired tokens age out and
+// operator hand-edits of world tokens.toml propagate back into the
+// issuances Secret. Leader election timings are not yet exposed —
+// client-go defaults (15s lease, 10s renew, 2s retry) suffice for our
+// failover budget and revisit only if a customer needs faster failover.
+type SweeperConfig struct {
+	// Disabled is the opt-out switch. Omitting the block in YAML
+	// (zero-value false) gives the production-correct behavior: the
+	// sweeper runs. Set to true only in dev configs where the operator
+	// wants expired tokens to linger for inspection, or in a
+	// single-replica deployment that wants to skip the leader-election
+	// overhead. Named "Disabled" rather than "Enabled" so the
+	// zero-value default is the safe one.
+	Disabled bool `yaml:"disabled"`
+	// Interval is the time between sweep passes. Default 5m. Shorter
+	// values shrink the worst-case window between token expiry and the
+	// world Secret reflecting it, at the cost of more k8s API churn.
+	Interval time.Duration `yaml:"interval"`
+	// LeaseName is the coordination.k8s.io/Lease object the broker
+	// replicas race for, in Server.BrokerNamespace. Default
+	// "demarkus-broker-sweeper". Override only when running multiple
+	// independent broker deployments in the same namespace (rare).
+	LeaseName string `yaml:"leaseName"`
+}
+
 // TokenScope is the capability bundle every token minted for a given
 // world carries. Paths + Operations are written verbatim into the server-
 // readable tokens.toml; ExpiresAfter is the lifetime applied to each
@@ -209,6 +237,19 @@ func (c *Config) validate() error {
 			return fmt.Errorf("worlds[%d]: duplicate name %q", i, w.Name)
 		}
 		seen[w.Name] = true
+	}
+	// Sweeper defaults. Disabled is the zero-value opt-out — see the
+	// SweeperConfig doc for why it's named "Disabled" rather than
+	// "Enabled". Interval and LeaseName get production-safe defaults
+	// when omitted; negative Interval is a config typo.
+	if c.Sweeper.Interval == 0 {
+		c.Sweeper.Interval = 5 * time.Minute
+	}
+	if c.Sweeper.Interval < 0 {
+		return fmt.Errorf("sweeper.interval must be > 0 (got %s)", c.Sweeper.Interval)
+	}
+	if c.Sweeper.LeaseName == "" {
+		c.Sweeper.LeaseName = "demarkus-broker-sweeper"
 	}
 	return nil
 }
