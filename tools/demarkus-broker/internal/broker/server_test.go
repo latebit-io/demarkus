@@ -16,6 +16,18 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+// testHTTPTimeout caps every test request against the in-process broker so
+// a deadlocked handler fails the offending test in seconds instead of
+// hanging until Go's overall test timeout (10m by default) and obscuring
+// which case actually broke. Five seconds is generous — every handler is
+// purely in-memory and should complete in microseconds.
+const testHTTPTimeout = 5 * time.Second
+
+// testHTTPClient is the shared client for tests that don't need custom
+// redirect behavior or a cookie jar. Use it instead of http.DefaultClient
+// or http.Get.
+var testHTTPClient = &http.Client{Timeout: testHTTPTimeout}
+
 func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clientset) (testSrv *httptest.Server, brokerSrv *Server) {
 	t.Helper()
 	signer := newTestSigner(t)
@@ -35,7 +47,7 @@ func TestHealthAndReady(t *testing.T) {
 	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
 
 	for _, path := range []string{"/healthz", "/readyz"} {
-		resp, err := http.Get(srv.URL + path)
+		resp, err := testHTTPClient.Get(srv.URL + path)
 		if err != nil {
 			t.Fatalf("GET %s: %v", path, err)
 		}
@@ -50,7 +62,10 @@ func TestAuthLoginRedirectsAndSetsStateCookie(t *testing.T) {
 	verifier := &fakeVerifier{authURL: "https://idp.example.com/authorize"}
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
 
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{
+		Timeout:       testHTTPTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	resp, err := client.Get(srv.URL + "/auth/login")
 	if err != nil {
 		t.Fatalf("GET /auth/login: %v", err)
@@ -89,6 +104,7 @@ func loginAndExtract(t *testing.T, srv *httptest.Server) (cookie *http.Cookie, n
 		t.Fatalf("cookiejar.New: %v", err)
 	}
 	client := &http.Client{
+		Timeout:       testHTTPTimeout,
 		Jar:           jar,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
@@ -124,7 +140,7 @@ func TestAuthCallbackSuccess(t *testing.T) {
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
 		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
 	req.AddCookie(cookie)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -160,7 +176,7 @@ func TestAuthCallbackStateMismatch(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth/callback?code=abc&state=wrong-nonce", http.NoBody)
 	req.AddCookie(cookie)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -174,7 +190,7 @@ func TestAuthCallbackMissingCookie(t *testing.T) {
 	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
 
-	resp, err := http.Get(srv.URL + "/auth/callback?code=abc&state=irrelevant")
+	resp, err := testHTTPClient.Get(srv.URL + "/auth/callback?code=abc&state=irrelevant")
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -191,7 +207,7 @@ func TestAuthCallbackExchangeFails(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth/callback?code=abc&state="+nonce, http.NoBody)
 	req.AddCookie(cookie)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -208,7 +224,7 @@ func TestAuthCallbackUnauthorizedDomain(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth/callback?code=abc&state="+nonce, http.NoBody)
 	req.AddCookie(cookie)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -234,7 +250,7 @@ func TestListTokens(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
 	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -259,7 +275,7 @@ func TestListTokens(t *testing.T) {
 
 func TestListTokensUnauthenticated(t *testing.T) {
 	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
-	resp, err := http.Get(srv.URL + "/tokens")
+	resp, err := testHTTPClient.Get(srv.URL + "/tokens")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -276,7 +292,7 @@ func TestListTokensInvalidBearer(t *testing.T) {
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
 	req.Header.Set("Authorization", "Bearer not-actually-a-jwt")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -301,7 +317,7 @@ func TestDeleteToken(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/"+results[0].Label, http.NoBody)
 	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -338,7 +354,7 @@ func TestDeleteTokenNotOwner(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/"+results[0].Label, http.NoBody)
 	req.Header.Set("Authorization", "Bearer mallory-id-token")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -354,7 +370,7 @@ func TestDeleteTokenNotFound(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/usr_nope", http.NoBody)
 	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
