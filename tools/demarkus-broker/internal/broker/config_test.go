@@ -22,7 +22,20 @@ worlds:
   - name: team-a
     namespace: team-a
     tokensSecret: team-a-tokens
-    allowDomains: ["example.com"]
+    allow:
+      domains: ["example.com"]
+    defaultToken:
+      paths: ["/team-a/*"]
+      operations: ["read", "publish"]
+      expiresAfter: 24h
+`
+
+const validWorldBlock = `worlds:
+  - name: team-a
+    namespace: team-a
+    tokensSecret: team-a-tokens
+    allow:
+      domains: ["example.com"]
     defaultToken:
       paths: ["/team-a/*"]
       operations: ["read", "publish"]
@@ -75,7 +88,7 @@ func TestLoadConfig(t *testing.T) {
 		},
 		{
 			name:    "no worlds",
-			body:    strings.Replace(validConfig, "worlds:\n  - name: team-a\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    allowDomains: [\"example.com\"]\n    defaultToken:\n      paths: [\"/team-a/*\"]\n      operations: [\"read\", \"publish\"]\n      expiresAfter: 24h\n", "worlds: []\n", 1),
+			body:    strings.Replace(validConfig, validWorldBlock, "worlds: []\n", 1),
 			wantErr: "at least one world is required",
 		},
 		{
@@ -102,6 +115,50 @@ func TestLoadConfig(t *testing.T) {
 			name:    "unknown field caught",
 			body:    validConfig + "extraField: oops\n",
 			wantErr: "field extraField not found",
+		},
+		{
+			name: "allow.emails normalized to lowercase",
+			body: strings.Replace(validConfig,
+				`allow:
+      domains: ["example.com"]`,
+				`allow:
+      emails: ["  Alice@Example.COM  ", "BOB@example.com"]`, 1),
+			validate: func(t *testing.T, c *Config) {
+				got := c.Worlds[0].Allow.Emails
+				want := []string{"alice@example.com", "bob@example.com"}
+				if len(got) != len(want) {
+					t.Fatalf("emails = %v, want %v", got, want)
+				}
+				for j, e := range got {
+					if e != want[j] {
+						t.Errorf("emails[%d] = %q, want %q (must be lowercased + trimmed at load)", j, e, want[j])
+					}
+				}
+			},
+		},
+		{
+			name: "allow.emails empty entry rejected",
+			body: strings.Replace(validConfig,
+				`allow:
+      domains: ["example.com"]`,
+				`allow:
+      emails: ["alice@example.com", "   "]`, 1),
+			wantErr: "allow.emails[1] is empty",
+		},
+		{
+			name: "allow.groups accepted",
+			body: strings.Replace(validConfig,
+				`allow:
+      domains: ["example.com"]`,
+				`allow:
+      domains: ["example.com"]
+      groups: ["engineering", "ops"]`, 1),
+			validate: func(t *testing.T, c *Config) {
+				got := c.Worlds[0].Allow.Groups
+				if len(got) != 2 || got[0] != "engineering" || got[1] != "ops" {
+					t.Errorf("groups = %v, want [engineering ops]", got)
+				}
+			},
 		},
 	}
 	for _, tt := range tests {

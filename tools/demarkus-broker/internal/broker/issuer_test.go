@@ -42,7 +42,7 @@ func testConfig() *Config {
 				Name:         "team-a",
 				Namespace:    "team-a",
 				TokensSecret: "team-a-tokens",
-				AllowDomains: []string{"example.com"},
+				Allow:        AllowConfig{Domains: []string{"example.com"}},
 				DefaultToken: TokenScope{
 					Paths:        []string{"/team-a/*"},
 					Operations:   []string{"read", "publish"},
@@ -161,7 +161,7 @@ func TestMintRejectsEmptyEmail(t *testing.T) {
 	// with no identity into the same "owner" in the issuances Secret.
 	// Mint must refuse before that ownership record is written.
 	cfg := testConfig()
-	cfg.Worlds[0].AllowDomains = nil
+	cfg.Worlds[0].Allow = AllowConfig{}
 	for _, email := range []string{"", "   ", "\t"} {
 		k8s := fake.NewSimpleClientset()
 		i := newIssuer(t, cfg, k8s)
@@ -193,7 +193,7 @@ func TestMintMultipleWorldsOnlyAuthorizedReceive(t *testing.T) {
 		Name:         "team-b",
 		Namespace:    "team-b",
 		TokensSecret: "team-b-tokens",
-		AllowDomains: []string{"other.example"},
+		Allow:        AllowConfig{Domains: []string{"other.example"}},
 		DefaultToken: TokenScope{
 			Paths:        []string{"/team-b/*"},
 			Operations:   []string{"read"},
@@ -215,14 +215,162 @@ func TestMintMultipleWorldsOnlyAuthorizedReceive(t *testing.T) {
 	}
 }
 
-func TestMintDomainAllowlistEmptyMatchesAll(t *testing.T) {
+func TestMintAllAllowlistsEmptyMatchesAll(t *testing.T) {
+	// Back-compat: a world with no allowlist (the pre-Slice-C default
+	// when an operator omitted allowDomains) keeps the "any verified
+	// user qualifies" behavior. Slice C.1 must not tighten this — only
+	// rendering AllowConfig non-empty switches into restricted mode.
 	cfg := testConfig()
-	cfg.Worlds[0].AllowDomains = nil
+	cfg.Worlds[0].Allow = AllowConfig{}
 	k8s := fake.NewSimpleClientset()
 	i := newIssuer(t, cfg, k8s)
 
 	if _, err := i.Mint(context.Background(), Claims{Email: "anyone@anywhere.test", EmailVerified: true}); err != nil {
 		t.Errorf("Mint: %v", err)
+	}
+}
+
+// TestMintAuthorizationPredicate is the Slice C.1 authorization table.
+// Each row pins one AllowConfig shape and asserts whether a given
+// Claims qualifies. Mint is the public surface; reaching ErrNotAuthorized
+// means the world rejected, while a single MintResult means it accepted.
+// The "expect" column is the world-A accept decision; rejections also
+// verify no Secrets were written (caught by the partial-mint regression
+// guard from Slice B).
+func TestMintAuthorizationPredicate(t *testing.T) {
+	tests := []struct {
+		name   string
+		allow  AllowConfig
+		claims Claims
+		accept bool
+	}{
+		{
+			name:   "all_empty_back_compat_accept",
+			allow:  AllowConfig{},
+			claims: Claims{Email: "any@anywhere.test", EmailVerified: true},
+			accept: true,
+		},
+		{
+			name:   "domain_only_match",
+			allow:  AllowConfig{Domains: []string{"example.com"}},
+			claims: Claims{Email: "alice@example.com", EmailVerified: true},
+			accept: true,
+		},
+		{
+			name:   "domain_only_reject",
+			allow:  AllowConfig{Domains: []string{"example.com"}},
+			claims: Claims{Email: "alice@evil.example", EmailVerified: true},
+			accept: false,
+		},
+		{
+			name:   "groups_only_match",
+			allow:  AllowConfig{Groups: []string{"engineering"}},
+			claims: Claims{Email: "any@anywhere.test", EmailVerified: true, Groups: []string{"engineering", "ops"}},
+			accept: true,
+		},
+		{
+			name: "groups_only_reject_no_group_claim",
+			// The IdP did not surface a `groups` claim at all (Groups nil).
+			// AllowGroups is non-empty so groupsMatch returns false.
+			// The operator's escape hatch is to add Emails — covered below.
+			allow:  AllowConfig{Groups: []string{"engineering"}},
+			claims: Claims{Email: "any@anywhere.test", EmailVerified: true},
+			accept: false,
+		},
+		{
+			name:   "groups_only_reject_wrong_group",
+			allow:  AllowConfig{Groups: []string{"engineering"}},
+			claims: Claims{Email: "any@anywhere.test", EmailVerified: true, Groups: []string{"marketing"}},
+			accept: false,
+		},
+		{
+			name:   "domain_and_groups_both_match",
+			allow:  AllowConfig{Domains: []string{"example.com"}, Groups: []string{"engineering"}},
+			claims: Claims{Email: "alice@example.com", EmailVerified: true, Groups: []string{"engineering"}},
+			accept: true,
+		},
+		{
+			name: "domain_and_groups_domain_fails",
+			// Predicate is AND between domains and groups, so a domain
+			// miss rejects even with a matching group. This is the
+			// "groups intersect domains" semantics — RBAC inside an org,
+			// not across orgs.
+			allow:  AllowConfig{Domains: []string{"example.com"}, Groups: []string{"engineering"}},
+			claims: Claims{Email: "alice@partner.test", EmailVerified: true, Groups: []string{"engineering"}},
+			accept: false,
+		},
+		{
+			name:   "domain_and_groups_groups_fails",
+			allow:  AllowConfig{Domains: []string{"example.com"}, Groups: []string{"engineering"}},
+			claims: Claims{Email: "alice@example.com", EmailVerified: true, Groups: []string{"marketing"}},
+			accept: false,
+		},
+		{
+			name:   "emails_carve_out_bypasses_domain",
+			allow:  AllowConfig{Domains: []string{"example.com"}, Emails: []string{"alice@partner.test"}},
+			claims: Claims{Email: "alice@partner.test", EmailVerified: true},
+			accept: true,
+		},
+		{
+			name: "emails_carve_out_bypasses_groups",
+			// The whole point of Emails: the user lacks a matching
+			// group (or any groups at all), but is on the carve-out
+			// list. Mint must accept regardless.
+			allow:  AllowConfig{Groups: []string{"engineering"}, Emails: []string{"contractor@example.com"}},
+			claims: Claims{Email: "contractor@example.com", EmailVerified: true},
+			accept: true,
+		},
+		{
+			name: "emails_only_no_match_rejects",
+			// The "only AllowEmails" subtlety: an empty Domains+Groups
+			// would normally evaluate to true on the AND predicate, but
+			// worldAllows refuses to fall through to that branch when
+			// only Emails was configured. Otherwise `allow.emails:
+			// [alice]` with nothing else would silently mean "everyone
+			// plus alice."
+			allow:  AllowConfig{Emails: []string{"alice@example.com"}},
+			claims: Claims{Email: "bob@example.com", EmailVerified: true},
+			accept: false,
+		},
+		{
+			name:   "emails_only_match",
+			allow:  AllowConfig{Emails: []string{"alice@example.com"}},
+			claims: Claims{Email: "alice@example.com", EmailVerified: true},
+			accept: true,
+		},
+		{
+			name: "emails_case_insensitive",
+			// AllowConfig.Emails is normalized at config load
+			// (lowercased + trimmed). The runtime compare lowercases
+			// the claim's email too; a claim with uppercase characters
+			// must still match a lowercased entry.
+			allow:  AllowConfig{Emails: []string{"alice@example.com"}},
+			claims: Claims{Email: "Alice@Example.COM", EmailVerified: true},
+			accept: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Worlds[0].Allow = tt.allow
+			k8s := fake.NewSimpleClientset()
+			i := newIssuer(t, cfg, k8s)
+
+			results, err := i.Mint(context.Background(), tt.claims)
+			if tt.accept {
+				if err != nil {
+					t.Fatalf("Mint: %v, want accept", err)
+				}
+				if len(results) != 1 {
+					t.Errorf("got %d results, want 1", len(results))
+				}
+				return
+			}
+			if !errors.Is(err, ErrNotAuthorized) {
+				t.Errorf("err = %v, want ErrNotAuthorized", err)
+			}
+			assertNoSecretsWritten(t, k8s)
+		})
 	}
 }
 
@@ -309,7 +457,7 @@ func TestMintCrossWorldLabelCollisionRetries(t *testing.T) {
 		Name:         "team-b",
 		Namespace:    "team-b",
 		TokensSecret: "team-b-tokens",
-		AllowDomains: []string{"example.com"},
+		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
 			Paths:        []string{"/team-b/*"},
 			Operations:   []string{"read"},
@@ -390,7 +538,7 @@ func TestListFiltersByEmail(t *testing.T) {
 		Name:         "team-b",
 		Namespace:    "team-b",
 		TokensSecret: "team-b-tokens",
-		AllowDomains: []string{"example.com"},
+		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
 			Paths:        []string{"/team-b/*"},
 			Operations:   []string{"read"},

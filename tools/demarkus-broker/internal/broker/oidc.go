@@ -10,12 +10,15 @@ import (
 )
 
 // Claims is the subset of OIDC ID-token claims the broker actually consumes.
-// Slice B uses only Subject + Email + EmailVerified. Groups will be added
-// in Slice C; left out for now so the surface area is minimal.
+// Subject + Email + EmailVerified are required to mint. Groups is optional
+// and used by the per-world group allowlist (Slice C.1); IdPs that don't
+// surface groups in the ID token (or aren't configured to) leave it nil
+// and the operator falls back to AllowDomains or per-email carve-outs.
 type Claims struct {
 	Subject       string
 	Email         string
 	EmailVerified bool
+	Groups        []string
 }
 
 // Verifier is the broker's abstraction over an OIDC provider. The
@@ -45,8 +48,8 @@ var ErrNoIDToken = errors.New("broker: oidc token response missing id_token")
 
 // ErrEmailUnverified is returned when the IdP did not assert
 // email_verified=true. The broker refuses to mint for unverified emails
-// because the world authorization decision (allowDomains) is meaningless
-// on an unverified address.
+// because the world authorization decisions (allow.domains / allow.emails)
+// are meaningless on an unverified address.
 var ErrEmailUnverified = errors.New("broker: id_token email not verified")
 
 type oidcVerifier struct {
@@ -99,8 +102,9 @@ func (v *oidcVerifier) VerifyIDToken(ctx context.Context, rawIDToken string) (Cl
 		return Claims{}, fmt.Errorf("broker: verify id_token: %w", err)
 	}
 	var raw struct {
-		Email         string `json:"email"`
-		EmailVerified bool   `json:"email_verified"`
+		Email         string   `json:"email"`
+		EmailVerified bool     `json:"email_verified"`
+		Groups        []string `json:"groups"`
 	}
 	if err := idTok.Claims(&raw); err != nil {
 		return Claims{}, fmt.Errorf("broker: read id_token claims: %w", err)
@@ -112,5 +116,6 @@ func (v *oidcVerifier) VerifyIDToken(ctx context.Context, rawIDToken string) (Cl
 		Subject:       idTok.Subject,
 		Email:         raw.Email,
 		EmailVerified: raw.EmailVerified,
+		Groups:        raw.Groups,
 	}, nil
 }

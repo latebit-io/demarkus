@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -60,7 +61,7 @@ type OIDCConfig struct {
 
 // WorldConfig describes one demarkus world the broker is authorized to
 // mint tokens for. Authorization is per-world; an OIDC identity may
-// qualify for some worlds and not others depending on AllowDomains.
+// qualify for some worlds and not others depending on Allow.
 type WorldConfig struct {
 	// Name is the world's logical name (also the value in the
 	// "world" field of issuances records).
@@ -70,16 +71,53 @@ type WorldConfig struct {
 	// TokensSecret is the name of the world's tokens.toml Secret. The
 	// broker requires get/patch on this Secret in that namespace.
 	TokensSecret string `yaml:"tokensSecret"`
-	// AllowDomains is the email-domain allowlist used for authorization
-	// in Slice B. A login's id_token.email must end with one of these
-	// domains for the broker to mint a token for this world. Empty list
-	// = no domain restriction (any verified user qualifies); the operator
-	// must opt out explicitly to avoid surprise authorization.
-	AllowDomains []string `yaml:"allowDomains"`
+	// Allow is the per-world authorization predicate. See AllowConfig for
+	// the rules. When every list is empty the world accepts any verified
+	// identity (back-compat with pre-Slice-C configs that had only
+	// AllowDomains and left it empty).
+	Allow AllowConfig `yaml:"allow"`
 	// DefaultToken describes the capabilities of every token minted for
 	// this world. Slice B treats DefaultToken as the only scope; per-call
 	// narrowing is a Slice C feature.
 	DefaultToken TokenScope `yaml:"defaultToken"`
+}
+
+// AllowConfig describes who qualifies for tokens against a given world.
+// Predicate (Slice C.1):
+//
+//  1. If Domains, Groups, and Emails are all empty, any verified identity
+//     qualifies. This preserves the pre-Slice-C "no allowlist = open
+//     world" behavior so existing configs upgrade without surprise.
+//  2. Otherwise the identity qualifies if its email is in Emails (the
+//     per-user carve-out), OR if its email matches Domains and its
+//     groups intersect Groups. Either Domains or Groups may be empty
+//     individually; an empty list in that dimension means "no
+//     restriction on that dimension." But at least one of {Domains,
+//     Groups, Emails} must match for the world to authorize.
+//
+// Emails exists so worlds can grant access to specific users when the
+// IdP doesn't surface usable groups in the ID token (Google Workspace,
+// some Entra configs). Groups exists so RBAC can live in the IdP
+// instead of the broker config.
+type AllowConfig struct {
+	// Domains is the email-domain allowlist. A login's id_token.email
+	// must end with one of these (case-insensitive) for the
+	// domain-and-groups predicate to match. Empty disables this
+	// dimension only — see the AllowConfig doc for the full rule.
+	Domains []string `yaml:"domains"`
+	// Groups is the OIDC `groups`-claim allowlist. The identity must
+	// have at least one group in this list for the domain-and-groups
+	// predicate to match. IdP-specific: Okta and Auth0 emit `groups` in
+	// the ID token when configured; Entra needs the optional `groups`
+	// claim enabled; Google does not surface groups in the ID token
+	// (use Emails as a carve-out, or wait for a userinfo-based Verifier
+	// — backlogged).
+	Groups []string `yaml:"groups"`
+	// Emails is the per-user carve-out. A login whose verified email
+	// matches an entry here qualifies regardless of Domains and Groups.
+	// Entries are lowercased + trimmed at config load so the runtime
+	// compare is case-insensitive without per-call normalization.
+	Emails []string `yaml:"emails"`
 }
 
 // TokenScope is the capability bundle every token minted for a given
@@ -174,6 +212,18 @@ func (c *Config) validate() error {
 			return fmt.Errorf("worlds[%d] (%s): defaultToken.operations is required", i, w.Name)
 		case w.DefaultToken.ExpiresAfter <= 0:
 			return fmt.Errorf("worlds[%d] (%s): defaultToken.expiresAfter must be > 0", i, w.Name)
+		}
+		// Normalize Allow.Emails to lowercase+trim so authorizedWorlds can
+		// do a plain string compare on every login. Reject empty entries
+		// here rather than silently matching the empty-email reject path
+		// inside Mint — that fails for the right reason but blames the
+		// caller for a config bug.
+		for j, e := range w.Allow.Emails {
+			norm := strings.ToLower(strings.TrimSpace(e))
+			if norm == "" {
+				return fmt.Errorf("worlds[%d] (%s): allow.emails[%d] is empty", i, w.Name, j)
+			}
+			w.Allow.Emails[j] = norm
 		}
 		seen[w.Name] = true
 	}

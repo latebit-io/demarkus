@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -115,15 +116,15 @@ func (i *Issuer) Mint(ctx context.Context, claims Claims) ([]MintResult, error) 
 		return nil, ErrEmailUnverified
 	}
 	// An empty (or whitespace-only) email evades domain authorization
-	// because domainMatches short-circuits to true when a world's
-	// AllowDomains is empty. Worse, the empty string would land as the
+	// because a world with every Allow list empty qualifies any verified
+	// identity (back-compat). Worse, the empty string would land as the
 	// "owner" of the issuance record, collapsing every future caller
 	// with no email into the same identity for List/Revoke. Reject
-	// explicitly at this boundary.
+	// explicitly at this boundary, before authorizedWorlds runs.
 	if strings.TrimSpace(claims.Email) == "" {
 		return nil, ErrNotAuthorized
 	}
-	worlds := i.authorizedWorlds(claims.Email)
+	worlds := i.authorizedWorlds(claims)
 	if len(worlds) == 0 {
 		return nil, ErrNotAuthorized
 	}
@@ -139,17 +140,56 @@ func (i *Issuer) Mint(ctx context.Context, claims Claims) ([]MintResult, error) 
 	return results, nil
 }
 
-func (i *Issuer) authorizedWorlds(email string) []*WorldConfig {
+func (i *Issuer) authorizedWorlds(claims Claims) []*WorldConfig {
 	out := make([]*WorldConfig, 0, len(i.cfg.Worlds))
 	for j := range i.cfg.Worlds {
 		w := &i.cfg.Worlds[j]
-		if domainMatches(email, w.AllowDomains) {
+		if worldAllows(&w.Allow, claims) {
 			out = append(out, w)
 		}
 	}
 	return out
 }
 
+// worldAllows is the AllowConfig predicate. See the AllowConfig doc on
+// config.go for the human-readable rule; the order of checks here is:
+//
+//  1. All three lists empty → match (back-compat for worlds with no
+//     allowlist configured, same as the pre-Slice-C behavior).
+//  2. Email-in-Emails → match (per-user carve-out bypasses both
+//     domain and group requirements).
+//  3. Domains+Groups predicate, where an empty list on either dimension
+//     means "no restriction on that dimension." But if only Emails was
+//     set and Step 2 didn't match, Step 3 must reject — otherwise
+//     `emails: [alice@x]` with no other allowlist would silently mean
+//     "everyone plus alice." Detected as `len(Domains)+len(Groups)==0`
+//     when we get here.
+func worldAllows(a *AllowConfig, claims Claims) bool {
+	if len(a.Domains) == 0 && len(a.Groups) == 0 && len(a.Emails) == 0 {
+		return true
+	}
+	if emailMatches(claims.Email, a.Emails) {
+		return true
+	}
+	if len(a.Domains) == 0 && len(a.Groups) == 0 {
+		return false
+	}
+	return domainMatches(claims.Email, a.Domains) && groupsMatch(claims.Groups, a.Groups)
+}
+
+// emailMatches reports whether the lowercased+trimmed identity email is
+// in the (already-normalized at config load) Emails list.
+func emailMatches(email string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return false
+	}
+	want := strings.ToLower(strings.TrimSpace(email))
+	return slices.Contains(allowed, want)
+}
+
+// domainMatches reports whether the identity email's domain part is in
+// the allowlist. Returns true on an empty allowlist — the "no
+// restriction on the domain dimension" semantic worldAllows depends on.
 func domainMatches(email string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return true
@@ -162,6 +202,26 @@ func domainMatches(email string, allowed []string) bool {
 	for _, d := range allowed {
 		if strings.EqualFold(d, domain) {
 			return true
+		}
+	}
+	return false
+}
+
+// groupsMatch reports whether the identity has at least one group in
+// the allowlist. Returns true on an empty allowlist — the "no
+// restriction on the group dimension" semantic worldAllows depends on.
+// IdPs that don't surface groups in the ID token send a nil claims.Groups;
+// in that case the match fails (unless the allowlist is also empty),
+// which is the operator's signal to use AllowEmails as a carve-out.
+func groupsMatch(have, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, g := range have {
+		for _, want := range allowed {
+			if strings.EqualFold(g, want) {
+				return true
+			}
 		}
 	}
 	return false
