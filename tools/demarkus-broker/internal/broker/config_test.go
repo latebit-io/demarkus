@@ -112,6 +112,26 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "server.stateTTL must be > 0",
 		},
 		{
+			name:    "sweeper.interval over 24h rejected",
+			body:    validConfig + "sweeper:\n  interval: 48h\n",
+			wantErr: "sweeper.interval must be <= 24h0m0s",
+		},
+		{
+			name: "sweeper.interval defaults to 5m when omitted",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				if c.Sweeper.Interval != 5*time.Minute {
+					t.Errorf("sweeper.interval default = %s, want 5m", c.Sweeper.Interval)
+				}
+				if c.Sweeper.LeaseName != "demarkus-broker-sweeper" {
+					t.Errorf("sweeper.leaseName default = %q, want demarkus-broker-sweeper", c.Sweeper.LeaseName)
+				}
+				if c.Sweeper.Disabled {
+					t.Error("sweeper.disabled = true, want false default")
+				}
+			},
+		},
+		{
 			name:    "unknown field caught",
 			body:    validConfig + "extraField: oops\n",
 			wantErr: "field extraField not found",

@@ -241,18 +241,32 @@ func (c *Config) validate() error {
 	// Sweeper defaults. Disabled is the zero-value opt-out — see the
 	// SweeperConfig doc for why it's named "Disabled" rather than
 	// "Enabled". Interval and LeaseName get production-safe defaults
-	// when omitted; negative Interval is a config typo.
+	// when omitted; negative Interval is a config typo, and an
+	// interval longer than the typical 24h token lifetime would let
+	// expired tokens linger past their `defaultToken.expiresAfter`
+	// window — defeating the short-lived-tokens identity-lifecycle
+	// model (see plan §Revocation §3).
 	if c.Sweeper.Interval == 0 {
 		c.Sweeper.Interval = 5 * time.Minute
 	}
 	if c.Sweeper.Interval < 0 {
 		return fmt.Errorf("sweeper.interval must be > 0 (got %s)", c.Sweeper.Interval)
 	}
+	if c.Sweeper.Interval > maxSweeperInterval {
+		return fmt.Errorf("sweeper.interval must be <= %s (got %s); intervals longer than a token lifetime defeat expiry-driven revocation", maxSweeperInterval, c.Sweeper.Interval)
+	}
 	if c.Sweeper.LeaseName == "" {
 		c.Sweeper.LeaseName = "demarkus-broker-sweeper"
 	}
 	return nil
 }
+
+// maxSweeperInterval caps Sweeper.Interval at 24h — the canonical
+// short-lived-token lifetime in plan §Revocation. Intervals longer
+// than this leave expired tokens accepted past their ExpiresAt for
+// up to a whole sweep cycle, breaking the contract that callers
+// expect "expires" to mean.
+const maxSweeperInterval = 24 * time.Hour
 
 // validateWorld enforces the per-world invariants and normalizes the
 // AllowConfig string lists in place. Split out of validate() so the

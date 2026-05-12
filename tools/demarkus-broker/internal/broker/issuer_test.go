@@ -757,14 +757,17 @@ func TestMintRBACDeniedNoPartialState(t *testing.T) {
 	})
 	k8s.PrependReactor("update", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		ua, ok := action.(k8stesting.UpdateAction)
-		if !ok || ua.GetNamespace() != "team-b" {
+		if !ok {
 			return false, nil, nil
 		}
-		return true, nil, apierrors.NewForbidden(
-			schema.GroupResource{Resource: "secrets"},
-			"team-b-tokens",
-			errors.New("broker SA lacks update on team-b/team-b-tokens"),
-		)
+		if ua.GetNamespace() == "team-b" {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Resource: "secrets"},
+				"team-b-tokens",
+				errors.New("broker SA lacks update on team-b/team-b-tokens"),
+			)
+		}
+		return false, nil, nil
 	})
 	i := newIssuer(t, cfg, k8s)
 

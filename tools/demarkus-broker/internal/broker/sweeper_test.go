@@ -151,7 +151,10 @@ func TestSweepRetiresExpiredKeepsFresh(t *testing.T) {
 		t.Fatalf("sweep: %v", err)
 	}
 
-	worldSecret, _ := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	worldSecret, err := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get world tokens secret: %v", err)
+	}
 	gotTOML := string(worldSecret.Data[TokensSecretKey])
 	if strings.Contains(gotTOML, "usr_stale") {
 		t.Errorf("stale label still in world Secret:\n%s", gotTOML)
@@ -215,7 +218,10 @@ func TestSweepPrunesDrift(t *testing.T) {
 	if len(live) != 1 || live[0].Label != "usr_present" {
 		t.Errorf("issuances after drift sweep = %+v, want only usr_present", live)
 	}
-	worldSecret, _ := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	worldSecret, err := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get world tokens secret: %v", err)
+	}
 	if !strings.Contains(string(worldSecret.Data[TokensSecretKey]), "usr_present") {
 		t.Errorf("present label missing from world Secret after drift sweep:\n%s", worldSecret.Data[TokensSecretKey])
 	}
@@ -266,7 +272,11 @@ func TestSweepEmptyIssuancesIsNoop(t *testing.T) {
 		t.Fatalf("sweep on empty state: %v", err)
 	}
 	// No Secrets should have been created.
-	if list, _ := k8s.CoreV1().Secrets("team-a").List(context.Background(), metav1.ListOptions{}); len(list.Items) != 0 {
+	list, err := k8s.CoreV1().Secrets("team-a").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list team-a Secrets: %v", err)
+	}
+	if len(list.Items) != 0 {
 		t.Errorf("empty sweep created team-a Secrets: %d", len(list.Items))
 	}
 }
@@ -326,18 +336,17 @@ func TestSweeperLeaderElection(t *testing.T) {
 	var (
 		leaderCount, followerCount   *atomic.Int32
 		cancelLeader, cancelFollower context.CancelFunc
-		doneLeader                   chan struct{}
+		doneLeader, doneFollower     chan struct{}
 	)
 	if leaderIsA {
 		leaderCount, followerCount = countA, countB
 		cancelLeader, cancelFollower = cancelA, cancelB
-		doneLeader = doneA
+		doneLeader, doneFollower = doneA, doneB
 	} else {
 		leaderCount, followerCount = countB, countA
 		cancelLeader, cancelFollower = cancelB, cancelA
-		doneLeader = doneB
+		doneLeader, doneFollower = doneB, doneA
 	}
-	_ = cancelFollower
 
 	time.Sleep(200 * time.Millisecond)
 	if followerCount.Load() != 0 {
@@ -353,6 +362,14 @@ func TestSweeperLeaderElection(t *testing.T) {
 	waitFor(t, 10*time.Second, func() bool {
 		return followerCount.Load() > followerBaseline
 	})
+
+	// Cancel and wait for the follower too. The deferred cancels at
+	// the top of the test would eventually fire, but they fire on
+	// return — without an explicit join here the follower's renewal
+	// loop and the test's cleanup race, leaving the goroutine and
+	// fake-clientset Lease state to leak into the next test.
+	cancelFollower()
+	<-doneFollower
 }
 
 // waitFor polls cond every 10ms until it returns true or the timeout

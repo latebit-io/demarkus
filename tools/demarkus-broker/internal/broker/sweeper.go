@@ -132,6 +132,17 @@ func (s *Sweeper) runOnce(ctx context.Context) {
 // sweep performs one cleanup pass. Returns an error only when the
 // top-level issuances read fails — every other failure is logged in
 // place and the loop continues with the remaining entries.
+//
+// Memory: the full issuances list is loaded into memory each tick.
+// The implicit upper bound is the Kubernetes Secret size limit (~1MB
+// after etcd encoding), which works out to roughly 5000–7000
+// issuance records at ~150 bytes apiece. Long before sweep memory
+// becomes a problem, the issuances Secret itself stops being
+// writable — which is the actual scaling wall for this design.
+// Pagination would address neither failure mode (Secrets aren't a
+// paginated resource), so the right Phase-7 fix is a different
+// backing store (CRD, namespaced ConfigMap-per-user, etc.), not a
+// streaming sweep.
 func (s *Sweeper) sweep(ctx context.Context) error {
 	all, err := s.issuer.readIssuances(ctx)
 	if err != nil {
