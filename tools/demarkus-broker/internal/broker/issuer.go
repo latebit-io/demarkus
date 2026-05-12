@@ -159,7 +159,7 @@ func domainMatches(email string, allowed []string) bool {
 }
 
 func (i *Issuer) mintForWorld(ctx context.Context, w *WorldConfig, claims Claims, now time.Time) (MintResult, error) {
-	for attempt := range maxLabelRetries {
+	for range maxLabelRetries {
 		label, err := i.labelGen()
 		if err != nil {
 			return MintResult{}, err
@@ -173,9 +173,9 @@ func (i *Issuer) mintForWorld(ctx context.Context, w *WorldConfig, claims Claims
 
 		err = i.appendToWorldSecret(ctx, w, label, &minted.Entry)
 		if errors.Is(err, token.ErrLabelExists) {
-			if attempt == maxLabelRetries-1 {
-				return MintResult{}, fmt.Errorf("%d consecutive label collisions", maxLabelRetries)
-			}
+			// Retry with a fresh label. After maxLabelRetries
+			// consecutive collisions we fall out of the loop and
+			// return the trailing error below.
 			continue
 		}
 		if err != nil {
