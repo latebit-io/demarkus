@@ -23,10 +23,17 @@ import (
 // purely in-memory and should complete in microseconds.
 const testHTTPTimeout = 5 * time.Second
 
-// testHTTPClient is the shared client for tests that don't need custom
-// redirect behavior or a cookie jar. Use it instead of http.DefaultClient
-// or http.Get.
-var testHTTPClient = &http.Client{Timeout: testHTTPTimeout}
+// testClient returns an HTTP client that trusts the test server's
+// self-signed certificate and has the test timeout applied. We work on a
+// shallow copy because httptest.Server.Client() returns the same instance
+// across calls; per-test mutations to Jar / CheckRedirect would otherwise
+// leak between tests.
+func testClient(srv *httptest.Server) *http.Client {
+	base := srv.Client()
+	c := *base
+	c.Timeout = testHTTPTimeout
+	return &c
+}
 
 func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clientset) (testSrv *httptest.Server, brokerSrv *Server) {
 	t.Helper()
@@ -38,7 +45,12 @@ func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clien
 	// callback tests. The issuer's clock stays pinned so token-expiry
 	// assertions in issuer tests remain deterministic.
 	brokerSrv = NewServer(cfg, signer, verifier, issuer, nil)
-	testSrv = httptest.NewServer(brokerSrv.Routes())
+	// NewTLSServer (not NewServer): the state cookie is set with
+	// Secure=true and Path=/auth/callback, attributes only enforceable
+	// over HTTPS. Without TLS we'd be relying on manual AddCookie calls
+	// in tests, which bypass jar policy and mask regressions where the
+	// cookie scope was accidentally widened.
+	testSrv = httptest.NewTLSServer(brokerSrv.Routes())
 	t.Cleanup(testSrv.Close)
 	return testSrv, brokerSrv
 }
@@ -47,7 +59,7 @@ func TestHealthAndReady(t *testing.T) {
 	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
 
 	for _, path := range []string{"/healthz", "/readyz"} {
-		resp, err := testHTTPClient.Get(srv.URL + path)
+		resp, err := testClient(srv).Get(srv.URL + path)
 		if err != nil {
 			t.Fatalf("GET %s: %v", path, err)
 		}
@@ -62,10 +74,8 @@ func TestAuthLoginRedirectsAndSetsStateCookie(t *testing.T) {
 	verifier := &fakeVerifier{authURL: "https://idp.example.com/authorize"}
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
 
-	client := &http.Client{
-		Timeout:       testHTTPTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	client := testClient(srv)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Get(srv.URL + "/auth/login")
 	if err != nil {
 		t.Fatalf("GET /auth/login: %v", err)
@@ -93,40 +103,52 @@ func TestAuthLoginRedirectsAndSetsStateCookie(t *testing.T) {
 	}
 }
 
-// loginAndExtract simulates the full /auth/login → cookie → callback flow
-// against the test server, returning the parsed callback response body.
-// Uses a custom transport that does not follow the redirect to the IdP so
-// the test can capture the state nonce and synthesize a callback request.
-func loginAndExtract(t *testing.T, srv *httptest.Server) (cookie *http.Cookie, nonce string) {
+// loginAndExtract simulates the /auth/login leg of the OIDC flow and
+// returns a client whose cookie jar holds the state cookie, plus the
+// nonce from the IdP redirect URL. Callers issue the /auth/callback
+// request through the returned client so the jar (not a manual
+// req.AddCookie call) replays the state cookie — that's the only way to
+// exercise the Secure=true + Path=/auth/callback attributes for real.
+func loginAndExtract(t *testing.T, srv *httptest.Server) (client *http.Client, nonce string) {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	client := &http.Client{
-		Timeout:       testHTTPTimeout,
-		Jar:           jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	client = testClient(srv)
+	client.Jar = jar
+	// Stop at the 302 to the IdP — we synthesize the callback ourselves
+	// rather than chasing the redirect off-cluster.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
 	resp, err := client.Get(srv.URL + "/auth/login")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
 	_ = resp.Body.Close()
-	for _, c := range resp.Cookies() {
-		if c.Name == stateCookieName {
-			cookie = c
-		}
-	}
 	loc, err := url.Parse(resp.Header.Get("Location"))
 	if err != nil {
 		t.Fatalf("parse redirect Location: %v", err)
 	}
 	nonce = loc.Query().Get("state")
-	if cookie == nil || nonce == "" {
-		t.Fatalf("state cookie=%v nonce=%q after /auth/login", cookie, nonce)
+	if nonce == "" {
+		t.Fatalf("missing state nonce after /auth/login (Location=%q)", resp.Header.Get("Location"))
 	}
-	return cookie, nonce
+	// Sanity: the jar must have captured the state cookie from the
+	// 302. If it didn't, attributes like Path or Secure are wrong for
+	// the test's HTTPS server.
+	u, _ := url.Parse(srv.URL + "/auth/callback")
+	var has bool
+	for _, c := range jar.Cookies(u) {
+		if c.Name == stateCookieName {
+			has = true
+			break
+		}
+	}
+	if !has {
+		t.Fatalf("state cookie not retained by jar — check Secure/Path attributes")
+	}
+	return client, nonce
 }
 
 func TestAuthCallbackSuccess(t *testing.T) {
@@ -135,12 +157,11 @@ func TestAuthCallbackSuccess(t *testing.T) {
 		claims:  Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|123"},
 	}
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
-	cookie, nonce := loginAndExtract(t, srv)
+	client, nonce := loginAndExtract(t, srv)
 
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
 		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
-	req.AddCookie(cookie)
-	resp, err := testHTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -172,11 +193,10 @@ func TestAuthCallbackSuccess(t *testing.T) {
 func TestAuthCallbackStateMismatch(t *testing.T) {
 	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
-	cookie, _ := loginAndExtract(t, srv)
+	client, _ := loginAndExtract(t, srv)
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth/callback?code=abc&state=wrong-nonce", http.NoBody)
-	req.AddCookie(cookie)
-	resp, err := testHTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -190,7 +210,7 @@ func TestAuthCallbackMissingCookie(t *testing.T) {
 	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
 
-	resp, err := testHTTPClient.Get(srv.URL + "/auth/callback?code=abc&state=irrelevant")
+	resp, err := testClient(srv).Get(srv.URL + "/auth/callback?code=abc&state=irrelevant")
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -203,11 +223,11 @@ func TestAuthCallbackMissingCookie(t *testing.T) {
 func TestAuthCallbackExchangeFails(t *testing.T) {
 	verifier := &fakeVerifier{exchErr: errors.New("idp said no")}
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
-	cookie, nonce := loginAndExtract(t, srv)
+	client, nonce := loginAndExtract(t, srv)
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth/callback?code=abc&state="+nonce, http.NoBody)
-	req.AddCookie(cookie)
-	resp, err := testHTTPClient.Do(req)
+	req, _ := http.NewRequest(http.MethodGet,
+		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -220,11 +240,11 @@ func TestAuthCallbackExchangeFails(t *testing.T) {
 func TestAuthCallbackUnauthorizedDomain(t *testing.T) {
 	verifier := &fakeVerifier{claims: Claims{Email: "mallory@evil.example", EmailVerified: true}}
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
-	cookie, nonce := loginAndExtract(t, srv)
+	client, nonce := loginAndExtract(t, srv)
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth/callback?code=abc&state="+nonce, http.NoBody)
-	req.AddCookie(cookie)
-	resp, err := testHTTPClient.Do(req)
+	req, _ := http.NewRequest(http.MethodGet,
+		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -250,7 +270,7 @@ func TestListTokens(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
 	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := testHTTPClient.Do(req)
+	resp, err := testClient(srv).Do(req)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -275,7 +295,7 @@ func TestListTokens(t *testing.T) {
 
 func TestListTokensUnauthenticated(t *testing.T) {
 	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
-	resp, err := testHTTPClient.Get(srv.URL + "/tokens")
+	resp, err := testClient(srv).Get(srv.URL + "/tokens")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -292,7 +312,7 @@ func TestListTokensInvalidBearer(t *testing.T) {
 	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
 	req.Header.Set("Authorization", "Bearer not-actually-a-jwt")
-	resp, err := testHTTPClient.Do(req)
+	resp, err := testClient(srv).Do(req)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -317,7 +337,7 @@ func TestDeleteToken(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/"+results[0].Label, http.NoBody)
 	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := testHTTPClient.Do(req)
+	resp, err := testClient(srv).Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -354,7 +374,7 @@ func TestDeleteTokenNotOwner(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/"+results[0].Label, http.NoBody)
 	req.Header.Set("Authorization", "Bearer mallory-id-token")
-	resp, err := testHTTPClient.Do(req)
+	resp, err := testClient(srv).Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -370,7 +390,7 @@ func TestDeleteTokenNotFound(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/usr_nope", http.NoBody)
 	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := testHTTPClient.Do(req)
+	resp, err := testClient(srv).Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
