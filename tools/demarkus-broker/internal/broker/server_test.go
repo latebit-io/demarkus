@@ -139,8 +139,14 @@ func TestAuthCallbackSuccess(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got.Tokens) != 1 || got.Tokens[0].World != "team-a" {
-		t.Errorf("tokens = %+v", got.Tokens)
+	// Count is a precondition for the field-level assertions below;
+	// without it the indexing on Line 0 would panic instead of giving a
+	// useful diff.
+	if len(got.Tokens) != 1 {
+		t.Fatalf("tokens = %+v, want exactly 1", got.Tokens)
+	}
+	if got.Tokens[0].World != "team-a" {
+		t.Errorf("world = %q, want team-a", got.Tokens[0].World)
 	}
 	if got.Tokens[0].RawToken == "" {
 		t.Error("RawToken empty in callback response")
@@ -289,6 +295,9 @@ func TestDeleteToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed mint: %v", err)
 	}
+	if len(results) == 0 {
+		t.Fatal("seed mint returned no results")
+	}
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/"+results[0].Label, http.NoBody)
 	req.Header.Set("Authorization", "Bearer some-id-token")
@@ -317,6 +326,9 @@ func TestDeleteTokenNotOwner(t *testing.T) {
 	results, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("seed mint returned no results")
 	}
 
 	// Verifier returns mallory's identity for the bearer token, so the
