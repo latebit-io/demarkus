@@ -232,6 +232,66 @@ func TestMintLabelCollisionRetries(t *testing.T) {
 	}
 }
 
+func TestMintCrossWorldLabelCollisionRetries(t *testing.T) {
+	// Two worlds, one allowed domain each. Alice qualifies for both.
+	// The label generator returns "usr_dup" once, then "usr_unique"
+	// thereafter. World A succeeds. World B's appendToWorldSecret does
+	// NOT collide (different Secret), but appendIssuance refuses the
+	// duplicate label — the issuances Secret enforces global uniqueness.
+	// World B must roll back its world-Secret write and retry with the
+	// next label.
+	cfg := testConfig()
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{
+		Name:         "team-b",
+		Namespace:    "team-b",
+		TokensSecret: "team-b-tokens",
+		AllowDomains: []string{"example.com"},
+		DefaultToken: TokenScope{
+			Paths:        []string{"/team-b/*"},
+			Operations:   []string{"read"},
+			ExpiresAfter: 12 * time.Hour,
+		},
+	})
+	k8s := fake.NewSimpleClientset()
+	i := newIssuer(t, cfg, k8s)
+	var calls int32
+	i.labelGen = func() (string, error) {
+		n := atomic.AddInt32(&calls, 1)
+		// Calls: 1 = team-a (succeeds, lands "usr_dup")
+		//        2 = team-b first attempt (also "usr_dup", collides in issuances)
+		//        3 = team-b retry (returns "usr_unique")
+		if n <= 2 {
+			return "usr_dup", nil
+		}
+		return "usr_unique", nil
+	}
+
+	results, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+	if results[0].Label != "usr_dup" {
+		t.Errorf("team-a label = %q, want usr_dup", results[0].Label)
+	}
+	if results[1].Label != "usr_unique" {
+		t.Errorf("team-b label = %q, want usr_unique (collision must retry)", results[1].Label)
+	}
+
+	// team-b's tokens.toml must only contain the retried label — the
+	// rollback of the colliding write must have removed "usr_dup".
+	secretB, _ := k8s.CoreV1().Secrets("team-b").Get(context.Background(), "team-b-tokens", metav1.GetOptions{})
+	tomlB := string(secretB.Data[TokensSecretKey])
+	if !strings.Contains(tomlB, "[tokens.usr_unique]") {
+		t.Errorf("team-b missing retried label:\n%s", tomlB)
+	}
+	if strings.Contains(tomlB, "[tokens.usr_dup]") {
+		t.Errorf("team-b rollback failed — collided label still present:\n%s", tomlB)
+	}
+}
+
 func TestMintConflictRetries(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
 	var conflicts int32

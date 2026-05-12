@@ -201,6 +201,13 @@ func (i *Issuer) mintForWorld(ctx context.Context, w *WorldConfig, claims Claims
 			rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			rbErr := i.removeFromWorldSecret(rbCtx, w, label)
 			cancel()
+			// Cross-world label collision: another world already
+			// owns this label in the issuances Secret. Treat as a
+			// collision and retry with a fresh label (rollback
+			// undid the world-secret write, so the loop is clean).
+			if rbErr == nil && errors.Is(err, token.ErrLabelExists) {
+				continue
+			}
 			if rbErr != nil {
 				return MintResult{}, fmt.Errorf("record issuance: %w (rollback failed: %v)", err, rbErr)
 			}
@@ -301,6 +308,16 @@ func (i *Issuer) appendIssuance(ctx context.Context, iss *Issuance) error {
 		if len(existing) > 0 {
 			if err := json.Unmarshal(existing, &current); err != nil {
 				return nil, fmt.Errorf("decode issuances: %w", err)
+			}
+		}
+		// Labels must be globally unique across all worlds.
+		// removeIssuance filters by label across the whole Secret, so a
+		// cross-world collision would orphan one world's token after
+		// the first revoke. Reject the duplicate and let the caller
+		// retry with a fresh label.
+		for j := range current.Entries {
+			if current.Entries[j].Label == iss.Label {
+				return nil, token.ErrLabelExists
 			}
 		}
 		current.Entries = append(current.Entries, *iss)
