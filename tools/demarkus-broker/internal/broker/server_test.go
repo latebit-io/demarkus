@@ -84,7 +84,10 @@ func TestAuthLoginRedirectsAndSetsStateCookie(t *testing.T) {
 // the test can capture the state nonce and synthesize a callback request.
 func loginAndExtract(t *testing.T, srv *httptest.Server) (cookie *http.Cookie, nonce string) {
 	t.Helper()
-	jar, _ := cookiejar.New(nil)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
 	client := &http.Client{
 		Jar:           jar,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -99,7 +102,10 @@ func loginAndExtract(t *testing.T, srv *httptest.Server) (cookie *http.Cookie, n
 			cookie = c
 		}
 	}
-	loc, _ := url.Parse(resp.Header.Get("Location"))
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect Location: %v", err)
+	}
 	nonce = loc.Query().Get("state")
 	if cookie == nil || nonce == "" {
 		t.Fatalf("state cookie=%v nonce=%q after /auth/login", cookie, nonce)
@@ -213,8 +219,12 @@ func TestListTokens(t *testing.T) {
 	// Use the issuer directly to seed two issuances for alice; bypasses
 	// the OIDC flow, which is exercised in the callback tests above.
 	i := newIssuer(t, testConfig(), k8s)
-	_, _ = i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
-	_, _ = i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if _, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}); err != nil {
+		t.Fatalf("seed mint #1: %v", err)
+	}
+	if _, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}); err != nil {
+		t.Fatalf("seed mint #2: %v", err)
+	}
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
 	req.Header.Set("Authorization", "Bearer some-id-token")
@@ -291,7 +301,10 @@ func TestDeleteToken(t *testing.T) {
 		t.Errorf("status = %d, want 204", resp.StatusCode)
 	}
 
-	list, _ := i.List(context.Background(), "alice@example.com")
+	list, err := i.List(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
 	if len(list) != 0 {
 		t.Errorf("expected 0 issuances after delete, got %d", len(list))
 	}

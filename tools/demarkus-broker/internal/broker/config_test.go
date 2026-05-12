@@ -94,6 +94,11 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "defaultToken.expiresAfter must be > 0",
 		},
 		{
+			name:    "negative stateTTL rejected",
+			body:    strings.Replace(validConfig, `addr: ":8080"`, "addr: \":8080\"\n  stateTTL: -1m", 1),
+			wantErr: "server.stateTTL must be > 0",
+		},
+		{
 			name:    "unknown field caught",
 			body:    validConfig + "extraField: oops\n",
 			wantErr: "field extraField not found",
