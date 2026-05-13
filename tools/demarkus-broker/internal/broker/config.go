@@ -243,10 +243,26 @@ func LoadConfig(path string) (*Config, error) {
 	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("broker: parse config %s: %w", path, err)
 	}
+	c.applyEnvOverrides()
 	if err := c.validate(); err != nil {
 		return nil, fmt.Errorf("broker: validate config %s: %w", path, err)
 	}
 	return &c, nil
+}
+
+// applyEnvOverrides lets a small set of high-sensitivity fields come from
+// environment variables instead of the on-disk config. Today only
+// OIDC_CLIENT_SECRET is supported, so production deployments can keep the
+// OAuth client secret in an externally-managed Kubernetes Secret (External
+// Secrets Operator, Sealed Secrets, Vault) mounted via secretKeyRef rather
+// than baked into the chart-rendered config Secret where it would leak
+// into helm release history. The env var wins over the file value when
+// both are set; an empty env var is treated as unset so an accidentally
+// cleared variable doesn't blank out a file-supplied value at runtime.
+func (c *Config) applyEnvOverrides() {
+	if v := os.Getenv("OIDC_CLIENT_SECRET"); v != "" {
+		c.OIDC.ClientSecret = v
+	}
 }
 
 func (c *Config) validate() error {

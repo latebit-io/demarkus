@@ -53,12 +53,24 @@ oidc:
   # OAuth client ID registered at the IdP.
   clientID: ""
   # OAuth client secret. Two modes:
-  #   1. Cleartext via this field — chart bakes it into the config Secret.
-  #      Easiest install path; the value lives in helm release history.
-  #   2. existingSecretRef — point at an externally-managed Secret created
-  #      by External Secrets Operator / Sealed Secrets / kubectl. The
-  #      Ingress slice wires this mode end-to-end; not yet plumbed here.
+  #   1. Cleartext via this field — chart bakes it into the chart-managed
+  #      config Secret. Easiest install path; the value lives in helm
+  #      release history.
+  #   2. existingSecretRef below — production path. Chart leaves
+  #      clientSecret blank in the config Secret and mounts
+  #      OIDC_CLIENT_SECRET into the broker pod from an externally-
+  #      managed Kubernetes Secret (External Secrets Operator, Sealed
+  #      Secrets, kubectl-created). Broker reads the env var on startup
+  #      via the LoadConfig override path.
+  # Set exactly one of clientSecret or existingSecretRef.name; the chart
+  # fails template-render if both are set so the precedence isn't ambiguous
+  # to a reader of the values file.
   clientSecret: ""
+  existingSecretRef:
+    # Name of the operator-managed Secret. Empty disables this mode.
+    name: ""
+    # Data key inside the Secret holding the OAuth client secret.
+    key: clientSecret
   # Public URL of /auth/callback. Must exactly match the redirect URI
   # registered with the IdP.
   redirectURL: ""
@@ -167,13 +179,38 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# Ingress + cert-manager ship in the Ingress slice. Schema declared here
-# so values structure is stable.
+# Ingress fronts the broker's plain-HTTP listener with TLS termination
+# at the controller. The chart's `rateLimit.trustForwardedFor: true`
+# default is only safe when the Ingress controller strips spoofed
+# X-Forwarded-For from inbound requests and appends the real client IP
+# — verify this for your controller before exposing the broker
+# (nginx-ingress and Traefik do it by default; some Cloud LBs need
+# explicit config). See README "X-Forwarded-For invariant".
 ingress:
   enabled: false
+  # IngressClass to route through. nginx is the most common managed-k8s
+  # default; override for traefik / haproxy / cloud-specific classes.
   className: nginx
+  # Public hostname the broker is reachable at, e.g. broker.example.com.
+  # Required when ingress.enabled is true.
   host: ""
+  # Controller-specific annotations. The broker's HTTP surface is
+  # bog-standard so most defaults work; common knobs would be
+  # nginx.ingress.kubernetes.io/proxy-body-size or
+  # cert-manager.io/cluster-issuer.
   annotations: {}
+  # Path to expose. Defaults to the whole broker surface at /.
+  path: /
+  pathType: Prefix
+  # TLS configuration. Three modes:
+  #   1. existingSecret: reference a pre-existing kubernetes.io/tls Secret
+  #      (cert-manager-managed, externally-provisioned, etc.).
+  #   2. certManager.enabled=true: chart provisions a cert-manager
+  #      Certificate resource that creates the TLS Secret in this
+  #      release's namespace.
+  #   3. neither set: Ingress has no TLS block (Ingress controller
+  #      handles TLS termination externally, or the deployment runs
+  #      without TLS — not recommended for production).
   tls:
     existingSecret: ""
     certManager:
@@ -181,6 +218,7 @@ ingress:
       issuerRef:
         kind: ClusterIssuer
         name: letsencrypt-prod
+      # Annotations on the Certificate resource.
       annotations: {}
 
 service:

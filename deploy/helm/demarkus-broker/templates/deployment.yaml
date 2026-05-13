@@ -52,6 +52,20 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            {{- /* Production OIDC client secret path. When the operator
+                   points oidc.existingSecretRef at an externally-managed
+                   Secret, the chart leaves clientSecret blank in the
+                   config Secret and mounts OIDC_CLIENT_SECRET here.
+                   broker.LoadConfig applies the env var as an override
+                   before validate(). Cleartext-via-values mode skips
+                   this block entirely. */}}
+            {{- with .Values.oidc.existingSecretRef.name }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $.Values.oidc.existingSecretRef.key | quote }}
+            {{- end }}
           ports:
             - name: http
               protocol: TCP

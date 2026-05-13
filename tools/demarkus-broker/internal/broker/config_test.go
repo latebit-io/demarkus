@@ -2,6 +2,7 @@ package broker
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -354,5 +355,82 @@ func TestLoadConfigMissingFile(t *testing.T) {
 	_, err := LoadConfig(filepath.Join(t.TempDir(), "nope.yaml"))
 	if err == nil {
 		t.Fatal("expected error for missing file")
+	}
+}
+
+// OIDC_CLIENT_SECRET env-var override lets the chart-rendered config
+// Secret keep clientSecret blank and source the real value from an
+// externally-managed Kubernetes Secret (External Secrets / Sealed
+// Secrets / Vault) mounted via secretKeyRef. The env var wins over the
+// file value when both are set, and an empty env var is treated as
+// unset so an accidentally cleared variable cannot silently blank the
+// runtime value.
+func TestLoadConfigOIDCClientSecretEnvOverride(t *testing.T) {
+	tests := []struct {
+		name     string
+		fileVal  string
+		setEnv   bool
+		envVal   string
+		wantErr  string
+		wantCSec string
+	}{
+		{
+			name:     "env overrides file value",
+			fileVal:  "shh-from-file",
+			setEnv:   true,
+			envVal:   "shh-from-env",
+			wantCSec: "shh-from-env",
+		},
+		{
+			name:     "env supplies value when file is empty",
+			fileVal:  "",
+			setEnv:   true,
+			envVal:   "shh-from-env",
+			wantCSec: "shh-from-env",
+		},
+		{
+			name:     "empty env does not clobber file value",
+			fileVal:  "shh-from-file",
+			setEnv:   true,
+			envVal:   "",
+			wantCSec: "shh-from-file",
+		},
+		{
+			name:    "no env, no file value, validate rejects",
+			fileVal: "",
+			setEnv:  false,
+			wantErr: "oidc.clientSecret is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Always Setenv to make the test deterministic regardless of
+			// whether the parent CI shell happens to have OIDC_CLIENT_SECRET
+			// exported. t.Setenv restores the previous value (including
+			// "unset") on test cleanup. Empty value is treated as unset by
+			// applyEnvOverrides, which is the property the setEnv=false
+			// case is asserting.
+			envVal := tt.envVal
+			if !tt.setEnv {
+				envVal = ""
+			}
+			t.Setenv("OIDC_CLIENT_SECRET", envVal)
+			body := strings.Replace(validConfig,
+				"clientSecret: shh",
+				"clientSecret: "+strconv.Quote(tt.fileVal), 1)
+			cfg, err := LoadConfig(writeConfig(t, body))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.OIDC.ClientSecret != tt.wantCSec {
+				t.Errorf("ClientSecret = %q, want %q", cfg.OIDC.ClientSecret, tt.wantCSec)
+			}
+		})
 	}
 }
