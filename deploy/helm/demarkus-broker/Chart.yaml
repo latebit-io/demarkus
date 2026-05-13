@@ -1,0 +1,22 @@
+apiVersion: v2
+name: demarkus-broker
+description: |
+  OIDC token broker for demarkus. Exchanges a verified IdP identity for one
+  or more demarkus tokens, writing token hashes into per-world Kubernetes
+  Secrets and tracking ownership in a broker-namespace issuances Secret.
+  Multi-replica HA, leader-elected expiry/drift sweeper, per-subject and
+  per-IP rate limiting.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - demarkus
+  - mark-protocol
+  - oidc
+  - token-broker
+home: https://demarkus.io
+sources:
+  - https://github.com/latebit-io/demarkus
+maintainers:
+  - name: latebit-io
+    url: https://github.com/latebit-io
