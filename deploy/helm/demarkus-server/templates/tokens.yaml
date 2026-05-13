@@ -1,17 +1,42 @@
 {{/*
-Both token Secrets are emitted from one file so a single $rawToken value flows
-into both (within the same template render pass). This avoids the trap where
-randAlphaNum runs separately per file and produces mismatched raw/hash.
+Both token Secrets are rendered with a `lookup`-skip + `helm.sh/resource-policy: keep`
+pattern so they survive `helm upgrade` and `helm uninstall` without wiping
+broker-minted entries.
+
+Why both: the broker (Phase 6.2 / 6.3) mints per-user tokens by appending
+entries to the world's tokens Secret. On `helm upgrade` of this chart, a
+naive re-render would emit a Secret containing only the bootstrap admin
+entry — wiping every broker-minted user token. The lookup-skip branch keeps
+the existing Secret intact: on upgrade, `lookup` returns the live Secret,
+the template emits nothing, helm sees the resource was removed from the
+manifest, and the keep annotation on the live Secret prevents helm GC.
+Net effect: helm upgrades never touch broker-minted state.
+
+The token-values Secret carries the same treatment so the bootstrap admin
+raw token survives upgrades — the broker reads it via `secretKeyRef` to
+authenticate against the world's server during bootstrap.
+
+`lookup` returns nil during offline `helm template`, so tests and dry-runs
+always see the first-install render path. The single-render-pass invariant
+(one `$rawToken` flowing into both Secrets) only matters during first
+install; subsequent renders are skipped.
 */}}
 {{- $rawToken := include "demarkus-server.resolveAdminToken" . -}}
 {{- $hash := printf "sha256-%s" (sha256sum $rawToken) -}}
 {{- $admin := .Values.tokens.admin -}}
+{{- $ns := .Release.Namespace -}}
+{{- $tokensName := include "demarkus-server.tokensSecretName" . -}}
+{{- $valuesName := include "demarkus-server.tokenValuesSecretName" . -}}
+{{- if not (lookup "v1" "Secret" $ns $tokensName) }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "demarkus-server.tokensSecretName" . }}
+  name: {{ $tokensName }}
+  namespace: {{ $ns }}
   labels:
     {{- include "demarkus-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
 type: Opaque
 stringData:
   tokens.toml: |
@@ -23,15 +48,18 @@ stringData:
     operations = [
       {{- range $i, $o := $admin.operations }}{{ if $i }}, {{ end }}{{ $o | quote }}{{ end -}}
     ]
-{{- if .Values.tokens.emitRawValues }}
+{{- end }}
+{{- if and .Values.tokens.emitRawValues (not (lookup "v1" "Secret" $ns $valuesName)) }}
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "demarkus-server.tokenValuesSecretName" . }}
+  name: {{ $valuesName }}
+  namespace: {{ $ns }}
   labels:
     {{- include "demarkus-server.labels" . | nindent 4 }}
   annotations:
+    helm.sh/resource-policy: keep
     # This Secret contains raw tokens. Intended for broker consumption (read +
     # revoke). The server never mounts this Secret.
     demarkus.io/raw-tokens: "true"
