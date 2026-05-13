@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit/demarkus/protocol/store"
 	"github.com/latebit/demarkus/server/internal/auth"
 	"github.com/latebit/demarkus/server/internal/config"
 	"github.com/latebit/demarkus/server/internal/handler"
 	"github.com/latebit/demarkus/server/internal/logging"
 	"github.com/latebit/demarkus/server/internal/ratelimit"
-	"github.com/latebit/demarkus/server/internal/store"
 	servertls "github.com/latebit/demarkus/server/internal/tls"
 	"github.com/quic-go/quic-go"
 )

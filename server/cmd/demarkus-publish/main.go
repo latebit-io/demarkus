@@ -19,7 +19,7 @@ import (
 	"strings"
 
 	"github.com/latebit/demarkus/protocol"
-	"github.com/latebit/demarkus/server/internal/store"
+	"github.com/latebit/demarkus/protocol/store"
 )
 
 func main() {
