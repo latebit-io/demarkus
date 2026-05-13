@@ -101,7 +101,7 @@ echo "--- helm upgrade (re-renders templates; lookup-skip + keep should preserve
 helm upgrade "$RELEASE" "$CHART" --namespace "$NAMESPACE" --wait=false "${HELM_ARGS[@]}"
 
 echo "--- assert seeded data persists after upgrade"
-got=$(kubectl -n "$NAMESPACE" get secret "$SECRET" -o jsonpath="{.data.${SEED_KEY}}")
+got=$(kubectl -n "$NAMESPACE" get secret "$SECRET" -o jsonpath="{.data['${SEED_KEY}']}")
 if [[ "$got" != "$SEED_VALUE_B64" ]]; then
   echo "FAIL: seeded ${SEED_KEY} missing or modified after upgrade"
   echo "  got:  ${got}"
@@ -131,7 +131,7 @@ if ! kubectl -n "$NAMESPACE" get secret "$SECRET" >/dev/null 2>&1; then
   echo "FAIL: $SECRET deleted on uninstall — resource-policy=keep did not hold"
   exit 1
 fi
-got=$(kubectl -n "$NAMESPACE" get secret "$SECRET" -o jsonpath="{.data.${SEED_KEY}}")
+got=$(kubectl -n "$NAMESPACE" get secret "$SECRET" -o jsonpath="{.data['${SEED_KEY}']}")
 if [[ "$got" != "$SEED_VALUE_B64" ]]; then
   echo "FAIL: seeded ${SEED_KEY} lost after uninstall"
   exit 1
