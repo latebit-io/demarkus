@@ -6,9 +6,11 @@
 // Current scope: single broker, multi-world support with
 // domain/groups/emails allowlists (Slice C.1), browser code-flow for
 // /auth/login + /auth/callback, bearer-token (ID token) authentication
-// for /tokens and DELETE /tokens/:label, leader-elected expiry/drift
-// sweeper (Slice C.2). No rotate endpoint, no rate limit — Slice C.3
-// and C.4 respectively.
+// for /tokens, DELETE /tokens/:label, and POST /tokens/:label/rotate
+// (Slice C.3), leader-elected expiry/drift sweeper (Slice C.2), and
+// per-subject + per-IP rate limiting (Slice C.4) via in-memory token
+// buckets keyed by hashSubject(claims.Subject) on authed routes and
+// source IP on /auth/login.
 package main
 
 import (
@@ -85,6 +87,16 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 
 	issuer := broker.NewIssuer(cfg, k8s)
 	srv := broker.NewServer(cfg, signer, verifier, issuer, log)
+	if cfg.RateLimit.Disabled {
+		log.Info("broker: rate limit disabled (rateLimit.disabled=true)")
+	} else {
+		log.Info("broker: rate limit enabled",
+			"tokensPerMin", cfg.RateLimit.Tokens.PerMinute,
+			"tokensBurst", cfg.RateLimit.Tokens.Burst,
+			"loginPerMin", cfg.RateLimit.Login.PerMinute,
+			"loginBurst", cfg.RateLimit.Login.Burst,
+			"trustForwardedFor", cfg.RateLimit.TrustForwardedFor)
+	}
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Server.Addr,

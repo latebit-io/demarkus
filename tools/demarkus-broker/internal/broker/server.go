@@ -27,6 +27,18 @@ type Server struct {
 	issuer   *Issuer
 	log      *slog.Logger
 	clock    func() time.Time
+
+	// subjectReg is the per-subject limiter shared across the three
+	// /tokens routes; loginReg is the per-IP limiter for /auth/login.
+	// Either may be nil (Slice C.4 RateLimitConfig.Disabled, or a test
+	// that constructs Config{} without rate-limit fields set), in
+	// which case the corresponding middleware is a no-op passthrough.
+	subjectReg *rateLimitRegistry
+	loginReg   *rateLimitRegistry
+	// trustForwardedFor mirrors RateLimitConfig.TrustForwardedFor; the
+	// flag is hoisted onto Server so the ipRateLimit middleware can
+	// read it without re-reaching into Config on every request.
+	trustForwardedFor bool
 }
 
 // NewServer wires a Server. The caller is responsible for constructing the
@@ -36,28 +48,54 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, l
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{
-		cfg:      cfg,
-		signer:   signer,
-		verifier: verifier,
-		issuer:   issuer,
-		log:      log,
-		clock:    time.Now,
+	s := &Server{
+		cfg:               cfg,
+		signer:            signer,
+		verifier:          verifier,
+		issuer:            issuer,
+		log:               log,
+		clock:             time.Now,
+		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
+	// Build the registries unless the operator disabled the limiter
+	// entirely. newRateLimitRegistry returns nil for zero/negative
+	// inputs, so tests that construct Config{} without RateLimit set
+	// get registry=nil and the middleware passes through cleanly —
+	// matching the pre-Slice-C.4 behavior of those tests.
+	if !cfg.RateLimit.Disabled {
+		s.subjectReg = newRateLimitRegistry(cfg.RateLimit.Tokens.PerMinute, cfg.RateLimit.Tokens.Burst)
+		s.loginReg = newRateLimitRegistry(cfg.RateLimit.Login.PerMinute, cfg.RateLimit.Login.Burst)
+	}
+	return s
 }
 
 // Routes returns an http.Handler with the broker's routes registered.
 // Routes are mounted on the default ServeMux pattern syntax (Go 1.22+),
 // which gives us method + path matching without a router library.
+//
+// Middleware composition (Slice C.4):
+//   - /healthz, /readyz, /auth/callback: no middleware. Health probes
+//     must succeed without auth or rate-limiting, and /auth/callback's
+//     own state-cookie HMAC gate is the natural rate limit.
+//   - /auth/login: ipRateLimit only. Unauthenticated by design — the
+//     IP limiter is the only backstop against an attacker hammering
+//     the OIDC redirect machinery.
+//   - /tokens, /tokens/:label DELETE, /tokens/:label/rotate:
+//     requireAuth (verifies bearer, stashes claims on ctx) → then
+//     subjectRateLimit (reads claims from ctx, keys on subject hash) →
+//     handler (reads claims from ctx via claimsFromCtx).
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
-	mux.HandleFunc("GET /auth/login", s.authLogin)
+	mux.Handle("GET /auth/login", s.ipRateLimit(http.HandlerFunc(s.authLogin)))
 	mux.HandleFunc("GET /auth/callback", s.authCallback)
-	mux.HandleFunc("GET /tokens", s.listTokens)
-	mux.HandleFunc("DELETE /tokens/{label}", s.deleteToken)
-	mux.HandleFunc("POST /tokens/{label}/rotate", s.rotateToken)
+	authedSubject := func(h http.HandlerFunc) http.Handler {
+		return s.requireAuth(s.subjectRateLimit(h))
+	}
+	mux.Handle("GET /tokens", authedSubject(s.listTokens))
+	mux.Handle("DELETE /tokens/{label}", authedSubject(s.deleteToken))
+	mux.Handle("POST /tokens/{label}/rotate", authedSubject(s.rotateToken))
 	return mux
 }
 
@@ -186,8 +224,12 @@ type listTokensResponse struct {
 }
 
 func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
-	claims, ok := s.authenticate(w, r)
+	claims, ok := claimsFromCtx(r.Context())
 	if !ok {
+		// Unreachable via Routes() composition (requireAuth always
+		// runs first). The 500 makes the regression loud if a future
+		// route registration forgets to chain requireAuth.
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	issuances, err := s.issuer.List(r.Context(), claims.Email)
@@ -200,8 +242,9 @@ func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
-	claims, ok := s.authenticate(w, r)
+	claims, ok := claimsFromCtx(r.Context())
 	if !ok {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	label := r.PathValue("label")
@@ -226,8 +269,9 @@ func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rotateToken(w http.ResponseWriter, r *http.Request) {
-	claims, ok := s.authenticate(w, r)
+	claims, ok := claimsFromCtx(r.Context())
 	if !ok {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	label := r.PathValue("label")
@@ -273,24 +317,6 @@ func (s *Server) rotateToken(w http.ResponseWriter, r *http.Request) {
 		s.log.ErrorContext(r.Context(), "broker: rotate failed", "label", label, "err", err)
 		http.Error(w, "rotate failed", http.StatusInternalServerError)
 	}
-}
-
-// authenticate validates the bearer ID token on the request and returns
-// the verified claims. On any failure it writes the appropriate HTTP
-// response and returns ok=false; the caller must return immediately.
-func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (Claims, bool) {
-	raw := bearerToken(r)
-	if raw == "" {
-		http.Error(w, "Authorization: Bearer <id_token> required", http.StatusUnauthorized)
-		return Claims{}, false
-	}
-	claims, err := s.verifier.VerifyIDToken(r.Context(), raw)
-	if err != nil {
-		s.log.WarnContext(r.Context(), "broker: id_token verification failed", "err", err)
-		http.Error(w, "invalid bearer token", http.StatusUnauthorized)
-		return Claims{}, false
-	}
-	return claims, true
 }
 
 func bearerToken(r *http.Request) string {
