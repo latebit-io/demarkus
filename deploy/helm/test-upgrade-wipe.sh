@@ -71,6 +71,25 @@ if [[ "$policy" != "keep" ]]; then
 fi
 echo "OK: keep annotation present"
 
+# Optional legacy-state simulation: strips the keep annotation from the
+# Secret so the helm upgrade exercises the migration path from a release
+# that originally shipped without it. The chart's tokens.yaml has a
+# branch (lookup-found + missing keep) that re-renders the existing
+# data verbatim plus the keep annotation — without that branch, helm
+# would delete the Secret on apply because lookup-skip emits nothing
+# and the live Secret has no keep to block GC. Set
+# SIMULATE_LEGACY_NO_KEEP=true in CI to exercise it.
+if [[ "${SIMULATE_LEGACY_NO_KEEP:-false}" == "true" ]]; then
+  echo "--- simulate legacy state: remove keep annotation before upgrade"
+  kubectl -n "$NAMESPACE" annotate secret "$SECRET" helm.sh/resource-policy- --overwrite
+  policy=$(kubectl -n "$NAMESPACE" get secret "$SECRET" -o jsonpath='{.metadata.annotations.helm\.sh/resource-policy}')
+  if [[ -n "$policy" ]]; then
+    echo "FAIL: legacy-state simulation did not strip annotation; got '$policy'"
+    exit 1
+  fi
+  echo "OK: keep annotation removed (legacy state)"
+fi
+
 echo "--- seed broker-minted data ($SEED_KEY=<redacted>)"
 # Strategic-merge patch: adds the key without touching other entries, and
 # handles the case where data is absent (empty {} in YAML is stored as nil,
@@ -90,6 +109,19 @@ if [[ "$got" != "$SEED_VALUE_B64" ]]; then
   exit 1
 fi
 echo "OK: seeded data survived upgrade"
+
+# In legacy mode, the upgrade should ALSO have re-applied the keep
+# annotation via the migration branch. Verify it's back so the next
+# upgrade follows the race-free no-op path.
+if [[ "${SIMULATE_LEGACY_NO_KEEP:-false}" == "true" ]]; then
+  echo "--- assert keep annotation re-applied by migration branch"
+  policy=$(kubectl -n "$NAMESPACE" get secret "$SECRET" -o jsonpath='{.metadata.annotations.helm\.sh/resource-policy}')
+  if [[ "$policy" != "keep" ]]; then
+    echo "FAIL: migration upgrade did not restore keep annotation; got '$policy'"
+    exit 1
+  fi
+  echo "OK: keep annotation restored by legacy migration branch"
+fi
 
 echo "--- helm uninstall"
 helm uninstall "$RELEASE" --namespace "$NAMESPACE" --wait

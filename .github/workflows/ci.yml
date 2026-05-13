@@ -165,6 +165,17 @@ jobs:
             demarkus-server-tokens \
             broker-minted-test \
             ZmFrZS10b2tlbi1oYXNo
+      - name: Legacy-migration regression — demarkus-server
+        env:
+          SIMULATE_LEGACY_NO_KEEP: "true"
+        run: |
+          bash deploy/helm/test-upgrade-wipe.sh \
+            deploy/helm/demarkus-server \
+            demarkus-server-legacy \
+            test-server-legacy \
+            demarkus-server-legacy-tokens \
+            broker-minted-test \
+            ZmFrZS10b2tlbi1oYXNo
       - name: Upgrade-wipe regression — demarkus-broker
         run: |
           bash deploy/helm/test-upgrade-wipe.sh \

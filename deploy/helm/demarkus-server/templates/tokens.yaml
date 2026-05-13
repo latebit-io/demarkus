@@ -1,25 +1,34 @@
 {{/*
-Both token Secrets are rendered with a `lookup`-skip + `helm.sh/resource-policy: keep`
-pattern so they survive `helm upgrade` and `helm uninstall` without wiping
-broker-minted entries.
+Token Secrets — three render branches keyed on the live Secret's state:
 
-Why both: the broker (Phase 6.2 / 6.3) mints per-user tokens by appending
-entries to the world's tokens Secret. On `helm upgrade` of this chart, a
-naive re-render would emit a Secret containing only the bootstrap admin
-entry — wiping every broker-minted user token. The lookup-skip branch keeps
-the existing Secret intact: on upgrade, `lookup` returns the live Secret,
-the template emits nothing, helm sees the resource was removed from the
-manifest, and the keep annotation on the live Secret prevents helm GC.
-Net effect: helm upgrades never touch broker-minted state.
+  1. First install (lookup returns nil) → render fresh content with the
+     `helm.sh/resource-policy: keep` annotation. `$rawToken` resolves to a
+     freshly-generated token; both Secrets ship with consistent raw+hash.
 
-The token-values Secret carries the same treatment so the bootstrap admin
-raw token survives upgrades — the broker reads it via `secretKeyRef` to
-authenticate against the world's server during bootstrap.
+  2. Legacy upgrade (Secret exists but LACKS the keep annotation) →
+     render the EXISTING data verbatim plus the keep annotation. This is
+     the migration path from §6.1's original template (PR #107) which
+     shipped without the keep annotation; without this branch, the
+     subsequent `lookup`-skip path would emit nothing, helm would diff
+     the old (annotation-less) manifest against the new (absent)
+     manifest, and DELETE the Secret on apply — wiping every broker-
+     minted user-token entry along the way. Re-rendering existing data
+     ensures helm's apply is a content no-op while the annotation lands
+     so future upgrades flip to branch 3.
 
-`lookup` returns nil during offline `helm template`, so tests and dry-runs
-always see the first-install render path. The single-render-pass invariant
-(one `$rawToken` flowing into both Secrets) only matters during first
-install; subsequent renders are skipped.
+  3. Race-free no-op (Secret exists AND has the keep annotation) → emit
+     nothing. helm sees the Secret was removed from the rendered
+     manifest, would normally GC it, but the keep annotation on the
+     live Secret blocks deletion. Net effect: helm upgrades after the
+     first migration NEVER touch the Secret content, leaving the broker
+     as the sole writer and eliminating any race window between
+     `helm template` and `helm apply`.
+
+`lookup` returns nil during offline `helm template` and helm-unittest, so
+both branches 1 (first install) and tests see the same fresh render. The
+legacy and race-free branches are only exercised against a real cluster
+— covered end-to-end by the kind `test-upgrade-wipe.sh` regression
+(normal mode + SIMULATE_LEGACY_NO_KEEP mode).
 */}}
 {{- $rawToken := include "demarkus-server.resolveAdminToken" . -}}
 {{- $hash := printf "sha256-%s" (sha256sum $rawToken) -}}
@@ -27,7 +36,23 @@ install; subsequent renders are skipped.
 {{- $ns := .Release.Namespace -}}
 {{- $tokensName := include "demarkus-server.tokensSecretName" . -}}
 {{- $valuesName := include "demarkus-server.tokenValuesSecretName" . -}}
-{{- if not (lookup "v1" "Secret" $ns $tokensName) }}
+{{- $existingTokens := lookup "v1" "Secret" $ns $tokensName -}}
+{{- $tokensHasKeep := false -}}
+{{- if $existingTokens -}}
+  {{- $tokensAnnotations := default dict $existingTokens.metadata.annotations -}}
+  {{- if eq (index $tokensAnnotations "helm.sh/resource-policy") "keep" -}}
+    {{- $tokensHasKeep = true -}}
+  {{- end -}}
+{{- end -}}
+{{- $existingValues := lookup "v1" "Secret" $ns $valuesName -}}
+{{- $valuesHasKeep := false -}}
+{{- if $existingValues -}}
+  {{- $valuesAnnotations := default dict $existingValues.metadata.annotations -}}
+  {{- if eq (index $valuesAnnotations "helm.sh/resource-policy") "keep" -}}
+    {{- $valuesHasKeep = true -}}
+  {{- end -}}
+{{- end -}}
+{{- if not $existingTokens }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -48,8 +73,22 @@ stringData:
     operations = [
       {{- range $i, $o := $admin.operations }}{{ if $i }}, {{ end }}{{ $o | quote }}{{ end -}}
     ]
+{{- else if not $tokensHasKeep }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $tokensName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "demarkus-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: {{ default "Opaque" $existingTokens.type }}
+data:
+  {{- toYaml $existingTokens.data | nindent 2 }}
 {{- end }}
-{{- if and .Values.tokens.emitRawValues (not (lookup "v1" "Secret" $ns $valuesName)) }}
+{{- if .Values.tokens.emitRawValues }}
+{{- if not $existingValues }}
 ---
 apiVersion: v1
 kind: Secret
@@ -66,4 +105,20 @@ metadata:
 type: Opaque
 data:
   {{ $admin.label }}: {{ $rawToken | b64enc }}
+{{- else if not $valuesHasKeep }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $valuesName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "demarkus-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+    demarkus.io/raw-tokens: "true"
+type: {{ default "Opaque" $existingValues.type }}
+data:
+  {{- toYaml $existingValues.data | nindent 2 }}
+{{- end }}
 {{- end }}
