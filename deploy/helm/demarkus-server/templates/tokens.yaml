@@ -1,17 +1,67 @@
 {{/*
-Both token Secrets are emitted from one file so a single $rawToken value flows
-into both (within the same template render pass). This avoids the trap where
-randAlphaNum runs separately per file and produces mismatched raw/hash.
+Token Secrets — three render branches keyed on the live Secret's state:
+
+  1. First install (lookup returns nil) → render fresh content with the
+     `helm.sh/resource-policy: keep` annotation. `$rawToken` resolves to a
+     freshly-generated token; both Secrets ship with consistent raw+hash.
+
+  2. Legacy upgrade (Secret exists but LACKS the keep annotation) →
+     render the EXISTING data verbatim plus the keep annotation. This is
+     the migration path from §6.1's original template (PR #107) which
+     shipped without the keep annotation; without this branch, the
+     subsequent `lookup`-skip path would emit nothing, helm would diff
+     the old (annotation-less) manifest against the new (absent)
+     manifest, and DELETE the Secret on apply — wiping every broker-
+     minted user-token entry along the way. Re-rendering existing data
+     ensures helm's apply is a content no-op while the annotation lands
+     so future upgrades flip to branch 3.
+
+  3. Race-free no-op (Secret exists AND has the keep annotation) → emit
+     nothing. helm sees the Secret was removed from the rendered
+     manifest, would normally GC it, but the keep annotation on the
+     live Secret blocks deletion. Net effect: helm upgrades after the
+     first migration NEVER touch the Secret content, leaving the broker
+     as the sole writer and eliminating any race window between
+     `helm template` and `helm apply`.
+
+`lookup` returns nil during offline `helm template` and helm-unittest, so
+both branches 1 (first install) and tests see the same fresh render. The
+legacy and race-free branches are only exercised against a real cluster
+— covered end-to-end by the kind `test-upgrade-wipe.sh` regression
+(normal mode + SIMULATE_LEGACY_NO_KEEP mode).
 */}}
 {{- $rawToken := include "demarkus-server.resolveAdminToken" . -}}
 {{- $hash := printf "sha256-%s" (sha256sum $rawToken) -}}
 {{- $admin := .Values.tokens.admin -}}
+{{- $ns := .Release.Namespace -}}
+{{- $tokensName := include "demarkus-server.tokensSecretName" . -}}
+{{- $valuesName := include "demarkus-server.tokenValuesSecretName" . -}}
+{{- $existingTokens := lookup "v1" "Secret" $ns $tokensName -}}
+{{- $tokensHasKeep := false -}}
+{{- if $existingTokens -}}
+  {{- $tokensAnnotations := default dict $existingTokens.metadata.annotations -}}
+  {{- if eq (index $tokensAnnotations "helm.sh/resource-policy") "keep" -}}
+    {{- $tokensHasKeep = true -}}
+  {{- end -}}
+{{- end -}}
+{{- $existingValues := lookup "v1" "Secret" $ns $valuesName -}}
+{{- $valuesHasKeep := false -}}
+{{- if $existingValues -}}
+  {{- $valuesAnnotations := default dict $existingValues.metadata.annotations -}}
+  {{- if eq (index $valuesAnnotations "helm.sh/resource-policy") "keep" -}}
+    {{- $valuesHasKeep = true -}}
+  {{- end -}}
+{{- end -}}
+{{- if not $existingTokens }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "demarkus-server.tokensSecretName" . }}
+  name: {{ $tokensName }}
+  namespace: {{ $ns }}
   labels:
     {{- include "demarkus-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
 type: Opaque
 stringData:
   tokens.toml: |
@@ -23,19 +73,52 @@ stringData:
     operations = [
       {{- range $i, $o := $admin.operations }}{{ if $i }}, {{ end }}{{ $o | quote }}{{ end -}}
     ]
+{{- else if not $tokensHasKeep }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $tokensName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "demarkus-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: {{ default "Opaque" $existingTokens.type }}
+data:
+  {{- toYaml $existingTokens.data | nindent 2 }}
+{{- end }}
 {{- if .Values.tokens.emitRawValues }}
+{{- if not $existingValues }}
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "demarkus-server.tokenValuesSecretName" . }}
+  name: {{ $valuesName }}
+  namespace: {{ $ns }}
   labels:
     {{- include "demarkus-server.labels" . | nindent 4 }}
   annotations:
+    helm.sh/resource-policy: keep
     # This Secret contains raw tokens. Intended for broker consumption (read +
     # revoke). The server never mounts this Secret.
     demarkus.io/raw-tokens: "true"
 type: Opaque
 data:
   {{ $admin.label }}: {{ $rawToken | b64enc }}
+{{- else if not $valuesHasKeep }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $valuesName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "demarkus-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+    demarkus.io/raw-tokens: "true"
+type: {{ default "Opaque" $existingValues.type }}
+data:
+  {{- toYaml $existingValues.data | nindent 2 }}
+{{- end }}
 {{- end }}

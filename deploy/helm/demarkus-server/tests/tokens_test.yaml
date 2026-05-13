@@ -92,3 +92,30 @@ tests:
       - equal:
           path: data.admin
           value: bXktbGl0ZXJhbC1yYXctdG9rZW4=  # base64 of "my-literal-raw-token"
+
+  - it: tokens Secret carries helm.sh/resource-policy keep so helm upgrade/uninstall do not wipe broker-minted entries
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-demarkus-server-tokens
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: token-values Secret carries helm.sh/resource-policy keep so the broker bootstrap raw token survives upgrades
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-demarkus-server-token-values
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: tokens Secret renders explicit metadata.namespace so the lookup-skip branch checks the right namespace on upgrade
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-demarkus-server-tokens
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE

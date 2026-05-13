@@ -142,3 +142,50 @@ jobs:
         run: helm unittest deploy/helm/demarkus-server
       - name: Unit test demarkus-broker chart
         run: helm unittest deploy/helm/demarkus-broker
+
+  test-charts-kind:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.charts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.2
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: chart-upgrade-wipe
+      - name: Upgrade-wipe regression — demarkus-server
+        run: |
+          bash deploy/helm/test-upgrade-wipe.sh \
+            deploy/helm/demarkus-server \
+            demarkus-server \
+            test-server \
+            demarkus-server-tokens \
+            broker-minted-test \
+            ZmFrZS10b2tlbi1oYXNo
+      - name: Legacy-migration regression — demarkus-server
+        env:
+          SIMULATE_LEGACY_NO_KEEP: "true"
+        run: |
+          bash deploy/helm/test-upgrade-wipe.sh \
+            deploy/helm/demarkus-server \
+            demarkus-server-legacy \
+            test-server-legacy \
+            demarkus-server-legacy-tokens \
+            broker-minted-test \
+            ZmFrZS10b2tlbi1oYXNo
+      - name: Upgrade-wipe regression — demarkus-broker
+        run: |
+          bash deploy/helm/test-upgrade-wipe.sh \
+            deploy/helm/demarkus-broker \
+            demarkus-broker \
+            test-broker \
+            demarkus-broker-issuances \
+            broker-minted-test \
+            ZmFrZS1pc3N1YW5jZQ== \
+            --set oidc.issuer=https://accounts.google.com \
+            --set oidc.clientID=test-client \
+            --set oidc.clientSecret=test-secret \
+            --set oidc.redirectURL=https://broker.example/auth/callback
