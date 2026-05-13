@@ -1,0 +1,181 @@
+suite: rbac
+templates:
+  - rbac-broker-ns.yaml
+  - rbac-worlds.yaml
+release:
+  namespace: broker-ns
+set:
+  oidc.issuer: https://accounts.example.com
+  oidc.clientID: broker-app
+  oidc.clientSecret: shh
+  oidc.redirectURL: https://broker.example.com/auth/callback
+tests:
+  - it: broker-namespace Role + RoleBinding render in brokerNamespace
+    template: rbac-broker-ns.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: Role
+      - documentIndex: 0
+        equal:
+          path: metadata.namespace
+          value: broker-ns
+      - documentIndex: 1
+        isKind:
+          of: RoleBinding
+      - documentIndex: 1
+        equal:
+          path: metadata.namespace
+          value: broker-ns
+
+  - it: broker-ns Role leases rule pinned to get/create/update on the configured leaseName
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[0].apiGroups
+          value: ["coordination.k8s.io"]
+      - equal:
+          path: rules[0].resources
+          value: ["leases"]
+      - equal:
+          path: rules[0].resourceNames
+          value: ["demarkus-broker-sweeper"]
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "create", "update"]
+
+  - it: broker-ns Role secrets rule pinned to get/update on issuancesSecret only
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[1].apiGroups
+          value: [""]
+      - equal:
+          path: rules[1].resources
+          value: ["secrets"]
+      - equal:
+          path: rules[1].resourceNames
+          value: ["RELEASE-NAME-demarkus-broker-issuances"]
+      - equal:
+          path: rules[1].verbs
+          value: ["get", "update"]
+      - notContains:
+          path: rules[1].verbs
+          content: create
+      - notContains:
+          path: rules[1].verbs
+          content: delete
+      - notContains:
+          path: rules[1].verbs
+          content: list
+
+  - it: per-world template emits 2 Roles + 2 RoleBindings for two worlds
+    template: rbac-worlds.yaml
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+        - name: team-b
+          namespace: team-b
+          tokensSecret: team-b-tokens
+          allow: {}
+          defaultToken:
+            paths: ["/team-b/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: per-world Role scopes get/update to the named tokens Secret, NOT create
+    template: rbac-worlds.yaml
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: team-a
+      - equal:
+          path: rules[0].apiGroups
+          value: [""]
+      - equal:
+          path: rules[0].resources
+          value: ["secrets"]
+      - equal:
+          path: rules[0].resourceNames
+          value: ["team-a-tokens"]
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "update"]
+      - notContains:
+          path: rules[0].verbs
+          content: create
+      - notContains:
+          path: rules[0].verbs
+          content: delete
+
+  - it: per-world RoleBinding subject references broker SA in release namespace
+    template: rbac-worlds.yaml
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: team-a
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-demarkus-broker
+      - equal:
+          path: subjects[0].namespace
+          value: broker-ns
+
+  - it: rbac.create=false skips both broker-ns and per-world RBAC
+    set:
+      rbac.create: false
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -35,7 +35,8 @@ After each implementation run tests and pre-commit.sh.
 /guidelines.md     — Hard rules for code quality, must read before writing code
 /debugging.md      — Lessons from bugs and investigations
 /roadmap.md        — What's done, what's next
-/journal.md        — Session notes and evolution log
+Records (one per decision, zero-padded 4-digit sequence)
+- `/<project>/journal/<YYYY-MM-DD>.md` — dated session notes, one file per day
 /thoughts.md       — Agent reflections and ideas
 /guide.md          — Setup instructions for demarkus-soul
 ```
