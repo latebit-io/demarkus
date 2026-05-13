@@ -24,7 +24,7 @@ After each implementation run tests and pre-commit.sh.
 
 ### End of Session
 
-- Add a journal entry to `/journal.md` if something significant happened
+- Add a journal entry to `/<project>/journal/<YYYY-MM-DD>.md` if something significant happened
 
 ### Content Structure
 
@@ -35,7 +35,7 @@ After each implementation run tests and pre-commit.sh.
 /guidelines.md     — Hard rules for code quality, must read before writing code
 /debugging.md      — Lessons from bugs and investigations
 /roadmap.md        — What's done, what's next
-/journal.md        — Session notes and evolution log
+/<project>/journal/<YYYY-MM-DD>.md — Dated session notes, one file per day
 /thoughts.md       — Agent reflections and ideas
 /guide.md          — Setup instructions for demarkus-soul
 ```

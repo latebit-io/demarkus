@@ -13,6 +13,8 @@ jobs:
       protocol: ${{ steps.filter.outputs.protocol }}
       server: ${{ steps.filter.outputs.server }}
       client: ${{ steps.filter.outputs.client }}
+      broker: ${{ steps.filter.outputs.broker }}
+      charts: ${{ steps.filter.outputs.charts }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -27,6 +29,13 @@ jobs:
             client:
               - 'client/**'
               - 'protocol/**'
+            broker:
+              - 'tools/demarkus-broker/**'
+              - 'tools/go.mod'
+              - 'tools/go.sum'
+              - 'protocol/**'
+            charts:
+              - 'deploy/helm/**'
 
   test-protocol:
     needs: detect-changes
@@ -89,3 +98,47 @@ jobs:
         run: cd client && go build -o /dev/null ./cmd/demarkus-tui
       - name: Build MCP
         run: cd client && go build -o /dev/null ./cmd/demarkus-mcp
+
+  test-broker:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.broker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.9.0
+          working-directory: tools/demarkus-broker
+      - name: Test
+        run: cd tools && go test ./demarkus-broker/...
+      - name: Vet
+        run: cd tools && go vet ./demarkus-broker/...
+      - name: Build
+        run: cd tools && go build -o /dev/null ./demarkus-broker
+
+  test-charts:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.charts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.2
+      - name: Install helm-unittest
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.6.2
+      - name: Lint demarkus-server chart
+        run: helm lint deploy/helm/demarkus-server
+      - name: Lint demarkus-broker chart
+        run: helm lint deploy/helm/demarkus-broker
+      - name: Lint demarkus-agent chart
+        run: helm lint deploy/helm/demarkus-agent
+      - name: Unit test demarkus-server chart
+        run: helm unittest deploy/helm/demarkus-server
+      - name: Unit test demarkus-broker chart
+        run: helm unittest deploy/helm/demarkus-broker

@@ -1,0 +1,108 @@
+suite: ingress
+templates:
+  - ingress.yaml
+  - certificate.yaml
+set:
+  oidc.issuer: https://accounts.example.com
+  oidc.clientID: broker-app
+  oidc.clientSecret: shh
+  oidc.redirectURL: https://broker.example.com/auth/callback
+tests:
+  - it: Ingress and Certificate both absent by default (ingress.enabled=false)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: fail-render when ingress.enabled=true but host blank
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.host is required when ingress.enabled is true"
+
+  - it: fail-render when both ingress.tls.existingSecret and certManager.enabled set (mutex)
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.tls.existingSecret: my-tls
+      ingress.tls.certManager.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.tls.existingSecret and ingress.tls.certManager.enabled are mutually exclusive; set exactly one"
+
+  - it: Ingress with existingSecret references that Secret in TLS block
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.tls.existingSecret: my-corp-tls
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.tls[0].secretName
+          value: my-corp-tls
+      - equal:
+          path: spec.tls[0].hosts[0]
+          value: broker.example.com
+      - equal:
+          path: spec.rules[0].host
+          value: broker.example.com
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /
+      - equal:
+          path: spec.rules[0].http.paths[0].pathType
+          value: Prefix
+
+  - it: cert-manager Certificate emitted only when ingress.enabled + certManager.enabled both true
+    template: certificate.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.tls.certManager.enabled: true
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-broker-tls
+      - equal:
+          path: spec.secretName
+          value: RELEASE-NAME-demarkus-broker-tls
+      - equal:
+          path: spec.dnsNames[0]
+          value: broker.example.com
+      - equal:
+          path: spec.issuerRef.kind
+          value: ClusterIssuer
+      - equal:
+          path: spec.issuerRef.name
+          value: letsencrypt-prod
+
+  - it: Ingress with certManager mode references the chart-generated TLS Secret
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.tls.certManager.enabled: true
+    asserts:
+      - equal:
+          path: spec.tls[0].secretName
+          value: RELEASE-NAME-demarkus-broker-tls
+
+  - it: ingress.className override propagates to ingressClassName
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.className: traefik
+    asserts:
+      - equal:
+          path: spec.ingressClassName
+          value: traefik

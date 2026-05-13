@@ -1,8 +1,10 @@
 suite: statefulset
 templates:
   - statefulset.yaml
+  - tokens.yaml
 tests:
   - it: renders a StatefulSet with correct name + replicas
+    template: statefulset.yaml
     asserts:
       - hasDocuments:
           count: 1
@@ -19,6 +21,7 @@ tests:
           value: RELEASE-NAME-demarkus-server
 
   - it: container args include -port and -root by default
+    template: statefulset.yaml
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
@@ -34,6 +37,7 @@ tests:
           content: /var/lib/demarkus/content
 
   - it: -read-only added when server.readOnly=true
+    template: statefulset.yaml
     set:
       server.readOnly: true
     asserts:
@@ -42,12 +46,14 @@ tests:
           content: "-read-only"
 
   - it: -read-only absent when server.readOnly=false (default)
+    template: statefulset.yaml
     asserts:
       - notContains:
           path: spec.template.spec.containers[0].args
           content: "-read-only"
 
   - it: TLS args + volume absent when no TLS configured
+    template: statefulset.yaml
     asserts:
       - notContains:
           path: spec.template.spec.containers[0].args
@@ -60,6 +66,7 @@ tests:
               secretName: RELEASE-NAME-demarkus-server-tls
 
   - it: TLS args + volume present when cert-manager enabled
+    template: statefulset.yaml
     set:
       tls.certManager.enabled: true
     asserts:
@@ -77,6 +84,7 @@ tests:
               secretName: RELEASE-NAME-demarkus-server-tls
 
   - it: TLS uses existingSecret when set
+    template: statefulset.yaml
     set:
       tls.existingSecret: my-corp-tls
     asserts:
@@ -88,6 +96,7 @@ tests:
               secretName: my-corp-tls
 
   - it: udpPort knob propagates to args and port
+    template: statefulset.yaml
     set:
       server.udpPort: 443
     asserts:
@@ -102,6 +111,7 @@ tests:
           value: UDP
 
   - it: pod-level securityContext has runAsNonRoot + seccompProfile
+    template: statefulset.yaml
     asserts:
       - equal:
           path: spec.template.spec.securityContext.runAsNonRoot
@@ -111,6 +121,7 @@ tests:
           value: RuntimeDefault
 
   - it: container-level securityContext locks down container
+    template: statefulset.yaml
     asserts:
       - equal:
           path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
@@ -123,6 +134,7 @@ tests:
           content: ALL
 
   - it: probes disabled when probes.enabled=false
+    template: statefulset.yaml
     set:
       probes.enabled: false
     asserts:
@@ -132,6 +144,7 @@ tests:
           path: spec.template.spec.containers[0].readinessProbe
 
   - it: probes use demarkus CLI fetching agent-manifest
+    template: statefulset.yaml
     asserts:
       - contains:
           path: spec.template.spec.containers[0].livenessProbe.exec.command
@@ -144,6 +157,7 @@ tests:
           content: "mark://localhost:6309/.well-known/agent-manifest.md"
 
   - it: volumeClaimTemplates provisions content PVC
+    template: statefulset.yaml
     set:
       storage.className: premium-rwo
       storage.size: 10Gi
