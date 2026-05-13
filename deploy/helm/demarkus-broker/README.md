@@ -27,15 +27,32 @@ in CI.
 
 ## Quick install (development)
 
+Put the OIDC client secret in a values file rather than on the command
+line — `--set` values leak into shell history and `ps` output:
+
+```yaml
+# broker-secrets.values.yaml — do not commit
+oidc:
+  clientSecret: "YOUR_CLIENT_SECRET"
+```
+
+Then install:
+
 ```bash
 helm install broker deploy/helm/demarkus-broker \
   --namespace demarkus-broker --create-namespace \
+  --values broker-secrets.values.yaml \
   --set oidc.issuer=https://accounts.google.com \
   --set oidc.clientID=YOUR_CLIENT_ID \
-  --set oidc.clientSecret=YOUR_CLIENT_SECRET \
   --set oidc.redirectURL=https://broker.example.com/auth/callback \
   --set-json 'worlds=[{"name":"team-a","namespace":"team-a","tokensSecret":"team-a-tokens","allow":{"domains":["example.com"]},"defaultToken":{"paths":["/team-a/*"],"operations":["read","publish"],"expiresAfter":"24h"}}]'
 ```
+
+Production deployments should go further: store the OIDC client secret
+in a SealedSecret / External Secrets Operator / Vault-managed resource
+and reference it via `oidc.existingSecretRef` once the Ingress slice
+plumbs that field. Until then, treat `broker-secrets.values.yaml` as
+sensitive — gitignore it.
 
 The world namespaces (`team-a` in the example) must already exist; the
 chart does not create them. RBAC across world namespaces ships in the
