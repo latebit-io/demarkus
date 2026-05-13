@@ -30,7 +30,9 @@ jobs:
               - 'client/**'
               - 'protocol/**'
             broker:
-              - 'tools/**'
+              - 'tools/demarkus-broker/**'
+              - 'tools/go.mod'
+              - 'tools/go.sum'
               - 'protocol/**'
             charts:
               - 'deploy/helm/**'
@@ -101,6 +103,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.broker == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -109,7 +112,7 @@ jobs:
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.9.0
-          working-directory: tools
+          working-directory: tools/demarkus-broker
       - name: Test
         run: cd tools && go test ./demarkus-broker/...
       - name: Vet
@@ -121,6 +124,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.charts == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
