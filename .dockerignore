@@ -1,0 +1,16 @@
+# Keep the build context minimal so unrelated edits don't invalidate
+# Docker's layer cache and `docker build` stays fast.
+.git/
+.github/
+docs/
+deploy/
+plugins/
+trials/
+**/bin/
+**/*.test
+**/*.out
+**/coverage.*
+**/.mark/
+Dockerfile
+.dockerignore
+*.md

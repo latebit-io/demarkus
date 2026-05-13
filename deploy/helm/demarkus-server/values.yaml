@@ -2,8 +2,11 @@
 # Override with --values or --set on `helm install`.
 
 image:
-  # Must include demarkus-server, demarkus (CLI for probes), and demarkus-token.
-  repository: ghcr.io/latebit-io/demarkus-server
+  # Unified demarkus image bundling every deployable binary. The chart
+  # selects `demarkus-server` via the container's `command:` field; the
+  # exec probes invoke the bundled `demarkus` CLI on /. Bootstrap and
+  # broker integration consume the bundled `demarkus-token`.
+  repository: ghcr.io/latebit-io/demarkus
   # tag defaults to .Chart.appVersion when empty
   tag: ""
   pullPolicy: IfNotPresent

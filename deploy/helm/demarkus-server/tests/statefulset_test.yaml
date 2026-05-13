@@ -156,6 +156,21 @@ tests:
           path: spec.template.spec.containers[0].livenessProbe.exec.command
           content: "mark://localhost:6309/.well-known/agent-manifest.md"
 
+  - it: container command selects the server binary from the unified image
+    template: statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - /demarkus-server
+
+  - it: container image is the unified ghcr.io/latebit-io/demarkus repo
+    template: statefulset.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/latebit-io/demarkus:'
+
   - it: volumeClaimTemplates provisions content PVC
     template: statefulset.yaml
     set:

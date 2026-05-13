@@ -40,6 +40,8 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          command:
+            - /demarkus-broker
           args:
             - -config
             - /etc/demarkus-broker/config.yaml

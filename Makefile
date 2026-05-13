@@ -1,4 +1,4 @@
-.PHONY: all protocol server client tools test clean install help lint
+.PHONY: all protocol server client tools image test clean install help lint fmt vet deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -12,7 +12,8 @@ help:
 	@echo "  protocol  - Build protocol library"
 	@echo "  server    - Build demarkus-server"
 	@echo "  client    - Build demarkus TUI client"
-	@echo "  tools     - Build development tools"
+	@echo "  tools     - Build broker, token, publish (tools/bin/)"
+	@echo "  image     - Build unified container image (IMAGE/TAG overridable)"
 	@echo "  test      - Run all tests"
 	@echo "  lint      - Run golangci-lint on all modules"
 	@echo "  clean     - Remove build artifacts"
@@ -34,8 +35,7 @@ protocol:
 server: protocol
 	@echo "Building demarkus-server..."
 	cd server && go build -o bin/demarkus-server ./cmd/demarkus-server
-	cd server && go build -o bin/demarkus-token ./cmd/demarkus-token
-	@echo "✓ Server built: server/bin/demarkus-server, server/bin/demarkus-token"
+	@echo "✓ Server built: server/bin/demarkus-server"
 
 # Build client
 client: protocol
@@ -49,9 +49,20 @@ client: protocol
 # Build tools
 tools: protocol
 	@echo "Building tools..."
-	cd tools && go build ./...
-	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-broker ./demarkus-broker
-	@echo "✓ Tools built: tools/bin/demarkus-broker"
+	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-broker  ./demarkus-broker
+	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-token   ./demarkus-token
+	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-publish ./demarkus-publish
+	@echo "✓ Tools built: tools/bin/{demarkus-broker, demarkus-token, demarkus-publish}"
+
+# Build the unified container image. Bakes every deployable binary into a
+# single scratch-based image; each chart picks which binary runs via its
+# pod spec's `command:` field.
+IMAGE ?= ghcr.io/latebit-io/demarkus
+TAG   ?= dev
+image:
+	@echo "Building $(IMAGE):$(TAG)..."
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(TAG) .
+	@echo "✓ Image built: $(IMAGE):$(TAG)"
 
 # Run tests
 test:
