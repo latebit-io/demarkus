@@ -156,6 +156,15 @@ tests:
           path: spec.template.spec.containers[0].livenessProbe.exec.command
           content: "mark://localhost:6309/.well-known/agent-manifest.md"
 
+  - it: container image is the demarkus-server repo and relies on ENTRYPOINT
+    template: statefulset.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/latebit-io/demarkus-server:'
+      - notExists:
+          path: spec.template.spec.containers[0].command
+
   - it: volumeClaimTemplates provisions content PVC
     template: statefulset.yaml
     set:

@@ -1,4 +1,4 @@
-.PHONY: all protocol server client tools test clean install help lint
+.PHONY: all protocol server client tools image image-server image-broker image-agent test clean install help lint fmt vet deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -12,7 +12,8 @@ help:
 	@echo "  protocol  - Build protocol library"
 	@echo "  server    - Build demarkus-server"
 	@echo "  client    - Build demarkus TUI client"
-	@echo "  tools     - Build development tools"
+	@echo "  tools     - Build broker, token, publish (tools/bin/)"
+	@echo "  image     - Build server + broker + agent container images (TAG overridable)"
 	@echo "  test      - Run all tests"
 	@echo "  lint      - Run golangci-lint on all modules"
 	@echo "  clean     - Remove build artifacts"
@@ -34,8 +35,7 @@ protocol:
 server: protocol
 	@echo "Building demarkus-server..."
 	cd server && go build -o bin/demarkus-server ./cmd/demarkus-server
-	cd server && go build -o bin/demarkus-token ./cmd/demarkus-token
-	@echo "✓ Server built: server/bin/demarkus-server, server/bin/demarkus-token"
+	@echo "✓ Server built: server/bin/demarkus-server"
 
 # Build client
 client: protocol
@@ -49,9 +49,37 @@ client: protocol
 # Build tools
 tools: protocol
 	@echo "Building tools..."
-	cd tools && go build ./...
-	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-broker ./demarkus-broker
-	@echo "✓ Tools built: tools/bin/demarkus-broker"
+	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-broker  ./demarkus-broker
+	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-token   ./demarkus-token
+	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-publish ./demarkus-publish
+	@echo "✓ Tools built: tools/bin/{demarkus-broker, demarkus-token, demarkus-publish}"
+
+# Build container images. One image per deployable service so each pod
+# carries only the binaries it needs at runtime. Admin CLIs are NOT
+# bundled — they ship as standalone binaries via goreleaser archives.
+#
+# Each Dockerfile uses repo root as build context so it can reach across
+# go module boundaries (server image needs both server/ and client/ for
+# the CLI used by exec probes).
+IMAGE_REGISTRY ?= ghcr.io/latebit-io
+TAG            ?= dev
+
+image: image-server image-broker image-agent
+
+image-server:
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-server:$(TAG)..."
+	docker build --build-arg VERSION=$(VERSION) -f server/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-server:$(TAG) .
+	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-server:$(TAG)"
+
+image-broker:
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-broker:$(TAG)..."
+	docker build --build-arg VERSION=$(VERSION) -f tools/demarkus-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-broker:$(TAG) .
+	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-broker:$(TAG)"
+
+image-agent:
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-agent:$(TAG)..."
+	docker build --build-arg VERSION=$(VERSION) -f client/cmd/demarkus-agent/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-agent:$(TAG) .
+	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-agent:$(TAG)"
 
 # Run tests
 test:

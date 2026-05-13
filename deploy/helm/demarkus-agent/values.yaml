@@ -2,6 +2,8 @@
 # Override with --values or --set on `helm install`.
 
 image:
+  # Single-binary image; demarkus-agent is ENTRYPOINT. The agent runs
+  # as a daemon with no probes today, so no CLI is bundled.
   repository: ghcr.io/latebit-io/demarkus-agent
   # tag defaults to .Chart.appVersion when empty
   tag: ""

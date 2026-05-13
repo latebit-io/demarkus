@@ -1,8 +1,18 @@
 suite: deployment
+# deployment.yaml `include`s configmap.yaml and secret.yaml for the
+# checksum/config + checksum/tokens annotations. Both must be in the
+# suite template list for those `include` calls to resolve at render
+# time; otherwise helm-unittest reports "no template ... associated
+# with template gotpl" and every test errors. Per-test `template:`
+# scoping narrows assertions back to deployment.yaml. Same pattern as
+# server `statefulset_test.yaml` post-§6.3.D.1.
 templates:
   - deployment.yaml
+  - configmap.yaml
+  - secret.yaml
 tests:
   - it: renders a Deployment with correct name and labels
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
@@ -21,7 +31,20 @@ tests:
           path: spec.strategy.type
           value: Recreate
 
+  - it: container image is the demarkus-agent repo and relies on ENTRYPOINT
+    template: deployment.yaml
+    set:
+      config.seeds:
+        - mark://team-a:6309
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/latebit-io/demarkus-agent:'
+      - notExists:
+          path: spec.template.spec.containers[0].command
+
   - it: omits --publish when no hubs configured
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
@@ -32,6 +55,7 @@ tests:
           content: --publish
 
   - it: includes --publish when hubs configured
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
@@ -43,6 +67,7 @@ tests:
           content: --publish
 
   - it: includes --per-server when perServer=true
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
@@ -55,6 +80,7 @@ tests:
           content: --per-server
 
   - it: includes --insecure when insecure=true
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
@@ -65,6 +91,7 @@ tests:
           content: --insecure
 
   - it: state volume is emptyDir by default
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
@@ -78,6 +105,7 @@ tests:
           path: spec.template.spec.volumes[?(@.name=="state")].persistentVolumeClaim
 
   - it: state volume is PVC when persistent=true and emits PVC document
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
@@ -103,6 +131,7 @@ tests:
           value: premium-rwo
 
   - it: pod-level securityContext only contains pod-supported fields
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
@@ -122,6 +151,7 @@ tests:
           path: spec.template.spec.securityContext.allowPrivilegeEscalation
 
   - it: container-level securityContext locks down the container
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
@@ -140,6 +170,7 @@ tests:
           content: ALL
 
   - it: tokens volume mounts at /home/demarkus/.mark for tokens.LoadDefault
+    template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309

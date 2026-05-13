@@ -2,7 +2,8 @@
 # Override with --values or --set on `helm install`.
 
 image:
-  # Must include the demarkus-broker binary on PATH at /demarkus-broker.
+  # Single-binary image; demarkus-broker is ENTRYPOINT. HTTP /healthz
+  # and /readyz probes, so no CLI is bundled.
   repository: ghcr.io/latebit-io/demarkus-broker
   # tag defaults to .Chart.appVersion when empty
   tag: ""
