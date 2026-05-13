@@ -1,0 +1,218 @@
+# Default values for demarkus-broker.
+# Override with --values or --set on `helm install`.
+
+image:
+  # Must include the demarkus-broker binary on PATH at /demarkus-broker.
+  repository: ghcr.io/latebit-io/demarkus-broker
+  # tag defaults to .Chart.appVersion when empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Multi-replica HA. Slice C of the broker is stateless modulo k8s Secret
+# writes (resourceVersion optimistic concurrency on world tokens Secret +
+# issuances Secret); the sweeper coordinates via a coordination.k8s.io/Lease
+# so N>=2 replicas is the production posture. Drop to 1 only for dev/trial
+# clusters where you also want to flip sweeper.disabled=true to skip the
+# leader-election overhead.
+replicaCount: 2
+
+server:
+  # HTTP listen port inside the pod. The broker speaks plain HTTP — the
+  # Ingress (shipped in the Ingress slice) terminates TLS. The pod listens
+  # on this port; the Service forwards to it; the deployment renders
+  # containerPort from this value.
+  port: 8080
+
+  # Signed-state-cookie HMAC key, base64-encoded. When empty the chart
+  # generates a fresh 32-byte key on first install and preserves it across
+  # `helm upgrade` via `lookup` on the existing config Secret. Override only
+  # if you want to manage the key out-of-band (rotate by setting a new value
+  # and bouncing the broker; any in-flight login is invalidated).
+  cookieKey: ""
+
+  # State cookie TTL. Long enough for a real user to complete the OIDC
+  # redirect, short enough that a stale cookie cannot be replayed.
+  stateTTL: 5m
+
+  # Namespace the broker itself runs in. Defaults to the release namespace
+  # via the helper; override only if the issuances Secret lives elsewhere
+  # (rare).
+  brokerNamespace: ""
+
+  # Secret name for the broker's issuance state (label -> {email, world,
+  # ...}). Default derived from the release name. The Secret is created
+  # with `helm.sh/resource-policy: keep` so `helm upgrade` and
+  # `helm uninstall` never wipe broker-minted issuance records.
+  issuancesSecret: ""
+
+oidc:
+  # OIDC discovery URL (e.g. https://accounts.google.com).
+  issuer: ""
+  # OAuth client ID registered at the IdP.
+  clientID: ""
+  # OAuth client secret. Two modes:
+  #   1. Cleartext via this field — chart bakes it into the config Secret.
+  #      Easiest install path; the value lives in helm release history.
+  #   2. existingSecretRef — point at an externally-managed Secret created
+  #      by External Secrets Operator / Sealed Secrets / kubectl. The
+  #      Ingress slice wires this mode end-to-end; not yet plumbed here.
+  clientSecret: ""
+  # Public URL of /auth/callback. Must exactly match the redirect URI
+  # registered with the IdP.
+  redirectURL: ""
+
+# Per-world authorization. Each entry produces one Role + RoleBinding in
+# the world's namespace (RBAC slice) granting the broker SA get/patch on
+# the named tokens Secret.
+worlds: []
+  # - name: team-a
+  #   namespace: team-a
+  #   tokensSecret: team-a-tokens
+  #   allow:
+  #     domains: ["nesto.ca"]
+  #     groups: ["engineering"]
+  #     emails: ["alice@example.com"]
+  #   defaultToken:
+  #     paths: ["/team-a/*"]
+  #     operations: ["read", "publish"]
+  #     expiresAfter: 24h
+
+# Periodic expiry + drift sweeper. Leader-elected via
+# coordination.k8s.io/Lease so multi-replica deployments enforce
+# singleton sweep without coordination on the broker side. Named
+# `disabled` (not `enabled`) so the YAML zero-value is the
+# production-safe behavior — omit the block and the sweeper runs.
+sweeper:
+  disabled: false
+  interval: 5m
+  leaseName: demarkus-broker-sweeper
+
+# Per-subject + per-IP token-bucket rate limiting. Same `disabled`-not-
+# `enabled` naming so omission keeps the protection on. Defaults match
+# plan §6.2 Slice C.4: 10/min subject burst 5 (shared across the three
+# /tokens routes), 20/min IP burst 5 on /auth/login.
+#
+# trustForwardedFor: the chart default is true because the broker's
+# deployment posture is "behind an Ingress that strips spoofed
+# X-Forwarded-For and appends the real client IP." This INVERTS the
+# binary's default (false). The Ingress slice wires the controller-side
+# XFF stripping so the per-IP limiter on /auth/login is effective.
+# Flip to false only when running the broker without an Ingress in
+# front (dev / port-forward).
+rateLimit:
+  disabled: false
+  tokens:
+    perMinute: 10
+    burst: 5
+  login:
+    perMinute: 20
+    burst: 5
+  trustForwardedFor: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Liveness + readiness use the broker's own /healthz and /readyz HTTP
+# endpoints (unauthed and rate-limit-bypassed by design — Slice C.4 §Routes).
+probes:
+  enabled: true
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # Workload Identity (GKE) annotation — sets iam.gke.io/gcp-service-account
+  # so the broker SA impersonates the named GSA without static keys.
+  workloadIdentity:
+    gsa: ""
+
+# RBAC ships in the RBAC slice. Schema declared here so values structure
+# is stable.
+rbac:
+  # When true (default), the chart creates per-world Role + RoleBinding
+  # in each world's namespace plus a broker-namespace Role for the
+  # sweeper Lease and the issuances Secret. Flip to false if your
+  # cluster manages RBAC out-of-band (operator policies, GitOps Roles).
+  create: true
+
+# NetworkPolicy ships in the RBAC slice. Schema declared here so values
+# structure is stable.
+networkPolicy:
+  enabled: true
+  # Ingress controller namespace selector — broker accepts inbound HTTP
+  # only from pods in this namespace. Override to match your controller
+  # (defaults assume nginx-ingress in namespace `ingress-nginx`).
+  ingressFromNamespace: ingress-nginx
+
+# PodDisruptionBudget ships in the RBAC slice. Schema declared here so
+# values structure is stable.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Ingress + cert-manager ship in the Ingress slice. Schema declared here
+# so values structure is stable.
+ingress:
+  enabled: false
+  className: nginx
+  host: ""
+  annotations: {}
+  tls:
+    existingSecret: ""
+    certManager:
+      enabled: false
+      issuerRef:
+        kind: ClusterIssuer
+        name: letsencrypt-prod
+      annotations: {}
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+# TopologySpreadConstraints keep the two replicas off the same node when
+# possible. ScheduleAnyway so the broker still schedules on
+# single-node clusters or when capacity is tight.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels: {} # filled by deployment template using selector labels
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
