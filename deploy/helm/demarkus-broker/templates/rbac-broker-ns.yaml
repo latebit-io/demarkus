@@ -1,0 +1,48 @@
+{{- if .Values.rbac.create }}
+{{- /* Broker-namespace RBAC: the broker SA's access to its own state.
+
+   - coordination.k8s.io/leases: the sweeper's leader-election Lease. Both
+     get/update are scoped to the configured lease name; create is in the
+     same rule because Helm install needs to seed the Lease on first
+     leadership acquisition. The k8s RBAC "create cannot be restricted by
+     resourceName" caveat means create effectively allows any Lease in
+     this namespace — acceptable scope since the namespace is broker-owned.
+
+   - secrets: the chart-created issuances Secret. Only get/update needed
+     since the chart's secret-issuances.yaml seeds it at install time; the
+     broker never needs to bootstrap it at runtime. */ -}}
+{{- $brokerNs := include "demarkus-broker.brokerNamespace" . -}}
+{{- $name := include "demarkus-broker.fullname" . -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $brokerNs }}
+  labels:
+    {{- include "demarkus-broker.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: [{{ .Values.sweeper.leaseName | quote }}]
+    verbs: ["get", "create", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ include "demarkus-broker.issuancesSecretName" . | quote }}]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $brokerNs }}
+  labels:
+    {{- include "demarkus-broker.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "demarkus-broker.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+{{- end }}
