@@ -401,6 +401,15 @@ func (i *Issuer) Revoke(ctx context.Context, callerEmail, label string) error {
 //     Callers detect via `result.Label != ""` and treat as 200 with a
 //     warn log. Matches the Slice B partial-mint convention.
 func (i *Issuer) RotateLabel(ctx context.Context, claims Claims, label string) (MintResult, error) {
+	// Defense in depth: mirror Mint's email-verified gate. The
+	// production Verifier rejects unverified ID tokens before they
+	// reach this layer, but a future Verifier impl (or a test
+	// double) might not — and rotation extends access, so the cost
+	// of an unverified-identity rotation slipping through is exactly
+	// the same as the original Mint footgun this guards against.
+	if !claims.EmailVerified {
+		return MintResult{}, ErrEmailUnverified
+	}
 	// Same canonicalization as Mint — the persisted issuance email
 	// is lowercase+trim, so the owner-check compare needs the
 	// caller's email in the same form.
@@ -422,7 +431,12 @@ func (i *Issuer) RotateLabel(ctx context.Context, claims Claims, label string) (
 	if found == nil {
 		return MintResult{}, ErrNotFound
 	}
-	if found.Email != claims.Email {
+	// EqualFold rather than == so admin-tooled or pre-canonicalization
+	// issuance rows still match a canonical caller email. Forward
+	// traffic from Mint always lands with canonical iss.Email so the
+	// two are equivalent; this is the defense-in-depth shape for
+	// non-canonical legacy entries, matching Revoke's owner check.
+	if !strings.EqualFold(found.Email, claims.Email) {
 		return MintResult{}, ErrNotOwner
 	}
 	world := i.lookupWorld(found.World)

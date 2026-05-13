@@ -10,10 +10,15 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // testHTTPTimeout caps every test request against the in-process broker so
@@ -512,6 +517,96 @@ func TestRotateTokenNotFound(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestRotateTokenSoftPartial(t *testing.T) {
+	// The handler's "mint succeeded, old revoke failed" branch is
+	// the most consequential code path on the rotate response —
+	// callers see 200 with a fresh token but the old label is still
+	// live in both Secrets until the sweeper retires it on expiry.
+	// Reactor strategy: count Updates against team-a's tokens
+	// Secret. The mint phase writes the new label as Update #1 and
+	// must pass. The revoke phase writes the old-label removal as
+	// Update #2 and we fail it with ServiceUnavailable (mutateSecret
+	// only retries on Conflict, so the unavailable propagates).
+	// Result: the new label is committed, the old label is NOT
+	// removed, and the handler returns 200 because the user's
+	// rotation succeeded from their perspective.
+	k8s := fake.NewSimpleClientset()
+	cfg := testConfig()
+	i := newIssuer(t, cfg, k8s)
+	minted, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed mint: %v", err)
+	}
+	oldLabel := minted[0].Label
+
+	var teamAUpdates atomic.Int32
+	k8s.PrependReactor("update", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ua, ok := action.(k8stesting.UpdateAction)
+		if !ok || ua.GetNamespace() != "team-a" {
+			return false, nil, nil
+		}
+		n := teamAUpdates.Add(1)
+		if n >= 2 {
+			// Second team-a update is the revoke phase's removal
+			// of the old label. Simulate a transient k8s API blip
+			// — mutateSecret only retries on Conflict so this
+			// error propagates straight up to revokeIssuance.
+			return true, nil, apierrors.NewServiceUnavailable("simulated transient blip during old-label revoke")
+		}
+		return false, nil, nil
+	})
+
+	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, cfg, verifier, k8s)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/"+oldLabel+"/rotate", http.NoBody)
+	req.Header.Set("Authorization", "Bearer alice-id-token")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s — soft-partial path must still return 200", resp.StatusCode, body)
+	}
+	var got MintResult
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Label == "" || got.Label == oldLabel {
+		t.Errorf("new label = %q, want non-empty and != old %q", got.Label, oldLabel)
+	}
+	if got.RawToken == "" {
+		t.Error("RawToken empty in soft-partial response")
+	}
+
+	// World Secret: BOTH labels still present — the old one
+	// because revoke failed, the new one because mint succeeded.
+	// The sweeper will retire the old on expiry.
+	worldSecret, err := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get world Secret: %v", err)
+	}
+	gotTOML := string(worldSecret.Data[TokensSecretKey])
+	if !strings.Contains(gotTOML, oldLabel) {
+		t.Errorf("old label gone from world Secret despite failed revoke:\n%s", gotTOML)
+	}
+	if !strings.Contains(gotTOML, got.Label) {
+		t.Errorf("new label missing from world Secret on soft-partial:\n%s", gotTOML)
+	}
+
+	// Issuances Secret: both entries too. Owner alice now has TWO
+	// live issuances; this is the transient state the sweeper
+	// resolves on expiry.
+	live, err := i.List(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(live) != 2 {
+		t.Errorf("issuances after soft-partial rotate = %d, want 2 (old + new live until sweep)", len(live))
 	}
 }
 

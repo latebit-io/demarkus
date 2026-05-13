@@ -870,6 +870,36 @@ func TestRotateLabelHappyPath(t *testing.T) {
 	}
 }
 
+func TestRotateLabelRejectsUnverifiedEmail(t *testing.T) {
+	// Defense-in-depth gate mirrored from Mint. The production
+	// Verifier short-circuits unverified ID tokens before they reach
+	// RotateLabel, but a test double or a future Verifier impl might
+	// not, and rotation extends access — so an unverified rotation
+	// is the same threat as an unverified mint. ErrEmailUnverified
+	// returned, original token left untouched.
+	k8s := fake.NewSimpleClientset()
+	issuer := newIssuer(t, testConfig(), k8s)
+	minted, err := issuer.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed Mint: %v", err)
+	}
+
+	_, err = issuer.RotateLabel(context.Background(), Claims{Email: "alice@example.com", EmailVerified: false}, minted[0].Label)
+	if !errors.Is(err, ErrEmailUnverified) {
+		t.Errorf("err = %v, want ErrEmailUnverified", err)
+	}
+	// Original token still alive in both Secrets — no state
+	// mutation on the unverified-reject path.
+	worldSecret, _ := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	if !strings.Contains(string(worldSecret.Data[TokensSecretKey]), minted[0].Label) {
+		t.Errorf("original label removed from world Secret after unverified-reject rotate")
+	}
+	live, _ := issuer.List(context.Background(), "alice@example.com")
+	if len(live) != 1 || live[0].Label != minted[0].Label {
+		t.Errorf("issuances mutated by unverified-reject rotate: %+v", live)
+	}
+}
+
 func TestRotateLabelNotOwner(t *testing.T) {
 	// Alice mints, mallory tries to rotate. Same gate as Revoke's
 	// owner-check: ErrNotOwner, no state change in either Secret.
