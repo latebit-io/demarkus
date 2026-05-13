@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit/demarkus/protocol/store"
 	"github.com/latebit/demarkus/server/internal/auth"
-	"github.com/latebit/demarkus/server/internal/store"
 )
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))

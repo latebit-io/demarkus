@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit/demarkus/protocol/store"
 	"github.com/latebit/demarkus/server/internal/auth"
-	"github.com/latebit/demarkus/server/internal/store"
 )
 
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
