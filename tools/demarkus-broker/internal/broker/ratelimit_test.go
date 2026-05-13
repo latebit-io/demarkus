@@ -276,7 +276,10 @@ func TestRateLimitTokensCrossSubjectIsolation(t *testing.T) {
 	for i := range 3 {
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
 		req.Header.Set("Authorization", "Bearer alice-token")
-		resp, _ := client.Do(req)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("alice attempt %d: %v", i+1, err)
+		}
 		_ = resp.Body.Close()
 		if i < 2 && resp.StatusCode != http.StatusOK {
 			t.Fatalf("alice attempt %d status = %d, want 200", i+1, resp.StatusCode)
@@ -312,7 +315,10 @@ func TestRateLimitTokensSharedBucketAcrossRoutes(t *testing.T) {
 	// 1st: GET /tokens (200, empty list).
 	req1, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
 	req1.Header.Set("Authorization", "Bearer alice-token")
-	r1, _ := client.Do(req1)
+	r1, err := client.Do(req1)
+	if err != nil {
+		t.Fatalf("1st (GET): %v", err)
+	}
 	_ = r1.Body.Close()
 	if r1.StatusCode != http.StatusOK {
 		t.Fatalf("1st (GET) status = %d, want 200", r1.StatusCode)
@@ -320,7 +326,10 @@ func TestRateLimitTokensSharedBucketAcrossRoutes(t *testing.T) {
 	// 2nd: DELETE /tokens/nope (404 from handler, but counts).
 	req2, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/usr_nope", http.NoBody)
 	req2.Header.Set("Authorization", "Bearer alice-token")
-	r2, _ := client.Do(req2)
+	r2, err := client.Do(req2)
+	if err != nil {
+		t.Fatalf("2nd (DELETE): %v", err)
+	}
 	_ = r2.Body.Close()
 	if r2.StatusCode != http.StatusNotFound {
 		t.Fatalf("2nd (DELETE) status = %d, want 404 (handler-side; rate limit must not fire here)", r2.StatusCode)
@@ -329,7 +338,10 @@ func TestRateLimitTokensSharedBucketAcrossRoutes(t *testing.T) {
 	// because the shared bucket is now empty.
 	req3, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/usr_nope/rotate", http.NoBody)
 	req3.Header.Set("Authorization", "Bearer alice-token")
-	r3, _ := client.Do(req3)
+	r3, err := client.Do(req3)
+	if err != nil {
+		t.Fatalf("3rd (ROTATE): %v", err)
+	}
 	_ = r3.Body.Close()
 	if r3.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("3rd (ROTATE on a different route) status = %d, want 429 — shared-bucket invariant broken", r3.StatusCode)
@@ -386,10 +398,13 @@ func TestRateLimitLoginIPCrossIPIsolation(t *testing.T) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	// IP A: 3 attempts (last 429s).
-	for range 3 {
+	for i := range 3 {
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth/login", http.NoBody)
 		req.Header.Set("X-Forwarded-For", "198.51.100.10")
-		resp, _ := client.Do(req)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("IP A attempt %d: %v", i+1, err)
+		}
 		_ = resp.Body.Close()
 	}
 	// IP B: must pass — independent bucket.
@@ -422,7 +437,10 @@ func TestRateLimitLoginIPIgnoresForwardedForByDefault(t *testing.T) {
 	for i, ip := range []string{"198.51.100.10", "198.51.100.20", "198.51.100.30"} {
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth/login", http.NoBody)
 		req.Header.Set("X-Forwarded-For", ip)
-		resp, _ := client.Do(req)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("attempt %d (XFF=%s): %v", i+1, ip, err)
+		}
 		_ = resp.Body.Close()
 		if i < 2 && resp.StatusCode != http.StatusFound {
 			t.Fatalf("attempt %d status = %d, want 302 within burst", i+1, resp.StatusCode)

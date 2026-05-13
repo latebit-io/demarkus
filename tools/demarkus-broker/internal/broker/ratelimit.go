@@ -55,12 +55,39 @@ func claimsFromCtx(ctx context.Context) (Claims, bool) {
 // (memcached / Redis / k8s Lease-coordinated tokens) is the eventual fix
 // when an operator's deployment actually needs it.
 //
-// No idle-key GC for Slice C.4: the upper bound is (authed subjects) +
-// (recent client IPs). For single-org deployments that's small enough
-// that map growth isn't a concern. When the broker grows past that
-// scale, idle-key GC is a phase-7+ follow-up — a background goroutine
-// scanning for limiters whose token bucket is full (no recent activity)
-// and evicting them.
+// No idle-key GC for Slice C.4. The two registries are bounded by:
+//
+//   - subjectReg keys are hashSubject(claims.Subject). A request only
+//     reaches subjectRateLimit after requireAuth has validated a real
+//     OIDC bearer, so growth is bounded by the IdP's user count (the
+//     attacker cannot inflate the keyspace without first holding valid
+//     IdP-issued tokens, which is itself rate-limited by the IdP).
+//   - loginReg keys come from s.clientIP(r). With trustForwardedFor=false
+//     (default we ship) the key is r.RemoteAddr — bounded by clients
+//     that can actually reach the broker's listener. With
+//     trustForwardedFor=true (chart-side §6.3 flips this on once the
+//     broker sits behind an Ingress that strips spoofed XFF), the key
+//     is the leftmost XFF entry, which a correctly-configured ingress
+//     caps to real client IPs.
+//
+// The unbounded-growth concern is real only when trustForwardedFor=true
+// AND the broker is internet-exposed without a trusted proxy in front —
+// i.e., a deployment misconfiguration the §6.3 chart docs call out. TTL
+// eviction does NOT fix that posture: under active attack an attacker
+// who rotates keys faster than the TTL gets fresh buckets indefinitely
+// (effective rate-limit disappears), and an LRU cap evicts legitimate
+// users' older buckets first while the attacker's freshly-created
+// buckets stay in the map. The defense at the right layer is upstream
+// (cluster-shared rate limiter at the broker pod set, or per-IP
+// rate-limit annotations at the ingress controller); Phase-7+ work.
+//
+// Realistic worst-case sizing for sized-up healthy deployments: a
+// long-running broker pod with ~10k distinct authenticated subjects
+// holds ~10k limiters at ~50 bytes each, ~500KB total. That's not a
+// memory-DoS-shaped quantity. If a customer's broker outgrows that,
+// idle-key GC (scan the sync.Map periodically, evict entries whose
+// token bucket is full + has not seen activity for a TTL) is a clean
+// additive change.
 type rateLimitRegistry struct {
 	mu        sync.Map // key string → *rate.Limiter
 	perMinute int
