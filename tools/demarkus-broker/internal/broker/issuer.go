@@ -142,7 +142,7 @@ func (i *Issuer) Mint(ctx context.Context, claims Claims) ([]MintResult, error) 
 	now := i.clock()
 	results := make([]MintResult, 0, len(worlds))
 	for _, w := range worlds {
-		r, err := i.mintForWorld(ctx, w, claims, now)
+		r, err := i.mintForWorld(ctx, w, claims, now, w.DefaultToken.Paths, w.DefaultToken.Operations)
 		if err != nil {
 			return results, fmt.Errorf("mint for world %s: %w", w.Name, err)
 		}
@@ -240,13 +240,22 @@ func groupsMatch(have, allowed []string) bool {
 	return false
 }
 
-func (i *Issuer) mintForWorld(ctx context.Context, w *WorldConfig, claims Claims, now time.Time) (MintResult, error) {
+// mintForWorld issues one token against w with the given scope
+// (paths + operations) and the world's current expiry policy. Slice
+// B's Mint passes the world's DefaultToken scope; Slice C.3's
+// RotateLabel passes the issuance-recorded scope, deliberately
+// ignoring config-side scope changes between mint and rotate (see
+// plan §Routes — operator scope changes only take effect on next
+// `demarkus login`). Lifetime always uses the operator's current
+// DefaultToken.ExpiresAfter so config-side expiry tightening DOES
+// take effect on rotate; the asymmetry is intentional.
+func (i *Issuer) mintForWorld(ctx context.Context, w *WorldConfig, claims Claims, now time.Time, paths, operations []string) (MintResult, error) {
 	for range maxLabelRetries {
 		label, err := i.labelGen()
 		if err != nil {
 			return MintResult{}, err
 		}
-		minted, err := token.Generate(label, w.DefaultToken.Paths, w.DefaultToken.Operations)
+		minted, err := token.Generate(label, paths, operations)
 		if err != nil {
 			return MintResult{}, fmt.Errorf("generate token: %w", err)
 		}
@@ -267,8 +276,8 @@ func (i *Issuer) mintForWorld(ctx context.Context, w *WorldConfig, claims Claims
 			Label:      label,
 			Email:      claims.Email,
 			World:      w.Name,
-			Paths:      append([]string(nil), w.DefaultToken.Paths...),
-			Operations: append([]string(nil), w.DefaultToken.Operations...),
+			Paths:      append([]string(nil), paths...),
+			Operations: append([]string(nil), operations...),
 			IssuedAt:   now,
 			ExpiresAt:  expiresAt,
 		}
@@ -346,6 +355,105 @@ func (i *Issuer) Revoke(ctx context.Context, callerEmail, label string) error {
 		return ErrNotOwner
 	}
 	return i.revokeIssuance(ctx, found)
+}
+
+// RotateLabel issues a fresh token replacing label, returning the new
+// MintResult. Slice C.3.
+//
+// Authorization model (see plan §Routes "rotate"):
+//
+//  1. Owner check — caller's claims.Email must match the issuance's
+//     stored email. Same gate as Revoke; prevents one user from
+//     rotating another's token.
+//  2. Re-validation — the world's current Allow predicate must still
+//     accept the caller. A user removed from the world's allowlist
+//     between mint and rotate must NOT be able to extend access via
+//     rotation. This is the difference between rotation-as-refresh
+//     (would skip this check) and rotation-as-relogin (this
+//     implementation). The bearer ID-token verification at the HTTP
+//     layer already proves the IdP identity is still active; we add
+//     the per-world predicate to catch in-org permission changes.
+//
+// Scope vs. lifetime asymmetry:
+//
+//   - Scope (paths + operations) stays frozen to the issuance record.
+//     Operator narrowing of DefaultToken.Paths between mint and rotate
+//     does NOT shrink the rotated token's reach; the user re-logs in to
+//     pick up new scope.
+//   - Lifetime resets to now + DefaultToken.ExpiresAfter. Operator
+//     tightening of expiry DOES apply on rotate — the operator's
+//     security tightening trumps the user's lifetime expectation.
+//
+// Sequence: mint new first, then revoke old. On revoke failure the
+// new token is returned anyway and the soft error wraps the revoke
+// failure — the sweeper catches the orphan on expiry. Picked over
+// revoke-then-mint because the alternative leaves the user with no
+// token if mint then fails (which forces a full re-login), worse UX
+// than the briefly-two-valid-tokens window.
+//
+// Returns:
+//   - (minted, nil) on full success.
+//   - (zero MintResult, ErrNotFound/ErrNotOwner/ErrNotAuthorized) on
+//     hard authz failures, BEFORE any state change.
+//   - (zero MintResult, other err) on hard mint failures, also no
+//     state change.
+//   - (minted, err) when new mint succeeded but old revoke failed.
+//     Callers detect via `result.Label != ""` and treat as 200 with a
+//     warn log. Matches the Slice B partial-mint convention.
+func (i *Issuer) RotateLabel(ctx context.Context, claims Claims, label string) (MintResult, error) {
+	// Same canonicalization as Mint — the persisted issuance email
+	// is lowercase+trim, so the owner-check compare needs the
+	// caller's email in the same form.
+	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
+	if claims.Email == "" {
+		return MintResult{}, ErrNotAuthorized
+	}
+	all, err := i.readIssuances(ctx)
+	if err != nil {
+		return MintResult{}, err
+	}
+	var found *Issuance
+	for j := range all.Entries {
+		if all.Entries[j].Label == label {
+			found = &all.Entries[j]
+			break
+		}
+	}
+	if found == nil {
+		return MintResult{}, ErrNotFound
+	}
+	if found.Email != claims.Email {
+		return MintResult{}, ErrNotOwner
+	}
+	world := i.lookupWorld(found.World)
+	if world == nil {
+		return MintResult{}, fmt.Errorf("world %q not configured for label %q", found.World, label)
+	}
+	if !worldAllows(&world.Allow, claims) {
+		return MintResult{}, ErrNotAuthorized
+	}
+	now := i.clock()
+	minted, err := i.mintForWorld(ctx, world, claims, now, found.Paths, found.Operations)
+	if err != nil {
+		return MintResult{}, fmt.Errorf("mint replacement for %s: %w", label, err)
+	}
+	// Snapshot of the old label before mutation; revokeIssuance
+	// removes by iss.Label so passing found directly is safe, but
+	// reading it back from `all.Entries` post-mint would race with
+	// a fresh-mint that re-added it (impossible in practice since
+	// labels are opaque random IDs, but the snapshot makes the
+	// data-flow obvious).
+	oldLabel := found.Label
+	if err := i.revokeIssuance(ctx, found); err != nil {
+		// Partial success: the new token is live and recorded.
+		// The old label stays both in the world Secret and the
+		// issuances Secret; sweep will retire it on expiry (or
+		// drift, if the operator hand-edits the world Secret in
+		// the meantime). Return the new mint plus the wrapped
+		// error so the HTTP layer can log-warn-and-200.
+		return minted, fmt.Errorf("revoke old label %s: %w", oldLabel, err)
+	}
+	return minted, nil
 }
 
 // revokeIssuance executes the two-Secret mutation that retires a token:

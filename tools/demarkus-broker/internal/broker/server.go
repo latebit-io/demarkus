@@ -57,6 +57,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /auth/callback", s.authCallback)
 	mux.HandleFunc("GET /tokens", s.listTokens)
 	mux.HandleFunc("DELETE /tokens/{label}", s.deleteToken)
+	mux.HandleFunc("POST /tokens/{label}/rotate", s.rotateToken)
 	return mux
 }
 
@@ -221,6 +222,56 @@ func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.log.ErrorContext(r.Context(), "broker: revoke failed", "label", label, "err", err)
 		http.Error(w, "revoke failed", http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) rotateToken(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	label := r.PathValue("label")
+	if label == "" {
+		http.Error(w, "label is required", http.StatusBadRequest)
+		return
+	}
+	minted, err := s.issuer.RotateLabel(r.Context(), claims, label)
+	switch {
+	case err == nil:
+		s.log.InfoContext(r.Context(), "broker: rotate succeeded",
+			"old", label, "new", minted.Label,
+			"world", minted.World, "subject", hashSubject(claims.Subject))
+		writeJSON(w, http.StatusOK, minted)
+	case errors.Is(err, ErrNotFound):
+		http.Error(w, "label not found", http.StatusNotFound)
+	case errors.Is(err, ErrNotOwner):
+		s.log.WarnContext(r.Context(), "broker: rotate owner mismatch",
+			"label", label, "subject", hashSubject(claims.Subject))
+		http.Error(w, "not the token owner", http.StatusForbidden)
+	case errors.Is(err, ErrNotAuthorized):
+		// Caller's bearer token is valid but the world's Allow
+		// predicate no longer accepts them (group removed, domain
+		// renamed, email taken off carve-out). Same response shape
+		// as Mint's "no authorized worlds" path.
+		s.log.InfoContext(r.Context(), "broker: rotate denied — caller no longer authorized for world",
+			"label", label, "subject", hashSubject(claims.Subject))
+		http.Error(w, "no longer authorized for this world", http.StatusForbidden)
+	case minted.Label != "":
+		// Soft failure: the new token was minted and recorded
+		// successfully, but the old-label revoke failed (k8s API
+		// blip, transient RBAC issue, etc.). The user's rotation
+		// completed from their perspective — return 200 with the
+		// new token; the sweeper will retire the orphan old label
+		// on expiry or via drift if the operator hand-cleans.
+		// Logging at WARN so operators see the soft failure without
+		// it tripping HTTP error-rate alerts.
+		s.log.WarnContext(r.Context(), "broker: rotate partial — old label not revoked",
+			"old", label, "new", minted.Label,
+			"world", minted.World, "subject", hashSubject(claims.Subject), "err", err)
+		writeJSON(w, http.StatusOK, minted)
+	default:
+		s.log.ErrorContext(r.Context(), "broker: rotate failed", "label", label, "err", err)
+		http.Error(w, "rotate failed", http.StatusInternalServerError)
 	}
 }
 

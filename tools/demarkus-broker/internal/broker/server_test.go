@@ -400,6 +400,137 @@ func TestDeleteTokenNotFound(t *testing.T) {
 	}
 }
 
+func TestRotateTokenSuccess(t *testing.T) {
+	// Bearer-authed POST /tokens/{label}/rotate returns 200 with the
+	// new MintResult JSON. Alice mints, then rotates; verifier is
+	// configured to return alice's identity on bearer verify so the
+	// owner check passes.
+	k8s := fake.NewSimpleClientset()
+	cfg := testConfig()
+	i := newIssuer(t, cfg, k8s)
+	minted, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed mint: %v", err)
+	}
+	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, cfg, verifier, k8s)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/"+minted[0].Label+"/rotate", http.NoBody)
+	req.Header.Set("Authorization", "Bearer alice-id-token")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	var got MintResult
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Label == "" || got.Label == minted[0].Label {
+		t.Errorf("new label = %q, want non-empty and != old %q", got.Label, minted[0].Label)
+	}
+	if got.RawToken == "" {
+		t.Error("RawToken empty in rotate response")
+	}
+	if got.World != "team-a" {
+		t.Errorf("world = %q, want team-a", got.World)
+	}
+}
+
+func TestRotateTokenNotOwner(t *testing.T) {
+	// Alice mints, mallory tries to rotate. Verifier returns mallory's
+	// claims for the bearer; owner check inside RotateLabel fails →
+	// 403 (matches the DELETE owner-check shape from Slice B).
+	k8s := fake.NewSimpleClientset()
+	cfg := testConfig()
+	i := newIssuer(t, cfg, k8s)
+	minted, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed mint: %v", err)
+	}
+	verifier := &fakeVerifier{claims: Claims{Email: "mallory@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, cfg, verifier, k8s)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/"+minted[0].Label+"/rotate", http.NoBody)
+	req.Header.Set("Authorization", "Bearer mallory-id-token")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestRotateTokenNoLongerAuthorized(t *testing.T) {
+	// Operator tightened the Allow predicate between mint and rotate
+	// to a domain alice no longer matches. Bearer is still valid
+	// (IdP didn't disable her account) but the world's allowlist
+	// rejects → 403 with the "no longer authorized" message. This
+	// is the rotate-as-relogin half of the re-auth story; without
+	// this gate a user removed from a group could rotate forever.
+	k8s := fake.NewSimpleClientset()
+	cfg := testConfig()
+	cfg.Worlds[0].Allow = AllowConfig{Domains: []string{"example.com"}}
+	i := newIssuer(t, cfg, k8s)
+	minted, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed mint: %v", err)
+	}
+	cfg.Worlds[0].Allow = AllowConfig{Domains: []string{"other.example"}}
+
+	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, cfg, verifier, k8s)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/"+minted[0].Label+"/rotate", http.NoBody)
+	req.Header.Set("Authorization", "Bearer alice-id-token")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestRotateTokenNotFound(t *testing.T) {
+	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
+	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/usr_nope/rotate", http.NoBody)
+	req.Header.Set("Authorization", "Bearer some-id-token")
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestRotateTokenUnauthenticated(t *testing.T) {
+	// No bearer at all → 401 from the shared authenticate helper,
+	// before RotateLabel even runs. Same shape as the equivalent
+	// DELETE and GET /tokens unauthenticated guards.
+	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/whatever/rotate", http.NoBody)
+	resp, err := testClient(srv).Do(req)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
 // Sanity guard so the clock override on Server is exercised at least once.
 func TestServerClockExposed(t *testing.T) {
 	cfg := testConfig()
