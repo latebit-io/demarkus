@@ -404,13 +404,17 @@ func TestLoadConfigOIDCClientSecretEnvOverride(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// t.Setenv unsets on test cleanup so each row is isolated;
-			// not calling Setenv when setEnv=false ensures the var is
-			// unset for that case (parent process is not expected to
-			// have it set during `go test`).
-			if tt.setEnv {
-				t.Setenv("OIDC_CLIENT_SECRET", tt.envVal)
+			// Always Setenv to make the test deterministic regardless of
+			// whether the parent CI shell happens to have OIDC_CLIENT_SECRET
+			// exported. t.Setenv restores the previous value (including
+			// "unset") on test cleanup. Empty value is treated as unset by
+			// applyEnvOverrides, which is the property the setEnv=false
+			// case is asserting.
+			envVal := tt.envVal
+			if !tt.setEnv {
+				envVal = ""
 			}
+			t.Setenv("OIDC_CLIENT_SECRET", envVal)
 			body := strings.Replace(validConfig,
 				"clientSecret: shh",
 				"clientSecret: "+strconv.Quote(tt.fileVal), 1)

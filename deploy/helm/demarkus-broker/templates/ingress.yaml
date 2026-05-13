@@ -2,6 +2,14 @@
 {{- if not .Values.ingress.host }}
 {{- fail "ingress.host is required when ingress.enabled is true" }}
 {{- end }}
+{{- /* existingSecret and certManager.enabled are mutually exclusive
+       operator-facing modes. Allowing both would silently render an
+       Ingress pointing at existingSecret while certificate.yaml emitted
+       a cert-manager Certificate trying to manage a different Secret;
+       fail-fast keeps the TLS-source contract unambiguous. */ -}}
+{{- if and .Values.ingress.tls.existingSecret .Values.ingress.tls.certManager.enabled }}
+{{- fail "ingress.tls.existingSecret and ingress.tls.certManager.enabled are mutually exclusive; set exactly one" }}
+{{- end }}
 {{- $tlsSecret := "" -}}
 {{- if .Values.ingress.tls.existingSecret -}}
 {{- $tlsSecret = .Values.ingress.tls.existingSecret -}}
