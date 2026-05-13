@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -808,5 +809,288 @@ func TestMintRBACDeniedNoPartialState(t *testing.T) {
 	}
 	if live[0].World != "team-a" {
 		t.Errorf("issuance world = %q, want team-a", live[0].World)
+	}
+}
+
+func TestRotateLabelHappyPath(t *testing.T) {
+	// End-to-end: mint via Issuer.Mint, rotate the resulting label,
+	// assert the new MintResult is well-formed and the world/issuance
+	// Secrets reflect exactly the new label (old gone from both).
+	// This pins the basic "mint new, revoke old" sequence on the
+	// happy path.
+	k8s := fake.NewSimpleClientset()
+	issuer := newIssuer(t, testConfig(), k8s)
+	minted, err := issuer.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed Mint: %v", err)
+	}
+	oldLabel := minted[0].Label
+	oldToken := minted[0].RawToken
+
+	rotated, err := issuer.RotateLabel(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, oldLabel)
+	if err != nil {
+		t.Fatalf("RotateLabel: %v", err)
+	}
+	if rotated.Label == "" || rotated.Label == oldLabel {
+		t.Errorf("new label = %q, want non-empty and != old %q", rotated.Label, oldLabel)
+	}
+	if rotated.RawToken == "" || rotated.RawToken == oldToken {
+		t.Errorf("new RawToken empty or unchanged from old")
+	}
+	if rotated.World != "team-a" {
+		t.Errorf("world = %q, want team-a", rotated.World)
+	}
+
+	// World Secret: only the new label present.
+	worldSecret, err := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get world Secret: %v", err)
+	}
+	gotTOML := string(worldSecret.Data[TokensSecretKey])
+	if strings.Contains(gotTOML, oldLabel) {
+		t.Errorf("old label still in world Secret after rotate:\n%s", gotTOML)
+	}
+	if !strings.Contains(gotTOML, rotated.Label) {
+		t.Errorf("new label missing from world Secret:\n%s", gotTOML)
+	}
+
+	// Issuances Secret: only the new label, with same scope, same email.
+	live, err := issuer.List(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(live) != 1 {
+		t.Fatalf("issuances after rotate = %d, want 1", len(live))
+	}
+	if live[0].Label != rotated.Label {
+		t.Errorf("issuance label = %q, want rotated label %q", live[0].Label, rotated.Label)
+	}
+	if live[0].Email != "alice@example.com" {
+		t.Errorf("issuance email = %q, want alice@example.com (canonical)", live[0].Email)
+	}
+}
+
+func TestRotateLabelRejectsUnverifiedEmail(t *testing.T) {
+	// Defense-in-depth gate mirrored from Mint. The production
+	// Verifier short-circuits unverified ID tokens before they reach
+	// RotateLabel, but a test double or a future Verifier impl might
+	// not, and rotation extends access — so an unverified rotation
+	// is the same threat as an unverified mint. ErrEmailUnverified
+	// returned, original token left untouched.
+	k8s := fake.NewSimpleClientset()
+	issuer := newIssuer(t, testConfig(), k8s)
+	minted, err := issuer.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed Mint: %v", err)
+	}
+
+	_, err = issuer.RotateLabel(context.Background(), Claims{Email: "alice@example.com", EmailVerified: false}, minted[0].Label)
+	if !errors.Is(err, ErrEmailUnverified) {
+		t.Errorf("err = %v, want ErrEmailUnverified", err)
+	}
+	// Original token still alive in both Secrets — no state
+	// mutation on the unverified-reject path.
+	worldSecret, _ := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	if !strings.Contains(string(worldSecret.Data[TokensSecretKey]), minted[0].Label) {
+		t.Errorf("original label removed from world Secret after unverified-reject rotate")
+	}
+	live, _ := issuer.List(context.Background(), "alice@example.com")
+	if len(live) != 1 || live[0].Label != minted[0].Label {
+		t.Errorf("issuances mutated by unverified-reject rotate: %+v", live)
+	}
+}
+
+func TestRotateLabelNotOwner(t *testing.T) {
+	// Alice mints, mallory tries to rotate. Same gate as Revoke's
+	// owner-check: ErrNotOwner, no state change in either Secret.
+	k8s := fake.NewSimpleClientset()
+	issuer := newIssuer(t, testConfig(), k8s)
+	minted, err := issuer.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed Mint: %v", err)
+	}
+	oldLabel := minted[0].Label
+
+	_, err = issuer.RotateLabel(context.Background(), Claims{Email: "mallory@example.com", EmailVerified: true}, oldLabel)
+	if !errors.Is(err, ErrNotOwner) {
+		t.Fatalf("err = %v, want ErrNotOwner", err)
+	}
+
+	// Alice's token must still be intact in both Secrets.
+	worldSecret, _ := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	if !strings.Contains(string(worldSecret.Data[TokensSecretKey]), oldLabel) {
+		t.Errorf("alice's label vanished from world Secret after mallory's failed rotate")
+	}
+	live, _ := issuer.List(context.Background(), "alice@example.com")
+	if len(live) != 1 || live[0].Label != oldLabel {
+		t.Errorf("alice's issuance changed after mallory's failed rotate: %+v", live)
+	}
+}
+
+func TestRotateLabelUnknownLabel(t *testing.T) {
+	k8s := fake.NewSimpleClientset()
+	issuer := newIssuer(t, testConfig(), k8s)
+
+	_, err := issuer.RotateLabel(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, "usr_nope")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRotateLabelPreservesIssuanceScope(t *testing.T) {
+	// The plan's central rotate semantic: scope (paths + operations)
+	// stays frozen to the issuance record across rotation. Operator
+	// narrowing of DefaultToken.Paths between mint and rotate must
+	// NOT shrink the rotated token's reach — that only happens on
+	// next demarkus login. Lifetime, by contrast, DOES update to the
+	// operator's current DefaultToken.ExpiresAfter (separate test
+	// below would cover the lifetime side; here we only need to pin
+	// scope).
+	cfg := testConfig()
+	cfg.Worlds[0].DefaultToken.Paths = []string{"/team-a/wide/*", "/team-a/other/*"}
+	cfg.Worlds[0].DefaultToken.Operations = []string{"read", "publish"}
+	k8s := fake.NewSimpleClientset()
+	issuer := newIssuer(t, cfg, k8s)
+	minted, err := issuer.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed Mint: %v", err)
+	}
+	oldLabel := minted[0].Label
+
+	// Operator narrows DefaultToken between mint and rotate.
+	// (Mutating the shared config is fine here — newIssuer captured
+	// the same *Config pointer, but the issuance record's scope was
+	// snapshot at mint time and stored in the issuances Secret.)
+	cfg.Worlds[0].DefaultToken.Paths = []string{"/team-a/narrow/*"}
+	cfg.Worlds[0].DefaultToken.Operations = []string{"read"}
+
+	rotated, err := issuer.RotateLabel(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, oldLabel)
+	if err != nil {
+		t.Fatalf("RotateLabel: %v", err)
+	}
+
+	// New issuance record carries the ORIGINAL scope, not the
+	// narrowed DefaultToken.
+	live, _ := issuer.List(context.Background(), "alice@example.com")
+	if len(live) != 1 || live[0].Label != rotated.Label {
+		t.Fatalf("issuances = %+v, want one entry matching rotated", live)
+	}
+	wantPaths := []string{"/team-a/wide/*", "/team-a/other/*"}
+	if !slices.Equal(live[0].Paths, wantPaths) {
+		t.Errorf("paths = %v, want %v (issuance-frozen, not config-current)", live[0].Paths, wantPaths)
+	}
+	wantOps := []string{"read", "publish"}
+	if !slices.Equal(live[0].Operations, wantOps) {
+		t.Errorf("operations = %v, want %v (issuance-frozen)", live[0].Operations, wantOps)
+	}
+
+	// World Secret entry for the new label carries the original
+	// scope too — the server is the one that enforces paths/ops, so
+	// what's written here is what the user can actually do.
+	worldSecret, _ := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
+	gotTOML := string(worldSecret.Data[TokensSecretKey])
+	if !strings.Contains(gotTOML, `paths = ["/team-a/wide/*", "/team-a/other/*"]`) {
+		t.Errorf("world Secret entry does not carry original paths:\n%s", gotTOML)
+	}
+}
+
+func TestRotateLabelLifetimeUpdatesToCurrentConfig(t *testing.T) {
+	// The other half of the scope-vs-lifetime asymmetry: lifetime
+	// resets to now + DefaultToken.ExpiresAfter on rotate, using the
+	// operator's CURRENT config. If the operator tightens expiry,
+	// rotation honors the new shorter lifetime — that's an explicit
+	// security-tightening lever and rotation must not bypass it.
+	cfg := testConfig()
+	cfg.Worlds[0].DefaultToken.ExpiresAfter = 24 * time.Hour
+	k8s := fake.NewSimpleClientset()
+	issuer := newIssuer(t, cfg, k8s)
+	minted, err := issuer.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed Mint: %v", err)
+	}
+
+	// Tighten expiry to 1 hour and rotate.
+	cfg.Worlds[0].DefaultToken.ExpiresAfter = 1 * time.Hour
+
+	rotated, err := issuer.RotateLabel(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, minted[0].Label)
+	if err != nil {
+		t.Fatalf("RotateLabel: %v", err)
+	}
+
+	// newIssuer pins the clock to 2026-05-11 12:00 UTC; expect the
+	// new token to expire 1h later (the tightened lifetime), not 24h
+	// later (the original).
+	wantExpiry := time.Date(2026, 5, 11, 13, 0, 0, 0, time.UTC)
+	if !rotated.ExpiresAt.Equal(wantExpiry) {
+		t.Errorf("ExpiresAt = %v, want %v (1h after pinned clock — operator tightening must apply)",
+			rotated.ExpiresAt, wantExpiry)
+	}
+}
+
+func TestRotateLabelReauthorizesAgainstCurrentAllow(t *testing.T) {
+	// Rotate-as-relogin: if the user no longer qualifies under the
+	// world's current Allow predicate (operator removed their group,
+	// renamed their domain, took them off the email carve-out),
+	// rotation must reject. Without re-auth, a fired user could keep
+	// rotating forever as long as the IdP still issues ID tokens.
+	cfg := testConfig()
+	cfg.Worlds[0].Allow = AllowConfig{Domains: []string{"example.com"}}
+	k8s := fake.NewSimpleClientset()
+	issuer := newIssuer(t, cfg, k8s)
+	minted, err := issuer.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("seed Mint: %v", err)
+	}
+
+	// Operator tightens the allowlist to a different domain. Alice's
+	// email no longer qualifies.
+	cfg.Worlds[0].Allow = AllowConfig{Domains: []string{"other.example"}}
+
+	_, err = issuer.RotateLabel(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, minted[0].Label)
+	if !errors.Is(err, ErrNotAuthorized) {
+		t.Errorf("err = %v, want ErrNotAuthorized", err)
+	}
+
+	// Alice's original token must remain intact — rotate failed
+	// before any state mutation. (No new label minted, no old label
+	// revoked.)
+	live, _ := issuer.List(context.Background(), "alice@example.com")
+	if len(live) != 1 || live[0].Label != minted[0].Label {
+		t.Errorf("issuances after denied rotate = %+v, want unchanged from original", live)
+	}
+}
+
+func TestRotateLabelMissingWorldErrors(t *testing.T) {
+	// Pre-seed an issuance pointing at a world the broker has no
+	// config for (admin removed the world between mint and rotate).
+	// RotateLabel must surface the misconfiguration rather than
+	// silently treating it as no-op or 5xx-swallowing; same
+	// conservative posture as Revoke.
+	cfg := testConfig()
+	orphan := Issuance{
+		Label:      "usr_orphan",
+		Email:      "alice@example.com",
+		World:      "team-removed",
+		Paths:      []string{"/team-removed/*"},
+		Operations: []string{"read"},
+		IssuedAt:   time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC),
+		ExpiresAt:  time.Date(2026, 5, 12, 10, 0, 0, 0, time.UTC),
+	}
+	payload, err := json.Marshal(Issuances{Entries: []Issuance{orphan}})
+	if err != nil {
+		t.Fatalf("marshal seed: %v", err)
+	}
+	k8s := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: testIssuancesNS, Namespace: testBrokerNS},
+		Data:       map[string][]byte{IssuancesSecretKey: payload},
+	})
+	issuer := newIssuer(t, cfg, k8s)
+
+	_, err = issuer.RotateLabel(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, "usr_orphan")
+	if err == nil {
+		t.Fatal("RotateLabel returned nil, want error for missing world")
+	}
+	if !strings.Contains(err.Error(), "team-removed") {
+		t.Errorf("error %q does not name the orphaned world", err)
 	}
 }
