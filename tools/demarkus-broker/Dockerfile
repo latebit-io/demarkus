@@ -17,7 +17,7 @@ COPY tools/    tools/
 ARG VERSION=dev
 ENV CGO_ENABLED=0
 
-RUN cd tools && go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-broker ./demarkus-broker
+RUN go build -C tools -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-broker ./demarkus-broker
 
 FROM scratch
 # Trust store for outbound TLS. The broker calls the OIDC issuer's

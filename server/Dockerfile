@@ -26,8 +26,8 @@ COPY client/   client/
 ARG VERSION=dev
 ENV CGO_ENABLED=0
 
-RUN cd server && go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-server ./cmd/demarkus-server
-RUN cd client && go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus        ./cmd/demarkus
+RUN go build -C server -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-server ./cmd/demarkus-server
+RUN go build -C client -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus        ./cmd/demarkus
 
 FROM scratch
 COPY --from=build /out/demarkus-server /demarkus-server

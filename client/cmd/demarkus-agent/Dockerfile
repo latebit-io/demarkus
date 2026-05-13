@@ -19,7 +19,7 @@ COPY client/   client/
 ARG VERSION=dev
 ENV CGO_ENABLED=0
 
-RUN cd client && go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-agent ./cmd/demarkus-agent
+RUN go build -C client -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-agent ./cmd/demarkus-agent
 
 FROM scratch
 # Trust store for outbound TLS. The agent crawls remote mark:// servers
