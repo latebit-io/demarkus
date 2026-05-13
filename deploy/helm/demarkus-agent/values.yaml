@@ -2,9 +2,9 @@
 # Override with --values or --set on `helm install`.
 
 image:
-  # Unified demarkus image bundling every deployable binary. The chart
-  # selects `demarkus-agent` via the container's `command:` field.
-  repository: ghcr.io/latebit-io/demarkus
+  # Single-binary image; demarkus-agent is ENTRYPOINT. The agent runs
+  # as a daemon with no probes today, so no CLI is bundled.
+  repository: ghcr.io/latebit-io/demarkus-agent
   # tag defaults to .Chart.appVersion when empty
   tag: ""
   pullPolicy: IfNotPresent

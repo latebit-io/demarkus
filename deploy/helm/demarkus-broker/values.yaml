@@ -2,9 +2,9 @@
 # Override with --values or --set on `helm install`.
 
 image:
-  # Unified demarkus image bundling every deployable binary. The chart
-  # selects `demarkus-broker` via the container's `command:` field.
-  repository: ghcr.io/latebit-io/demarkus
+  # Single-binary image; demarkus-broker is ENTRYPOINT. HTTP /healthz
+  # and /readyz probes, so no CLI is bundled.
+  repository: ghcr.io/latebit-io/demarkus-broker
   # tag defaults to .Chart.appVersion when empty
   tag: ""
   pullPolicy: IfNotPresent

@@ -40,8 +40,6 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          command:
-            - /demarkus-agent
           args:
             - daemon
             - --config

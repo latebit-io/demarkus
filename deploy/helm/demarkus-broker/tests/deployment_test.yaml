@@ -25,20 +25,14 @@ tests:
           path: spec.strategy.type
           value: RollingUpdate
 
-  - it: container image uses AppVersion when image.tag empty
+  - it: container image uses AppVersion when image.tag empty and relies on ENTRYPOINT
     template: deployment.yaml
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/latebit-io/demarkus:0.1.0
-
-  - it: container command selects the broker binary from the unified image
-    template: deployment.yaml
-    asserts:
-      - equal:
+          value: ghcr.io/latebit-io/demarkus-broker:0.1.0
+      - notExists:
           path: spec.template.spec.containers[0].command
-          value:
-            - /demarkus-broker
 
   - it: checksum/config annotation present so config changes roll the pod
     template: deployment.yaml

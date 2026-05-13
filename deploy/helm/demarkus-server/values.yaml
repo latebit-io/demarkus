@@ -2,11 +2,11 @@
 # Override with --values or --set on `helm install`.
 
 image:
-  # Unified demarkus image bundling every deployable binary. The chart
-  # selects `demarkus-server` via the container's `command:` field; the
-  # exec probes invoke the bundled `demarkus` CLI on /. Bootstrap and
-  # broker integration consume the bundled `demarkus-token`.
-  repository: ghcr.io/latebit-io/demarkus
+  # Bundles demarkus-server (ENTRYPOINT) and the demarkus CLI used by
+  # the StatefulSet's exec probes. Admin CLIs (demarkus-token,
+  # demarkus-publish) live outside the runtime image; see
+  # tools/.goreleaser.yml for their distribution.
+  repository: ghcr.io/latebit-io/demarkus-server
   # tag defaults to .Chart.appVersion when empty
   tag: ""
   pullPolicy: IfNotPresent

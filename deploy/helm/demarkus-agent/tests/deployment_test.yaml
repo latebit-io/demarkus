@@ -31,18 +31,7 @@ tests:
           path: spec.strategy.type
           value: Recreate
 
-  - it: container command selects the agent binary from the unified image
-    template: deployment.yaml
-    set:
-      config.seeds:
-        - mark://team-a:6309
-    asserts:
-      - equal:
-          path: spec.template.spec.containers[0].command
-          value:
-            - /demarkus-agent
-
-  - it: container image is the unified ghcr.io/latebit-io/demarkus repo
+  - it: container image is the demarkus-agent repo and relies on ENTRYPOINT
     template: deployment.yaml
     set:
       config.seeds:
@@ -50,7 +39,9 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].image
-          pattern: '^ghcr\.io/latebit-io/demarkus:'
+          pattern: '^ghcr\.io/latebit-io/demarkus-agent:'
+      - notExists:
+          path: spec.template.spec.containers[0].command
 
   - it: omits --publish when no hubs configured
     template: deployment.yaml

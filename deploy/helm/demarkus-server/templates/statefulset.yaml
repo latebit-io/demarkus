@@ -38,8 +38,6 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          command:
-            - /demarkus-server
           args:
             - -port
             - {{ .Values.server.udpPort | quote }}

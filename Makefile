@@ -1,4 +1,4 @@
-.PHONY: all protocol server client tools image test clean install help lint fmt vet deps
+.PHONY: all protocol server client tools image image-server image-broker image-agent test clean install help lint fmt vet deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -13,7 +13,7 @@ help:
 	@echo "  server    - Build demarkus-server"
 	@echo "  client    - Build demarkus TUI client"
 	@echo "  tools     - Build broker, token, publish (tools/bin/)"
-	@echo "  image     - Build unified container image (IMAGE/TAG overridable)"
+	@echo "  image     - Build server + broker + agent container images (TAG overridable)"
 	@echo "  test      - Run all tests"
 	@echo "  lint      - Run golangci-lint on all modules"
 	@echo "  clean     - Remove build artifacts"
@@ -54,15 +54,32 @@ tools: protocol
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-publish ./demarkus-publish
 	@echo "✓ Tools built: tools/bin/{demarkus-broker, demarkus-token, demarkus-publish}"
 
-# Build the unified container image. Bakes every deployable binary into a
-# single scratch-based image; each chart picks which binary runs via its
-# pod spec's `command:` field.
-IMAGE ?= ghcr.io/latebit-io/demarkus
-TAG   ?= dev
-image:
-	@echo "Building $(IMAGE):$(TAG)..."
-	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(TAG) .
-	@echo "✓ Image built: $(IMAGE):$(TAG)"
+# Build container images. One image per deployable service so each pod
+# carries only the binaries it needs at runtime. Admin CLIs are NOT
+# bundled — they ship as standalone binaries via goreleaser archives.
+#
+# Each Dockerfile uses repo root as build context so it can reach across
+# go module boundaries (server image needs both server/ and client/ for
+# the CLI used by exec probes).
+IMAGE_REGISTRY ?= ghcr.io/latebit-io
+TAG            ?= dev
+
+image: image-server image-broker image-agent
+
+image-server:
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-server:$(TAG)..."
+	docker build --build-arg VERSION=$(VERSION) -f server/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-server:$(TAG) .
+	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-server:$(TAG)"
+
+image-broker:
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-broker:$(TAG)..."
+	docker build --build-arg VERSION=$(VERSION) -f tools/demarkus-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-broker:$(TAG) .
+	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-broker:$(TAG)"
+
+image-agent:
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-agent:$(TAG)..."
+	docker build --build-arg VERSION=$(VERSION) -f client/cmd/demarkus-agent/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-agent:$(TAG) .
+	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-agent:$(TAG)"
 
 # Run tests
 test:

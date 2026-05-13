@@ -1,5 +1,7 @@
 # Keep the build context minimal so unrelated edits don't invalidate
-# Docker's layer cache and `docker build` stays fast.
+# Docker's layer cache and `docker build` stays fast. Applies to every
+# image build at repo root (server/, broker/, agent/ Dockerfiles all use
+# `.` as context).
 .git/
 .github/
 docs/
@@ -11,6 +13,5 @@ trials/
 **/*.out
 **/coverage.*
 **/.mark/
-Dockerfile
 .dockerignore
 *.md
