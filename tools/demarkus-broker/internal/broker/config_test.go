@@ -247,6 +247,85 @@ func TestLoadConfig(t *testing.T) {
       groups: ["engineering", "   "]`, 1),
 			wantErr: "allow.groups[1] is empty",
 		},
+		{
+			// Plan §6.2 Slice C.4 defaults: tokens 10/min burst 5,
+			// login 20/min burst 5. Operator omitting the block
+			// gets the production-safe values applied at validate
+			// — same shape as sweeper.interval defaulting.
+			name: "rateLimit defaults applied when block omitted",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				if c.RateLimit.Disabled {
+					t.Error("rateLimit.disabled = true, want false default")
+				}
+				if c.RateLimit.Tokens.PerMinute != 10 {
+					t.Errorf("rateLimit.tokens.perMinute = %d, want 10", c.RateLimit.Tokens.PerMinute)
+				}
+				if c.RateLimit.Tokens.Burst != 5 {
+					t.Errorf("rateLimit.tokens.burst = %d, want 5", c.RateLimit.Tokens.Burst)
+				}
+				if c.RateLimit.Login.PerMinute != 20 {
+					t.Errorf("rateLimit.login.perMinute = %d, want 20", c.RateLimit.Login.PerMinute)
+				}
+				if c.RateLimit.Login.Burst != 5 {
+					t.Errorf("rateLimit.login.burst = %d, want 5", c.RateLimit.Login.Burst)
+				}
+				if c.RateLimit.TrustForwardedFor {
+					t.Error("rateLimit.trustForwardedFor = true, want false default")
+				}
+			},
+		},
+		{
+			name: "rateLimit operator overrides honored",
+			body: validConfig + "rateLimit:\n  tokens:\n    perMinute: 60\n    burst: 10\n  login:\n    perMinute: 120\n    burst: 20\n  trustForwardedFor: true\n",
+			validate: func(t *testing.T, c *Config) {
+				if c.RateLimit.Tokens.PerMinute != 60 || c.RateLimit.Tokens.Burst != 10 {
+					t.Errorf("tokens = %+v, want 60/10", c.RateLimit.Tokens)
+				}
+				if c.RateLimit.Login.PerMinute != 120 || c.RateLimit.Login.Burst != 20 {
+					t.Errorf("login = %+v, want 120/20", c.RateLimit.Login)
+				}
+				if !c.RateLimit.TrustForwardedFor {
+					t.Error("trustForwardedFor not honored")
+				}
+			},
+		},
+		{
+			// disabled=true skips default-filling and value
+			// validation, so an operator who explicitly opts out
+			// can omit the per-route knobs entirely.
+			name: "rateLimit disabled bypasses field defaults",
+			body: validConfig + "rateLimit:\n  disabled: true\n",
+			validate: func(t *testing.T, c *Config) {
+				if !c.RateLimit.Disabled {
+					t.Error("disabled not honored")
+				}
+				if c.RateLimit.Tokens.PerMinute != 0 || c.RateLimit.Login.PerMinute != 0 {
+					t.Errorf("perMinute filled in despite disabled=true: tokens=%d login=%d",
+						c.RateLimit.Tokens.PerMinute, c.RateLimit.Login.PerMinute)
+				}
+			},
+		},
+		{
+			name:    "rateLimit.tokens.perMinute negative rejected",
+			body:    validConfig + "rateLimit:\n  tokens:\n    perMinute: -1\n    burst: 5\n",
+			wantErr: "rateLimit.tokens.perMinute must be >= 1",
+		},
+		{
+			name:    "rateLimit.tokens.burst negative rejected",
+			body:    validConfig + "rateLimit:\n  tokens:\n    perMinute: 10\n    burst: -1\n",
+			wantErr: "rateLimit.tokens.burst must be >= 1",
+		},
+		{
+			name:    "rateLimit.login.perMinute negative rejected",
+			body:    validConfig + "rateLimit:\n  login:\n    perMinute: -1\n    burst: 5\n",
+			wantErr: "rateLimit.login.perMinute must be >= 1",
+		},
+		{
+			name:    "rateLimit.login.burst negative rejected",
+			body:    validConfig + "rateLimit:\n  login:\n    perMinute: 20\n    burst: -1\n",
+			wantErr: "rateLimit.login.burst must be >= 1",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

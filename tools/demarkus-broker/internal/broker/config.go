@@ -15,10 +15,11 @@ import (
 // is authorized to mint tokens for. The world Tokens Secrets live in each
 // world's namespace; the issuances Secret lives in the broker's namespace.
 type Config struct {
-	Server  ServerConfig  `yaml:"server"`
-	OIDC    OIDCConfig    `yaml:"oidc"`
-	Worlds  []WorldConfig `yaml:"worlds"`
-	Sweeper SweeperConfig `yaml:"sweeper"`
+	Server    ServerConfig    `yaml:"server"`
+	OIDC      OIDCConfig      `yaml:"oidc"`
+	Worlds    []WorldConfig   `yaml:"worlds"`
+	Sweeper   SweeperConfig   `yaml:"sweeper"`
+	RateLimit RateLimitConfig `yaml:"rateLimit"`
 }
 
 // ServerConfig holds the broker's own runtime settings — listen address,
@@ -153,6 +154,61 @@ type SweeperConfig struct {
 	LeaseName string `yaml:"leaseName"`
 }
 
+// RateLimitConfig caps per-subject and per-IP request rates against the
+// broker's HTTP surface (Slice C.4). Per-replica only: each broker pod
+// keeps its own in-memory limiter, so the effective rate seen by an
+// abusive client is up to N× the configured value in a multi-replica
+// deployment. Documented as a §Risks bullet; cluster-shared rate
+// limiting is a Phase 7+ follow-up when a customer's scale needs it.
+//
+// Defaults come from plan §6.2 Slice C.4: 10/min subject on /tokens,
+// /tokens/:label DELETE, /tokens/:label/rotate (single shared bucket,
+// burst 5); 20/min IP on /auth/login (burst 5). Operators tighten or
+// loosen via YAML.
+type RateLimitConfig struct {
+	// Disabled is the opt-out switch, same naming convention as
+	// SweeperConfig.Disabled. Zero-value (false) means the limiter
+	// runs with the configured rates, so an operator who omits the
+	// rateLimit block in their values file still gets the protection.
+	Disabled bool `yaml:"disabled"`
+	// Tokens governs the per-subject bucket shared across GET
+	// /tokens, DELETE /tokens/:label, and POST /tokens/:label/rotate.
+	// One shared bucket means a misbehaving client cannot multiply
+	// its effective rate by fanning out across the three routes.
+	Tokens RateLimitRouteConfig `yaml:"tokens"`
+	// Login governs the per-IP bucket on GET /auth/login. The
+	// callback is intentionally not rate-limited at this layer: the
+	// signed state cookie (HMAC-SHA256, 5-minute TTL) is the natural
+	// rate gate on /auth/callback, and adding an IP bucket there
+	// would penalize legitimate redirects from heavily-NATted
+	// corporate networks where many users share an egress IP.
+	Login RateLimitRouteConfig `yaml:"login"`
+	// TrustForwardedFor opts the IP limiter into honoring the
+	// leftmost X-Forwarded-For entry as the client IP. Default false
+	// because trusting XFF when the broker is not actually behind a
+	// proxy lets an attacker spoof the header to bypass per-IP
+	// limits. Operators flip this to true once the broker is
+	// deployed behind an Ingress/LB that strips spoofed XFF and
+	// appends the real client IP.
+	TrustForwardedFor bool `yaml:"trustForwardedFor"`
+}
+
+// RateLimitRouteConfig is the per-bucket knobs for a route group. Both
+// fields are required when the parent block is present and Disabled is
+// false; validation surfaces missing values at load rather than letting
+// a zero-rate limiter reject every request at runtime.
+type RateLimitRouteConfig struct {
+	// PerMinute is the steady-state replenishment rate in events per
+	// minute. We expose minutes (not events/sec) so the operator-
+	// facing knob matches the human-scale numbers in the plan.
+	PerMinute int `yaml:"perMinute"`
+	// Burst is the size of the token bucket, i.e. the largest sudden
+	// spike accepted before throttling kicks in. Must be >= 1; a
+	// zero burst with positive PerMinute would never accept any
+	// request because the limiter starts with an empty bucket.
+	Burst int `yaml:"burst"`
+}
+
 // TokenScope is the capability bundle every token minted for a given
 // world carries. Paths + Operations are written verbatim into the server-
 // readable tokens.toml; ExpiresAfter is the lifetime applied to each
@@ -257,6 +313,40 @@ func (c *Config) validate() error {
 	}
 	if c.Sweeper.LeaseName == "" {
 		c.Sweeper.LeaseName = "demarkus-broker-sweeper"
+	}
+	return c.RateLimit.applyDefaultsAndValidate()
+}
+
+// applyDefaultsAndValidate fills in plan §6.2 Slice C.4 defaults for the
+// rate-limit knobs and rejects negative values. Per-field defaults are
+// applied only when Disabled is false, so a fully-opted-out config can
+// leave the per-route blocks empty without tripping validation. Extracted
+// from validate() to keep both functions inside the gocyclo budget.
+func (r *RateLimitConfig) applyDefaultsAndValidate() error {
+	if r.Disabled {
+		return nil
+	}
+	if r.Tokens.PerMinute == 0 {
+		r.Tokens.PerMinute = 10
+	}
+	if r.Tokens.Burst == 0 {
+		r.Tokens.Burst = 5
+	}
+	if r.Login.PerMinute == 0 {
+		r.Login.PerMinute = 20
+	}
+	if r.Login.Burst == 0 {
+		r.Login.Burst = 5
+	}
+	switch {
+	case r.Tokens.PerMinute < 0:
+		return fmt.Errorf("rateLimit.tokens.perMinute must be >= 1 (got %d)", r.Tokens.PerMinute)
+	case r.Tokens.Burst < 0:
+		return fmt.Errorf("rateLimit.tokens.burst must be >= 1 (got %d)", r.Tokens.Burst)
+	case r.Login.PerMinute < 0:
+		return fmt.Errorf("rateLimit.login.perMinute must be >= 1 (got %d)", r.Login.PerMinute)
+	case r.Login.Burst < 0:
+		return fmt.Errorf("rateLimit.login.burst must be >= 1 (got %d)", r.Login.Burst)
 	}
 	return nil
 }
