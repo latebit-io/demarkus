@@ -22,5 +22,14 @@ ENV CGO_ENABLED=0
 RUN cd client && go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-agent ./cmd/demarkus-agent
 
 FROM scratch
+# Trust store for outbound TLS. The agent crawls remote mark:// servers
+# whose QUIC TLS certificates require validation when `insecure: false`
+# (the chart's production default). Without this bundle, the agent's
+# fetch handshakes fail against any non-self-signed peer.
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/demarkus-agent /demarkus-agent
+# Match the chart's podSecurityContext.runAsUser so the image runs
+# non-root even when deployed outside k8s. Defense-in-depth on top of
+# the chart's runAsNonRoot: true.
+USER 65532:65532
 ENTRYPOINT ["/demarkus-agent"]

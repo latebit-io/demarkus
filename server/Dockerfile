@@ -32,5 +32,10 @@ RUN cd client && go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/de
 FROM scratch
 COPY --from=build /out/demarkus-server /demarkus-server
 COPY --from=build /out/demarkus        /demarkus
+# Match the chart's podSecurityContext.runAsUser so the image runs
+# non-root even when deployed outside k8s (plain `docker run`, CI
+# runners, etc.). The chart enforces this via runAsNonRoot: true; the
+# Dockerfile-level USER is defense-in-depth.
+USER 65532:65532
 EXPOSE 6309/udp
 ENTRYPOINT ["/demarkus-server"]
