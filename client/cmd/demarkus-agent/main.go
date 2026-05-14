@@ -29,10 +29,20 @@ var logger = newLogger()
 
 func newLogger() *slog.Logger {
 	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
-	if strings.EqualFold(os.Getenv("DEMARKUS_LOG_FORMAT"), "json") {
+	// Validate explicitly so a typo (DEMARKUS_LOG_FORMAT=jsno) fails fast
+	// at startup rather than silently producing text logs an operator's
+	// JSON-aware log shipper can't parse.
+	format := strings.ToLower(strings.TrimSpace(os.Getenv("DEMARKUS_LOG_FORMAT")))
+	switch format {
+	case "", "text":
+		return slog.New(slog.NewTextHandler(os.Stderr, opts))
+	case "json":
 		return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+	default:
+		fmt.Fprintf(os.Stderr, "invalid DEMARKUS_LOG_FORMAT=%q (expected: json|text)\n", format)
+		os.Exit(2)
+		return nil
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, opts))
 }
 
 // fatal logs at ERROR level with the provided fields and exits non-zero.
