@@ -46,7 +46,12 @@ helm upgrade --install "$RELEASE" "$SERVER_CHART" \
   --values "$VALUES_FILE" \
   --wait --timeout 5m
 
-POD="${RELEASE}-demarkus-server-0"
+POD_SELECTOR="app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/name=demarkus-server"
+POD=$(kubectl -n "$NAMESPACE" get pods -l "$POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+if [[ -z "$POD" ]]; then
+  echo "no demarkus-server pod found for selector: $POD_SELECTOR" >&2
+  exit 1
+fi
 echo "--- waiting for pod $POD"
 kubectl -n "$NAMESPACE" wait --for=condition=ready "pod/$POD" --timeout=120s
 
@@ -57,13 +62,9 @@ kubectl -n "$NAMESPACE" exec "$POD" -- \
 # The chart emits two Secrets when emitRawValues=true (default):
 #   <release>-demarkus-server-tokens         server-mounted, hash-only TOML
 #   <release>-demarkus-server-token-values   raw admin token
+# We deliberately do not print the token here — a kind dev cluster is
+# ephemeral and the user can pull it on demand with the command shown below.
 TOKEN_SECRET="${RELEASE}-demarkus-server-token-values"
-if kubectl -n "$NAMESPACE" get secret "$TOKEN_SECRET" >/dev/null 2>&1; then
-  echo "--- admin token (from $TOKEN_SECRET):"
-  kubectl -n "$NAMESPACE" get secret "$TOKEN_SECRET" \
-    -o jsonpath='{.data.admin}' | base64 -d
-  echo
-fi
 
 cat <<EOF
 
@@ -77,6 +78,9 @@ service:   $RELEASE-demarkus-server.$NAMESPACE.svc.cluster.local:6309 (UDP)
 interact from inside the cluster:
   kubectl -n $NAMESPACE exec -it $POD -- \\
     demarkus -insecure fetch mark://localhost:6309/.well-known/agent-manifest.md
+
+retrieve the admin token (when you need it):
+  kubectl -n $NAMESPACE get secret $TOKEN_SECRET -o jsonpath='{.data.admin}' | base64 -d
 
 tear down:
   $SCRIPT_DIR/down.sh
