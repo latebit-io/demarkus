@@ -6,7 +6,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,6 +20,27 @@ import (
 
 // version is set at build time via -ldflags.
 var version = "dev"
+
+// logger is the package-level structured logger. Format is text by default
+// and switches to JSON when DEMARKUS_LOG_FORMAT=json — matches the server
+// + broker convention so an operator's log shipper sees the same shape
+// across all three runtime images.
+var logger = newLogger()
+
+func newLogger() *slog.Logger {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	if strings.EqualFold(os.Getenv("DEMARKUS_LOG_FORMAT"), "json") {
+		return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, opts))
+}
+
+// fatal logs at ERROR level with the provided fields and exits non-zero.
+// Replacement for the previous log.Fatalf / log.Fatal pattern.
+func fatal(msg string, args ...any) {
+	logger.Error(msg, args...)
+	os.Exit(1)
+}
 
 func main() {
 	if len(os.Args) > 1 {
@@ -54,7 +75,7 @@ func crawlMain(args []string) {
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parse flags: %v", err)
+		fatal("parse flags", "err", err)
 	}
 
 	// Parse seeds from flag or config.
@@ -69,12 +90,12 @@ func crawlMain(args []string) {
 	// Load config.
 	cfg, err := fedcrawl.Load(*configPath, seedList)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		fatal("load config", "err", err)
 	}
 
 	// Validate.
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("invalid config: %v", err)
+		fatal("invalid config", "err", err)
 	}
 
 	// Create client.
@@ -85,7 +106,7 @@ func crawlMain(args []string) {
 	// Load state.
 	state, err := fedcrawl.LoadState(*statePath)
 	if err != nil {
-		log.Fatalf("load state: %v", err)
+		fatal("load state", "err", err)
 	}
 
 	// Load tokens.
@@ -98,29 +119,30 @@ func crawlMain(args []string) {
 	defer cancel()
 
 	if *verbose {
-		log.Printf("Starting crawl with %d seed(s)", len(cfg.Seeds))
+		logger.Info("crawl: starting", "seeds", len(cfg.Seeds))
 	}
 
 	start := time.Now()
 	result, err := crawler.Run(ctx)
 	if err != nil {
-		log.Fatalf("crawl failed: %v", err)
+		fatal("crawl: failed", "err", err)
 	}
 
 	elapsed := time.Since(start)
 
 	if *verbose {
-		log.Printf("Crawl complete in %s", elapsed.Round(time.Millisecond))
-		log.Printf("  Servers discovered: %d", result.ServersDiscovered)
-		log.Printf("  Documents crawled:  %d", result.DocumentsCrawled)
-		log.Printf("  Hashes collected:   %d", result.HashesCollected)
-		if len(result.Errors) > 0 {
-			log.Printf("  Errors: %d", len(result.Errors))
-			for _, e := range result.Errors {
-				log.Printf("    - %s", e)
-			}
+		logger.Info("crawl: complete",
+			"duration_ms", elapsed.Round(time.Millisecond).Milliseconds(),
+			"servers", result.ServersDiscovered,
+			"documents", result.DocumentsCrawled,
+			"hashes", result.HashesCollected,
+			"errors", len(result.Errors))
+		for _, e := range result.Errors {
+			logger.Warn("crawl: error", "detail", e)
 		}
 	} else {
+		// Single-line stdout summary preserved for shell-script parsing.
+		// Not routed through slog because it's user-facing output, not a log event.
 		fmt.Printf("servers=%d docs=%d hashes=%d errors=%d\n",
 			result.ServersDiscovered,
 			result.DocumentsCrawled,
@@ -128,13 +150,13 @@ func crawlMain(args []string) {
 			len(result.Errors))
 	}
 
-	// Publish indexes to hubs if requested
+	// Publish indexes to hubs if requested.
 	if *publish && len(cfg.Hubs) > 0 {
 		pubCount, err := crawler.PublishToHubs(ctx, client, *perServer)
 		if err != nil {
-			log.Printf("[WARN] publish to hubs: %v", err)
+			logger.Warn("publish: hub push failed", "err", err)
 		} else if *verbose {
-			log.Printf("  Published %d index(es) to %d hub(s)", pubCount, len(cfg.Hubs))
+			logger.Info("publish: complete", "indexes", pubCount, "hubs", len(cfg.Hubs))
 		}
 	}
 }
@@ -153,12 +175,12 @@ func daemonMain(args []string) {
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parse flags: %v", err)
+		fatal("parse flags", "err", err)
 	}
 
 	// Validate required flags.
 	if *configPath == "" {
-		log.Fatal("config path is required; use -config flag")
+		fatal("config path is required; use -config flag")
 	}
 
 	// Parse seeds from flag.
@@ -173,12 +195,12 @@ func daemonMain(args []string) {
 	// Load config.
 	cfg, err := fedcrawl.Load(*configPath, seedList)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		fatal("load config", "err", err)
 	}
 
 	// Validate.
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("invalid config: %v", err)
+		fatal("invalid config", "err", err)
 	}
 
 	// Create client.
@@ -189,7 +211,7 @@ func daemonMain(args []string) {
 	// Load state.
 	state, err := fedcrawl.LoadState(*statePath)
 	if err != nil {
-		log.Fatalf("load state: %v", err)
+		fatal("load state", "err", err)
 	}
 
 	// Load tokens.
@@ -197,10 +219,10 @@ func daemonMain(args []string) {
 
 	// Validate interval for daemon mode before starting.
 	if cfg.Schedule.Interval <= 0 {
-		log.Fatal("schedule.interval must be > 0 in daemon mode")
+		fatal("schedule.interval must be > 0 in daemon mode")
 	}
 
-	log.Printf("demarkus-agent daemon starting (interval: %s)", cfg.Schedule.Interval)
+	logger.Info("daemon: starting", "interval", cfg.Schedule.Interval.String())
 
 	// Signal handling.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -216,7 +238,7 @@ func daemonMain(args []string) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("daemon stopping")
+			logger.Info("daemon: stopping")
 			return
 		case <-ticker.C:
 			runCrawl(ctx, &cfg, client, state, tokenStore, *publish, *perServer)
@@ -232,28 +254,28 @@ func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, s
 	elapsed := time.Since(start)
 
 	if err != nil {
-		log.Printf("[ERROR] crawl failed: %v", err)
+		logger.Error("crawl: failed", "err", err)
 		return
 	}
 
-	log.Printf("[INFO] crawl complete in %s: servers=%d docs=%d hashes=%d errors=%d",
-		elapsed.Round(time.Millisecond),
-		result.ServersDiscovered,
-		result.DocumentsCrawled,
-		result.HashesCollected,
-		len(result.Errors))
+	logger.Info("crawl: complete",
+		"duration_ms", elapsed.Round(time.Millisecond).Milliseconds(),
+		"servers", result.ServersDiscovered,
+		"documents", result.DocumentsCrawled,
+		"hashes", result.HashesCollected,
+		"errors", len(result.Errors))
 
 	for _, e := range result.Errors {
-		log.Printf("[WARN] %s", e)
+		logger.Warn("crawl: error", "detail", e)
 	}
 
-	// Publish indexes to hubs if requested
+	// Publish indexes to hubs if requested.
 	if publish && len(cfg.Hubs) > 0 {
 		pubCount, err := crawler.PublishToHubs(ctx, client, perServer)
 		if err != nil {
-			log.Printf("[WARN] publish to hubs: %v", err)
+			logger.Warn("publish: hub push failed", "err", err)
 		} else {
-			log.Printf("[INFO] published %d index(es) to %d hub(s)", pubCount, len(cfg.Hubs))
+			logger.Info("publish: complete", "indexes", pubCount, "hubs", len(cfg.Hubs))
 		}
 	}
 }

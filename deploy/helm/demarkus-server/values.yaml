@@ -25,6 +25,12 @@ server:
   # Reject all write operations (FETCH/LIST/VERSIONS only).
   readOnly: false
 
+  # Log format. "json" (default) produces one structured JSON record per
+  # event for log shippers; "text" produces human-readable key=value lines.
+  # The chart defaults to JSON because production deployments invariably
+  # want machine-parseable logs.
+  logFormat: json
+
   # Extra args appended to the server command line.
   extraArgs: []
 
