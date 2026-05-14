@@ -34,7 +34,7 @@ if kind get clusters | grep -qx "$CLUSTER"; then
   echo "--- kind cluster '$CLUSTER' already exists, reusing"
 else
   echo "--- creating kind cluster '$CLUSTER'"
-  kind create cluster --config "$KIND_CONFIG"
+  kind create cluster --name "$CLUSTER" --config "$KIND_CONFIG"
 fi
 
 kubectl config use-context "kind-$CLUSTER" >/dev/null
@@ -47,7 +47,7 @@ helm upgrade --install "$RELEASE" "$SERVER_CHART" \
   --wait --timeout 5m
 
 POD_SELECTOR="app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/name=demarkus-server"
-POD=$(kubectl -n "$NAMESPACE" get pods -l "$POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+POD=$(kubectl -n "$NAMESPACE" get pods -l "$POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
 if [[ -z "$POD" ]]; then
   echo "no demarkus-server pod found for selector: $POD_SELECTOR" >&2
   exit 1
