@@ -64,7 +64,7 @@ tools: protocol
 # release workflow via the same staging pattern.
 IMAGE_REGISTRY ?= ghcr.io/latebit-io
 TAG            ?= dev
-HOST_ARCH      ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+HOST_ARCH      ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/;s/armv7l/arm/')
 
 image: image-server image-broker image-agent
 
