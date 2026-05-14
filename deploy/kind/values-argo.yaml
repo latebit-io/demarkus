@@ -1,0 +1,13 @@
+# Argo CD chart overrides for the kind harness.
+#
+# Two settings matter for Stage 3:
+#   - helm.enableOCI=true so argocd-repo-server can pull demarkus-server
+#     from oci://ghcr.io/latebit-io/charts (anonymous public registry).
+#   - server.insecure=true so argocd-server speaks plain HTTP behind no TLS;
+#     kind has no ingress controller and we drive everything via port-forward.
+
+configs:
+  cm:
+    helm.enableOCI: "true"
+  params:
+    server.insecure: true

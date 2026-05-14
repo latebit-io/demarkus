@@ -1,0 +1,69 @@
+# Argo CD ApplicationSet — scale demarkus to many worlds from a single list.
+#
+# Each entry in `generators[0].list.elements` templates one Argo Application,
+# which installs the demarkus-server Helm chart from GHCR into its own
+# namespace. To add or remove a world, edit the list and let Argo reconcile.
+#
+# Used by the kind harness at deploy/kind/up.sh --with-argo. Intended as a
+# starting point for a customer GitOps repo — copy, adjust the world list,
+# pin the chart version, and commit.
+#
+# Prerequisites:
+#   - Argo CD installed in the `argocd` namespace.
+#   - Argo CD's repo-server configured with helm.enableOCI=true (see
+#     deploy/kind/values-argo.yaml for the kind reference; production
+#     deployments set the same flag in argocd-cm).
+#
+# Per-world isolation: each Application targets its own namespace, and the
+# demarkus-server chart's bootstrap Job creates the per-world tokens Secret
+# inside that namespace. Worlds are isolated by namespace boundary. Tighter
+# RBAC (an AppProject scoping per-world sync rights to specific teams) is a
+# customer-side extension — wire it against your identity provider's groups.
+
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: demarkus-worlds
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - name: world-a
+          - name: world-b
+  template:
+    metadata:
+      name: "{{name}}"
+    spec:
+      project: default
+      source:
+        repoURL: ghcr.io/latebit-io/charts
+        chart: demarkus-server
+        targetRevision: 0.17.9
+        helm:
+          releaseName: "{{name}}"
+          values: |
+            service:
+              type: ClusterIP
+            storage:
+              size: 1Gi
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{name}}"
+      # The StatefulSet's volumeClaimTemplates entry picks up server-side
+      # defaults (volumeMode, apiVersion/kind, status) that don't exist in
+      # the Helm-rendered manifest. volumeClaimTemplates is immutable on a
+      # StatefulSet, so ignoring drift on the whole block costs nothing
+      # operationally and prevents Argo from looping on a sync it can never
+      # converge.
+      ignoreDifferences:
+        - group: apps
+          kind: StatefulSet
+          jsonPointers:
+            - /spec/volumeClaimTemplates
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
