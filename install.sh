@@ -959,7 +959,7 @@ do_install() {
 
   # Download and install server binaries
   download_and_verify "server" "$version" "$_TMPDIR"
-  install_binaries "$_TMPDIR" "demarkus-server" "demarkus-token"
+  install_binaries "$_TMPDIR" "demarkus-server"
 
   # Download and install client binaries (separate archives)
   local client_version
@@ -974,6 +974,24 @@ do_install() {
   else
     log_warn "Could not find client release, skipping client install"
   fi
+
+  # Download and install admin CLIs from the tools/ release.
+  # demarkus-token + demarkus-publish moved out of the server archive in §6.7.A.
+  local tools_version
+  tools_version=$(fetch_latest_version "tools")
+  if [ -z "$tools_version" ]; then
+    log_error "Could not find tools release — demarkus-token is required for token generation."
+    exit 1
+  fi
+  # Pre-fetch the tools-release checksums file so download_and_verify_asset
+  # can verify each per-binary archive against it.
+  download_asset_file "tools/v${tools_version}" "demarkus-tools_checksums.txt" \
+    "${_TMPDIR}/demarkus-tools_checksums.txt" 2>/dev/null \
+    || log_warn "Could not download tools checksums; per-binary verification will be skipped"
+  download_and_verify_asset "demarkus-token" "$tools_version" "tools" "$_TMPDIR"
+  install_binaries "$_TMPDIR" "demarkus-token"
+  download_and_verify_asset "demarkus-publish" "$tools_version" "tools" "$_TMPDIR"
+  install_binaries "$_TMPDIR" "demarkus-publish"
 
   # Create user before directories (chown needs the user to exist)
   create_system_user
@@ -1092,6 +1110,7 @@ do_install() {
   log_info "Server:    ${INSTALL_DIR}/demarkus-server"
   log_info "Client:    ${INSTALL_DIR}/demarkus"
   log_info "Token tool: ${INSTALL_DIR}/demarkus-token"
+  log_info "Publish tool: ${INSTALL_DIR}/demarkus-publish"
   log_info "Content:   ${content_root}"
   log_info "Config:    ${CONFIG_DIR}/"
   log_info "Tokens:    ${tokens_file}"
@@ -1280,6 +1299,19 @@ _do_update_inner() {
     download_and_verify_asset "demarkus-mcp" "$client_version" "client" "$_TMPDIR"
   fi
 
+  # Download new admin CLIs from the tools/ release.
+  local tools_version
+  tools_version=$(fetch_latest_version "tools")
+  if [ -n "$tools_version" ]; then
+    download_asset_file "tools/v${tools_version}" "demarkus-tools_checksums.txt" \
+      "${_TMPDIR}/demarkus-tools_checksums.txt" 2>/dev/null \
+      || log_warn "Could not download tools checksums; per-binary verification will be skipped"
+    download_and_verify_asset "demarkus-token" "$tools_version" "tools" "$_TMPDIR"
+    download_and_verify_asset "demarkus-publish" "$tools_version" "tools" "$_TMPDIR"
+  else
+    log_warn "Could not find tools release; skipping demarkus-token/demarkus-publish update"
+  fi
+
   # Run migrations before replacing binaries
   migrate "$from" "$to"
 
@@ -1305,11 +1337,15 @@ _do_update_inner() {
   fi
 
   # Replace binaries
-  install_binaries "$_TMPDIR" "demarkus-server" "demarkus-token"
+  install_binaries "$_TMPDIR" "demarkus-server"
   if [ -n "$client_version" ]; then
     install_binaries "$_TMPDIR" "demarkus"
     install_binaries "$_TMPDIR" "demarkus-tui"
     install_binaries "$_TMPDIR" "demarkus-mcp"
+  fi
+  if [ -n "$tools_version" ]; then
+    install_binaries "$_TMPDIR" "demarkus-token"
+    install_binaries "$_TMPDIR" "demarkus-publish"
   fi
 
   # Restart service
@@ -1454,7 +1490,7 @@ do_uninstall() {
   fi
 
   # Remove binaries
-  for bin in demarkus-server demarkus-token demarkus demarkus-tui demarkus-mcp demarkus-install; do
+  for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install; do
     $SUDO rm -f "${INSTALL_DIR}/${bin}"
   done
   log_info "Removed binaries from ${INSTALL_DIR}/"

@@ -76,7 +76,10 @@ download_binary() {
   local dest="$4"
 
   local tag="${component}/v${version}"
-  local archive="demarkus-${component}_${version}_linux_${ARCH}.tar.gz"
+  # Archive name is per-binary (e.g. demarkus-server_..., demarkus-publish_...).
+  # Both server (single-binary archive) and tools (one archive per binary,
+  # post-§6.7.A) follow this shape; the checksums file is per-release.
+  local archive="${binary}_${version}_linux_${ARCH}.tar.gz"
   local checksums="demarkus-${component}_checksums.txt"
   local base_url="https://github.com/${GITHUB_REPO}/releases/download/${tag}"
 
@@ -189,15 +192,20 @@ do_install() {
   cp "${tmpdir}/demarkus-server" "${root}/bin/demarkus-server"
   chmod 755 "${root}/bin/demarkus-server"
 
-  # Also install demarkus-publish to /usr/local/bin (runs outside the chroot)
-  download_binary "server" "$version" "demarkus-publish" "$tmpdir" 2>/dev/null || true
-  if [ -f "${tmpdir}/demarkus-publish" ]; then
-    cp "${tmpdir}/demarkus-publish" /usr/local/bin/demarkus-publish
-    chmod 755 /usr/local/bin/demarkus-publish
-    log_info "Installed demarkus-publish to /usr/local/bin/"
-  else
-    log_warn "demarkus-publish not found in release — build from source or publish via protocol"
+  # Also install demarkus-publish to /usr/local/bin (runs outside the chroot).
+  # demarkus-publish lives in the tools/ release as of §6.7.A; pinned to the
+  # latest tools tag here because read-only installs don't have a CONFIG_DIR
+  # version marker to anchor a coordinated upgrade.
+  local tools_version
+  tools_version=$(fetch_latest_version "tools")
+  if [ -z "$tools_version" ]; then
+    log_error "Could not find tools release — demarkus-publish is required for read-only installs."
+    exit 1
   fi
+  download_binary "tools" "$tools_version" "demarkus-publish" "$tmpdir"
+  cp "${tmpdir}/demarkus-publish" /usr/local/bin/demarkus-publish
+  chmod 755 /usr/local/bin/demarkus-publish
+  log_info "Installed demarkus-publish v${tools_version} to /usr/local/bin/"
 
   rm -rf "$tmpdir"
 
