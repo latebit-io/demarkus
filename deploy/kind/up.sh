@@ -204,28 +204,32 @@ set -eu
 
 BROKER=http://'"$BROKER_RELEASE"'-demarkus-broker.'"$NAMESPACE"'.svc.cluster.local:8080
 
+# Hard timeouts so a DNS or TCP stall fails the smoke test in seconds
+# instead of pinning the kubectl-run pod open until cluster cleanup.
+CURL="curl -sS --connect-timeout 5 --max-time 15"
+
 # 0. Wait for the broker Service to be reachable. helm --wait returned
 #    on /readyz green, but the Service endpoints object can lag the pod-
 #    Ready transition by a second or two, and curl on a fresh pod that
 #    races that window sees "Failed to connect after 1 ms".
 for attempt in $(seq 1 15); do
-  if curl -sS -o /dev/null --max-time 2 "$BROKER/healthz"; then
+  if $CURL -o /dev/null "$BROKER/healthz"; then
     break
   fi
   sleep 2
 done
-curl -sSf -o /dev/null "$BROKER/healthz" || { echo "FAIL: broker unreachable after retries"; exit 1; }
+$CURL -f -o /dev/null "$BROKER/healthz" || { echo "FAIL: broker unreachable after retries"; exit 1; }
 
 # 1. /auth/login — broker signs a state cookie (Secure dropped because
 #    server.insecureCookies=true in values-broker-argo.yaml) and 302s
 #    to mock-oauth2-server.
-curl -sS -c /tmp/cookies -D /tmp/login.h -o /dev/null "$BROKER/auth/login"
+$CURL -c /tmp/cookies -D /tmp/login.h -o /dev/null "$BROKER/auth/login"
 IDP=$(awk "/^[Ll]ocation:/{print \$2}" /tmp/login.h | tr -d "\r")
 [ -n "$IDP" ] || { echo "FAIL: no Location from /auth/login"; cat /tmp/login.h; exit 1; }
 
 # 2. /authorize — mock-oauth2-server is configured with
 #    interactiveLogin=false so it 302s back with code+state.
-curl -sS -D /tmp/idp.h -o /dev/null "$IDP"
+$CURL -D /tmp/idp.h -o /dev/null "$IDP"
 CB=$(awk "/^[Ll]ocation:/{print \$2}" /tmp/idp.h | tr -d "\r")
 [ -n "$CB" ] || { echo "FAIL: no Location from /authorize"; cat /tmp/idp.h; exit 1; }
 
@@ -236,10 +240,15 @@ STATE=$(printf "%s" "$CB" | sed -n "s/.*[?&]state=\([^&]*\).*/\1/p")
 
 # 4. /auth/callback against the broker (not the literal localhost the
 #    IdP redirected to). The state cookie from step 1 replays.
-MINT=$(curl -sS -b /tmp/cookies "$BROKER/auth/callback?code=$CODE&state=$STATE")
-echo "mint response: $MINT"
+MINT=$($CURL -b /tmp/cookies "$BROKER/auth/callback?code=$CODE&state=$STATE")
 
-# 5. Both worlds must appear in the mint response. The broker writes a
+# 5. Print the mint response with the raw bearer tokens redacted. Worlds,
+#    labels, and expiry stay visible for debugging; the secret material
+#    that the broker just minted does NOT land in terminal/CI logs.
+SAFE=$(echo "$MINT" | sed "s/\"token\":\"[^\"]*\"/\"token\":\"REDACTED\"/g")
+echo "mint response: $SAFE"
+
+# 6. Both worlds must appear in the mint response. The broker writes a
 #    token into each world Secret as part of Mint() before returning
 #    200, so this implicitly asserts the cross-namespace RBAC worked.
 echo "$MINT" | grep -q "\"world\":\"world-a\"" || { echo "FAIL: world-a missing from mint response"; exit 1; }
