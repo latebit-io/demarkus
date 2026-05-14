@@ -108,37 +108,6 @@ func TestAuthLoginRedirectsAndSetsStateCookie(t *testing.T) {
 	}
 }
 
-func TestAuthLoginInsecureCookiesDropsSecureFlag(t *testing.T) {
-	cfg := testConfig()
-	cfg.Server.InsecureCookies = true
-	verifier := &fakeVerifier{authURL: "https://idp.example.com/authorize"}
-	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
-
-	client := testClient(srv)
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := client.Get(srv.URL + "/auth/login")
-	if err != nil {
-		t.Fatalf("GET /auth/login: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var stateCookie *http.Cookie
-	for _, c := range resp.Cookies() {
-		if c.Name == stateCookieName {
-			stateCookie = c
-			break
-		}
-	}
-	if stateCookie == nil {
-		t.Fatal("state cookie not set")
-	}
-	if !stateCookie.HttpOnly {
-		t.Errorf("HttpOnly = false, want true (insecureCookies only drops Secure)")
-	}
-	if stateCookie.Secure {
-		t.Errorf("Secure = true, want false when InsecureCookies is set")
-	}
-}
-
 // loginAndExtract simulates the /auth/login leg of the OIDC flow and
 // returns a client whose cookie jar holds the state cookie, plus the
 // nonce from the IdP redirect URL. Callers issue the /auth/callback
@@ -185,6 +154,99 @@ func loginAndExtract(t *testing.T, srv *httptest.Server) (client *http.Client, n
 		t.Fatalf("state cookie not retained by jar — check Secure/Path attributes")
 	}
 	return client, nonce
+}
+
+// TestStateCookieSecureMatchesInsecureCookiesFlag locks BOTH cookie-writing
+// sites (the set on /auth/login and the clear on /auth/callback) against
+// the same flag, so a future change that flips only one is caught here.
+func TestStateCookieSecureMatchesInsecureCookiesFlag(t *testing.T) {
+	tests := []struct {
+		name            string
+		insecureCookies bool
+		wantSecure      bool
+	}{
+		{"default keeps Secure=true on set and clear", false, true},
+		{"InsecureCookies drops Secure on set and clear", true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Server.InsecureCookies = tt.insecureCookies
+			verifier := &fakeVerifier{
+				authURL: "https://idp.example.com/authorize",
+				claims:  Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|123"},
+			}
+			srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
+
+			// Single /auth/login so the jar captures one state cookie
+			// whose nonce we can replay on /auth/callback. A second
+			// /auth/login would rotate the nonce and the callback would
+			// fail at the state-mismatch guard before reaching the
+			// clear-cookie write.
+			jar, err := cookiejar.New(nil)
+			if err != nil {
+				t.Fatalf("cookiejar.New: %v", err)
+			}
+			client := testClient(srv)
+			client.Jar = jar
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+			loginResp, err := client.Get(srv.URL + "/auth/login")
+			if err != nil {
+				t.Fatalf("GET /auth/login: %v", err)
+			}
+			_ = loginResp.Body.Close()
+			setCookie := findStateCookie(loginResp.Cookies())
+			if setCookie == nil {
+				t.Fatal("state cookie not set on /auth/login")
+			}
+			if setCookie.Secure != tt.wantSecure {
+				t.Errorf("login Secure = %v, want %v", setCookie.Secure, tt.wantSecure)
+			}
+			loc, err := url.Parse(loginResp.Header.Get("Location"))
+			if err != nil {
+				t.Fatalf("parse redirect Location: %v", err)
+			}
+			nonce := loc.Query().Get("state")
+			if nonce == "" {
+				t.Fatalf("missing state nonce after /auth/login")
+			}
+
+			// /auth/callback emits a clearing Set-Cookie with MaxAge<0
+			// using the same Secure flag. Verifying it here is the
+			// load-bearing assertion: without this, a regression on the
+			// clear path would slip past the login-path test.
+			req, _ := http.NewRequest(http.MethodGet,
+				srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
+			cbResp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("callback: %v", err)
+			}
+			_ = cbResp.Body.Close()
+			if cbResp.StatusCode != http.StatusOK {
+				t.Fatalf("callback status = %d, want 200 (so clear-cookie write is reached)", cbResp.StatusCode)
+			}
+			clearCookie := findStateCookie(cbResp.Cookies())
+			if clearCookie == nil {
+				t.Fatal("state cookie not cleared on /auth/callback")
+			}
+			if clearCookie.MaxAge >= 0 {
+				t.Errorf("clear MaxAge = %d, want < 0 (cookie should be cleared)", clearCookie.MaxAge)
+			}
+			if clearCookie.Secure != tt.wantSecure {
+				t.Errorf("callback clear Secure = %v, want %v", clearCookie.Secure, tt.wantSecure)
+			}
+		})
+	}
+}
+
+func findStateCookie(cookies []*http.Cookie) *http.Cookie {
+	for _, c := range cookies {
+		if c.Name == stateCookieName {
+			return c
+		}
+	}
+	return nil
 }
 
 func TestAuthCallbackSuccess(t *testing.T) {
