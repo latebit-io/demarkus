@@ -59,6 +59,11 @@ spec:
             # Ensure tokens.LoadDefault() finds the mounted Secret at ~/.mark/tokens.toml.
             - name: HOME
               value: /home/demarkus
+            # JSON-by-default in k8s deployments so log shippers see the
+            # same structured shape across server / broker / agent. Override
+            # to "text" on a debug pod for human-readable output.
+            - name: DEMARKUS_LOG_FORMAT
+              value: {{ .Values.logFormat | default "json" | quote }}
           volumeMounts:
             - name: config
               mountPath: /etc/demarkus

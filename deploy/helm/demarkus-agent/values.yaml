@@ -11,6 +11,12 @@ image:
 
 imagePullSecrets: []
 
+# Log format. "json" (default) produces structured JSON records for log
+# shippers; "text" produces human-readable key=value lines. The chart
+# defaults to JSON because production deployments want machine-parseable
+# logs across server / broker / agent.
+logFormat: json
+
 # Pod count. The agent maintains a crawl-politeness cache on disk;
 # multiple replicas would duplicate work. Keep at 1.
 replicaCount: 1
