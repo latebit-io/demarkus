@@ -293,10 +293,36 @@ jobs:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GORELEASER_CURRENT_TAG: "server/v${{ needs.semver-server.outputs.new_version }}"
 
-      # Multi-stage Dockerfile compiles binaries from source; build context
-      # is the repo root because the server image bundles demarkus + demarkus-
-      # server which live in different go modules. Versions are stamped via
-      # build-args. Multi-arch matches the goreleaser binary matrix.
+      # Stage pre-built binaries into dist/docker/<arch>/ so the Dockerfile
+      # is COPY-only and buildx skips QEMU compilation entirely. demarkus-
+      # server comes from server/.goreleaser.yml above; demarkus CLI lives
+      # in client/ and isn't part of that goreleaser run, so we native
+      # cross-compile it inline (fast — no QEMU because the runner is
+      # amd64 and Go natively cross-compiles to any GOARCH).
+      - name: Stage binaries for Docker build
+        run: |
+          set -euxo pipefail
+          ls dist/
+          mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
+
+          cp dist/demarkus-server_linux_amd64*/demarkus-server dist/docker/amd64/
+          cp dist/demarkus-server_linux_arm64*/demarkus-server dist/docker/arm64/
+          cp dist/demarkus-server_linux_arm_7*/demarkus-server dist/docker/armv7/
+
+          VER="${{ needs.semver-server.outputs.new_version }}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -C client -ldflags="-s -w -X main.version=$VER" \
+              -o ../dist/docker/amd64/demarkus ./cmd/demarkus
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            go build -C client -ldflags="-s -w -X main.version=$VER" \
+              -o ../dist/docker/arm64/demarkus ./cmd/demarkus
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+            go build -C client -ldflags="-s -w -X main.version=$VER" \
+              -o ../dist/docker/armv7/demarkus ./cmd/demarkus
+
+      # Dockerfile is COPY-only over the staged binaries above. Multi-arch
+      # build under QEMU completes in seconds because no Go compile runs
+      # under emulation.
       - name: Build + push demarkus-server image
         uses: docker/build-push-action@v6
         with:
@@ -307,8 +333,6 @@ jobs:
           tags: |
             ghcr.io/latebit-io/demarkus-server:${{ needs.semver-server.outputs.new_version }}
             ghcr.io/latebit-io/demarkus-server:latest
-          build-args: |
-            VERSION=${{ needs.semver-server.outputs.new_version }}
 
       # Chart version + appVersion are pinned 1:1 to the server module
       # version so `helm install ghcr.io/.../charts/demarkus-server --version
@@ -372,10 +396,21 @@ jobs:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GORELEASER_CURRENT_TAG: "client/v${{ needs.semver-client.outputs.new_version }}"
 
+      # Stage pre-built agent binaries (built by client/.goreleaser.yml's
+      # demarkus-agent build entry, image-only — no archive) into
+      # dist/docker/<arch>/ so the Dockerfile is COPY-only and buildx
+      # skips QEMU compilation.
+      - name: Stage binaries for Docker build
+        run: |
+          set -euxo pipefail
+          ls dist/
+          mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
+          cp dist/demarkus-agent_linux_amd64*/demarkus-agent dist/docker/amd64/
+          cp dist/demarkus-agent_linux_arm64*/demarkus-agent dist/docker/arm64/
+          cp dist/demarkus-agent_linux_arm_7*/demarkus-agent dist/docker/armv7/
+
       # demarkus-agent lives in client/cmd/ so it rides the client release
-      # cadence. Multi-stage Dockerfile compiles from source; context is the
-      # repo root because the agent module's tools/ replace directive needs
-      # protocol/ alongside.
+      # cadence. Dockerfile is COPY-only over the staged binaries above.
       - name: Build + push demarkus-agent image
         uses: docker/build-push-action@v6
         with:
@@ -386,8 +421,6 @@ jobs:
           tags: |
             ghcr.io/latebit-io/demarkus-agent:${{ needs.semver-client.outputs.new_version }}
             ghcr.io/latebit-io/demarkus-agent:latest
-          build-args: |
-            VERSION=${{ needs.semver-client.outputs.new_version }}
 
       # Chart version + appVersion pinned 1:1 to the client module version
       # so the agent chart and the agent image released in the same module
@@ -450,10 +483,22 @@ jobs:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GORELEASER_CURRENT_TAG: "tools/v${{ needs.semver-tools.outputs.new_version }}"
 
+      # Stage pre-built broker binary (built by tools/.goreleaser.yml
+      # above) into dist/docker/<arch>/ so the Dockerfile is COPY-only
+      # and buildx skips QEMU compilation.
+      - name: Stage binaries for Docker build
+        run: |
+          set -euxo pipefail
+          ls dist/
+          mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
+          cp dist/demarkus-broker_linux_amd64*/demarkus-broker dist/docker/amd64/
+          cp dist/demarkus-broker_linux_arm64*/demarkus-broker dist/docker/arm64/
+          cp dist/demarkus-broker_linux_arm_7*/demarkus-broker dist/docker/armv7/
+
       # demarkus-broker is the only runtime image in tools/. Admin CLIs
       # (demarkus-token, demarkus-publish) ship as standalone binary archives
       # via goreleaser above and are not bundled into any image — see §6.7.A
-      # decisions on minimal pod blast radius.
+      # decisions on minimal pod blast radius. Dockerfile is COPY-only.
       - name: Build + push demarkus-broker image
         uses: docker/build-push-action@v6
         with:
@@ -464,8 +509,6 @@ jobs:
           tags: |
             ghcr.io/latebit-io/demarkus-broker:${{ needs.semver-tools.outputs.new_version }}
             ghcr.io/latebit-io/demarkus-broker:latest
-          build-args: |
-            VERSION=${{ needs.semver-tools.outputs.new_version }}
 
       # Chart version + appVersion pinned 1:1 to the tools module version so
       # the broker chart and the broker image released in the same bump

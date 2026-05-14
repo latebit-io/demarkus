@@ -3,41 +3,28 @@
 #   /demarkus         — CLI; the helm chart's exec probes invoke it
 #                       against the local server's agent-manifest path
 #
-# Admin CLIs (demarkus-token, demarkus-publish) are NOT bundled —
-# they ship as standalone binaries via tools/.goreleaser.yml so the
-# running server pod's blast radius stays minimal. Operators run them
-# locally or in dedicated Job pods, not via kubectl exec.
+# Pre-built binaries are staged into dist/docker/<arch>/ by the release
+# workflow (and by `make image-server` for local dev). The Dockerfile is
+# COPY-only — no `RUN` step — so a buildx multi-arch build under QEMU
+# completes in seconds instead of minutes (no Go compile under emulation).
 #
-# Build context = repo root so the multi-module source tree
-# (protocol/ + server/ + client/) is reachable from one Dockerfile:
-#   docker build -f server/Dockerfile -t demarkus-server:dev .
+# Build context = repo root. Staged paths the Dockerfile expects:
+#   dist/docker/amd64/{demarkus-server,demarkus}
+#   dist/docker/arm64/{demarkus-server,demarkus}
+#   dist/docker/armv7/{demarkus-server,demarkus}
 #
-# Smoke-tested end-to-end via deploy/kind/up.sh.
-
-FROM golang:1.26-alpine AS build
-WORKDIR /src
-
-COPY protocol/go.mod protocol/go.sum protocol/
-COPY server/go.mod   server/go.sum   server/
-COPY client/go.mod   client/go.sum   client/
-
-COPY protocol/ protocol/
-COPY server/   server/
-COPY client/   client/
-
-ARG VERSION=dev
-ENV CGO_ENABLED=0
-
-RUN go build -C server -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-server ./cmd/demarkus-server
-RUN go build -C client -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus        ./cmd/demarkus
+# Admin CLIs (demarkus-token, demarkus-publish) are NOT bundled — they
+# ship as standalone binaries via tools/.goreleaser.yml so the running
+# server pod's blast radius stays minimal.
 
 FROM scratch
-COPY --from=build /out/demarkus-server /demarkus-server
-COPY --from=build /out/demarkus        /demarkus
+ARG TARGETARCH
+ARG TARGETVARIANT
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus-server /demarkus-server
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus        /demarkus
 # Match the chart's podSecurityContext.runAsUser so the image runs
 # non-root even when deployed outside k8s (plain `docker run`, CI
-# runners, etc.). The chart enforces this via runAsNonRoot: true; the
-# Dockerfile-level USER is defense-in-depth.
+# runners, etc.). Defense-in-depth on top of the chart's runAsNonRoot.
 USER 65532:65532
 EXPOSE 6309/udp
 ENTRYPOINT ["/demarkus-server"]

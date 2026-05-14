@@ -32,6 +32,10 @@ server/bin/
 client/bin/
 tools/bin/
 
+# goreleaser output + Docker build staging dir (image targets cross-
+# compile binaries here before invoking `docker build`).
+dist/
+
 # Stray binaries (built without -o flag)
 client/demarkus
 client/demarkus-tui
