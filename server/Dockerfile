@@ -11,6 +11,8 @@
 # Build context = repo root so the multi-module source tree
 # (protocol/ + server/ + client/) is reachable from one Dockerfile:
 #   docker build -f server/Dockerfile -t demarkus-server:dev .
+#
+# Smoke-tested end-to-end via deploy/kind/up.sh.
 
 FROM golang:1.26-alpine AS build
 WORKDIR /src
