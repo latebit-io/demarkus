@@ -11,7 +11,7 @@ All three services write to stdout/stderr via Go's `log/slog`:
 | Service | Default format | Override |
 |---|---|---|
 | `demarkus-server` | `json` (chart default) | `server.logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
-| `demarkus-broker` | `json` (hardcoded in binary) | not exposed; `tools/demarkus-broker/main.go:48` |
+| `demarkus-broker` | `json` (hardcoded in binary) | not exposed; `tools/demarkus-broker/main.go` |
 | `demarkus-agent` | `json` (chart default) | `logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
 
 The binary's standalone default outside the chart is `text` for server and agent (human-readable for local dev). The Helm charts override to `json` so production deployments are machine-parseable without operator intervention.
@@ -131,6 +131,6 @@ Each backend's docs evolve; the demarkus field schema above is what stays stable
 ## What's NOT in the logs (by design)
 
 - **Raw OIDC subject identifiers or email addresses.** Broker uses `hashSubject()` and never logs `claims.Email` directly. Audit trails for "what did user X do" live in the issuances Secret, not in logs.
-- **Token material.** Tokens are written to disk + Secrets; they never appear in log lines. The chart's `helm.sh/resource-policy: keep` on world tokens Secrets (§6.3.D.2) is the operator-side guarantee that token state survives chart upgrades.
+- **Token material.** Tokens are written to disk + Secrets; they never appear in log lines. The chart's `helm.sh/resource-policy: keep` annotation on world tokens Secrets is the operator-side guarantee that token state survives chart upgrades.
 - **Request/response bodies.** The server logs `path` + `verb`, not content. PUBLISH bodies are not logged (they would leak document content). The `archive` audit event records what was deleted via `path` + `version`, not the document body.
 - **`/metrics` endpoint or OTel SDK calls.** demarkus does not embed a metrics or tracing client. Observability is intentionally log-derived so the deployment surface stays narrow — your log shipper is the only data path out. If you want time-series metrics, derive them in your backend from the log events above (Datadog log-based metrics, Vector's log-to-metric transform, Loki's `log_queries_total` counter, etc.).
