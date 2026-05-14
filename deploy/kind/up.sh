@@ -12,10 +12,10 @@ set -euo pipefail
 CLUSTER="${CLUSTER:-knowledge-system}"
 NAMESPACE="${NAMESPACE:-demarkus}"
 RELEASE="${RELEASE:-world-default}"
-SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.17.8}"
+SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.17.9}"
 SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
 BROKER_RELEASE="${BROKER_RELEASE:-broker}"
-BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.1.0}"
+BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.1.1}"
 BROKER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-broker"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
