@@ -9,6 +9,43 @@
 #
 # Reachable from broker pods at:
 #   http://mock-oauth2-server.demarkus.svc.cluster.local:8080/default
+#
+# JSON_CONFIG (mounted from the ConfigMap below) sets:
+#   - interactiveLogin=false so /authorize bypasses the HTML login form
+#     and 302s directly back with a code (lets curl-only smoke tests
+#     drive the full mint without scraping a form).
+#   - default tokenCallback claims include email=alice@example.com +
+#     email_verified=true so the broker's authorizedWorlds predicate
+#     (allow.emails: ["alice@example.com"]) matches.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-oauth2-server-config
+  labels:
+    app.kubernetes.io/name: mock-oauth2-server
+data:
+  config.json: |
+    {
+      "interactiveLogin": false,
+      "tokenCallbacks": [
+        {
+          "issuerId": "default",
+          "tokenExpiry": 3600,
+          "requestMappings": [
+            {
+              "requestParam": "grant_type",
+              "match": "authorization_code",
+              "claims": {
+                "sub": "alice-kind-test",
+                "email": "alice@example.com",
+                "email_verified": true
+              }
+            }
+          ]
+        }
+      ]
+    }
 ---
 apiVersion: v1
 kind: Service
@@ -40,6 +77,10 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: mock-oauth2-server
+      # Bounce the pod when the config changes so we don't ship a
+      # stale interactiveLogin / claims set on subsequent up.sh runs.
+      annotations:
+        checksum/config: "v1-alice-noninteractive"
     spec:
       containers:
         - name: mock-oauth2-server
@@ -51,6 +92,12 @@ spec:
           env:
             - name: SERVER_PORT
               value: "8080"
+            - name: JSON_CONFIG_PATH
+              value: /etc/mock-oauth2-server/config.json
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mock-oauth2-server
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /default/.well-known/openid-configuration
@@ -70,3 +117,7 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: mock-oauth2-server-config

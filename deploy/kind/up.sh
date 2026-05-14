@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 # kind harness for demarkus development.
 #
-# Stage 1 (default):    single-node kind cluster + demarkus-server chart.
-# Stage 2 (--with-broker):  + mock-oauth2-server + demarkus-broker chart.
-# Stage 3 (--with-argo):    + Argo CD + ApplicationSet templating two worlds.
+# Stage 1 (default):                          kind cluster + demarkus-server chart.
+# Stage 2 (--with-broker):                    + mock-oauth2-server + demarkus-broker.
+# Stage 3 (--with-argo):                      + Argo CD + ApplicationSet templating two worlds.
+# Stage 4 (--with-argo --with-broker):         + broker against the Argo worlds, then
+#                                              drive a full OIDC mint flow via curl and
+#                                              assert tokens land in BOTH world Secrets.
 #
-# --with-argo replaces the Stage 1 server install with an Argo-managed
-# ApplicationSet so the worlds are GitOps-shaped from the start. It is not
-# combinable with --with-broker yet (the broker chart values are hard-wired
-# to the Stage 1 release name; multi-world broker wiring is a follow-up).
+# Stage 3 replaces the Stage 1 server install with an Argo-managed
+# ApplicationSet; the worlds are GitOps-shaped from the start. Stage 4 layers
+# the broker on top of Stage 3 and uses deploy/kind/values-broker-argo.yaml
+# (multi-world wiring + server.insecureCookies=true so curl can drive the OIDC
+# state cookie over plain HTTP).
 #
 # Verification runs `demarkus` against each server's own QUIC listener via
 # `kubectl exec`, which exercises the full read path without exposing
-# anything to the host.
+# anything to the host. Stage 4 also runs an ephemeral curl pod that drives
+# /auth/login -> /authorize -> /auth/callback and asserts the broker's
+# mint response references both worlds.
 
 set -euo pipefail
 
@@ -22,8 +28,11 @@ RELEASE="${RELEASE:-world-default}"
 SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.17.9}"
 SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
 BROKER_RELEASE="${BROKER_RELEASE:-broker}"
-BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.1.1}"
+BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.1.3}"
 BROKER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-broker"
+# Ephemeral curl pod image used by the Stage 4 mint smoke test. Pinned so
+# behavior is reproducible across hosts; busybox sh + curl is all we need.
+MINT_CURL_IMAGE="${MINT_CURL_IMAGE:-curlimages/curl:8.11.1}"
 # Hard-coded to match deploy/k8s/examples/applicationset.yaml which pins
 # metadata.namespace: argocd. Making this env-overridable would silently
 # break: the script would install Argo into the override namespace while
@@ -40,6 +49,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." &>/dev/null && pwd)"
 VALUES_FILE="$SCRIPT_DIR/values-kind.yaml"
 BROKER_VALUES_FILE="$SCRIPT_DIR/values-broker.yaml"
+BROKER_ARGO_VALUES_FILE="$SCRIPT_DIR/values-broker-argo.yaml"
 ARGO_VALUES_FILE="$SCRIPT_DIR/values-argo.yaml"
 MOCK_OIDC_MANIFEST="$SCRIPT_DIR/mock-oidc.yaml"
 KIND_CONFIG="$SCRIPT_DIR/kind-config.yaml"
@@ -53,32 +63,27 @@ for arg in "$@"; do
     --with-argo)   WITH_ARGO=true ;;
     -h|--help)
       cat <<EOF
-usage: up.sh [--with-broker | --with-argo]
+usage: up.sh [--with-broker] [--with-argo]
 
-  --with-broker    also install mock-oauth2-server + demarkus-broker chart
+  --with-broker    install mock-oauth2-server + demarkus-broker chart
   --with-argo      install Argo CD + ApplicationSet templating two worlds
                    (replaces the Stage 1 server install)
+
+  Combine both for Stage 4: Argo-managed worlds + broker wired across
+  them. up.sh then drives a full OIDC mint flow via curl and asserts
+  tokens land in BOTH world Secrets.
 
 env overrides:
   CLUSTER, NAMESPACE, RELEASE, SERVER_CHART_VERSION,
   BROKER_RELEASE, BROKER_CHART_VERSION,
-  ARGO_RELEASE, ARGO_CHART_VERSION, ARGO_REPO_URL
+  ARGO_RELEASE, ARGO_CHART_VERSION, ARGO_REPO_URL,
+  MINT_CURL_IMAGE
 EOF
       exit 0
       ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
   esac
 done
-
-if [[ "$WITH_BROKER" == "true" && "$WITH_ARGO" == "true" ]]; then
-  cat >&2 <<EOF
---with-broker and --with-argo cannot be combined: the broker chart values
-at $BROKER_VALUES_FILE are hard-wired to the Stage 1 release name
-'world-default', while --with-argo provisions world-a/world-b instead.
-Multi-world broker wiring is a follow-up.
-EOF
-  exit 2
-fi
 
 require() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -155,6 +160,120 @@ if [[ "$WITH_ARGO" == "true" ]]; then
     kubectl -n "$world" exec "$WORLD_POD" -- \
       /demarkus -insecure -no-cache "mark://localhost:6309/.well-known/agent-manifest.md"
   done
+
+  # Stage 4: layer the broker on top of the Argo-managed worlds and drive
+  # a real OIDC mint. The broker is universe-singleton (one per ApplicationSet
+  # multi-world deployment), not per-world, so it installs via helm direct
+  # rather than through Argo — see /journal/2026-05-14.md for why we didn't
+  # template it inside the ApplicationSet.
+  if [[ "$WITH_BROKER" == "true" ]]; then
+    echo "--- applying mock-oauth2-server (OIDC issuer; JSON_CONFIG sets interactiveLogin=false so curl can drive /authorize without an HTML form)"
+    kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+    kubectl -n "$NAMESPACE" apply -f "$MOCK_OIDC_MANIFEST"
+    kubectl -n "$NAMESPACE" rollout status deployment/mock-oauth2-server --timeout=120s
+
+    echo "--- installing demarkus-broker chart $BROKER_CHART_VERSION (multi-world wiring)"
+    # helm --wait blocks on /readyz, which only flips green after OIDC
+    # discovery succeeds. RBAC fan-out across world-a + world-b namespaces
+    # also runs at install time — a failure here means the cross-namespace
+    # Role/RoleBinding pattern broke under multi-world.
+    helm upgrade --install "$BROKER_RELEASE" "$BROKER_CHART" \
+      --version "$BROKER_CHART_VERSION" \
+      --namespace "$NAMESPACE" --create-namespace \
+      --values "$BROKER_ARGO_VALUES_FILE" \
+      --wait --timeout 5m
+
+    BROKER_POD_SELECTOR="app.kubernetes.io/instance=$BROKER_RELEASE,app.kubernetes.io/name=demarkus-broker"
+    BROKER_POD=$(kubectl -n "$NAMESPACE" get pods -l "$BROKER_POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
+    if [[ -z "$BROKER_POD" ]]; then
+      echo "no demarkus-broker pod found for selector: $BROKER_POD_SELECTOR" >&2
+      exit 1
+    fi
+
+    echo "--- driving OIDC mint flow from an ephemeral curl pod"
+    # We synthesize the redirect chain by hand rather than letting curl
+    # follow -L. The reason: the broker's redirectURL points at localhost
+    # (the cookie's Path=/auth/callback scope only matches if the host
+    # part is the same as the broker we hit), so we have to re-target the
+    # callback URL at the broker's in-cluster Service while preserving the
+    # signed state cookie. -L would chase the redirect to literal
+    # localhost:8080 inside the curl pod, which is itself.
+    kubectl run -n "$NAMESPACE" mint-smoke --rm -i --restart=Never \
+      --image="$MINT_CURL_IMAGE" --command -- sh -c '
+set -eu
+
+BROKER=http://'"$BROKER_RELEASE"'-demarkus-broker.'"$NAMESPACE"'.svc.cluster.local:8080
+
+# 0. Wait for the broker Service to be reachable. helm --wait returned
+#    on /readyz green, but the Service endpoints object can lag the pod-
+#    Ready transition by a second or two, and curl on a fresh pod that
+#    races that window sees "Failed to connect after 1 ms".
+for attempt in $(seq 1 15); do
+  if curl -sS -o /dev/null --max-time 2 "$BROKER/healthz"; then
+    break
+  fi
+  sleep 2
+done
+curl -sSf -o /dev/null "$BROKER/healthz" || { echo "FAIL: broker unreachable after retries"; exit 1; }
+
+# 1. /auth/login — broker signs a state cookie (Secure dropped because
+#    server.insecureCookies=true in values-broker-argo.yaml) and 302s
+#    to mock-oauth2-server.
+curl -sS -c /tmp/cookies -D /tmp/login.h -o /dev/null "$BROKER/auth/login"
+IDP=$(awk "/^[Ll]ocation:/{print \$2}" /tmp/login.h | tr -d "\r")
+[ -n "$IDP" ] || { echo "FAIL: no Location from /auth/login"; cat /tmp/login.h; exit 1; }
+
+# 2. /authorize — mock-oauth2-server is configured with
+#    interactiveLogin=false so it 302s back with code+state.
+curl -sS -D /tmp/idp.h -o /dev/null "$IDP"
+CB=$(awk "/^[Ll]ocation:/{print \$2}" /tmp/idp.h | tr -d "\r")
+[ -n "$CB" ] || { echo "FAIL: no Location from /authorize"; cat /tmp/idp.h; exit 1; }
+
+# 3. Extract code+state from the callback URL the IdP redirected to.
+CODE=$(printf "%s" "$CB" | sed -n "s/.*[?&]code=\([^&]*\).*/\1/p")
+STATE=$(printf "%s" "$CB" | sed -n "s/.*[?&]state=\([^&]*\).*/\1/p")
+[ -n "$CODE" ] && [ -n "$STATE" ] || { echo "FAIL: bad callback URL: $CB"; exit 1; }
+
+# 4. /auth/callback against the broker (not the literal localhost the
+#    IdP redirected to). The state cookie from step 1 replays.
+MINT=$(curl -sS -b /tmp/cookies "$BROKER/auth/callback?code=$CODE&state=$STATE")
+echo "mint response: $MINT"
+
+# 5. Both worlds must appear in the mint response. The broker writes a
+#    token into each world Secret as part of Mint() before returning
+#    200, so this implicitly asserts the cross-namespace RBAC worked.
+echo "$MINT" | grep -q "\"world\":\"world-a\"" || { echo "FAIL: world-a missing from mint response"; exit 1; }
+echo "$MINT" | grep -q "\"world\":\"world-b\"" || { echo "FAIL: world-b missing from mint response"; exit 1; }
+echo "OK: mint succeeded for both worlds"
+'
+
+    cat <<EOF
+
+ready (with argo + broker).
+
+cluster:         kind-$CLUSTER
+argo namespace:  $ARGO_NAMESPACE
+broker ns:       $NAMESPACE
+broker release:  $BROKER_RELEASE
+broker pod:      $BROKER_POD
+worlds:          ${ARGO_WORLDS[*]}
+mock OIDC:       mock-oauth2-server.$NAMESPACE.svc.cluster.local:8080/default
+
+inspect minted tokens in each world (decoded TOML):
+  for w in ${ARGO_WORLDS[*]}; do
+    echo "=== \$w ==="
+    kubectl -n \$w get secret \$w-demarkus-server-tokens -o jsonpath='{.data.tokens\\.toml}' | base64 -d
+  done
+
+re-run the mint flow (handy for poking at logs):
+  kubectl run -n $NAMESPACE mint-replay --rm -i --restart=Never \\
+    --image=$MINT_CURL_IMAGE -- curl -sS http://$BROKER_RELEASE-demarkus-broker:8080/healthz
+
+tear down:
+  $SCRIPT_DIR/down.sh
+EOF
+    exit 0
+  fi
 
   cat <<EOF
 

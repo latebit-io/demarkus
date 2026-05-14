@@ -1,0 +1,84 @@
+# Broker chart overrides for the kind harness when the worlds are
+# Argo-managed (deploy/k8s/examples/applicationset.yaml templates
+# world-a + world-b). Used by deploy/kind/up.sh when --with-argo and
+# --with-broker are both set.
+#
+# Goal: exercise the FULL mint flow end-to-end against multiple worlds.
+# A successful mint via /auth/login → /auth/callback writes a hashed
+# token entry into BOTH world-a and world-b tokens Secrets, proving
+# cross-namespace RBAC + the per-world allow predicate fan-out.
+
+# Single replica — leader-elected sweeper is unnecessary on a 1-node
+# kind cluster, and the PodDisruptionBudget would block scale-to-zero
+# on teardown.
+replicaCount: 1
+
+server:
+  # DEV-ONLY. Drops the Secure attribute on the OIDC state cookie so
+  # curl can drive /auth/login -> /auth/callback over plain HTTP. The
+  # broker chart's values.yaml has the prominent comment warning
+  # against production use; we opt in here knowing the kind cluster
+  # is local-only and never exposed.
+  insecureCookies: true
+
+# OIDC points at the in-cluster mock issuer applied alongside this
+# chart. mock-oauth2-server is configured with interactiveLogin=false
+# and a tokenCallback that returns email=alice@example.com so the
+# broker's authorizedWorlds predicate (allow.emails below) matches.
+oidc:
+  issuer: http://mock-oauth2-server.demarkus.svc.cluster.local:8080/default
+  clientID: demarkus-broker-kind
+  clientSecret: dev-secret
+  # redirectURL is what the broker tells the IdP to redirect the user
+  # back to. For the kind smoke test the curl client hits the broker's
+  # Service directly via kubectl exec, so the localhost shape is the
+  # one whose cookie scope (Path=/auth/callback) matches the actual
+  # request URL.
+  redirectURL: http://localhost:8080/auth/callback
+
+# One entry per Argo-templated world. The TokensSecret name matches
+# the demarkus-server chart's `<release>-demarkus-server-tokens`
+# template; the ApplicationSet uses release name = world name, so the
+# Secrets land at world-a-demarkus-server-tokens and
+# world-b-demarkus-server-tokens in their respective namespaces.
+worlds:
+  - name: world-a
+    namespace: world-a
+    tokensSecret: world-a-demarkus-server-tokens
+    allow:
+      emails: ["alice@example.com"]
+    defaultToken:
+      paths: ["/*"]
+      operations: ["read", "publish"]
+      expiresAfter: 24h
+  - name: world-b
+    namespace: world-b
+    tokensSecret: world-b-demarkus-server-tokens
+    allow:
+      emails: ["alice@example.com"]
+    defaultToken:
+      paths: ["/*"]
+      operations: ["read", "publish"]
+      expiresAfter: 24h
+
+# Sweeper coordinates via a Lease across replicas; with 1 replica it's
+# overhead. Drift sweep is unnecessary on a clean dev cluster.
+sweeper:
+  disabled: true
+
+# Rate limiting depends on a trustworthy X-Forwarded-For from an Ingress
+# controller; kind has no ingress controller in this harness.
+rateLimit:
+  disabled: true
+
+# NetworkPolicy restricts inbound to ingress-nginx namespace by default;
+# without ingress-nginx the broker becomes unreachable for the smoke test.
+networkPolicy:
+  enabled: false
+
+# PDB needs >=2 replicas to be meaningful and would block teardown.
+podDisruptionBudget:
+  enabled: false
+
+ingress:
+  enabled: false
