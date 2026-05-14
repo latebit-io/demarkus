@@ -1,36 +1,24 @@
 # demarkus-broker image. Single binary; the broker is HTTP-only and uses
 # HTTP /healthz + /readyz probes, so the CLI is not bundled.
 #
-# Build context = repo root so the protocol/ module is reachable via the
-# tools/ replace directive:
-#   docker build -f tools/demarkus-broker/Dockerfile -t demarkus-broker:dev .
+# Pre-built binary is staged into dist/docker/<arch>/ by the release
+# workflow (and by `make image-broker` for local dev). The Dockerfile is
+# COPY-only — no `RUN` step — so a buildx multi-arch build under QEMU
+# completes in seconds instead of minutes.
 #
-# Smoke-tested end-to-end on kind via deploy/kind/up.sh --with-broker,
-# which discovers against an in-cluster mock OIDC issuer.
+# Base is distroless/static:nonroot — it ships /etc/ssl/certs/ca-certificates.crt
+# for the broker's outbound HTTPS to the OIDC issuer (discovery + token
+# exchange), and runs as UID 65532 by default. Defense-in-depth USER
+# directive matches the chart's podSecurityContext.runAsUser.
+#
+# Build context = repo root. Staged paths the Dockerfile expects:
+#   dist/docker/amd64/demarkus-broker
+#   dist/docker/arm64/demarkus-broker
+#   dist/docker/armv7/demarkus-broker
 
-FROM golang:1.26-alpine AS build
-WORKDIR /src
-
-COPY protocol/go.mod protocol/go.sum protocol/
-COPY tools/go.mod    tools/go.sum    tools/
-
-COPY protocol/ protocol/
-COPY tools/    tools/
-
-ARG VERSION=dev
-ENV CGO_ENABLED=0
-
-RUN go build -C tools -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-broker ./demarkus-broker
-
-FROM scratch
-# Trust store for outbound TLS. The broker calls the OIDC issuer's
-# discovery (.well-known/openid-configuration) and token endpoints over
-# HTTPS; without /etc/ssl/certs/ca-certificates.crt, Go's TLS handshake
-# fails certificate validation against the IdP.
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=build /out/demarkus-broker /demarkus-broker
-# Match the chart's podSecurityContext.runAsUser so the image runs
-# non-root even when deployed outside k8s. Defense-in-depth on top of
-# the chart's runAsNonRoot: true.
+FROM gcr.io/distroless/static-debian12:nonroot
+ARG TARGETARCH
+ARG TARGETVARIANT
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus-broker /demarkus-broker
 USER 65532:65532
 ENTRYPOINT ["/demarkus-broker"]

@@ -58,27 +58,36 @@ tools: protocol
 # carries only the binaries it needs at runtime. Admin CLIs are NOT
 # bundled — they ship as standalone binaries via goreleaser archives.
 #
-# Each Dockerfile uses repo root as build context so it can reach across
-# go module boundaries (server image needs both server/ and client/ for
-# the CLI used by exec probes).
+# Each Dockerfile expects pre-built binaries in dist/docker/<arch>/ —
+# the targets below cross-compile natively (fast — no QEMU) for HOST_ARCH
+# before invoking `docker build`. Multi-arch matrix builds happen in the
+# release workflow via the same staging pattern.
 IMAGE_REGISTRY ?= ghcr.io/latebit-io
 TAG            ?= dev
+HOST_ARCH      ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 
 image: image-server image-broker image-agent
 
 image-server:
-	@echo "Building $(IMAGE_REGISTRY)/demarkus-server:$(TAG)..."
-	docker build --build-arg VERSION=$(VERSION) -f server/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-server:$(TAG) .
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-server:$(TAG) for linux/$(HOST_ARCH)..."
+	@mkdir -p dist/docker/$(HOST_ARCH)
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C server -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-server ./cmd/demarkus-server
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C client -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus ./cmd/demarkus
+	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f server/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-server:$(TAG) .
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-server:$(TAG)"
 
 image-broker:
-	@echo "Building $(IMAGE_REGISTRY)/demarkus-broker:$(TAG)..."
-	docker build --build-arg VERSION=$(VERSION) -f tools/demarkus-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-broker:$(TAG) .
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-broker:$(TAG) for linux/$(HOST_ARCH)..."
+	@mkdir -p dist/docker/$(HOST_ARCH)
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C tools -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-broker ./demarkus-broker
+	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f tools/demarkus-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-broker:$(TAG) .
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-broker:$(TAG)"
 
 image-agent:
-	@echo "Building $(IMAGE_REGISTRY)/demarkus-agent:$(TAG)..."
-	docker build --build-arg VERSION=$(VERSION) -f client/cmd/demarkus-agent/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-agent:$(TAG) .
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-agent:$(TAG) for linux/$(HOST_ARCH)..."
+	@mkdir -p dist/docker/$(HOST_ARCH)
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C client -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-agent ./cmd/demarkus-agent
+	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f client/cmd/demarkus-agent/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-agent:$(TAG) .
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-agent:$(TAG)"
 
 # Run tests
@@ -92,7 +101,7 @@ test:
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
-	@rm -rf server/bin client/bin tools/bin
+	@rm -rf server/bin client/bin tools/bin dist
 	@cd protocol && go clean
 	@cd server && go clean
 	@cd client && go clean

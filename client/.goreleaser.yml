@@ -58,6 +58,26 @@ builds:
     ldflags:
       - -s -w
 
+  # demarkus-agent ships only as a container image (release-client job
+  # bundles it into ghcr.io/.../demarkus-agent). Listed under builds:
+  # so goreleaser cross-compiles per-arch binaries that the Dockerfile
+  # then COPYs in — no archive entry, no end-user binary tarball.
+  - id: demarkus-agent
+    main: ./cmd/demarkus-agent
+    binary: demarkus-agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w
+
 archives:
   - id: demarkus
     builds:

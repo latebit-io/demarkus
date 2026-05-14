@@ -1,35 +1,25 @@
 # demarkus-agent image. The agent is a daemon crawler with no probes
-# today (per chart values default), so the CLI is not bundled. If
-# probes are added later, this Dockerfile can grow to bundle /demarkus
-# alongside the agent.
+# today (per chart values default), so the CLI is not bundled.
 #
-# Build context = repo root so the protocol/ module is reachable via
-# the client/ replace directive:
-#   docker build -f client/cmd/demarkus-agent/Dockerfile -t demarkus-agent:dev .
+# Pre-built binary is staged into dist/docker/<arch>/ by the release
+# workflow (and by `make image-agent` for local dev). The Dockerfile is
+# COPY-only — no `RUN` step — so a buildx multi-arch build under QEMU
+# completes in seconds instead of minutes.
+#
+# Base is distroless/static:nonroot — it ships /etc/ssl/certs/ca-certificates.crt
+# so the agent's outbound mark:// crawls validate peer TLS when the
+# chart's `insecure: false` production default is on. Runs as UID 65532
+# by default; defense-in-depth USER matches the chart's
+# podSecurityContext.runAsUser.
+#
+# Build context = repo root. Staged paths the Dockerfile expects:
+#   dist/docker/amd64/demarkus-agent
+#   dist/docker/arm64/demarkus-agent
+#   dist/docker/armv7/demarkus-agent
 
-FROM golang:1.26-alpine AS build
-WORKDIR /src
-
-COPY protocol/go.mod protocol/go.sum protocol/
-COPY client/go.mod   client/go.sum   client/
-
-COPY protocol/ protocol/
-COPY client/   client/
-
-ARG VERSION=dev
-ENV CGO_ENABLED=0
-
-RUN go build -C client -ldflags="-s -w -X main.version=${VERSION}" -o /out/demarkus-agent ./cmd/demarkus-agent
-
-FROM scratch
-# Trust store for outbound TLS. The agent crawls remote mark:// servers
-# whose QUIC TLS certificates require validation when `insecure: false`
-# (the chart's production default). Without this bundle, the agent's
-# fetch handshakes fail against any non-self-signed peer.
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=build /out/demarkus-agent /demarkus-agent
-# Match the chart's podSecurityContext.runAsUser so the image runs
-# non-root even when deployed outside k8s. Defense-in-depth on top of
-# the chart's runAsNonRoot: true.
+FROM gcr.io/distroless/static-debian12:nonroot
+ARG TARGETARCH
+ARG TARGETVARIANT
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus-agent /demarkus-agent
 USER 65532:65532
 ENTRYPOINT ["/demarkus-agent"]
