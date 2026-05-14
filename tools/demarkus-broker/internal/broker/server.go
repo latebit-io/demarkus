@@ -131,7 +131,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    signed,
 		Path:     "/auth/callback",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   !s.cfg.Server.InsecureCookies,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  state.ExpiresAt,
 		MaxAge:   int(s.cfg.Server.StateTTL.Seconds()),
@@ -168,7 +168,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/auth/callback",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   !s.cfg.Server.InsecureCookies,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
