@@ -184,8 +184,11 @@ ensure_binaries() {
   fi
 
   # Record installed versions so subsequent ensure_binaries calls can detect
-  # drift after a plugin update bumps SERVER_VERSION / CLIENT_VERSION.
-  printf 'server=%s,client=%s\n' "${SERVER_VERSION}" "${CLIENT_VERSION}" > "${PLUGIN_VERSION_FILE}"
+  # drift after a plugin update bumps any of the pins. Must match the format
+  # emitted by _desired_versions() exactly, otherwise the comparison there
+  # treats every startup as drift and triggers a redundant re-download.
+  printf 'server=%s,client=%s,tools=%s\n' \
+    "${SERVER_VERSION}" "${CLIENT_VERSION}" "${TOOLS_VERSION}" > "${PLUGIN_VERSION_FILE}"
 
   log "binaries installed to ${PLUGIN_BIN_DIR}"
 }
