@@ -48,6 +48,17 @@ server:
   # `helm uninstall` never wipe broker-minted issuance records.
   issuancesSecret: ""
 
+  # DEV-ONLY: drop the Secure attribute on the OIDC state cookie.
+  # Default false. Flip to true only for local / kind harnesses where the
+  # broker is reachable over plain HTTP and the Secure attribute would
+  # prevent the cookie jar from replaying the state on /auth/callback.
+  # Enabling this in a production deployment turns the state cookie into
+  # a downgrade-attack surface — any plaintext-hijacked redirect can
+  # complete the OIDC dance. Production deployments terminate TLS at the
+  # Ingress, in which case this stays false and the cookie's Secure
+  # attribute is honored end-to-end.
+  insecureCookies: false
+
 oidc:
   # OIDC discovery URL (e.g. https://accounts.google.com).
   issuer: ""

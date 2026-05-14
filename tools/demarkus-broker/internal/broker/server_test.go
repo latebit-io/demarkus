@@ -108,6 +108,37 @@ func TestAuthLoginRedirectsAndSetsStateCookie(t *testing.T) {
 	}
 }
 
+func TestAuthLoginInsecureCookiesDropsSecureFlag(t *testing.T) {
+	cfg := testConfig()
+	cfg.Server.InsecureCookies = true
+	verifier := &fakeVerifier{authURL: "https://idp.example.com/authorize"}
+	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
+
+	client := testClient(srv)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Get(srv.URL + "/auth/login")
+	if err != nil {
+		t.Fatalf("GET /auth/login: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var stateCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == stateCookieName {
+			stateCookie = c
+			break
+		}
+	}
+	if stateCookie == nil {
+		t.Fatal("state cookie not set")
+	}
+	if !stateCookie.HttpOnly {
+		t.Errorf("HttpOnly = false, want true (insecureCookies only drops Secure)")
+	}
+	if stateCookie.Secure {
+		t.Errorf("Secure = true, want false when InsecureCookies is set")
+	}
+}
+
 // loginAndExtract simulates the /auth/login leg of the OIDC flow and
 // returns a client whose cookie jar holds the state cookie, plus the
 // nonce from the IdP redirect URL. Callers issue the /auth/callback

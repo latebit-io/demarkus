@@ -45,6 +45,14 @@ type ServerConfig struct {
 	// label → {email, world, paths, ...} map (JSON-encoded). World servers
 	// never read this Secret.
 	IssuancesSecret string `yaml:"issuancesSecret"`
+	// InsecureCookies drops the Secure attribute on the OIDC state cookie.
+	// Default false (production-correct: state cookies travel over HTTPS
+	// only). Flip to true ONLY for kind / local dev where the broker is
+	// reachable over plain HTTP and the Secure attribute would prevent the
+	// cookie jar from replaying it on /auth/callback. Enabling this in a
+	// real deployment turns the state cookie into a downgrade attack vector
+	// — any plaintext-hijacked redirect can complete the OIDC dance.
+	InsecureCookies bool `yaml:"insecureCookies"`
 }
 
 // OIDCConfig describes the OIDC client registration at the IdP. Discovery
