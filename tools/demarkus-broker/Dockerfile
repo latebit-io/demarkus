@@ -4,6 +4,9 @@
 # Build context = repo root so the protocol/ module is reachable via the
 # tools/ replace directive:
 #   docker build -f tools/demarkus-broker/Dockerfile -t demarkus-broker:dev .
+#
+# Smoke-tested end-to-end on kind via deploy/kind/up.sh --with-broker,
+# which discovers against an in-cluster mock OIDC issuer.
 
 FROM golang:1.26-alpine AS build
 WORKDIR /src
