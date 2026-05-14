@@ -310,6 +310,20 @@ jobs:
           build-args: |
             VERSION=${{ needs.semver-server.outputs.new_version }}
 
+      # Chart version + appVersion are pinned 1:1 to the server module
+      # version so `helm install ghcr.io/.../charts/demarkus-server --version
+      # X` resolves the image at the same tag. Helm 3.13+ reads ~/.docker/
+      # config.json for OCI auth, which docker/login-action already wrote.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.2
+
+      - name: Package + push demarkus-server chart
+        run: |
+          VER="${{ needs.semver-server.outputs.new_version }}"
+          helm package deploy/helm/demarkus-server --version "$VER" --app-version "$VER" --destination /tmp/charts
+          helm push "/tmp/charts/demarkus-server-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+
   release-client:
     needs: semver-client
     if: needs.semver-client.outputs.should_release == 'true'
@@ -375,6 +389,19 @@ jobs:
           build-args: |
             VERSION=${{ needs.semver-client.outputs.new_version }}
 
+      # Chart version + appVersion pinned 1:1 to the client module version
+      # so the agent chart and the agent image released in the same module
+      # bump always reference each other.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.2
+
+      - name: Package + push demarkus-agent chart
+        run: |
+          VER="${{ needs.semver-client.outputs.new_version }}"
+          helm package deploy/helm/demarkus-agent --version "$VER" --app-version "$VER" --destination /tmp/charts
+          helm push "/tmp/charts/demarkus-agent-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+
   release-tools:
     needs: semver-tools
     if: needs.semver-tools.outputs.should_release == 'true'
@@ -439,3 +466,16 @@ jobs:
             ghcr.io/latebit-io/demarkus-broker:latest
           build-args: |
             VERSION=${{ needs.semver-tools.outputs.new_version }}
+
+      # Chart version + appVersion pinned 1:1 to the tools module version so
+      # the broker chart and the broker image released in the same bump
+      # always reference each other.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.2
+
+      - name: Package + push demarkus-broker chart
+        run: |
+          VER="${{ needs.semver-tools.outputs.new_version }}"
+          helm package deploy/helm/demarkus-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
+          helm push "/tmp/charts/demarkus-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
