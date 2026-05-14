@@ -24,7 +24,12 @@ SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
 BROKER_RELEASE="${BROKER_RELEASE:-broker}"
 BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.1.1}"
 BROKER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-broker"
-ARGO_NAMESPACE="${ARGO_NAMESPACE:-argocd}"
+# Hard-coded to match deploy/k8s/examples/applicationset.yaml which pins
+# metadata.namespace: argocd. Making this env-overridable would silently
+# break: the script would install Argo into the override namespace while
+# the ApplicationSet still landed in argocd, and the kubectl waits below
+# would target the wrong namespace.
+ARGO_NAMESPACE=argocd
 ARGO_RELEASE="${ARGO_RELEASE:-argocd}"
 ARGO_CHART_VERSION="${ARGO_CHART_VERSION:-7.7.0}"
 ARGO_REPO_URL="${ARGO_REPO_URL:-https://argoproj.github.io/argo-helm}"
@@ -57,7 +62,7 @@ usage: up.sh [--with-broker | --with-argo]
 env overrides:
   CLUSTER, NAMESPACE, RELEASE, SERVER_CHART_VERSION,
   BROKER_RELEASE, BROKER_CHART_VERSION,
-  ARGO_NAMESPACE, ARGO_RELEASE, ARGO_CHART_VERSION, ARGO_REPO_URL
+  ARGO_RELEASE, ARGO_CHART_VERSION, ARGO_REPO_URL
 EOF
       exit 0
       ;;
