@@ -1,0 +1,55 @@
+# Broker chart overrides for the kind harness.
+# Goal: get the broker pod booting + /readyz green + RBAC wired to the
+# Stage 1 world's tokens Secret. The full mint exercise (login + callback
+# + /tokens) is a follow-up that depends on shaping a JWT against the mock
+# OIDC issuer.
+
+# Single replica — leader-elected sweeper is unnecessary on a 1-node kind
+# cluster, and the PodDisruptionBudget would block scale-to-zero on teardown.
+replicaCount: 1
+
+# OIDC points at the in-cluster mock issuer applied alongside this chart.
+# clientID/clientSecret can be any value — mock-oauth2-server accepts any
+# client registration by default. redirectURL is only exercised if a real
+# login flow is driven, which we don't do at this stage.
+oidc:
+  issuer: http://mock-oauth2-server.demarkus.svc.cluster.local:8080/default
+  clientID: demarkus-broker-kind
+  clientSecret: dev-secret
+  redirectURL: http://localhost:8080/auth/callback
+
+# Wire to the Stage 1 world (release `world-default` in namespace `demarkus`).
+# tokensSecret name matches the demarkus-server chart's fullname template:
+# `<release>-demarkus-server-tokens`.
+worlds:
+  - name: world-default
+    namespace: demarkus
+    tokensSecret: world-default-demarkus-server-tokens
+    allow:
+      emails: ["alice@example.com"]
+    defaultToken:
+      paths: ["/*"]
+      operations: ["read", "publish"]
+      expiresAfter: 24h
+
+# Sweeper coordinates via a Lease across replicas; with 1 replica it's
+# overhead. Drift sweep is unnecessary on a clean dev cluster.
+sweeper:
+  disabled: true
+
+# Rate limiting depends on a trustworthy X-Forwarded-For from an Ingress
+# controller; kind has no ingress controller in this harness.
+rateLimit:
+  disabled: true
+
+# NetworkPolicy restricts inbound to ingress-nginx namespace by default;
+# without ingress-nginx the broker becomes unreachable for the smoke test.
+networkPolicy:
+  enabled: false
+
+# PDB needs >=2 replicas to be meaningful and would block teardown.
+podDisruptionBudget:
+  enabled: false
+
+ingress:
+  enabled: false
