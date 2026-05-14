@@ -16,6 +16,7 @@ jobs:
       protocol: ${{ steps.filter.outputs.protocol }}
       server: ${{ steps.filter.outputs.server }}
       client: ${{ steps.filter.outputs.client }}
+      tools: ${{ steps.filter.outputs.tools }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -29,6 +30,9 @@ jobs:
               - 'protocol/**'
             client:
               - 'client/**'
+              - 'protocol/**'
+            tools:
+              - 'tools/**'
               - 'protocol/**'
 
   test-protocol:
@@ -68,6 +72,21 @@ jobs:
       - run: cd client && go test ./...
       - run: cd client && go vet ./...
       - run: cd client && go build -o /dev/null ./cmd/demarkus
+
+  test-tools:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.tools == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - run: cd tools && go test ./...
+      - run: cd tools && go vet ./...
+      - run: cd tools && go build -o /dev/null ./demarkus-broker
+      - run: cd tools && go build -o /dev/null ./demarkus-token
+      - run: cd tools && go build -o /dev/null ./demarkus-publish
 
   semver-protocol:
     needs: test-protocol
@@ -155,6 +174,37 @@ jobs:
         id: check
         run: |
           TAG="client/v${{ steps.semver.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
+
+  semver-tools:
+    needs: test-tools
+    if: always() && needs.test-tools.result == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.semver.outputs.version }}
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: PaulHatch/semantic-version@v5.3.0
+        id: semver
+        with:
+          tag_prefix: "tools/v"
+          major_pattern: "BREAKING CHANGE:"
+          minor_pattern: "feat:"
+          change_path: "tools/"
+          bump_each_commit: false
+          search_commit_body: true
+      - name: Check if version changed
+        id: check
+        run: |
+          TAG="tools/v${{ steps.semver.outputs.version }}"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
@@ -324,3 +374,68 @@ jobs:
             ghcr.io/latebit-io/demarkus-agent:latest
           build-args: |
             VERSION=${{ needs.semver-client.outputs.new_version }}
+
+  release-tools:
+    needs: semver-tools
+    if: needs.semver-tools.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Create module tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = 'tools/v${{ needs.semver-tools.outputs.new_version }}';
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${tag}`,
+              sha: context.sha
+            });
+            console.log(`Created tag: ${tag}`);
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser-pro
+          version: latest
+          args: release --clean -f tools/.goreleaser.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          GORELEASER_CURRENT_TAG: "tools/v${{ needs.semver-tools.outputs.new_version }}"
+
+      # demarkus-broker is the only runtime image in tools/. Admin CLIs
+      # (demarkus-token, demarkus-publish) ship as standalone binary archives
+      # via goreleaser above and are not bundled into any image — see §6.7.A
+      # decisions on minimal pod blast radius.
+      - name: Build + push demarkus-broker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tools/demarkus-broker/Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: |
+            ghcr.io/latebit-io/demarkus-broker:${{ needs.semver-tools.outputs.new_version }}
+            ghcr.io/latebit-io/demarkus-broker:latest
+          build-args: |
+            VERSION=${{ needs.semver-tools.outputs.new_version }}
