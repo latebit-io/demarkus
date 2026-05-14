@@ -1,0 +1,12 @@
+# Chart overrides for the kind harness in deploy/kind/up.sh.
+# Stage 1: server only, no external exposure, server self-signs its TLS cert.
+
+service:
+  type: ClusterIP
+
+storage:
+  size: 1Gi
+
+# tls block intentionally left at chart defaults — neither existingSecret nor
+# certManager.enabled is set, so the server auto-generates a self-signed dev
+# cert at startup. Clients verify with `demarkus -insecure`.
