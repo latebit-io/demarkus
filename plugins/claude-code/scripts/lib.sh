@@ -25,8 +25,11 @@ readonly DEFAULT_PORT=6310             # plugin's first-choice port for its own 
 readonly ISOLATED_PORT_START=16310
 readonly ISOLATED_PORT_END=16509
 
-readonly SERVER_VERSION="0.17.4"
-readonly CLIENT_VERSION="0.12.26"
+readonly SERVER_VERSION="0.17.8"
+readonly CLIENT_VERSION="0.12.30"
+# demarkus-token moved from the server archive to its own tools/ release
+# in §6.7.A. Pin separately so a tools-only release can be picked up.
+readonly TOOLS_VERSION="0.1.0"
 
 # Sentinel file recording the SERVER/CLIENT versions of the binaries currently
 # installed at PLUGIN_BIN_DIR. ensure_binaries compares this against the
@@ -105,7 +108,7 @@ _installed_versions() {
 
 # _desired_versions — the version pin the plugin currently expects.
 _desired_versions() {
-  echo "server=${SERVER_VERSION},client=${CLIENT_VERSION}"
+  echo "server=${SERVER_VERSION},client=${CLIENT_VERSION},tools=${TOOLS_VERSION}"
 }
 
 # ensure_binaries — download + install to PLUGIN_BIN_DIR if any are missing
@@ -142,7 +145,7 @@ ensure_binaries() {
     tmp=$(mktemp -d)
     trap 'rm -rf "${tmp}"' EXIT
 
-    log "downloading demarkus binaries (server v${SERVER_VERSION}, client v${CLIENT_VERSION}, ${plat})"
+    log "downloading demarkus binaries (server v${SERVER_VERSION}, client v${CLIENT_VERSION}, tools v${TOOLS_VERSION}, ${plat})"
 
     local server_archive="demarkus-server_${SERVER_VERSION}_${plat}.tar.gz"
     local server_base="https://github.com/latebit-io/demarkus/releases/download/server%2Fv${SERVER_VERSION}"
@@ -158,6 +161,15 @@ ensure_binaries() {
     (cd "${tmp}" && sha256_verify client_checksums.txt "${mcp_archive}")
     tar -xzf "${tmp}/${mcp_archive}" -C "${tmp}"
 
+    # demarkus-token ships in the tools/ release as of §6.7.A; pre-§6.7.A
+    # plugin installs pulled it from the server archive.
+    local token_archive="demarkus-token_${TOOLS_VERSION}_${plat}.tar.gz"
+    local tools_base="https://github.com/latebit-io/demarkus/releases/download/tools%2Fv${TOOLS_VERSION}"
+    curl -fsSL -o "${tmp}/${token_archive}"    "${tools_base}/${token_archive}"               || die "download ${token_archive}"
+    curl -fsSL -o "${tmp}/tools_checksums.txt" "${tools_base}/demarkus-tools_checksums.txt"   || die "download tools checksums"
+    (cd "${tmp}" && sha256_verify tools_checksums.txt "${token_archive}")
+    tar -xzf "${tmp}/${token_archive}" -C "${tmp}"
+
     install -m 0755 "${tmp}/demarkus-server" "${PLUGIN_BIN_DIR}/demarkus-server"
     install -m 0755 "${tmp}/demarkus-token"  "${PLUGIN_BIN_DIR}/demarkus-token"
     install -m 0755 "${tmp}/demarkus-mcp"    "${PLUGIN_BIN_DIR}/demarkus-mcp"
@@ -172,8 +184,11 @@ ensure_binaries() {
   fi
 
   # Record installed versions so subsequent ensure_binaries calls can detect
-  # drift after a plugin update bumps SERVER_VERSION / CLIENT_VERSION.
-  printf 'server=%s,client=%s\n' "${SERVER_VERSION}" "${CLIENT_VERSION}" > "${PLUGIN_VERSION_FILE}"
+  # drift after a plugin update bumps any of the pins. Must match the format
+  # emitted by _desired_versions() exactly, otherwise the comparison there
+  # treats every startup as drift and triggers a redundant re-download.
+  printf 'server=%s,client=%s,tools=%s\n' \
+    "${SERVER_VERSION}" "${CLIENT_VERSION}" "${TOOLS_VERSION}" > "${PLUGIN_VERSION_FILE}"
 
   log "binaries installed to ${PLUGIN_BIN_DIR}"
 }
