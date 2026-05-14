@@ -56,11 +56,23 @@ spec:
       # StatefulSet, so ignoring drift on the whole block costs nothing
       # operationally and prevents Argo from looping on a sync it can never
       # converge.
+      #
+      # The world's tokens Secret holds runtime state — the demarkus-broker
+      # appends per-mint hash entries to data.tokens.toml. Without ignoring
+      # /data, Argo's selfHeal would revert every mint immediately back to
+      # the chart-rendered admin-only contents (resourceVersion churns, but
+      # the broker's writes never stick). Ignoring /data leaves the chart
+      # in charge of the Secret's existence + initial admin token while
+      # letting the broker own its lifecycle from then on.
       ignoreDifferences:
         - group: apps
           kind: StatefulSet
           jsonPointers:
             - /spec/volumeClaimTemplates
+        - kind: Secret
+          name: "{{name}}-demarkus-server-tokens"
+          jsonPointers:
+            - /data
       syncPolicy:
         automated:
           prune: true
