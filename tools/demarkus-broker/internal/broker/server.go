@@ -122,16 +122,18 @@ func (s *Server) Routes() http.Handler {
 	}
 	mux.Handle("GET /auth/login", s.ipRateLimit(http.HandlerFunc(s.authLogin)))
 	mux.HandleFunc("GET /auth/callback", s.authCallback)
-	// RFC 8628 device-flow surface. /device/authorize and /device/token
-	// sit behind the IP rate limiter for the same reason /auth/login
-	// does — they're unauthenticated by design and need a backstop
-	// against an attacker hammering them to enumerate state. /device
-	// (the user-facing HTML form) is unprotected: humans hand-typing
-	// codes rarely hit any rate threshold, and a real attacker would
-	// skip the form entirely and target the JSON endpoints.
+	// RFC 8628 device-flow surface. All POST surfaces sit behind the
+	// IP rate limiter — they're unauthenticated by design and a
+	// script can probe POST /device for the 302-vs-400 transition to
+	// brute-force active user_codes; the alphabet space makes that
+	// math infeasible (~30^8) but the limiter cuts the attack rate to
+	// a small fixed per-IP cap as defense-in-depth. /device GET (the
+	// HTML form) is unprotected: humans hand-typing codes rarely hit
+	// any rate threshold, and serving a static page has no state to
+	// leak.
 	mux.Handle("POST /device/authorize", s.ipRateLimit(http.HandlerFunc(s.deviceAuthorize)))
 	mux.HandleFunc("GET /device", s.deviceFormGet)
-	mux.HandleFunc("POST /device", s.deviceFormPost)
+	mux.Handle("POST /device", s.ipRateLimit(http.HandlerFunc(s.deviceFormPost)))
 	mux.Handle("POST /device/token", s.ipRateLimit(http.HandlerFunc(s.deviceToken)))
 	authedSubject := func(h http.HandlerFunc) http.Handler {
 		return s.requireAuth(s.subjectRateLimit(h))

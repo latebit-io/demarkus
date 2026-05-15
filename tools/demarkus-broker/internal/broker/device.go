@@ -79,19 +79,27 @@ type deviceTokenError struct {
 // deviceAuthorize implements POST /device/authorize (RFC 8628 §3.1).
 // Generates a fresh device_code + user_code, stashes a pending state
 // in the deviceStore, and returns the codes plus the verification
-// URLs the user follows in a browser. The client_id form parameter is
-// accepted (per RFC) but unused — the broker is the only relying
-// party in this flow, so a registration check would have no security
-// value. We log the supplied value at debug for observability without
-// gating on it.
+// URLs the user follows in a browser.
+//
+// client_id is REQUIRED per RFC 8628 §3.1; missing or empty returns
+// invalid_request. The broker does not validate the value against a
+// registration table — the plugin clients (demarkus-join + Claude
+// Code plugin) are not multiplexed identities and a registration
+// check would have no security value here. The check exists to
+// filter malformed clients and to keep the protocol surface
+// spec-conformant for any standard OIDC device-flow library a user
+// might plug in. Value is logged at debug for observability only.
 func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
-	if id := r.PostFormValue("client_id"); id != "" {
-		s.log.DebugContext(r.Context(), "broker: device authorize", "client_id", id)
+	clientID := r.PostFormValue("client_id")
+	if clientID == "" {
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		return
 	}
+	s.log.DebugContext(r.Context(), "broker: device authorize", "client_id", clientID)
 	deviceCode, userCode, expiresAt, err := s.deviceStore.Authorize()
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: device authorize failed", "err", err)
@@ -201,6 +209,12 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 		if !out.Result.Expiry.IsZero() {
 			expiresIn = max(int(out.Result.Expiry.Sub(now).Seconds()), 0)
 		}
+		// Tokens are bearer credentials — any intermediary that
+		// caches this response is a credential-leak vector. Set the
+		// canonical OAuth2 §5.1 no-store headers BEFORE writeJSON
+		// fires WriteHeader so they actually land in the response.
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
 		writeJSON(w, http.StatusOK, deviceTokenSuccess{
 			AccessToken: out.Result.AccessToken,
 			IDToken:     out.Result.RawIDToken,
@@ -287,10 +301,17 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 
 	exchange, err := s.verifier.Exchange(r.Context(), code)
 	if err != nil {
+		// Do NOT translate broker-side exchange failures into
+		// access_denied: that error is reserved for the user
+		// explicitly denying at the IdP (handled above on the
+		// `error` query param). Calling Deny here would permanently
+		// tell the polling client "user rejected" on a transient
+		// failure (JWKS unreachable, IdP rate-limited, etc.). Leave
+		// the grant pending so the user can retry by re-running
+		// /soul-join; if the broker stays broken until the device
+		// code's TTL, the polling client sees expired_token, which
+		// is the truthful state.
 		s.log.WarnContext(r.Context(), "broker: device callback oauth exchange failed", "err", err)
-		if denyErr := s.deviceStore.Deny(deviceCode); denyErr != nil {
-			s.log.WarnContext(r.Context(), "broker: device deny failed", "err", denyErr)
-		}
 		s.renderDeviceDone(w, r)
 		return
 	}

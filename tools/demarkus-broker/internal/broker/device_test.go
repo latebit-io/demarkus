@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -73,6 +74,131 @@ func TestDeviceAuthorize(t *testing.T) {
 	}
 	if got.Interval != int(testPollInterval.Seconds()) {
 		t.Errorf("interval = %d, want %d", got.Interval, int(testPollInterval.Seconds()))
+	}
+}
+
+func TestDeviceAuthorizeRequiresClientID(t *testing.T) {
+	srv, _ := newTestServer(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+
+	resp, err := testClient(srv).PostForm(srv.URL+"/device/authorize", url.Values{})
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for missing client_id", resp.StatusCode)
+	}
+	var errBody deviceTokenError
+	if err := json.NewDecoder(resp.Body).Decode(&errBody); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if errBody.Error != "invalid_request" {
+		t.Errorf("error = %q, want invalid_request", errBody.Error)
+	}
+}
+
+func TestDeviceTokenSuccessIsNonCacheable(t *testing.T) {
+	srv, broker := newTestServer(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+	deviceCode, _, _, err := broker.deviceStore.Authorize()
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	if err := broker.deviceStore.Bind(deviceCode, &ExchangeResult{
+		RawIDToken:  "id",
+		AccessToken: "access",
+	}); err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
+		"grant_type":  {deviceGrantType},
+		"device_code": {deviceCode},
+	})
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store (bearer tokens must not be cached)", got)
+	}
+	if got := resp.Header.Get("Pragma"); got != "no-cache" {
+		t.Errorf("Pragma = %q, want no-cache", got)
+	}
+}
+
+// TestDeviceCallbackExchangeFailureDoesNotDeny pins the bug-fix from
+// PR review: a transient Exchange failure (network blip, IdP/JWKS
+// outage) must NOT mark the device_code as access_denied. Only the
+// explicit IdP `error` query branch is a user denial; everything
+// else stays pending so the polling client either succeeds on retry
+// or times out with the truthful expired_token. Verifies the grant
+// is still pending after a forced exchange failure.
+func TestDeviceCallbackExchangeFailureDoesNotDeny(t *testing.T) {
+	verifier := &fakeVerifier{
+		authURL: "https://idp.example.com/authorize",
+		exchErr: errors.New("transient idp blip"),
+	}
+	srv, broker := newTestServer(t, deviceTestConfig(), verifier, fake.NewSimpleClientset())
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := testClient(srv)
+	client.Jar = jar
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	// Drive POST /device + /auth/login so the State carries the
+	// device_code, then trip the Exchange failure on /auth/callback.
+	authResp, err := client.PostForm(srv.URL+"/device/authorize", url.Values{
+		"client_id": {"demarkus-cli"},
+	})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	var auth deviceAuthorizeResponse
+	_ = json.NewDecoder(authResp.Body).Decode(&auth)
+	_ = authResp.Body.Close()
+
+	formResp, err := client.PostForm(srv.URL+"/device", url.Values{"user_code": {auth.UserCode}})
+	if err != nil {
+		t.Fatalf("form: %v", err)
+	}
+	_ = formResp.Body.Close()
+
+	loginResp, err := client.Get(srv.URL + "/auth/login")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	_ = loginResp.Body.Close()
+	loc, _ := url.Parse(loginResp.Header.Get("Location"))
+	nonce := loc.Query().Get("state")
+
+	req, _ := http.NewRequest(http.MethodGet,
+		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
+	cbResp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	_ = cbResp.Body.Close()
+
+	// Polling client must NOT see access_denied — Exchange failed
+	// for transient reasons, not because the user denied. The grant
+	// stays pending; the client retries until expiry.
+	if err := expectDeviceTokenError(t, srv, auth.DeviceCode, "authorization_pending"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inspect the store to confirm the state machine matches: status
+	// should still be statusPending, not statusDenied.
+	state, ok := broker.deviceStore.LookupByDeviceCode(auth.DeviceCode)
+	if !ok {
+		t.Fatal("device_code disappeared from store")
+	}
+	if state.Status != statusPending {
+		t.Errorf("status = %v, want statusPending (exchange-failure must NOT permanently Deny)", state.Status)
 	}
 }
 
@@ -726,7 +852,9 @@ func TestDeviceFlowIntegrationIdPDeny(t *testing.T) {
 	client.Jar = jar
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-	authResp, err := client.PostForm(srv.URL+"/device/authorize", url.Values{})
+	authResp, err := client.PostForm(srv.URL+"/device/authorize", url.Values{
+		"client_id": {"demarkus-cli"},
+	})
 	if err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
