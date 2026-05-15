@@ -502,19 +502,19 @@ func (i *Issuer) lookupWorld(name string) *WorldConfig {
 }
 
 func (i *Issuer) appendToWorldSecret(ctx context.Context, w *WorldConfig, label string, entry *token.Entry) error {
-	return i.mutateSecret(ctx, w.Namespace, w.TokensSecret, TokensSecretKey, func(existing []byte) ([]byte, error) {
+	return mutateSecret(ctx, i.k8s, w.Namespace, w.TokensSecret, TokensSecretKey, func(existing []byte) ([]byte, error) {
 		return token.AppendBytes(existing, label, entry)
 	})
 }
 
 func (i *Issuer) removeFromWorldSecret(ctx context.Context, w *WorldConfig, label string) error {
-	return i.mutateSecret(ctx, w.Namespace, w.TokensSecret, TokensSecretKey, func(existing []byte) ([]byte, error) {
+	return mutateSecret(ctx, i.k8s, w.Namespace, w.TokensSecret, TokensSecretKey, func(existing []byte) ([]byte, error) {
 		return token.RemoveBytes(existing, label)
 	})
 }
 
 func (i *Issuer) appendIssuance(ctx context.Context, iss *Issuance) error {
-	return i.mutateSecret(ctx, i.cfg.Server.BrokerNamespace, i.cfg.Server.IssuancesSecret, IssuancesSecretKey, func(existing []byte) ([]byte, error) {
+	return mutateSecret(ctx, i.k8s, i.cfg.Server.BrokerNamespace, i.cfg.Server.IssuancesSecret, IssuancesSecretKey, func(existing []byte) ([]byte, error) {
 		var current Issuances
 		if len(existing) > 0 {
 			if err := json.Unmarshal(existing, &current); err != nil {
@@ -537,7 +537,7 @@ func (i *Issuer) appendIssuance(ctx context.Context, iss *Issuance) error {
 }
 
 func (i *Issuer) removeIssuance(ctx context.Context, label string) error {
-	return i.mutateSecret(ctx, i.cfg.Server.BrokerNamespace, i.cfg.Server.IssuancesSecret, IssuancesSecretKey, func(existing []byte) ([]byte, error) {
+	return mutateSecret(ctx, i.k8s, i.cfg.Server.BrokerNamespace, i.cfg.Server.IssuancesSecret, IssuancesSecretKey, func(existing []byte) ([]byte, error) {
 		if len(existing) == 0 {
 			return existing, nil
 		}
@@ -580,9 +580,16 @@ func (i *Issuer) readIssuances(ctx context.Context) (Issuances, error) {
 // the named key set to the mutate-result on empty input. Retries
 // resourceVersion conflicts up to maxConflictRetries; surfaces all other
 // errors immediately.
-func (i *Issuer) mutateSecret(ctx context.Context, namespace, name, key string, mutate func([]byte) ([]byte, error)) error {
+//
+// Free function rather than a method on any one type so the broker's
+// Issuer and refreshStore can share the same Secret-mutation contract
+// without duplicating the conflict-retry loop. See /guidelines.md
+// "Don't Duplicate Logic" — the prior shape had the loop only on
+// *Issuer; the refresh-tokens Secret needed identical semantics, so the
+// helper became a package-level free function.
+func mutateSecret(ctx context.Context, k8s kubernetes.Interface, namespace, name, key string, mutate func([]byte) ([]byte, error)) error {
 	for range maxConflictRetries {
-		secret, getErr := i.k8s.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+		secret, getErr := k8s.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 		if getErr != nil && !apierrors.IsNotFound(getErr) {
 			return fmt.Errorf("get secret %s/%s: %w", namespace, name, getErr)
 		}
@@ -603,7 +610,7 @@ func (i *Issuer) mutateSecret(ctx context.Context, namespace, name, key string, 
 				Type: corev1.SecretTypeOpaque,
 				Data: map[string][]byte{key: next},
 			}
-			_, createErr := i.k8s.CoreV1().Secrets(namespace).Create(ctx, fresh, metav1.CreateOptions{})
+			_, createErr := k8s.CoreV1().Secrets(namespace).Create(ctx, fresh, metav1.CreateOptions{})
 			if createErr == nil {
 				return nil
 			}
@@ -616,7 +623,7 @@ func (i *Issuer) mutateSecret(ctx context.Context, namespace, name, key string, 
 			secret.Data = make(map[string][]byte, 1)
 		}
 		secret.Data[key] = next
-		_, updateErr := i.k8s.CoreV1().Secrets(namespace).Update(ctx, secret, metav1.UpdateOptions{})
+		_, updateErr := k8s.CoreV1().Secrets(namespace).Update(ctx, secret, metav1.UpdateOptions{})
 		if updateErr == nil {
 			return nil
 		}

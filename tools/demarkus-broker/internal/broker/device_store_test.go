@@ -136,7 +136,7 @@ func TestDeviceStoreLookupByUserCode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
-		if err := store.Bind(deviceCode, &ExchangeResult{}); err != nil {
+		if err := store.Bind(deviceCode, &ExchangeResult{}, ""); err != nil {
 			t.Fatalf("Bind: %v", err)
 		}
 		if _, ok := store.LookupByUserCode(userCode); ok {
@@ -157,7 +157,7 @@ func TestDeviceStoreBind(t *testing.T) {
 			RawIDToken:  "id-token",
 			AccessToken: "access-token",
 		}
-		if err := store.Bind(deviceCode, &result); err != nil {
+		if err := store.Bind(deviceCode, &result, "refresh-raw"); err != nil {
 			t.Fatalf("Bind: %v", err)
 		}
 		out := store.Poll(deviceCode)
@@ -170,11 +170,14 @@ func TestDeviceStoreBind(t *testing.T) {
 		if out.Result.AccessToken != "access-token" {
 			t.Fatalf("forwarded access_token mismatch: %q", out.Result.AccessToken)
 		}
+		if out.RefreshToken != "refresh-raw" {
+			t.Fatalf("forwarded refresh_token = %q, want refresh-raw", out.RefreshToken)
+		}
 	})
 
 	t.Run("unknown device code returns not-found", func(t *testing.T) {
 		store, _ := newTestDeviceStore(t)
-		err := store.Bind("nonexistent", &ExchangeResult{})
+		err := store.Bind("nonexistent", &ExchangeResult{}, "")
 		if !errors.Is(err, errDeviceCodeNotFound) {
 			t.Fatalf("err: got %v want errDeviceCodeNotFound", err)
 		}
@@ -186,10 +189,10 @@ func TestDeviceStoreBind(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
-		if err := store.Bind(deviceCode, &ExchangeResult{RawIDToken: "first"}); err != nil {
+		if err := store.Bind(deviceCode, &ExchangeResult{RawIDToken: "first"}, ""); err != nil {
 			t.Fatalf("first Bind: %v", err)
 		}
-		err = store.Bind(deviceCode, &ExchangeResult{RawIDToken: "second"})
+		err = store.Bind(deviceCode, &ExchangeResult{RawIDToken: "second"}, "")
 		if !errors.Is(err, errDeviceCodeTerminal) {
 			t.Fatalf("second Bind: got %v want errDeviceCodeTerminal", err)
 		}
@@ -207,7 +210,7 @@ func TestDeviceStoreBind(t *testing.T) {
 			t.Fatalf("Authorize: %v", err)
 		}
 		clock.Advance(testExpiresIn + time.Second)
-		err = store.Bind(deviceCode, &ExchangeResult{})
+		err = store.Bind(deviceCode, &ExchangeResult{}, "")
 		if !errors.Is(err, errDeviceCodeTerminal) {
 			t.Fatalf("err: got %v want errDeviceCodeTerminal", err)
 		}
@@ -236,7 +239,7 @@ func TestDeviceStoreDeny(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
-		if err := store.Bind(deviceCode, &ExchangeResult{RawIDToken: "id"}); err != nil {
+		if err := store.Bind(deviceCode, &ExchangeResult{RawIDToken: "id"}, ""); err != nil {
 			t.Fatalf("Bind: %v", err)
 		}
 		err = store.Deny(deviceCode)
@@ -256,7 +259,7 @@ func TestDeviceStorePoll(t *testing.T) {
 		if out := store.Poll(deviceCode); out.Status != statusPending || out.SlowDown {
 			t.Fatalf("first poll: got %+v want pending", out)
 		}
-		if err := store.Bind(deviceCode, &ExchangeResult{Claims: Claims{Email: "a@b"}}); err != nil {
+		if err := store.Bind(deviceCode, &ExchangeResult{Claims: Claims{Email: "a@b"}}, ""); err != nil {
 			t.Fatalf("Bind: %v", err)
 		}
 		out := store.Poll(deviceCode)

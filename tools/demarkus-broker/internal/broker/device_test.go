@@ -106,7 +106,7 @@ func TestDeviceTokenSuccessIsNonCacheable(t *testing.T) {
 	if err := broker.deviceStore.Bind(deviceCode, &ExchangeResult{
 		RawIDToken:  "id",
 		AccessToken: "access",
-	}); err != nil {
+	}, "refresh-raw"); err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
 	resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
@@ -472,7 +472,7 @@ func TestDeviceTokenStates(t *testing.T) {
 			Claims:      Claims{Email: "alice@example.com"},
 			RawIDToken:  "raw-id-token",
 			AccessToken: "raw-access-token",
-		}); err != nil {
+		}, "raw-refresh-token"); err != nil {
 			t.Fatalf("Bind: %v", err)
 		}
 		resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
@@ -496,6 +496,9 @@ func TestDeviceTokenStates(t *testing.T) {
 		}
 		if success.AccessToken != "raw-access-token" {
 			t.Errorf("access_token = %q, want raw-access-token", success.AccessToken)
+		}
+		if success.RefreshToken != "raw-refresh-token" {
+			t.Errorf("refresh_token = %q, want raw-refresh-token", success.RefreshToken)
 		}
 		if success.TokenType != "Bearer" {
 			t.Errorf("token_type = %q, want Bearer", success.TokenType)
@@ -832,6 +835,84 @@ func TestDeviceFlowIntegrationHappyPath(t *testing.T) {
 	}
 	if success.AccessToken != "raw-access-token-xyz" {
 		t.Errorf("access_token = %q, want forwarded value", success.AccessToken)
+	}
+	// PR4 contract: every device-code completion mints a refresh token.
+	// 32 bytes hex = 64 chars. The deviceCallback flow Issued at Bind
+	// time; the polling response forwards it verbatim.
+	if len(success.RefreshToken) != 64 {
+		t.Errorf("refresh_token len = %d, want 64 hex chars: %q", len(success.RefreshToken), success.RefreshToken)
+	}
+}
+
+// TestDeviceCallbackRefreshMintFailureLeavesPending pins PR4's
+// "never ship anything broken" posture: when the refresh-token mint
+// fails after a successful OAuth exchange, deviceCallback MUST leave
+// the device-code grant in statusPending so the polling client retries
+// (or eventually sees expired_token). Translating to access_denied or
+// hand-rolling a half-bound state would silently leak an IdP-verified
+// claim into a state the polling client can't recover from.
+func TestDeviceCallbackRefreshMintFailureLeavesPending(t *testing.T) {
+	verifier := &fakeVerifier{
+		authURL:    "https://idp.example.com/authorize",
+		claims:     Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|alice"},
+		rawIDToken: "id",
+	}
+	srv, broker := newTestServer(t, deviceTestConfig(), verifier, fake.NewSimpleClientset())
+	// Force refresh-mint failures: randFn always errors.
+	broker.refreshStore.randFn = func(_ []byte) (int, error) {
+		return 0, errors.New("simulated refresh mint failure")
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := testClient(srv)
+	client.Jar = jar
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	authResp, err := client.PostForm(srv.URL+"/device/authorize", url.Values{
+		"client_id": {"demarkus-cli"},
+	})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	var auth deviceAuthorizeResponse
+	if err := json.NewDecoder(authResp.Body).Decode(&auth); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	_ = authResp.Body.Close()
+
+	formResp, err := client.PostForm(srv.URL+"/device", url.Values{"user_code": {auth.UserCode}})
+	if err != nil {
+		t.Fatalf("form: %v", err)
+	}
+	_ = formResp.Body.Close()
+
+	loginResp, err := client.Get(srv.URL + "/auth/login")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	_ = loginResp.Body.Close()
+	loc, _ := url.Parse(loginResp.Header.Get("Location"))
+	nonce := loc.Query().Get("state")
+
+	req, _ := http.NewRequest(http.MethodGet,
+		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
+	cbResp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	_ = cbResp.Body.Close()
+	if cbResp.StatusCode != http.StatusOK {
+		t.Fatalf("callback status = %d, want 200 (done page renders on mint failure too)", cbResp.StatusCode)
+	}
+
+	// Grant must still be pending, NOT access_denied (that's reserved
+	// for IdP-side denial) and NOT statusComplete (we never minted
+	// the refresh token to put in the success body).
+	if err := expectDeviceTokenError(t, srv, auth.DeviceCode, "authorization_pending"); err != nil {
+		t.Fatal(err)
 	}
 }
 
