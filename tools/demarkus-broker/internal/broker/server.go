@@ -163,6 +163,18 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := State{Nonce: nonce, ExpiresAt: s.clock().Add(s.cfg.Server.StateTTL)}
+	// Device-flow handoff: if /device set the device cookie, pin the
+	// device_code into the signed state HERE so /auth/callback's
+	// dispatch is driven by a tamper-evident value rather than the
+	// ambient cookie. The cookie itself is consumed (cleared) below
+	// so an abandoned-then-resumed-elsewhere flow can't silently
+	// resurrect the device branch later.
+	if cookie, cerr := r.Cookie(deviceCookieName); cerr == nil && cookie.Value != "" {
+		if _, ok := s.deviceStore.LookupByDeviceCode(cookie.Value); ok {
+			state.DeviceCode = cookie.Value
+		}
+		s.clearDeviceCookie(w)
+	}
 	signed, err := s.signer.Sign(state)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: sign state", "err", err)
@@ -183,21 +195,9 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
-	// Device-flow branch: if the cookie set by POST /device is present
-	// on this callback, the request is the tail end of an RFC 8628
-	// flow rather than the browser code-flow. The handler short-
-	// circuits to deviceCallback (no Mint, no JSON response) and the
-	// rest of this function is unchanged for the browser path. Keeps
-	// the existing /auth/callback tests untouched when no cookie is
-	// set.
-	if cookie, err := r.Cookie(deviceCookieName); err == nil && cookie.Value != "" {
-		s.deviceCallback(w, r, cookie.Value)
-		return
-	}
 	queryState := r.URL.Query().Get("state")
-	code := r.URL.Query().Get("code")
-	if queryState == "" || code == "" {
-		http.Error(w, "missing state or code", http.StatusBadRequest)
+	if queryState == "" {
+		http.Error(w, "missing state", http.StatusBadRequest)
 		return
 	}
 	cookie, err := r.Cookie(stateCookieName)
@@ -216,7 +216,8 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "state mismatch", http.StatusUnauthorized)
 		return
 	}
-	// Best effort: clear the cookie now that it has done its job.
+	// State cookie has done its job — clear it before any branch so
+	// even error paths can't replay the nonce.
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookieName,
 		Value:    "",
@@ -226,6 +227,24 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
+
+	// Device-flow dispatch is driven by the signed State, not by an
+	// ambient cookie. authLogin pins state.DeviceCode when /device set
+	// the device cookie; an empty value here means a normal browser
+	// code-flow callback. A stale device cookie left in the jar from
+	// an abandoned flow cannot route a later browser callback through
+	// the device branch because the State was minted fresh at the
+	// most recent /auth/login.
+	if state.DeviceCode != "" {
+		s.deviceCallback(w, r, state.DeviceCode)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Error(w, "missing code", http.StatusBadRequest)
+		return
+	}
 
 	exchange, err := s.verifier.Exchange(r.Context(), code)
 	if err != nil {

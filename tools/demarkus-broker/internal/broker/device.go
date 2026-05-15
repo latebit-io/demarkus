@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -245,68 +246,30 @@ func (s *Server) renderDeviceDone(w http.ResponseWriter, r *http.Request) {
 }
 
 // deviceCallback is /auth/callback's device-flow branch — dispatched
-// from authCallback when the device cookie is present. Validates the
-// OIDC state cookie (same gates as the browser path), runs Exchange,
-// and Binds the result into the deviceStore for the polling client to
-// pick up on its next /device/token call. Renders device_done.html
-// regardless of outcome (success / IdP-denied / Bind-failed) — the
-// user-facing tab carries no actionable detail, and the polling
-// client distinguishes by the next /device/token response. Logs carry
-// the operational detail for the operator.
+// by authCallback when the verified State carries a non-empty
+// DeviceCode. State validation (signature, nonce match, expiry,
+// cookie clear) is owned by the caller; this function is invoked
+// only after those gates pass.
+//
+// Runs Exchange and Binds the result into the deviceStore for the
+// polling client to pick up. Renders device_done.html regardless of
+// outcome (success / IdP-denied / Bind-failed) — the user-facing tab
+// carries no actionable detail, and the polling client distinguishes
+// by the next /device/token response. Logs carry the operational
+// detail for the operator.
 //
 // IdP-denied branch translates ?error=... into deviceStore.Deny so
 // the polling client sees RFC 8628 access_denied rather than timing
 // out with expired_token (plan §Open Question 1 lean: cleaner UX).
 func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCode string) {
 	if _, ok := s.deviceStore.LookupByDeviceCode(deviceCode); !ok {
-		// Cookie pointed at a code the store doesn't know — could be
-		// post-restart memory loss, post-expiry-sweep, or a forged
-		// cookie. Either way nothing to recover; the polling client
-		// already lost the grant. Clear the cookie on the way out so
-		// the next request lands cleanly on the browser path.
-		s.clearDeviceCookie(w)
+		// State carried a device_code the store doesn't recognize —
+		// could be post-restart memory loss, post-expiry sweep, or
+		// the grant was already resolved. The polling client (if any)
+		// already lost the grant.
 		http.Error(w, "device session expired", http.StatusBadRequest)
 		return
 	}
-
-	queryState := r.URL.Query().Get("state")
-	if queryState == "" {
-		s.clearDeviceCookie(w)
-		http.Error(w, "missing state", http.StatusBadRequest)
-		return
-	}
-	stateCookie, err := r.Cookie(stateCookieName)
-	if err != nil {
-		s.clearDeviceCookie(w)
-		http.Error(w, "missing state cookie", http.StatusBadRequest)
-		return
-	}
-	state, err := s.signer.Verify(stateCookie.Value)
-	if err != nil {
-		s.log.WarnContext(r.Context(), "broker: device callback state cookie invalid", "err", err)
-		s.clearDeviceCookie(w)
-		http.Error(w, "invalid state", http.StatusUnauthorized)
-		return
-	}
-	if state.Nonce != queryState {
-		s.log.WarnContext(r.Context(), "broker: device callback state mismatch", "want", state.Nonce, "got", queryState)
-		s.clearDeviceCookie(w)
-		http.Error(w, "state mismatch", http.StatusUnauthorized)
-		return
-	}
-	// Both cookies have done their job. Clear now (before any
-	// WriteHeader call) so a replay can't reuse them and the
-	// browser does not retain them for the next request.
-	http.SetCookie(w, &http.Cookie{
-		Name:     stateCookieName,
-		Value:    "",
-		Path:     "/auth/callback",
-		HttpOnly: true,
-		Secure:   !s.cfg.Server.InsecureCookies,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
-	s.clearDeviceCookie(w)
 
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		s.log.InfoContext(r.Context(), "broker: device callback denied by idp", "err", errParam)
@@ -368,27 +331,41 @@ func (s *Server) RunDeviceJanitor(ctx context.Context) {
 }
 
 // sameOriginPost returns false when the request carries an Origin
-// header whose host differs from r.Host — the canonical signal of a
-// cross-origin browser POST. Absence of Origin is treated as
-// "not a browser" (curl, Go's http.Client, server-to-server tooling
-// — none of which are CSRF-vulnerable, since CSRF requires an
-// authenticated user-agent the attacker can puppet).
+// header whose scheme+host differs from the request's own — the
+// canonical signal of a cross-origin browser POST. Both axes
+// matter: `http://broker.example.com` and `https://broker.example.com`
+// are distinct origins, so a host-only match would let an attacker on
+// a downgraded scheme through.
 //
-// We don't compare against cfg.Server.PublicURL because in dev /
-// kind / port-forward setups the user reaches the broker through a
-// host that differs from PublicURL; r.Host reflects the actual host
-// the browser sees and the Origin it sends, which is what we want
-// for a strict same-origin gate.
+// Absence of Origin is treated as "not a browser" (curl, Go's
+// http.Client, server-to-server tooling — none of which are CSRF-
+// vulnerable, since CSRF requires an authenticated user-agent the
+// attacker can puppet).
+//
+// Expected scheme: X-Forwarded-Proto wins when present (we are
+// behind a TLS-terminating ingress per the standard deployment
+// shape; a browser-driven CSRF cannot forge this header since it is
+// stripped/rewritten by the ingress), falling back to r.TLS to
+// distinguish direct HTTPS from plain HTTP. Expected host: r.Host
+// — what the browser actually saw — rather than cfg.Server.PublicURL,
+// so dev / kind / port-forward setups where users reach the broker
+// on a different host than PublicURL keep working.
 func sameOriginPost(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true
 	}
 	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || u.Scheme == "" {
 		return false
 	}
-	return u.Host == r.Host
+	expectedScheme := "http"
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		expectedScheme = strings.ToLower(proto)
+	} else if r.TLS != nil {
+		expectedScheme = "https"
+	}
+	return u.Host == r.Host && strings.EqualFold(u.Scheme, expectedScheme)
 }
 
 // clearDeviceCookie zeroes the device cookie. Called from /auth/callback's

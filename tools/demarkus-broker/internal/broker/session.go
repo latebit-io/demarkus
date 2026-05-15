@@ -17,9 +17,18 @@ import (
 // The cookie is signed with HMAC-SHA256 over the JSON encoding of this
 // struct; the IdP never sees it (only the Nonce is echoed as the OAuth
 // `state` query parameter).
+//
+// DeviceCode is non-empty when /auth/login was entered from the device
+// flow: it pins the dispatch on /auth/callback to a single, signed
+// value rather than an ambient cookie. Without this field a stale
+// device cookie left in the browser jar (user abandoned a /soul-join
+// mid-flow, then later did a normal browser login) would silently
+// route /auth/callback through the device branch and bind the
+// wrong grant. Empty means a regular browser code-flow callback.
 type State struct {
-	Nonce     string    `json:"n"`
-	ExpiresAt time.Time `json:"e"`
+	Nonce      string    `json:"n"`
+	ExpiresAt  time.Time `json:"e"`
+	DeviceCode string    `json:"d,omitempty"`
 }
 
 // Signer encodes and verifies State values into the signed cookie format

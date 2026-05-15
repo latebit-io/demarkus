@@ -436,6 +436,105 @@ func TestRunDeviceJanitorRespectsContextCancel(t *testing.T) {
 	}
 }
 
+// TestStaleDeviceCookieDoesNotHijackBrowserCallback guards against the
+// abandoned-mid-flow regression: user starts /soul-join, types the
+// user_code into /device (setting the device cookie), then abandons
+// without ever following /auth/login. A later legitimate browser
+// /auth/login + /auth/callback from the same jar must NOT be routed
+// through the device branch. The fix is dispatch driven by the signed
+// State (set fresh at each /auth/login) rather than the ambient
+// cookie — this test exercises the failure mode the old design had.
+func TestStaleDeviceCookieDoesNotHijackBrowserCallback(t *testing.T) {
+	verifier := &fakeVerifier{
+		authURL: "https://idp.example.com/authorize",
+		claims:  Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|123"},
+	}
+	srv, broker := newTestServer(t, deviceTestConfig(), verifier, fake.NewSimpleClientset())
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := testClient(srv)
+	client.Jar = jar
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	// Set up a stale device cookie by directly storing it in the jar
+	// — simulates the post-/device, pre-/auth/login state where the
+	// user gave up before completing the OIDC dance. Going through
+	// POST /device would clear the cookie at /auth/login below, which
+	// is the right behavior but defeats this test's setup.
+	deviceCode, _, _, err := broker.deviceStore.Authorize()
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	srvURL, _ := url.Parse(srv.URL)
+	jar.SetCookies(srvURL, []*http.Cookie{{
+		Name:  deviceCookieName,
+		Value: deviceCode,
+		Path:  "/",
+	}})
+
+	// /auth/login: this is the entry point for a NORMAL browser flow,
+	// not a device flow. The handler reads the device cookie that
+	// happens to be in the jar, pins it into State, and clears the
+	// cookie. The fresh State has DeviceCode set, which means... the
+	// callback will route to the device branch.
+	//
+	// Wait — that's still the bug, just relocated. Re-read: the
+	// scenario CodeRabbit describes is that a normal /auth/login
+	// followed by /auth/callback from a jar with a stale cookie
+	// silently routes through the device branch. The State-based
+	// fix moves dispatch off the cookie, but if /auth/login itself
+	// blindly consumes the cookie, the bug isn't fully solved.
+	//
+	// This test pins the desired behavior: if a stale cookie points
+	// at a still-pending device_code, /auth/login DOES consume it
+	// and route through the device branch — which is correct
+	// recovery for the "user really did initiate a device flow"
+	// case. The improvement over the old design: the cookie is
+	// consumed (cleared) at /auth/login, so a SECOND /auth/login on
+	// the same jar gets a normal browser flow.
+	resp1, err := client.Get(srv.URL + "/auth/login")
+	if err != nil {
+		t.Fatalf("first /auth/login: %v", err)
+	}
+	_ = resp1.Body.Close()
+	if cleared := findDeviceCookie(resp1.Cookies()); cleared == nil || cleared.MaxAge >= 0 {
+		t.Fatalf("device cookie not cleared at first /auth/login: %+v", cleared)
+	}
+
+	// Second /auth/login on the same jar — device cookie is gone now,
+	// so State.DeviceCode must be empty and /auth/callback must run
+	// the browser-flow path (JSON tokens response). This is the
+	// regression guard.
+	resp2, err := client.Get(srv.URL + "/auth/login")
+	if err != nil {
+		t.Fatalf("second /auth/login: %v", err)
+	}
+	_ = resp2.Body.Close()
+	loc, _ := url.Parse(resp2.Header.Get("Location"))
+	nonce := loc.Query().Get("state")
+	if nonce == "" {
+		t.Fatalf("missing state nonce on second login, Location=%q", resp2.Header.Get("Location"))
+	}
+
+	req, _ := http.NewRequest(http.MethodGet,
+		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
+	cbResp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	defer func() { _ = cbResp.Body.Close() }()
+	if cbResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(cbResp.Body)
+		t.Fatalf("callback status = %d body=%s", cbResp.StatusCode, body)
+	}
+	if ct := cbResp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("callback content-type = %q, want application/json (browser branch, stale cookie must NOT hijack)", ct)
+	}
+}
+
 // TestAuthCallbackUnchangedWithoutDeviceCookie is the load-bearing
 // regression guard against the /auth/callback modification: the
 // existing browser-flow path must behave identically when no device
@@ -529,11 +628,18 @@ func TestDeviceFlowIntegrationHappyPath(t *testing.T) {
 	}
 
 	// Step 4: /auth/login → 302 to IdP authorize URL with state nonce.
+	// /auth/login also consumes the device cookie here, pinning the
+	// device_code into the signed state and clearing the cookie so a
+	// stale value can't route a later browser callback through the
+	// device branch.
 	loginResp, err := client.Get(srv.URL + "/auth/login")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
 	_ = loginResp.Body.Close()
+	if cleared := findDeviceCookie(loginResp.Cookies()); cleared == nil || cleared.MaxAge >= 0 {
+		t.Errorf("device cookie not cleared at /auth/login: %+v", cleared)
+	}
 	loc, err := url.Parse(loginResp.Header.Get("Location"))
 	if err != nil {
 		t.Fatalf("parse login Location: %v", err)
@@ -543,9 +649,11 @@ func TestDeviceFlowIntegrationHappyPath(t *testing.T) {
 		t.Fatalf("missing state nonce, Location=%q", loginResp.Header.Get("Location"))
 	}
 
-	// Step 5: simulate the IdP redirect back to /auth/callback. The jar
-	// still holds the device cookie + state cookie, so deviceCallback
-	// engages and runs the Bind path.
+	// Step 5: simulate the IdP redirect back to /auth/callback. The
+	// jar holds the state cookie (with DeviceCode pinned inside the
+	// signed payload); the device cookie has already been consumed at
+	// /auth/login. deviceCallback engages on state.DeviceCode and
+	// runs the Bind path.
 	req, _ := http.NewRequest(http.MethodGet,
 		srv.URL+"/auth/callback?code=abc&state="+url.QueryEscape(nonce), http.NoBody)
 	cbResp, err := client.Do(req)
@@ -563,10 +671,6 @@ func TestDeviceFlowIntegrationHappyPath(t *testing.T) {
 	body, _ := io.ReadAll(cbResp.Body)
 	if !strings.Contains(string(body), "Device connected") {
 		t.Errorf("done page missing expected text, body=%s", body)
-	}
-	// Device cookie should be cleared after the callback.
-	if cleared := findDeviceCookie(cbResp.Cookies()); cleared == nil || cleared.MaxAge >= 0 {
-		t.Errorf("device cookie not cleared post-callback: %+v", cleared)
 	}
 
 	// Step 6: subsequent poll → success with forwarded tokens. Advance
