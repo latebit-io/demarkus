@@ -144,7 +144,7 @@ func TestSweepRetiresExpiredKeepsFresh(t *testing.T) {
 	})
 
 	issuer := newIssuer(t, testConfig(), k8s)
-	s := NewSweeper(issuer, time.Hour, nil)
+	s := NewSweeper(issuer, nil, time.Hour, nil)
 	s.clock = func() time.Time { return now }
 
 	if err := s.sweep(context.Background()); err != nil {
@@ -204,7 +204,7 @@ func TestSweepPrunesDrift(t *testing.T) {
 	})
 
 	issuer := newIssuer(t, testConfig(), k8s)
-	s := NewSweeper(issuer, time.Hour, nil)
+	s := NewSweeper(issuer, nil, time.Hour, nil)
 	s.clock = func() time.Time { return now }
 
 	if err := s.sweep(context.Background()); err != nil {
@@ -246,7 +246,7 @@ func TestSweepSkipsUnconfiguredWorld(t *testing.T) {
 	})
 
 	issuer := newIssuer(t, testConfig(), k8s)
-	s := NewSweeper(issuer, time.Hour, nil)
+	s := NewSweeper(issuer, nil, time.Hour, nil)
 	s.clock = func() time.Time { return now }
 
 	if err := s.sweep(context.Background()); err != nil {
@@ -267,7 +267,7 @@ func TestSweepEmptyIssuancesIsNoop(t *testing.T) {
 	// touching any world Secret.
 	k8s := fake.NewSimpleClientset()
 	issuer := newIssuer(t, testConfig(), k8s)
-	s := NewSweeper(issuer, time.Hour, nil)
+	s := NewSweeper(issuer, nil, time.Hour, nil)
 	if err := s.sweep(context.Background()); err != nil {
 		t.Fatalf("sweep on empty state: %v", err)
 	}
@@ -278,6 +278,57 @@ func TestSweepEmptyIssuancesIsNoop(t *testing.T) {
 	}
 	if len(list.Items) != 0 {
 		t.Errorf("empty sweep created team-a Secrets: %d", len(list.Items))
+	}
+}
+
+func TestSweepRemovesExpiredRefreshTokens(t *testing.T) {
+	// PR4 Step 5: when the Sweeper is wired with a *RefreshStore,
+	// its per-tick pass must also remove expired refresh-token
+	// records from the broker-namespace Secret. The issuance leg
+	// is exercised in the surrounding tests; this one targets the
+	// new code path in isolation.
+	k8s := fake.NewSimpleClientset()
+	cfg := testRefreshConfig()
+	rs := NewRefreshStore(cfg, k8s)
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	rs.clock = func() time.Time { return base }
+
+	short, err := rs.Issue(context.Background(), Claims{Email: "short@x.com", EmailVerified: true}, time.Hour)
+	if err != nil {
+		t.Fatalf("Issue short: %v", err)
+	}
+	long, err := rs.Issue(context.Background(), Claims{Email: "long@x.com", EmailVerified: true}, 48*time.Hour)
+	if err != nil {
+		t.Fatalf("Issue long: %v", err)
+	}
+
+	// Advance the store's clock past the short token's ExpiresAt
+	// but not the long one's.
+	rs.clock = func() time.Time { return base.Add(2 * time.Hour) }
+
+	issuer := newIssuer(t, cfg, k8s)
+	s := NewSweeper(issuer, rs, time.Hour, nil)
+	if err := s.sweep(context.Background()); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if _, err := rs.Refresh(context.Background(), short); err == nil {
+		t.Errorf("expired token survived sweep")
+	}
+	if _, err := rs.Refresh(context.Background(), long); err != nil {
+		t.Errorf("long-lived token swept by accident: %v", err)
+	}
+}
+
+func TestSweepNoRefreshStoreIsNoop(t *testing.T) {
+	// Backward-compat with pre-PR4 callers: Sweeper constructed
+	// without a RefreshStore must not panic when its per-tick loop
+	// reaches the refresh-sweep block. Exercises the nil-skip.
+	k8s := fake.NewSimpleClientset()
+	issuer := newIssuer(t, testConfig(), k8s)
+	s := NewSweeper(issuer, nil, time.Hour, nil)
+	if err := s.sweep(context.Background()); err != nil {
+		t.Fatalf("sweep with nil refreshStore: %v", err)
 	}
 }
 
@@ -298,7 +349,7 @@ func TestSweeperLeaderElection(t *testing.T) {
 	// with its own counter.
 	makeReplica := func(identity string) (*Sweeper, *atomic.Int32) {
 		var count atomic.Int32
-		s := NewSweeper(newIssuer(t, cfg, k8s), 30*time.Millisecond, nil)
+		s := NewSweeper(newIssuer(t, cfg, k8s), nil, 30*time.Millisecond, nil)
 		s.sweepHook = func() { count.Add(1) }
 		_ = identity // wired into RunLeaderElected below
 		return s, &count

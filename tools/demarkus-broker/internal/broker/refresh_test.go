@@ -22,12 +22,12 @@ import (
 
 // testRefreshSecret is the operator-visible name for the broker's
 // refresh-tokens Secret in tests. Distinct from testIssuancesNS so a
-// stray cross-Secret read in the refreshStore would land on a
+// stray cross-Secret read in the RefreshStore would land on a
 // missing Secret and surface as an obvious test failure rather than
 // silently picking up issuance bytes.
 const testRefreshSecret = "broker-refresh-tokens"
 
-// testRefreshConfig builds a Config sufficient for refreshStore
+// testRefreshConfig builds a Config sufficient for RefreshStore
 // tests. Reuses the issuance-test config fields so a future cross-
 // store interaction (Step 2 onward) shares one base config helper.
 func testRefreshConfig() *Config {
@@ -37,9 +37,9 @@ func testRefreshConfig() *Config {
 	return c
 }
 
-func newRefreshStoreForTest(t *testing.T, k8s *fake.Clientset) *refreshStore {
+func newRefreshStoreForTest(t *testing.T, k8s *fake.Clientset) *RefreshStore {
 	t.Helper()
-	s := newRefreshStore(testRefreshConfig(), k8s)
+	s := NewRefreshStore(testRefreshConfig(), k8s)
 	s.clock = func() time.Time { return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC) }
 	return s
 }
@@ -102,13 +102,13 @@ func TestRefreshStoreIssueRejectsZeroTTL(t *testing.T) {
 func TestRefreshStoreRefreshErrors(t *testing.T) {
 	tests := []struct {
 		name string
-		fn   func(t *testing.T, s *refreshStore, raw string) (string, time.Time)
+		fn   func(t *testing.T, s *RefreshStore, raw string) (string, time.Time)
 	}{
-		{"unknown token", func(_ *testing.T, _ *refreshStore, _ string) (string, time.Time) {
+		{"unknown token", func(_ *testing.T, _ *RefreshStore, _ string) (string, time.Time) {
 			// Same length as a real token, never issued.
 			return strings.Repeat("0", refreshTokenBytes*2), time.Time{}
 		}},
-		{"tampered token (one byte off)", func(_ *testing.T, _ *refreshStore, raw string) (string, time.Time) {
+		{"tampered token (one byte off)", func(_ *testing.T, _ *RefreshStore, raw string) (string, time.Time) {
 			// Flip the first hex character to a guaranteed-different value.
 			flipped := []byte(raw)
 			if flipped[0] == 'f' {
@@ -118,10 +118,10 @@ func TestRefreshStoreRefreshErrors(t *testing.T) {
 			}
 			return string(flipped), time.Time{}
 		}},
-		{"empty token", func(_ *testing.T, _ *refreshStore, _ string) (string, time.Time) {
+		{"empty token", func(_ *testing.T, _ *RefreshStore, _ string) (string, time.Time) {
 			return "", time.Time{}
 		}},
-		{"expired token", func(_ *testing.T, s *refreshStore, raw string) (string, time.Time) {
+		{"expired token", func(_ *testing.T, s *RefreshStore, raw string) (string, time.Time) {
 			// Jump clock past ExpiresAt.
 			base := s.clock()
 			s.clock = func() time.Time { return base.Add(25 * time.Hour) }
@@ -312,7 +312,7 @@ func TestRefreshStoreSecretShape(t *testing.T) {
 // parallel Issues without a conflict-emitting reactor would last-
 // writer-wins and lose entries) then refreshes in parallel under
 // -race. The race detector is the load-bearing check: any
-// unsynchronized read or write inside refreshStore surfaces here.
+// unsynchronized read or write inside RefreshStore surfaces here.
 func TestRefreshStoreConcurrentRefresh(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
 	s := newRefreshStoreForTest(t, k8s)
@@ -353,7 +353,7 @@ func TestRefreshStoreConcurrentRefresh(t *testing.T) {
 }
 
 // TestRefreshStoreIssueConflictRetries exercises mutateSecret's
-// optimistic-concurrency retry loop end-to-end through refreshStore.
+// optimistic-concurrency retry loop end-to-end through RefreshStore.
 // A reactor injects two consecutive Conflicts on Update; the third
 // attempt must succeed and the issued token must be retrievable.
 // Mirrors TestMintConflictRetries' shape for the issuances Secret.

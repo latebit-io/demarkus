@@ -9,6 +9,10 @@ set:
   oidc.clientID: broker-app
   oidc.clientSecret: shh
   oidc.redirectURL: https://broker.example.com/auth/callback
+  # PR4 requires a signing-key surface in chart-render; rbac tests
+  # don't exercise it but the chart fails fast without it.
+  oidc.brokerSigningKey: "test-pem-placeholder"
+  server.publicURL: https://broker.example.com
 tests:
   - it: broker-namespace Role + RoleBinding render in brokerNamespace
     template: rbac-broker-ns.yaml
@@ -47,7 +51,7 @@ tests:
           path: rules[0].verbs
           value: ["get", "create", "update"]
 
-  - it: broker-ns Role secrets rule pinned to get/update on issuancesSecret only
+  - it: broker-ns Role secrets rule pinned to get/update on issuances + refresh-tokens Secrets
     template: rbac-broker-ns.yaml
     documentIndex: 0
     asserts:
@@ -59,7 +63,9 @@ tests:
           value: ["secrets"]
       - equal:
           path: rules[1].resourceNames
-          value: ["RELEASE-NAME-demarkus-broker-issuances"]
+          value:
+            - "RELEASE-NAME-demarkus-broker-issuances"
+            - "RELEASE-NAME-demarkus-broker-refresh-tokens"
       - equal:
           path: rules[1].verbs
           value: ["get", "update"]

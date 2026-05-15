@@ -41,6 +41,14 @@ oidc:
   # one whose cookie scope (Path=/auth/callback) matches the actual
   # request URL.
   redirectURL: http://localhost:8080/auth/callback
+  # PR4: broker-signed id_token key. Static test PEM (ECDSA P-256)
+  # baked into the kind harness — never used in production.
+  brokerSigningKey: |
+    -----BEGIN PRIVATE KEY-----
+    MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgmMCAYqh5RzyaZx8p
+    SQ/L9kZ+DsUvLMlrOQY6g8FU1B+hRANCAARk+xu8qwMJE4LOa6T4DnOY1OwYgTaK
+    r6wbg3zjA+29GDfnROA7cyYqguU2Hp9N6zrg8WFpynEqaRjGFvW6HbUF
+    -----END PRIVATE KEY-----
 
 # One entry per Argo-templated world. The TokensSecret name matches
 # the demarkus-server chart's `<release>-demarkus-server-tokens`

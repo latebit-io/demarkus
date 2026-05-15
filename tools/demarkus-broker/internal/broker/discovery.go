@@ -49,15 +49,17 @@ const maxDiscoveryBodySize = 1 << 20 // 1 MiB
 // same client without per-IdP discovery logic. See plan §"Why broker is
 // the device-flow shim, not plugin going IdP-direct".
 //
-// What is NOT yet end-to-end correct in PR2: jwks_uri stays pointed at
-// the IdP (proxied through unchanged), but issuer is overridden to the
-// broker. Until PR4 mints broker-signed id_tokens with a broker-hosted
-// jwks_uri, strict OIDC-client validation against this discovery doc
-// would reject id_tokens that came signed by the IdP and carry the IdP's
-// own `iss` claim. The plugin's device-flow client (PR6) consumes only
-// device_authorization_endpoint + token_endpoint from this doc, so the
-// mismatch does not affect it; the gap closes in PR4 when broker
-// re-signs.
+// PR4 swap: jwks_uri now also points at the broker, because the
+// broker signs id_tokens on the refresh-grant path. A strict client
+// validating an id_token against this discovery doc's iss
+// (= brokerURL) will fetch the broker's JWKS — which serves the
+// broker's signing key. The transition window remains: id_tokens
+// minted at device-code completion (PR3 path) are still IdP-signed
+// and carry the IdP's `iss`, so the broker's compositeVerifier
+// falls through to the IdP JWKS for those. Clients consuming the
+// id_token as a bearer against /me/install (PR5) get a uniform
+// "broker-issuer, broker-key" surface from refresh-renewed
+// tokens — the discovery doc is consistent with what they verify.
 type Discovery struct {
 	brokerURL    string
 	idpDiscovery string
@@ -238,13 +240,21 @@ func (d *Discovery) refresh(ctx context.Context) error {
 	return nil
 }
 
-// applyDiscoveryOverrides parses the upstream JSON, rewrites the three
-// broker-hosted endpoints, and re-marshals. Decoded into map[string]any
-// so unknown IdP-specific fields (Google's
+// applyDiscoveryOverrides parses the upstream JSON, rewrites the
+// broker-hosted endpoints, and re-marshals. Decoded into
+// map[string]any so unknown IdP-specific fields (Google's
 // `code_challenge_methods_supported`, Auth0's `mfa_challenge_endpoint`,
 // Okta's request_object_signing_alg lists, etc.) round-trip through
-// without us tracking each one in a typed struct — proxying everything
-// else verbatim is the point of this layer.
+// without us tracking each one in a typed struct — proxying
+// everything else verbatim is the point of this layer.
+//
+// PR4 swap: jwks_uri now points at the broker because the broker
+// re-signs id_tokens on the refresh-grant path. The broker still
+// accepts IdP-signed id_tokens via compositeVerifier's fallback
+// path, but a strict client reading this discovery doc will fetch
+// the broker's JWKS to verify any token issued by the iss declared
+// here — which is also the broker. The semantic loop matches:
+// broker as both issuer and key authority.
 func applyDiscoveryOverrides(raw []byte, brokerURL string) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -253,6 +263,7 @@ func applyDiscoveryOverrides(raw []byte, brokerURL string) ([]byte, error) {
 	doc["issuer"] = brokerURL
 	doc["device_authorization_endpoint"] = brokerURL + "/device/authorize"
 	doc["token_endpoint"] = brokerURL + "/device/token"
+	doc["jwks_uri"] = brokerURL + "/.well-known/jwks.json"
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")

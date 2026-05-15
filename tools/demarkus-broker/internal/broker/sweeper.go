@@ -36,10 +36,11 @@ import (
 // coordination.k8s.io/Lease runs the sweep loop. The other replicas
 // keep serving Mint/List/Revoke (those don't need a leader).
 type Sweeper struct {
-	issuer   *Issuer
-	interval time.Duration
-	clock    func() time.Time
-	log      *slog.Logger
+	issuer       *Issuer
+	refreshStore *RefreshStore
+	interval     time.Duration
+	clock        func() time.Time
+	log          *slog.Logger
 	// sweepHook fires after each sweep pass when non-nil. Test-only
 	// observability point so the leader-election test can count which
 	// replica's loop is running without scraping logs or polling the
@@ -52,11 +53,18 @@ type Sweeper struct {
 // timings live in RunLeaderElected. A nil logger falls back to slog
 // default so callers building one for ad-hoc tests don't have to plumb
 // a handler through.
-func NewSweeper(i *Issuer, interval time.Duration, log *slog.Logger) *Sweeper {
+//
+// refreshStore is optional: when non-nil the per-tick loop also
+// sweeps expired refresh tokens from the broker's refresh-tokens
+// Secret (PR4 Step 5). Passing nil keeps the sweeper limited to
+// the issuance surface — the pre-PR4 behavior. Production wiring
+// passes the same *RefreshStore that the Server holds so both
+// share a consistent view of the Secret.
+func NewSweeper(i *Issuer, refreshStore *RefreshStore, interval time.Duration, log *slog.Logger) *Sweeper {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Sweeper{issuer: i, interval: interval, clock: time.Now, log: log}
+	return &Sweeper{issuer: i, refreshStore: refreshStore, interval: interval, clock: time.Now, log: log}
 }
 
 // RunLeaderElected blocks until ctx is canceled, running the sweep loop
@@ -209,6 +217,19 @@ func (s *Sweeper) sweep(ctx context.Context) error {
 		s.log.InfoContext(ctx, "broker: swept",
 			"label", iss.Label, "world", iss.World,
 			"subject", hashSubject(iss.Email), "reason", reason)
+	}
+	// Refresh-token sweep runs after issuances so a transient
+	// failure here does not roll back the issuance-side progress.
+	// Non-fatal: the issuance sweep is the leader-elected critical
+	// path; refresh-token cleanup is best-effort with the next tick
+	// catching anything missed.
+	if s.refreshStore != nil {
+		swept, err := s.refreshStore.Sweep(ctx)
+		if err != nil {
+			s.log.ErrorContext(ctx, "broker: refresh token sweep failed", "err", err)
+		} else if swept > 0 {
+			s.log.InfoContext(ctx, "broker: swept refresh tokens", "count", swept)
+		}
 	}
 	return nil
 }

@@ -75,7 +75,7 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	// to start rather than failing the first user login. coreos/go-oidc
 	// does not use this context for ongoing JWKS refresh (it builds its
 	// own background context internally), so a plain Background suffices.
-	verifier, err := broker.NewVerifier(context.Background(), cfg.OIDC)
+	verifier, err := broker.NewVerifier(context.Background(), &cfg.OIDC)
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,19 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 		return err
 	}
 
-	srv := broker.NewServer(cfg, signer, verifier, issuer, discovery, log)
+	// Broker-side ECDSA signer for the /device/token refresh-grant
+	// path (PR4). Required because PR4 ships broker-signed
+	// id_tokens with a broker-hosted JWKS — without this, refresh
+	// responses can't be verified by /me/install in PR5. Parsed
+	// once at startup; an invalid PEM fails the pod fast rather
+	// than the first refresh.
+	idTokenSigner, err := broker.NewIDTokenSigner([]byte(cfg.OIDC.BrokerSigningKey))
+	if err != nil {
+		return err
+	}
+	log.Info("broker: id_token signer ready", "kid", idTokenSigner.KeyID())
+
+	srv := broker.NewServer(cfg, signer, verifier, issuer, discovery, idTokenSigner, log)
 	if cfg.RateLimit.Disabled {
 		log.Info("broker: rate limit disabled (rateLimit.disabled=true)")
 	} else {
@@ -138,7 +150,11 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	defer cancelSweep()
 	var sweepWG sync.WaitGroup
 	if !cfg.Sweeper.Disabled {
-		sweeper := broker.NewSweeper(issuer, cfg.Sweeper.Interval, log)
+		// Share the Server's refresh-token store so the sweeper
+		// operates on the same in-memory cache + Secret view the
+		// /device/token refresh-grant handler does. Server owns
+		// the lifecycle; Sweeper just borrows.
+		sweeper := broker.NewSweeper(issuer, srv.RefreshStore(), cfg.Sweeper.Interval, log)
 		identity := brokerIdentity()
 		log.Info("broker: starting sweeper",
 			"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,

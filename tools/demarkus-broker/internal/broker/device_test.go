@@ -922,6 +922,228 @@ func TestDeviceCallbackRefreshMintFailureLeavesPending(t *testing.T) {
 	}
 }
 
+// TestDeviceTokenRefreshGrant exercises the PR4 refresh-grant
+// branch end-to-end: Issue a refresh token via deviceCallback, then
+// POST /device/token with grant_type=refresh_token and verify the
+// response carries a fresh broker-signed id_token whose claims
+// match the original device-flow identity.
+func TestDeviceTokenRefreshGrant(t *testing.T) {
+	verifier := &fakeVerifier{
+		authURL:    "https://idp.example.com/authorize",
+		claims:     Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|alice", Groups: []string{"eng"}},
+		rawIDToken: "raw-id-token-abc",
+	}
+	signer := newTestIDTokenSigner(t)
+	cfg := deviceTestConfig()
+	cfg.Server.IDTokenTTL = 5 * time.Minute
+	srv, broker := newTestServerWithSigner(t, cfg, verifier, fake.NewSimpleClientset(), signer)
+
+	// Complete a device flow up to Bind by driving the store
+	// directly — the full /auth/callback dance is covered by
+	// TestDeviceFlowIntegrationHappyPath.
+	deviceCode, _, _, err := broker.deviceStore.Authorize()
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
+		verifier.claims, broker.cfg.Server.RefreshTokenTTL)
+	if err != nil {
+		t.Fatalf("refresh Issue: %v", err)
+	}
+	if err := broker.deviceStore.Bind(deviceCode,
+		&ExchangeResult{Claims: verifier.claims, RawIDToken: "raw-id-token-abc"},
+		rawRefresh); err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+
+	// Refresh-grant exchange.
+	resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
+		"grant_type":    {refreshGrantType},
+		"refresh_token": {rawRefresh},
+	})
+	if err != nil {
+		t.Fatalf("POST /device/token refresh: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("refresh status = %d body=%s", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	var out deviceTokenSuccess
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.IDToken == "" {
+		t.Fatal("id_token empty after refresh")
+	}
+	if out.IDToken != out.AccessToken {
+		t.Errorf("id_token != access_token; PR4 contract is same JWT in both fields")
+	}
+	// Refresh response returns the SAME refresh_token; PR4 does
+	// not rotate (plan §Out of Scope).
+	if out.RefreshToken != rawRefresh {
+		t.Errorf("refresh_token rotated: got %q, want %q", out.RefreshToken, rawRefresh)
+	}
+	if out.TokenType != "Bearer" {
+		t.Errorf("token_type = %q", out.TokenType)
+	}
+	if out.ExpiresIn <= 0 || out.ExpiresIn > int((5*time.Minute).Seconds())+1 {
+		t.Errorf("expires_in = %d, want ~%d", out.ExpiresIn, int((5 * time.Minute).Seconds()))
+	}
+
+	// Verify the broker-signed id_token round-trips through the
+	// broker's own signer with the original claims intact.
+	gotClaims, err := signer.VerifyIDToken(out.IDToken, cfg.Server.PublicURL, time.Now())
+	if err != nil {
+		t.Fatalf("VerifyIDToken: %v", err)
+	}
+	if gotClaims.Email != verifier.claims.Email {
+		t.Errorf("Email = %q, want %q", gotClaims.Email, verifier.claims.Email)
+	}
+	if gotClaims.Subject != verifier.claims.Subject {
+		t.Errorf("Subject = %q", gotClaims.Subject)
+	}
+	if len(gotClaims.Groups) != 1 || gotClaims.Groups[0] != "eng" {
+		t.Errorf("Groups = %v", gotClaims.Groups)
+	}
+}
+
+func TestDeviceTokenRefreshErrors(t *testing.T) {
+	signer := newTestIDTokenSigner(t)
+	tests := []struct {
+		name string
+		form url.Values
+		want string
+	}{
+		{
+			"missing refresh_token",
+			url.Values{"grant_type": {refreshGrantType}},
+			"invalid_request",
+		},
+		{
+			"empty refresh_token",
+			url.Values{"grant_type": {refreshGrantType}, "refresh_token": {""}},
+			"invalid_request",
+		},
+		{
+			"unknown refresh_token",
+			url.Values{"grant_type": {refreshGrantType}, "refresh_token": {strings.Repeat("0", refreshTokenBytes*2)}},
+			"invalid_grant",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _ := newTestServerWithSigner(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset(), signer)
+			resp, err := testClient(srv).PostForm(srv.URL+"/device/token", tt.form)
+			if err != nil {
+				t.Fatalf("POST: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", resp.StatusCode)
+			}
+			var body deviceTokenError
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.Error != tt.want {
+				t.Errorf("error = %q, want %q", body.Error, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeviceTokenRefreshRejectsRevoked(t *testing.T) {
+	// End-to-end: Issue a token, Revoke it, attempt to Refresh.
+	// Must return invalid_grant — the same shape as unknown.
+	signer := newTestIDTokenSigner(t)
+	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset(), signer)
+	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
+		Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := broker.refreshStore.Revoke(context.Background(), rawRefresh); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
+		"grant_type":    {refreshGrantType},
+		"refresh_token": {rawRefresh},
+	})
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	var body deviceTokenError
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.Error != "invalid_grant" {
+		t.Errorf("error = %q, want invalid_grant", body.Error)
+	}
+}
+
+func TestDeviceTokenRefreshCrossGrantIsolation(t *testing.T) {
+	// A refresh_token must NOT be accepted at the device_code
+	// branch, and a device_code must NOT be accepted at the
+	// refresh branch. The dispatch policy in deviceToken pins this;
+	// the test guards against accidental field-coupling regressions.
+	signer := newTestIDTokenSigner(t)
+	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset(), signer)
+
+	// Issue a refresh token; try it on the device_code branch.
+	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
+		Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+	if err != nil {
+		t.Fatalf("Issue refresh: %v", err)
+	}
+	resp1, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
+		"grant_type":  {deviceGrantType},
+		"device_code": {rawRefresh},
+	})
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp1.Body.Close() }()
+	if resp1.StatusCode != http.StatusBadRequest {
+		t.Fatalf("device-branch with refresh_token: status = %d, want 400", resp1.StatusCode)
+	}
+	// deviceTokenDeviceFlow returns expired_token for unknown
+	// device codes (matches RFC 8628 — never leak whether a code
+	// existed). A real refresh token sent here looks unknown.
+	var err1 deviceTokenError
+	_ = json.NewDecoder(resp1.Body).Decode(&err1)
+	if err1.Error != "expired_token" {
+		t.Errorf("device-branch error = %q, want expired_token", err1.Error)
+	}
+
+	// And the reverse: device_code on the refresh branch.
+	deviceCode, _, _, err := broker.deviceStore.Authorize()
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	resp2, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
+		"grant_type":    {refreshGrantType},
+		"refresh_token": {deviceCode},
+	})
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("refresh-branch with device_code: status = %d, want 400", resp2.StatusCode)
+	}
+	var err2 deviceTokenError
+	_ = json.NewDecoder(resp2.Body).Decode(&err2)
+	if err2.Error != "invalid_grant" {
+		t.Errorf("refresh-branch error = %q, want invalid_grant", err2.Error)
+	}
+}
+
 // TestDeviceFlowIntegrationIdPDeny exercises the open-question-1 lean:
 // when the IdP redirects /auth/callback with ?error=..., the device
 // branch must translate to deviceStore.Deny so a polling client gets

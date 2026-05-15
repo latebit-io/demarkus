@@ -44,17 +44,35 @@ func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clien
 	t.Helper()
 	signer := newTestSigner(t)
 	issuer := newIssuer(t, cfg, k8s)
+	// Default: no id-token signer wired. Refresh-grant tests use
+	// newTestServerWithSigner so existing tests don't acquire an
+	// extra (unobservable) construction cost they don't care about.
 	// Leave the server's clock at the default time.Now — pinning it to
 	// the issuer's fixed date would expire the OIDC state cookie under
 	// any real wall-clock that is later than that date, breaking the
 	// callback tests. The issuer's clock stays pinned so token-expiry
 	// assertions in issuer tests remain deterministic.
-	brokerSrv = NewServer(cfg, signer, verifier, issuer, nil, nil)
+	brokerSrv = NewServer(cfg, signer, verifier, issuer, nil, nil, nil)
 	// NewTLSServer (not NewServer): the state cookie is set with
 	// Secure=true and Path=/auth/callback, attributes only enforceable
 	// over HTTPS. Without TLS we'd be relying on manual AddCookie calls
 	// in tests, which bypass jar policy and mask regressions where the
 	// cookie scope was accidentally widened.
+	testSrv = httptest.NewTLSServer(brokerSrv.Routes())
+	t.Cleanup(testSrv.Close)
+	return testSrv, brokerSrv
+}
+
+// newTestServerWithSigner is the test helper for refresh-grant /
+// JWKS / broker-signed verification tests. Identical shape to
+// newTestServer but wires an ephemeral IDTokenSigner so /device/token
+// refresh, /.well-known/jwks.json, and the composite-verifier
+// broker-leg are all live.
+func newTestServerWithSigner(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clientset, signer *IDTokenSigner) (testSrv *httptest.Server, brokerSrv *Server) {
+	t.Helper()
+	cookieSigner := newTestSigner(t)
+	issuer := newIssuer(t, cfg, k8s)
+	brokerSrv = NewServer(cfg, cookieSigner, verifier, issuer, nil, signer, nil)
 	testSrv = httptest.NewTLSServer(brokerSrv.Routes())
 	t.Cleanup(testSrv.Close)
 	return testSrv, brokerSrv
@@ -97,7 +115,7 @@ func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 		t.Fatalf("NewDiscovery: %v", err)
 	}
 	cfg := testConfig()
-	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), d, nil)
+	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), d, nil, nil)
 	tsrv := httptest.NewServer(srv.Routes())
 	t.Cleanup(tsrv.Close)
 
@@ -783,7 +801,7 @@ func TestRotateTokenUnauthenticated(t *testing.T) {
 // Sanity guard so the clock override on Server is exercised at least once.
 func TestServerClockExposed(t *testing.T) {
 	cfg := testConfig()
-	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), nil, nil)
+	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), nil, nil, nil)
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	s.clock = func() time.Time { return fixed }
 	if !s.clock().Equal(fixed) {

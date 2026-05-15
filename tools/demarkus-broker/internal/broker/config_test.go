@@ -20,6 +20,7 @@ oidc:
   clientID: client-abc
   clientSecret: shh
   redirectURL: https://broker.example.com/auth/callback
+  brokerSigningKey: "test-pem-placeholder"
 worlds:
   - name: team-a
     namespace: team-a
@@ -396,6 +397,90 @@ func TestLoadConfig(t *testing.T) {
 				want := "mark://team-a.cluster.local:6309"
 				if c.Worlds[0].PublicURL != want {
 					t.Errorf("PublicURL = %q, want %q", c.Worlds[0].PublicURL, want)
+				}
+			},
+		},
+		{
+			// PR4: brokerSigningKey is required so a refresh-grant
+			// request never falls through to a "feature missing"
+			// runtime error. validate() only checks non-emptiness;
+			// the PEM parsing happens at NewIDTokenSigner.
+			name:    "brokerSigningKey required",
+			body:    strings.Replace(validConfig, "  brokerSigningKey: \"test-pem-placeholder\"\n", "", 1),
+			wantErr: "oidc.brokerSigningKey is required",
+		},
+		{
+			// PR4: refreshTokenTTL defaults to 90 days when
+			// omitted — matches plan §"refresh tokens at 90-day TTL."
+			name: "refreshTokenTTL default applied",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				want := 90 * 24 * time.Hour
+				if c.Server.RefreshTokenTTL != want {
+					t.Errorf("RefreshTokenTTL = %s, want %s", c.Server.RefreshTokenTTL, want)
+				}
+			},
+		},
+		{
+			name: "refreshTokenTTL operator override",
+			body: strings.Replace(validConfig,
+				"publicURL: \"https://broker.example.com\"",
+				"publicURL: \"https://broker.example.com\"\n  refreshTokenTTL: 720h", 1),
+			validate: func(t *testing.T, c *Config) {
+				want := 720 * time.Hour
+				if c.Server.RefreshTokenTTL != want {
+					t.Errorf("RefreshTokenTTL = %s, want %s", c.Server.RefreshTokenTTL, want)
+				}
+			},
+		},
+		{
+			name: "idTokenTTL default applied",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				want := 15 * time.Minute
+				if c.Server.IDTokenTTL != want {
+					t.Errorf("IDTokenTTL = %s, want %s", c.Server.IDTokenTTL, want)
+				}
+			},
+		},
+		{
+			// idTokenTTL ≥ refreshTokenTTL is degenerate — the
+			// refresh credential would expire before the bearer it
+			// mints. validate() rejects.
+			name: "idTokenTTL must be less than refreshTokenTTL",
+			body: strings.Replace(validConfig,
+				"publicURL: \"https://broker.example.com\"",
+				"publicURL: \"https://broker.example.com\"\n  idTokenTTL: 100h\n  refreshTokenTTL: 50h", 1),
+			wantErr: "idTokenTTL",
+		},
+		{
+			name:    "refreshTokenTTL negative rejected",
+			body:    strings.Replace(validConfig, "publicURL: \"https://broker.example.com\"", "publicURL: \"https://broker.example.com\"\n  refreshTokenTTL: -1h", 1),
+			wantErr: "server.refreshTokenTTL must be > 0",
+		},
+		{
+			name:    "idTokenTTL negative rejected",
+			body:    strings.Replace(validConfig, "publicURL: \"https://broker.example.com\"", "publicURL: \"https://broker.example.com\"\n  idTokenTTL: -1m", 1),
+			wantErr: "server.idTokenTTL must be > 0",
+		},
+		{
+			name: "refreshTokensSecret default applied",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				want := defaultRefreshTokensSecret
+				if c.Server.RefreshTokensSecret != want {
+					t.Errorf("RefreshTokensSecret = %q, want %q", c.Server.RefreshTokensSecret, want)
+				}
+			},
+		},
+		{
+			name: "refreshTokensSecret operator override",
+			body: strings.Replace(validConfig,
+				"publicURL: \"https://broker.example.com\"",
+				"publicURL: \"https://broker.example.com\"\n  refreshTokensSecret: my-refresh-tokens", 1),
+			validate: func(t *testing.T, c *Config) {
+				if c.Server.RefreshTokensSecret != "my-refresh-tokens" {
+					t.Errorf("RefreshTokensSecret = %q", c.Server.RefreshTokensSecret)
 				}
 			},
 		},

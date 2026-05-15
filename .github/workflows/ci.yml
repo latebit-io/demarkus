@@ -189,4 +189,5 @@ jobs:
             --set oidc.clientID=test-client \
             --set oidc.clientSecret=test-secret \
             --set oidc.redirectURL=https://broker.example/auth/callback \
-            --set server.publicURL=https://broker.example
+            --set server.publicURL=https://broker.example \
+            --set oidc.brokerSigningKey=test-pem-placeholder

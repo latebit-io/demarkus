@@ -27,12 +27,19 @@ Secrets and tracking ownership in a broker-namespace issuances Secret.
 ## Quick install (development)
 
 Put sensitive values in a values file rather than on the command line —
-`--set` values leak into shell history and `ps` output:
+`--set` values leak into shell history and `ps` output. The values
+file also keeps the multi-line broker signing PEM readable:
 
 ```yaml
 # broker-secrets.values.yaml — do not commit
 oidc:
   clientSecret: "YOUR_CLIENT_SECRET"
+  # PR4: ECDSA P-256 key for broker-signed id_tokens. Generate with:
+  #   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256
+  brokerSigningKey: |
+    -----BEGIN PRIVATE KEY-----
+    YOUR_PEM_LINES_HERE
+    -----END PRIVATE KEY-----
 ```
 
 ```bash

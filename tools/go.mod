@@ -6,6 +6,7 @@ replace github.com/latebit/demarkus/protocol => ../protocol
 
 require (
 	github.com/coreos/go-oidc/v3 v3.18.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/latebit/demarkus/protocol v0.0.0-00010101000000-000000000000
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/time v0.14.0
@@ -20,7 +21,6 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect

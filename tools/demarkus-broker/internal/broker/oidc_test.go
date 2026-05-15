@@ -45,7 +45,7 @@ func TestNewVerifierDiscoversAndBuildsAuthURL(t *testing.T) {
 		ClientSecret: "secret",
 		RedirectURL:  "https://broker.example.com/auth/callback",
 	}
-	v, err := NewVerifier(context.Background(), cfg)
+	v, err := NewVerifier(context.Background(), &cfg)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestNewVerifierDiscoversAndBuildsAuthURL(t *testing.T) {
 }
 
 func TestNewVerifierFailsOnBadIssuer(t *testing.T) {
-	_, err := NewVerifier(context.Background(), OIDCConfig{
+	_, err := NewVerifier(context.Background(), &OIDCConfig{
 		Issuer:       "http://127.0.0.1:1", // unreachable
 		ClientID:     "x",
 		ClientSecret: "y",
@@ -126,4 +126,124 @@ func (f *fakeVerifier) VerifyIDToken(_ context.Context, raw string) (Claims, err
 		return f.verifyFn(raw)
 	}
 	return f.claims, nil
+}
+
+func TestCompositeVerifierPassThroughAuthAndExchange(t *testing.T) {
+	primary := &fakeVerifier{
+		authURL:    "https://idp.example.com/authorize",
+		claims:     Claims{Email: "alice@x.com", EmailVerified: true, Subject: "g|alice"},
+		rawIDToken: "primary-raw",
+	}
+	c := newCompositeVerifier(primary, newTestIDTokenSigner(t), "https://broker.example.com")
+
+	if got := c.AuthCodeURL("nonce-1"); !strings.Contains(got, "nonce-1") {
+		t.Errorf("AuthCodeURL = %q, want primary's URL with state", got)
+	}
+	res, err := c.Exchange(context.Background(), "code")
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if res.RawIDToken != "primary-raw" {
+		t.Errorf("Exchange forwarded to primary returned %q", res.RawIDToken)
+	}
+}
+
+func TestCompositeVerifierVerifiesBrokerSigned(t *testing.T) {
+	primary := &fakeVerifier{verifyFn: func(string) (Claims, error) {
+		return Claims{}, fmt.Errorf("primary should not be invoked for broker-signed tokens")
+	}}
+	signer := newTestIDTokenSigner(t)
+	c := newCompositeVerifier(primary, signer, "https://broker.example.com")
+	c.clock = func() time.Time { return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC) }
+
+	raw, err := signer.Sign(Claims{
+		Subject: "g|alice", Email: "alice@x.com", EmailVerified: true,
+	}, "https://broker.example.com", time.Minute, c.clock())
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	claims, err := c.VerifyIDToken(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("VerifyIDToken: %v", err)
+	}
+	if claims.Email != "alice@x.com" {
+		t.Errorf("Email = %q", claims.Email)
+	}
+}
+
+func TestCompositeVerifierFallsThroughOnUnknownKid(t *testing.T) {
+	// Token signed by a DIFFERENT signer carries an unknown kid;
+	// composite must fall through to the primary (IdP) verifier.
+	otherSigner := newTestIDTokenSigner(t)
+	raw, err := otherSigner.Sign(Claims{Email: "carol@x.com"}, "https://broker.example.com", time.Minute, time.Now())
+	if err != nil {
+		t.Fatalf("Sign on other signer: %v", err)
+	}
+	fallbackHit := false
+	primary := &fakeVerifier{verifyFn: func(string) (Claims, error) {
+		fallbackHit = true
+		return Claims{Email: "from-primary@x.com", EmailVerified: true}, nil
+	}}
+	brokerSigner := newTestIDTokenSigner(t)
+	c := newCompositeVerifier(primary, brokerSigner, "https://broker.example.com")
+
+	claims, err := c.VerifyIDToken(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("VerifyIDToken: %v", err)
+	}
+	if !fallbackHit {
+		t.Errorf("primary not invoked for unknown-kid token")
+	}
+	if claims.Email != "from-primary@x.com" {
+		t.Errorf("Email = %q, want from-primary path", claims.Email)
+	}
+}
+
+func TestCompositeVerifierDoesNotFallThroughOnBrokerSignatureFail(t *testing.T) {
+	// A token with the BROKER's kid but a tampered signature must
+	// NOT fall through to the IdP — otherwise a forged token whose
+	// kid points at the broker's would silently sneak through if
+	// the IdP's verifier was permissive. This pins the dispatch
+	// policy from the compositeVerifier doc comment.
+	signer := newTestIDTokenSigner(t)
+	now := time.Now()
+	raw, err := signer.Sign(Claims{Subject: "u"}, "https://broker.example.com", time.Minute, now)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	// Tamper a signature byte.
+	parts := strings.SplitN(raw, ".", 3)
+	if len(parts) != 3 {
+		t.Fatalf("unexpected token shape")
+	}
+	tamperedSig := []byte(parts[2])
+	if tamperedSig[0] == 'A' {
+		tamperedSig[0] = 'B'
+	} else {
+		tamperedSig[0] = 'A'
+	}
+	bad := parts[0] + "." + parts[1] + "." + string(tamperedSig)
+
+	primary := &fakeVerifier{verifyFn: func(string) (Claims, error) {
+		t.Fatal("primary must not be invoked on broker-side signature failure")
+		return Claims{}, nil
+	}}
+	c := newCompositeVerifier(primary, signer, "https://broker.example.com")
+	if _, err := c.VerifyIDToken(context.Background(), bad); err == nil {
+		t.Fatalf("tampered broker-signed token accepted")
+	}
+}
+
+func TestCompositeVerifierNilSignerIsPassThrough(t *testing.T) {
+	primary := &fakeVerifier{verifyFn: func(string) (Claims, error) {
+		return Claims{Email: "from-primary@x.com"}, nil
+	}}
+	c := newCompositeVerifier(primary, nil, "https://broker.example.com")
+	claims, err := c.VerifyIDToken(context.Background(), "any-token")
+	if err != nil {
+		t.Fatalf("VerifyIDToken: %v", err)
+	}
+	if claims.Email != "from-primary@x.com" {
+		t.Errorf("Email = %q", claims.Email)
+	}
 }
