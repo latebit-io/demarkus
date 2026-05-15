@@ -391,7 +391,7 @@ func (c *Config) validate() error {
 
 // applyDeviceFlowDefaults fills in PR3 device-flow defaults and rejects
 // degenerate combinations. Extracted from Config.validate to keep the
-// outer function inside the gocyclo budget. Pollinterval must be
+// outer function inside the gocyclo budget. PollInterval must be
 // strictly less than the TTL — a configuration where every legitimate
 // poll trips slow_down would deadlock a real client.
 func (s *ServerConfig) applyDeviceFlowDefaults() error {
