@@ -188,4 +188,5 @@ jobs:
             --set oidc.issuer=https://accounts.google.com \
             --set oidc.clientID=test-client \
             --set oidc.clientSecret=test-secret \
-            --set oidc.redirectURL=https://broker.example/auth/callback
+            --set oidc.redirectURL=https://broker.example/auth/callback \
+            --set server.publicURL=https://broker.example
