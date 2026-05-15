@@ -34,8 +34,8 @@ file also keeps the multi-line broker signing PEM readable:
 # broker-secrets.values.yaml — do not commit
 oidc:
   clientSecret: "YOUR_CLIENT_SECRET"
-  # PR4: ECDSA P-256 key for broker-signed id_tokens. Generate with:
-  #   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256
+  # ECDSA P-256 key for broker-signed id_tokens. Generate with:
+  #   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out broker-key.pem
   brokerSigningKey: |
     -----BEGIN PRIVATE KEY-----
     YOUR_PEM_LINES_HERE

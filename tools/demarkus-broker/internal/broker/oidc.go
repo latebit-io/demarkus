@@ -90,6 +90,14 @@ type oidcVerifier struct {
 // The library is provider-agnostic: any RFC-compliant OIDC IdP with
 // discovery works. "google" is just the first one we've validated.
 func NewVerifier(ctx context.Context, cfg *OIDCConfig) (Verifier, error) {
+	// nil-guard: NewVerifier is an error-returning API; a nil cfg
+	// should surface as a structured error rather than a constructor
+	// panic deep in the OIDC stack. Belt-and-suspenders — production
+	// wiring always passes &cfg.OIDC after LoadConfig, but tests and
+	// future callers benefit from the explicit boundary.
+	if cfg == nil {
+		return nil, fmt.Errorf("broker: oidc config is required")
+	}
 	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("broker: oidc discovery for %s: %w", cfg.Issuer, err)

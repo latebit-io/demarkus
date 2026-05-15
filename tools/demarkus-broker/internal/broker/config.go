@@ -431,6 +431,13 @@ func (c *Config) validate() error {
 // four required fields. All five are operator-supplied and missing
 // any one of them makes the broker incapable of completing a login
 // or signing a refresh-grant response.
+//
+// BrokerSigningKey is parsed (not just checked for emptiness)
+// because a malformed PEM would otherwise survive LoadConfig and
+// only surface in main.run after OIDC discovery + kube client setup
+// have already burned several seconds and produced noisier logs.
+// Parsing here costs a microsecond and lets the operator-facing
+// error reference oidc.brokerSigningKey directly.
 func (o *OIDCConfig) validate() error {
 	switch {
 	case o.Issuer == "":
@@ -443,6 +450,9 @@ func (o *OIDCConfig) validate() error {
 		return fmt.Errorf("oidc.redirectURL is required")
 	case o.BrokerSigningKey == "":
 		return fmt.Errorf("oidc.brokerSigningKey is required")
+	}
+	if _, err := NewIDTokenSigner([]byte(o.BrokerSigningKey)); err != nil {
+		return fmt.Errorf("oidc.brokerSigningKey is invalid: %w", err)
 	}
 	return nil
 }

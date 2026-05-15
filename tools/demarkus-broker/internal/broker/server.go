@@ -89,6 +89,18 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 	if log == nil {
 		log = slog.Default()
 	}
+	// Discovery overrides jwks_uri to the broker (PR4); a discovery
+	// doc that advertises /.well-known/jwks.json with no handler
+	// mounted is a broken-by-construction surface — strict OIDC
+	// clients will fail at key-discovery time. Production wiring
+	// guarantees both are present (LoadConfig requires
+	// BrokerSigningKey when validate runs), so this guard is for
+	// programming errors at construction. Panic rather than return
+	// an error because NewServer's signature is error-less and the
+	// invariant is impossible to recover from at runtime.
+	if discovery != nil && idTokenSigner == nil {
+		panic("broker: NewServer with discovery != nil requires idTokenSigner; otherwise the well-known doc would advertise jwks_uri at a route that is not registered")
+	}
 	// Device-flow knobs default at construction time so tests that
 	// build Config{} directly (skipping LoadConfig validation) still
 	// get usable values — keeps the in-process httptest path symmetric

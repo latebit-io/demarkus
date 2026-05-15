@@ -56,9 +56,12 @@ func (s *Server) tokenRevoke(w http.ResponseWriter, r *http.Request) {
 		// already absorbs "token unknown" as a no-op. A propagated
 		// error here means the Secret read or write failed; surface
 		// 500 rather than 204 so the caller knows the revocation
-		// did not land.
+		// did not land. JSON shape matches the rest of the OAuth2
+		// surface (RFC 7009 §2.2.1 + RFC 6749 §5.2 — error responses
+		// are application/json with an `error` field); the prior
+		// text/plain response was the odd one out.
 		s.log.ErrorContext(r.Context(), "broker: revoke refresh token failed", "err", err)
-		http.Error(w, "revoke failed", http.StatusInternalServerError)
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

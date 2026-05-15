@@ -86,6 +86,20 @@ func TestNewVerifierFailsOnBadIssuer(t *testing.T) {
 	}
 }
 
+// TestNewVerifierRejectsNilConfig pins the boundary check added in
+// PR4 review: NewVerifier is an error-returning API and must
+// surface a structured error rather than crash deep in the OIDC
+// stack when callers hand it a nil *OIDCConfig.
+func TestNewVerifierRejectsNilConfig(t *testing.T) {
+	_, err := NewVerifier(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil cfg, got nil")
+	}
+	if !strings.Contains(err.Error(), "oidc config is required") {
+		t.Errorf("err = %v, want 'oidc config is required'", err)
+	}
+}
+
 // fakeVerifier is the test double issuer/server tests use. It implements
 // the Verifier interface with predetermined claims and is not coupled to
 // the OIDC library.

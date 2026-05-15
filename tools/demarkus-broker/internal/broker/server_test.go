@@ -93,6 +93,35 @@ func TestHealthAndReady(t *testing.T) {
 	}
 }
 
+// TestNewServerPanicsOnDiscoveryWithoutSigner pins the construction
+// invariant added in PR4 review: a Discovery doc that advertises
+// jwks_uri at a route the broker doesn't serve is broken-by-
+// construction. NewServer panics rather than silently produce a
+// half-wired surface.
+func TestNewServerPanicsOnDiscoveryWithoutSigner(t *testing.T) {
+	idpMux := http.NewServeMux()
+	idpMux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"issuer":"https://idp.example.com"}`)
+	})
+	idp := httptest.NewServer(idpMux)
+	t.Cleanup(idp.Close)
+	d, err := NewDiscovery(context.Background(), DiscoveryConfig{
+		BrokerURL: "https://broker.example.com",
+		IdPIssuer: idp.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewDiscovery: %v", err)
+	}
+	cfg := testConfig()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for discovery != nil + idTokenSigner == nil")
+		}
+	}()
+	NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), d, nil, nil)
+}
+
 // TestWellKnownDiscoveryRouteRegistered guards the Routes() composition:
 // when a Discovery is wired into NewServer, the broker mux exposes it at
 // /.well-known/openid-configuration. The discovery_test.go suite covers
@@ -115,7 +144,11 @@ func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 		t.Fatalf("NewDiscovery: %v", err)
 	}
 	cfg := testConfig()
-	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), d, nil, nil)
+	// PR4 invariant: discovery != nil requires a non-nil
+	// IDTokenSigner so the jwks_uri override the discovery doc
+	// advertises actually has a handler mounted. NewServer panics
+	// otherwise.
+	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), d, newTestIDTokenSigner(t), nil)
 	tsrv := httptest.NewServer(srv.Routes())
 	t.Cleanup(tsrv.Close)
 

@@ -1,6 +1,11 @@
 package broker
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -8,7 +13,12 @@ import (
 	"time"
 )
 
-const validConfig = `
+// validConfigTemplate carries a sentinel where the broker signing
+// key block goes. init() substitutes an ephemeral PEM generated
+// per-test-binary so no checked-in PEM appears in the source tree
+// (which would trigger secret scanners) and so parse-at-validate
+// (added in PR4 review) actually sees a parseable key.
+const validConfigTemplate = `
 server:
   addr: ":8080"
   cookieKey: "dGVzdC1rZXk="
@@ -20,7 +30,7 @@ oidc:
   clientID: client-abc
   clientSecret: shh
   redirectURL: https://broker.example.com/auth/callback
-  brokerSigningKey: "test-pem-placeholder"
+__SIGNING_KEY_BLOCK__
 worlds:
   - name: team-a
     namespace: team-a
@@ -32,6 +42,38 @@ worlds:
       operations: ["read", "publish"]
       expiresAfter: 24h
 `
+
+// validConfig is the rendered template with a fresh signing-key
+// block. Tests that exercise the "brokerSigningKey is required"
+// path use validConfigNoSigningKey directly so they don't rely on
+// brittle string replacements against the embedded PEM.
+var (
+	validConfig             string
+	validConfigNoSigningKey string
+)
+
+func init() {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic("config_test: generate test signing key: " + err.Error())
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		panic("config_test: marshal test signing key: " + err.Error())
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	// YAML literal block inside the `oidc:` map: brokerSigningKey
+	// header at 2-space indent, PEM body at 4-space indent.
+	var b strings.Builder
+	b.WriteString("  brokerSigningKey: |\n")
+	for line := range strings.SplitSeq(strings.TrimSpace(string(pemBytes)), "\n") {
+		b.WriteString("    ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	validConfig = strings.Replace(validConfigTemplate, "__SIGNING_KEY_BLOCK__\n", b.String(), 1)
+	validConfigNoSigningKey = strings.Replace(validConfigTemplate, "__SIGNING_KEY_BLOCK__\n", "", 1)
+}
 
 const validWorldBlock = `worlds:
   - name: team-a
@@ -55,6 +97,14 @@ func writeConfig(t *testing.T, body string) string {
 }
 
 func TestLoadConfig(t *testing.T) {
+	// applyEnvOverrides reads BROKER_SIGNING_KEY and
+	// OIDC_CLIENT_SECRET from the process environment. Without
+	// clearing them, a CI runner that exports either var (or a
+	// developer who set them locally) silently masks YAML-missing
+	// test cases. t.Setenv restores the prior value at test end so
+	// peer tests that DO want a real env value still work.
+	t.Setenv("BROKER_SIGNING_KEY", "")
+	t.Setenv("OIDC_CLIENT_SECRET", "")
 	tests := []struct {
 		name     string
 		body     string
@@ -403,11 +453,24 @@ func TestLoadConfig(t *testing.T) {
 		{
 			// PR4: brokerSigningKey is required so a refresh-grant
 			// request never falls through to a "feature missing"
-			// runtime error. validate() only checks non-emptiness;
-			// the PEM parsing happens at NewIDTokenSigner.
+			// runtime error. validate() now parses the PEM too
+			// (see OIDCConfig.validate doc), but missing-field
+			// short-circuits before parse so the error message
+			// matches the "is required" surface, not the parse
+			// error.
 			name:    "brokerSigningKey required",
-			body:    strings.Replace(validConfig, "  brokerSigningKey: \"test-pem-placeholder\"\n", "", 1),
+			body:    validConfigNoSigningKey,
 			wantErr: "oidc.brokerSigningKey is required",
+		},
+		{
+			// PR4 review: malformed PEM is now caught at LoadConfig
+			// (parse-at-validate) instead of bubbling up later
+			// from main.run's NewIDTokenSigner. Operator-facing
+			// error references oidc.brokerSigningKey directly.
+			name: "brokerSigningKey invalid PEM rejected",
+			body: strings.Replace(validConfigTemplate, "__SIGNING_KEY_BLOCK__\n",
+				"  brokerSigningKey: \"not-a-pem\"\n", 1),
+			wantErr: "oidc.brokerSigningKey is invalid",
 		},
 		{
 			// PR4: refreshTokenTTL defaults to 90 days when

@@ -178,6 +178,15 @@ jobs:
             ZmFrZS10b2tlbi1oYXNo
       - name: Upgrade-wipe regression — demarkus-broker
         run: |
+          # PR4 broker requires a parseable ECDSA P-256 PEM for
+          # oidc.brokerSigningKey — OIDCConfig.validate now parses
+          # the key at LoadConfig (parse-at-validate). Generate an
+          # ephemeral key per run, hand it to helm via --set-file
+          # (multi-line value, ${{ }}-safe), and let the trap rm
+          # it. The PEM never lives in the repo or shell history.
+          SIGNING_KEY_FILE="$(mktemp)"
+          trap 'rm -f "$SIGNING_KEY_FILE"' EXIT
+          openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$SIGNING_KEY_FILE"
           bash deploy/helm/test-upgrade-wipe.sh \
             deploy/helm/demarkus-broker \
             demarkus-broker \
@@ -190,4 +199,4 @@ jobs:
             --set oidc.clientSecret=test-secret \
             --set oidc.redirectURL=https://broker.example/auth/callback \
             --set server.publicURL=https://broker.example \
-            --set oidc.brokerSigningKey=test-pem-placeholder
+            --set-file oidc.brokerSigningKey="$SIGNING_KEY_FILE"

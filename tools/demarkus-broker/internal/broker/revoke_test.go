@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestTokenRevokeValid(t *testing.T) {
@@ -122,5 +124,47 @@ func TestTokenRevokeIdempotent(t *testing.T) {
 		if resp.StatusCode != http.StatusNoContent {
 			t.Errorf("POST #%d status = %d, want 204", i, resp.StatusCode)
 		}
+	}
+}
+
+// TestTokenRevokeServerErrorIsJSON pins the PR4-review fix: the
+// store-failure 500 branch must serve JSON (matching RFC 7009
+// §2.2.1 + the rest of the OAuth2 surface), not the text/plain
+// shape `http.Error` would emit. We force an upstream k8s failure
+// via a reactor so the Revoke I/O path errors out.
+func TestTokenRevokeServerErrorIsJSON(t *testing.T) {
+	k8s := fake.NewSimpleClientset()
+	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &fakeVerifier{}, k8s, newTestIDTokenSigner(t))
+	// Mint a token so refreshStore.Revoke reaches the Update step
+	// (the no-Secret-exists path returns nil and skips the failure
+	// surface).
+	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
+		Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	// Reactor that forces every secrets Get to fail. After enough
+	// retries mutateSecret surrenders and propagates the error.
+	k8s.PrependReactor("get", "secrets", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("simulated k8s outage")
+	})
+
+	resp, err := testClient(srv).PostForm(srv.URL+"/token/revoke", url.Values{"token": {rawRefresh}})
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json (RFC 7009 §2.2.1)", ct)
+	}
+	var body deviceTokenError
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Error != "server_error" {
+		t.Errorf("error = %q, want server_error", body.Error)
 	}
 }
