@@ -60,12 +60,16 @@ type deviceAuthorizeResponse struct {
 // deviceTokenSuccess mirrors RFC 8628 §3.5 success — the same shape as
 // an OAuth2 token endpoint response when the polling completes. We
 // forward the IdP's raw id_token + access_token verbatim; refresh_token
-// is intentionally omitted in PR3 and lands in PR4.
+// lands at PR4 (broker-minted opaque token; see refresh.go). On a
+// successful device-code completion every response carries all four
+// token fields — omitempty stays on RefreshToken purely as belt-and-
+// suspenders against a degenerate Bind path that didn't mint one.
 type deviceTokenSuccess struct {
-	AccessToken string `json:"access_token"`
-	IDToken     string `json:"id_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
+	AccessToken  string `json:"access_token"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
 }
 
 // deviceTokenError is the standard OAuth2 error response shape (RFC
@@ -218,10 +222,11 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Pragma", "no-cache")
 		writeJSON(w, http.StatusOK, deviceTokenSuccess{
-			AccessToken: out.Result.AccessToken,
-			IDToken:     out.Result.RawIDToken,
-			TokenType:   "Bearer",
-			ExpiresIn:   expiresIn,
+			AccessToken:  out.Result.AccessToken,
+			IDToken:      out.Result.RawIDToken,
+			RefreshToken: out.RefreshToken,
+			TokenType:    "Bearer",
+			ExpiresIn:    expiresIn,
 		})
 	case out.Status == statusExpired:
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "expired_token"})
@@ -317,7 +322,21 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 		s.renderDeviceDone(w, r)
 		return
 	}
-	if err := s.deviceStore.Bind(deviceCode, &exchange); err != nil {
+	// Mint the refresh token BEFORE Bind so a Secret-side failure
+	// keeps the grant pending — the polling client retries on the
+	// next interval, the user re-runs soul-join, and no orphan
+	// statusComplete state goes out without its refresh token.
+	// Orphaned refresh-tokens Secret entries (mint succeeded, Bind
+	// then races a sweep) age out on Sweep, same posture as the
+	// issuances Secret's partial-failure recovery.
+	rawRefresh, err := s.refreshStore.Issue(r.Context(), exchange.Claims, s.cfg.Server.RefreshTokenTTL)
+	if err != nil {
+		s.log.WarnContext(r.Context(), "broker: device callback refresh mint failed",
+			"err", err, "subject", hashSubject(exchange.Claims.Subject))
+		s.renderDeviceDone(w, r)
+		return
+	}
+	if err := s.deviceStore.Bind(deviceCode, &exchange, rawRefresh); err != nil {
 		s.log.WarnContext(r.Context(), "broker: device bind failed",
 			"err", err, "subject", hashSubject(exchange.Claims.Subject))
 		s.renderDeviceDone(w, r)

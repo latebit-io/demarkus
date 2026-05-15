@@ -36,6 +36,14 @@ type Server struct {
 	// HTTP surface; the store owns the state machine.
 	deviceStore *deviceStore
 
+	// refreshStore owns the Secret-backed map of sha256(refresh_token)
+	// → record. Wired by NewServer with the configured (or defaulted)
+	// broker-namespace Secret. Survives broker restarts unlike
+	// deviceStore. Universe-onboarding PR4. The k8s client lives on
+	// the Issuer; NewServer passes it through so the store and the
+	// issuer share one client.
+	refreshStore *refreshStore
+
 	// subjectReg is the per-subject limiter shared across the three
 	// /tokens routes; loginReg is the per-IP limiter for /auth/login.
 	// Either may be nil (Slice C.4 RateLimitConfig.Disabled, or a test
@@ -61,7 +69,8 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 	// Device-flow knobs default at construction time so tests that
 	// build Config{} directly (skipping LoadConfig validation) still
 	// get usable values — keeps the in-process httptest path symmetric
-	// with the LoadConfig-validated production path.
+	// with the LoadConfig-validated production path. Same shape for
+	// refresh-flow knobs (PR4).
 	deviceTTL := cfg.Server.DeviceCodeTTL
 	if deviceTTL <= 0 {
 		deviceTTL = 10 * time.Minute
@@ -69,6 +78,12 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 	pollInterval := cfg.Server.DevicePollInterval
 	if pollInterval <= 0 {
 		pollInterval = 5 * time.Second
+	}
+	if cfg.Server.RefreshTokensSecret == "" {
+		cfg.Server.RefreshTokensSecret = defaultRefreshTokensSecret
+	}
+	if cfg.Server.RefreshTokenTTL <= 0 {
+		cfg.Server.RefreshTokenTTL = defaultRefreshTokenTTL
 	}
 	clock := time.Now
 	s := &Server{
@@ -80,6 +95,7 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 		log:               log,
 		clock:             clock,
 		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
+		refreshStore:      newRefreshStore(cfg, issuer.k8s),
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
 	// Build the registries unless the operator disabled the limiter

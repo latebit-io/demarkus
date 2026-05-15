@@ -68,6 +68,13 @@ type deviceCodeState struct {
 	// Populated by Bind on successful IdP exchange; consumed by Poll
 	// to build the statusComplete response. Zero values otherwise.
 	Result ExchangeResult
+	// RefreshToken is the raw opaque refresh token minted at Bind time
+	// by the broker's refreshStore. Stashed here so that idempotent
+	// polling (a buggy client polling multiple times after completion
+	// resolves) returns the SAME refresh_token rather than minting a
+	// fresh one each poll. Empty until Bind sets it; cleared on Sweep
+	// alongside the state itself.
+	RefreshToken string
 }
 
 // pollResult is what the /device/token handler dispatches on. SlowDown
@@ -79,6 +86,11 @@ type pollResult struct {
 	Status   deviceStatus
 	SlowDown bool
 	Result   ExchangeResult // only set when Status == statusComplete
+	// RefreshToken is the raw opaque refresh token bound to this grant.
+	// Set only when Status == statusComplete and a refresh token was
+	// minted at Bind time. Forwarded verbatim into the /device/token
+	// success response; subsequent polls return the same value.
+	RefreshToken string
 }
 
 // errDeviceCodeNotFound is returned by Bind / Poll / Deny when the
@@ -226,16 +238,25 @@ func (s *deviceStore) LookupByDeviceCode(deviceCode string) (deviceCodeState, bo
 }
 
 // Bind transitions a pending grant to statusComplete and stashes the
-// IdP exchange result for the polling client to pick up. Called from
-// /auth/callback's device-cookie branch after the OAuth exchange
-// succeeds. Takes a pointer to avoid copying ExchangeResult (~120
-// bytes) through the call site; the store still owns its copy via
-// the dereference into deviceCodeState.Result. Returns
-// errDeviceCodeNotFound for unknown codes and errDeviceCodeTerminal
-// if the grant has already resolved (already complete, expired, or
-// denied) — the callback handler treats the terminal case as a
-// no-op, since whatever already resolved is the authoritative outcome.
-func (s *deviceStore) Bind(deviceCode string, result *ExchangeResult) error {
+// IdP exchange result + the broker-minted refresh token for the
+// polling client to pick up. Called from /auth/callback's device-cookie
+// branch after the OAuth exchange succeeds. Takes a pointer to
+// ExchangeResult to avoid copying ~120 bytes through the call site;
+// the store still owns its copy via the dereference into
+// deviceCodeState.Result.
+//
+// refreshToken may be empty during early callers; the caller is
+// expected to mint and pass it. An empty value is stored verbatim and
+// surfaced as an empty refresh_token in the polling response. PR4's
+// deviceCallback always mints before Bind, so production paths never
+// pass empty.
+//
+// Returns errDeviceCodeNotFound for unknown codes and
+// errDeviceCodeTerminal if the grant has already resolved (already
+// complete, expired, or denied) — the callback handler treats the
+// terminal case as a no-op, since whatever already resolved is the
+// authoritative outcome.
+func (s *deviceStore) Bind(deviceCode string, result *ExchangeResult, refreshToken string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state, ok := s.codes[deviceCode]
@@ -251,6 +272,7 @@ func (s *deviceStore) Bind(deviceCode string, result *ExchangeResult) error {
 	}
 	state.Status = statusComplete
 	state.Result = *result
+	state.RefreshToken = refreshToken
 	return nil
 }
 
@@ -303,6 +325,7 @@ func (s *deviceStore) Poll(deviceCode string) pollResult {
 		out := pollResult{Status: state.Status}
 		if state.Status == statusComplete {
 			out.Result = state.Result
+			out.RefreshToken = state.RefreshToken
 		}
 		return out
 	}

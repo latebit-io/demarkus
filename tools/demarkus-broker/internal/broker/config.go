@@ -75,6 +75,18 @@ type ServerConfig struct {
 	// Default 5s; matches the `interval` value the authorize response
 	// emits to clients.
 	DevicePollInterval time.Duration `yaml:"devicePollInterval"`
+	// RefreshTokensSecret is the broker-namespace Secret holding the
+	// JSON map of sha256(refresh_token) → record. Read+patched on every
+	// /device/token refresh-grant call and /token/revoke. Required for
+	// universe-onboarding PR4; defaulted in validate when omitted so
+	// existing dev configs upgrade without an explicit value.
+	RefreshTokensSecret string `yaml:"refreshTokensSecret"`
+	// RefreshTokenTTL is the lifetime of a newly-issued refresh token.
+	// Default 90 days. Tokens past their TTL are rejected at refresh
+	// time and reaped by the periodic Sweeper. Operators tighten this
+	// for short-lived deployments or relax it for headless CI tooling
+	// where a 90-day re-login is acceptable.
+	RefreshTokenTTL time.Duration `yaml:"refreshTokenTTL"`
 }
 
 // OIDCConfig describes the OIDC client registration at the IdP. Discovery
