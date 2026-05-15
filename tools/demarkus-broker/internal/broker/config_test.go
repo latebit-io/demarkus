@@ -14,6 +14,7 @@ server:
   cookieKey: "dGVzdC1rZXk="
   brokerNamespace: demarkus-broker
   issuancesSecret: broker-issuances
+  publicURL: "https://broker.example.com"
 oidc:
   issuer: https://accounts.google.com
   clientID: client-abc
@@ -326,6 +327,25 @@ func TestLoadConfig(t *testing.T) {
 			name:    "rateLimit.login.burst negative rejected",
 			body:    validConfig + "rateLimit:\n  login:\n    perMinute: 20\n    burst: -1\n",
 			wantErr: "rateLimit.login.burst must be >= 1",
+		},
+		{
+			name:    "missing server.publicURL",
+			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: ""`, 1),
+			wantErr: "server.publicURL is required",
+		},
+		{
+			// PublicURL trailing slash is stripped at load so every
+			// downstream consumer (discovery doc, /me/install) sees a
+			// canonical form without re-trimming on every call.
+			name: "server.publicURL trailing slash stripped",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				`publicURL: "https://broker.example.com/"`, 1),
+			validate: func(t *testing.T, c *Config) {
+				if c.Server.PublicURL != "https://broker.example.com" {
+					t.Errorf("PublicURL = %q, want trailing slash stripped", c.Server.PublicURL)
+				}
+			},
 		},
 		{
 			// publicURL is optional — when omitted (validConfig), it

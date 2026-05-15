@@ -21,12 +21,13 @@ const stateCookieName = "broker_oidc_state"
 // Issuer interfaces; tests pass a fakeVerifier and a fake-clientset-backed
 // Issuer and exercise every route end-to-end without network or kube.
 type Server struct {
-	cfg      *Config
-	signer   *Signer
-	verifier Verifier
-	issuer   *Issuer
-	log      *slog.Logger
-	clock    func() time.Time
+	cfg       *Config
+	signer    *Signer
+	verifier  Verifier
+	issuer    *Issuer
+	discovery *Discovery
+	log       *slog.Logger
+	clock     func() time.Time
 
 	// subjectReg is the per-subject limiter shared across the three
 	// /tokens routes; loginReg is the per-IP limiter for /auth/login.
@@ -42,9 +43,11 @@ type Server struct {
 }
 
 // NewServer wires a Server. The caller is responsible for constructing the
-// Signer, Verifier, and Issuer in advance — keeps this constructor cheap
-// enough for tests to call directly.
-func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, log *slog.Logger) *Server {
+// Signer, Verifier, Issuer, and Discovery in advance — keeps this
+// constructor cheap enough for tests to call directly. discovery is
+// optional: tests that don't exercise the well-known route pass nil and
+// Routes() skips registering it.
+func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, discovery *Discovery, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -53,6 +56,7 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, l
 		signer:            signer,
 		verifier:          verifier,
 		issuer:            issuer,
+		discovery:         discovery,
 		log:               log,
 		clock:             time.Now,
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
@@ -88,6 +92,13 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
+	// /.well-known/openid-configuration: public, unauthenticated, no
+	// rate limit. Polling-friendly: device-flow clients fetch it once
+	// per /soul-join and never again; intermediaries cache via the
+	// Cache-Control header the Discovery handler emits.
+	if s.discovery != nil {
+		mux.Handle("GET /.well-known/openid-configuration", s.discovery.Handler())
+	}
 	mux.Handle("GET /auth/login", s.ipRateLimit(http.HandlerFunc(s.authLogin)))
 	mux.HandleFunc("GET /auth/callback", s.authCallback)
 	authedSubject := func(h http.HandlerFunc) http.Handler {

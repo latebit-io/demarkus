@@ -8,6 +8,13 @@
 # cluster, and the PodDisruptionBudget would block scale-to-zero on teardown.
 replicaCount: 1
 
+server:
+  # Advertised in /.well-known/openid-configuration as the broker's
+  # base URL. Stage 2 doesn't exercise the discovery doc, but the
+  # broker's LoadConfig requires the field so it must be set; localhost
+  # mirrors the redirectURL shape below.
+  publicURL: "http://localhost:8080"
+
 # OIDC points at the in-cluster mock issuer applied alongside this chart.
 # clientID/clientSecret can be any value — mock-oauth2-server accepts any
 # client registration by default. redirectURL is only exercised if a real

@@ -49,7 +49,7 @@ func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clien
 	// any real wall-clock that is later than that date, breaking the
 	// callback tests. The issuer's clock stays pinned so token-expiry
 	// assertions in issuer tests remain deterministic.
-	brokerSrv = NewServer(cfg, signer, verifier, issuer, nil)
+	brokerSrv = NewServer(cfg, signer, verifier, issuer, nil, nil)
 	// NewTLSServer (not NewServer): the state cookie is set with
 	// Secure=true and Path=/auth/callback, attributes only enforceable
 	// over HTTPS. Without TLS we'd be relying on manual AddCookie calls
@@ -72,6 +72,67 @@ func TestHealthAndReady(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("%s: status = %d", path, resp.StatusCode)
 		}
+	}
+}
+
+// TestWellKnownDiscoveryRouteRegistered guards the Routes() composition:
+// when a Discovery is wired into NewServer, the broker mux exposes it at
+// /.well-known/openid-configuration. The discovery_test.go suite covers
+// the proxy + cache mechanics; this test just confirms the mount point so
+// a future refactor can't quietly drop the route registration.
+func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
+	idpMux := http.NewServeMux()
+	idpMux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"issuer":"https://idp.example.com","jwks_uri":"https://idp.example.com/jwks"}`)
+	})
+	idp := httptest.NewServer(idpMux)
+	t.Cleanup(idp.Close)
+
+	d, err := NewDiscovery(context.Background(), DiscoveryConfig{
+		BrokerURL: "https://broker.example.com",
+		IdPIssuer: idp.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewDiscovery: %v", err)
+	}
+	cfg := testConfig()
+	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), d, nil)
+	tsrv := httptest.NewServer(srv.Routes())
+	t.Cleanup(tsrv.Close)
+
+	resp, err := http.Get(tsrv.URL + "/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatalf("GET well-known: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got, _ := doc["issuer"].(string); got != "https://broker.example.com" {
+		t.Errorf("issuer = %q, want broker URL (override applied via mounted route)", got)
+	}
+}
+
+// TestWellKnownDiscoveryRouteSkippedWhenNil guards the inverse: tests
+// that don't construct a Discovery (the common case for server_test.go)
+// get a 404 rather than a nil dereference. Without the nil-guard in
+// Routes(), the bare NewServer(..., nil, ...) call in newTestServer
+// would crash any handler test that happened to hit /.well-known.
+func TestWellKnownDiscoveryRouteSkippedWhenNil(t *testing.T) {
+	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+	resp, err := testClient(srv).Get(srv.URL + "/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatalf("GET well-known: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 when discovery is nil", resp.StatusCode)
 	}
 }
 
@@ -722,7 +783,7 @@ func TestRotateTokenUnauthenticated(t *testing.T) {
 // Sanity guard so the clock override on Server is exercised at least once.
 func TestServerClockExposed(t *testing.T) {
 	cfg := testConfig()
-	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), nil)
+	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), nil, nil)
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	s.clock = func() time.Time { return fixed }
 	if !s.clock().Equal(fixed) {

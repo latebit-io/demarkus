@@ -45,6 +45,15 @@ type ServerConfig struct {
 	// label → {email, world, paths, ...} map (JSON-encoded). World servers
 	// never read this Secret.
 	IssuancesSecret string `yaml:"issuancesSecret"`
+	// PublicURL is the broker's externally-reachable base URL (e.g.
+	// https://broker.acmecorp.com), trailing slash stripped at load. Used as
+	// the issuer + base for device_authorization_endpoint and token_endpoint
+	// in /.well-known/openid-configuration (universe onboarding PR2). The
+	// broker has no other way to know its own externally-visible URL —
+	// OIDC.RedirectURL is purpose-specific (the IdP redirect target) and
+	// may differ from the broker's base when the broker is fronted at a
+	// path or behind an Ingress with rewrites.
+	PublicURL string `yaml:"publicURL"`
 	// InsecureCookies drops the Secure attribute on the OIDC state cookie.
 	// Default false (production-correct: state cookies travel over HTTPS
 	// only). Flip to true ONLY for kind / local dev where the broker is
@@ -295,6 +304,13 @@ func (c *Config) validate() error {
 	if c.Server.IssuancesSecret == "" {
 		return fmt.Errorf("server.issuancesSecret is required")
 	}
+	if c.Server.PublicURL == "" {
+		return fmt.Errorf("server.publicURL is required")
+	}
+	// Trim once at load so every downstream consumer (discovery doc,
+	// future device-flow URLs, /me/install) sees a canonical no-trailing-
+	// slash form without each one re-trimming.
+	c.Server.PublicURL = strings.TrimRight(c.Server.PublicURL, "/")
 	if c.Server.StateTTL == 0 {
 		c.Server.StateTTL = 5 * time.Minute
 	}

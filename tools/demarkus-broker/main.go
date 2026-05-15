@@ -86,7 +86,21 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	}
 
 	issuer := broker.NewIssuer(cfg, k8s)
-	srv := broker.NewServer(cfg, signer, verifier, issuer, log)
+
+	// Discovery does an eager IdP fetch at startup — same failure mode
+	// as NewVerifier above (fails fast on misconfigured / unreachable
+	// IdP). 5-minute TTL refresh keeps key-rotation propagation bounded
+	// per plan §Risks.
+	discovery, err := broker.NewDiscovery(context.Background(), broker.DiscoveryConfig{
+		BrokerURL: cfg.Server.PublicURL,
+		IdPIssuer: cfg.OIDC.Issuer,
+		Log:       log,
+	})
+	if err != nil {
+		return err
+	}
+
+	srv := broker.NewServer(cfg, signer, verifier, issuer, discovery, log)
 	if cfg.RateLimit.Disabled {
 		log.Info("broker: rate limit disabled (rateLimit.disabled=true)")
 	} else {
