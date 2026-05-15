@@ -39,6 +39,7 @@ oidc:
 helm install broker deploy/helm/demarkus-broker \
   --namespace demarkus-broker --create-namespace \
   --values broker-secrets.values.yaml \
+  --set server.publicURL=https://broker.example.com \
   --set oidc.issuer=https://accounts.google.com \
   --set oidc.clientID=YOUR_CLIENT_ID \
   --set oidc.redirectURL=https://broker.example.com/auth/callback \

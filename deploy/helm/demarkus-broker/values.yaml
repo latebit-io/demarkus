@@ -37,6 +37,16 @@ server:
   # redirect, short enough that a stale cookie cannot be replayed.
   stateTTL: 5m
 
+  # Externally-reachable base URL of the broker, no trailing slash
+  # (e.g. https://broker.acmecorp.com). Required: advertised as `issuer`
+  # in /.well-known/openid-configuration and used as the base for the
+  # broker-hosted device_authorization_endpoint + token_endpoint
+  # overrides the same doc emits (universe onboarding, plan PR2). May
+  # differ from oidc.redirectURL when the broker is fronted at a
+  # different path or behind an Ingress with rewrites — operators set
+  # this explicitly so the discovery doc never depends on guessing.
+  publicURL: ""
+
   # Namespace the broker itself runs in. Defaults to the release namespace
   # via the helper; override only if the issuances Secret lives elsewhere
   # (rare).

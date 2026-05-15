@@ -14,6 +14,7 @@ server:
   cookieKey: "dGVzdC1rZXk="
   brokerNamespace: demarkus-broker
   issuancesSecret: broker-issuances
+  publicURL: "https://broker.example.com"
 oidc:
   issuer: https://accounts.google.com
   clientID: client-abc
@@ -326,6 +327,50 @@ func TestLoadConfig(t *testing.T) {
 			name:    "rateLimit.login.burst negative rejected",
 			body:    validConfig + "rateLimit:\n  login:\n    perMinute: 20\n    burst: -1\n",
 			wantErr: "rateLimit.login.burst must be >= 1",
+		},
+		{
+			name:    "missing server.publicURL",
+			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: ""`, 1),
+			wantErr: "server.publicURL is required",
+		},
+		{
+			// Whitespace-only is functionally the same as empty —
+			// normalize before the empty-check so a yaml-quoted
+			// "   " value is rejected with the same error, not
+			// silently allowed through to break downstream URL
+			// construction.
+			name:    "server.publicURL whitespace-only rejected",
+			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: "   "`, 1),
+			wantErr: "server.publicURL is required",
+		},
+		{
+			// Bare "/" trims down to "" after the canonicalization
+			// pass and falls into the same is-required branch.
+			name:    "server.publicURL bare slash rejected",
+			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: "/"`, 1),
+			wantErr: "server.publicURL is required",
+		},
+		{
+			// Without scheme + host the override would render
+			// nonsense like "not-a-url/device/authorize" into the
+			// discovery doc. Catch at config load.
+			name:    "server.publicURL without scheme rejected",
+			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: "broker.example.com"`, 1),
+			wantErr: "server.publicURL must be an absolute URL",
+		},
+		{
+			// PublicURL trailing slash is stripped at load so every
+			// downstream consumer (discovery doc, /me/install) sees a
+			// canonical form without re-trimming on every call.
+			name: "server.publicURL trailing slash stripped",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				`publicURL: "https://broker.example.com/"`, 1),
+			validate: func(t *testing.T, c *Config) {
+				if c.Server.PublicURL != "https://broker.example.com" {
+					t.Errorf("PublicURL = %q, want trailing slash stripped", c.Server.PublicURL)
+				}
+			},
 		},
 		{
 			// publicURL is optional — when omitted (validConfig), it

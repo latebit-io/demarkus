@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -45,6 +46,15 @@ type ServerConfig struct {
 	// label → {email, world, paths, ...} map (JSON-encoded). World servers
 	// never read this Secret.
 	IssuancesSecret string `yaml:"issuancesSecret"`
+	// PublicURL is the broker's externally-reachable base URL (e.g.
+	// https://broker.acmecorp.com), trailing slash stripped at load. Used as
+	// the issuer + base for device_authorization_endpoint and token_endpoint
+	// in /.well-known/openid-configuration (universe onboarding PR2). The
+	// broker has no other way to know its own externally-visible URL —
+	// OIDC.RedirectURL is purpose-specific (the IdP redirect target) and
+	// may differ from the broker's base when the broker is fronted at a
+	// path or behind an Ingress with rewrites.
+	PublicURL string `yaml:"publicURL"`
 	// InsecureCookies drops the Secure attribute on the OIDC state cookie.
 	// Default false (production-correct: state cookies travel over HTTPS
 	// only). Flip to true ONLY for kind / local dev where the broker is
@@ -294,6 +304,20 @@ func (c *Config) validate() error {
 	}
 	if c.Server.IssuancesSecret == "" {
 		return fmt.Errorf("server.issuancesSecret is required")
+	}
+	// Normalize before the empty-check so values like "   " or "/" are
+	// caught here instead of silently producing a broken issuer URL
+	// downstream (e.g. "/device/authorize" with no scheme/host).
+	c.Server.PublicURL = strings.TrimRight(strings.TrimSpace(c.Server.PublicURL), "/")
+	if c.Server.PublicURL == "" {
+		return fmt.Errorf("server.publicURL is required")
+	}
+	// Enforce absolute-URL shape. Without scheme+host the override would
+	// emit values like "/device/authorize" into the discovery doc, which
+	// every OIDC client would reject — fail fast at config load instead
+	// of producing a broker that boots but serves a useless well-known.
+	if u, err := url.Parse(c.Server.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("server.publicURL must be an absolute URL (got %q)", c.Server.PublicURL)
 	}
 	if c.Server.StateTTL == 0 {
 		c.Server.StateTTL = 5 * time.Minute

@@ -14,6 +14,12 @@
 replicaCount: 1
 
 server:
+  # Advertised in /.well-known/openid-configuration as the broker's
+  # base URL. Stage 4 doesn't exercise the discovery doc, but the
+  # broker's LoadConfig requires the field so it must be set; localhost
+  # mirrors the redirectURL shape below.
+  publicURL: "http://localhost:8080"
+
   # DEV-ONLY. Drops the Secure attribute on the OIDC state cookie so
   # curl can drive /auth/login -> /auth/callback over plain HTTP. The
   # broker chart's values.yaml has the prominent comment warning
