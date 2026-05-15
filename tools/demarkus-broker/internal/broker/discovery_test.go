@@ -302,15 +302,22 @@ func TestDiscoveryRefreshSerializedAcrossConcurrentExpiry(t *testing.T) {
 	}
 	clk.Advance(time.Minute + time.Second)
 	const callers = 16
-	done := make(chan struct{}, callers)
+	// Each worker reports its error (or nil) back through the channel.
+	// We deliberately do not call t.Fatalf from inside the goroutine —
+	// t.Fatalf panics the calling goroutine without releasing pending
+	// sends, which would deadlock this test on the receive loop below
+	// before we ever observed the failure.
+	errs := make(chan error, callers)
 	for range callers {
 		go func() {
-			_ = serveAndDecode(t, d)
-			done <- struct{}{}
+			_, err := serveAndDecodeErr(d)
+			errs <- err
 		}()
 	}
 	for range callers {
-		<-done
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
 	}
 	if got := idp.hitCount(); got != 2 {
 		t.Errorf("after %d concurrent post-TTL requests: hits = %d, want 2 (initial + 1 refresh)", callers, got)
@@ -331,14 +338,27 @@ func TestDiscoveryRejectsInvalidUpstreamJSON(t *testing.T) {
 
 func serveAndDecode(t *testing.T, d *Discovery) map[string]any {
 	t.Helper()
+	doc, err := serveAndDecodeErr(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+// serveAndDecodeErr is the goroutine-safe variant of serveAndDecode:
+// returns errors instead of calling t.Fatalf, so tests that fan out
+// across goroutines (the concurrency-stampede assertion) can surface
+// failures through a channel without deadlocking the test on a panicked
+// worker that never signals completion.
+func serveAndDecodeErr(d *Discovery) (map[string]any, error) {
 	rec := httptest.NewRecorder()
 	d.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", http.NoBody))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
+		return nil, fmt.Errorf("status = %d", rec.Code)
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
-		t.Fatalf("decode body: %v", err)
+		return nil, fmt.Errorf("decode body: %w", err)
 	}
-	return doc
+	return doc, nil
 }

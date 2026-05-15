@@ -202,6 +202,15 @@ func (d *Discovery) get(ctx context.Context) []byte {
 // failure it leaves the prior cache untouched and returns the error
 // (caller decides whether to surface or fall back to stale).
 func (d *Discovery) refresh(ctx context.Context) error {
+	// Belt-and-suspenders timeout on the fetch context: the default
+	// http.Client has discoveryHTTPTimeout, but a caller may inject a
+	// custom HTTPClient via DiscoveryConfig with no Timeout field set
+	// (the constructor honors caller-supplied clients verbatim). Wrap
+	// here so refresh() is bounded regardless of how the client was
+	// configured and regardless of whether the caller's ctx has a
+	// deadline.
+	ctx, cancel := context.WithTimeout(ctx, discoveryHTTPTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.idpDiscovery, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
