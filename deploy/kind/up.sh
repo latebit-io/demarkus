@@ -115,12 +115,24 @@ ensure_broker_signing_key() {
   echo "--- generating ephemeral broker signing key (ECDSA P-256) for namespace $ns"
   local tmpfile
   tmpfile=$(mktemp)
-  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$tmpfile" 2>/dev/null
+  # Function-scoped RETURN trap: cleanup runs whether the function
+  # exits normally OR via `set -e` propagation when a downstream
+  # command (openssl / kubectl) fails. Without this, a mid-function
+  # abort would leave the private-key PEM in /tmp until the
+  # next tmpfiles sweep — visible to any local process during the
+  # window. RETURN is function-local in bash, so this does not
+  # clobber outer EXIT/ERR traps.
+  trap 'rm -f "$tmpfile"' RETURN
+  # No `2>/dev/null` on openssl — a real failure here (missing
+  # P-256 support on the host openssl build, /tmp disk pressure)
+  # needs to surface in the harness log; silencing it would turn
+  # a recoverable misconfiguration into "broker pod fails to
+  # start" minutes later with no breadcrumb.
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$tmpfile"
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
   kubectl -n "$ns" create secret generic broker-signing-key \
     --from-file=signing-key.pem="$tmpfile" \
     --dry-run=client -o yaml | kubectl apply -f -
-  rm -f "$tmpfile"
 }
 
 if kind get clusters | grep -qx "$CLUSTER"; then
