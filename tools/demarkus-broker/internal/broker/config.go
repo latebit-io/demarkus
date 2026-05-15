@@ -87,6 +87,15 @@ type ServerConfig struct {
 	// for short-lived deployments or relax it for headless CI tooling
 	// where a 90-day re-login is acceptable.
 	RefreshTokenTTL time.Duration `yaml:"refreshTokenTTL"`
+	// IDTokenTTL is the lifetime applied to broker-signed id_tokens
+	// emitted on the /device/token refresh-grant path. Default
+	// 15 minutes — short enough that a compromised id_token's
+	// useful window stays bounded, long enough that downstream
+	// requests (PR5 /me/install) complete without racing the
+	// expiry. Operators tighten via config; the refresh-grant
+	// itself stretches the effective session lifetime via fresh
+	// id_tokens minted on each poll.
+	IDTokenTTL time.Duration `yaml:"idTokenTTL"`
 }
 
 // OIDCConfig describes the OIDC client registration at the IdP. Discovery
@@ -101,6 +110,18 @@ type OIDCConfig struct {
 	// RedirectURL is the public URL of /auth/callback. Must exactly match
 	// the redirect URI registered with the IdP.
 	RedirectURL string `yaml:"redirectURL"`
+	// BrokerSigningKey is the PEM-encoded ECDSA P-256 private key
+	// the broker uses to sign id_tokens on the /device/token
+	// refresh-grant path (PR4). PKCS#8 (`-----BEGIN PRIVATE KEY-----`)
+	// or SEC1 (`-----BEGIN EC PRIVATE KEY-----`) formats accepted.
+	// Required when any refresh-grant request might be issued —
+	// production wiring requires it always; tests construct
+	// Config{} directly and let NewServer skip key-dependent routes
+	// when blank. Operators supply via Kubernetes Secret mounted as
+	// a file; the chart renders the field's value from a
+	// secretKeyRef so the key never round-trips through helm
+	// release history.
+	BrokerSigningKey string `yaml:"brokerSigningKey"`
 }
 
 // WorldConfig describes one demarkus world the broker is authorized to
@@ -302,17 +323,26 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 // applyEnvOverrides lets a small set of high-sensitivity fields come from
-// environment variables instead of the on-disk config. Today only
-// OIDC_CLIENT_SECRET is supported, so production deployments can keep the
-// OAuth client secret in an externally-managed Kubernetes Secret (External
-// Secrets Operator, Sealed Secrets, Vault) mounted via secretKeyRef rather
-// than baked into the chart-rendered config Secret where it would leak
-// into helm release history. The env var wins over the file value when
-// both are set; an empty env var is treated as unset so an accidentally
-// cleared variable doesn't blank out a file-supplied value at runtime.
+// environment variables instead of the on-disk config. Supported:
+//
+//   - OIDC_CLIENT_SECRET: the OAuth client secret.
+//   - BROKER_SIGNING_KEY: the ECDSA P-256 PEM the broker uses to
+//     sign id_tokens on the refresh-grant path (PR4). Multi-line
+//     PEMs travel fine through env vars under k8s secretKeyRef.
+//
+// Production deployments keep these in externally-managed
+// Kubernetes Secrets (External Secrets Operator, Sealed Secrets,
+// Vault) mounted via secretKeyRef rather than baked into the chart-
+// rendered config Secret where they would leak into helm release
+// history. The env var wins over the file value when both are set;
+// an empty env var is treated as unset so an accidentally cleared
+// variable doesn't blank out a file-supplied value at runtime.
 func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("OIDC_CLIENT_SECRET"); v != "" {
 		c.OIDC.ClientSecret = v
+	}
+	if v := os.Getenv("BROKER_SIGNING_KEY"); v != "" {
+		c.OIDC.BrokerSigningKey = v
 	}
 }
 
@@ -352,17 +382,11 @@ func (c *Config) validate() error {
 	if err := c.Server.applyDeviceFlowDefaults(); err != nil {
 		return err
 	}
-	if c.OIDC.Issuer == "" {
-		return fmt.Errorf("oidc.issuer is required")
+	if err := c.Server.applyRefreshDefaults(); err != nil {
+		return err
 	}
-	if c.OIDC.ClientID == "" {
-		return fmt.Errorf("oidc.clientID is required")
-	}
-	if c.OIDC.ClientSecret == "" {
-		return fmt.Errorf("oidc.clientSecret is required")
-	}
-	if c.OIDC.RedirectURL == "" {
-		return fmt.Errorf("oidc.redirectURL is required")
+	if err := c.OIDC.validate(); err != nil {
+		return err
 	}
 	if len(c.Worlds) == 0 {
 		return fmt.Errorf("at least one world is required")
@@ -399,6 +423,69 @@ func (c *Config) validate() error {
 		c.Sweeper.LeaseName = "demarkus-broker-sweeper"
 	}
 	return c.RateLimit.applyDefaultsAndValidate()
+}
+
+// validate enforces the OIDCConfig invariants. Extracted from
+// Config.validate so the outer function stays inside the gocyclo
+// budget after PR4 added BrokerSigningKey alongside the existing
+// four required fields. All five are operator-supplied and missing
+// any one of them makes the broker incapable of completing a login
+// or signing a refresh-grant response.
+//
+// BrokerSigningKey is parsed (not just checked for emptiness)
+// because a malformed PEM would otherwise survive LoadConfig and
+// only surface in main.run after OIDC discovery + kube client setup
+// have already burned several seconds and produced noisier logs.
+// Parsing here costs a microsecond and lets the operator-facing
+// error reference oidc.brokerSigningKey directly.
+func (o *OIDCConfig) validate() error {
+	switch {
+	case o.Issuer == "":
+		return fmt.Errorf("oidc.issuer is required")
+	case o.ClientID == "":
+		return fmt.Errorf("oidc.clientID is required")
+	case o.ClientSecret == "":
+		return fmt.Errorf("oidc.clientSecret is required")
+	case o.RedirectURL == "":
+		return fmt.Errorf("oidc.redirectURL is required")
+	case o.BrokerSigningKey == "":
+		return fmt.Errorf("oidc.brokerSigningKey is required")
+	}
+	if _, err := NewIDTokenSigner([]byte(o.BrokerSigningKey)); err != nil {
+		return fmt.Errorf("oidc.brokerSigningKey is invalid: %w", err)
+	}
+	return nil
+}
+
+// applyRefreshDefaults fills in PR4 refresh-flow defaults and rejects
+// degenerate combinations. Extracted from Config.validate to keep
+// the outer function inside the gocyclo budget; same shape as
+// applyDeviceFlowDefaults. The Secret name and TTL knobs are
+// applied to the validated config so NewServer / LoadConfig
+// downstream see the resolved values regardless of YAML presence.
+func (s *ServerConfig) applyRefreshDefaults() error {
+	if s.RefreshTokensSecret == "" {
+		s.RefreshTokensSecret = defaultRefreshTokensSecret
+	}
+	if s.RefreshTokenTTL == 0 {
+		s.RefreshTokenTTL = defaultRefreshTokenTTL
+	}
+	if s.RefreshTokenTTL < 0 {
+		return fmt.Errorf("server.refreshTokenTTL must be > 0 (got %s)", s.RefreshTokenTTL)
+	}
+	if s.IDTokenTTL == 0 {
+		s.IDTokenTTL = defaultIDTokenTTL
+	}
+	if s.IDTokenTTL < 0 {
+		return fmt.Errorf("server.idTokenTTL must be > 0 (got %s)", s.IDTokenTTL)
+	}
+	// id_token TTL > refresh_token TTL is a degenerate config: the
+	// refresh credential would expire before the bearer it mints,
+	// so the refresh round-trip would never produce a usable token.
+	if s.IDTokenTTL >= s.RefreshTokenTTL {
+		return fmt.Errorf("server.idTokenTTL (%s) must be < server.refreshTokenTTL (%s) — a bearer that outlives its refresh credential cannot be renewed", s.IDTokenTTL, s.RefreshTokenTTL)
+	}
+	return nil
 }
 
 // applyDeviceFlowDefaults fills in PR3 device-flow defaults and rejects

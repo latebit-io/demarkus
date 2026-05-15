@@ -8,9 +8,13 @@
      resourceName" caveat means create effectively allows any Lease in
      this namespace — acceptable scope since the namespace is broker-owned.
 
-   - secrets: the chart-created issuances Secret. Only get/update needed
-     since the chart's secret-issuances.yaml seeds it at install time; the
-     broker never needs to bootstrap it at runtime. */ -}}
+   - secrets: the chart-created issuances + refresh-tokens Secrets.
+     Only get/update needed since the chart seeds both at install
+     time (secret-issuances.yaml + secret-refresh-tokens.yaml); the
+     broker never needs to bootstrap either at runtime. The
+     resource-policy: keep annotation on both means helm upgrade
+     never re-templates them, so the broker SA's update verb is
+     the only path that mutates them after install. */ -}}
 {{- $brokerNs := include "demarkus-broker.brokerNamespace" . -}}
 {{- $name := include "demarkus-broker.fullname" . -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -27,7 +31,9 @@ rules:
     verbs: ["get", "create", "update"]
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: [{{ include "demarkus-broker.issuancesSecretName" . | quote }}]
+    resourceNames:
+      - {{ include "demarkus-broker.issuancesSecretName" . | quote }}
+      - {{ include "demarkus-broker.refreshTokensSecretName" . | quote }}
     verbs: ["get", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

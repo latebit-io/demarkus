@@ -66,6 +66,10 @@ Names for the chart-managed Secrets.
 {{- default (printf "%s-issuances" (include "demarkus-broker.fullname" .)) .Values.server.issuancesSecret -}}
 {{- end -}}
 
+{{- define "demarkus-broker.refreshTokensSecretName" -}}
+{{- default (printf "%s-refresh-tokens" (include "demarkus-broker.fullname" .)) .Values.server.refreshTokensSecret -}}
+{{- end -}}
+
 {{/*
 Cookie key resolution. Order of precedence:
   1. .Values.server.cookieKey (operator-supplied literal)

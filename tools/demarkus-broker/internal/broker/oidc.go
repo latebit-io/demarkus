@@ -10,6 +10,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// Ensure compositeVerifier satisfies the Verifier interface at
+// compile time. A drift between the interface and the implementation
+// would otherwise be caught only by callers, several files away.
+var _ Verifier = (*compositeVerifier)(nil)
+
 // Claims is the subset of OIDC ID-token claims the broker actually consumes.
 // Subject + Email + EmailVerified are required to mint. Groups is optional
 // and used by the per-world group allowlist (Slice C.1); IdPs that don't
@@ -75,13 +80,24 @@ type oidcVerifier struct {
 	verifier *oidc.IDTokenVerifier
 }
 
-// NewVerifier builds an OIDC Verifier from the broker's OIDCConfig. The
-// constructor performs OIDC discovery (one HTTP call to the issuer) so it
-// can fail fast at broker startup rather than on the first user login.
+// NewVerifier builds an OIDC Verifier from the broker's OIDCConfig.
+// Takes a pointer because OIDCConfig grew to 80+ bytes after PR4's
+// BrokerSigningKey addition (gocritic hugeParam threshold). The
+// constructor performs OIDC discovery (one HTTP call to the issuer)
+// so it can fail fast at broker startup rather than on the first
+// user login.
 //
 // The library is provider-agnostic: any RFC-compliant OIDC IdP with
 // discovery works. "google" is just the first one we've validated.
-func NewVerifier(ctx context.Context, cfg OIDCConfig) (Verifier, error) {
+func NewVerifier(ctx context.Context, cfg *OIDCConfig) (Verifier, error) {
+	// nil-guard: NewVerifier is an error-returning API; a nil cfg
+	// should surface as a structured error rather than a constructor
+	// panic deep in the OIDC stack. Belt-and-suspenders — production
+	// wiring always passes &cfg.OIDC after LoadConfig, but tests and
+	// future callers benefit from the explicit boundary.
+	if cfg == nil {
+		return nil, fmt.Errorf("broker: oidc config is required")
+	}
 	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("broker: oidc discovery for %s: %w", cfg.Issuer, err)
@@ -145,4 +161,68 @@ func (v *oidcVerifier) VerifyIDToken(ctx context.Context, rawIDToken string) (Cl
 		EmailVerified: raw.EmailVerified,
 		Groups:        raw.Groups,
 	}, nil
+}
+
+// compositeVerifier multiplexes id_token verification across the
+// broker's own signing key (PR4 refresh-grant minted tokens) and the
+// IdP's JWKS (device-code-completion tokens still IdP-signed,
+// pre-rotation legacy tokens, etc.). On AuthCodeURL + Exchange the
+// composite is a transparent pass-through to the IdP-backed
+// Verifier — only VerifyIDToken multiplexes.
+//
+// Dispatch policy: try the broker key first because it never
+// touches the network (kid match short-circuits or fails cheaply).
+// On ErrIDTokenKidUnknown (the token wasn't minted by this broker)
+// fall through to the IdP path. Any other broker-side verification
+// error (signature fail, bad iss, expired) is terminal — we do not
+// silently retry against the IdP, since a kid-matching token that
+// fails downstream checks indicates a tampered or stale broker
+// token, not an IdP token.
+//
+// idTokenSigner is required (non-nil) in production wiring; tests
+// that don't exercise broker-signed tokens may pass nil and the
+// composite degrades to a transparent pass-through.
+type compositeVerifier struct {
+	primary       Verifier
+	idTokenSigner *IDTokenSigner
+	brokerURL     string
+	clock         func() time.Time
+}
+
+// newCompositeVerifier wraps an existing Verifier (the IdP-backed
+// one) with the broker's own signer. brokerURL is the iss + aud the
+// broker emits on its tokens; the verifier checks them on the
+// broker-leg path.
+func newCompositeVerifier(primary Verifier, signer *IDTokenSigner, brokerURL string) *compositeVerifier {
+	return &compositeVerifier{
+		primary:       primary,
+		idTokenSigner: signer,
+		brokerURL:     brokerURL,
+		clock:         time.Now,
+	}
+}
+
+func (c *compositeVerifier) AuthCodeURL(state string) string {
+	return c.primary.AuthCodeURL(state)
+}
+
+func (c *compositeVerifier) Exchange(ctx context.Context, code string) (ExchangeResult, error) {
+	return c.primary.Exchange(ctx, code)
+}
+
+func (c *compositeVerifier) VerifyIDToken(ctx context.Context, raw string) (Claims, error) {
+	if c.idTokenSigner != nil {
+		claims, err := c.idTokenSigner.VerifyIDToken(raw, c.brokerURL, c.clock())
+		if err == nil {
+			return claims, nil
+		}
+		if !errors.Is(err, ErrIDTokenKidUnknown) {
+			// Broker recognized the kid as its own but the
+			// signature / claims failed. Falling through to the
+			// IdP path here would mask a real failure (e.g. a
+			// tampered broker token sneaking in via IdP's JWKS).
+			return Claims{}, err
+		}
+	}
+	return c.primary.VerifyIDToken(ctx, raw)
 }

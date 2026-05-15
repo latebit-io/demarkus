@@ -148,6 +148,11 @@ func TestDiscoveryOverridesBrokerEndpoints(t *testing.T) {
 		// token_endpoint moved to the broker — clients poll their
 		// device-code exchange here, broker mediates with the IdP.
 		{"token_endpoint", "https://broker.example.com/device/token"},
+		// jwks_uri moved to the broker (PR4) because the broker now
+		// signs id_tokens on the refresh-grant path. A strict client
+		// fetching the broker's JWKS gets the broker's signing key,
+		// matching the issuer the discovery doc advertises.
+		{"jwks_uri", "https://broker.example.com/.well-known/jwks.json"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.field, func(t *testing.T) {
@@ -160,10 +165,12 @@ func TestDiscoveryOverridesBrokerEndpoints(t *testing.T) {
 }
 
 func TestDiscoveryProxiesUnOverriddenFields(t *testing.T) {
-	// Round-trips fields the broker does NOT take over: jwks_uri,
+	// Round-trips fields the broker does NOT take over:
 	// userinfo_endpoint, authorization_endpoint, plus IdP-specific
 	// metadata arrays. Tests both presence and exact value so a
 	// regression that silently drops or rewrites these surfaces here.
+	// jwks_uri WAS in this list pre-PR4 but moved to the override
+	// set when the broker started signing id_tokens.
 	idp := newFakeDiscoveryIdP(t)
 	d, _ := newTestDiscovery(t, idp, time.Minute)
 	doc := serveAndDecode(t, d)
@@ -171,7 +178,6 @@ func TestDiscoveryProxiesUnOverriddenFields(t *testing.T) {
 		field string
 		want  any
 	}{
-		{"jwks_uri", "https://idp.example.com/.well-known/jwks.json"},
 		{"userinfo_endpoint", "https://idp.example.com/userinfo"},
 		{"authorization_endpoint", "https://idp.example.com/authorize"},
 	}

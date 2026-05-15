@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"embed"
+	"errors"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -23,6 +24,12 @@ const deviceCookieName = "broker_device_code"
 // client must send to /device/token. Reproduced as a constant so a typo
 // in the handler can't silently accept arbitrary grant types.
 const deviceGrantType = "urn:ietf:params:oauth:grant-type:device_code"
+
+// refreshGrantType is the RFC 6749 §6 grant_type identifier the
+// /device/token handler dispatches on for refresh requests.
+// Reproduced as a constant for the same reason as deviceGrantType:
+// the dispatch must reject typos rather than silently fall through.
+const refreshGrantType = "refresh_token"
 
 //go:embed templates/device_form.html templates/device_done.html
 var deviceTemplatesFS embed.FS
@@ -188,20 +195,34 @@ func (s *Server) deviceFormPost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/auth/login", http.StatusFound)
 }
 
-// deviceToken implements POST /device/token (RFC 8628 §3.4 + §3.5).
-// The polling client sends the same device_code on each call; the
-// broker responds with authorization_pending until /auth/callback
-// runs the OAuth exchange and Binds the result, then returns the
-// success payload (raw IdP id_token + access_token) on the next poll.
+// deviceToken implements POST /device/token. RFC 8628 §3.4+§3.5
+// (device-code polling) and RFC 6749 §6 (refresh grant) share the
+// same endpoint URL but are dispatched on the grant_type form
+// parameter; the strict switch rejects anything else so a typo on
+// the client side cannot accidentally exercise either branch's
+// surface.
 func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
-	if got := r.PostFormValue("grant_type"); got != deviceGrantType {
+	switch r.PostFormValue("grant_type") {
+	case deviceGrantType:
+		s.deviceTokenDeviceFlow(w, r)
+	case refreshGrantType:
+		s.deviceTokenRefresh(w, r)
+	default:
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "unsupported_grant_type"})
-		return
 	}
+}
+
+// deviceTokenDeviceFlow handles the RFC 8628 §3.4 device-code poll.
+// The polling client sends the same device_code on each call; the
+// broker responds with authorization_pending until /auth/callback
+// runs the OAuth exchange and Binds the result, then returns the
+// success payload (raw IdP id_token + access_token + broker-minted
+// refresh_token) on the next poll.
+func (s *Server) deviceTokenDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	deviceCode := r.PostFormValue("device_code")
 	if deviceCode == "" {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
@@ -237,6 +258,72 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "authorization_pending"})
 	}
+}
+
+// deviceTokenRefresh handles RFC 6749 §6 refresh_token exchange.
+// Validates the supplied refresh_token against the broker's
+// Secret-backed refreshStore, mints a fresh broker-signed id_token
+// from the cached Claims, and returns the response with the SAME
+// refresh_token (PR4 does not rotate — see plan §Out of Scope).
+//
+// access_token == id_token: PR5's /me/install consumes the id_token
+// as a bearer, the broker's compositeVerifier accepts it on either
+// field, and an empty access_token would force clients to learn a
+// per-broker quirk. Same string in both fields keeps the
+// OIDC-client-library default codepath working.
+//
+// Error mapping:
+//   - Missing refresh_token form param → invalid_request
+//   - refreshStore rejects (unknown / expired / revoked) →
+//     invalid_grant per RFC 6749 §5.2
+//   - Signing failure (programming error) → 500 server_error
+//   - id-token-signer not wired (operator misconfig) → 500
+//     server_error; PR4 wiring requires it always
+func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
+	if s.idTokenSigner == nil {
+		// Broker started without a signing key — refresh grant
+		// cannot mint a verifiable id_token. Surface 500 rather
+		// than silently returning an empty token; LoadConfig
+		// validation in Step 6 makes this unreachable in
+		// production, but keep the guard so a test misconfig
+		// fails loudly.
+		s.log.ErrorContext(r.Context(), "broker: refresh grant requested but id_token signer not wired")
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
+	rawRefresh := r.PostFormValue("refresh_token")
+	if rawRefresh == "" {
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		return
+	}
+	record, err := s.refreshStore.Refresh(r.Context(), rawRefresh)
+	if err != nil {
+		if errors.Is(err, ErrRefreshTokenInvalid) {
+			writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
+			return
+		}
+		s.log.ErrorContext(r.Context(), "broker: refresh store read failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
+	now := s.clock()
+	idToken, err := s.idTokenSigner.Sign(record.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "broker: refresh sign id_token failed",
+			"err", err, "subject", hashSubject(record.Claims.Subject))
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
+	expiresIn := max(int(s.cfg.Server.IDTokenTTL.Seconds()), 0)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	writeJSON(w, http.StatusOK, deviceTokenSuccess{
+		AccessToken:  idToken,
+		IDToken:      idToken,
+		RefreshToken: rawRefresh,
+		TokenType:    "Bearer",
+		ExpiresIn:    expiresIn,
+	})
 }
 
 // renderDeviceForm writes the user_code entry HTML. Templates are

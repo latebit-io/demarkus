@@ -69,6 +69,27 @@ server:
   # attribute is honored end-to-end.
   insecureCookies: false
 
+  # Refresh-token lifetime emitted on each device-code completion
+  # (universe onboarding PR4). 90 days matches industry defaults
+  # (Google / Auth0 / Okta sit in 60-180d). Operators tighten for
+  # short-lived deployments or relax for headless CI tooling where
+  # repeated re-login is operationally painful. Tokens past their TTL
+  # are rejected at refresh time and reaped by the periodic Sweeper.
+  refreshTokenTTL: 2160h  # 90d
+
+  # Broker-signed id_token lifetime on the /device/token refresh-grant
+  # path (PR4). 15m balances bounded compromise window against PR5
+  # /me/install request budget. Must be strictly less than
+  # refreshTokenTTL — a bearer that outlives its refresh credential
+  # cannot be renewed.
+  idTokenTTL: 15m
+
+  # Secret name for the broker's refresh-token store (PR4). Holds the
+  # JSON map of sha256(refresh_token) -> record. Default derived from
+  # the release name. Created with helm.sh/resource-policy: keep so
+  # chart lifecycle events never invalidate live refresh tokens.
+  refreshTokensSecret: ""
+
 oidc:
   # OIDC discovery URL (e.g. https://accounts.google.com).
   issuer: ""
@@ -96,6 +117,39 @@ oidc:
   # Public URL of /auth/callback. Must exactly match the redirect URI
   # registered with the IdP.
   redirectURL: ""
+
+  # Broker-side ECDSA P-256 private key (PR4). The broker signs
+  # id_tokens on /device/token refresh-grant responses with this key
+  # and serves the matching public key at /.well-known/jwks.json. Two
+  # modes — exactly the same shape as clientSecret:
+  #
+  #   1. Cleartext via brokerSigningKey: a multi-line PEM literal
+  #      (PKCS#8 `-----BEGIN PRIVATE KEY-----` or SEC1
+  #      `-----BEGIN EC PRIVATE KEY-----`). Easiest install path; the
+  #      value lives in helm release history. Only acceptable for dev /
+  #      kind clusters.
+  #
+  #   2. existingSigningKeyRef — production path. Chart leaves the
+  #      field blank in the config Secret and mounts the PEM into the
+  #      broker pod from an externally-managed Kubernetes Secret
+  #      (External Secrets Operator, Sealed Secrets, kubectl-created).
+  #
+  # Generate a fresh key with:
+  #   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256
+  #
+  # Rotation: swap the value and bounce the broker. Every refresh
+  # token minted by the prior key still verifies (refreshStore is
+  # opaque-token-only — the key signs the id_token, not the refresh
+  # token), but every broker-signed id_token in flight is invalidated.
+  # Cleaner rotation (overlapping keys + JWKS rollover) is deferred to
+  # a future PR.
+  brokerSigningKey: ""
+  existingSigningKeyRef:
+    # Name of the operator-managed Secret holding the PEM. Empty
+    # disables this mode.
+    name: ""
+    # Data key inside the Secret holding the PEM.
+    key: signing-key.pem
 
 # Per-world authorization. Each entry produces one Role + RoleBinding in
 # the world's namespace (RBAC slice) granting the broker SA get/patch on

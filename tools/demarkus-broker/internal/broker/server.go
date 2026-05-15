@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -36,13 +37,28 @@ type Server struct {
 	// HTTP surface; the store owns the state machine.
 	deviceStore *deviceStore
 
-	// refreshStore owns the Secret-backed map of sha256(refresh_token)
+	// RefreshStore owns the Secret-backed map of sha256(refresh_token)
 	// → record. Wired by NewServer with the configured (or defaulted)
 	// broker-namespace Secret. Survives broker restarts unlike
 	// deviceStore. Universe-onboarding PR4. The k8s client lives on
 	// the Issuer; NewServer passes it through so the store and the
 	// issuer share one client.
-	refreshStore *refreshStore
+	refreshStore *RefreshStore
+
+	// idTokenSigner mints broker-signed id_tokens on the
+	// /device/token refresh-grant path and serves its public key at
+	// /.well-known/jwks.json. May be nil in tests that don't
+	// exercise the refresh-grant surface; production wiring always
+	// supplies one (NewServer.LoadConfig validates the PEM at
+	// startup). Same signer satisfies both sign and verify (broker
+	// is the only relying party for its own tokens).
+	idTokenSigner *IDTokenSigner
+
+	// jwks holds the pre-rendered JWKS body served at
+	// /.well-known/jwks.json. Nil when idTokenSigner is nil;
+	// Routes() skips the registration in that case so existing
+	// tests that pass nil signers behave unchanged.
+	jwks *jwksHandler
 
 	// subjectReg is the per-subject limiter shared across the three
 	// /tokens routes; loginReg is the per-IP limiter for /auth/login.
@@ -57,14 +73,33 @@ type Server struct {
 	trustForwardedFor bool
 }
 
-// NewServer wires a Server. The caller is responsible for constructing the
-// Signer, Verifier, Issuer, and Discovery in advance — keeps this
-// constructor cheap enough for tests to call directly. discovery is
-// optional: tests that don't exercise the well-known route pass nil and
-// Routes() skips registering it.
-func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, discovery *Discovery, log *slog.Logger) *Server {
+// NewServer wires a Server. The caller is responsible for constructing
+// the Signer, Verifier, Issuer, Discovery, and (optionally)
+// IDTokenSigner in advance — keeps this constructor cheap enough for
+// tests to call directly. discovery and idTokenSigner are optional:
+// tests that don't exercise those surfaces pass nil and Routes() skips
+// the corresponding registrations.
+//
+// When idTokenSigner is non-nil, NewServer composes the supplied
+// Verifier with the broker-key verification leg (see
+// compositeVerifier in oidc.go) — callers don't have to wrap
+// manually, and tests that pass &fakeVerifier{} get broker-signed
+// verification "for free" against the supplied signer.
+func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, discovery *Discovery, idTokenSigner *IDTokenSigner, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
+	}
+	// Discovery overrides jwks_uri to the broker (PR4); a discovery
+	// doc that advertises /.well-known/jwks.json with no handler
+	// mounted is a broken-by-construction surface — strict OIDC
+	// clients will fail at key-discovery time. Production wiring
+	// guarantees both are present (LoadConfig requires
+	// BrokerSigningKey when validate runs), so this guard is for
+	// programming errors at construction. Panic rather than return
+	// an error because NewServer's signature is error-less and the
+	// invariant is impossible to recover from at runtime.
+	if discovery != nil && idTokenSigner == nil {
+		panic("broker: NewServer with discovery != nil requires idTokenSigner; otherwise the well-known doc would advertise jwks_uri at a route that is not registered")
 	}
 	// Device-flow knobs default at construction time so tests that
 	// build Config{} directly (skipping LoadConfig validation) still
@@ -85,6 +120,15 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 	if cfg.Server.RefreshTokenTTL <= 0 {
 		cfg.Server.RefreshTokenTTL = defaultRefreshTokenTTL
 	}
+	if cfg.Server.IDTokenTTL <= 0 {
+		cfg.Server.IDTokenTTL = defaultIDTokenTTL
+	}
+	// Wrap the supplied Verifier with the broker-key leg whenever a
+	// signer is wired. Callers never see the wrapping — Server.verifier
+	// is the composite under the same Verifier interface.
+	if idTokenSigner != nil {
+		verifier = newCompositeVerifier(verifier, idTokenSigner, cfg.Server.PublicURL)
+	}
 	clock := time.Now
 	s := &Server{
 		cfg:               cfg,
@@ -92,11 +136,24 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 		verifier:          verifier,
 		issuer:            issuer,
 		discovery:         discovery,
+		idTokenSigner:     idTokenSigner,
 		log:               log,
 		clock:             clock,
 		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
-		refreshStore:      newRefreshStore(cfg, issuer.k8s),
+		refreshStore:      NewRefreshStore(cfg, issuer.k8s),
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
+	}
+	if idTokenSigner != nil {
+		jwks, err := newJWKSHandler(idTokenSigner)
+		if err != nil {
+			// Marshal failure is purely a programming error — the
+			// JWK struct cannot legitimately fail to serialize.
+			// Panic rather than hide the surface as silently
+			// missing; the broker is unsafe to serve refresh
+			// grants without a verifiable JWKS.
+			panic(fmt.Sprintf("broker: render JWKS at startup: %v", err))
+		}
+		s.jwks = jwks
 	}
 	// Build the registries unless the operator disabled the limiter
 	// entirely. newRateLimitRegistry returns nil for zero/negative
@@ -136,6 +193,14 @@ func (s *Server) Routes() http.Handler {
 	if s.discovery != nil {
 		mux.Handle("GET /.well-known/openid-configuration", s.discovery.Handler())
 	}
+	// JWKS: served only when the broker has a signing key. Public,
+	// unauthenticated, no rate limit — same posture as the OIDC
+	// discovery doc (every OAuth client library expects the JWKS
+	// available without auth so it can validate id_tokens against
+	// the issuer the discovery doc advertises).
+	if s.jwks != nil {
+		mux.Handle("GET /.well-known/jwks.json", s.jwks)
+	}
 	mux.Handle("GET /auth/login", s.ipRateLimit(http.HandlerFunc(s.authLogin)))
 	mux.HandleFunc("GET /auth/callback", s.authCallback)
 	// RFC 8628 device-flow surface. All POST surfaces sit behind the
@@ -151,6 +216,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /device", s.deviceFormGet)
 	mux.Handle("POST /device", s.ipRateLimit(http.HandlerFunc(s.deviceFormPost)))
 	mux.Handle("POST /device/token", s.ipRateLimit(http.HandlerFunc(s.deviceToken)))
+	// RFC 7009 token revocation. Unauthenticated (possession of
+	// the token IS the authz signal) under the IP limiter for
+	// defense-in-depth. PR4 only operates on refresh tokens; the
+	// world tokens have their own DELETE /tokens/{label} surface.
+	mux.Handle("POST /token/revoke", s.ipRateLimit(http.HandlerFunc(s.tokenRevoke)))
 	authedSubject := func(h http.HandlerFunc) http.Handler {
 		return s.requireAuth(s.subjectRateLimit(h))
 	}
@@ -159,6 +229,14 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /tokens/{label}/rotate", authedSubject(s.rotateToken))
 	return mux
 }
+
+// RefreshStore exposes the broker's refresh-token store so the
+// Sweeper (constructed in main.go alongside the Issuer-driven
+// issuance sweeper) can share a single instance. Returns nil only
+// if NewServer somehow skipped construction — not a production
+// path. Kept as a method (not a public field) so the lifecycle
+// remains "Server owns construction; callers borrow."
+func (s *Server) RefreshStore() *RefreshStore { return s.refreshStore }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)

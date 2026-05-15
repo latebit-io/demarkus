@@ -83,7 +83,7 @@ type refreshTokens struct {
 	Entries map[string]refreshTokenRecord `json:"entries"`
 }
 
-// refreshStore is the broker's refresh-token lifecycle layer.
+// RefreshStore is the broker's refresh-token lifecycle layer.
 // All state lives in a single broker-namespace Secret; mutations go
 // through the shared optimistic-concurrency mutateSecret helper.
 // Multi-replica brokers converge under conflict retry — same posture
@@ -95,18 +95,20 @@ type refreshTokens struct {
 // limit becomes the wall. Phase-7 follow-up is a sharded or
 // CRD-backed store; the API surface here stays stable across that
 // migration.
-type refreshStore struct {
+type RefreshStore struct {
 	cfg    *Config
 	k8s    kubernetes.Interface
 	clock  func() time.Time
 	randFn func([]byte) (int, error)
 }
 
-// newRefreshStore wires a refreshStore with real time.Now and
+// NewRefreshStore wires a *RefreshStore with real time.Now and
 // crypto/rand. Tests override clock and randFn on the returned
 // struct for deterministic behavior — same pattern as NewIssuer.
-func newRefreshStore(cfg *Config, k8s kubernetes.Interface) *refreshStore {
-	return &refreshStore{
+// Exported because main.go and the Sweeper share a single
+// instance with the Server (PR4 Step 5).
+func NewRefreshStore(cfg *Config, k8s kubernetes.Interface) *RefreshStore {
+	return &RefreshStore{
 		cfg:    cfg,
 		k8s:    k8s,
 		clock:  time.Now,
@@ -123,7 +125,7 @@ func newRefreshStore(cfg *Config, k8s kubernetes.Interface) *refreshStore {
 // The raw token is hex-encoded 32-byte randomness (64 chars). The
 // caller is responsible for treating it as bearer credential material
 // — no logging, no retries that would surface it in error messages.
-func (s *refreshStore) Issue(ctx context.Context, claims Claims, ttl time.Duration) (string, error) {
+func (s *RefreshStore) Issue(ctx context.Context, claims Claims, ttl time.Duration) (string, error) {
 	if ttl <= 0 {
 		return "", fmt.Errorf("refresh ttl must be > 0 (got %s)", ttl)
 	}
@@ -167,7 +169,7 @@ func (s *refreshStore) Issue(ctx context.Context, claims Claims, ttl time.Durati
 // refresh) and returns the stored record so the caller can rebuild a
 // response from the cached Claims. On any "not minting" condition
 // returns ErrRefreshTokenInvalid; I/O failures propagate.
-func (s *refreshStore) Refresh(ctx context.Context, rawToken string) (refreshTokenRecord, error) {
+func (s *RefreshStore) Refresh(ctx context.Context, rawToken string) (refreshTokenRecord, error) {
 	if rawToken == "" {
 		return refreshTokenRecord{}, ErrRefreshTokenInvalid
 	}
@@ -203,7 +205,7 @@ func (s *refreshStore) Refresh(ctx context.Context, rawToken string) (refreshTok
 // Revoke drops a token from the store. Idempotent per RFC 7009 §2.2:
 // revoking an unknown or already-revoked token is not an error. An
 // absent Secret is the "store is empty" case and also a no-op.
-func (s *refreshStore) Revoke(ctx context.Context, rawToken string) error {
+func (s *RefreshStore) Revoke(ctx context.Context, rawToken string) error {
 	if rawToken == "" {
 		return nil
 	}
@@ -229,7 +231,7 @@ func (s *refreshStore) Revoke(ctx context.Context, rawToken string) error {
 // map are both no-ops returning (0, nil). Designed to be called from
 // the existing Sweeper's per-tick loop alongside the issuances
 // sweep — Step 5 wires it.
-func (s *refreshStore) Sweep(ctx context.Context) (int, error) {
+func (s *RefreshStore) Sweep(ctx context.Context) (int, error) {
 	var swept int
 	err := mutateSecret(ctx, s.k8s, s.cfg.Server.BrokerNamespace, s.cfg.Server.RefreshTokensSecret, RefreshTokensSecretKey, func(existing []byte) ([]byte, error) {
 		// Reset on each retry — same rationale as Refresh.

@@ -9,6 +9,10 @@ set:
   oidc.clientID: broker-app
   oidc.clientSecret: shh
   oidc.redirectURL: https://broker.example.com/auth/callback
+  # PR4 requires a signing-key surface — suite-wide default keeps
+  # every test in this file rendering. Individual tests override
+  # when targeting the signing-key surface specifically.
+  oidc.brokerSigningKey: "test-pem-placeholder"
   server.publicURL: https://broker.example.com
 tests:
   - it: renders a Deployment with two replicas and rolling update strategy
@@ -135,6 +139,31 @@ tests:
               secretKeyRef:
                 name: my-oidc-secret
                 key: clientSecret
+
+  - it: BROKER_SIGNING_KEY env absent when only brokerSigningKey cleartext set
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: BROKER_SIGNING_KEY
+
+  - it: BROKER_SIGNING_KEY env mounted via secretKeyRef when existingSigningKeyRef.name set
+    template: deployment.yaml
+    set:
+      oidc.brokerSigningKey: ""
+      oidc.existingSigningKeyRef.name: my-broker-signing
+      oidc.existingSigningKeyRef.key: signing-key.pem
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BROKER_SIGNING_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-broker-signing
+                key: signing-key.pem
 
   - it: topologySpread matchLabels populated from selector labels, not values empty default
     template: deployment.yaml

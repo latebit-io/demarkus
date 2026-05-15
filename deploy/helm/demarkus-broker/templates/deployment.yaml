@@ -66,6 +66,21 @@ spec:
                   name: {{ . | quote }}
                   key: {{ $.Values.oidc.existingSecretRef.key | quote }}
             {{- end }}
+            {{- /* PR4 broker signing key. Same env-var-override pattern
+                   as OIDC_CLIENT_SECRET. The chart's mutual-exclusion
+                   guard in secret-config.yaml means existingSigningKeyRef
+                   is set iff the in-config brokerSigningKey is blank;
+                   broker.applyEnvOverrides reads BROKER_SIGNING_KEY
+                   before validate(). The PEM travels through the env
+                   var as a multi-line string — kubelet preserves
+                   newlines under secretKeyRef. */}}
+            {{- with .Values.oidc.existingSigningKeyRef.name }}
+            - name: BROKER_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $.Values.oidc.existingSigningKeyRef.key | quote }}
+            {{- end }}
           ports:
             - name: http
               protocol: TCP

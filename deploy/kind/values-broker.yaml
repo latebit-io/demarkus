@@ -24,6 +24,16 @@ oidc:
   clientID: demarkus-broker-kind
   clientSecret: dev-secret
   redirectURL: http://localhost:8080/auth/callback
+  # Broker-signed id_token key: kept out of the repo. up.sh
+  # generates a fresh ECDSA P-256 key per harness run and applies
+  # it as a Kubernetes Secret named `broker-signing-key` in the
+  # broker namespace BEFORE helm install. The chart picks it up
+  # via existingSigningKeyRef and mounts BROKER_SIGNING_KEY into
+  # the broker pod.
+  brokerSigningKey: ""
+  existingSigningKeyRef:
+    name: broker-signing-key
+    key: signing-key.pem
 
 # Wire to the Stage 1 world (release `world-default` in namespace `demarkus`).
 # tokensSecret name matches the demarkus-server chart's fullname template:

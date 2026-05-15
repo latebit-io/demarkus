@@ -1,6 +1,11 @@
 package broker
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -8,7 +13,12 @@ import (
 	"time"
 )
 
-const validConfig = `
+// validConfigTemplate carries a sentinel where the broker signing
+// key block goes. init() substitutes an ephemeral PEM generated
+// per-test-binary so no checked-in PEM appears in the source tree
+// (which would trigger secret scanners) and so parse-at-validate
+// (added in PR4 review) actually sees a parseable key.
+const validConfigTemplate = `
 server:
   addr: ":8080"
   cookieKey: "dGVzdC1rZXk="
@@ -20,6 +30,7 @@ oidc:
   clientID: client-abc
   clientSecret: shh
   redirectURL: https://broker.example.com/auth/callback
+__SIGNING_KEY_BLOCK__
 worlds:
   - name: team-a
     namespace: team-a
@@ -31,6 +42,38 @@ worlds:
       operations: ["read", "publish"]
       expiresAfter: 24h
 `
+
+// validConfig is the rendered template with a fresh signing-key
+// block. Tests that exercise the "brokerSigningKey is required"
+// path use validConfigNoSigningKey directly so they don't rely on
+// brittle string replacements against the embedded PEM.
+var (
+	validConfig             string
+	validConfigNoSigningKey string
+)
+
+func init() {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic("config_test: generate test signing key: " + err.Error())
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		panic("config_test: marshal test signing key: " + err.Error())
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	// YAML literal block inside the `oidc:` map: brokerSigningKey
+	// header at 2-space indent, PEM body at 4-space indent.
+	var b strings.Builder
+	b.WriteString("  brokerSigningKey: |\n")
+	for line := range strings.SplitSeq(strings.TrimSpace(string(pemBytes)), "\n") {
+		b.WriteString("    ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	validConfig = strings.Replace(validConfigTemplate, "__SIGNING_KEY_BLOCK__\n", b.String(), 1)
+	validConfigNoSigningKey = strings.Replace(validConfigTemplate, "__SIGNING_KEY_BLOCK__\n", "", 1)
+}
 
 const validWorldBlock = `worlds:
   - name: team-a
@@ -54,6 +97,14 @@ func writeConfig(t *testing.T, body string) string {
 }
 
 func TestLoadConfig(t *testing.T) {
+	// applyEnvOverrides reads BROKER_SIGNING_KEY and
+	// OIDC_CLIENT_SECRET from the process environment. Without
+	// clearing them, a CI runner that exports either var (or a
+	// developer who set them locally) silently masks YAML-missing
+	// test cases. t.Setenv restores the prior value at test end so
+	// peer tests that DO want a real env value still work.
+	t.Setenv("BROKER_SIGNING_KEY", "")
+	t.Setenv("OIDC_CLIENT_SECRET", "")
 	tests := []struct {
 		name     string
 		body     string
@@ -396,6 +447,103 @@ func TestLoadConfig(t *testing.T) {
 				want := "mark://team-a.cluster.local:6309"
 				if c.Worlds[0].PublicURL != want {
 					t.Errorf("PublicURL = %q, want %q", c.Worlds[0].PublicURL, want)
+				}
+			},
+		},
+		{
+			// PR4: brokerSigningKey is required so a refresh-grant
+			// request never falls through to a "feature missing"
+			// runtime error. validate() now parses the PEM too
+			// (see OIDCConfig.validate doc), but missing-field
+			// short-circuits before parse so the error message
+			// matches the "is required" surface, not the parse
+			// error.
+			name:    "brokerSigningKey required",
+			body:    validConfigNoSigningKey,
+			wantErr: "oidc.brokerSigningKey is required",
+		},
+		{
+			// PR4 review: malformed PEM is now caught at LoadConfig
+			// (parse-at-validate) instead of bubbling up later
+			// from main.run's NewIDTokenSigner. Operator-facing
+			// error references oidc.brokerSigningKey directly.
+			name: "brokerSigningKey invalid PEM rejected",
+			body: strings.Replace(validConfigTemplate, "__SIGNING_KEY_BLOCK__\n",
+				"  brokerSigningKey: \"not-a-pem\"\n", 1),
+			wantErr: "oidc.brokerSigningKey is invalid",
+		},
+		{
+			// PR4: refreshTokenTTL defaults to 90 days when
+			// omitted — matches plan §"refresh tokens at 90-day TTL."
+			name: "refreshTokenTTL default applied",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				want := 90 * 24 * time.Hour
+				if c.Server.RefreshTokenTTL != want {
+					t.Errorf("RefreshTokenTTL = %s, want %s", c.Server.RefreshTokenTTL, want)
+				}
+			},
+		},
+		{
+			name: "refreshTokenTTL operator override",
+			body: strings.Replace(validConfig,
+				"publicURL: \"https://broker.example.com\"",
+				"publicURL: \"https://broker.example.com\"\n  refreshTokenTTL: 720h", 1),
+			validate: func(t *testing.T, c *Config) {
+				want := 720 * time.Hour
+				if c.Server.RefreshTokenTTL != want {
+					t.Errorf("RefreshTokenTTL = %s, want %s", c.Server.RefreshTokenTTL, want)
+				}
+			},
+		},
+		{
+			name: "idTokenTTL default applied",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				want := 15 * time.Minute
+				if c.Server.IDTokenTTL != want {
+					t.Errorf("IDTokenTTL = %s, want %s", c.Server.IDTokenTTL, want)
+				}
+			},
+		},
+		{
+			// idTokenTTL ≥ refreshTokenTTL is degenerate — the
+			// refresh credential would expire before the bearer it
+			// mints. validate() rejects.
+			name: "idTokenTTL must be less than refreshTokenTTL",
+			body: strings.Replace(validConfig,
+				"publicURL: \"https://broker.example.com\"",
+				"publicURL: \"https://broker.example.com\"\n  idTokenTTL: 100h\n  refreshTokenTTL: 50h", 1),
+			wantErr: "idTokenTTL",
+		},
+		{
+			name:    "refreshTokenTTL negative rejected",
+			body:    strings.Replace(validConfig, "publicURL: \"https://broker.example.com\"", "publicURL: \"https://broker.example.com\"\n  refreshTokenTTL: -1h", 1),
+			wantErr: "server.refreshTokenTTL must be > 0",
+		},
+		{
+			name:    "idTokenTTL negative rejected",
+			body:    strings.Replace(validConfig, "publicURL: \"https://broker.example.com\"", "publicURL: \"https://broker.example.com\"\n  idTokenTTL: -1m", 1),
+			wantErr: "server.idTokenTTL must be > 0",
+		},
+		{
+			name: "refreshTokensSecret default applied",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				want := defaultRefreshTokensSecret
+				if c.Server.RefreshTokensSecret != want {
+					t.Errorf("RefreshTokensSecret = %q, want %q", c.Server.RefreshTokensSecret, want)
+				}
+			},
+		},
+		{
+			name: "refreshTokensSecret operator override",
+			body: strings.Replace(validConfig,
+				"publicURL: \"https://broker.example.com\"",
+				"publicURL: \"https://broker.example.com\"\n  refreshTokensSecret: my-refresh-tokens", 1),
+			validate: func(t *testing.T, c *Config) {
+				if c.Server.RefreshTokensSecret != "my-refresh-tokens" {
+					t.Errorf("RefreshTokensSecret = %q", c.Server.RefreshTokensSecret)
 				}
 			},
 		},

@@ -185,7 +185,7 @@ func TestSubjectRateLimitMissingClaimsIs500(t *testing.T) {
 	// as 500 + an error log rather than silently disabling the limit
 	// (which would be the worst-of-both: production looks fine, but
 	// a misbehaving caller gets unbounded throughput).
-	srv := NewServer(testConfigWithRateLimit(), newTestSigner(t), &fakeVerifier{}, NewIssuer(testConfig(), fake.NewSimpleClientset()), nil, nil)
+	srv := NewServer(testConfigWithRateLimit(), newTestSigner(t), &fakeVerifier{}, NewIssuer(testConfig(), fake.NewSimpleClientset()), nil, nil, nil)
 	h := srv.subjectRateLimit(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler reached despite missing claims")
 		w.WriteHeader(http.StatusOK)

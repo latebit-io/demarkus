@@ -95,6 +95,45 @@ require() {
 require kind
 require helm
 require kubectl
+require openssl
+
+# ensure_broker_signing_key generates a fresh ECDSA P-256 PEM and
+# applies it as a Kubernetes Secret named `broker-signing-key`
+# (data key `signing-key.pem`) in the given namespace. PR4 review
+# called out checked-in test PEMs as a hygiene problem; this keeps
+# the key material ephemeral — generated once per harness run, never
+# committed to the repo. The chart's existingSigningKeyRef picks
+# the Secret up via secretKeyRef, mounting BROKER_SIGNING_KEY into
+# the broker pod at startup.
+#
+# Idempotent: re-runs replace the Secret in place, so a `up.sh`
+# rerun against an existing cluster rotates the broker's signing
+# key. This is desirable for kind — the cluster is ephemeral and
+# rotation surfaces any kid-pinning bugs in PR5+.
+ensure_broker_signing_key() {
+  local ns="$1"
+  echo "--- generating ephemeral broker signing key (ECDSA P-256) for namespace $ns"
+  local tmpfile
+  tmpfile=$(mktemp)
+  # Function-scoped RETURN trap: cleanup runs whether the function
+  # exits normally OR via `set -e` propagation when a downstream
+  # command (openssl / kubectl) fails. Without this, a mid-function
+  # abort would leave the private-key PEM in /tmp until the
+  # next tmpfiles sweep — visible to any local process during the
+  # window. RETURN is function-local in bash, so this does not
+  # clobber outer EXIT/ERR traps.
+  trap 'rm -f "$tmpfile"' RETURN
+  # No `2>/dev/null` on openssl — a real failure here (missing
+  # P-256 support on the host openssl build, /tmp disk pressure)
+  # needs to surface in the harness log; silencing it would turn
+  # a recoverable misconfiguration into "broker pod fails to
+  # start" minutes later with no breadcrumb.
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$tmpfile"
+  kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n "$ns" create secret generic broker-signing-key \
+    --from-file=signing-key.pem="$tmpfile" \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
 
 if kind get clusters | grep -qx "$CLUSTER"; then
   echo "--- kind cluster '$CLUSTER' already exists, reusing"
@@ -171,6 +210,8 @@ if [[ "$WITH_ARGO" == "true" ]]; then
     kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
     kubectl -n "$NAMESPACE" apply -f "$MOCK_OIDC_MANIFEST"
     kubectl -n "$NAMESPACE" rollout status deployment/mock-oauth2-server --timeout=120s
+
+    ensure_broker_signing_key "$NAMESPACE"
 
     echo "--- installing demarkus-broker chart $BROKER_CHART_VERSION (multi-world wiring)"
     # helm --wait blocks on /readyz, which only flips green after OIDC
@@ -346,6 +387,8 @@ if [[ "$WITH_BROKER" == "true" ]]; then
   echo "--- applying mock-oauth2-server (OIDC issuer for broker discovery)"
   kubectl -n "$NAMESPACE" apply -f "$MOCK_OIDC_MANIFEST"
   kubectl -n "$NAMESPACE" rollout status deployment/mock-oauth2-server --timeout=120s
+
+  ensure_broker_signing_key "$NAMESPACE"
 
   echo "--- installing demarkus-broker chart $BROKER_CHART_VERSION"
   # helm install --wait blocks on the broker's readiness probe, which hits
