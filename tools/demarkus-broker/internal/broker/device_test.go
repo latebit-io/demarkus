@@ -159,7 +159,9 @@ func TestDeviceCallbackExchangeFailureDoesNotDeny(t *testing.T) {
 		t.Fatalf("authorize: %v", err)
 	}
 	var auth deviceAuthorizeResponse
-	_ = json.NewDecoder(authResp.Body).Decode(&auth)
+	if err := json.NewDecoder(authResp.Body).Decode(&auth); err != nil {
+		t.Fatalf("decode authorize: %v", err)
+	}
 	_ = authResp.Body.Close()
 
 	formResp, err := client.PostForm(srv.URL+"/device", url.Values{"user_code": {auth.UserCode}})
@@ -859,7 +861,9 @@ func TestDeviceFlowIntegrationIdPDeny(t *testing.T) {
 		t.Fatalf("authorize: %v", err)
 	}
 	var auth deviceAuthorizeResponse
-	_ = json.NewDecoder(authResp.Body).Decode(&auth)
+	if err := json.NewDecoder(authResp.Body).Decode(&auth); err != nil {
+		t.Fatalf("decode authorize: %v", err)
+	}
 	_ = authResp.Body.Close()
 
 	formResp, err := client.PostForm(srv.URL+"/device", url.Values{"user_code": {auth.UserCode}})

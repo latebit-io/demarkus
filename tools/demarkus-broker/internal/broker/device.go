@@ -114,9 +114,11 @@ func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 		UserCode:                userCode,
 		VerificationURI:         verificationURI,
 		VerificationURIComplete: verificationURIComplete,
-		// Round down: a slightly-shorter advertised window is safer
-		// than advertising more time than the store will honor.
-		ExpiresIn: int(expiresAt.Sub(now).Seconds()),
+		// Round down + clamp to 0 under any clock skew: advertising
+		// a negative window confuses clients, and a slightly-shorter
+		// window is safer than advertising more time than the store
+		// will honor.
+		ExpiresIn: max(int(expiresAt.Sub(now).Seconds()), 0),
 		Interval:  int(s.cfg.Server.DevicePollInterval.Seconds()),
 	})
 }
