@@ -168,6 +168,12 @@ func TestRefreshStoreRevoke(t *testing.T) {
 		if err := s.Revoke(context.Background(), strings.Repeat("0", refreshTokenBytes*2)); err != nil {
 			t.Fatalf("Revoke unknown (no Secret): %v", err)
 		}
+		// No-write contract: Revoke against an absent Secret must NOT
+		// materialize the Secret as a side effect. Verifies the
+		// mutateSecret skip-on-empty-result guard.
+		if _, err := k8s.CoreV1().Secrets(s.cfg.Server.BrokerNamespace).Get(context.Background(), testRefreshSecret, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Errorf("Secret should not exist after no-op Revoke; Get err = %v", err)
+		}
 		// Now after an Issue + Revoke, revoke-unknown still succeeds.
 		raw, err := s.Issue(context.Background(), Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
 		if err != nil {
@@ -185,6 +191,10 @@ func TestRefreshStoreRevoke(t *testing.T) {
 		s := newRefreshStoreForTest(t, k8s)
 		if err := s.Revoke(context.Background(), ""); err != nil {
 			t.Fatalf("Revoke empty: %v", err)
+		}
+		// Same no-write contract as the unknown-token case.
+		if _, err := k8s.CoreV1().Secrets(s.cfg.Server.BrokerNamespace).Get(context.Background(), testRefreshSecret, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Errorf("Secret should not exist after empty-token Revoke; Get err = %v", err)
 		}
 	})
 }
@@ -233,6 +243,11 @@ func TestRefreshStoreSweep(t *testing.T) {
 		}
 		if n != 0 {
 			t.Errorf("Sweep on empty returned %d, want 0", n)
+		}
+		// No-write contract: Sweep against an absent Secret must
+		// NOT materialize the Secret as a side effect.
+		if _, err := k8s.CoreV1().Secrets(s.cfg.Server.BrokerNamespace).Get(context.Background(), testRefreshSecret, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Errorf("Secret should not exist after no-op Sweep; Get err = %v", err)
 		}
 	})
 	t.Run("no-op when nothing expired", func(t *testing.T) {

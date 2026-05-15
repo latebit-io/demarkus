@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -837,10 +838,15 @@ func TestDeviceFlowIntegrationHappyPath(t *testing.T) {
 		t.Errorf("access_token = %q, want forwarded value", success.AccessToken)
 	}
 	// PR4 contract: every device-code completion mints a refresh token.
-	// 32 bytes hex = 64 chars. The deviceCallback flow Issued at Bind
-	// time; the polling response forwards it verbatim.
-	if len(success.RefreshToken) != 64 {
-		t.Errorf("refresh_token len = %d, want 64 hex chars: %q", len(success.RefreshToken), success.RefreshToken)
+	// 32 bytes hex = 64 chars; assert hex validity too so a 64-byte
+	// garbage string can't masquerade as a real token in a future
+	// regression.
+	decoded, err := hex.DecodeString(success.RefreshToken)
+	if err != nil {
+		t.Errorf("refresh_token is not valid hex: %v (raw=%q)", err, success.RefreshToken)
+	}
+	if len(decoded) != refreshTokenBytes {
+		t.Errorf("refresh_token decoded len = %d, want %d", len(decoded), refreshTokenBytes)
 	}
 }
 

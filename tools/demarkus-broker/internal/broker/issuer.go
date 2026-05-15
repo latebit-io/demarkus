@@ -602,6 +602,18 @@ func mutateSecret(ctx context.Context, k8s kubernetes.Interface, namespace, name
 			return err
 		}
 		if apierrors.IsNotFound(getErr) {
+			// No-op closure on an absent Secret: don't materialize an
+			// empty Secret as a side effect. Refresh-store Revoke and
+			// Sweep both return existing-unchanged when there's
+			// nothing to do; without this guard the first such call
+			// would create a `{key: nil}` Secret that the next call
+			// then has to read back. The no-write contract is
+			// observable (helm-rendered Secrets, audit logs), so
+			// preserving "absent stays absent" is part of the
+			// store's behavior, not an internal detail.
+			if len(next) == 0 {
+				return nil
+			}
 			fresh := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      name,
