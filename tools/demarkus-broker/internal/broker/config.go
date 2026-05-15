@@ -81,6 +81,15 @@ type WorldConfig struct {
 	// TokensSecret is the name of the world's tokens.toml Secret. The
 	// broker requires get/patch on this Secret in that namespace.
 	TokensSecret string `yaml:"tokensSecret"`
+	// PublicURL is the world's reachable address for client installation
+	// (typically `mark://host:port`). Consumed by /me/install (universe
+	// onboarding) so the plugin can wire a client at this address. Optional:
+	// when blank, the world is omitted from /me/install responses because
+	// there is no address to hand the client. The field exists here on
+	// WorldConfig — not in the world's own Secret — because the broker is
+	// the single source of truth for what a user is told to connect to;
+	// the world server itself does not know its externally-visible URL.
+	PublicURL string `yaml:"publicURL"`
 	// Allow is the per-world authorization predicate. See AllowConfig for
 	// the rules. When every list is empty the world accepts any verified
 	// identity (back-compat with pre-Slice-C configs that had only
