@@ -29,6 +29,13 @@ type Server struct {
 	log       *slog.Logger
 	clock     func() time.Time
 
+	// deviceStore holds in-flight RFC 8628 device-flow grants. Created
+	// lazily by NewServer (single-broker invariant per plan §"Single
+	// broker only for now"); state lives in process memory and a
+	// broker restart drops it. The handlers in device.go own the
+	// HTTP surface; the store owns the state machine.
+	deviceStore *deviceStore
+
 	// subjectReg is the per-subject limiter shared across the three
 	// /tokens routes; loginReg is the per-IP limiter for /auth/login.
 	// Either may be nil (Slice C.4 RateLimitConfig.Disabled, or a test
@@ -51,6 +58,19 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 	if log == nil {
 		log = slog.Default()
 	}
+	// Device-flow knobs default at construction time so tests that
+	// build Config{} directly (skipping LoadConfig validation) still
+	// get usable values — keeps the in-process httptest path symmetric
+	// with the LoadConfig-validated production path.
+	deviceTTL := cfg.Server.DeviceCodeTTL
+	if deviceTTL <= 0 {
+		deviceTTL = 10 * time.Minute
+	}
+	pollInterval := cfg.Server.DevicePollInterval
+	if pollInterval <= 0 {
+		pollInterval = 5 * time.Second
+	}
+	clock := time.Now
 	s := &Server{
 		cfg:               cfg,
 		signer:            signer,
@@ -58,7 +78,8 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 		issuer:            issuer,
 		discovery:         discovery,
 		log:               log,
-		clock:             time.Now,
+		clock:             clock,
+		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
 	// Build the registries unless the operator disabled the limiter
@@ -101,6 +122,19 @@ func (s *Server) Routes() http.Handler {
 	}
 	mux.Handle("GET /auth/login", s.ipRateLimit(http.HandlerFunc(s.authLogin)))
 	mux.HandleFunc("GET /auth/callback", s.authCallback)
+	// RFC 8628 device-flow surface. All POST surfaces sit behind the
+	// IP rate limiter — they're unauthenticated by design and a
+	// script can probe POST /device for the 302-vs-400 transition to
+	// brute-force active user_codes; the alphabet space makes that
+	// math infeasible (~30^8) but the limiter cuts the attack rate to
+	// a small fixed per-IP cap as defense-in-depth. /device GET (the
+	// HTML form) is unprotected: humans hand-typing codes rarely hit
+	// any rate threshold, and serving a static page has no state to
+	// leak.
+	mux.Handle("POST /device/authorize", s.ipRateLimit(http.HandlerFunc(s.deviceAuthorize)))
+	mux.HandleFunc("GET /device", s.deviceFormGet)
+	mux.Handle("POST /device", s.ipRateLimit(http.HandlerFunc(s.deviceFormPost)))
+	mux.Handle("POST /device/token", s.ipRateLimit(http.HandlerFunc(s.deviceToken)))
 	authedSubject := func(h http.HandlerFunc) http.Handler {
 		return s.requireAuth(s.subjectRateLimit(h))
 	}
@@ -131,6 +165,18 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := State{Nonce: nonce, ExpiresAt: s.clock().Add(s.cfg.Server.StateTTL)}
+	// Device-flow handoff: if /device set the device cookie, pin the
+	// device_code into the signed state HERE so /auth/callback's
+	// dispatch is driven by a tamper-evident value rather than the
+	// ambient cookie. The cookie itself is consumed (cleared) below
+	// so an abandoned-then-resumed-elsewhere flow can't silently
+	// resurrect the device branch later.
+	if cookie, cerr := r.Cookie(deviceCookieName); cerr == nil && cookie.Value != "" {
+		if _, ok := s.deviceStore.LookupByDeviceCode(cookie.Value); ok {
+			state.DeviceCode = cookie.Value
+		}
+		s.clearDeviceCookie(w)
+	}
 	signed, err := s.signer.Sign(state)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: sign state", "err", err)
@@ -152,9 +198,8 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	queryState := r.URL.Query().Get("state")
-	code := r.URL.Query().Get("code")
-	if queryState == "" || code == "" {
-		http.Error(w, "missing state or code", http.StatusBadRequest)
+	if queryState == "" {
+		http.Error(w, "missing state", http.StatusBadRequest)
 		return
 	}
 	cookie, err := r.Cookie(stateCookieName)
@@ -173,7 +218,8 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "state mismatch", http.StatusUnauthorized)
 		return
 	}
-	// Best effort: clear the cookie now that it has done its job.
+	// State cookie has done its job — clear it before any branch so
+	// even error paths can't replay the nonce.
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookieName,
 		Value:    "",
@@ -184,12 +230,31 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 
-	claims, err := s.verifier.Exchange(r.Context(), code)
+	// Device-flow dispatch is driven by the signed State, not by an
+	// ambient cookie. authLogin pins state.DeviceCode when /device set
+	// the device cookie; an empty value here means a normal browser
+	// code-flow callback. A stale device cookie left in the jar from
+	// an abandoned flow cannot route a later browser callback through
+	// the device branch because the State was minted fresh at the
+	// most recent /auth/login.
+	if state.DeviceCode != "" {
+		s.deviceCallback(w, r, state.DeviceCode)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Error(w, "missing code", http.StatusBadRequest)
+		return
+	}
+
+	exchange, err := s.verifier.Exchange(r.Context(), code)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: oauth exchange failed", "err", err)
 		http.Error(w, "oauth exchange failed", http.StatusUnauthorized)
 		return
 	}
+	claims := exchange.Claims
 	results, err := s.issuer.Mint(r.Context(), claims)
 	if err != nil {
 		// Partial mint: some worlds succeeded before a later one failed.

@@ -150,6 +150,17 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 		log.Info("broker: sweeper disabled (sweeper.disabled=true)")
 	}
 
+	// Device-store janitor evicts terminal RFC 8628 grants on a fixed
+	// cadence. Per-replica state (single-broker invariant for now), no
+	// leader election needed. Shares sweepCtx with the Sweeper so a
+	// single cancel tears down both goroutines.
+	log.Info("broker: starting device-store janitor",
+		"deviceCodeTTL", cfg.Server.DeviceCodeTTL,
+		"devicePollInterval", cfg.Server.DevicePollInterval)
+	sweepWG.Go(func() {
+		srv.RunDeviceJanitor(sweepCtx)
+	})
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	select {

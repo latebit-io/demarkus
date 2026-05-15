@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -21,6 +22,21 @@ type Claims struct {
 	Groups        []string
 }
 
+// ExchangeResult bundles everything the broker needs from a completed
+// OAuth2 code exchange. Claims is the verified subset of the ID token; the
+// browser code-flow callback consumes it to drive Issuer.Mint. RawIDToken
+// and AccessToken are the IdP-issued tokens verbatim, forwarded into the
+// RFC 8628 device-flow `/device/token` success response so a polling
+// client (the plugin's join binary) ends up with the same bearer it would
+// have gotten from the browser callback. Expiry is the IdP's stated
+// token expiry, copied so callers don't have to re-parse the ID token.
+type ExchangeResult struct {
+	Claims      Claims
+	RawIDToken  string
+	AccessToken string
+	Expiry      time.Time
+}
+
 // Verifier is the broker's abstraction over an OIDC provider. The
 // production implementation wraps coreos/go-oidc + golang.org/x/oauth2;
 // tests pass a fake that hard-codes claims. Slice B keeps this surface
@@ -31,10 +47,12 @@ type Verifier interface {
 	// /auth/login. state is the OAuth2 state parameter (the same nonce
 	// the broker stores in its signed cookie for cross-check).
 	AuthCodeURL(state string) string
-	// Exchange swaps a callback authorization code for verified claims.
-	// It fetches the token from the IdP, verifies the ID-token signature
-	// against the JWKS, and extracts the broker's needed claims.
-	Exchange(ctx context.Context, code string) (Claims, error)
+	// Exchange swaps a callback authorization code for verified claims
+	// plus the raw IdP tokens. It fetches the token from the IdP,
+	// verifies the ID-token signature against the JWKS, and returns the
+	// verified claims alongside the raw id_token + access_token so the
+	// device-flow polling endpoint can forward them to the client.
+	Exchange(ctx context.Context, code string) (ExchangeResult, error)
 	// VerifyIDToken validates a bearer ID token presented by the CLI on
 	// /tokens and DELETE /tokens/:label. Same signature + claims
 	// extraction as Exchange's final step, without the OAuth code swap.
@@ -84,16 +102,25 @@ func (v *oidcVerifier) AuthCodeURL(state string) string {
 	return v.oauth.AuthCodeURL(state)
 }
 
-func (v *oidcVerifier) Exchange(ctx context.Context, code string) (Claims, error) {
+func (v *oidcVerifier) Exchange(ctx context.Context, code string) (ExchangeResult, error) {
 	tok, err := v.oauth.Exchange(ctx, code)
 	if err != nil {
-		return Claims{}, fmt.Errorf("broker: oauth exchange: %w", err)
+		return ExchangeResult{}, fmt.Errorf("broker: oauth exchange: %w", err)
 	}
 	rawIDToken, ok := tok.Extra("id_token").(string)
 	if !ok || rawIDToken == "" {
-		return Claims{}, ErrNoIDToken
+		return ExchangeResult{}, ErrNoIDToken
 	}
-	return v.VerifyIDToken(ctx, rawIDToken)
+	claims, err := v.VerifyIDToken(ctx, rawIDToken)
+	if err != nil {
+		return ExchangeResult{}, err
+	}
+	return ExchangeResult{
+		Claims:      claims,
+		RawIDToken:  rawIDToken,
+		AccessToken: tok.AccessToken,
+		Expiry:      tok.Expiry,
+	}, nil
 }
 
 func (v *oidcVerifier) VerifyIDToken(ctx context.Context, rawIDToken string) (Claims, error) {
