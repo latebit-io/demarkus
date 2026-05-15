@@ -94,6 +94,13 @@ worlds: []
   # - name: team-a
   #   namespace: team-a
   #   tokensSecret: team-a-tokens
+  #   # Reachable address handed to clients via /me/install during user
+  #   # onboarding (mark://host:port). Optional: worlds without a publicURL
+  #   # are minted-for as before but excluded from /me/install responses,
+  #   # because there is no address to wire the client to. Typically the
+  #   # VPN-reachable hostname or in-cluster Service when the user's
+  #   # network can route to it; see docs/deployment/security-topology.md.
+  #   publicURL: "mark://world-a.cluster.internal:6309"
   #   allow:
   #     domains: ["nesto.ca"]
   #     groups: ["engineering"]

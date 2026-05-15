@@ -327,6 +327,33 @@ func TestLoadConfig(t *testing.T) {
 			body:    validConfig + "rateLimit:\n  login:\n    perMinute: 20\n    burst: -1\n",
 			wantErr: "rateLimit.login.burst must be >= 1",
 		},
+		{
+			// publicURL is optional — when omitted (validConfig), it
+			// must round-trip to the zero value. /me/install will
+			// skip worlds whose PublicURL is blank.
+			name: "publicURL defaults to empty string when omitted",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				if c.Worlds[0].PublicURL != "" {
+					t.Errorf("PublicURL = %q, want empty default", c.Worlds[0].PublicURL)
+				}
+			},
+		},
+		{
+			// publicURL is parsed as a plain string here; shape
+			// validation lives in the /me/install consumer (PR5) so
+			// PR1 only asserts the field round-trips through YAML.
+			name: "publicURL round-trips through YAML",
+			body: strings.Replace(validConfig,
+				"tokensSecret: team-a-tokens",
+				"tokensSecret: team-a-tokens\n    publicURL: \"mark://team-a.cluster.local:6309\"", 1),
+			validate: func(t *testing.T, c *Config) {
+				want := "mark://team-a.cluster.local:6309"
+				if c.Worlds[0].PublicURL != want {
+					t.Errorf("PublicURL = %q, want %q", c.Worlds[0].PublicURL, want)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
