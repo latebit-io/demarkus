@@ -29,6 +29,13 @@ type Server struct {
 	log       *slog.Logger
 	clock     func() time.Time
 
+	// deviceStore holds in-flight RFC 8628 device-flow grants. Created
+	// lazily by NewServer (single-broker invariant per plan §"Single
+	// broker only for now"); state lives in process memory and a
+	// broker restart drops it. The handlers in device.go own the
+	// HTTP surface; the store owns the state machine.
+	deviceStore *deviceStore
+
 	// subjectReg is the per-subject limiter shared across the three
 	// /tokens routes; loginReg is the per-IP limiter for /auth/login.
 	// Either may be nil (Slice C.4 RateLimitConfig.Disabled, or a test
@@ -51,6 +58,19 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 	if log == nil {
 		log = slog.Default()
 	}
+	// Device-flow knobs default at construction time so tests that
+	// build Config{} directly (skipping LoadConfig validation) still
+	// get usable values — keeps the in-process httptest path symmetric
+	// with the LoadConfig-validated production path.
+	deviceTTL := cfg.Server.DeviceCodeTTL
+	if deviceTTL <= 0 {
+		deviceTTL = 10 * time.Minute
+	}
+	pollInterval := cfg.Server.DevicePollInterval
+	if pollInterval <= 0 {
+		pollInterval = 5 * time.Second
+	}
+	clock := time.Now
 	s := &Server{
 		cfg:               cfg,
 		signer:            signer,
@@ -58,7 +78,8 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 		issuer:            issuer,
 		discovery:         discovery,
 		log:               log,
-		clock:             time.Now,
+		clock:             clock,
+		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
 	// Build the registries unless the operator disabled the limiter
@@ -101,6 +122,17 @@ func (s *Server) Routes() http.Handler {
 	}
 	mux.Handle("GET /auth/login", s.ipRateLimit(http.HandlerFunc(s.authLogin)))
 	mux.HandleFunc("GET /auth/callback", s.authCallback)
+	// RFC 8628 device-flow surface. /device/authorize and /device/token
+	// sit behind the IP rate limiter for the same reason /auth/login
+	// does — they're unauthenticated by design and need a backstop
+	// against an attacker hammering them to enumerate state. /device
+	// (the user-facing HTML form) is unprotected: humans hand-typing
+	// codes rarely hit any rate threshold, and a real attacker would
+	// skip the form entirely and target the JSON endpoints.
+	mux.Handle("POST /device/authorize", s.ipRateLimit(http.HandlerFunc(s.deviceAuthorize)))
+	mux.HandleFunc("GET /device", s.deviceFormGet)
+	mux.HandleFunc("POST /device", s.deviceFormPost)
+	mux.Handle("POST /device/token", s.ipRateLimit(http.HandlerFunc(s.deviceToken)))
 	authedSubject := func(h http.HandlerFunc) http.Handler {
 		return s.requireAuth(s.subjectRateLimit(h))
 	}
@@ -151,6 +183,17 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
+	// Device-flow branch: if the cookie set by POST /device is present
+	// on this callback, the request is the tail end of an RFC 8628
+	// flow rather than the browser code-flow. The handler short-
+	// circuits to deviceCallback (no Mint, no JSON response) and the
+	// rest of this function is unchanged for the browser path. Keeps
+	// the existing /auth/callback tests untouched when no cookie is
+	// set.
+	if cookie, err := r.Cookie(deviceCookieName); err == nil && cookie.Value != "" {
+		s.deviceCallback(w, r, cookie.Value)
+		return
+	}
 	queryState := r.URL.Query().Get("state")
 	code := r.URL.Query().Get("code")
 	if queryState == "" || code == "" {
@@ -184,12 +227,13 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 
-	claims, err := s.verifier.Exchange(r.Context(), code)
+	exchange, err := s.verifier.Exchange(r.Context(), code)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: oauth exchange failed", "err", err)
 		http.Error(w, "oauth exchange failed", http.StatusUnauthorized)
 		return
 	}
+	claims := exchange.Claims
 	results, err := s.issuer.Mint(r.Context(), claims)
 	if err != nil {
 		// Partial mint: some worlds succeeded before a later one failed.

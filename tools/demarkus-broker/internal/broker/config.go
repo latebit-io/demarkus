@@ -63,6 +63,18 @@ type ServerConfig struct {
 	// real deployment turns the state cookie into a downgrade attack vector
 	// — any plaintext-hijacked redirect can complete the OIDC dance.
 	InsecureCookies bool `yaml:"insecureCookies"`
+	// DeviceCodeTTL caps the lifetime of an RFC 8628 device-flow grant —
+	// the window between /device/authorize and the user completing the
+	// IdP redirect at /device. Default 10 minutes; matches the value
+	// Google + Auth0 use, long enough for a user to switch devices and
+	// complete the OIDC dance, short enough that an abandoned grant
+	// evicts before clogging the in-memory store.
+	DeviceCodeTTL time.Duration `yaml:"deviceCodeTTL"`
+	// DevicePollInterval is the minimum allowed gap between successive
+	// /device/token polls before the broker returns RFC 8628 slow_down.
+	// Default 5s; matches the `interval` value the authorize response
+	// emits to clients.
+	DevicePollInterval time.Duration `yaml:"devicePollInterval"`
 }
 
 // OIDCConfig describes the OIDC client registration at the IdP. Discovery
@@ -325,6 +337,9 @@ func (c *Config) validate() error {
 	if c.Server.StateTTL < 0 {
 		return fmt.Errorf("server.stateTTL must be > 0 (got %s)", c.Server.StateTTL)
 	}
+	if err := c.Server.applyDeviceFlowDefaults(); err != nil {
+		return err
+	}
 	if c.OIDC.Issuer == "" {
 		return fmt.Errorf("oidc.issuer is required")
 	}
@@ -372,6 +387,30 @@ func (c *Config) validate() error {
 		c.Sweeper.LeaseName = "demarkus-broker-sweeper"
 	}
 	return c.RateLimit.applyDefaultsAndValidate()
+}
+
+// applyDeviceFlowDefaults fills in PR3 device-flow defaults and rejects
+// degenerate combinations. Extracted from Config.validate to keep the
+// outer function inside the gocyclo budget. Pollinterval must be
+// strictly less than the TTL — a configuration where every legitimate
+// poll trips slow_down would deadlock a real client.
+func (s *ServerConfig) applyDeviceFlowDefaults() error {
+	if s.DeviceCodeTTL == 0 {
+		s.DeviceCodeTTL = 10 * time.Minute
+	}
+	if s.DeviceCodeTTL < 0 {
+		return fmt.Errorf("server.deviceCodeTTL must be > 0 (got %s)", s.DeviceCodeTTL)
+	}
+	if s.DevicePollInterval == 0 {
+		s.DevicePollInterval = 5 * time.Second
+	}
+	if s.DevicePollInterval < 0 {
+		return fmt.Errorf("server.devicePollInterval must be > 0 (got %s)", s.DevicePollInterval)
+	}
+	if s.DevicePollInterval >= s.DeviceCodeTTL {
+		return fmt.Errorf("server.devicePollInterval (%s) must be < server.deviceCodeTTL (%s)", s.DevicePollInterval, s.DeviceCodeTTL)
+	}
+	return nil
 }
 
 // applyDefaultsAndValidate fills in plan §6.2 Slice C.4 defaults for the

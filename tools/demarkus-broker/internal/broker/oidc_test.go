@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeIdP serves the minimum OIDC discovery surface NewVerifier touches:
@@ -89,10 +90,13 @@ func TestNewVerifierFailsOnBadIssuer(t *testing.T) {
 // the Verifier interface with predetermined claims and is not coupled to
 // the OIDC library.
 type fakeVerifier struct {
-	authURL  string
-	claims   Claims
-	exchErr  error
-	verifyFn func(raw string) (Claims, error) // optional per-token behavior for VerifyIDToken
+	authURL     string
+	claims      Claims
+	rawIDToken  string
+	accessToken string
+	expiry      time.Time
+	exchErr     error
+	verifyFn    func(raw string) (Claims, error) // optional per-token behavior for VerifyIDToken
 }
 
 func (f *fakeVerifier) AuthCodeURL(state string) string {
@@ -105,11 +109,16 @@ func (f *fakeVerifier) AuthCodeURL(state string) string {
 	return f.authURL + "?state=" + url.QueryEscape(state)
 }
 
-func (f *fakeVerifier) Exchange(_ context.Context, _ string) (Claims, error) {
+func (f *fakeVerifier) Exchange(_ context.Context, _ string) (ExchangeResult, error) {
 	if f.exchErr != nil {
-		return Claims{}, f.exchErr
+		return ExchangeResult{}, f.exchErr
 	}
-	return f.claims, nil
+	return ExchangeResult{
+		Claims:      f.claims,
+		RawIDToken:  f.rawIDToken,
+		AccessToken: f.accessToken,
+		Expiry:      f.expiry,
+	}, nil
 }
 
 func (f *fakeVerifier) VerifyIDToken(_ context.Context, raw string) (Claims, error) {
