@@ -101,7 +101,7 @@ func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 	tsrv := httptest.NewServer(srv.Routes())
 	t.Cleanup(tsrv.Close)
 
-	resp, err := http.Get(tsrv.URL + "/.well-known/openid-configuration")
+	resp, err := testClient(tsrv).Get(tsrv.URL + "/.well-known/openid-configuration")
 	if err != nil {
 		t.Fatalf("GET well-known: %v", err)
 	}

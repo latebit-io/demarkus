@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -304,13 +305,20 @@ func (c *Config) validate() error {
 	if c.Server.IssuancesSecret == "" {
 		return fmt.Errorf("server.issuancesSecret is required")
 	}
+	// Normalize before the empty-check so values like "   " or "/" are
+	// caught here instead of silently producing a broken issuer URL
+	// downstream (e.g. "/device/authorize" with no scheme/host).
+	c.Server.PublicURL = strings.TrimRight(strings.TrimSpace(c.Server.PublicURL), "/")
 	if c.Server.PublicURL == "" {
 		return fmt.Errorf("server.publicURL is required")
 	}
-	// Trim once at load so every downstream consumer (discovery doc,
-	// future device-flow URLs, /me/install) sees a canonical no-trailing-
-	// slash form without each one re-trimming.
-	c.Server.PublicURL = strings.TrimRight(c.Server.PublicURL, "/")
+	// Enforce absolute-URL shape. Without scheme+host the override would
+	// emit values like "/device/authorize" into the discovery doc, which
+	// every OIDC client would reject — fail fast at config load instead
+	// of producing a broker that boots but serves a useless well-known.
+	if u, err := url.Parse(c.Server.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("server.publicURL must be an absolute URL (got %q)", c.Server.PublicURL)
+	}
 	if c.Server.StateTTL == 0 {
 		c.Server.StateTTL = 5 * time.Minute
 	}

@@ -69,6 +69,14 @@ type Discovery struct {
 	mu    sync.RWMutex
 	body  []byte
 	until time.Time
+
+	// refreshMu serializes TTL-expiry refreshes so N concurrent in-flight
+	// requests fire at most one upstream fetch instead of N. Cheap insurance
+	// — without it, a popular broker behind a fronting cache that all
+	// expires the well-known doc simultaneously would multiply load on the
+	// IdP by the in-flight request count. Held across the upstream fetch +
+	// body publish; the regular mu still owns reads of body/until.
+	refreshMu sync.Mutex
 }
 
 // DiscoveryConfig is the input bundle to NewDiscovery. Single struct so
@@ -163,16 +171,26 @@ func (d *Discovery) Handler() http.Handler {
 
 // get returns the cached body, refreshing inline on TTL expiry. Stale
 // served on refresh failure so the well-known endpoint stays available
-// during transient upstream issues.
+// during transient upstream issues. refreshMu serializes refreshes so
+// concurrent expirers don't stampede the upstream IdP — late arrivals
+// re-check the TTL after taking the lock and skip the fetch when a
+// prior holder already refreshed.
 func (d *Discovery) get(ctx context.Context) []byte {
 	d.mu.RLock()
 	expired := !d.clock().Before(d.until)
 	d.mu.RUnlock()
 	if expired {
-		if err := d.refresh(ctx); err != nil {
-			d.log.WarnContext(ctx, "broker: discovery refresh failed, serving stale",
-				"err", err, "upstream", d.idpDiscovery)
+		d.refreshMu.Lock()
+		d.mu.RLock()
+		stillExpired := !d.clock().Before(d.until)
+		d.mu.RUnlock()
+		if stillExpired {
+			if err := d.refresh(ctx); err != nil {
+				d.log.WarnContext(ctx, "broker: discovery refresh failed, serving stale",
+					"err", err, "upstream", d.idpDiscovery)
+			}
 		}
+		d.refreshMu.Unlock()
 	}
 	d.mu.RLock()
 	defer d.mu.RUnlock()

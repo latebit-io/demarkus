@@ -334,6 +334,31 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "server.publicURL is required",
 		},
 		{
+			// Whitespace-only is functionally the same as empty —
+			// normalize before the empty-check so a yaml-quoted
+			// "   " value is rejected with the same error, not
+			// silently allowed through to break downstream URL
+			// construction.
+			name:    "server.publicURL whitespace-only rejected",
+			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: "   "`, 1),
+			wantErr: "server.publicURL is required",
+		},
+		{
+			// Bare "/" trims down to "" after the canonicalization
+			// pass and falls into the same is-required branch.
+			name:    "server.publicURL bare slash rejected",
+			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: "/"`, 1),
+			wantErr: "server.publicURL is required",
+		},
+		{
+			// Without scheme + host the override would render
+			// nonsense like "not-a-url/device/authorize" into the
+			// discovery doc. Catch at config load.
+			name:    "server.publicURL without scheme rejected",
+			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: "broker.example.com"`, 1),
+			wantErr: "server.publicURL must be an absolute URL",
+		},
+		{
 			// PublicURL trailing slash is stripped at load so every
 			// downstream consumer (discovery doc, /me/install) sees a
 			// canonical form without re-trimming on every call.

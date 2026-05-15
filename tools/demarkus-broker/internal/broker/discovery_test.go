@@ -286,6 +286,37 @@ func TestDiscoveryBrokerURLTrailingSlashTrimmed(t *testing.T) {
 	}
 }
 
+func TestDiscoveryRefreshSerializedAcrossConcurrentExpiry(t *testing.T) {
+	// Without the refresh mutex, N concurrent goroutines arriving after
+	// TTL expiry all see expired=true and each fires its own upstream
+	// fetch — at scale that's a stampede on the IdP every time the
+	// well-known cache rolls. The mutex serializes refreshes; late
+	// arrivals re-check TTL after lock acquisition and skip the fetch
+	// because a prior holder already refreshed. Assert at most ONE
+	// extra upstream hit (initial + one refresh) regardless of the
+	// concurrent caller count.
+	idp := newFakeDiscoveryIdP(t)
+	d, clk := newTestDiscovery(t, idp, time.Minute)
+	if got := idp.hitCount(); got != 1 {
+		t.Fatalf("after construction: hits = %d, want 1", got)
+	}
+	clk.Advance(time.Minute + time.Second)
+	const callers = 16
+	done := make(chan struct{}, callers)
+	for range callers {
+		go func() {
+			_ = serveAndDecode(t, d)
+			done <- struct{}{}
+		}()
+	}
+	for range callers {
+		<-done
+	}
+	if got := idp.hitCount(); got != 2 {
+		t.Errorf("after %d concurrent post-TTL requests: hits = %d, want 2 (initial + 1 refresh)", callers, got)
+	}
+}
+
 func TestDiscoveryRejectsInvalidUpstreamJSON(t *testing.T) {
 	idp := newFakeDiscoveryIdP(t)
 	idp.body.Store("not-json")
