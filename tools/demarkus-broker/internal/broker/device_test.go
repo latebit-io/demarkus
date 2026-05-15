@@ -163,6 +163,79 @@ func TestDeviceFormPostSuccessSetsCookieAndRedirects(t *testing.T) {
 	}
 }
 
+// TestDeviceFormPostRejectsCrossOriginCSRF locks the Origin-header
+// CSRF gate on POST /device. The classic attack is an evil.com page
+// auto-submitting a form with an attacker-supplied user_code; the
+// browser would set the broker_device_code cookie and follow the
+// 302 to /auth/login, ultimately binding the victim's IdP identity
+// to the attacker's device_code. Defense is the Origin check in
+// sameOriginPost — verified here by sending a POST with Origin set
+// to an external host and asserting the handler rejects with 403
+// before any cookie is set.
+func TestDeviceFormPostRejectsCrossOriginCSRF(t *testing.T) {
+	srv, broker := newTestServer(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+	_, userCode, _, err := broker.deviceStore.Authorize()
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+
+	form := url.Values{"user_code": {userCode}}
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/device", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example.com")
+
+	client := testClient(srv)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /device: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	if findDeviceCookie(resp.Cookies()) != nil {
+		t.Error("device cookie set despite cross-origin POST — CSRF gate failed open")
+	}
+}
+
+// TestDeviceFormPostAcceptsSameOriginPost confirms the gate doesn't
+// false-positive on legitimate same-origin POSTs (Origin == r.Host).
+// The other DeviceFormPost tests rely on Go's http.Client which omits
+// Origin entirely; this one sets it explicitly to mirror what a real
+// browser submits and asserts the request proceeds normally.
+func TestDeviceFormPostAcceptsSameOriginPost(t *testing.T) {
+	srv, broker := newTestServer(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+	deviceCode, userCode, _, err := broker.deviceStore.Authorize()
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+
+	form := url.Values{"user_code": {userCode}}
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/device", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// Origin host must match r.Host (the test server's listener), not
+	// PublicURL: that's the production-correct shape since browsers
+	// stamp Origin from the page they served the form from.
+	u, _ := url.Parse(srv.URL)
+	req.Header.Set("Origin", "https://"+u.Host)
+
+	client := testClient(srv)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /device: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	cookie := findDeviceCookie(resp.Cookies())
+	if cookie == nil || cookie.Value != deviceCode {
+		t.Fatalf("device cookie not set on same-origin POST: %+v", cookie)
+	}
+}
+
 func TestDeviceFormPostSecureMatchesInsecureCookiesFlag(t *testing.T) {
 	tests := []struct {
 		name            string

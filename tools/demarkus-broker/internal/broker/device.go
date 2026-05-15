@@ -128,7 +128,26 @@ func (s *Server) deviceFormGet(w http.ResponseWriter, r *http.Request) {
 // re-renders with an error message — distinguished only as "invalid or
 // expired" since exposing whether a specific code was issued would
 // turn this endpoint into an enumeration oracle.
+//
+// CSRF defense: a cross-origin POST that successfully reached this
+// handler could bind a victim's IdP identity to an attacker-supplied
+// device_code (the attacker would have called /device/authorize first
+// and embedded their own user_code in a form on a page the victim
+// visits). SameSite=Lax doesn't help here because we are SETTING the
+// device cookie cross-site, not reading an existing one. The Origin
+// header check below catches every browser-shape CSRF attempt: modern
+// browsers always send Origin on POST, so any cross-origin POST will
+// have an Origin pointing at the attacker's site, which we reject.
+// Non-browser clients (curl, Go's http.Client) omit Origin and are
+// allowed; they are not vulnerable to the CSRF tricked-browser
+// scenario by construction.
 func (s *Server) deviceFormPost(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginPost(r) {
+		s.log.WarnContext(r.Context(), "broker: device form POST blocked — cross-origin",
+			"origin", r.Header.Get("Origin"), "host", r.Host)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		s.renderDeviceForm(w, r, deviceFormData{Error: "invalid request"}, http.StatusBadRequest)
 		return
@@ -346,6 +365,30 @@ func (s *Server) RunDeviceJanitor(ctx context.Context) {
 			s.deviceStore.Sweep()
 		}
 	}
+}
+
+// sameOriginPost returns false when the request carries an Origin
+// header whose host differs from r.Host — the canonical signal of a
+// cross-origin browser POST. Absence of Origin is treated as
+// "not a browser" (curl, Go's http.Client, server-to-server tooling
+// — none of which are CSRF-vulnerable, since CSRF requires an
+// authenticated user-agent the attacker can puppet).
+//
+// We don't compare against cfg.Server.PublicURL because in dev /
+// kind / port-forward setups the user reaches the broker through a
+// host that differs from PublicURL; r.Host reflects the actual host
+// the browser sees and the Origin it sends, which is what we want
+// for a strict same-origin gate.
+func sameOriginPost(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Host == r.Host
 }
 
 // clearDeviceCookie zeroes the device cookie. Called from /auth/callback's
