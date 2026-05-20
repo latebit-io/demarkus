@@ -107,7 +107,37 @@ var ErrNotFound = errors.New("broker: label not found in issuances")
 // the partial results are returned alongside the error so the caller can
 // hand back what was actually minted — the unfinished worlds are not
 // reflected in either Secret.
+//
+// Mint is the no-filter shape used by /auth/callback; surfaces that need
+// to narrow the candidate worlds before mint (e.g. /me/install, which
+// drops worlds without a PublicURL so the issuances Secret is not
+// polluted with records the install bundle would then drop anyway) call
+// MintFiltered with a predicate. Mint is preserved as a back-compat
+// wrapper so existing call sites are untouched.
 func (i *Issuer) Mint(ctx context.Context, claims Claims) ([]MintResult, error) {
+	return i.MintFiltered(ctx, claims, nil)
+}
+
+// MintFiltered is Mint with an optional per-world predicate applied
+// after the AllowConfig authorization check and before any Secret is
+// written. A nil keep is "accept all" — equivalent to Mint.
+//
+// Filter ordering matters: keep runs AFTER authorizedWorlds so the
+// caller can reason about the predicate's input as "worlds this
+// identity is already permitted to use." A keep that filters every
+// authorized world to zero returns ErrNotAuthorized — same shape as
+// "no worlds matched the identity in the first place" so the HTTP
+// layer (e.g. /me/install) can map a single error sentinel to the
+// "200 with worlds: []" response regardless of which branch produced
+// the empty set.
+//
+// The predicate gates issuance entirely: filtered worlds get NO entry
+// in either the world's tokens Secret or the broker's issuances
+// Secret. This is the right shape for /me/install where a
+// PublicURL-less world is structurally un-installable; leaving a
+// stale issuance per call would churn the issuances Secret toward
+// its 5000-record cap without ever producing a usable token.
+func (i *Issuer) MintFiltered(ctx context.Context, claims Claims, keep func(*WorldConfig) bool) ([]MintResult, error) {
 	// Defense in depth: the production Verifier rejects unverified claims
 	// before Mint is reached, but a test double (or future Verifier impl)
 	// might not. Authorization by email domain is meaningless on an
@@ -138,6 +168,18 @@ func (i *Issuer) Mint(ctx context.Context, claims Claims) ([]MintResult, error) 
 	worlds := i.authorizedWorlds(claims)
 	if len(worlds) == 0 {
 		return nil, ErrNotAuthorized
+	}
+	if keep != nil {
+		filtered := worlds[:0]
+		for _, w := range worlds {
+			if keep(w) {
+				filtered = append(filtered, w)
+			}
+		}
+		worlds = filtered
+		if len(worlds) == 0 {
+			return nil, ErrNotAuthorized
+		}
 	}
 	now := i.clock()
 	results := make([]MintResult, 0, len(worlds))

@@ -7,10 +7,12 @@
 // domain/groups/emails allowlists (Slice C.1), browser code-flow for
 // /auth/login + /auth/callback, bearer-token (ID token) authentication
 // for /tokens, DELETE /tokens/:label, and POST /tokens/:label/rotate
-// (Slice C.3), leader-elected expiry/drift sweeper (Slice C.2), and
+// (Slice C.3), leader-elected expiry/drift sweeper (Slice C.2),
 // per-subject + per-IP rate limiting (Slice C.4) via in-memory token
 // buckets keyed by hashSubject(claims.Subject) on authed routes and
-// source IP on /auth/login.
+// source IP on /auth/login, RFC 8628 device flow + broker-signed
+// refresh tokens + RFC 7009 revoke (universe-onboarding PRs 3-4), and
+// GET /me/install per-user install bundle (universe-onboarding PR5).
 package main
 
 import (
