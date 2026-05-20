@@ -50,7 +50,7 @@ returned world; raw token material is never recoverable from the
 issuances Secret, so reuse is not possible. Old tokens stay valid
 until their `expiresAt`; the sweeper retires them.
 
-```
+```http
 GET /me/install
 Authorization: Bearer <id_token>
 
