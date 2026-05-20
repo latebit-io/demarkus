@@ -24,6 +24,72 @@ Secrets and tracking ownership in a broker-namespace issuances Secret.
   cert-manager-managed TLS Certificate.
 - TopologySpreadConstraints to keep replicas off the same node.
 
+## Endpoint surface
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| `GET` | `/healthz`, `/readyz` | none | Liveness / readiness probes. |
+| `GET` | `/.well-known/openid-configuration` | none | Broker discovery doc; proxies the IdP's doc with `issuer`, `device_authorization_endpoint`, `token_endpoint`, and `jwks_uri` rewritten to the broker. 5-minute TTL. |
+| `GET` | `/.well-known/jwks.json` | none | Public ECDSA P-256 key for broker-signed `id_token`s (refresh-grant output). |
+| `GET` | `/auth/login` | none | OIDC code-flow login redirect. IP rate-limited. |
+| `GET` | `/auth/callback` | OIDC state cookie | OIDC code-flow callback; mints per-world tokens; dispatches device-flow handoffs by signed state. |
+| `POST` | `/device/authorize`, `/device/token` | none | RFC 8628 device flow. IP rate-limited. `/device/token` accepts both `grant_type=urn:ietf:params:oauth:grant-type:device_code` and `grant_type=refresh_token`. |
+| `GET`, `POST` | `/device` | none | HTML user-code entry form. |
+| `POST` | `/token/revoke` | possession | RFC 7009 refresh-token revocation. IP rate-limited. |
+| `GET` | `/tokens` | Bearer id_token | Caller's issuance records. Per-subject rate-limited. |
+| `DELETE` | `/tokens/{label}` | Bearer id_token | Owner-only revoke. Per-subject rate-limited. |
+| `POST` | `/tokens/{label}/rotate` | Bearer id_token | Owner-only rotate. Per-subject rate-limited. |
+| `GET` | `/me/install` | Bearer id_token | Per-user install bundle (universe onboarding). Per-subject rate-limited. |
+
+### `/me/install`
+
+Returns the caller's full install bundle — one entry per world the
+verified identity is authorized for AND that has a non-empty
+`publicURL` configured. Each call mints a fresh access token per
+returned world; raw token material is never recoverable from the
+issuances Secret, so reuse is not possible. Old tokens stay valid
+until their `expiresAt`; the sweeper retires them.
+
+```
+GET /me/install
+Authorization: Bearer <id_token>
+
+200 OK
+Content-Type: application/json
+Cache-Control: no-store
+Pragma: no-cache
+{
+  "worlds": [
+    {
+      "name": "team-a",
+      "publicURL": "mark://team-a.example:6309",
+      "label": "usr_b23fbc20",
+      "accessToken": "<raw token>",
+      "expiresAt": "2026-05-16T18:00:00Z"
+    }
+  ]
+}
+```
+
+Notes:
+- **Worlds without `publicURL` are excluded.** A world with an empty
+  `worlds[].publicURL` is structurally un-installable (the client has
+  no address to wire) so the broker filters it BEFORE mint — no
+  issuance record is written for excluded worlds.
+- **Empty `worlds: []` is a 200, not a 403.** An authenticated identity
+  with zero installable worlds (no allowlist match, or every match
+  filtered by the `publicURL` rule) returns `200 + worlds: []` so
+  consumers can distinguish auth failure from authz emptiness.
+- **Partial failures return 200.** If some worlds minted but a later
+  one failed (k8s blip, RBAC denial on one world's tokens Secret), the
+  response carries the successful entries plus a
+  `"partialFailure": "one_or_more_worlds_failed"` field — same shape
+  as `/auth/callback` for the equivalent condition.
+- **The bearer accepts both broker-signed and IdP-signed id_tokens.**
+  Broker-signed tokens come from the device-flow refresh grant; IdP-
+  signed tokens come from the device-flow completion. The broker's
+  composite verifier dispatches by `kid`.
+
 ## Quick install (development)
 
 Put sensitive values in a values file rather than on the command line —

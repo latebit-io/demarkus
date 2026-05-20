@@ -1094,3 +1094,212 @@ func TestRotateLabelMissingWorldErrors(t *testing.T) {
 		t.Errorf("error %q does not name the orphaned world", err)
 	}
 }
+
+// twoWorldConfig returns testConfig() with team-b appended; team-b
+// matches the same example.com domain as team-a so an alice@example.com
+// caller qualifies for both. Shared by the MintFiltered tests, which all
+// need a multi-world fixture to exercise the predicate's discrimination.
+func twoWorldConfig() *Config {
+	cfg := testConfig()
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{
+		Name:         "team-b",
+		Namespace:    "team-b",
+		TokensSecret: "team-b-tokens",
+		Allow:        AllowConfig{Domains: []string{"example.com"}},
+		DefaultToken: TokenScope{
+			Paths:        []string{"/team-b/*"},
+			Operations:   []string{"read"},
+			ExpiresAfter: 12 * time.Hour,
+		},
+	})
+	return cfg
+}
+
+func TestMintFilteredNilPredicateMatchesMint(t *testing.T) {
+	// Regression guard for the back-compat shim: Mint must remain a thin
+	// wrapper that produces the same MintResult slice (in the same
+	// order, with the same scopes) as MintFiltered(nil). Same single-world
+	// fixture as TestMintCreatesBothSecrets so the assertion compares
+	// shape, not contents, against an independently-minted reference.
+	claims := Claims{Email: "alice@example.com", EmailVerified: true}
+
+	k8sA := fake.NewSimpleClientset()
+	a := newIssuer(t, testConfig(), k8sA)
+	viaMint, err := a.Mint(context.Background(), claims)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+
+	k8sB := fake.NewSimpleClientset()
+	b := newIssuer(t, testConfig(), k8sB)
+	viaFiltered, err := b.MintFiltered(context.Background(), claims, nil)
+	if err != nil {
+		t.Fatalf("MintFiltered(nil): %v", err)
+	}
+
+	if len(viaMint) != len(viaFiltered) {
+		t.Fatalf("len mismatch: Mint=%d MintFiltered(nil)=%d", len(viaMint), len(viaFiltered))
+	}
+	for i := range viaMint {
+		// Raw tokens differ (fresh random per call) but world + expiry
+		// shape must match exactly.
+		if viaMint[i].World != viaFiltered[i].World {
+			t.Errorf("[%d] World mismatch: Mint=%q MintFiltered(nil)=%q", i, viaMint[i].World, viaFiltered[i].World)
+		}
+		if !viaMint[i].ExpiresAt.Equal(viaFiltered[i].ExpiresAt) {
+			t.Errorf("[%d] ExpiresAt mismatch: Mint=%v MintFiltered(nil)=%v", i, viaMint[i].ExpiresAt, viaFiltered[i].ExpiresAt)
+		}
+	}
+}
+
+func TestMintFilteredPredicateSkipsWorlds(t *testing.T) {
+	// Two-world fixture: alice qualifies for both team-a and team-b. The
+	// predicate accepts only team-b. Result must contain exactly the
+	// kept world; the filtered world must have NO entry in either
+	// tokens.toml or the issuances Secret.
+	cfg := twoWorldConfig()
+	k8s := fake.NewSimpleClientset()
+	i := newIssuer(t, cfg, k8s)
+
+	keep := func(w *WorldConfig) bool { return w.Name == "team-b" }
+	results, err := i.MintFiltered(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, keep)
+	if err != nil {
+		t.Fatalf("MintFiltered: %v", err)
+	}
+	if len(results) != 1 || results[0].World != "team-b" {
+		t.Fatalf("results = %+v, want only team-b", results)
+	}
+
+	// team-a's tokens Secret must not exist — predicate filtered before mint.
+	if _, err := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("team-a Secret unexpectedly created: %v", err)
+	}
+	// Issuances Secret must contain only team-b.
+	live, err := i.List(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(live) != 1 || live[0].World != "team-b" {
+		t.Errorf("issuances = %+v, want only team-b", live)
+	}
+}
+
+func TestMintFilteredPredicateRejectsAll(t *testing.T) {
+	// Authorized worlds is non-empty but the predicate rejects every
+	// one of them. The result must be ErrNotAuthorized — same sentinel
+	// as "zero authorized worlds in the first place" — so the HTTP
+	// caller can map both cases to a single response (200 + worlds: []
+	// for /me/install).
+	cfg := twoWorldConfig()
+	k8s := fake.NewSimpleClientset()
+	i := newIssuer(t, cfg, k8s)
+
+	_, err := i.MintFiltered(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, func(_ *WorldConfig) bool { return false })
+	if !errors.Is(err, ErrNotAuthorized) {
+		t.Errorf("err = %v, want ErrNotAuthorized", err)
+	}
+	assertNoSecretsWritten(t, k8s)
+	// Issuances Secret must not have been touched either (assertNoSecretsWritten
+	// covers team-a; team-b's Secret object is also asserted absent below).
+	if _, err := k8s.CoreV1().Secrets("team-b").Get(context.Background(), "team-b-tokens", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("team-b Secret unexpectedly created on reject-all predicate: %v", err)
+	}
+}
+
+func TestMintFilteredPartialFailurePassesThroughPredicate(t *testing.T) {
+	// Predicate keeps both worlds (PublicURL-style filter is a no-op
+	// here), and team-b's mint fails via an RBAC-denied Update. Same
+	// shape as TestMintRBACDeniedNoPartialState but exercised through
+	// MintFiltered to confirm the predicate doesn't alter the partial-
+	// failure contract: team-a's MintResult comes back paired with the
+	// team-b error.
+	cfg := twoWorldConfig()
+	k8s := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-b-tokens", Namespace: "team-b"},
+		Data:       map[string][]byte{TokensSecretKey: {}},
+	})
+	k8s.PrependReactor("update", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ua, ok := action.(k8stesting.UpdateAction)
+		if !ok {
+			return false, nil, nil
+		}
+		if ua.GetNamespace() == "team-b" {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Resource: "secrets"},
+				"team-b-tokens",
+				errors.New("broker SA lacks update on team-b/team-b-tokens"),
+			)
+		}
+		return false, nil, nil
+	})
+	i := newIssuer(t, cfg, k8s)
+
+	results, err := i.MintFiltered(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, func(_ *WorldConfig) bool { return true })
+	if err == nil {
+		t.Fatal("MintFiltered returned nil err, want RBAC-denied wrapped")
+	}
+	if len(results) != 1 || results[0].World != "team-a" {
+		t.Fatalf("results = %+v, want only team-a (partial mint)", results)
+	}
+	if !strings.Contains(err.Error(), "team-b") {
+		t.Errorf("err %q does not name the failing world team-b", err)
+	}
+}
+
+func TestMintFilteredRejectsUnauthorizedBeforePredicate(t *testing.T) {
+	// Predicate must never run when AllowConfig already rejected the
+	// caller — otherwise a buggy predicate could be tricked into
+	// running against fabricated WorldConfig pointers. Use a panicking
+	// predicate to make a regression loud: if the predicate fires,
+	// the test panics; if MintFiltered short-circuits on
+	// ErrNotAuthorized before the predicate, the test passes.
+	cfg := testConfig()
+	// alice@example.com is authorized; mallory@evil.example is not.
+	k8s := fake.NewSimpleClientset()
+	i := newIssuer(t, cfg, k8s)
+
+	panicKeep := func(_ *WorldConfig) bool { panic("predicate must not run when AllowConfig rejected the caller") }
+	_, err := i.MintFiltered(context.Background(), Claims{Email: "mallory@evil.example", EmailVerified: true}, panicKeep)
+	if !errors.Is(err, ErrNotAuthorized) {
+		t.Errorf("err = %v, want ErrNotAuthorized", err)
+	}
+}
+
+func TestMintFilteredSeesAuthorizedWorldsOnly(t *testing.T) {
+	// Predicate input is the post-Allow set, not the raw cfg.Worlds.
+	// Two worlds: team-a allows example.com, team-b allows other.example.
+	// alice@example.com qualifies only for team-a, so the predicate
+	// should be called exactly once with team-a — never with team-b.
+	// Pinning this contract lets /me/install reason about the predicate
+	// input as "worlds the identity is already permitted to use."
+	cfg := testConfig()
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{
+		Name:         "team-b",
+		Namespace:    "team-b",
+		TokensSecret: "team-b-tokens",
+		Allow:        AllowConfig{Domains: []string{"other.example"}},
+		DefaultToken: TokenScope{
+			Paths:        []string{"/team-b/*"},
+			Operations:   []string{"read"},
+			ExpiresAfter: 12 * time.Hour,
+		},
+	})
+	k8s := fake.NewSimpleClientset()
+	i := newIssuer(t, cfg, k8s)
+
+	var seen []string
+	keep := func(w *WorldConfig) bool {
+		seen = append(seen, w.Name)
+		return true
+	}
+	results, err := i.MintFiltered(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}, keep)
+	if err != nil {
+		t.Fatalf("MintFiltered: %v", err)
+	}
+	if !slices.Equal(seen, []string{"team-a"}) {
+		t.Errorf("predicate saw %v, want [team-a] only", seen)
+	}
+	if len(results) != 1 || results[0].World != "team-a" {
+		t.Errorf("results = %+v, want only team-a", results)
+	}
+}

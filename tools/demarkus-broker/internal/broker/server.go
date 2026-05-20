@@ -227,6 +227,14 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /tokens", authedSubject(s.listTokens))
 	mux.Handle("DELETE /tokens/{label}", authedSubject(s.deleteToken))
 	mux.Handle("POST /tokens/{label}/rotate", authedSubject(s.rotateToken))
+	// /me/install: per-user install bundle. Same auth + per-subject
+	// rate-limit composition as the /tokens routes — the caller is an
+	// authenticated identity and the bucket is shared across the
+	// /tokens routes so a misbehaving client can't fan out across
+	// endpoints to evade the limit. GET (not POST) matches the OAuth
+	// /me-style convention; the per-call mint side-effect is
+	// documented in meInstall's doc comment.
+	mux.Handle("GET /me/install", authedSubject(s.meInstall))
 	return mux
 }
 
