@@ -654,3 +654,91 @@ func TestLoadConfigOIDCClientSecretEnvOverride(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPConfigValidate(t *testing.T) {
+	tests := []struct {
+		name     string
+		mcp      MCPConfig
+		wantErr  string
+		wantAddr string
+	}{
+		{
+			name:     "zero value gets default addr",
+			mcp:      MCPConfig{},
+			wantAddr: defaultMCPAddr,
+		},
+		{
+			name:     "explicit addr preserved",
+			mcp:      MCPConfig{Addr: ":9090"},
+			wantAddr: ":9090",
+		},
+		{
+			name:     "addr + both tls fields — valid",
+			mcp:      MCPConfig{Addr: ":8081", TLS: MCPTLSConfig{CertFile: "/c", KeyFile: "/k"}},
+			wantAddr: ":8081",
+		},
+		{
+			name:    "tls cert without key",
+			mcp:     MCPConfig{Addr: ":8081", TLS: MCPTLSConfig{CertFile: "/c"}},
+			wantErr: "server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together",
+		},
+		{
+			name:    "tls key without cert",
+			mcp:     MCPConfig{Addr: ":8081", TLS: MCPTLSConfig{KeyFile: "/k"}},
+			wantErr: "server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.mcp.validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("validate: unexpected error %v", err)
+				}
+				if tt.mcp.Addr != tt.wantAddr {
+					t.Errorf("validate: addr = %q, want %q", tt.mcp.Addr, tt.wantAddr)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("validate: err = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadConfigMCPBlockValidatesAtLoad(t *testing.T) {
+	// One YAML-round-trip case to pin that the new MCPConfig.validate
+	// hook is actually called from Config.validate() — a unit test on
+	// MCPConfig.validate alone wouldn't catch a missing hook in the
+	// outer validation chain.
+	t.Setenv("BROKER_SIGNING_KEY", "")
+	t.Setenv("OIDC_CLIENT_SECRET", "")
+	body := strings.Replace(validConfig,
+		`publicURL: "https://broker.example.com"`,
+		"publicURL: \"https://broker.example.com\"\n  mcp:\n    addr: \":8081\"\n    tls:\n      certFile: \"/etc/tls/cert.pem\"",
+		1)
+	_, err := LoadConfig(writeConfig(t, body))
+	if err == nil {
+		t.Fatal("LoadConfig accepted MCP block with TLS cert-without-key — validate hook not wired into outer chain")
+	}
+	if !strings.Contains(err.Error(), "certFile and server.mcp.tls.keyFile must be set together") {
+		t.Errorf("err = %v, want paired-TLS-fields message", err)
+	}
+}
+
+func TestLoadConfigMCPDefaultsAppliedWhenBlockOmitted(t *testing.T) {
+	// Existing universe-onboarding configs have no `mcp:` block —
+	// they predate the gateway plan. Upgrading to a broker with
+	// always-on MCP must default Addr so those configs load without
+	// modification.
+	t.Setenv("BROKER_SIGNING_KEY", "")
+	t.Setenv("OIDC_CLIENT_SECRET", "")
+	cfg, err := LoadConfig(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Server.MCP.Addr != defaultMCPAddr {
+		t.Errorf("MCP.Addr = %q, want default %q so existing configs upgrade silently", cfg.Server.MCP.Addr, defaultMCPAddr)
+	}
+}

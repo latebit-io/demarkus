@@ -143,6 +143,36 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 		errs <- nil
 	}()
 
+	// MCP gateway runs on its own listener alongside the management
+	// API (plan: Broker MCP Gateway, Slice 1). Always on — every
+	// broker is a knowledge-system gateway. Distinct Addr lets the
+	// chart route the two surfaces through different Ingress hosts
+	// or paths; shared auth + rate-limit + Issuer + Discovery
+	// machinery means only the listener and the JSON-RPC transport
+	// are new.
+	mcpSrv := &http.Server{
+		Addr:              cfg.Server.MCP.Addr,
+		Handler:           srv.MCPGateway(version),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	mcpErrs := make(chan error, 1)
+	mcpTLS := cfg.Server.MCP.TLS
+	go func() {
+		log.Info("broker: mcp gateway listening",
+			"addr", cfg.Server.MCP.Addr, "tls", mcpTLS.CertFile != "")
+		var err error
+		if mcpTLS.CertFile != "" {
+			err = mcpSrv.ListenAndServeTLS(mcpTLS.CertFile, mcpTLS.KeyFile)
+		} else {
+			err = mcpSrv.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			mcpErrs <- err
+			return
+		}
+		mcpErrs <- nil
+	}()
+
 	// Sweeper runs alongside HTTP — leader election keeps it singleton
 	// across replicas. Its lifecycle hangs off sweepCtx so the signal
 	// path below can cancel it cleanly before HTTP shutdown begins.
@@ -190,6 +220,12 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 			sweepWG.Wait()
 			return err
 		}
+	case err := <-mcpErrs:
+		if err != nil {
+			cancelSweep()
+			sweepWG.Wait()
+			return err
+		}
 	}
 
 	cancelSweep()
@@ -197,6 +233,12 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
+	// Best-effort MCP shutdown alongside the management API. Errors
+	// here don't override the management-API shutdown outcome — the
+	// management surface is the authoritative liveness signal.
+	if err := mcpSrv.Shutdown(shutdownCtx); err != nil {
+		log.Warn("broker: mcp gateway shutdown error", "err", err)
+	}
 	return httpSrv.Shutdown(shutdownCtx)
 }
 

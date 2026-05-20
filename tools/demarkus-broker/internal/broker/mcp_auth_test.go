@@ -1,0 +1,129 @@
+package broker
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"k8s.io/client-go/kubernetes/fake"
+)
+
+// resourceMetadataRE pulls the resource_metadata="..." parameter out
+// of a WWW-Authenticate Bearer challenge so the assertion is
+// whitespace-tolerant (RFC 6750 lets the params be in any order with
+// arbitrary linear whitespace between them).
+var resourceMetadataRE = regexp.MustCompile(`resource_metadata="([^"]+)"`)
+
+func TestGatewayAuthMissingBearerReturns401WithChallenge(t *testing.T) {
+	cfg := mcpTestConfig()
+	ts := newTestMCPGateway(t, cfg, &fakeVerifier{})
+
+	// Bare POST with no Authorization header — gateway auth must
+	// reject with 401 and the RFC 6750/9728 challenge that points
+	// the client at the protected-resource metadata document.
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	c := &http.Client{Timeout: 5 * time.Second}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("POST /mcp: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	challenge := resp.Header.Get("WWW-Authenticate")
+	if challenge == "" {
+		t.Fatal("missing WWW-Authenticate header")
+	}
+	if !strings.HasPrefix(challenge, "Bearer ") {
+		t.Errorf("WWW-Authenticate = %q, want Bearer scheme", challenge)
+	}
+	if !strings.Contains(challenge, `realm="demarkus-broker"`) {
+		t.Errorf("WWW-Authenticate missing realm: %q", challenge)
+	}
+	if !strings.Contains(challenge, `error="missing_bearer"`) {
+		t.Errorf("WWW-Authenticate missing error=\"missing_bearer\": %q", challenge)
+	}
+	m := resourceMetadataRE.FindStringSubmatch(challenge)
+	if m == nil {
+		t.Fatalf("WWW-Authenticate missing resource_metadata param: %q", challenge)
+	}
+	wantMetadata := cfg.Server.PublicURL + "/.well-known/oauth-protected-resource"
+	if m[1] != wantMetadata {
+		t.Errorf("resource_metadata = %q, want %q", m[1], wantMetadata)
+	}
+}
+
+func TestGatewayAuthInvalidBearerReturns401WithErrorCode(t *testing.T) {
+	// Verifier that always rejects — exercises the err-path of
+	// gatewayAuth. The challenge must report error="invalid_token"
+	// so RFC 6750-aware clients distinguish "bearer required" from
+	// "bearer present but bad" without parsing the body.
+	v := &fakeVerifier{verifyFn: func(string) (Claims, error) {
+		return Claims{}, errors.New("forged signature")
+	}}
+	ts := newTestMCPGateway(t, mcpTestConfig(), v)
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer not-a-real-token")
+	c := &http.Client{Timeout: 5 * time.Second}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("POST /mcp: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	challenge := resp.Header.Get("WWW-Authenticate")
+	if !strings.Contains(challenge, `error="invalid_token"`) {
+		t.Errorf("WWW-Authenticate = %q, want error=\"invalid_token\"", challenge)
+	}
+}
+
+func TestGatewayAuthValidBearerStashesClaimsOnContext(t *testing.T) {
+	// Compose gatewayAuth around a recording handler so we can pin
+	// that valid bearers land on the next handler WITH the claims
+	// already attached. Mirrors TestRequireAuthSucceeds in
+	// ratelimit_test.go but for the MCP-side middleware.
+	cfg := mcpTestConfig()
+	wantSubject := "google|alice"
+	v := &fakeVerifier{claims: Claims{Subject: wantSubject, Email: "alice@example.com", EmailVerified: true}}
+
+	signer := newTestSigner(t)
+	issuer := newIssuer(t, cfg, fake.NewSimpleClientset())
+	brokerSrv := NewServer(cfg, signer, v, issuer, nil, nil, nil)
+
+	var seen Claims
+	var sawClaims bool
+	recorder := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen, sawClaims = claimsFromCtx(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := brokerSrv.gatewayAuth(recorder)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", http.NoBody).WithContext(context.Background())
+	req.Header.Set("Authorization", "Bearer good-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !sawClaims {
+		t.Fatal("downstream handler did not see claims on context")
+	}
+	if seen.Subject != wantSubject {
+		t.Errorf("claims.Subject = %q, want %q", seen.Subject, wantSubject)
+	}
+}
