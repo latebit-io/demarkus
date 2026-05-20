@@ -231,15 +231,19 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	cancelSweep()
 	sweepWG.Wait()
 
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelShutdown()
-	// Best-effort MCP shutdown alongside the management API. Errors
-	// here don't override the management-API shutdown outcome — the
-	// management surface is the authoritative liveness signal.
-	if err := mcpSrv.Shutdown(shutdownCtx); err != nil {
+	// Separate shutdown contexts so a slow MCP drain doesn't burn
+	// the management-API deadline (and vice versa). Each surface
+	// gets a fresh 10s; the management API's outcome is the
+	// authoritative liveness signal, MCP shutdown errors are
+	// logged best-effort.
+	mcpShutdownCtx, cancelMCPShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelMCPShutdown()
+	if err := mcpSrv.Shutdown(mcpShutdownCtx); err != nil {
 		log.Warn("broker: mcp gateway shutdown error", "err", err)
 	}
-	return httpSrv.Shutdown(shutdownCtx)
+	mgmtShutdownCtx, cancelMgmtShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelMgmtShutdown()
+	return httpSrv.Shutdown(mgmtShutdownCtx)
 }
 
 // brokerIdentity returns the holder identity stamped onto the leader-

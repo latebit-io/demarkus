@@ -49,8 +49,8 @@ func TestGatewayAuthMissingBearerReturns401WithChallenge(t *testing.T) {
 	if !strings.Contains(challenge, `realm="demarkus-broker"`) {
 		t.Errorf("WWW-Authenticate missing realm: %q", challenge)
 	}
-	if !strings.Contains(challenge, `error="missing_bearer"`) {
-		t.Errorf("WWW-Authenticate missing error=\"missing_bearer\": %q", challenge)
+	if !strings.Contains(challenge, `error="invalid_request"`) {
+		t.Errorf("WWW-Authenticate missing error=\"invalid_request\" (RFC 6750 §3.1): %q", challenge)
 	}
 	m := resourceMetadataRE.FindStringSubmatch(challenge)
 	if m == nil {

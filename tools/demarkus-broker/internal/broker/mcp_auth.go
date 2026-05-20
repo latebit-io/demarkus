@@ -23,7 +23,12 @@ func (s *Server) gatewayAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw := bearerToken(r)
 		if raw == "" {
-			s.writeMCPAuthChallenge(w, "missing_bearer", "Authorization: Bearer <id_token> required")
+			// RFC 6750 §3.1 defines only three error codes for the
+			// Bearer challenge: invalid_request, invalid_token,
+			// insufficient_scope. "missing bearer" maps to
+			// invalid_request (the request is missing a required
+			// parameter — the Authorization header).
+			s.writeMCPAuthChallenge(w, "invalid_request", "Authorization: Bearer <id_token> required")
 			return
 		}
 		claims, err := s.verifier.VerifyIDToken(r.Context(), raw)

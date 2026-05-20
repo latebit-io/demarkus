@@ -447,6 +447,15 @@ func (c *Config) validate() error {
 	if err := c.Server.MCP.validate(); err != nil {
 		return err
 	}
+	// The management API and the MCP gateway must bind distinct
+	// addresses — same listener for both would fail at the second
+	// http.Server's Listen with a "address already in use" error at
+	// startup. Catching it at config-load surfaces the typo with a
+	// clear message instead of a noisy bind error in the broker's
+	// log stream.
+	if c.Server.MCP.Addr == c.Server.Addr {
+		return fmt.Errorf("server.mcp.addr must differ from server.addr (both are %q)", c.Server.Addr)
+	}
 	if err := c.OIDC.validate(); err != nil {
 		return err
 	}

@@ -727,6 +727,26 @@ func TestLoadConfigMCPBlockValidatesAtLoad(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsMatchingMgmtAndMCPAddrs(t *testing.T) {
+	// Same listener for management API and MCP gateway would fail at
+	// the second http.Server's Listen with EADDRINUSE — catch the
+	// typo at config load so the operator sees a clear message
+	// instead of a noisy bind error in logs.
+	t.Setenv("BROKER_SIGNING_KEY", "")
+	t.Setenv("OIDC_CLIENT_SECRET", "")
+	body := strings.Replace(validConfig,
+		`publicURL: "https://broker.example.com"`,
+		"publicURL: \"https://broker.example.com\"\n  mcp:\n    addr: \":8080\"",
+		1)
+	_, err := LoadConfig(writeConfig(t, body))
+	if err == nil {
+		t.Fatal("LoadConfig accepted matching server.addr and server.mcp.addr — config-time collision check missing")
+	}
+	if !strings.Contains(err.Error(), "server.mcp.addr must differ from server.addr") {
+		t.Errorf("err = %v, want addr-collision message", err)
+	}
+}
+
 func TestLoadConfigMCPDefaultsAppliedWhenBlockOmitted(t *testing.T) {
 	// Existing universe-onboarding configs have no `mcp:` block —
 	// they predate the gateway plan. Upgrading to a broker with
