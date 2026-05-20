@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/latebit/demarkus/client/fetch"
 	"github.com/latebit/demarkus/client/internal/fedcrawl"
-	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/tokens"
 )
 
