@@ -96,6 +96,54 @@ type ServerConfig struct {
 	// itself stretches the effective session lifetime via fresh
 	// id_tokens minted on each poll.
 	IDTokenTTL time.Duration `yaml:"idTokenTTL"`
+	// MCP is the broker's MCP-gateway-specific config. The gateway
+	// is opt-in: an operator runs the broker without MCP by leaving
+	// `mcp.enabled` unset, in which case the existing management
+	// API stays the only listener. When enabled, the MCP listener
+	// binds its own Addr (separate from Server.Addr) and shares the
+	// auth + rate-limit + Issuer machinery with the rest of Server.
+	// See plan: Broker MCP Gateway (Knowledge-System Layer).
+	MCP MCPConfig `yaml:"mcp"`
+}
+
+// MCPConfig governs the broker's MCP-over-HTTPS gateway listener
+// (knowledge-system layer). The gateway is always on — every broker
+// is a knowledge-system gateway, the OAuth-only deployment shape is
+// not a product we ship. Operators tune Addr and TLS here; the
+// listener always binds.
+//
+// Slice 1 of the gateway plan ships only the listener + initialize +
+// tools/list surface; tool implementations land in later slices.
+type MCPConfig struct {
+	// Addr is the MCP gateway's listen address, e.g. ":8081".
+	// Defaulted to defaultMCPAddr when unset so existing deployments
+	// pick up the gateway on upgrade without a values.yaml change.
+	// Must differ from Server.Addr so the management API and the
+	// MCP surface bind their own listeners — the chart routes the
+	// two through distinct Ingress hosts or paths.
+	Addr string `yaml:"addr"`
+	// TLS terminates HTTPS at the broker when CertFile and KeyFile
+	// are set. Leave blank to run plain HTTP inside the cluster (the
+	// Ingress terminates HTTPS at the edge), matching the existing
+	// Server.Addr convention. When set, both files must point at
+	// readable PEM blobs.
+	TLS MCPTLSConfig `yaml:"tls"`
+}
+
+// defaultMCPAddr is the port the MCP gateway binds when MCPConfig.Addr
+// is omitted. Picked to be distinct from the management API's typical
+// :8080 so the two listeners don't collide in default deployments. The
+// chart still surfaces an override.
+const defaultMCPAddr = ":8081"
+
+// MCPTLSConfig is the optional cert+key pair for the MCP gateway
+// listener. Both fields must be set together; specifying one without
+// the other is a config typo and fails validation.
+type MCPTLSConfig struct {
+	// CertFile is the path to the PEM-encoded certificate chain.
+	CertFile string `yaml:"certFile"`
+	// KeyFile is the path to the matching PEM-encoded private key.
+	KeyFile string `yaml:"keyFile"`
 }
 
 // OIDCConfig describes the OIDC client registration at the IdP. Discovery
@@ -145,6 +193,17 @@ type WorldConfig struct {
 	// the single source of truth for what a user is told to connect to;
 	// the world server itself does not know its externally-visible URL.
 	PublicURL string `yaml:"publicURL"`
+	// InternalAddress overrides the default `<name>.<namespace>.svc.
+	// cluster.local:6309` resolution the MCP gateway uses to route
+	// tool calls keyed by worldName. Optional: when blank, the gateway
+	// builds the address from this world's Name + Namespace using the
+	// standard Kubernetes Service-DNS convention. Operators set this
+	// when they deploy a world with a Service name that diverges from
+	// the world's logical Name (the demarkus-server chart's default
+	// keeps them aligned, so most deployments leave this blank).
+	// The Mark Protocol scheme is always `mark://`; the value here is
+	// host:port only (e.g. `team-a-mark.team-a:6309`).
+	InternalAddress string `yaml:"internalAddress"`
 	// Allow is the per-world authorization predicate. See AllowConfig for
 	// the rules. When every list is empty the world accepts any verified
 	// identity (back-compat with pre-Slice-C configs that had only
@@ -385,6 +444,18 @@ func (c *Config) validate() error {
 	if err := c.Server.applyRefreshDefaults(); err != nil {
 		return err
 	}
+	if err := c.Server.MCP.validate(); err != nil {
+		return err
+	}
+	// The management API and the MCP gateway must bind distinct
+	// addresses — same listener for both would fail at the second
+	// http.Server's Listen with a "address already in use" error at
+	// startup. Catching it at config-load surfaces the typo with a
+	// clear message instead of a noisy bind error in the broker's
+	// log stream.
+	if c.Server.MCP.Addr == c.Server.Addr {
+		return fmt.Errorf("server.mcp.addr must differ from server.addr (both are %q)", c.Server.Addr)
+	}
 	if err := c.OIDC.validate(); err != nil {
 		return err
 	}
@@ -508,6 +579,25 @@ func (s *ServerConfig) applyDeviceFlowDefaults() error {
 	}
 	if s.DevicePollInterval >= s.DeviceCodeTTL {
 		return fmt.Errorf("server.devicePollInterval (%s) must be < server.deviceCodeTTL (%s)", s.DevicePollInterval, s.DeviceCodeTTL)
+	}
+	return nil
+}
+
+// validate enforces the MCPConfig invariants. Addr is defaulted to
+// defaultMCPAddr when omitted so an upgrade picks up the gateway
+// without a values.yaml change. The TLS fields are paired: supplying
+// one without the other is a config typo that would either fail at
+// ListenAndServeTLS startup with a noisy error, or silently downgrade
+// to plain HTTP. Fail fast at LoadConfig so the operator sees the
+// misconfiguration before the broker pod starts.
+func (m *MCPConfig) validate() error {
+	if m.Addr == "" {
+		m.Addr = defaultMCPAddr
+	}
+	hasCert := m.TLS.CertFile != ""
+	hasKey := m.TLS.KeyFile != ""
+	if hasCert != hasKey {
+		return fmt.Errorf("server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together")
 	}
 	return nil
 }

@@ -143,6 +143,36 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 		errs <- nil
 	}()
 
+	// MCP gateway runs on its own listener alongside the management
+	// API (plan: Broker MCP Gateway, Slice 1). Always on — every
+	// broker is a knowledge-system gateway. Distinct Addr lets the
+	// chart route the two surfaces through different Ingress hosts
+	// or paths; shared auth + rate-limit + Issuer + Discovery
+	// machinery means only the listener and the JSON-RPC transport
+	// are new.
+	mcpSrv := &http.Server{
+		Addr:              cfg.Server.MCP.Addr,
+		Handler:           srv.MCPGateway(version),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	mcpErrs := make(chan error, 1)
+	mcpTLS := cfg.Server.MCP.TLS
+	go func() {
+		log.Info("broker: mcp gateway listening",
+			"addr", cfg.Server.MCP.Addr, "tls", mcpTLS.CertFile != "")
+		var err error
+		if mcpTLS.CertFile != "" {
+			err = mcpSrv.ListenAndServeTLS(mcpTLS.CertFile, mcpTLS.KeyFile)
+		} else {
+			err = mcpSrv.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			mcpErrs <- err
+			return
+		}
+		mcpErrs <- nil
+	}()
+
 	// Sweeper runs alongside HTTP — leader election keeps it singleton
 	// across replicas. Its lifecycle hangs off sweepCtx so the signal
 	// path below can cancel it cleanly before HTTP shutdown begins.
@@ -190,14 +220,30 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 			sweepWG.Wait()
 			return err
 		}
+	case err := <-mcpErrs:
+		if err != nil {
+			cancelSweep()
+			sweepWG.Wait()
+			return err
+		}
 	}
 
 	cancelSweep()
 	sweepWG.Wait()
 
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelShutdown()
-	return httpSrv.Shutdown(shutdownCtx)
+	// Separate shutdown contexts so a slow MCP drain doesn't burn
+	// the management-API deadline (and vice versa). Each surface
+	// gets a fresh 10s; the management API's outcome is the
+	// authoritative liveness signal, MCP shutdown errors are
+	// logged best-effort.
+	mcpShutdownCtx, cancelMCPShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelMCPShutdown()
+	if err := mcpSrv.Shutdown(mcpShutdownCtx); err != nil {
+		log.Warn("broker: mcp gateway shutdown error", "err", err)
+	}
+	mgmtShutdownCtx, cancelMgmtShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelMgmtShutdown()
+	return httpSrv.Shutdown(mgmtShutdownCtx)
 }
 
 // brokerIdentity returns the holder identity stamped onto the leader-
