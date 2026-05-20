@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/latebit/demarkus/client/fetch"
 	"github.com/latebit/demarkus/client/internal/bookmarks"
 	"github.com/latebit/demarkus/client/internal/cache"
-	"github.com/latebit/demarkus/client/internal/fetch"
 	"github.com/latebit/demarkus/client/internal/graph"
 	"github.com/latebit/demarkus/client/internal/graphstore"
 	"github.com/latebit/demarkus/client/internal/links"

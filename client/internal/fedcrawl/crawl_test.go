@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit/demarkus/client/internal/fetch"
+	"github.com/latebit/demarkus/client/fetch"
 	"github.com/latebit/demarkus/protocol"
 )
 
