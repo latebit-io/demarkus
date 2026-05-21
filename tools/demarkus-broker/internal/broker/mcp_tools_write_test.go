@@ -531,6 +531,9 @@ func TestMCPGatewayMarkPublishEndToEnd(t *testing.T) {
 		t.Fatalf("initialize: status = %d", initR.HTTPStatus)
 	}
 	sessionID := initR.Headers[mcpSessionHeader]
+	if sessionID == "" {
+		t.Fatalf("initialize response missing %s header — session negotiation regressed", mcpSessionHeader)
+	}
 
 	resp := mcpRequest(t, ts.URL, "alice-token", sessionID, map[string]any{
 		"jsonrpc": "2.0",
