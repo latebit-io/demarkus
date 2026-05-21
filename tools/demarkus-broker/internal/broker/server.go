@@ -60,6 +60,12 @@ type Server struct {
 	// tests that pass nil signers behave unchanged.
 	jwks *jwksHandler
 
+	// mcpPool is the production worldPool wired by MCPGateway, held
+	// here so CloseMCPGateway can drain pooled QUIC connections at
+	// shutdown. Nil for tests that go through MCPGatewayWith (they
+	// own their fake dispatcher's lifecycle).
+	mcpPool *worldPool
+
 	// subjectReg is the per-subject limiter shared across the three
 	// /tokens routes; loginReg is the per-IP limiter for /auth/login.
 	// Either may be nil (Slice C.4 RateLimitConfig.Disabled, or a test

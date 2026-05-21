@@ -241,6 +241,11 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	if err := mcpSrv.Shutdown(mcpShutdownCtx); err != nil {
 		log.Warn("broker: mcp gateway shutdown error", "err", err)
 	}
+	// Drain the per-world fetch.Client pool's QUIC connections.
+	// Done after http.Shutdown so any in-flight tool calls have
+	// already returned (or timed out via their own contexts);
+	// closing earlier could race against active streams.
+	srv.CloseMCPGateway()
 	mgmtShutdownCtx, cancelMgmtShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelMgmtShutdown()
 	return httpSrv.Shutdown(mgmtShutdownCtx)

@@ -112,8 +112,10 @@ type ServerConfig struct {
 // not a product we ship. Operators tune Addr and TLS here; the
 // listener always binds.
 //
-// Slice 1 of the gateway plan ships only the listener + initialize +
-// tools/list surface; tool implementations land in later slices.
+// Slice 1 shipped the listener + initialize + tools/list surface.
+// Slice 2 adds the read-tool handlers and the broker-side session
+// cache that backs them — SessionMaxIdle and WorldTokenTTL govern
+// that cache; see the field docs for the lifecycle semantics.
 type MCPConfig struct {
 	// Addr is the MCP gateway's listen address, e.g. ":8081".
 	// Defaulted to defaultMCPAddr when unset so existing deployments
@@ -128,6 +130,38 @@ type MCPConfig struct {
 	// Server.Addr convention. When set, both files must point at
 	// readable PEM blobs.
 	TLS MCPTLSConfig `yaml:"tls"`
+	// SessionMaxIdle is how long a per-email session (the cached
+	// world-token map) lives without being touched before the
+	// gateway evicts it. Default 1h; a returning user past idle
+	// simply pays the lazy-mint cost on the next tool call. Set
+	// shorter to free memory faster, longer for stable user bases
+	// where keeping the cache warm is preferable.
+	SessionMaxIdle time.Duration `yaml:"sessionMaxIdle"`
+	// MaxSessions caps the LRU-evicted size of the session cache.
+	// Default 10000 — a 10k user broker holds ~10MB worth of cached
+	// world tokens at 5 worlds/user × ~200 bytes/token. Operators
+	// scale up for larger universes; an evicted user pays one
+	// lazy-mint round trip on their next call.
+	MaxSessions int `yaml:"maxSessions"`
+	// FirstMintMaxAttempts caps the broker-side retry loop that
+	// absorbs the kubelet → world tokens-Secret propagation lag
+	// after a lazy mint: the world's projected Secret volume
+	// typically refreshes within seconds, but worst-case can take
+	// up to the kubelet sync period. The retry loop runs only when
+	// the dispatch produces an `unauthorized` response on a token
+	// the broker just minted (or just re-minted after a cache-hit
+	// 401). Default 6. Subsequent attempts back off exponentially
+	// from FirstMintInitialBackoff up to FirstMintMaxBackoff.
+	FirstMintMaxAttempts int `yaml:"firstMintMaxAttempts"`
+	// FirstMintInitialBackoff is the delay before the second
+	// dispatch attempt. Doubles each iteration up to
+	// FirstMintMaxBackoff. Default 250ms.
+	FirstMintInitialBackoff time.Duration `yaml:"firstMintInitialBackoff"`
+	// FirstMintMaxBackoff caps the exponential growth. Default 8s.
+	// 250ms → 500ms → 1s → 2s → 4s → 8s sums to ~16s of waiting
+	// across 6 attempts, well under the typical 60s worst-case
+	// propagation window.
+	FirstMintMaxBackoff time.Duration `yaml:"firstMintMaxBackoff"`
 }
 
 // defaultMCPAddr is the port the MCP gateway binds when MCPConfig.Addr
@@ -590,6 +624,13 @@ func (s *ServerConfig) applyDeviceFlowDefaults() error {
 // ListenAndServeTLS startup with a noisy error, or silently downgrade
 // to plain HTTP. Fail fast at LoadConfig so the operator sees the
 // misconfiguration before the broker pod starts.
+//
+// Slice 2 defaults: SessionMaxIdle=1h, MaxSessions=10000,
+// FirstMintMaxAttempts=6, FirstMintInitialBackoff=250ms,
+// FirstMintMaxBackoff=8s. The retry knobs absorb the kubelet → world
+// Secret propagation lag after a lazy mint (see plan §"Open Question 9"
+// and the Risks bullet on SIGHUP cadence). Negative values are config
+// typos and rejected.
 func (m *MCPConfig) validate() error {
 	if m.Addr == "" {
 		m.Addr = defaultMCPAddr
@@ -599,8 +640,53 @@ func (m *MCPConfig) validate() error {
 	if hasCert != hasKey {
 		return fmt.Errorf("server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together")
 	}
+	if m.SessionMaxIdle == 0 {
+		m.SessionMaxIdle = defaultSessionMaxIdle
+	}
+	if m.SessionMaxIdle < 0 {
+		return fmt.Errorf("server.mcp.sessionMaxIdle must be > 0 (got %s)", m.SessionMaxIdle)
+	}
+	if m.MaxSessions == 0 {
+		m.MaxSessions = defaultMaxSessions
+	}
+	if m.MaxSessions < 0 {
+		return fmt.Errorf("server.mcp.maxSessions must be > 0 (got %d)", m.MaxSessions)
+	}
+	if m.FirstMintMaxAttempts == 0 {
+		m.FirstMintMaxAttempts = defaultFirstMintMaxAttempts
+	}
+	if m.FirstMintMaxAttempts < 0 {
+		return fmt.Errorf("server.mcp.firstMintMaxAttempts must be > 0 (got %d)", m.FirstMintMaxAttempts)
+	}
+	if m.FirstMintInitialBackoff == 0 {
+		m.FirstMintInitialBackoff = defaultFirstMintInitialBackoff
+	}
+	if m.FirstMintInitialBackoff < 0 {
+		return fmt.Errorf("server.mcp.firstMintInitialBackoff must be > 0 (got %s)", m.FirstMintInitialBackoff)
+	}
+	if m.FirstMintMaxBackoff == 0 {
+		m.FirstMintMaxBackoff = defaultFirstMintMaxBackoff
+	}
+	if m.FirstMintMaxBackoff < 0 {
+		return fmt.Errorf("server.mcp.firstMintMaxBackoff must be > 0 (got %s)", m.FirstMintMaxBackoff)
+	}
+	if m.FirstMintInitialBackoff > m.FirstMintMaxBackoff {
+		return fmt.Errorf("server.mcp.firstMintInitialBackoff (%s) must be <= firstMintMaxBackoff (%s)", m.FirstMintInitialBackoff, m.FirstMintMaxBackoff)
+	}
 	return nil
 }
+
+// Slice 2 defaults for the MCP gateway's session cache and first-mint
+// retry loop. Picked to absorb the typical kubelet Secret-propagation
+// window without holding a tool call open longer than a careful user
+// would wait. Operators tune in values.yaml.
+const (
+	defaultSessionMaxIdle          = time.Hour
+	defaultMaxSessions             = 10000
+	defaultFirstMintMaxAttempts    = 6
+	defaultFirstMintInitialBackoff = 250 * time.Millisecond
+	defaultFirstMintMaxBackoff     = 8 * time.Second
+)
 
 // applyDefaultsAndValidate fills in plan §6.2 Slice C.4 defaults for the
 // rate-limit knobs and rejects negative values. Per-field defaults are

@@ -3,6 +3,7 @@ package broker
 import (
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // gatewayAuth is the MCP-gateway-specific authentication middleware.
@@ -15,6 +16,17 @@ import (
 // resource metadata document (RFC 9728), which in turn declares the
 // authorization-server URL — completing the discovery chain per the
 // MCP spec's OAuth integration.
+//
+// Slice 2 adds the unverified-email gate: the broker's identity
+// primitive is canonical verified email (see plan v5 Non-Negotiable
+// "Single identity dimension"). Rejecting unverified-email tokens at
+// the gateway boundary keeps the MCP surface aligned with
+// Issuer.ErrEmailUnverified — every other broker surface
+// (/auth/callback, /me/install, /tokens) already refuses unverified
+// identities, and the gateway must not be the easy door in. An empty
+// email claim is also rejected because the session cache keys on
+// email and an empty key would collapse every no-email caller onto
+// one shared session.
 //
 // Composition shape: gatewayAuth → subjectRateLimit → mcp transport.
 // requireAuth stays the gate for the existing /tokens routes;
@@ -37,8 +49,30 @@ func (s *Server) gatewayAuth(next http.Handler) http.Handler {
 			s.writeMCPAuthChallenge(w, "invalid_token", "invalid bearer token")
 			return
 		}
+		if !claims.EmailVerified {
+			s.log.WarnContext(r.Context(), "broker: mcp gateway rejected unverified email",
+				"subject", hashSubject(claims.Subject))
+			s.writeMCPAuthChallenge(w, "invalid_token", "email not verified")
+			return
+		}
+		if canonicalEmail(claims.Email) == "" {
+			s.log.WarnContext(r.Context(), "broker: mcp gateway rejected empty email claim",
+				"subject", hashSubject(claims.Subject))
+			s.writeMCPAuthChallenge(w, "invalid_token", "email claim missing")
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(ctxWithClaims(r.Context(), claims)))
 	})
+}
+
+// canonicalEmail mirrors Issuer.MintFiltered's normalization: trim
+// surrounding whitespace and lowercase. Used by gatewayAuth (to gate
+// empty-email claims) and by sessionCache (to key cache entries on
+// the same canonical form). Pulled out so both call sites share one
+// definition and a future tweak (e.g. Unicode normalization) lands
+// in one place.
+func canonicalEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // writeMCPAuthChallenge writes the 401 response shape for MCP clients.

@@ -226,7 +226,7 @@ func TestMCPGatewayToolsListReturnsExpected13(t *testing.T) {
 	}
 }
 
-func TestMCPGatewayToolsCallReturnsSlice1Placeholder(t *testing.T) {
+func TestMCPGatewayToolsCallReturnsPlaceholderForUnimplemented(t *testing.T) {
 	v := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
 	ts := newTestMCPGateway(t, mcpTestConfig(), v)
 
@@ -239,17 +239,23 @@ func TestMCPGatewayToolsCallReturnsSlice1Placeholder(t *testing.T) {
 		t.Fatalf("initialize response missing %s header — cannot drive tools/call", mcpSessionHeader)
 	}
 
-	// Slice 1 ships placeholders, NOT real handlers. tools/call on any
-	// of the 13 tools should return a structured tool error (isError:
-	// true) with a message naming the tool — a later slice flips this
-	// to a real response and breaks this test on purpose.
+	// Slice 2 lights up mark_fetch / mark_list / mark_versions; the
+	// other 10 tools still hit notImplementedHandler. Calling one of
+	// them (mark_publish) must return a structured tool error
+	// (isError: true) with a message naming the tool. Tools land in
+	// later slices; updating this test (to pick a still-unimplemented
+	// tool, or deleting it once all 13 are real) is the canary.
 	resp := mcpRequest(t, ts.URL, "alice-token", sessionID, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      3,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name":      "mark_fetch",
-			"arguments": map[string]any{"url": "mark://team-a/foo.md"},
+			"name": "mark_publish",
+			"arguments": map[string]any{
+				"url":              "mark://team-a/foo.md",
+				"body":             "hello",
+				"expected_version": float64(0),
+			},
 		},
 	})
 	if resp.HTTPStatus != http.StatusOK {
@@ -260,7 +266,7 @@ func TestMCPGatewayToolsCallReturnsSlice1Placeholder(t *testing.T) {
 	}
 	isErr, _ := resp.Result["isError"].(bool)
 	if !isErr {
-		t.Errorf("tools/call result.isError = false, want true (Slice 1 placeholder): %+v", resp.Result)
+		t.Errorf("tools/call result.isError = false, want true (placeholder): %+v", resp.Result)
 	}
 	contents, _ := resp.Result["content"].([]any)
 	if len(contents) == 0 {
@@ -270,7 +276,7 @@ func TestMCPGatewayToolsCallReturnsSlice1Placeholder(t *testing.T) {
 	if first, ok := contents[0].(map[string]any); ok {
 		text, _ = first["text"].(string)
 	}
-	if !strings.Contains(text, "mark_fetch") || !strings.Contains(text, "not yet implemented") {
+	if !strings.Contains(text, "mark_publish") || !strings.Contains(text, "not yet implemented") {
 		t.Errorf("placeholder message = %q, want it to mention the tool name + \"not yet implemented\"", text)
 	}
 }
