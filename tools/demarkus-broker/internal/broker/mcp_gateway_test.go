@@ -239,22 +239,22 @@ func TestMCPGatewayToolsCallReturnsPlaceholderForUnimplemented(t *testing.T) {
 		t.Fatalf("initialize response missing %s header — cannot drive tools/call", mcpSessionHeader)
 	}
 
-	// Slice 3 lights up the three write verbs alongside Slice 2's
-	// three read verbs; the 7 federation tools (mark_discover,
-	// mark_resolve, mark_index, mark_backlinks, mark_graph,
-	// mark_graph_export, mark_graph_publish) still hit
-	// notImplementedHandler. Calling one of those (mark_discover)
-	// must return a structured tool error with a message naming the
-	// tool. Updating this test as the placeholders peel off is the
-	// canary; deleting it once all 13 are real closes the loop.
+	// Slice 4a lights up mark_discover + mark_resolve on top of
+	// Slices 2 + 3's six handlers; 5 tools still hit
+	// notImplementedHandler (mark_backlinks, mark_graph,
+	// mark_index, mark_graph_export, mark_graph_publish). Calling
+	// one of those (mark_backlinks) must return a structured tool
+	// error with a message naming the tool. Updating this test as
+	// placeholders peel off is the canary; deleting it once all
+	// 13 are real closes the loop.
 	resp := mcpRequest(t, ts.URL, "alice-token", sessionID, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      3,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "mark_discover",
+			"name": "mark_backlinks",
 			"arguments": map[string]any{
-				"url": "mark://team-a/",
+				"url": "mark://team-a/foo.md",
 			},
 		},
 	})
@@ -276,7 +276,7 @@ func TestMCPGatewayToolsCallReturnsPlaceholderForUnimplemented(t *testing.T) {
 	if first, ok := contents[0].(map[string]any); ok {
 		text, _ = first["text"].(string)
 	}
-	if !strings.Contains(text, "mark_discover") || !strings.Contains(text, "not yet implemented") {
+	if !strings.Contains(text, "mark_backlinks") || !strings.Contains(text, "not yet implemented") {
 		t.Errorf("placeholder message = %q, want it to mention the tool name + \"not yet implemented\"", text)
 	}
 }

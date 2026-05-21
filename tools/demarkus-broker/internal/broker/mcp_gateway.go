@@ -93,8 +93,11 @@ func (g *mcpGateway) registerTools() {
 // without indirection through a global.
 //
 // Slice 2 added the three read verbs; Slice 3 adds the three
-// write verbs. The 7 federation tools still fall through to the
-// placeholder until Slices 4–5.
+// write verbs; Slice 4a adds the two federation read tools that
+// don't need a broker-side graph store. The remaining 5
+// placeholders are: mark_backlinks, mark_graph (Slice 4b — need
+// graph-store infrastructure), and mark_index, mark_graph_export,
+// mark_graph_publish (Slice 5).
 func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 	return map[string]mcpserver.ToolHandlerFunc{
 		"mark_fetch":    g.handleMarkFetch,
@@ -103,6 +106,8 @@ func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 		"mark_publish":  g.handleMarkPublish,
 		"mark_append":   g.handleMarkAppend,
 		"mark_archive":  g.handleMarkArchive,
+		"mark_discover": g.handleMarkDiscover,
+		"mark_resolve":  g.handleMarkResolve,
 	}
 }
 
