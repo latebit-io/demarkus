@@ -16,12 +16,17 @@ import (
 //
 // Surface kept narrow on purpose: handlers do not see fetch.Client
 // or QUIC concepts; they hand the dispatcher a worldName + path +
-// token and consume the resulting fetch.Result. Slice 3 will add
-// Publish/Append/Archive methods; the read-only verbs are Slice 2.
+// token (+ body / expectedVersion / meta for the write verbs) and
+// consume the resulting fetch.Result. Slice 2 added the three read
+// verbs; Slice 3 adds the three write verbs. The 7 federation
+// tools land in Slices 4–5.
 type worldDispatcher interface {
 	Fetch(worldName, path, token string) (fetch.Result, error)
 	List(worldName, path, token string) (fetch.Result, error)
 	Versions(worldName, path, token string) (fetch.Result, error)
+	Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	Archive(worldName, path, token string) (fetch.Result, error)
 }
 
 // errWorldNotFound surfaces when a tool call targets a worldName
@@ -121,6 +126,43 @@ func (p *worldPool) Versions(worldName, path, token string) (fetch.Result, error
 		return fetch.Result{}, err
 	}
 	return c.Versions(host, path, token)
+}
+
+// Publish dispatches a PUBLISH against worldName. Byte-for-byte
+// proxy: the broker forwards body and metadata verbatim, then
+// hands the world's response back without transformation.
+// expectedVersion follows fetch.Client.Publish's semantics:
+// <0 unconditional, 0 create-only, >0 update-only.
+func (p *worldPool) Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	c, host, err := p.clientFor(worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+	return c.Publish(host, path, body, token, expectedVersion, meta)
+}
+
+// Append dispatches an APPEND against worldName. The world
+// enforces the expectedVersion >= 1 invariant; the dispatcher
+// stays as a thin proxy so the world's protocol-level error
+// envelopes (`bad-request` on missing version) flow through
+// unchanged.
+func (p *worldPool) Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	c, host, err := p.clientFor(worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+	return c.Append(host, path, body, token, expectedVersion, meta)
+}
+
+// Archive dispatches an ARCHIVE against worldName. The demarkus
+// protocol's destructive verb is ARCHIVE (not DELETE) — the
+// world keeps version history and flips status to `archived`.
+func (p *worldPool) Archive(worldName, path, token string) (fetch.Result, error) {
+	c, host, err := p.clientFor(worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+	return c.Archive(host, path, token)
 }
 
 // Close closes every per-world fetch.Client, releasing pooled

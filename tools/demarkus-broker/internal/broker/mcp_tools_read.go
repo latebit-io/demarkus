@@ -113,35 +113,18 @@ func (g *mcpGateway) mintFuncFor(claims Claims, worldName string) mintFunc {
 	}
 }
 
-// readOp is the small enum the dispatcher consumes to choose
-// Fetch/List/Versions on the worldDispatcher. Defined as an enum
-// rather than three near-identical methods so the retry loop
-// (cache hit → 401 → invalidate → re-mint → retry) stays in one
-// place across all three read verbs.
-type readOp int
+// worldOp is the closure form of a dispatcher call. The handler
+// captures the per-verb args (path, body, expectedVersion, meta)
+// in its closure; the retry loop only knows about token. This
+// keeps dispatchWithAuth verb-agnostic — Slice 2's three read
+// verbs and Slice 3's three write verbs share the same auth-race
+// machinery without an enum + switch threaded through every call
+// site.
+type worldOp func(token string) (fetch.Result, error)
 
-const (
-	opFetch readOp = iota
-	opList
-	opVersions
-)
-
-func (o readOp) String() string {
-	switch o {
-	case opFetch:
-		return "fetch"
-	case opList:
-		return "list"
-	case opVersions:
-		return "versions"
-	default:
-		return "unknown"
-	}
-}
-
-// dispatchRead pulls or lazy-mints the world token for (email,
-// worldName), then invokes the dispatcher op. On a world response
-// of `unauthorized`:
+// dispatchWithAuth pulls or lazy-mints the world token for (email,
+// worldName), then invokes op. On a world response of
+// `unauthorized`:
 //
 //   - cache hit: the token the world has changed under us
 //     (operator hand-revoked, sweeper retired, world Secret reset
@@ -161,7 +144,7 @@ func (o readOp) String() string {
 // forwarded verbatim to the caller per the byte-for-byte proxy
 // contract. Transport errors short-circuit immediately — they're
 // not auth races.
-func (g *mcpGateway) dispatchRead(ctx context.Context, claims Claims, worldName, path string, op readOp) (fetch.Result, error) {
+func (g *mcpGateway) dispatchWithAuth(ctx context.Context, claims Claims, worldName string, op worldOp) (fetch.Result, error) {
 	mcpCfg := g.srv.cfg.Server.MCP
 	maxAttempts := mcpCfg.FirstMintMaxAttempts
 	if maxAttempts <= 0 {
@@ -181,7 +164,7 @@ func (g *mcpGateway) dispatchRead(ctx context.Context, claims Claims, worldName,
 		if err != nil {
 			return fetch.Result{}, err
 		}
-		result, err := g.dispatchOp(op, worldName, path, tok.raw)
+		result, err := op(tok.raw)
 		if err != nil {
 			// Transport-level failure — no auth race semantics
 			// apply. Return immediately; the caller maps it to
@@ -227,22 +210,6 @@ func (g *mcpGateway) dispatchRead(ctx context.Context, claims Claims, worldName,
 	}
 }
 
-// dispatchOp routes to the dispatcher method matching op. Kept
-// out of dispatchRead so the retry loop stays focused on the
-// auth-race lifecycle.
-func (g *mcpGateway) dispatchOp(op readOp, worldName, path, token string) (fetch.Result, error) {
-	switch op {
-	case opFetch:
-		return g.dispatcher.Fetch(worldName, path, token)
-	case opList:
-		return g.dispatcher.List(worldName, path, token)
-	case opVersions:
-		return g.dispatcher.Versions(worldName, path, token)
-	default:
-		return fetch.Result{}, fmt.Errorf("broker: unknown read op %d", op)
-	}
-}
-
 // handleMarkFetch implements the mark_fetch tool against the
 // brokered world. Output format mirrors the local
 // client/cmd/demarkus-mcp emission for parity (plan v5
@@ -265,7 +232,9 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 		// the middleware.
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
-	result, err := g.dispatchRead(ctx, claims, worldName, path, opFetch)
+	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
+		return g.dispatcher.Fetch(worldName, path, token)
+	})
 	if err != nil {
 		return g.toolErrorFor("fetch", worldName, err), nil
 	}
@@ -289,7 +258,9 @@ func (g *mcpGateway) handleMarkList(ctx context.Context, req mcp.CallToolRequest
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
-	result, err := g.dispatchRead(ctx, claims, worldName, path, opList)
+	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
+		return g.dispatcher.List(worldName, path, token)
+	})
 	if err != nil {
 		return g.toolErrorFor("list", worldName, err), nil
 	}
@@ -312,7 +283,9 @@ func (g *mcpGateway) handleMarkVersions(ctx context.Context, req mcp.CallToolReq
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
-	result, err := g.dispatchRead(ctx, claims, worldName, path, opVersions)
+	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
+		return g.dispatcher.Versions(worldName, path, token)
+	})
 	if err != nil {
 		return g.toolErrorFor("versions", worldName, err), nil
 	}
