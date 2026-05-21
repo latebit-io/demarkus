@@ -159,6 +159,16 @@ func (c *sessionCache) GetOrMint(ctx context.Context, email, worldName string, m
 		if err != nil {
 			return nil, err
 		}
+		// Re-read the clock after mint so `lastUsed` reflects when
+		// the cache write actually landed, not when we started
+		// waiting for the Issuer round-trip. A slow mint (kube API
+		// blip, throttled write) under the pre-mint timestamp would
+		// backdate the session and let idle eviction reap it on the
+		// very next access. The mint round-trip is typically a few
+		// milliseconds — cost of the extra clock read is noise — but
+		// the worst case (multi-second mint) is exactly when the
+		// backdating bug bites.
+		now = c.clock()
 		c.mu.Lock()
 		c.storeLocked(key, worldName, minted, now)
 		c.mu.Unlock()

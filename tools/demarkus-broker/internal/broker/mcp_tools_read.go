@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,10 +40,16 @@ func parseToolURL(raw string) (worldName, path string, err error) {
 	// slash (`mark:///foo`) leaves Host="" and Path="/foo" and
 	// must be rejected: there is no world name, and silently
 	// re-interpreting the first path segment as a world would
-	// surprise agents who typo'd the URL. Hostname() strips any
-	// port, which shouldn't be present in tool URLs anyway —
-	// the broker resolves the world name to a host:port
-	// internally.
+	// surprise agents who typo'd the URL.
+	//
+	// Hostname() strips port + userinfo. We do NOT want to
+	// silently swallow either: `mark://team-a:7000/foo` and
+	// `mark://eve@team-a/foo` are operator typos or, worse, an
+	// agent embedding credentials in a URL that the broker
+	// would then drop on the floor while still issuing the
+	// request as `team-a`. The broker addresses worlds by name
+	// only — there is no port in this URL shape — so reject
+	// outright.
 	worldName = u.Hostname()
 	path = u.Path
 	if worldName == "" {
@@ -51,6 +58,12 @@ func parseToolURL(raw string) (worldName, path string, err error) {
 		// is double-slash with the worldName as host; anything
 		// else is a malformed tool URL.
 		return "", "", fmt.Errorf("missing world name in URL %q (expected mark://{worldName}/{path})", raw)
+	}
+	if u.Port() != "" {
+		return "", "", fmt.Errorf("invalid URL %q: world host must not carry a port (the broker resolves world names internally)", raw)
+	}
+	if u.User != nil {
+		return "", "", fmt.Errorf("invalid URL %q: world host must not carry userinfo", raw)
 	}
 	if path == "" {
 		path = "/"
@@ -120,13 +133,16 @@ func (o readOp) String() string {
 //
 //   - cache hit: the token the world has changed under us
 //     (operator hand-revoked, sweeper retired, world Secret reset
-//     during a restore). Invalidate, treat the next iteration as a
-//     fresh mint, and retry without backoff.
+//     during a restore). Invalidate and immediately fall through
+//     to a fresh mint — no sleep, no budget consumption.
 //   - fresh mint: the world hasn't propagated the new issuance
 //     yet (kubelet projected-volume refresh in flight). Back off
 //     and retry up to cfg.Server.MCP.FirstMintMaxAttempts with
 //     exponential backoff from FirstMintInitialBackoff to
-//     FirstMintMaxBackoff.
+//     FirstMintMaxBackoff. The budget is for fresh-mint
+//     unauthorized responses only — a single cache-hit 401 at
+//     the start of the call MUST NOT reduce the propagation-race
+//     retries available afterward.
 //
 // All other responses (ok / not-modified / not-found / archived /
 // not-permitted / conflict / bad-request / server-error) are
@@ -142,7 +158,13 @@ func (g *mcpGateway) dispatchRead(ctx context.Context, claims Claims, worldName,
 	backoff := mcpCfg.FirstMintInitialBackoff
 	mint := g.mintFuncFor(claims, worldName)
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	// freshUnauthorized counts only the propagation-race attempts:
+	// fresh-mint tokens the world rejected. Cache-hit rejections
+	// drop the entry and loop immediately without touching this
+	// counter so a tight maxAttempts config still gives the full
+	// propagation-race budget after a stale-cache wakeup.
+	freshUnauthorized := 0
+	for {
 		tok, isFresh, err := g.sessionCache.GetOrMint(ctx, claims.Email, worldName, mint)
 		if err != nil {
 			return fetch.Result{}, err
@@ -165,28 +187,32 @@ func (g *mcpGateway) dispatchRead(ctx context.Context, claims Claims, worldName,
 		g.sessionCache.Invalidate(claims.Email, worldName)
 		if !isFresh {
 			// Cache-hit token rejected. The next iteration is
-			// the fresh-mint case; loop without sleeping —
-			// the propagation race only applies to mints that
-			// just happened.
+			// the fresh-mint case; loop without sleeping and
+			// without counting against the propagation-race
+			// budget — the cache was stale, not the world.
 			continue
 		}
-		// Fresh-mint token rejected. Sleep with bounded
-		// exponential backoff before the next attempt. Context
-		// cancellation short-circuits so a client hangup
-		// doesn't keep the broker spinning.
-		if attempt < maxAttempts-1 {
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
-				return fetch.Result{}, ctx.Err()
-			}
-			backoff *= 2
-			if backoff > mcpCfg.FirstMintMaxBackoff {
-				backoff = mcpCfg.FirstMintMaxBackoff
-			}
+		// Fresh-mint token rejected. Consumes the propagation-
+		// race budget; bail out cleanly when exhausted so the
+		// agent sees a descriptive error instead of a hung
+		// tool call.
+		freshUnauthorized++
+		if freshUnauthorized >= maxAttempts {
+			return fetch.Result{}, fmt.Errorf("broker: world %s rejected freshly-minted token after %d attempts (token propagation lag exceeded broker deadline)", worldName, maxAttempts)
+		}
+		// Sleep with bounded exponential backoff before the
+		// next attempt. Context cancellation short-circuits so
+		// a client hangup doesn't keep the broker spinning.
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return fetch.Result{}, ctx.Err()
+		}
+		backoff *= 2
+		if backoff > mcpCfg.FirstMintMaxBackoff {
+			backoff = mcpCfg.FirstMintMaxBackoff
 		}
 	}
-	return fetch.Result{}, fmt.Errorf("broker: world %s rejected freshly-minted token after %d attempts (token propagation lag exceeded broker deadline)", worldName, maxAttempts)
 }
 
 // dispatchOp routes to the dispatcher method matching op. Kept
@@ -303,18 +329,25 @@ func (g *mcpGateway) toolErrorFor(verb, worldName string, err error) *mcp.CallTo
 // formatToolResult mirrors the local client/cmd/demarkus-mcp
 // formatResult helper byte-for-byte: status line, then the
 // explicitly-named metadata keys in order, then any remaining
-// metadata keys, then a blank line and the body (if present).
-// Duplicated rather than hoisted into a shared package because:
+// metadata keys (sorted for determinism), then a blank line and
+// the body (if present). Duplicated rather than hoisted into a
+// shared package because:
 //
-//   - the function is 20 LOC and stable;
+//   - the function is short and stable;
 //   - hoisting would touch the client module again on top of
 //     Pre-Flight 0;
 //   - drift is detected by the proxy-fidelity test (Slice 2 test)
-//     that fetches the same doc through the broker MCP and a
-//     direct-QUIC local demarkus-mcp and asserts byte-equality.
+//     that pins broker-side output against a verbatim copy of the
+//     local server's helper.
 //
 // If the formatter ever does drift, the right answer is to hoist
 // to client/mcpfmt at that time, not pre-emptively.
+//
+// The remaining-keys order is sorted (not insertion-order — Go's
+// map iteration is randomized — and not a separate "extras"
+// ordering — that would surprise agents diffing tool output across
+// calls). Sorting is the cheapest determinism guarantee that keeps
+// the local server's formatter in lockstep with this one.
 func formatToolResult(r fetch.Result, keys ...string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "status: %s\n", r.Response.Status)
@@ -325,10 +358,15 @@ func formatToolResult(r fetch.Result, keys ...string) string {
 			shown[key] = true
 		}
 	}
-	for k, v := range r.Response.Metadata {
+	remaining := make([]string, 0, len(r.Response.Metadata))
+	for k := range r.Response.Metadata {
 		if !shown[k] {
-			fmt.Fprintf(&b, "%s: %s\n", k, v)
+			remaining = append(remaining, k)
 		}
+	}
+	sort.Strings(remaining)
+	for _, k := range remaining {
+		fmt.Fprintf(&b, "%s: %s\n", k, r.Response.Metadata[k])
 	}
 	if r.Response.Body != "" {
 		b.WriteString("\n")

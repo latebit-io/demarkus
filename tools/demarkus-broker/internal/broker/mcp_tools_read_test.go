@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -136,6 +137,35 @@ func TestParseToolURLRejectsMissingWorld(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "world name") {
 		t.Errorf("err = %v, want message naming the missing world", err)
+	}
+}
+
+func TestParseToolURLRejectsPort(t *testing.T) {
+	// PR #146 review (CodeRabbit): url.URL.Hostname() silently
+	// drops the port, so mark://team-a:7000/foo would have been
+	// retargeted as team-a — masking an operator typo. Reject
+	// outright instead.
+	_, _, err := parseToolURL("mark://team-a:7000/foo.md")
+	if err == nil {
+		t.Fatal("parseToolURL accepted URL with port")
+	}
+	if !strings.Contains(err.Error(), "port") {
+		t.Errorf("err = %v, want message naming the port", err)
+	}
+}
+
+func TestParseToolURLRejectsUserinfo(t *testing.T) {
+	// PR #146 review (CodeRabbit): url.URL.Hostname() silently
+	// drops userinfo. An agent embedding credentials in a URL
+	// would have them dropped on the floor while the request
+	// still went out as the bare worldName. Reject with a
+	// useful error.
+	_, _, err := parseToolURL("mark://eve@team-a/foo.md")
+	if err == nil {
+		t.Fatal("parseToolURL accepted URL with userinfo")
+	}
+	if !strings.Contains(err.Error(), "userinfo") {
+		t.Errorf("err = %v, want message naming userinfo", err)
 	}
 }
 
@@ -532,6 +562,62 @@ func TestDispatchReadCacheHit401InvalidatesAndReMints(t *testing.T) {
 	}
 }
 
+func TestDispatchReadCacheHit401DoesNotConsumeFreshMintBudget(t *testing.T) {
+	// PR #146 review (CodeRabbit): a single cache-hit 401 (e.g.
+	// operator hand-revoked between calls) MUST NOT consume any
+	// of the fresh-mint retry budget. With maxAttempts=1, the
+	// dispatcher gets one fresh-mint shot — if cache-hit 401
+	// burns it, the propagation-race feature is gone the moment
+	// any operator touches a token. Pin the separation here.
+	cfg := mcpTestConfig()
+	cfg.Server.MCP.FirstMintMaxAttempts = 1
+	cfg.Server.MCP.FirstMintInitialBackoff = time.Millisecond
+	cfg.Server.MCP.FirstMintMaxBackoff = 2 * time.Millisecond
+
+	var calls int32
+	d := &fakeDispatcher{
+		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+			n := atomic.AddInt32(&calls, 1)
+			switch n {
+			case 1, 3:
+				// Seed call + re-mint after invalidate both
+				// succeed. Call 2 is the cache-hit that
+				// fails.
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "1"},
+					Body:     "ok",
+				}}, nil
+			case 2:
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
+			default:
+				t.Fatalf("unexpected 4th call — cache-hit 401 consumed retry budget")
+				return fetch.Result{}, nil
+			}
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	ctx := withAliceClaims(context.Background())
+
+	// First call: seed the cache.
+	if res, err := g.handleMarkFetch(ctx, callToolReq("mark_fetch", map[string]any{"url": "mark://team-a/foo.md"})); err != nil || res.IsError {
+		t.Fatalf("seed call: err=%v isError=%v text=%s", err, res.IsError, toolResultText(t, res))
+	}
+	// Second call: cache hit returns 401, dispatcher invalidates,
+	// re-mints, and succeeds. With maxAttempts=1 this only works
+	// because cache-hit 401 does not consume the budget.
+	res, err := g.handleMarkFetch(ctx, callToolReq("mark_fetch", map[string]any{"url": "mark://team-a/foo.md"}))
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if res.IsError {
+		t.Errorf("second call isError = true, want false (cache-hit 401 should fall through to fresh mint with full budget intact): %s", toolResultText(t, res))
+	}
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Errorf("dispatcher calls = %d, want 3 (seed + cache-hit 401 + re-mint succeed)", got)
+	}
+}
+
 func TestHandleMarkFetchUnauthorizedIdentitySurfacesAsToolError(t *testing.T) {
 	cfg := mcpTestConfig()
 	g := newGatewayWithDispatcher(t, cfg, &fakeDispatcher{})
@@ -565,6 +651,10 @@ func TestHandleMarkFetchUnauthorizedIdentitySurfacesAsToolError(t *testing.T) {
 // catches it. If the local server ever changes its formatter,
 // this copy must move in lockstep — at which point hoisting both
 // into a shared package becomes the right call.
+//
+// The remaining-keys sort below mirrors the determinism fix
+// applied in both implementations after PR #146 review surfaced
+// nondeterministic map iteration order.
 func formatResultReference(r fetch.Result, keys ...string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "status: %s\n", r.Response.Status)
@@ -575,16 +665,58 @@ func formatResultReference(r fetch.Result, keys ...string) string {
 			shown[key] = true
 		}
 	}
-	for k, v := range r.Response.Metadata {
+	remaining := make([]string, 0, len(r.Response.Metadata))
+	for k := range r.Response.Metadata {
 		if !shown[k] {
-			fmt.Fprintf(&b, "%s: %s\n", k, v)
+			remaining = append(remaining, k)
 		}
+	}
+	sort.Strings(remaining)
+	for _, k := range remaining {
+		fmt.Fprintf(&b, "%s: %s\n", k, r.Response.Metadata[k])
 	}
 	if r.Response.Body != "" {
 		b.WriteString("\n")
 		b.WriteString(r.Response.Body)
 	}
 	return b.String()
+}
+
+func TestFormatToolResultDeterministicRemainingOrder(t *testing.T) {
+	// Go's map iteration is randomized; running the formatter
+	// many times on the same Result must produce one canonical
+	// output, otherwise the byte-for-byte proxy contract is a
+	// statistical claim rather than a property. Five keys none
+	// of which are in the explicit `keys` argument exercises
+	// the remaining-order code path. PR #146 review surfaced
+	// the bug; this test pins the fix.
+	r := fetch.Result{Response: protocol.Response{
+		Status: protocol.StatusOK,
+		Metadata: map[string]string{
+			"zeta":  "1",
+			"alpha": "2",
+			"beta":  "3",
+			"delta": "4",
+			"gamma": "5",
+		},
+		Body: "body",
+	}}
+	first := formatToolResult(r)
+	for range 20 {
+		if got := formatToolResult(r); got != first {
+			t.Fatalf("formatToolResult nondeterministic across runs\nfirst:\n%s\nlater:\n%s", first, got)
+		}
+	}
+	// Pin the actual ordering — alpha, beta, delta, gamma, zeta.
+	wantOrder := []string{"alpha", "beta", "delta", "gamma", "zeta"}
+	idx := 0
+	for _, key := range wantOrder {
+		next := strings.Index(first[idx:], key)
+		if next < 0 {
+			t.Fatalf("expected key %q in remaining order, not found at or after offset %d\nfull:\n%s", key, idx, first)
+		}
+		idx += next
+	}
 }
 
 func TestProxyFidelityFormatMatchesLocalServer(t *testing.T) {

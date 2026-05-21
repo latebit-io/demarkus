@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -333,7 +334,10 @@ func markIndexTool(host string) mcp.Tool {
 
 // formatResult builds a text response with status, selected metadata keys, and body.
 // After the explicitly requested keys, any remaining metadata keys (e.g. publisher
-// metadata) are appended so agents always see the full picture.
+// metadata) are appended in sorted order so output is deterministic across calls —
+// Go's map iteration is randomized, and the broker MCP gateway's mirror of this
+// formatter relies on byte-for-byte agreement with this function to satisfy the
+// proxy-fidelity contract documented in /plans/broker-https-gateway.md.
 func formatResult(r fetch.Result, keys ...string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "status: %s\n", r.Response.Status)
@@ -344,10 +348,15 @@ func formatResult(r fetch.Result, keys ...string) string {
 			shown[key] = true
 		}
 	}
-	for k, v := range r.Response.Metadata {
+	remaining := make([]string, 0, len(r.Response.Metadata))
+	for k := range r.Response.Metadata {
 		if !shown[k] {
-			fmt.Fprintf(&b, "%s: %s\n", k, v)
+			remaining = append(remaining, k)
 		}
+	}
+	sort.Strings(remaining)
+	for _, k := range remaining {
+		fmt.Fprintf(&b, "%s: %s\n", k, r.Response.Metadata[k])
 	}
 	if r.Response.Body != "" {
 		b.WriteString("\n")
