@@ -50,6 +50,18 @@ type Options struct {
 	Insecure       bool
 	DialTimeout    time.Duration
 	RequestTimeout time.Duration
+	// KeepAlivePeriod controls QUIC keep-alive PING cadence on pooled
+	// connections. Long-lived consumers (TUI, MCP servers, federation
+	// crawlers) keep one connection per host across many requests; if
+	// the connection sits idle long enough for the NAT path or server-
+	// side idle timer to drop it, the next request silently waits for
+	// RequestTimeout before transient-failure retry kicks in. With
+	// keep-alive set, quic-go sends PING frames at this interval
+	// whenever the connection has been idle, holding the path open
+	// across typical 30s+ NAT timeouts. Default 25s (under common NAT
+	// thresholds, well under quic-go's 30s default idle timeout). Set
+	// to a negative value to disable.
+	KeepAlivePeriod time.Duration
 }
 
 func (o *Options) applyDefaults() {
@@ -59,26 +71,36 @@ func (o *Options) applyDefaults() {
 	if o.RequestTimeout == 0 {
 		o.RequestTimeout = 10 * time.Second
 	}
+	if o.KeepAlivePeriod == 0 {
+		o.KeepAlivePeriod = 25 * time.Second
+	}
 }
 
 // Client manages QUIC connections and performs Mark Protocol operations.
 type Client struct {
-	opts    Options
-	tlsConf *tls.Config
-	mu      sync.Mutex
-	conns   map[string]*quic.Conn
+	opts     Options
+	tlsConf  *tls.Config
+	quicConf *quic.Config
+	mu       sync.Mutex
+	conns    map[string]*quic.Conn
 }
 
 // NewClient creates a new client with the given options.
 func NewClient(opts Options) *Client {
 	opts.applyDefaults()
+	qc := &quic.Config{}
+	// Negative KeepAlivePeriod disables; positive applies.
+	if opts.KeepAlivePeriod > 0 {
+		qc.KeepAlivePeriod = opts.KeepAlivePeriod
+	}
 	return &Client{
 		opts: opts,
 		tlsConf: &tls.Config{
 			InsecureSkipVerify: opts.Insecure,
 			NextProtos:         []string{protocol.ALPN},
 		},
-		conns: make(map[string]*quic.Conn),
+		quicConf: qc,
+		conns:    make(map[string]*quic.Conn),
 	}
 }
 
@@ -296,7 +318,7 @@ func (c *Client) getConn(host string) (*quic.Conn, error) {
 		tlsConf.ServerName = host
 	}
 
-	conn, err := quic.DialAddr(ctx, host, tlsConf, nil)
+	conn, err := quic.DialAddr(ctx, host, tlsConf, c.quicConf)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", host, err)
 	}
