@@ -65,6 +65,18 @@ func parseToolURL(raw string) (worldName, path string, err error) {
 	if u.User != nil {
 		return "", "", fmt.Errorf("invalid URL %q: world host must not carry userinfo", raw)
 	}
+	// Query strings and fragments are not part of the demarkus
+	// protocol's address shape. Forwarding only u.Path would
+	// silently strip them — the agent would see a success
+	// response for a different target than it requested. Reject
+	// so a typo'd `mark://team-a/foo.md?rev=1` surfaces the
+	// shape error instead of pretending to succeed.
+	if u.RawQuery != "" {
+		return "", "", fmt.Errorf("invalid URL %q: query parameters are not supported", raw)
+	}
+	if u.Fragment != "" {
+		return "", "", fmt.Errorf("invalid URL %q: fragments are not supported", raw)
+	}
 	if path == "" {
 		path = "/"
 	}

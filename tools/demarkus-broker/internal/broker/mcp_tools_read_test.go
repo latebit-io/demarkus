@@ -169,6 +169,32 @@ func TestParseToolURLRejectsUserinfo(t *testing.T) {
 	}
 }
 
+func TestParseToolURLRejectsQuery(t *testing.T) {
+	// PR #146 review (CodeRabbit, outside-diff): forwarding only
+	// u.Path would silently strip `?rev=1`, giving the agent a
+	// success response for a different target than it asked
+	// for. Reject the shape outright.
+	_, _, err := parseToolURL("mark://team-a/foo.md?rev=1")
+	if err == nil {
+		t.Fatal("parseToolURL accepted URL with query parameters")
+	}
+	if !strings.Contains(err.Error(), "query") {
+		t.Errorf("err = %v, want message naming query parameters", err)
+	}
+}
+
+func TestParseToolURLRejectsFragment(t *testing.T) {
+	// PR #146 review (CodeRabbit, outside-diff): same silent-
+	// rewrite class as the query case.
+	_, _, err := parseToolURL("mark://team-a/foo.md#section-2")
+	if err == nil {
+		t.Fatal("parseToolURL accepted URL with fragment")
+	}
+	if !strings.Contains(err.Error(), "fragment") {
+		t.Errorf("err = %v, want message naming fragment", err)
+	}
+}
+
 func TestParseToolURLDeepPath(t *testing.T) {
 	world, path, err := parseToolURL("mark://team-a/docs/architecture/index.md")
 	if err != nil {
