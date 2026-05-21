@@ -91,11 +91,18 @@ func (g *mcpGateway) registerTools() {
 // from the map use notImplementedHandler. Method (rather than a
 // package-level var) so the handlers carry the gateway receiver
 // without indirection through a global.
+//
+// Slice 2 added the three read verbs; Slice 3 adds the three
+// write verbs. The 7 federation tools still fall through to the
+// placeholder until Slices 4–5.
 func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 	return map[string]mcpserver.ToolHandlerFunc{
 		"mark_fetch":    g.handleMarkFetch,
 		"mark_list":     g.handleMarkList,
 		"mark_versions": g.handleMarkVersions,
+		"mark_publish":  g.handleMarkPublish,
+		"mark_append":   g.handleMarkAppend,
+		"mark_archive":  g.handleMarkArchive,
 	}
 }
 

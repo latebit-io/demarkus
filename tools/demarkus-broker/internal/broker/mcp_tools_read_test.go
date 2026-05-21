@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -27,16 +28,34 @@ type fakeDispatcher struct {
 	fetchFn    func(worldName, path, token string) (fetch.Result, error)
 	listFn     func(worldName, path, token string) (fetch.Result, error)
 	versionsFn func(worldName, path, token string) (fetch.Result, error)
+	publishFn  func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	appendFn   func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	archiveFn  func(worldName, path, token string) (fetch.Result, error)
 
 	fetchCalls    []dispatchCall
 	listCalls     []dispatchCall
 	versionsCalls []dispatchCall
+	publishCalls  []writeCall
+	appendCalls   []writeCall
+	archiveCalls  []dispatchCall
 }
 
 type dispatchCall struct {
 	worldName string
 	path      string
 	token     string
+}
+
+// writeCall records a Publish/Append invocation. Captures the
+// body + expected_version + meta so tests can assert what the
+// broker forwarded to the world.
+type writeCall struct {
+	worldName       string
+	path            string
+	body            string
+	token           string
+	expectedVersion int
+	meta            map[string]string
 }
 
 func (f *fakeDispatcher) Fetch(worldName, path, token string) (fetch.Result, error) {
@@ -68,6 +87,67 @@ func (f *fakeDispatcher) Versions(worldName, path, token string) (fetch.Result, 
 	f.mu.Unlock()
 	if fn == nil {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
+	}
+	return fn(worldName, path, token)
+}
+
+func (f *fakeDispatcher) Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	f.mu.Lock()
+	f.publishCalls = append(f.publishCalls, writeCall{worldName, path, body, token, expectedVersion, cloneMeta(meta)})
+	fn := f.publishFn
+	f.mu.Unlock()
+	if fn == nil {
+		return fetch.Result{Response: protocol.Response{
+			Status:   protocol.StatusOK,
+			Metadata: map[string]string{"version": "1"},
+		}}, nil
+	}
+	return fn(worldName, path, body, token, expectedVersion, meta)
+}
+
+func (f *fakeDispatcher) Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	f.mu.Lock()
+	f.appendCalls = append(f.appendCalls, writeCall{worldName, path, body, token, expectedVersion, cloneMeta(meta)})
+	fn := f.appendFn
+	f.mu.Unlock()
+	if fn == nil {
+		return fetch.Result{Response: protocol.Response{
+			Status:   protocol.StatusOK,
+			Metadata: map[string]string{"version": "2"},
+		}}, nil
+	}
+	return fn(worldName, path, body, token, expectedVersion, meta)
+}
+
+// cloneMeta snapshots a publisher-metadata map so writeCall
+// records an immutable copy. PR #147 review (CodeRabbit): the
+// fakeDispatcher stored caller-owned maps by reference, so a
+// post-call mutation of the same map (legal under fetch.Client's
+// Publish signature — the client copies before sending, but a
+// future broker handler that reused a map between calls would
+// retroactively change recorded test history) could silently
+// invalidate assertions written against the captured value.
+// Cloning here is a test-only guard; production code paths still
+// pass the original map down to fetch.Client.
+func cloneMeta(meta map[string]string) map[string]string {
+	if meta == nil {
+		return nil
+	}
+	out := make(map[string]string, len(meta))
+	maps.Copy(out, meta)
+	return out
+}
+
+func (f *fakeDispatcher) Archive(worldName, path, token string) (fetch.Result, error) {
+	f.mu.Lock()
+	f.archiveCalls = append(f.archiveCalls, dispatchCall{worldName, path, token})
+	fn := f.archiveFn
+	f.mu.Unlock()
+	if fn == nil {
+		return fetch.Result{Response: protocol.Response{
+			Status:   protocol.StatusArchived,
+			Metadata: map[string]string{"version": "3"},
+		}}, nil
 	}
 	return fn(worldName, path, token)
 }
