@@ -91,6 +91,66 @@ func TestGatewayAuthInvalidBearerReturns401WithErrorCode(t *testing.T) {
 	}
 }
 
+func TestGatewayAuthRejectsUnverifiedEmail(t *testing.T) {
+	// Plan v5 Non-Negotiable "Single identity dimension": the
+	// MCP gateway refuses unverified-email id_tokens at the
+	// boundary so the broker has one consistent identity gate
+	// across /me/install, /tokens, /auth/callback, and /mcp.
+	// Returning invalid_token (not invalid_request) matches
+	// RFC 6750 §3.1 — the bearer is present but its claims
+	// don't meet our requirements.
+	v := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: false}}
+	ts := newTestMCPGateway(t, mcpTestConfig(), v)
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer alice-token")
+	c := &http.Client{Timeout: 5 * time.Second}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("POST /mcp: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	challenge := resp.Header.Get("WWW-Authenticate")
+	if !strings.Contains(challenge, `error="invalid_token"`) {
+		t.Errorf("WWW-Authenticate = %q, want error=\"invalid_token\"", challenge)
+	}
+}
+
+func TestGatewayAuthRejectsEmptyEmailClaim(t *testing.T) {
+	// EmailVerified=true with Email="" can occur if an IdP is
+	// misconfigured to emit verified=true without surfacing the
+	// address. Letting it through would collapse every such
+	// caller onto a shared "" session key in the cache. The
+	// gateway rejects at the boundary; the session cache also
+	// guards as defense-in-depth (errInvalidEmail) but tests
+	// here pin the boundary behavior.
+	v := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "   ", EmailVerified: true}}
+	ts := newTestMCPGateway(t, mcpTestConfig(), v)
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer alice-token")
+	c := &http.Client{Timeout: 5 * time.Second}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("POST /mcp: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	challenge := resp.Header.Get("WWW-Authenticate")
+	if !strings.Contains(challenge, `error="invalid_token"`) {
+		t.Errorf("WWW-Authenticate = %q, want error=\"invalid_token\"", challenge)
+	}
+}
+
 func TestGatewayAuthValidBearerStashesClaimsOnContext(t *testing.T) {
 	// Compose gatewayAuth around a recording handler so we can pin
 	// that valid bearers land on the next handler WITH the claims
