@@ -247,6 +247,32 @@ func TestHandleMarkPublishTransportErrorFailsLoud(t *testing.T) {
 	}
 }
 
+func TestFakeDispatcherSnapshotsMetaOnCapture(t *testing.T) {
+	// PR #147 review (CodeRabbit): the fakeDispatcher used to
+	// store the caller-supplied meta map by reference. A
+	// post-call mutation of that map would silently change the
+	// historical writeCall record. The fake now snapshots; pin
+	// the property so a future refactor that drops cloneMeta
+	// fails this test instead of producing flaky assertions.
+	d := &fakeDispatcher{}
+	meta := map[string]string{"agent": "alice@example.com"}
+	if _, err := d.Publish("team-a", "/foo.md", "hello", "token", 0, meta); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	// Caller mutates AFTER the call returns — simulating a
+	// handler reusing one map across multiple dispatcher calls,
+	// or a future code path that builds meta lazily.
+	meta["agent"] = "mallory@evil.example"
+	meta["injected"] = "should-not-appear"
+
+	if got := d.publishCalls[0].meta["agent"]; got != "alice@example.com" {
+		t.Errorf("recorded meta[agent] = %q, want alice@example.com (mutation after Publish leaked into history)", got)
+	}
+	if _, ok := d.publishCalls[0].meta["injected"]; ok {
+		t.Error("recorded meta inherited a key added after Publish — snapshot broken")
+	}
+}
+
 // TestHandleMarkAppendHappyPath drives an append with an
 // explicit expected_version. Same byte-for-byte forwarding
 // invariant as publish.

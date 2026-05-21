@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -92,7 +93,7 @@ func (f *fakeDispatcher) Versions(worldName, path, token string) (fetch.Result, 
 
 func (f *fakeDispatcher) Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
 	f.mu.Lock()
-	f.publishCalls = append(f.publishCalls, writeCall{worldName, path, body, token, expectedVersion, meta})
+	f.publishCalls = append(f.publishCalls, writeCall{worldName, path, body, token, expectedVersion, cloneMeta(meta)})
 	fn := f.publishFn
 	f.mu.Unlock()
 	if fn == nil {
@@ -106,7 +107,7 @@ func (f *fakeDispatcher) Publish(worldName, path, body, token string, expectedVe
 
 func (f *fakeDispatcher) Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
 	f.mu.Lock()
-	f.appendCalls = append(f.appendCalls, writeCall{worldName, path, body, token, expectedVersion, meta})
+	f.appendCalls = append(f.appendCalls, writeCall{worldName, path, body, token, expectedVersion, cloneMeta(meta)})
 	fn := f.appendFn
 	f.mu.Unlock()
 	if fn == nil {
@@ -116,6 +117,25 @@ func (f *fakeDispatcher) Append(worldName, path, body, token string, expectedVer
 		}}, nil
 	}
 	return fn(worldName, path, body, token, expectedVersion, meta)
+}
+
+// cloneMeta snapshots a publisher-metadata map so writeCall
+// records an immutable copy. PR #147 review (CodeRabbit): the
+// fakeDispatcher stored caller-owned maps by reference, so a
+// post-call mutation of the same map (legal under fetch.Client's
+// Publish signature — the client copies before sending, but a
+// future broker handler that reused a map between calls would
+// retroactively change recorded test history) could silently
+// invalidate assertions written against the captured value.
+// Cloning here is a test-only guard; production code paths still
+// pass the original map down to fetch.Client.
+func cloneMeta(meta map[string]string) map[string]string {
+	if meta == nil {
+		return nil
+	}
+	out := make(map[string]string, len(meta))
+	maps.Copy(out, meta)
+	return out
 }
 
 func (f *fakeDispatcher) Archive(worldName, path, token string) (fetch.Result, error) {
