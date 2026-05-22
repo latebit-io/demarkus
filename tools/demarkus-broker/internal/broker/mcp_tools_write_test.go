@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestHandleMarkPublishHappyPath(t *testing.T) {
 				Metadata: map[string]string{
 					"version":        "4",
 					"modified":       "2026-05-21T10:00:00Z",
-					"server-version": "1.0",
+					"server-version": "1",
 				},
 			}}, nil
 		},
@@ -45,7 +46,7 @@ func TestHandleMarkPublishHappyPath(t *testing.T) {
 		t.Fatalf("isError = true: %s", toolResultText(t, res))
 	}
 	text := toolResultText(t, res)
-	for _, want := range []string{"status: ok", "version: 4", "modified: 2026-05-21T10:00:00Z", "server-version: 1.0"} {
+	for _, want := range []string{"status: ok", "version: 4", "modified: 2026-05-21T10:00:00Z", "server-version: 1"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("response missing %q\nfull:\n%s", want, text)
 		}
@@ -108,12 +109,382 @@ func TestHandleMarkPublishNegativeExpectedVersion(t *testing.T) {
 	}
 }
 
-func TestHandleMarkPublishConflictPassesThroughVerbatim(t *testing.T) {
+// TestHandleMarkPublishMergeCleanOutcomeOK: publish succeeds
+// without conflict on the first attempt. merge.Candidate
+// returns OutcomeOK, and formatMergeOutcome delegates to
+// formatToolResult so the success-path text is byte-for-byte
+// identical to a plain on_conflict="fail" success. That's the
+// load-bearing parity invariant: default-flip doesn't disturb
+// the happy path's output shape.
+func TestHandleMarkPublishMergeCleanOutcomeOK(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status: protocol.StatusOK,
+				Metadata: map[string]string{
+					"version":        "5",
+					"modified":       "2026-05-22T10:00:00Z",
+					"server-version": "1",
+				},
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url":              "mark://team-a/foo.md",
+		"body":             "# clean publish\n",
+		"expected_version": float64(4),
+		"on_conflict":      "merge",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true on clean merge OK: %s", toolResultText(t, res))
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{"status: ok", "version: 5", "modified: 2026-05-22T10:00:00Z", "server-version: 1"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("merge OK text missing %q\nfull:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "merge-candidate") {
+		t.Errorf("clean merge produced merge-candidate envelope — should have been a plain OK: %s", text)
+	}
+}
+
+// TestHandleMarkPublishMergeCandidateWithoutMarkers: the world
+// reports conflict, the broker fetches base + current, Diff3
+// produces a clean structural merge (no marker section). The
+// agent gets the merge-candidate envelope with has-markers=false
+// and the synthesized body.
+func TestHandleMarkPublishMergeCandidateWithoutMarkers(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			// First publish: conflict.
+			return fetch.Result{Response: protocol.Response{
+				Status: protocol.StatusConflict,
+				Metadata: map[string]string{
+					"version":        "5",
+					"server-version": "5",
+				},
+			}}, nil
+		},
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			switch path {
+			case "/foo.md/v3":
+				// Base: four-line document. Ours edits line 1,
+				// theirs edits line 4 — different regions so
+				// Diff3 produces a clean merge.
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "3"},
+					Body:     "line one\nline two\nline three\nline four\n",
+				}}, nil
+			case "/foo.md":
+				// Current head: theirs edited line 4 only.
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "5"},
+					Body:     "line one\nline two\nline three\nTHEIRS edited line four\n",
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url": "mark://team-a/foo.md",
+		// Ours: edited line 1 only — disjoint from theirs.
+		"body":             "OURS edited line one\nline two\nline three\nline four\n",
+		"expected_version": float64(3),
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true on merge candidate: %s", toolResultText(t, res))
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{
+		"status: merge-candidate",
+		"your-version: 3",
+		"current-version: 5",
+		"publish-at-version: 5",
+		"has-markers: false",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("candidate envelope missing %q\nfull:\n%s", want, text)
+		}
+	}
+	// Both edits must survive in the merged body — that's the
+	// proof Diff3 ran with the right base/ours/theirs triple.
+	for _, want := range []string{"OURS edited line one", "THEIRS edited line four", "line two", "line three"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("candidate body missing %q\nfull:\n%s", want, text)
+		}
+	}
+}
+
+// TestHandleMarkPublishMergeCandidateWithMarkers: both sides
+// edited the SAME lines since the base. Diff3 emits git-style
+// conflict markers (<<<<<<<, =======, >>>>>>>) and
+// has-markers=true so the agent knows to inspect/resolve before
+// republishing.
+func TestHandleMarkPublishMergeCandidateWithMarkers(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusConflict,
+				Metadata: map[string]string{"version": "5", "server-version": "5"},
+			}}, nil
+		},
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			switch path {
+			case "/foo.md/v3":
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "3"},
+					Body:     "the original line\n",
+				}}, nil
+			case "/foo.md":
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "5"},
+					Body:     "their changed line\n",
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url":              "mark://team-a/foo.md",
+		"body":             "my changed line\n",
+		"expected_version": float64(3),
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true on conflict-marker case: %s", toolResultText(t, res))
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "has-markers: true") {
+		t.Errorf("expected has-markers: true for an overlapping-edit conflict; got:\n%s", text)
+	}
+	// Conflict markers — Diff3 emits the git-style triple.
+	for _, want := range []string{"<<<<<<<", "=======", ">>>>>>>", "my changed line", "their changed line"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("conflict-marker body missing %q\nfull:\n%s", want, text)
+		}
+	}
+}
+
+// TestHandleMarkPublishMergeDispatchesEachStepThroughAuth: the
+// merge orchestration calls Publish (conflict) → FetchVersion
+// (base) → FetchCurrent (theirs). Each must dispatch through
+// dispatchWithAuth, so the sessionCache token gets reused
+// across the three calls and a propagation-race retry on any
+// one of them works. Pinned by counting dispatches and
+// asserting they all carry the same lazy-minted token.
+func TestHandleMarkPublishMergeDispatchesEachStepThroughAuth(t *testing.T) {
+	cfg := mcpTestConfig()
+	var publishTokens, fetchTokens []string
+	var mu sync.Mutex
+	d := &fakeDispatcher{
+		publishFn: func(_, _, _, token string, _ int, _ map[string]string) (fetch.Result, error) {
+			mu.Lock()
+			publishTokens = append(publishTokens, token)
+			mu.Unlock()
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusConflict,
+				Metadata: map[string]string{"version": "4", "server-version": "4"},
+			}}, nil
+		},
+		fetchFn: func(_, _, token string) (fetch.Result, error) {
+			mu.Lock()
+			fetchTokens = append(fetchTokens, token)
+			mu.Unlock()
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "4"},
+				Body:     "world content\n",
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	if _, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url":              "mark://team-a/foo.md",
+		"body":             "my content\n",
+		"expected_version": float64(2),
+	})); err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(publishTokens) != 1 {
+		t.Errorf("publish dispatched %d times, want 1", len(publishTokens))
+	}
+	if len(fetchTokens) != 2 {
+		t.Errorf("fetch dispatched %d times, want 2 (base + current)", len(fetchTokens))
+	}
+	// All three dispatches share the same lazy-minted token —
+	// proves the sessionCache is honored across the merge
+	// orchestration's calls.
+	allTokens := append(append([]string{}, publishTokens...), fetchTokens...)
+	for i := 1; i < len(allTokens); i++ {
+		if allTokens[i] != allTokens[0] {
+			t.Errorf("merge step %d used token %q, want shared %q (sessionCache hit)", i, allTokens[i], allTokens[0])
+		}
+	}
+}
+
+// TestHandleMarkPublishDefaultOnConflictIsMerge: omit
+// on_conflict entirely → broker takes the merge branch (not the
+// "fail" branch, which was Slice 3's default). Drives the same
+// conflict scenario as TestHandleMarkPublishFailConflictForwardsVerbatim
+// but with NO explicit on_conflict and asserts the
+// merge-candidate envelope appears instead of the verbatim
+// conflict.
+func TestHandleMarkPublishDefaultOnConflictIsMerge(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusConflict,
+				Metadata: map[string]string{"version": "3", "server-version": "3"},
+			}}, nil
+		},
+		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "3"},
+				Body:     "world body\n",
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url":              "mark://team-a/foo.md",
+		"body":             "my body\n",
+		"expected_version": float64(1),
+		// on_conflict intentionally omitted
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true on default merge: %s", toolResultText(t, res))
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "status: merge-candidate") {
+		t.Errorf("default on_conflict did not produce merge-candidate envelope — default may have regressed to \"fail\":\n%s", text)
+	}
+}
+
+func TestHandleMarkPublishEmptyOnConflictNormalizesToMerge(t *testing.T) {
+	// MCP clients send blank strings for optional fields
+	// sometimes; the broker normalizes "" → "merge" rather than
+	// erroring out. Pins the parity with the local
+	// demarkus-mcp's surface.
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusConflict,
+				Metadata: map[string]string{"version": "2", "server-version": "2"},
+			}}, nil
+		},
+		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "2"},
+				Body:     "x\n",
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url":              "mark://team-a/foo.md",
+		"body":             "y\n",
+		"expected_version": float64(1),
+		"on_conflict":      "   ",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true on whitespace on_conflict: %s", toolResultText(t, res))
+	}
+	if !strings.Contains(toolResultText(t, res), "status: merge-candidate") {
+		t.Errorf("whitespace on_conflict did not normalize to \"merge\":\n%s", toolResultText(t, res))
+	}
+}
+
+// TestHandleMarkPublishMergeBaseVersionZero: expected_version=0
+// means create-only. A conflict in that mode means the doc
+// already exists; merge.Candidate falls through with base=""
+// (no base fetch) and runs Diff3 against an empty base. Pinned
+// by the local demarkus-mcp's contract — non-overlapping
+// insertions on both sides go through cleanly.
+func TestHandleMarkPublishMergeBaseVersionZero(t *testing.T) {
+	cfg := mcpTestConfig()
+	var versionedFetch atomic.Bool
+	d := &fakeDispatcher{
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusConflict,
+				Metadata: map[string]string{"version": "1", "server-version": "1"},
+			}}, nil
+		},
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			// merge.Candidate with expected_version=0 must NOT
+			// issue a FetchVersion — the local merge package's
+			// contract says base="" in that case. A request to
+			// any /vN path here would be a regression.
+			if strings.Contains(path, "/v") {
+				versionedFetch.Store(true)
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "1"},
+				Body:     "head\n",
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url":              "mark://team-a/foo.md",
+		"body":             "new\n",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true on create-only merge: %s", toolResultText(t, res))
+	}
+	if versionedFetch.Load() {
+		t.Error("merge.Candidate fetched a versioned path with expected_version=0; should have used base=\"\"")
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "your-version: 0") {
+		t.Errorf("expected your-version: 0 in candidate envelope; got:\n%s", text)
+	}
+}
+
+func TestHandleMarkPublishFailConflictForwardsVerbatim(t *testing.T) {
 	// version-mismatch on the world surfaces as `conflict`
-	// status. The broker forwards verbatim — body + version +
-	// server-version unchanged — so the agent can act on the
-	// conflict envelope the same way against a brokered or
-	// direct-QUIC world.
+	// status. With on_conflict="fail" the broker forwards
+	// verbatim — body + version + server-version unchanged —
+	// so the agent can act on the conflict envelope the same
+	// way against a brokered or direct-QUIC world. The
+	// merge-candidate path (Slice 6) is the default; this test
+	// pins the still-supported opt-out behavior.
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
 		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
@@ -131,12 +502,13 @@ func TestHandleMarkPublishConflictPassesThroughVerbatim(t *testing.T) {
 		"url":              "mark://team-a/foo.md",
 		"body":             "stale body",
 		"expected_version": float64(5),
+		"on_conflict":      "fail",
 	}))
 	if err != nil {
 		t.Fatalf("handleMarkPublish: %v", err)
 	}
 	if res.IsError {
-		t.Errorf("isError = true on conflict (must forward verbatim, not turn into a tool error): %s", toolResultText(t, res))
+		t.Errorf("isError = true on conflict with on_conflict=fail (must forward verbatim, not turn into a tool error): %s", toolResultText(t, res))
 	}
 	text := toolResultText(t, res)
 	if !strings.Contains(text, "status: conflict") {
@@ -144,32 +516,6 @@ func TestHandleMarkPublishConflictPassesThroughVerbatim(t *testing.T) {
 	}
 	if !strings.Contains(text, "server-version: 7") {
 		t.Errorf("expected server-version: 7 in output, got:\n%s", text)
-	}
-}
-
-func TestHandleMarkPublishOnConflictMergeRejectedUntilSlice6(t *testing.T) {
-	// Slice 3 deliberately does NOT ship the merge candidate
-	// flow (Slice 6 lands it). Agents calling with
-	// on_conflict="merge" need to know the surface gap so they
-	// can either pass "fail" or wait. Silently accepting and
-	// running the "fail" path would be a bait-and-switch — the
-	// agent thinks merge is being attempted when it isn't.
-	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
-	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
-		"url":              "mark://team-a/foo.md",
-		"body":             "hello",
-		"expected_version": float64(3),
-		"on_conflict":      "merge",
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkPublish: %v", err)
-	}
-	if !res.IsError {
-		t.Error("isError = false on on_conflict=merge, want true (Slice 6)")
-	}
-	text := toolResultText(t, res)
-	if !strings.Contains(text, "Slice 6") {
-		t.Errorf("tool error %q must point at Slice 6 of the plan so agents know when to retry", text)
 	}
 }
 
