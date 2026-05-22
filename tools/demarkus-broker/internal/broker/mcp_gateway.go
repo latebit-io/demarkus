@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/latebit/demarkus/client/fetch"
+	"github.com/latebit/demarkus/client/graphstore"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -27,6 +28,16 @@ type mcpGateway struct {
 	log          *slog.Logger
 	sessionCache *sessionCache
 	dispatcher   worldDispatcher
+	// graphStore is an ephemeral in-process graph store backing
+	// mark_backlinks / mark_graph / mark_graph_export /
+	// mark_graph_publish. Lifetime = broker pod lifetime: any
+	// restart drops the store and the agent re-crawls. Plan v5
+	// 4b/5 decision (Fritz, 2026-05-21): the broker is a
+	// wire-shape adapter, not a stateful protocol surface; an
+	// alternate bucket-backed persistent store is parked for a
+	// post-broker design window (see /thoughts.md "On Bucket
+	// Stores").
+	graphStore *graphstore.Store
 }
 
 // newMCPGateway constructs a gateway, registers the 13 tool
@@ -62,6 +73,10 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGa
 		log:          s.log,
 		sessionCache: newSessionCache(s.cfg.Server.MCP.MaxSessions, s.cfg.Server.MCP.SessionMaxIdle, s.clock),
 		dispatcher:   dispatcher,
+		// Ephemeral graph store — empty on each gateway
+		// construction, dies with the broker pod. See the
+		// graphStore field doc for the design framing.
+		graphStore: graphstore.New(),
 	}
 	g.registerTools()
 	g.transport = mcpserver.NewStreamableHTTPServer(mcpSrv)
@@ -92,22 +107,28 @@ func (g *mcpGateway) registerTools() {
 // package-level var) so the handlers carry the gateway receiver
 // without indirection through a global.
 //
-// Slice 2 added the three read verbs; Slice 3 adds the three
-// write verbs; Slice 4a adds the two federation read tools that
-// don't need a broker-side graph store. The remaining 5
-// placeholders are: mark_backlinks, mark_graph (Slice 4b — need
-// graph-store infrastructure), and mark_index, mark_graph_export,
-// mark_graph_publish (Slice 5).
+// Slices 2-4 lit up the read, write, and discover/resolve verbs;
+// Slice 4b+5 closes out the federation surface with the
+// graph-store-backed tools (mark_backlinks, mark_graph,
+// mark_index, mark_graph_export, mark_graph_publish). All 13
+// tools are real handlers now — every entry below points at a
+// concrete implementation, and notImplementedHandler should
+// never run in production.
 func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 	return map[string]mcpserver.ToolHandlerFunc{
-		"mark_fetch":    g.handleMarkFetch,
-		"mark_list":     g.handleMarkList,
-		"mark_versions": g.handleMarkVersions,
-		"mark_publish":  g.handleMarkPublish,
-		"mark_append":   g.handleMarkAppend,
-		"mark_archive":  g.handleMarkArchive,
-		"mark_discover": g.handleMarkDiscover,
-		"mark_resolve":  g.handleMarkResolve,
+		"mark_fetch":         g.handleMarkFetch,
+		"mark_list":          g.handleMarkList,
+		"mark_versions":      g.handleMarkVersions,
+		"mark_publish":       g.handleMarkPublish,
+		"mark_append":        g.handleMarkAppend,
+		"mark_archive":       g.handleMarkArchive,
+		"mark_discover":      g.handleMarkDiscover,
+		"mark_resolve":       g.handleMarkResolve,
+		"mark_backlinks":     g.handleMarkBacklinks,
+		"mark_graph":         g.handleMarkGraph,
+		"mark_index":         g.handleMarkIndex,
+		"mark_graph_export":  g.handleMarkGraphExport,
+		"mark_graph_publish": g.handleMarkGraphPublish,
 	}
 }
 

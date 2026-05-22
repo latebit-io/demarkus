@@ -13,12 +13,12 @@ import (
 	"strings"
 
 	"github.com/latebit/demarkus/client/fetch"
+	"github.com/latebit/demarkus/client/graph"
+	"github.com/latebit/demarkus/client/graphstore"
 	"github.com/latebit/demarkus/client/internal/bookmarks"
 	"github.com/latebit/demarkus/client/internal/cache"
-	"github.com/latebit/demarkus/client/internal/graph"
-	"github.com/latebit/demarkus/client/internal/graphstore"
-	"github.com/latebit/demarkus/client/internal/links"
 	"github.com/latebit/demarkus/client/internal/tokens"
+	"github.com/latebit/demarkus/client/links"
 	"github.com/latebit/demarkus/protocol"
 )
 

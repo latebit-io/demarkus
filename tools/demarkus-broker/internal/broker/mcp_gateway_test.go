@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -226,58 +226,34 @@ func TestMCPGatewayToolsListReturnsExpected13(t *testing.T) {
 	}
 }
 
-func TestMCPGatewayToolsCallReturnsPlaceholderForUnimplemented(t *testing.T) {
-	v := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
-	ts := newTestMCPGateway(t, mcpTestConfig(), v)
+// TestMCPGatewayEveryAdvertisedToolHasAHandler is the canary
+// the placeholder test from Slices 1-4a evolved into. All 13
+// tools are real handlers now (Slice 4b+5); this test makes the
+// "no placeholder fall-throughs in production" invariant
+// permanent by asserting toolHandlers() returns a real handler
+// for every advertised tool name. A future tool definition added
+// to mcpToolNames without a matching handlers map entry fails
+// here, not at runtime.
+func TestMCPGatewayEveryAdvertisedToolHasAHandler(t *testing.T) {
+	signer := newTestSigner(t)
+	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
+	issuer := newIssuer(t, mcpTestConfig(), fake.NewSimpleClientset())
+	srv := NewServer(mcpTestConfig(), signer, verifier, issuer, nil, nil, nil)
+	gw := newMCPGateway(srv, "test", &fakeDispatcher{})
 
-	initR := mcpRequest(t, ts.URL, "alice-token", "", initializeRequest(1))
-	if initR.HTTPStatus != http.StatusOK {
-		t.Fatalf("initialize: status = %d, body = %s", initR.HTTPStatus, initR.RawBody)
+	handlers := gw.toolHandlers()
+	for _, name := range mcpToolNames {
+		if _, ok := handlers[name]; !ok {
+			t.Errorf("toolHandlers() missing entry for %q — would fall through to notImplementedHandler", name)
+		}
 	}
-	sessionID := initR.Headers[mcpSessionHeader]
-	if sessionID == "" {
-		t.Fatalf("initialize response missing %s header — cannot drive tools/call", mcpSessionHeader)
-	}
-
-	// Slice 4a lights up mark_discover + mark_resolve on top of
-	// Slices 2 + 3's six handlers; 5 tools still hit
-	// notImplementedHandler (mark_backlinks, mark_graph,
-	// mark_index, mark_graph_export, mark_graph_publish). Calling
-	// one of those (mark_backlinks) must return a structured tool
-	// error with a message naming the tool. Updating this test as
-	// placeholders peel off is the canary; deleting it once all
-	// 13 are real closes the loop.
-	resp := mcpRequest(t, ts.URL, "alice-token", sessionID, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      3,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name": "mark_backlinks",
-			"arguments": map[string]any{
-				"url": "mark://team-a/foo.md",
-			},
-		},
-	})
-	if resp.HTTPStatus != http.StatusOK {
-		t.Fatalf("tools/call: status = %d, body = %s", resp.HTTPStatus, resp.RawBody)
-	}
-	if resp.Error != nil {
-		t.Fatalf("tools/call returned JSON-RPC error envelope (should be tool-result error, not transport): %+v", resp.Error)
-	}
-	isErr, _ := resp.Result["isError"].(bool)
-	if !isErr {
-		t.Errorf("tools/call result.isError = false, want true (placeholder): %+v", resp.Result)
-	}
-	contents, _ := resp.Result["content"].([]any)
-	if len(contents) == 0 {
-		t.Fatalf("tools/call result.content empty: %+v", resp.Result)
-	}
-	text := ""
-	if first, ok := contents[0].(map[string]any); ok {
-		text, _ = first["text"].(string)
-	}
-	if !strings.Contains(text, "mark_backlinks") || !strings.Contains(text, "not yet implemented") {
-		t.Errorf("placeholder message = %q, want it to mention the tool name + \"not yet implemented\"", text)
+	// Reverse direction: catch any handler map entry whose name
+	// doesn't appear in mcpToolNames — would mean we wired a
+	// handler but never advertised the tool definition.
+	for name := range handlers {
+		if !slices.Contains(mcpToolNames, name) {
+			t.Errorf("toolHandlers() has %q but no advertised tool definition by that name", name)
+		}
 	}
 }
 

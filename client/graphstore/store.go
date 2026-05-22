@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/graph"
 	"github.com/latebit/demarkus/client/internal/tokens"
 )
 
@@ -67,8 +67,22 @@ func DefaultPath() string {
 	return filepath.Join(home, ".mark", "graph.json")
 }
 
-// Load reads a graph store from disk. Returns an empty store if the file
-// does not exist. Returns an error for other I/O or parse failures.
+// New returns an empty in-memory Store. No filesystem path is
+// associated, so Save() is a no-op — useful for callers that want
+// the graph data structure without the disk-backing (e.g. the
+// broker MCP gateway, which keeps a per-pod ephemeral store).
+// Load(path) is the right constructor for the CLI/TUI which
+// wants the disk-backing.
+func New() *Store {
+	return &Store{
+		nodes:   make(map[string]*StoredNode),
+		edgeSet: make(map[StoredEdge]struct{}),
+	}
+}
+
+// Load reads a graph store from disk. Returns an empty store if
+// the file does not exist. Returns an error for other I/O or
+// parse failures.
 func Load(path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("graphstore: empty path")
@@ -111,10 +125,19 @@ func Load(path string) (*Store, error) {
 }
 
 // Save writes the graph store to disk atomically (write tmp, rename).
+// When s.path is empty (in-memory store from New()) this is a
+// no-op so callers can treat persistence as transparent and rely
+// on the New()-constructed store for ephemeral use cases.
 // NOTE: holds RLock across marshal + disk I/O. Fine while Save is only called
 // from CrawlAndPersist (infrequent, user-triggered). If concurrent or periodic
 // saves are added, snapshot state under lock and write outside it.
 func (s *Store) Save() error {
+	if s.path == "" {
+		// In-memory store; nothing to persist. CrawlAndPersist
+		// still calls us unconditionally, so this no-op is the
+		// load-bearing part of the New() contract.
+		return nil
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

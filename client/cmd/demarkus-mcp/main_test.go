@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 
 	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/internal/graph"
-	"github.com/latebit/demarkus/client/internal/graphstore"
+	"github.com/latebit/demarkus/client/graph"
+	"github.com/latebit/demarkus/client/graphstore"
 	"github.com/latebit/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"

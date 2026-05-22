@@ -8,8 +8,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/internal/graph"
-	"github.com/latebit/demarkus/client/internal/graphstore"
+	"github.com/latebit/demarkus/client/graph"
+	"github.com/latebit/demarkus/client/graphstore"
 	"github.com/latebit/demarkus/client/internal/tokens"
 )
 

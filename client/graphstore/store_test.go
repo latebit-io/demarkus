@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/latebit/demarkus/client/internal/graph"
+	"github.com/latebit/demarkus/client/graph"
 )
 
 func TestLoadEmpty(t *testing.T) {
