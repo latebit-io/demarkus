@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -48,7 +49,7 @@ import (
 // the document itself even when the link carries a fragment.
 // parseToolURL stays strict for agent input, where a fragment
 // is a typo signal.
-func brokerCrawlParseURL(raw string) (worldName, path string, err error) {
+func brokerCrawlParseURL(raw string) (worldName, urlPath string, err error) {
 	u, parseErr := url.Parse(raw)
 	if parseErr != nil {
 		return "", "", parseErr
@@ -60,11 +61,11 @@ func brokerCrawlParseURL(raw string) (worldName, path string, err error) {
 	if worldName == "" {
 		return "", "", fmt.Errorf("missing world name in %q", raw)
 	}
-	path = u.Path
-	if path == "" {
-		path = "/"
+	urlPath = u.Path
+	if urlPath == "" {
+		urlPath = "/"
 	}
-	return worldName, path, nil
+	return worldName, urlPath, nil
 }
 
 // crawlFetchFn returns a closure suitable for
@@ -216,7 +217,7 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	worldName, path, err := parseToolURL(raw)
+	worldName, urlPath, err := parseToolURL(raw)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
@@ -234,7 +235,7 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	body := g.graphStore.Export()
 	meta := agentMetaFromClaims(claims)
 	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Publish(worldName, path, body, token, expectedVersion, meta)
+		return g.dispatcher.Publish(worldName, urlPath, body, token, expectedVersion, meta)
 	})
 	if err != nil {
 		return g.toolErrorFor("graph publish", worldName, err), nil
@@ -301,11 +302,28 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 		return block, nil
 	}
 
-	// Crawl source world. The walkDir helper handles depth
-	// recursion + the maxIndexDocuments cap.
+	// Crawl source world. The walkIndexDir helper handles depth
+	// recursion + the maxIndexDocuments cap + cycle detection.
 	var entries []index.Entry
 	sourceScheme := "mark://" + sourceWorld
-	walkErr := g.walkIndexDir(ctx, claims, sourceWorld, sourcePath, sourceScheme, &entries)
+	// visited is the cycle-detection + path-escape gate. A world
+	// that responds to LIST with directory entries linking back
+	// to ancestor paths (whether by buggy server or hostile
+	// content) would otherwise recurse forever — maxIndexDocuments
+	// bounds file appends but not directory traversal. Keyed on
+	// the canonical (path.Clean-normalized) directory path so two
+	// representations of the same dir (e.g. /docs/ and /docs)
+	// collapse to one entry.
+	visited := map[string]struct{}{}
+	// sourceRoot is the canonical form of the user-supplied
+	// starting directory. walkIndexDir refuses to recurse into
+	// paths that don't stay under it, blocking path-escape via
+	// "../" in LIST destinations.
+	sourceRoot := path.Clean(sourcePath)
+	if !strings.HasSuffix(sourceRoot, "/") {
+		sourceRoot += "/"
+	}
+	walkErr := g.walkIndexDir(ctx, claims, sourceWorld, sourcePath, sourceScheme, sourceRoot, &entries, visited)
 	if walkErr != nil && !errors.Is(walkErr, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", walkErr)), nil
 	}
@@ -400,7 +418,20 @@ func (g *mcpGateway) checkIndexManifests(ctx context.Context, claims Claims, sou
 // that fails or returns non-ok) are skipped silently — they may
 // be perfectly legitimate paths the broker's mint scope just
 // doesn't cover this call.
-func (g *mcpGateway) walkIndexDir(ctx context.Context, claims Claims, worldName, dirPath, sourceScheme string, entries *[]index.Entry) error {
+//
+// Two safety properties guard against pathological LIST
+// responses (cycles, path escapes — whether from a misbehaving
+// world or a malicious one):
+//
+//   - visited keys on canonical (path.Clean-normalized)
+//     directory paths. A directory entry linking back to an
+//     ancestor (or to itself) short-circuits before recursing.
+//   - sourceRoot is the canonical form of the user-supplied
+//     starting directory; directories whose canonical path
+//     escapes this root (e.g. via "../" in a LIST destination)
+//     are skipped silently. The index is "what's under
+//     sourcePath", not "what the world feels like serving."
+func (g *mcpGateway) walkIndexDir(ctx context.Context, claims Claims, worldName, dirPath, sourceScheme, sourceRoot string, entries *[]index.Entry, visited map[string]struct{}) error {
 	if len(*entries) >= maxIndexDocuments {
 		return errIndexTruncated
 	}
@@ -426,7 +457,27 @@ func (g *mcpGateway) walkIndexDir(ctx context.Context, claims Claims, worldName,
 		}
 		fullPath += dest
 		if strings.HasSuffix(dest, "/") {
-			if recErr := g.walkIndexDir(ctx, claims, worldName, fullPath, sourceScheme, entries); recErr != nil {
+			// Canonicalize before deciding whether to recurse.
+			// path.Clean collapses ".", ".." and double-slashes
+			// to a normalized form we can compare for cycles
+			// and check against the source root.
+			canonical := path.Clean(fullPath)
+			if !strings.HasSuffix(canonical, "/") {
+				canonical += "/"
+			}
+			if !strings.HasPrefix(canonical, sourceRoot) {
+				// Path-escape attempt (e.g., a LIST entry
+				// of "../" climbing above the source). Skip
+				// silently — the index covers the subtree
+				// the user pointed at, not the world's
+				// whole filesystem.
+				continue
+			}
+			if _, seen := visited[canonical]; seen {
+				continue
+			}
+			visited[canonical] = struct{}{}
+			if recErr := g.walkIndexDir(ctx, claims, worldName, fullPath, sourceScheme, sourceRoot, entries, visited); recErr != nil {
 				return recErr
 			}
 			continue

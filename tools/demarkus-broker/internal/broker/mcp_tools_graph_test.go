@@ -186,30 +186,170 @@ func TestHandleMarkGraphMissingURL(t *testing.T) {
 }
 
 func TestHandleMarkGraphDepthClamping(t *testing.T) {
-	// Plan: depth defaults to 2, clamps to [1, 5]. Test the
-	// extremes — depth=0 and depth=99 both get a successful
-	// crawl (clamped), but with different traversal scope.
+	// Plan: depth clamps to [1, 5]. depth=0 clamps to 1 (only
+	// the seed + its direct neighbors crawl); depth=99 clamps to
+	// 5 (the deeper graph crawls). Multi-hop graph is required
+	// to actually observe the clamp — without it, the test
+	// would pass even if depth were silently ignored.
+	//
+	// Graph shape: seed.md → child.md → grandchild.md →
+	//              greatgrandchild.md
+	// depth=1 reaches seed + child (2 crawled nodes, 1 edge).
+	// depth=5 reaches everything (4 crawled nodes, 3 edges).
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			switch path {
+			case "/seed.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("seed", "/child.md"),
+				}}, nil
+			case "/child.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("child", "/grandchild.md"),
+				}}, nil
+			case "/grandchild.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("grandchild", "/greatgrandchild.md"),
+				}}, nil
+			case "/greatgrandchild.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("greatgrandchild"),
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+
+	// depth=0 clamps to 1 — seed + its direct neighbors crawl.
+	// The crawler records EDGES to deeper targets (child → grandchild)
+	// even though grandchild itself is never fetched, so a
+	// string-presence test on the output is misleading. The
+	// load-bearing property is node count: how many docs did we
+	// actually fetch and walk into the graph store?
+	gShallow := newGatewayWithDispatcher(t, cfg, d)
+	if shallowRes, sherr := gShallow.handleMarkGraph(withAliceClaims(context.Background()), callToolReq("mark_graph", map[string]any{
+		"url":   "mark://team-a/seed.md",
+		"depth": float64(0),
+	})); sherr != nil || shallowRes.IsError {
+		t.Fatalf("shallow crawl: err=%v isError=%v", sherr, shallowRes.IsError)
+	}
+
+	// depth=99 clamps to 5 — full 4-node chain crawls.
+	gDeep := newGatewayWithDispatcher(t, cfg, d)
+	if deepRes, dherr := gDeep.handleMarkGraph(withAliceClaims(context.Background()), callToolReq("mark_graph", map[string]any{
+		"url":   "mark://team-a/seed.md",
+		"depth": float64(99),
+	})); dherr != nil || deepRes.IsError {
+		t.Fatalf("deep crawl: err=%v isError=%v", dherr, deepRes.IsError)
+	}
+
+	// The crawler creates nodes for every URL it touches, whether
+	// it fetches them or just records them as edge destinations.
+	// graph.Crawl with MaxDepth=N enqueues children of depth-(N-1)
+	// nodes but doesn't enqueue deeper. So:
+	//   shallow (MaxDepth=1): seed (depth 0) crawls; child (depth 1)
+	//   added as a node but not enqueued. → 2 nodes total.
+	//   deep (MaxDepth=5):   all 4 of the chain crawl, plus the
+	//   greatgrandchild's "no link" body adds no extras. → 4 nodes.
+	//
+	// If depth were silently ignored both gateways would produce
+	// the same NodeCount (likely the deep count since the full
+	// chain would be reachable). The strict inequality is what
+	// pins the clamp behavior.
+	if gShallow.graphStore.NodeCount() == gDeep.graphStore.NodeCount() {
+		t.Errorf("shallow node count (%d) == deep node count (%d) — depth not producing different traversal scopes",
+			gShallow.graphStore.NodeCount(), gDeep.graphStore.NodeCount())
+	}
+	if gShallow.graphStore.NodeCount() >= gDeep.graphStore.NodeCount() {
+		t.Errorf("shallow node count (%d) should be < deep node count (%d)",
+			gShallow.graphStore.NodeCount(), gDeep.graphStore.NodeCount())
+	}
+}
+
+// TestHandleMarkIndexBoundsOnDirectoryCycle pins the cycle-
+// detection guard in walkIndexDir. PR #149 review surfaced the
+// DoS shape: a LIST that links a subdirectory back to its
+// ancestor would have recursed forever before this fix.
+// maxIndexDocuments caps file appends but not the directory
+// traversal itself, so without visited-set protection an
+// adversarial (or buggy) world could pin the broker on a
+// single index call.
+func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{
+		Name:         "hub",
+		Namespace:    "hub",
+		TokensSecret: "hub-tokens",
+		Allow:        AllowConfig{Domains: []string{"example.com"}},
+		DefaultToken: TokenScope{
+			Paths:        []string{"/*"},
+			Operations:   []string{"read", "publish"},
+			ExpiresAfter: cfg.Worlds[0].DefaultToken.ExpiresAfter,
+		},
+	})
+	var listCalls atomic.Int32
+	d := &fakeDispatcher{
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   indexManifestBody,
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+		listFn: func(_, _, _ string) (fetch.Result, error) {
+			n := listCalls.Add(1)
+			// Sanity cap: if the fix is broken, this will fire
+			// thousands of times before any test timeout. Fail
+			// loud at 100 LIST calls so the test fails in
+			// seconds rather than hanging.
+			if n > 100 {
+				t.Errorf("walkIndexDir called LIST %d times on a cyclic graph — cycle detection regressed", n)
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+			}
+			// Pathological LIST body: a subdirectory link that
+			// points back to the parent. Without cycle
+			// detection this would recurse indefinitely.
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
-				Body:   "# no links",
+				Body:   "- [self](./)\n- [parent](../)\n",
+			}}, nil
+		},
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "1"},
 			}}, nil
 		},
 	}
-	for _, depth := range []any{float64(0), float64(99)} {
-		g := newGatewayWithDispatcher(t, cfg, d)
-		res, err := g.handleMarkGraph(withAliceClaims(context.Background()), callToolReq("mark_graph", map[string]any{
-			"url":   "mark://team-a/seed.md",
-			"depth": depth,
-		}))
-		if err != nil {
-			t.Fatalf("depth=%v: %v", depth, err)
-		}
-		if res.IsError {
-			t.Errorf("depth=%v isError=true: %s", depth, toolResultText(t, res))
-		}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
+		"source": "mark://team-a/",
+		"target": "mark://hub/index.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkIndex: %v", err)
+	}
+	if res.IsError {
+		// Acceptable if the cycle scenario produces an error
+		// envelope, as long as we didn't recurse indefinitely.
+		// What's NOT acceptable is a hang or runaway LIST count.
+		t.Logf("index returned tool error (acceptable for cycle scenario): %s", toolResultText(t, res))
+	}
+	// Two source LISTs are reasonable: one for the initial
+	// dirPath, plus possibly the "./" entry recursing once into
+	// the canonicalized same path (which then dedupes). The
+	// "../" entry should be rejected by the path-escape guard
+	// without ever LIST-ing. The sanity cap above catches any
+	// regression that lets recursion run free.
+	if n := listCalls.Load(); n > 5 {
+		t.Errorf("LIST called %d times on a cyclic source — cycle/escape guard not bounding recursion tightly enough", n)
 	}
 }
 
