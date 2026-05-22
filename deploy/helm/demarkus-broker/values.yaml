@@ -125,8 +125,12 @@ server:
     #      deployment topology bypasses the Ingress entirely.
     #
     # The Secret must be a kubernetes.io/tls Secret (data keys
-    # `tls.crt` + `tls.key`). The chart fails template-render if
-    # existingSecretRef is set with the wrong shape.
+    # `tls.crt` + `tls.key`). The chart only references the Secret
+    # by NAME at render time; a wrong type (Opaque instead of
+    # kubernetes.io/tls) or missing data keys surface later as a
+    # `CreateContainerConfigError` when the kubelet tries to project
+    # the volume at pod startup. Verify the Secret shape out of band
+    # before pointing the chart at it.
     tls:
       existingSecretRef:
         # Name of the kubernetes.io/tls Secret in the release

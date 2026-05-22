@@ -24,6 +24,16 @@
 {{- $mgmtTLSSecret = printf "%s-tls" (include "demarkus-broker.fullname" .) -}}
 {{- end -}}
 {{- $mcpHost := .Values.ingress.mcp.host -}}
+{{- /* The MCP gateway routes through a SEPARATE hostname from the
+       management API; collocating them on the same host would mean
+       two Ingress rules backing different Service ports for the
+       same hostname (controller-dependent precedence, undefined
+       across implementations) AND would reintroduce the very
+       /.well-known/* collision the split-host topology exists to
+       avoid. Fail render rather than ship an ambiguous Ingress. */ -}}
+{{- if and $mcpHost (eq $mcpHost .Values.ingress.host) -}}
+{{- fail "ingress.mcp.host must differ from ingress.host (split-hostname topology — see README § MCP gateway)" -}}
+{{- end -}}
 {{- $mcpTLSSecret := "" -}}
 {{- if $mcpHost -}}
 {{- if .Values.ingress.mcp.tls.existingSecret -}}

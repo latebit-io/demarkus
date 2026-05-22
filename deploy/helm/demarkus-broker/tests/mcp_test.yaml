@@ -227,6 +227,30 @@ tests:
       - failedTemplate:
           errorMessage: "server.mcp.addr must differ from server.port (management API and MCP gateway bind distinct listeners)"
 
+  - it: fail-render when server.mcp.addr binds same port via 0.0.0.0 form (numeric compare, not string)
+    template: secret-config.yaml
+    set:
+      server.mcp.addr: "0.0.0.0:8080"
+    asserts:
+      - failedTemplate:
+          errorMessage: "server.mcp.addr must differ from server.port (management API and MCP gateway bind distinct listeners)"
+
+  - it: fail-render when server.mcp.addr has a non-numeric port suffix
+    template: service.yaml
+    set:
+      server.mcp.addr: ":abc"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'server.mcp.addr ":abc" has a non-numeric port suffix "abc"'
+
+  - it: fail-render when server.mcp.addr port is out of legal range
+    template: service.yaml
+    set:
+      server.mcp.addr: ":99999"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'server.mcp.addr ":99999" port 99999 is outside the legal 1..65535 range'
+
   # Ingress.mcp host topology: separate hostname, separate TLS Secret.
 
   - it: Ingress with no ingress.mcp.host has only the management rule
@@ -309,6 +333,16 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "ingress.mcp.tls.existingSecret and ingress.mcp.tls.certManager.enabled are mutually exclusive; set exactly one"
+
+  - it: fail-render when ingress.mcp.host equals ingress.host (collocated hosts forbidden)
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.mcp.host: broker.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.mcp.host must differ from ingress.host (split-hostname topology — see README § MCP gateway)"
 
   - it: parallel cert-manager Certificates emit when both hosts configured
     template: certificate.yaml

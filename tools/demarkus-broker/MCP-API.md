@@ -61,7 +61,7 @@ that the demarkus-server already manages.
 
 Every tool that addresses a world uses the URL shape:
 
-```
+```text
 mark://{worldName}/{path}
 ```
 
@@ -200,8 +200,10 @@ hub manifest unless `force: true`.
 
 ### Graph store (ephemeral)
 
-> **The broker's graph store is in-memory only and per-pod-lifetime.**
-> A broker restart drops every cached graph. Re-run `mark_graph` to
+> **The broker's graph store is in-memory only and pod-scoped.**
+> Any event that recycles the broker pod — Helm rollout, OOMKill,
+> node drain or eviction, kubelet restart — drops every cached
+> graph. Re-run `mark_graph` against the relevant worlds to
 > re-populate. This is a deliberate trade-off documented under
 > "Ephemeral graph store" in the chart README — bucket-store-backed
 > persistence is parked for the post-broker design window.

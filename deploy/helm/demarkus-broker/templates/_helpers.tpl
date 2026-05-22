@@ -106,7 +106,20 @@ on bind.
 {{- if not $port -}}
 {{- fail (printf "server.mcp.addr %q has no parseable port suffix" $addr) -}}
 {{- end -}}
-{{- $port | int -}}
+{{- /* Sprig's `int` is a best-effort cast that silently coerces
+       non-numeric strings to 0 (`{{ "abc" | int }}` → 0). Letting
+       a typo in server.mcp.addr (e.g. `:abc`, `localhost`, missing
+       colon) sail through would render containerPort: 0 and crash
+       the pod with no breadcrumb. Validate the suffix is purely
+       digits and within the legal port range BEFORE casting. */ -}}
+{{- if not (regexMatch "^[0-9]+$" $port) -}}
+{{- fail (printf "server.mcp.addr %q has a non-numeric port suffix %q" $addr $port) -}}
+{{- end -}}
+{{- $portInt := $port | int -}}
+{{- if or (lt $portInt 1) (gt $portInt 65535) -}}
+{{- fail (printf "server.mcp.addr %q port %d is outside the legal 1..65535 range" $addr $portInt) -}}
+{{- end -}}
+{{- $portInt -}}
 {{- end -}}
 
 {{/*
