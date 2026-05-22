@@ -22,9 +22,28 @@ Secrets and tracking ownership in a broker-namespace issuances Secret.
   filesystem, all capabilities dropped, seccomp RuntimeDefault.
 - Optional `Ingress` (default `ingressClassName: nginx`) with optional
   cert-manager-managed TLS Certificate.
+- **MCP gateway** (always-on, listens on `:8081` by default) exposing
+  the 13-tool demarkus surface to plugin-style agents over JSON-RPC
+  over Streamable HTTP. Identity is the company SSO `id_token` bearer;
+  world access-tokens are minted lazily per-session and never
+  persisted. See [MCP gateway](#mcp-gateway).
 - TopologySpreadConstraints to keep replicas off the same node.
 
 ## Endpoint surface
+
+The broker exposes two distinct HTTP listeners on the pod, fronted by
+the same Ingress controller through different hostnames:
+
+| Listener | Default port | Default Ingress host | Purpose |
+| --- | --- | --- | --- |
+| Management API | `:8080` (`server.port`) | `ingress.host` | OIDC login + device flow + token management + `/me/install` (see table below). |
+| MCP gateway | `:8081` (`server.mcp.addr`) | `ingress.mcp.host` (optional) | 13-tool demarkus surface over JSON-RPC/Streamable HTTP for plugin agents. See [MCP gateway](#mcp-gateway). |
+
+The two listeners share auth (`compositeVerifier`), rate-limit
+buckets (per-canonical-email), and the `Issuer` machinery — only the
+wire shape (JSON-RPC vs REST) differs.
+
+## Management API endpoint surface
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
@@ -89,6 +108,190 @@ Notes:
   Broker-signed tokens come from the device-flow refresh grant; IdP-
   signed tokens come from the device-flow completion. The broker's
   composite verifier dispatches by `kid`.
+
+## MCP gateway
+
+The MCP gateway is the broker's HTTPS-fronted JSON-RPC surface for
+plugin-style agents (Claude Code, IDE integrations, anything
+speaking the Model Context Protocol). One MCP server entry on the
+client connects the agent to every world the operator has
+configured under `worlds[]` — no per-world client setup. The
+gateway translates HTTPS/JSON-RPC at the org boundary into QUIC/Mark
+Protocol inside the cluster, so corporate networks that block UDP
+reach the universe over standard `:443`.
+
+### Always-on
+
+The gateway is part of the binary, not a feature flag. Every broker
+listens on `server.mcp.addr` (default `:8081`); the chart's Service
+exposes the port as `mcp`; the NetworkPolicy admits ingress on it.
+Existing deployments upgrading the chart pick up the listener
+silently — no `mcp.enabled` knob to set. To keep the listener
+cluster-internal, leave `ingress.mcp.host` blank; the port is still
+admitted from the ingress-controller namespace by the
+NetworkPolicy but no external rule routes traffic to it.
+
+### Hostname topology
+
+The MCP gateway routes through a SEPARATE hostname from the
+management API. The chart's `ingress.yaml` adds a second rule + TLS
+block to the same Ingress resource when `ingress.mcp.host` is set,
+backed by the Service's `mcp` port.
+
+```yaml
+ingress:
+  enabled: true
+  host: broker.acme.com          # management API
+  tls:
+    certManager:
+      enabled: true              # cert-manager mints broker.acme.com TLS
+  mcp:
+    host: mcp.broker.acme.com    # MCP gateway
+    tls:
+      certManager:
+        enabled: true            # cert-manager mints mcp.broker.acme.com TLS
+```
+
+Splitting the hosts avoids `.well-known/*` path collisions: the
+management API serves `/.well-known/openid-configuration` and
+`/.well-known/jwks.json` for OIDC discovery, while the MCP gateway
+serves `/.well-known/oauth-protected-resource` (RFC 9728) and
+`/.well-known/oauth-authorization-server` (RFC 8414) for OAuth
+metadata. Two hostnames, two TLS contexts, no path-routing
+fragility, and operators rotate certs on either side independently.
+
+### TLS termination
+
+Two supported modes. **Pick one per surface.**
+
+| Mode | Operator action | Where TLS terminates |
+| --- | --- | --- |
+| **Ingress-terminated** (recommended) | Configure `ingress.mcp.tls.{existingSecret,certManager}` as above. Leave `server.mcp.tls.existingSecretRef.name` blank. | At the Ingress controller. Broker speaks plain HTTP inside the cluster. Matches the management API's posture. |
+| **Broker-terminated** | Provision a `kubernetes.io/tls` Secret in the broker's namespace and set `server.mcp.tls.existingSecretRef.name=<secret>`. | At the broker pod. Chart mounts the Secret read-only at `/etc/demarkus-broker/tls/mcp/` and points `MCPConfig.TLS.{CertFile,KeyFile}` at the projected `tls.crt` / `tls.key`. Use when the topology bypasses the Ingress or requires mTLS broker→Ingress. |
+
+There is intentionally no in-line PEM mode (`brokerSigningKey`-style
+cleartext) for the MCP listener: a TLS private key in helm release
+history is never acceptable, even for dev. Use `existingSecretRef`
+or terminate at the Ingress.
+
+### Plugin-side flow
+
+The next slice ships a `/knowledge-join` slash command in the
+`demarkus-memory` Claude Code plugin. Operators direct users to:
+
+```
+/knowledge-join https://mcp.broker.acme.com
+```
+
+The plugin validates the broker URL by fetching
+`/.well-known/oauth-protected-resource`, derives a per-org slug from
+the hostname, and runs `claude mcp add --transport http {slug}
+{url}/mcp`. The Claude Code OAuth device flow handles the first-time
+identity exchange against the broker's existing
+`/device/authorize` + `/device/token` endpoints (universe-onboarding
+PR3+PR4). After that the plugin sees all 13 demarkus tools as one
+MCP server.
+
+### OAuth flow shape
+
+The gateway implements MCP's [authorization
+spec](https://modelcontextprotocol.io/specification/2024-11-05/basic/authorization)
+using the broker's existing OIDC machinery:
+
+- `GET /.well-known/oauth-protected-resource` (RFC 9728) — declares
+  the resource server and points clients at the authorization-server
+  metadata.
+- `GET /.well-known/oauth-authorization-server` (RFC 8414) —
+  authorization-server metadata. Aliases the broker's existing OIDC
+  Discovery handler (`/.well-known/openid-configuration` on the
+  management API) so the broker advertises itself as both the MCP
+  resource server AND the authorization server. The actual IdP
+  (Google, Okta, Entra) is one hop deeper, handled by the broker's
+  existing PR3 device-flow + PR4 refresh-grant code.
+- `POST /mcp` — single JSON-RPC endpoint. Unauthenticated requests
+  receive `401 + WWW-Authenticate: Bearer
+  resource_metadata="...oauth-protected-resource"` per RFC 6750 +
+  RFC 9728, so a fresh client knows where to start the auth flow.
+- All authenticated tool calls present `Authorization: Bearer
+  <id_token>`. The broker validates via the existing PR4
+  `compositeVerifier` (accepts both broker-signed and IdP-signed
+  tokens), extracts `email` + `email_verified`, **rejects unverified
+  emails** (matches `Issuer.ErrEmailUnverified`), and canonicalizes
+  the email (trim + lowercase) as the session-cache key.
+
+### Rate-limit behavior
+
+The gateway's rate limiter is the same per-canonical-email bucket
+the management API's `/tokens` family uses. A single user calling
+both the MCP gateway and the management API shares one bucket — an
+abusive identity cannot multiply its effective rate by fanning out
+across surfaces. Defaults from `rateLimit.tokens`: 10/min per
+email, burst 5. The 401 + 429 envelope shape is the same on either
+listener.
+
+### Ephemeral graph store
+
+**The broker's graph store (used by `mark_backlinks`, `mark_graph`,
+`mark_graph_export`, `mark_graph_publish`) lives in process memory
+and does NOT survive broker pod restarts.** A rolling chart upgrade,
+node drain, or pod eviction drops every cached graph. The first
+user to call a graph-store tool after restart triggers a fresh
+crawl via `mark_graph` (or whatever federation tool needs the
+data); the broker re-populates and continues. Operators planning
+maintenance windows should expect a few seconds of cold-start
+latency on the first graph-tool call after a bounce, and document
+the re-crawl as expected behavior for end users.
+
+This is a deliberate trade-off: a stateless broker pod is restart-
+resilient, multi-replica-safe, and matches the gateway's framing as
+a wire-shape adapter rather than a persistent protocol surface. A
+bucket-store-backed persistent graph is on the radar for the
+post-broker design window (see `/thoughts.md` § "On Bucket Stores")
+but is not part of the chart today.
+
+### Session cache + first-mint propagation
+
+The broker caches per-email world access-tokens in memory. Defaults
+sized for an enterprise universe: 10k unique users × 5 worlds × ~200
+bytes/token ≈ 10MB at saturation. Tune `server.mcp.maxSessions` and
+`server.mcp.sessionMaxIdle` if your population is materially larger
+or your idle profile differs.
+
+The `firstMintMax*` / `firstMintInitialBackoff` / `firstMintMaxBackoff`
+knobs govern a broker-side retry loop that absorbs the kubelet →
+world-Secret projection lag. When the broker lazily mints a new
+world token, the world's projected `tokens.toml` volume may not
+refresh before the next tool call, and the world will 401. The
+retry loop re-dispatches with exponential backoff (default 6
+attempts, 250ms → 8s) only on `unauthorized` responses for
+just-minted tokens; genuine permission denials and cache-hit 401s
+take separate paths. Defaults sit well under the typical kubelet
+sync period; tune up only for slow-kubelet clusters.
+
+### Operator reference: 13-tool surface
+
+See `tools/demarkus-broker/MCP-API.md` in the repo for the full
+tool reference (names, JSON schemas, semantics).
+
+### Upgrade notes
+
+Pre-gateway deployments upgrading this chart pick up the MCP
+listener silently:
+
+- Deployment grows a `mcp` containerPort on `:8081`.
+- Service grows a `mcp` port routing to the named containerPort.
+- NetworkPolicy admits ingress on the MCP port from the same
+  ingress-controller namespace already configured for the
+  management API.
+- The rendered `config.yaml` carries the MCP block; existing
+  deployments without operator overrides get the chart defaults.
+- No new RBAC: the broker SA already has the perms it needs (the
+  issuances Secret + world tokens Secrets that lazy-mint touches).
+- Worlds[] entries get an `internalAddress: ""` field. Empty string
+  preserves the default `<name>.<namespace>.svc.cluster.local:6309`
+  Service-DNS resolution the gateway uses for tool dispatch.
+- External exposure requires setting `ingress.mcp.host` (and TLS).
+  Without it, the listener stays cluster-internal.
 
 ## Quick install (development)
 

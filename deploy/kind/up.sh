@@ -28,7 +28,7 @@ RELEASE="${RELEASE:-world-default}"
 SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.17.9}"
 SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
 BROKER_RELEASE="${BROKER_RELEASE:-broker}"
-BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.1.3}"
+BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.1.15}"
 BROKER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-broker"
 # Ephemeral curl pod image used by the Stage 4 mint smoke test. Pinned so
 # behavior is reproducible across hosts; busybox sh + curl is all we need.
@@ -57,21 +57,30 @@ APPLICATIONSET_MANIFEST="$REPO_ROOT/deploy/k8s/examples/applicationset.yaml"
 
 WITH_BROKER=false
 WITH_ARGO=false
+WITH_MCP_SMOKE=false
 for arg in "$@"; do
   case "$arg" in
-    --with-broker) WITH_BROKER=true ;;
-    --with-argo)   WITH_ARGO=true ;;
+    --with-broker)   WITH_BROKER=true ;;
+    --with-argo)     WITH_ARGO=true ;;
+    --with-mcp-smoke) WITH_MCP_SMOKE=true ;;
     -h|--help)
       cat <<EOF
-usage: up.sh [--with-broker] [--with-argo]
+usage: up.sh [--with-broker] [--with-argo] [--with-mcp-smoke]
 
-  --with-broker    install mock-oauth2-server + demarkus-broker chart
-  --with-argo      install Argo CD + ApplicationSet templating two worlds
-                   (replaces the Stage 1 server install)
+  --with-broker     install mock-oauth2-server + demarkus-broker chart
+  --with-argo       install Argo CD + ApplicationSet templating two worlds
+                    (replaces the Stage 1 server install)
+  --with-mcp-smoke  rebuild the broker image from this checkout,
+                    sideload it into kind, install the LOCAL broker
+                    chart (deploy/helm/demarkus-broker) with that image,
+                    and run smoke checks against the MCP gateway
+                    listener (\${BROKER_RELEASE}-...:8081). Requires
+                    --with-broker; not compatible with --with-argo
+                    (Stage 4 expects the published chart artifact).
 
-  Combine both for Stage 4: Argo-managed worlds + broker wired across
-  them. up.sh then drives a full OIDC mint flow via curl and asserts
-  tokens land in BOTH world Secrets.
+  Combine --with-broker + --with-argo for Stage 4: Argo-managed worlds
+  + broker wired across them. up.sh then drives a full OIDC mint flow
+  via curl and asserts tokens land in BOTH world Secrets.
 
 env overrides:
   CLUSTER, NAMESPACE, RELEASE, SERVER_CHART_VERSION,
@@ -85,6 +94,22 @@ EOF
   esac
 done
 
+if [[ "$WITH_MCP_SMOKE" == "true" ]]; then
+  if [[ "$WITH_BROKER" != "true" ]]; then
+    echo "--with-mcp-smoke requires --with-broker" >&2
+    exit 2
+  fi
+  if [[ "$WITH_ARGO" == "true" ]]; then
+    # Stage 4 pulls the published broker chart from OCI and pins its
+    # version for reproducibility. Mixing in a local-chart/local-image
+    # build would invert that invariant. Run the MCP smoke against
+    # Stage 2 instead, then layer Argo on a separate harness invocation
+    # if both shapes are needed.
+    echo "--with-mcp-smoke is not compatible with --with-argo (Stage 4 pins the OCI chart)" >&2
+    exit 2
+  fi
+fi
+
 require() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "missing required tool: $1" >&2
@@ -96,6 +121,10 @@ require kind
 require helm
 require kubectl
 require openssl
+if [[ "$WITH_MCP_SMOKE" == "true" ]]; then
+  require docker
+  require make
+fi
 
 # ensure_broker_signing_key generates a fresh ECDSA P-256 PEM and
 # applies it as a Kubernetes Secret named `broker-signing-key`
@@ -390,22 +419,97 @@ if [[ "$WITH_BROKER" == "true" ]]; then
 
   ensure_broker_signing_key "$NAMESPACE"
 
-  echo "--- installing demarkus-broker chart $BROKER_CHART_VERSION"
-  # helm install --wait blocks on the broker's readiness probe, which hits
-  # /readyz. /readyz only flips green after OIDC discovery + JWKS fetch
-  # against the mock issuer have completed, so a successful install here
-  # already proves discovery works end-to-end.
-  helm upgrade --install "$BROKER_RELEASE" "$BROKER_CHART" \
-    --version "$BROKER_CHART_VERSION" \
-    --namespace "$NAMESPACE" --create-namespace \
-    --values "$BROKER_VALUES_FILE" \
-    --wait --timeout 5m
+  if [[ "$WITH_MCP_SMOKE" == "true" ]]; then
+    # --with-mcp-smoke replaces the OCI broker install with a local-chart
+    # + locally-built-image install so the MCP smoke checks below actually
+    # exercise THIS BRANCH's chart wiring (server.mcp.*, the `mcp`
+    # Service port, the NetworkPolicy port admission). Image tag is
+    # ephemeral so subsequent --with-mcp-smoke runs always rebuild from
+    # the current checkout.
+    MCP_SMOKE_IMAGE_REGISTRY=demarkus-mcp-smoke
+    MCP_SMOKE_IMAGE_TAG="local-$(date +%s)"
+    echo "--- building demarkus-broker image $MCP_SMOKE_IMAGE_REGISTRY/demarkus-broker:$MCP_SMOKE_IMAGE_TAG"
+    ( cd "$REPO_ROOT" && \
+        make image-broker "IMAGE_REGISTRY=$MCP_SMOKE_IMAGE_REGISTRY" "TAG=$MCP_SMOKE_IMAGE_TAG" )
+    echo "--- sideloading image into kind cluster $CLUSTER"
+    kind load docker-image "$MCP_SMOKE_IMAGE_REGISTRY/demarkus-broker:$MCP_SMOKE_IMAGE_TAG" --name "$CLUSTER"
+
+    echo "--- installing LOCAL demarkus-broker chart from $REPO_ROOT/deploy/helm/demarkus-broker"
+    helm upgrade --install "$BROKER_RELEASE" "$REPO_ROOT/deploy/helm/demarkus-broker" \
+      --namespace "$NAMESPACE" --create-namespace \
+      --values "$BROKER_VALUES_FILE" \
+      --set "image.repository=$MCP_SMOKE_IMAGE_REGISTRY/demarkus-broker" \
+      --set "image.tag=$MCP_SMOKE_IMAGE_TAG" \
+      --set "image.pullPolicy=IfNotPresent" \
+      --wait --timeout 5m
+  else
+    echo "--- installing demarkus-broker chart $BROKER_CHART_VERSION"
+    # helm install --wait blocks on the broker's readiness probe, which hits
+    # /readyz. /readyz only flips green after OIDC discovery + JWKS fetch
+    # against the mock issuer have completed, so a successful install here
+    # already proves discovery works end-to-end.
+    helm upgrade --install "$BROKER_RELEASE" "$BROKER_CHART" \
+      --version "$BROKER_CHART_VERSION" \
+      --namespace "$NAMESPACE" --create-namespace \
+      --values "$BROKER_VALUES_FILE" \
+      --wait --timeout 5m
+  fi
 
   BROKER_POD_SELECTOR="app.kubernetes.io/instance=$BROKER_RELEASE,app.kubernetes.io/name=demarkus-broker"
   BROKER_POD=$(kubectl -n "$NAMESPACE" get pods -l "$BROKER_POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
   if [[ -z "$BROKER_POD" ]]; then
     echo "no demarkus-broker pod found for selector: $BROKER_POD_SELECTOR" >&2
     exit 1
+  fi
+
+  if [[ "$WITH_MCP_SMOKE" == "true" ]]; then
+    # MCP gateway smoke checks. We deliberately do NOT drive a full
+    # initialize/tools/call flow here — that requires an id_token bearer
+    # obtained via the device-flow exchange + a mint round trip, which
+    # is the natural test surface for Slice 8's /knowledge-join slash
+    # command. These three checks prove the chart's MCP listener is:
+    #   1. bound (port 8081 reachable through the Service)
+    #   2. serving RFC 9728 OAuth metadata (well-known endpoint)
+    #   3. enforcing auth on /mcp (401 + WWW-Authenticate challenge)
+    # That is the smallest evidence that Slice 7's chart wiring works.
+    echo "--- driving MCP gateway smoke checks from an ephemeral curl pod"
+    BROKER_MCP_URL="http://$BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8081"
+    kubectl run -n "$NAMESPACE" mcp-smoke --rm -i --restart=Never \
+      --image="$MINT_CURL_IMAGE" --command -- sh -c '
+set -eu
+BROKER_MCP='"$BROKER_MCP_URL"'
+CURL="curl -sS --connect-timeout 5 --max-time 15"
+
+# Wait for the MCP Service endpoint to be reachable. Service object
+# Endpoints can lag the Pod-Ready transition by a beat or two even
+# after helm --wait returns, so a curl on a fresh pod can race.
+for attempt in $(seq 1 15); do
+  HTTP=$($CURL -o /dev/null -w "%{http_code}" "$BROKER_MCP/.well-known/oauth-protected-resource" 2>/dev/null || echo "")
+  if [ "$HTTP" = "200" ]; then break; fi
+  sleep 2
+done
+
+# 1. RFC 9728 metadata endpoint. Returns the resource server
+#    identity + a pointer at the auth-server metadata. No auth.
+META=$($CURL "$BROKER_MCP/.well-known/oauth-protected-resource")
+echo "$META" | grep -q "resource" || { echo "FAIL: oauth-protected-resource missing resource field"; echo "$META"; exit 1; }
+echo "OK: /.well-known/oauth-protected-resource"
+
+# 2. RFC 8414 metadata endpoint. Auth-server metadata — aliases
+#    the broker OIDC Discovery handler. Plain GET, no auth.
+META=$($CURL "$BROKER_MCP/.well-known/oauth-authorization-server")
+echo "$META" | grep -q "issuer" || { echo "FAIL: oauth-authorization-server missing issuer field"; echo "$META"; exit 1; }
+echo "OK: /.well-known/oauth-authorization-server"
+
+# 3. /mcp without auth must 401 with a WWW-Authenticate challenge
+#    per RFC 6750 + RFC 9728 — point fresh clients at the metadata
+#    endpoint they need to bootstrap the auth flow.
+HDR=$($CURL -D - -o /dev/null -X POST "$BROKER_MCP/mcp" -H "Content-Type: application/json" -d "{}")
+echo "$HDR" | grep -qi "^HTTP/.* 401" || { echo "FAIL: POST /mcp without bearer did not 401"; echo "$HDR"; exit 1; }
+echo "$HDR" | grep -qi "^WWW-Authenticate: Bearer" || { echo "FAIL: 401 response missing WWW-Authenticate: Bearer"; echo "$HDR"; exit 1; }
+echo "OK: POST /mcp 401 + WWW-Authenticate"
+'
+    echo "--- MCP gateway smoke checks passed"
   fi
 
   cat <<EOF
@@ -419,12 +523,17 @@ broker release: $BROKER_RELEASE
 broker pod:     $BROKER_POD
 server svc:     $RELEASE-demarkus-server.$NAMESPACE.svc.cluster.local:6309 (UDP)
 broker svc:     $BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8080 (HTTP)
+broker MCP svc: $BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8081 (HTTP)
 mock OIDC:      mock-oauth2-server.$NAMESPACE.svc.cluster.local:8080/default
 
 probe the broker (from another shell):
   kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE-demarkus-broker 8080:8080
   curl http://localhost:8080/healthz
   curl http://localhost:8080/readyz
+
+probe the MCP gateway:
+  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE-demarkus-broker 8081:8081
+  curl http://localhost:8081/.well-known/oauth-protected-resource
 
 server fetch from inside the cluster:
   kubectl -n $NAMESPACE exec -it $POD -- \\

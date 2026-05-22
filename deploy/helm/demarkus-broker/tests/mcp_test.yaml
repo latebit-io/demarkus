@@ -1,0 +1,399 @@
+suite: mcp gateway
+templates:
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+  - ingress.yaml
+  - certificate.yaml
+  - secret-config.yaml
+release:
+  namespace: broker-ns
+set:
+  oidc.issuer: https://accounts.example.com
+  oidc.clientID: broker-app
+  oidc.clientSecret: shh
+  oidc.redirectURL: https://broker.example.com/auth/callback
+  oidc.brokerSigningKey: "test-pem-placeholder"
+  server.publicURL: https://broker.example.com
+tests:
+  # Deployment: always-on MCP containerPort + optional TLS volume.
+
+  - it: deployment exposes `mcp` containerPort derived from server.mcp.addr (default :8081)
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: mcp
+            protocol: TCP
+            containerPort: 8081
+
+  - it: server.mcp.addr override flows through to the MCP containerPort
+    template: deployment.yaml
+    set:
+      server.mcp.addr: ":9443"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: mcp
+            protocol: TCP
+            containerPort: 9443
+
+  - it: MCP TLS volume absent by default (no existingSecretRef.name)
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          any: true
+          content:
+            name: mcp-tls
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          any: true
+          content:
+            name: mcp-tls
+            mountPath: /etc/demarkus-broker/tls/mcp
+            readOnly: true
+
+  - it: MCP TLS volume + mount projected when existingSecretRef.name set
+    template: deployment.yaml
+    set:
+      server.mcp.tls.existingSecretRef.name: my-mcp-tls
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: mcp-tls
+            mountPath: /etc/demarkus-broker/tls/mcp
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: mcp-tls
+            secret:
+              secretName: my-mcp-tls
+              items:
+                - key: tls.crt
+                  path: tls.crt
+                - key: tls.key
+                  path: tls.key
+
+  # Service: always-on mcp port aligned to the deployment's named containerPort.
+
+  - it: Service exposes `http` and `mcp` named ports, both default
+    template: service.yaml
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            name: http
+            protocol: TCP
+            port: 8080
+            targetPort: http
+      - contains:
+          path: spec.ports
+          content:
+            name: mcp
+            protocol: TCP
+            port: 8081
+            targetPort: mcp
+
+  - it: server.mcp.addr override flows through the Service port too
+    template: service.yaml
+    set:
+      server.mcp.addr: ":9443"
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            name: mcp
+            protocol: TCP
+            port: 9443
+            targetPort: mcp
+
+  # NetworkPolicy: ingress admits both ports from the same ingress namespace.
+
+  - it: NetworkPolicy admits MCP port alongside management API port
+    template: networkpolicy.yaml
+    asserts:
+      - contains:
+          path: spec.ingress[0].ports
+          content:
+            protocol: TCP
+            port: 8080
+      - contains:
+          path: spec.ingress[0].ports
+          content:
+            protocol: TCP
+            port: 8081
+
+  # Secret-config: the rendered config.yaml carries the MCP block.
+
+  - it: config.yaml renders the mcp block with defaults
+    template: secret-config.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*sessionMaxIdle: "1h"\s*\n\s*maxSessions: 10000\s*\n\s*firstMintMaxAttempts: 6\s*\n\s*firstMintInitialBackoff: "250ms"\s*\n\s*firstMintMaxBackoff: "8s"'
+
+  - it: config.yaml omits mcp.tls block when no existingSecretRef set
+    template: secret-config.yaml
+    asserts:
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'certFile:'
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'keyFile:'
+
+  - it: config.yaml emits mcp.tls cert/key paths when existingSecretRef set
+    template: secret-config.yaml
+    set:
+      server.mcp.tls.existingSecretRef.name: my-mcp-tls
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'tls:\s*\n\s*certFile: "/etc/demarkus-broker/tls/mcp/tls.crt"\s*\n\s*keyFile: "/etc/demarkus-broker/tls/mcp/tls.key"'
+
+  - it: mcp.sessionMaxIdle override flows through
+    template: secret-config.yaml
+    set:
+      server.mcp.sessionMaxIdle: 30m
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'sessionMaxIdle: "30m"'
+
+  - it: mcp.firstMint* knobs all override into the rendered config
+    template: secret-config.yaml
+    set:
+      server.mcp.firstMintMaxAttempts: 3
+      server.mcp.firstMintInitialBackoff: 100ms
+      server.mcp.firstMintMaxBackoff: 1s
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'firstMintMaxAttempts: 3'
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'firstMintInitialBackoff: "100ms"'
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'firstMintMaxBackoff: "1s"'
+
+  # worlds[].internalAddress: stable shape, override flows through.
+
+  - it: world without internalAddress renders an empty internalAddress field
+    template: secret-config.yaml
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'internalAddress: ""'
+
+  - it: world internalAddress override flows through
+    template: secret-config.yaml
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          internalAddress: "team-a-mark.team-a:6309"
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'internalAddress: "team-a-mark.team-a:6309"'
+
+  # Fail-fast guards.
+
+  - it: fail-render when server.mcp.addr collides with server.port
+    template: secret-config.yaml
+    set:
+      server.mcp.addr: ":8080"
+    asserts:
+      - failedTemplate:
+          errorMessage: "server.mcp.addr must differ from server.port (management API and MCP gateway bind distinct listeners)"
+
+  - it: fail-render when server.mcp.addr binds same port via 0.0.0.0 form (numeric compare, not string)
+    template: secret-config.yaml
+    set:
+      server.mcp.addr: "0.0.0.0:8080"
+    asserts:
+      - failedTemplate:
+          errorMessage: "server.mcp.addr must differ from server.port (management API and MCP gateway bind distinct listeners)"
+
+  - it: fail-render when server.mcp.addr has a non-numeric port suffix
+    template: service.yaml
+    set:
+      server.mcp.addr: ":abc"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'server.mcp.addr ":abc" has a non-numeric port suffix "abc"'
+
+  - it: fail-render when server.mcp.addr port is out of legal range
+    template: service.yaml
+    set:
+      server.mcp.addr: ":99999"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'server.mcp.addr ":99999" port 99999 is outside the legal 1..65535 range'
+
+  # Ingress.mcp host topology: separate hostname, separate TLS Secret.
+
+  - it: Ingress with no ingress.mcp.host has only the management rule
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: broker.example.com
+      - notExists:
+          path: spec.rules[1]
+
+  - it: Ingress with ingress.mcp.host adds a second rule routing to the mcp Service port
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.mcp.host: mcp.broker.example.com
+    asserts:
+      - equal:
+          path: spec.rules[1].host
+          value: mcp.broker.example.com
+      - equal:
+          path: spec.rules[1].http.paths[0].path
+          value: /
+      - equal:
+          path: spec.rules[1].http.paths[0].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[1].http.paths[0].backend.service.port.number
+          value: 8081
+
+  - it: ingress.mcp.host with existingSecret adds a parallel TLS block
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.tls.existingSecret: mgmt-tls
+      ingress.mcp.host: mcp.broker.example.com
+      ingress.mcp.tls.existingSecret: mcp-tls
+    asserts:
+      - equal:
+          path: spec.tls[0].hosts[0]
+          value: broker.example.com
+      - equal:
+          path: spec.tls[0].secretName
+          value: mgmt-tls
+      - equal:
+          path: spec.tls[1].hosts[0]
+          value: mcp.broker.example.com
+      - equal:
+          path: spec.tls[1].secretName
+          value: mcp-tls
+
+  - it: ingress.mcp.host with certManager points TLS at the chart-generated Secret
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.mcp.host: mcp.broker.example.com
+      ingress.mcp.tls.certManager.enabled: true
+    asserts:
+      - equal:
+          path: spec.tls[0].hosts[0]
+          value: mcp.broker.example.com
+      - equal:
+          path: spec.tls[0].secretName
+          value: RELEASE-NAME-demarkus-broker-mcp-tls
+
+  - it: fail-render when both ingress.mcp.tls.existingSecret and certManager.enabled set
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.mcp.host: mcp.broker.example.com
+      ingress.mcp.tls.existingSecret: mcp-tls
+      ingress.mcp.tls.certManager.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.mcp.tls.existingSecret and ingress.mcp.tls.certManager.enabled are mutually exclusive; set exactly one"
+
+  - it: fail-render when ingress.mcp.host equals ingress.host (collocated hosts forbidden)
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.mcp.host: broker.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.mcp.host must differ from ingress.host (split-hostname topology — see README § MCP gateway)"
+
+  - it: parallel cert-manager Certificates emit when both hosts configured
+    template: certificate.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.tls.certManager.enabled: true
+      ingress.mcp.host: mcp.broker.example.com
+      ingress.mcp.tls.certManager.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: MCP-only cert-manager Certificate renders when only MCP cert-manager enabled
+    template: certificate.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.tls.existingSecret: mgmt-pre-provisioned
+      ingress.mcp.host: mcp.broker.example.com
+      ingress.mcp.tls.certManager.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-broker-mcp-tls
+      - equal:
+          path: spec.secretName
+          value: RELEASE-NAME-demarkus-broker-mcp-tls
+      - equal:
+          path: spec.dnsNames[0]
+          value: mcp.broker.example.com
+      - equal:
+          path: spec.issuerRef.kind
+          value: ClusterIssuer
+      - equal:
+          path: spec.issuerRef.name
+          value: letsencrypt-prod
+
+  - it: no MCP Certificate when ingress.mcp.host blank even if certManager enabled
+    template: certificate.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.tls.certManager.enabled: true
+      ingress.mcp.tls.certManager.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-broker-tls
+          documentIndex: 0

@@ -15,5 +15,13 @@ spec:
       protocol: TCP
       port: {{ .Values.server.port }}
       targetPort: http
+    {{- /* MCP gateway port. Always rendered alongside `http` — the
+           listener is always on. `targetPort: mcp` resolves to the
+           deployment's named containerPort so renumbering
+           server.mcp.addr never desyncs the Service from the pod. */}}
+    - name: mcp
+      protocol: TCP
+      port: {{ include "demarkus-broker.mcpPort" . }}
+      targetPort: mcp
   selector:
     {{- include "demarkus-broker.selectorLabels" . | nindent 4 }}
