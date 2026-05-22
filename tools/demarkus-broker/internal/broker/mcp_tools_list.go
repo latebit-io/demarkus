@@ -250,6 +250,8 @@ func markBacklinksTool() mcp.Tool {
 		mcp.WithDescription(
 			"Look up which documents link to a given URL, using the broker's graph store. "+
 				"Returns results from previous crawls — run mark_graph first to populate. "+
+				"NOTE: the broker's graph store is ephemeral (per-pod lifetime); a broker restart "+
+				"resets the store and you must re-crawl. "+
 				mcpURLHint,
 		),
 		mcp.WithString("url",

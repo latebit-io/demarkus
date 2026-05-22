@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/latebit/demarkus/client/internal/links"
+	"github.com/latebit/demarkus/client/links"
 	"github.com/latebit/demarkus/protocol"
 )
 
