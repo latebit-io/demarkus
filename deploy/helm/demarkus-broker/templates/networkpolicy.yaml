@@ -34,6 +34,14 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.server.port }}
+        {{- /* MCP gateway port admitted from the same ingress-
+               controller namespace. Same trust topology as the
+               management API — the gateway is fronted by the same
+               Ingress controller (different hostname, different
+               Service port) so it does not warrant a separate
+               from-block. */}}
+        - protocol: TCP
+          port: {{ include "demarkus-broker.mcpPort" . }}
   egress:
     # DNS — UDP + TCP to kube-system (CoreDNS / kube-dns).
     - to:

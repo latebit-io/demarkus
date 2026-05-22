@@ -85,6 +85,15 @@ spec:
             - name: http
               protocol: TCP
               containerPort: {{ .Values.server.port }}
+            {{- /* MCP gateway listener (knowledge-system layer; plan:
+                   Broker MCP Gateway). Always rendered — the listener
+                   is part of the binary, not a feature flag. The port
+                   is extracted from server.mcp.addr so a single knob
+                   keeps containerPort, Service, NetworkPolicy, and
+                   the rendered config in sync. */}}
+            - name: mcp
+              protocol: TCP
+              containerPort: {{ include "demarkus-broker.mcpPort" . }}
           {{- if .Values.probes.enabled }}
           livenessProbe:
             httpGet:
@@ -109,6 +118,18 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- /* MCP TLS Secret mount. Only present when the
+                   operator pinned an existingSecretRef — the chart's
+                   only TLS mode for the MCP listener (cleartext PEMs
+                   in helm release history are out of scope). Mount
+                   path is chart-managed so secret-config.yaml can
+                   render the absolute certFile/keyFile values into
+                   the broker's config.yaml without a separate knob. */}}
+            {{- if .Values.server.mcp.tls.existingSecretRef.name }}
+            - name: mcp-tls
+              mountPath: {{ include "demarkus-broker.mcpTLSMountPath" . | quote }}
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
@@ -120,6 +141,22 @@ spec:
                 path: config.yaml
         - name: tmp
           emptyDir: {}
+        {{- if .Values.server.mcp.tls.existingSecretRef.name }}
+        - name: mcp-tls
+          secret:
+            secretName: {{ .Values.server.mcp.tls.existingSecretRef.name | quote }}
+            {{- /* kubernetes.io/tls Secrets always carry tls.crt +
+                   tls.key data keys. The chart projects those two
+                   keys explicitly so a misconfigured Secret (e.g. a
+                   generic Opaque Secret with the wrong data keys)
+                   fails pod startup with a clear "missing key"
+                   error rather than mounting an empty directory. */}}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        {{- end }}
       {{- with .Values.topologySpreadConstraints }}
       topologySpreadConstraints:
         {{- range $constraint := . }}

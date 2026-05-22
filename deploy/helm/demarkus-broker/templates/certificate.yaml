@@ -30,3 +30,27 @@ spec:
     kind: {{ .Values.ingress.tls.certManager.issuerRef.kind }}
     name: {{ .Values.ingress.tls.certManager.issuerRef.name }}
 {{- end }}
+{{- if and .Values.ingress.enabled .Values.ingress.mcp.host .Values.ingress.mcp.tls.certManager.enabled }}
+---
+{{- /* Parallel Certificate for the MCP host. Independent secretName,
+       independent issuerRef — two surfaces, two certs, rotation on
+       either side cannot disturb the other. */ -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "demarkus-broker.fullname" . }}-mcp-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "demarkus-broker.labels" . | nindent 4 }}
+  {{- with .Values.ingress.mcp.tls.certManager.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  secretName: {{ include "demarkus-broker.fullname" . }}-mcp-tls
+  dnsNames:
+    - {{ .Values.ingress.mcp.host | quote }}
+  issuerRef:
+    kind: {{ .Values.ingress.mcp.tls.certManager.issuerRef.kind }}
+    name: {{ .Values.ingress.mcp.tls.certManager.issuerRef.name }}
+{{- end }}

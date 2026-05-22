@@ -71,6 +71,45 @@ Names for the chart-managed Secrets.
 {{- end -}}
 
 {{/*
+Chart-managed mount path for the MCP gateway's TLS Secret. Single
+source of truth for secret-config.yaml (renders certFile/keyFile into
+the broker's config.yaml) and deployment.yaml (mounts the Secret
+volume here). Not operator-facing — operators only choose the
+kubernetes.io/tls Secret name; the chart owns the in-pod path.
+
+kubernetes.io/tls Secrets always project `tls.crt` + `tls.key`, so
+the rendered paths are fixed and the chart never needs to surface
+key-name knobs.
+*/}}
+{{- define "demarkus-broker.mcpTLSMountPath" -}}
+/etc/demarkus-broker/tls/mcp
+{{- end -}}
+
+{{/*
+Extract the numeric port from server.mcp.addr (a `host:port` listen
+string like `:8081`). Used by deployment.yaml (containerPort),
+service.yaml (port + targetPort numbering), and networkpolicy.yaml
+(ingress port). Single source of truth keeps the four manifests in
+sync no matter how an operator overrides server.mcp.addr.
+
+Returns the port as an integer. Fails template render with a clear
+message if the addr lacks a parseable port suffix — better than
+silently rendering containerPort: 0 and producing a pod that crashes
+on bind.
+*/}}
+{{- define "demarkus-broker.mcpPort" -}}
+{{- $addr := .Values.server.mcp.addr -}}
+{{- if not $addr -}}
+{{- fail "server.mcp.addr is required (e.g. \":8081\")" -}}
+{{- end -}}
+{{- $port := splitList ":" $addr | last -}}
+{{- if not $port -}}
+{{- fail (printf "server.mcp.addr %q has no parseable port suffix" $addr) -}}
+{{- end -}}
+{{- $port | int -}}
+{{- end -}}
+
+{{/*
 Cookie key resolution. Order of precedence:
   1. .Values.server.cookieKey (operator-supplied literal)
   2. Existing config Secret (preserves the key across helm upgrades)

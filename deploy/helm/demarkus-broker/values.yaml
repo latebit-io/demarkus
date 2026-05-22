@@ -90,6 +90,81 @@ server:
   # chart lifecycle events never invalidate live refresh tokens.
   refreshTokensSecret: ""
 
+  # MCP gateway listener (knowledge-system layer; plan: Broker MCP
+  # Gateway). The gateway is ALWAYS ON — every broker is a
+  # knowledge-system gateway, there is no `enabled` knob. Operators
+  # tune the address, TLS, and session-cache behavior here. An
+  # existing pre-gateway deployment picks up the listener on :8081
+  # silently on chart upgrade: the listener binds, the Service grows
+  # a second `mcp` port, the NetworkPolicy admits traffic to it.
+  # Exposure beyond the cluster requires setting `ingress.mcp.host`
+  # (see the Ingress block below); leaving it unset keeps the
+  # listener cluster-internal.
+  #
+  # Sized for an enterprise universe: ~10k unique users × ~5 worlds
+  # at ~200 bytes per cached world-token ≈ 10MB of session-cache
+  # memory at saturation. Tune `maxSessions` if your population is
+  # materially larger or smaller.
+  mcp:
+    # Listen address inside the pod. Must differ from server.port so
+    # the management API and the MCP surface bind distinct listeners.
+    # The Service exposes both ports; the Ingress routes by hostname.
+    addr: ":8081"
+    # TLS termination at the broker for the MCP listener. Two modes:
+    #
+    #   1. existingSecretRef.name unset (default) — broker speaks
+    #      plain HTTP inside the cluster; the Ingress controller
+    #      terminates TLS at the edge. Matches the management API's
+    #      posture. Recommended for typical k8s deployments.
+    #
+    #   2. existingSecretRef.name set — chart mounts the named
+    #      kubernetes.io/tls Secret read-only at a chart-managed
+    #      path inside the broker pod and the rendered config
+    #      points the MCP listener at the cert+key files. Use this
+    #      when broker-to-Ingress mTLS is required, or when the
+    #      deployment topology bypasses the Ingress entirely.
+    #
+    # The Secret must be a kubernetes.io/tls Secret (data keys
+    # `tls.crt` + `tls.key`). The chart fails template-render if
+    # existingSecretRef is set with the wrong shape.
+    tls:
+      existingSecretRef:
+        # Name of the kubernetes.io/tls Secret in the release
+        # namespace. Empty disables broker-side TLS.
+        name: ""
+    # Per-email session idle timeout. A returning user past idle pays
+    # one lazy-mint round trip on their next call. Default 1h.
+    sessionMaxIdle: 1h
+    # LRU cap on cached email sessions. Eviction is lossless from
+    # the user's perspective — an evicted session is re-minted on
+    # the next call. Default 10000.
+    maxSessions: 10000
+    # World-token TTL is NOT a chart knob. Cached world tokens carry
+    # their natural expiry from Issuer.MintFiltered (the world's
+    # defaultToken.expiresAfter, plus refresh on id_token rotation).
+    # Plan OQ#5 (Broker MCP Gateway v5) pinned this: the broker
+    # respects the world's own TTL rather than overriding it
+    # broker-side. Tune per-world TTL via `worlds[].defaultToken.
+    # expiresAfter` instead.
+    #
+    # First-mint retry loop knobs. After a lazy mint, the world's
+    # projected-Secret-volume refresh has a kubelet-bounded
+    # propagation lag — a freshly-minted token can 401 at the
+    # world for up to ~kubeletSyncPeriod (default ~1 min). The
+    # retry loop runs only when dispatch produces `unauthorized`
+    # on a token the broker just minted (or just re-minted after
+    # a cache-hit 401), distinguishing the propagation race from a
+    # genuine permission denial.
+    #
+    # Defaults (6 attempts, 250ms → 8s exponential) sum to ~16s of
+    # waiting across attempts, well under the typical worst-case
+    # propagation window. Tune up for slow-kubelet clusters; tune
+    # down for development setups where retry latency masks
+    # genuine misconfiguration.
+    firstMintMaxAttempts: 6
+    firstMintInitialBackoff: 250ms
+    firstMintMaxBackoff: 8s
+
 oidc:
   # OIDC discovery URL (e.g. https://accounts.google.com).
   issuer: ""
@@ -165,6 +240,16 @@ worlds: []
   #   # VPN-reachable hostname or in-cluster Service when the user's
   #   # network can route to it; see docs/deployment/security-topology.md.
   #   publicURL: "mark://world-a.cluster.internal:6309"
+  #   # Cluster-internal address the MCP gateway uses to route
+  #   # `mark://{worldName}/{path}` tool calls to this world.
+  #   # Optional: when blank, the gateway resolves via the standard
+  #   # `<name>.<namespace>.svc.cluster.local:6309` Service-DNS
+  #   # convention (the demarkus-server chart's default keeps Service
+  #   # name == world name, so most deployments leave this blank).
+  #   # Override when the Service name diverges from the world's
+  #   # logical name. Host:port only — the `mark://` scheme is
+  #   # implicit.
+  #   # internalAddress: "team-a-mark.team-a:6309"
   #   allow:
   #     domains: ["nesto.ca"]
   #     groups: ["engineering"]
@@ -303,6 +388,44 @@ ingress:
         name: letsencrypt-prod
       # Annotations on the Certificate resource.
       annotations: {}
+
+  # MCP gateway exposure. The MCP listener (server.mcp.addr, default
+  # :8081) is a separate listener from the management API, so it
+  # routes through a distinct hostname rather than path-mixing on
+  # the primary host. Keeping the hostnames separate avoids
+  # `.well-known/*` collisions between the management API's OIDC
+  # discovery (`/.well-known/openid-configuration`,
+  # `/.well-known/jwks.json`) and the MCP listener's OAuth metadata
+  # (`/.well-known/oauth-protected-resource`,
+  # `/.well-known/oauth-authorization-server`).
+  #
+  # When `mcp.host` is set the chart adds a second rule + TLS block
+  # to the same Ingress resource, routing the MCP host to the
+  # Service's `mcp` port. Leave blank to keep the listener
+  # cluster-internal (still reachable from inside the cluster for
+  # in-cluster MCP clients or smoke tests). The MCP host requires
+  # the parent `ingress.enabled` to be true.
+  mcp:
+    # Public hostname the MCP gateway is reachable at, e.g.
+    # mcp.broker.example.com. Empty disables MCP ingress (listener
+    # stays cluster-internal). Independent of `ingress.host`.
+    host: ""
+    # TLS configuration for the MCP host. Same three-mode shape as
+    # the management host's `ingress.tls`:
+    #   1. existingSecret: pre-existing kubernetes.io/tls Secret.
+    #   2. certManager.enabled=true: chart provisions a Certificate.
+    #   3. neither set: Ingress has no TLS block for this host.
+    # The two TLS modes are mutually exclusive (render-time check).
+    # Use a different Secret/issuer than the management host so
+    # cert rotation on either side stays independent.
+    tls:
+      existingSecret: ""
+      certManager:
+        enabled: false
+        issuerRef:
+          kind: ClusterIssuer
+          name: letsencrypt-prod
+        annotations: {}
 
 service:
   type: ClusterIP
