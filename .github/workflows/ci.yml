@@ -9,6 +9,15 @@ on:
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
+    # dorny/paths-filter@v3 calls the Pulls.listFiles GitHub API on
+    # pull_request events to compute the diff. The default GITHUB_TOKEN
+    # in this repo lacks pull-requests scope (Settings → Actions →
+    # Workflow permissions is set to restricted), so the action errors
+    # with "Bad credentials". Grant the two scopes the action needs at
+    # the job level — narrowest blast radius, no effect on other jobs.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       protocol: ${{ steps.filter.outputs.protocol }}
       server: ${{ steps.filter.outputs.server }}
