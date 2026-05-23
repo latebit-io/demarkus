@@ -26,10 +26,10 @@ readonly ISOLATED_PORT_START=16310
 readonly ISOLATED_PORT_END=16509
 
 readonly SERVER_VERSION="0.17.10"
-readonly CLIENT_VERSION="0.12.33"
+readonly CLIENT_VERSION="0.12.36"
 # demarkus-token moved from the server archive to its own tools/ release
 # in §6.7.A. Pin separately so a tools-only release can be picked up.
-readonly TOOLS_VERSION="0.1.10"
+readonly TOOLS_VERSION="0.1.16"
 
 # Sentinel file recording the SERVER/CLIENT versions of the binaries currently
 # installed at PLUGIN_BIN_DIR. ensure_binaries compares this against the
