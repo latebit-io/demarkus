@@ -205,27 +205,37 @@ test_trailing_slash_stripped_from_url() {
 # metadata path. We override HOST via a synthetic URL whose host portion
 # we control.
 
+test_uppercase_scheme_accepted_and_normalized() {
+  local broker
+  broker=$(start_mock 200) || return 1
+  local port="${broker##*:}"
+  local out
+  # User pastes the URL with an uppercase scheme. RFC 3986 says scheme
+  # is case-insensitive; the script must accept it AND normalize the
+  # emitted url= / mcp-url= back to lowercase so `claude mcp list`
+  # output stays clean.
+  out=$(DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP=1 bash "${KJ}" "HTTP://127.0.0.1:${port}" 2>&1) \
+    || { echo "script failed on uppercase scheme: ${out}"; return 1; }
+  grep -q "^url=http://127.0.0.1:${port}\$" <<<"${out}" \
+    || { echo "scheme not normalized in url=: ${out}"; return 1; }
+  grep -q "^mcp-url=http://127.0.0.1:${port}/mcp\$" <<<"${out}" \
+    || { echo "scheme not normalized in mcp-url=: ${out}"; return 1; }
+}
+
 test_slug_first_label_lowercased() {
   local broker
   broker=$(start_mock 200) || return 1
   local port="${broker##*:}"
-  # Use a hostname alias that resolves to 127.0.0.1 via /etc/hosts? No —
-  # instead, drive the script with an http URL whose host portion we
-  # craft. curl won't resolve `mcp.broker.example` to anything, so the
-  # mock can't serve it. We tested the happy path above; here we only
-  # care that slug derivation honors lowercasing on a real-DNS hostname.
-  # Repurpose the loopback: 127.0.0.1's first label IS already lowercase
-  # numeric. Cover lowercasing via an env-injected URL that points at
-  # the same mock via 'localhost' (also valid loopback alias, lowercase
-  # already). So lowercasing per se is covered by tr 'A-Z' 'a-z' on the
-  # source string — direct unit-test the script with an UPPERCASE host
-  # piece via a Host header trick? Simpler: just trust the tr; the
-  # interesting behaviors to pin in tests are slug-character-sanitization
-  # and the trim. We skip explicit upper→lower (a one-liner tr).
-  out=$(DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP=1 bash "${KJ}" "http://localhost:${port}" 2>&1) \
+  local out
+  # Drive the script with an UPPERCASE host (curl accepts case-insensitive
+  # hostnames for loopback, RFC 3986 §3.2.2). The slug derivation pipeline
+  # tr's [:upper:] → [:lower:] before character-class sanitization; this
+  # test pins that the lowercasing actually fires by passing LOCALHOST and
+  # asserting the emitted slug is the all-lowercase `localhost`.
+  out=$(DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP=1 bash "${KJ}" "http://LOCALHOST:${port}" 2>&1) \
     || { echo "script failed: ${out}"; return 1; }
   grep -q '^slug=localhost$' <<<"${out}" \
-    || { echo "slug derivation wrong: ${out}"; return 1; }
+    || { echo "slug not lowercased: ${out}"; return 1; }
 }
 
 test_slug_port_stripped_before_first_label_extraction() {

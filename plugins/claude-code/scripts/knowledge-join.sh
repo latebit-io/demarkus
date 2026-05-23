@@ -42,9 +42,16 @@ URL="$1"
 # a local http:// mock without round-tripping through TLS plumbing. The
 # env var is deliberately long + namespaced so accidental shell exports
 # don't enable it.
+#
+# Per RFC 3986, scheme matching is case-insensitive — `HTTPS://...` and
+# `Https://...` are valid. Bash 3.2 (macOS stock) lacks `${URL,,}`
+# lower-casing, so use bracketed character classes for each scheme byte
+# instead. Surgical (only these two patterns get the treatment) rather
+# than `shopt -s nocasematch` which would silently affect every later
+# case statement in the script.
 case "${URL}" in
-  https://*) ;;
-  http://*)
+  [Hh][Tt][Tt][Pp][Ss]://*) ;;
+  [Hh][Tt][Tt][Pp]://*)
     if [[ "${DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP:-}" != "1" ]]; then
       fail "broker URL must use https:// (got: ${URL})"
     fi
@@ -57,6 +64,13 @@ esac
 # Strip trailing slashes so the joined /mcp URL is well-formed regardless
 # of how the user pasted the URL.
 URL="${URL%/}"
+
+# Normalize the scheme portion to lowercase. Case-insensitive scheme
+# validation above accepts `HTTPS://`, but everything downstream
+# (`claude mcp list`, broker logs, the emitted url=... line) reads
+# cleaner with `https://`. The scheme is guaranteed to be present at
+# this point — the case-validation block rejected anything else.
+URL="$(printf '%s' "${URL%%://*}" | tr '[:upper:]' '[:lower:]')://${URL#*://}"
 
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 
@@ -103,8 +117,11 @@ esac
 # heuristic produces a wrong slug for a deployment, the user can rename
 # the MCP server entry via `claude mcp` after the fact — we are not
 # trying to be clever here.
-HOST="${URL#http://}"
-HOST="${HOST#https://}"
+# Strip everything up to and including `://` so the scheme drops out
+# regardless of case. Cheaper than two case-insensitive prefix patterns
+# and the case-validation step above already guaranteed a scheme is
+# present, so the # match here is always non-empty.
+HOST="${URL#*://}"
 HOST="${HOST%%/*}"
 HOST="${HOST%%:*}"          # strip :port if present
 SLUG_RAW="${HOST%%.*}"      # first DNS label

@@ -10,7 +10,7 @@ This is the broker-fronted counterpart to `/soul-init` (which configures a perso
 
 The user invokes this command with the broker URL:
 
-```
+```bash
 /knowledge-join https://mcp.broker.acme.com
 ```
 
@@ -20,7 +20,7 @@ If the user invokes without an argument, ask them for the URL before running any
 
 1. **Validate + derive slug.** Run the helper script:
 
-   ```
+   ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/knowledge-join.sh" <broker-url>
    ```
 
@@ -43,7 +43,7 @@ If the user invokes without an argument, ask them for the URL before running any
 
 3. **Register the MCP server.** Run:
 
-   ```
+   ```bash
    claude mcp add --transport http <slug> <mcp-url>
    ```
 
