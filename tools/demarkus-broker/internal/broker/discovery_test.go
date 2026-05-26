@@ -153,6 +153,11 @@ func TestDiscoveryOverridesBrokerEndpoints(t *testing.T) {
 		// fetching the broker's JWKS gets the broker's signing key,
 		// matching the issuer the discovery doc advertises.
 		{"jwks_uri", "https://broker.example.com/.well-known/jwks.json"},
+		// registration_endpoint added so MCP clients that require RFC
+		// 7591 dynamic client registration don't reject the broker with
+		// "Incompatible auth server" before reaching the device-flow
+		// surface. See register.go for the rubber-stamp rationale.
+		{"registration_endpoint", "https://broker.example.com/register"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.field, func(t *testing.T) {

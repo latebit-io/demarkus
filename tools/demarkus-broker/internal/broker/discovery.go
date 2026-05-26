@@ -264,6 +264,13 @@ func applyDiscoveryOverrides(raw []byte, brokerURL string) ([]byte, error) {
 	doc["device_authorization_endpoint"] = brokerURL + "/device/authorize"
 	doc["token_endpoint"] = brokerURL + "/device/token"
 	doc["jwks_uri"] = brokerURL + "/.well-known/jwks.json"
+	// RFC 7591 dynamic client registration endpoint. Advertised so MCP
+	// clients (which require DCR per the MCP authorization spec)
+	// don't reject the broker with "Incompatible auth server: does
+	// not support dynamic client registration" before they ever
+	// reach the device-flow surface. See register.go for the
+	// rubber-stamp semantics and the rationale.
+	doc["registration_endpoint"] = brokerURL + "/register"
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
