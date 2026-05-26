@@ -222,6 +222,14 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /device", s.deviceFormGet)
 	mux.Handle("POST /device", s.ipRateLimit(http.HandlerFunc(s.deviceFormPost)))
 	mux.Handle("POST /device/token", s.ipRateLimit(http.HandlerFunc(s.deviceToken)))
+	// RFC 7591 dynamic client registration. Open (unauthenticated) per
+	// the spec's §2 open-registration mode; rubber-stamps any caller
+	// because the broker's actual access control lives at the
+	// id_token verification + per-world Allow list, not the client_id
+	// layer. IP rate limiter caps per-IP /register churn the same way
+	// it gates the device-flow POSTs. See register.go for the full
+	// rationale.
+	mux.Handle("POST /register", s.ipRateLimit(http.HandlerFunc(s.register)))
 	// RFC 7009 token revocation. Unauthenticated (possession of
 	// the token IS the authz signal) under the IP limiter for
 	// defense-in-depth. PR4 only operates on refresh tokens; the
