@@ -37,6 +37,14 @@ type Server struct {
 	// HTTP surface; the store owns the state machine.
 	deviceStore *deviceStore
 
+	// authCodeStore holds in-flight RFC 6749 authorization-code grants
+	// for MCP clients that do not pivot to device flow (Claude Code's
+	// MCP SDK as of 2026-05). Same single-broker invariant as
+	// deviceStore — process-memory only, dropped on restart. The
+	// handlers in oauth_authorize.go own the HTTP surface; the store
+	// owns the pending → code → exchange state machine.
+	authCodeStore *authCodeStore
+
 	// RefreshStore owns the Secret-backed map of sha256(refresh_token)
 	// → record. Wired by NewServer with the configured (or defaulted)
 	// broker-namespace Secret. Survives broker restarts unlike
@@ -146,6 +154,7 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 		log:               log,
 		clock:             clock,
 		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
+		authCodeStore:     newAuthCodeStore(clock, defaultPendingAuthCodeTTL, defaultAuthCodeTTL),
 		refreshStore:      NewRefreshStore(cfg, issuer.k8s),
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}

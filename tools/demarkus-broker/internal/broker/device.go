@@ -434,13 +434,20 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 	s.renderDeviceDone(w, r)
 }
 
-// RunDeviceJanitor sweeps the deviceStore on a fixed cadence until ctx
-// is canceled. Sweep cadence is half the configured device-code TTL so
-// terminal entries are evicted within one TTL window after resolution.
-// Unlike the Sweeper, this janitor needs no leader election: the store
-// is per-replica in-memory state (plan §"Single broker only for now"),
-// so each replica sweeps its own store. Multi-replica deployments are
-// out of scope until the device store grows a shared backing store.
+// RunDeviceJanitor sweeps the deviceStore and the authCodeStore on a
+// fixed cadence until ctx is canceled. Sweep cadence is half the
+// configured device-code TTL so terminal device-flow entries are
+// evicted within one TTL window after resolution; the same tick
+// also sweeps the auth-code store, whose own TTLs (10m pending,
+// 60s code) are correctly enforced lazily by LookupPending/Redeem
+// regardless of sweep timing — the sweep is only a memory-cleanup
+// concern for abandoned grants.
+//
+// Unlike the Sweeper, this janitor needs no leader election: the
+// stores are per-replica in-memory state (plan §"Single broker only
+// for now"), so each replica sweeps its own. Multi-replica
+// deployments are out of scope until either store grows a shared
+// backing store.
 func (s *Server) RunDeviceJanitor(ctx context.Context) {
 	ttl := s.cfg.Server.DeviceCodeTTL
 	if ttl <= 0 {
@@ -455,6 +462,9 @@ func (s *Server) RunDeviceJanitor(ctx context.Context) {
 			return
 		case <-t.C:
 			s.deviceStore.Sweep()
+			if s.authCodeStore != nil {
+				s.authCodeStore.Sweep()
+			}
 		}
 	}
 }
