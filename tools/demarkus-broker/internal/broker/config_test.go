@@ -380,6 +380,24 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "rateLimit.login.burst must be >= 1",
 		},
 		{
+			name: "worldDialer defaults to verify-strict",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				if c.WorldDialer.InsecureSkipVerify {
+					t.Error("worldDialer.insecureSkipVerify defaulted to true; want secure-by-default false")
+				}
+			},
+		},
+		{
+			name: "worldDialer.insecureSkipVerify honored",
+			body: validConfig + "worldDialer:\n  insecureSkipVerify: true\n",
+			validate: func(t *testing.T, c *Config) {
+				if !c.WorldDialer.InsecureSkipVerify {
+					t.Error("worldDialer.insecureSkipVerify=true not honored")
+				}
+			},
+		},
+		{
 			name:    "missing server.publicURL",
 			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: ""`, 1),
 			wantErr: "server.publicURL is required",
