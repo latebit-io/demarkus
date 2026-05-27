@@ -16,11 +16,40 @@ import (
 // is authorized to mint tokens for. The world Tokens Secrets live in each
 // world's namespace; the issuances Secret lives in the broker's namespace.
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	OIDC      OIDCConfig      `yaml:"oidc"`
-	Worlds    []WorldConfig   `yaml:"worlds"`
-	Sweeper   SweeperConfig   `yaml:"sweeper"`
-	RateLimit RateLimitConfig `yaml:"rateLimit"`
+	Server      ServerConfig      `yaml:"server"`
+	OIDC        OIDCConfig        `yaml:"oidc"`
+	Worlds      []WorldConfig     `yaml:"worlds"`
+	Sweeper     SweeperConfig     `yaml:"sweeper"`
+	RateLimit   RateLimitConfig   `yaml:"rateLimit"`
+	WorldDialer WorldDialerConfig `yaml:"worldDialer"`
+}
+
+// WorldDialerConfig holds knobs governing how the broker's MCP gateway
+// dials world servers over QUIC. Single block at the top level (rather
+// than per-world WorldConfig) because the dialer's posture is uniform
+// across worlds — the trust model is "all worlds the broker is
+// configured for are equally trusted." Per-world overrides would
+// invite a misconfiguration where one world's relaxed posture leaks
+// onto another via shared connection pooling.
+type WorldDialerConfig struct {
+	// InsecureSkipVerify disables the QUIC client's TLS chain +
+	// hostname verification when dialing worlds. Required today for
+	// in-cluster deployments where each world has a self-signed cert
+	// from cert-manager's `selfsigned` ClusterIssuer (no shared CA the
+	// broker can trust) — QUIC still encrypts on the wire, but the
+	// broker takes on faith that the address it dialed actually
+	// belongs to the world it expects. NetworkPolicy + cluster RBAC
+	// are doing the real isolation work in that topology.
+	//
+	// Production-correct value once a shared CA is wired (e.g.,
+	// cert-manager CA Issuer signing all world certs + a `caBundle`
+	// config that loads it into the broker's RootCAs): false. The
+	// flag stays as the operator escape hatch for environments where
+	// shared CA setup isn't feasible.
+	//
+	// Default false. Operators who want skip-verify must opt in
+	// explicitly so the verification posture is never silently relaxed.
+	InsecureSkipVerify bool `yaml:"insecureSkipVerify"`
 }
 
 // ServerConfig holds the broker's own runtime settings — listen address,

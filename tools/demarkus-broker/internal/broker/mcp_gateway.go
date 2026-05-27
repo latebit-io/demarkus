@@ -178,7 +178,15 @@ func (g *mcpGateway) Routes() http.Handler {
 // main.go calls (*Server).CloseMCPGateway during shutdown to drain
 // pooled QUIC connections. For test injection use MCPGatewayWith.
 func (s *Server) MCPGateway(version string) http.Handler {
-	pool := newWorldPool(s.cfg, fetch.Options{})
+	// WorldDialer.InsecureSkipVerify propagates into fetch.Options.Insecure
+	// so the QUIC client skips TLS chain + hostname verification on
+	// dial. Required today for in-cluster deployments using per-world
+	// self-signed certs (no shared CA the broker can trust); the flag
+	// stays opt-in so the secure-by-default posture is preserved.
+	// See WorldDialerConfig doc for the trust-model rationale.
+	pool := newWorldPool(s.cfg, fetch.Options{
+		Insecure: s.cfg.WorldDialer.InsecureSkipVerify,
+	})
 	s.mcpPool = pool
 	return newMCPGateway(s, version, pool).Routes()
 }

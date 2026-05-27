@@ -295,6 +295,23 @@ rateLimit:
     burst: 5
   trustForwardedFor: true
 
+# Knobs governing how the MCP gateway dials world servers over QUIC.
+# Single block at the top level (not per-world) — the dialer posture is
+# uniform across worlds.
+worldDialer:
+  # Disable QUIC TLS chain + hostname verification on the broker→world
+  # dial. Required today for in-cluster deployments where each world
+  # has a self-signed cert from cert-manager's `selfsigned` ClusterIssuer
+  # (no shared CA the broker can trust). QUIC still encrypts on the
+  # wire; the broker takes on faith that the address it dialed actually
+  # belongs to the world it expects — NetworkPolicy + cluster RBAC do
+  # the real isolation work in that topology.
+  #
+  # Flip back to false once a shared CA is wired (e.g., a cert-manager
+  # CA Issuer signing all world certs + a broker-side CA bundle config
+  # that loads it into the QUIC client's RootCAs).
+  insecureSkipVerify: false
+
 resources:
   requests:
     cpu: 100m
