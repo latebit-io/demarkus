@@ -28,12 +28,15 @@ jobs:
             server:
               - 'server/**'
               - 'protocol/**'
+              - 'deploy/helm/demarkus-server/**'
             client:
               - 'client/**'
               - 'protocol/**'
+              - 'deploy/helm/demarkus-agent/**'
             tools:
               - 'tools/**'
               - 'protocol/**'
+              - 'deploy/helm/demarkus-broker/**'
 
   test-protocol:
     needs: detect-changes
@@ -136,7 +139,12 @@ jobs:
           tag_prefix: "server/v"
           major_pattern: "BREAKING CHANGE:"
           minor_pattern: "feat:"
-          change_path: "server/"
+          # Chart and image are released together at the same version,
+          # so a chart-only commit must bump the version too. Without
+          # the chart path here, fix(server-chart) commits would slip
+          # past the change-path gate, leave should_release=false, and
+          # silently never publish.
+          change_path: "server/ deploy/helm/demarkus-server/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -167,7 +175,9 @@ jobs:
           tag_prefix: "client/v"
           major_pattern: "BREAKING CHANGE:"
           minor_pattern: "feat:"
-          change_path: "client/"
+          # See server's change_path note: chart-only commits must
+          # bump the version so the chart actually publishes.
+          change_path: "client/ deploy/helm/demarkus-agent/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -198,7 +208,9 @@ jobs:
           tag_prefix: "tools/v"
           major_pattern: "BREAKING CHANGE:"
           minor_pattern: "feat:"
-          change_path: "tools/"
+          # See server's change_path note: chart-only commits must
+          # bump the version so the chart actually publishes.
+          change_path: "tools/ deploy/helm/demarkus-broker/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
