@@ -1,34 +1,34 @@
 {{- if .Values.rbac.create }}
 {{- /* Broker-namespace RBAC: the broker SA's access to its own state.
 
-   - coordination.k8s.io/leases: the sweeper's leader-election Lease. Both
-     get/update are scoped to the configured lease name; create is in the
-     same rule because Helm install needs to seed the Lease on first
-     leadership acquisition. The k8s RBAC "create cannot be restricted by
-     resourceName" caveat means create effectively allows any Lease in
-     this namespace — acceptable scope since the namespace is broker-owned.
+   K8s RBAC has a hard limitation that shapes the structure below:
+   `resourceNames` does not apply to `create` requests (the name of
+   the new object isn't known at authorization time, so the rule
+   simply does not match). A single rule that lists `create`
+   alongside `get`/`update` AND uses `resourceNames` will silently
+   deny create. Each create-capable surface therefore needs a
+   separate, name-unrestricted rule. The cost is that create is
+   namespace-wide for that resource type — acceptable here because
+   the namespace is broker-owned, and the rest of the SA's surface
+   (get/update) is still tightly scoped by resourceNames.
+
+   - coordination.k8s.io/leases: the sweeper's leader-election Lease.
+     get/update pinned to the configured lease name; create gets
+     its own rule (namespace-wide).
 
    - secrets (issuances + refresh-tokens): chart-seeded at install
      time (secret-issuances.yaml + secret-refresh-tokens.yaml), so
-     the broker only needs get/update — not create. The
+     the broker only needs get/update — never create. The
      resource-policy: keep annotation on both means helm upgrade
      never re-templates them, so the broker SA's update verb is
      the only path that mutates them after install.
 
    - secrets (per-world write-token): the broker provisions these
-     lazily on the first write to each configured world (one
-     Secret per worlds[] entry). The chart does NOT seed them — if
-     it did, the broker would have to read+verify each one at
-     startup, and at-rest token rotation would race chart upgrades.
-     Lazy provisioning instead, which is why this rule must include
-     create. Names are pinned per world via resourceNames so a
-     compromised broker SA cannot read or update any other Secret
-     in the broker namespace. The same k8s RBAC "create cannot be
-     restricted by resourceName" caveat documented for leases above
-     applies here too: create effectively allows any Secret in
-     this namespace at the API level — acceptable scope since the
-     namespace is broker-owned, but worth knowing when threat-
-     modeling. */ -}}
+     lazily on the first write to each configured world. get/update
+     pinned per-world; create gets its own rule (namespace-wide).
+     Names are pinned per world via resourceNames so a compromised
+     broker SA cannot read or update any other Secret in the broker
+     namespace. */ -}}
 {{- $brokerNs := include "demarkus-broker.brokerNamespace" . -}}
 {{- $name := include "demarkus-broker.fullname" . -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -42,7 +42,10 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     resourceNames: [{{ .Values.sweeper.leaseName | quote }}]
-    verbs: ["get", "create", "update"]
+    verbs: ["get", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames:
@@ -56,7 +59,10 @@ rules:
       {{- range .Values.worlds }}
       - {{ include "demarkus-broker.writeTokenSecretName" (dict "worldName" .name) | quote }}
       {{- end }}
-    verbs: ["get", "create", "update"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
