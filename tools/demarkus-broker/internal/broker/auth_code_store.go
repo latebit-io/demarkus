@@ -246,6 +246,19 @@ func (s *authCodeStore) Bind(id string, exchange *ExchangeResult) (string, Pendi
 // internal logs name the failure without the handler having to
 // rebuild the reason from context — handler still maps every error
 // to `invalid_grant` on the wire.
+//
+// Consumption semantics: only successful redemption and expiry
+// delete the code. errAuthCodeClientMismatch /
+// errAuthCodeRedirectMismatch / errAuthCodePKCEFailed leave the
+// entry in place so a transient client misconfig — wrong client_id
+// passed in a retry, race between two callback ports, momentarily
+// wrong code_verifier — does not burn the user's flow inside the
+// 60-second window. The 256-bit code entropy and the PKCE binding
+// keep brute-force probes infeasible in that window. The "transient
+// client misconfig" subtest pins this contract. The HTTP handler in
+// oauth_authorize.go is the right place to emit a structured
+// debug log on validation failure (request context lives there,
+// not in the store).
 func (s *authCodeStore) Redeem(code, clientID, redirectURI, codeVerifier string) (ExchangeResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

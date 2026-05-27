@@ -267,7 +267,7 @@ func TestAuthCodeStoreRedeem(t *testing.T) {
 		}
 	})
 
-	t.Run("client_id mismatch is rejected", func(t *testing.T) {
+	t.Run("transient client misconfig: client_id mismatch is rejected and preserves code", func(t *testing.T) {
 		store, _ := newTestAuthCodeStore(t)
 		req := newTestAuthCodeRequest()
 		id, err := store.Begin(req)
