@@ -8,13 +8,22 @@
      resourceName" caveat means create effectively allows any Lease in
      this namespace — acceptable scope since the namespace is broker-owned.
 
-   - secrets: the chart-created issuances + refresh-tokens Secrets.
-     Only get/update needed since the chart seeds both at install
-     time (secret-issuances.yaml + secret-refresh-tokens.yaml); the
-     broker never needs to bootstrap either at runtime. The
+   - secrets (issuances + refresh-tokens): chart-seeded at install
+     time (secret-issuances.yaml + secret-refresh-tokens.yaml), so
+     the broker only needs get/update — not create. The
      resource-policy: keep annotation on both means helm upgrade
      never re-templates them, so the broker SA's update verb is
-     the only path that mutates them after install. */ -}}
+     the only path that mutates them after install.
+
+   - secrets (per-world write-token): the broker provisions these
+     lazily on the first write to each configured world (one
+     Secret per worlds[] entry). The chart does NOT seed them — if
+     it did, the broker would have to read+verify each one at
+     startup, and at-rest token rotation would race chart upgrades.
+     Lazy provisioning instead, which is why this rule must include
+     create. Names are pinned per world via resourceNames so a
+     compromised broker SA cannot read every Secret in the broker
+     namespace. */ -}}
 {{- $brokerNs := include "demarkus-broker.brokerNamespace" . -}}
 {{- $name := include "demarkus-broker.fullname" . -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -35,6 +44,15 @@ rules:
       - {{ include "demarkus-broker.issuancesSecretName" . | quote }}
       - {{ include "demarkus-broker.refreshTokensSecretName" . | quote }}
     verbs: ["get", "update"]
+  {{- if .Values.worlds }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- range .Values.worlds }}
+      - {{ include "demarkus-broker.writeTokenSecretName" (dict "worldName" .name) | quote }}
+      {{- end }}
+    verbs: ["get", "create", "update"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
