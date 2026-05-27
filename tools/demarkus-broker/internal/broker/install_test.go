@@ -11,13 +11,9 @@ import (
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
-	k8stesting "k8s.io/client-go/testing"
 )
 
 // installTestConfig returns a single-world fixture with team-a's
@@ -87,7 +83,8 @@ func decodeInstall(t *testing.T, resp *http.Response) installResponse {
 func TestMeInstallHappyPathSingleWorld(t *testing.T) {
 	cfg := installTestConfig()
 	verifier := &fakeVerifier{claims: aliceClaims()}
-	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
+	k8s := fake.NewSimpleClientset()
+	srv, _ := newTestServer(t, cfg, verifier, k8s)
 
 	resp := installReq(t, srv, "id-token")
 	if resp.StatusCode != http.StatusOK {
@@ -98,8 +95,8 @@ func TestMeInstallHappyPathSingleWorld(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
 	got := decodeInstall(t, resp)
-	if got.PartialFailure != "" {
-		t.Errorf("PartialFailure = %q, want empty on happy path", got.PartialFailure)
+	if got.Email != "alice@example.com" {
+		t.Errorf("Email = %q, want alice@example.com", got.Email)
 	}
 	if len(got.Worlds) != 1 {
 		t.Fatalf("worlds = %+v, want 1 entry", got.Worlds)
@@ -111,14 +108,14 @@ func TestMeInstallHappyPathSingleWorld(t *testing.T) {
 	if w.PublicURL != "mark://team-a.cluster.local:6309" {
 		t.Errorf("PublicURL = %q, want configured URL", w.PublicURL)
 	}
-	if !strings.HasPrefix(w.Label, LabelPrefix) {
-		t.Errorf("Label %q missing %q prefix", w.Label, LabelPrefix)
+	// /me/install is read-only: no mint side-effect, so no
+	// world-tokens Secret and no issuances Secret should appear after
+	// the call. The MCP gateway provisions lazily on first dispatch.
+	if _, err := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("team-a tokens Secret unexpectedly created by /me/install: %v", err)
 	}
-	if w.AccessToken == "" {
-		t.Errorf("AccessToken empty")
-	}
-	if w.ExpiresAt.IsZero() {
-		t.Errorf("ExpiresAt zero")
+	if _, err := k8s.CoreV1().Secrets(testBrokerNS).Get(context.Background(), testIssuancesNS, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("issuances Secret unexpectedly created by /me/install: %v", err)
 	}
 }
 
@@ -149,11 +146,9 @@ func TestMeInstallMultiWorldOrdering(t *testing.T) {
 
 func TestMeInstallFiltersWorldsWithoutPublicURL(t *testing.T) {
 	// Two-world fixture: alice qualifies for both, team-b has no
-	// PublicURL configured. /me/install must:
-	//   1. Return only team-a in the response body.
-	//   2. NOT write an issuance record for team-b — the filter has to
-	//      run BEFORE mint so the issuances Secret isn't churned with
-	//      records for un-installable worlds.
+	// PublicURL configured. /me/install reports only installable
+	// worlds (PublicURL set) and writes no Secrets — provisioning is
+	// lazy in the MCP gateway, not here.
 	cfg := installTestConfigTwoWorlds()
 	cfg.Worlds[1].PublicURL = "" // team-b is un-installable
 	k8s := fake.NewSimpleClientset()
@@ -168,22 +163,16 @@ func TestMeInstallFiltersWorldsWithoutPublicURL(t *testing.T) {
 	if len(got.Worlds) != 1 || got.Worlds[0].Name != "team-a" {
 		t.Errorf("worlds = %+v, want only team-a", got.Worlds)
 	}
-	// team-b's tokens Secret must not exist — predicate filtered before
-	// mint touched it.
+	// Neither world's tokens Secret nor the issuances Secret should
+	// have been touched: /me/install is a read-only listing.
+	if _, err := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("team-a tokens Secret unexpectedly created: %v", err)
+	}
 	if _, err := k8s.CoreV1().Secrets("team-b").Get(context.Background(), "team-b-tokens", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
-		t.Errorf("team-b Secret unexpectedly created: %v", err)
+		t.Errorf("team-b tokens Secret unexpectedly created: %v", err)
 	}
-	// Issuances Secret must contain only team-a.
-	iss, err := k8s.CoreV1().Secrets(testBrokerNS).Get(context.Background(), testIssuancesNS, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get issuances Secret: %v", err)
-	}
-	body := string(iss.Data[IssuancesSecretKey])
-	if !strings.Contains(body, `"world":"team-a"`) {
-		t.Errorf("issuances Secret missing team-a entry: %s", body)
-	}
-	if strings.Contains(body, `"world":"team-b"`) {
-		t.Errorf("issuances Secret has team-b entry despite filter: %s", body)
+	if _, err := k8s.CoreV1().Secrets(testBrokerNS).Get(context.Background(), testIssuancesNS, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("issuances Secret unexpectedly created: %v", err)
 	}
 }
 
@@ -233,9 +222,6 @@ func TestMeInstallEmptyWorldsReturns200EmptySlice(t *testing.T) {
 	if len(got.Worlds) != 0 {
 		t.Errorf("Worlds = %+v, want []", got.Worlds)
 	}
-	if got.PartialFailure != "" {
-		t.Errorf("PartialFailure = %q, want empty", got.PartialFailure)
-	}
 }
 
 func TestMeInstallAllWorldsFilteredReturns200Empty(t *testing.T) {
@@ -271,69 +257,6 @@ func TestMeInstallUnverifiedEmailReturns403(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.StatusCode)
-	}
-}
-
-func TestMeInstallPartialFailureReturns200WithFlag(t *testing.T) {
-	// Two-world fixture, alice qualifies for both. team-b's Update is
-	// RBAC-denied. Response must be 200 + the team-a entry + a
-	// partialFailure code — same shape as /auth/callback so consumers
-	// have one error model for both mint paths.
-	cfg := installTestConfigTwoWorlds()
-	k8s := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "team-b-tokens", Namespace: "team-b"},
-		Data:       map[string][]byte{TokensSecretKey: {}},
-	})
-	k8s.PrependReactor("update", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		ua, ok := action.(k8stesting.UpdateAction)
-		if !ok || ua.GetNamespace() != "team-b" {
-			return false, nil, nil
-		}
-		return true, nil, apierrors.NewForbidden(
-			schema.GroupResource{Resource: "secrets"},
-			"team-b-tokens",
-			errors.New("denied"),
-		)
-	})
-	verifier := &fakeVerifier{claims: aliceClaims()}
-	srv, _ := newTestServer(t, cfg, verifier, k8s)
-
-	resp := installReq(t, srv, "id-token")
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200 + partialFailure. body=%s", resp.StatusCode, body)
-	}
-	got := decodeInstall(t, resp)
-	if got.PartialFailure == "" {
-		t.Errorf("PartialFailure empty, want a stable code")
-	}
-	if len(got.Worlds) != 1 || got.Worlds[0].Name != "team-a" {
-		t.Errorf("worlds = %+v, want only team-a (partial mint)", got.Worlds)
-	}
-}
-
-func TestMeInstallHardFailureReturns500(t *testing.T) {
-	// First world's Update is RBAC-denied with NO successful mints
-	// preceding it. zero results → hard failure path, 500.
-	cfg := installTestConfig()
-	k8s := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "team-a-tokens", Namespace: "team-a"},
-		Data:       map[string][]byte{TokensSecretKey: {}},
-	})
-	k8s.PrependReactor("update", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		ua, ok := action.(k8stesting.UpdateAction)
-		if !ok || ua.GetNamespace() != "team-a" {
-			return false, nil, nil
-		}
-		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "team-a-tokens", errors.New("denied"))
-	})
-	verifier := &fakeVerifier{claims: aliceClaims()}
-	srv, _ := newTestServer(t, cfg, verifier, k8s)
-
-	resp := installReq(t, srv, "id-token")
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500", resp.StatusCode)
 	}
 }
 

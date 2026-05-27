@@ -40,6 +40,36 @@ func agentMetaFromClaims(claims Claims) map[string]string {
 	return map[string]string{"agent": canonicalEmail(claims.Email)}
 }
 
+// gateWrite enforces the broker's writer-allow check on a tool
+// call. There is one long-lived write token per world (lazy-
+// provisioned by worldWriteTokenStore); writer authorization
+// happens here, BEFORE the dispatcher is invoked, so an
+// unauthorized caller can never reach the world. Returns the
+// world config on success, or a populated tool-error result the
+// caller must return immediately.
+//
+// Defense-in-depth on email verification: requireAuth's
+// compositeVerifier is the primary gate at the bearer layer; this
+// catches a future Verifier impl or test double that admits an
+// unverified identity.
+func (g *mcpGateway) gateWrite(claims Claims, worldName string) (*WorldConfig, *mcp.CallToolResult) {
+	if !claims.EmailVerified {
+		return nil, mcp.NewToolResultError("identity email is not verified")
+	}
+	claims.Email = canonicalEmail(claims.Email)
+	if claims.Email == "" {
+		return nil, mcp.NewToolResultError("identity has no email claim")
+	}
+	worldCfg := g.srv.issuer.lookupWorld(worldName)
+	if worldCfg == nil {
+		return nil, mcp.NewToolResultError(fmt.Sprintf("world %q is not configured", worldName))
+	}
+	if !worldAllows(&worldCfg.Allow, claims) {
+		return nil, mcp.NewToolResultError(fmt.Sprintf("write access denied for world %q", worldName))
+	}
+	return worldCfg, nil
+}
+
 // handleMarkPublish implements the mark_publish tool. on_conflict
 // defaults to "merge" (matches local demarkus-mcp); pass
 // on_conflict="fail" to opt out of the merge candidate flow and
@@ -82,6 +112,9 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
+	}
+	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
+		return errRes, nil
 	}
 	meta := agentMetaFromClaims(claims)
 	switch onConflict {
@@ -296,6 +329,9 @@ func (g *mcpGateway) handleMarkAppend(ctx context.Context, req mcp.CallToolReque
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
+	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
+		return errRes, nil
+	}
 	if expectedVersion == 0 {
 		// Auto-resolve via VERSIONS. Same dispatch wrapper as
 		// the actual append so a propagation-race or stale-
@@ -347,6 +383,9 @@ func (g *mcpGateway) handleMarkArchive(ctx context.Context, req mcp.CallToolRequ
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
+	}
+	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
+		return errRes, nil
 	}
 	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Archive(worldName, path, token)

@@ -681,7 +681,12 @@ func TestAuthCallbackUnchangedWithoutDeviceCookie(t *testing.T) {
 		authURL: "https://idp.example.com/authorize",
 		claims:  Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|123"},
 	}
-	srv, _ := newTestServer(t, deviceTestConfig(), verifier, fake.NewSimpleClientset())
+	cfg := deviceTestConfig()
+	// PublicURL is required for the callback to include the world
+	// in its response — parity with /me/install (see authCallback's
+	// filter in server.go).
+	cfg.Worlds[0].PublicURL = "mark://team-a.cluster.local:6309"
+	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
 	client, nonce := loginAndExtract(t, srv)
 
 	req, _ := http.NewRequest(http.MethodGet,
@@ -698,14 +703,17 @@ func TestAuthCallbackUnchangedWithoutDeviceCookie(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Errorf("content-type = %q, want application/json (regression: device branch must NOT engage)", ct)
 	}
-	var got struct {
-		Tokens []MintResult `json:"tokens"`
-	}
+	// Same identity+worlds response shape as TestAuthCallbackSuccess.
+	// No raw tokens — provisioning is lazy in the MCP gateway.
+	var got installResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got.Tokens) != 1 {
-		t.Fatalf("tokens = %+v, want exactly 1", got.Tokens)
+	if got.Email != "alice@example.com" {
+		t.Errorf("Email = %q, want alice@example.com", got.Email)
+	}
+	if len(got.Worlds) != 1 {
+		t.Fatalf("worlds = %+v, want exactly 1 (regression: device branch must NOT engage)", got.Worlds)
 	}
 }
 

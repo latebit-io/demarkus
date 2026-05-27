@@ -72,6 +72,40 @@ func TestHandleMarkPublishHappyPath(t *testing.T) {
 	}
 }
 
+func TestHandleMarkPublishDeniesNonWriter(t *testing.T) {
+	// Writer authorization happens at the broker BEFORE dispatch.
+	// An SSO-authed identity whose email is not covered by the
+	// world's Allow predicate gets a clear "write access denied"
+	// tool error — the dispatcher is never invoked, no Secret is
+	// touched. SSO is the org gate; WorldConfig.Allow is the
+	// writer allowlist.
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	ctx := ctxWithClaims(context.Background(), Claims{
+		Subject:       "google|carol",
+		Email:         "carol@otherco.test", // not in example.com domain
+		EmailVerified: true,
+	})
+	res, err := g.handleMarkPublish(ctx, callToolReq("mark_publish", map[string]any{
+		"url":              "mark://team-a/foo.md",
+		"body":             "should not land\n",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("isError = false for non-writer identity, want true")
+	}
+	if text := toolResultText(t, res); !strings.Contains(text, "write access denied") {
+		t.Errorf("tool error = %q, want it to name the writer-allow rejection", text)
+	}
+	if len(d.publishCalls) != 0 {
+		t.Errorf("dispatcher.Publish called %d times for denied write, want 0", len(d.publishCalls))
+	}
+}
+
 func TestHandleMarkPublishMissingExpectedVersion(t *testing.T) {
 	// expected_version is a REQUIRED field on mark_publish (the
 	// auto-resolve convenience lives on mark_append only). Missing

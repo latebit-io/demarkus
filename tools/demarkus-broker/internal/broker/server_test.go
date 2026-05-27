@@ -366,7 +366,13 @@ func TestAuthCallbackSuccess(t *testing.T) {
 		authURL: "https://idp.example.com/authorize",
 		claims:  Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|123"},
 	}
-	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+	cfg := testConfig()
+	// PublicURL is required for the callback to include the world in
+	// its response — see the parity-with-/me/install filter in
+	// server.go's authCallback. testConfig's default is "" so we set
+	// it explicitly here.
+	cfg.Worlds[0].PublicURL = "mark://team-a.cluster.local:6309"
+	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
 	client, nonce := loginAndExtract(t, srv)
 
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
@@ -380,23 +386,34 @@ func TestAuthCallbackSuccess(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
 	}
-	var got struct {
-		Tokens []MintResult `json:"tokens"`
-	}
+	// The bare-code branch returns identity + authorized worlds — no
+	// raw tokens. Per-world demarkus tokens are minted lazily inside
+	// the broker's MCP gateway on first dispatch.
+	var got installResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// Count is a precondition for the field-level assertions below;
-	// without it the indexing on Line 0 would panic instead of giving a
-	// useful diff.
-	if len(got.Tokens) != 1 {
-		t.Fatalf("tokens = %+v, want exactly 1", got.Tokens)
+	if got.Email != "alice@example.com" {
+		t.Errorf("Email = %q, want alice@example.com", got.Email)
 	}
-	if got.Tokens[0].World != "team-a" {
-		t.Errorf("world = %q, want team-a", got.Tokens[0].World)
+	if len(got.Worlds) != 1 {
+		t.Fatalf("worlds = %+v, want exactly 1", got.Worlds)
 	}
-	if got.Tokens[0].RawToken == "" {
-		t.Error("RawToken empty in callback response")
+	if got.Worlds[0].Name != "team-a" {
+		t.Errorf("Name = %q, want team-a", got.Worlds[0].Name)
+	}
+	// Parity guard with /me/install: the callback must filter
+	// PublicURL-less worlds and emit the same no-store cache
+	// headers. Without these assertions either contract can drift
+	// silently on the callback branch.
+	if got.Worlds[0].PublicURL == "" {
+		t.Errorf("Worlds[0].PublicURL empty; non-installable worlds must be filtered")
+	}
+	if h := resp.Header.Get("Cache-Control"); h != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", h)
+	}
+	if h := resp.Header.Get("Pragma"); h != "no-cache" {
+		t.Errorf("Pragma = %q, want no-cache", h)
 	}
 }
 
