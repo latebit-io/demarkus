@@ -16,6 +16,29 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// runInBackground starts w.Run on a goroutine and registers a cleanup that
+// cancels the context and asserts Run returned without error within 1s. This
+// keeps Run's error surfaced to the test rather than discarded by the
+// goroutine, and ensures the watcher goroutine is joined before the test
+// returns.
+func runInBackground(t *testing.T, w *Watcher) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("Run() returned error: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Errorf("Run() did not return within 1s after ctx cancel")
+		}
+	})
+}
+
 // waitForCount blocks until the counter reaches at least want or the deadline
 // passes. Returns the final value.
 func waitForCount(counter *atomic.Int32, want int32, deadline time.Duration) int32 {
@@ -63,9 +86,7 @@ func TestInPlaceWriteTriggersReload(t *testing.T) {
 		Debounce: 20 * time.Millisecond,
 		Logger:   discardLogger(),
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() { _ = w.Run(ctx) }()
+	runInBackground(t, &w)
 
 	time.Sleep(50 * time.Millisecond) // let watcher attach
 	if err := os.WriteFile(target, []byte("v2"), 0o600); err != nil {
@@ -91,9 +112,7 @@ func TestAtomicRenameTriggersReload(t *testing.T) {
 		Debounce: 20 * time.Millisecond,
 		Logger:   discardLogger(),
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() { _ = w.Run(ctx) }()
+	runInBackground(t, &w)
 
 	time.Sleep(50 * time.Millisecond)
 	tmp := filepath.Join(dir, "tokens.toml.tmp")
@@ -147,9 +166,7 @@ func TestSymlinkRetargetTriggersReload(t *testing.T) {
 		Debounce: 20 * time.Millisecond,
 		Logger:   discardLogger(),
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() { _ = w.Run(ctx) }()
+	runInBackground(t, &w)
 
 	time.Sleep(50 * time.Millisecond)
 	// Atomic swap of the indirection: stage a new symlink and rename it over
@@ -181,9 +198,7 @@ func TestDebounceCoalescesBurst(t *testing.T) {
 		Debounce: 80 * time.Millisecond,
 		Logger:   discardLogger(),
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() { _ = w.Run(ctx) }()
+	runInBackground(t, &w)
 
 	time.Sleep(50 * time.Millisecond)
 	// Fire several writes well within the debounce window.

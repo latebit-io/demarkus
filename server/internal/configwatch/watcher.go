@@ -57,7 +57,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("configwatch: create watcher: %w", err)
 	}
-	defer func() { _ = fw.Close() }()
+	defer func() {
+		if err := fw.Close(); err != nil {
+			w.Logger.Warn("configwatch: close watcher failed", "target", w.Target, "error", err)
+		}
+	}()
 
 	if err := fw.Add(dir); err != nil {
 		return fmt.Errorf("configwatch: watch %s: %w", dir, err)
