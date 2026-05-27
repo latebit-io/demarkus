@@ -34,7 +34,7 @@ tests:
           path: metadata.namespace
           value: broker-ns
 
-  - it: broker-ns Role leases rule pinned to get/create/update on the configured leaseName
+  - it: broker-ns Role leases get/update rule pinned to the configured leaseName
     template: rbac-broker-ns.yaml
     documentIndex: 0
     asserts:
@@ -49,37 +49,63 @@ tests:
           value: ["demarkus-broker-sweeper"]
       - equal:
           path: rules[0].verbs
-          value: ["get", "create", "update"]
+          value: ["get", "update"]
+      - notContains:
+          path: rules[0].verbs
+          content: create
+      - notContains:
+          path: rules[0].verbs
+          content: delete
+
+  - it: broker-ns Role leases create rule is namespace-wide (resourceNames is unsupported for create)
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[1].apiGroups
+          value: ["coordination.k8s.io"]
+      - equal:
+          path: rules[1].resources
+          value: ["leases"]
+      - equal:
+          path: rules[1].verbs
+          value: ["create"]
+      - notExists:
+          # Critical: resourceNames MUST NOT be set on a create
+          # rule. k8s evaluates the rule as "does not match" when
+          # both are present, silently denying create. The Lease
+          # bootstrap depends on this rule landing un-restricted.
+          path: rules[1].resourceNames
 
   - it: broker-ns Role secrets rule pinned to get/update on issuances + refresh-tokens Secrets
     template: rbac-broker-ns.yaml
     documentIndex: 0
     asserts:
       - equal:
-          path: rules[1].apiGroups
+          path: rules[2].apiGroups
           value: [""]
       - equal:
-          path: rules[1].resources
+          path: rules[2].resources
           value: ["secrets"]
       - equal:
-          path: rules[1].resourceNames
+          path: rules[2].resourceNames
           value:
             - "RELEASE-NAME-demarkus-broker-issuances"
             - "RELEASE-NAME-demarkus-broker-refresh-tokens"
       - equal:
-          path: rules[1].verbs
+          path: rules[2].verbs
           value: ["get", "update"]
       - notContains:
-          path: rules[1].verbs
+          path: rules[2].verbs
           content: create
       - notContains:
-          path: rules[1].verbs
+          path: rules[2].verbs
           content: delete
       - notContains:
-          path: rules[1].verbs
+          path: rules[2].verbs
           content: list
 
-  - it: broker-ns Role per-world write-token rule grants get/create/update on each configured world's write-token Secret
+  - it: broker-ns Role per-world write-token rule pins get/update to each configured world's Secret
     template: rbac-broker-ns.yaml
     documentIndex: 0
     set:
@@ -102,36 +128,66 @@ tests:
             expiresAfter: 24h
     asserts:
       - equal:
-          path: rules[2].apiGroups
+          path: rules[3].apiGroups
           value: [""]
       - equal:
-          path: rules[2].resources
+          path: rules[3].resources
           value: ["secrets"]
       - equal:
-          path: rules[2].resourceNames
+          path: rules[3].resourceNames
           value:
             - "demarkus-broker-write-token-team-a"
             - "demarkus-broker-write-token-team-b"
       - equal:
-          path: rules[2].verbs
-          value: ["get", "create", "update"]
+          path: rules[3].verbs
+          value: ["get", "update"]
       - notContains:
-          path: rules[2].verbs
+          path: rules[3].verbs
+          content: create
+      - notContains:
+          path: rules[3].verbs
           content: delete
-      - notContains:
-          path: rules[2].verbs
-          content: list
 
-  - it: broker-ns Role omits the write-token rule entirely when worlds[] is empty
+  - it: broker-ns Role secrets create rule is namespace-wide (resourceNames is unsupported for create)
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["publish"]
+            expiresAfter: 24h
+    asserts:
+      - equal:
+          path: rules[4].apiGroups
+          value: [""]
+      - equal:
+          path: rules[4].resources
+          value: ["secrets"]
+      - equal:
+          path: rules[4].verbs
+          value: ["create"]
+      - notExists:
+          # Same hard k8s RBAC constraint as the leases create rule:
+          # resourceNames on a create rule silently denies create.
+          # The per-world write-token bootstrap depends on this
+          # rule landing un-restricted.
+          path: rules[4].resourceNames
+
+  - it: broker-ns Role omits both worlds rules entirely when worlds[] is empty
     template: rbac-broker-ns.yaml
     documentIndex: 0
     set:
       worlds: []
     asserts:
-      # Only the leases rule + the issuances/refresh-tokens rule
-      # render; no rules[2] is emitted when there are no worlds.
+      # Only the two leases rules + the chart-seeded-secrets rule
+      # render; no rules[3] or [4] are emitted without worlds.
       - notExists:
-          path: rules[2]
+          path: rules[3]
 
   - it: per-world template emits 2 Roles + 2 RoleBindings for two worlds
     template: rbac-worlds.yaml

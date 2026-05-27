@@ -35,7 +35,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/latebit-io/demarkus-broker:0.3.0
+          value: ghcr.io/latebit-io/demarkus-broker:0.3.1
       - notExists:
           path: spec.template.spec.containers[0].command
 
