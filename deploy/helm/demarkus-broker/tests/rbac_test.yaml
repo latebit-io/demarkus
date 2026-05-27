@@ -79,6 +79,60 @@ tests:
           path: rules[1].verbs
           content: list
 
+  - it: broker-ns Role per-world write-token rule grants get/create/update on each configured world's write-token Secret
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["publish"]
+            expiresAfter: 24h
+        - name: team-b
+          namespace: team-b
+          tokensSecret: team-b-tokens
+          allow: {}
+          defaultToken:
+            paths: ["/team-b/*"]
+            operations: ["publish"]
+            expiresAfter: 24h
+    asserts:
+      - equal:
+          path: rules[2].apiGroups
+          value: [""]
+      - equal:
+          path: rules[2].resources
+          value: ["secrets"]
+      - equal:
+          path: rules[2].resourceNames
+          value:
+            - "demarkus-broker-write-token-team-a"
+            - "demarkus-broker-write-token-team-b"
+      - equal:
+          path: rules[2].verbs
+          value: ["get", "create", "update"]
+      - notContains:
+          path: rules[2].verbs
+          content: delete
+      - notContains:
+          path: rules[2].verbs
+          content: list
+
+  - it: broker-ns Role omits the write-token rule entirely when worlds[] is empty
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    set:
+      worlds: []
+    asserts:
+      # Only the leases rule + the issuances/refresh-tokens rule
+      # render; no rules[2] is emitted when there are no worlds.
+      - notExists:
+          path: rules[2]
+
   - it: per-world template emits 2 Roles + 2 RoleBindings for two worlds
     template: rbac-worlds.yaml
     set:

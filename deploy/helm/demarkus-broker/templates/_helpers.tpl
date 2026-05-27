@@ -71,6 +71,20 @@ Names for the chart-managed Secrets.
 {{- end -}}
 
 {{/*
+Per-world write-token Secret name. The broker provisions one of
+these lazily on the first write to each world (see
+worldWriteTokenStore.Provision in
+tools/demarkus-broker/internal/broker/world_write_tokens.go). The
+prefix is hardcoded in the Go side — keep this helper byte-for-byte
+in sync; a drift here surfaces at runtime as a "forbidden" on the
+broker's first write attempt and is exactly the kind of silent
+misconfig RBAC is supposed to catch up front.
+*/}}
+{{- define "demarkus-broker.writeTokenSecretName" -}}
+{{- printf "demarkus-broker-write-token-%s" .worldName -}}
+{{- end -}}
+
+{{/*
 Chart-managed mount path for the MCP gateway's TLS Secret. Single
 source of truth for secret-config.yaml (renders certFile/keyFile into
 the broker's config.yaml) and deployment.yaml (mounts the Secret
