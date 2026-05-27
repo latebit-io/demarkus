@@ -83,139 +83,88 @@ func parseToolURL(raw string) (worldName, path string, err error) {
 	return worldName, path, nil
 }
 
-// mintFuncFor returns a mintFunc bound to the given identity and
-// worldName. The closure narrows the broker's Issuer.MintFiltered
-// to the single target world via a keep predicate so the lazy mint
-// produces exactly one issuance — minting against every authorized
-// world on a tool call against one would burn Secret writes on
-// worlds the user may never touch this session.
-//
-// The returned cachedWorldToken carries Issuer.MintFiltered's own
-// ExpiresAt so the session cache evicts entries past their natural
-// lifetime without round-tripping to the world.
-func (g *mcpGateway) mintFuncFor(claims Claims, worldName string) mintFunc {
-	return func(ctx context.Context) (cachedWorldToken, error) {
-		keep := func(w *WorldConfig) bool { return w.Name == worldName }
-		results, err := g.srv.issuer.MintFiltered(ctx, claims, keep)
-		if err != nil {
-			return cachedWorldToken{}, err
-		}
-		// MintFiltered with a single-world keep predicate returns
-		// either zero results (filtered out — world exists but
-		// identity is not authorized for it) or exactly one. Zero
-		// is a real failure to surface to the caller; the
-		// keep-everything case never lands here.
-		if len(results) != 1 {
-			return cachedWorldToken{}, fmt.Errorf("broker: mint returned %d results for world %q (expected exactly 1)", len(results), worldName)
-		}
-		r := results[0]
-		return cachedWorldToken{raw: r.RawToken, expiresAt: r.ExpiresAt}, nil
-	}
-}
-
 // worldOp is the closure form of a dispatcher call. The handler
 // captures the per-verb args (path, body, expectedVersion, meta)
 // in its closure; the retry loop only knows about token. This
-// keeps dispatchWithAuth verb-agnostic — Slice 2's three read
-// verbs and Slice 3's three write verbs share the same auth-race
-// machinery without an enum + switch threaded through every call
-// site.
+// keeps dispatchWithAuth verb-agnostic — the write verbs (publish,
+// append, archive) and the federation/graph tools share the same
+// auth-race machinery without an enum + switch threaded through
+// every call site. The three core read verbs (fetch, list,
+// versions) dispatch unauthenticated and skip this path entirely
+// — reads are open to any SSO-authed caller.
 type worldOp func(token string) (fetch.Result, error)
 
-// dispatchWithAuth pulls or lazy-mints the world token for (email,
-// worldName), then invokes op. On a world response of
-// `unauthorized`:
+// dispatchWithAuth resolves the per-world write token and invokes
+// op against it, retrying the SAME token on `unauthorized`
+// responses to absorb the one-time kubelet propagation lag the
+// first time a fresh world is provisioned. The claims argument is
+// kept on the signature for callsite stability but no longer
+// drives the mint — there is one long-lived write token per
+// world, persisted in a broker-namespace Secret, shared across
+// every authorized writer. Writer authorization is enforced at
+// the handler boundary (see write handlers in mcp_tools_write.go)
+// before dispatchWithAuth is invoked at all.
 //
-//   - cache hit: the token the world has changed under us
-//     (operator hand-revoked, sweeper retired, world Secret reset
-//     during a restore). Invalidate and immediately fall through
-//     to a fresh mint — no sleep, no budget consumption.
-//   - fresh mint: the world hasn't propagated the new issuance
-//     yet (kubelet projected-volume refresh in flight). Back off
-//     and retry up to cfg.Server.MCP.FirstMintMaxAttempts with
-//     exponential backoff from FirstMintInitialBackoff to
-//     FirstMintMaxBackoff. The budget is for fresh-mint
-//     unauthorized responses only — a single cache-hit 401 at
-//     the start of the call MUST NOT reduce the propagation-race
-//     retries available afterward.
+// Retry budget: FirstMintMaxAttempts bounds the total attempts
+// (initial + retries) against a single token. After the very
+// first Provision call lands on a fresh world, kubelet projects
+// the new Secret within seconds-to-minutes; subsequent dispatches
+// to the same world hit the cache and return on the first call.
 //
-// All other responses (ok / not-modified / not-found / archived /
-// not-permitted / conflict / bad-request / server-error) are
-// forwarded verbatim to the caller per the byte-for-byte proxy
-// contract. Transport errors short-circuit immediately — they're
-// not auth races.
-func (g *mcpGateway) dispatchWithAuth(ctx context.Context, claims Claims, worldName string, op worldOp) (fetch.Result, error) {
+// All non-`unauthorized` responses (ok / not-modified / not-found /
+// archived / not-permitted / conflict / bad-request / server-error)
+// are forwarded verbatim per the byte-for-byte proxy contract.
+// Transport errors short-circuit immediately.
+func (g *mcpGateway) dispatchWithAuth(ctx context.Context, _ Claims, worldName string, op worldOp) (fetch.Result, error) {
 	mcpCfg := g.srv.cfg.Server.MCP
 	maxAttempts := mcpCfg.FirstMintMaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
 	backoff := mcpCfg.FirstMintInitialBackoff
-	mint := g.mintFuncFor(claims, worldName)
 
-	// freshUnauthorized counts only the propagation-race attempts:
-	// fresh-mint tokens the world rejected. Cache-hit rejections
-	// drop the entry and loop immediately without touching this
-	// counter so a tight maxAttempts config still gives the full
-	// propagation-race budget after a stale-cache wakeup.
-	freshUnauthorized := 0
-	for {
-		tok, isFresh, err := g.sessionCache.GetOrMint(ctx, claims.Email, worldName, mint)
-		if err != nil {
-			return fetch.Result{}, err
+	tok, err := g.srv.worldWriteTokens.Provision(ctx, worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			// Backoff before the retry, not before the first attempt.
+			// Context cancellation short-circuits so a client hangup
+			// doesn't keep the broker spinning.
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return fetch.Result{}, ctx.Err()
+			}
+			backoff *= 2
+			if backoff > mcpCfg.FirstMintMaxBackoff {
+				backoff = mcpCfg.FirstMintMaxBackoff
+			}
 		}
-		result, err := op(tok.raw)
-		if err != nil {
+		result, opErr := op(tok)
+		if opErr != nil {
 			// Transport-level failure — no auth race semantics
-			// apply. Return immediately; the caller maps it to
-			// an MCP tool error.
-			return fetch.Result{}, err
+			// apply. Return immediately; the caller maps it to an
+			// MCP tool error.
+			return fetch.Result{}, opErr
 		}
 		if result.Response.Status != protocol.StatusUnauthorized {
 			return result, nil
 		}
-		// Unauthorized response. The cache entry is wrong (or
-		// the world hasn't seen our newly-minted token yet).
-		// Drop the cache and retry. The next iteration's
-		// GetOrMint will fresh-mint, so the retry covers both
-		// the "stale cache" and "kubelet propagation lag" cases.
-		g.sessionCache.Invalidate(claims.Email, worldName)
-		if !isFresh {
-			// Cache-hit token rejected. The next iteration is
-			// the fresh-mint case; loop without sleeping and
-			// without counting against the propagation-race
-			// budget — the cache was stale, not the world.
-			continue
-		}
-		// Fresh-mint token rejected. Consumes the propagation-
-		// race budget; bail out cleanly when exhausted so the
-		// agent sees a descriptive error instead of a hung
-		// tool call.
-		freshUnauthorized++
-		if freshUnauthorized >= maxAttempts {
-			return fetch.Result{}, fmt.Errorf("broker: world %s rejected freshly-minted token after %d attempts (token propagation lag exceeded broker deadline)", worldName, maxAttempts)
-		}
-		// Sleep with bounded exponential backoff before the
-		// next attempt. Context cancellation short-circuits so
-		// a client hangup doesn't keep the broker spinning.
-		select {
-		case <-time.After(backoff):
-		case <-ctx.Done():
-			return fetch.Result{}, ctx.Err()
-		}
-		backoff *= 2
-		if backoff > mcpCfg.FirstMintMaxBackoff {
-			backoff = mcpCfg.FirstMintMaxBackoff
-		}
 	}
+	return fetch.Result{}, fmt.Errorf("broker: world %s rejected write token after %d attempts (token propagation lag exceeded broker deadline)", worldName, maxAttempts)
 }
 
 // handleMarkFetch implements the mark_fetch tool against the
-// brokered world. Output format mirrors the local
-// client/cmd/demarkus-mcp emission for parity (plan v5
-// byte-for-byte proxy contract): formatToolResult is the
-// duplicated formatter; the proxy-fidelity test pins drift.
-func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
+// brokered world. Reads are open to any SSO-authenticated caller:
+// the world's tokens.toml is write-only (no `read` operation is
+// granted to any token), so an empty bearer flows through and the
+// document is returned. No issuer round-trip, no sessionCache, no
+// propagation-race retry — that machinery exists solely for
+// writes.
+func (g *mcpGateway) handleMarkFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -224,28 +173,16 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	claims, ok := claimsFromCtx(ctx)
-	if !ok {
-		// Unreachable when wired through gatewayAuth +
-		// subjectRateLimit; the 500-equivalent envelope makes
-		// the regression loud if a future composition skips
-		// the middleware.
-		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
-	}
-	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Fetch(worldName, path, token)
-	})
+	result, err := g.dispatcher.Fetch(worldName, path, "")
 	if err != nil {
 		return g.toolErrorFor("fetch", worldName, err), nil
 	}
 	return mcp.NewToolResultText(formatToolResult(result, "version", "modified", "etag")), nil
 }
 
-// handleMarkList implements the mark_list tool. Output keys
-// mirror the local server's choice (just `modified`); remaining
-// metadata keys are appended to give the agent full visibility
-// (formatToolResult convention).
-func (g *mcpGateway) handleMarkList(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+// handleMarkList implements the mark_list tool. Reads dispatch
+// unauthenticated; see handleMarkFetch for the rationale.
+func (g *mcpGateway) handleMarkList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -254,23 +191,16 @@ func (g *mcpGateway) handleMarkList(ctx context.Context, req mcp.CallToolRequest
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	claims, ok := claimsFromCtx(ctx)
-	if !ok {
-		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
-	}
-	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.List(worldName, path, token)
-	})
+	result, err := g.dispatcher.List(worldName, path, "")
 	if err != nil {
 		return g.toolErrorFor("list", worldName, err), nil
 	}
 	return mcp.NewToolResultText(formatToolResult(result, "modified")), nil
 }
 
-// handleMarkVersions implements the mark_versions tool. Same
-// formatToolResult key ordering as the local server so the
-// proxy-fidelity test can pin equality across both surfaces.
-func (g *mcpGateway) handleMarkVersions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+// handleMarkVersions implements the mark_versions tool. Reads
+// dispatch unauthenticated; see handleMarkFetch for the rationale.
+func (g *mcpGateway) handleMarkVersions(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -279,13 +209,7 @@ func (g *mcpGateway) handleMarkVersions(ctx context.Context, req mcp.CallToolReq
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	claims, ok := claimsFromCtx(ctx)
-	if !ok {
-		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
-	}
-	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Versions(worldName, path, token)
-	})
+	result, err := g.dispatcher.Versions(worldName, path, "")
 	if err != nil {
 		return g.toolErrorFor("versions", worldName, err), nil
 	}

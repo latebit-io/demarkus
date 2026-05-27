@@ -380,23 +380,21 @@ func TestAuthCallbackSuccess(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
 	}
-	var got struct {
-		Tokens []MintResult `json:"tokens"`
-	}
+	// The bare-code branch returns identity + authorized worlds — no
+	// raw tokens. Per-world demarkus tokens are minted lazily inside
+	// the broker's MCP gateway on first dispatch.
+	var got installResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// Count is a precondition for the field-level assertions below;
-	// without it the indexing on Line 0 would panic instead of giving a
-	// useful diff.
-	if len(got.Tokens) != 1 {
-		t.Fatalf("tokens = %+v, want exactly 1", got.Tokens)
+	if got.Email != "alice@example.com" {
+		t.Errorf("Email = %q, want alice@example.com", got.Email)
 	}
-	if got.Tokens[0].World != "team-a" {
-		t.Errorf("world = %q, want team-a", got.Tokens[0].World)
+	if len(got.Worlds) != 1 {
+		t.Fatalf("worlds = %+v, want exactly 1", got.Worlds)
 	}
-	if got.Tokens[0].RawToken == "" {
-		t.Error("RawToken empty in callback response")
+	if got.Worlds[0].Name != "team-a" {
+		t.Errorf("Name = %q, want team-a", got.Worlds[0].Name)
 	}
 }
 

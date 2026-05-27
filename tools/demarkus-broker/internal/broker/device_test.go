@@ -698,14 +698,17 @@ func TestAuthCallbackUnchangedWithoutDeviceCookie(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Errorf("content-type = %q, want application/json (regression: device branch must NOT engage)", ct)
 	}
-	var got struct {
-		Tokens []MintResult `json:"tokens"`
-	}
+	// Same identity+worlds response shape as TestAuthCallbackSuccess.
+	// No raw tokens — provisioning is lazy in the MCP gateway.
+	var got installResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got.Tokens) != 1 {
-		t.Fatalf("tokens = %+v, want exactly 1", got.Tokens)
+	if got.Email != "alice@example.com" {
+		t.Errorf("Email = %q, want alice@example.com", got.Email)
+	}
+	if len(got.Worlds) != 1 {
+		t.Fatalf("worlds = %+v, want exactly 1 (regression: device branch must NOT engage)", got.Worlds)
 	}
 }
 

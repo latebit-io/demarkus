@@ -68,6 +68,13 @@ type Server struct {
 	// tests that pass nil signers behave unchanged.
 	jwks *jwksHandler
 
+	// worldWriteTokens owns the per-world write-token Secrets the
+	// MCP gateway dispatches writes with. One long-lived token per
+	// world, shared across all writers — SSO + WorldConfig.Allow at
+	// the broker is the writer gate; the world only ever sees one
+	// token-per-world in its tokens.toml.
+	worldWriteTokens *worldWriteTokenStore
+
 	// mcpPool is the production worldPool wired by MCPGateway, held
 	// here so CloseMCPGateway can drain pooled QUIC connections at
 	// shutdown. Nil for tests that go through MCPGatewayWith (they
@@ -156,6 +163,7 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
 		authCodeStore:     newAuthCodeStore(clock, defaultPendingAuthCodeTTL, defaultAuthCodeTTL),
 		refreshStore:      NewRefreshStore(cfg, issuer.k8s),
+		worldWriteTokens:  newWorldWriteTokenStore(cfg, issuer.k8s),
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
 	if idTokenSigner != nil {
@@ -396,41 +404,37 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := exchange.Claims
-	results, err := s.issuer.Mint(r.Context(), claims)
-	if err != nil {
-		// Partial mint: some worlds succeeded before a later one failed.
-		// Hand back the minted tokens so the client persists them; the
-		// failed worlds are absent from both Secrets, so a re-login
-		// retries them cleanly. Status 200 with a partialFailure field
-		// — 207 Multi-Status would be more standards-correct but most
-		// HTTP clients drop the body on non-2xx codes that aren't 200.
-		if len(results) > 0 {
-			s.log.WarnContext(r.Context(), "broker: partial mint", "err", err, "subject", hashSubject(claims.Subject), "minted", len(results))
-			// Stable client-safe code; full err detail stays in the log
-			// above so we don't leak internal Secret names or backend
-			// failure modes to API consumers.
-			writeJSON(w, http.StatusOK, map[string]any{
-				"tokens":         results,
-				"partialFailure": "one_or_more_worlds_failed",
-			})
-			return
-		}
-		if errors.Is(err, ErrNotAuthorized) {
-			s.log.InfoContext(r.Context(), "broker: identity not authorized for any world", "subject", hashSubject(claims.Subject))
-			http.Error(w, "no authorized worlds", http.StatusForbidden)
-			return
-		}
-		if errors.Is(err, ErrEmailUnverified) {
-			s.log.InfoContext(r.Context(), "broker: rejected unverified identity", "subject", hashSubject(claims.Subject))
-			http.Error(w, "email not verified", http.StatusForbidden)
-			return
-		}
-		s.log.ErrorContext(r.Context(), "broker: mint failed", "err", err, "subject", hashSubject(claims.Subject))
-		http.Error(w, "mint failed", http.StatusInternalServerError)
+	if !claims.EmailVerified {
+		s.log.InfoContext(r.Context(), "broker: rejected unverified identity", "subject", hashSubject(claims.Subject))
+		http.Error(w, "email not verified", http.StatusForbidden)
 		return
 	}
-	s.log.InfoContext(r.Context(), "broker: mint succeeded", "subject", hashSubject(claims.Subject), "worlds", len(results))
-	writeJSON(w, http.StatusOK, map[string]any{"tokens": results})
+	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
+	worlds := s.issuer.authorizedWorlds(claims)
+	if claims.Email == "" || len(worlds) == 0 {
+		s.log.InfoContext(r.Context(), "broker: identity not authorized for any world", "subject", hashSubject(claims.Subject))
+		http.Error(w, "no authorized worlds", http.StatusForbidden)
+		return
+	}
+	// Identity-only response. Per-world demarkus tokens are minted
+	// lazily inside the broker's MCP gateway on first dispatch and are
+	// never returned to clients on the knowledge-system flow — the
+	// world is unreachable except through the broker, so the raw token
+	// has no consumer outside the broker process.
+	out := make([]installWorld, 0, len(worlds))
+	for _, world := range worlds {
+		out = append(out, installWorld{
+			Name:      world.Name,
+			PublicURL: world.PublicURL,
+		})
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	s.log.InfoContext(r.Context(), "broker: login succeeded", "subject", hashSubject(claims.Subject), "worlds", len(out))
+	writeJSON(w, http.StatusOK, installResponse{
+		Email:  claims.Email,
+		Worlds: out,
+	})
 }
 
 // listTokensResponse is the public shape returned by GET /tokens. The
