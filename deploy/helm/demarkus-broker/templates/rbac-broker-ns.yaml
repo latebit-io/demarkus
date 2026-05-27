@@ -22,8 +22,13 @@
      startup, and at-rest token rotation would race chart upgrades.
      Lazy provisioning instead, which is why this rule must include
      create. Names are pinned per world via resourceNames so a
-     compromised broker SA cannot read every Secret in the broker
-     namespace. */ -}}
+     compromised broker SA cannot read or update any other Secret
+     in the broker namespace. The same k8s RBAC "create cannot be
+     restricted by resourceName" caveat documented for leases above
+     applies here too: create effectively allows any Secret in
+     this namespace at the API level — acceptable scope since the
+     namespace is broker-owned, but worth knowing when threat-
+     modeling. */ -}}
 {{- $brokerNs := include "demarkus-broker.brokerNamespace" . -}}
 {{- $name := include "demarkus-broker.fullname" . -}}
 apiVersion: rbac.authorization.k8s.io/v1
