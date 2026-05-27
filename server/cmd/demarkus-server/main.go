@@ -17,6 +17,7 @@ import (
 	"github.com/latebit/demarkus/protocol/store"
 	"github.com/latebit/demarkus/server/internal/auth"
 	"github.com/latebit/demarkus/server/internal/config"
+	"github.com/latebit/demarkus/server/internal/configwatch"
 	"github.com/latebit/demarkus/server/internal/handler"
 	"github.com/latebit/demarkus/server/internal/logging"
 	"github.com/latebit/demarkus/server/internal/ratelimit"
@@ -117,6 +118,7 @@ func main() {
 			os.Exit(1)
 		}
 		logger.Info("auth: loaded tokens", "path", cfg.TokensFile)
+		startTokenFileWatcher(cfg.TokensFile, logger)
 	} else {
 		logger.Info("auth: no tokens file configured, writes disabled")
 	}
@@ -252,6 +254,22 @@ func loadTokenStore(path string) error {
 	currentTokenStore = ts
 	tokenMu.Unlock()
 	return nil
+}
+
+// startTokenFileWatcher reloads the token store when the tokens file changes
+// on disk. SIGHUP already covers operator-driven reloads; this complements it
+// for environments where the file is rewritten in place without a signal.
+func startTokenFileWatcher(path string, logger *slog.Logger) {
+	w := &configwatch.Watcher{
+		Target: path,
+		Reload: func() error { return loadTokenStore(path) },
+		Logger: logger,
+	}
+	go func() {
+		if err := w.Run(context.Background()); err != nil {
+			logger.Warn("auth: token file watcher exited", "error", err)
+		}
+	}()
 }
 
 // loadTLS returns a TLS config based on the server configuration.
