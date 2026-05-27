@@ -230,6 +230,13 @@ func (s *Server) Routes() http.Handler {
 	// it gates the device-flow POSTs. See register.go for the full
 	// rationale.
 	mux.Handle("POST /register", s.ipRateLimit(http.HandlerFunc(s.register)))
+	// /oauth/authorize stub. The discovery doc advertises this URL as
+	// `authorization_endpoint` to keep MCP clients from defaulting back
+	// to the upstream IdP's authorize URL (where the broker's DCR-minted
+	// client_id is unknown). GET + POST both routed at the same handler
+	// per RFC 6749 §3.1. See oauth_authorize.go for the probe rationale.
+	mux.Handle("GET /oauth/authorize", s.ipRateLimit(http.HandlerFunc(s.oauthAuthorize)))
+	mux.Handle("POST /oauth/authorize", s.ipRateLimit(http.HandlerFunc(s.oauthAuthorize)))
 	// RFC 7009 token revocation. Unauthenticated (possession of
 	// the token IS the authz signal) under the IP limiter for
 	// defense-in-depth. PR4 only operates on refresh tokens; the

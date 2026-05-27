@@ -271,6 +271,31 @@ func applyDiscoveryOverrides(raw []byte, brokerURL string) ([]byte, error) {
 	// reach the device-flow surface. See register.go for the
 	// rubber-stamp semantics and the rationale.
 	doc["registration_endpoint"] = brokerURL + "/register"
+	// authorization_endpoint redirected to the broker's stub handler.
+	// The IdP's upstream value (e.g. accounts.google.com/o/oauth2/v2/auth)
+	// MUST NOT pass through: an MCP client following the spec's
+	// authorization_code-first preference would ship its DCR-minted
+	// client_id straight to the IdP, which has never heard of it →
+	// confusing `invalid_client` 401 surfaced at the wrong layer. The
+	// stub at /oauth/authorize returns RFC 6749 `unsupported_response_type`
+	// JSON pointing the client at device_authorization_endpoint. Paired
+	// with the grant_types_supported override below, this signals
+	// "device_code only" to a well-behaved MCP client. See
+	// oauth_authorize.go for the probe rationale — if Claude Code's SDK
+	// doesn't fall back, the broker needs a real authorization_code
+	// grant implementation.
+	doc["authorization_endpoint"] = brokerURL + "/oauth/authorize"
+	// grant_types_supported overridden so MCP clients reading the
+	// discovery doc see exactly what the broker's token endpoint
+	// actually accepts. The IdP's upstream list typically includes
+	// authorization_code, which the broker does NOT support yet —
+	// advertising it would invite clients to attempt a flow that
+	// will fail at /device/token with unsupported_grant_type. Dropping
+	// it here puts the spec-driven negotiation on the right footing.
+	doc["grant_types_supported"] = []string{
+		"urn:ietf:params:oauth:grant-type:device_code",
+		"refresh_token",
+	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")

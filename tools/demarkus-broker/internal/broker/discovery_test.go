@@ -158,6 +158,12 @@ func TestDiscoveryOverridesBrokerEndpoints(t *testing.T) {
 		// "Incompatible auth server" before reaching the device-flow
 		// surface. See register.go for the rubber-stamp rationale.
 		{"registration_endpoint", "https://broker.example.com/register"},
+		// authorization_endpoint redirected to the broker's stub handler
+		// so an MCP client following the spec's authorization_code-first
+		// preference does NOT ship its DCR-minted client_id to the
+		// upstream IdP (which has never heard of it → confusing
+		// invalid_client from the IdP). See oauth_authorize.go.
+		{"authorization_endpoint", "https://broker.example.com/oauth/authorize"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.field, func(t *testing.T) {
@@ -171,11 +177,15 @@ func TestDiscoveryOverridesBrokerEndpoints(t *testing.T) {
 
 func TestDiscoveryProxiesUnOverriddenFields(t *testing.T) {
 	// Round-trips fields the broker does NOT take over:
-	// userinfo_endpoint, authorization_endpoint, plus IdP-specific
-	// metadata arrays. Tests both presence and exact value so a
-	// regression that silently drops or rewrites these surfaces here.
+	// userinfo_endpoint plus IdP-specific metadata arrays. Tests both
+	// presence and exact value so a regression that silently drops or
+	// rewrites these surfaces here.
+	//
 	// jwks_uri WAS in this list pre-PR4 but moved to the override
-	// set when the broker started signing id_tokens.
+	// set when the broker started signing id_tokens. authorization_endpoint
+	// WAS in this list pre-DCR-followup but moved to the override set
+	// to stop MCP clients from shipping their DCR-minted client_id at
+	// the upstream IdP.
 	idp := newFakeDiscoveryIdP(t)
 	d, _ := newTestDiscovery(t, idp, time.Minute)
 	doc := serveAndDecode(t, d)
@@ -184,7 +194,6 @@ func TestDiscoveryProxiesUnOverriddenFields(t *testing.T) {
 		want  any
 	}{
 		{"userinfo_endpoint", "https://idp.example.com/userinfo"},
-		{"authorization_endpoint", "https://idp.example.com/authorize"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.field, func(t *testing.T) {
@@ -200,6 +209,31 @@ func TestDiscoveryProxiesUnOverriddenFields(t *testing.T) {
 	}
 	if got, ok := doc["code_challenge_methods_supported"].([]any); !ok || len(got) != 1 || got[0] != "S256" {
 		t.Errorf("code_challenge_methods_supported = %v, want [S256]", doc["code_challenge_methods_supported"])
+	}
+}
+
+// TestDiscoveryOverridesGrantTypesSupported asserts the broker advertises
+// only the grant types its /device/token endpoint actually accepts.
+// Upstream IdPs typically advertise authorization_code; passing that
+// through would invite MCP clients to attempt a flow that fails at
+// /device/token with unsupported_grant_type — the exact wrong-layer
+// confusion the authorization_endpoint stub avoids on the front side.
+func TestDiscoveryOverridesGrantTypesSupported(t *testing.T) {
+	idp := newFakeDiscoveryIdP(t)
+	d, _ := newTestDiscovery(t, idp, time.Minute)
+	doc := serveAndDecode(t, d)
+	got, ok := doc["grant_types_supported"].([]any)
+	if !ok {
+		t.Fatalf("grant_types_supported = %v (type %T), want []string", doc["grant_types_supported"], doc["grant_types_supported"])
+	}
+	want := []string{"urn:ietf:params:oauth:grant-type:device_code", "refresh_token"}
+	if len(got) != len(want) {
+		t.Fatalf("grant_types_supported length = %d, want %d (got=%v)", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("grant_types_supported[%d] = %v, want %q", i, got[i], w)
+		}
 	}
 }
 
