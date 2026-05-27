@@ -25,10 +25,23 @@ import (
 // mid-flow, then later did a normal browser login) would silently
 // route /auth/callback through the device branch and bind the
 // wrong grant. Empty means a regular browser code-flow callback.
+//
+// AuthCodeID is the analogous field for the OAuth authorization-code
+// grant the broker offers to MCP clients (Claude Code etc.) that do
+// not pivot to device flow. It opaquely identifies the pending
+// /oauth/authorize request the callback must resume; same dispatch
+// rationale as DeviceCode — keep the callback branch driven by a
+// tamper-evident value, not by an ambient cookie. DeviceCode and
+// AuthCodeID are mutually exclusive in practice (a single /auth/login
+// is driven by one entry-point), but encoded independently so the
+// callback handler's branch order — DeviceCode first, then
+// AuthCodeID — stays unambiguous if a future entry-point ever sets
+// both.
 type State struct {
 	Nonce      string    `json:"n"`
 	ExpiresAt  time.Time `json:"e"`
 	DeviceCode string    `json:"d,omitempty"`
+	AuthCodeID string    `json:"a,omitempty"`
 }
 
 // Signer encodes and verifies State values into the signed cookie format

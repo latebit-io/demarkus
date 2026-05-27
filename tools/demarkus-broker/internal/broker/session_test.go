@@ -41,6 +41,30 @@ func TestSignerRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSignerRoundTripCarriesDispatchFields(t *testing.T) {
+	s := newTestSigner(t)
+	state := State{
+		Nonce:      "abc",
+		ExpiresAt:  time.Now().Add(5 * time.Minute),
+		DeviceCode: "device-code-opaque",
+		AuthCodeID: "auth-code-id-opaque",
+	}
+	token, err := s.Sign(state)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	got, err := s.Verify(token)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got.DeviceCode != state.DeviceCode {
+		t.Errorf("DeviceCode = %q, want %q", got.DeviceCode, state.DeviceCode)
+	}
+	if got.AuthCodeID != state.AuthCodeID {
+		t.Errorf("AuthCodeID = %q, want %q", got.AuthCodeID, state.AuthCodeID)
+	}
+}
+
 func TestSignerRejectsTampering(t *testing.T) {
 	s := newTestSigner(t)
 	state := State{Nonce: "abc", ExpiresAt: time.Now().Add(5 * time.Minute)}
