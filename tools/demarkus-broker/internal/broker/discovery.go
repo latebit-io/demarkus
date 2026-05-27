@@ -271,31 +271,40 @@ func applyDiscoveryOverrides(raw []byte, brokerURL string) ([]byte, error) {
 	// reach the device-flow surface. See register.go for the
 	// rubber-stamp semantics and the rationale.
 	doc["registration_endpoint"] = brokerURL + "/register"
-	// authorization_endpoint redirected to the broker's stub handler.
+	// authorization_endpoint redirected to the broker's own handler.
 	// The IdP's upstream value (e.g. accounts.google.com/o/oauth2/v2/auth)
 	// MUST NOT pass through: an MCP client following the spec's
 	// authorization_code-first preference would ship its DCR-minted
 	// client_id straight to the IdP, which has never heard of it →
-	// confusing `invalid_client` 401 surfaced at the wrong layer. The
-	// stub at /oauth/authorize returns RFC 6749 `unsupported_response_type`
-	// JSON pointing the client at device_authorization_endpoint. Paired
-	// with the grant_types_supported override below, this signals
-	// "device_code only" to a well-behaved MCP client. See
-	// oauth_authorize.go for the probe rationale — if Claude Code's SDK
-	// doesn't fall back, the broker needs a real authorization_code
-	// grant implementation.
+	// confusing `invalid_client` 401 surfaced at the wrong layer.
+	// The broker IS the OAuth AS for the MCP client; the IdP only
+	// ever sees the broker as its OAuth client. See
+	// oauth_authorize.go for the handler.
 	doc["authorization_endpoint"] = brokerURL + "/oauth/authorize"
 	// grant_types_supported overridden so MCP clients reading the
 	// discovery doc see exactly what the broker's token endpoint
 	// actually accepts. The IdP's upstream list typically includes
-	// authorization_code, which the broker does NOT support yet —
-	// advertising it would invite clients to attempt a flow that
-	// will fail at /device/token with unsupported_grant_type. Dropping
-	// it here puts the spec-driven negotiation on the right footing.
+	// extras (client_credentials, password, etc.) that the broker
+	// does not support; dropping them here keeps the spec-driven
+	// negotiation honest. Order matches the broker's own dispatch
+	// preference: authorization_code is the MCP-SDK default and
+	// gets listed first.
 	doc["grant_types_supported"] = []string{
+		"authorization_code",
 		"urn:ietf:params:oauth:grant-type:device_code",
 		"refresh_token",
 	}
+	// response_types_supported declares the broker's authorize
+	// endpoint accepts only `code` — no implicit / hybrid. MCP SDKs
+	// that probe for OAuth 2.1 compliance check this list before
+	// they kick off /oauth/authorize.
+	doc["response_types_supported"] = []string{"code"}
+	// code_challenge_methods_supported declares S256-only PKCE.
+	// `plain` is excluded by policy (see oauth_authorize.go). The
+	// override replaces any upstream value verbatim so the broker's
+	// stricter posture is advertised honestly even when the IdP
+	// would have allowed `plain`.
+	doc["code_challenge_methods_supported"] = []string{"S256"}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")

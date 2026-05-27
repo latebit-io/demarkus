@@ -508,8 +508,12 @@ func TestDeviceTokenStates(t *testing.T) {
 
 	t.Run("unsupported_grant_type", func(t *testing.T) {
 		srv, _ := newTestServer(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+		// `client_credentials` is genuinely unsupported by the broker
+		// (PR2 of broker-auth-code-grant added authorization_code as a
+		// recognized grant_type, so a placeholder there would no longer
+		// exercise the default branch).
 		resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
-			"grant_type":  {"authorization_code"},
+			"grant_type":  {"client_credentials"},
 			"device_code": {"x"},
 		})
 		if err != nil {

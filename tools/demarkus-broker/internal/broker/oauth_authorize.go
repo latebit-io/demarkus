@@ -2,44 +2,311 @@ package broker
 
 import (
 	"net/http"
+	"net/url"
+	"strings"
 )
 
-// oauthAuthorize is a stub authorization endpoint that always rejects
-// with `unsupported_response_type`. It exists for one reason: MCP
-// clients that follow the spec's authorization_code-first preference
-// MUST be able to fetch SOME `authorization_endpoint` from the broker's
-// discovery doc and get a clear "not supported here" signal — otherwise
-// the field defaults to the upstream IdP (e.g. accounts.google.com)
-// which the broker's DCR-minted client_id was never registered with,
-// surfacing as a confusing `invalid_client` from the IdP itself.
+// oauthAuthorize implements GET / POST /oauth/authorize — the RFC
+// 6749 §4.1.1 authorization endpoint, scoped to the
+// `response_type=code` + PKCE-S256 flow MCP clients drive against
+// the broker. The handler does not bounce to an IdP directly; the
+// broker is its own AS to the MCP client, and the IdP dance is
+// resumed by /auth/callback via the signed State cookie's
+// AuthCodeID field (mirroring the existing DeviceCode dispatch).
 //
-// Returning a JSON 400 with a standard OAuth error code lets a
-// well-behaved MCP client either surface the error to the user or
-// (better) consult `grant_types_supported` in the same discovery doc
-// and pivot to the device_code grant.
+// Two-phase validation matches RFC 6749 §4.1.2.1: errors that
+// happen BEFORE the redirect_uri is trusted (missing client_id,
+// non-loopback redirect_uri) surface as a JSON 400 directly to the
+// user agent. Errors AFTER trust is established (bad response_type,
+// missing PKCE, store failure) redirect to the client's
+// redirect_uri with `error=...&state=...` so the MCP SDK can surface
+// the failure programmatically.
 //
-// Probe semantics: this handler ships paired with the
-// `authorization_endpoint` + `grant_types_supported` discovery overrides
-// in applyDiscoveryOverrides. If Claude Code's MCP SDK pivots to
-// device flow on its own, this stub stays as-is. If the SDK insists on
-// authorization_code, the broker needs a real OAuth authorization-code
-// grant (handler that mediates between the MCP client and the upstream
-// IdP via /auth/callback); at that point this file becomes the real
-// authorize handler instead of a polite rejection.
+// PKCE is required: the broker accepts only `code_challenge_method=
+// S256` and rejects requests missing `code_challenge`. OAuth 2.1
+// guidance + the MCP authorization spec both require this; with no
+// legacy clients to placate, the broker fails closed.
 //
-// Authentication: none. The endpoint is anonymous-public — same posture
-// as the upstream IdP's authorization endpoint would be. IP rate
-// limiter (server.go) caps per-IP churn.
-//
-// HTTP method: GET and POST both accepted per RFC 6749 §3.1 ("The
-// authorization server MUST support the use of the HTTP GET method
-// [...] and MAY support the use of the HTTP POST method as well").
-// Routing them at the same handler keeps the rejection uniform —
-// neither shape is valid here.
-func (s *Server) oauthAuthorize(w http.ResponseWriter, _ *http.Request) {
+// Method handling: GET (per RFC 6749 §3.1) is the canonical entry;
+// POST is accepted on the same handler. r.URL.Query() covers both
+// because Go's net/http populates form values on POST too, but we
+// stick to query semantics so signed-state state cookie set here
+// doesn't depend on POST body parsing.
+func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusBadRequest, map[string]string{
-		"error":             "unsupported_response_type",
-		"error_description": "this broker does not support the authorization_code grant; clients should consult grant_types_supported in the discovery document and use the device_code grant via device_authorization_endpoint",
+
+	if err := r.ParseForm(); err != nil {
+		writeAuthorizeJSONError(w, "invalid_request", "could not parse form")
+		return
+	}
+	params := r.Form
+
+	clientID := strings.TrimSpace(params.Get("client_id"))
+	if clientID == "" {
+		writeAuthorizeJSONError(w, "invalid_request", "client_id required")
+		return
+	}
+	redirectURI := strings.TrimSpace(params.Get("redirect_uri"))
+	if redirectURI == "" {
+		writeAuthorizeJSONError(w, "invalid_request", "redirect_uri required")
+		return
+	}
+	if !isLoopbackRedirectURI(redirectURI) {
+		// RFC 8252 §7.3: native apps MUST use loopback. Any other
+		// host is a configuration mistake or an attack; either way
+		// the broker refuses BEFORE the redirect is trusted, so the
+		// error stays on the broker's surface (no 302 to a hostile
+		// host).
+		writeAuthorizeJSONError(w, "invalid_request", "redirect_uri must be loopback (http://127.0.0.1:PORT or http://localhost:PORT)")
+		return
+	}
+
+	// redirect_uri is now trusted. All subsequent errors redirect.
+	clientState := params.Get("state")
+
+	responseType := strings.TrimSpace(params.Get("response_type"))
+	if responseType != "code" {
+		redirectAuthorizeError(w, r, redirectURI, clientState, "unsupported_response_type",
+			"only response_type=code is supported")
+		return
+	}
+	codeChallenge := strings.TrimSpace(params.Get("code_challenge"))
+	if codeChallenge == "" {
+		redirectAuthorizeError(w, r, redirectURI, clientState, "invalid_request",
+			"code_challenge required")
+		return
+	}
+	codeChallengeMethod := strings.TrimSpace(params.Get("code_challenge_method"))
+	if codeChallengeMethod == "" {
+		// RFC 7636 §4.3: omitted method defaults to `plain`, but the
+		// broker does not accept `plain`. Reject the omitted case
+		// explicitly so the SDK gets a helpful error code rather
+		// than the broker silently treating it as plain and then
+		// failing PKCE at the /token leg.
+		redirectAuthorizeError(w, r, redirectURI, clientState, "invalid_request",
+			"code_challenge_method required (only S256 is supported)")
+		return
+	}
+	if codeChallengeMethod != "S256" {
+		redirectAuthorizeError(w, r, redirectURI, clientState, "invalid_request",
+			"only code_challenge_method=S256 is supported")
+		return
+	}
+
+	authCodeID, err := s.authCodeStore.Begin(&AuthCodeRequest{
+		ClientID:            clientID,
+		RedirectURI:         redirectURI,
+		ClientState:         clientState,
+		Scope:               params.Get("scope"),
+		CodeChallenge:       codeChallenge,
+		CodeChallengeMethod: codeChallengeMethod,
 	})
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "broker: auth code begin failed", "err", err)
+		redirectAuthorizeError(w, r, redirectURI, clientState, "server_error", "internal error")
+		return
+	}
+
+	nonce, err := NewNonce()
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "broker: nonce", "err", err)
+		redirectAuthorizeError(w, r, redirectURI, clientState, "server_error", "internal error")
+		return
+	}
+	state := State{
+		Nonce:      nonce,
+		AuthCodeID: authCodeID,
+		ExpiresAt:  s.clock().Add(s.cfg.Server.StateTTL),
+	}
+	signed, err := s.signer.Sign(state)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "broker: sign state", "err", err)
+		redirectAuthorizeError(w, r, redirectURI, clientState, "server_error", "internal error")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     stateCookieName,
+		Value:    signed,
+		Path:     "/auth/callback",
+		HttpOnly: true,
+		Secure:   !s.cfg.Server.InsecureCookies,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  state.ExpiresAt,
+		MaxAge:   int(s.cfg.Server.StateTTL.Seconds()),
+	})
+	http.Redirect(w, r, s.verifier.AuthCodeURL(nonce), http.StatusFound)
+}
+
+// authCodeCallback resumes the auth-code flow after the IdP has
+// returned the user to /auth/callback. Dispatched from authCallback
+// when the verified State carries a non-empty AuthCodeID. State
+// validation (signature, nonce match, expiry, cookie clear) is
+// owned by the caller; this function is invoked only after those
+// gates pass.
+//
+// On success: Exchange the IdP code, Bind into the authCodeStore
+// (which mints the broker's authorization code), 302 back to the
+// client's redirect_uri with `code` + `state` + `iss` (RFC 9207
+// mix-up defense — cheap to ship even if Claude Code's SDK ignores
+// it).
+//
+// On IdP-side denial (?error=...): redirect to the client's
+// redirect_uri with the equivalent OAuth error code so the MCP SDK
+// surfaces a real failure rather than waiting for /token.
+//
+// On broker-side failure (LookupPending miss, Exchange error, Bind
+// error): redirect with `error=server_error` whenever the pending
+// entry is still recoverable (so we have a redirect_uri to send
+// the SDK to); render a generic error page only when the pending
+// entry is gone entirely.
+func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCodeID string) {
+	pending, ok := s.authCodeStore.LookupPending(authCodeID)
+	if !ok {
+		// No redirect_uri to send the client to — the pending entry
+		// has been swept or never existed. Surface the failure as a
+		// plain 400; the MCP SDK will see it as an aborted browser
+		// leg.
+		s.log.WarnContext(r.Context(), "broker: auth code callback — pending entry missing",
+			"authCodeID", authCodeID)
+		http.Error(w, "authorization session expired", http.StatusBadRequest)
+		return
+	}
+
+	if errParam := r.URL.Query().Get("error"); errParam != "" {
+		s.log.InfoContext(r.Context(), "broker: auth code callback denied by idp", "err", errParam)
+		// The IdP error code may not match the OAuth 2.0
+		// client-facing set; map to access_denied as the closest
+		// safe equivalent. Real failure detail stays in the log.
+		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
+			"access_denied", "identity provider denied the request")
+		return
+	}
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		s.log.WarnContext(r.Context(), "broker: auth code callback missing code param")
+		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
+			"server_error", "missing authorization code from identity provider")
+		return
+	}
+
+	exchange, err := s.verifier.Exchange(r.Context(), code)
+	if err != nil {
+		s.log.WarnContext(r.Context(), "broker: auth code callback oauth exchange failed", "err", err)
+		// Do NOT translate to access_denied — same rationale as
+		// deviceCallback. A transient IdP failure is not a user
+		// denial.
+		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
+			"server_error", "identity provider exchange failed")
+		return
+	}
+
+	authCode, _, err := s.authCodeStore.Bind(authCodeID, &exchange)
+	if err != nil {
+		s.log.WarnContext(r.Context(), "broker: auth code bind failed",
+			"err", err, "subject", hashSubject(exchange.Claims.Subject))
+		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
+			"server_error", "authorization session expired")
+		return
+	}
+
+	s.log.InfoContext(r.Context(), "broker: auth code bind succeeded",
+		"subject", hashSubject(exchange.Claims.Subject))
+
+	redirectAuthorizeSuccess(w, r, pending.RedirectURI, pending.ClientState, authCode, s.cfg.Server.PublicURL)
+}
+
+// writeAuthorizeJSONError emits a pre-redirect-trust error in the
+// OAuth 2.0 JSON-400 shape. Only invoked while redirect_uri is not
+// yet trusted (missing/malformed client_id, redirect_uri).
+func writeAuthorizeJSONError(w http.ResponseWriter, code, description string) {
+	writeJSON(w, http.StatusBadRequest, map[string]string{
+		"error":             code,
+		"error_description": description,
+	})
+}
+
+// redirectAuthorizeError 302s to the client's redirect_uri with
+// `error=<code>&error_description=<desc>&state=<client_state>` per
+// RFC 6749 §4.1.2.1. Caller MUST have validated that redirectURI
+// is a loopback URI (or otherwise trusted) before invoking — this
+// helper does not re-check.
+func redirectAuthorizeError(w http.ResponseWriter, r *http.Request, redirectURI, clientState, code, description string) {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		// Unreachable in practice — caller validated. Falling back
+		// to a JSON 400 keeps the failure surfaced rather than
+		// generating a malformed Location header.
+		writeAuthorizeJSONError(w, "server_error", "invalid redirect_uri")
+		return
+	}
+	q := u.Query()
+	q.Set("error", code)
+	if description != "" {
+		q.Set("error_description", description)
+	}
+	if clientState != "" {
+		q.Set("state", clientState)
+	}
+	u.RawQuery = q.Encode()
+	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+// redirectAuthorizeSuccess 302s to the client's redirect_uri with
+// `code=<authCode>&state=<client_state>&iss=<brokerURL>`. The `iss`
+// parameter (RFC 9207) lets a defensive SDK confirm the redirect
+// came from the broker it expected, defending against authorization-
+// response mix-up attacks. Cheap to emit even if a given SDK ignores
+// it.
+func redirectAuthorizeSuccess(w http.ResponseWriter, r *http.Request, redirectURI, clientState, authCode, brokerURL string) {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		writeAuthorizeJSONError(w, "server_error", "invalid redirect_uri")
+		return
+	}
+	q := u.Query()
+	q.Set("code", authCode)
+	if clientState != "" {
+		q.Set("state", clientState)
+	}
+	if brokerURL != "" {
+		q.Set("iss", brokerURL)
+	}
+	u.RawQuery = q.Encode()
+	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+// isLoopbackRedirectURI returns true iff raw parses as
+// http://127.0.0.1[:PORT][/path] or http://localhost[:PORT][/path]
+// or http://[::1][:PORT][/path]. RFC 8252 §7.3 requires native apps
+// use loopback; the broker refuses anything else outright.
+//
+// Implementation notes:
+//   - Scheme is http only (TLS is irrelevant on loopback, and HTTPS
+//     loopback redirects are not in the MCP SDK's repertoire).
+//   - Hostname (without port) is compared as the parsed Host so an
+//     attacker cannot smuggle a non-loopback target via userinfo
+//     (`http://localhost@evil.example/`) — net/url's Hostname()
+//     strips userinfo automatically.
+//   - Port is unrestricted (RFC 8252 §7.3 explicitly permits any
+//     port; native apps bind ephemeral ports).
+func isLoopbackRedirectURI(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	if u.User != nil {
+		// Userinfo on a redirect URI has no legitimate use here and
+		// is a known SSRF / mix-up footgun. Reject outright.
+		return false
+	}
+	host := u.Hostname()
+	switch host {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	default:
+		return false
+	}
 }
