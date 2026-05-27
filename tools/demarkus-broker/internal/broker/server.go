@@ -421,8 +421,16 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	// never returned to clients on the knowledge-system flow — the
 	// world is unreachable except through the broker, so the raw token
 	// has no consumer outside the broker process.
+	//
+	// PublicURL-less worlds are filtered out for parity with /me/install:
+	// the plugin has no address to wire them to, and exposing them here
+	// only to have them disappear from the install bundle is the kind
+	// of inconsistency that drifts into agent confusion.
 	out := make([]installWorld, 0, len(worlds))
 	for _, world := range worlds {
+		if world.PublicURL == "" {
+			continue
+		}
 		out = append(out, installWorld{
 			Name:      world.Name,
 			PublicURL: world.PublicURL,

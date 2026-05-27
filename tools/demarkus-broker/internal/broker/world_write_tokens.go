@@ -157,22 +157,54 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 	return finalRecord.RawToken, nil
 }
 
-// syncWorldHash appends the broker's write-token Entry to the
-// world's tokens.toml under the stable label. Idempotent: when the
-// label is already present (the typical case after the first
-// provision), AppendBytes returns ErrLabelExists and we treat that
-// as a no-op — the existing entry's hash matches our raw token
-// because both derive from the same broker-Secret record.
+// syncWorldHash brings the world's tokens.toml in line with the
+// broker's canonical write-token entry under the stable label.
+// Idempotent for the matching-hash case (the typical state after
+// the first provision); reconciling for the mismatched-hash case
+// (the broker Secret was recreated under us while the world Secret
+// retained the old `broker-write-*` entry). Without the hash check
+// the latter case would silently cache a token the world will
+// never authorize and every write would burn the propagation-race
+// budget pretending kubelet was lagging.
 func (s *worldWriteTokenStore) syncWorldHash(ctx context.Context, world *WorldConfig, label string, entry *token.Entry) error {
 	return mutateSecret(ctx, s.k8s, world.Namespace, world.TokensSecret, TokensSecretKey, func(existing []byte) ([]byte, error) {
 		next, err := token.AppendBytes(existing, label, entry)
-		if err != nil {
-			if errors.Is(err, token.ErrLabelExists) {
-				return existing, nil
-			}
+		if err == nil {
+			return next, nil
+		}
+		if !errors.Is(err, token.ErrLabelExists) {
 			return nil, err
 		}
-		return next, nil
+		// Label already present. Compare on-disk hash to decide
+		// whether this is the steady-state no-op or a stale entry
+		// we need to rewrite.
+		current, parseErr := token.ParseBytes(existing)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse existing tokens.toml: %w", parseErr)
+		}
+		existingEntry, ok := current.Tokens[label]
+		if !ok {
+			// AppendBytes claims the label exists but ParseBytes
+			// disagrees. Shouldn't be reachable since both share
+			// the same TOML decoder; surface as an error rather
+			// than overwrite — the right next step is diagnosing
+			// the divergence, not papering over it.
+			return nil, fmt.Errorf("syncWorldHash: AppendBytes reported %q exists but ParseBytes did not find it", label)
+		}
+		if existingEntry.Hash == entry.Hash {
+			return existing, nil
+		}
+		// Hash drift: replace the stale entry so the world
+		// recognizes the broker's current canonical token.
+		stripped, removeErr := token.RemoveBytes(existing, label)
+		if removeErr != nil {
+			return nil, fmt.Errorf("remove stale tokens.toml entry %q: %w", label, removeErr)
+		}
+		rewritten, appendErr := token.AppendBytes(stripped, label, entry)
+		if appendErr != nil {
+			return nil, fmt.Errorf("rewrite tokens.toml entry %q: %w", label, appendErr)
+		}
+		return rewritten, nil
 	})
 }
 

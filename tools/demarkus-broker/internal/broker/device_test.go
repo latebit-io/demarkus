@@ -681,7 +681,12 @@ func TestAuthCallbackUnchangedWithoutDeviceCookie(t *testing.T) {
 		authURL: "https://idp.example.com/authorize",
 		claims:  Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|123"},
 	}
-	srv, _ := newTestServer(t, deviceTestConfig(), verifier, fake.NewSimpleClientset())
+	cfg := deviceTestConfig()
+	// PublicURL is required for the callback to include the world
+	// in its response — parity with /me/install (see authCallback's
+	// filter in server.go).
+	cfg.Worlds[0].PublicURL = "mark://team-a.cluster.local:6309"
+	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
 	client, nonce := loginAndExtract(t, srv)
 
 	req, _ := http.NewRequest(http.MethodGet,
