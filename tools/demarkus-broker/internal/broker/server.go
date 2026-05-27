@@ -373,6 +373,15 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		s.deviceCallback(w, r, state.DeviceCode)
 		return
 	}
+	// Auth-code dispatch (parallel to device-flow): the signed State
+	// carries AuthCodeID when /oauth/authorize set the cookie. The
+	// AuthCodeID was minted by authCodeStore.Begin and never left
+	// the broker (it lives only in the signed cookie), so a callback
+	// claiming a non-empty AuthCodeID is necessarily one we issued.
+	if state.AuthCodeID != "" {
+		s.authCodeCallback(w, r, state.AuthCodeID)
+		return
+	}
 
 	code := r.URL.Query().Get("code")
 	if code == "" {

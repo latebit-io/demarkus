@@ -31,6 +31,11 @@ const deviceGrantType = "urn:ietf:params:oauth:grant-type:device_code"
 // the dispatch must reject typos rather than silently fall through.
 const refreshGrantType = "refresh_token"
 
+// authCodeGrantType is the RFC 6749 §4.1.3 grant_type identifier the
+// /device/token handler dispatches on for the authorization-code
+// exchange. Same single-source-of-truth rationale as the other two.
+const authCodeGrantType = "authorization_code"
+
 //go:embed templates/device_form.html templates/device_done.html
 var deviceTemplatesFS embed.FS
 
@@ -211,6 +216,8 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 		s.deviceTokenDeviceFlow(w, r)
 	case refreshGrantType:
 		s.deviceTokenRefresh(w, r)
+	case authCodeGrantType:
+		s.deviceTokenAuthCode(w, r)
 	default:
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "unsupported_grant_type"})
 	}
@@ -311,6 +318,95 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: refresh sign id_token failed",
 			"err", err, "subject", hashSubject(record.Claims.Subject))
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
+	expiresIn := max(int(s.cfg.Server.IDTokenTTL.Seconds()), 0)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	writeJSON(w, http.StatusOK, deviceTokenSuccess{
+		AccessToken:  idToken,
+		IDToken:      idToken,
+		RefreshToken: rawRefresh,
+		TokenType:    "Bearer",
+		ExpiresIn:    expiresIn,
+	})
+}
+
+// deviceTokenAuthCode handles RFC 6749 §4.1.3 authorization-code
+// exchange. Dispatched from deviceToken on grant_type=
+// authorization_code. Validates the supplied code against the
+// authCodeStore (existence, expiry, client_id binding, redirect_uri
+// binding, PKCE S256 verifier), mints a fresh broker refresh_token
+// + broker-signed id_token, and returns the standard OAuth2 token
+// response.
+//
+// access_token == id_token: same convention deviceTokenRefresh
+// uses (see its doc above) — the broker is the relying party for
+// its own bearer tokens, the compositeVerifier accepts either
+// field, and empty access_token would force every client to learn
+// a per-broker quirk.
+//
+// Error mapping:
+//   - Missing required form params → invalid_request
+//   - authCodeStore.Redeem error (unknown code, mismatch, PKCE) →
+//     invalid_grant. We deliberately collapse the store's distinct
+//     sentinels into one wire code so the response surface does
+//     not leak which axis failed (operator logs name the failure
+//     for in-the-room diagnosis).
+//   - Signing key not wired (operator misconfig) → server_error
+//   - Refresh-token issuance failure → server_error
+//   - id_token signing failure (programming error) → server_error
+//
+// The auth code is consumed by Redeem only on validation success;
+// transient client errors (wrong client_id, wrong redirect_uri,
+// wrong code_verifier) preserve the code for legitimate retry
+// inside the 60-second window. See authCodeStore.Redeem's
+// "Consumption semantics" note for the contract.
+func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
+	if s.idTokenSigner == nil {
+		s.log.ErrorContext(r.Context(), "broker: auth_code grant requested but id_token signer not wired")
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
+	code := r.PostFormValue("code")
+	clientID := r.PostFormValue("client_id")
+	redirectURI := r.PostFormValue("redirect_uri")
+	codeVerifier := r.PostFormValue("code_verifier")
+	if code == "" || clientID == "" || redirectURI == "" || codeVerifier == "" {
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		return
+	}
+
+	exchange, err := s.authCodeStore.Redeem(code, clientID, redirectURI, codeVerifier)
+	if err != nil {
+		// Log the specific axis at debug so an operator can tell
+		// apart wrong-verifier (client bug) from unknown-code
+		// (replay or storage churn); the wire response stays
+		// invalid_grant uniformly.
+		s.log.DebugContext(r.Context(), "broker: auth code redeem failed", "err", err)
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
+		return
+	}
+
+	rawRefresh, err := s.refreshStore.Issue(r.Context(), exchange.Claims, s.cfg.Server.RefreshTokenTTL)
+	if err != nil {
+		// Code is already consumed by Redeem (one-shot). The user
+		// has to retry from /oauth/authorize; that's acceptable
+		// because the failure mode is a backend write to Secrets,
+		// rare in practice and resolved without user action by the
+		// time they retry.
+		s.log.ErrorContext(r.Context(), "broker: auth code refresh mint failed",
+			"err", err, "subject", hashSubject(exchange.Claims.Subject))
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
+
+	now := s.clock()
+	idToken, err := s.idTokenSigner.Sign(exchange.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "broker: auth code sign id_token failed",
+			"err", err, "subject", hashSubject(exchange.Claims.Subject))
 		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
