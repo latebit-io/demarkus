@@ -168,6 +168,40 @@ func TestWorldWriteTokenStoreRewritesStaleWorldEntry(t *testing.T) {
 	}
 }
 
+func TestWorldWriteTokenStoreProvisionIgnoresConfiguredOperations(t *testing.T) {
+	// Regression guard: the broker MUST hardcode the write-token
+	// operations to ["publish"] regardless of what the operator put
+	// in worlds[].defaultToken.operations. If "read" ever leaked
+	// through (e.g. via a well-intentioned "make it configurable"
+	// refactor), the server's RequiresReadAuth would flip on for
+	// every path matched by this token and the open-bearer read
+	// path that the entire broker simplification rests on would
+	// silently start returning unauthorized.
+	cfg := testConfig()
+	// The classic foot-gun config: operator includes "read" thinking
+	// it grants read capability, not realizing it inverts the
+	// world's read-auth gate to require auth on /*.
+	cfg.Worlds[0].DefaultToken.Operations = []string{"read", "publish", "append", "archive"}
+
+	k8s := fake.NewSimpleClientset()
+	store := newWorldWriteTokenStore(cfg, k8s)
+	if _, err := store.Provision(context.Background(), "team-a"); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	brokerSecret, err := k8s.CoreV1().Secrets(cfg.Server.BrokerNamespace).Get(context.Background(), worldWriteTokenSecretName("team-a"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get broker write-token Secret: %v", err)
+	}
+	var record writeTokenRecord
+	if err := json.Unmarshal(brokerSecret.Data[worldWriteTokenSecretKey], &record); err != nil {
+		t.Fatalf("decode write token record: %v", err)
+	}
+	if len(record.Entry.Operations) != 1 || record.Entry.Operations[0] != "publish" {
+		t.Errorf("Entry.Operations = %v, want exactly [\"publish\"] (operator config MUST be ignored)", record.Entry.Operations)
+	}
+}
+
 func TestWorldWriteTokenStoreProvisionUnknownWorld(t *testing.T) {
 	cfg := testConfig()
 	k8s := fake.NewSimpleClientset()

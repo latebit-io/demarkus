@@ -124,7 +124,21 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 			}
 			return existing, nil
 		}
-		minted, mErr := token.Generate(label, world.DefaultToken.Paths, world.DefaultToken.Operations)
+		// Operations is hardcoded — NOT sourced from
+		// world.DefaultToken.Operations — to keep the open-reads
+		// design impossible to regress via config. The server only
+		// recognizes "publish" for write verbs (PUBLISH / APPEND /
+		// ARCHIVE all call Authorize with "publish"), so anything
+		// else is dead weight. Critically, if "read" ever leaked
+		// into the operator's `operations:` list, the server's
+		// `RequiresReadAuth` would flip on for every path matched
+		// by this token (`/*` in the default config) and every
+		// open-bearer read would start returning unauthorized.
+		// One char of config drift would silently break the
+		// architectural invariant the entire broker simplification
+		// rests on. Path stays configurable — narrowing the write
+		// surface to e.g. /team-a/** is a legitimate operator knob.
+		minted, mErr := token.Generate(label, world.DefaultToken.Paths, []string{"publish"})
 		if mErr != nil {
 			return nil, fmt.Errorf("generate write token: %w", mErr)
 		}
