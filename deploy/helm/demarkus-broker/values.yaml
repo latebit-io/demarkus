@@ -259,8 +259,28 @@ worlds: []
   #     groups: ["engineering"]
   #     emails: ["alice@example.com"]
   #   defaultToken:
-  #     paths: ["/team-a/*"]
-  #     operations: ["read", "publish"]
+  #     # Path glob scoping the broker's per-world write token. Use
+  #     # the recursive `/**` glob for "write anywhere in this
+  #     # world" — `/*` only matches top-level entries because
+  #     # path.Match doesn't cross `/`, so a single-star glob would
+  #     # refuse writes to anything in a subdirectory (e.g.
+  #     # /team-a/foo.md). Narrow the scope only if you have a
+  #     # specific reason to forbid writes to certain subtrees;
+  #     # otherwise leave at /** so writers can publish anywhere
+  #     # under the world.
+  #     paths: ["/**"]
+  #     # Operations is ignored by the broker — the write token is
+  #     # always minted with hardcoded ["publish"] regardless of
+  #     # what's set here (see worldWriteTokenStore.Provision in
+  #     # tools/demarkus-broker/internal/broker/world_write_tokens.go
+  #     # for why). The chart still requires the field set so the
+  #     # config-validation surface stays stable across upgrades;
+  #     # values other than ["publish"] are silently ignored.
+  #     operations: ["publish"]
+  #     # ExpiresAfter is currently observed by the dead per-user
+  #     # mint path (issuer.go MintFiltered, scheduled for removal
+  #     # in broker-deadcode-cleanup). The per-world write token is
+  #     # long-lived (no expiry) by design.
   #     expiresAfter: 24h
 
 # Periodic expiry + drift sweeper. Leader-elected via
