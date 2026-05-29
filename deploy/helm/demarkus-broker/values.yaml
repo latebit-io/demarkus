@@ -247,19 +247,11 @@ worlds: []
   #     # otherwise leave at /** so writers can publish anywhere
   #     # under the world.
   #     paths: ["/**"]
-  #     # Operations is ignored by the broker — the write token is
-  #     # always minted with hardcoded ["publish"] regardless of
-  #     # what's set here (see worldWriteTokenStore.Provision in
-  #     # tools/demarkus-broker/internal/broker/world_write_tokens.go
-  #     # for why). The chart still requires the field set so the
-  #     # config-validation surface stays stable across upgrades;
-  #     # values other than ["publish"] are silently ignored.
-  #     operations: ["publish"]
-  #     # ExpiresAfter is no longer consulted by the broker: the
-  #     # per-world write token is long-lived (no expiry) by design,
-  #     # and reads use no token. Kept for config-surface stability;
-  #     # the value is ignored, same as operations above.
-  #     expiresAfter: 24h
+  #     # paths is the only knob. The write token's operations are
+  #     # always ["publish"] (hardcoded in worldWriteTokenStore.Provision
+  #     # so an open-reads regression can't slip in via config) and the
+  #     # token never expires, so there is no operations/expiresAfter
+  #     # field to set.
 
 # Periodic expiry + drift sweeper. Leader-elected via
 # coordination.k8s.io/Lease so multi-replica deployments enforce

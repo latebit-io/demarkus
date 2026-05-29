@@ -287,9 +287,7 @@ func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths:        []string{"/*"},
-			Operations:   []string{"read", "publish"},
-			ExpiresAfter: cfg.Worlds[0].DefaultToken.ExpiresAfter,
+			Paths: []string{"/*"},
 		},
 	})
 	var listCalls atomic.Int32
@@ -467,9 +465,7 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths:        []string{"/*"},
-			Operations:   []string{"read", "publish"},
-			ExpiresAfter: cfg.Worlds[0].DefaultToken.ExpiresAfter,
+			Paths: []string{"/*"},
 		},
 	})
 	var publishCalled atomic.Bool
@@ -537,9 +533,7 @@ func TestHandleMarkIndexBlocksWhenTargetHasNoManifest(t *testing.T) {
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths:        []string{"/*"},
-			Operations:   []string{"read", "publish"},
-			ExpiresAfter: cfg.Worlds[0].DefaultToken.ExpiresAfter,
+			Paths: []string{"/*"},
 		},
 	})
 	d := &fakeDispatcher{
@@ -576,9 +570,7 @@ func TestHandleMarkIndexForceOverridesManifestBlock(t *testing.T) {
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths:        []string{"/*"},
-			Operations:   []string{"read", "publish"},
-			ExpiresAfter: cfg.Worlds[0].DefaultToken.ExpiresAfter,
+			Paths: []string{"/*"},
 		},
 	})
 	var publishCalled atomic.Bool
@@ -629,9 +621,7 @@ func TestHandleMarkIndexDryRunReturnsBodyWithoutPublishing(t *testing.T) {
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths:        []string{"/*"},
-			Operations:   []string{"read", "publish"},
-			ExpiresAfter: cfg.Worlds[0].DefaultToken.ExpiresAfter,
+			Paths: []string{"/*"},
 		},
 	})
 	var publishCalled atomic.Bool

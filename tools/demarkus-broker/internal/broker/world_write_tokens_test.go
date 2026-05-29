@@ -125,7 +125,7 @@ func TestWorldWriteTokenStoreRewritesStaleWorldEntry(t *testing.T) {
 	stale := token.Entry{
 		Hash:       "sha256-" + strings.Repeat("d", 64), // deliberately not what Generate would produce
 		Paths:      cfg.Worlds[0].DefaultToken.Paths,
-		Operations: cfg.Worlds[0].DefaultToken.Operations,
+		Operations: []string{"publish"}, // broker hardcodes write-token ops to ["publish"]
 	}
 	staleBytes, err := token.AppendBytes(nil, label, &stale)
 	if err != nil {
@@ -170,18 +170,15 @@ func TestWorldWriteTokenStoreRewritesStaleWorldEntry(t *testing.T) {
 
 func TestWorldWriteTokenStoreProvisionIgnoresConfiguredOperations(t *testing.T) {
 	// Regression guard: the broker MUST hardcode the write-token
-	// operations to ["publish"] regardless of what the operator put
-	// in worlds[].defaultToken.operations. If "read" ever leaked
-	// through (e.g. via a well-intentioned "make it configurable"
-	// refactor), the server's RequiresReadAuth would flip on for
-	// every path matched by this token and the open-bearer read
-	// path that the entire broker simplification rests on would
+	// operations to ["publish"]. The operations knob was removed from
+	// worlds[].defaultToken entirely, so there is no operator config
+	// to honor; Provision must still emit exactly ["publish"]. If
+	// "read" ever leaked through (e.g. via a well-intentioned "make it
+	// configurable" refactor), the server's RequiresReadAuth would
+	// flip on for every path matched by this token and the open-bearer
+	// read path that the entire broker simplification rests on would
 	// silently start returning unauthorized.
 	cfg := testConfig()
-	// The classic foot-gun config: operator includes "read" thinking
-	// it grants read capability, not realizing it inverts the
-	// world's read-auth gate to require auth on /*.
-	cfg.Worlds[0].DefaultToken.Operations = []string{"read", "publish", "append", "archive"}
 
 	k8s := fake.NewSimpleClientset()
 	store := newWorldWriteTokenStore(cfg, k8s)

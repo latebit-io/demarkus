@@ -37,9 +37,7 @@ func installTestConfigTwoWorlds() *Config {
 		PublicURL:    "mark://team-b.cluster.local:6309",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths:        []string{"/team-b/*"},
-			Operations:   []string{"read"},
-			ExpiresAfter: 12 * time.Hour,
+			Paths: []string{"/team-b/*"},
 		},
 	})
 	return cfg

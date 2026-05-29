@@ -277,9 +277,7 @@ func TestHandleMarkResolveContentHashMismatchSkipsCandidate(t *testing.T) {
 		TokensSecret: "team-b-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths:        []string{"/*"},
-			Operations:   []string{"read"},
-			ExpiresAfter: cfg.Worlds[0].DefaultToken.ExpiresAfter,
+			Paths: []string{"/*"},
 		},
 	})
 	d := &fakeDispatcher{
@@ -387,9 +385,7 @@ func TestHandleMarkResolveAllCandidatesFailReportsLast(t *testing.T) {
 		TokensSecret: "team-b-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths:        []string{"/*"},
-			Operations:   []string{"read"},
-			ExpiresAfter: cfg.Worlds[0].DefaultToken.ExpiresAfter,
+			Paths: []string{"/*"},
 		},
 	})
 	d := &fakeDispatcher{

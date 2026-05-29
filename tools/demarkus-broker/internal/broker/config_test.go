@@ -38,8 +38,6 @@ worlds:
       domains: ["example.com"]
     defaultToken:
       paths: ["/team-a/*"]
-      operations: ["read", "publish"]
-      expiresAfter: 24h
 `
 
 // validConfig is the rendered template with a fresh signing-key
@@ -82,8 +80,6 @@ const validWorldBlock = `worlds:
       domains: ["example.com"]
     defaultToken:
       paths: ["/team-a/*"]
-      operations: ["read", "publish"]
-      expiresAfter: 24h
 `
 
 func writeConfig(t *testing.T, body string) string {
@@ -123,9 +119,6 @@ func TestLoadConfig(t *testing.T) {
 				if len(c.Worlds) != 1 || c.Worlds[0].Name != "team-a" {
 					t.Errorf("worlds = %+v", c.Worlds)
 				}
-				if c.Worlds[0].DefaultToken.ExpiresAfter != 24*time.Hour {
-					t.Errorf("expiresAfter = %v", c.Worlds[0].DefaultToken.ExpiresAfter)
-				}
 			},
 		},
 		{
@@ -145,18 +138,8 @@ func TestLoadConfig(t *testing.T) {
 		},
 		{
 			name:    "duplicate world name",
-			body:    validConfig + "  - name: team-a\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    defaultToken:\n      paths: [\"/x\"]\n      operations: [\"read\"]\n      expiresAfter: 1h\n",
+			body:    validConfig + "  - name: team-a\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    defaultToken:\n      paths: [\"/x\"]\n",
 			wantErr: `duplicate name "team-a"`,
-		},
-		{
-			name:    "missing defaultToken.operations",
-			body:    strings.Replace(validConfig, `operations: ["read", "publish"]`, `operations: []`, 1),
-			wantErr: "defaultToken.operations is required",
-		},
-		{
-			name:    "zero expiresAfter rejected",
-			body:    strings.Replace(validConfig, "expiresAfter: 24h", "expiresAfter: 0s", 1),
-			wantErr: "defaultToken.expiresAfter must be > 0",
 		},
 		{
 			name:    "negative stateTTL rejected",
