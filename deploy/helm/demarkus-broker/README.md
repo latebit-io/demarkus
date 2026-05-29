@@ -56,12 +56,12 @@ wire shape (JSON-RPC vs REST) differs.
 
 ### `/me/install`
 
-Returns the caller's full install bundle — one entry per world the
-verified identity is authorized for AND that has a non-empty
-`publicURL` configured. Each call mints a fresh access token per
-returned world; raw token material is never recoverable after the
-response, so reuse is not possible. Old tokens stay valid
-until their `expiresAt`; the sweeper retires them.
+Returns the caller's identity and installable world metadata — one
+entry per world the verified identity is authorized for AND that has
+a non-empty `publicURL` configured. The endpoint mints no world
+tokens and returns no raw token material; world access is mediated
+entirely by the MCP gateway (reads are open to any SSO-authed
+identity, writes use a broker-held per-world write token).
 
 ```http
 GET /me/install
@@ -210,13 +210,13 @@ using the broker's existing OIDC machinery:
   <id_token>`. The broker validates via the existing PR4
   `compositeVerifier` (accepts both broker-signed and IdP-signed
   tokens), extracts `email` + `email_verified`, **rejects unverified
-  emails** (matches `Issuer.ErrEmailUnverified`), and canonicalizes
-  the email (trim + lowercase) as the session-cache key.
+  emails** (matches `ErrEmailUnverified`), and canonicalizes the
+  email (trim + lowercase) for per-subject rate-limit keying.
 
 ### Rate-limit behavior
 
 The gateway's rate limiter is the same per-canonical-email bucket
-the management API's `/tokens` family uses. A single user calling
+the management API's `/me/install` route uses. A single user calling
 both the MCP gateway and the management API shares one bucket — an
 abusive identity cannot multiply its effective rate by fanning out
 across surfaces. Defaults from `rateLimit.tokens`: 10/min per
@@ -243,15 +243,17 @@ bucket-store-backed persistent graph is on the radar for the
 post-broker design window (see `/thoughts.md` § "On Bucket Stores")
 but is not part of the chart today.
 
-### Session cache + first-mint propagation
+### Write-token provisioning + propagation retries
 
-The broker caches per-email world access-tokens in memory.
+The broker keeps one long-lived write token per world. The raw token
+is stored canonically in a broker-namespace Secret and cached
+in-process; there is no per-email, in-memory session cache.
 
 The `firstMintMax*` / `firstMintInitialBackoff` / `firstMintMaxBackoff`
 knobs govern a broker-side retry loop that absorbs the kubelet →
-world-Secret projection lag. When the broker lazily mints a new
-world token, the world's projected `tokens.toml` volume may not
-refresh before the next tool call, and the world will 401. The
+world-Secret projection lag. When the broker first provisions a
+world's write token, the world's projected `tokens.toml` volume may
+not refresh before the next tool call, and the world will 401. The
 retry loop re-dispatches with exponential backoff (default 6
 attempts, 250ms → 8s) only on `unauthorized` responses for
 just-minted tokens; genuine permission denials and cache-hit 401s

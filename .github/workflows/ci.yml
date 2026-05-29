@@ -204,9 +204,9 @@ jobs:
             deploy/helm/demarkus-broker \
             demarkus-broker \
             test-broker \
-            demarkus-broker-issuances \
-            broker-minted-test \
-            ZmFrZS1pc3N1YW5jZQ== \
+            demarkus-broker-refresh-tokens \
+            broker-seeded-test \
+            ZmFrZS10b2tlbg== \
             --set oidc.issuer=https://accounts.google.com \
             --set oidc.clientID=test-client \
             --set oidc.clientSecret=test-secret \

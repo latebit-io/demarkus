@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -191,6 +192,14 @@ func mutateSecret(ctx context.Context, k8s kubernetes.Interface, namespace, name
 				continue
 			}
 			return fmt.Errorf("create secret %s/%s: %w", namespace, name, createErr)
+		}
+		// No-op mutation: the value is unchanged, so skip the Update.
+		// Writing it anyway bumps the Secret's resourceVersion, which
+		// triggers a kubelet re-projection on every world tokens.toml
+		// mount and amplifies conflict retries across replicas — the
+		// exact propagation churn the broker works to avoid.
+		if bytes.Equal(existing, next) {
+			return nil
 		}
 		if secret.Data == nil {
 			secret.Data = make(map[string][]byte, 1)
