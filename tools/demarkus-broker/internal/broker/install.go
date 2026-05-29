@@ -69,7 +69,7 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 
 	out := []installWorld{}
 	if claims.Email != "" {
-		for _, world := range s.issuer.authorizedWorlds(claims) {
+		for _, world := range authorizedWorlds(s.cfg, claims) {
 			// A world without a PublicURL is not installable: the
 			// plugin has no address to wire the client at. Skip it
 			// rather than report it and force the consumer to

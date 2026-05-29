@@ -161,9 +161,8 @@ func (g *mcpGateway) dispatchWithAuth(ctx context.Context, _ Claims, worldName s
 // brokered world. Reads are open to any SSO-authenticated caller:
 // the world's tokens.toml is write-only (no `read` operation is
 // granted to any token), so an empty bearer flows through and the
-// document is returned. No issuer round-trip, no sessionCache, no
-// propagation-race retry — that machinery exists solely for
-// writes.
+// document is returned. No token, no mint, no propagation-race
+// retry — that machinery exists solely for writes.
 func (g *mcpGateway) handleMarkFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
@@ -217,7 +216,7 @@ func (g *mcpGateway) handleMarkVersions(_ context.Context, req mcp.CallToolReque
 }
 
 // toolErrorFor renders a tool-error envelope from a dispatcher
-// failure. errWorldNotFound and Issuer's ErrNotAuthorized /
+// failure. errWorldNotFound and ErrNotAuthorized /
 // ErrEmailUnverified are surfaced with descriptive messages so
 // the agent sees the cause; other errors fall through to a
 // generic "verb failed" wrapper.

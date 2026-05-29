@@ -32,9 +32,10 @@ import "net/http"
 // (the sha256 space makes guessing infeasible, but the limiter is
 // defense-in-depth same as on /device/authorize).
 //
-// Note: the broker is the resource server for the world tokens
-// (those go through DELETE /tokens/{label}, not this endpoint).
-// /token/revoke applies only to refresh tokens minted by /device/token.
+// Note: /token/revoke applies only to refresh tokens minted by
+// /device/token. There is no per-user world-token revocation surface —
+// the broker provisions one long-lived write token per world, not
+// per-user tokens.
 func (s *Server) tokenRevoke(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})

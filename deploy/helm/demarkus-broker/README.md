@@ -2,7 +2,7 @@
 
 OIDC token broker for demarkus. Exchanges a verified IdP identity for one
 or more demarkus tokens, writing token hashes into per-world Kubernetes
-Secrets and tracking ownership in a broker-namespace issuances Secret.
+Secrets.
 
 ## What this chart ships
 
@@ -10,12 +10,9 @@ Secrets and tracking ownership in a broker-namespace issuances Secret.
   and `PodDisruptionBudget` (`minAvailable: 1`).
 - Chart-managed broker config Secret with auto-generated cookie HMAC key
   preserved across `helm upgrade` via `lookup`.
-- Issuances Secret seeded empty on first install with
-  `helm.sh/resource-policy: keep` so chart updates and uninstalls never
-  wipe broker-minted issuance records.
 - Per-world `Role` + `RoleBinding` in each world's namespace
   (`get/update` on the world's tokens Secret) plus broker-namespace
-  `Role` covering the sweeper Lease and the issuances Secret.
+  `Role` covering the sweeper Lease and the refresh-tokens Secret.
 - Default-on `NetworkPolicy` restricting ingress to the configured
   Ingress controller namespace and egress to DNS + TCP 443.
 - Locked-down pod security context: nonroot UID, read-only root
@@ -55,9 +52,6 @@ wire shape (JSON-RPC vs REST) differs.
 | `POST` | `/device/authorize`, `/device/token` | none | RFC 8628 device flow. IP rate-limited. `/device/token` accepts both `grant_type=urn:ietf:params:oauth:grant-type:device_code` and `grant_type=refresh_token`. |
 | `GET`, `POST` | `/device` | none | HTML user-code entry form. |
 | `POST` | `/token/revoke` | possession | RFC 7009 refresh-token revocation. IP rate-limited. |
-| `GET` | `/tokens` | Bearer id_token | Caller's issuance records. Per-subject rate-limited. |
-| `DELETE` | `/tokens/{label}` | Bearer id_token | Owner-only revoke. Per-subject rate-limited. |
-| `POST` | `/tokens/{label}/rotate` | Bearer id_token | Owner-only rotate. Per-subject rate-limited. |
 | `GET` | `/me/install` | Bearer id_token | Per-user install bundle (universe onboarding). Per-subject rate-limited. |
 
 ### `/me/install`
@@ -65,8 +59,8 @@ wire shape (JSON-RPC vs REST) differs.
 Returns the caller's full install bundle — one entry per world the
 verified identity is authorized for AND that has a non-empty
 `publicURL` configured. Each call mints a fresh access token per
-returned world; raw token material is never recoverable from the
-issuances Secret, so reuse is not possible. Old tokens stay valid
+returned world; raw token material is never recoverable after the
+response, so reuse is not possible. Old tokens stay valid
 until their `expiresAt`; the sweeper retires them.
 
 ```http
@@ -94,7 +88,7 @@ Notes:
 - **Worlds without `publicURL` are excluded.** A world with an empty
   `worlds[].publicURL` is structurally un-installable (the client has
   no address to wire) so the broker filters it BEFORE mint — no
-  issuance record is written for excluded worlds.
+  token is minted for excluded worlds.
 - **Empty `worlds: []` is a 200, not a 403.** An authenticated identity
   with zero installable worlds (no allowlist match, or every match
   filtered by the `publicURL` rule) returns `200 + worlds: []` so
@@ -251,11 +245,7 @@ but is not part of the chart today.
 
 ### Session cache + first-mint propagation
 
-The broker caches per-email world access-tokens in memory. Defaults
-sized for an enterprise universe: 10k unique users × 5 worlds × ~200
-bytes/token ≈ 10MB at saturation. Tune `server.mcp.maxSessions` and
-`server.mcp.sessionMaxIdle` if your population is materially larger
-or your idle profile differs.
+The broker caches per-email world access-tokens in memory.
 
 The `firstMintMax*` / `firstMintInitialBackoff` / `firstMintMaxBackoff`
 knobs govern a broker-side retry loop that absorbs the kubelet →
@@ -286,7 +276,7 @@ listener silently:
 - The rendered `config.yaml` carries the MCP block; existing
   deployments without operator overrides get the chart defaults.
 - No new RBAC: the broker SA already has the perms it needs (the
-  issuances Secret + world tokens Secrets that lazy-mint touches).
+  refresh-tokens Secret + world tokens Secrets that lazy-mint touches).
 - Worlds[] entries get an `internalAddress: ""` field. Empty string
   preserves the default `<name>.<namespace>.svc.cluster.local:6309`
   Service-DNS resolution the gateway uses for tool dispatch.
@@ -415,7 +405,7 @@ namespaces. If your cluster restricts cross-namespace RBAC
 management, set `rbac.create: false` and provision the per-world
 `Role`s out of band — every world entry needs `secrets`
 `get/update` on its `tokensSecret`, plus the broker-namespace `Role`
-covering `coordination.k8s.io/leases` + the issuances Secret.
+covering `coordination.k8s.io/leases` + the refresh-tokens Secret.
 
 ### 5. Set sensible resource limits and confirm the PDB
 
@@ -433,19 +423,6 @@ preserved across `helm upgrade` via a `lookup` of the live config
 Secret. To rotate the key, set `server.cookieKey` to a new
 base64-encoded value and restart the broker. Any in-flight OIDC login
 is invalidated by rotation, which is the intended behavior.
-
-## Issuances Secret resource policy
-
-The issuances Secret is created with `helm.sh/resource-policy: keep`.
-Consequences:
-
-- `helm upgrade` does not overwrite the broker's runtime writes.
-- `helm uninstall` does not delete the Secret. To fully clean up after
-  removing the chart, delete it manually:
-  `kubectl delete secret <release>-issuances -n <broker-namespace>`.
-- Reinstalling the chart in the same namespace picks up the existing
-  issuance state, so users keep their tokens across chart lifecycle
-  events.
 
 ## Values
 

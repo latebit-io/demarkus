@@ -49,7 +49,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/*
 Broker namespace. Defaults to the release namespace; override only when
-the issuances Secret deliberately lives elsewhere (rare).
+the broker's state Secrets deliberately live elsewhere (rare).
 */}}
 {{- define "demarkus-broker.brokerNamespace" -}}
 {{- default .Release.Namespace .Values.server.brokerNamespace -}}
@@ -60,10 +60,6 @@ Names for the chart-managed Secrets.
 */}}
 {{- define "demarkus-broker.configSecretName" -}}
 {{- printf "%s-config" (include "demarkus-broker.fullname" .) -}}
-{{- end -}}
-
-{{- define "demarkus-broker.issuancesSecretName" -}}
-{{- default (printf "%s-issuances" (include "demarkus-broker.fullname" .)) .Values.server.issuancesSecret -}}
 {{- end -}}
 
 {{- define "demarkus-broker.refreshTokensSecretName" -}}

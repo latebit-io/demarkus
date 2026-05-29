@@ -5,14 +5,16 @@
 //
 // Current scope: single broker, multi-world support with
 // domain/groups/emails allowlists (Slice C.1), browser code-flow for
-// /auth/login + /auth/callback, bearer-token (ID token) authentication
-// for /tokens, DELETE /tokens/:label, and POST /tokens/:label/rotate
-// (Slice C.3), leader-elected expiry/drift sweeper (Slice C.2),
-// per-subject + per-IP rate limiting (Slice C.4) via in-memory token
-// buckets keyed by hashSubject(claims.Subject) on authed routes and
-// source IP on /auth/login, RFC 8628 device flow + broker-signed
-// refresh tokens + RFC 7009 revoke (universe-onboarding PRs 3-4), and
-// GET /me/install per-user install bundle (universe-onboarding PR5).
+// /auth/login + /auth/callback, leader-elected refresh-token sweeper
+// (Slice C.2), per-subject + per-IP rate limiting (Slice C.4) via
+// in-memory token buckets keyed by hashSubject(claims.Subject) on authed
+// routes and source IP on /auth/login, RFC 8628 device flow +
+// broker-signed refresh tokens + RFC 7009 revoke (universe-onboarding
+// PRs 3-4), GET /me/install per-user install bundle (universe-onboarding
+// PR5), and the always-on MCP-over-HTTPS gateway at /mcp. World access
+// is mediated entirely through the gateway: SSO is the org gate, reads
+// are open, and writes use a long-lived per-world token the broker
+// provisions and holds. The broker no longer mints per-user tokens.
 package main
 
 import (
@@ -87,8 +89,6 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 		return err
 	}
 
-	issuer := broker.NewIssuer(cfg, k8s)
-
 	// Discovery does an eager IdP fetch at startup — same failure mode
 	// as NewVerifier above (fails fast on misconfigured / unreachable
 	// IdP). 5-minute TTL refresh keeps key-rotation propagation bounded
@@ -114,7 +114,7 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	}
 	log.Info("broker: id_token signer ready", "kid", idTokenSigner.KeyID())
 
-	srv := broker.NewServer(cfg, signer, verifier, issuer, discovery, idTokenSigner, log)
+	srv := broker.NewServer(cfg, signer, verifier, k8s, discovery, idTokenSigner, log)
 	if cfg.RateLimit.Disabled {
 		log.Info("broker: rate limit disabled (rateLimit.disabled=true)")
 	} else {
@@ -183,10 +183,10 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	var sweepWG sync.WaitGroup
 	if !cfg.Sweeper.Disabled {
 		// Share the Server's refresh-token store so the sweeper
-		// operates on the same in-memory cache + Secret view the
-		// /device/token refresh-grant handler does. Server owns
-		// the lifecycle; Sweeper just borrows.
-		sweeper := broker.NewSweeper(issuer, srv.RefreshStore(), cfg.Sweeper.Interval, log)
+		// retires expired grants from the same in-memory cache +
+		// Secret view the /device/token refresh-grant handler uses.
+		// Server owns the lifecycle; Sweeper just borrows.
+		sweeper := broker.NewSweeper(k8s, srv.RefreshStore(), cfg.Sweeper.Interval, log)
 		identity := brokerIdentity()
 		log.Info("broker: starting sweeper",
 			"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,

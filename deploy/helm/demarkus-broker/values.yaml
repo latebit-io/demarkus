@@ -13,7 +13,7 @@ imagePullSecrets: []
 
 # Multi-replica HA. Slice C of the broker is stateless modulo k8s Secret
 # writes (resourceVersion optimistic concurrency on world tokens Secret +
-# issuances Secret); the sweeper coordinates via a coordination.k8s.io/Lease
+# refresh-tokens Secret); the sweeper coordinates via a coordination.k8s.io/Lease
 # so N>=2 replicas is the production posture. Drop to 1 only for dev/trial
 # clusters where you also want to flip sweeper.disabled=true to skip the
 # leader-election overhead.
@@ -48,15 +48,9 @@ server:
   publicURL: ""
 
   # Namespace the broker itself runs in. Defaults to the release namespace
-  # via the helper; override only if the issuances Secret lives elsewhere
-  # (rare).
+  # via the helper; override only if the broker's state Secrets live
+  # elsewhere (rare).
   brokerNamespace: ""
-
-  # Secret name for the broker's issuance state (label -> {email, world,
-  # ...}). Default derived from the release name. The Secret is created
-  # with `helm.sh/resource-policy: keep` so `helm upgrade` and
-  # `helm uninstall` never wipe broker-minted issuance records.
-  issuancesSecret: ""
 
   # DEV-ONLY: drop the Secure attribute on the OIDC state cookie.
   # Default false. Flip to true only for local / kind harnesses where the
@@ -100,11 +94,6 @@ server:
   # Exposure beyond the cluster requires setting `ingress.mcp.host`
   # (see the Ingress block below); leaving it unset keeps the
   # listener cluster-internal.
-  #
-  # Sized for an enterprise universe: ~10k unique users × ~5 worlds
-  # at ~200 bytes per cached world-token ≈ 10MB of session-cache
-  # memory at saturation. Tune `maxSessions` if your population is
-  # materially larger or smaller.
   mcp:
     # Listen address inside the pod. Must differ from server.port so
     # the management API and the MCP surface bind distinct listeners.
@@ -136,13 +125,6 @@ server:
         # Name of the kubernetes.io/tls Secret in the release
         # namespace. Empty disables broker-side TLS.
         name: ""
-    # Per-email session idle timeout. A returning user past idle pays
-    # one lazy-mint round trip on their next call. Default 1h.
-    sessionMaxIdle: 1h
-    # LRU cap on cached email sessions. Eviction is lossless from
-    # the user's perspective — an evicted session is re-minted on
-    # the next call. Default 10000.
-    maxSessions: 10000
     # World-token TTL is NOT a chart knob. Cached world tokens carry
     # their natural expiry from Issuer.MintFiltered (the world's
     # defaultToken.expiresAfter, plus refresh on id_token rotation).
@@ -369,7 +351,7 @@ serviceAccount:
 rbac:
   # When true (default), the chart creates per-world Role + RoleBinding
   # in each world's namespace plus a broker-namespace Role for the
-  # sweeper Lease and the issuances Secret. Flip to false if your
+  # sweeper Lease and the refresh-tokens Secret. Flip to false if your
   # cluster manages RBAC out-of-band (operator policies, GitOps Roles).
   create: true
 

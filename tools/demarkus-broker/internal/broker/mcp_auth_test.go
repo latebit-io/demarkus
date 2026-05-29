@@ -95,7 +95,7 @@ func TestGatewayAuthRejectsUnverifiedEmail(t *testing.T) {
 	// Plan v5 Non-Negotiable "Single identity dimension": the
 	// MCP gateway refuses unverified-email id_tokens at the
 	// boundary so the broker has one consistent identity gate
-	// across /me/install, /tokens, /auth/callback, and /mcp.
+	// across /me/install, /auth/callback, and /mcp.
 	// Returning invalid_token (not invalid_request) matches
 	// RFC 6750 §3.1 — the bearer is present but its claims
 	// don't meet our requirements.
@@ -161,8 +161,8 @@ func TestGatewayAuthValidBearerStashesClaimsOnContext(t *testing.T) {
 	v := &fakeVerifier{claims: Claims{Subject: wantSubject, Email: "alice@example.com", EmailVerified: true}}
 
 	signer := newTestSigner(t)
-	issuer := newIssuer(t, cfg, fake.NewSimpleClientset())
-	brokerSrv := NewServer(cfg, signer, v, issuer, nil, nil, nil)
+	k8s := fake.NewSimpleClientset()
+	brokerSrv := NewServer(cfg, signer, v, k8s, nil, nil, nil)
 
 	var seen Claims
 	var sawClaims bool

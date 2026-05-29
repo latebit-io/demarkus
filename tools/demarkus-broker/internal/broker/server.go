@@ -4,12 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"k8s.io/client-go/kubernetes"
 )
 
 // stateCookieName is the name of the signed cookie holding the OIDC state
@@ -18,14 +19,14 @@ import (
 // (defense against login-CSRF / IdP-mixup).
 const stateCookieName = "broker_oidc_state"
 
-// Server is the broker's HTTP layer. It depends only on the Verifier and
-// Issuer interfaces; tests pass a fakeVerifier and a fake-clientset-backed
-// Issuer and exercise every route end-to-end without network or kube.
+// Server is the broker's HTTP layer. It depends on the Verifier plus a
+// kubernetes client for the Secret-backed stores; tests pass a
+// fakeVerifier and a fake clientset and exercise every route end-to-end
+// without network or kube.
 type Server struct {
 	cfg       *Config
 	signer    *Signer
 	verifier  Verifier
-	issuer    *Issuer
 	discovery *Discovery
 	log       *slog.Logger
 	clock     func() time.Time
@@ -48,9 +49,9 @@ type Server struct {
 	// RefreshStore owns the Secret-backed map of sha256(refresh_token)
 	// → record. Wired by NewServer with the configured (or defaulted)
 	// broker-namespace Secret. Survives broker restarts unlike
-	// deviceStore. Universe-onboarding PR4. The k8s client lives on
-	// the Issuer; NewServer passes it through so the store and the
-	// issuer share one client.
+	// deviceStore. Universe-onboarding PR4. NewServer passes the
+	// kubernetes client straight through so the refresh and
+	// write-token stores share one client.
 	refreshStore *RefreshStore
 
 	// idTokenSigner mints broker-signed id_tokens on the
@@ -81,8 +82,8 @@ type Server struct {
 	// own their fake dispatcher's lifecycle).
 	mcpPool *worldPool
 
-	// subjectReg is the per-subject limiter shared across the three
-	// /tokens routes; loginReg is the per-IP limiter for /auth/login.
+	// subjectReg is the per-subject limiter for /me/install; loginReg
+	// is the per-IP limiter for /auth/login.
 	// Either may be nil (Slice C.4 RateLimitConfig.Disabled, or a test
 	// that constructs Config{} without rate-limit fields set), in
 	// which case the corresponding middleware is a no-op passthrough.
@@ -95,7 +96,7 @@ type Server struct {
 }
 
 // NewServer wires a Server. The caller is responsible for constructing
-// the Signer, Verifier, Issuer, Discovery, and (optionally)
+// the Signer, Verifier, kubernetes client, Discovery, and (optionally)
 // IDTokenSigner in advance — keeps this constructor cheap enough for
 // tests to call directly. discovery and idTokenSigner are optional:
 // tests that don't exercise those surfaces pass nil and Routes() skips
@@ -106,7 +107,7 @@ type Server struct {
 // compositeVerifier in oidc.go) — callers don't have to wrap
 // manually, and tests that pass &fakeVerifier{} get broker-signed
 // verification "for free" against the supplied signer.
-func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, discovery *Discovery, idTokenSigner *IDTokenSigner, log *slog.Logger) *Server {
+func NewServer(cfg *Config, signer *Signer, verifier Verifier, k8s kubernetes.Interface, discovery *Discovery, idTokenSigner *IDTokenSigner, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -155,15 +156,14 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 		cfg:               cfg,
 		signer:            signer,
 		verifier:          verifier,
-		issuer:            issuer,
 		discovery:         discovery,
 		idTokenSigner:     idTokenSigner,
 		log:               log,
 		clock:             clock,
 		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
 		authCodeStore:     newAuthCodeStore(clock, defaultPendingAuthCodeTTL, defaultAuthCodeTTL),
-		refreshStore:      NewRefreshStore(cfg, issuer.k8s),
-		worldWriteTokens:  newWorldWriteTokenStore(cfg, issuer.k8s),
+		refreshStore:      NewRefreshStore(cfg, k8s),
+		worldWriteTokens:  newWorldWriteTokenStore(cfg, k8s),
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
 	if idTokenSigner != nil {
@@ -201,10 +201,9 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, issuer *Issuer, d
 //   - /auth/login: ipRateLimit only. Unauthenticated by design — the
 //     IP limiter is the only backstop against an attacker hammering
 //     the OIDC redirect machinery.
-//   - /tokens, /tokens/:label DELETE, /tokens/:label/rotate:
-//     requireAuth (verifies bearer, stashes claims on ctx) → then
-//     subjectRateLimit (reads claims from ctx, keys on subject hash) →
-//     handler (reads claims from ctx via claimsFromCtx).
+//   - /me/install: requireAuth (verifies bearer, stashes claims on
+//     ctx) → then subjectRateLimit (reads claims from ctx, keys on
+//     subject hash) → handler (reads claims from ctx via claimsFromCtx).
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
@@ -256,32 +255,22 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /oauth/authorize", s.ipRateLimit(http.HandlerFunc(s.oauthAuthorize)))
 	// RFC 7009 token revocation. Unauthenticated (possession of
 	// the token IS the authz signal) under the IP limiter for
-	// defense-in-depth. PR4 only operates on refresh tokens; the
-	// world tokens have their own DELETE /tokens/{label} surface.
+	// defense-in-depth. Operates on refresh tokens only.
 	mux.Handle("POST /token/revoke", s.ipRateLimit(http.HandlerFunc(s.tokenRevoke)))
-	authedSubject := func(h http.HandlerFunc) http.Handler {
-		return s.requireAuth(s.subjectRateLimit(h))
-	}
-	mux.Handle("GET /tokens", authedSubject(s.listTokens))
-	mux.Handle("DELETE /tokens/{label}", authedSubject(s.deleteToken))
-	mux.Handle("POST /tokens/{label}/rotate", authedSubject(s.rotateToken))
-	// /me/install: per-user install bundle. Same auth + per-subject
-	// rate-limit composition as the /tokens routes — the caller is an
-	// authenticated identity and the bucket is shared across the
-	// /tokens routes so a misbehaving client can't fan out across
-	// endpoints to evade the limit. GET (not POST) matches the OAuth
-	// /me-style convention; the per-call mint side-effect is
-	// documented in meInstall's doc comment.
-	mux.Handle("GET /me/install", authedSubject(s.meInstall))
+	// /me/install: per-user install bundle. requireAuth (verifies
+	// bearer, stashes claims on ctx) → subjectRateLimit (keys on the
+	// subject hash) → handler. GET (not POST) matches the OAuth
+	// /me-style convention; the endpoint confirms identity and lists
+	// authorized worlds, no token material (see meInstall's doc).
+	mux.Handle("GET /me/install", s.requireAuth(s.subjectRateLimit(http.HandlerFunc(s.meInstall))))
 	return mux
 }
 
 // RefreshStore exposes the broker's refresh-token store so the
-// Sweeper (constructed in main.go alongside the Issuer-driven
-// issuance sweeper) can share a single instance. Returns nil only
-// if NewServer somehow skipped construction — not a production
-// path. Kept as a method (not a public field) so the lifecycle
-// remains "Server owns construction; callers borrow."
+// Sweeper (constructed in main.go) can share a single instance.
+// Returns nil only if NewServer somehow skipped construction — not a
+// production path. Kept as a method (not a public field) so the
+// lifecycle remains "Server owns construction; callers borrow."
 func (s *Server) RefreshStore() *RefreshStore { return s.refreshStore }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
@@ -410,7 +399,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
-	worlds := s.issuer.authorizedWorlds(claims)
+	worlds := authorizedWorlds(s.cfg, claims)
 	if claims.Email == "" || len(worlds) == 0 {
 		s.log.InfoContext(r.Context(), "broker: identity not authorized for any world", "subject", hashSubject(claims.Subject))
 		http.Error(w, "no authorized worlds", http.StatusForbidden)
@@ -445,109 +434,6 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// listTokensResponse is the public shape returned by GET /tokens. The
-// caller's email comes from the verified ID token, never from a request
-// parameter.
-type listTokensResponse struct {
-	Tokens []Issuance `json:"tokens"`
-}
-
-func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
-	claims, ok := claimsFromCtx(r.Context())
-	if !ok {
-		// Unreachable via Routes() composition (requireAuth always
-		// runs first). The 500 makes the regression loud if a future
-		// route registration forgets to chain requireAuth.
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	issuances, err := s.issuer.List(r.Context(), claims.Email)
-	if err != nil {
-		s.log.ErrorContext(r.Context(), "broker: list issuances", "err", err, "subject", hashSubject(claims.Subject))
-		http.Error(w, "list failed", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, listTokensResponse{Tokens: issuances})
-}
-
-func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
-	claims, ok := claimsFromCtx(r.Context())
-	if !ok {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	label := r.PathValue("label")
-	if label == "" {
-		http.Error(w, "label is required", http.StatusBadRequest)
-		return
-	}
-	err := s.issuer.Revoke(r.Context(), claims.Email, label)
-	switch {
-	case err == nil:
-		s.log.InfoContext(r.Context(), "broker: revoke succeeded", "label", label, "subject", hashSubject(claims.Subject))
-		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, ErrNotFound):
-		http.Error(w, "label not found", http.StatusNotFound)
-	case errors.Is(err, ErrNotOwner):
-		s.log.WarnContext(r.Context(), "broker: revoke owner mismatch", "label", label, "subject", hashSubject(claims.Subject))
-		http.Error(w, "not the token owner", http.StatusForbidden)
-	default:
-		s.log.ErrorContext(r.Context(), "broker: revoke failed", "label", label, "err", err)
-		http.Error(w, "revoke failed", http.StatusInternalServerError)
-	}
-}
-
-func (s *Server) rotateToken(w http.ResponseWriter, r *http.Request) {
-	claims, ok := claimsFromCtx(r.Context())
-	if !ok {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	label := r.PathValue("label")
-	if label == "" {
-		http.Error(w, "label is required", http.StatusBadRequest)
-		return
-	}
-	minted, err := s.issuer.RotateLabel(r.Context(), claims, label)
-	switch {
-	case err == nil:
-		s.log.InfoContext(r.Context(), "broker: rotate succeeded",
-			"old", label, "new", minted.Label,
-			"world", minted.World, "subject", hashSubject(claims.Subject))
-		writeJSON(w, http.StatusOK, minted)
-	case errors.Is(err, ErrNotFound):
-		http.Error(w, "label not found", http.StatusNotFound)
-	case errors.Is(err, ErrNotOwner):
-		s.log.WarnContext(r.Context(), "broker: rotate owner mismatch",
-			"label", label, "subject", hashSubject(claims.Subject))
-		http.Error(w, "not the token owner", http.StatusForbidden)
-	case errors.Is(err, ErrNotAuthorized):
-		// Caller's bearer token is valid but the world's Allow
-		// predicate no longer accepts them (group removed, domain
-		// renamed, email taken off carve-out). Same response shape
-		// as Mint's "no authorized worlds" path.
-		s.log.InfoContext(r.Context(), "broker: rotate denied — caller no longer authorized for world",
-			"label", label, "subject", hashSubject(claims.Subject))
-		http.Error(w, "no longer authorized for this world", http.StatusForbidden)
-	case minted.Label != "":
-		// Soft failure: the new token was minted and recorded
-		// successfully, but the old-label revoke failed (k8s API
-		// blip, transient RBAC issue, etc.). The user's rotation
-		// completed from their perspective — return 200 with the
-		// new token; the sweeper will retire the orphan old label
-		// on expiry or via drift if the operator hand-cleans.
-		// Logging at WARN so operators see the soft failure without
-		// it tripping HTTP error-rate alerts.
-		s.log.WarnContext(r.Context(), "broker: rotate partial — old label not revoked",
-			"old", label, "new", minted.Label,
-			"world", minted.World, "subject", hashSubject(claims.Subject), "err", err)
-		writeJSON(w, http.StatusOK, minted)
-	default:
-		s.log.ErrorContext(r.Context(), "broker: rotate failed", "label", label, "err", err)
-		http.Error(w, "rotate failed", http.StatusInternalServerError)
-	}
-}
-
 func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if h == "" {
@@ -572,8 +458,8 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 // for log correlation without exposing the raw OIDC subject (which often
 // embeds the user's email or external IdP ID). 8 hex chars of SHA-256 is
 // enough to disambiguate users in a single broker's audit trail while
-// keeping aggregated log stores PII-light. The full identity lives in the
-// broker's issuances Secret; logs only need a fingerprint.
+// keeping aggregated log stores PII-light. Logs only need a fingerprint,
+// not the raw subject.
 func hashSubject(subject string) string {
 	if subject == "" {
 		return ""

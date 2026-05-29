@@ -77,7 +77,7 @@ tests:
           # bootstrap depends on this rule landing un-restricted.
           path: rules[1].resourceNames
 
-  - it: broker-ns Role secrets rule pinned to get/update on issuances + refresh-tokens Secrets
+  - it: broker-ns Role secrets rule pinned to get/update on refresh-tokens Secret
     template: rbac-broker-ns.yaml
     documentIndex: 0
     asserts:
@@ -90,7 +90,6 @@ tests:
       - equal:
           path: rules[2].resourceNames
           value:
-            - "RELEASE-NAME-demarkus-broker-issuances"
             - "RELEASE-NAME-demarkus-broker-refresh-tokens"
       - equal:
           path: rules[2].verbs

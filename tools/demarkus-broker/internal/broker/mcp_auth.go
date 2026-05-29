@@ -21,16 +21,15 @@ import (
 // primitive is canonical verified email (see plan v5 Non-Negotiable
 // "Single identity dimension"). Rejecting unverified-email tokens at
 // the gateway boundary keeps the MCP surface aligned with
-// Issuer.ErrEmailUnverified — every other broker surface
-// (/auth/callback, /me/install, /tokens) already refuses unverified
-// identities, and the gateway must not be the easy door in. An empty
-// email claim is also rejected because the session cache keys on
-// email and an empty key would collapse every no-email caller onto
-// one shared session.
+// ErrEmailUnverified — every other broker surface (/auth/callback,
+// /me/install) already refuses unverified identities, and the gateway
+// must not be the easy door in. An empty email claim is also rejected
+// because the canonical email is the identity primitive downstream and
+// an empty key would collapse every no-email caller onto one identity.
 //
 // Composition shape: gatewayAuth → subjectRateLimit → mcp transport.
-// requireAuth stays the gate for the existing /tokens routes;
-// gatewayAuth is a sibling that differs only in the 401 envelope.
+// requireAuth stays the gate for /me/install; gatewayAuth is a sibling
+// that differs only in the 401 envelope.
 func (s *Server) gatewayAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw := bearerToken(r)
@@ -65,12 +64,11 @@ func (s *Server) gatewayAuth(next http.Handler) http.Handler {
 	})
 }
 
-// canonicalEmail mirrors Issuer.MintFiltered's normalization: trim
+// canonicalEmail is the shared identity normalization: trim
 // surrounding whitespace and lowercase. Used by gatewayAuth (to gate
-// empty-email claims) and by sessionCache (to key cache entries on
-// the same canonical form). Pulled out so both call sites share one
-// definition and a future tweak (e.g. Unicode normalization) lands
-// in one place.
+// empty-email claims) and the write gate (WorldConfig.Allow matching).
+// Pulled out so both call sites share one definition and a future
+// tweak (e.g. Unicode normalization) lands in one place.
 func canonicalEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }

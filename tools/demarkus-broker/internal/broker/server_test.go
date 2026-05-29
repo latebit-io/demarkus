@@ -10,15 +10,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
-	k8stesting "k8s.io/client-go/testing"
 )
 
 // testHTTPTimeout caps every test request against the in-process broker so
@@ -43,16 +38,14 @@ func testClient(srv *httptest.Server) *http.Client {
 func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clientset) (testSrv *httptest.Server, brokerSrv *Server) {
 	t.Helper()
 	signer := newTestSigner(t)
-	issuer := newIssuer(t, cfg, k8s)
 	// Default: no id-token signer wired. Refresh-grant tests use
 	// newTestServerWithSigner so existing tests don't acquire an
 	// extra (unobservable) construction cost they don't care about.
 	// Leave the server's clock at the default time.Now — pinning it to
-	// the issuer's fixed date would expire the OIDC state cookie under
-	// any real wall-clock that is later than that date, breaking the
-	// callback tests. The issuer's clock stays pinned so token-expiry
-	// assertions in issuer tests remain deterministic.
-	brokerSrv = NewServer(cfg, signer, verifier, issuer, nil, nil, nil)
+	// a fixed date would expire the OIDC state cookie under any real
+	// wall-clock that is later than that date, breaking the callback
+	// tests.
+	brokerSrv = NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
 	// NewTLSServer (not NewServer): the state cookie is set with
 	// Secure=true and Path=/auth/callback, attributes only enforceable
 	// over HTTPS. Without TLS we'd be relying on manual AddCookie calls
@@ -71,8 +64,7 @@ func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clien
 func newTestServerWithSigner(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clientset, signer *IDTokenSigner) (testSrv *httptest.Server, brokerSrv *Server) {
 	t.Helper()
 	cookieSigner := newTestSigner(t)
-	issuer := newIssuer(t, cfg, k8s)
-	brokerSrv = NewServer(cfg, cookieSigner, verifier, issuer, nil, signer, nil)
+	brokerSrv = NewServer(cfg, cookieSigner, verifier, k8s, nil, signer, nil)
 	testSrv = httptest.NewTLSServer(brokerSrv.Routes())
 	t.Cleanup(testSrv.Close)
 	return testSrv, brokerSrv
@@ -119,7 +111,7 @@ func TestNewServerPanicsOnDiscoveryWithoutSigner(t *testing.T) {
 			t.Fatal("expected panic for discovery != nil + idTokenSigner == nil")
 		}
 	}()
-	NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), d, nil, nil)
+	NewServer(cfg, newTestSigner(t), &fakeVerifier{}, fake.NewSimpleClientset(), d, nil, nil)
 }
 
 // TestWellKnownDiscoveryRouteRegistered guards the Routes() composition:
@@ -148,7 +140,7 @@ func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 	// IDTokenSigner so the jwks_uri override the discovery doc
 	// advertises actually has a handler mounted. NewServer panics
 	// otherwise.
-	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), d, newTestIDTokenSigner(t), nil)
+	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, fake.NewSimpleClientset(), d, newTestIDTokenSigner(t), nil)
 	tsrv := httptest.NewServer(srv.Routes())
 	t.Cleanup(tsrv.Close)
 
@@ -481,377 +473,10 @@ func TestAuthCallbackUnauthorizedDomain(t *testing.T) {
 	}
 }
 
-func TestListTokens(t *testing.T) {
-	k8s := fake.NewSimpleClientset()
-	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
-	srv, _ := newTestServer(t, testConfig(), verifier, k8s)
-	// Use the issuer directly to seed two issuances for alice; bypasses
-	// the OIDC flow, which is exercised in the callback tests above.
-	i := newIssuer(t, testConfig(), k8s)
-	if _, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}); err != nil {
-		t.Fatalf("seed mint #1: %v", err)
-	}
-	if _, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true}); err != nil {
-		t.Fatalf("seed mint #2: %v", err)
-	}
-
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
-	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
-	}
-	var got listTokensResponse
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(got.Tokens) != 2 {
-		t.Errorf("got %d issuances, want 2: %+v", len(got.Tokens), got.Tokens)
-	}
-	for _, iss := range got.Tokens {
-		if iss.Email != "alice@example.com" {
-			t.Errorf("foreign issuance leaked: %+v", iss)
-		}
-	}
-}
-
-func TestListTokensUnauthenticated(t *testing.T) {
-	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
-	resp, err := testClient(srv).Get(srv.URL + "/tokens")
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status = %d", resp.StatusCode)
-	}
-}
-
-func TestListTokensInvalidBearer(t *testing.T) {
-	verifier := &fakeVerifier{
-		verifyFn: func(_ string) (Claims, error) { return Claims{}, errors.New("bad sig") },
-	}
-	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
-	req.Header.Set("Authorization", "Bearer not-actually-a-jwt")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", resp.StatusCode)
-	}
-}
-
-func TestDeleteToken(t *testing.T) {
-	k8s := fake.NewSimpleClientset()
-	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
-	srv, _ := newTestServer(t, testConfig(), verifier, k8s)
-	i := newIssuer(t, testConfig(), k8s)
-	results, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
-	if err != nil {
-		t.Fatalf("seed mint: %v", err)
-	}
-	if len(results) == 0 {
-		t.Fatal("seed mint returned no results")
-	}
-
-	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/"+results[0].Label, http.NoBody)
-	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("status = %d, want 204", resp.StatusCode)
-	}
-
-	list, err := i.List(context.Background(), "alice@example.com")
-	if err != nil {
-		t.Fatalf("list after delete: %v", err)
-	}
-	if len(list) != 0 {
-		t.Errorf("expected 0 issuances after delete, got %d", len(list))
-	}
-}
-
-func TestDeleteTokenNotOwner(t *testing.T) {
-	k8s := fake.NewSimpleClientset()
-	cfg := testConfig()
-	i := newIssuer(t, cfg, k8s)
-	results, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
-	if err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	if len(results) == 0 {
-		t.Fatal("seed mint returned no results")
-	}
-
-	// Verifier returns mallory's identity for the bearer token, so the
-	// owner check inside Revoke should fail.
-	verifier := &fakeVerifier{claims: Claims{Email: "mallory@example.com", EmailVerified: true}}
-	srv, _ := newTestServer(t, cfg, verifier, k8s)
-
-	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/"+results[0].Label, http.NoBody)
-	req.Header.Set("Authorization", "Bearer mallory-id-token")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", resp.StatusCode)
-	}
-}
-
-func TestDeleteTokenNotFound(t *testing.T) {
-	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
-	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
-
-	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/usr_nope", http.NoBody)
-	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", resp.StatusCode)
-	}
-}
-
-func TestRotateTokenSuccess(t *testing.T) {
-	// Bearer-authed POST /tokens/{label}/rotate returns 200 with the
-	// new MintResult JSON. Alice mints, then rotates; verifier is
-	// configured to return alice's identity on bearer verify so the
-	// owner check passes.
-	k8s := fake.NewSimpleClientset()
-	cfg := testConfig()
-	i := newIssuer(t, cfg, k8s)
-	minted, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
-	if err != nil {
-		t.Fatalf("seed mint: %v", err)
-	}
-	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
-	srv, _ := newTestServer(t, cfg, verifier, k8s)
-
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/"+minted[0].Label+"/rotate", http.NoBody)
-	req.Header.Set("Authorization", "Bearer alice-id-token")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
-	}
-	var got MintResult
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got.Label == "" || got.Label == minted[0].Label {
-		t.Errorf("new label = %q, want non-empty and != old %q", got.Label, minted[0].Label)
-	}
-	if got.RawToken == "" {
-		t.Error("RawToken empty in rotate response")
-	}
-	if got.World != "team-a" {
-		t.Errorf("world = %q, want team-a", got.World)
-	}
-}
-
-func TestRotateTokenNotOwner(t *testing.T) {
-	// Alice mints, mallory tries to rotate. Verifier returns mallory's
-	// claims for the bearer; owner check inside RotateLabel fails →
-	// 403 (matches the DELETE owner-check shape from Slice B).
-	k8s := fake.NewSimpleClientset()
-	cfg := testConfig()
-	i := newIssuer(t, cfg, k8s)
-	minted, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
-	if err != nil {
-		t.Fatalf("seed mint: %v", err)
-	}
-	verifier := &fakeVerifier{claims: Claims{Email: "mallory@example.com", EmailVerified: true}}
-	srv, _ := newTestServer(t, cfg, verifier, k8s)
-
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/"+minted[0].Label+"/rotate", http.NoBody)
-	req.Header.Set("Authorization", "Bearer mallory-id-token")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", resp.StatusCode)
-	}
-}
-
-func TestRotateTokenNoLongerAuthorized(t *testing.T) {
-	// Operator tightened the Allow predicate between mint and rotate
-	// to a domain alice no longer matches. Bearer is still valid
-	// (IdP didn't disable her account) but the world's allowlist
-	// rejects → 403 with the "no longer authorized" message. This
-	// is the rotate-as-relogin half of the re-auth story; without
-	// this gate a user removed from a group could rotate forever.
-	k8s := fake.NewSimpleClientset()
-	cfg := testConfig()
-	cfg.Worlds[0].Allow = AllowConfig{Domains: []string{"example.com"}}
-	i := newIssuer(t, cfg, k8s)
-	minted, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
-	if err != nil {
-		t.Fatalf("seed mint: %v", err)
-	}
-	cfg.Worlds[0].Allow = AllowConfig{Domains: []string{"other.example"}}
-
-	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
-	srv, _ := newTestServer(t, cfg, verifier, k8s)
-
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/"+minted[0].Label+"/rotate", http.NoBody)
-	req.Header.Set("Authorization", "Bearer alice-id-token")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", resp.StatusCode)
-	}
-}
-
-func TestRotateTokenNotFound(t *testing.T) {
-	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
-	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
-
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/usr_nope/rotate", http.NoBody)
-	req.Header.Set("Authorization", "Bearer some-id-token")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", resp.StatusCode)
-	}
-}
-
-func TestRotateTokenSoftPartial(t *testing.T) {
-	// The handler's "mint succeeded, old revoke failed" branch is
-	// the most consequential code path on the rotate response —
-	// callers see 200 with a fresh token but the old label is still
-	// live in both Secrets until the sweeper retires it on expiry.
-	// Reactor strategy: count Updates against team-a's tokens
-	// Secret. The mint phase writes the new label as Update #1 and
-	// must pass. The revoke phase writes the old-label removal as
-	// Update #2 and we fail it with ServiceUnavailable (mutateSecret
-	// only retries on Conflict, so the unavailable propagates).
-	// Result: the new label is committed, the old label is NOT
-	// removed, and the handler returns 200 because the user's
-	// rotation succeeded from their perspective.
-	k8s := fake.NewSimpleClientset()
-	cfg := testConfig()
-	i := newIssuer(t, cfg, k8s)
-	minted, err := i.Mint(context.Background(), Claims{Email: "alice@example.com", EmailVerified: true})
-	if err != nil {
-		t.Fatalf("seed mint: %v", err)
-	}
-	oldLabel := minted[0].Label
-
-	var teamAUpdates atomic.Int32
-	k8s.PrependReactor("update", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		ua, ok := action.(k8stesting.UpdateAction)
-		if !ok || ua.GetNamespace() != "team-a" {
-			return false, nil, nil
-		}
-		n := teamAUpdates.Add(1)
-		if n >= 2 {
-			// Second team-a update is the revoke phase's removal
-			// of the old label. Simulate a transient k8s API blip
-			// — mutateSecret only retries on Conflict so this
-			// error propagates straight up to revokeIssuance.
-			return true, nil, apierrors.NewServiceUnavailable("simulated transient blip during old-label revoke")
-		}
-		return false, nil, nil
-	})
-
-	verifier := &fakeVerifier{claims: Claims{Email: "alice@example.com", EmailVerified: true}}
-	srv, _ := newTestServer(t, cfg, verifier, k8s)
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/"+oldLabel+"/rotate", http.NoBody)
-	req.Header.Set("Authorization", "Bearer alice-id-token")
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d body=%s — soft-partial path must still return 200", resp.StatusCode, body)
-	}
-	var got MintResult
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got.Label == "" || got.Label == oldLabel {
-		t.Errorf("new label = %q, want non-empty and != old %q", got.Label, oldLabel)
-	}
-	if got.RawToken == "" {
-		t.Error("RawToken empty in soft-partial response")
-	}
-
-	// World Secret: BOTH labels still present — the old one
-	// because revoke failed, the new one because mint succeeded.
-	// The sweeper will retire the old on expiry.
-	worldSecret, err := k8s.CoreV1().Secrets("team-a").Get(context.Background(), "team-a-tokens", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get world Secret: %v", err)
-	}
-	gotTOML := string(worldSecret.Data[TokensSecretKey])
-	if !strings.Contains(gotTOML, oldLabel) {
-		t.Errorf("old label gone from world Secret despite failed revoke:\n%s", gotTOML)
-	}
-	if !strings.Contains(gotTOML, got.Label) {
-		t.Errorf("new label missing from world Secret on soft-partial:\n%s", gotTOML)
-	}
-
-	// Issuances Secret: both entries too. Owner alice now has TWO
-	// live issuances; this is the transient state the sweeper
-	// resolves on expiry.
-	live, err := i.List(context.Background(), "alice@example.com")
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(live) != 2 {
-		t.Errorf("issuances after soft-partial rotate = %d, want 2 (old + new live until sweep)", len(live))
-	}
-}
-
-func TestRotateTokenUnauthenticated(t *testing.T) {
-	// No bearer at all → 401 from the shared authenticate helper,
-	// before RotateLabel even runs. Same shape as the equivalent
-	// DELETE and GET /tokens unauthenticated guards.
-	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/whatever/rotate", http.NoBody)
-	resp, err := testClient(srv).Do(req)
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", resp.StatusCode)
-	}
-}
-
 // Sanity guard so the clock override on Server is exercised at least once.
 func TestServerClockExposed(t *testing.T) {
 	cfg := testConfig()
-	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewIssuer(cfg, fake.NewSimpleClientset()), nil, nil, nil)
+	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, fake.NewSimpleClientset(), nil, nil, nil)
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	s.clock = func() time.Time { return fixed }
 	if !s.clock().Equal(fixed) {

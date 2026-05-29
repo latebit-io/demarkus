@@ -29,7 +29,8 @@ type Claims struct {
 
 // ExchangeResult bundles everything the broker needs from a completed
 // OAuth2 code exchange. Claims is the verified subset of the ID token; the
-// browser code-flow callback consumes it to drive Issuer.Mint. RawIDToken
+// browser code-flow callback consumes it to evaluate authorizedWorlds for
+// the identity/worlds response. RawIDToken
 // and AccessToken are the IdP-issued tokens verbatim, forwarded into the
 // RFC 8628 device-flow `/device/token` success response so a polling
 // client (the plugin's join binary) ends up with the same bearer it would
@@ -58,8 +59,8 @@ type Verifier interface {
 	// verified claims alongside the raw id_token + access_token so the
 	// device-flow polling endpoint can forward them to the client.
 	Exchange(ctx context.Context, code string) (ExchangeResult, error)
-	// VerifyIDToken validates a bearer ID token presented by the CLI on
-	// /tokens and DELETE /tokens/:label. Same signature + claims
+	// VerifyIDToken validates a bearer ID token presented on
+	// /me/install and the MCP gateway. Same signature + claims
 	// extraction as Exchange's final step, without the OAuth code swap.
 	VerifyIDToken(ctx context.Context, raw string) (Claims, error)
 }
