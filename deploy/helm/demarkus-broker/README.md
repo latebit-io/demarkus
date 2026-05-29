@@ -12,7 +12,9 @@ Secrets.
   preserved across `helm upgrade` via `lookup`.
 - Per-world `Role` + `RoleBinding` in each world's namespace
   (`get/update` on the world's tokens Secret) plus broker-namespace
-  `Role` covering the sweeper Lease and the refresh-tokens Secret.
+  `Role` covering the sweeper Lease, the refresh-tokens Secret, and
+  `create` + per-world `get/update` on the write-token Secrets the
+  broker provisions on first write.
 - Default-on `NetworkPolicy` restricting ingress to the configured
   Ingress controller namespace and egress to DNS + TCP 443.
 - Locked-down pod security context: nonroot UID, read-only root
@@ -275,8 +277,11 @@ listener silently:
   management API.
 - The rendered `config.yaml` carries the MCP block; existing
   deployments without operator overrides get the chart defaults.
-- No new RBAC: the broker SA already has the perms it needs (the
-  refresh-tokens Secret + world tokens Secrets that lazy-mint touches).
+- No new RBAC to enable the gateway: the broker-namespace `Role`
+  already grants the write path everything it needs — `create` +
+  per-world `get/update` on the write-token Secrets (broker namespace)
+  and `get/update` on each world's tokens Secret (per-world `Role`).
+  See "What this chart ships" above; nothing extra to provision.
 - Worlds[] entries get an `internalAddress: ""` field. Empty string
   preserves the default `<name>.<namespace>.svc.cluster.local:6309`
   Service-DNS resolution the gateway uses for tool dispatch.
