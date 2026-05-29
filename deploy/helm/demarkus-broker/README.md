@@ -22,8 +22,9 @@ Secrets.
 - **MCP gateway** (always-on, listens on `:8081` by default) exposing
   the 13-tool demarkus surface to plugin-style agents over JSON-RPC
   over Streamable HTTP. Identity is the company SSO `id_token` bearer;
-  world access-tokens are minted lazily per-session and never
-  persisted. See [MCP gateway](#mcp-gateway).
+  reads dispatch with no token (open to any SSO-authed identity) and
+  writes use a long-lived per-world token the broker holds. See
+  [MCP gateway](#mcp-gateway).
 - TopologySpreadConstraints to keep replicas off the same node.
 
 ## Endpoint surface
@@ -72,13 +73,11 @@ Content-Type: application/json
 Cache-Control: no-store
 Pragma: no-cache
 {
+  "email": "alice@example.com",
   "worlds": [
     {
       "name": "team-a",
-      "publicURL": "mark://team-a.example:6309",
-      "label": "usr_b23fbc20",
-      "accessToken": "<raw token>",
-      "expiresAt": "2026-05-16T18:00:00Z"
+      "publicURL": "mark://team-a.example:6309"
     }
   ]
 }
@@ -87,17 +86,14 @@ Pragma: no-cache
 Notes:
 - **Worlds without `publicURL` are excluded.** A world with an empty
   `worlds[].publicURL` is structurally un-installable (the client has
-  no address to wire) so the broker filters it BEFORE mint — no
-  token is minted for excluded worlds.
+  no address to wire) so the broker filters it from the bundle.
 - **Empty `worlds: []` is a 200, not a 403.** An authenticated identity
   with zero installable worlds (no allowlist match, or every match
   filtered by the `publicURL` rule) returns `200 + worlds: []` so
   consumers can distinguish auth failure from authz emptiness.
-- **Partial failures return 200.** If some worlds minted but a later
-  one failed (k8s blip, RBAC denial on one world's tokens Secret), the
-  response carries the successful entries plus a
-  `"partialFailure": "one_or_more_worlds_failed"` field — same shape
-  as `/auth/callback` for the equivalent condition.
+- **No token material is returned.** The response carries identity +
+  world metadata only; the broker mints nothing on this path, so there
+  is no per-world token, expiry, or partial-mint-failure shape.
 - **The bearer accepts both broker-signed and IdP-signed id_tokens.**
   Broker-signed tokens come from the device-flow refresh grant; IdP-
   signed tokens come from the device-flow completion. The broker's
@@ -254,11 +250,13 @@ knobs govern a broker-side retry loop that absorbs the kubelet →
 world-Secret projection lag. When the broker first provisions a
 world's write token, the world's projected `tokens.toml` volume may
 not refresh before the next tool call, and the world will 401. The
-retry loop re-dispatches with exponential backoff (default 6
-attempts, 250ms → 8s) only on `unauthorized` responses for
-just-minted tokens; genuine permission denials and cache-hit 401s
-take separate paths. Defaults sit well under the typical kubelet
-sync period; tune up only for slow-kubelet clusters.
+retry loop re-dispatches the same token with exponential backoff
+(default 6 attempts, 250ms → 8s) only on `unauthorized` responses
+right after a world's write token is first provisioned. Writer
+authorization is enforced at the broker before dispatch, so a
+fresh-provision 401 is propagation lag, not a real denial. Defaults
+sit well under the typical kubelet sync period; tune up only for
+slow-kubelet clusters.
 
 ### Operator reference: 13-tool surface
 
