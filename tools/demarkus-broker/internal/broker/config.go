@@ -257,9 +257,8 @@ type WorldConfig struct {
 	// identity (back-compat with pre-Slice-C configs that had only
 	// AllowDomains and left it empty).
 	Allow AllowConfig `yaml:"allow"`
-	// DefaultToken describes the capabilities of every token minted for
-	// this world. Slice B treats DefaultToken as the only scope; per-call
-	// narrowing is a Slice C feature.
+	// DefaultToken carries the path scope applied to the broker's
+	// long-lived write token for this world.
 	DefaultToken TokenScope `yaml:"defaultToken"`
 }
 
@@ -387,24 +386,17 @@ type RateLimitRouteConfig struct {
 	Burst int `yaml:"burst"`
 }
 
-// TokenScope is the capability bundle every token minted for a given
-// world carries. Paths + Operations are written verbatim into the server-
-// readable tokens.toml; ExpiresAfter is the lifetime applied to each
-// minted token.
+// TokenScope is the path scope of the broker's long-lived write token
+// for a world. The operations are always ["publish"] (hardcoded in
+// worldWriteTokenStore.Provision so an open-reads regression can't slip
+// in via config) and the token never expires, so the only operator
+// knob is the path glob list written into the world's tokens.toml.
 type TokenScope struct {
-	// Paths is the list of glob patterns the token is allowed to access,
-	// e.g. ["/team-a/*"]. Empty means no path restriction (server-side
-	// default: deny). Validation: at least one entry is required to
-	// avoid accidentally issuing zero-scope tokens.
+	// Paths is the list of glob patterns the write token is allowed to
+	// access, e.g. ["/team-a/*"]. Empty means no path restriction
+	// (server-side default: deny). Validation: at least one entry is
+	// required to avoid accidentally issuing a zero-scope token.
 	Paths []string `yaml:"paths"`
-	// Operations is the set of capabilities granted, e.g.
-	// ["read", "publish"]. At least one entry is required.
-	Operations []string `yaml:"operations"`
-	// ExpiresAfter is the lifetime of minted tokens. Zero is rejected
-	// during validation — short-lived tokens are the primary identity-
-	// lifecycle mechanism (see plan §6.2 revocation), so accidentally
-	// issuing non-expiring tokens would silently break that property.
-	ExpiresAfter time.Duration `yaml:"expiresAfter"`
 }
 
 // LoadConfig reads, parses, and validates a broker config file. Validation
@@ -521,10 +513,9 @@ func (c *Config) validate() error {
 	// SweeperConfig doc for why it's named "Disabled" rather than
 	// "Enabled". Interval and LeaseName get production-safe defaults
 	// when omitted; negative Interval is a config typo, and an
-	// interval longer than the typical 24h token lifetime would let
-	// expired tokens linger past their `defaultToken.expiresAfter`
-	// window — defeating the short-lived-tokens identity-lifecycle
-	// model (see plan §Revocation §3).
+	// over-long interval lets expired refresh tokens linger in the
+	// broker's refresh-tokens Secret well past their TTL before the
+	// sweeper retires them.
 	if c.Sweeper.Interval == 0 {
 		c.Sweeper.Interval = 5 * time.Minute
 	}
@@ -738,10 +729,6 @@ func validateWorld(i int, w *WorldConfig) error {
 		return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
 	case len(w.DefaultToken.Paths) == 0:
 		return fmt.Errorf("worlds[%d] (%s): defaultToken.paths is required", i, w.Name)
-	case len(w.DefaultToken.Operations) == 0:
-		return fmt.Errorf("worlds[%d] (%s): defaultToken.operations is required", i, w.Name)
-	case w.DefaultToken.ExpiresAfter <= 0:
-		return fmt.Errorf("worlds[%d] (%s): defaultToken.expiresAfter must be > 0", i, w.Name)
 	}
 	// All three lists are lowercased+trimmed at load so authorizedWorlds
 	// can do plain string compares on every login. Group-name match is

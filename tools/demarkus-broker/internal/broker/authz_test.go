@@ -43,9 +43,7 @@ func testConfig() *Config {
 				TokensSecret: "team-a-tokens",
 				Allow:        AllowConfig{Domains: []string{"example.com"}},
 				DefaultToken: TokenScope{
-					Paths:        []string{"/team-a/*"},
-					Operations:   []string{"read", "publish"},
-					ExpiresAfter: 24 * time.Hour,
+					Paths: []string{"/team-a/*"},
 				},
 			},
 		},
