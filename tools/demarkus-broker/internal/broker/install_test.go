@@ -120,9 +120,9 @@ func TestMeInstallHappyPathSingleWorld(t *testing.T) {
 }
 
 func TestMeInstallMultiWorldOrdering(t *testing.T) {
-	// cfg.Worlds is iterated in declaration order by authorizedWorlds;
-	// MintFiltered preserves that, and toInstallWorlds maps results in
-	// place. Pin the contract: response worlds order matches cfg.Worlds.
+	// cfg.Worlds is iterated in declaration order by authorizedWorlds,
+	// and toInstallWorlds maps results in place. Pin the contract:
+	// response worlds order matches cfg.Worlds.
 	cfg := installTestConfigTwoWorlds()
 	verifier := &fakeVerifier{claims: aliceClaims()}
 	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())

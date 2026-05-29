@@ -45,7 +45,7 @@ func claimsFromCtx(ctx context.Context) (Claims, bool) {
 }
 
 // rateLimitRegistry keeps one *rate.Limiter per key (subject hash for the
-// authed /tokens routes, source IP for /auth/login). A sync.Map fits the
+// authed /me/install route, source IP for /auth/login). A sync.Map fits the
 // shape: lookups dominate writes, and key creation is one-time-per-key.
 //
 // Per-replica only by design: in a multi-replica broker each pod has its
@@ -183,10 +183,10 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 // one bucket. When s.subjectReg is nil (rate limit disabled in config),
 // returns next unchanged so the route is free of measurement overhead.
 //
-// Bucket-sharing across the three /tokens routes is intentional: the
-// same actor doing /tokens GET + DELETE + rotate hits the same bucket,
-// so a misbehaving client can't burn 10× the configured budget by
-// fan-out across routes. Plan §6.2 C.4 decision.
+// /me/install is the only subject-rate-limited route, so there is no
+// cross-route bucket-sharing to reason about here — the per-subject
+// limiter simply caps how fast one identity can hit /me/install. Plan
+// §6.2 C.4 decision.
 func (s *Server) subjectRateLimit(next http.Handler) http.Handler {
 	if s.subjectReg == nil {
 		return next

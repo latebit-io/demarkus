@@ -32,8 +32,8 @@ func mcpTestConfig() *Config {
 func newTestMCPGateway(t *testing.T, cfg *Config, verifier Verifier) *httptest.Server {
 	t.Helper()
 	signer := newTestSigner(t)
-	issuer := newIssuer(t, cfg, fake.NewSimpleClientset())
-	brokerSrv := NewServer(cfg, signer, verifier, issuer, nil, nil, nil)
+	k8s := fake.NewSimpleClientset()
+	brokerSrv := NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
 	ts := httptest.NewServer(brokerSrv.MCPGateway("test"))
 	t.Cleanup(ts.Close)
 	return ts
@@ -237,8 +237,8 @@ func TestMCPGatewayToolsListReturnsExpected13(t *testing.T) {
 func TestMCPGatewayEveryAdvertisedToolHasAHandler(t *testing.T) {
 	signer := newTestSigner(t)
 	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
-	issuer := newIssuer(t, mcpTestConfig(), fake.NewSimpleClientset())
-	srv := NewServer(mcpTestConfig(), signer, verifier, issuer, nil, nil, nil)
+	k8s := fake.NewSimpleClientset()
+	srv := NewServer(mcpTestConfig(), signer, verifier, k8s, nil, nil, nil)
 	gw := newMCPGateway(srv, "test", &fakeDispatcher{})
 
 	handlers := gw.toolHandlers()
@@ -292,9 +292,9 @@ func TestMCPGatewayPerSubjectRateLimitTriggers429(t *testing.T) {
 	}
 
 	// Cross-subject isolation: bob still has a fresh bucket even after
-	// alice burned hers. Same property /tokens covers; pinned here so a
-	// future refactor that subtly broadens the rate-limit key (e.g.
-	// including the route in the hash) doesn't silently regress.
+	// alice burned hers. Pinned here so a future refactor that subtly
+	// broadens the rate-limit key (e.g. including the route in the hash)
+	// doesn't silently regress.
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")

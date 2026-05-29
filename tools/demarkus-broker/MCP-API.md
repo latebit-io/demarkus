@@ -31,31 +31,35 @@ For deployment instructions, TLS, and Ingress topology, see
   resource_metadata="…oauth-protected-resource"` per RFC 6750 + RFC
   9728, so a fresh client knows where to bootstrap.
 
-## Identity + session model
+## Identity + access model
 
-The broker keys per-session state on the **canonical verified email**
+The broker derives identity from the **canonical verified email**
 extracted from the bearer (`email` claim, trimmed + lowercased,
 `email_verified=true` required). This is the same identity dimension
-the broker's `/me/install`, `/tokens` list/revoke, `AllowConfig`, and
-audit logs already use — one identity per broker, no cross-surface
-drift.
+the broker's `/me/install`, `AllowConfig`, and audit logs already use
+— one identity per broker, no cross-surface drift.
 
-For each `(email, worldName)` pair, the broker lazy-mints a world
-access-token on first use via `Issuer.MintFiltered`, caches it in
-process memory, and re-uses it on subsequent calls. The cache:
+The broker does **not** mint per-user tokens. World access is gated as
+follows:
 
-- Is per-pod, in-memory only. Broker restart drops it; the next tool
-  call re-mints.
-- Has bounded size (`server.mcp.maxSessions`, default 10000) with LRU
-  eviction.
-- Times out idle sessions (`server.mcp.sessionMaxIdle`, default 1h).
-- Coalesces concurrent first-call bursts on `(email, worldName)` via
-  singleflight, so a plugin reconnecting after a broker restart
-  triggers one mint per world, not N.
+- **Reads** (`mark_fetch`, `mark_list`, `mark_versions`, and the
+  federation reads) dispatch with an empty bearer. The world's
+  `tokens.toml` grants no `read` operation to any token, so reads are
+  open to any SSO-authenticated identity.
+- **Writes** (`mark_publish`, `mark_append`, `mark_archive`, and the
+  federation writes) dispatch with a single long-lived, per-world
+  write token the broker provisions on first write and holds in
+  process memory. SSO is the org gate; `WorldConfig.Allow` is the
+  per-world writer allowlist enforced at the broker before dispatch.
+  There is no per-user mint, no session cache, and no singleflight.
 
-Raw world tokens are NEVER persisted to disk by the broker. They live
-in memory; their hashes land in the per-world `tokens.toml` Secret
-that the demarkus-server already manages.
+The per-world write token is shared across all authorized writers, so
+the world only ever sees one token per world in its `tokens.toml`. Raw
+tokens are never persisted by the broker except as the broker-namespace
+per-world write-token Secret (the canonical record across pods); their
+hashes land in the per-world `tokens.toml` Secret the demarkus-server
+already manages. A broker restart drops the in-memory cache; the next
+write re-reads the broker Secret rather than re-minting.
 
 ## URL form
 
@@ -174,8 +178,9 @@ Returns `not-found` if no manifest is published.
 Resolve content by its SHA-256 hash using a hub index document.
 Looks the hash up in the index, finds candidate servers, and fetches
 by hash. Skips candidates the broker has no `worlds[]` entry for and
-candidates whose mint fails with `ErrNotAuthorized` — both collapse to
-"this broker can't reach this candidate for me; try the next."
+candidates the identity is not authorized for (`ErrNotAuthorized`) —
+both collapse to "this broker can't reach this candidate for me; try
+the next."
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -264,17 +269,14 @@ A few non-obvious categories worth pinning:
 - **Unverified-email id_token** → `401` from `gatewayAuth` with the
   standard RFC 6750 + RFC 9728 `WWW-Authenticate` challenge. Same
   shape as a missing or expired bearer.
-- **World-side `unauthorized` after a fresh mint** → retried by the
-  broker with exponential backoff (`firstMint*` knobs) up to the
-  configured attempts. The Kubelet projects refreshed Secret
-  volumes on a sync cycle, so a just-minted token can briefly 401
-  at the world before propagation completes. The retry loop is
-  invisible to the agent.
-- **Cache-hit `unauthorized`** (a token the broker had cached that
-  the world now rejects: hand-revoked, sweeper-retired, etc.) →
-  cache entry invalidated immediately and one re-mint attempted
-  without backoff. Subsequent failures surface as the world's
-  `unauthorized` envelope.
+- **World-side `unauthorized` after first provision** → retried by
+  the broker with exponential backoff (`firstMint*` knobs) up to the
+  configured attempts, against the same long-lived per-world write
+  token. The Kubelet projects refreshed Secret volumes on a sync
+  cycle, so a just-provisioned token can briefly 401 at the world
+  before propagation completes. The retry loop is invisible to the
+  agent; once the retry budget is exhausted the world's
+  `unauthorized` envelope surfaces.
 - **Cross-org candidate in `mark_resolve`** → the candidate is
   skipped with a logged reason; if all candidates skip or fail, the
   last failure surfaces in the tool response.

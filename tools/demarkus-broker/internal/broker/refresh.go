@@ -75,10 +75,10 @@ type refreshTokenRecord struct {
 
 // refreshTokens is the on-disk shape of the broker's refresh-tokens
 // Secret data[refresh_tokens.json]: a map keyed by sha256 hex.
-// Map vs. slice (issuances uses a slice) reflects access pattern —
-// every Refresh and Revoke is an O(1) hash lookup; a slice would
-// force an O(N) scan on every poll, and a 90-day TTL means N can
-// reach several thousand on a busy broker.
+// A map (rather than a slice) reflects the access pattern — every
+// Refresh and Revoke is an O(1) hash lookup; a slice would force an
+// O(N) scan on every poll, and a 90-day TTL means N can reach several
+// thousand on a busy broker.
 type refreshTokens struct {
 	Entries map[string]refreshTokenRecord `json:"entries"`
 }
@@ -86,8 +86,7 @@ type refreshTokens struct {
 // RefreshStore is the broker's refresh-token lifecycle layer.
 // All state lives in a single broker-namespace Secret; mutations go
 // through the shared optimistic-concurrency mutateSecret helper.
-// Multi-replica brokers converge under conflict retry — same posture
-// as the issuances Secret.
+// Multi-replica brokers converge under conflict retry.
 //
 // Single-Secret scaling cap is documented in
 // /plans/universe-onboarding-pr4.md §Risks ("Secret-storage scaling"):
@@ -104,9 +103,8 @@ type RefreshStore struct {
 
 // NewRefreshStore wires a *RefreshStore with real time.Now and
 // crypto/rand. Tests override clock and randFn on the returned
-// struct for deterministic behavior — same pattern as NewIssuer.
-// Exported because main.go and the Sweeper share a single
-// instance with the Server (PR4 Step 5).
+// struct for deterministic behavior. Exported because main.go and
+// the Sweeper share a single instance with the Server (PR4 Step 5).
 func NewRefreshStore(cfg *Config, k8s kubernetes.Interface) *RefreshStore {
 	return &RefreshStore{
 		cfg:    cfg,
@@ -228,9 +226,8 @@ func (s *RefreshStore) Revoke(ctx context.Context, rawToken string) error {
 
 // Sweep removes every expired entry in one pass. Returns the count
 // of records swept so the caller can log it. Absent Secret and empty
-// map are both no-ops returning (0, nil). Designed to be called from
-// the existing Sweeper's per-tick loop alongside the issuances
-// sweep — Step 5 wires it.
+// map are both no-ops returning (0, nil). Called from the Sweeper's
+// per-tick loop, which is refresh-token-only — Step 5 wires it.
 func (s *RefreshStore) Sweep(ctx context.Context) (int, error) {
 	var swept int
 	err := mutateSecret(ctx, s.k8s, s.cfg.Server.BrokerNamespace, s.cfg.Server.RefreshTokensSecret, RefreshTokensSecretKey, func(existing []byte) ([]byte, error) {

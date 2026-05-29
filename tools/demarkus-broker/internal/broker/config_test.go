@@ -23,7 +23,6 @@ server:
   addr: ":8080"
   cookieKey: "dGVzdC1rZXk="
   brokerNamespace: demarkus-broker
-  issuancesSecret: broker-issuances
   publicURL: "https://broker.example.com"
 oidc:
   issuer: https://accounts.google.com

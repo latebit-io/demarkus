@@ -98,7 +98,7 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 	if tok, ok := s.Get(worldName); ok {
 		return tok, nil
 	}
-	world := s.lookupWorld(worldName)
+	world := lookupWorld(s.cfg, worldName)
 	if world == nil {
 		// Same sentinel the worldPool returns so callers
 		// (notably federation/graph) can treat "no broker config
@@ -220,13 +220,4 @@ func (s *worldWriteTokenStore) syncWorldHash(ctx context.Context, world *WorldCo
 		}
 		return rewritten, nil
 	})
-}
-
-func (s *worldWriteTokenStore) lookupWorld(name string) *WorldConfig {
-	for i := range s.cfg.Worlds {
-		if s.cfg.Worlds[i].Name == name {
-			return &s.cfg.Worlds[i]
-		}
-	}
-	return nil
 }

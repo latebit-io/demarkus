@@ -2,7 +2,7 @@
 
 OIDC token broker for demarkus. Exchanges a verified IdP identity for one
 or more demarkus tokens, writing token hashes into per-world Kubernetes
-Secrets and tracking ownership in a broker-namespace issuances Secret.
+Secrets.
 
 ## What this chart ships
 
@@ -10,12 +10,11 @@ Secrets and tracking ownership in a broker-namespace issuances Secret.
   and `PodDisruptionBudget` (`minAvailable: 1`).
 - Chart-managed broker config Secret with auto-generated cookie HMAC key
   preserved across `helm upgrade` via `lookup`.
-- Issuances Secret seeded empty on first install with
-  `helm.sh/resource-policy: keep` so chart updates and uninstalls never
-  wipe broker-minted issuance records.
 - Per-world `Role` + `RoleBinding` in each world's namespace
   (`get/update` on the world's tokens Secret) plus broker-namespace
-  `Role` covering the sweeper Lease and the issuances Secret.
+  `Role` covering the sweeper Lease, the refresh-tokens Secret, and
+  `create` + per-world `get/update` on the write-token Secrets the
+  broker provisions on first write.
 - Default-on `NetworkPolicy` restricting ingress to the configured
   Ingress controller namespace and egress to DNS + TCP 443.
 - Locked-down pod security context: nonroot UID, read-only root
@@ -25,8 +24,9 @@ Secrets and tracking ownership in a broker-namespace issuances Secret.
 - **MCP gateway** (always-on, listens on `:8081` by default) exposing
   the 13-tool demarkus surface to plugin-style agents over JSON-RPC
   over Streamable HTTP. Identity is the company SSO `id_token` bearer;
-  world access-tokens are minted lazily per-session and never
-  persisted. See [MCP gateway](#mcp-gateway).
+  reads dispatch with no token (open to any SSO-authed identity) and
+  writes use a long-lived per-world token the broker holds. See
+  [MCP gateway](#mcp-gateway).
 - TopologySpreadConstraints to keep replicas off the same node.
 
 ## Endpoint surface
@@ -55,19 +55,16 @@ wire shape (JSON-RPC vs REST) differs.
 | `POST` | `/device/authorize`, `/device/token` | none | RFC 8628 device flow. IP rate-limited. `/device/token` accepts both `grant_type=urn:ietf:params:oauth:grant-type:device_code` and `grant_type=refresh_token`. |
 | `GET`, `POST` | `/device` | none | HTML user-code entry form. |
 | `POST` | `/token/revoke` | possession | RFC 7009 refresh-token revocation. IP rate-limited. |
-| `GET` | `/tokens` | Bearer id_token | Caller's issuance records. Per-subject rate-limited. |
-| `DELETE` | `/tokens/{label}` | Bearer id_token | Owner-only revoke. Per-subject rate-limited. |
-| `POST` | `/tokens/{label}/rotate` | Bearer id_token | Owner-only rotate. Per-subject rate-limited. |
 | `GET` | `/me/install` | Bearer id_token | Per-user install bundle (universe onboarding). Per-subject rate-limited. |
 
 ### `/me/install`
 
-Returns the caller's full install bundle — one entry per world the
-verified identity is authorized for AND that has a non-empty
-`publicURL` configured. Each call mints a fresh access token per
-returned world; raw token material is never recoverable from the
-issuances Secret, so reuse is not possible. Old tokens stay valid
-until their `expiresAt`; the sweeper retires them.
+Returns the caller's identity and installable world metadata — one
+entry per world the verified identity is authorized for AND that has
+a non-empty `publicURL` configured. The endpoint mints no world
+tokens and returns no raw token material; world access is mediated
+entirely by the MCP gateway (reads are open to any SSO-authed
+identity, writes use a broker-held per-world write token).
 
 ```http
 GET /me/install
@@ -78,13 +75,11 @@ Content-Type: application/json
 Cache-Control: no-store
 Pragma: no-cache
 {
+  "email": "alice@example.com",
   "worlds": [
     {
       "name": "team-a",
-      "publicURL": "mark://team-a.example:6309",
-      "label": "usr_b23fbc20",
-      "accessToken": "<raw token>",
-      "expiresAt": "2026-05-16T18:00:00Z"
+      "publicURL": "mark://team-a.example:6309"
     }
   ]
 }
@@ -93,17 +88,14 @@ Pragma: no-cache
 Notes:
 - **Worlds without `publicURL` are excluded.** A world with an empty
   `worlds[].publicURL` is structurally un-installable (the client has
-  no address to wire) so the broker filters it BEFORE mint — no
-  issuance record is written for excluded worlds.
+  no address to wire) so the broker filters it from the bundle.
 - **Empty `worlds: []` is a 200, not a 403.** An authenticated identity
   with zero installable worlds (no allowlist match, or every match
   filtered by the `publicURL` rule) returns `200 + worlds: []` so
   consumers can distinguish auth failure from authz emptiness.
-- **Partial failures return 200.** If some worlds minted but a later
-  one failed (k8s blip, RBAC denial on one world's tokens Secret), the
-  response carries the successful entries plus a
-  `"partialFailure": "one_or_more_worlds_failed"` field — same shape
-  as `/auth/callback` for the equivalent condition.
+- **No token material is returned.** The response carries identity +
+  world metadata only; the broker mints nothing on this path, so there
+  is no per-world token, expiry, or partial-mint-failure shape.
 - **The bearer accepts both broker-signed and IdP-signed id_tokens.**
   Broker-signed tokens come from the device-flow refresh grant; IdP-
   signed tokens come from the device-flow completion. The broker's
@@ -216,13 +208,13 @@ using the broker's existing OIDC machinery:
   <id_token>`. The broker validates via the existing PR4
   `compositeVerifier` (accepts both broker-signed and IdP-signed
   tokens), extracts `email` + `email_verified`, **rejects unverified
-  emails** (matches `Issuer.ErrEmailUnverified`), and canonicalizes
-  the email (trim + lowercase) as the session-cache key.
+  emails** (matches `ErrEmailUnverified`), and canonicalizes the
+  email (trim + lowercase) for per-subject rate-limit keying.
 
 ### Rate-limit behavior
 
 The gateway's rate limiter is the same per-canonical-email bucket
-the management API's `/tokens` family uses. A single user calling
+the management API's `/me/install` route uses. A single user calling
 both the MCP gateway and the management API shares one bucket — an
 abusive identity cannot multiply its effective rate by fanning out
 across surfaces. Defaults from `rateLimit.tokens`: 10/min per
@@ -249,24 +241,24 @@ bucket-store-backed persistent graph is on the radar for the
 post-broker design window (see `/thoughts.md` § "On Bucket Stores")
 but is not part of the chart today.
 
-### Session cache + first-mint propagation
+### Write-token provisioning + propagation retries
 
-The broker caches per-email world access-tokens in memory. Defaults
-sized for an enterprise universe: 10k unique users × 5 worlds × ~200
-bytes/token ≈ 10MB at saturation. Tune `server.mcp.maxSessions` and
-`server.mcp.sessionMaxIdle` if your population is materially larger
-or your idle profile differs.
+The broker keeps one long-lived write token per world. The raw token
+is stored canonically in a broker-namespace Secret and cached
+in-process; there is no per-email, in-memory session cache.
 
 The `firstMintMax*` / `firstMintInitialBackoff` / `firstMintMaxBackoff`
 knobs govern a broker-side retry loop that absorbs the kubelet →
-world-Secret projection lag. When the broker lazily mints a new
-world token, the world's projected `tokens.toml` volume may not
-refresh before the next tool call, and the world will 401. The
-retry loop re-dispatches with exponential backoff (default 6
-attempts, 250ms → 8s) only on `unauthorized` responses for
-just-minted tokens; genuine permission denials and cache-hit 401s
-take separate paths. Defaults sit well under the typical kubelet
-sync period; tune up only for slow-kubelet clusters.
+world-Secret projection lag. When the broker first provisions a
+world's write token, the world's projected `tokens.toml` volume may
+not refresh before the next tool call, and the world will 401. The
+retry loop re-dispatches the same token with exponential backoff
+(default 6 attempts, 250ms → 8s) only on `unauthorized` responses
+right after a world's write token is first provisioned. Writer
+authorization is enforced at the broker before dispatch, so a
+fresh-provision 401 is propagation lag, not a real denial. Defaults
+sit well under the typical kubelet sync period; tune up only for
+slow-kubelet clusters.
 
 ### Operator reference: 13-tool surface
 
@@ -285,8 +277,11 @@ listener silently:
   management API.
 - The rendered `config.yaml` carries the MCP block; existing
   deployments without operator overrides get the chart defaults.
-- No new RBAC: the broker SA already has the perms it needs (the
-  issuances Secret + world tokens Secrets that lazy-mint touches).
+- No new RBAC to enable the gateway: the broker-namespace `Role`
+  already grants the write path everything it needs — `create` +
+  per-world `get/update` on the write-token Secrets (broker namespace)
+  and `get/update` on each world's tokens Secret (per-world `Role`).
+  See "What this chart ships" above; nothing extra to provision.
 - Worlds[] entries get an `internalAddress: ""` field. Empty string
   preserves the default `<name>.<namespace>.svc.cluster.local:6309`
   Service-DNS resolution the gateway uses for tool dispatch.
@@ -415,7 +410,7 @@ namespaces. If your cluster restricts cross-namespace RBAC
 management, set `rbac.create: false` and provision the per-world
 `Role`s out of band — every world entry needs `secrets`
 `get/update` on its `tokensSecret`, plus the broker-namespace `Role`
-covering `coordination.k8s.io/leases` + the issuances Secret.
+covering `coordination.k8s.io/leases` + the refresh-tokens Secret.
 
 ### 5. Set sensible resource limits and confirm the PDB
 
@@ -433,19 +428,6 @@ preserved across `helm upgrade` via a `lookup` of the live config
 Secret. To rotate the key, set `server.cookieKey` to a new
 base64-encoded value and restart the broker. Any in-flight OIDC login
 is invalidated by rotation, which is the intended behavior.
-
-## Issuances Secret resource policy
-
-The issuances Secret is created with `helm.sh/resource-policy: keep`.
-Consequences:
-
-- `helm upgrade` does not overwrite the broker's runtime writes.
-- `helm uninstall` does not delete the Secret. To fully clean up after
-  removing the chart, delete it manually:
-  `kubectl delete secret <release>-issuances -n <broker-namespace>`.
-- Reinstalling the chart in the same namespace picks up the existing
-  issuance state, so users keep their tokens across chart lifecycle
-  events.
 
 ## Values
 

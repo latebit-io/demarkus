@@ -289,18 +289,15 @@ func TestParseToolURLDeepPath(t *testing.T) {
 
 // newGatewayWithDispatcher builds an mcpGateway with the supplied
 // dispatcher, bypassing the HTTP layer. Used for unit tests that
-// drive handlers directly through their Go signatures. The
-// server's clock is pinned to match newIssuer's pinned clock
-// (2026-05-11 12:00 UTC) so the session cache and the issuer agree
-// on "now" — without that alignment the cache would treat every
-// freshly-minted token as instantly expired (issuer expiry =
-// pinned + 24h ≈ 2026-05-12, real wall clock ≈ months later).
+// drive handlers directly through their Go signatures. The server's
+// clock is pinned to a fixed instant so any time-dependent assertion
+// stays deterministic across runs.
 func newGatewayWithDispatcher(t *testing.T, cfg *Config, d worldDispatcher) *mcpGateway {
 	t.Helper()
 	signer := newTestSigner(t)
 	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
-	issuer := newIssuer(t, cfg, fake.NewSimpleClientset())
-	srv := NewServer(cfg, signer, verifier, issuer, nil, nil, nil)
+	k8s := fake.NewSimpleClientset()
+	srv := NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
 	srv.clock = func() time.Time { return time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC) }
 	return newMCPGateway(srv, "test", d)
 }
@@ -680,8 +677,8 @@ func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 		Subject: "google|alice", Email: "alice@example.com", EmailVerified: true,
 	}}
 	signer := newTestSigner(t)
-	issuer := newIssuer(t, cfg, fake.NewSimpleClientset())
-	brokerSrv := NewServer(cfg, signer, verifier, issuer, nil, nil, nil)
+	k8s := fake.NewSimpleClientset()
+	brokerSrv := NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
 	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d))
 	t.Cleanup(ts.Close)
 

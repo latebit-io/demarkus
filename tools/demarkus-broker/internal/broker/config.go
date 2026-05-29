@@ -14,7 +14,8 @@ import (
 // Config is the broker's YAML configuration. One file describes the broker's
 // own runtime knobs, the OIDC provider it trusts, and the set of worlds it
 // is authorized to mint tokens for. The world Tokens Secrets live in each
-// world's namespace; the issuances Secret lives in the broker's namespace.
+// world's namespace; the broker's own refresh-token and per-world
+// write-token Secrets live in the broker's namespace.
 type Config struct {
 	Server      ServerConfig      `yaml:"server"`
 	OIDC        OIDCConfig        `yaml:"oidc"`
@@ -54,7 +55,7 @@ type WorldDialerConfig struct {
 
 // ServerConfig holds the broker's own runtime settings — listen address,
 // cookie-signing key, state-cookie TTL, and the broker namespace + Secret
-// name where its issuance state lives.
+// names where its refresh-token and per-world write-token state live.
 type ServerConfig struct {
 	// Addr is the listen address, e.g. ":8080". HTTPS termination is the
 	// Ingress's job; the broker speaks plain HTTP inside the cluster.
@@ -69,12 +70,8 @@ type ServerConfig struct {
 	// short enough that a stale cookie cannot be replayed.
 	StateTTL time.Duration `yaml:"stateTTL"`
 	// BrokerNamespace is the k8s namespace the broker itself runs in;
-	// the issuances Secret lives here.
+	// the refresh-tokens and per-world write-token Secrets live here.
 	BrokerNamespace string `yaml:"brokerNamespace"`
-	// IssuancesSecret is the name of the broker-owned Secret holding the
-	// label → {email, world, paths, ...} map (JSON-encoded). World servers
-	// never read this Secret.
-	IssuancesSecret string `yaml:"issuancesSecret"`
 	// PublicURL is the broker's externally-reachable base URL (e.g.
 	// https://broker.acmecorp.com), trailing slash stripped at load. Used as
 	// the issuer + base for device_authorization_endpoint and token_endpoint
@@ -130,7 +127,7 @@ type ServerConfig struct {
 	// `mcp.enabled` unset, in which case the existing management
 	// API stays the only listener. When enabled, the MCP listener
 	// binds its own Addr (separate from Server.Addr) and shares the
-	// auth + rate-limit + Issuer machinery with the rest of Server.
+	// auth + rate-limit machinery with the rest of Server.
 	// See plan: Broker MCP Gateway (Knowledge-System Layer).
 	MCP MCPConfig `yaml:"mcp"`
 }
@@ -141,10 +138,11 @@ type ServerConfig struct {
 // not a product we ship. Operators tune Addr and TLS here; the
 // listener always binds.
 //
-// Slice 1 shipped the listener + initialize + tools/list surface.
-// Slice 2 adds the read-tool handlers and the broker-side session
-// cache that backs them — SessionMaxIdle and WorldTokenTTL govern
-// that cache; see the field docs for the lifecycle semantics.
+// All 13 tools are live. Reads dispatch with an empty bearer (open to
+// any SSO-authed identity); writes use a long-lived per-world token the
+// broker provisions on first write. The FirstMint* knobs govern the
+// retry loop that absorbs kubelet Secret-propagation lag on that first
+// write — see the field docs.
 type MCPConfig struct {
 	// Addr is the MCP gateway's listen address, e.g. ":8081".
 	// Defaulted to defaultMCPAddr when unset so existing deployments
@@ -159,19 +157,6 @@ type MCPConfig struct {
 	// Server.Addr convention. When set, both files must point at
 	// readable PEM blobs.
 	TLS MCPTLSConfig `yaml:"tls"`
-	// SessionMaxIdle is how long a per-email session (the cached
-	// world-token map) lives without being touched before the
-	// gateway evicts it. Default 1h; a returning user past idle
-	// simply pays the lazy-mint cost on the next tool call. Set
-	// shorter to free memory faster, longer for stable user bases
-	// where keeping the cache warm is preferable.
-	SessionMaxIdle time.Duration `yaml:"sessionMaxIdle"`
-	// MaxSessions caps the LRU-evicted size of the session cache.
-	// Default 10000 — a 10k user broker holds ~10MB worth of cached
-	// world tokens at 5 worlds/user × ~200 bytes/token. Operators
-	// scale up for larger universes; an evicted user pays one
-	// lazy-mint round trip on their next call.
-	MaxSessions int `yaml:"maxSessions"`
 	// FirstMintMaxAttempts caps the broker-side retry loop that
 	// absorbs the kubelet → world tokens-Secret propagation lag
 	// after a lazy mint: the world's projected Secret volume
@@ -239,8 +224,8 @@ type OIDCConfig struct {
 // mint tokens for. Authorization is per-world; an OIDC identity may
 // qualify for some worlds and not others depending on Allow.
 type WorldConfig struct {
-	// Name is the world's logical name (also the value in the
-	// "world" field of issuances records).
+	// Name is the world's logical name; the MCP gateway keys tool
+	// calls and the per-world write-token store on it.
 	Name string `yaml:"name"`
 	// Namespace is the k8s namespace where this world's TokensSecret lives.
 	Namespace string `yaml:"namespace"`
@@ -321,13 +306,13 @@ type AllowConfig struct {
 	Emails []string `yaml:"emails"`
 }
 
-// SweeperConfig knobs control the broker's periodic expiry+drift
-// janitor (Slice C.2). The sweeper runs by default in every broker;
-// multi-replica deployments need it so expired tokens age out and
-// operator hand-edits of world tokens.toml propagate back into the
-// issuances Secret. Leader election timings are not yet exposed —
-// client-go defaults (15s lease, 10s renew, 2s retry) suffice for our
-// failover budget and revisit only if a customer needs faster failover.
+// SweeperConfig knobs control the broker's periodic refresh-token
+// expiry janitor (Slice C.2). The sweeper runs by default in every
+// broker; multi-replica deployments need it so expired refresh tokens
+// age out of the broker-namespace Secret. Leader election timings are
+// not yet exposed — client-go defaults (15s lease, 10s renew, 2s retry)
+// suffice for our failover budget and revisit only if a customer needs
+// faster failover.
 type SweeperConfig struct {
 	// Disabled is the opt-out switch. Omitting the block in YAML
 	// (zero-value false) gives the production-correct behavior: the
@@ -355,20 +340,19 @@ type SweeperConfig struct {
 // deployment. Documented as a §Risks bullet; cluster-shared rate
 // limiting is a Phase 7+ follow-up when a customer's scale needs it.
 //
-// Defaults come from plan §6.2 Slice C.4: 10/min subject on /tokens,
-// /tokens/:label DELETE, /tokens/:label/rotate (single shared bucket,
-// burst 5); 20/min IP on /auth/login (burst 5). Operators tighten or
-// loosen via YAML.
+// Defaults come from plan §6.2 Slice C.4: 10/min subject on
+// /me/install (burst 5); 20/min IP on /auth/login (burst 5). Operators
+// tighten or loosen via YAML.
 type RateLimitConfig struct {
 	// Disabled is the opt-out switch, same naming convention as
 	// SweeperConfig.Disabled. Zero-value (false) means the limiter
 	// runs with the configured rates, so an operator who omits the
 	// rateLimit block in their values file still gets the protection.
 	Disabled bool `yaml:"disabled"`
-	// Tokens governs the per-subject bucket shared across GET
-	// /tokens, DELETE /tokens/:label, and POST /tokens/:label/rotate.
-	// One shared bucket means a misbehaving client cannot multiply
-	// its effective rate by fanning out across the three routes.
+	// Tokens governs the per-subject bucket fronting GET /me/install,
+	// the only subject-rate-limited route. (The yaml key is kept as
+	// `tokens` for config back-compat with deployments authored before
+	// the per-user /tokens routes were removed.)
 	Tokens RateLimitRouteConfig `yaml:"tokens"`
 	// Login governs the per-IP bucket on GET /auth/login. The
 	// callback is intentionally not rate-limited at this layer: the
@@ -477,9 +461,6 @@ func (c *Config) validate() error {
 	}
 	if c.Server.BrokerNamespace == "" {
 		return fmt.Errorf("server.brokerNamespace is required")
-	}
-	if c.Server.IssuancesSecret == "" {
-		return fmt.Errorf("server.issuancesSecret is required")
 	}
 	// Normalize before the empty-check so values like "   " or "/" are
 	// caught here instead of silently producing a broken issuer URL
@@ -654,12 +635,10 @@ func (s *ServerConfig) applyDeviceFlowDefaults() error {
 // to plain HTTP. Fail fast at LoadConfig so the operator sees the
 // misconfiguration before the broker pod starts.
 //
-// Slice 2 defaults: SessionMaxIdle=1h, MaxSessions=10000,
-// FirstMintMaxAttempts=6, FirstMintInitialBackoff=250ms,
+// Defaults: FirstMintMaxAttempts=6, FirstMintInitialBackoff=250ms,
 // FirstMintMaxBackoff=8s. The retry knobs absorb the kubelet → world
-// Secret propagation lag after a lazy mint (see plan §"Open Question 9"
-// and the Risks bullet on SIGHUP cadence). Negative values are config
-// typos and rejected.
+// Secret propagation lag after the first write provisions a world's
+// token. Negative values are config typos and rejected.
 func (m *MCPConfig) validate() error {
 	if m.Addr == "" {
 		m.Addr = defaultMCPAddr
@@ -668,18 +647,6 @@ func (m *MCPConfig) validate() error {
 	hasKey := m.TLS.KeyFile != ""
 	if hasCert != hasKey {
 		return fmt.Errorf("server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together")
-	}
-	if m.SessionMaxIdle == 0 {
-		m.SessionMaxIdle = defaultSessionMaxIdle
-	}
-	if m.SessionMaxIdle < 0 {
-		return fmt.Errorf("server.mcp.sessionMaxIdle must be > 0 (got %s)", m.SessionMaxIdle)
-	}
-	if m.MaxSessions == 0 {
-		m.MaxSessions = defaultMaxSessions
-	}
-	if m.MaxSessions < 0 {
-		return fmt.Errorf("server.mcp.maxSessions must be > 0 (got %d)", m.MaxSessions)
 	}
 	if m.FirstMintMaxAttempts == 0 {
 		m.FirstMintMaxAttempts = defaultFirstMintMaxAttempts
@@ -705,13 +672,11 @@ func (m *MCPConfig) validate() error {
 	return nil
 }
 
-// Slice 2 defaults for the MCP gateway's session cache and first-mint
-// retry loop. Picked to absorb the typical kubelet Secret-propagation
-// window without holding a tool call open longer than a careful user
-// would wait. Operators tune in values.yaml.
+// Defaults for the MCP gateway's first-mint retry loop. Picked to
+// absorb the typical kubelet Secret-propagation window without holding
+// a tool call open longer than a careful user would wait. Operators
+// tune in values.yaml.
 const (
-	defaultSessionMaxIdle          = time.Hour
-	defaultMaxSessions             = 10000
 	defaultFirstMintMaxAttempts    = 6
 	defaultFirstMintInitialBackoff = 250 * time.Millisecond
 	defaultFirstMintMaxBackoff     = 8 * time.Second

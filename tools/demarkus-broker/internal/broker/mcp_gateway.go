@@ -13,21 +13,19 @@ import (
 )
 
 // mcpGateway is the broker's MCP-over-HTTPS gateway. It owns the mcp-go
-// MCPServer and its Streamable HTTP transport, sharing auth + Issuer +
+// MCPServer and its Streamable HTTP transport, sharing auth +
 // rate-limit machinery with the parent broker Server.
 //
-// Slice 1 shipped the listener, the initialize handshake, and the
-// tools/list response with all 13 tool definitions. Slice 2 lands
-// the real handlers for mark_fetch / mark_list / mark_versions plus
-// the per-email sessionCache and per-world worldDispatcher that back
-// them. The remaining 10 tools still hit notImplementedHandler.
+// All 13 tools have real handlers. Reads dispatch with an empty bearer
+// (the world's tokens.toml grants no read op, so the org SSO gate at
+// the broker is the only access control); writes provision a per-world
+// token through worldWriteTokens and dispatch through worldDispatcher.
 type mcpGateway struct {
-	srv          *Server
-	mcpServer    *mcpserver.MCPServer
-	transport    *mcpserver.StreamableHTTPServer
-	log          *slog.Logger
-	sessionCache *sessionCache
-	dispatcher   worldDispatcher
+	srv        *Server
+	mcpServer  *mcpserver.MCPServer
+	transport  *mcpserver.StreamableHTTPServer
+	log        *slog.Logger
+	dispatcher worldDispatcher
 	// graphStore is an ephemeral in-process graph store backing
 	// mark_backlinks / mark_graph / mark_graph_export /
 	// mark_graph_publish. Lifetime = broker pod lifetime: any
@@ -53,10 +51,8 @@ type mcpGateway struct {
 // is called; resources and prompts stay absent because the plan's
 // Out-of-Scope excludes them.
 //
-// dispatcher is the worldDispatcher backing Slice 2's read handlers.
-// Production wires *worldPool; tests inject a fake. Slice 2 also
-// constructs the per-process sessionCache here so every tool call
-// sees one consistent per-email map.
+// dispatcher is the worldDispatcher backing the tool handlers.
+// Production wires *worldPool; tests inject a fake.
 func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGateway {
 	mcpSrv := mcpserver.NewMCPServer(
 		"demarkus-broker",
@@ -68,11 +64,10 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGa
 		mcpserver.WithToolCapabilities(false),
 	)
 	g := &mcpGateway{
-		srv:          s,
-		mcpServer:    mcpSrv,
-		log:          s.log,
-		sessionCache: newSessionCache(s.cfg.Server.MCP.MaxSessions, s.cfg.Server.MCP.SessionMaxIdle, s.clock),
-		dispatcher:   dispatcher,
+		srv:        s,
+		mcpServer:  mcpSrv,
+		log:        s.log,
+		dispatcher: dispatcher,
 		// Ephemeral graph store — empty on each gateway
 		// construction, dies with the broker pod. See the
 		// graphStore field doc for the design framing.

@@ -135,7 +135,7 @@ tests:
     asserts:
       - matchRegex:
           path: stringData["config.yaml"]
-          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*sessionMaxIdle: "1h"\s*\n\s*maxSessions: 10000\s*\n\s*firstMintMaxAttempts: 6\s*\n\s*firstMintInitialBackoff: "250ms"\s*\n\s*firstMintMaxBackoff: "8s"'
+          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*firstMintMaxAttempts: 6\s*\n\s*firstMintInitialBackoff: "250ms"\s*\n\s*firstMintMaxBackoff: "8s"'
 
   - it: config.yaml omits mcp.tls block when no existingSecretRef set
     template: secret-config.yaml
@@ -155,15 +155,6 @@ tests:
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: 'tls:\s*\n\s*certFile: "/etc/demarkus-broker/tls/mcp/tls.crt"\s*\n\s*keyFile: "/etc/demarkus-broker/tls/mcp/tls.key"'
-
-  - it: mcp.sessionMaxIdle override flows through
-    template: secret-config.yaml
-    set:
-      server.mcp.sessionMaxIdle: 30m
-    asserts:
-      - matchRegex:
-          path: stringData["config.yaml"]
-          pattern: 'sessionMaxIdle: "30m"'
 
   - it: mcp.firstMint* knobs all override into the rendered config
     template: secret-config.yaml

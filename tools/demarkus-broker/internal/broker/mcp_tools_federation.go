@@ -153,8 +153,8 @@ func (g *mcpGateway) resolveCandidate(ctx context.Context, claims Claims, entry 
 		var notFound *errWorldNotFound
 		// Both errWorldNotFound (world isn't in cfg.Worlds) and
 		// ErrNotAuthorized (world is in cfg.Worlds but the
-		// identity's AllowConfig didn't keep it through
-		// MintFiltered) collapse to "this broker can't reach
+		// identity's AllowConfig denied the write) collapse to
+		// "this broker can't reach
 		// this candidate for me" from the agent's perspective.
 		// Different distinct internal causes — same user-facing
 		// recovery (try the next candidate, or accept that

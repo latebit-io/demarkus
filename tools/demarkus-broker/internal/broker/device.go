@@ -510,8 +510,7 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 	// next interval, the user re-runs soul-join, and no orphan
 	// statusComplete state goes out without its refresh token.
 	// Orphaned refresh-tokens Secret entries (mint succeeded, Bind
-	// then races a sweep) age out on Sweep, same posture as the
-	// issuances Secret's partial-failure recovery.
+	// then races a sweep) age out on Sweep via their expiry.
 	rawRefresh, err := s.refreshStore.Issue(r.Context(), exchange.Claims, s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: device callback refresh mint failed",

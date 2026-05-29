@@ -13,7 +13,7 @@ imagePullSecrets: []
 
 # Multi-replica HA. Slice C of the broker is stateless modulo k8s Secret
 # writes (resourceVersion optimistic concurrency on world tokens Secret +
-# issuances Secret); the sweeper coordinates via a coordination.k8s.io/Lease
+# refresh-tokens Secret); the sweeper coordinates via a coordination.k8s.io/Lease
 # so N>=2 replicas is the production posture. Drop to 1 only for dev/trial
 # clusters where you also want to flip sweeper.disabled=true to skip the
 # leader-election overhead.
@@ -48,15 +48,9 @@ server:
   publicURL: ""
 
   # Namespace the broker itself runs in. Defaults to the release namespace
-  # via the helper; override only if the issuances Secret lives elsewhere
-  # (rare).
+  # via the helper; override only if the broker's state Secrets live
+  # elsewhere (rare).
   brokerNamespace: ""
-
-  # Secret name for the broker's issuance state (label -> {email, world,
-  # ...}). Default derived from the release name. The Secret is created
-  # with `helm.sh/resource-policy: keep` so `helm upgrade` and
-  # `helm uninstall` never wipe broker-minted issuance records.
-  issuancesSecret: ""
 
   # DEV-ONLY: drop the Secure attribute on the OIDC state cookie.
   # Default false. Flip to true only for local / kind harnesses where the
@@ -93,18 +87,13 @@ server:
   # MCP gateway listener (knowledge-system layer; plan: Broker MCP
   # Gateway). The gateway is ALWAYS ON — every broker is a
   # knowledge-system gateway, there is no `enabled` knob. Operators
-  # tune the address, TLS, and session-cache behavior here. An
+  # tune the address, TLS, and first-write retry behavior here. An
   # existing pre-gateway deployment picks up the listener on :8081
   # silently on chart upgrade: the listener binds, the Service grows
   # a second `mcp` port, the NetworkPolicy admits traffic to it.
   # Exposure beyond the cluster requires setting `ingress.mcp.host`
   # (see the Ingress block below); leaving it unset keeps the
   # listener cluster-internal.
-  #
-  # Sized for an enterprise universe: ~10k unique users × ~5 worlds
-  # at ~200 bytes per cached world-token ≈ 10MB of session-cache
-  # memory at saturation. Tune `maxSessions` if your population is
-  # materially larger or smaller.
   mcp:
     # Listen address inside the pod. Must differ from server.port so
     # the management API and the MCP surface bind distinct listeners.
@@ -136,29 +125,18 @@ server:
         # Name of the kubernetes.io/tls Secret in the release
         # namespace. Empty disables broker-side TLS.
         name: ""
-    # Per-email session idle timeout. A returning user past idle pays
-    # one lazy-mint round trip on their next call. Default 1h.
-    sessionMaxIdle: 1h
-    # LRU cap on cached email sessions. Eviction is lossless from
-    # the user's perspective — an evicted session is re-minted on
-    # the next call. Default 10000.
-    maxSessions: 10000
-    # World-token TTL is NOT a chart knob. Cached world tokens carry
-    # their natural expiry from Issuer.MintFiltered (the world's
-    # defaultToken.expiresAfter, plus refresh on id_token rotation).
-    # Plan OQ#5 (Broker MCP Gateway v5) pinned this: the broker
-    # respects the world's own TTL rather than overriding it
-    # broker-side. Tune per-world TTL via `worlds[].defaultToken.
-    # expiresAfter` instead.
+    # World-token TTL is NOT a chart knob. The broker provisions one
+    # long-lived write token per world (no expiry) and holds it; reads
+    # dispatch with no token at all. There is nothing to time out, so
+    # there is no broker-side TTL to tune.
     #
-    # First-mint retry loop knobs. After a lazy mint, the world's
-    # projected-Secret-volume refresh has a kubelet-bounded
-    # propagation lag — a freshly-minted token can 401 at the
-    # world for up to ~kubeletSyncPeriod (default ~1 min). The
-    # retry loop runs only when dispatch produces `unauthorized`
-    # on a token the broker just minted (or just re-minted after
-    # a cache-hit 401), distinguishing the propagation race from a
-    # genuine permission denial.
+    # First-write retry loop knobs. The first write to a world makes the
+    # broker provision that world's write token; the world's
+    # projected-Secret-volume refresh has a kubelet-bounded propagation
+    # lag, so the freshly-written token can 401 at the world for up to
+    # ~kubeletSyncPeriod (default ~1 min). The retry loop re-dispatches
+    # the same token with backoff only on `unauthorized` responses,
+    # distinguishing the propagation race from a genuine denial.
     #
     # Defaults (6 attempts, 250ms → 8s exponential) sum to ~16s of
     # waiting across attempts, well under the typical worst-case
@@ -239,7 +217,7 @@ worlds: []
   #   tokensSecret: team-a-tokens
   #   # Reachable address handed to clients via /me/install during user
   #   # onboarding (mark://host:port). Optional: worlds without a publicURL
-  #   # are minted-for as before but excluded from /me/install responses,
+  #   # are excluded from /me/install responses,
   #   # because there is no address to wire the client to. Typically the
   #   # VPN-reachable hostname or in-cluster Service when the user's
   #   # network can route to it; see docs/deployment/security-topology.md.
@@ -277,10 +255,10 @@ worlds: []
   #     # config-validation surface stays stable across upgrades;
   #     # values other than ["publish"] are silently ignored.
   #     operations: ["publish"]
-  #     # ExpiresAfter is currently observed by the dead per-user
-  #     # mint path (issuer.go MintFiltered, scheduled for removal
-  #     # in broker-deadcode-cleanup). The per-world write token is
-  #     # long-lived (no expiry) by design.
+  #     # ExpiresAfter is no longer consulted by the broker: the
+  #     # per-world write token is long-lived (no expiry) by design,
+  #     # and reads use no token. Kept for config-surface stability;
+  #     # the value is ignored, same as operations above.
   #     expiresAfter: 24h
 
 # Periodic expiry + drift sweeper. Leader-elected via
@@ -295,8 +273,8 @@ sweeper:
 
 # Per-subject + per-IP token-bucket rate limiting. Same `disabled`-not-
 # `enabled` naming so omission keeps the protection on. Defaults match
-# plan §6.2 Slice C.4: 10/min subject burst 5 (shared across the three
-# /tokens routes), 20/min IP burst 5 on /auth/login.
+# plan §6.2 Slice C.4: 10/min subject burst 5 (on /me/install, the only
+# per-subject-limited management route), 20/min IP burst 5 on /auth/login.
 #
 # trustForwardedFor: the chart default is true because the broker's
 # deployment posture is "behind an Ingress that strips spoofed
@@ -369,8 +347,12 @@ serviceAccount:
 rbac:
   # When true (default), the chart creates per-world Role + RoleBinding
   # in each world's namespace plus a broker-namespace Role for the
-  # sweeper Lease and the issuances Secret. Flip to false if your
-  # cluster manages RBAC out-of-band (operator policies, GitOps Roles).
+  # sweeper Lease, the refresh-tokens Secret, and create/update on the
+  # per-world write-token Secrets the broker provisions on first write.
+  # Flip to false ONLY if your cluster manages RBAC out-of-band
+  # (operator policies, GitOps Roles); you must then grant the broker
+  # those same broker-namespace permissions yourself, or the write path
+  # fails when it tries to persist a world's write token.
   create: true
 
 # NetworkPolicy ships in the RBAC slice. Schema declared here so values

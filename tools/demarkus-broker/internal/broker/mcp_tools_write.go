@@ -60,7 +60,7 @@ func (g *mcpGateway) gateWrite(claims Claims, worldName string) (*WorldConfig, *
 	if claims.Email == "" {
 		return nil, mcp.NewToolResultError("identity has no email claim")
 	}
-	worldCfg := g.srv.issuer.lookupWorld(worldName)
+	worldCfg := lookupWorld(g.srv.cfg, worldName)
 	if worldCfg == nil {
 		return nil, mcp.NewToolResultError(fmt.Sprintf("world %q is not configured", worldName))
 	}
@@ -303,11 +303,11 @@ func formatMergeOutcome(o *merge.Outcome) string {
 // version for the APPEND. Matches the local demarkus-mcp's
 // behavior so agents see the same convenience either way.
 //
-// The auto-resolve path issues two dispatch calls under one
-// session's cached token — the singleflight + sessionCache from
-// Slice 2 ensure only the very first call pays the mint round
-// trip; the VERSIONS + APPEND pair shares whatever's already
-// cached.
+// The auto-resolve path issues two dispatch calls (VERSIONS then
+// APPEND). Both go through dispatchWithAuth, which provisions the
+// world's write token from worldWriteTokens — its in-memory cache
+// means only the first call to a fresh world pays the provision
+// round trip; the VERSIONS + APPEND pair shares the cached token.
 func (g *mcpGateway) handleMarkAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {

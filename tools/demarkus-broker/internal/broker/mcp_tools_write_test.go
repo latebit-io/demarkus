@@ -321,10 +321,10 @@ func TestHandleMarkPublishMergeCandidateWithMarkers(t *testing.T) {
 // TestHandleMarkPublishMergeDispatchesEachStepThroughAuth: the
 // merge orchestration calls Publish (conflict) → FetchVersion
 // (base) → FetchCurrent (theirs). Each must dispatch through
-// dispatchWithAuth, so the sessionCache token gets reused
+// dispatchWithAuth, so the world write token gets reused
 // across the three calls and a propagation-race retry on any
 // one of them works. Pinned by counting dispatches and
-// asserting they all carry the same lazy-minted token.
+// asserting they all carry the same provisioned token.
 func TestHandleMarkPublishMergeDispatchesEachStepThroughAuth(t *testing.T) {
 	cfg := mcpTestConfig()
 	var publishTokens, fetchTokens []string
@@ -366,13 +366,13 @@ func TestHandleMarkPublishMergeDispatchesEachStepThroughAuth(t *testing.T) {
 	if len(fetchTokens) != 2 {
 		t.Errorf("fetch dispatched %d times, want 2 (base + current)", len(fetchTokens))
 	}
-	// All three dispatches share the same lazy-minted token —
-	// proves the sessionCache is honored across the merge
+	// All three dispatches share the same provisioned token —
+	// proves the world write token is honored across the merge
 	// orchestration's calls.
 	allTokens := append(append([]string{}, publishTokens...), fetchTokens...)
 	for i := 1; i < len(allTokens); i++ {
 		if allTokens[i] != allTokens[0] {
-			t.Errorf("merge step %d used token %q, want shared %q (sessionCache hit)", i, allTokens[i], allTokens[0])
+			t.Errorf("merge step %d used token %q, want shared %q (world write token reuse)", i, allTokens[i], allTokens[0])
 		}
 	}
 }
@@ -901,8 +901,8 @@ func TestMCPGatewayMarkPublishEndToEnd(t *testing.T) {
 		Subject: "google|alice", Email: "alice@example.com", EmailVerified: true,
 	}}
 	signer := newTestSigner(t)
-	issuer := newIssuer(t, cfg, fake.NewSimpleClientset())
-	brokerSrv := NewServer(cfg, signer, verifier, issuer, nil, nil, nil)
+	k8s := fake.NewSimpleClientset()
+	brokerSrv := NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
 	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d))
 	t.Cleanup(ts.Close)
 

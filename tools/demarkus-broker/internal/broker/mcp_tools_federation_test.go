@@ -504,8 +504,8 @@ func TestMCPGatewayMarkDiscoverEndToEnd(t *testing.T) {
 		Subject: "google|alice", Email: "alice@example.com", EmailVerified: true,
 	}}
 	signer := newTestSigner(t)
-	issuer := newIssuer(t, cfg, fake.NewSimpleClientset())
-	brokerSrv := NewServer(cfg, signer, verifier, issuer, nil, nil, nil)
+	k8s := fake.NewSimpleClientset()
+	brokerSrv := NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
 	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d))
 	t.Cleanup(ts.Close)
 

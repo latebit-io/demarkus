@@ -185,13 +185,13 @@ func TestSubjectRateLimitMissingClaimsIs500(t *testing.T) {
 	// as 500 + an error log rather than silently disabling the limit
 	// (which would be the worst-of-both: production looks fine, but
 	// a misbehaving caller gets unbounded throughput).
-	srv := NewServer(testConfigWithRateLimit(), newTestSigner(t), &fakeVerifier{}, NewIssuer(testConfig(), fake.NewSimpleClientset()), nil, nil, nil)
+	srv := NewServer(testConfigWithRateLimit(), newTestSigner(t), &fakeVerifier{}, fake.NewSimpleClientset(), nil, nil, nil)
 	h := srv.subjectRateLimit(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler reached despite missing claims")
 		w.WriteHeader(http.StatusOK)
 	}))
 	rr := httptest.NewRecorder()
-	r, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/tokens", http.NoBody)
+	r, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/me/install", http.NoBody)
 	h.ServeHTTP(rr, r)
 	if rr.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rr.Code)
@@ -234,7 +234,7 @@ func TestRateLimitTokensExhaustsAndReturns429WithRetryAfter(t *testing.T) {
 
 	// burst=2, so the first two requests pass and the third 429s.
 	for i := range 2 {
-		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/me/install", http.NoBody)
 		req.Header.Set("Authorization", "Bearer alice-token")
 		resp, err := client.Do(req)
 		if err != nil {
@@ -245,7 +245,7 @@ func TestRateLimitTokensExhaustsAndReturns429WithRetryAfter(t *testing.T) {
 			t.Fatalf("attempt %d status = %d, want 200 (within burst)", i+1, resp.StatusCode)
 		}
 	}
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/me/install", http.NoBody)
 	req.Header.Set("Authorization", "Bearer alice-token")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -274,7 +274,7 @@ func TestRateLimitTokensCrossSubjectIsolation(t *testing.T) {
 	client := testClient(srv)
 
 	for i := range 3 {
-		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/me/install", http.NoBody)
 		req.Header.Set("Authorization", "Bearer alice-token")
 		resp, err := client.Do(req)
 		if err != nil {
@@ -289,7 +289,7 @@ func TestRateLimitTokensCrossSubjectIsolation(t *testing.T) {
 		}
 	}
 	// Bob should still pass through cleanly.
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/me/install", http.NoBody)
 	req.Header.Set("Authorization", "Bearer bob-token")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -298,53 +298,6 @@ func TestRateLimitTokensCrossSubjectIsolation(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("bob status = %d, want 200 (his bucket should be independent)", resp.StatusCode)
-	}
-}
-
-func TestRateLimitTokensSharedBucketAcrossRoutes(t *testing.T) {
-	// Plan §6.2 C.4 decision: the three /tokens routes share one
-	// per-subject bucket so a misbehaving client cannot multiply
-	// effective throughput by fanning out (list + revoke + rotate
-	// each at 10/min would give 30/min effective). With burst=2,
-	// 1 list + 1 delete should be allowed; the 3rd request — on a
-	// distinct route — must 429.
-	cfg := testConfigWithRateLimit()
-	srv, _ := newTestServer(t, cfg, twoSubjectVerifier(), fake.NewSimpleClientset())
-	client := testClient(srv)
-
-	// 1st: GET /tokens (200, empty list).
-	req1, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
-	req1.Header.Set("Authorization", "Bearer alice-token")
-	r1, err := client.Do(req1)
-	if err != nil {
-		t.Fatalf("1st (GET): %v", err)
-	}
-	_ = r1.Body.Close()
-	if r1.StatusCode != http.StatusOK {
-		t.Fatalf("1st (GET) status = %d, want 200", r1.StatusCode)
-	}
-	// 2nd: DELETE /tokens/nope (404 from handler, but counts).
-	req2, _ := http.NewRequest(http.MethodDelete, srv.URL+"/tokens/usr_nope", http.NoBody)
-	req2.Header.Set("Authorization", "Bearer alice-token")
-	r2, err := client.Do(req2)
-	if err != nil {
-		t.Fatalf("2nd (DELETE): %v", err)
-	}
-	_ = r2.Body.Close()
-	if r2.StatusCode != http.StatusNotFound {
-		t.Fatalf("2nd (DELETE) status = %d, want 404 (handler-side; rate limit must not fire here)", r2.StatusCode)
-	}
-	// 3rd: POST /tokens/.../rotate on a different route — must 429
-	// because the shared bucket is now empty.
-	req3, _ := http.NewRequest(http.MethodPost, srv.URL+"/tokens/usr_nope/rotate", http.NoBody)
-	req3.Header.Set("Authorization", "Bearer alice-token")
-	r3, err := client.Do(req3)
-	if err != nil {
-		t.Fatalf("3rd (ROTATE): %v", err)
-	}
-	_ = r3.Body.Close()
-	if r3.StatusCode != http.StatusTooManyRequests {
-		t.Errorf("3rd (ROTATE on a different route) status = %d, want 429 — shared-bucket invariant broken", r3.StatusCode)
 	}
 }
 
@@ -464,7 +417,7 @@ func TestRateLimitDisabledBypasses(t *testing.T) {
 	client := testClient(srv)
 
 	for i := range 20 {
-		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tokens", http.NoBody)
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/me/install", http.NoBody)
 		req.Header.Set("Authorization", "Bearer alice-token")
 		resp, err := client.Do(req)
 		if err != nil {
