@@ -190,6 +190,9 @@ type LookupOptions struct {
 // scope, returning an importance-ranked markdown table. query is required.
 // If token is non-empty it is sent so read-auth-gated documents are included.
 func (c *Client) Lookup(host, scope, query, token string, opts LookupOptions) (Result, error) {
+	if query == "" {
+		return Result{}, fmt.Errorf("LOOKUP requires a non-empty query")
+	}
 	req := protocol.Request{Verb: protocol.VerbLookup, Path: scope, Metadata: map[string]string{"query": query}}
 	if opts.Filter != "" {
 		req.Metadata["filter"] = opts.Filter
