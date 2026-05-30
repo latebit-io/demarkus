@@ -28,6 +28,12 @@ const (
 	// VerbAppend appends content to the end of an existing document.
 	VerbAppend = "APPEND"
 
+	// VerbLookup looks up documents by subject against the server's catalog,
+	// returning an importance-ranked list of matches. Not yet wired into the
+	// request parser or handler dispatch — added there with the catalog so the
+	// verb is never recognised before it works.
+	VerbLookup = "LOOKUP"
+
 	// WellKnownManifestPath is the conventional path for agent manifest discovery.
 	WellKnownManifestPath = "/.well-known/agent-manifest.md"
 

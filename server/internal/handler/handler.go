@@ -47,6 +47,7 @@ var reservedKeys = map[string]bool{
 	"chain-error":     true,
 	"archived":        true,
 	"entries":         true,
+	"matches":         true,
 	"status":          true,
 }
 
