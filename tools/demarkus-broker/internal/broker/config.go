@@ -138,7 +138,7 @@ type ServerConfig struct {
 // not a product we ship. Operators tune Addr and TLS here; the
 // listener always binds.
 //
-// All 13 tools are live. Reads dispatch with an empty bearer (open to
+// All 14 tools are live. Reads dispatch with an empty bearer (open to
 // any SSO-authed identity); writes use a long-lived per-world token the
 // broker provisions on first write. The FirstMint* knobs govern the
 // retry loop that absorbs kubelet Secret-propagation lag on that first

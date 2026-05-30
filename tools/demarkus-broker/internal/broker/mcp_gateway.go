@@ -16,7 +16,7 @@ import (
 // MCPServer and its Streamable HTTP transport, sharing auth +
 // rate-limit machinery with the parent broker Server.
 //
-// All 13 tools have real handlers. Reads dispatch with an empty bearer
+// All 14 tools have real handlers. Reads dispatch with an empty bearer
 // (the world's tokens.toml grants no read op, so the org SSO gate at
 // the broker is the only access control); writes provision a per-world
 // token through worldWriteTokens and dispatch through worldDispatcher.
@@ -38,7 +38,7 @@ type mcpGateway struct {
 	graphStore *graphstore.Store
 }
 
-// newMCPGateway constructs a gateway, registers the 13 tool
+// newMCPGateway constructs a gateway, registers the 14 tool
 // definitions (real handlers for Slice 2's read verbs, placeholders
 // for the rest), and wraps the mcp-go MCPServer in a Streamable HTTP
 // transport. The transport is an http.Handler — the caller mounts
@@ -78,13 +78,11 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGa
 	return g
 }
 
-// registerTools wires the 13 tool definitions onto the MCP server.
-// Slice 2 dispatches mark_fetch / mark_list / mark_versions to real
-// handlers; the remaining 10 tools fall through to
-// notImplementedHandler until later slices replace them. The
-// per-tool handler map lives in toolHandlers so adding new
-// implementations is a one-line edit and the placeholder fallback
-// is impossible to forget.
+// registerTools wires the 14 tool definitions onto the MCP server.
+// Tools absent from the toolHandlers map fall through to
+// notImplementedHandler. The per-tool handler map lives in
+// toolHandlers so adding new implementations is a one-line edit and
+// the placeholder fallback is impossible to forget.
 func (g *mcpGateway) registerTools() {
 	handlers := g.toolHandlers()
 	tools := mcpTools()
@@ -102,17 +100,14 @@ func (g *mcpGateway) registerTools() {
 // package-level var) so the handlers carry the gateway receiver
 // without indirection through a global.
 //
-// Slices 2-4 lit up the read, write, and discover/resolve verbs;
-// Slice 4b+5 closes out the federation surface with the
-// graph-store-backed tools (mark_backlinks, mark_graph,
-// mark_index, mark_graph_export, mark_graph_publish). All 13
-// tools are real handlers now — every entry below points at a
-// concrete implementation, and notImplementedHandler should
-// never run in production.
+// All 14 tools are real handlers — every entry below points at a
+// concrete implementation, and notImplementedHandler should never
+// run in production.
 func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 	return map[string]mcpserver.ToolHandlerFunc{
 		"mark_fetch":         g.handleMarkFetch,
 		"mark_list":          g.handleMarkList,
+		"mark_lookup":        g.handleMarkLookup,
 		"mark_versions":      g.handleMarkVersions,
 		"mark_publish":       g.handleMarkPublish,
 		"mark_append":        g.handleMarkAppend,

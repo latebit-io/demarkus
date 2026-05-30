@@ -5,13 +5,13 @@ import (
 	"testing"
 )
 
-func TestMCPToolsExactly13(t *testing.T) {
+func TestMCPToolsExactly14(t *testing.T) {
 	tools := mcpTools()
 	if len(tools) != len(mcpToolNames) {
 		t.Fatalf("mcpTools() returned %d tools, mcpToolNames lists %d — names + builders out of sync", len(tools), len(mcpToolNames))
 	}
-	if len(tools) != 13 {
-		t.Fatalf("expected 13 tools (parity with client/cmd/demarkus-mcp), got %d", len(tools))
+	if len(tools) != 14 {
+		t.Fatalf("expected 14 tools (parity with client/cmd/demarkus-mcp), got %d", len(tools))
 	}
 	for i, tool := range tools {
 		if tool.Name != mcpToolNames[i] {

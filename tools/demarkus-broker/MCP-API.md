@@ -1,6 +1,6 @@
 # Broker MCP API
 
-Operator + developer reference for the 13-tool MCP surface exposed by
+Operator + developer reference for the 14-tool MCP surface exposed by
 the demarkus-broker's `/mcp` endpoint. Mirrors the local
 `client/cmd/demarkus-mcp` stdio server byte-for-byte: a document
 fetched via the broker and the same document fetched direct-QUIC
@@ -85,7 +85,7 @@ for caller-supplied URLs.
 
 ## Tools
 
-All 13 tools below have semantic parity with the local
+All 14 tools below have semantic parity with the local
 `client/cmd/demarkus-mcp` stdio server. The proxy-fidelity gate is a
 broker-side unit test that asserts the broker's `formatToolResult`
 matches the local server's `formatResult` byte-for-byte across
@@ -120,6 +120,22 @@ validation status, and a list of versions with timestamps.
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `url` | string | yes | `mark://{worldName}/{path}` |
+
+#### `mark_lookup`
+
+Look up documents by subject against the world's catalog. Matches the
+query against each document's declared tags and title and returns an
+importance-ranked markdown table of matches (path, importance, title,
+tags) — not document bodies. A catalog lookup, not full-text search:
+a subject never tagged or titled is not found. Returns `matches` (the
+row count). Dispatched unauthenticated like the other reads.
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `url` | string | yes | Scope: `mark://{worldName}/` for the whole world, or a subtree like `mark://{worldName}/docs/`. |
+| `query` | string | yes | Subject; matched against tags and titles (min 2 chars). |
+| `filter` | string | no | Comma-separated `key=value`; built-ins `tag=`, `modified-after=`, `modified-before=`. |
+| `limit` | number | no | Max results (server default 10, cap 1000). |
 
 ### Write
 
