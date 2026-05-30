@@ -247,7 +247,7 @@ func IsHashPath(path string) (hash string, ok bool) {
 // IsValidVerb returns true if verb is a known Mark Protocol verb.
 func IsValidVerb(verb string) bool {
 	switch verb {
-	case VerbFetch, VerbList, VerbVersions, VerbPublish, VerbArchive, VerbAppend:
+	case VerbFetch, VerbList, VerbVersions, VerbPublish, VerbArchive, VerbAppend, VerbLookup:
 		return true
 	default:
 		return false

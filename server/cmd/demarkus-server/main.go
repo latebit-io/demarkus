@@ -16,6 +16,7 @@ import (
 	"github.com/latebit/demarkus/protocol"
 	"github.com/latebit/demarkus/protocol/store"
 	"github.com/latebit/demarkus/server/internal/auth"
+	"github.com/latebit/demarkus/server/internal/catalog"
 	"github.com/latebit/demarkus/server/internal/config"
 	"github.com/latebit/demarkus/server/internal/configwatch"
 	"github.com/latebit/demarkus/server/internal/handler"
@@ -24,6 +25,22 @@ import (
 	servertls "github.com/latebit/demarkus/server/internal/tls"
 	"github.com/quic-go/quic-go"
 )
+
+// buildCatalog builds the LOOKUP catalog by walking the store's current
+// documents. A failed walk leaves an empty catalog (lookups return no matches)
+// rather than aborting startup.
+func buildCatalog(s *store.Store, logger *slog.Logger) *catalog.Catalog {
+	cat := catalog.New()
+	if err := s.WalkCurrent(func(d store.CurrentDoc) error {
+		cat.Set(catalog.FromDocument(d.Path, d.Metadata, d.Body, d.Modified))
+		return nil
+	}); err != nil {
+		logger.Warn("lookup catalog build failed", "error", err)
+	} else {
+		logger.Info("lookup catalog built", "entries", cat.Len())
+	}
+	return cat
+}
 
 func main() {
 	root := flag.String("root", "", "content directory to serve (overrides DEMARKUS_ROOT)")
@@ -112,6 +129,8 @@ func main() {
 		logger.Info("content hash index built", "entries", s.HashIndexSize())
 	}
 
+	cat := buildCatalog(s, logger)
+
 	if cfg.TokensFile != "" {
 		if err := loadTokenStore(cfg.TokensFile); err != nil {
 			logger.Error("token loading failed", "error", err)
@@ -126,6 +145,7 @@ func main() {
 	h := &handler.Handler{
 		ContentDir: cfg.ContentDir,
 		Store:      s,
+		Catalog:    cat,
 		Logger:     logger,
 		ReadOnly:   cfg.ReadOnly,
 		GetTokenStore: func() *auth.TokenStore {

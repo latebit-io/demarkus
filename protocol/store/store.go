@@ -202,6 +202,71 @@ func (s *Store) BuildHashIndex() error {
 	})
 }
 
+// CurrentDoc describes a current, non-archived document version surfaced by
+// WalkCurrent. Body is the markdown content with store frontmatter stripped;
+// Metadata is the publisher metadata with the "meta." prefix stripped.
+type CurrentDoc struct {
+	Path     string
+	Body     []byte
+	Metadata map[string]string
+	Modified time.Time
+}
+
+// WalkCurrent visits every current, non-archived document version and calls fn
+// for each. It mirrors BuildHashIndex's traversal: it follows current-version
+// symlinks, skips the versions/ directory, and skips archived, oversized, or
+// unreadable files. This lets a caller (e.g. the LOOKUP catalog) build its own
+// derived index from the same source of truth without re-implementing the walk.
+func (s *Store) WalkCurrent(fn func(CurrentDoc) error) error {
+	absRoot, err := s.resolvedRoot()
+	if err != nil {
+		return err
+	}
+
+	return filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if d.IsDir() {
+			if d.Name() == "versions" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&os.ModeSymlink == 0 {
+			return nil // only follow current-version symlinks
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil // skip broken symlinks
+		}
+		if !isContained(resolved, absRoot) {
+			return nil // skip symlinks that escape the content root
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
+			return nil // skip unreadable or oversized files
+		}
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			return nil // skip unreadable files
+		}
+		if isArchived(data) {
+			return nil
+		}
+		rel, err := filepath.Rel(absRoot, path)
+		if err != nil {
+			return nil
+		}
+		return fn(CurrentDoc{
+			Path:     "/" + rel,
+			Body:     extractBody(data),
+			Metadata: extractMetadata(data),
+			Modified: info.ModTime().UTC().Truncate(time.Second),
+		})
+	})
+}
+
 // LookupHash returns the request path for a content hash, or false if not found.
 func (s *Store) LookupHash(hash string) (string, bool) {
 	s.hashMu.RLock()

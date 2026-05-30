@@ -19,10 +19,19 @@ import (
 	"github.com/latebit/demarkus/protocol"
 	"github.com/latebit/demarkus/protocol/store"
 	"github.com/latebit/demarkus/server/internal/auth"
+	"github.com/latebit/demarkus/server/internal/catalog"
 )
 
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
 const MaxDirectoryEntries = 1000
+
+// LOOKUP result bounds.
+const (
+	// defaultLookupLimit is the result count used when a request omits limit.
+	defaultLookupLimit = 10
+	// maxLookupResults is the hard cap on LOOKUP results regardless of limit.
+	maxLookupResults = 1000
+)
 
 // controlKeys are request metadata keys consumed by the handler and never stored.
 var controlKeys = map[string]bool{
@@ -55,6 +64,7 @@ var reservedKeys = map[string]bool{
 type Handler struct {
 	ContentDir    string
 	Store         *store.Store
+	Catalog       *catalog.Catalog        // LOOKUP index; nil disables LOOKUP and catalog updates
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
 	Logger        *slog.Logger
 	ReadOnly      bool // reject all write operations
@@ -106,6 +116,8 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.handleList(stream, req)
 	case protocol.VerbVersions:
 		h.handleVersions(stream, req)
+	case protocol.VerbLookup:
+		h.handleLookup(stream, req)
 	case protocol.VerbPublish, protocol.VerbArchive, protocol.VerbAppend:
 		if h.ReadOnly {
 			h.writeError(stream, protocol.StatusNotPermitted, "server is read-only")
@@ -178,33 +190,44 @@ func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash stri
 // public and the request proceeds without auth. Returns false and writes an
 // error response if auth is required but missing or invalid.
 func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
+	ok, err := h.checkReadAuth(req.Path, req.Metadata["auth"])
+	if ok {
+		return true
+	}
+	switch {
+	case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken), errors.Is(err, auth.ErrTokenExpired):
+		h.logger().Warn("unauthorized", "operation", req.Verb, "path", sanitize(req.Path))
+		h.writeError(w, protocol.StatusUnauthorized, "authentication required")
+	default:
+		h.logger().Warn("not permitted", "operation", req.Verb, "path", sanitize(req.Path))
+		h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
+	}
+	return false
+}
+
+// checkReadAuth reports whether token may read reqPath, without writing a
+// response. It returns (true, nil) when the path needs no read auth or the
+// token is authorized. When unauthorized it returns (false, err) so callers
+// that surface errors can distinguish unauthorized from not-permitted; callers
+// that only filter (e.g. LOOKUP) can ignore err.
+func (h *Handler) checkReadAuth(reqPath, token string) (bool, error) {
 	var ts *auth.TokenStore
 	if h.GetTokenStore != nil {
 		ts = h.GetTokenStore()
 	}
 	if ts == nil {
-		return true
+		return true, nil
 	}
-	if req.Path == protocol.WellKnownManifestPath {
-		return true
+	if reqPath == protocol.WellKnownManifestPath {
+		return true, nil
 	}
-	if !ts.RequiresReadAuth(req.Path) {
-		return true
+	if !ts.RequiresReadAuth(reqPath) {
+		return true, nil
 	}
-	token := req.Metadata["auth"]
-	_, err := ts.Authorize(token, req.Path, "read")
-	if err != nil {
-		switch {
-		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrInvalidToken), errors.Is(err, auth.ErrTokenExpired):
-			h.logger().Warn("unauthorized", "operation", req.Verb, "path", sanitize(req.Path))
-			h.writeError(w, protocol.StatusUnauthorized, "authentication required")
-		default:
-			h.logger().Warn("not permitted", "operation", req.Verb, "path", sanitize(req.Path))
-			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
-		}
-		return false
+	if _, err := ts.Authorize(token, reqPath, "read"); err != nil {
+		return false, err
 	}
-	return true
+	return true, nil
 }
 
 func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
@@ -368,6 +391,23 @@ func buildDirectoryIndex(reqPath string, entries []os.DirEntry) (body string, en
 	return sb.String(), entryCount
 }
 
+// buildLookupResults renders LOOKUP matches as a markdown table. Cells are
+// markdown-escaped so paths, titles, and tags cannot break the table or inject
+// markup. The Path column is server-relative; clients compose the full URL.
+func buildLookupResults(query, scope string, rows []catalog.Result) string {
+	var sb strings.Builder
+	sb.WriteString("\n# Lookup matches for \"" + escapeMD(query) + "\" in " + escapeMD(scope) + "\n\n")
+	sb.WriteString("| Path | Importance | Title | Tags |\n")
+	sb.WriteString("|------|------------|-------|------|\n")
+	for _, r := range rows {
+		sb.WriteString("| " + escapeMD(r.Path) +
+			" | " + strconv.FormatFloat(r.Importance, 'f', 2, 64) +
+			" | " + escapeMD(r.Title) +
+			" | " + escapeMD(strings.Join(r.Tags, ", ")) + " |\n")
+	}
+	return sb.String()
+}
+
 func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 	// Try index.md first — if the directory has an explicit index, serve it as a normal document.
 	indexPath := path.Join(req.Path, "index.md")
@@ -495,6 +535,96 @@ func (h *Handler) handleVersions(w io.Writer, req protocol.Request) {
 	h.writeResponse(w, resp)
 }
 
+func (h *Handler) handleLookup(w io.Writer, req protocol.Request) {
+	if h.Catalog == nil {
+		h.writeError(w, protocol.StatusServerError, "lookup not configured")
+		return
+	}
+
+	query := strings.TrimSpace(req.Metadata["query"])
+	if len([]rune(query)) < 2 {
+		h.writeError(w, protocol.StatusBadRequest, "query must be at least 2 characters")
+		return
+	}
+
+	limit := defaultLookupLimit
+	if lv := req.Metadata["limit"]; lv != "" {
+		n, err := strconv.Atoi(lv)
+		if err != nil || n < 1 {
+			h.writeError(w, protocol.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = n
+	}
+	if limit > maxLookupResults {
+		limit = maxLookupResults
+	}
+
+	preds, err := catalog.ParseFilter(req.Metadata["filter"])
+	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Scope must be the whole-server root or an existing directory.
+	if req.Path != "/" {
+		isDir, derr := h.Store.IsDir(req.Path)
+		if derr != nil && !errors.Is(derr, os.ErrNotExist) {
+			h.logger().Error("lookup isdir check failed", "path", sanitize(req.Path), "error", derr)
+			h.writeError(w, protocol.StatusServerError, "internal error")
+			return
+		}
+		if !isDir {
+			h.logger().Info("lookup scope not found", "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
+	}
+
+	results := h.Catalog.Lookup(query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults})
+
+	// Filter by read authorization before truncating to limit, so protected
+	// documents the requester cannot see never displace authorized matches and
+	// never reveal their existence (no path, no title, not counted).
+	token := req.Metadata["auth"]
+	rows := make([]catalog.Result, 0, len(results))
+	for _, r := range results {
+		if ok, _ := h.checkReadAuth(r.Path, token); !ok {
+			continue
+		}
+		rows = append(rows, r)
+		if len(rows) >= limit {
+			break
+		}
+	}
+
+	resp := protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{"matches": strconv.Itoa(len(rows))},
+		Body:     buildLookupResults(query, req.Path, rows),
+	}
+	h.writeResponse(w, resp)
+}
+
+// catalogPut adds or replaces the LOOKUP catalog entry for a document. body is
+// the markdown content with store frontmatter already stripped. No-op when no
+// catalog is configured.
+func (h *Handler) catalogPut(reqPath string, body []byte, meta map[string]string, modified time.Time) {
+	if h.Catalog == nil {
+		return
+	}
+	h.Catalog.Set(catalog.FromDocument(reqPath, meta, body, modified))
+}
+
+// catalogRemove drops a document from the LOOKUP catalog. No-op when no catalog
+// is configured.
+func (h *Handler) catalogRemove(reqPath string) {
+	if h.Catalog == nil {
+		return
+	}
+	h.Catalog.Remove(reqPath)
+}
+
 func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 	if h.Store == nil {
 		h.writeError(w, protocol.StatusServerError, "archiving not configured")
@@ -547,6 +677,7 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 	}
 
 	h.logger().Info("archive", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
+	h.catalogRemove(req.Path)
 	resp := protocol.Response{
 		Status: protocol.StatusOK,
 		Metadata: map[string]string{
@@ -616,6 +747,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 				return
 			}
 			h.logger().Info("unarchive", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
+			h.catalogPut(req.Path, []byte(stripFrontmatter(string(doc.Content))), doc.Metadata, doc.Modified)
 		}
 
 		// Return OK (no-op for active documents, or unarchive response)
@@ -694,6 +826,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	}
 
 	h.logger().Info("publish", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body))
+	h.catalogPut(req.Path, doc.Content, doc.Metadata, doc.Modified)
 	resp := protocol.Response{
 		Status: protocol.StatusCreated,
 		Metadata: map[string]string{
@@ -800,6 +933,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 	}
 
 	h.logger().Info("append", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body))
+	h.catalogPut(req.Path, doc.Content, doc.Metadata, doc.Modified)
 	resp := protocol.Response{
 		Status: protocol.StatusCreated,
 		Metadata: map[string]string{
