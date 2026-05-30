@@ -483,7 +483,7 @@ The body MUST be a markdown table, one row per result. Columns are the document'
 - `importance`: a decimal in the range [0,1] used as the ranking weight. Absent or invalid values MUST be treated as 0.5.
 - `title`: an OPTIONAL one-line title shown in results and included in the `query` match target. When absent, the server SHOULD derive it from the document's first level-1 heading, falling back to the path's base name.
 
-`tags` and `importance` are the only publisher metadata keys a server interprets; all other declared metadata remains opaque and is reachable only through `filter`.
+`tags`, `importance`, and `title` are the only publisher metadata keys a server interprets for LOOKUP; all other declared metadata remains opaque and is reachable only through `filter`.
 
 **Read authorisation**: a server that enforces per-path read authorisation MUST filter LOOKUP results so that documents the requester is not authorised to read are omitted entirely — no path, no title, no tags, and not counted in `matches`. Knowledge of a subject MUST NOT reveal the existence of protected documents.
 
