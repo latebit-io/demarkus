@@ -212,6 +212,12 @@ func TestHandleLookupCatalogUpdates(t *testing.T) {
 	if !strings.Contains(resp.Body, "/auth.md") {
 		t.Errorf("published doc missing from lookup:\n%s", resp.Body)
 	}
+	// Title is derived from the body's H1 (no declared title). This confirms the
+	// catalog received the clean body from WriteVersion, not store-frontmatter
+	// bytes — a corrupted body would not yield "Auth Middleware" here.
+	if !strings.Contains(resp.Body, "Auth Middleware") {
+		t.Errorf("title not derived from body H1 (catalog body may be corrupted):\n%s", resp.Body)
+	}
 
 	// ARCHIVE removes it from the catalog.
 	arch := newMockStream("ARCHIVE /auth.md\n---\nauth: " + secret + "\n---\n")

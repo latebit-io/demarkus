@@ -139,15 +139,13 @@ func contentHash(body []byte) string {
 	return "sha256-" + hex.EncodeToString(h[:])
 }
 
-// BuildHashIndex walks the content root and indexes current versions by content hash.
-// Skips versions/ directories and archived documents.
-func (s *Store) BuildHashIndex() error {
-	s.hashMu.Lock()
-	defer s.hashMu.Unlock()
-
-	s.hashIdx = make(map[string]string)
-	s.pathIdx = make(map[string]string)
-
+// walkCurrentFiles walks the content root and calls fn for each current,
+// non-archived document version. It follows current-version symlinks, skips
+// the versions/ directory, and skips archived, oversized, or unreadable files.
+// data is the raw on-disk bytes (including store frontmatter). This is the
+// shared traversal used by both BuildHashIndex and WalkCurrent so the skip and
+// containment rules live in one place.
+func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified time.Time) error) error {
 	absRoot, err := s.resolvedRoot()
 	if err != nil {
 		return err
@@ -163,7 +161,7 @@ func (s *Store) BuildHashIndex() error {
 			}
 			return nil
 		}
-		// Only follow symlinks (versioned documents)
+		// Only follow symlinks (current versions of documents).
 		if d.Type()&os.ModeSymlink == 0 {
 			return nil
 		}
@@ -183,19 +181,28 @@ func (s *Store) BuildHashIndex() error {
 		if err != nil {
 			return nil // skip unreadable files
 		}
-
-		// Skip archived documents
 		if isArchived(data) {
 			return nil
 		}
-
-		body := extractBody(data)
-		hash := contentHash(body)
 		rel, err := filepath.Rel(absRoot, path)
 		if err != nil {
 			return nil
 		}
-		reqPath := "/" + rel
+		return fn("/"+rel, data, info.ModTime().UTC().Truncate(time.Second))
+	})
+}
+
+// BuildHashIndex walks the content root and indexes current versions by content hash.
+// Skips versions/ directories and archived documents.
+func (s *Store) BuildHashIndex() error {
+	s.hashMu.Lock()
+	defer s.hashMu.Unlock()
+
+	s.hashIdx = make(map[string]string)
+	s.pathIdx = make(map[string]string)
+
+	return s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
+		hash := contentHash(extractBody(data))
 		s.hashIdx[hash] = reqPath
 		s.pathIdx[reqPath] = hash
 		return nil
@@ -218,51 +225,12 @@ type CurrentDoc struct {
 // unreadable files. This lets a caller (e.g. the LOOKUP catalog) build its own
 // derived index from the same source of truth without re-implementing the walk.
 func (s *Store) WalkCurrent(fn func(CurrentDoc) error) error {
-	absRoot, err := s.resolvedRoot()
-	if err != nil {
-		return err
-	}
-
-	return filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable entries
-		}
-		if d.IsDir() {
-			if d.Name() == "versions" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Type()&os.ModeSymlink == 0 {
-			return nil // only follow current-version symlinks
-		}
-		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return nil // skip broken symlinks
-		}
-		if !isContained(resolved, absRoot) {
-			return nil // skip symlinks that escape the content root
-		}
-		info, err := os.Stat(resolved)
-		if err != nil || info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
-			return nil // skip unreadable or oversized files
-		}
-		data, err := os.ReadFile(resolved)
-		if err != nil {
-			return nil // skip unreadable files
-		}
-		if isArchived(data) {
-			return nil
-		}
-		rel, err := filepath.Rel(absRoot, path)
-		if err != nil {
-			return nil
-		}
+	return s.walkCurrentFiles(func(reqPath string, data []byte, modified time.Time) error {
 		return fn(CurrentDoc{
-			Path:     "/" + rel,
+			Path:     reqPath,
 			Body:     extractBody(data),
 			Metadata: extractMetadata(data),
-			Modified: info.ModTime().UTC().Truncate(time.Second),
+			Modified: modified,
 		})
 	})
 }
