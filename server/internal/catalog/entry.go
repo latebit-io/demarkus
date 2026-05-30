@@ -71,10 +71,28 @@ func resolveTitle(declared string, body []byte, docPath string) string {
 
 // firstH1 returns the text of the first level-1 ATX heading ("# ...") in body,
 // or "" if none. Only a single leading '#' followed by a space qualifies, so
-// "## Sub" and "#NoSpace" do not match.
+// "## Sub" and "#NoSpace" do not match. Headings inside fenced code blocks
+// (``` or ~~~) or indented code blocks (a tab or 4+ leading spaces) are
+// skipped, so a "# comment" in a code sample is not mistaken for the title.
 func firstH1(body []byte) string {
+	inFence := false
 	for line := range strings.SplitSeq(string(body), "\n") {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		// ATX headings allow at most 3 spaces of indentation; a leading tab
+		// or 4+ spaces makes the line an indented code block, not a heading.
+		if strings.HasPrefix(line, "\t") {
+			continue
+		}
+		if indent := len(line) - len(strings.TrimLeft(line, " ")); indent >= 4 {
+			continue
+		}
 		if strings.HasPrefix(trimmed, "# ") {
 			return strings.TrimSpace(trimmed[2:])
 		}

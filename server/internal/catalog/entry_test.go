@@ -67,6 +67,13 @@ func TestFirstH1(t *testing.T) {
 		{"leading blank lines", "\n\n# Title", "Title"},
 		{"trims heading", "#   Spacey   ", "Spacey"},
 		{"first wins", "# First\n# Second", "First"},
+		{"skips fenced code", "```\n# install\n```\n# Real Title", "Real Title"},
+		{"skips tilde fence", "~~~\n# nope\n~~~\n# Real Title", "Real Title"},
+		{"fence with language", "```sh\n# comment\n```\n# Real Title", "Real Title"},
+		{"no h1 only fenced", "```\n# install\n```", ""},
+		{"skips tab-indented", "\t# tabbed\n# Real Title", "Real Title"},
+		{"skips 4-space indented", "    # indented\n# Real Title", "Real Title"},
+		{"allows up to 3 spaces", "   # Indented Three", "Indented Three"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
