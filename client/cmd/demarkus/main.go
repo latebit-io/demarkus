@@ -40,6 +40,9 @@ func main() {
 		case "bookmark":
 			bookmarkMain(os.Args[2:])
 			return
+		case "lookup":
+			lookupMain(os.Args[2:])
+			return
 		}
 	}
 	requestMain()
@@ -60,6 +63,7 @@ func requestMain() {
 		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus bookmark <add|list|remove>\n")
+		fmt.Fprintf(os.Stderr, "       demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] mark://host:port/scope/\n")
 		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
 	}
@@ -114,6 +118,8 @@ func requestMain() {
 		result, err = client.Archive(host, path, token)
 	case protocol.VerbAppend:
 		result, err = client.Append(host, path, reqBody, token, *expectedVersion, nil)
+	case protocol.VerbLookup:
+		log.Fatal("use 'demarkus lookup -query SUBJECT mark://host/scope/' for LOOKUP requests")
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -607,6 +613,55 @@ func editorCommand(fields []string, file string) (name string, args []string) {
 
 	args = append(args, file)
 	return fields[0], args
+}
+
+func lookupMain(args []string) {
+	fs := flag.NewFlagSet("lookup", flag.ExitOnError)
+	query := fs.String("query", "", "subject to look up; matched against document tags and titles (required)")
+	filter := fs.String("filter", "", "comma-separated key=value predicates (e.g. project=broker,modified-after=2025-01-01)")
+	limit := fs.Int("limit", 0, "maximum results (0 = server default)")
+	authToken := fs.String("auth", "", "auth token (env: DEMARKUS_AUTH)")
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+	verbose := fs.Bool("v", false, "show status and metadata header before the results table")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-auth TOKEN] mark://host:port/scope/\n\n")
+		fmt.Fprintf(os.Stderr, "Look up documents by subject against the server's catalog. Use / as the scope\n")
+		fmt.Fprintf(os.Stderr, "to search everything, or a subtree like /docs/ to narrow it.\n\n")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	if *query == "" {
+		log.Fatal("lookup requires -query")
+	}
+
+	host, scope, err := fetch.ParseMarkURL(fs.Arg(0))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	token := tokens.Resolve(*authToken, host, tokens.LoadDefault())
+
+	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
+	defer client.Close()
+
+	result, err := client.Lookup(host, scope, *query, token, fetch.LookupOptions{Filter: *filter, Limit: *limit})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "[%s]", result.Response.Status)
+		for k, v := range result.Response.Metadata {
+			fmt.Fprintf(os.Stderr, " %s=%s", k, v)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+	fmt.Print(result.Response.Body)
 }
 
 func validateVerb(verb string) error {

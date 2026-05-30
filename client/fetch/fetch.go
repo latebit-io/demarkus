@@ -179,6 +179,32 @@ func (c *Client) Append(host, path, body, token string, expectedVersion int, met
 	})
 }
 
+// LookupOptions configures a LOOKUP request. Zero values are omitted from the
+// request so the server applies its own defaults.
+type LookupOptions struct {
+	Filter string // comma-separated key=value predicates
+	Limit  int    // max results; <= 0 lets the server choose
+}
+
+// Lookup queries a server's catalog for documents matching a subject under
+// scope, returning an importance-ranked markdown table. query is required.
+// If token is non-empty it is sent so read-auth-gated documents are included.
+func (c *Client) Lookup(host, scope, query, token string, opts LookupOptions) (Result, error) {
+	req := protocol.Request{Verb: protocol.VerbLookup, Path: scope, Metadata: map[string]string{"query": query}}
+	if opts.Filter != "" {
+		req.Metadata["filter"] = opts.Filter
+	}
+	if opts.Limit > 0 {
+		req.Metadata["limit"] = strconv.Itoa(opts.Limit)
+	}
+	if token != "" {
+		req.Metadata["auth"] = token
+	}
+	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
+		return c.requestOnConn(conn, req)
+	})
+}
+
 // Archive marks a document as archived on a Mark Protocol server.
 func (c *Client) Archive(host, path, token string) (Result, error) {
 	req := protocol.Request{Verb: protocol.VerbArchive, Path: path, Metadata: make(map[string]string)}
