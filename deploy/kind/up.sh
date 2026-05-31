@@ -634,7 +634,7 @@ HTTP=$($CURL -o /tmp/tok.json -w "%{http_code}" -X POST "$BROKER/device/token" \
   --data-urlencode "code_verifier=$VERIFIER")
 [ "$HTTP" = "200" ] || { echo "FAIL: authorization_code exchange did not 200 (got $HTTP)"; cat /tmp/tok.json; exit 1; }
 grep -q "\"token_type\":\"Bearer\"" /tmp/tok.json || { echo "FAIL: token_type Bearer missing from token response"; exit 1; }
-grep -q "\"access_token\":\"..*\"" /tmp/tok.json || { echo "FAIL: access_token missing/empty in token response"; exit 1; }
+grep -Eq "\"access_token\":\"[^\"]+\"" /tmp/tok.json || { echo "FAIL: access_token missing/empty in token response"; cat /tmp/tok.json; exit 1; }
 echo "OK: authorization_code + verifier exchange minted a Bearer token"
 
 # 6. REPLAY — the code is one-shot; re-presenting it with the correct
