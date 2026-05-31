@@ -1283,6 +1283,8 @@ Hubs are the entry points into the information graph:
 - Search gives you matches; the graph gives you understanding of how information relates
 - The protocol already has all the primitives: FETCH reads content, LIST enumerates, links connect — no new verbs needed
 
+> **Update (2026-05-30):** LOOKUP was later added as a 7th verb (issue #113), but it does not contradict the above. LOOKUP is a per-world *card catalog* over author-declared `tags`/`importance` — not a centralized or full-text index. It never reads document bodies, ranks only by tag/title match plus declared importance, and complements graph traversal rather than replacing it. These arguments still stand against *full-text / semantic* search, which remains out of core (an opt-in sidecar that reads demarkus over LIST/FETCH). See SPEC.md §6.7.
+
 **Graph as content — export, publish, share**:
 - The crawled graph is itself a markdown document — nodes as list items, edges as `mark://` links
 - Export your graph and publish it to a demarkus server: `mark://my-server/graph/index.md`

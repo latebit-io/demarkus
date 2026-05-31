@@ -66,7 +66,7 @@ modified: 2026-01-15T10:30:00Z
 # Hello World
 ```
 
-**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `PUBLISH` · `APPEND` · `ARCHIVE`
+**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `LOOKUP` · `PUBLISH` · `APPEND` · `ARCHIVE`
 
 ## Use Cases
 

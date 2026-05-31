@@ -12,7 +12,7 @@ If you're new, start with the CLI and confirm you can fetch a document.
 
 ## CLI (`demarkus`)
 
-The CLI supports `FETCH`, `LIST`, `VERSIONS`, and `PUBLISH`, plus `edit` and `graph` subcommands.
+The CLI supports the read/write verbs (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `APPEND`, `ARCHIVE`) plus `edit`, `graph`, and `lookup` subcommands.
 
 ### Common commands
 
@@ -98,7 +98,7 @@ demarkus-mcp -host mark://localhost:6309 -insecure
 
 When `-host` is provided, tools accept bare paths (e.g. `/index.md`) instead of full URLs.
 
-Available tools include `mark_fetch`, `mark_list`, `mark_publish`, `mark_append`, `mark_archive`, `mark_versions`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, `mark_index`, and `mark_resolve`. The `mark_graph` tool crawls and persists the document graph; `mark_backlinks` queries it for reverse links. `mark_graph_export` renders the graph as publishable markdown; `mark_graph_publish` exports and publishes in one step so other agents can discover the topology without recrawling.
+Available tools include `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_publish`, `mark_append`, `mark_archive`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, `mark_index`, and `mark_resolve`. `mark_lookup` looks up documents by subject against the server's catalog (declared tags + title, ranked by importance). The `mark_graph` tool crawls and persists the document graph; `mark_backlinks` queries it for reverse links. `mark_graph_export` renders the graph as publishable markdown; `mark_graph_publish` exports and publishes in one step so other agents can discover the topology without recrawling.
 
 ## Accessing Private Servers
 

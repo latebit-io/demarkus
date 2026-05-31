@@ -48,7 +48,7 @@ demarkus --insecure -X PUBLISH -auth <raw-token> -body "# Hello World" mark://lo
 
 ### Read Access (Private Paths)
 
-By default, all paths are public. To protect specific paths, create a token with the `read` operation. Any path covered by a read token requires authentication for FETCH, LIST, and VERSIONS.
+By default, all paths are public. To protect specific paths, create a token with the `read` operation. Any path covered by a read token requires authentication for FETCH, LIST, and VERSIONS. LOOKUP doesn't reject the whole request — instead it filters its results, omitting any protected document the caller isn't authorized to read (no path, title, or existence is revealed).
 
 #### Protect a subtree
 
@@ -94,7 +94,7 @@ For public-facing servers where you don't want any network writes, use the `-rea
 demarkus-server -read-only -root /srv/site
 ```
 
-All PUBLISH, APPEND, and ARCHIVE requests are rejected with `not-permitted`. FETCH, LIST, and VERSIONS work normally.
+All PUBLISH, APPEND, and ARCHIVE requests are rejected with `not-permitted`. FETCH, LIST, VERSIONS, and LOOKUP work normally.
 
 Publish content locally with `demarkus-publish` — it writes directly to the versioned store on disk:
 
