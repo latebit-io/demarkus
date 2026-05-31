@@ -36,12 +36,19 @@ tools/bin/
 # compile binaries here before invoking `docker build`).
 dist/
 
-# Stray binaries (built without -o flag)
+# Stray binaries (built without -o flag). Client/server sources live under
+# cmd/, so these names only ever match a stray binary. Tools sources do NOT:
+# each tools/<name>/ is a main package, and `go build` run inside it drops a
+# matching binary there. Anchor to the binary path so we ignore that stray
+# build artifact without matching the source directory (an unanchored
+# `tools/<name>` would silently ignore new source files in the package).
 client/demarkus
 client/demarkus-tui
 client/demarkus-mcp
 server/demarkus-server
-tools/demarkus-token
+tools/demarkus-token/demarkus-token
+tools/demarkus-publish/demarkus-publish
+tools/demarkus-broker/demarkus-broker
 
 # OS files
 .DS_Store

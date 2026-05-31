@@ -25,11 +25,11 @@ readonly DEFAULT_PORT=6310             # plugin's first-choice port for its own 
 readonly ISOLATED_PORT_START=16310
 readonly ISOLATED_PORT_END=16509
 
-readonly SERVER_VERSION="0.17.10"
-readonly CLIENT_VERSION="0.12.36"
+readonly SERVER_VERSION="0.17.13"
+readonly CLIENT_VERSION="0.12.38"
 # demarkus-token moved from the server archive to its own tools/ release
 # in §6.7.A. Pin separately so a tools-only release can be picked up.
-readonly TOOLS_VERSION="0.1.16"
+readonly TOOLS_VERSION="0.1.28"
 
 # Sentinel file recording the SERVER/CLIENT versions of the binaries currently
 # installed at PLUGIN_BIN_DIR. ensure_binaries compares this against the
@@ -40,6 +40,48 @@ readonly PLUGIN_VERSION_FILE="${PLUGIN_BIN_DIR}/.versions"
 log()  { echo "[demarkus-memory] $*" >&2; }
 warn() { echo "[demarkus-memory] warning: $*" >&2; }
 die()  { echo "[demarkus-memory] error: $*" >&2; exit 1; }
+
+# json_escape — reads stdin and emits it as a single JSON string literal
+# (quotes included). Pure awk so it works without jq on stock macOS/Linux.
+# Escapes backslash, double-quote, and tab; strips CR; turns each input line
+# into a \n-terminated chunk. Sufficient for our markdown context payloads
+# (printable ASCII + newlines); not a general-purpose UTF-8 control encoder.
+json_escape() {
+  awk '
+    BEGIN { ORS=""; print "\"" }
+    { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); gsub(/\r/, ""); print $0 "\\n" }
+    END { print "\"" }
+  '
+}
+
+# server_health_warning — echoes a one-line human warning when the configured
+# memory server does not appear to be up, empty when it looks healthy. Relies
+# on load_config having set SOUL_DIR/PORT/MODE. Best-effort and probe-only (no
+# QUIC round-trip): for managed modes it trusts the .pid liveness that
+# ensure_managed_server maintains; for reuse it scans for the adopted process.
+# Deliberately avoids the port_is_free check as a health signal — that probe
+# degrades to permissive without lsof/ss and would emit false "not listening"
+# warnings on a perfectly healthy server.
+server_health_warning() {
+  case "${MODE:-}" in
+    default|isolated)
+      local pid_file="${SOUL_DIR}/.pid"
+      local pid=""
+      [[ -f "${pid_file}" ]] && pid="$(cat "${pid_file}" 2>/dev/null || true)"
+      # Validate the recorded PID is a bare positive integer before probing —
+      # an empty, partial, or option-like .pid (e.g. "-1") would otherwise make
+      # kill -0 misread it and report a dead server as alive.
+      if [[ -z "${pid}" || ! "${pid}" =~ ^[0-9]+$ ]] || ! kill -0 "${pid}" 2>/dev/null; then
+        echo "the demarkus-memory server is not running (no live process for ${SOUL_DIR}). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts — run /soul-init to restart, or /soul-status to diagnose."
+      fi
+      ;;
+    reuse)
+      if [[ -z "$(pid_of_server_at_root "${SOUL_DIR}" 2>/dev/null)" ]]; then
+        echo "demarkus-memory is configured to reuse a server rooted at ${SOUL_DIR}, but none is running. Memory tools will fail until it is started — start that server or run /soul-init to reconfigure."
+      fi
+      ;;
+  esac
+}
 
 # load_config — sources the config file, sets SOUL_DIR, PORT, MODE.
 # Returns 1 if config missing; dies on malformed config.
