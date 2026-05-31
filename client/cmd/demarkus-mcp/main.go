@@ -254,6 +254,9 @@ func markPublishTool(host string) mcp.Tool {
 		mcp.WithString("on_conflict",
 			mcp.Description("conflict behavior: \"merge\" (default) returns a merge-candidate body; the agent reviews it (resolving any conflict markers) and calls mark_publish again with expected_version set to the returned publish-at-version. \"fail\" opts out and returns the raw conflict status."),
 		),
+		mcp.WithObject("metadata",
+			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Reserved keys are rejected."),
+		),
 	)
 }
 
@@ -398,6 +401,26 @@ func formatResult(r fetch.Result, keys ...string) string {
 // agentMeta returns publisher metadata with the "agent" key set to the MCP
 // client name from the session context. If the client name is unavailable,
 // it falls back to "unknown".
+// publisherMeta merges caller-supplied publisher metadata (the optional
+// "metadata" object argument, values coerced to strings) with the agent
+// identity. It starts from the agent map and skips a caller-supplied "agent"
+// key so identity cannot be spoofed. The server validates keys/values and
+// rejects reserved keys, so this stays a thin pass-through.
+func publisherMeta(ctx context.Context, args map[string]any) map[string]string {
+	meta := agentMeta(ctx)
+	raw, ok := args["metadata"].(map[string]any)
+	if !ok {
+		return meta
+	}
+	for k, v := range raw {
+		if k == "agent" {
+			continue // identity is server-set; callers cannot override it
+		}
+		meta[k] = fmt.Sprintf("%v", v)
+	}
+	return meta
+}
+
 func agentMeta(ctx context.Context) map[string]string {
 	name := "unknown"
 	if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
@@ -547,7 +570,7 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		// fall through to plain publish
 	case "merge":
 		adapter := &mergeClientAdapter{inner: h.client, host: host, token: token}
-		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, agentMeta(ctx))
+		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, publisherMeta(ctx, req.GetArguments()))
 		if mErr != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", mErr)), nil
 		}
@@ -556,7 +579,7 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"fail\" or \"merge\"", onConflict)), nil
 	}
 
-	result, err := h.client.Publish(host, path, body, token, expectedVersion, agentMeta(ctx))
+	result, err := h.client.Publish(host, path, body, token, expectedVersion, publisherMeta(ctx, req.GetArguments()))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}

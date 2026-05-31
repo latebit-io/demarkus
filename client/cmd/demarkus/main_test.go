@@ -6,6 +6,34 @@ import (
 	"github.com/latebit/demarkus/protocol"
 )
 
+func TestMetaFlag(t *testing.T) {
+	m := metaFlag{}
+	if err := m.Set("tags=go,auth"); err != nil {
+		t.Fatalf("Set tags: %v", err)
+	}
+	if err := m.Set("importance=0.9"); err != nil {
+		t.Fatalf("Set importance: %v", err)
+	}
+	if m["tags"] != "go,auth" || m["importance"] != "0.9" {
+		t.Errorf("collected = %v, want tags=go,auth importance=0.9", map[string]string(m))
+	}
+	if err := m.Set("noequals"); err == nil {
+		t.Error("expected error for missing '='")
+	}
+	if err := m.Set("Bad Key=v"); err == nil {
+		t.Error("expected error for invalid key characters")
+	}
+	if err := m.Set("=novalue"); err == nil {
+		t.Error("expected error for empty key")
+	}
+	if metaMap(metaFlag{}) != nil {
+		t.Error("metaMap of empty flag should be nil")
+	}
+	if got := metaMap(m); got["tags"] != "go,auth" {
+		t.Errorf("metaMap dropped data: %v", got)
+	}
+}
+
 func TestValidateVerb(t *testing.T) {
 	tests := []struct {
 		verb    string

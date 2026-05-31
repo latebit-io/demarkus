@@ -530,6 +530,44 @@ func (s *stubClient) Lookup(host, scope, query, token string, opts fetch.LookupO
 	return fetch.Result{}, nil
 }
 
+func TestHandlerMarkPublish_Metadata(t *testing.T) {
+	var gotMeta map[string]string
+	sc := &stubClient{
+		publishFn: func(_, _, _, _ string, _ int, meta map[string]string) (fetch.Result, error) {
+			gotMeta = meta
+			return fetch.Result{Response: protocol.Response{
+				Status:   "created",
+				Metadata: map[string]string{"version": "1"},
+			}}, nil
+		},
+	}
+	h := &handler{client: sc, token: "test-token"}
+
+	res, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "# Doc",
+		"expected_version": float64(0),
+		"on_conflict":      "fail",
+		"metadata":         map[string]any{"tags": "go,auth", "importance": 0.9},
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %v", res.Content)
+	}
+	if gotMeta["tags"] != "go,auth" {
+		t.Errorf("tags = %q, want go,auth", gotMeta["tags"])
+	}
+	if gotMeta["importance"] != "0.9" {
+		t.Errorf("importance = %q, want 0.9", gotMeta["importance"])
+	}
+	// Agent identity is still set (applied last so callers can't spoof it).
+	if gotMeta["agent"] == "" {
+		t.Errorf("agent identity missing from publisher metadata: %v", gotMeta)
+	}
+}
+
 func TestHandlerMarkLookup(t *testing.T) {
 	var gotScope, gotQuery string
 	var gotOpts fetch.LookupOptions
