@@ -438,6 +438,62 @@ modified: <RFC 3339 timestamp>
 - `conflict`: `expected-version` does not match the current version. Response includes `your-version` and `server-version` metadata.
 - `server-error`: Internal error, empty body, or combined content exceeds size limit.
 
+### 6.7. LOOKUP
+
+Looks up documents by subject and returns a compact, importance-ranked list of matches. LOOKUP is a discovery aid — a card catalog — not full-text search. It matches a subject query against each document's declared `tags` and title, never against the document body. Servers SHOULD answer LOOKUP from an in-memory catalog and MUST NOT read document bodies at query time.
+
+LOOKUP operates over current versions only; archived documents MUST be excluded. The path in the request line is a scope: `LOOKUP /` covers the whole server, `LOOKUP /docs/` restricts to that subtree.
+
+**Request**:
+```
+LOOKUP /docs/\n
+---\n
+query: auth middleware\n
+filter: project=broker,modified-after=2025-01-01\n
+limit: 10\n
+auth: <raw-token>\n
+---\n
+```
+
+- `query` (REQUIRED): the subject text. The server lowercases it and splits it on whitespace into terms. A document matches if any term matches its declared `tags` or its title. Matching is case-insensitive and term-based; the precise rule (exact tag membership, title substring) is implementation-defined but MUST be limited to `tags` and title. The query MUST be at least 2 characters; a missing, empty, or too-short query MUST return `bad-request`.
+- `filter` (OPTIONAL): a comma-separated list of `key=value` predicates applied **before** ranking. Each predicate matches a declared metadata value by exact equality, except the built-ins `modified-after` and `modified-before`, which compare an RFC 3339 timestamp (or date) against the document's modification time. A document MUST satisfy all predicates to be included. A malformed `filter` MUST return `bad-request`.
+- `limit` (OPTIONAL): the maximum number of results. Default **10**. Servers MUST impose a hard cap (RECOMMENDED **1000**).
+- `auth` (OPTIONAL): a token used to authorise results on read-auth-protected paths (see Read authorisation below).
+
+**Success response** (`ok`):
+```
+---
+status: ok
+matches: <count>
+---
+# Lookup matches for "<query>" in <scope>
+
+| Path | Importance | Title | Tags |
+|------|------------|-------|------|
+| /docs/auth-middleware | 0.90 | Auth middleware design | go, auth, middleware |
+| /docs/gateway | 0.50 | Gateway overview | go |
+```
+
+The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags. The `Path` is server-relative; clients compose the full `mark://host/path` URL from the host they connected to. The response MUST NOT include document body content — clients FETCH the documents they choose. `matches` is the number of rows returned.
+
+**Ranking**: results are ordered by (1) the number of distinct query terms matched, then (2) descending `importance`, then (3) descending modification time, then (4) ascending path. Importance influences ordering only among documents that already matched the query; it MUST NOT cause an unmatched document to appear in the results.
+
+**Declared catalog metadata** (set on PUBLISH as publisher metadata):
+- `tags`: a comma-separated list of subject labels, e.g. `tags: go,auth,middleware`. The match target for `query`, and available for exact membership matching via `filter`.
+- `importance`: a decimal in the range [0,1] used as the ranking weight. Absent or invalid values MUST be treated as 0.5.
+- `title`: an OPTIONAL one-line title shown in results and included in the `query` match target. When absent, the server SHOULD derive it from the document's first level-1 heading, falling back to the path's base name.
+
+`tags`, `importance`, and `title` are the only publisher metadata keys a server interprets for LOOKUP; all other declared metadata remains opaque and is reachable only through `filter`.
+
+**Read authorisation**: a server that enforces per-path read authorisation MUST filter LOOKUP results so that documents the requester is not authorised to read are omitted entirely — no path, no title, no tags, and not counted in `matches`. Knowledge of a subject MUST NOT reveal the existence of protected documents.
+
+**Errors**:
+- `bad-request`: Missing, empty, or too-short `query`, or a malformed `filter`.
+- `not-found`: The scope path does not exist or is not a directory.
+- `server-error`: Internal error.
+
+A valid LOOKUP over an existing scope with no matching documents MUST return `ok` with `matches: 0` and a header-only table, not `not-found`.
+
 ## 7. Status Values
 
 Status values are text strings. There are no numeric status codes.
@@ -474,6 +530,12 @@ The following status values are reserved for future use:
 | `if-modified-since` | FETCH | RFC 3339 timestamp | Timestamp from a previous response. Enables conditional fetch. |
 | `auth` | PUBLISH, ARCHIVE, APPEND | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
 | `expected-version` | PUBLISH (optional), APPEND (required) | Decimal integer | Expected current version for optimistic concurrency. If present and does not match the server's current version, the server returns `conflict`. APPEND requires this field (>= 1). |
+| `query` | LOOKUP | String | Subject text matched against each document's `tags` and title. REQUIRED; minimum 2 characters. |
+| `filter` | LOOKUP | Comma-separated `key=value` | Predicates applied before ranking. Exact match on declared metadata, plus built-ins `modified-after` / `modified-before`. |
+| `limit` | LOOKUP | Decimal integer | Maximum number of results. Default 10; server-capped (RECOMMENDED 1000). |
+| `tags` | PUBLISH | Comma-separated string | Subject labels for the document. Interpreted by the server: matched by LOOKUP `query` and `filter`. |
+| `importance` | PUBLISH | Decimal in [0,1] | Ranking weight used by LOOKUP. Interpreted by the server. Absent or invalid is treated as 0.5. |
+| `title` | PUBLISH | String | One-line title shown in LOOKUP results and matched by `query`. Defaults to the first level-1 heading, then the path base name. |
 
 ### 8.2. Response Metadata
 
@@ -491,6 +553,7 @@ The following status values are reserved for future use:
 | `chain-valid` | VERSIONS | `true` or `false` | Whether the version hash chain is intact. |
 | `chain-error` | VERSIONS | String | Description of chain verification failure. Present only when `chain-valid` is `false`. |
 | `content-hash` | FETCH | `sha256-` + 64-char lowercase hex | SHA-256 hash of the response body (stripped of store frontmatter). Enables content-addressed retrieval. |
+| `matches` | LOOKUP | Decimal integer | Number of catalog matches returned in the table body. |
 
 ## 9. Versioning
 
@@ -784,6 +847,8 @@ These will be specified in future versions of this document.
 | Max request metadata | 65536 bytes |
 | Recommended max document size | 1 MB |
 | Recommended max directory entries | 1000 |
+| Default LOOKUP limit | 10 |
+| Recommended max LOOKUP results | 1000 |
 | Hash algorithm | SHA-256 |
 | Hash format | `sha256-<64 lowercase hex chars>` |
 

@@ -215,6 +215,35 @@ func (g *mcpGateway) handleMarkVersions(_ context.Context, req mcp.CallToolReque
 	return mcp.NewToolResultText(formatToolResult(result, "total", "current", "chain-valid", "chain-error")), nil
 }
 
+// handleMarkLookup implements the mark_lookup tool. Like the other
+// reads it dispatches unauthenticated (see handleMarkFetch); the
+// world ranks and filters, and the broker forwards the importance-
+// ranked table verbatim. query is required; filter and limit are
+// optional and passed through to the world.
+func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	raw, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError("url is required"), nil
+	}
+	query, err := req.RequireString("query")
+	if err != nil {
+		return mcp.NewToolResultError("query is required"), nil
+	}
+	worldName, scope, err := parseToolURL(raw)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
+	}
+	opts := fetch.LookupOptions{
+		Filter: req.GetString("filter", ""),
+		Limit:  req.GetInt("limit", 0),
+	}
+	result, err := g.dispatcher.Lookup(worldName, scope, query, "", opts)
+	if err != nil {
+		return g.toolErrorFor("lookup", worldName, err), nil
+	}
+	return mcp.NewToolResultText(formatToolResult(result, "matches")), nil
+}
+
 // toolErrorFor renders a tool-error envelope from a dispatcher
 // failure. errWorldNotFound and ErrNotAuthorized /
 // ErrEmailUnverified are surfaced with descriptive messages so

@@ -27,6 +27,7 @@ type fakeDispatcher struct {
 	fetchFn    func(worldName, path, token string) (fetch.Result, error)
 	listFn     func(worldName, path, token string) (fetch.Result, error)
 	versionsFn func(worldName, path, token string) (fetch.Result, error)
+	lookupFn   func(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	publishFn  func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	appendFn   func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	archiveFn  func(worldName, path, token string) (fetch.Result, error)
@@ -34,9 +35,19 @@ type fakeDispatcher struct {
 	fetchCalls    []dispatchCall
 	listCalls     []dispatchCall
 	versionsCalls []dispatchCall
+	lookupCalls   []lookupCall
 	publishCalls  []writeCall
 	appendCalls   []writeCall
 	archiveCalls  []dispatchCall
+}
+
+// lookupCall records a LOOKUP dispatch for assertions.
+type lookupCall struct {
+	worldName string
+	scope     string
+	query     string
+	token     string
+	opts      fetch.LookupOptions
 }
 
 type dispatchCall struct {
@@ -88,6 +99,20 @@ func (f *fakeDispatcher) Versions(worldName, path, token string) (fetch.Result, 
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
 	}
 	return fn(worldName, path, token)
+}
+
+func (f *fakeDispatcher) Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
+	f.mu.Lock()
+	f.lookupCalls = append(f.lookupCalls, lookupCall{worldName, scope, query, token, opts})
+	fn := f.lookupFn
+	f.mu.Unlock()
+	if fn == nil {
+		return fetch.Result{Response: protocol.Response{
+			Status:   protocol.StatusOK,
+			Metadata: map[string]string{"matches": "0"},
+		}}, nil
+	}
+	return fn(worldName, scope, query, token, opts)
 }
 
 func (f *fakeDispatcher) Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
@@ -385,6 +410,66 @@ func TestHandleMarkFetchHappyPath(t *testing.T) {
 	// flows through and the document is returned.
 	if call.token != "" {
 		t.Errorf("dispatcher saw token=%q, want empty (reads are open)", call.token)
+	}
+}
+
+func TestHandleMarkLookupHappyPath(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		lookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"matches": "1"},
+				Body:     "| Path | Importance | Title | Tags |\n| /docs/auth.md | 0.90 | Auth | auth |\n",
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+
+	res, err := g.handleMarkLookup(withAliceClaims(context.Background()), callToolReq("mark_lookup", map[string]any{
+		"url":    "mark://team-a/docs/",
+		"query":  "auth",
+		"filter": "project=broker",
+		"limit":  float64(5),
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkLookup: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true: %+v", res.Content)
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{"status: ok", "matches: 1", "/docs/auth.md"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing %q\nfull:\n%s", want, text)
+		}
+	}
+	if len(d.lookupCalls) != 1 {
+		t.Fatalf("lookup dispatch count = %d, want 1", len(d.lookupCalls))
+	}
+	call := d.lookupCalls[0]
+	if call.worldName != "team-a" || call.scope != "/docs/" || call.query != "auth" {
+		t.Errorf("dispatcher saw worldName=%q scope=%q query=%q", call.worldName, call.scope, call.query)
+	}
+	if call.opts.Filter != "project=broker" || call.opts.Limit != 5 {
+		t.Errorf("dispatcher saw opts=%+v, want {Filter:project=broker Limit:5}", call.opts)
+	}
+	// Reads dispatch unauthenticated — the empty bearer flows through.
+	if call.token != "" {
+		t.Errorf("dispatcher saw token=%q, want empty (reads are open)", call.token)
+	}
+}
+
+func TestHandleMarkLookupRequiresQuery(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	res, err := g.handleMarkLookup(withAliceClaims(context.Background()), callToolReq("mark_lookup", map[string]any{
+		"url": "mark://team-a/",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkLookup: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected tool error for missing query")
 	}
 }
 

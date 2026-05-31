@@ -22,7 +22,7 @@ Secrets.
 - Optional `Ingress` (default `ingressClassName: nginx`) with optional
   cert-manager-managed TLS Certificate.
 - **MCP gateway** (always-on, listens on `:8081` by default) exposing
-  the 13-tool demarkus surface to plugin-style agents over JSON-RPC
+  the 14-tool demarkus surface to plugin-style agents over JSON-RPC
   over Streamable HTTP. Identity is the company SSO `id_token` bearer;
   reads dispatch with no token (open to any SSO-authed identity) and
   writes use a long-lived per-world token the broker holds. See
@@ -37,7 +37,7 @@ the same Ingress controller through different hostnames:
 | Listener | Default port | Default Ingress host | Purpose |
 | --- | --- | --- | --- |
 | Management API | `:8080` (`server.port`) | `ingress.host` | OIDC login + device flow + token management + `/me/install` (see table below). |
-| MCP gateway | `:8081` (`server.mcp.addr`) | `ingress.mcp.host` (optional) | 13-tool demarkus surface over JSON-RPC/Streamable HTTP for plugin agents. See [MCP gateway](#mcp-gateway). |
+| MCP gateway | `:8081` (`server.mcp.addr`) | `ingress.mcp.host` (optional) | 14-tool demarkus surface over JSON-RPC/Streamable HTTP for plugin agents. See [MCP gateway](#mcp-gateway). |
 
 The two listeners share auth (`compositeVerifier`), rate-limit
 buckets (per-canonical-email), and the `Issuer` machinery — only the
@@ -260,7 +260,7 @@ fresh-provision 401 is propagation lag, not a real denial. Defaults
 sit well under the typical kubelet sync period; tune up only for
 slow-kubelet clusters.
 
-### Operator reference: 13-tool surface
+### Operator reference: 14-tool surface
 
 See `tools/demarkus-broker/MCP-API.md` in the repo for the full
 tool reference (names, JSON schemas, semantics).

@@ -72,6 +72,46 @@ func TestHandleMarkPublishHappyPath(t *testing.T) {
 	}
 }
 
+func TestHandleMarkPublishForwardsMetadata(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "1"},
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url":              "mark://team-a/foo.md",
+		"body":             "# new\n",
+		"expected_version": float64(0),
+		"on_conflict":      "fail",
+		"metadata":         map[string]any{"tags": "go,auth", "importance": 0.9},
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true: %s", toolResultText(t, res))
+	}
+	if len(d.publishCalls) != 1 {
+		t.Fatalf("publish dispatch count = %d, want 1", len(d.publishCalls))
+	}
+	m := d.publishCalls[0].meta
+	if m["tags"] != "go,auth" {
+		t.Errorf("forwarded tags = %q, want go,auth", m["tags"])
+	}
+	if m["importance"] != "0.9" {
+		t.Errorf("forwarded importance = %q, want 0.9", m["importance"])
+	}
+	// Agent identity is applied last and cannot be spoofed by caller metadata.
+	if m["agent"] != "alice@example.com" {
+		t.Errorf("agent = %q, want alice@example.com", m["agent"])
+	}
+}
+
 func TestHandleMarkPublishDeniesNonWriter(t *testing.T) {
 	// Writer authorization happens at the broker BEFORE dispatch.
 	// An SSO-authed identity whose email is not covered by the

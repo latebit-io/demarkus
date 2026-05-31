@@ -26,6 +26,7 @@ var mcpToolNames = []string{
 	"mark_fetch",
 	"mark_list",
 	"mark_versions",
+	"mark_lookup",
 	"mark_publish",
 	"mark_append",
 	"mark_archive",
@@ -38,7 +39,7 @@ var mcpToolNames = []string{
 	"mark_graph_publish",
 }
 
-// mcpTools returns the 13 tool definitions exposed by the broker MCP
+// mcpTools returns the 14 tool definitions exposed by the broker MCP
 // gateway. The set mirrors client/cmd/demarkus-mcp's tool surface for
 // parity (so the agent sees the same vocabulary regardless of
 // transport); only the URL-format description differs because the
@@ -48,6 +49,7 @@ func mcpTools() []mcp.Tool {
 		markFetchTool(),
 		markListTool(),
 		markVersionsTool(),
+		markLookupTool(),
 		markPublishTool(),
 		markAppendTool(),
 		markArchiveTool(),
@@ -104,6 +106,34 @@ func markVersionsTool() mcp.Tool {
 	)
 }
 
+func markLookupTool() mcp.Tool {
+	return mcp.NewTool("mark_lookup",
+		mcp.WithDescription(
+			"Look up documents by subject against a Mark Protocol server's catalog. "+
+				"Matches the query against each document's declared tags and title and returns "+
+				"an importance-ranked markdown table of matches (path, importance, title, tags) "+
+				"— not document bodies; FETCH the ones you want. This is a catalog lookup, not "+
+				"full-text search: a subject that was never tagged or titled will not be found. "+
+				"Optionally narrow with a comma-separated key=value filter and cap results with limit. "+
+				mcpURLHint,
+		),
+		mcp.WithString("url",
+			mcp.Required(),
+			mcp.Description("scope to search under: mark://{worldName}/ for the whole world, or a subtree like mark://{worldName}/docs/. "+mcpURLDesc),
+		),
+		mcp.WithString("query",
+			mcp.Required(),
+			mcp.Description("subject to look up; matched against document tags and titles (minimum 2 characters)"),
+		),
+		mcp.WithString("filter",
+			mcp.Description("comma-separated key=value predicates applied before ranking; built-ins: tag=, modified-after=, modified-before="),
+		),
+		mcp.WithNumber("limit",
+			mcp.Description("maximum number of results (server default 10, hard cap 1000)"),
+		),
+	)
+}
+
 func markPublishTool() mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
@@ -137,6 +167,9 @@ func markPublishTool() mcp.Tool {
 		),
 		mcp.WithString("on_conflict",
 			mcp.Description("conflict behavior: \"merge\" (default) returns a merge-candidate body; the agent reviews it (resolving any conflict markers) and calls mark_publish again with expected_version set to the returned publish-at-version. \"fail\" opts out and returns the raw conflict status."),
+		),
+		mcp.WithObject("metadata",
+			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Reserved keys are rejected."),
 		),
 	)
 }

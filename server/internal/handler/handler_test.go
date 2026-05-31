@@ -1912,7 +1912,7 @@ func TestPublisherMetadata(t *testing.T) {
 		s := store.New(dir)
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
-		for _, key := range []string{"version", "modified", "etag", "current-version", "server-version"} {
+		for _, key := range []string{"version", "modified", "etag", "current-version", "server-version", "matches"} {
 			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": evil\n---\n# Content\n")
 			h.HandleStream(stream)
 

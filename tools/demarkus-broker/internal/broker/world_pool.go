@@ -24,6 +24,7 @@ type worldDispatcher interface {
 	Fetch(worldName, path, token string) (fetch.Result, error)
 	List(worldName, path, token string) (fetch.Result, error)
 	Versions(worldName, path, token string) (fetch.Result, error)
+	Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Archive(worldName, path, token string) (fetch.Result, error)
@@ -126,6 +127,18 @@ func (p *worldPool) Versions(worldName, path, token string) (fetch.Result, error
 		return fetch.Result{}, err
 	}
 	return c.Versions(host, path, token)
+}
+
+// Lookup dispatches a LOOKUP against worldName. Same proxy
+// contract as the other reads — the world ranks and filters; the
+// broker forwards the query/options and hands back the world's
+// importance-ranked table verbatim.
+func (p *worldPool) Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
+	c, host, err := p.clientFor(worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+	return c.Lookup(host, scope, query, token, opts)
 }
 
 // Publish dispatches a PUBLISH against worldName. Byte-for-byte

@@ -74,6 +74,27 @@ func (g *mcpGateway) gateWrite(claims Claims, worldName string) (*WorldConfig, *
 // defaults to "merge" (matches local demarkus-mcp); pass
 // on_conflict="fail" to opt out of the merge candidate flow and
 // get the raw conflict response instead.
+// publisherMeta merges caller-supplied publisher metadata (the optional
+// "metadata" object argument, values coerced to strings) with the agent
+// identity derived from claims. It starts from the agent map and skips a
+// caller-supplied "agent" key so identity cannot be spoofed. The world
+// validates keys/values and rejects reserved keys, so this stays a thin
+// pass-through.
+func publisherMeta(args map[string]any, claims Claims) map[string]string {
+	meta := agentMetaFromClaims(claims)
+	raw, ok := args["metadata"].(map[string]any)
+	if !ok {
+		return meta
+	}
+	for k, v := range raw {
+		if k == "agent" {
+			continue // identity is broker-set; callers cannot override it
+		}
+		meta[k] = fmt.Sprintf("%v", v)
+	}
+	return meta
+}
+
 func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
@@ -116,7 +137,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
 		return errRes, nil
 	}
-	meta := agentMetaFromClaims(claims)
+	meta := publisherMeta(req.GetArguments(), claims)
 	switch onConflict {
 	case "fail":
 		// Pass through to the dispatcher; the world returns

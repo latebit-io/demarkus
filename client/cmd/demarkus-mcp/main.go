@@ -56,6 +56,7 @@ func main() {
 	s.AddTool(markListTool(*defaultHost), h.markList)
 	s.AddTool(markGraphTool(*defaultHost), h.markGraph)
 	s.AddTool(markVersionsTool(*defaultHost), h.markVersions)
+	s.AddTool(markLookupTool(*defaultHost), h.markLookup)
 	s.AddTool(markPublishTool(*defaultHost), h.markPublish)
 	s.AddTool(markArchiveTool(*defaultHost), h.markArchive)
 	s.AddTool(markAppendTool(*defaultHost), h.markAppend)
@@ -76,6 +77,7 @@ type markClient interface {
 	Fetch(host, path, token string) (fetch.Result, error)
 	List(host, path, token string) (fetch.Result, error)
 	Versions(host, path, token string) (fetch.Result, error)
+	Lookup(host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Archive(host, path, token string) (fetch.Result, error)
@@ -189,6 +191,34 @@ func markVersionsTool(host string) mcp.Tool {
 	)
 }
 
+func markLookupTool(host string) mcp.Tool {
+	return mcp.NewTool("mark_lookup",
+		mcp.WithDescription(
+			"Look up documents by subject against a Mark Protocol server's catalog. "+
+				"Matches the query against each document's declared tags and title and returns "+
+				"an importance-ranked markdown table of matches (path, importance, title, tags) "+
+				"— not document bodies; FETCH the ones you want. This is a catalog lookup, not "+
+				"full-text search: a subject that was never tagged or titled will not be found. "+
+				"Optionally narrow with a comma-separated key=value filter and cap results with limit. "+
+				urlHint(host),
+		),
+		mcp.WithString("url",
+			mcp.Required(),
+			mcp.Description("scope to search under: / for everything, or a subtree like /docs/. "+urlDesc(host)),
+		),
+		mcp.WithString("query",
+			mcp.Required(),
+			mcp.Description("subject to look up; matched against document tags and titles (minimum 2 characters)"),
+		),
+		mcp.WithString("filter",
+			mcp.Description("comma-separated key=value predicates applied before ranking; built-ins: tag=, modified-after=, modified-before="),
+		),
+		mcp.WithNumber("limit",
+			mcp.Description("maximum number of results (server default 10, hard cap 1000)"),
+		),
+	)
+}
+
 func markPublishTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
@@ -223,6 +253,9 @@ func markPublishTool(host string) mcp.Tool {
 		),
 		mcp.WithString("on_conflict",
 			mcp.Description("conflict behavior: \"merge\" (default) returns a merge-candidate body; the agent reviews it (resolving any conflict markers) and calls mark_publish again with expected_version set to the returned publish-at-version. \"fail\" opts out and returns the raw conflict status."),
+		),
+		mcp.WithObject("metadata",
+			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Reserved keys are rejected."),
 		),
 	)
 }
@@ -368,6 +401,26 @@ func formatResult(r fetch.Result, keys ...string) string {
 // agentMeta returns publisher metadata with the "agent" key set to the MCP
 // client name from the session context. If the client name is unavailable,
 // it falls back to "unknown".
+// publisherMeta merges caller-supplied publisher metadata (the optional
+// "metadata" object argument, values coerced to strings) with the agent
+// identity. It starts from the agent map and skips a caller-supplied "agent"
+// key so identity cannot be spoofed. The server validates keys/values and
+// rejects reserved keys, so this stays a thin pass-through.
+func publisherMeta(ctx context.Context, args map[string]any) map[string]string {
+	meta := agentMeta(ctx)
+	raw, ok := args["metadata"].(map[string]any)
+	if !ok {
+		return meta
+	}
+	for k, v := range raw {
+		if k == "agent" {
+			continue // identity is server-set; callers cannot override it
+		}
+		meta[k] = fmt.Sprintf("%v", v)
+	}
+	return meta
+}
+
 func agentMeta(ctx context.Context) map[string]string {
 	name := "unknown"
 	if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
@@ -440,6 +493,33 @@ func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(formatResult(result, "total", "current", "chain-valid", "chain-error")), nil
 }
 
+func (h *handler) markLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	rawURL, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError("url is required"), nil
+	}
+	query, err := req.RequireString("query")
+	if err != nil {
+		return mcp.NewToolResultError("query is required"), nil
+	}
+
+	host, scope, err := h.resolveURL(rawURL)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
+	}
+
+	opts := fetch.LookupOptions{
+		Filter: req.GetString("filter", ""),
+		Limit:  req.GetInt("limit", 0),
+	}
+	result, err := h.client.Lookup(host, scope, query, h.resolveToken(host), opts)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("lookup failed: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(formatResult(result, "matches")), nil
+}
+
 func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
@@ -490,7 +570,7 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		// fall through to plain publish
 	case "merge":
 		adapter := &mergeClientAdapter{inner: h.client, host: host, token: token}
-		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, agentMeta(ctx))
+		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, publisherMeta(ctx, req.GetArguments()))
 		if mErr != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", mErr)), nil
 		}
@@ -499,7 +579,7 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"fail\" or \"merge\"", onConflict)), nil
 	}
 
-	result, err := h.client.Publish(host, path, body, token, expectedVersion, agentMeta(ctx))
+	result, err := h.client.Publish(host, path, body, token, expectedVersion, publisherMeta(ctx, req.GetArguments()))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}

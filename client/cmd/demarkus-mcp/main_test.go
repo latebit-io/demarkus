@@ -487,6 +487,7 @@ type stubClient struct {
 	versionsFn func(host, path, token string) (fetch.Result, error)
 	publishFn  func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	appendFn   func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	lookupFn   func(host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 }
 
 func (s *stubClient) Fetch(host, path, token string) (fetch.Result, error) {
@@ -521,6 +522,101 @@ func (s *stubClient) Append(host, path, body, token string, expectedVersion int,
 		return s.appendFn(host, path, body, token, expectedVersion, meta)
 	}
 	return fetch.Result{}, nil
+}
+func (s *stubClient) Lookup(host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
+	if s.lookupFn != nil {
+		return s.lookupFn(host, scope, query, token, opts)
+	}
+	return fetch.Result{}, nil
+}
+
+func TestHandlerMarkPublish_Metadata(t *testing.T) {
+	var gotMeta map[string]string
+	sc := &stubClient{
+		publishFn: func(_, _, _, _ string, _ int, meta map[string]string) (fetch.Result, error) {
+			gotMeta = meta
+			return fetch.Result{Response: protocol.Response{
+				Status:   "created",
+				Metadata: map[string]string{"version": "1"},
+			}}, nil
+		},
+	}
+	h := &handler{client: sc, token: "test-token"}
+
+	res, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/doc.md",
+		"body":             "# Doc",
+		"expected_version": float64(0),
+		"on_conflict":      "fail",
+		"metadata":         map[string]any{"tags": "go,auth", "importance": 0.9},
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %v", res.Content)
+	}
+	if gotMeta["tags"] != "go,auth" {
+		t.Errorf("tags = %q, want go,auth", gotMeta["tags"])
+	}
+	if gotMeta["importance"] != "0.9" {
+		t.Errorf("importance = %q, want 0.9", gotMeta["importance"])
+	}
+	// Agent identity is still set (applied last so callers can't spoof it).
+	if gotMeta["agent"] == "" {
+		t.Errorf("agent identity missing from publisher metadata: %v", gotMeta)
+	}
+}
+
+func TestHandlerMarkLookup(t *testing.T) {
+	var gotScope, gotQuery string
+	var gotOpts fetch.LookupOptions
+	sc := &stubClient{
+		lookupFn: func(_, scope, query, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+			gotScope, gotQuery, gotOpts = scope, query, opts
+			return fetch.Result{
+				Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"matches": "1"},
+					Body:     "| Path | Importance | Title | Tags |\n",
+				},
+			}, nil
+		},
+	}
+
+	h := &handler{client: sc, token: "test-token"}
+	result, err := h.markLookup(context.Background(), newCallToolRequest(map[string]any{
+		"url":    "mark://example.com/docs/",
+		"query":  "auth middleware",
+		"filter": "project=broker",
+		"limit":  float64(5),
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+	if gotScope != "/docs/" {
+		t.Errorf("scope = %q, want /docs/", gotScope)
+	}
+	if gotQuery != "auth middleware" {
+		t.Errorf("query = %q, want %q", gotQuery, "auth middleware")
+	}
+	if gotOpts.Filter != "project=broker" || gotOpts.Limit != 5 {
+		t.Errorf("opts = %+v, want {Filter:project=broker Limit:5}", gotOpts)
+	}
+}
+
+func TestHandlerMarkLookup_RequiresQuery(t *testing.T) {
+	h := &handler{client: &stubClient{}, token: "test-token"}
+	result, err := h.markLookup(context.Background(), newCallToolRequest(map[string]any{
+		"url": "mark://example.com/",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "query")
 }
 
 func TestHandlerMarkAppend_AutoResolveVersion(t *testing.T) {

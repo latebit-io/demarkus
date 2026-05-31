@@ -40,6 +40,9 @@ func main() {
 		case "bookmark":
 			bookmarkMain(os.Args[2:])
 			return
+		case "lookup":
+			lookupMain(os.Args[2:])
+			return
 		}
 	}
 	requestMain()
@@ -50,6 +53,8 @@ func requestMain() {
 	body := flag.String("body", "", "request body (for PUBLISH/APPEND); reads stdin if omitted")
 	authToken := flag.String("auth", "", "auth token for all requests including reads on private paths (env: DEMARKUS_AUTH)")
 	expectedVersion := flag.Int("expected-version", -1, "version check: -1 skip (default), 0 create-only, >0 require match; required (>0) for APPEND")
+	meta := metaFlag{}
+	flag.Var(meta, "meta", "publisher metadata key=value for PUBLISH/APPEND (repeatable); e.g. -meta tags=go,auth -meta importance=0.9")
 	verbose := flag.Bool("v", false, "show status and metadata header before body")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
@@ -60,6 +65,7 @@ func requestMain() {
 		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus bookmark <add|list|remove>\n")
+		fmt.Fprintf(os.Stderr, "       demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] mark://host:port/scope/\n")
 		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
 	}
@@ -109,11 +115,13 @@ func requestMain() {
 	case protocol.VerbVersions:
 		result, err = client.Versions(host, path, token)
 	case protocol.VerbPublish:
-		result, err = client.Publish(host, path, reqBody, token, *expectedVersion, nil)
+		result, err = client.Publish(host, path, reqBody, token, *expectedVersion, metaMap(meta))
 	case protocol.VerbArchive:
 		result, err = client.Archive(host, path, token)
 	case protocol.VerbAppend:
-		result, err = client.Append(host, path, reqBody, token, *expectedVersion, nil)
+		result, err = client.Append(host, path, reqBody, token, *expectedVersion, metaMap(meta))
+	case protocol.VerbLookup:
+		log.Fatal("use 'demarkus lookup -query SUBJECT mark://host/scope/' for LOOKUP requests")
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -607,6 +615,91 @@ func editorCommand(fields []string, file string) (name string, args []string) {
 
 	args = append(args, file)
 	return fields[0], args
+}
+
+func lookupMain(args []string) {
+	fs := flag.NewFlagSet("lookup", flag.ExitOnError)
+	query := fs.String("query", "", "subject to look up; matched against document tags and titles (required)")
+	filter := fs.String("filter", "", "comma-separated key=value predicates (e.g. project=broker,modified-after=2025-01-01)")
+	limit := fs.Int("limit", 0, "maximum results (0 = server default)")
+	authToken := fs.String("auth", "", "auth token (env: DEMARKUS_AUTH)")
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+	verbose := fs.Bool("v", false, "show status and metadata header before the results table")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-auth TOKEN] mark://host:port/scope/\n\n")
+		fmt.Fprintf(os.Stderr, "Look up documents by subject against the server's catalog. Use / as the scope\n")
+		fmt.Fprintf(os.Stderr, "to search everything, or a subtree like /docs/ to narrow it.\n\n")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	if *query == "" {
+		log.Fatal("lookup requires -query")
+	}
+
+	host, scope, err := fetch.ParseMarkURL(fs.Arg(0))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	token := tokens.Resolve(*authToken, host, tokens.LoadDefault())
+
+	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
+	defer client.Close()
+
+	result, err := client.Lookup(host, scope, *query, token, fetch.LookupOptions{Filter: *filter, Limit: *limit})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "[%s]", result.Response.Status)
+		for k, v := range result.Response.Metadata {
+			fmt.Fprintf(os.Stderr, " %s=%s", k, v)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+	fmt.Print(result.Response.Body)
+}
+
+// metaFlag collects repeatable `-meta key=value` publisher-metadata pairs.
+// The underlying map is shared by flag.Var, so Set accumulates across repeats.
+type metaFlag map[string]string
+
+func (m metaFlag) String() string {
+	if len(m) == 0 {
+		return ""
+	}
+	pairs := make([]string, 0, len(m))
+	for k, v := range m {
+		pairs = append(pairs, k+"="+v)
+	}
+	return strings.Join(pairs, ",")
+}
+
+func (m metaFlag) Set(s string) error {
+	k, v, ok := strings.Cut(s, "=")
+	if !ok || k == "" {
+		return fmt.Errorf("invalid -meta %q: want key=value", s)
+	}
+	if !protocol.IsValidMetaKey(k) {
+		return fmt.Errorf("invalid -meta key %q: lowercase letters, digits, and hyphens only", k)
+	}
+	m[k] = v
+	return nil
+}
+
+// metaMap returns the collected publisher metadata, or nil when empty so the
+// client omits the frontmatter entirely rather than sending an empty block.
+func metaMap(m metaFlag) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 func validateVerb(verb string) error {
