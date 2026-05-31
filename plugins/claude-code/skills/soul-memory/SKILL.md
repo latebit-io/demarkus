@@ -39,10 +39,10 @@ Each `/<project>/` subtree has a fixed layout:
 
 ## Tool routing
 
-Read intents → start with `mark_fetch`:
+Read intents → start with `mark_lookup` (the catalog), then `mark_fetch`:
 
-1. Fetch `/index.md` to see the project list
-2. Fetch `/<project>/` (directory listing) or a specific file under it
+1. `mark_lookup` with `url=/<project>/` (or `/` to span every project) and a subject `query` — returns an importance-ranked markdown table of matching docs (path, importance, title, tags), not bodies. This is a catalog lookup, not full-text search: it finds only what was tagged or titled. Narrow with the optional `filter` arg (`tag=`, `modified-after=`, `modified-before=`) and cap with `limit`.
+2. `mark_fetch` the rows worth reading. Also `mark_fetch /index.md` / `/<project>/index.md` directly — lookup won't surface untagged docs, so the index hub still anchors discovery.
 3. Use `mark_backlinks` or `mark_graph` to surface related documents across projects
 4. If nothing relevant is found, say so honestly rather than fabricating
 
@@ -55,6 +55,8 @@ Write intents — route to the right file for the content type:
 - **Task / todo** → fetch and update `/<project>/plan/tasks.md`.
 - **Roadmap item** → fetch and update `/<project>/roadmap.md`.
 - **Cross-project or global note** → if it does not fit a project, ask the user where it belongs. Do not create ad-hoc top-level files.
+
+**On every `mark_publish`, set `metadata`:** `tags` (comma-separated subjects — the primary match target for `mark_lookup`) and, sparingly, `importance` (0–1, default 0.5; reserve high values for genuinely central docs like index hubs and architecture). An untagged document can only be found by words in its title, so tagging on write is what makes later recall work. Reserved keys are rejected; any other metadata key is stored opaquely and reachable through lookup's `filter` axis.
 
 Always reference what you saved by full path so the user can find it again.
 

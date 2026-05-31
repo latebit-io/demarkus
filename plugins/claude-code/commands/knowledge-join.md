@@ -2,7 +2,7 @@
 description: Join an organizational demarkus knowledge system (broker-fronted universe) — validates the broker URL, registers it as a Claude Code MCP server, and points you at the device-flow auth on first tool call.
 ---
 
-Connect this Claude Code installation to an organizational demarkus knowledge system. The user supplies the public URL of the org's demarkus-broker MCP gateway; this command validates the URL, derives a short server slug from the hostname, and registers it with `claude mcp add` so the broker's 13-tool surface appears as a single MCP server.
+Connect this Claude Code installation to an organizational demarkus knowledge system. The user supplies the public URL of the org's demarkus-broker MCP gateway; this command validates the URL, derives a short server slug from the hostname, and registers it with `claude mcp add` so the broker's 14-tool surface appears as a single MCP server.
 
 This is the broker-fronted counterpart to `/soul-init` (which configures a personal, direct-QUIC soul). A Claude Code installation can have both — different commands, different MCP server entries, different auth modes.
 
