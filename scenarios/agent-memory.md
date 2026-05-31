@@ -13,7 +13,7 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 ## What you'll have
 
 - A Demarkus server holding structured markdown docs
-- MCP tools (`mark_fetch`, `mark_publish`, `mark_list`, `mark_append`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, `mark_discover`) available to the agent
+- MCP tools (`mark_fetch`, `mark_list`, `mark_lookup`, `mark_publish`, `mark_append`, `mark_archive`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, `mark_discover`) available to the agent — `mark_lookup` finds memories by subject (declared tags/title)
 - Version history of every memory update
 - Persistent document graph with backlink queries
 - The agent reads context at session start and writes updates at the end

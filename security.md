@@ -17,7 +17,7 @@ The server is deliberately minimal:
 - **No database** — documents are files on disk
 - **No sessions or cookies** — stateless request handling
 - **Single directory** — all reads and writes are scoped to the content root
-- **6 verbs** — FETCH, LIST, VERSIONS (read), PUBLISH, APPEND, ARCHIVE (write)
+- **7 verbs** — FETCH, LIST, VERSIONS, LOOKUP (read), PUBLISH, APPEND, ARCHIVE (write)
 - **Encrypted transport** — QUIC with TLS (self-signed for local, real certs for production)
 - **Size limits** — 1 MiB body, 64 KB frontmatter per request
 - **Rate limiting** — per-IP request throttling built in

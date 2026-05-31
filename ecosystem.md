@@ -62,6 +62,6 @@ ClawHub skill for OpenClaw agents. See the [OpenClaw install guide](/install/ope
 
 ## Building your own
 
-The protocol surface is small: QUIC with ALPN `mark`, a text request verb (one of FETCH, LIST, VERSIONS, PUBLISH, APPEND, ARCHIVE), and YAML-style `---`-delimited metadata in responses. Caztor's read-only Java client is roughly a hundred lines. See the [protocol reference](/reference/) for the full spec.
+The protocol surface is small: QUIC with ALPN `mark`, a text request verb (one of FETCH, LIST, VERSIONS, LOOKUP, PUBLISH, APPEND, ARCHIVE), and YAML-style `---`-delimited metadata in responses. Caztor's read-only Java client is roughly a hundred lines. See the [protocol reference](/reference/) for the full spec.
 
 If you ship something that speaks Demarkus, [open an issue](https://github.com/latebit-io/demarkus/issues) or drop a link and we will list it here.

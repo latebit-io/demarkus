@@ -45,9 +45,13 @@ Once installed, the agent can use these tools through mcporter:
 | `demarkus.mark_append` | Append content (no fetch required) |
 | `demarkus.mark_list` | List documents and directories |
 | `demarkus.mark_versions` | Full version history |
+| `demarkus.mark_lookup` | Look up documents by subject (declared tags/title, ranked by importance) |
+| `demarkus.mark_archive` | Archive a document |
 | `demarkus.mark_discover` | Fetch the server's agent manifest |
 | `demarkus.mark_graph` | Crawl links and build a graph |
 | `demarkus.mark_backlinks` | Find what links to a document |
+| `demarkus.mark_graph_export` | Render the crawled graph as markdown |
+| `demarkus.mark_graph_publish` | Export and publish the graph in one step |
 
 ## Related
 

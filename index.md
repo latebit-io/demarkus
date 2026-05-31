@@ -35,10 +35,11 @@ Demarkus implements the **Mark Protocol** — a minimal protocol for serving ver
 | Tool | Purpose |
 |------|---------|
 | `demarkus-server` | Serve a directory of markdown files |
-| `demarkus` | CLI: fetch, list, publish, edit, graph |
+| `demarkus` | CLI: fetch, list, publish, edit, graph, lookup |
 | `demarkus-tui` | Interactive terminal browser with graph view |
 | `demarkus-mcp` | MCP server for LLM agents (graph, backlinks, discovery) |
 | `demarkus-token` | Generate capability-based auth tokens |
+| `demarkus-publish` | Write directly to the versioned store for read-only server installs |
 
 ## Learn more
 
