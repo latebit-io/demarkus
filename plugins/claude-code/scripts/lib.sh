@@ -66,7 +66,12 @@ server_health_warning() {
   case "${MODE:-}" in
     default|isolated)
       local pid_file="${SOUL_DIR}/.pid"
-      if [[ ! -f "${pid_file}" ]] || ! kill -0 "$(cat "${pid_file}" 2>/dev/null)" 2>/dev/null; then
+      local pid=""
+      [[ -f "${pid_file}" ]] && pid="$(cat "${pid_file}" 2>/dev/null || true)"
+      # Validate the recorded PID is a bare positive integer before probing —
+      # an empty, partial, or option-like .pid (e.g. "-1") would otherwise make
+      # kill -0 misread it and report a dead server as alive.
+      if [[ -z "${pid}" || ! "${pid}" =~ ^[0-9]+$ ]] || ! kill -0 "${pid}" 2>/dev/null; then
         echo "the demarkus-memory server is not running (no live process for ${SOUL_DIR}). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts — run /soul-init to restart, or /soul-status to diagnose."
       fi
       ;;

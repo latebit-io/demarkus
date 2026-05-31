@@ -56,7 +56,9 @@ Write intents — route to the right file for the content type:
 - **Roadmap item** → fetch and update `/<project>/roadmap.md`.
 - **Cross-project or global note** → if it does not fit a project, ask the user where it belongs. Do not create ad-hoc top-level files.
 
-**On every `mark_publish`, set `metadata`:** `tags` (comma-separated subjects — the primary match target for `mark_lookup`) and, sparingly, `importance` (0–1, default 0.5; reserve high values for genuinely central docs like index hubs and architecture). An untagged document can only be found by words in its title, so tagging on write is what makes later recall work. Reserved keys are rejected; any other metadata key is stored opaquely and reachable through lookup's `filter` axis.
+**On every `mark_publish`, set `metadata`:** `tags` (comma-separated subjects — the primary match target for `mark_lookup`) and, sparingly, `importance` (0–1, default 0.5; reserve high values for genuinely central docs like index hubs and architecture). An untagged document can only be found by words in its title, so tagging on write is what makes later recall work. The server does not infer either field — you choose them. Reserved keys are rejected; any other metadata key is stored opaquely and reachable through lookup's `filter` axis.
+
+`mark_append` carries no metadata, so a doc's `tags`/`importance` are whatever its last `mark_publish` set. When an append introduces a materially new subject, re-publish the doc (full body, correct `expected_version`) with extended `tags` rather than letting the catalog drift.
 
 Always reference what you saved by full path so the user can find it again.
 

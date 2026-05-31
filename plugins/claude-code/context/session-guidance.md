@@ -21,7 +21,11 @@ When something is worth persisting, write it without being prompted:
 - **Significant progress or end of a working session** → append to `/<slug>/journal/<YYYY-MM-DD>.md`
 - **Architecture / roadmap / task changes** → the matching file under `/<slug>/`
 
-**Always set `metadata` on `mark_publish`:** `tags` (comma-separated subjects) and, sparingly, `importance` (0–1, for genuinely central docs). An untagged document is invisible to `mark_lookup` later — tagging on write is what makes recall work.
+**You tag and rank — the server infers nothing.** On every `mark_publish`, set a `metadata` object:
+- `tags`: comma-separated subjects describing the doc. Derive them from the content. An untagged document is invisible to `mark_lookup`, so this is not optional — it's what makes the write recallable.
+- `importance`: a float 0–1 you choose deliberately. Reserve high values (≥0.8) for genuinely central docs (index hubs, architecture, key decisions); routine notes sit lower. It floats matches in lookup ranking; it never surfaces an unmatched doc, so it's a prior, not an override.
+
+`mark_append` can't carry metadata — tags/importance are fixed at the doc's last `mark_publish`. When an append adds a materially new subject, re-publish the doc with extended `tags` so the catalog stays accurate.
 
 ## Restraint
 
