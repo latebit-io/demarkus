@@ -16,6 +16,13 @@ readonly PLUGIN_CONFIG="${PLUGIN_HOME}/plugin-memory.conf"
 readonly PLUGIN_TOKEN_FILE="${PLUGIN_HOME}/plugin-memory.token"
 readonly TOKEN_LABEL="claude-code-plugin"
 
+# Strictness for the publish tag-gate (hooks/publish-gate.sh). One line:
+# warn | block | ask. Kept in its own file, orthogonal to PLUGIN_CONFIG, so
+# setup.sh rewrites of the conf never clobber a chosen strictness. Absent file
+# means the warn default. The knowledge-system courier (#7) will write
+# per-slug siblings (plugin-memory.strictness.<slug>); not used yet.
+readonly PLUGIN_STRICTNESS_FILE="${PLUGIN_HOME}/plugin-memory.strictness"
+
 # Soul dirs that setup.sh may choose.
 readonly SHARED_SOUL_DIR="${PLUGIN_HOME}/soul"
 readonly ISOLATED_SOUL_DIR="${PLUGIN_HOME}/plugin-soul"
@@ -25,7 +32,7 @@ readonly DEFAULT_PORT=6310             # plugin's first-choice port for its own 
 readonly ISOLATED_PORT_START=16310
 readonly ISOLATED_PORT_END=16509
 
-readonly SERVER_VERSION="0.17.13"
+readonly SERVER_VERSION="0.17.14"
 readonly CLIENT_VERSION="0.12.38"
 # demarkus-token moved from the server archive to its own tools/ release
 # in §6.7.A. Pin separately so a tools-only release can be picked up.
@@ -51,6 +58,100 @@ json_escape() {
     BEGIN { ORS=""; print "\"" }
     { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); gsub(/\r/, ""); print $0 "\\n" }
     END { print "\"" }
+  '
+}
+
+# configured_strictness — echoes the publish tag-gate strictness: warn|block|ask.
+# Precedence: DEMARKUS_MEMORY_STRICTNESS env override, then PLUGIN_STRICTNESS_FILE,
+# then the warn default. Never dies. Any unrecognized value falls back to warn so
+# a corrupt file or typo can never silently escalate to block.
+configured_strictness() {
+  local s="${DEMARKUS_MEMORY_STRICTNESS:-}"
+  if [[ -z "${s}" && -f "${PLUGIN_STRICTNESS_FILE}" ]]; then
+    s="$(tr -d '[:space:]' < "${PLUGIN_STRICTNESS_FILE}" 2>/dev/null || true)"
+  fi
+  case "${s}" in
+    warn|block|ask) echo "${s}" ;;
+    *)              echo "warn" ;;
+  esac
+}
+
+# publish_metadata_check — reads a Claude Code PreToolUse/PostToolUse hook
+# payload (the full JSON object) on stdin and emits exactly five lines:
+#   1: hook_event_name
+#   2: tool_name
+#   3: TAGS_OK  — "1" if tool_input.metadata.tags is a non-empty (trimmed) string, else "0"
+#   4: IMP_OK   — "1" if metadata.importance is absent OR a number in [0,1], else "0"
+#   5: url      — tool_input.url (or empty)
+#
+# Pure awk — NO jq, NO python, nothing outside coreutils. The plugin ships zero
+# runtime dependencies; awk is already the parser behind json_escape. A naive
+# grep for "tags" would false-match the arbitrary `body` value (which can
+# contain literal "tags": text and braces), so this is a real character-level
+# JSON scan: it tracks string boundaries (honoring backslash escapes, so a
+# quote inside `body` can't end the string early) and the object-key path, and
+# captures only values at the exact paths it cares about. MCP metadata values
+# arrive as strings, so importance is range-checked from its string form;
+# numeric form is handled too. Pure read — mutates nothing.
+publish_metadata_check() {
+  awk '
+    { data = data $0 "\n" }
+    END {
+      n = split(data, ch, "")
+      depth = 0; inStr = 0; esc = 0; buf = ""
+      ev = ""; tool = ""; url = ""
+      tags = ""; haveTags = 0; imp = ""; haveImp = 0
+      for (i = 1; i <= n; i++) {
+        c = ch[i]
+        if (inStr) {
+          if (esc) { buf = buf c; esc = 0; continue }
+          if (c == "\\") { buf = buf c; esc = 1; continue }
+          if (c == "\"") { inStr = 0; handleString(buf); buf = ""; continue }
+          buf = buf c; continue
+        }
+        if (c == "\"") { inStr = 1; buf = ""; continue }
+        if (c == " " || c == "\t" || c == "\n" || c == "\r") continue
+        if (c == "{") { depth++; ctype[depth] = "o"; expect[depth] = "key"; continue }
+        if (c == "[") { depth++; ctype[depth] = "a"; expect[depth] = "val"; continue }
+        if (c == "}" || c == "]") { depth--; continue }
+        if (c == ":") { expect[depth] = "val"; continue }
+        if (c == ",") { expect[depth] = (ctype[depth] == "o") ? "key" : "val"; continue }
+        # scalar value (number/true/false/null) — read to the next delimiter.
+        sv = c
+        while (i + 1 <= n) {
+          d = ch[i+1]
+          if (d == "," || d == "}" || d == "]" || d == " " || d == "\t" || d == "\n" || d == "\r") break
+          sv = sv d; i++
+        }
+        recordValue(sv)
+      }
+      tags_ok = (haveTags && trim(tags) != "") ? "1" : "0"
+      if (!haveImp) imp_ok = "1"
+      else if (imp ~ /^-?[0-9]+(\.[0-9]+)?$/) { nimp = imp + 0; imp_ok = (nimp >= 0 && nimp <= 1) ? "1" : "0" }
+      else imp_ok = "0"
+      print ev; print tool; print tags_ok; print imp_ok; print url
+    }
+    function trim(s) { gsub(/^[ \t\r\n]+/, "", s); gsub(/[ \t\r\n]+$/, "", s); return s }
+    # Object-key path of the current position, e.g. /tool_input/metadata/tags.
+    # Array levels contribute "/#" so an array can never alias an object path.
+    function curpath(   p, d2) {
+      p = ""
+      for (d2 = 1; d2 <= depth; d2++) p = p "/" ((ctype[d2] == "o") ? ckey[d2] : "#")
+      return p
+    }
+    # A completed string is a key (object, expecting a key) or a value.
+    function handleString(s) {
+      if (ctype[depth] == "o" && expect[depth] == "key") { ckey[depth] = s; return }
+      recordValue(s)
+    }
+    function recordValue(v,   p) {
+      p = curpath()
+      if (p == "/hook_event_name") ev = v
+      else if (p == "/tool_name") tool = v
+      else if (p == "/tool_input/url") url = v
+      else if (p == "/tool_input/metadata/tags") { tags = v; haveTags = 1 }
+      else if (p == "/tool_input/metadata/importance") { imp = v; haveImp = 1 }
+    }
   '
 }
 

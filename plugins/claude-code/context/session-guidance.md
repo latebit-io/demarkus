@@ -25,6 +25,8 @@ When something is worth persisting, write it without being prompted:
 - `tags`: comma-separated subjects describing the doc. Derive them from the content. An untagged document is invisible to `mark_lookup`, so this is not optional — it's what makes the write recallable.
 - `importance`: a float 0–1 you choose deliberately. Reserve high values (≥0.8) for genuinely central docs (index hubs, architecture, key decisions); routine notes sit lower. It floats matches in lookup ranking; it never surfaces an unmatched doc, so it's a prior, not an override.
 
+This is **enforced** by a write-time gate, not just guidance: a `mark_publish` with no `metadata.tags` (or an `importance` outside [0,1]) trips the publish gate. By default it warns (a system-reminder asking you to re-publish with tags); stricter setups deny the call until you add them. Either way, set `tags` on the first try — don't make the gate ask twice.
+
 `mark_append` can't carry metadata — tags/importance are fixed at the doc's last `mark_publish`. When an append adds a materially new subject, re-publish the doc with extended `tags` so the catalog stays accurate.
 
 ## Restraint
