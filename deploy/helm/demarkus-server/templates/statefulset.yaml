@@ -144,6 +144,15 @@ spec:
       spec:
         accessModes:
           - {{ .Values.storage.accessMode }}
+        # Render volumeMode explicitly. Kubernetes defaults a PVC's volumeMode
+        # to Filesystem server-side, so omitting it here makes the rendered
+        # manifest (volumeMode absent) drift from the live PVC (Filesystem).
+        # volumeClaimTemplates is immutable, so under a GitOps tool using
+        # ServerSideApply (e.g. ArgoCD) that drift turns every subsequent sync
+        # that must re-apply the StatefulSet — like an image bump — into a
+        # rejected "forbidden update to immutable field" loop. Emitting the
+        # value the cluster will default to keeps render == live.
+        volumeMode: {{ .Values.storage.volumeMode }}
         resources:
           requests:
             storage: {{ .Values.storage.size }}
