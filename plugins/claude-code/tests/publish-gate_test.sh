@@ -168,6 +168,32 @@ test_escaped_tags_with_real_content_pass() {
   [[ -z "${out}" ]] || { echo "tags with escape + real content should defer; got: ${out}"; return 1; }
 }
 
+test_nonstring_tags_treated_as_tagless() {
+  # tags must be a JSON string. A bare false/null/0/number scalar must NOT
+  # satisfy the gate — block must deny each.
+  local out v
+  for v in 'false' 'null' '0' '42'; do
+    out=$(run_gate block "$(payload PreToolUse "${PUB_TOOL}" "{\"tags\":${v}}")")
+    grep -q '"permissionDecision":"deny"' <<<"${out}" \
+      || { echo "non-string tags '${v}' should be tagless → deny: ${out}"; return 1; }
+  done
+}
+
+test_exponent_importance_in_range_ok() {
+  # 1e-1 == 0.1, a valid in-range number — must not be flagged (defer).
+  local out
+  out=$(run_gate warn "$(payload PostToolUse "${PUB_TOOL}" '{"tags":"x","importance":"1e-1"}')")
+  [[ -z "${out}" ]] || { echo "exponent importance 1e-1 (=0.1) should defer; got: ${out}"; return 1; }
+}
+
+test_exponent_importance_out_of_range_flagged() {
+  # 1e1 == 10, out of [0,1] — must be flagged.
+  local out
+  out=$(run_gate warn "$(payload PostToolUse "${PUB_TOOL}" '{"tags":"x","importance":"1e1"}')")
+  grep -q 'importance' <<<"${out}" \
+    || { echo "exponent importance 1e1 (=10) should be flagged: ${out}"; return 1; }
+}
+
 test_importance_out_of_range_flagged() {
   local out
   out=$(run_gate warn "$(payload PostToolUse "${PUB_TOOL}" '{"tags":"journal","importance":"1.5"}')")

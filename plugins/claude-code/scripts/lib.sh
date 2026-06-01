@@ -100,7 +100,7 @@ publish_metadata_check() {
       n = split(data, ch, "")
       depth = 0; inStr = 0; esc = 0; buf = ""
       ev = ""; tool = ""; url = ""
-      tags = ""; haveTags = 0; imp = ""; haveImp = 0
+      tags = ""; haveTags = 0; tagsStr = 0; imp = ""; haveImp = 0
       for (i = 1; i <= n; i++) {
         c = ch[i]
         if (inStr) {
@@ -117,13 +117,14 @@ publish_metadata_check() {
         if (c == ":") { expect[depth] = "val"; continue }
         if (c == ",") { expect[depth] = (ctype[depth] == "o") ? "key" : "val"; continue }
         # scalar value (number/true/false/null) — read to the next delimiter.
+        # is_string=0: a non-string scalar must not satisfy the tags check.
         sv = c
         while (i + 1 <= n) {
           d = ch[i+1]
           if (d == "," || d == "}" || d == "]" || d == " " || d == "\t" || d == "\n" || d == "\r") break
           sv = sv d; i++
         }
-        recordValue(sv)
+        recordValue(sv, 0)
       }
       # Decode JSON string escapes BEFORE validating, otherwise {"tags":"\n"}
       # is stored raw as backslash+n — non-empty — and a whitespace-only value
@@ -132,9 +133,13 @@ publish_metadata_check() {
       tags_d = json_unescape(tags)
       imp_d = json_unescape(imp)
       url_d = json_unescape(url)
-      tags_ok = (haveTags && trim(tags_d) != "") ? "1" : "0"
+      # tags must be a JSON STRING (per the field contract) and non-empty after
+      # decode/trim — a bare false/null/0 scalar must not satisfy the gate.
+      tags_ok = (haveTags && tagsStr && trim(tags_d) != "") ? "1" : "0"
+      # importance: absent is fine; otherwise a JSON number in [0,1], including
+      # exponent form (e.g. 1e-1). MCP sends it as a string, raw number handled too.
       if (!haveImp) imp_ok = "1"
-      else if (imp_d ~ /^-?[0-9]+(\.[0-9]+)?$/) { nimp = imp_d + 0; imp_ok = (nimp >= 0 && nimp <= 1) ? "1" : "0" }
+      else if (imp_d ~ /^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/) { nimp = imp_d + 0; imp_ok = (nimp >= 0 && nimp <= 1) ? "1" : "0" }
       else imp_ok = "0"
       print ev; print tool; print tags_ok; print imp_ok; print url_d
     }
@@ -198,16 +203,17 @@ publish_metadata_check() {
       return p
     }
     # A completed string is a key (object, expecting a key) or a value.
+    # A value here is_string=1 so tags captured from a JSON string is honored.
     function handleString(s) {
       if (ctype[depth] == "o" && expect[depth] == "key") { ckey[depth] = s; return }
-      recordValue(s)
+      recordValue(s, 1)
     }
-    function recordValue(v,   p) {
+    function recordValue(v, is_string,   p) {
       p = curpath()
       if (p == "/hook_event_name") ev = v
       else if (p == "/tool_name") tool = v
       else if (p == "/tool_input/url") url = v
-      else if (p == "/tool_input/metadata/tags") { tags = v; haveTags = 1 }
+      else if (p == "/tool_input/metadata/tags") { tags = v; haveTags = 1; tagsStr = is_string }
       else if (p == "/tool_input/metadata/importance") { imp = v; haveImp = 1 }
     }
   '
