@@ -128,7 +128,7 @@ test_quoted_stop_hook_active_suppresses() {
   local tmp; tmp="$(mktemp -d)"
   local t; t="$(mk_transcript "${tmp}" "${EDIT_LINE}")"
   local payload out
-  payload="$(printf '{"session_id":"S7q","transcript_path":"%s","stop_hook_active":"true"}' "${t}")"
+  payload="$(printf '{"session_id":"S7q","transcript_path":"%s","cwd":"/x","hook_event_name":"Stop","stop_hook_active":"true"}' "${t}")"
   out="$(printf '%s' "${payload}" | TMPDIR="${tmp}" bash "${HOOK}")"
   rm -rf "${tmp}"
   [[ -z "${out}" ]] || { echo "quoted stop_hook_active=\"true\" must suppress; got: ${out}"; return 1; }

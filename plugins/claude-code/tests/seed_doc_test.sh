@@ -32,8 +32,12 @@ test_seeds_when_absent() {
   [[ ! -f "${tmp}/soul/index.md" ]] || { echo "should not seed into a missing dir"; rm -rf "${tmp}"; return 1; }
   mkdir -p "${tmp}/soul"
   seed_doc "${tmp}/seed.md" "${tmp}/soul/index.md" 2>/dev/null
+  # ...and now that the dir exists, the seed lands with the right content.
+  local ok=1
+  [[ -f "${tmp}/soul/index.md" ]] || { echo "should seed once the target dir exists"; ok=0; }
+  grep -q 'SEED BODY' "${tmp}/soul/index.md" 2>/dev/null || { echo "seeded content mismatch"; ok=0; }
   rm -rf "${tmp}"
-  return 0
+  (( ok == 1 ))
 }
 
 test_seeds_into_writable_dir() {
