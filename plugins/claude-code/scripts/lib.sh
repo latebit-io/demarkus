@@ -219,6 +219,58 @@ publish_metadata_check() {
   '
 }
 
+# stop_hook_fields — reads a Claude Code Stop hook payload (a flat JSON object)
+# on stdin and emits exactly three lines:
+#   1: session_id
+#   2: transcript_path
+#   3: stop_hook_active ("true"/"false"; "false" when absent)
+# Same pure-awk, string-boundary-aware approach as publish_metadata_check, but
+# the Stop payload is flat so it only captures top-level (depth 1) keys. No deps.
+stop_hook_fields() {
+  awk '
+    { data = data $0 "\n" }
+    END {
+      n = split(data, ch, "")
+      depth = 0; inStr = 0; esc = 0; buf = ""; curkey = ""
+      sid = ""; tpath = ""; active = "false"
+      for (i = 1; i <= n; i++) {
+        c = ch[i]
+        if (inStr) {
+          if (esc) { buf = buf c; esc = 0; continue }
+          if (c == "\\") { buf = buf c; esc = 1; continue }
+          if (c == "\"") { inStr = 0; onstr(buf); buf = ""; continue }
+          buf = buf c; continue
+        }
+        if (c == "\"") { inStr = 1; buf = ""; continue }
+        if (c == " " || c == "\t" || c == "\n" || c == "\r") continue
+        if (c == "{") { depth++; expect[depth] = "key"; continue }
+        if (c == "[") { depth++; expect[depth] = "val"; continue }
+        if (c == "}" || c == "]") { depth--; continue }
+        if (c == ":") { expect[depth] = "val"; continue }
+        if (c == ",") { expect[depth] = "key"; continue }
+        # scalar value (bool/number/null) — read to the next delimiter.
+        sv = c
+        while (i + 1 <= n) {
+          d = ch[i+1]
+          if (d == "," || d == "}" || d == "]" || d == " " || d == "\t" || d == "\n" || d == "\r") break
+          sv = sv d; i++
+        }
+        if (depth == 1 && curkey == "stop_hook_active") active = sv
+        expect[depth] = "key"
+      }
+      print sid; print tpath; print active
+    }
+    # At depth 1, a string is a key (records curkey) or the value for curkey.
+    function onstr(s) {
+      if (depth == 1 && expect[depth] == "key") { curkey = s; return }
+      if (depth == 1) {
+        if (curkey == "session_id") sid = s
+        else if (curkey == "transcript_path") tpath = s
+      }
+    }
+  '
+}
+
 # server_health_warning — echoes a one-line human warning when the configured
 # memory server does not appear to be up, empty when it looks healthy. Relies
 # on load_config having set SOUL_DIR/PORT/MODE. Best-effort and probe-only (no
