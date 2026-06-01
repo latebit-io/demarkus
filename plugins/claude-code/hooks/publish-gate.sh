@@ -69,10 +69,14 @@ esac
 missing_axes=""
 if [[ "${tags_ok}" == "1" ]]; then
   required_axes="$(configured_require_tags "${strict_slug}")"
+  # Split the space-separated axes with globbing off (an axis must never expand
+  # against the filesystem); tags_have_axis then matches each literally.
+  set -f
   for axis in ${required_axes}; do
     tags_have_axis "${tags_value}" "${axis}" \
       || missing_axes="${missing_axes:+${missing_axes} }${axis}"
   done
+  set +f
 fi
 
 # Properly tagged + valid importance + all required axes present → nothing to do.

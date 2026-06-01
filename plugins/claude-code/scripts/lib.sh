@@ -137,19 +137,24 @@ configured_require_tags() {
 # pattern quotes it), so an axis containing regex/glob metacharacters can't
 # overmatch — unlike a `grep -E` interpolation would.
 tags_have_axis() {
-  local tags="$1" axis="$2" tok
-  local oldifs="$IFS"
+  local tags="$1" axis="$2" tok rc=1
+  local oldifs="$IFS" reglob=""
+  # Disable pathname expansion while splitting the unquoted list, so a tag with
+  # glob metacharacters (*, ?, []) can't expand against the filesystem and make
+  # matching nondeterministic. Restore -f only if we were the one to set it.
+  case "$-" in *f*) ;; *) reglob=1; set -f ;; esac
   IFS=','
   for tok in ${tags}; do
     # trim surrounding whitespace from the token
     tok="${tok#"${tok%%[![:space:]]*}"}"
     tok="${tok%"${tok##*[![:space:]]}"}"
     case "${tok}" in
-      "${axis}:"*) IFS="${oldifs}"; return 0 ;;
+      "${axis}:"*) rc=0; break ;;
     esac
   done
   IFS="${oldifs}"
-  return 1
+  [[ -n "${reglob}" ]] && set +f
+  return "${rc}"
 }
 
 # register_knowledge_system SLUG — append SLUG to the knowledge-system registry

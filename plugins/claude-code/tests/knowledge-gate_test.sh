@@ -181,6 +181,23 @@ test_require_tags_axis_matched_literally() {
     || { echo "axis 'a.c' satisfied by literal 'a.c:yes' should defer: ${tagged}"; return 1; }
 }
 
+test_require_tags_no_glob_expansion() {
+  # A tag value with a glob metacharacter must NOT expand against the filesystem.
+  # Run from a cwd that contains a decoy file named like a satisfying token; a
+  # tag of '*' must still be treated literally → category axis missing → deny.
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
+  printf 'category\n' > "${home}/.demarkus/plugin-memory.require-tags.acme"
+  local work; work="$(mktemp -d)"
+  : > "${work}/category:leak"   # would match 'category:'* if '*' globbed here
+  local pl; pl="$(payload 'mcp__acme__mark_publish' '{"tags":"*"}')"
+  local out
+  out="$(cd "${work}" && printf '%s' "${pl}" | HOME="${home}" DEMARKUS_MEMORY_STRICTNESS=block bash "${GATE}")"
+  rm -rf "${home}" "${work}"
+  grep -q '"permissionDecision":"deny"' <<<"${out}" \
+    || { echo "glob tag '*' must not expand to satisfy the axis; expected deny: ${out}"; return 1; }
+}
+
 test_require_tags_isolation() {
   # acme requires team; beta requires nothing — a bare-tagged beta publish defers.
   local home; home="$(mktemp -d)"
