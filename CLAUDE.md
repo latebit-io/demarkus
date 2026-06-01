@@ -1,44 +1,55 @@
 # CLAUDE.md
 
-## demarkus-soul
+Project context — architecture, patterns, build commands, conventions, debugging
+notes, roadmap — lives on the **demarkus-soul** MCP server. Generic memory
+mechanics (recall, tagging, journaling, the project template) are handled by the
+demarkus-memory plugin; this file carries only what's specific to demarkus.
 
-All project context — architecture, patterns, build commands, conventions, debugging notes, and roadmap — lives on the demarkus-soul MCP server.
-No sycophancy — code or ideas. Critically review code before presenting: layering violations, missing edge cases, state desync, stale references, channel blocking, rune vs byte vs cell-width confusion, silent error paths, leaky abstractions, wrong architectural layer. Challenge ideas and proposals before agreeing: what's the downside? What breaks? What's the simpler alternative? Is this solving the right problem? Push back when something doesn't hold up — disagreement backed by reasoning is expected.
-Never silently swallow errors. Every error must be explicitly handled — logged or surfaced. No _ = fn() without a comment.
-After each implementation run tests and pre-commit.sh.
+## How I work
 
-### Required Preflight (Every Session)
+- No sycophancy — on code or ideas. Critically review before presenting: layering
+  violations, missing edge cases, state desync, stale references, channel blocking,
+  rune vs byte vs cell-width confusion, silent error paths, leaky abstractions,
+  wrong architectural layer.
+- Challenge ideas before agreeing: what's the downside? what breaks? what's the
+  simpler alternative? is this the right problem? Push back when something doesn't
+  hold up — disagreement backed by reasoning is expected.
+- Never silently swallow errors. Every error is explicitly handled — logged or
+  surfaced. No `_ = fn()` without a comment.
+- After each implementation, run tests and `bash pre-commit.sh`.
 
-1. `mark_fetch` `/index.md` — get the hub page
-2. `mark_fetch` `/patterns.md` — build commands, code style, workflow
-3. `mark_fetch` `/guidelines.md` — hard rules for code quality, must read before writing code
-4. Fetch other pages as needed: `/architecture.md`, `/debugging.md`, `/roadmap.md`
-5. If MCP is unavailable, stop and ask the developer before proceeding
+## Required preflight (every session, before writing code)
 
-### During Work
+From the demarkus-soul MCP server:
 
-- Update soul pages when learning something new
-- Use natural language; avoid overusing "-" within sentences. For bullet points, "-" is still preferred.
-- Use `mark_append` for journal entries and incremental notes
-- Always use `expected_version` from a prior fetch when publishing or appending
+1. `mark_fetch /index.md` — the hub
+2. `mark_fetch /patterns.md` — build commands, code style, workflow
+3. `mark_fetch /guidelines.md` — hard code-quality rules; read before writing code
+4. Fetch as needed: `/architecture.md`, `/debugging.md`, `/roadmap.md`
+5. If the MCP server is unavailable, stop and ask before proceeding.
 
-### End of Session
+## demarkus-soul layout (flat — one project)
 
-- Add a journal entry to `/<project>/journal/<YYYY-MM-DD>.md` if something significant happened
-
-### Content Structure
-
+```text
+/index.md         — hub, links to every section
+/architecture.md  — system design, module boundaries, key decisions
+/patterns.md      — code patterns, build commands, conventions, workflow
+/guidelines.md    — hard code-quality rules
+/debugging.md     — lessons from bugs and investigations
+/roadmap.md       — what's done, what's next
+/thoughts.md      — reflections and ideas
+/journal/<YYYY-MM-DD>.md — dated session notes, one file per day
+/plans/<name>.md  — plan documents
 ```
-/index.md          — Hub page, links to all sections
-/architecture.md   — System design, module boundaries, key decisions
-/patterns.md       — Code patterns, build commands, conventions, workflow
-/guidelines.md     — Hard rules for code quality, must read before writing code
-/debugging.md      — Lessons from bugs and investigations
-/roadmap.md        — What's done, what's next
-/<project>/journal/<YYYY-MM-DD>.md — Dated session notes, one file per day
-/thoughts.md       — Agent reflections and ideas
-/guide.md          — Setup instructions for demarkus-soul
-```
-### Plans
- - Agents should never store the plans in their own vendor specific folder
- - The agent should always publish the plan to demarkus soul instead
+
+This is a single-project flat soul. The demarkus-memory plugin's per-project
+`/<slug>/` template does **not** apply here.
+
+## Plans
+
+Never store plans in a vendor-specific folder. Publish them to demarkus-soul
+(`/plans/<name>.md`).
+
+## Doc style
+
+Natural language in soul docs; avoid overusing "-" within sentences (bullet "- " is fine).

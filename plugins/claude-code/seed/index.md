@@ -8,16 +8,9 @@ _No projects yet. Add a link below when the agent creates a project subtree._
 
 ## Per-Project Structure
 
-Each `/<project>/` subtree contains:
+Each `/<project>/` subtree follows the canonical layout defined in **[/project-template.md](/project-template.md)** — the single source of truth. In brief: a maintained `index.md` hub, plus `architecture.md`, `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `thoughts.md`, an `adr/` directory (one ADR per decision), a `plans/` directory, and `journal/<YYYY-MM-DD>.md` dated notes.
 
-- `plan/tasks.md` — active work, priorities, what's in flight
-- `architecture.md` — system design, module boundaries, key decisions
-- `patterns.md` — code patterns, conventions, idioms
-- `roadmap.md` — what's done, what's next, what's deliberately not prioritized
-- `adr/` — Architecture Decision Records, one file per decision (e.g. `0001-auth-model.md`)
-- `journal/` — dated session notes, one file per day (`YYYY-MM-DD.md`), appended as the day progresses
-
-The agent keeps this layout consistent across projects so `/soul`, `/soul-journal`, and the memory skill know where to look.
+The agent keeps this layout consistent across projects so `/soul`, `/soul-journal`, and the memory skill always know where to look. See `/project-template.md` for the full descriptions and conventions.
 
 ## Technical
 

@@ -1,7 +1,7 @@
 {
   "name": "demarkus-memory",
-  "version": "0.3.0",
-  "description": "Local, versioned memory for Claude Code via demarkus. Zero-config install: spawns a local demarkus-server, auto-generates a token, wires MCP tools for fetch/publish/append/graph/lookup, and injects standing guidance so sessions self-document to the soul and recall via lookup.",
+  "version": "0.4.0",
+  "description": "Local, versioned memory for Claude Code via demarkus. Zero-config install: spawns a local demarkus-server, auto-generates a token, wires MCP tools for fetch/publish/append/graph/lookup, injects standing guidance so sessions self-document to the soul, and enforces a publish tag-gate so documents stay findable via lookup.",
   "author": {
     "name": "latebit",
     "url": "https://github.com/latebit-io"
@@ -15,6 +15,48 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*__mark_publish",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/publish-gate.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*__mark_publish",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/publish-gate.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-journal-nudge.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/recall-nudge.sh"
           }
         ]
       }

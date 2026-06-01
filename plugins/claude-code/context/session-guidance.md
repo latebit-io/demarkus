@@ -14,16 +14,19 @@ Before answering "what do I know about / did we decide / have we seen X" — and
 
 ## Record as you go (proactively)
 
-When something is worth persisting, write it without being prompted:
+When something is worth persisting, write it without being prompted. The full per-project layout lives in `/project-template.md` at the soul root (the canonical source); the common routes:
 
 - **Decision** → an ADR at `/<slug>/adr/<NNNN>-<title>.md`
+- **Lesson from a bug / a gotcha** → `/<slug>/debugging.md` (often the highest recall value)
 - **Pattern / convention learned** → `/<slug>/patterns.md`
-- **Significant progress or end of a working session** → append to `/<slug>/journal/<YYYY-MM-DD>.md`
-- **Architecture / roadmap / task changes** → the matching file under `/<slug>/`
+- **Progress / end of a working session** → today's `/<slug>/journal/<YYYY-MM-DD>.md`
+- **Architecture, roadmap, debt, plans, open questions** → the matching file under `/<slug>/` (see the template)
 
-**You tag and rank — the server infers nothing.** On every `mark_publish`, set a `metadata` object:
-- `tags`: comma-separated subjects describing the doc. Derive them from the content. An untagged document is invisible to `mark_lookup`, so this is not optional — it's what makes the write recallable.
-- `importance`: a float 0–1 you choose deliberately. Reserve high values (≥0.8) for genuinely central docs (index hubs, architecture, key decisions); routine notes sit lower. It floats matches in lookup ranking; it never surfaces an unmatched doc, so it's a prior, not an override.
+Keep each project's `/<slug>/index.md` hub current — it's the discovery backstop for anything `mark_lookup` can't surface.
+
+**Tag every publish — it's the rule the harness enforces hardest.** On `mark_publish`, set a `metadata` object: `tags` (comma-separated subjects drawn from the content; an untagged doc is invisible to `mark_lookup`) and `importance` (a float 0–1 — reserve ≥0.8 for hubs, architecture, and key decisions; routine notes sit lower). A write-time gate catches a tagless publish (or `importance` outside [0,1]): it warns by default and re-states why at the moment it fires, or denies in stricter setups. So set `tags` on the first try rather than waiting to be told.
+
+Soft checks back you up at the moment they matter: the publish gate (tags), a session-end nudge to journal if you changed files but recorded nothing, and a recall nudge when you ask a "did we / what did we decide" question. They're reminders, not substitutes — routing to the right file is still purely on you, and you shouldn't wait to be nudged.
 
 `mark_append` can't carry metadata — tags/importance are fixed at the doc's last `mark_publish`. When an append adds a materially new subject, re-publish the doc with extended `tags` so the catalog stays accurate.
 

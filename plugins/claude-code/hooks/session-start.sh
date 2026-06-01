@@ -26,14 +26,13 @@ GUIDANCE_FILE="${HOOK_DIR}/../context/session-guidance.md"
 # shellcheck source=../scripts/lib.sh
 . "${SCRIPTS_DIR}/lib.sh"
 
-seed_index() {
-  local seed_file="${HOOK_DIR}/../seed/index.md"
-  local target="${SOUL_DIR}/index.md"
-  [[ -d "${SOUL_DIR}" && -w "${SOUL_DIR}" ]] || return 0
-  [[ -f "${target}"    ]] && return 0
-  [[ -f "${seed_file}" ]] || return 0
-  cp "${seed_file}" "${target}"
-  log "seeded ${target}"
+# seed_souldocs — drop the bundled seed docs into an empty soul. seed_doc never
+# clobbers, so this is safe to run every session: it fills in only what's
+# missing (a fresh soul, or an existing one that predates a new seed doc).
+seed_souldocs() {
+  local seed_dir="${HOOK_DIR}/../seed"
+  seed_doc "${seed_dir}/index.md"            "${SOUL_DIR}/index.md"
+  seed_doc "${seed_dir}/project-template.md" "${SOUL_DIR}/project-template.md"
 }
 
 # emit_context — print the SessionStart additionalContext JSON to stdout.
@@ -82,7 +81,7 @@ main() {
         ;;
     esac
 
-    seed_index
+    seed_souldocs
 
     # Best-effort health check; never abort the hook over it.
     warning="$(server_health_warning || true)"

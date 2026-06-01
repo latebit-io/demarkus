@@ -1,5 +1,5 @@
 ---
-description: Restore session context from the current project's soul (recent journal, active tasks)
+description: Restore session context from the current project's soul (recent journal, active work)
 ---
 
 Bring the current project's recent memory into the session so the agent and the user can pick up where they left off. Read-only; does not modify the soul.
@@ -12,7 +12,7 @@ Bring the current project's recent memory into the session so the agent and the 
 
 3. **Pull recent journal entries.** List `/<project>/journal/` via `mark_list`. Take today's entry plus the two most recent prior days (UTC `YYYY-MM-DD.md`). For each, `mark_fetch` and read in full. If today's file doesn't exist, just use the most recent two prior days.
 
-4. **Pull active work.** `mark_fetch /<project>/plan/tasks.md` if it exists. Skip silently if `not-found`.
+4. **Pull active work.** `mark_fetch /<project>/roadmap.md` if it exists (what's next / in flight). Skip silently if `not-found`.
 
 5. **Summarize for the user.** Render in this shape, plain text, no preamble:
 
@@ -20,7 +20,7 @@ Bring the current project's recent memory into the session so the agent and the 
    ## <Project> — recent context
 
    ### What's in flight
-   <one or two sentences pulled from tasks.md, or "No active task list">
+   <one or two sentences pulled from roadmap.md, or "No roadmap yet">
 
    ### Recent journal
    - <YYYY-MM-DD>: <one-line summary of that day's entry>
@@ -34,6 +34,6 @@ Bring the current project's recent memory into the session so the agent and the 
 
 ## Don't
 
-- Don't fabricate. If a section is empty (no tasks file, no recent journals), say so.
+- Don't fabricate. If a section is empty (no roadmap, no recent journals), say so.
 - Don't pull every doc in the project — this is a session primer, not a dump.
 - Don't write to the soul. This command is read-only.
