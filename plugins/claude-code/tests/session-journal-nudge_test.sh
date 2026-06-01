@@ -122,6 +122,18 @@ test_stop_hook_active_suppresses() {
   [[ -z "${out}" ]] || { echo "stop_hook_active=true must suppress the nudge; got: ${out}"; return 1; }
 }
 
+test_quoted_stop_hook_active_suppresses() {
+  # Defensive: a nonconforming payload with stop_hook_active as a quoted string
+  # "true" must still be honored as a loop guard.
+  local tmp; tmp="$(mktemp -d)"
+  local t; t="$(mk_transcript "${tmp}" "${EDIT_LINE}")"
+  local payload out
+  payload="$(printf '{"session_id":"S7q","transcript_path":"%s","stop_hook_active":"true"}' "${t}")"
+  out="$(printf '%s' "${payload}" | TMPDIR="${tmp}" bash "${HOOK}")"
+  rm -rf "${tmp}"
+  [[ -z "${out}" ]] || { echo "quoted stop_hook_active=\"true\" must suppress; got: ${out}"; return 1; }
+}
+
 test_once_per_session() {
   local tmp; tmp="$(mktemp -d)"
   local t; t="$(mk_transcript "${tmp}" "${EDIT_LINE}")"

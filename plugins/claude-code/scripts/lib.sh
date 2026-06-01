@@ -261,11 +261,15 @@ stop_hook_fields() {
       print sid; print tpath; print active
     }
     # At depth 1, a string is a key (records curkey) or the value for curkey.
+    # stop_hook_active is documented as a JSON boolean (handled on the scalar
+    # path), but accept a quoted "true"/"false" too — a loop guard should not
+    # silently fail on a nonconforming payload.
     function onstr(s) {
       if (depth == 1 && expect[depth] == "key") { curkey = s; return }
       if (depth == 1) {
         if (curkey == "session_id") sid = s
         else if (curkey == "transcript_path") tpath = s
+        else if (curkey == "stop_hook_active") active = s
       }
     }
   '

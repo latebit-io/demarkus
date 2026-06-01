@@ -179,6 +179,18 @@ test_nonstring_tags_treated_as_tagless() {
   done
 }
 
+test_array_or_object_tags_treated_as_tagless() {
+  # Common mistake: passing an array of tags or an object instead of a
+  # comma-separated string. Arrays/objects are valid JSON but fail the
+  # string-type requirement — block must deny.
+  local out v
+  for v in '["a","b"]' '{}' '{"x":"y"}'; do
+    out=$(run_gate block "$(payload PreToolUse "${PUB_TOOL}" "{\"tags\":${v}}")")
+    grep -q '"permissionDecision":"deny"' <<<"${out}" \
+      || { echo "array/object tags '${v}' should be tagless → deny: ${out}"; return 1; }
+  done
+}
+
 test_exponent_importance_in_range_ok() {
   # 1e-1 == 0.1, a valid in-range number — must not be flagged (defer).
   local out
