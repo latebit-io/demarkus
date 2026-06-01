@@ -30,7 +30,7 @@ From the demarkus-soul MCP server:
 
 ## demarkus-soul layout (flat — one project)
 
-```
+```text
 /index.md         — hub, links to every section
 /architecture.md  — system design, module boundaries, key decisions
 /patterns.md      — code patterns, build commands, conventions, workflow

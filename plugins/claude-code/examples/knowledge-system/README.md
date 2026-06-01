@@ -6,7 +6,7 @@ Reference artifacts for an organizational demarkus knowledge system (a broker-fr
 
 Every knowledge system has a guaranteed hub world named **`root`** that tracks things globally for the system. Org-wide conventions live there as ordinary versioned documents under a well-known prefix:
 
-```
+```text
 mark://root/.well-known/demarkus/policy.md     ← strictness + required tags (see policy.md here)
 mark://root/.well-known/demarkus/template.md   ← required per-world structure (the canonical layout)
 ```
@@ -19,10 +19,12 @@ mark://root/.well-known/demarkus/template.md   ← required per-world structure 
 
 1. On first substantive work against a knowledge system, the agent fetches `mark://root/.well-known/demarkus/policy.md` and `template.md` and follows them — structure conventions are advisory by necessity (only the agent, via its MCP OAuth session, can reach the broker; a hook cannot).
 2. The agent mirrors the policy's **enforced core** into local files the gate reads (`<slug>` is the MCP server name `/knowledge-join` registered, shown by `claude mcp list`):
-   ```
+
+   ```bash
    printf '%s\n' "block"      > ~/.demarkus/plugin-memory.strictness.<slug>     # from strictness:
    printf '%s\n' "category"   > ~/.demarkus/plugin-memory.require-tags.<slug>   # from require_tags:
    ```
+
    The org declares these once on `root`; each agent mirrors them; the local gate enforces them. `strictness:` sets the severity; `require_tags:` are tag axes the gate presence-checks (each satisfied by an `axis:value` tag, e.g. `category:project`).
 
 ## Why this shape

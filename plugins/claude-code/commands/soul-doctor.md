@@ -37,7 +37,7 @@ These cost one fetch per document, so only run them for a single project / world
 
 - **Untagged docs** — fetch and check the `tags` metadata is non-empty. An untagged doc is invisible to `mark_lookup`. (This is what the publish gate now prevents going forward; this finds pre-existing ones.)
 - **Duplicate content** — compare `content-hash` across fetched docs; identical hashes under different paths are duplicates.
-- **Knowledge-system taxonomy** (only for a `mark://<world>/` scope) — fetch `mark://root/.well-known/demarkus/policy.md`. For each required axis in its `require_tags:`, flag docs missing an `axis:value` tag; for documented taxonomy values, flag tags that use an out-of-vocabulary value. (The gate enforces axis *presence* going forward; this audits the advisory *values* and back-catalog.)
+- **Knowledge-system taxonomy** (only for a `mark://<world>/` scope) — fetch the policy from **the same knowledge system the audited world belongs to**, via the same broker MCP server you're auditing through: `mark://root/.well-known/demarkus/policy.md` on that server (its `root` hub — not some other system's). If that policy is `not-found`, skip this check; the system hasn't declared a taxonomy. Otherwise, for each required axis in its `require_tags:`, flag docs missing an `axis:value` tag, and for documented taxonomy values flag tags that use an out-of-vocabulary value. (The gate enforces axis *presence* going forward; this audits the advisory *values* and the back-catalog.)
 
 ## Report
 

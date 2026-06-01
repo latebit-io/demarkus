@@ -165,6 +165,22 @@ test_require_tags_warn_nudges_post() {
     || { echo "nudge should name the missing axis 'team': ${out}"; return 1; }
 }
 
+test_require_tags_axis_matched_literally() {
+  # An axis containing a regex metachar ('a.c') must be matched LITERALLY — a
+  # token 'abc:x' must NOT satisfy it (a grep -E interpolation would overmatch).
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
+  printf 'a.c\n' > "${home}/.demarkus/plugin-memory.require-tags.acme"
+  local deny tagged
+  deny="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"abc:x"}')")"
+  tagged="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"a.c:yes"}')")"
+  rm -rf "${home}"
+  grep -q '"permissionDecision":"deny"' <<<"${deny}" \
+    || { echo "axis 'a.c' must not be satisfied by 'abc:x' (literal match): ${deny}"; return 1; }
+  [[ -z "${tagged}" ]] \
+    || { echo "axis 'a.c' satisfied by literal 'a.c:yes' should defer: ${tagged}"; return 1; }
+}
+
 test_require_tags_isolation() {
   # acme requires team; beta requires nothing — a bare-tagged beta publish defers.
   local home; home="$(mktemp -d)"

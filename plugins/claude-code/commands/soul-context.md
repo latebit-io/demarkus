@@ -1,5 +1,5 @@
 ---
-description: Restore session context from the current project's soul (recent journal, active tasks)
+description: Restore session context from the current project's soul (recent journal, active work)
 ---
 
 Bring the current project's recent memory into the session so the agent and the user can pick up where they left off. Read-only; does not modify the soul.
@@ -34,6 +34,6 @@ Bring the current project's recent memory into the session so the agent and the 
 
 ## Don't
 
-- Don't fabricate. If a section is empty (no tasks file, no recent journals), say so.
+- Don't fabricate. If a section is empty (no roadmap, no recent journals), say so.
 - Don't pull every doc in the project — this is a session primer, not a dump.
 - Don't write to the soul. This command is read-only.

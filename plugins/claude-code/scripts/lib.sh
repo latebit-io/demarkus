@@ -73,7 +73,14 @@ seed_doc() {
   [[ -d "${dir}" && -w "${dir}" ]] || return 0
   [[ -f "${target}" ]] && return 0
   [[ -f "${seed_file}" ]] || return 0
-  cp "${seed_file}" "${target}" && log "seeded ${target}"
+  # Best-effort: a cp failure is surfaced (never silently swallowed) but does not
+  # propagate a non-zero status to a caller running under `set -e`.
+  if cp "${seed_file}" "${target}" 2>/dev/null; then
+    log "seeded ${target}"
+  else
+    warn "could not seed ${target} (cp failed); continuing"
+  fi
+  return 0
 }
 
 # json_escape — reads stdin and emits it as a single JSON string literal
@@ -123,6 +130,26 @@ configured_require_tags() {
     raw="$(cat "${PLUGIN_REQUIRE_TAGS_FILE}" 2>/dev/null || true)"
   fi
   printf '%s' "${raw}" | tr ',\r\n\t' '    ' | tr -s ' ' | sed 's/^ //;s/ $//'
+}
+
+# tags_have_axis TAGS AXIS — true if the comma-separated TAGS list contains a
+# token of the form "AXIS:value". AXIS is matched as a LITERAL prefix (the case
+# pattern quotes it), so an axis containing regex/glob metacharacters can't
+# overmatch — unlike a `grep -E` interpolation would.
+tags_have_axis() {
+  local tags="$1" axis="$2" tok
+  local oldifs="$IFS"
+  IFS=','
+  for tok in ${tags}; do
+    # trim surrounding whitespace from the token
+    tok="${tok#"${tok%%[![:space:]]*}"}"
+    tok="${tok%"${tok##*[![:space:]]}"}"
+    case "${tok}" in
+      "${axis}:"*) IFS="${oldifs}"; return 0 ;;
+    esac
+  done
+  IFS="${oldifs}"
+  return 1
 }
 
 # register_knowledge_system SLUG — append SLUG to the knowledge-system registry

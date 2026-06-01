@@ -63,14 +63,14 @@ esac
 
 # Required tag axes (knowledge-system policy, mirrored locally). An axis is
 # satisfied by an "axis:value" token in the tags. Only checked when tags are
-# present (a tagless publish is already a violation below). Axes are simple
-# identifiers; a stray regex metachar in a policy just won't match → reported
-# missing, which is the safe direction.
+# present (a tagless publish is already a violation below). Axis matching is
+# literal (tags_have_axis), so a policy axis containing metacharacters can't
+# overmatch and falsely satisfy the check.
 missing_axes=""
 if [[ "${tags_ok}" == "1" ]]; then
   required_axes="$(configured_require_tags "${strict_slug}")"
   for axis in ${required_axes}; do
-    grep -qE "(^|,)[[:space:]]*${axis}:" <<<"${tags_value}" \
+    tags_have_axis "${tags_value}" "${axis}" \
       || missing_axes="${missing_axes:+${missing_axes} }${axis}"
   done
 fi
