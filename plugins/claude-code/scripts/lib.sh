@@ -19,9 +19,22 @@ readonly TOKEN_LABEL="claude-code-plugin"
 # Strictness for the publish tag-gate (hooks/publish-gate.sh). One line:
 # warn | block | ask. Kept in its own file, orthogonal to PLUGIN_CONFIG, so
 # setup.sh rewrites of the conf never clobber a chosen strictness. Absent file
-# means the warn default. The knowledge-system courier (#7) will write
-# per-slug siblings (plugin-memory.strictness.<slug>); not used yet.
+# means the warn default. A joined knowledge system can carry its own severity
+# in a per-slug sibling (plugin-memory.strictness.<slug>), which the agent
+# mirrors from the system's published policy (see register-knowledge.sh / #7).
 readonly PLUGIN_STRICTNESS_FILE="${PLUGIN_HOME}/plugin-memory.strictness"
+
+# Registry of joined knowledge-system MCP server slugs (one per line), recorded
+# by /knowledge-join. The publish gate enforces tags on writes to a registered
+# system the same way it does for the local soul, but never on unrelated
+# demarkus servers the user happens to have configured (e.g. a personal soul).
+readonly PLUGIN_KNOWLEDGE_REGISTRY="${PLUGIN_HOME}/knowledge-systems"
+
+# Required tag axes a knowledge system declares in its policy (e.g. team, type).
+# A publish satisfies an axis when its tags include an "axis:value" token. The
+# agent mirrors the policy's require_tags into a per-slug sibling
+# (PLUGIN_REQUIRE_TAGS_FILE.<slug>); the gate then presence-checks each axis.
+readonly PLUGIN_REQUIRE_TAGS_FILE="${PLUGIN_HOME}/plugin-memory.require-tags"
 
 # Soul dirs that setup.sh may choose.
 readonly SHARED_SOUL_DIR="${PLUGIN_HOME}/soul"
@@ -76,18 +89,78 @@ json_escape() {
   '
 }
 
-# configured_strictness — echoes the publish tag-gate strictness: warn|block|ask.
-# Precedence: DEMARKUS_MEMORY_STRICTNESS env override, then PLUGIN_STRICTNESS_FILE,
-# then the warn default. Never dies. Any unrecognized value falls back to warn so
-# a corrupt file or typo can never silently escalate to block.
+# configured_strictness [SLUG] — echoes the publish tag-gate strictness:
+# warn|block|ask. Precedence: DEMARKUS_MEMORY_STRICTNESS env override, then a
+# per-slug file (PLUGIN_STRICTNESS_FILE.<slug>, when SLUG is given — a knowledge
+# system's mirrored policy), then the global PLUGIN_STRICTNESS_FILE, then the
+# warn default. Never dies. Any unrecognized value falls back to warn so a
+# corrupt file or typo can never silently escalate to block.
 configured_strictness() {
+  local slug="${1:-}"
   local s="${DEMARKUS_MEMORY_STRICTNESS:-}"
+  if [[ -z "${s}" && -n "${slug}" && -f "${PLUGIN_STRICTNESS_FILE}.${slug}" ]]; then
+    s="$(tr -d '[:space:]' < "${PLUGIN_STRICTNESS_FILE}.${slug}" 2>/dev/null || true)"
+  fi
   if [[ -z "${s}" && -f "${PLUGIN_STRICTNESS_FILE}" ]]; then
     s="$(tr -d '[:space:]' < "${PLUGIN_STRICTNESS_FILE}" 2>/dev/null || true)"
   fi
   case "${s}" in
     warn|block|ask) echo "${s}" ;;
     *)              echo "warn" ;;
+  esac
+}
+
+# configured_require_tags [SLUG] — echo the required tag axes (space-separated)
+# for this scope: a per-slug PLUGIN_REQUIRE_TAGS_FILE.<slug>, else the global
+# PLUGIN_REQUIRE_TAGS_FILE, else empty. The file may list axes comma- or
+# newline-separated; output is normalized to single spaces. Empty → no axis
+# requirement (the common case; only knowledge systems that declare it have one).
+configured_require_tags() {
+  local slug="${1:-}" raw=""
+  if [[ -n "${slug}" && -f "${PLUGIN_REQUIRE_TAGS_FILE}.${slug}" ]]; then
+    raw="$(cat "${PLUGIN_REQUIRE_TAGS_FILE}.${slug}" 2>/dev/null || true)"
+  elif [[ -f "${PLUGIN_REQUIRE_TAGS_FILE}" ]]; then
+    raw="$(cat "${PLUGIN_REQUIRE_TAGS_FILE}" 2>/dev/null || true)"
+  fi
+  printf '%s' "${raw}" | tr ',\r\n\t' '    ' | tr -s ' ' | sed 's/^ //;s/ $//'
+}
+
+# register_knowledge_system SLUG — append SLUG to the knowledge-system registry
+# if absent. Idempotent. Returns non-zero on empty input.
+register_knowledge_system() {
+  local slug="$1"
+  [[ -n "${slug}" ]] || return 1
+  mkdir -p "${PLUGIN_HOME}"
+  touch "${PLUGIN_KNOWLEDGE_REGISTRY}"
+  grep -qxF "${slug}" "${PLUGIN_KNOWLEDGE_REGISTRY}" 2>/dev/null && return 0
+  printf '%s\n' "${slug}" >> "${PLUGIN_KNOWLEDGE_REGISTRY}"
+}
+
+# is_registered_knowledge_system SLUG — true if SLUG is in the registry.
+is_registered_knowledge_system() {
+  local slug="$1"
+  [[ -n "${slug}" && -f "${PLUGIN_KNOWLEDGE_REGISTRY}" ]] || return 1
+  grep -qxF "${slug}" "${PLUGIN_KNOWLEDGE_REGISTRY}" 2>/dev/null
+}
+
+# publish_gate_scope TOOLNAME — classifies an MCP mark_publish tool by which
+# server it targets, echoing one of:
+#   local         — the plugin's own soul server (gate with global strictness)
+#   ks:<slug>      — a registered knowledge system (gate with per-slug strictness)
+#   (empty)        — a server the plugin does not manage (do not gate)
+# The server is the segment between the leading "mcp__" and the trailing
+# "__mark_publish"; for the local plugin server it contains "demarkus-memory".
+publish_gate_scope() {
+  local tool="$1" server
+  server="${tool#mcp__}"
+  server="${server%__mark_publish}"
+  case "${server}" in
+    *demarkus-memory*) echo "local" ;;
+    *)
+      if is_registered_knowledge_system "${server}"; then
+        echo "ks:${server}"
+      fi
+      ;;
   esac
 }
 
@@ -98,6 +171,8 @@ configured_strictness() {
 #   3: TAGS_OK  — "1" if tool_input.metadata.tags is a non-empty (trimmed) string, else "0"
 #   4: IMP_OK   — "1" if metadata.importance is absent OR a number in [0,1], else "0"
 #   5: url      — tool_input.url (or empty)
+#   6: tags     — the decoded tags string, internal whitespace flattened to one
+#                 line (for axis-presence checks; empty when tagless)
 #
 # Pure awk — NO jq, NO python, nothing outside coreutils. The plugin ships zero
 # runtime dependencies; awk is already the parser behind json_escape. A naive
@@ -156,7 +231,11 @@ publish_metadata_check() {
       if (!haveImp) imp_ok = "1"
       else if (imp_d ~ /^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/) { nimp = imp_d + 0; imp_ok = (nimp >= 0 && nimp <= 1) ? "1" : "0" }
       else imp_ok = "0"
-      print ev; print tool; print tags_ok; print imp_ok; print url_d
+      # Surface the decoded tags (flattened to one line) so the gate can
+      # presence-check required axes. Only for a genuine JSON-string value.
+      tags_emit = (tagsStr ? tags_d : "")
+      gsub(/[\n\r\t]/, " ", tags_emit)
+      print ev; print tool; print tags_ok; print imp_ok; print url_d; print tags_emit
     }
     function trim(s) { gsub(/^[ \t\r\n]+/, "", s); gsub(/[ \t\r\n]+$/, "", s); return s }
     # json_unescape — decode JSON string escapes (\n \t \r \b \f \/ \" \\ and

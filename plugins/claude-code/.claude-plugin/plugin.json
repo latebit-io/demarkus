@@ -21,7 +21,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__.*demarkus-memory__mark_publish",
+        "matcher": "mcp__.*__mark_publish",
         "hooks": [
           {
             "type": "command",
@@ -32,7 +32,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__.*demarkus-memory__mark_publish",
+        "matcher": "mcp__.*__mark_publish",
         "hooks": [
           {
             "type": "command",

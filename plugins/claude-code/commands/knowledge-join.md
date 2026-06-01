@@ -49,7 +49,32 @@ If the user invokes without an argument, ask them for the URL before running any
 
    Claude Code performs the OAuth device flow against the broker on the first tool call — there is no token to capture or paste here.
 
-4. **Confirm success.** Tell the user, in plain language:
+4. **Record the system for the publish gate.** After `claude mcp add` succeeds, run:
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/register-knowledge.sh" <slug>
+   ```
+
+   This records the slug so the publish tag-gate enforces tags on writes to this knowledge system, the same way it does for the local soul. (It does not gate unrelated demarkus servers the user may have configured.)
+
+5. **Adopt the system's conventions (`root` hub).** A knowledge system can publish org-wide conventions to its guaranteed `root` hub world. Once the OAuth flow is complete and you are doing real work against this system, fetch them and follow them:
+
+   - `mark_fetch mark://root/.well-known/demarkus/template.md` — the required per-world structure (same shape as the local `/project-template.md`). Follow it.
+   - `mark_fetch mark://root/.well-known/demarkus/policy.md` — strictness + required tags. Mirror the enforceable knobs to local files so the gate (which cannot reach the broker) can apply them:
+
+     - If it declares a `strictness:` line:
+       ```bash
+       printf '%s\n' "<warn|block|ask from policy.md>" > ~/.demarkus/plugin-memory.strictness.<slug>
+       ```
+     - If it declares a `require_tags:` line (the tag axes every doc must carry, e.g. `category`), mirror the axes so the gate presence-checks them:
+       ```bash
+       printf '%s\n' "<axes from policy.md, e.g. category>" > ~/.demarkus/plugin-memory.require-tags.<slug>
+       ```
+       Each axis is then satisfied by an `axis:value` tag (e.g. `category:project`).
+
+   If either document is `not-found`, the system simply hasn't declared that convention yet — skip silently. See `${CLAUDE_PLUGIN_ROOT}/examples/knowledge-system/` for the format an admin publishes.
+
+6. **Confirm success.** Tell the user, in plain language:
 
    > Added knowledge system **<slug>** at <url>. Claude Code will prompt you to complete the OAuth device flow against the broker the next time it talks to that MCP server. After that, the org's full demarkus tool surface (mark_fetch, mark_publish, mark_graph, etc.) is available against worlds the broker exposes (URL form: `mark://<worldName>/<path>`).
 
