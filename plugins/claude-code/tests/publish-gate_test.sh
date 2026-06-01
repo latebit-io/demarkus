@@ -130,6 +130,44 @@ test_empty_tags_string_treated_as_tagless() {
     || { echo "whitespace-only tags should be tagless → deny: ${out}"; return 1; }
 }
 
+test_escaped_whitespace_tags_treated_as_tagless() {
+  # The escape-decode bypass: raw JSON \n / \t / \r decode to whitespace and
+  # must be judged tagless, not the literal backslash sequences. Each must deny.
+  local out esc
+  for esc in '\n' '\t' '\r' '\n\t' '\r\n'; do
+    out=$(run_gate block "$(payload PreToolUse "${PUB_TOOL}" "{\"tags\":\"${esc}\"}")")
+    grep -q '"permissionDecision":"deny"' <<<"${out}" \
+      || { echo "escaped-whitespace tags '${esc}' should be tagless → deny: ${out}"; return 1; }
+  done
+}
+
+test_unicode_escape_whitespace_tags_treated_as_tagless() {
+  # \u escapes for space (0020), tab (0009), and ideographic space (3000)
+  # decode to whitespace → tagless → deny. Build the "\uXXXX" from a literal
+  # backslash var so the sequence survives verbatim into the JSON payload.
+  local out esc bs='\'
+  for esc in "${bs}u0020" "${bs}u0009" "${bs}u3000"; do
+    out=$(run_gate block "$(payload PreToolUse "${PUB_TOOL}" "{\"tags\":\"${esc}\"}")")
+    grep -q '"permissionDecision":"deny"' <<<"${out}" \
+      || { echo "unicode-whitespace tags '${esc}' should be tagless → deny: ${out}"; return 1; }
+  done
+}
+
+test_unicode_escape_real_char_tags_pass() {
+  # a = 'a' — a real non-whitespace char → not tagless → defer.
+  local out bs='\'
+  out=$(run_gate block "$(payload PreToolUse "${PUB_TOOL}" "{\"tags\":\"${bs}u0061\"}")")
+  [[ -z "${out}" ]] || { echo "unicode non-whitespace tag should defer; got: ${out}"; return 1; }
+}
+
+test_escaped_tags_with_real_content_pass() {
+  # A tag value carrying a real escape but real content (newline between two
+  # subjects) is NOT tagless — must defer.
+  local out
+  out=$(run_gate block "$(payload PreToolUse "${PUB_TOOL}" '{"tags":"alpha\nbeta"}')")
+  [[ -z "${out}" ]] || { echo "tags with escape + real content should defer; got: ${out}"; return 1; }
+}
+
 test_importance_out_of_range_flagged() {
   local out
   out=$(run_gate warn "$(payload PostToolUse "${PUB_TOOL}" '{"tags":"journal","importance":"1.5"}')")

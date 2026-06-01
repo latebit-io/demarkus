@@ -125,13 +125,71 @@ publish_metadata_check() {
         }
         recordValue(sv)
       }
-      tags_ok = (haveTags && trim(tags) != "") ? "1" : "0"
+      # Decode JSON string escapes BEFORE validating, otherwise {"tags":"\n"}
+      # is stored raw as backslash+n — non-empty — and a whitespace-only value
+      # slips past the emptiness check. The gate is a policy boundary, so the
+      # decoded value is what must be judged.
+      tags_d = json_unescape(tags)
+      imp_d = json_unescape(imp)
+      url_d = json_unescape(url)
+      tags_ok = (haveTags && trim(tags_d) != "") ? "1" : "0"
       if (!haveImp) imp_ok = "1"
-      else if (imp ~ /^-?[0-9]+(\.[0-9]+)?$/) { nimp = imp + 0; imp_ok = (nimp >= 0 && nimp <= 1) ? "1" : "0" }
+      else if (imp_d ~ /^-?[0-9]+(\.[0-9]+)?$/) { nimp = imp_d + 0; imp_ok = (nimp >= 0 && nimp <= 1) ? "1" : "0" }
       else imp_ok = "0"
-      print ev; print tool; print tags_ok; print imp_ok; print url
+      print ev; print tool; print tags_ok; print imp_ok; print url_d
     }
     function trim(s) { gsub(/^[ \t\r\n]+/, "", s); gsub(/[ \t\r\n]+$/, "", s); return s }
+    # json_unescape — decode JSON string escapes (\n \t \r \b \f \/ \" \\ and
+    # \uXXXX) to their actual characters. For \uXXXX, whitespace codepoints
+    # become a space and all other codepoints a non-space marker — enough to
+    # judge emptiness/numeric-ness correctly without full UTF-8 reconstruction.
+    function json_unescape(s,   out, i, n2, c, d, hex, code) {
+      out = ""; n2 = length(s); i = 1
+      while (i <= n2) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n2) {
+          d = substr(s, i + 1, 1)
+          if (d == "n") { out = out "\n"; i += 2; continue }
+          if (d == "t") { out = out "\t"; i += 2; continue }
+          if (d == "r") { out = out "\r"; i += 2; continue }
+          if (d == "b") { out = out "\b"; i += 2; continue }
+          if (d == "f") { out = out "\f"; i += 2; continue }
+          if (d == "/") { out = out "/"; i += 2; continue }
+          if (d == "\"") { out = out "\""; i += 2; continue }
+          if (d == "\\") { out = out "\\"; i += 2; continue }
+          if (d == "u" && i + 5 <= n2) {
+            hex = substr(s, i + 2, 4)
+            if (hex ~ /^[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]$/) {
+              code = hexval(hex)
+              out = out (is_ws_code(code) ? " " : "x")
+              i += 6; continue
+            }
+          }
+          # Unknown/invalid escape: drop the backslash, keep the next char.
+          out = out d; i += 2; continue
+        }
+        out = out c; i++
+      }
+      return out
+    }
+    # hexval — parse a hex string to its integer value (no 0x literals; BSD awk).
+    function hexval(h,   v, i, c, dgt) {
+      v = 0
+      for (i = 1; i <= length(h); i++) {
+        c = tolower(substr(h, i, 1))
+        if (c >= "0" && c <= "9") dgt = c + 0
+        else if (c == "a") dgt = 10; else if (c == "b") dgt = 11
+        else if (c == "c") dgt = 12; else if (c == "d") dgt = 13
+        else if (c == "e") dgt = 14; else if (c == "f") dgt = 15
+        else dgt = 0
+        v = v * 16 + dgt
+      }
+      return v
+    }
+    # is_ws_code — true for ASCII + common Unicode whitespace codepoints.
+    function is_ws_code(code) {
+      return (code == 9 || code == 10 || code == 11 || code == 12 || code == 13 || code == 32 || code == 160 || (code >= 8192 && code <= 8202) || code == 8232 || code == 8233 || code == 8239 || code == 8287 || code == 12288)
+    }
     # Object-key path of the current position, e.g. /tool_input/metadata/tags.
     # Array levels contribute "/#" so an array can never alias an object path.
     function curpath(   p, d2) {
