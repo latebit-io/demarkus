@@ -26,7 +26,7 @@ Keep each project's `/<slug>/index.md` hub current — it's the discovery backst
 
 **Tag every publish — it's the rule the harness enforces hardest.** On `mark_publish`, set a `metadata` object: `tags` (comma-separated subjects drawn from the content; an untagged doc is invisible to `mark_lookup`) and `importance` (a float 0–1 — reserve ≥0.8 for hubs, architecture, and key decisions; routine notes sit lower). A write-time gate catches a tagless publish (or `importance` outside [0,1]): it warns by default and re-states why at the moment it fires, or denies in stricter setups. So set `tags` on the first try rather than waiting to be told.
 
-Two soft checks back you up: that publish gate, and a one-time session-end nudge if you changed files but recorded nothing here. Recalling before you answer and routing to the right file have **no** backstop at all — those are purely on you.
+Soft checks back you up at the moment they matter: the publish gate (tags), a session-end nudge to journal if you changed files but recorded nothing, and a recall nudge when you ask a "did we / what did we decide" question. They're reminders, not substitutes — routing to the right file is still purely on you, and you shouldn't wait to be nudged.
 
 `mark_append` can't carry metadata — tags/importance are fixed at the doc's last `mark_publish`. When an append adds a materially new subject, re-publish the doc with extended `tags` so the catalog stays accurate.
 
