@@ -48,6 +48,21 @@ log()  { echo "[demarkus-memory] $*" >&2; }
 warn() { echo "[demarkus-memory] warning: $*" >&2; }
 die()  { echo "[demarkus-memory] error: $*" >&2; exit 1; }
 
+# seed_doc SEED_FILE TARGET_FILE — copy SEED_FILE to TARGET_FILE if the target
+# is absent and its directory is writable. Best-effort: a no-op (return 0) when
+# the directory isn't writable, the seed is missing, or the target already
+# exists — it never clobbers existing content, so a user's customized doc
+# survives across sessions. Logs only on an actual copy.
+seed_doc() {
+  local seed_file="$1" target="$2"
+  local dir
+  dir="$(dirname "${target}")"
+  [[ -d "${dir}" && -w "${dir}" ]] || return 0
+  [[ -f "${target}" ]] && return 0
+  [[ -f "${seed_file}" ]] || return 0
+  cp "${seed_file}" "${target}" && log "seeded ${target}"
+}
+
 # json_escape — reads stdin and emits it as a single JSON string literal
 # (quotes included). Pure awk so it works without jq on stock macOS/Linux.
 # Escapes backslash, double-quote, and tab; strips CR; turns each input line

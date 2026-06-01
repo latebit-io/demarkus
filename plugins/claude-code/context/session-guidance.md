@@ -14,12 +14,15 @@ Before answering "what do I know about / did we decide / have we seen X" — and
 
 ## Record as you go (proactively)
 
-When something is worth persisting, write it without being prompted:
+When something is worth persisting, write it without being prompted. The full per-project layout lives in `/project-template.md` at the soul root (the canonical source); the common routes:
 
 - **Decision** → an ADR at `/<slug>/adr/<NNNN>-<title>.md`
+- **Lesson from a bug / a gotcha** → `/<slug>/debugging.md` (often the highest recall value)
 - **Pattern / convention learned** → `/<slug>/patterns.md`
-- **Significant progress or end of a working session** → append to `/<slug>/journal/<YYYY-MM-DD>.md`
-- **Architecture / roadmap / task changes** → the matching file under `/<slug>/`
+- **Progress / end of a working session** → today's `/<slug>/journal/<YYYY-MM-DD>.md`
+- **Architecture, roadmap, debt, plans, open questions** → the matching file under `/<slug>/` (see the template)
+
+Keep each project's `/<slug>/index.md` hub current — it's the discovery backstop for anything `mark_lookup` can't surface.
 
 **Tag every publish — it's the rule the harness enforces hardest.** On `mark_publish`, set a `metadata` object: `tags` (comma-separated subjects drawn from the content; an untagged doc is invisible to `mark_lookup`) and `importance` (a float 0–1 — reserve ≥0.8 for hubs, architecture, and key decisions; routine notes sit lower). A write-time gate catches a tagless publish (or `importance` outside [0,1]): it warns by default and re-states why at the moment it fires, or denies in stricter setups. So set `tags` on the first try rather than waiting to be told.
 

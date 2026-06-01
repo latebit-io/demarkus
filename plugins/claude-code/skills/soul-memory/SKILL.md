@@ -28,13 +28,18 @@ Before reading or writing, resolve the project slug:
 
 ## Per-project structure
 
-Each `/<project>/` subtree has a fixed layout:
+The canonical layout lives in **`/project-template.md`** at the soul root (seeded on first session, user-customizable). Fetch it when in doubt — it is the single source of truth. In brief, each `/<project>/` subtree uses:
 
-- `/<project>/plan/tasks.md` — active work, priorities, what's in flight
+- `/<project>/index.md` — the project hub; links to every doc below and anchors discovery
 - `/<project>/architecture.md` — system design, module boundaries, key decisions
 - `/<project>/patterns.md` — code patterns, conventions, idioms
-- `/<project>/roadmap.md` — done, next, not prioritized
+- `/<project>/guidelines.md` — hard rules for code quality; read before writing code
+- `/<project>/debugging.md` — lessons from bugs and investigations
+- `/<project>/roadmap.md` — done, next, deliberately not prioritized
+- `/<project>/debt.md` — technical debt and improvement opportunities
+- `/<project>/thoughts.md` — open questions, reflections, ideas
 - `/<project>/adr/<NNNN>-<slug>.md` — Architecture Decision Records (one per decision, zero-padded 4-digit sequence)
+- `/<project>/plans/<name>.md` — plan documents (lifecycle carried in the text)
 - `/<project>/journal/<YYYY-MM-DD>.md` — dated session notes, one file per day
 
 ## Tool routing
@@ -51,10 +56,14 @@ Write intents — route to the right file for the content type:
 - **Fleeting observation / daily note** → append to today's `/<project>/journal/<YYYY-MM-DD>.md`. If the file does not exist yet, create it with `mark_publish` (`expected_version: 0`) and a header like `# <Project> journal — <YYYY-MM-DD>`, then append on subsequent calls. The `/soul-journal` command handles this automatically.
 - **Architecture decision** → create a new ADR at `/<project>/adr/<NNNN>-<slug>.md` with `mark_publish` (`expected_version: 0`). Pick the next sequence number by listing the `adr/` directory. Standard ADR template: `# <NNNN>. <Title>`, `## Status`, `## Context`, `## Decision`, `## Consequences`.
 - **Pattern / convention learned** → append to `/<project>/patterns.md`. Fetch first if updating an existing section; otherwise `mark_append` with `expected_version` unset.
+- **Hard rule for code quality** → `/<project>/guidelines.md`.
+- **Lesson from a bug / a gotcha** → `/<project>/debugging.md` (high recall value — capture the non-obvious why).
 - **Architecture change** → fetch `/<project>/architecture.md`, update the relevant section, publish with the correct `expected_version`.
-- **Task / todo** → fetch and update `/<project>/plan/tasks.md`.
-- **Roadmap item** → fetch and update `/<project>/roadmap.md`.
-- **Cross-project or global note** → if it does not fit a project, ask the user where it belongs. Do not create ad-hoc top-level files.
+- **What's next / done / not prioritized** → `/<project>/roadmap.md`.
+- **Technical debt** → `/<project>/debt.md`.
+- **Plan document** → `/<project>/plans/<name>.md` (carry active / completed / archived in the text).
+- **Open question / idea, not yet decided** → `/<project>/thoughts.md`.
+- **Cross-project or global note** → if it does not fit a project, ask the user where it belongs. Do not create ad-hoc top-level files (the soul root holds only `/index.md` and `/project-template.md`).
 
 **On every `mark_publish`, set `metadata`:** `tags` (comma-separated subjects — the primary match target for `mark_lookup`) and, sparingly, `importance` (0–1, default 0.5; reserve high values for genuinely central docs like index hubs and architecture). An untagged document can only be found by words in its title, so tagging on write is what makes later recall work. The server does not infer either field — you choose them. Reserved keys are rejected; any other metadata key is stored opaquely and reachable through lookup's `filter` axis.
 
@@ -64,11 +73,12 @@ Always reference what you saved by full path so the user can find it again.
 
 ## Creating a new project
 
-When the user wants to start memory for a project that does not exist in `/index.md` yet:
+When the user wants to start memory for a project that does not exist in `/index.md` yet (fetch `/project-template.md` first if you need the full layout):
 
 1. Confirm the slug (basename of `CLAUDE_PROJECT_DIR`, lowercased, spaces → hyphens)
-2. Create the first relevant file (e.g. today's journal entry, or `architecture.md` stub) with `mark_publish` `expected_version: 0`
-3. Fetch `/index.md`, add a bullet `- [<Project Name>](/<slug>/)` under the project list, and publish with the correct `expected_version`
+2. Create the project hub `/<slug>/index.md` with `mark_publish` `expected_version: 0` — a short page that will link to the project's docs as they appear. Don't pre-create empty stubs for every template file; add docs when there's something real to put in them.
+3. Create the first content doc (today's journal entry, or an `architecture.md` stub) and link it from `/<slug>/index.md`.
+4. Fetch `/index.md`, add a bullet `- [<Project Name>](/<slug>/)` under the project list, and publish with the correct `expected_version`
 
 ## Don't
 
