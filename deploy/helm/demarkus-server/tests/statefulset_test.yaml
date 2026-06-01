@@ -180,3 +180,28 @@ tests:
       - equal:
           path: spec.volumeClaimTemplates[0].spec.storageClassName
           value: premium-rwo
+
+  - it: volumeClaimTemplates sets volumeMode to match the k8s default (no drift)
+    template: statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.volumeMode
+          value: Filesystem
+
+  - it: volumeMode is overridable
+    template: statefulset.yaml
+    set:
+      storage.volumeMode: Block
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.volumeMode
+          value: Block
+
+  - it: empty volumeMode override still renders Filesystem (no silent drift)
+    template: statefulset.yaml
+    set:
+      storage.volumeMode: ""
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.volumeMode
+          value: Filesystem
