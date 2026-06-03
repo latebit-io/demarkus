@@ -41,7 +41,6 @@ tool="$(sed -n '2p' <<<"${parsed}")"
 tags_ok="$(sed -n '3p' <<<"${parsed}")"
 imp_ok="$(sed -n '4p' <<<"${parsed}")"
 url="$(sed -n '5p' <<<"${parsed}")"
-tags_value="$(sed -n '6p' <<<"${parsed}")"
 
 # Defensive scope: the matcher is broad (mcp__.*__mark_publish), so a stray
 # non-publish tool must not be acted on.
@@ -50,37 +49,16 @@ case "${tool}" in
   *) exit 0 ;;
 esac
 
-# Server scope: gate only the plugin's own soul and knowledge systems joined via
-# /knowledge-join — never an unrelated demarkus server the user configured. A
-# registered knowledge system carries its own (agent-mirrored) per-slug strictness.
-scope="$(publish_gate_scope "${tool}")"
-strict_slug=""
-case "${scope}" in
-  local) ;;                          # plugin soul → global strictness
-  ks:*)  strict_slug="${scope#ks:}" ;;
-  *)     exit 0 ;;                    # not a server the plugin manages
+# Server scope: gate only the plugin's own soul — never an unrelated demarkus
+# server the user configured, and never an organizational knowledge system
+# (those are the separate demarkus-knowledge plugin's concern).
+case "$(publish_gate_scope "${tool}")" in
+  local) ;;
+  *)     exit 0 ;;
 esac
 
-# Required tag axes (knowledge-system policy, mirrored locally). An axis is
-# satisfied by an "axis:value" token in the tags. Only checked when tags are
-# present (a tagless publish is already a violation below). Axis matching is
-# literal (tags_have_axis), so a policy axis containing metacharacters can't
-# overmatch and falsely satisfy the check.
-missing_axes=""
-if [[ "${tags_ok}" == "1" ]]; then
-  required_axes="$(configured_require_tags "${strict_slug}")"
-  # Split the space-separated axes with globbing off (an axis must never expand
-  # against the filesystem); tags_have_axis then matches each literally.
-  set -f
-  for axis in ${required_axes}; do
-    tags_have_axis "${tags_value}" "${axis}" \
-      || missing_axes="${missing_axes:+${missing_axes} }${axis}"
-  done
-  set +f
-fi
-
-# Properly tagged + valid importance + all required axes present → nothing to do.
-[[ "${tags_ok}" == "1" && "${imp_ok}" == "1" && -z "${missing_axes}" ]] && exit 0
+# Properly tagged + valid importance → nothing to do.
+[[ "${tags_ok}" == "1" && "${imp_ok}" == "1" ]] && exit 0
 
 target="${url:-the document}"
 problems=""
@@ -89,13 +67,9 @@ if [[ "${imp_ok}" != "1" ]]; then
   [[ -n "${problems}" ]] && problems="${problems}; "
   problems="${problems}metadata.importance outside [0,1]"
 fi
-if [[ -n "${missing_axes}" ]]; then
-  [[ -n "${problems}" ]] && problems="${problems}; "
-  problems="${problems}missing required tag axes for this knowledge system: ${missing_axes} (tag as \"axis:value\", e.g. ${missing_axes%% *}:<value>)"
-fi
 reason="demarkus publish to ${target} has ${problems}. Re-issue mark_publish with a metadata object: tags (comma-separated subjects derived from the content) and, if set, importance in [0,1]. Tags are what make this document findable via mark_lookup."
 
-strictness="$(configured_strictness "${strict_slug}")"
+strictness="$(configured_strictness)"
 
 emit_pre() {
   local decision="$1" why="$2"
