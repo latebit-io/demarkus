@@ -18,7 +18,20 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 - Persistent document graph with backlink queries
 - The agent reads context at session start and writes updates at the end
 
-## Setup
+## Quick start: the Claude Code plugin
+
+If you use Claude Code, the `demarkus-memory` plugin is the one-step path — no manual server, token, or MCP config to set up. Install it from the marketplace:
+
+```
+/plugin marketplace add latebit-io/demarkus
+/plugin install demarkus-memory@demarkus
+```
+
+On the first session it spawns a local `demarkus-server`, auto-generates a publish token, and wires the MCP tools for you. It adds the `/soul`, `/soul-init`, `/soul-journal`, and `/soul-doctor` commands plus a `soul-memory` skill that triggers on "remember / recall / save / note" intents.
+
+That is the whole setup for Claude Code. The manual steps below are for other MCP agents, a custom port, or a remote soul server.
+
+## Manual setup (any MCP agent)
 
 ### 1. Install
 
