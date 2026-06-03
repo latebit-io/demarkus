@@ -154,8 +154,14 @@ publish_gate_scope() {
   local tool="$1" server
   server="${tool#mcp__}"
   server="${server%__mark_publish}"
+  # Match the local soul precisely: either the manually-configured server name
+  # "demarkus-memory" or the plugin-prefixed form "..._demarkus-memory". A joined
+  # knowledge-system slug is sanitized to [a-z0-9-] (no underscores) by
+  # knowledge-join.sh, so the "*_demarkus-memory" arm can never collide with one
+  # — a substring match like "*demarkus-memory*" would, and would wrongly exempt
+  # a system whose slug contained that substring from the gate.
   case "${server}" in
-    *demarkus-memory*) return 0 ;;   # the local soul — handled by demarkus-memory
+    demarkus-memory | *_demarkus-memory) return 0 ;;   # the local soul — handled by demarkus-memory
   esac
   if is_registered_knowledge_system "${server}"; then
     echo "ks:${server}"

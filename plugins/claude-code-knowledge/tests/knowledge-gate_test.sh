@@ -222,6 +222,19 @@ test_require_tags_not_applied_to_local() {
   [[ -z "${out}" ]] || { echo "local soul must not inherit a per-slug require-tags; got: ${out}"; return 1; }
 }
 
+test_ks_slug_containing_memory_substring_still_gated() {
+  # Regression: the local-soul exemption must match precisely, not as a
+  # "*demarkus-memory*" substring. A registered system whose slug merely contains
+  # that token (e.g. derived from a host like demarkus-memory.broker.acme) must
+  # still be gated, not silently exempted.
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme-demarkus-memory 2>/dev/null
+  local out; out="$(gate "${home}" block "$(payload 'mcp__acme-demarkus-memory__mark_publish' none)")"
+  rm -rf "${home}"
+  grep -q '"permissionDecision":"deny"' <<<"${out}" \
+    || { echo "a KS slug containing 'demarkus-memory' must still be gated: ${out}"; return 1; }
+}
+
 # ----- runner -----------------------------------------------------------
 
 TESTS=$(declare -F | awk '$3 ~ /^test_/ { print $3 }')

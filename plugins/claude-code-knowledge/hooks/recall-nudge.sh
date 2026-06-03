@@ -27,7 +27,7 @@ lc="$(printf '%s' "${input}" | tr '[:upper:]' '[:lower:]')"
 # Recall-intent patterns — multi-word and specific so ordinary questions don't
 # trip them. Matched against the lowercased payload; only the `prompt` field
 # carries prose, so the uuid/path/mode fields won't false-match these phrases.
-recall_re='\bdid we\b|\bhave we\b|\bhad we\b|\bwhat did we\b|\bwhy did we\b|\bhow did we\b|\bwhat( is| was|s)? our\b|\bdo we (have|know)\b|\bwe (decided|agreed|chose|discussed|already)\b|\blast time\b|\bpreviously\b|\brecall\b|\bis there (a |an |any )?(adr|decision|note|record)\b|\bwhat does the (org|team|company)\b|\bstandard\b|\bconvention\b'
+recall_re='\bdid we\b|\bhave we\b|\bhad we\b|\bwhat did we\b|\bwhy did we\b|\bhow did we\b|\bwhat( is| was|s)? our\b|\bdo we (have|know)\b|\bwe (decided|agreed|chose|discussed|already)\b|\blast time\b|\bpreviously\b|\brecall\b|\bis there (a |an |any )?(adr|decision|note|record)\b|\bwhat does the (org|team|company)\b|\b(our|team|org|company|agreed|approved) (standard|convention)s?\b'
 
 printf '%s' "${lc}" | grep -qE "${recall_re}" || exit 0
 

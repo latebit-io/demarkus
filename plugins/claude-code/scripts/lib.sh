@@ -98,17 +98,19 @@ configured_strictness() {
   esac
 }
 
-# publish_gate_scope TOOLNAME — true (echoes "local") only when the tool targets
-# this plugin's own soul server, empty otherwise. The server is the segment
-# between the leading "mcp__" and the trailing "__mark_publish"; the plugin's
-# server name contains "demarkus-memory". Organizational knowledge systems are
-# gated by the separate demarkus-knowledge plugin, never here.
+# publish_gate_scope TOOLNAME — echoes "local" only when the tool targets this
+# plugin's own soul server, empty otherwise. The server is the segment between
+# the leading "mcp__" and the trailing "__mark_publish": either the manually-
+# configured name "demarkus-memory" or the plugin-prefixed "..._demarkus-memory".
+# Matched exactly (not as a "*demarkus-memory*" substring) so an unrelated server
+# whose name merely contains that token isn't swept in. Organizational knowledge
+# systems are gated by the separate demarkus-knowledge plugin, never here.
 publish_gate_scope() {
   local tool="$1" server
   server="${tool#mcp__}"
   server="${server%__mark_publish}"
   case "${server}" in
-    *demarkus-memory*) echo "local" ;;
+    demarkus-memory | *_demarkus-memory) echo "local" ;;
   esac
 }
 
