@@ -21,8 +21,8 @@ mark://root/.well-known/demarkus/template.md   ← required per-world structure 
 2. The agent mirrors the policy's **enforced core** into local files the gate reads (`<slug>` is the MCP server name `/knowledge-join` registered, shown by `claude mcp list`):
 
    ```bash
-   printf '%s\n' "block"      > ~/.demarkus/plugin-memory.strictness.<slug>     # from strictness:
-   printf '%s\n' "category"   > ~/.demarkus/plugin-memory.require-tags.<slug>   # from require_tags:
+   printf '%s\n' "block"      > ~/.demarkus/plugin-knowledge.strictness.<slug>     # from strictness:
+   printf '%s\n' "category"   > ~/.demarkus/plugin-knowledge.require-tags.<slug>   # from require_tags:
    ```
 
    The org declares these once on `root`; each agent mirrors them; the local gate enforces them. `strictness:` sets the severity; `require_tags:` are tag axes the gate presence-checks (each satisfied by an `axis:value` tag, e.g. `category:project`).

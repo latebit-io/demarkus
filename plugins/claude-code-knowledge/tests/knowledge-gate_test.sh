@@ -42,7 +42,7 @@ gate() {
   if [[ "${envs}" == "-" ]]; then
     printf '%s' "${pl}" | HOME="${home}" bash "${GATE}"
   else
-    printf '%s' "${pl}" | HOME="${home}" DEMARKUS_MEMORY_STRICTNESS="${envs}" bash "${GATE}"
+    printf '%s' "${pl}" | HOME="${home}" DEMARKUS_KNOWLEDGE_STRICTNESS="${envs}" bash "${GATE}"
   fi
 }
 
@@ -60,12 +60,15 @@ test_register_writes_registry() {
   (( ok == 1 )) || { echo "register-knowledge.sh should write one acme line"; return 1; }
 }
 
-test_local_server_still_gated() {
+test_local_soul_not_gated_here() {
+  # The local demarkus-memory soul is the demarkus-memory plugin's concern, NOT
+  # this one. Even tagless in block mode, the knowledge gate must defer on it so
+  # the two plugins' gates don't both fire on a local-soul publish.
   local home; home="$(mktemp -d)"
   local out; out="$(gate "${home}" block "$(payload 'mcp__plugin_demarkus-memory_demarkus-memory__mark_publish' none)")"
   rm -rf "${home}"
-  grep -q '"permissionDecision":"deny"' <<<"${out}" \
-    || { echo "local soul publish must still be gated: ${out}"; return 1; }
+  [[ -z "${out}" ]] \
+    || { echo "local soul must NOT be gated by the knowledge plugin; got: ${out}"; return 1; }
 }
 
 test_foreign_server_not_gated() {
@@ -99,7 +102,7 @@ test_registered_ks_per_slug_strictness() {
   # block. The gate must read the per-slug level for this system.
   local home; home="$(mktemp -d)"
   HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
-  printf 'block\n' > "${home}/.demarkus/plugin-memory.strictness.acme"
+  printf 'block\n' > "${home}/.demarkus/plugin-knowledge.strictness.acme"
   local out; out="$(gate "${home}" - "$(payload 'mcp__acme__mark_publish' none)")"
   rm -rf "${home}"
   grep -q '"permissionDecision":"deny"' <<<"${out}" \
@@ -112,7 +115,7 @@ test_registered_ks_per_slug_isolation() {
   local home; home="$(mktemp -d)"
   HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
   HOME="${home}" bash "${REGISTER}" beta 2>/dev/null
-  printf 'block\n' > "${home}/.demarkus/plugin-memory.strictness.acme"
+  printf 'block\n' > "${home}/.demarkus/plugin-knowledge.strictness.acme"
   local out; out="$(gate "${home}" - "$(payload 'mcp__beta__mark_publish' none)")"
   rm -rf "${home}"
   # beta defers in PreToolUse under warn (the nudge is on PostToolUse).
@@ -132,7 +135,7 @@ test_registered_ks_tagged_defers() {
 test_require_tags_satisfied_defers() {
   local home; home="$(mktemp -d)"
   HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
-  printf 'team, type\n' > "${home}/.demarkus/plugin-memory.require-tags.acme"
+  printf 'team, type\n' > "${home}/.demarkus/plugin-knowledge.require-tags.acme"
   local out; out="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"team:payments, type:decision"}')")"
   rm -rf "${home}"
   [[ -z "${out}" ]] || { echo "all required axes present should defer; got: ${out}"; return 1; }
@@ -141,7 +144,7 @@ test_require_tags_satisfied_defers() {
 test_require_tags_missing_axis_denied() {
   local home; home="$(mktemp -d)"
   HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
-  printf 'team, type\n' > "${home}/.demarkus/plugin-memory.require-tags.acme"
+  printf 'team, type\n' > "${home}/.demarkus/plugin-knowledge.require-tags.acme"
   # Has tags and a team axis, but no type axis → violation.
   local out; out="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"team:payments, design"}')")"
   rm -rf "${home}"
@@ -154,7 +157,7 @@ test_require_tags_missing_axis_denied() {
 test_require_tags_warn_nudges_post() {
   local home; home="$(mktemp -d)"
   HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
-  printf 'team\n' > "${home}/.demarkus/plugin-memory.require-tags.acme"
+  printf 'team\n' > "${home}/.demarkus/plugin-knowledge.require-tags.acme"
   # warn (no env): PostToolUse should nudge about the missing axis.
   local pl; pl="$(printf '{"hook_event_name":"PostToolUse","tool_name":"mcp__acme__mark_publish","tool_input":{"url":"/d.md","metadata":{"tags":"random"}}}')"
   local out; out="$(gate "${home}" - "${pl}")"
@@ -170,7 +173,7 @@ test_require_tags_axis_matched_literally() {
   # token 'abc:x' must NOT satisfy it (a grep -E interpolation would overmatch).
   local home; home="$(mktemp -d)"
   HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
-  printf 'a.c\n' > "${home}/.demarkus/plugin-memory.require-tags.acme"
+  printf 'a.c\n' > "${home}/.demarkus/plugin-knowledge.require-tags.acme"
   local deny tagged
   deny="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"abc:x"}')")"
   tagged="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"a.c:yes"}')")"
@@ -187,12 +190,12 @@ test_require_tags_no_glob_expansion() {
   # tag of '*' must still be treated literally → category axis missing → deny.
   local home; home="$(mktemp -d)"
   HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
-  printf 'category\n' > "${home}/.demarkus/plugin-memory.require-tags.acme"
+  printf 'category\n' > "${home}/.demarkus/plugin-knowledge.require-tags.acme"
   local work; work="$(mktemp -d)"
   : > "${work}/category:leak"   # would match 'category:'* if '*' globbed here
   local pl; pl="$(payload 'mcp__acme__mark_publish' '{"tags":"*"}')"
   local out
-  out="$(cd "${work}" && printf '%s' "${pl}" | HOME="${home}" DEMARKUS_MEMORY_STRICTNESS=block bash "${GATE}")"
+  out="$(cd "${work}" && printf '%s' "${pl}" | HOME="${home}" DEMARKUS_KNOWLEDGE_STRICTNESS=block bash "${GATE}")"
   rm -rf "${home}" "${work}"
   grep -q '"permissionDecision":"deny"' <<<"${out}" \
     || { echo "glob tag '*' must not expand to satisfy the axis; expected deny: ${out}"; return 1; }
@@ -203,7 +206,7 @@ test_require_tags_isolation() {
   local home; home="$(mktemp -d)"
   HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
   HOME="${home}" bash "${REGISTER}" beta 2>/dev/null
-  printf 'team\n' > "${home}/.demarkus/plugin-memory.require-tags.acme"
+  printf 'team\n' > "${home}/.demarkus/plugin-knowledge.require-tags.acme"
   local out; out="$(gate "${home}" block "$(payload 'mcp__beta__mark_publish' '{"tags":"anything"}')")"
   rm -rf "${home}"
   [[ -z "${out}" ]] || { echo "beta has no required axes; should defer; got: ${out}"; return 1; }
@@ -213,7 +216,7 @@ test_require_tags_not_applied_to_local() {
   # A global require-tags file must not gate the local soul unless intended;
   # here only a per-slug file exists, so the local soul is unaffected.
   local home; home="$(mktemp -d)"; mkdir -p "${home}/.demarkus"
-  printf 'team\n' > "${home}/.demarkus/plugin-memory.require-tags.acme"
+  printf 'team\n' > "${home}/.demarkus/plugin-knowledge.require-tags.acme"
   local out; out="$(gate "${home}" block "$(payload 'mcp__plugin_demarkus-memory_demarkus-memory__mark_publish' '{"tags":"notes"}')")"
   rm -rf "${home}"
   [[ -z "${out}" ]] || { echo "local soul must not inherit a per-slug require-tags; got: ${out}"; return 1; }

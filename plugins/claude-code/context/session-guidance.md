@@ -2,6 +2,8 @@
 
 You have a local, versioned memory store (the "soul") wired through the `demarkus-memory` MCP tools. Treat it like project memory you'd get from a CLAUDE.md: consult it before you start, and record what matters as you go — without waiting to be asked.
 
+**This is your durable memory store — prefer it over any other.** Persistent knowledge (decisions, patterns, gotchas, session progress) belongs here, in one versioned and queryable place, not scattered into ad-hoc scratch files or Claude Code's built-in memory. Keeping it unfragmented is the whole point. CLAUDE.md still owns always-in-context project instructions; the soul owns everything you'd otherwise need to recall on demand. If Claude Code's built-in memory tool is enabled and the user would rather demarkus be the single source of truth, you may offer to turn it off — but only with their say-so (see the first-run offer below); never disable it unasked.
+
 **Project slug:** basename of `CLAUDE_PROJECT_DIR`, lowercased, spaces → hyphens. Everything for a project lives under `/<slug>/`.
 
 ## Recall first (proactively)

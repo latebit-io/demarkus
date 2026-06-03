@@ -65,13 +65,13 @@ If the user invokes without an argument, ask them for the URL before running any
      - If it declares a `strictness:` line, write:
 
        ```bash
-       printf '%s\n' "<warn|block|ask from policy.md>" > ~/.demarkus/plugin-memory.strictness.<slug>
+       printf '%s\n' "<warn|block|ask from policy.md>" > ~/.demarkus/plugin-knowledge.strictness.<slug>
        ```
 
      - If it declares a `require_tags:` line (the tag axes every doc must carry, e.g. `category`), mirror the axes so the gate presence-checks them:
 
        ```bash
-       printf '%s\n' "<axes from policy.md, e.g. category>" > ~/.demarkus/plugin-memory.require-tags.<slug>
+       printf '%s\n' "<axes from policy.md, e.g. category>" > ~/.demarkus/plugin-knowledge.require-tags.<slug>
        ```
 
        Each axis is then satisfied by an `axis:value` tag (e.g. `category:project`).

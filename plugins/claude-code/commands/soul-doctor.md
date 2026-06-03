@@ -1,6 +1,6 @@
 ---
-description: Audit the soul (or a project / knowledge-system world) for catalog hygiene — orphans, broken links, untagged docs, stale index entries, ADR gaps. Read-only.
-argument-hint: "[project-slug | mark://<world>/ | blank = whole local soul]"
+description: Audit the soul (or a single project) for catalog hygiene — orphans, broken links, untagged docs, stale index entries, ADR gaps. Read-only.
+argument-hint: "[project-slug | blank = whole local soul]"
 ---
 
 Run a read-only health check over a demarkus knowledge base and report what's rotting. This **never writes** — it surfaces findings and suggests fixes; the user decides what to act on.
@@ -11,9 +11,10 @@ Resolve the audit root from `$ARGUMENTS`:
 
 - **blank** → the whole local soul (`/`). Use the `demarkus-memory` MCP tools (`mark_graph` / `mark_list` / `mark_fetch` / `mark_backlinks`) with bare paths.
 - **a project slug** (e.g. `demarkus`) → scope to `/<slug>/`.
-- **a `mark://<world>/` URL** → a knowledge-system world. Use the broker MCP tools (`mcp__<slug>__*`) and `mark://` URLs.
 
-Anchor on the scope's hub: `/index.md`, `/<slug>/index.md`, or `mark://<world>/index.md`.
+Anchor on the scope's hub: `/index.md` or `/<slug>/index.md`.
+
+(Auditing an organizational knowledge-system world is the separate demarkus-knowledge plugin's territory, not this command.)
 
 ## Gather (cheap — two calls)
 
@@ -37,7 +38,6 @@ These cost one fetch per document, so only run them for a single project / world
 
 - **Untagged docs** — fetch and check the `tags` metadata is non-empty. An untagged doc is invisible to `mark_lookup`. (This is what the publish gate now prevents going forward; this finds pre-existing ones.)
 - **Duplicate content** — compare `content-hash` across fetched docs; identical hashes under different paths are duplicates.
-- **Knowledge-system taxonomy** (only for a `mark://<world>/` scope) — fetch the policy from **the same knowledge system the audited world belongs to**, via the same broker MCP server you're auditing through: `mark://root/.well-known/demarkus/policy.md` on that server (its `root` hub — not some other system's). If that policy is `not-found`, skip this check; the system hasn't declared a taxonomy. Otherwise, for each required axis in its `require_tags:`, flag docs missing an `axis:value` tag, and for documented taxonomy values flag tags that use an out-of-vocabulary value. (The gate enforces axis *presence* going forward; this audits the advisory *values* and the back-catalog.)
 
 ## Report
 

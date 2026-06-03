@@ -1,12 +1,12 @@
 {
-  "name": "demarkus-memory",
-  "version": "0.5.0",
-  "description": "Local, versioned memory for Claude Code via demarkus. Zero-config install: spawns a local demarkus-server, auto-generates a token, wires MCP tools for fetch/publish/append/graph/lookup, injects standing guidance so sessions self-document to the soul, and enforces a publish tag-gate so documents stay findable via lookup.",
+  "name": "demarkus-knowledge",
+  "version": "0.1.0",
+  "description": "Join an organizational demarkus knowledge system (a broker-fronted, shared, versioned markdown catalog) from Claude Code. Validates and registers the broker as an MCP server, steers sessions to consult the shared catalog first, makes it easy to navigate, and enforces a publish tag-gate so shared documents stay findable. No local server, no binaries — pure broker + OAuth.",
   "author": {
     "name": "latebit",
     "url": "https://github.com/latebit-io"
   },
-  "homepage": "https://github.com/latebit-io/demarkus",
+  "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code-knowledge",
   "license": "MIT",
   "hooks": {
     "SessionStart": [
@@ -37,16 +37,6 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/publish-gate.sh"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-journal-nudge.sh"
           }
         ]
       }
