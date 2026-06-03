@@ -49,7 +49,7 @@ Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/
 
 - Source: [plugins/claude-code-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code-knowledge)
 - Install: `/plugin install demarkus-knowledge@demarkus`
-- Slash commands: `/knowledge-join <broker>`, `/knowledge`
+- Slash commands: `/knowledge-join <broker-url>`, `/knowledge`
 
 ## Agent platforms
 

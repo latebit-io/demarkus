@@ -24,7 +24,7 @@ This is the tier above the [team knowledge base](/scenarios/team/). A team scena
                  Claude Code  (MCP over HTTPS, OIDC)
                       │
                       ▼
-        broker.knowledge.example.com          ← OIDC + token minting
+        knowledge.example.com                 ← broker: OIDC + token minting
                       │  (QUIC, internal)
         ┌─────────────┼─────────────┐
         ▼             ▼             ▼
@@ -61,10 +61,10 @@ Once the broker is up, anyone on the team joins from Claude Code. No binaries, n
 ### 2. Join the system
 
 ```
-/knowledge-join broker.knowledge.example.com
+/knowledge-join https://knowledge.example.com
 ```
 
-This validates the broker, registers it as an MCP server in Claude Code, and points you at the browser-based auth flow on the first tool call. Authentication is the standard MCP authorization spec — discovery (RFC 8414 / 9728), dynamic client registration (RFC 7591), then `authorization_code` + PKCE. You log in through your identity provider; the broker handles per-world tokens from there.
+Pass the full `https://` URL of the broker's MCP gateway. The command validates it, registers it as an MCP server in Claude Code, and points you at the browser-based auth flow on the first tool call. Authentication is the standard MCP authorization spec — discovery (RFC 8414 / 9728), dynamic client registration (RFC 7591), then `authorization_code` + PKCE. You log in through your identity provider; the broker handles per-world tokens from there.
 
 ### 3. Navigate and work
 
@@ -78,10 +78,10 @@ A personal [soul](/scenarios/agent-memory/) and an organizational knowledge syst
 
 ## Live example
 
-`knowledge.demarkus.io` is a live knowledge system running the reference deployment, with a `root` hub and a published system policy. Point `/knowledge-join` at its broker to see the join flow end to end:
+`knowledge.demarkus.io` is a live knowledge system running the reference deployment, with a `root` hub and a published system policy. Point `/knowledge-join` at it to see the join flow end to end:
 
 ```
-/knowledge-join broker.knowledge.demarkus.io
+/knowledge-join https://knowledge.demarkus.io
 ```
 
 ## Related
