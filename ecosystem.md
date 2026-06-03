@@ -36,12 +36,20 @@ Fetch, publish, and browse Demarkus documents directly from Obsidian.
 
 ### Claude Code
 
-Zero-config plugin for Claude Code: spawns a local `demarkus-server`, auto-generates a token, and wires the MCP tools on first session.
+Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/demarkus`). They compose in one install and partition by server scope.
+
+**`demarkus-memory`** — personal agent memory (the [soul pattern](/scenarios/agent-memory/)). Zero-config: spawns a local `demarkus-server`, auto-generates a token, and wires the MCP tools on first session.
 
 - Source: [plugins/claude-code](https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code)
-- Install: `/plugin marketplace add latebit-io/demarkus` then `/plugin install demarkus-memory@demarkus`
-- Slash commands: `/soul`, `/soul-journal`, `/soul-init`
-- Skill: `memory` — triggers on "remember / recall / save / note" intents
+- Install: `/plugin install demarkus-memory@demarkus`
+- Slash commands: `/soul`, `/soul-journal`, `/soul-init`, `/soul-doctor`
+- Skill: `soul-memory` — triggers on "remember / recall / save / note" intents
+
+**`demarkus-knowledge`** — join an organizational [knowledge system](/scenarios/knowledge-system/), a broker-fronted universe of worlds. No binaries and no local server: pure broker plus the Claude Code MCP OAuth flow.
+
+- Source: [plugins/claude-code-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code-knowledge)
+- Install: `/plugin install demarkus-knowledge@demarkus`
+- Slash commands: `/knowledge-join <broker>`, `/knowledge`
 
 ## Agent platforms
 

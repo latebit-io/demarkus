@@ -17,6 +17,7 @@ Demarkus is a protocol and toolkit for publishing markdown documents with versio
 - [Run a personal knowledge base](/scenarios/personal-wiki/) — local markdown notes, browsable via TUI
 - [Publish a public hub](/scenarios/public-hub/) — VPS + Let's Encrypt + open read access
 - [Set up a team knowledge base](/scenarios/team/) — shared server with token-based write access
+- [Run an organizational knowledge system](/scenarios/knowledge-system/) — broker-fronted universe of worlds, OIDC join via `/knowledge-join`
 
 ---
 
