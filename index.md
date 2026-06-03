@@ -7,7 +7,7 @@ Demarkus is a protocol and toolkit for publishing markdown documents with versio
 
 **What do you want to do?**
 
-- [Set up agent memory - soul](/scenarios/agent-memory/) — persistent memory for Claude Code and other LLM agents
+- [Set up agent memory - soul (Claude Code / general setup)](/scenarios/agent-memory/) — persistent memory for Claude Code and other LLM agents
 - [Run an organizational knowledge system](/scenarios/knowledge-system/) — broker-fronted universe of worlds, OIDC join via `/knowledge-join`
 - [Set up a team knowledge base](/scenarios/team/) — shared server with token-based write access
 - [Install on macOS](/install/macos/) — one-line install, works today
