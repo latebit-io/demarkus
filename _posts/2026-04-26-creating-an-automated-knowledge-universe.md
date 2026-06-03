@@ -56,6 +56,7 @@ VERSIONS   Get the full version history
 PUBLISH    Create or update a document
 APPEND     Add to an existing document without resending it
 ARCHIVE    Mark a document as superseded
+LOOKUP     Metadata/Category lookup
 ```
 
 The verb set is complete and closed. Every missing verb is a class of bugs that cannot exist. All six map directly to MCP tools. There is one additional MCP tool not tied to a verb: mark_graph, which crawls a server and builds a document graph for discovery. Six verbs, seven tools, and agents can master all of them in one session.
