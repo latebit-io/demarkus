@@ -47,7 +47,7 @@ demarkus versions every document. Agents hallucinate. Agents make mistakes. Peop
 
 Every interaction has three parts. A verb and a path telling the server what you want to do. A YAML frontmatter block with metadata like who published and version numbers. A markdown body with the content. Responses come back the same way, frontmatter with the status, body with the content. Agents understand this immediately. It maps to how they already think.
 
-### Six Verbs
+### Seven Verbs
 
 ```
 FETCH      Read a document
@@ -59,7 +59,7 @@ ARCHIVE    Mark a document as superseded
 LOOKUP     Metadata/Category lookup
 ```
 
-The verb set is complete and closed. Every missing verb is a class of bugs that cannot exist. All six map directly to MCP tools. There is one additional MCP tool not tied to a verb: mark_graph, which crawls a server and builds a document graph for discovery. Six verbs, seven tools, and agents can master all of them in one session.
+The verb set is complete and closed. Every missing verb is a class of bugs that cannot exist. All seven map directly to MCP tools. There is one additional MCP tool not tied to a verb: mark_graph, which crawls a server and builds a document graph for discovery. Seven verbs, seven tools, and agents can master all of them in one session.
 
 ### Lightweight by Design
 
