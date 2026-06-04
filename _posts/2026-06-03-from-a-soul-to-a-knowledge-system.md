@@ -19,7 +19,7 @@ First it's the soul on your laptop. Then a teammate wants in, so you put a serve
 
 Then it sprawls a bit. The infra notes don't belong in the same bucket as the API docs, so you stand up another VM, maybe a third. One server per concern, kept separate on purpose, linked with `mark://` when something in one genuinely depends on something in another. Without planning it you've built a little knowledge graph: a few servers that know how to point at each other. This is the [universe](/blog/creating-an-automated-knowledge-universe/) in miniature, and you can run it manually for a long time. They're just bookshelves.
 
-What doesn't scale manually is the boring part. Once it's forty engineers/peoles with real turnover, and worlds that have to actually stay private, minting authtokens and emailing them around like it's 2009 stops being charming. Capability tokens are a lovely primitive and a miserable thing to hand out by "hand". That's the line where you want a full knowledge system, the enterprise or academic version of this pattern. So I stopped handing out tokens and built one.
+What doesn't scale manually is the boring part. Once it's forty engineers/peoples with real turnover, and worlds that have to actually stay private, minting authtokens and emailing them around like it's 2009 stops being charming. Capability tokens are a lovely primitive and a miserable thing to hand out by "hand". That's the line where you want a full knowledge system, the enterprise or academic version of this pattern. So I stopped handing out tokens and built one.
 
 ## The broker / gateway
 
