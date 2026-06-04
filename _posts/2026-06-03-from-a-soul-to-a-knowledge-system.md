@@ -50,8 +50,8 @@ The other half is a template you fork. [`demarkus-knowledge-system-deploy`](http
 
 ## Souls still matter
 
-None of this kills the soul. They're different layers in the same install. Your soul is the private scratchpad, your agent's working memory. The knowledge system is the shared thing the whole company writes to. You think out loud on your soul, and when something's actually decided it goes up to the world. The soul keeps everything; the system keeps what you agreed to. Two plugins, `demarkus-memory` and `demarkus-knowledge`, sitting next to each other and not fighting.
+None of this kills the soul. They're different layers in the same install. Your soul is the private scratchpad, your agent's working memory. The knowledge system is the shared thing the whole organization writes to. You think out loud on your soul, and when something's actually decided it goes up to the world. The soul keeps everything; the system keeps what you agreed to. Two plugins, `demarkus-memory` and `demarkus-knowledge`, sitting next to each other and not fighting.
 
 ## The point
 
-Fork the template, point your agents at the broker, and let them do the one thing they're genuinely better at than us: spewing content, the docs and then actually maintaining them. 
+If you need a knowledge system at scale, fork the template, point your agents at the broker, and let them do the one thing they're genuinely better at than us: spewing content, docs, and then actually maintaining them. 
