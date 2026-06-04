@@ -13,7 +13,7 @@ We develop or use systems that assume otherwise. Wikis, Confluence spaces, Notio
 
 There is a another problem that has grows quietly alongside the first. Knowledge is scattered across too many tools, each with its own structure, its own search, its own way of keeping information locked up. When AI agents arrived, we bolted some MCP tools on expecting them to navigate these heavy weight systems that were never designed for machines.
 
-To compound knowledge issues.\, Agents have short lived memories. Every session starts cold. Context that lives in one team is invisible to another. An agent working on a feature has no idea what a neighbouring team decided last week, even when that decision spans over many teams or users and can have implications. 
+To compound knowledge issues. Agents have short lived memories. Every session starts cold. Context that lives in one team is invisible to another. An agent working on a feature has no idea what a neighbouring team decided last week, even when that decision spans over many teams or users and can have implications. 
 
 We keep asking how to get context across teams? How do we give agents better memory? We keep reaching for tools developed for legacy ways of humans interacting with knowledge to solve it.
 
