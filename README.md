@@ -4,6 +4,8 @@
 
 Demarkus implements the Mark Protocol — versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Read and write with capability tokens. Every change is traceable. Lightweight and installable anywhere.
 
+Run a single personal server, or compose many into an organizational **knowledge system** — a broker-fronted universe of servers behind one HTTPS endpoint with single sign-on. Humans and agents share the same versioned memory.
+
 ## Install
 
 ```bash
@@ -14,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
 ```
 
-See [full install docs](https://latebit-io.github.io/demarkus/getting-started/) for platform-specific guides and other options.
+See [full install docs](https://www.demarkus.io/install/) for platform-specific guides and other options.
 
 ### See it in action
 
@@ -33,7 +35,7 @@ demarkus-tui mark://soul.demarkus.io/index.md
 demarkus-server -root ./docs/site
 ```
 
-For more examples (tokens, publishing, editing), see [full usage guide](https://latebit-io.github.io/demarkus/).
+For more examples (tokens, publishing, editing), see [full usage guide](https://www.demarkus.io/).
 
 ## What's Included
 
@@ -70,7 +72,9 @@ modified: 2026-01-15T10:30:00Z
 
 ## Use Cases
 
-**Agent Memory** — Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/) or install via [OpenClaw](https://demarkus.io/install/openclaw/).
+**Agent Memory** — Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/) or install via [OpenClaw](https://www.demarkus.io/install/openclaw/).
+
+**Organizational Knowledge System** — Compose many servers ("worlds") into a broker-fronted universe reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command — `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/) — and their agents share organizational memory over MCP, with no per-developer server or token setup. See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
 
 **Personal Knowledge Base** — Local server, versioned documents, TUI browser. Everything from first write.
 
@@ -82,10 +86,11 @@ modified: 2026-01-15T10:30:00Z
 
 - [Caztor](https://github.com/kevinboone/caztor) — cross-platform Java GUI browser with preliminary Demarkus support
 - [Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus) — publish and browse from Obsidian
-- [Claude Code plugin](plugins/claude-code/) — zero-config local memory for Claude Code
-- [OpenClaw skill](https://clawhub.ai/ontehfritz/demarkus) — ClawHub skill for OpenClaw agents (see [install guide](https://demarkus.io/install/openclaw/))
+- [Claude Code memory plugin](plugins/claude-code/) — zero-config local memory for Claude Code
+- [Claude Code knowledge plugin](plugins/claude-code-knowledge/) — join an organizational knowledge system (broker-fronted, MCP OAuth)
+- [OpenClaw skill](https://clawhub.ai/ontehfritz/demarkus) — ClawHub skill for OpenClaw agents (see [install guide](https://www.demarkus.io/install/openclaw/))
 
-See [demarkus.io/ecosystem](https://demarkus.io/ecosystem/) for the full list.
+See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full list.
 
 ## Build from Source
 
@@ -95,11 +100,11 @@ cd demarkus
 make all   # or: make server / make client
 ```
 
-Requires Go 1.26+. Binaries land in `server/bin/` and `client/bin/`.
+Requires Go 1.26+. Binaries land in `server/bin/`, `client/bin/`, and `tools/bin/`.
 
 ## Documentation
 
-- [Website](https://latebit-io.github.io/demarkus/) — install guides, scenarios, troubleshooting
+- [Website](https://www.demarkus.io/) — install guides, scenarios, troubleshooting
 - [Protocol Specification](docs/SPEC.md) — complete wire format
 - [Design Rationale](docs/DESIGN.md) — why things are built the way they are
 
