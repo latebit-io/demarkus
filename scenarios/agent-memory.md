@@ -13,7 +13,7 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 ## What you'll have
 
 - A Demarkus server holding structured markdown docs
-- MCP tools (`mark_fetch`, `mark_list`, `mark_lookup`, `mark_publish`, `mark_append`, `mark_archive`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, `mark_discover`) available to the agent — `mark_lookup` finds memories by subject (declared tags/title)
+- The full MCP tool surface available to the agent — `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, and `mark_discover`. `mark_lookup` finds memories by subject (declared tags/title)
 - Version history of every memory update
 - Persistent document graph with backlink queries
 - The agent reads context at session start and writes updates at the end
@@ -27,7 +27,9 @@ If you use Claude Code, the `demarkus-memory` plugin is the one-step path — no
 /plugin install demarkus-memory@demarkus
 ```
 
-On the first session it spawns a local `demarkus-server`, auto-generates a publish token, and wires the MCP tools for you. It adds the `/soul`, `/soul-init`, `/soul-journal`, and `/soul-doctor` commands plus a `soul-memory` skill that triggers on "remember / recall / save / note" intents.
+On the first session it spawns a local `demarkus-server`, auto-generates a publish token, wires the MCP tools, and **seeds the soul** — you never hand-author an index. It adds the `/soul`, `/soul-context`, `/soul-init`, `/soul-journal`, `/soul-status`, and `/soul-doctor` commands plus a `soul-memory` skill that triggers on "remember / recall / save / note" intents.
+
+Memory is organized **per project**: each one lives under `/<project>/` (the slug is the basename of your project directory) following the canonical layout the plugin seeds as `/project-template.md`. The agent maintains the per-project `index.md` hub itself as it adds documents.
 
 That is the whole setup for Claude Code. The manual steps below are for other MCP agents, a custom port, or a remote soul server.
 
@@ -48,37 +50,25 @@ On Linux, this installs and enables the systemd service.
 mkdir -p ~/soul
 ```
 
-Create an initial index:
-
-```bash
-cat > ~/soul/index.md << 'EOF'
-# Project Soul
-
-- [Architecture](architecture.md) — system design, key decisions
-- [Patterns](patterns.md) — conventions and build commands
-- [Debugging](debugging.md) — lessons from bugs
-- [Roadmap](roadmap.md) — what's done, what's next
-- [Journal](journal.md) — session notes
-EOF
-```
+That's it — leave it empty. You don't pre-build an index or a structure by hand. The agent creates and maintains the layout itself (driven by the `CLAUDE.md` instructions in step 6), publishing `index.md` and the per-project documents on its first writes. The server serves an empty root fine until then. See [Recommended soul structure](#recommended-soul-structure) for the layout the agent should follow.
 
 ### 3. Generate a publish token
 
 ```bash
-demarkus-token generate -paths "/*" -ops publish,archive -tokens ~/soul/tokens.toml
+demarkus-token generate -label my-soul -paths "/*" -ops publish -tokens ~/soul/tokens.toml
 ```
 
-Copy the raw token from the output — you'll need it for the MCP config.
+`-label` is required. A single `publish` op is all you need — it authorizes `PUBLISH`, `APPEND`, and `ARCHIVE` (there is no separate `archive` operation). Copy the raw token from the output — you'll need it for the MCP config.
 
 ### 4. Start the soul server on port 6310
 
 Run it alongside your main server (which uses 6309):
 
 ```bash
-demarkus-server -root ~/soul -tokens ~/soul/tokens.toml -addr :6310
+demarkus-server -root ~/soul -tokens ~/soul/tokens.toml -port 6310
 ```
 
-Or configure the full installer to use a different port (manual setup recommended for dual-server).
+The flag is `-port` (an integer), not `-addr`. Run this alongside any main server you already have on the default 6309.
 
 ### 5. Configure MCP for your project
 
@@ -110,23 +100,25 @@ Tell the agent how to use the soul. Create `CLAUDE.md` in your project:
 
 ## Soul
 
-All project context lives on the soul server.
+All project context lives on the soul server, organized per project under
+`/<project>/`.
 
 ### Preflight (every session)
 
-1. `mark_fetch` `/index.md` — hub page
-2. `mark_fetch` `/patterns.md` — build commands and conventions
-3. Fetch other pages as needed
+1. `mark_fetch` `/<project>/index.md` — the project hub
+2. `mark_fetch` `/<project>/patterns.md` and `/<project>/guidelines.md`
+3. `mark_lookup` to find memories by subject; fetch other docs as needed
 
 ### During work
 
-- Use `mark_append` for incremental notes
-- Use `mark_publish` when rewriting a section
-- Always use `expected_version` from a prior fetch
+- `mark_append` for incremental notes; `mark_publish` when rewriting a section
+- Always pass `expected_version` from a prior fetch (optimistic concurrency)
+- Tag every publish with `metadata.tags` + `importance` so `mark_lookup`
+  can find it; keep `index.md` pointing at new docs as a backstop
 
 ### End of session
 
-- Add a journal entry to `/journal.md`
+- Append to today's journal at `/<project>/journal/<YYYY-MM-DD>.md`
 ```
 
 ### 7. Verify
@@ -174,15 +166,34 @@ The published graph is plain markdown with `mark://` links. Other agents can cra
 
 ## Recommended soul structure
 
+Memory is organized **per project**. Each project lives under `/<project>/`
+(the slug is the basename of your project directory, lowercased, spaces →
+hyphens) and follows the canonical layout — the same one the plugin seeds as
+`/project-template.md`:
+
 ```
-/index.md          — hub, links to all sections
-/architecture.md   — system design and key decisions
-/patterns.md       — build commands, code style, conventions
-/debugging.md      — lessons from bugs
-/roadmap.md        — what's done, what's next
-/journal.md        — session notes (append-only)
-/thoughts.md       — agent reflections
+/<project>/index.md              — the project hub; links to every doc below
+/<project>/architecture.md       — system design, module boundaries, decisions
+/<project>/patterns.md           — code patterns, conventions, idioms
+/<project>/guidelines.md         — hard code-quality rules (read before coding)
+/<project>/debugging.md          — lessons from bugs and investigations
+/<project>/roadmap.md            — what's done, what's next, what's deferred
+/<project>/debt.md               — technical debt and improvement opportunities
+/<project>/thoughts.md           — open questions, reflections, undecided ideas
+/<project>/adr/<NNNN>-<slug>.md  — one Architecture Decision Record per decision
+/<project>/plans/<name>.md       — plan documents (carry lifecycle in the text)
+/<project>/journal/<YYYY-MM-DD>.md — dated session notes, one file per day
 ```
+
+Not every project needs every file — create a doc when there's something real
+to put in it. The common core is `index.md`, `journal/`, and whichever of
+architecture / patterns / decisions the work actually produces. The agent keeps
+the per-project `index.md` current as the discovery backstop for anything
+`mark_lookup` can't surface.
+
+> A single-project soul can instead keep these files flat at the root (no
+> `/<project>/` prefix). That's what the Demarkus project's own soul at
+> `mark://soul.demarkus.io` does — a documented exception, not the default.
 
 ## Using a remote soul server
 
