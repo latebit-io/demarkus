@@ -50,7 +50,7 @@ This uses a built-in self-signed certificate. Use `--insecure` on the client whe
 
 - Downloads binaries for `darwin/arm64` or `darwin/amd64` from GitHub Releases
 - Verifies checksums before installing
-- Creates a launchd plist at `~/Library/LaunchAgents/io.demarkus.server.plist`
+- Creates a launchd plist at `~/Library/LaunchAgents/io.latebit.demarkus.plist`
 - Starts the server automatically on login
 - Copies TLS certificates to `~/.demarkus/tls/` if provided
 
@@ -74,7 +74,7 @@ cd demarkus
 make all
 ```
 
-Binaries are placed in `server/bin/` and `client/bin/`. Requires Go 1.22+.
+Binaries are placed in `server/bin/`, `client/bin/`, and `tools/bin/`. Requires Go 1.26+.
 
 ## Upgrade
 

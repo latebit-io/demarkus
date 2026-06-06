@@ -20,10 +20,10 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 ## Linux
 
-One-line install. Sets up a systemd service plus the client binaries.
+One-line install. Sets up a systemd service plus the server and client binaries (CLI, TUI, MCP).
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | sudo bash
 ```
 
 [Full Linux guide →](/install/linux/) — includes Let's Encrypt TLS and read-only chroot install.

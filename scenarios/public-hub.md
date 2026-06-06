@@ -47,8 +47,8 @@ See the repo for structure, contributing guidelines, and how to list your own se
 SSH into your VPS and run:
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
-  bash -s -- --domain yourdomain.com --root /srv/site
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
+  sudo bash -s -- --domain yourdomain.com --root /srv/site
 ```
 
 This will:

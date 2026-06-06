@@ -35,15 +35,15 @@ Each team member gets a personal publish token scoped to paths they own. A team 
 On a Linux host (VPS or internal):
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
-  bash -s -- --domain docs.internal.example.com --root /srv/team-docs
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
+  sudo bash -s -- --domain docs.internal.example.com --root /srv/team-docs
 ```
 
 Or with your own certificates:
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
-  bash -s -- --tls-cert /path/cert.pem --tls-key /path/key.pem
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
+  sudo bash -s -- --tls-cert /path/cert.pem --tls-key /path/key.pem
 ```
 
 ### 2. Create initial structure
@@ -61,10 +61,12 @@ demarkus-publish -root /srv/team-docs -path /runbooks/index.md -body "# Runbooks
 ```bash
 sudo demarkus-token generate \
   -paths "/*" \
-  -ops publish,archive \
+  -ops publish \
   -tokens /etc/demarkus/tokens.toml \
   -label "team-lead"
 ```
+
+The `publish` op grants all writes — PUBLISH, APPEND, and ARCHIVE — for the matched paths. There is no separate `archive` operation.
 
 **Developer token (scoped to their project folder):**
 
@@ -76,9 +78,19 @@ sudo demarkus-token generate \
   -label "dev-alice"
 ```
 
-**Read-only token (if you want to restrict reads too):**
+**Restricting reads (optional):**
 
-Omit `-ops` — by default the server is read-open. To restrict reads, use the token without publish ops.
+By default all reads are open. Reads become gated only once you mint a token that carries the `read` op for a path — at that point that path requires a valid read token. So to make `/projects/secret/*` private, generate a read token for it and hand it only to authorized members:
+
+```bash
+sudo demarkus-token generate \
+  -paths "/projects/secret/*" \
+  -ops read \
+  -tokens /etc/demarkus/tokens.toml \
+  -label "secret-reader"
+```
+
+(Granting `read` somewhere does not change read access for any other path.)
 
 After generating tokens, reload:
 

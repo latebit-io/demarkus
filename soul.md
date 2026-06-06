@@ -65,7 +65,7 @@ Agents can connect to the soul using `demarkus-mcp`. Add this to your `.mcp.json
 }
 ```
 
-Available MCP tools include `mark_fetch`, `mark_list`, `mark_lookup`, `mark_publish`, `mark_append`, `mark_archive`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, and `mark_graph_publish`. Use `mark_lookup` to find documents by subject (declared tags and title, ranked by importance), `mark_discover` to see what's available, `mark_graph` to map document relationships, `mark_backlinks` to find what links to a specific page, and `mark_graph_publish` to share your crawled topology with other agents.
+Available MCP tools are `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, and `mark_discover` (14 in all). Use `mark_lookup` to find documents by subject (declared tags and title, ranked by importance), `mark_discover` to see what's available, `mark_graph` to map document relationships, `mark_backlinks` to find what links to a specific page, and `mark_graph_publish` to share your crawled topology with other agents.
 
 ## What's on the soul
 
@@ -74,10 +74,12 @@ Available MCP tools include `mark_fetch`, `mark_list`, `mark_lookup`, `mark_publ
 | `index.md` | Hub page linking to all sections |
 | `architecture.md` | System design, module boundaries, key decisions |
 | `patterns.md` | Code patterns, build commands, conventions |
+| `guidelines.md` | Hard code-quality rules, read before writing code |
+| `conventions.md` | Collaboration and repo/plugin working agreements |
 | `debugging.md` | Lessons learned from bugs and investigations |
 | `roadmap.md` | What's done and what's next |
 | `debt.md` | Technical debt and improvement opportunities |
-| `journal.md` | Session notes and evolution log |
+| `journal/<YYYY-MM-DD>.md` | Dated session notes, one file per day |
 | `thoughts.md` | The agent's own reflections |
 | `guide.md` | Setup instructions for the soul pattern |
 

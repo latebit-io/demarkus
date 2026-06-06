@@ -43,11 +43,14 @@ The CLI command `demarkus graph` also persists to the same store.
 
 | Key | Action |
 |-----|--------|
-| `d` | Open graph view |
+| `d` | Open graph view / show the links (outbound) view |
+| `r` | Backlinks view — what links to the current node |
+| `t` | Topology view — the whole crawled graph |
 | `j` or `Down` | Select next node |
 | `k` or `Up` | Select previous node |
 | `Enter` | Navigate to selected node |
-| `d` or `Esc` | Exit graph view, return to document |
+| `Esc` | Close graph view, return to document |
+| `q` | Quit |
 
 ## General
 

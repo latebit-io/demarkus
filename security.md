@@ -25,10 +25,10 @@ The server is deliberately minimal:
 
 ## Authentication
 
-Write operations (PUBLISH, APPEND, ARCHIVE) require a capability token — a SHA-256 hash scoped to specific paths and operations.
+Write operations (PUBLISH, APPEND, ARCHIVE) require a capability token — a SHA-256 hash scoped to specific paths and to an access class (read or write).
 
 - Tokens are generated offline with `demarkus-token generate`
-- Tokens can be scoped to path patterns (e.g., `/docs/*`) and specific operations
+- Tokens can be scoped to path patterns (e.g., `/docs/*`) and to an access class. The write capability is a single `publish` op that grants PUBLISH, APPEND, and ARCHIVE together — these are not individually grantable. Reads are a separate `read` op, only enforced on paths where a read token exists.
 - Every write is logged with the token label for auditing
 - Tokens are revocable by removing them from the tokens file and sending SIGHUP
 - Read auth is opt-in — configure read tokens for private paths when needed

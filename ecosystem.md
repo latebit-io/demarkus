@@ -23,7 +23,7 @@ Cross-platform Java GUI browser for Gemini, Spartan, Gopher, Nex, and **Demarkus
 The reference terminal browser, built on Bubble Tea and Glamour.
 
 - Source: [client/cmd/demarkus-tui](https://github.com/latebit-io/demarkus/tree/main/client/cmd/demarkus-tui)
-- `demarkus-tui -host mark://your.server/` — full FETCH / LIST / VERSIONS, link-following, graph view, mouse wheel, external URL launching
+- `demarkus-tui mark://your.server/index.md` — full FETCH / LIST / VERSIONS, link-following, graph view, mouse wheel, external URL launching (the URL is a positional argument; there is no `-host` flag)
 
 ## Plugins
 
@@ -42,7 +42,7 @@ Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/
 
 - Source: [plugins/claude-code](https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code)
 - Install: `/plugin install demarkus-memory@demarkus`
-- Slash commands: `/soul`, `/soul-journal`, `/soul-init`, `/soul-doctor`
+- Slash commands: `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-status`, `/soul-doctor`
 - Skill: `soul-memory` — triggers on "remember / recall / save / note" intents
 
 **`demarkus-knowledge`** — join an organizational [knowledge system](/scenarios/knowledge-system/), a broker-fronted universe of worlds. No binaries and no local server: pure broker plus the Claude Code MCP OAuth flow.
@@ -62,7 +62,7 @@ ClawHub skill for OpenClaw agents. See the [OpenClaw install guide](/install/ope
 | Tool | Purpose |
 |------|---------|
 | `demarkus-server` | Reference QUIC server |
-| `demarkus` | CLI: fetch, list, publish, edit, graph |
+| `demarkus` | CLI: fetch, list, publish, edit, graph, lookup |
 | `demarkus-tui` | Terminal browser with graph view |
 | `demarkus-mcp` | MCP bridge for LLM agents |
 | `demarkus-token` | Capability-based auth token management |

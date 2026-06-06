@@ -120,7 +120,7 @@ No tokens file is configured, or the token is wrong. Check:
 `launchctl load` is deprecated on macOS 14+. Use:
 
 ```bash
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.demarkus.server.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.latebit.demarkus.plist
 ```
 
 ---

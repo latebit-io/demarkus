@@ -9,18 +9,18 @@ permalink: /install/linux/
 ## Quick install (server + client)
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | sudo bash
 ```
 
-> Run with `sudo` so the installer can write to `/usr/local/bin` and install the systemd service.
+> Pipe into `sudo bash` (not `sudo curl`) so the **installer** runs as root — it needs to write to `/usr/local/bin` and install the systemd service. `sudo curl … | bash` only elevates `curl`, and the server install will abort.
 
 This installs `demarkus-server`, `demarkus-token`, `demarkus`, `demarkus-tui`, and `demarkus-mcp`.
 
 ## With Let's Encrypt TLS
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
-  bash -s -- --domain yourdomain.com --root /srv/site
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
+  sudo bash -s -- --domain yourdomain.com --root /srv/site
 ```
 
 The installer:
@@ -33,8 +33,8 @@ The installer:
 ## With your own TLS certificate
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
-  bash -s -- --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
+  sudo bash -s -- --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
 ```
 
 ## Client only
@@ -49,8 +49,8 @@ No sudo needed for client-only. Installs to `~/.local/bin` if `/usr/local/bin` i
 ## Read-only server (maximum security)
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | \
-  bash -s -- --domain yourdomain.com
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | \
+  sudo bash -s -- --domain yourdomain.com
 ```
 
 Installs the server inside a chroot with zero write access. Publish content locally with `demarkus-publish`. See [Security Model](/security/) for details.
@@ -101,7 +101,7 @@ cd demarkus
 make all
 ```
 
-Requires Go 1.22+.
+Requires Go 1.26+.
 
 ## Related
 

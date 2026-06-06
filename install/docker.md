@@ -23,13 +23,13 @@ docker run -d \
   -root /data
 ```
 
-Fetch a document to verify:
+Verify it's serving (from a host with the client installed — the `scratch` image has no shell):
 
 ```bash
-demarkus --insecure mark://localhost:6309/index.md
+demarkus --insecure mark://localhost:6309/health
 ```
 
-> Use `--insecure` because the container uses the built-in self-signed certificate by default.
+> Use `/health` rather than `/index.md` — a fresh `/srv/site` volume is empty, so `index.md` doesn't exist yet. `/health` always responds. Use `--insecure` because the container uses the built-in self-signed certificate by default.
 
 ## With TLS
 
@@ -52,7 +52,7 @@ docker run -d \
 Generate a tokens file on the host, then mount it:
 
 ```bash
-demarkus-token generate -paths "/*" -ops publish -tokens /srv/site/tokens.toml
+demarkus-token generate -label docker -paths "/*" -ops publish -tokens /srv/site/tokens.toml
 ```
 
 ```bash

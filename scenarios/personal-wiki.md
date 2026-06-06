@@ -128,8 +128,8 @@ If you used the full installer, the server starts automatically via launchd. To 
 
 ```bash
 # macOS 14+
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.demarkus.server.plist
-launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/io.demarkus.server.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.latebit.demarkus.plist
+launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/io.latebit.demarkus.plist
 ```
 
 ## Running on startup (Linux)

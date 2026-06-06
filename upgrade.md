@@ -36,7 +36,7 @@ Re-running the install script is safe and idempotent. It:
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
 
 # Linux server + client update
-sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | sudo bash
 ```
 
 ## What gets updated
@@ -52,12 +52,21 @@ sudo curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/insta
 - Your content directory (untouched)
 - Service configuration (plist or systemd unit) — only rewritten if flags change
 
-## Check installed versions
+## Check installed version
+
+The binaries don't expose a `--version` flag. The installer records the
+installed release in a version marker:
 
 ```bash
-demarkus --version
-demarkus-server --version
+# Linux
+cat /etc/demarkus/version
+
+# macOS
+cat ~/.demarkus/version
 ```
+
+`demarkus-install update` reads this same marker and reports the current vs.
+latest release before updating.
 
 ## Uninstall
 
