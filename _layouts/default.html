@@ -7,17 +7,16 @@
     <meta name="description" content="{{ page.excerpt | default: site.description | strip_html | strip_newlines | truncate: 160 }}" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}" />
   </head>
   <body{% if page.url == '/' %} class="is-home"{% endif %}>
-    <div class="atmo atmo-a"></div>
-    <div class="atmo atmo-b"></div>
+    <div class="vignette" aria-hidden="true"></div>
 
     <header class="shell site-header">
       <a class="brand" href="{{ '/' | relative_url }}">
         <span class="brand-mark">M</span>
-        <span>Demarkus</span>
+        <span class="brand-word">Demarkus</span>
       </a>
       {% include nav.html %}
     </header>
@@ -25,8 +24,8 @@
     <main class="shell site-main">
       {% if page.url == '/' %}
       <section class="hero">
-        <p class="eyebrow">MARK PROTOCOL</p>
-        <h1>De-centralized - markdown - for us</h1>
+        <p class="eyebrow">The Mark Protocol</p>
+        <h1>De&middot;centralized markdown, for us</h1>
         <p class="hero-copy">{{ site.description }}</p>
       </section>
       {% endif %}
@@ -36,7 +35,10 @@
     </main>
 
     <footer class="shell site-footer">
-      <p>Demarkus: public and private, versioned, markdown-native publishing.</p>
+      <p class="colophon">
+        <span>Demarkus &middot; The Mark Protocol</span>
+        <span>Versioned &middot; Permanent &middot; Markdown-native</span>
+      </p>
     </footer>
   </body>
 </html>
