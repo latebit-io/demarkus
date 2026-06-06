@@ -66,6 +66,43 @@ body {
     text-rendering: optimizeLegibility;
 }
 
+/* Knowledge graph as ambient texture — the product's own nature, rendered
+   like the star-chart endpapers of an old atlas. Sits behind the vignette
+   so its edges fade into the dark. */
+.graphfield {
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    animation: graph-in 1600ms ease-out both;
+}
+
+.graphfield .gf-edges line {
+    stroke: var(--gold);
+    stroke-width: 0.8;
+    opacity: 0.13;
+}
+
+.graphfield .gf-nodes circle {
+    fill: var(--gold);
+    opacity: 0.2;
+}
+
+.graphfield .gf-nodes circle.hub {
+    opacity: 0.4;
+}
+
+@keyframes graph-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
 /* Soft vignette + a faint gilt horizon glow, replacing the neon squares */
 .vignette {
     position: fixed;
@@ -349,11 +386,21 @@ body {
     font-weight: 600;
 }
 
+/* Section divider as a printed-book asterism */
 .content-card hr {
     border: 0;
-    height: 1px;
-    margin: 2.6rem 0;
-    background: var(--rule);
+    height: auto;
+    margin: 2.8rem 0;
+    text-align: center;
+    line-height: 1;
+}
+
+.content-card hr::after {
+    content: "\2042";
+    font-family: var(--display);
+    font-size: 1.25rem;
+    letter-spacing: 0.3em;
+    color: var(--gold);
 }
 
 /* Links — quiet ink, gilt underline that draws on hover */
