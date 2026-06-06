@@ -27,8 +27,8 @@
     --display: "Fraunces", "Spectral", Georgia, serif;
     --mono: "IBM Plex Mono", "SF Mono", "Menlo", monospace;
 
-    --measure: 70ch;
-    --shell: min(1080px, 92vw);
+    --measure: 82ch;
+    --shell: min(1160px, 94vw);
 }
 
 * {
@@ -44,8 +44,8 @@ body {
 body {
     color: var(--ink);
     font-family: var(--serif);
-    font-size: 1.02rem;
-    line-height: 1.72;
+    font-size: clamp(1.08rem, 0.99rem + 0.36vw, 1.24rem);
+    line-height: 1.7;
     background-color: var(--bg);
     background-image:
         radial-gradient(
@@ -301,7 +301,7 @@ body {
 }
 
 .content-card > p:first-of-type {
-    font-size: 1.12rem;
+    font-size: 1.12em;
     color: var(--ink);
 }
 
@@ -317,7 +317,7 @@ body {
 }
 
 .is-home .content-card > p:first-of-type {
-    font-size: 1.18rem;
+    font-size: 1.1em;
 }
 
 .is-home .content-card > p:first-of-type::first-letter {
