@@ -25,8 +25,9 @@ From the demarkus-soul MCP server:
 1. `mark_fetch /index.md` — the hub
 2. `mark_fetch /patterns.md` — build commands, code style, workflow
 3. `mark_fetch /guidelines.md` — hard code-quality rules; read before writing code
-4. Fetch as needed: `/architecture.md`, `/debugging.md`, `/roadmap.md`
-5. If the MCP server is unavailable, stop and ask before proceeding.
+4. `mark_fetch /conventions.md` — collaboration + repo/plugin conventions (how I work)
+5. Fetch as needed: `/architecture.md`, `/debugging.md`, `/roadmap.md`
+6. If the MCP server is unavailable, stop and ask before proceeding.
 
 ## demarkus-soul layout (flat — one project)
 
@@ -35,6 +36,7 @@ From the demarkus-soul MCP server:
 /architecture.md  — system design, module boundaries, key decisions
 /patterns.md      — code patterns, build commands, conventions, workflow
 /guidelines.md    — hard code-quality rules
+/conventions.md   — collaboration + repo/plugin conventions (how I work)
 /debugging.md     — lessons from bugs and investigations
 /roadmap.md       — what's done, what's next
 /thoughts.md      — reflections and ideas
