@@ -175,6 +175,31 @@ oidc:
   # registered with the IdP.
   redirectURL: ""
 
+  # Broker-global Google Workspace hosted-domain (`hd`) allowlist.
+  # When non-empty, every IdP exchange (device flow, auth-code flow,
+  # legacy /auth/callback) is rejected unless the verified id_token's
+  # `hd` claim matches one of these entries. Consumer Google accounts
+  # (no `hd`) and Workspace users from other tenants are denied before
+  # any authorization code, refresh token, or world dispatch is
+  # issued. Empty disables the gate — any verified identity passes
+  # the broker layer; per-world `worlds[].allow` lists still apply
+  # downstream.
+  #
+  # Keying on `hd` (not the email domain) is the spoof-resistant
+  # choice: `hd` is set by Google from the Workspace tenant binding
+  # and the user cannot influence it. See
+  # /tools/demarkus-broker/internal/broker/authz.go `oidcDomainAllowed`.
+  #
+  # Entries are lowercased+trimmed at broker startup. Set multiple
+  # to admit more than one org (Google's `hd` query param does not
+  # support multi-domain — multi-tenant gating MUST be done server-
+  # side, which is what this list does).
+  #
+  # Examples:
+  #   allowDomains: ["example.com"]                 # single org
+  #   allowDomains: ["example.com", "acme.test"]    # multi-org
+  allowDomains: []
+
   # Broker-side ECDSA P-256 private key (PR4). The broker signs
   # id_tokens on /device/token refresh-grant responses with this key
   # and serves the matching public key at /.well-known/jwks.json. Two
@@ -233,7 +258,7 @@ worlds: []
   #   # implicit.
   #   # internalAddress: "team-a-mark.team-a:6309"
   #   allow:
-  #     domains: ["nesto.ca"]
+  #     domains: ["example.com"]
   #     groups: ["engineering"]
   #     emails: ["alice@example.com"]
   #   defaultToken:
