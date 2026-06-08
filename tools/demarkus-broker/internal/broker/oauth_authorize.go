@@ -200,6 +200,14 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 		return
 	}
 
+	if !oidcDomainAllowed(s.cfg.OIDC.AllowDomains, exchange.Claims.HD) {
+		s.log.InfoContext(r.Context(), "broker: auth code rejected by allowDomains",
+			"subject", hashSubject(exchange.Claims.Subject), "hd", exchange.Claims.HD)
+		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
+			"access_denied", "domain not permitted")
+		return
+	}
+
 	authCode, _, err := s.authCodeStore.Bind(authCodeID, &exchange)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: auth code bind failed",

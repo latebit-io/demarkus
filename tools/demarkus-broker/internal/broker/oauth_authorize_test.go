@@ -344,6 +344,73 @@ func TestOAuthAuthorizeEndToEnd(t *testing.T) {
 	}
 }
 
+// TestOAuthAuthorizeAllowDomainsRejectsForeignHD confirms the
+// broker-global OIDC.AllowDomains gate fires inside authCodeCallback:
+// an exchange that returns a verified identity whose hd claim is not
+// in the allowlist is redirected back to the client with
+// error=access_denied, no authorization code is bound, and the
+// authCodeStore pending entry is consumed (i.e. no replay).
+func TestOAuthAuthorizeAllowDomainsRejectsForeignHD(t *testing.T) {
+	verifier := &fakeVerifier{
+		authURL: "https://idp.example.com/authorize",
+		claims: Claims{
+			Subject:       "google|outsider",
+			Email:         "outsider@competitor.com",
+			EmailVerified: true,
+			HD:            "competitor.com",
+		},
+	}
+	cfg := testConfig()
+	cfg.Server.PublicURL = "https://broker.example.com"
+	cfg.OIDC.AllowDomains = []string{"latebit.io"}
+	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := testClient(srv)
+	client.Jar = jar
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	authResp, err := client.Get(srv.URL + "/oauth/authorize?" + authorizeQuery().Encode())
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	_ = authResp.Body.Close()
+	idpRedirect, _ := url.Parse(authResp.Header.Get("Location"))
+	nonce := idpRedirect.Query().Get("state")
+	if nonce == "" {
+		t.Fatal("missing IdP state nonce")
+	}
+
+	cbReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		srv.URL+"/auth/callback?code=idp-code-abc&state="+url.QueryEscape(nonce), http.NoBody)
+	cbResp, err := client.Do(cbReq)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	defer func() { _ = cbResp.Body.Close() }()
+	if cbResp.StatusCode != http.StatusFound {
+		body, _ := io.ReadAll(cbResp.Body)
+		t.Fatalf("callback status = %d, want 302 (error redirect); body=%s", cbResp.StatusCode, body)
+	}
+	clientRedirect, err := url.Parse(cbResp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parse client redirect: %v", err)
+	}
+	q := clientRedirect.Query()
+	if got := q.Get("error"); got != "access_denied" {
+		t.Errorf("error = %q, want access_denied", got)
+	}
+	if q.Get("code") != "" {
+		t.Error("authorization code leaked on denied callback")
+	}
+	if got := q.Get("state"); got != "client-state-nonce" {
+		t.Errorf("state passthrough mismatch on denial: got %q", got)
+	}
+}
+
 // TestOAuthAuthorizeStaleStateCookieRoutesToAuthCodeBranch confirms
 // the dispatch order: a State cookie carrying AuthCodeID enters the
 // auth-code branch even if it also happened to carry DeviceCode (it

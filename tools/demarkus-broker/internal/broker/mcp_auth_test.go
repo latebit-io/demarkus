@@ -164,7 +164,7 @@ func TestGatewayAuthValidBearerStashesClaimsOnContext(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
 	brokerSrv := NewServer(cfg, signer, v, k8s, nil, nil, nil)
 
-	var seen Claims
+	var seen *Claims
 	var sawClaims bool
 	recorder := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen, sawClaims = claimsFromCtx(r.Context())

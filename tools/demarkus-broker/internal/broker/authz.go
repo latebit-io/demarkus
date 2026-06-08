@@ -32,13 +32,30 @@ const (
 // descriptive tool-error message.
 var ErrNotAuthorized = errors.New("broker: identity not authorized for any world")
 
+// oidcDomainAllowed reports whether the IdP-issued identity satisfies
+// the broker-global hosted-domain allowlist (OIDC.AllowDomains). An
+// empty allowlist disables the gate — any verified identity passes
+// the broker layer (per-world Allow lists still apply downstream).
+// When non-empty, the identity's hd claim (Google Workspace
+// hosted-domain binding, set server-side by Google from the Workspace
+// tenant) must be in the list. Consumer Google accounts have no hd
+// claim and are rejected. The allowlist is lowercased+trimmed at
+// config load, so a plain Contains against the lowercased hd is
+// sufficient on the hot path.
+func oidcDomainAllowed(allowDomains []string, hd string) bool {
+	if len(allowDomains) == 0 {
+		return true
+	}
+	return slices.Contains(allowDomains, strings.ToLower(strings.TrimSpace(hd)))
+}
+
 // authorizedWorlds returns the configured worlds whose Allow predicate
 // admits claims. Used by /auth/callback and /me/install to list the
 // worlds an identity may reach. The broker no longer mints per-user
 // tokens — SSO at the broker is the org gate and WorldConfig.Allow is
 // the writer allowlist (enforced at the MCP write handlers) — so this
 // is a pure read over config, no Secret writes.
-func authorizedWorlds(cfg *Config, claims Claims) []*WorldConfig {
+func authorizedWorlds(cfg *Config, claims *Claims) []*WorldConfig {
 	out := make([]*WorldConfig, 0, len(cfg.Worlds))
 	for j := range cfg.Worlds {
 		w := &cfg.Worlds[j]
@@ -74,7 +91,7 @@ func lookupWorld(cfg *Config, name string) *WorldConfig {
 //     `emails: [alice@x]` with no other allowlist would silently mean
 //     "everyone plus alice." Detected as `len(Domains)+len(Groups)==0`
 //     when we get here.
-func worldAllows(a *AllowConfig, claims Claims) bool {
+func worldAllows(a *AllowConfig, claims *Claims) bool {
 	if len(a.Domains) == 0 && len(a.Groups) == 0 && len(a.Emails) == 0 {
 		return true
 	}

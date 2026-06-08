@@ -36,7 +36,7 @@ import (
 // even when the agent never tells the world its name; the
 // broker's existing audit log already correlates by email so the
 // two surfaces agree.
-func agentMetaFromClaims(claims Claims) map[string]string {
+func agentMetaFromClaims(claims *Claims) map[string]string {
 	return map[string]string{"agent": canonicalEmail(claims.Email)}
 }
 
@@ -52,7 +52,7 @@ func agentMetaFromClaims(claims Claims) map[string]string {
 // compositeVerifier is the primary gate at the bearer layer; this
 // catches a future Verifier impl or test double that admits an
 // unverified identity.
-func (g *mcpGateway) gateWrite(claims Claims, worldName string) (*WorldConfig, *mcp.CallToolResult) {
+func (g *mcpGateway) gateWrite(claims *Claims, worldName string) (*WorldConfig, *mcp.CallToolResult) {
 	if !claims.EmailVerified {
 		return nil, mcp.NewToolResultError("identity email is not verified")
 	}
@@ -80,7 +80,7 @@ func (g *mcpGateway) gateWrite(claims Claims, worldName string) (*WorldConfig, *
 // caller-supplied "agent" key so identity cannot be spoofed. The world
 // validates keys/values and rejects reserved keys, so this stays a thin
 // pass-through.
-func publisherMeta(args map[string]any, claims Claims) map[string]string {
+func publisherMeta(args map[string]any, claims *Claims) map[string]string {
 	meta := agentMetaFromClaims(claims)
 	raw, ok := args["metadata"].(map[string]any)
 	if !ok {
@@ -184,7 +184,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 type brokerMergeAdapter struct {
 	g         *mcpGateway
 	ctx       context.Context
-	claims    Claims
+	claims    *Claims
 	worldName string
 }
 

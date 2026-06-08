@@ -298,7 +298,7 @@ func TestMeInstallAcceptsBrokerSignedBearer(t *testing.T) {
 	}}
 	srv, _ := newTestServerWithSigner(t, cfg, primary, fake.NewSimpleClientset(), idTokenSigner)
 
-	raw, err := idTokenSigner.Sign(aliceClaims(), cfg.Server.PublicURL, time.Hour, time.Now())
+	raw, err := idTokenSigner.Sign(&Claims{Subject: "u-alice", Email: "alice@example.com", EmailVerified: true}, cfg.Server.PublicURL, time.Hour, time.Now())
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}

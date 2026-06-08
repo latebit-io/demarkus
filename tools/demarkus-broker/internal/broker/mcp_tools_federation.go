@@ -141,7 +141,7 @@ func (g *mcpGateway) handleMarkResolve(ctx context.Context, req mcp.CallToolRequ
 // handleMarkResolve so the per-candidate decision tree (parse
 // server URL → dispatch → status check → content-hash verify)
 // stays readable.
-func (g *mcpGateway) resolveCandidate(ctx context.Context, claims Claims, entry index.Entry, hash string) (result fetch.Result, skipReason string) {
+func (g *mcpGateway) resolveCandidate(ctx context.Context, claims *Claims, entry index.Entry, hash string) (result fetch.Result, skipReason string) {
 	candidateWorld, _, perr := parseToolURL(entry.Server)
 	if perr != nil {
 		return fetch.Result{}, fmt.Sprintf("%s: invalid server URL: %v", entry.Server, perr)

@@ -20,11 +20,11 @@ func TestSweepRemovesExpiredRefreshTokens(t *testing.T) {
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	rs.clock = func() time.Time { return base }
 
-	short, err := rs.Issue(context.Background(), Claims{Email: "short@x.com", EmailVerified: true}, time.Hour)
+	short, err := rs.Issue(context.Background(), &Claims{Email: "short@x.com", EmailVerified: true}, time.Hour)
 	if err != nil {
 		t.Fatalf("Issue short: %v", err)
 	}
-	long, err := rs.Issue(context.Background(), Claims{Email: "long@x.com", EmailVerified: true}, 48*time.Hour)
+	long, err := rs.Issue(context.Background(), &Claims{Email: "long@x.com", EmailVerified: true}, 48*time.Hour)
 	if err != nil {
 		t.Fatalf("Issue long: %v", err)
 	}

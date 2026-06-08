@@ -20,11 +20,17 @@ var _ Verifier = (*compositeVerifier)(nil)
 // and used by the per-world group allowlist (Slice C.1); IdPs that don't
 // surface groups in the ID token (or aren't configured to) leave it nil
 // and the operator falls back to AllowDomains or per-email carve-outs.
+// HD is Google's Workspace hosted-domain claim — set by Google from the
+// Workspace tenant binding (the user cannot influence it), empty for
+// consumer Gmail accounts. The broker-global OIDC.AllowDomains gate keys
+// on HD because email-domain parsing can be confused by aliases /
+// unverified secondaries, while HD is asserted by Google's signature.
 type Claims struct {
 	Subject       string
 	Email         string
 	EmailVerified bool
 	Groups        []string
+	HD            string
 }
 
 // ExchangeResult bundles everything the broker needs from a completed
@@ -149,6 +155,7 @@ func (v *oidcVerifier) VerifyIDToken(ctx context.Context, rawIDToken string) (Cl
 		Email         string   `json:"email"`
 		EmailVerified bool     `json:"email_verified"`
 		Groups        []string `json:"groups"`
+		HD            string   `json:"hd"`
 	}
 	if err := idTok.Claims(&raw); err != nil {
 		return Claims{}, fmt.Errorf("broker: read id_token claims: %w", err)
@@ -161,6 +168,7 @@ func (v *oidcVerifier) VerifyIDToken(ctx context.Context, rawIDToken string) (Cl
 		Email:         raw.Email,
 		EmailVerified: raw.EmailVerified,
 		Groups:        raw.Groups,
+		HD:            raw.HD,
 	}, nil
 }
 

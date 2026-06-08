@@ -398,8 +398,13 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "email not verified", http.StatusForbidden)
 		return
 	}
+	if !oidcDomainAllowed(s.cfg.OIDC.AllowDomains, claims.HD) {
+		s.log.InfoContext(r.Context(), "broker: rejected by allowDomains", "subject", hashSubject(claims.Subject), "hd", claims.HD)
+		http.Error(w, "domain not permitted", http.StatusForbidden)
+		return
+	}
 	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
-	worlds := authorizedWorlds(s.cfg, claims)
+	worlds := authorizedWorlds(s.cfg, &claims)
 	if claims.Email == "" || len(worlds) == 0 {
 		s.log.InfoContext(r.Context(), "broker: identity not authorized for any world", "subject", hashSubject(claims.Subject))
 		http.Error(w, "no authorized worlds", http.StatusForbidden)

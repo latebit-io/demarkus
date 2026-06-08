@@ -30,17 +30,19 @@ const (
 // requireAuth before dispatching to the next handler in the chain so all
 // downstream code (subjectRateLimit, the actual handler) shares one
 // authentication result rather than re-verifying the bearer token.
-func ctxWithClaims(ctx context.Context, c Claims) context.Context {
+func ctxWithClaims(ctx context.Context, c *Claims) context.Context {
 	return context.WithValue(ctx, ctxClaimsKey, c)
 }
 
-// claimsFromCtx pulls the verified claims out of ctx. Returns the zero
-// Claims and false if the context did not pass through requireAuth — the
-// caller must treat that as a programming error since the middleware
-// chain should make it impossible for an authed handler to be reached
-// without claims set.
-func claimsFromCtx(ctx context.Context) (Claims, bool) {
-	c, ok := ctx.Value(ctxClaimsKey).(Claims)
+// claimsFromCtx pulls the verified claims out of ctx. Returns nil and
+// false if the context did not pass through requireAuth — the caller
+// must treat that as a programming error since the middleware chain
+// should make it impossible for an authed handler to be reached
+// without claims set. The pointer return matches the in-context
+// storage shape (Claims grew past gocritic's hugeParam threshold;
+// passing by pointer keeps the handlers off the slow path).
+func claimsFromCtx(ctx context.Context) (*Claims, bool) {
+	c, ok := ctx.Value(ctxClaimsKey).(*Claims)
 	return c, ok
 }
 
@@ -172,7 +174,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(ctxWithClaims(r.Context(), claims)))
+		next.ServeHTTP(w, r.WithContext(ctxWithClaims(r.Context(), &claims)))
 	})
 }
 

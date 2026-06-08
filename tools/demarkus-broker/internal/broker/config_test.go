@@ -283,6 +283,33 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "allow.groups[1] is empty",
 		},
 		{
+			name: "oidc.allowDomains normalized to lowercase",
+			body: strings.Replace(validConfig,
+				`redirectURL: https://broker.example.com/auth/callback`,
+				`redirectURL: https://broker.example.com/auth/callback
+  allowDomains: ["  Latebit.IO  ", "NESTO.test"]`, 1),
+			validate: func(t *testing.T, c *Config) {
+				got := c.OIDC.AllowDomains
+				want := []string{"latebit.io", "nesto.test"}
+				if len(got) != len(want) {
+					t.Fatalf("allowDomains = %v, want %v", got, want)
+				}
+				for j, d := range got {
+					if d != want[j] {
+						t.Errorf("allowDomains[%d] = %q, want %q (must be lowercased + trimmed at load)", j, d, want[j])
+					}
+				}
+			},
+		},
+		{
+			name: "oidc.allowDomains empty entry rejected",
+			body: strings.Replace(validConfig,
+				`redirectURL: https://broker.example.com/auth/callback`,
+				`redirectURL: https://broker.example.com/auth/callback
+  allowDomains: ["latebit.io", "   "]`, 1),
+			wantErr: "oidc.allowDomains[1] is empty",
+		},
+		{
 			// Plan §6.2 Slice C.4 defaults: tokens 10/min burst 5,
 			// login 20/min burst 5. Operator omitting the block
 			// gets the production-safe values applied at validate

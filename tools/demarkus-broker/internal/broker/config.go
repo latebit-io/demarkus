@@ -218,6 +218,20 @@ type OIDCConfig struct {
 	// secretKeyRef so the key never round-trips through helm
 	// release history.
 	BrokerSigningKey string `yaml:"brokerSigningKey"`
+	// AllowDomains is the broker-global Google Workspace hosted-domain
+	// allowlist. When non-empty, every IdP exchange (device flow,
+	// auth-code flow, and the legacy browser /auth/callback) is rejected
+	// unless the verified id_token's `hd` claim matches one of these
+	// entries. The check runs before any authorization code, refresh
+	// token, or world dispatch is issued, so disallowed identities
+	// never get past initial login. Empty disables the gate (any
+	// verified identity passes the broker layer; per-world Allow lists
+	// still apply downstream). Entries are lowercased+trimmed at
+	// config load. Keying on `hd` rather than parsing the email domain
+	// is the spoof-resistant choice: `hd` is set by Google from the
+	// Workspace tenant and the user cannot influence it. Consumer
+	// Google accounts (no `hd`) are rejected when this list is set.
+	AllowDomains []string `yaml:"allowDomains"`
 }
 
 // WorldConfig describes one demarkus world the broker is authorized to
@@ -559,6 +573,13 @@ func (o *OIDCConfig) validate() error {
 	}
 	if _, err := NewIDTokenSigner([]byte(o.BrokerSigningKey)); err != nil {
 		return fmt.Errorf("oidc.brokerSigningKey is invalid: %w", err)
+	}
+	for i, d := range o.AllowDomains {
+		norm := strings.ToLower(strings.TrimSpace(d))
+		if norm == "" {
+			return fmt.Errorf("oidc.allowDomains[%d] is empty", i)
+		}
+		o.AllowDomains[i] = norm
 	}
 	return nil
 }

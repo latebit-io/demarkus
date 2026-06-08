@@ -19,7 +19,7 @@ import (
 func TestTokenRevokeValid(t *testing.T) {
 	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset(), newTestIDTokenSigner(t))
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+		&Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestTokenRevokeAcceptsTokenTypeHint(t *testing.T) {
 	// eager future validator).
 	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset(), newTestIDTokenSigner(t))
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+		&Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestTokenRevokeAcceptsTokenTypeHint(t *testing.T) {
 func TestTokenRevokeIdempotent(t *testing.T) {
 	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset(), newTestIDTokenSigner(t))
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+		&Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestTokenRevokeServerErrorIsJSON(t *testing.T) {
 	// (the no-Secret-exists path returns nil and skips the failure
 	// surface).
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+		&Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}

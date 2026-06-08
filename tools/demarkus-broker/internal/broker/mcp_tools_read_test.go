@@ -342,7 +342,7 @@ func callToolReq(name string, args map[string]any) mcp.CallToolRequest {
 // withAliceClaims returns ctx with verified claims attached,
 // matching what gatewayAuth installs in production traffic.
 func withAliceClaims(ctx context.Context) context.Context {
-	return ctxWithClaims(ctx, Claims{
+	return ctxWithClaims(ctx, &Claims{
 		Subject:       "google|alice",
 		Email:         "alice@example.com",
 		EmailVerified: true,

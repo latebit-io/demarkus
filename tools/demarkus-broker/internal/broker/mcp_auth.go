@@ -60,7 +60,7 @@ func (s *Server) gatewayAuth(next http.Handler) http.Handler {
 			s.writeMCPAuthChallenge(w, "invalid_token", "email claim missing")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(ctxWithClaims(r.Context(), claims)))
+		next.ServeHTTP(w, r.WithContext(ctxWithClaims(r.Context(), &claims)))
 	})
 }
 

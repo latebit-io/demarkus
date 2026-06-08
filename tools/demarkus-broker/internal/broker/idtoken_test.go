@@ -65,7 +65,7 @@ func TestIDTokenSignerSignVerifyRoundTrip(t *testing.T) {
 		EmailVerified: true,
 		Groups:        []string{"eng", "ops"},
 	}
-	raw, err := s.Sign(claims, brokerURL, 15*time.Minute, now)
+	raw, err := s.Sign(&claims, brokerURL, 15*time.Minute, now)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -94,10 +94,10 @@ func TestIDTokenSignerSignVerifyRoundTrip(t *testing.T) {
 
 func TestIDTokenSignerSignRejectsZeroTTL(t *testing.T) {
 	s := newTestIDTokenSigner(t)
-	if _, err := s.Sign(Claims{}, "https://b", 0, time.Now()); err == nil {
+	if _, err := s.Sign(&Claims{}, "https://b", 0, time.Now()); err == nil {
 		t.Fatalf("zero ttl should error")
 	}
-	if _, err := s.Sign(Claims{}, "https://b", -time.Second, time.Now()); err == nil {
+	if _, err := s.Sign(&Claims{}, "https://b", -time.Second, time.Now()); err == nil {
 		t.Fatalf("negative ttl should error")
 	}
 }
@@ -105,7 +105,7 @@ func TestIDTokenSignerSignRejectsZeroTTL(t *testing.T) {
 func TestIDTokenSignerVerifyRejectsExpired(t *testing.T) {
 	s := newTestIDTokenSigner(t)
 	now := time.Now()
-	raw, err := s.Sign(Claims{Subject: "u"}, "https://b", time.Minute, now)
+	raw, err := s.Sign(&Claims{Subject: "u"}, "https://b", time.Minute, now)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestIDTokenSignerVerifyRejectsExpired(t *testing.T) {
 func TestIDTokenSignerVerifyRejectsWrongIssuer(t *testing.T) {
 	s := newTestIDTokenSigner(t)
 	now := time.Now()
-	raw, err := s.Sign(Claims{Subject: "u"}, "https://b1.example.com", time.Minute, now)
+	raw, err := s.Sign(&Claims{Subject: "u"}, "https://b1.example.com", time.Minute, now)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestIDTokenSignerVerifyRejectsForeignKid(t *testing.T) {
 		t.Fatalf("two ephemeral signers collided on kid — astronomically unlikely, test wiring broken")
 	}
 	now := time.Now()
-	raw, err := a.Sign(Claims{Subject: "u"}, "https://b", time.Minute, now)
+	raw, err := a.Sign(&Claims{Subject: "u"}, "https://b", time.Minute, now)
 	if err != nil {
 		t.Fatalf("Sign on A: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestIDTokenSignerVerifyRejectsForeignKid(t *testing.T) {
 func TestIDTokenSignerVerifyRejectsBadSignature(t *testing.T) {
 	s := newTestIDTokenSigner(t)
 	now := time.Now()
-	raw, err := s.Sign(Claims{Subject: "u"}, "https://b", time.Minute, now)
+	raw, err := s.Sign(&Claims{Subject: "u"}, "https://b", time.Minute, now)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}

@@ -122,7 +122,7 @@ func TestHandleMarkPublishDeniesNonWriter(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{}
 	g := newGatewayWithDispatcher(t, cfg, d)
-	ctx := ctxWithClaims(context.Background(), Claims{
+	ctx := ctxWithClaims(context.Background(), &Claims{
 		Subject:       "google|carol",
 		Email:         "carol@otherco.test", // not in example.com domain
 		EmailVerified: true,

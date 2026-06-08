@@ -123,7 +123,7 @@ func NewRefreshStore(cfg *Config, k8s kubernetes.Interface) *RefreshStore {
 // The raw token is hex-encoded 32-byte randomness (64 chars). The
 // caller is responsible for treating it as bearer credential material
 // — no logging, no retries that would surface it in error messages.
-func (s *RefreshStore) Issue(ctx context.Context, claims Claims, ttl time.Duration) (string, error) {
+func (s *RefreshStore) Issue(ctx context.Context, claims *Claims, ttl time.Duration) (string, error) {
 	if ttl <= 0 {
 		return "", fmt.Errorf("refresh ttl must be > 0 (got %s)", ttl)
 	}
@@ -136,7 +136,7 @@ func (s *RefreshStore) Issue(ctx context.Context, claims Claims, ttl time.Durati
 	now := s.clock()
 	record := refreshTokenRecord{
 		KeyHash:   keyHash,
-		Claims:    claims,
+		Claims:    *claims,
 		IssuedAt:  now,
 		ExpiresAt: now.Add(ttl),
 	}

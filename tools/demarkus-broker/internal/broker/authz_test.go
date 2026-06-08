@@ -185,7 +185,7 @@ func TestWorldAllowsPredicate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := worldAllows(&tt.allow, tt.claims); got != tt.accept {
+			if got := worldAllows(&tt.allow, &tt.claims); got != tt.accept {
 				t.Errorf("worldAllows = %v, want %v", got, tt.accept)
 			}
 		})
@@ -209,7 +209,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 			Namespace: "team-b",
 			Allow:     AllowConfig{Domains: []string{"other.example"}},
 		})
-		got := authorizedWorlds(cfg, Claims{Email: "alice@example.com", EmailVerified: true})
+		got := authorizedWorlds(cfg, &Claims{Email: "alice@example.com", EmailVerified: true})
 		if len(got) != 1 || got[0].Name != "team-a" {
 			names := make([]string, len(got))
 			for i, w := range got {
@@ -226,7 +226,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 		// AllowConfig non-empty switches into restricted mode.
 		cfg := testConfig()
 		cfg.Worlds[0].Allow = AllowConfig{}
-		got := authorizedWorlds(cfg, Claims{Email: "anyone@anywhere.test", EmailVerified: true})
+		got := authorizedWorlds(cfg, &Claims{Email: "anyone@anywhere.test", EmailVerified: true})
 		if len(got) != 1 || got[0].Name != "team-a" {
 			t.Errorf("authorizedWorlds = %+v, want team-a admitted on empty allowlist", got)
 		}
@@ -234,7 +234,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 
 	t.Run("unauthorized_identity_gets_none", func(t *testing.T) {
 		cfg := testConfig()
-		got := authorizedWorlds(cfg, Claims{Email: "mallory@evil.example", EmailVerified: true})
+		got := authorizedWorlds(cfg, &Claims{Email: "mallory@evil.example", EmailVerified: true})
 		if len(got) != 0 {
 			t.Errorf("authorizedWorlds = %+v, want empty for unauthorized domain", got)
 		}
@@ -249,7 +249,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 			Namespace: "team-b",
 			Allow:     AllowConfig{Domains: []string{"example.com"}},
 		})
-		got := authorizedWorlds(cfg, Claims{Email: "alice@example.com", EmailVerified: true})
+		got := authorizedWorlds(cfg, &Claims{Email: "alice@example.com", EmailVerified: true})
 		if len(got) != 2 || got[0].Name != "team-a" || got[1].Name != "team-b" {
 			t.Errorf("authorizedWorlds order = %+v, want [team-a, team-b]", got)
 		}
@@ -265,6 +265,38 @@ func TestLookupWorld(t *testing.T) {
 	}
 	if w := lookupWorld(cfg, "nope"); w != nil {
 		t.Errorf("lookupWorld(nope) = %+v, want nil", w)
+	}
+}
+
+// TestOIDCDomainAllowed pins the broker-global hd allowlist semantics:
+// empty list opens the gate, non-empty list demands an hd match.
+// Consumer Google accounts (empty hd) must be rejected when the list
+// is set — this is the whole point of keying on hd vs the email
+// domain, which an unverified secondary can spoof.
+func TestOIDCDomainAllowed(t *testing.T) {
+	tests := []struct {
+		name   string
+		allow  []string
+		hd     string
+		accept bool
+	}{
+		{"empty_list_open", nil, "anything.com", true},
+		{"empty_list_empty_hd_open", nil, "", true},
+		{"match", []string{"latebit.io"}, "latebit.io", true},
+		{"match_mixed_case_hd", []string{"latebit.io"}, "Latebit.IO", true},
+		{"miss_other_workspace", []string{"latebit.io"}, "competitor.com", false},
+		{"miss_empty_hd_consumer_google", []string{"latebit.io"}, "", false},
+		{"miss_whitespace_only", []string{"latebit.io"}, "   ", false},
+		{"multi_domain_match", []string{"latebit.io", "nesto.test"}, "nesto.test", true},
+		{"multi_domain_miss", []string{"latebit.io", "nesto.test"}, "outsider.com", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := oidcDomainAllowed(tt.allow, tt.hd)
+			if got != tt.accept {
+				t.Errorf("oidcDomainAllowed(%v, %q) = %v, want %v", tt.allow, tt.hd, got, tt.accept)
+			}
+		})
 	}
 }
 

@@ -170,7 +170,7 @@ func TestCompositeVerifierVerifiesBrokerSigned(t *testing.T) {
 	c := newCompositeVerifier(primary, signer, "https://broker.example.com")
 	c.clock = func() time.Time { return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC) }
 
-	raw, err := signer.Sign(Claims{
+	raw, err := signer.Sign(&Claims{
 		Subject: "g|alice", Email: "alice@x.com", EmailVerified: true,
 	}, "https://broker.example.com", time.Minute, c.clock())
 	if err != nil {
@@ -189,7 +189,7 @@ func TestCompositeVerifierFallsThroughOnUnknownKid(t *testing.T) {
 	// Token signed by a DIFFERENT signer carries an unknown kid;
 	// composite must fall through to the primary (IdP) verifier.
 	otherSigner := newTestIDTokenSigner(t)
-	raw, err := otherSigner.Sign(Claims{Email: "carol@x.com"}, "https://broker.example.com", time.Minute, time.Now())
+	raw, err := otherSigner.Sign(&Claims{Email: "carol@x.com"}, "https://broker.example.com", time.Minute, time.Now())
 	if err != nil {
 		t.Fatalf("Sign on other signer: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestCompositeVerifierDoesNotFallThroughOnBrokerSignatureFail(t *testing.T) 
 	// policy from the compositeVerifier doc comment.
 	signer := newTestIDTokenSigner(t)
 	now := time.Now()
-	raw, err := signer.Sign(Claims{Subject: "u"}, "https://broker.example.com", time.Minute, now)
+	raw, err := signer.Sign(&Claims{Subject: "u"}, "https://broker.example.com", time.Minute, now)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}

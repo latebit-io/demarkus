@@ -150,7 +150,7 @@ func NewIDTokenSigner(pemBytes []byte) (*IDTokenSigner, error) {
 //
 // Returns the compact JWS serialization (three base64url segments
 // separated by dots) — the standard JWT wire format.
-func (s *IDTokenSigner) Sign(claims Claims, brokerURL string, ttl time.Duration, now time.Time) (string, error) {
+func (s *IDTokenSigner) Sign(claims *Claims, brokerURL string, ttl time.Duration, now time.Time) (string, error) {
 	if ttl <= 0 {
 		return "", fmt.Errorf("broker: id_token ttl must be > 0 (got %s)", ttl)
 	}

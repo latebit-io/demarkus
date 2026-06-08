@@ -75,7 +75,7 @@ func brokerCrawlParseURL(raw string) (worldName, urlPath string, err error) {
 // crawl loop. The closure intentionally tolerates per-fetch
 // failure (returns the error to the crawler, which marks the
 // node "error" and continues) — a graph crawl is best-effort.
-func (g *mcpGateway) crawlFetchFn(ctx context.Context, claims Claims) func(string, string) (string, string, string, error) {
+func (g *mcpGateway) crawlFetchFn(ctx context.Context, claims *Claims) func(string, string) (string, string, string, error) {
 	return func(worldName, path string) (string, string, string, error) {
 		result, derr := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
 			return g.dispatcher.Fetch(worldName, path, token)
@@ -385,7 +385,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 // world that hasn't said "yes, accept index publications") —
 // force=true bypasses the block with a recorded warning so an
 // operator who intends the publish anyway can opt in.
-func (g *mcpGateway) checkIndexManifests(ctx context.Context, claims Claims, sourceWorld, targetWorld string, dryRun, force bool) ([]string, *mcp.CallToolResult) {
+func (g *mcpGateway) checkIndexManifests(ctx context.Context, claims *Claims, sourceWorld, targetWorld string, dryRun, force bool) ([]string, *mcp.CallToolResult) {
 	var warnings []string
 	srcManifest, err := g.dispatchWithAuth(ctx, claims, sourceWorld, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Fetch(sourceWorld, protocol.WellKnownManifestPath, token)
@@ -431,7 +431,7 @@ func (g *mcpGateway) checkIndexManifests(ctx context.Context, claims Claims, sou
 //     escapes this root (e.g. via "../" in a LIST destination)
 //     are skipped silently. The index is "what's under
 //     sourcePath", not "what the world feels like serving."
-func (g *mcpGateway) walkIndexDir(ctx context.Context, claims Claims, worldName, dirPath, sourceScheme, sourceRoot string, entries *[]index.Entry, visited map[string]struct{}) error {
+func (g *mcpGateway) walkIndexDir(ctx context.Context, claims *Claims, worldName, dirPath, sourceScheme, sourceRoot string, entries *[]index.Entry, visited map[string]struct{}) error {
 	if len(*entries) >= maxIndexDocuments {
 		return errIndexTruncated
 	}

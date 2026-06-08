@@ -115,7 +115,7 @@ type worldOp func(token string) (fetch.Result, error)
 // archived / not-permitted / conflict / bad-request / server-error)
 // are forwarded verbatim per the byte-for-byte proxy contract.
 // Transport errors short-circuit immediately.
-func (g *mcpGateway) dispatchWithAuth(ctx context.Context, _ Claims, worldName string, op worldOp) (fetch.Result, error) {
+func (g *mcpGateway) dispatchWithAuth(ctx context.Context, _ *Claims, worldName string, op worldOp) (fetch.Result, error) {
 	mcpCfg := g.srv.cfg.Server.MCP
 	maxAttempts := mcpCfg.FirstMintMaxAttempts
 	if maxAttempts <= 0 {

@@ -958,7 +958,7 @@ func TestDeviceTokenRefreshGrant(t *testing.T) {
 		t.Fatalf("Authorize: %v", err)
 	}
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		verifier.claims, broker.cfg.Server.RefreshTokenTTL)
+		&verifier.claims, broker.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		t.Fatalf("refresh Issue: %v", err)
 	}
@@ -1074,7 +1074,7 @@ func TestDeviceTokenRefreshRejectsRevoked(t *testing.T) {
 	signer := newTestIDTokenSigner(t)
 	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &fakeVerifier{}, fake.NewSimpleClientset(), signer)
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+		&Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -1109,7 +1109,7 @@ func TestDeviceTokenRefreshCrossGrantIsolation(t *testing.T) {
 
 	// Issue a refresh token; try it on the device_code branch.
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+		&Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
 	if err != nil {
 		t.Fatalf("Issue refresh: %v", err)
 	}

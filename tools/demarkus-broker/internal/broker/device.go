@@ -314,7 +314,7 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.clock()
-	idToken, err := s.idTokenSigner.Sign(record.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
+	idToken, err := s.idTokenSigner.Sign(&record.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: refresh sign id_token failed",
 			"err", err, "subject", hashSubject(record.Claims.Subject))
@@ -389,7 +389,7 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawRefresh, err := s.refreshStore.Issue(r.Context(), exchange.Claims, s.cfg.Server.RefreshTokenTTL)
+	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		// Code is already consumed by Redeem (one-shot). The user
 		// has to retry from /oauth/authorize; that's acceptable
@@ -403,7 +403,7 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := s.clock()
-	idToken, err := s.idTokenSigner.Sign(exchange.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
+	idToken, err := s.idTokenSigner.Sign(&exchange.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: auth code sign id_token failed",
 			"err", err, "subject", hashSubject(exchange.Claims.Subject))
@@ -505,13 +505,26 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 		s.renderDeviceDone(w, r)
 		return
 	}
+	if !oidcDomainAllowed(s.cfg.OIDC.AllowDomains, exchange.Claims.HD) {
+		// Allowlist miss IS a real denial (the identity is
+		// authenticated but not authorized), so Deny the grant —
+		// the polling client should see access_denied, not keep
+		// retrying.
+		s.log.InfoContext(r.Context(), "broker: device callback rejected by allowDomains",
+			"subject", hashSubject(exchange.Claims.Subject), "hd", exchange.Claims.HD)
+		if denyErr := s.deviceStore.Deny(deviceCode); denyErr != nil {
+			s.log.WarnContext(r.Context(), "broker: device deny failed", "err", denyErr)
+		}
+		s.renderDeviceDone(w, r)
+		return
+	}
 	// Mint the refresh token BEFORE Bind so a Secret-side failure
 	// keeps the grant pending — the polling client retries on the
 	// next interval, the user re-runs soul-join, and no orphan
 	// statusComplete state goes out without its refresh token.
 	// Orphaned refresh-tokens Secret entries (mint succeeded, Bind
 	// then races a sweep) age out on Sweep via their expiry.
-	rawRefresh, err := s.refreshStore.Issue(r.Context(), exchange.Claims, s.cfg.Server.RefreshTokenTTL)
+	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: device callback refresh mint failed",
 			"err", err, "subject", hashSubject(exchange.Claims.Subject))
