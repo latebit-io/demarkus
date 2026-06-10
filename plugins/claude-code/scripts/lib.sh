@@ -32,17 +32,11 @@ readonly DEFAULT_PORT=6310             # plugin's first-choice port for its own 
 readonly ISOLATED_PORT_START=16310
 readonly ISOLATED_PORT_END=16509
 
-readonly SERVER_VERSION="0.17.14"
-readonly CLIENT_VERSION="0.12.38"
+readonly SERVER_VERSION="0.17.15"
+readonly CLIENT_VERSION="0.12.39"
 # demarkus-token moved from the server archive to its own tools/ release
 # in §6.7.A. Pin separately so a tools-only release can be picked up.
-readonly TOOLS_VERSION="0.1.28"
-
-# Sentinel file recording the SERVER/CLIENT versions of the binaries currently
-# installed at PLUGIN_BIN_DIR. ensure_binaries compares this against the
-# pinned versions above and re-downloads on drift, so a plugin update that
-# bumps the pins propagates to existing installs on next session start.
-readonly PLUGIN_VERSION_FILE="${PLUGIN_BIN_DIR}/.versions"
+readonly TOOLS_VERSION="0.1.32"
 
 log()  { echo "[demarkus-memory] $*" >&2; }
 warn() { echo "[demarkus-memory] warning: $*" >&2; }
@@ -408,31 +402,57 @@ sha256_verify() {
     || die "checksum mismatch for ${archive} (expected ${expected}, got ${actual})"
 }
 
-# _installed_versions — emits the recorded versions string (or empty).
+# _binary_version BIN ARGS... — echoes the version BIN reports via its version
+# flag, or empty if BIN is missing, not executable, or too old to support the
+# flag (a pre-0.17.15 binary errors on an unknown flag). stderr is discarded so
+# an old binary's "flag provided but not defined" noise doesn't leak into the
+# captured value.
+_binary_version() {
+  local bin="$1"; shift
+  [[ -x "${bin}" ]] || return 0
+  "${bin}" "$@" 2>/dev/null
+}
+
+# _installed_versions — the versions the on-disk binaries actually report,
+# queried live via each binary's --version, in the same shape _desired_versions
+# emits. The binaries are the source of truth: unlike a sidecar file it can't
+# drift from what's really installed, and it also catches a corrupt or wrong-arch
+# binary (which fails to run → empty field). A missing or pre-version binary
+# yields an empty field, which never equals a desired version, so ensure_binaries
+# re-downloads. demarkus-token accepts --version as well as its `version`
+# subcommand, so one flag form covers all three.
 _installed_versions() {
-  [[ -f "${PLUGIN_VERSION_FILE}" ]] && cat "${PLUGIN_VERSION_FILE}" || echo ""
+  printf 'server=%s,client=%s,tools=%s' \
+    "$(_binary_version "${PLUGIN_BIN_DIR}/demarkus-server" --version)" \
+    "$(_binary_version "${PLUGIN_BIN_DIR}/demarkus-mcp" --version)" \
+    "$(_binary_version "${PLUGIN_BIN_DIR}/demarkus-token" --version)"
 }
 
 # _desired_versions — the version pin the plugin currently expects.
 _desired_versions() {
-  echo "server=${SERVER_VERSION},client=${CLIENT_VERSION},tools=${TOOLS_VERSION}"
+  printf 'server=%s,client=%s,tools=%s' "${SERVER_VERSION}" "${CLIENT_VERSION}" "${TOOLS_VERSION}"
 }
 
-# ensure_binaries — download + install to PLUGIN_BIN_DIR if any are missing
-# or if the recorded versions don't match the pins above. The version
-# sentinel lets a CLIENT_VERSION/SERVER_VERSION bump propagate to existing
-# installs on the next session start; without it, ensure_binaries would
-# never re-fetch and users would silently stay on an old release.
+# ensure_binaries — download + install to PLUGIN_BIN_DIR when the installed
+# binaries don't report exactly the pinned versions (queried live via --version,
+# so a pin bump, a missing/corrupt binary, or a pre-version binary all trigger a
+# re-download on the next session start). No sidecar to keep in sync: the
+# binaries are the source of truth, and a partial/failed install simply reads as
+# a mismatch and re-downloads next time.
 ensure_binaries() {
-  if [[ -x "${PLUGIN_BIN_DIR}/demarkus-server" \
-     && -x "${PLUGIN_BIN_DIR}/demarkus-mcp" \
-     && -x "${PLUGIN_BIN_DIR}/demarkus-token" \
-     && "$(_installed_versions)" == "$(_desired_versions)" ]]; then
+  local desired installed
+  desired="$(_desired_versions)"
+  installed="$(_installed_versions)"
+  if [[ "${installed}" == "${desired}" ]]; then
     return 0
   fi
 
-  if [[ -n "$(_installed_versions)" && "$(_installed_versions)" != "$(_desired_versions)" ]]; then
-    log "binary version drift detected (installed=$(_installed_versions), desired=$(_desired_versions)); re-downloading"
+  # Distinguish a stale install (something is there, wrong version) from a fresh
+  # one (nothing there) for the log line only — both re-download.
+  if [[ -x "${PLUGIN_BIN_DIR}/demarkus-server" \
+     || -x "${PLUGIN_BIN_DIR}/demarkus-mcp" \
+     || -x "${PLUGIN_BIN_DIR}/demarkus-token" ]]; then
+    log "binary version drift detected (installed=${installed}, desired=${desired}); re-downloading"
   fi
 
   mkdir -p "${PLUGIN_BIN_DIR}"
@@ -482,20 +502,12 @@ ensure_binaries() {
     install -m 0755 "${tmp}/demarkus-mcp"    "${PLUGIN_BIN_DIR}/demarkus-mcp"
   )
   # Check the subshell exit explicitly rather than relying on the caller's
-  # set -e. If any download or install step failed, drop the sentinel so the
-  # next ensure_binaries call retries instead of trusting partial binaries.
+  # set -e. A failed install needs no cleanup: the next ensure_binaries call
+  # re-queries the binaries via --version, sees the mismatch, and retries.
   local install_rc=$?
   if (( install_rc != 0 )); then
-    rm -f "${PLUGIN_VERSION_FILE}"
     return "${install_rc}"
   fi
-
-  # Record installed versions so subsequent ensure_binaries calls can detect
-  # drift after a plugin update bumps any of the pins. Must match the format
-  # emitted by _desired_versions() exactly, otherwise the comparison there
-  # treats every startup as drift and triggers a redundant re-download.
-  printf 'server=%s,client=%s,tools=%s\n' \
-    "${SERVER_VERSION}" "${CLIENT_VERSION}" "${TOOLS_VERSION}" > "${PLUGIN_VERSION_FILE}"
 
   log "binaries installed to ${PLUGIN_BIN_DIR}"
 }
