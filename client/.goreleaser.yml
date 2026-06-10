@@ -56,7 +56,7 @@ builds:
     goarm:
       - "7"
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{ .Version }}
 
   # demarkus-agent ships only as a container image (release-client job
   # bundles it into ghcr.io/.../demarkus-agent). Listed under builds:

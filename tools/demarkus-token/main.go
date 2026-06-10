@@ -21,6 +21,9 @@ import (
 	"github.com/latebit/demarkus/protocol/token"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -34,6 +37,8 @@ func main() {
 		cmdList(os.Args[2:])
 	case "revoke":
 		cmdRevoke(os.Args[2:])
+	case "version", "-version", "--version":
+		fmt.Println(version)
 	default:
 		printUsage()
 		os.Exit(1)
@@ -46,6 +51,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  generate  Generate a new auth token\n")
 	fmt.Fprintf(os.Stderr, "  list      List tokens in a tokens file\n")
 	fmt.Fprintf(os.Stderr, "  revoke    Revoke a token by label\n")
+	fmt.Fprintf(os.Stderr, "  version   Print version and exit\n")
 }
 
 func cmdGenerate(args []string) {

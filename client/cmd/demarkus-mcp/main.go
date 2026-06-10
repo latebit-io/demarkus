@@ -36,7 +36,13 @@ func main() {
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	noCache := flag.Bool("no-cache", false, "disable response caching")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	opts := fetch.Options{Insecure: *insecure}
 	if !*noCache {
