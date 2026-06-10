@@ -10,7 +10,7 @@
       "name": "demarkus-memory",
       "source": "./plugins/claude-code",
       "description": "Zero-config local memory for Claude Code. Spawns a local demarkus-server and wires MCP tools for fetch/publish/append/graph/lookup over your own versioned markdown store, and self-documents sessions to it.",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "category": "memory",
       "tags": ["memory", "demarkus", "mark-protocol", "local-first"],
       "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code"
