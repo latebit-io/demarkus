@@ -12,10 +12,14 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
 
    ```
    ls -la ~/.demarkus/bin/ 2>/dev/null
-   cat ~/.demarkus/bin/.versions 2>/dev/null || echo "(no version sentinel — pre-tracking install)"
+   for b in demarkus-server demarkus-mcp demarkus-token; do
+     printf '%s ' "$b"; ~/.demarkus/bin/$b --version 2>/dev/null || echo "(missing or too old for --version)"
+   done
    ```
 
-   Note which binaries are present and what versions they report.
+   Note which binaries are present and what versions they report. A binary that
+   prints "(missing or too old for --version)" predates the `--version` flag and
+   will be upgraded on the next session start.
 
 3. **Check the server process.** Read `SOUL_DIR` and `PORT` from the config. Run:
 
@@ -34,7 +38,7 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
    - **Soul:** <SOUL_DIR>
    - **Port:** <PORT>
    - **Server:** running (pid <N>) | not running | reused (user-managed)
-   - **Binaries:** demarkus-server <ver>, demarkus-mcp <ver>, demarkus-token <ver>  (or "version sentinel missing")
+   - **Binaries:** demarkus-server <ver>, demarkus-mcp <ver>, demarkus-token <ver>  (or "too old for --version — upgrades next session")
    - **Connectivity:** ok | not-found (empty soul) | unauthorized (token mismatch) | unreachable
 
    <If anything is degraded, suggest the specific fix:>
