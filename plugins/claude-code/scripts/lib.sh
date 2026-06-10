@@ -643,24 +643,70 @@ ensure_token_entry() {
   log "generated plugin token (label=${TOKEN_LABEL})"
 }
 
+# managed_server_current PID_FILE VERSION_FILE — true (0) when the managed
+# server recorded in PID_FILE is alive AND the binary version stamped in
+# VERSION_FILE matches the current SERVER_VERSION pin. Any other case (no/garbage
+# PID, dead process, missing or mismatched stamp) is false (1), telling
+# ensure_managed_server to (re)spawn onto the pinned binary. The stamp is what
+# lets a binary upgrade propagate to a still-running server: an unstamped server
+# (older plugin) or a stale stamp both read as not-current → restart.
+managed_server_current() {
+  local pid_file="$1" version_file="$2"
+  [[ -f "${pid_file}" ]] || return 1
+  local pid; pid="$(cat "${pid_file}" 2>/dev/null || true)"
+  [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "${pid}" 2>/dev/null || return 1
+  local ver; ver="$(cat "${version_file}" 2>/dev/null || true)"
+  [[ "${ver}" == "${SERVER_VERSION}" ]]
+}
+
 # ensure_managed_server SOUL_DIR PORT
 # Spawns a demarkus-server for SOUL_DIR on PORT if ours isn't already running.
-# Writes PID to ${SOUL_DIR}/.pid. For default/isolated modes only — do not
-# call for reuse mode (the user's server is not ours to restart).
+# Writes PID to ${SOUL_DIR}/.pid and the spawned binary's version to
+# ${SOUL_DIR}/.server-version. For default/isolated modes only — do not call
+# for reuse mode (the user's server is not ours to restart).
+#
+# A live managed server is reused only when its recorded version matches the
+# current SERVER_VERSION pin. When ensure_binaries has upgraded the on-disk
+# binary under a still-running server (the version stamp now lags the pin, or
+# is absent because an older plugin spawned it), this restarts the server onto
+# the new binary — otherwise the process would keep serving the stale binary
+# from memory until it died on its own (reboot / manual kill), which is the
+# "server binary behind after a plugin update" symptom. The soul is on-disk and
+# versioned, so the restart never risks data; demarkus is QUIC (UDP), so the
+# killed process frees its port on exit with no TIME_WAIT to wait out.
 ensure_managed_server() {
   local soul_dir="$1" port="$2"
   local pid_file="${soul_dir}/.pid"
+  local version_file="${soul_dir}/.server-version"
   local log_file="${soul_dir}/.log"
 
-  # Note: the read+kill below is not atomic (classic TOCTOU), but the PID-reuse
-  # window is microseconds and the worst-case failure is "plugin thinks a stale
-  # PID is alive, skips spawn, MCP connections fail, user reruns /soul-init" —
-  # not data loss. flock would add a macOS/Linux portability burden that isn't
-  # worth closing this theoretical race.
-  if [[ -f "${pid_file}" ]] && kill -0 "$(cat "${pid_file}")" 2>/dev/null; then
+  # Note: the read+kill in managed_server_current is not atomic (classic
+  # TOCTOU), but the PID-reuse window is microseconds and the worst-case failure
+  # is "plugin thinks a stale PID is alive, skips spawn, MCP connections fail,
+  # user reruns /soul-init" — not data loss. flock would add a macOS/Linux
+  # portability burden that isn't worth closing this theoretical race.
+  if managed_server_current "${pid_file}" "${version_file}"; then
     return 0
   fi
-  rm -f "${pid_file}"
+  # Not reusable. If a live-but-stale managed server is recorded (binary upgraded
+  # under it, or an unstamped server left by an older plugin), stop it before we
+  # respawn on the new binary — otherwise the old process keeps serving the stale
+  # binary from memory. A dead/garbage PID just gets its files cleared.
+  local running_pid; running_pid="$(cat "${pid_file}" 2>/dev/null || true)"
+  if [[ "${running_pid}" =~ ^[0-9]+$ ]] && kill -0 "${running_pid}" 2>/dev/null; then
+    log "restarting managed demarkus-server onto upgraded binary (target=${SERVER_VERSION})"
+    kill "${running_pid}" 2>/dev/null || true
+    # Bounded wait for exit (~3s), then escalate to SIGKILL so the respawn below
+    # can bind the freed UDP port instead of dying with "port in use".
+    local waited=0
+    while (( waited < 30 )) && kill -0 "${running_pid}" 2>/dev/null; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+    kill -0 "${running_pid}" 2>/dev/null && kill -9 "${running_pid}" 2>/dev/null || true
+  fi
+  rm -f "${pid_file}" "${version_file}"
 
   mkdir -p "${soul_dir}"
 
@@ -671,6 +717,7 @@ ensure_managed_server() {
         >> "${log_file}" 2>&1 &
   local pid=$!
   echo "${pid}" > "${pid_file}"
+  printf '%s\n' "${SERVER_VERSION}" > "${version_file}"
   disown || true
 
   # Bounded poll: fail fast if the process died (bind or startup error),
@@ -681,7 +728,7 @@ ensure_managed_server() {
   local max_attempts=20  # ~2s at 100ms intervals
   while (( attempts < max_attempts )); do
     if ! kill -0 "${pid}" 2>/dev/null; then
-      rm -f "${pid_file}"
+      rm -f "${pid_file}" "${version_file}"
       local tail_info=""
       [[ -f "${log_file}" ]] && tail_info=$'\n'"recent log:"$'\n'"$(tail -5 "${log_file}")"
       die "demarkus-server failed to start (port ${port} may be in use; re-run /soul-init)${tail_info}"
