@@ -38,6 +38,7 @@ func TestVersionSubcommand(t *testing.T) {
 		want      string
 	}{
 		{"version subcommand, injected", "9.9.9-test", "version", "9.9.9-test"},
+		{"-version flag form", "9.9.9-test", "-version", "9.9.9-test"},
 		{"--version flag form", "9.9.9-test", "--version", "9.9.9-test"},
 		{"default when not injected", "", "version", "dev"},
 	}
