@@ -67,6 +67,8 @@ Write intents — route to the right file for the content type:
 
 **On every `mark_publish`, set `metadata`:** `tags` (comma-separated subjects — the primary match target for `mark_lookup`) and, sparingly, `importance` (0–1, default 0.5; reserve high values for genuinely central docs like index hubs and architecture). An untagged document can only be found by words in its title, so tagging on write is what makes later recall work. The server does not infer either field — you choose them. Reserved keys are rejected; any other metadata key is stored opaquely and reachable through lookup's `filter` axis.
 
+**All metadata goes in the `metadata` object, never in the body.** The recognized keys are `title`, `tags`, and `importance`. Never hand-write a YAML frontmatter block at the top of a document body — a `---` … `---` fence, or `name:` / `description:` / `type:` keys. demarkus prepends its own version envelope and carries metadata out of band, so a body that opens with `---` is stored as literal content: it renders as garbled headings in a viewer and is invisible to `mark_lookup`. Express the intent through the real channel — the document's name is its `# H1` heading (or `metadata.title`), its kind is a tag (`type:reference`), and a one-line summary is the first sentence under the H1.
+
 `mark_append` carries no metadata, so a doc's `tags`/`importance` are whatever its last `mark_publish` set. When an append introduces a materially new subject, re-publish the doc (full body, correct `expected_version`) with extended `tags` rather than letting the catalog drift.
 
 Always reference what you saved by full path so the user can find it again.
