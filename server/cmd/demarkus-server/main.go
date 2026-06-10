@@ -42,6 +42,42 @@ func buildCatalog(s *store.Store, logger *slog.Logger) *catalog.Catalog {
 	return cat
 }
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
+// flagOverrides holds the CLI flag values that override env-derived config.
+type flagOverrides struct {
+	root     string
+	tlsCert  string
+	tlsKey   string
+	tokens   string
+	port     int
+	readOnly bool
+}
+
+// applyFlagOverrides applies non-empty/non-zero CLI flags onto cfg. Flags take
+// precedence over env vars.
+func applyFlagOverrides(cfg *config.Config, o *flagOverrides) {
+	if o.root != "" {
+		cfg.ContentDir = o.root
+	}
+	if o.port != 0 {
+		cfg.Port = o.port
+	}
+	if o.tlsCert != "" {
+		cfg.TLSCert = o.tlsCert
+	}
+	if o.tlsKey != "" {
+		cfg.TLSKey = o.tlsKey
+	}
+	if o.tokens != "" {
+		cfg.TokensFile = o.tokens
+	}
+	if o.readOnly {
+		cfg.ReadOnly = true
+	}
+}
+
 func main() {
 	root := flag.String("root", "", "content directory to serve (overrides DEMARKUS_ROOT)")
 	port := flag.Int("port", 0, "port to listen on (overrides DEMARKUS_PORT)")
@@ -49,6 +85,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
 	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
 	readOnly := flag.Bool("read-only", false, "reject all write operations (also enabled via DEMARKUS_READ_ONLY)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: demarkus-server [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Serves markdown documents over the Mark Protocol (QUIC, port %d).\n", protocol.DefaultPort)
@@ -56,6 +93,11 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	cfg, err := config.NewConfig()
 
@@ -66,25 +108,14 @@ func main() {
 		logger.Warn("config", "error", err)
 	}
 
-	// Flag overrides take precedence over env vars
-	if *root != "" {
-		cfg.ContentDir = *root
-	}
-	if *port != 0 {
-		cfg.Port = *port
-	}
-	if *tlsCert != "" {
-		cfg.TLSCert = *tlsCert
-	}
-	if *tlsKey != "" {
-		cfg.TLSKey = *tlsKey
-	}
-	if *tokens != "" {
-		cfg.TokensFile = *tokens
-	}
-	if *readOnly {
-		cfg.ReadOnly = true
-	}
+	applyFlagOverrides(cfg, &flagOverrides{
+		root:     *root,
+		port:     *port,
+		tlsCert:  *tlsCert,
+		tlsKey:   *tlsKey,
+		tokens:   *tokens,
+		readOnly: *readOnly,
+	})
 	if cfg.ContentDir == "" {
 		logger.Error("content directory is required (set DEMARKUS_ROOT or use -root flag)")
 		os.Exit(1)

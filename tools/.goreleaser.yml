@@ -39,7 +39,7 @@ builds:
     goarm:
       - "7"
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{ .Version }}
 
   - id: demarkus-publish
     main: ./demarkus-publish
