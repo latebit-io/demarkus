@@ -26,6 +26,12 @@
 # broker-minted code -> /device/token exchange, with negative (wrong
 # verifier -> invalid_grant) and replay (one-shot code) assertions. This is
 # the OAuth surface Claude Code's MCP SDK uses via /knowledge-join.
+#
+# It also drives the CONFIDENTIAL web-client flow (phase-1b web SSO): a
+# webClients registry entry is rendered through the local chart, then the
+# same authorize -> IdP -> callback dance runs against the registered https
+# redirect, the token exchange must present the client secret (Basic), and
+# the minted refresh token is client-bound (refresh without auth -> 401).
 
 set -euo pipefail
 
@@ -445,6 +451,16 @@ if [[ "$WITH_BROKER" == "true" ]]; then
     kind load docker-image "$MCP_SMOKE_IMAGE_REGISTRY/demarkus-broker:$MCP_SMOKE_IMAGE_TAG" --name "$CLUSTER"
 
     echo "--- installing LOCAL demarkus-broker chart from $REPO_ROOT/deploy/helm/demarkus-broker"
+    # Confidential web client for the web-SSO smoke below. The secret is
+    # generated per run and only its sha256 enters the rendered config —
+    # same posture as a real deployment. The redirect host is .invalid
+    # (RFC 2606): nothing ever connects to it, the smoke only parses the
+    # broker's 302 Location to recover the authorization code.
+    WEBCLIENT_ID="library-web-smoke"
+    WEBCLIENT_SECRET="$(openssl rand -hex 24)"
+    WEBCLIENT_SECRET_HASH="$(printf '%s' "$WEBCLIENT_SECRET" | openssl dgst -sha256 -hex | awk '{print $NF}')"
+    WEBCLIENT_REDIRECT_URI="https://library.smoke.invalid/auth/callback"
+
     # server.insecureCookies=true is set here (not in values-broker.yaml) so
     # only the --with-mcp-smoke install drops the Secure attribute on the
     # OIDC state cookie. The auth-code smoke below drives /oauth/authorize ->
@@ -459,6 +475,10 @@ if [[ "$WITH_BROKER" == "true" ]]; then
       --set "image.repository=$MCP_SMOKE_IMAGE_REGISTRY/demarkus-broker" \
       --set "image.tag=$MCP_SMOKE_IMAGE_TAG" \
       --set "image.pullPolicy=IfNotPresent" \
+      --set "webClients[0].clientID=$WEBCLIENT_ID" \
+      --set-string "webClients[0].clientSecretHash=$WEBCLIENT_SECRET_HASH" \
+      --set "webClients[0].redirectURIs[0]=$WEBCLIENT_REDIRECT_URI" \
+      --set "webClients[0].name=Web SSO smoke client" \
       --wait --timeout 5m
   else
     echo "--- installing demarkus-broker chart $BROKER_CHART_VERSION"
@@ -650,6 +670,137 @@ echo "OK: authorization code is one-shot (replay rejected)"
 echo "OK: auth-code + PKCE flow end-to-end"
 '
     echo "--- auth-code + PKCE flow passed"
+
+    # Confidential web-client flow (phase-1b web SSO). Proves the chart's
+    # webClients rendering reached the broker AND the broker enforces the
+    # confidential contract: registered https redirect accepted (loopback
+    # path untouched — covered above), token exchange demands the client
+    # secret without burning the code on a missing-auth attempt, and the
+    # minted refresh token is bound to the client.
+    WEB_CLIENT_STATE="$(openssl rand -hex 16)"
+    WEB_VERIFIER="$(openssl rand -hex 32)"
+    WEB_CHALLENGE="$(printf '%s' "$WEB_VERIFIER" \
+      | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+
+    echo "--- driving confidential web-client flow from an ephemeral curl pod"
+    kubectl run -n "$NAMESPACE" webclient-smoke --rm -i --restart=Never \
+      --image="$MINT_CURL_IMAGE" --command -- sh -c '
+set -eu
+BROKER='"$BROKER_OAUTH_URL"'
+CLIENT_ID='"$WEBCLIENT_ID"'
+CLIENT_SECRET='"$WEBCLIENT_SECRET"'
+REDIRECT_URI='"$WEBCLIENT_REDIRECT_URI"'
+CLIENT_STATE='"$WEB_CLIENT_STATE"'
+VERIFIER='"$WEB_VERIFIER"'
+CHALLENGE='"$WEB_CHALLENGE"'
+CURL="curl -sS --connect-timeout 5 --max-time 15"
+
+# 0. Wait for the broker OAuth Service to answer.
+for attempt in $(seq 1 15); do
+  if $CURL -o /dev/null "$BROKER/healthz"; then break; fi
+  sleep 2
+done
+$CURL -f -o /dev/null "$BROKER/healthz" || { echo "FAIL: broker OAuth surface unreachable"; exit 1; }
+
+# 1. Discovery advertises the confidential auth methods.
+DISC=$($CURL "$BROKER/.well-known/openid-configuration")
+echo "$DISC" | grep -q "client_secret_basic" || { echo "FAIL: discovery missing client_secret_basic"; exit 1; }
+echo "OK: discovery advertises client_secret_basic"
+
+# 2. NEGATIVE — an unregistered https redirect for the registered client
+#    must be refused BEFORE redirect trust (JSON 400, no Location).
+HTTP=$($CURL -G -o /tmp/badredir.json -w "%{http_code}" \
+  --data-urlencode "response_type=code" \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "redirect_uri=https://attacker.invalid/steal" \
+  --data-urlencode "code_challenge=$CHALLENGE" \
+  --data-urlencode "code_challenge_method=S256" \
+  --data-urlencode "state=$CLIENT_STATE" \
+  "$BROKER/oauth/authorize")
+[ "$HTTP" = "400" ] || { echo "FAIL: unregistered redirect did not 400 (got $HTTP)"; cat /tmp/badredir.json; exit 1; }
+echo "OK: unregistered redirect_uri rejected for registered client"
+
+# 3. /oauth/authorize with the REGISTERED https redirect -> 302 to IdP.
+$CURL -G -c /tmp/cookies -D /tmp/authz.h -o /dev/null \
+  --data-urlencode "response_type=code" \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "redirect_uri=$REDIRECT_URI" \
+  --data-urlencode "code_challenge=$CHALLENGE" \
+  --data-urlencode "code_challenge_method=S256" \
+  --data-urlencode "state=$CLIENT_STATE" \
+  "$BROKER/oauth/authorize"
+IDP=$(awk "/^[Ll]ocation:/{print \$2}" /tmp/authz.h | tr -d "\r")
+[ -n "$IDP" ] || { echo "FAIL: no Location from /oauth/authorize (web client)"; cat /tmp/authz.h; exit 1; }
+
+# 4. Mock IdP auto-approves -> code+state for the broker callback.
+$CURL -D /tmp/idp.h -o /dev/null "$IDP"
+CB=$(awk "/^[Ll]ocation:/{print \$2}" /tmp/idp.h | tr -d "\r")
+IDP_CODE=$(printf "%s" "$CB" | sed -n "s/.*[?&]code=\([^&]*\).*/\1/p")
+IDP_STATE=$(printf "%s" "$CB" | sed -n "s/.*[?&]state=\([^&]*\).*/\1/p")
+[ -n "$IDP_CODE" ] && [ -n "$IDP_STATE" ] || { echo "FAIL: bad IdP callback URL: $CB"; exit 1; }
+
+# 5. /auth/callback -> 302 to the REGISTERED https redirect with the code.
+$CURL -b /tmp/cookies -D /tmp/cb.h -o /dev/null "$BROKER/auth/callback?code=$IDP_CODE&state=$IDP_STATE"
+RU=$(awk "/^[Ll]ocation:/{print \$2}" /tmp/cb.h | tr -d "\r")
+case "$RU" in
+  "$REDIRECT_URI"*) ;;
+  *) echo "FAIL: callback did not redirect to registered URI: $RU"; exit 1 ;;
+esac
+case "$RU" in
+  *"error="*) echo "FAIL: web-client callback returned an OAuth error: $RU"; exit 1 ;;
+esac
+AUTH_CODE=$(printf "%s" "$RU" | sed -n "s/.*[?&]code=\([^&]*\).*/\1/p")
+RET_STATE=$(printf "%s" "$RU" | sed -n "s/.*[?&]state=\([^&]*\).*/\1/p")
+[ -n "$AUTH_CODE" ] || { echo "FAIL: no broker authorization code in redirect: $RU"; exit 1; }
+[ "$RET_STATE" = "$CLIENT_STATE" ] || { echo "FAIL: state mismatch: got [$RET_STATE] want [$CLIENT_STATE]"; exit 1; }
+echo "OK: authorize -> callback -> code on registered https redirect"
+
+# 6. NEGATIVE — exchange WITHOUT the client secret must 401
+#    invalid_client with a Basic challenge, and must NOT burn the code.
+HTTP=$($CURL -D /tmp/noauth.h -o /tmp/noauth.json -w "%{http_code}" -X POST "$BROKER/device/token" \
+  --data-urlencode "grant_type=authorization_code" \
+  --data-urlencode "code=$AUTH_CODE" \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "redirect_uri=$REDIRECT_URI" \
+  --data-urlencode "code_verifier=$VERIFIER")
+[ "$HTTP" = "401" ] || { echo "FAIL: secretless exchange did not 401 (got $HTTP)"; cat /tmp/noauth.json; exit 1; }
+grep -q "invalid_client" /tmp/noauth.json || { echo "FAIL: secretless exchange not invalid_client"; cat /tmp/noauth.json; exit 1; }
+grep -qi "^WWW-Authenticate: Basic" /tmp/noauth.h || { echo "FAIL: 401 missing WWW-Authenticate: Basic"; cat /tmp/noauth.h; exit 1; }
+echo "OK: token exchange without client secret rejected (invalid_client + Basic challenge)"
+
+# 7. POSITIVE — exchange WITH HTTP Basic mints a Bearer + refresh token,
+#    proving the failed attempt above preserved the one-shot code.
+HTTP=$($CURL -u "$CLIENT_ID:$CLIENT_SECRET" -o /tmp/tok.json -w "%{http_code}" -X POST "$BROKER/device/token" \
+  --data-urlencode "grant_type=authorization_code" \
+  --data-urlencode "code=$AUTH_CODE" \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "redirect_uri=$REDIRECT_URI" \
+  --data-urlencode "code_verifier=$VERIFIER")
+[ "$HTTP" = "200" ] || { echo "FAIL: Basic-auth exchange did not 200 (got $HTTP)"; cat /tmp/tok.json; exit 1; }
+grep -q "\"token_type\":\"Bearer\"" /tmp/tok.json || { echo "FAIL: token_type Bearer missing"; exit 1; }
+REFRESH=$(sed -n "s/.*\"refresh_token\":\"\([^\"]*\)\".*/\1/p" /tmp/tok.json)
+[ -n "$REFRESH" ] || { echo "FAIL: refresh_token missing from web-client exchange"; exit 1; }
+echo "OK: Basic-auth exchange minted a Bearer token (code survived the failed attempt)"
+
+# 8. NEGATIVE — the refresh token is client-bound: refresh WITHOUT
+#    client auth must 401 invalid_client.
+HTTP=$($CURL -o /tmp/refnoauth.json -w "%{http_code}" -X POST "$BROKER/device/token" \
+  --data-urlencode "grant_type=refresh_token" \
+  --data-urlencode "refresh_token=$REFRESH")
+[ "$HTTP" = "401" ] || { echo "FAIL: unauthenticated refresh of bound token did not 401 (got $HTTP)"; cat /tmp/refnoauth.json; exit 1; }
+grep -q "invalid_client" /tmp/refnoauth.json || { echo "FAIL: unauthenticated refresh not invalid_client"; cat /tmp/refnoauth.json; exit 1; }
+echo "OK: client-bound refresh token refuses to mint without client auth"
+
+# 9. POSITIVE — refresh WITH Basic auth mints a fresh id_token.
+HTTP=$($CURL -u "$CLIENT_ID:$CLIENT_SECRET" -o /tmp/ref.json -w "%{http_code}" -X POST "$BROKER/device/token" \
+  --data-urlencode "grant_type=refresh_token" \
+  --data-urlencode "refresh_token=$REFRESH")
+[ "$HTTP" = "200" ] || { echo "FAIL: Basic-auth refresh did not 200 (got $HTTP)"; cat /tmp/ref.json; exit 1; }
+grep -Eq "\"id_token\":\"[^\"]+\"" /tmp/ref.json || { echo "FAIL: id_token missing from authenticated refresh"; exit 1; }
+echo "OK: bound refresh token mints with client auth"
+echo "OK: confidential web-client flow end-to-end"
+'
+    echo "--- confidential web-client flow passed"
   fi
 
   cat <<EOF

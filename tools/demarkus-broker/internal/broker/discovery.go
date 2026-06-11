@@ -299,6 +299,19 @@ func applyDiscoveryOverrides(raw []byte, brokerURL string) ([]byte, error) {
 	// that probe for OAuth 2.1 compliance check this list before
 	// they kick off /oauth/authorize.
 	doc["response_types_supported"] = []string{"code"}
+	// token_endpoint_auth_methods_supported reflects the broker's
+	// two client classes: public/native clients authenticate with
+	// nothing but PKCE (`none`), registered confidential web clients
+	// present their secret via HTTP Basic (preferred) or
+	// client_secret_post. Overridden rather than passed through so
+	// the IdP's own method list (often including private_key_jwt
+	// etc.) doesn't promise mechanisms the broker's token endpoint
+	// would reject.
+	doc["token_endpoint_auth_methods_supported"] = []string{
+		"none",
+		"client_secret_basic",
+		"client_secret_post",
+	}
 	// code_challenge_methods_supported declares S256-only PKCE.
 	// `plain` is excluded by policy (see oauth_authorize.go). The
 	// override replaces any upstream value verbatim so the broker's

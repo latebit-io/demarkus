@@ -278,6 +278,25 @@ worlds: []
   #     # token never expires, so there is no operations/expiresAfter
   #     # field to set.
 
+# Registered confidential web clients (RFC 6749 §2.1) — server-side
+# apps (e.g. the Universe Library) that authenticate with a client
+# secret and receive the authorization-code redirect at a real https
+# URL instead of a native-app loopback. Explicit operator-curated
+# registry, NOT open dynamic registration. Native/CLI agents never
+# appear here. Store only the sha256-hex of the secret; the plaintext
+# lives in the web app's own deployment.
+webClients: []
+  # - clientID: library-web
+  #   # sha256-hex of the client secret, e.g.
+  #   #   printf '%s' "$SECRET" | sha256sum | cut -d' ' -f1
+  #   clientSecretHash: "0123…64 hex chars…cdef"
+  #   # Exact-match https redirect allowlist — no wildcards, no
+  #   # loopback. The broker rejects any redirect_uri not listed here.
+  #   redirectURIs:
+  #     - https://library.example.com/auth/callback
+  #   # Optional human label for logs.
+  #   name: Universe Library
+
 # Periodic expiry + drift sweeper. Leader-elected via
 # coordination.k8s.io/Lease so multi-replica deployments enforce
 # singleton sweep without coordination on the broker side. Named

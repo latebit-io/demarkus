@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,9 +21,63 @@ type Config struct {
 	Server      ServerConfig      `yaml:"server"`
 	OIDC        OIDCConfig        `yaml:"oidc"`
 	Worlds      []WorldConfig     `yaml:"worlds"`
+	WebClients  []WebClientConfig `yaml:"webClients"`
 	Sweeper     SweeperConfig     `yaml:"sweeper"`
 	RateLimit   RateLimitConfig   `yaml:"rateLimit"`
 	WorldDialer WorldDialerConfig `yaml:"worldDialer"`
+}
+
+// WebClientConfig registers one confidential web client (RFC 6749 §2.1)
+// at the broker — a server-side app that can keep a secret and receives
+// the authorization-code redirect at a real https URL instead of a
+// native-app loopback. The registry is the explicit operator-curated
+// list of first-party apps (e.g. the Universe Library); it is NOT open
+// dynamic registration — /register stays public-client-only.
+//
+// Public/native clients (Claude Code's MCP SDK, demarkus-join) never
+// appear here: an unregistered client_id keeps the existing
+// loopback-only PKCE path on /oauth/authorize untouched.
+type WebClientConfig struct {
+	// ClientID is the registered identifier the web app presents on
+	// /oauth/authorize and the token endpoint. Must be unique across
+	// the registry.
+	ClientID string `yaml:"clientID"`
+	// ClientSecretHash is the lowercase sha256-hex of the client
+	// secret. The plaintext secret never appears in broker config —
+	// the operator generates a high-entropy secret, hands it to the
+	// web app's deployment, and stores only the hash here. sha256
+	// (not bcrypt) is sufficient because the secret is
+	// operator-generated randomness, not a human password — there is
+	// no low-entropy input for a fast hash to endanger.
+	ClientSecretHash string `yaml:"clientSecretHash"`
+	// RedirectURIs is the exact-match allowlist for this client's
+	// redirect_uri. Each entry must be an absolute https URL; no
+	// wildcards, no prefix matching, no loopback exemption — the web
+	// app's callback URL is known at deploy time and anything looser
+	// is an open-redirect foothold.
+	RedirectURIs []string `yaml:"redirectURIs"`
+	// Name is an optional human label for logs and operator grep.
+	Name string `yaml:"name"`
+}
+
+// webClient returns the registered confidential client for clientID,
+// or false when the id is unregistered (the public/native path).
+// Linear scan — the registry is a handful of first-party apps.
+func (c *Config) webClient(clientID string) (*WebClientConfig, bool) {
+	for i := range c.WebClients {
+		if c.WebClients[i].ClientID == clientID {
+			return &c.WebClients[i], true
+		}
+	}
+	return nil, false
+}
+
+// allowsRedirect reports whether raw exactly matches one of the
+// client's registered redirect URIs. Byte-for-byte compare per OAuth
+// 2.1 — normalization tricks (case, default ports, dot segments) are
+// how redirect allowlists get bypassed.
+func (wc *WebClientConfig) allowsRedirect(raw string) bool {
+	return slices.Contains(wc.RedirectURIs, raw)
 }
 
 // WorldDialerConfig holds knobs governing how the broker's MCP gateway
@@ -523,6 +578,9 @@ func (c *Config) validate() error {
 		}
 		seen[w.Name] = true
 	}
+	if err := validateWebClients(c.WebClients); err != nil {
+		return err
+	}
 	// Sweeper defaults. Disabled is the zero-value opt-out — see the
 	// SweeperConfig doc for why it's named "Disabled" rather than
 	// "Enabled". Interval and LeaseName get production-safe defaults
@@ -768,6 +826,83 @@ func validateWorld(i int, w *WorldConfig) error {
 		return err
 	}
 	return normalizeAllowList(i, w.Name, "groups", w.Allow.Groups)
+}
+
+// validateWebClients enforces the confidential-client registry
+// invariants and normalizes secret hashes in place. Every axis is an
+// operator typo that must fail at load: a half-registered client
+// would either lock out the web app (bad hash) or silently fall back
+// to the loopback-only path (missing redirect), both of which present
+// as confusing runtime auth failures instead of a startup error.
+func validateWebClients(clients []WebClientConfig) error {
+	seen := make(map[string]bool, len(clients))
+	for i := range clients {
+		wc := &clients[i]
+		if wc.ClientID == "" {
+			return fmt.Errorf("webClients[%d]: clientID is required", i)
+		}
+		if seen[wc.ClientID] {
+			return fmt.Errorf("webClients[%d]: duplicate clientID %q", i, wc.ClientID)
+		}
+		seen[wc.ClientID] = true
+		// Normalize to lowercase so the runtime constant-time compare
+		// never misses on an uppercase-hex operator paste.
+		wc.ClientSecretHash = strings.ToLower(strings.TrimSpace(wc.ClientSecretHash))
+		if !isSHA256Hex(wc.ClientSecretHash) {
+			return fmt.Errorf("webClients[%d] (%s): clientSecretHash must be 64 hex chars (sha256 of the client secret)", i, wc.ClientID)
+		}
+		if len(wc.RedirectURIs) == 0 {
+			return fmt.Errorf("webClients[%d] (%s): at least one redirectURI is required", i, wc.ClientID)
+		}
+		for j, raw := range wc.RedirectURIs {
+			if err := validateWebRedirectURI(raw); err != nil {
+				return fmt.Errorf("webClients[%d] (%s): redirectURIs[%d]: %w", i, wc.ClientID, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateWebRedirectURI enforces the registered-redirect shape:
+// absolute https URL, no userinfo, no fragment. Loopback hosts are
+// rejected too — a web client registering http://localhost belongs on
+// the native path, and letting it in here would blur the one boundary
+// this registry exists to draw.
+func validateWebRedirectURI(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL %q: %w", raw, err)
+	}
+	switch {
+	case u.Scheme != "https":
+		return fmt.Errorf("%q: scheme must be https", raw)
+	case u.Host == "":
+		return fmt.Errorf("%q: host is required", raw)
+	case u.User != nil:
+		return fmt.Errorf("%q: userinfo is not allowed", raw)
+	case u.Fragment != "" || u.RawFragment != "":
+		return fmt.Errorf("%q: fragment is not allowed", raw)
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+		return fmt.Errorf("%q: loopback hosts use the native-app flow, not the web-client registry", raw)
+	}
+	return nil
+}
+
+// isSHA256Hex reports whether s is exactly 64 lowercase hex chars —
+// the shape of a sha256 hex digest. Validation-time gate so a
+// truncated or plaintext-pasted secret fails at load.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeAllowList(worldIdx int, worldName, field string, list []string) error {

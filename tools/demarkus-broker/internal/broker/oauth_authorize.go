@@ -16,11 +16,20 @@ import (
 //
 // Two-phase validation matches RFC 6749 §4.1.2.1: errors that
 // happen BEFORE the redirect_uri is trusted (missing client_id,
-// non-loopback redirect_uri) surface as a JSON 400 directly to the
+// unacceptable redirect_uri) surface as a JSON 400 directly to the
 // user agent. Errors AFTER trust is established (bad response_type,
 // missing PKCE, store failure) redirect to the client's
 // redirect_uri with `error=...&state=...` so the MCP SDK can surface
 // the failure programmatically.
+//
+// Redirect trust is two-class: a client_id registered in the
+// WebClients registry (confidential web app) must present an exact
+// match against its registered https redirect allowlist; every other
+// client_id is the native/public path and must present a loopback
+// redirect per RFC 8252 §7.3. Whether the grant then requires client
+// authentication at the token endpoint is decided there by the same
+// registry lookup — the auth-code store's client_id binding
+// guarantees the two lookups see the same client.
 //
 // PKCE is required: the broker accepts only `code_challenge_method=
 // S256` and rejects requests missing `code_challenge`. OAuth 2.1
@@ -51,7 +60,16 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeAuthorizeJSONError(w, "invalid_request", "redirect_uri required")
 		return
 	}
-	if !isLoopbackRedirectURI(redirectURI) {
+	if webClient, ok := s.cfg.webClient(clientID); ok {
+		// Registered confidential web client: the redirect target is
+		// the operator-curated exact-match allowlist, not loopback.
+		// RFC 6749 §3.1.2.3 — pre-registered redirect URIs are the
+		// redirect-trust mechanism for confidential clients.
+		if !webClient.allowsRedirect(redirectURI) {
+			writeAuthorizeJSONError(w, "invalid_request", "redirect_uri is not registered for this client")
+			return
+		}
+	} else if !isLoopbackRedirectURI(redirectURI) {
 		// RFC 8252 §7.3: native apps MUST use loopback. Any other
 		// host is a configuration mistake or an attack; either way
 		// the broker refuses BEFORE the redirect is trusted, so the

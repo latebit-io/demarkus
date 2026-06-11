@@ -50,7 +50,7 @@ func TestRefreshStoreIssueRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	claims := Claims{Subject: "user-1", Email: "alice@example.com", EmailVerified: true, Groups: []string{"eng"}}
-	raw, err := s.Issue(ctx, &claims, s.cfg.Server.RefreshTokenTTL)
+	raw, err := s.Issue(ctx, &claims, "", s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -91,10 +91,10 @@ func TestRefreshStoreIssueRoundTrip(t *testing.T) {
 func TestRefreshStoreIssueRejectsZeroTTL(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
 	s := newRefreshStoreForTest(t, k8s)
-	if _, err := s.Issue(context.Background(), &Claims{}, 0); err == nil {
+	if _, err := s.Issue(context.Background(), &Claims{}, "", 0); err == nil {
 		t.Fatalf("Issue with ttl=0 should error")
 	}
-	if _, err := s.Issue(context.Background(), &Claims{}, -time.Second); err == nil {
+	if _, err := s.Issue(context.Background(), &Claims{}, "", -time.Second); err == nil {
 		t.Fatalf("Issue with negative ttl should error")
 	}
 }
@@ -133,7 +133,7 @@ func TestRefreshStoreRefreshErrors(t *testing.T) {
 			k8s := fake.NewSimpleClientset()
 			s := newRefreshStoreForTest(t, k8s)
 			ctx := context.Background()
-			raw, err := s.Issue(ctx, &Claims{Subject: "u", Email: "a@b.com", EmailVerified: true}, time.Hour)
+			raw, err := s.Issue(ctx, &Claims{Subject: "u", Email: "a@b.com", EmailVerified: true}, "", time.Hour)
 			if err != nil {
 				t.Fatalf("setup Issue: %v", err)
 			}
@@ -150,7 +150,7 @@ func TestRefreshStoreRevoke(t *testing.T) {
 		k8s := fake.NewSimpleClientset()
 		s := newRefreshStoreForTest(t, k8s)
 		ctx := context.Background()
-		raw, err := s.Issue(ctx, &Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+		raw, err := s.Issue(ctx, &Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}
@@ -175,7 +175,7 @@ func TestRefreshStoreRevoke(t *testing.T) {
 			t.Errorf("Secret should not exist after no-op Revoke; Get err = %v", err)
 		}
 		// Now after an Issue + Revoke, revoke-unknown still succeeds.
-		raw, err := s.Issue(context.Background(), &Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+		raw, err := s.Issue(context.Background(), &Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}
@@ -207,11 +207,11 @@ func TestRefreshStoreSweep(t *testing.T) {
 		base := s.clock()
 
 		// Mint one short-lived (1h) and one long-lived (48h) token.
-		shortRaw, err := s.Issue(ctx, &Claims{Email: "short@x.com", EmailVerified: true}, time.Hour)
+		shortRaw, err := s.Issue(ctx, &Claims{Email: "short@x.com", EmailVerified: true}, "", time.Hour)
 		if err != nil {
 			t.Fatalf("Issue short: %v", err)
 		}
-		longRaw, err := s.Issue(ctx, &Claims{Email: "long@x.com", EmailVerified: true}, 48*time.Hour)
+		longRaw, err := s.Issue(ctx, &Claims{Email: "long@x.com", EmailVerified: true}, "", 48*time.Hour)
 		if err != nil {
 			t.Fatalf("Issue long: %v", err)
 		}
@@ -253,7 +253,7 @@ func TestRefreshStoreSweep(t *testing.T) {
 	t.Run("no-op when nothing expired", func(t *testing.T) {
 		k8s := fake.NewSimpleClientset()
 		s := newRefreshStoreForTest(t, k8s)
-		_, err := s.Issue(context.Background(), &Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+		_, err := s.Issue(context.Background(), &Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}
@@ -272,7 +272,7 @@ func TestRefreshStoreSecretShape(t *testing.T) {
 	s := newRefreshStoreForTest(t, k8s)
 	ctx := context.Background()
 
-	raw, err := s.Issue(ctx, &Claims{Subject: "u1", Email: "a@example.com", EmailVerified: true, Groups: []string{"g"}}, time.Hour)
+	raw, err := s.Issue(ctx, &Claims{Subject: "u1", Email: "a@example.com", EmailVerified: true, Groups: []string{"g"}}, "", time.Hour)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestRefreshStoreConcurrentRefresh(t *testing.T) {
 	const n = 50
 	tokens := make([]string, n)
 	for i := range n {
-		raw, err := s.Issue(ctx, &Claims{Subject: fmt.Sprintf("u%d", i), Email: fmt.Sprintf("u%d@x.com", i), EmailVerified: true}, time.Hour)
+		raw, err := s.Issue(ctx, &Claims{Subject: fmt.Sprintf("u%d", i), Email: fmt.Sprintf("u%d@x.com", i), EmailVerified: true}, "", time.Hour)
 		if err != nil {
 			t.Fatalf("setup Issue[%d]: %v", i, err)
 		}
@@ -385,7 +385,7 @@ func TestRefreshStoreIssueConflictRetries(t *testing.T) {
 	}
 
 	s := newRefreshStoreForTest(t, k8s)
-	raw, err := s.Issue(context.Background(), &Claims{Email: "a@b.com", EmailVerified: true}, time.Hour)
+	raw, err := s.Issue(context.Background(), &Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -415,10 +415,10 @@ func TestRefreshStoreCollisionRetry(t *testing.T) {
 		return len(b), nil
 	}
 	ctx := context.Background()
-	if _, err := s.Issue(ctx, &Claims{Email: "a@b.com", EmailVerified: true}, time.Hour); err != nil {
+	if _, err := s.Issue(ctx, &Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour); err != nil {
 		t.Fatalf("first Issue: %v", err)
 	}
-	if _, err := s.Issue(ctx, &Claims{Email: "a@b.com", EmailVerified: true}, time.Hour); err == nil {
+	if _, err := s.Issue(ctx, &Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour); err == nil {
 		t.Fatalf("second Issue with identical randomness should fail with collision")
 	}
 	if calls != 2 {
