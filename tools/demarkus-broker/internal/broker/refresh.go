@@ -71,6 +71,14 @@ type refreshTokenRecord struct {
 	IssuedAt   time.Time `json:"issuedAt"`
 	ExpiresAt  time.Time `json:"expiresAt"`
 	LastUsedAt time.Time `json:"lastUsedAt,omitzero"`
+	// ClientID binds the token to the confidential web client it was
+	// issued to: the refresh grant then requires that client to
+	// authenticate, so a leaked refresh token alone mints nothing.
+	// Empty for tokens issued on the public/native paths (device
+	// flow, loopback auth-code), which refresh without client auth
+	// as before. omitempty keeps pre-existing Secret records valid —
+	// they decode with an empty ClientID, i.e. unbound.
+	ClientID string `json:"clientID,omitempty"`
 }
 
 // refreshTokens is the on-disk shape of the broker's refresh-tokens
@@ -118,12 +126,14 @@ func NewRefreshStore(cfg *Config, k8s kubernetes.Interface) *RefreshStore {
 // in the Secret, and returns the raw token for the caller to hand
 // back to the polling client. ttl must be > 0; callers (the
 // /device/token success branch in Step 2) pass
-// ServerConfig.RefreshTokenTTL.
+// ServerConfig.RefreshTokenTTL. clientID is the confidential web
+// client the token is bound to, or "" for the public/native paths —
+// see refreshTokenRecord.ClientID for the binding semantics.
 //
 // The raw token is hex-encoded 32-byte randomness (64 chars). The
 // caller is responsible for treating it as bearer credential material
 // — no logging, no retries that would surface it in error messages.
-func (s *RefreshStore) Issue(ctx context.Context, claims *Claims, ttl time.Duration) (string, error) {
+func (s *RefreshStore) Issue(ctx context.Context, claims *Claims, clientID string, ttl time.Duration) (string, error) {
 	if ttl <= 0 {
 		return "", fmt.Errorf("refresh ttl must be > 0 (got %s)", ttl)
 	}
@@ -139,6 +149,7 @@ func (s *RefreshStore) Issue(ctx context.Context, claims *Claims, ttl time.Durat
 		Claims:    *claims,
 		IssuedAt:  now,
 		ExpiresAt: now.Add(ttl),
+		ClientID:  clientID,
 	}
 	err := mutateSecret(ctx, s.k8s, s.cfg.Server.BrokerNamespace, s.cfg.Server.RefreshTokensSecret, RefreshTokensSecretKey, func(existing []byte) ([]byte, error) {
 		store, err := decodeRefreshTokens(existing)

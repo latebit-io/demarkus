@@ -147,6 +147,43 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "server.stateTTL must be > 0",
 		},
 		{
+			// YAML round-trip for the webClients registry — the chart
+			// renders exactly this shape, and LoadConfig's
+			// KnownFields(true) would reject a yaml-tag typo that the
+			// direct validateWebClients tests can't catch.
+			name: "webClients block parses and normalizes",
+			body: validConfig + `webClients:
+  - clientID: library-web
+    clientSecretHash: "` + strings.ToUpper(strings.Repeat("ab", 32)) + `"
+    redirectURIs: ["https://library.example.com/auth/callback"]
+    name: Universe Library
+`,
+			validate: func(t *testing.T, c *Config) {
+				if len(c.WebClients) != 1 {
+					t.Fatalf("webClients = %+v", c.WebClients)
+				}
+				wc := c.WebClients[0]
+				if wc.ClientID != "library-web" {
+					t.Errorf("clientID = %q", wc.ClientID)
+				}
+				if wc.ClientSecretHash != strings.Repeat("ab", 32) {
+					t.Errorf("hash not lowercased: %q", wc.ClientSecretHash)
+				}
+				if !wc.allowsRedirect("https://library.example.com/auth/callback") {
+					t.Errorf("redirectURIs = %v", wc.RedirectURIs)
+				}
+			},
+		},
+		{
+			name: "webClients loopback redirect rejected at load",
+			body: validConfig + `webClients:
+  - clientID: library-web
+    clientSecretHash: "` + strings.Repeat("ab", 32) + `"
+    redirectURIs: ["https://localhost:8443/cb"]
+`,
+			wantErr: "loopback hosts",
+		},
+		{
 			name:    "sweeper.interval over 24h rejected",
 			body:    validConfig + "sweeper:\n  interval: 48h\n",
 			wantErr: "sweeper.interval must be <= 24h0m0s",

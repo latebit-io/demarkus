@@ -279,10 +279,23 @@ func (s *Server) deviceTokenDeviceFlow(w http.ResponseWriter, r *http.Request) {
 // per-broker quirk. Same string in both fields keeps the
 // OIDC-client-library default codepath working.
 //
+// Client authentication: a record carrying a non-empty ClientID was
+// issued to a confidential web client and the request must
+// authenticate as that client (Basic or client_secret_post) — a
+// leaked refresh token alone mints nothing. The binding check runs
+// after the store lookup because the record IS the source of the
+// requirement; the only side effect before the gate is the record's
+// LastUsedAt bump, which is observability metadata, not credential
+// state. Unbound records (device flow, loopback auth-code) refresh
+// without client auth, unchanged.
+//
 // Error mapping:
-//   - Missing refresh_token form param → invalid_request
+//   - Missing refresh_token form param / malformed client auth →
+//     invalid_request
 //   - refreshStore rejects (unknown / expired / revoked) →
 //     invalid_grant per RFC 6749 §5.2
+//   - Missing or wrong client auth for a client-bound record →
+//     401 invalid_client + WWW-Authenticate: Basic
 //   - Signing failure (programming error) → 500 server_error
 //   - id-token-signer not wired (operator misconfig) → 500
 //     server_error; PR4 wiring requires it always
@@ -296,6 +309,12 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		// fails loudly.
 		s.log.ErrorContext(r.Context(), "broker: refresh grant requested but id_token signer not wired")
 		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
+	creds, err := parseClientAuth(r)
+	if err != nil {
+		s.log.DebugContext(r.Context(), "broker: refresh client auth malformed", "err", err)
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	rawRefresh := r.PostFormValue("refresh_token")
@@ -312,6 +331,21 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		s.log.ErrorContext(r.Context(), "broker: refresh store read failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
+	}
+	if record.ClientID != "" {
+		// Client-bound token: the presented identity must be the bound
+		// client and its secret must verify against the registry. A
+		// client deregistered since issuance also lands here — the
+		// binding can no longer be verified, so the token mints
+		// nothing until the operator restores the registration or the
+		// user re-authenticates.
+		webClient, ok := s.cfg.webClient(record.ClientID)
+		if !ok || creds.ClientID != record.ClientID || !verifyWebClientSecret(webClient, creds.Secret) {
+			s.log.InfoContext(r.Context(), "broker: refresh client auth failed",
+				"bound_client_id", record.ClientID, "subject", hashSubject(record.Claims.Subject))
+			writeInvalidClient(w)
+			return
+		}
 	}
 	now := s.clock()
 	idToken, err := s.idTokenSigner.Sign(&record.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
@@ -347,8 +381,22 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 // field, and empty access_token would force every client to learn
 // a per-broker quirk.
 //
+// Client authentication: a client_id registered in the WebClients
+// registry is confidential and MUST authenticate (RFC 6749 §3.2.1)
+// via HTTP Basic or client_secret_post. The check runs BEFORE
+// Redeem so a bad secret does not consume the code — mirroring the
+// store's keep-code-on-client-error semantics. An unregistered
+// client_id is the public/native path and presents no secret, as
+// before. The store's client_id binding inside Redeem is what makes
+// the registry lookup here authoritative: a code minted for a
+// confidential client can only redeem under that client_id, and
+// that client_id always trips this gate.
+//
 // Error mapping:
-//   - Missing required form params → invalid_request
+//   - Missing required form params / malformed client auth →
+//     invalid_request
+//   - Missing or wrong client secret for a registered web client →
+//     401 invalid_client + WWW-Authenticate: Basic
 //   - authCodeStore.Redeem error (unknown code, mismatch, PKCE) →
 //     invalid_grant. We deliberately collapse the store's distinct
 //     sentinels into one wire code so the response surface does
@@ -369,13 +417,33 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
+	creds, err := parseClientAuth(r)
+	if err != nil {
+		s.log.DebugContext(r.Context(), "broker: auth code client auth malformed", "err", err)
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		return
+	}
 	code := r.PostFormValue("code")
-	clientID := r.PostFormValue("client_id")
+	clientID := creds.ClientID
 	redirectURI := r.PostFormValue("redirect_uri")
 	codeVerifier := r.PostFormValue("code_verifier")
 	if code == "" || clientID == "" || redirectURI == "" || codeVerifier == "" {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
+	}
+
+	// boundClientID is recorded into the refresh token for confidential
+	// clients so the refresh grant can demand the same authentication.
+	// Stays empty on the public path — an unbound token refreshes as
+	// before.
+	var boundClientID string
+	if webClient, ok := s.cfg.webClient(clientID); ok {
+		if !verifyWebClientSecret(webClient, creds.Secret) {
+			s.log.InfoContext(r.Context(), "broker: auth code client auth failed", "client_id", clientID)
+			writeInvalidClient(w)
+			return
+		}
+		boundClientID = clientID
 	}
 
 	exchange, err := s.authCodeStore.Redeem(code, clientID, redirectURI, codeVerifier)
@@ -389,7 +457,7 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, s.cfg.Server.RefreshTokenTTL)
+	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, boundClientID, s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		// Code is already consumed by Redeem (one-shot). The user
 		// has to retry from /oauth/authorize; that's acceptable
@@ -524,7 +592,9 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 	// statusComplete state goes out without its refresh token.
 	// Orphaned refresh-tokens Secret entries (mint succeeded, Bind
 	// then races a sweep) age out on Sweep via their expiry.
-	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, s.cfg.Server.RefreshTokenTTL)
+	// Device-flow tokens are never client-bound — the polling clients
+	// are public/native by construction.
+	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, "", s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: device callback refresh mint failed",
 			"err", err, "subject", hashSubject(exchange.Claims.Subject))
