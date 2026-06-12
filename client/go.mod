@@ -1,4 +1,4 @@
-module github.com/latebit/demarkus/client
+module github.com/latebit-io/demarkus/client
 
 go 1.26.0
 
@@ -8,7 +8,7 @@ require (
 	charm.land/glamour/v2 v2.0.0
 	charm.land/lipgloss/v2 v2.0.2
 	github.com/BurntSushi/toml v1.6.0
-	github.com/latebit/demarkus/protocol v0.0.0
+	github.com/latebit-io/demarkus/protocol v0.0.0
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/quic-go/quic-go v0.59.0
 	github.com/yuin/goldmark v1.7.8
@@ -53,4 +53,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/latebit/demarkus/protocol => ../protocol
+replace github.com/latebit-io/demarkus/protocol => ../protocol

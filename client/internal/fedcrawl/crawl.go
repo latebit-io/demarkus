@@ -11,11 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/index"
-	"github.com/latebit/demarkus/client/internal/tokens"
-	"github.com/latebit/demarkus/client/links"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
+	"github.com/latebit-io/demarkus/client/internal/tokens"
+	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // FetchClient wraps the operations needed for crawling.

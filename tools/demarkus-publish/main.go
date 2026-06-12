@@ -18,8 +18,8 @@ import (
 	pathpkg "path"
 	"strings"
 
-	"github.com/latebit/demarkus/protocol"
-	"github.com/latebit/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/store"
 )
 
 func main() {

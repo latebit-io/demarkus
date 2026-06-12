@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // Entry maps a content hash to a server location.

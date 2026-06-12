@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // worldDispatcher is the read/write surface the MCP tool handlers

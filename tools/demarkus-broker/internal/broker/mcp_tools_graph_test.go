@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/graph"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes/fake"
 )
 

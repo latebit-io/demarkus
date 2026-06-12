@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // DemarkusCacheDir is the environment variable for overriding the cache directory.

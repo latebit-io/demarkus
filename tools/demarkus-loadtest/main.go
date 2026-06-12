@@ -35,8 +35,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func main() {

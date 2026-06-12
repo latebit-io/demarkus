@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // Entry is the persistent shape of a single token as the server reads it

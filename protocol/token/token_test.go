@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestGenerate(t *testing.T) {

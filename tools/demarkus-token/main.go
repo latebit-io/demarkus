@@ -18,7 +18,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/latebit/demarkus/protocol/token"
+	"github.com/latebit-io/demarkus/protocol/token"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".

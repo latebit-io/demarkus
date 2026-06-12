@@ -1,4 +1,4 @@
-module github.com/latebit/demarkus/protocol
+module github.com/latebit-io/demarkus/protocol
 
 go 1.26.0
 

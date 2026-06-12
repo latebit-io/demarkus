@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestPutAndGet(t *testing.T) {

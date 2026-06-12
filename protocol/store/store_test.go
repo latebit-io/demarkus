@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestGet_FlatFileRejected(t *testing.T) {

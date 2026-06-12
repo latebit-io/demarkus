@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes/fake"
 )
 

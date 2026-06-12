@@ -18,9 +18,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/graph"
-	"github.com/latebit/demarkus/client/internal/tokens"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/internal/tokens"
 )
 
 // schemaVersion is the on-disk format version. Increment on breaking changes.
