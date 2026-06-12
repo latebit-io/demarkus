@@ -1355,6 +1355,26 @@ func TestHandlerMarkGraphPublish_NoToken(t *testing.T) {
 	assertIsToolError(t, result, "requires a token")
 }
 
+func TestHandlerMarkGraphPublish_NegativeVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	gs, err := graphstore.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	h := &handler{graphStore: gs, token: "test-token"}
+	ctx := context.Background()
+
+	result, err := h.markGraphPublish(ctx, newCallToolRequest(map[string]any{
+		"url":              "mark://target.com/graph.md",
+		"expected_version": float64(-1),
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "expected_version must be >= 0")
+}
+
 func TestHandlerMarkPublish_OnConflictMergeDisjoint(t *testing.T) {
 	// Agent edited base v5 ("a\nb\nc\n") into "a\nB\nc\n".
 	// Latest is v6 ("a\nb\nC\n"). Tool returns a clean diff3 candidate at v6;

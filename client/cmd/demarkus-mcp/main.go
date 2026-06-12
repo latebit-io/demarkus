@@ -1240,6 +1240,9 @@ func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest)
 	if err != nil {
 		return mcp.NewToolResultError("expected_version is required"), nil
 	}
+	if expectedVersion < 0 {
+		return mcp.NewToolResultError("expected_version must be >= 0"), nil
+	}
 
 	md := h.graphStore.Export()
 
