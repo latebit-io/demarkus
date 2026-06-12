@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	"k8s.io/client-go/kubernetes/fake"
 )

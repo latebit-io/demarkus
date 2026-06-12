@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit/demarkus/protocol"
-	"github.com/latebit/demarkus/protocol/store"
-	"github.com/latebit/demarkus/server/internal/auth"
+	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/server/internal/auth"
 )
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))

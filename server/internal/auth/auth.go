@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // Token represents a single capability token's permissions.

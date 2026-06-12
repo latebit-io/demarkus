@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestNewConfig_Defaults(t *testing.T) {

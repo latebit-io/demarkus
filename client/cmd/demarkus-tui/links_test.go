@@ -9,8 +9,8 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/latebit/demarkus/client/internal/bookmarks"
-	"github.com/latebit/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/internal/bookmarks"
+	"github.com/latebit-io/demarkus/client/links"
 )
 
 // osc8 wraps text in an OSC 8 hyperlink sequence, matching Glamour v2 output.

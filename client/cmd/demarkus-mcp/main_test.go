@@ -9,10 +9,10 @@ import (
 
 	"path/filepath"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/graph"
-	"github.com/latebit/demarkus/client/graphstore"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -1353,6 +1353,26 @@ func TestHandlerMarkGraphPublish_NoToken(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	assertIsToolError(t, result, "requires a token")
+}
+
+func TestHandlerMarkGraphPublish_NegativeVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	gs, err := graphstore.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	h := &handler{graphStore: gs, token: "test-token"}
+	ctx := context.Background()
+
+	result, err := h.markGraphPublish(ctx, newCallToolRequest(map[string]any{
+		"url":              "mark://target.com/graph.md",
+		"expected_version": float64(-1),
+	}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	assertIsToolError(t, result, "expected_version must be >= 0")
 }
 
 func TestHandlerMarkPublish_OnConflictMergeDisjoint(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestLoadTokens(t *testing.T) {

@@ -33,7 +33,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/latebit/demarkus/tools/demarkus-broker/internal/broker"
+	"github.com/latebit-io/demarkus/tools/demarkus-broker/internal/broker"
 )
 
 var version = "dev"

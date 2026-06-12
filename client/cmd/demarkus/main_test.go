@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestMetaFlag(t *testing.T) {

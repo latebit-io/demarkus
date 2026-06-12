@@ -11,7 +11,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // LoadConfig loads a TLS config from PEM-encoded certificate and key files.

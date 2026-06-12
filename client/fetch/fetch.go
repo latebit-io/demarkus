@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latebit/demarkus/client/internal/cache"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/internal/cache"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/quic-go/quic-go"
 )
 

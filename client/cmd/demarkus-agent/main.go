@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/internal/fedcrawl"
-	"github.com/latebit/demarkus/client/internal/tokens"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/internal/fedcrawl"
+	"github.com/latebit-io/demarkus/client/internal/tokens"
 )
 
 // version is set at build time via -ldflags.

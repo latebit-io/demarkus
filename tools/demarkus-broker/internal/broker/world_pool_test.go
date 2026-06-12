@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/latebit/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetch"
 )
 
 func TestResolveWorldAddressDefaultDNSPattern(t *testing.T) {

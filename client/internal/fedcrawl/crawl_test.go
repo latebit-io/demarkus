@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // mockClient implements FetchClient and PublishClient for testing.

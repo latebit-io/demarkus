@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit/demarkus/client/graph"
-	"github.com/latebit/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/graphstore"
 )
 
 func TestFlattenGraphNilGraph(t *testing.T) {

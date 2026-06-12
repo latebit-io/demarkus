@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit/demarkus/protocol"
-	"github.com/latebit/demarkus/protocol/store"
-	"github.com/latebit/demarkus/server/internal/auth"
-	"github.com/latebit/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/server/internal/auth"
+	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
 // lookupReq builds a LOOKUP request with the given metadata lines.

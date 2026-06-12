@@ -34,7 +34,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // Document holds a document's content and metadata.

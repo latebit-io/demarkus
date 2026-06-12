@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latebit/demarkus/protocol/token"
+	"github.com/latebit-io/demarkus/protocol/token"
 	"k8s.io/client-go/kubernetes"
 )
 

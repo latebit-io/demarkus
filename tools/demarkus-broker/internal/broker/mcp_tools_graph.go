@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/graph"
-	"github.com/latebit/demarkus/client/graphstore"
-	"github.com/latebit/demarkus/client/index"
-	"github.com/latebit/demarkus/client/links"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/index"
+	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )

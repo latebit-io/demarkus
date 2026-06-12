@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/latebit/demarkus/client/links"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // Fetcher abstracts the ability to fetch a document by host and path.

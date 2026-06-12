@@ -14,15 +14,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latebit/demarkus/client/fetch"
-	"github.com/latebit/demarkus/client/graph"
-	"github.com/latebit/demarkus/client/graphstore"
-	"github.com/latebit/demarkus/client/index"
-	"github.com/latebit/demarkus/client/internal/cache"
-	"github.com/latebit/demarkus/client/internal/tokens"
-	"github.com/latebit/demarkus/client/links"
-	"github.com/latebit/demarkus/client/merge"
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/index"
+	"github.com/latebit-io/demarkus/client/internal/cache"
+	"github.com/latebit-io/demarkus/client/internal/tokens"
+	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/merge"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -1239,6 +1239,9 @@ func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest)
 	expectedVersion, err := req.RequireInt("expected_version")
 	if err != nil {
 		return mcp.NewToolResultError("expected_version is required"), nil
+	}
+	if expectedVersion < 0 {
+		return mcp.NewToolResultError("expected_version must be >= 0"), nil
 	}
 
 	md := h.graphStore.Export()

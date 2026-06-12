@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/latebit/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // Config holds the server configuration.

@@ -5,7 +5,7 @@ package main
 import (
 	"log/slog"
 
-	"github.com/latebit/demarkus/server/internal/config"
+	"github.com/latebit-io/demarkus/server/internal/config"
 )
 
 func startCertReloader(_ *config.Config, _ bool, _ *slog.Logger) {
