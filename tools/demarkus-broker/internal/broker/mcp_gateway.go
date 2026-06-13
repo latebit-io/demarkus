@@ -16,7 +16,7 @@ import (
 // MCPServer and its Streamable HTTP transport, sharing auth +
 // rate-limit machinery with the parent broker Server.
 //
-// All 14 tools have real handlers. Reads dispatch with an empty bearer
+// All 15 tools have real handlers. Reads dispatch with an empty bearer
 // (the world's tokens.toml grants no read op, so the org SSO gate at
 // the broker is the only access control); writes provision a per-world
 // token through worldWriteTokens and dispatch through worldDispatcher.
@@ -38,7 +38,7 @@ type mcpGateway struct {
 	graphStore *graphstore.Store
 }
 
-// newMCPGateway constructs a gateway, registers the 14 tool
+// newMCPGateway constructs a gateway, registers the 15 tool
 // definitions (real handlers for Slice 2's read verbs, placeholders
 // for the rest), and wraps the mcp-go MCPServer in a Streamable HTTP
 // transport. The transport is an http.Handler — the caller mounts
@@ -78,7 +78,7 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGa
 	return g
 }
 
-// registerTools wires the 14 tool definitions onto the MCP server.
+// registerTools wires the 15 tool definitions onto the MCP server.
 // Tools absent from the toolHandlers map fall through to
 // notImplementedHandler. The per-tool handler map lives in
 // toolHandlers so adding new implementations is a one-line edit and
@@ -100,7 +100,7 @@ func (g *mcpGateway) registerTools() {
 // package-level var) so the handlers carry the gateway receiver
 // without indirection through a global.
 //
-// All 14 tools are real handlers — every entry below points at a
+// All 15 tools are real handlers — every entry below points at a
 // concrete implementation, and notImplementedHandler should never
 // run in production.
 func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
@@ -119,6 +119,7 @@ func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 		"mark_index":         g.handleMarkIndex,
 		"mark_graph_export":  g.handleMarkGraphExport,
 		"mark_graph_publish": g.handleMarkGraphPublish,
+		"mark_worlds":        g.handleMarkWorlds,
 	}
 }
 
