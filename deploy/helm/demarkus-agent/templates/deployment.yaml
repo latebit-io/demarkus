@@ -52,6 +52,9 @@ spec:
             {{- if .Values.perServer }}
             - --per-server
             {{- end }}
+            {{- if .Values.publishGraph }}
+            - --publish-graph
+            {{- end }}
             {{- if .Values.insecure }}
             - --insecure
             {{- end }}

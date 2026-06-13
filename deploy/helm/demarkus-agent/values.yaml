@@ -48,6 +48,11 @@ config:
 # true = one index per discovered server at /index/<host>.md.
 perServer: false
 
+# Also publish a link-graph export to each hub at /graph.md (the durable
+# topology the reading-room floor renders: nodes + edges). Independent of the
+# hash index; aggregated across servers so cross-server edges are kept.
+publishGraph: false
+
 # Skip TLS certificate verification on outbound mark:// connections.
 # Useful for self-signed dev clusters. Leave false in production.
 insecure: false
