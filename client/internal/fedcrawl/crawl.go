@@ -484,8 +484,14 @@ func (c *Crawler) recordEdges(host, path, body string, meta map[string]string) {
 // format stays identical to mark_graph_export / mark_graph_publish — the same
 // document any agent or the library floor reads.
 func (c *Crawler) GraphExport() string {
+	// Snapshot the graph pointer under the lock: Run reassigns c.graph under
+	// c.mu, so an export racing a re-crawl must not read the field unguarded
+	// (the graph's own methods are synchronized; the field reassignment is not).
+	c.mu.Lock()
+	g := c.graph
+	c.mu.Unlock()
 	store := graphstore.New()
-	store.Merge(c.graph, nil)
+	store.Merge(g, nil)
 	return store.Export()
 }
 
