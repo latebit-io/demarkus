@@ -5,13 +5,16 @@ import (
 	"testing"
 )
 
-func TestMCPToolsExactly14(t *testing.T) {
+func TestMCPToolsExactly15(t *testing.T) {
 	tools := mcpTools()
 	if len(tools) != len(mcpToolNames) {
 		t.Fatalf("mcpTools() returned %d tools, mcpToolNames lists %d — names + builders out of sync", len(tools), len(mcpToolNames))
 	}
-	if len(tools) != 14 {
-		t.Fatalf("expected 14 tools (parity with client/cmd/demarkus-mcp), got %d", len(tools))
+	// 14 tools mirror client/cmd/demarkus-mcp for cross-transport parity;
+	// mark_worlds is the one deliberate broker-only addition (enumerating
+	// worlds is a knowledge-system concept with no single-world analogue).
+	if len(tools) != 15 {
+		t.Fatalf("expected 15 tools (demarkus-mcp parity surface + mark_worlds), got %d", len(tools))
 	}
 	for i, tool := range tools {
 		if tool.Name != mcpToolNames[i] {

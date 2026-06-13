@@ -37,13 +37,17 @@ var mcpToolNames = []string{
 	"mark_graph",
 	"mark_graph_export",
 	"mark_graph_publish",
+	"mark_worlds",
 }
 
-// mcpTools returns the 14 tool definitions exposed by the broker MCP
-// gateway. The set mirrors client/cmd/demarkus-mcp's tool surface for
-// parity (so the agent sees the same vocabulary regardless of
+// mcpTools returns the 15 tool definitions exposed by the broker MCP
+// gateway. The first 14 mirror client/cmd/demarkus-mcp's tool surface
+// for parity (so the agent sees the same vocabulary regardless of
 // transport); only the URL-format description differs because the
-// broker addresses worlds by name rather than host:port.
+// broker addresses worlds by name rather than host:port. mark_worlds
+// is deliberately broker-only: enumerating worlds is a knowledge-system
+// concept — the local single-world MCP's universe IS its one world, so
+// there is nothing to enumerate there.
 func mcpTools() []mcp.Tool {
 	return []mcp.Tool{
 		markFetchTool(),
@@ -60,6 +64,7 @@ func mcpTools() []mcp.Tool {
 		markGraphTool(),
 		markGraphExportTool(),
 		markGraphPublishTool(),
+		markWorldsTool(),
 	}
 }
 
@@ -320,6 +325,18 @@ func markGraphExportTool() mcp.Tool {
 			"Export the broker's graph store as a publishable markdown document. "+
 				"The output contains mark:// links so crawling it naturally discovers the topology. "+
 				"Run mark_graph first to populate the store.",
+		),
+	)
+}
+
+func markWorldsTool() mcp.Tool {
+	return mcp.NewTool("mark_worlds",
+		mcp.WithDescription(
+			"List the worlds of this knowledge system that your identity may read. "+
+				"Returns a count and a markdown table of world names and public URLs. "+
+				"Each name is the {worldName} addressing primitive for every other tool "+
+				"(mark://{worldName}/{path}); use this to discover the universe before "+
+				"navigating it.",
 		),
 	)
 }
