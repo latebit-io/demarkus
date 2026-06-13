@@ -79,6 +79,31 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --per-server
 
+  - it: includes --publish-graph when publishGraph=true
+    template: deployment.yaml
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      config.hubs:
+        - mark://hub:6309
+      publishGraph: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --publish-graph
+
+  - it: omits --publish-graph by default
+    template: deployment.yaml
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      config.hubs:
+        - mark://hub:6309
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --publish-graph
+
   - it: includes --insecure when insecure=true
     template: deployment.yaml
     set:
