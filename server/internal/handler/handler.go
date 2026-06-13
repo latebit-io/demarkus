@@ -542,7 +542,9 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request) {
 	}
 
 	query := strings.TrimSpace(req.Metadata["query"])
-	if len([]rune(query)) < 2 {
+	// "*" is the match-all query (whole catalog under scope, importance
+	// order); anything else needs at least 2 characters of subject.
+	if query != "*" && len([]rune(query)) < 2 {
 		h.writeError(w, protocol.StatusBadRequest, "query must be at least 2 characters")
 		return
 	}
