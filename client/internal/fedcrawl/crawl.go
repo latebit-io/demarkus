@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
@@ -35,6 +37,7 @@ type Crawler struct {
 	mu      sync.Mutex
 	hashes  map[string][]index.Entry // content-hash -> all observed locations
 	servers map[string]bool          // discovered servers (host)
+	graph   *graph.Graph             // link graph accumulated during the walk (concurrency-safe itself)
 }
 
 // NewCrawler creates a new federation crawler.
@@ -48,6 +51,7 @@ func NewCrawler(cfg Config, client FetchClient, state *State, tokenStore *tokens
 		tokens:  tokenStore,
 		hashes:  make(map[string][]index.Entry),
 		servers: make(map[string]bool),
+		graph:   graph.New(),
 	}
 }
 
@@ -71,6 +75,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	c.mu.Lock()
 	c.hashes = make(map[string][]index.Entry)
 	c.servers = make(map[string]bool)
+	c.graph = graph.New()
 	c.mu.Unlock()
 
 	result := &CrawlResult{}
@@ -278,6 +283,10 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 			c.mu.Unlock()
 		}
 
+		// Record this document's outbound links into the graph (the durable
+		// topology map the hub publishes for the reading room's floor).
+		c.recordEdges(host, fullPath, doc.Response.Body, doc.Response.Metadata)
+
 		// Discover cross-server links.
 		c.discoverServers(doc.Response.Body, host, queue, wg)
 
@@ -445,6 +454,72 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 			}
 			successCount++
 		}
+	}
+
+	return successCount, errors.Join(publishErrs...)
+}
+
+// recordEdges adds a crawled document and its outbound mark:// links to the
+// link graph. Only mark:// targets are kept (the floor's edges are between
+// demarkus documents); external links are left out. The graph is the source
+// for the hub graph export — the durable, transport-symmetric topology the
+// reading-room floor renders (plans "Floor enrichment", decision 11).
+func (c *Crawler) recordEdges(host, path, body string, meta map[string]string) {
+	url := "mark://" + host + path
+	base := "mark://" + host
+	var linkCount int
+	for _, link := range links.Extract(body) {
+		resolved := links.Resolve(base, link)
+		if !strings.HasPrefix(resolved, "mark://") {
+			continue
+		}
+		c.graph.AddEdge(url, resolved)
+		linkCount++
+	}
+	c.graph.AddNode(&graph.Node{URL: url, Title: meta["title"], Status: "ok", LinkCount: linkCount})
+}
+
+// GraphExport renders the accumulated link graph as a mark_graph_export
+// document (Nodes + Edges tables). It reuses graphstore's exporter so the
+// format stays identical to mark_graph_export / mark_graph_publish — the same
+// document any agent or the library floor reads.
+func (c *Crawler) GraphExport() string {
+	// Snapshot the graph pointer under the lock: Run reassigns c.graph under
+	// c.mu, so an export racing a re-crawl must not read the field unguarded
+	// (the graph's own methods are synchronized; the field reassignment is not).
+	c.mu.Lock()
+	g := c.graph
+	c.mu.Unlock()
+	store := graphstore.New()
+	store.Merge(g, nil)
+	return store.Export()
+}
+
+// PublishGraphToHubs publishes the link-graph export to each configured hub at
+// /graph.md. Unlike the hash index this is always aggregated (cross-server
+// edges are the whole point — they make portal nodes on the floor). Returns
+// the number of successful publications.
+func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) (int, error) {
+	if len(c.cfg.Hubs) == 0 {
+		return 0, nil
+	}
+
+	body := c.GraphExport()
+	successCount := 0
+	var publishErrs []error
+
+	for _, hub := range c.cfg.Hubs {
+		host, _, err := fetch.ParseMarkURL(hub + "/")
+		if err != nil {
+			publishErrs = append(publishErrs, fmt.Errorf("parse hub URL %q: %w", hub, err))
+			continue
+		}
+		token := c.resolveToken(host)
+		if err := c.publishIndex(ctx, client, host, "/graph.md", body, token); err != nil {
+			publishErrs = append(publishErrs, fmt.Errorf("publish /graph.md to hub %s: %w", hub, err))
+			continue
+		}
+		successCount++
 	}
 
 	return successCount, errors.Join(publishErrs...)
