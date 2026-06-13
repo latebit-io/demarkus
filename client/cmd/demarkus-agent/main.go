@@ -79,6 +79,7 @@ func crawlMain(args []string) {
 	verbose := fs.Bool("v", false, "verbose output")
 	publish := fs.Bool("publish", false, "publish indexes to hubs after crawl")
 	perServer := fs.Bool("per-server", false, "publish per-server indexes instead of aggregated")
+	publishGraph := fs.Bool("publish-graph", false, "publish a link-graph export (/graph.md) to hubs after crawl")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus-agent crawl [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Runs a single federation crawl.\n\n")
@@ -169,6 +170,16 @@ func crawlMain(args []string) {
 			logger.Info("publish: complete", "indexes", pubCount, "hubs", len(cfg.Hubs))
 		}
 	}
+
+	// Publish the link-graph export to hubs if requested.
+	if *publishGraph && len(cfg.Hubs) > 0 {
+		gCount, err := crawler.PublishGraphToHubs(ctx, client)
+		if err != nil {
+			logger.Warn("publish-graph: hub push failed", "err", err)
+		} else if *verbose {
+			logger.Info("publish-graph: complete", "graphs", gCount, "hubs", len(cfg.Hubs))
+		}
+	}
 }
 
 func daemonMain(args []string) {
@@ -179,6 +190,7 @@ func daemonMain(args []string) {
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	publish := fs.Bool("publish", false, "publish indexes to hubs after each crawl")
 	perServer := fs.Bool("per-server", false, "publish per-server indexes instead of aggregated")
+	publishGraph := fs.Bool("publish-graph", false, "publish a link-graph export (/graph.md) to hubs after each crawl")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus-agent daemon [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Runs federation crawl as a daemon on a schedule.\n\n")
@@ -239,7 +251,7 @@ func daemonMain(args []string) {
 	defer cancel()
 
 	// Run initial crawl.
-	runCrawl(ctx, &cfg, client, state, tokenStore, *publish, *perServer)
+	runCrawl(ctx, &cfg, client, state, tokenStore, *publish, *perServer, *publishGraph)
 
 	// Schedule subsequent crawls.
 	ticker := time.NewTicker(cfg.Schedule.Interval)
@@ -251,12 +263,12 @@ func daemonMain(args []string) {
 			logger.Info("daemon: stopping")
 			return
 		case <-ticker.C:
-			runCrawl(ctx, &cfg, client, state, tokenStore, *publish, *perServer)
+			runCrawl(ctx, &cfg, client, state, tokenStore, *publish, *perServer, *publishGraph)
 		}
 	}
 }
 
-func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, state *fedcrawl.State, tokenStore *tokens.Store, publish, perServer bool) {
+func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, state *fedcrawl.State, tokenStore *tokens.Store, publish, perServer, publishGraph bool) {
 	crawler := fedcrawl.NewCrawler(*cfg, client, state, tokenStore)
 
 	start := time.Now()
@@ -286,6 +298,16 @@ func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, s
 			logger.Warn("publish: hub push failed", "err", err)
 		} else {
 			logger.Info("publish: complete", "indexes", pubCount, "hubs", len(cfg.Hubs))
+		}
+	}
+
+	// Publish the link-graph export to hubs if requested.
+	if publishGraph && len(cfg.Hubs) > 0 {
+		gCount, err := crawler.PublishGraphToHubs(ctx, client)
+		if err != nil {
+			logger.Warn("publish-graph: hub push failed", "err", err)
+		} else {
+			logger.Info("publish-graph: complete", "graphs", gCount, "hubs", len(cfg.Hubs))
 		}
 	}
 }

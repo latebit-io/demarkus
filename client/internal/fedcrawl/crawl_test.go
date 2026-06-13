@@ -541,6 +541,61 @@ func TestPublishToHubs(t *testing.T) {
 	})
 }
 
+func TestCrawlerGraphExportAndPublish(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://a.example.com"}
+	cfg.Hubs = []string{"mark://hub.example.com"}
+	cfg.Crawl.MaxDocuments = 100
+
+	client := newMockClient()
+	client.addList("a.example.com:6309", "/", "- [index.md](index.md)\n- [notes.md](notes.md)\n")
+	// index.md links to a sibling and to a doc on another server.
+	client.addDoc("a.example.com:6309", "/index.md",
+		"# A\n[notes](notes.md) and [cross](mark://b.example.com:6309/page.md)",
+		"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	client.addDoc("a.example.com:6309", "/notes.md", "# Notes",
+		"sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	client.addList("b.example.com:6309", "/", "- [page.md](page.md)\n")
+	client.addDoc("b.example.com:6309", "/page.md", "# B",
+		"sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	if _, err := crawler.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	exp := crawler.GraphExport()
+	for _, want := range []string{
+		"# Document Graph",
+		"## Edges",
+		// intra-server edge (relative link resolved)
+		"mark://a.example.com:6309/index.md | mark://a.example.com:6309/notes.md",
+		// cross-server edge — the connection that makes a portal/edge on the floor
+		"mark://a.example.com:6309/index.md | mark://b.example.com:6309/page.md",
+	} {
+		if !contains(exp, want) {
+			t.Errorf("graph export missing %q\n---\n%s", want, exp)
+		}
+	}
+
+	n, err := crawler.PublishGraphToHubs(context.Background(), client)
+	if err != nil {
+		t.Fatalf("PublishGraphToHubs() error: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("published = %d, want 1", n)
+	}
+	var graphPublished bool
+	for _, call := range client.publishes {
+		if call.Host == "hub.example.com:6309" && call.Path == "/graph.md" {
+			graphPublished = true
+		}
+	}
+	if !graphPublished {
+		t.Errorf("no /graph.md publish to the hub: %+v", client.publishes)
+	}
+}
+
 func contains(s, substr string) bool {
 	return s != "" && substr != "" && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsMiddle(s, substr)))
 }
