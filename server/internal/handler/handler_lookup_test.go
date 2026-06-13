@@ -229,3 +229,22 @@ func TestHandleLookupCatalogUpdates(t *testing.T) {
 		t.Errorf("post-archive matches = %q, want 0", resp.Metadata["matches"])
 	}
 }
+
+func TestHandleLookupMatchAll(t *testing.T) {
+	// "*" passes the length validation and returns the whole catalog under
+	// the scope in importance order — the universe-browser query.
+	h := lookupHandler(t,
+		&catalog.Entry{Path: "/hub.md", Tags: []string{"hub"}, Title: "Hub", Importance: 0.9},
+		&catalog.Entry{Path: "/note.md", Tags: []string{"misc"}, Title: "Note", Importance: 0.3},
+	)
+	resp := sendLookup(t, h, lookupReq("/", "query: '*'"))
+	if resp.Status != protocol.StatusOK {
+		t.Fatalf("status = %q, want ok (match-all must pass validation)", resp.Status)
+	}
+	if resp.Metadata["matches"] != "2" {
+		t.Errorf("matches = %q, want 2", resp.Metadata["matches"])
+	}
+	if hub, note := strings.Index(resp.Body, "/hub.md"), strings.Index(resp.Body, "/note.md"); hub == -1 || note == -1 || hub > note {
+		t.Errorf("want both paths, importance order:\n%s", resp.Body)
+	}
+}

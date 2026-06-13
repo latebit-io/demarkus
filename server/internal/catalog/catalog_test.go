@@ -179,3 +179,44 @@ func TestLookupScorePopulated(t *testing.T) {
 		t.Fatalf("expected one result with score 2, got %+v", got)
 	}
 }
+
+func TestLookupMatchAll(t *testing.T) {
+	c := New()
+	c.Set(&Entry{Path: "/low.md", Tags: []string{"go"}, Importance: 0.2})
+	c.Set(&Entry{Path: "/hub.md", Tags: []string{"hub"}, Importance: 0.9})
+	c.Set(&Entry{Path: "/mid.md", Tags: []string{"rust"}, Importance: 0.5})
+	c.Set(&Entry{Path: "/docs/deep.md", Tags: []string{"go"}, Importance: 0.7})
+
+	// "*" returns every catalogued doc, importance-ranked (scores all zero,
+	// so the tiebreak chain starts at importance).
+	got := paths(c.Lookup("*", Options{}))
+	want := []string{"/hub.md", "/docs/deep.md", "/mid.md", "/low.md"}
+	if !equalPaths(got, want) {
+		t.Fatalf("match-all order = %v, want %v", got, want)
+	}
+
+	// Scope and filters still narrow the universe.
+	if got := paths(c.Lookup("*", Options{Scope: "/docs/"})); !equalPaths(got, []string{"/docs/deep.md"}) {
+		t.Errorf("scoped match-all = %v", got)
+	}
+	preds, perr := ParseFilter("tag=go")
+	if perr != nil {
+		t.Fatalf("ParseFilter: %v", perr)
+	}
+	if got := paths(c.Lookup("*", Options{Filter: preds})); !equalPaths(got, []string{"/docs/deep.md", "/low.md"}) {
+		t.Errorf("filtered match-all = %v", got)
+	}
+	// Max caps it like any lookup.
+	if got := paths(c.Lookup("*", Options{Max: 1})); !equalPaths(got, []string{"/hub.md"}) {
+		t.Errorf("capped match-all = %v", got)
+	}
+	// Whitespace-padded star still counts; a star mixed with other terms is
+	// a normal query (star becomes a literal term) — "go" matches its two
+	// docs, NOT the whole catalog.
+	if got := paths(c.Lookup("  *  ", Options{})); len(got) != 4 {
+		t.Errorf("padded star = %v", got)
+	}
+	if got := paths(c.Lookup("* go", Options{})); len(got) != 2 {
+		t.Errorf("star-with-terms must behave as a term query, got %v", got)
+	}
+}

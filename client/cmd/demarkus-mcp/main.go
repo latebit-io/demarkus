@@ -214,7 +214,7 @@ func markLookupTool(host string) mcp.Tool {
 		),
 		mcp.WithString("query",
 			mcp.Required(),
-			mcp.Description("subject to look up; matched against document tags and titles (minimum 2 characters)"),
+			mcp.Description("subject to look up; matched against document tags and titles (minimum 2 characters), or '*' to match every catalogued document under the scope (importance order)"),
 		),
 		mcp.WithString("filter",
 			mcp.Description("comma-separated key=value predicates applied before ranking; built-ins: tag=, modified-after=, modified-before="),

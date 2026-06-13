@@ -83,9 +83,15 @@ type Options struct {
 // Lookup returns documents whose tags or title match at least one query term,
 // satisfy every filter predicate, and fall under the scope, ordered by
 // descending match count, then importance, then modification time, then path.
+//
+// The query "*" matches every catalogued document under the scope (filters
+// still apply): with all match scores equal, the ordering reduces to
+// importance — "the most important documents here" without guessing a
+// subject. This is the whole-catalog view that universe browsers build on.
 func (c *Catalog) Lookup(query string, opts Options) []Result {
+	matchAll := strings.TrimSpace(query) == "*"
 	terms := tokenize(query)
-	if len(terms) == 0 {
+	if !matchAll && len(terms) == 0 {
 		return nil
 	}
 	scope := normalizeScope(opts.Scope)
@@ -97,6 +103,10 @@ func (c *Catalog) Lookup(query string, opts Options) []Result {
 			continue
 		}
 		if !matchesAll(e, opts.Filter) {
+			continue
+		}
+		if matchAll {
+			results = append(results, Result{Entry: *e})
 			continue
 		}
 		if score := matchScore(e, terms); score > 0 {
