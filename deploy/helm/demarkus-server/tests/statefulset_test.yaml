@@ -205,3 +205,16 @@ tests:
       - equal:
           path: spec.volumeClaimTemplates[0].spec.volumeMode
           value: Filesystem
+
+  - it: volumeClaimTemplates carries only stable labels (immutable-safe across bumps)
+    template: statefulset.yaml
+    asserts:
+      # The PVC template is immutable, so it must carry only labels that are
+      # stable across chart bumps. selectorLabels (name + instance) qualify;
+      # the version/chart/managed-by labels would churn every release and turn
+      # each bump into a forbidden in-place VCT update.
+      - equal:
+          path: spec.volumeClaimTemplates[0].metadata.labels
+          value:
+            app.kubernetes.io/name: demarkus-server
+            app.kubernetes.io/instance: RELEASE-NAME

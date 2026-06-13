@@ -139,8 +139,16 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: content
+        # selectorLabels ONLY — never the full label set. volumeClaimTemplates
+        # is immutable, and the full labels carry `helm.sh/chart` +
+        # `app.kubernetes.io/version`, which change on every chart bump. Stamping
+        # those here turns each version bump into a forbidden in-place VCT update
+        # (the same immutable-field trap the volumeMode comment below guards
+        # against, via metadata instead of spec). selectorLabels (name +
+        # instance) are stable across versions, so the VCT stays byte-identical
+        # across bumps and GitOps applies them cleanly.
         labels:
-          {{- include "demarkus-server.labels" . | nindent 10 }}
+          {{- include "demarkus-server.selectorLabels" . | nindent 10 }}
       spec:
         accessModes:
           - {{ .Values.storage.accessMode }}
