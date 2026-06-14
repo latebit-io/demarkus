@@ -99,10 +99,12 @@ tokens:
   # their content. Disable only if tokens are provisioned by some other means.
   bootstrap:
     enabled: true
-    # Needs kubectl + sh + coreutils (sha256sum, tr). Pinned within ±1 minor of
-    # the cluster (GKE 1.35) per the kubectl version-skew policy; bump alongside
-    # cluster upgrades. Override with the org's approved kubectl image + tag.
-    image: docker.io/bitnami/kubectl:1.35.6
+    # Needs kubectl + sh + coreutils (sha256sum, tr); alpine/k8s bundles all
+    # three. Pinned within ±1 minor of the cluster (GKE 1.35) per the kubectl
+    # version-skew policy; bump alongside cluster upgrades. Override with the
+    # org's approved image + tag. (bitnami/kubectl was dropped — its Docker Hub
+    # repo no longer publishes version tags.)
+    image: docker.io/alpine/k8s:1.35.5
     imagePullPolicy: IfNotPresent
 
 resources:

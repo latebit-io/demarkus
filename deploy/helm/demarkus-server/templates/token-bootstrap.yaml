@@ -104,6 +104,9 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
+        # fsGroup so the non-root user can write the scratch emptyDir below
+        # (kubectl wants a writable cache dir under a read-only root fs).
+        fsGroup: 65532
       containers:
         - name: bootstrap
           image: {{ .Values.tokens.bootstrap.image | quote }}
@@ -113,7 +116,14 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: scratch
+              mountPath: /tmp
           env:
+            # HOME on the writable scratch volume → kubectl's cache/discovery
+            # writes succeed under readOnlyRootFilesystem.
+            - name: HOME
+              value: /tmp
             - name: NS
               value: {{ .Release.Namespace | quote }}
             - name: TOKENS_SECRET
@@ -147,4 +157,7 @@ spec:
                 kubectl -n "$NS" patch secret "$VALUES_SECRET" -p '{"metadata":{"annotations":{"helm.sh/resource-policy":"keep","demarkus.io/raw-tokens":"true"}}}'
               fi
               echo "bootstrapped $TOKENS_SECRET (emit-raw=$EMIT_RAW), hash $HASH."
+      volumes:
+        - name: scratch
+          emptyDir: {}
 {{- end }}
