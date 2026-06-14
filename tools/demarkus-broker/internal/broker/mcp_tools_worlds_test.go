@@ -48,8 +48,10 @@ func TestHandleMarkWorldsListsAuthorizedOnly(t *testing.T) {
 	for _, want := range []string{
 		"status: ok",
 		"count: 1",
-		"| world | url |",
-		"| team-a | mark://team-a.example.org:6309 |",
+		"| world | url | address |",
+		// url = PublicURL; address = internal dial address (the topology graph's
+		// node host) so the floor can join graph edges back to the worldName.
+		"| team-a | mark://team-a.example.org:6309 | mark://team-a.team-a.svc.cluster.local:6309 |",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %q", want, text)
@@ -64,13 +66,14 @@ func TestHandleMarkWorldsListsAuthorizedOnly(t *testing.T) {
 
 func TestHandleMarkWorldsBlankPublicURL(t *testing.T) {
 	// PublicURL is optional config; the worldName alone still addresses
-	// the world through every tool, so the row renders with an empty cell
-	// rather than being dropped.
+	// the world through every tool, so the url cell renders empty rather than
+	// the row being dropped. The address cell is always populated (the
+	// internal dial address the broker derives from Name + Namespace).
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
 	res, err := g.handleMarkWorlds(withAliceClaims(context.Background()), callToolReq("mark_worlds", nil))
 	text := toolResultText(t, mustToolResult(t, res, err))
-	if !strings.Contains(text, "| team-a |  |") {
-		t.Errorf("blank-URL row missing: %q", text)
+	if !strings.Contains(text, "| team-a |  | mark://team-a.team-a.svc.cluster.local:6309 |") {
+		t.Errorf("blank-URL row missing or address cell not populated: %q", text)
 	}
 }
 

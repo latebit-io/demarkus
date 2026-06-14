@@ -22,14 +22,22 @@ import (
 //	status: ok
 //	count: 2
 //
-//	| world | url |
-//	|-------|-----|
-//	| team-a | mark://team-a.example.org:6309 |
-//	| hub | |
+//	| world | url | address |
+//	|-------|-----|---------|
+//	| team-a | mark://team-a.example.org:6309 | mark://team-a.team-a.svc.cluster.local:6309 |
+//	| hub | | mark://hub.hub.svc.cluster.local:6309 |
 //
-// url is the world's externally reachable address (WorldConfig.PublicURL)
-// and may be empty — the worldName remains the addressing primitive for
-// every tool either way.
+// Two addresses, deliberately distinct:
+//   - url: the world's externally reachable address (WorldConfig.PublicURL),
+//     for a client that wants to connect directly. May be empty.
+//   - address: the world's internal dial address (resolveWorldAddress — the
+//     same host:port the broker routes to and the federation agent crawls
+//     by). Always populated. This is the world's identity in the topology
+//     graph (graph.md keys nodes by it), so a consumer like the reading-room
+//     floor can join host-keyed graph edges back to the worldName. Internal
+//     cluster DNS, but only ever shown to an already-authorized identity.
+//
+// The worldName remains the addressing primitive for every tool regardless.
 func (g *mcpGateway) handleMarkWorlds(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
@@ -41,9 +49,9 @@ func (g *mcpGateway) handleMarkWorlds(ctx context.Context, _ mcp.CallToolRequest
 	b.WriteString("status: ok\n")
 	fmt.Fprintf(&b, "count: %d\n", len(worlds))
 	if len(worlds) > 0 {
-		b.WriteString("\n| world | url |\n|-------|-----|\n")
+		b.WriteString("\n| world | url | address |\n|-------|-----|---------|\n")
 		for _, w := range worlds {
-			fmt.Fprintf(&b, "| %s | %s |\n", w.Name, w.PublicURL)
+			fmt.Fprintf(&b, "| %s | %s | mark://%s |\n", w.Name, w.PublicURL, resolveWorldAddress(w))
 		}
 	}
 	return mcp.NewToolResultText(b.String()), nil
