@@ -88,9 +88,21 @@ tokens:
     # Explicit token value; if empty, auto-generated on first install.
     token: ""
 
-  # When true, also emit the <release>-token-values Secret with the raw value.
-  # Required when the broker manages this world. Default true.
+  # When true, also create the <release>-token-values Secret with the raw value.
+  # Required when the broker / federation agent manages this world. Default true.
   emitRawValues: true
+
+  # Token Secrets are runtime-owned (server reads tokens.toml; the broker appends
+  # its write-token entry at runtime). A one-time pre-install/pre-upgrade Job
+  # creates them out-of-band — atomically and consistently — then hands off; the
+  # chart never templates them, so no GitOps controller reconciles (and corrupts)
+  # their content. Disable only if tokens are provisioned by some other means.
+  bootstrap:
+    enabled: true
+    # Needs kubectl + sh + coreutils (sha256sum, tr). Override with the org's
+    # approved kubectl image + tag.
+    image: docker.io/bitnami/kubectl:1.31
+    imagePullPolicy: IfNotPresent
 
 resources:
   requests:

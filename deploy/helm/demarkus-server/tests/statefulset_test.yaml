@@ -1,7 +1,6 @@
 suite: statefulset
 templates:
   - statefulset.yaml
-  - tokens.yaml
 tests:
   - it: renders a StatefulSet with correct name + replicas
     template: statefulset.yaml

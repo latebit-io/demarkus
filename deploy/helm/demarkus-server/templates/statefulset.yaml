@@ -20,7 +20,9 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/tokens: {{ include (print $.Template.BasePath "/tokens.yaml") . | sha256sum }}
+        {{- /* No checksum/tokens: the token Secret is runtime-owned (bootstrap
+               Job + broker), not chart-rendered, so there is nothing stable to
+               hash here. Token rotation is an explicit operator action. */}}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

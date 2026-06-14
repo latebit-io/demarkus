@@ -72,27 +72,14 @@ TLS Secret name. Either user-provided or chart-generated via cert-manager.
 {{- end -}}
 
 {{/*
-Admin token resolution. Order of precedence:
-  1. .Values.tokens.admin.token (user-provided literal)
-  2. Existing <release>-token-values Secret (preserves token across upgrades)
-  3. Freshly generated randAlphaNum 64
-
-This helper is called from tokens.yaml where both Secrets render in the same
-template pass, so $rawToken is computed once and reused across both Secrets.
-
-NOTE: `lookup` returns nil during `helm template` (no cluster context). Tests
-should not assert on exact token values, only on structure.
+Admin token paths/operations, rendered as a quoted, comma-joined TOML array
+body (e.g. `"/**"` or `"publish", "read"`). Used by the token-bootstrap Job to
+build the admin entry in tokens.toml. Kept as helpers so the Job script and any
+test render the same shape.
 */}}
-{{- define "demarkus-server.resolveAdminToken" -}}
-{{- if .Values.tokens.admin.token -}}
-{{- .Values.tokens.admin.token -}}
-{{- else -}}
-{{- $existing := lookup "v1" "Secret" .Release.Namespace (include "demarkus-server.tokenValuesSecretName" .) -}}
-{{- $label := .Values.tokens.admin.label -}}
-{{- if and $existing (index $existing.data $label) -}}
-{{- index $existing.data $label | b64dec -}}
-{{- else -}}
-{{- randAlphaNum 64 -}}
+{{- define "demarkus-server.tokenAdminPaths" -}}
+{{- range $i, $p := .Values.tokens.admin.paths }}{{ if $i }}, {{ end }}{{ $p | quote }}{{- end -}}
 {{- end -}}
-{{- end -}}
+{{- define "demarkus-server.tokenAdminOps" -}}
+{{- range $i, $o := .Values.tokens.admin.operations }}{{ if $i }}, {{ end }}{{ $o | quote }}{{- end -}}
 {{- end -}}

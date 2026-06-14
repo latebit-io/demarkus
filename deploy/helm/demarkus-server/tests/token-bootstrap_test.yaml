@@ -1,0 +1,116 @@
+suite: token-bootstrap
+templates:
+  - token-bootstrap.yaml
+tests:
+  - it: renders SA, Role, RoleBinding, and Job by default
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: renders nothing when bootstrap disabled
+    set:
+      tokens.bootstrap.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: includes a ServiceAccount
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - isKind:
+          of: ServiceAccount
+
+  - it: includes a RoleBinding bound to the bootstrap SA
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - matchRegex:
+          path: subjects[0].name
+          pattern: -token-bootstrap$
+
+  - it: Job runs as pre-install/pre-upgrade hook before the StatefulSet
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-5"
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/hook"]
+          value: PreSync
+
+  - it: RBAC runs before the Job (lower hook-weight) and is namespace-scoped to secrets
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-10"
+      - equal:
+          path: rules[0].resources[0]
+          value: secrets
+      - notContains:
+          path: rules[0].verbs
+          content: delete
+      - notContains:
+          path: rules[0].verbs
+          content: update
+
+  - it: Job uses the configured kubectl image and dedicated ServiceAccount
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      tokens.bootstrap.image: example.org/kubectl:9.9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: example.org/kubectl:9.9
+      - matchRegex:
+          path: spec.template.spec.serviceAccountName
+          pattern: -token-bootstrap$
+
+  - it: Job script is idempotent — skips when the tokens Secret already exists
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'get secret "\$TOKENS_SECRET" >/dev/null 2>&1; then'
+
+  - it: Job builds the admin entry with the configured paths and operations
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      tokens.admin.paths: ["/**"]
+      tokens.admin.operations: ["publish"]
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'paths = \["/\*\*"\]'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'operations = \["publish"\]'
+
+  - it: passes emitRawValues through to the Job
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      tokens.emitRawValues: false
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="EMIT_RAW")].value
+          value: "false"
