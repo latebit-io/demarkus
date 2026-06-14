@@ -166,23 +166,18 @@ jobs:
         with:
           cluster_name: chart-upgrade-wipe
       - name: Upgrade-wipe regression — demarkus-server
+        # The token Secret is now created out-of-band by the chart's
+        # pre-install/pre-upgrade bootstrap Job (not templated), so it is never
+        # helm-release-owned: broker-minted entries survive `helm upgrade` (the
+        # Job no-ops on an existing Secret) and the Secret survives `helm
+        # uninstall`. (The old lookup-skip "legacy-migration" case is gone with
+        # the chart-templated Secret it guarded.)
         run: |
           bash deploy/helm/test-upgrade-wipe.sh \
             deploy/helm/demarkus-server \
             demarkus-server \
             test-server \
             demarkus-server-tokens \
-            broker-minted-test \
-            ZmFrZS10b2tlbi1oYXNo
-      - name: Legacy-migration regression — demarkus-server
-        env:
-          SIMULATE_LEGACY_NO_KEEP: "true"
-        run: |
-          bash deploy/helm/test-upgrade-wipe.sh \
-            deploy/helm/demarkus-server \
-            demarkus-server-legacy \
-            test-server-legacy \
-            demarkus-server-legacy-tokens \
             broker-minted-test \
             ZmFrZS10b2tlbi1oYXNo
       - name: Upgrade-wipe regression — demarkus-broker
