@@ -333,10 +333,12 @@ func markWorldsTool() mcp.Tool {
 	return mcp.NewTool("mark_worlds",
 		mcp.WithDescription(
 			"List the worlds of this knowledge system that your identity may read. "+
-				"Returns a count and a markdown table of world names and public URLs. "+
-				"Each name is the {worldName} addressing primitive for every other tool "+
-				"(mark://{worldName}/{path}); use this to discover the universe before "+
-				"navigating it.",
+				"Returns a count and a markdown table with columns: world (the "+
+				"{worldName} addressing primitive for every other tool — "+
+				"mark://{worldName}/{path}), url (the world's external address for a "+
+				"direct client, may be blank), and address (the world's internal dial "+
+				"address — its identity in the topology graph). Use this to discover "+
+				"the universe before navigating it.",
 		),
 	)
 }
