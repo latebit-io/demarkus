@@ -99,9 +99,10 @@ tokens:
   # their content. Disable only if tokens are provisioned by some other means.
   bootstrap:
     enabled: true
-    # Needs kubectl + sh + coreutils (sha256sum, tr). Override with the org's
-    # approved kubectl image + tag.
-    image: docker.io/bitnami/kubectl:1.31
+    # Needs kubectl + sh + coreutils (sha256sum, tr). Pinned within ±1 minor of
+    # the cluster (GKE 1.35) per the kubectl version-skew policy; bump alongside
+    # cluster upgrades. Override with the org's approved kubectl image + tag.
+    image: docker.io/bitnami/kubectl:1.35.6
     imagePullPolicy: IfNotPresent
 
 resources:
