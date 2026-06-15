@@ -10,10 +10,13 @@ import (
 )
 
 // handleMarkWorlds implements the mark_worlds tool: the worlds of this
-// knowledge system the calling identity may read, per the same
-// authorizedWorlds predicate /auth/callback and /me/install already
-// apply. A pure read over config and claims — no dispatch, no Secret
-// access, no per-world traffic.
+// knowledge system the calling identity may read. Reads are gated by the
+// broker's SSO org gate alone (not the per-world Allow, which is the writer
+// allowlist), so this lists readableWorlds — every configured world — for any
+// authenticated identity. It deliberately does NOT use authorizedWorlds:
+// filtering the read list by the writer allowlist hid readable worlds from
+// non-writers (the reading-room floor rendered empty for them). A pure read
+// over config — no dispatch, no Secret access, no per-world traffic.
 //
 // Output follows the formatToolResult shape (status line, metadata,
 // blank line, body) with a markdown table body mirroring mark_lookup's
@@ -39,11 +42,10 @@ import (
 //
 // The worldName remains the addressing primitive for every tool regardless.
 func (g *mcpGateway) handleMarkWorlds(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
-	claims, ok := claimsFromCtx(ctx)
-	if !ok {
+	if _, ok := claimsFromCtx(ctx); !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
-	worlds := authorizedWorlds(g.srv.cfg, claims)
+	worlds := readableWorlds(g.srv.cfg)
 
 	var b strings.Builder
 	b.WriteString("status: ok\n")
