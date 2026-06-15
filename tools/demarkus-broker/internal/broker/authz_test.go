@@ -50,6 +50,31 @@ func testConfig() *Config {
 	}
 }
 
+// TestReadableWorldsIgnoresWriterAllow pins the read/write split: reads are
+// gated by the broker SSO org gate alone, so readableWorlds returns every
+// configured world regardless of its writer Allow. (authorizedWorlds — the
+// writer set — is tested via TestWorldAllowsPredicate.)
+func TestReadableWorldsIgnoresWriterAllow(t *testing.T) {
+	cfg := testConfig() // team-a: Allow domains=example.com
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{
+		Name:         "locked",
+		Namespace:    "locked",
+		TokensSecret: "locked-tokens",
+		Allow:        AllowConfig{Emails: []string{"only-admin@nowhere.test"}},
+	})
+	got := readableWorlds(cfg)
+	if len(got) != 2 {
+		t.Fatalf("readableWorlds = %d, want 2 (a restrictive writer Allow must not hide a world from readers)", len(got))
+	}
+	seen := map[string]bool{}
+	for _, w := range got {
+		seen[w.Name] = true
+	}
+	if !seen["team-a"] || !seen["locked"] {
+		t.Errorf("readableWorlds names = %v, want both team-a and locked", seen)
+	}
+}
+
 // TestWorldAllowsPredicate is the authorization table for the
 // AllowConfig predicate. Each row pins one AllowConfig shape and asserts
 // whether a given Claims qualifies. Tests worldAllows directly — the

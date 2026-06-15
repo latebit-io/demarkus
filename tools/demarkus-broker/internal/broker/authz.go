@@ -50,11 +50,15 @@ func oidcDomainAllowed(allowDomains []string, hd string) bool {
 }
 
 // authorizedWorlds returns the configured worlds whose Allow predicate
-// admits claims. Used by /auth/callback and /me/install to list the
-// worlds an identity may reach. The broker no longer mints per-user
-// tokens — SSO at the broker is the org gate and WorldConfig.Allow is
-// the writer allowlist (enforced at the MCP write handlers) — so this
-// is a pure read over config, no Secret writes.
+// admits claims — the WRITER set. Used by /auth/callback and /me/install
+// (which wire writable worlds into a plugin) and mirrored by the MCP write
+// gate. WorldConfig.Allow is the writer allowlist; SSO at the broker is the
+// org gate. A pure read over config, no Secret writes.
+//
+// Do NOT use this for read-discovery (mark_worlds) — reads are gated by the
+// SSO org gate alone, not Allow (a world's tokens.toml grants no read op), so
+// filtering the world LIST by the writer allowlist wrongly hides readable
+// worlds from non-writers. Use readableWorlds for that.
 func authorizedWorlds(cfg *Config, claims *Claims) []*WorldConfig {
 	out := make([]*WorldConfig, 0, len(cfg.Worlds))
 	for j := range cfg.Worlds {
@@ -62,6 +66,23 @@ func authorizedWorlds(cfg *Config, claims *Claims) []*WorldConfig {
 		if worldAllows(&w.Allow, claims) {
 			out = append(out, w)
 		}
+	}
+	return out
+}
+
+// readableWorlds returns the worlds an authenticated identity may READ.
+// Reads are gated only by the broker's SSO/allowDomains org gate — not by
+// per-world Allow (that is the writer allowlist) — so every configured world
+// is readable by any identity that cleared the broker login gate. This is the
+// read-discovery seam mark_worlds lists from, kept separate from the writer
+// Allow so "all logins read everything, writes are allow-listed" is
+// expressible: opening reads here never widens writes. Per-world READ
+// restrictions (Phase 2 restricted collections) would filter here, on a
+// dedicated read predicate, never on the write Allow.
+func readableWorlds(cfg *Config) []*WorldConfig {
+	out := make([]*WorldConfig, 0, len(cfg.Worlds))
+	for j := range cfg.Worlds {
+		out = append(out, &cfg.Worlds[j])
 	}
 	return out
 }

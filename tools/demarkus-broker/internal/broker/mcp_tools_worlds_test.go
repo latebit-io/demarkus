@@ -34,7 +34,14 @@ func worldsTestConfig() *Config {
 	return cfg
 }
 
-func TestHandleMarkWorldsListsAuthorizedOnly(t *testing.T) {
+func TestHandleMarkWorldsListsAllReadable(t *testing.T) {
+	// Reads are gated by the broker SSO org gate alone, not the per-world
+	// Allow (which is the WRITER allowlist). So mark_worlds lists EVERY
+	// configured world to any authenticated identity — "secret-b" appears
+	// even though alice does not match its writer Allow. Filtering the read
+	// list by the writer allowlist is exactly the bug this corrects (it left
+	// non-writers with an empty reading-room floor). Per-world READ
+	// restrictions are a separate, not-yet-built predicate (Phase 2).
 	g := newGatewayWithDispatcher(t, worldsTestConfig(), &fakeDispatcher{})
 	res, err := g.handleMarkWorlds(withAliceClaims(context.Background()), callToolReq("mark_worlds", nil))
 	if err != nil {
@@ -47,20 +54,17 @@ func TestHandleMarkWorldsListsAuthorizedOnly(t *testing.T) {
 
 	for _, want := range []string{
 		"status: ok",
-		"count: 1",
+		"count: 2",
 		"| world | url | address |",
 		// url = PublicURL; address = internal dial address (the topology graph's
 		// node host) so the floor can join graph edges back to the worldName.
 		"| team-a | mark://team-a.example.org:6309 | mark://team-a.team-a.svc.cluster.local:6309 |",
+		// readable despite alice not matching its writer Allow.
+		"secret-b",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %q", want, text)
 		}
-	}
-	// alice@example.com does not match secret-b's otherco.test allowlist:
-	// the world must not leak into her universe.
-	if strings.Contains(text, "secret-b") {
-		t.Errorf("unauthorized world leaked: %q", text)
 	}
 }
 
@@ -78,8 +82,11 @@ func TestHandleMarkWorldsBlankPublicURL(t *testing.T) {
 }
 
 func TestHandleMarkWorldsEmptyUniverse(t *testing.T) {
+	// Only a genuinely world-less config yields an empty list now — a world's
+	// writer Allow no longer hides it from the read list. Exercises the
+	// count: 0 / no-table rendering branch.
 	cfg := mcpTestConfig()
-	cfg.Worlds[0].Allow = AllowConfig{Domains: []string{"otherco.test"}}
+	cfg.Worlds = nil
 	g := newGatewayWithDispatcher(t, cfg, &fakeDispatcher{})
 	res, err := g.handleMarkWorlds(withAliceClaims(context.Background()), callToolReq("mark_worlds", nil))
 	text := toolResultText(t, mustToolResult(t, res, err))
