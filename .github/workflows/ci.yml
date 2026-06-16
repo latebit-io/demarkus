@@ -140,7 +140,16 @@ jobs:
         with:
           version: v3.13.2
       - name: Install helm-unittest
-        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.6.2
+        # helm-unittest v0.6.2's plugin-install hook fails on checksum
+        # validation ("no properly formatted SHA checksum lines found"). The
+        # release tarball already carries plugin.yaml + the untt binary, so
+        # extract it straight into the helm plugins dir — helm discovers the
+        # plugin with no install hook (and no broken checksum step).
+        run: |
+          HELM_PLUGINS="$(helm env HELM_PLUGINS)"
+          mkdir -p "$HELM_PLUGINS/helm-unittest"
+          curl -fsSL https://github.com/helm-unittest/helm-unittest/releases/download/v0.6.2/helm-unittest-linux-amd64-0.6.2.tgz \
+            | tar -xz -C "$HELM_PLUGINS/helm-unittest"
       - name: Lint demarkus-server chart
         run: helm lint deploy/helm/demarkus-server
       - name: Lint demarkus-broker chart

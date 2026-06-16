@@ -107,7 +107,7 @@ jobs:
         with:
           tag_prefix: "protocol/v"
           major_pattern: "BREAKING CHANGE:"
-          minor_pattern: "feat:"
+          minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           change_path: "protocol/"
           bump_each_commit: false
           search_commit_body: true
@@ -138,7 +138,7 @@ jobs:
         with:
           tag_prefix: "server/v"
           major_pattern: "BREAKING CHANGE:"
-          minor_pattern: "feat:"
+          minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           # Chart and image are released together at the same version,
           # so a chart-only commit must bump the version too. Without
           # the chart path here, fix(server-chart) commits would slip
@@ -174,7 +174,7 @@ jobs:
         with:
           tag_prefix: "client/v"
           major_pattern: "BREAKING CHANGE:"
-          minor_pattern: "feat:"
+          minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           # See server's change_path note: chart-only commits must
           # bump the version so the chart actually publishes.
           change_path: "client/ deploy/helm/demarkus-agent/"
@@ -207,7 +207,7 @@ jobs:
         with:
           tag_prefix: "tools/v"
           major_pattern: "BREAKING CHANGE:"
-          minor_pattern: "feat:"
+          minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           # See server's change_path note: chart-only commits must
           # bump the version so the chart actually publishes.
           change_path: "tools/ deploy/helm/demarkus-broker/"
