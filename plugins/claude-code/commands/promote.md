@@ -14,7 +14,7 @@ Promote one soul document from your personal soul (the staging tier) up to a sha
 
 2. **Read the source.** `mark_fetch` the soul path from the soul server (`mcp__demarkus-memory__mark_fetch` or the configured soul server). Note its current version — the back-stamp needs it. If `not-found`, say so and stop.
 
-3. **Already promoted?** If the source body already carries a `promoted → mark://…` marker (see step 6), this document was promoted before. Do not silently re-promote: tell the user where it lives, and only continue if they explicitly want to push an **update** (an edit since the last promotion). An update re-enters the cascade as a gated change to the existing knowledge doc, not a new one.
+3. **Already promoted?** If the source body already carries a `promoted: mark://…@v<N>` marker (see step 6), this document was promoted before. Do not silently re-promote: tell the user where it lives, and only continue if they explicitly want to push an **update** (an edit since the last promotion). An update re-enters the cascade as a gated change to the existing knowledge doc, not a new one — this is the upward leg of the coherence edge that `/soul-refresh` points back here for.
 
 4. **Run the execution cascade (knowledge side).** Hand the source document to the demarkus-knowledge plugin's **`knowledge-promote`** skill, which:
    triages (durable? broadly useful? not already in the catalog — most soul content correctly fails here and stays personal), distills for a shared audience (strips personal/local framing and any secrets/PII), dedups and conflict-checks against the catalog via `mark_lookup`, re-tags to the system's taxonomy (the `category:` axis and any `require_tags`), selects a destination world (filtered to your **writable** worlds via `mark_worlds`, routed by each world's `world.md` `domain`), applies the destination's autonomy ceiling, runs the human gate, and publishes with provenance back to this soul origin. It returns the published `mark://<world>/<path>@<version>`.
@@ -23,9 +23,16 @@ Promote one soul document from your personal soul (the staging tier) up to a sha
 5. **Capture the result.** From the cascade, record the published `mark://<world>/<path>` and its version.
 
 6. **Back-stamp the soul doc (memory side, this command's job — the knowledge plugin never writes the soul).** Apply provenance to the source so it is not re-promoted and does not drift from the now-authoritative copy. Confirm the mode with the user:
-   - **Stub (default, link-not-copy).** Replace the body with a short stub — the H1 title plus `promoted → mark://<world>/<path>@<version>` and a one-line summary — so recall resolves the link and fetches fresh from knowledge. There is then no rival copy to go stale. Best for reference docs you will not keep editing locally.
-   - **Marker only.** Keep the body, prepend a `promoted → mark://<world>/<path>@<version>` line under the H1. Best for living documents (e.g. an active plan) you keep iterating in the soul. The `@<version>` stamp lets a later check detect when the knowledge copy has moved on.
-   Write the back-stamp with `mark_publish` on the soul at the version from step 2 (republish the chosen body; metadata `tags`/`importance` preserved). Reconciliation is **directional**: knowledge is authoritative, the soul refreshes from it, and any local edits re-enter through the gate (step 3) — never a silent two-way merge.
+   Both modes carry the same machine-readable marker line so `/soul-refresh` can find the doc later and tell which knowledge version it tracks. Emit it **verbatim** on its own line, where `<N>` is the published knowledge version from step 5:
+
+   ```
+   promoted: mark://<world>/<path>@v<N>
+   ```
+
+   - **Stub (default, link-not-copy).** Replace the body with a short stub — the H1 title, the marker line, and a one-line summary — so recall resolves the link and fetches fresh from knowledge. There is then no rival copy to go stale. Best for reference docs you will not keep editing locally.
+   - **Marker only.** Keep the body, put the marker line directly under the H1. Best for living documents (e.g. an active plan) you keep iterating in the soul. The `@v<N>` stamp lets `/soul-refresh` detect when the knowledge copy has moved on.
+
+   Write the back-stamp with `mark_publish` on the soul at the version from step 2 (republish the chosen body; preserve existing `tags`/`importance` and **add the `promoted` tag** so the doc is discoverable as promoted via `mark_lookup filter=tag=promoted`). Reconciliation is **directional**: knowledge is authoritative, the soul refreshes from it, and any local edits re-enter through the gate (step 3) — never a silent two-way merge.
 
 7. **Report.** Tell the user the destination `mark://`, the back-stamp mode applied, and the soul path. Reference both by full path.
 
