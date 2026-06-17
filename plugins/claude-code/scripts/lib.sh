@@ -23,6 +23,15 @@ readonly TOKEN_LABEL="claude-code-plugin"
 # strictness live in the separate demarkus-knowledge plugin, not here.)
 readonly PLUGIN_STRICTNESS_FILE="${PLUGIN_HOME}/plugin-memory.strictness"
 
+# Registry of joined knowledge-system MCP server slugs, written by the SEPARATE
+# demarkus-knowledge plugin's /knowledge-join (one slug per line). We read it
+# (never write it) purely to detect that a knowledge endpoint exists — the
+# reverse of demarkus-knowledge's read-only peek at this plugin's
+# plugin-memory.conf. This mutual, file-only detection is what gates the promote
+# bridge (soul → knowledge): with no endpoint there is nothing to promote to, so
+# /promote stays dormant. We never touch the broker — detection only.
+readonly KNOWLEDGE_REGISTRY="${PLUGIN_HOME}/knowledge-systems"
+
 # Soul dirs that setup.sh may choose.
 readonly SHARED_SOUL_DIR="${PLUGIN_HOME}/soul"
 readonly ISOLATED_SOUL_DIR="${PLUGIN_HOME}/plugin-soul"
@@ -90,6 +99,24 @@ configured_strictness() {
     warn|block|ask) echo "${s}" ;;
     *)              echo "warn" ;;
   esac
+}
+
+# knowledge_endpoints — emit each joined knowledge-system slug on its own line
+# (empty when none). Read-only peek at the demarkus-knowledge registry; blank
+# lines and surrounding whitespace are stripped. Mirrors that plugin's own
+# list_knowledge_systems so both sides read the registry identically. The slug
+# is the MCP server name (e.g. "knowledge"), the addressing handle the agent
+# uses for mcp__<slug>__mark_* tools when running the promote cascade.
+knowledge_endpoints() {
+  [[ -f "${KNOWLEDGE_REGISTRY}" ]] || return 0
+  awk 'NF { gsub(/^[ \t]+|[ \t]+$/, ""); if ($0 != "") print }' "${KNOWLEDGE_REGISTRY}" 2>/dev/null || true
+}
+
+# knowledge_present — true when at least one knowledge endpoint is joined. The
+# detection gate for the promote bridge: /promote is meaningful only with a
+# destination to promote to.
+knowledge_present() {
+  [[ -n "$(knowledge_endpoints)" ]]
 }
 
 # publish_gate_scope TOOLNAME — echoes "local" only when the tool targets this
