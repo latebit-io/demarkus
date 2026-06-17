@@ -55,12 +55,14 @@ func TestHandleMarkWorldsListsAllReadable(t *testing.T) {
 	for _, want := range []string{
 		"status: ok",
 		"count: 2",
-		"| world | url | address |",
+		"| world | url | address | writable |",
 		// url = PublicURL; address = internal dial address (the topology graph's
 		// node host) so the floor can join graph edges back to the worldName.
-		"| team-a | mark://team-a.example.org:6309 | mark://team-a.team-a.svc.cluster.local:6309 |",
-		// readable despite alice not matching its writer Allow.
-		"secret-b",
+		// writable = yes: alice (example.com) matches team-a's writer Allow.
+		"| team-a | mark://team-a.example.org:6309 | mark://team-a.team-a.svc.cluster.local:6309 | yes |",
+		// readable despite alice not matching its writer Allow (otherco.test),
+		// so it lists but flags writable = no — the read/write split made legible.
+		"| secret-b |  | mark://secret-b.secret-b.svc.cluster.local:6309 | no |",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %q", want, text)
@@ -76,7 +78,7 @@ func TestHandleMarkWorldsBlankPublicURL(t *testing.T) {
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
 	res, err := g.handleMarkWorlds(withAliceClaims(context.Background()), callToolReq("mark_worlds", nil))
 	text := toolResultText(t, mustToolResult(t, res, err))
-	if !strings.Contains(text, "| team-a |  | mark://team-a.team-a.svc.cluster.local:6309 |") {
+	if !strings.Contains(text, "| team-a |  | mark://team-a.team-a.svc.cluster.local:6309 | yes |") {
 		t.Errorf("blank-URL row missing or address cell not populated: %q", text)
 	}
 }
