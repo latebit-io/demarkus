@@ -13,6 +13,16 @@ mark://root/.well-known/demarkus/template.md   ← required per-world structure 
 
 `template.md` is the same layout the local soul seeds as `/project-template.md` — publish a copy of that to `root` (tailored as needed). `policy.md` is the example in this directory.
 
+## Per-world descriptors (`world.md`)
+
+`policy.md` and `template.md` live once on `root` and govern the whole system. A **world descriptor** is different — it is per-world, published by each world's owner to its own well-known prefix:
+
+```text
+mark://<world>/.well-known/demarkus/world.md   ← team, domain, partition role, autonomy ceiling (see world.md here)
+```
+
+It declares who owns the world, what subject domain it holds, its partition role (`hub`/`team`/`project`/`scratch`), and the most autonomous a promotion *into it* may be (`autonomy_ceiling`). The curation pipeline reads these to route a promotion to the right world among the ones the caller may write (the `writable` column of `mark_worlds`) and to cap promotion autonomy at the destination's ceiling. A world without a descriptor still works — it appears in the manual pick-list and defaults to `human-only`. `world.md` is the example in this directory.
+
 ## How a joined agent consumes them
 
 `/knowledge-join` registers the system so the publish tag-gate enforces on its writes (the same tag check as the local soul; tags travel in the tool call, so no broker access is needed for that). For the rest:

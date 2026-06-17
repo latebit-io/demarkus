@@ -332,13 +332,17 @@ func markGraphExportTool() mcp.Tool {
 func markWorldsTool() mcp.Tool {
 	return mcp.NewTool("mark_worlds",
 		mcp.WithDescription(
-			"List the worlds of this knowledge system that your identity may read. "+
+			"List the worlds of this knowledge system that your identity may read, "+
+				"each flagged with whether you may also write it. "+
 				"Returns a count and a markdown table with columns: world (the "+
 				"{worldName} addressing primitive for every other tool — "+
 				"mark://{worldName}/{path}), url (the world's external address for a "+
-				"direct client, may be blank), and address (the world's internal dial "+
-				"address — its identity in the topology graph). Use this to discover "+
-				"the universe before navigating it.",
+				"direct client, may be blank), address (the world's internal dial "+
+				"address — its identity in the topology graph), and writable (yes/no — "+
+				"whether your identity may publish to the world; reading a world does "+
+				"not imply you can write it). Use this to discover the universe before "+
+				"navigating it, and to pick a write destination among the worlds you "+
+				"may publish to.",
 		),
 	)
 }
