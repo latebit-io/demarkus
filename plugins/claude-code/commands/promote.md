@@ -2,22 +2,26 @@
 description: Promote a soul document up to a shared knowledge system — curate, route, gate, publish, and back-stamp the source
 ---
 
-Promote one soul document from your personal soul (the staging tier) up to a shared knowledge system (the curated, authoritative tier). This is the bridge between the two plugins: the memory side owns intent, source, and back-stamp; the **execution cascade (triage → distill → dedup → tag → route → gate → publish) is the demarkus-knowledge plugin's `knowledge-promote` skill.** This command orchestrates them and is the manual promotion trigger.
+Promote one soul document from your personal soul (the staging tier) up to a shared destination (the curated, authoritative tier). A destination is either a **brokered knowledge system** (joined via `/knowledge-join`) or a **plain remote demarkus server** registered as a promote target. This is the bridge between the two plugins: the memory side owns intent, source, registry, and back-stamp; the **execution cascade (triage → distill → dedup → tag → route → gate → publish) is the demarkus-knowledge plugin's `knowledge-promote` skill.** This command orchestrates them and is the manual promotion trigger.
 
 `$ARGUMENTS` is the soul path to promote (e.g. `/demarkus/plans/foo.md`). If empty, ask which document.
 
 ## Steps
 
-1. **Detection gate.** Run `${CLAUDE_PLUGIN_ROOT}/scripts/detect-knowledge.sh` via Bash.
-   - `NO_KNOWLEDGE` → there is no knowledge system joined, so there is nowhere to promote to. Tell the user promotion is dormant and that `/knowledge-join <broker-url>` (the demarkus-knowledge plugin) lights it up. Stop.
-   - `KNOWLEDGE` followed by slugs → those are the joined endpoint slugs (MCP server names). If more than one, ask which destination system; otherwise use the single one. The agent reaches it through that server's `mcp__<slug>__mark_*` tools.
+1. **Detection gate.** Run `${CLAUDE_PLUGIN_ROOT}/scripts/detect-promote.sh` via Bash. It lists every destination, one per line:
+   - `knowledge <slug>` → a brokered knowledge system (the `<slug>` MCP server). Destination-selection there uses `mark_worlds` (writable column) + each world's `world.md`.
+   - `target <slug> <path> [label]` → a plain remote endpoint and the write `<path>` you declared for it. The destination is that `<slug>`/`<path>` directly — no `mark_worlds`/`world.md` (a plain server has no directory), default autonomy `human-only`.
+   - `NONE` → no destination is configured, so promotion is dormant. Offer the two ways to light it up, and act on the user's choice:
+     - a brokered system: `/knowledge-join <broker-url>` (demarkus-knowledge plugin);
+     - a plain remote server: register it now — confirm its MCP server slug (from `claude mcp list`) and the write path/prefix, then run `${CLAUDE_PLUGIN_ROOT}/scripts/promote-target.sh add <slug> <path> [label]` and continue.
+   - If more than one destination is listed, ask which to use; otherwise use the single one. Reach any destination through its `mcp__<slug>__mark_*` tools.
 
 2. **Read the source.** `mark_fetch` the soul path from the soul server (`mcp__demarkus-memory__mark_fetch` or the configured soul server). Note its current version — the back-stamp needs it. If `not-found`, say so and stop.
 
 3. **Already promoted?** If the source body already carries a `promoted: mark://…@v<N>` marker (see step 6), this document was promoted before. Do not silently re-promote: tell the user where it lives, and only continue if they explicitly want to push an **update** (an edit since the last promotion). An update re-enters the cascade as a gated change to the existing knowledge doc, not a new one — this is the upward leg of the coherence edge that `/soul-refresh` points back here for.
 
-4. **Run the execution cascade (knowledge side).** Hand the source document to the demarkus-knowledge plugin's **`knowledge-promote`** skill, which:
-   triages (durable? broadly useful? not already in the catalog — most soul content correctly fails here and stays personal), distills for a shared audience (strips personal/local framing and any secrets/PII), dedups and conflict-checks against the catalog via `mark_lookup`, re-tags to the system's taxonomy (the `category:` axis and any `require_tags`), selects a destination world (filtered to your **writable** worlds via `mark_worlds`, routed by each world's `world.md` `domain`), applies the destination's autonomy ceiling, runs the human gate, and publishes with provenance back to this soul origin. It returns the published `mark://<world>/<path>@<version>`.
+4. **Run the execution cascade (knowledge side).** Hand the source document — and the chosen destination from step 1 (a brokered system, or a plain `target` with its declared write path) — to the demarkus-knowledge plugin's **`knowledge-promote`** skill, which:
+   triages (durable? broadly useful? not already in the catalog — most soul content correctly fails here and stays personal), distills for a shared audience (strips personal/local framing and any secrets/PII), dedups and conflict-checks against the destination via `mark_lookup`, tags appropriately (honoring the destination's `policy.md` `require_tags`/`category:` if it has one), selects where to write (a brokered system: a **writable** world via `mark_worlds` + `world.md` routing; a plain target: the declared `<path>`), applies the autonomy ceiling (`human-only` for a plain target), runs the human gate, and publishes with provenance back to this soul origin. It returns the published `mark://<dest>/<path>@<version>`.
    - If the cascade triages the document out (not worth promoting) or the human declines at the gate, report that and **stop without back-stamping** — nothing was published.
 
 5. **Capture the result.** From the cascade, record the published `mark://<world>/<path>` and its version.

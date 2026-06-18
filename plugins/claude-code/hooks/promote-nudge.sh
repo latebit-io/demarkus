@@ -31,8 +31,9 @@ SCRIPTS_DIR="${HOOK_DIR}/../scripts"
 # No soul configured → nothing is being staged here.
 [[ -f "${PLUGIN_CONFIG}" ]] || exit 0
 
-# No knowledge endpoint joined → promote is dormant, so do not nudge toward it.
-knowledge_present || exit 0
+# No promote destination of any kind (brokered system or plain remote target) →
+# promote is dormant, so do not nudge toward it.
+promote_destination_present || exit 0
 
 input="$(cat)"
 

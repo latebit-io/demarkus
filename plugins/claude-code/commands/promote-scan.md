@@ -8,7 +8,7 @@ Scan the soul for documents worth promoting to a shared knowledge system, and pr
 
 ## Steps
 
-1. **Detection gate.** Run `${CLAUDE_PLUGIN_ROOT}/scripts/detect-knowledge.sh` via Bash. `NO_KNOWLEDGE` → there is nowhere to promote to, so a scan is pointless; say so and stop. Otherwise note the joined endpoint slug(s).
+1. **Detection gate.** Run `${CLAUDE_PLUGIN_ROOT}/scripts/detect-promote.sh` via Bash. `NONE` → there is nowhere to promote to, so a scan is pointless; say so and stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`) — candidates can be promoted to any of them via `/promote`.
 
 2. **Gather the already-promoted set (to exclude).** `mark_lookup` the soul with `filter=tag=promoted` (optionally scoped to `/<slug>/`). These already live in the catalog — never re-list them as candidates. Their soul docs also carry a `promoted: mark://…@v<N>` marker; `/soul-refresh` keeps them current, not this command.
 
