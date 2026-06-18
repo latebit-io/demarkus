@@ -13,7 +13,10 @@ The bar here is high: a shared catalog is not a soul mirror. **Most staged conte
 
 - The source document body.
 - Its origin (the soul `mark://`/path and version, or the external source) — for provenance.
-- The destination knowledge-system slug (the MCP server name, e.g. `knowledge`). The caller resolved it; reach the system through that server's `mcp__<slug>__mark_*` tools.
+- The destination, resolved by the caller (`/promote`'s detection step). Its **kind** is given by the input shape, and decides the step-5 path:
+  - **Brokered knowledge system** — a single MCP server slug (e.g. `knowledge`). Reach it via `mcp__<slug>__mark_*`; it provides `mark_worlds` for world discovery.
+  - **Plain remote endpoint** — a slug plus a declared write `<path>` (and optional label), as registered via `promote-target.sh add <slug> <path> [label]`. No `mark_worlds`/`world.md`; write under the declared `<path>`.
+  Reach either through that server's `mcp__<slug>__mark_*` tools.
 
 ## The cascade
 
@@ -25,7 +28,7 @@ Run the stages in order. Each is a gate; a document that fails any early stage s
 
 3. **Dedup and conflict-check against the catalog.** `mark_lookup` the destination for the document's subject/tags, then `mark_fetch` any close matches. If an existing doc already covers this, prefer **updating** it (a gated change to that doc) over creating a near-duplicate. If the new content *conflicts* with an existing doc, surface the conflict to the human at the gate rather than silently overwriting — knowledge is the base of truth and reconciliation is directional.
 
-4. **Tag to the destination taxonomy.** `mark_fetch` the destination's policy at `<dest>/.well-known/demarkus/policy.md` (cheap, cache for the session) if it has one. Honor `require_tags:` — every named axis must be satisfied by an `axis:value` tag (at minimum the `category:` axis). A plain remote endpoint may have no policy; then apply sensible subject tags and a `category:` anyway, so the doc stays findable. Add a deliberate `importance` (0–1; reserve ≥0.8 for hubs/architecture/key decisions). Soul tags are loose and personal; re-tag, don't copy them across.
+4. **Tag to the destination taxonomy.** Fetch the destination's policy if it has one (cheap, cache for the session): for a brokered system `mark_fetch mark://root/.well-known/demarkus/policy.md`; for a plain remote endpoint `mark_fetch mark://<slug>/.well-known/demarkus/policy.md` (endpoint-level — a plain server has no per-world root). Honor `require_tags:` — every named axis must be satisfied by an `axis:value` tag (at minimum the `category:` axis). A plain remote endpoint may have no policy; then apply sensible subject tags and a `category:` anyway, so the doc stays findable. Add a deliberate `importance` (0–1; reserve ≥0.8 for hubs/architecture/key decisions). Soul tags are loose and personal; re-tag, don't copy them across.
 
 5. **Select where to write.** The destination kind comes from the caller (`/promote`'s detection step):
    - **Brokered knowledge system:** `mark_worlds` → use the **`writable` column** (readable is not writable); only writable worlds are candidates. For each, `mark_fetch mark://<world>/.well-known/demarkus/world.md` and route by matching the document's subject/team against the declared `domain`/`team` — auto-route on a clear match, else a **write-filtered, labeled pick-list**. A world with no descriptor is writable-but-unlabeled (pick-list only). Note its `autonomy_ceiling`.
@@ -33,9 +36,12 @@ Run the stages in order. Each is a gate; a document that fails any early stage s
 
 6. **Human gate, capped by the destination.** Effective autonomy is `min(local preference, autonomy_ceiling)`; default is human-in-the-loop. Present the distilled draft, the chosen destination, the tags, and any dedup/conflict findings, and get explicit approval before publishing. Only relax to a model verification step when the destination's ceiling is `verify-then-auto` (and the local preference allows) — then a refute-check (does the distillation hold against its source?) may stand in for the human. `auto` (no gate) is only ever valid for a low-stakes `scratch` world; never an authoritative one. If the human declines, stop and report — nothing is published.
 
-7. **Publish with provenance.** `mark_publish` to `mark://<chosen-world>/<path>` (for an update, fetch first and use the correct `expected_version`; for a new doc use 0). Set `metadata.tags` and `metadata.importance` from step 4 — metadata travels in the `metadata` object, never as a `---` block in the body. Include a provenance line in the body linking back to the origin (the soul `mark://`/path, and the external source if any).
+7. **Publish with provenance.** `mark_publish` to the destination mark:
+   - **Brokered:** `mark://<chosen-world>/<path>` (the writable world chosen in step 5).
+   - **Plain remote:** `mark://<slug>/<declared-path>/<leaf>`, where `<declared-path>` is the registered write path and `<leaf>` is the filename chosen in step 5.
+   For an update, fetch first and use the correct `expected_version`; for a new doc use 0. Set `metadata.tags` and `metadata.importance` from step 4 — metadata travels in the `metadata` object, never as a `---` block in the body. Include a provenance line in the body linking back to the origin (the soul `mark://`/path, and the external source if any).
 
-8. **Return the result** to the caller: the published `mark://<world>/<path>` and its new version. The caller (memory side) applies the back-stamp to the origin; **this skill never writes the soul.**
+8. **Return the result** to the caller: the published `mark://<dest>/<path>@v<N>` (`<dest>` = the chosen world for a brokered system, or `<slug>/<declared-path>/<leaf>` for a plain remote) and its new version. The caller (memory side) applies the back-stamp to the origin; **this skill never writes the soul.**
 
 ## Model routing (for batch/automated use)
 

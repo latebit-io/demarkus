@@ -32,6 +32,9 @@ case "${cmd}" in
     label="${*:-}"
     [[ -n "${slug}" ]] || die "add: missing <slug> (the endpoint's MCP server name)"
     [[ "${path}" == /* ]] || die "add: <path> must start with / (got '${path:-}')"
+    # The registry is space-delimited (slug path [label]); a path with internal
+    # whitespace would serialize ambiguously and reparse as a truncated path.
+    [[ "${path}" != *[[:space:]]* ]] || die "add: <path> must not contain whitespace (got '${path}')"
     case "${slug}" in
       *[!a-zA-Z0-9_-]*) die "add: <slug> '${slug}' has unexpected characters; use the MCP server name" ;;
     esac

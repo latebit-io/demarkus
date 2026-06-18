@@ -24,14 +24,16 @@ Promote one soul document from your personal soul (the staging tier) up to a sha
    triages (durable? broadly useful? not already in the catalog — most soul content correctly fails here and stays personal), distills for a shared audience (strips personal/local framing and any secrets/PII), dedups and conflict-checks against the destination via `mark_lookup`, tags appropriately (honoring the destination's `policy.md` `require_tags`/`category:` if it has one), selects where to write (a brokered system: a **writable** world via `mark_worlds` + `world.md` routing; a plain target: the declared `<path>`), applies the autonomy ceiling (`human-only` for a plain target), runs the human gate, and publishes with provenance back to this soul origin. It returns the published `mark://<dest>/<path>@<version>`.
    - If the cascade triages the document out (not worth promoting) or the human declines at the gate, report that and **stop without back-stamping** — nothing was published.
 
-5. **Capture the result.** From the cascade, record the published `mark://<world>/<path>` and its version.
+5. **Capture the result.** From the cascade, record the published mark — `mark://<dest>/<path>@v<N>`, where `<dest>` is the world slug for a brokered system or the endpoint slug for a plain remote target — and its version.
 
 6. **Back-stamp the soul doc (memory side, this command's job — the knowledge plugin never writes the soul).** Apply provenance to the source so it is not re-promoted and does not drift from the now-authoritative copy. Confirm the mode with the user:
-   Both modes carry the same machine-readable marker line so `/soul-refresh` can find the doc later and tell which knowledge version it tracks. Emit it **verbatim** on its own line, where `<N>` is the published knowledge version from step 5:
+   Both modes carry the same machine-readable marker line so `/soul-refresh` can find the doc later and tell which destination version it tracks. Emit it **verbatim** on its own line, where `<dest>`/`<path>` is the published mark from step 5 and `<N>` its version:
 
    ```
-   promoted: mark://<world>/<path>@v<N>
+   promoted: mark://<dest>/<path>@v<N>
    ```
+
+   (`<dest>` is the destination world slug for a brokered system, or the endpoint slug — registered via `promote-target.sh add` — for a plain remote target.)
 
    - **Stub (default, link-not-copy).** Replace the body with a short stub — the H1 title, the marker line, and a one-line summary — so recall resolves the link and fetches fresh from knowledge. There is then no rival copy to go stale. Best for reference docs you will not keep editing locally.
    - **Marker only.** Keep the body, put the marker line directly under the H1. Best for living documents (e.g. an active plan) you keep iterating in the soul. The `@v<N>` stamp lets `/soul-refresh` detect when the knowledge copy has moved on.

@@ -47,6 +47,26 @@ test_add_rejects_missing_slug() {
   (( rc != 0 )) || { echo "missing slug should be rejected"; return 1; }
 }
 
+test_add_rejects_whitespace_path() {
+  # The registry is space-delimited; a path with whitespace would corrupt parsing.
+  local home; home="$(mktemp -d)"; mkdir -p "${home}/.demarkus"
+  local rc=0
+  pt "${home}" add slug "/team docs" >/dev/null 2>&1 || rc=$?
+  local n; n="$(pt "${home}" list 2>/dev/null | wc -l | tr -d ' ')"
+  rm -rf "${home}"
+  (( rc != 0 )) || { echo "a path with whitespace should be rejected"; return 1; }
+  [[ "${n}" == "0" ]] || { echo "nothing should have been registered, got ${n} entries"; return 1; }
+}
+
+test_add_rejects_invalid_slug_chars() {
+  # The slug is used as an MCP server name (mcp__<slug>__mark_*); guard the charset.
+  local home; home="$(mktemp -d)"; mkdir -p "${home}/.demarkus"
+  local rc=0
+  pt "${home}" add 'bad/slug' /shared/ >/dev/null 2>&1 || rc=$?
+  rm -rf "${home}"
+  (( rc != 0 )) || { echo "a slug with invalid characters should be rejected"; return 1; }
+}
+
 test_add_is_idempotent_on_slug_path() {
   local home; home="$(mktemp -d)"; mkdir -p "${home}/.demarkus"
   pt "${home}" add team-remote /shared/ >/dev/null 2>&1
