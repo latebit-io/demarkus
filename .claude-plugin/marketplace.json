@@ -9,8 +9,8 @@
     {
       "name": "demarkus-memory",
       "source": "./plugins/claude-code",
-      "description": "Zero-config local memory for Claude Code. Spawns a local demarkus-server and wires MCP tools for fetch/publish/append/graph/lookup over your own versioned markdown store, and self-documents sessions to it. With a knowledge system joined, /promote lifts ready notes up to the shared catalog and /soul-refresh pulls them back as they evolve.",
-      "version": "0.6.0",
+      "description": "Zero-config local memory for Claude Code. Spawns a local demarkus-server and wires MCP tools for fetch/publish/append/graph/lookup over your own versioned markdown store, and self-documents sessions to it. With a knowledge system joined, /promote lifts ready notes up to the shared catalog, /promote-scan sweeps for candidates, an ADR publish nudges promotion, and /soul-refresh pulls promoted docs back as they evolve.",
+      "version": "0.7.0",
       "category": "memory",
       "tags": ["memory", "demarkus", "mark-protocol", "local-first"],
       "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code"
