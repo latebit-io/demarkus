@@ -23,13 +23,17 @@ run_test() {
   else echo "FAIL  ${name}"; printf '%s\n' "${out}" | sed 's/^/      /'; FAIL=$((FAIL + 1)); FAILED_NAMES+=("${name}"); fi
 }
 
-# new_home [with_knowledge] — temp HOME with a soul conf; optionally a knowledge
-# registry so knowledge_present is true. Echoes the HOME path.
+# new_home [with_knowledge|with_target] — temp HOME with a soul conf; optionally
+# a promote destination so the nudge gate (promote_destination_present) opens:
+# a brokered knowledge system or a plain remote target. Echoes the HOME path.
 new_home() {
   local home; home="$(mktemp -d)"
   mkdir -p "${home}/.demarkus"
   printf 'SOUL_DIR=%s/soul\nPORT=6310\nMODE=shared\n' "${home}" > "${home}/.demarkus/plugin-memory.conf"
-  [[ "${1:-}" == "with_knowledge" ]] && printf 'knowledge\n' > "${home}/.demarkus/knowledge-systems"
+  case "${1:-}" in
+    with_knowledge) printf 'knowledge\n' > "${home}/.demarkus/knowledge-systems" ;;
+    with_target)    printf 'team-remote /shared/\n' > "${home}/.demarkus/promote-targets" ;;
+  esac
   echo "${home}"
 }
 
@@ -53,12 +57,21 @@ test_nudges_on_adr_publish() {
   (( ok == 1 )) || { echo "got: ${out}"; return 1; }
 }
 
-test_silent_without_knowledge_endpoint() {
-  # No knowledge system joined → promote is dormant → no nudge.
+test_nudges_with_plain_target_no_knowledge() {
+  # A registered plain remote target is a promote destination too → nudge fires
+  # even with no brokered knowledge system joined.
+  local home; home="$(new_home with_target)"
+  local out; out="$(payload PostToolUse "${SOUL_TOOL}" "${ADR_URL}" "# 0007. X" | HOME="${home}" bash "${HOOK}" 2>&1)"
+  rm -rf "${home}"
+  printf '%s' "${out}" | grep -q '/promote' || { echo "expected a nudge with a plain target, got: ${out}"; return 1; }
+}
+
+test_silent_without_any_destination() {
+  # No destination of any kind (no knowledge system, no plain target) → dormant.
   local home; home="$(new_home)"
   local out; out="$(payload PostToolUse "${SOUL_TOOL}" "${ADR_URL}" "# 0007. X" | HOME="${home}" bash "${HOOK}" 2>&1)"
   rm -rf "${home}"
-  [[ -z "${out}" ]] || { echo "want silence without a knowledge endpoint, got: ${out}"; return 1; }
+  [[ -z "${out}" ]] || { echo "want silence with no destination, got: ${out}"; return 1; }
 }
 
 test_silent_on_non_adr_path() {

@@ -8,25 +8,25 @@ Keep promoted soul documents fresh as their published copies evolve. This is the
 
 ## Steps
 
-1. **Detection gate.** Run `${CLAUDE_PLUGIN_ROOT}/scripts/detect-knowledge.sh` via Bash. `NO_KNOWLEDGE` → nothing has been promoted anywhere, so there is nothing to refresh; say so and stop. Otherwise note the joined endpoint slug(s).
+1. **Detection gate.** Run `${CLAUDE_PLUGIN_ROOT}/scripts/detect-promote.sh` via Bash. `NONE` → no destination is configured, so nothing has been promoted anywhere and there is nothing to refresh; say so and stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`). A promoted soul doc records its own `mark://` target in its marker, so refresh works against whichever destination it was promoted to.
 
 2. **Find promoted docs.** If `$ARGUMENTS` names a path, use just that one. Otherwise `mark_lookup` the soul with `filter=tag=promoted` to list every promoted document (the `/promote` back-stamp adds that tag). For each, `mark_fetch` it and parse its marker line:
 
    ```
-   promoted: mark://<world>/<path>@v<N>
+   promoted: mark://<dest>/<path>@v<N>
    ```
 
-   `<N>` is the knowledge version this soul copy was last synced to. A doc with the `promoted` tag but no parseable marker is malformed — report it and skip (do not guess a destination).
+   `<dest>` is the world slug for a brokered system, or the endpoint slug for a plain remote target; `<N>` is the destination version this soul copy was last synced to. A doc with the `promoted` tag but no parseable marker is malformed — report it and skip (do not guess a destination).
 
-3. **Check each against the live copy.** Through the knowledge endpoint's MCP server (`mcp__<slug>__mark_fetch` / `mark_versions`), read the current version of `mark://<world>/<path>` — call it `<M>`.
+3. **Check each against the live copy.** Through the destination's MCP server (`mcp__<slug>__mark_fetch` / `mark_versions`), read the current version of `mark://<dest>/<path>` — call it `<M>`.
    - `<M> == <N>` → in sync. Skip silently.
-   - knowledge doc is `not-found` (archived or moved) → surface it; the link is dangling. Do not delete the soul doc — tell the user and let them decide. Skip the auto-refresh.
+   - the destination doc is `not-found` (archived or moved) → surface it; the link is dangling. Do not delete the soul doc — tell the user and let them decide. Skip the auto-refresh.
    - `<M> > <N>` → the authoritative copy moved on. Refresh, per the doc's mode (step 4).
 
 4. **Refresh a stale doc — directionally.** Determine the mode from the doc's shape:
-   - **Stub (body is just title + marker + summary, no rival content).** Safe to refresh automatically: `mark_fetch` the live knowledge body for the summary, then `mark_publish` the soul stub with the marker bumped to `@v<M>` (and a refreshed one-line summary). Knowledge wins; there was no local content to lose.
-   - **Marker-only (the soul kept a full body).** The local body may have diverged, so do **not** overwrite it silently. Surface the move (`<world>/<path>` went `v<N>` → `v<M>`) and offer the user two directional choices:
-     - **Pull down (knowledge wins):** replace the soul body with the live knowledge body and bump the marker to `@v<M>`. Use when the soul copy has no local edits worth keeping.
+   - **Stub (body is just title + marker + summary, no rival content).** Safe to refresh automatically: `mark_fetch` the live authoritative body for the summary, then `mark_publish` the soul stub with the marker bumped to `@v<M>` (and a refreshed one-line summary). The authoritative copy (knowledge system or remote endpoint) wins; there was no local content to lose.
+   - **Marker-only (the soul kept a full body).** The local body may have diverged, so do **not** overwrite it silently. Surface the move (`<dest>/<path>` went `v<N>` → `v<M>`) and offer the user two directional choices:
+     - **Pull down (authoritative wins):** replace the soul body with the live destination body and bump the marker to `@v<M>`. Use when the soul copy has no local edits worth keeping.
      - **Re-promote (soul proposes upward):** if the soul body has local refinements, those go *up* as a gated update — run `/promote` on this doc (its step 3 already-promoted path routes the edit through the cascade as an update to the existing knowledge doc). Never fold local edits into the authoritative copy without the gate.
    Always confirm before writing. The marker bump is a `mark_publish` on the soul at its current version.
 

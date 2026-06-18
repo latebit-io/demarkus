@@ -112,11 +112,37 @@ knowledge_endpoints() {
   awk 'NF { gsub(/^[ \t]+|[ \t]+$/, ""); if ($0 != "") print }' "${KNOWLEDGE_REGISTRY}" 2>/dev/null || true
 }
 
-# knowledge_present — true when at least one knowledge endpoint is joined. The
-# detection gate for the promote bridge: /promote is meaningful only with a
-# destination to promote to.
+# knowledge_present — true when at least one brokered knowledge endpoint is
+# joined (via the demarkus-knowledge plugin's /knowledge-join).
 knowledge_present() {
   [[ -n "$(knowledge_endpoints)" ]]
+}
+
+# Registry of plain remote promote targets — demarkus servers (no broker) you
+# may promote to, one per line: "<mcp-slug> <write-path> [label]". A plain
+# server has no directory to enumerate writable worlds from, so the write path
+# is DECLARED here at registration time (the client-side counterpart to the
+# broker's mark_worlds writable surface — no server/protocol change needed).
+# Written by scripts/promote-target.sh; read here. Memory stays broker-unaware:
+# a plain endpoint is just an MCP server slug + a path, no broker involved.
+readonly PROMOTE_TARGETS="${PLUGIN_HOME}/promote-targets"
+
+# promote_targets — emit each registered plain target on its own line
+# ("<slug> <path> [label]"), empty when none. Skips blank lines and #-comments;
+# trims surrounding whitespace.
+promote_targets() {
+  [[ -f "${PROMOTE_TARGETS}" ]] || return 0
+  awk '
+    { sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
+    NF && $1 !~ /^#/ { print }
+  ' "${PROMOTE_TARGETS}" 2>/dev/null || true
+}
+
+# promote_destination_present — true when ANY promote destination exists,
+# brokered or plain. The real detection gate for the promote bridge and its
+# triggers: with no destination of either kind, promote is dormant.
+promote_destination_present() {
+  knowledge_present || [[ -n "$(promote_targets)" ]]
 }
 
 # publish_gate_scope TOOLNAME — echoes "local" only when the tool targets this

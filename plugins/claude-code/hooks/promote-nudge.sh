@@ -3,8 +3,9 @@
 #
 # Wired PostToolUse on the plugin's own mark_publish. When a HIGH-SIGNAL soul
 # document is published — today that means an ADR (the plan's named doc-type
-# trigger) — and a knowledge endpoint exists to promote to, inject a discreet
-# reminder that the decision can be /promote'd up to the shared catalog.
+# trigger) — and a promote destination exists (a brokered knowledge system or a
+# registered plain remote target), inject a discreet reminder that the decision
+# can be /promote'd up to the shared tier.
 #
 # This is the memory-side trigger half of the promote bridge: triggers observe
 # the staging tier (the soul), so they live here, not in demarkus-knowledge.
@@ -12,8 +13,8 @@
 # all of these hold, to keep false positives near zero (recall-nudge philosophy):
 #   - PostToolUse on a mark_publish to THIS plugin's soul (not a knowledge system,
 #     not an unrelated server);
-#   - a knowledge endpoint is joined (otherwise promote is dormant — nothing to
-#     nudge toward);
+#   - a promote destination is configured — a brokered knowledge system or a
+#     plain remote target (otherwise promote is dormant — nothing to nudge toward);
 #   - the path is a high-signal type (an ADR);
 #   - the document is not ALREADY promoted (its body carries no `promoted:`
 #     marker) — so a back-stamp re-publish does not re-nudge.
@@ -31,8 +32,9 @@ SCRIPTS_DIR="${HOOK_DIR}/../scripts"
 # No soul configured → nothing is being staged here.
 [[ -f "${PLUGIN_CONFIG}" ]] || exit 0
 
-# No knowledge endpoint joined → promote is dormant, so do not nudge toward it.
-knowledge_present || exit 0
+# No promote destination of any kind (brokered system or plain remote target) →
+# promote is dormant, so do not nudge toward it.
+promote_destination_present || exit 0
 
 input="$(cat)"
 
