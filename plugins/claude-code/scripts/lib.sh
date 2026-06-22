@@ -204,6 +204,46 @@ is_registered_remote_soul() {
   list_remote_souls | grep -qxF "${slug}"
 }
 
+# local_soul_present — true when the local plugin-managed soul is configured
+# (PLUGIN_CONFIG exists). Its canonical catalog id / binding slug is the reserved
+# name "demarkus-memory" (what soul_target_id echoes for the local server).
+local_soul_present() {
+  [[ -f "${PLUGIN_CONFIG}" ]]
+}
+
+# soul_catalog — emit one row per soul this plugin routes, tab-separated
+# "<id>\t<tier>\t<host>\t<insecure>", local first then remotes:
+#   - local managed soul (when configured): "demarkus-memory\tlocal\t-\t-"
+#   - each remote soul (from SOULS_REGISTRY): "<slug>\tremote\t<host>\t<insecure>"
+# The <id> column is exactly the slug a project binding stores and the dest-gate
+# compares against (see soul_target_id). Empty when nothing is joined. This is
+# the union promised by the SOULS_REGISTRY header comment — the single place that
+# knows the full set of bindable write targets.
+soul_catalog() {
+  if local_soul_present; then
+    printf 'demarkus-memory\tlocal\t-\t-\n'
+  fi
+  # Absent registry → no remotes joined (return 0). But a present-yet-unreadable
+  # registry is an error, not "empty": let it propagate (return 1) instead of
+  # masking a read failure as "no souls" — the CLI's --list would otherwise tell
+  # the user to run /soul-join when the real problem is a permissions fault.
+  [[ -e "${SOULS_REGISTRY}" ]] || return 0
+  [[ -r "${SOULS_REGISTRY}" ]] || return 1
+  awk -F '\t' 'NF && $1 !~ /^#/ { print $1 "\tremote\t" $2 "\t" $3 }' \
+    "${SOULS_REGISTRY}"
+}
+
+# is_catalog_soul SLUG — true when SLUG is a bindable write target: the local
+# managed soul's reserved id, or a registered remote slug. The validation a
+# default-binding change runs before it touches PROJECT_SOULS, so a binding can
+# never point at a soul that was never joined.
+is_catalog_soul() {
+  local slug="$1"
+  [[ -n "${slug}" ]] || return 1
+  [[ "${slug}" == "demarkus-memory" ]] && { local_soul_present; return; }
+  is_registered_remote_soul "${slug}"
+}
+
 # bind_project_soul DIR SLUG — record that repo DIR writes to catalog soul SLUG
 # by default. Idempotent upsert keyed on DIR. Returns non-zero on empty input.
 bind_project_soul() {
