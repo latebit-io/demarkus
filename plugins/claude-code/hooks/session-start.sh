@@ -83,6 +83,11 @@ main() {
 
     ensure_binaries
 
+    # If ensure_binaries swapped the binary, restart the configured server (any
+    # mode, including reuse) onto it from its own config — a binary the running
+    # server can't see is the bug this closes. No-op when nothing was upgraded.
+    restart_local_server_on_upgrade
+
     case "${MODE}" in
       default|isolated)
         ensure_managed_server "${SOUL_DIR}" "${PORT}"

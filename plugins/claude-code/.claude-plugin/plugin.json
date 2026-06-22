@@ -1,6 +1,6 @@
 {
   "name": "demarkus-memory",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Local, versioned memory for Claude Code via demarkus. Zero-config install: spawns a local demarkus-server, auto-generates a token, wires MCP tools for fetch/publish/append/graph/lookup, injects standing guidance so sessions self-document to the soul, and enforces a publish tag-gate so documents stay findable via lookup.",
   "author": {
     "name": "latebit",
@@ -26,6 +26,15 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/publish-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*__mark_(publish|append)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/dest-gate.sh"
           }
         ]
       }

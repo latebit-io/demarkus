@@ -23,6 +23,13 @@ readonly TOKEN_LABEL="claude-code-plugin"
 # strictness live in the separate demarkus-knowledge plugin, not here.)
 readonly PLUGIN_STRICTNESS_FILE="${PLUGIN_HOME}/plugin-memory.strictness"
 
+# Strictness for the destination gate (hooks/dest-gate.sh): warn | block | ask.
+# Separate file from the tag-gate strictness so the two enforcement axes are set
+# independently. Absent file means the block default — an explicit project→soul
+# binding means writes belong to the bound soul, so a misroute is an error to
+# deny, not merely warn.
+readonly PLUGIN_DEST_STRICTNESS_FILE="${PLUGIN_HOME}/plugin-memory.dest-strictness"
+
 # Registry of joined knowledge-system MCP server slugs, written by the SEPARATE
 # demarkus-knowledge plugin's /knowledge-join (one slug per line). We read it
 # (never write it) purely to detect that a knowledge endpoint exists — the
@@ -31,6 +38,21 @@ readonly PLUGIN_STRICTNESS_FILE="${PLUGIN_HOME}/plugin-memory.strictness"
 # bridge (soul → knowledge): with no endpoint there is nothing to promote to, so
 # /promote stays dormant. We never touch the broker — detection only.
 readonly KNOWLEDGE_REGISTRY="${PLUGIN_HOME}/knowledge-systems"
+
+# Catalog of joined REMOTE souls (direct-QUIC demarkus servers reached over the
+# network, e.g. soul.demarkus.io), written by /soul-join. Tab-separated, one row
+# per soul: "<slug>\t<host>\t<insecure 0|1>\t<token-file|->". This is the managed
+# replacement for hand-wiring a remote demarkus-mcp into .mcp.json: the token
+# lives in a 0600 file (token-file column), never inline in the MCP config. The
+# local plugin-managed soul stays in PLUGIN_CONFIG (tier "local"); these rows are
+# tier "remote". soul_catalog() unions both for a full view.
+readonly SOULS_REGISTRY="${PLUGIN_HOME}/souls"
+
+# Per-project binding: which catalog soul a given repo writes to by default.
+# Tab-separated "<project-dir>\t<slug>", one row per bound repo, written by
+# /soul-join when run inside a repo. The routing key that disambiguates "which
+# soul does THIS project use" when several are configured.
+readonly PROJECT_SOULS="${PLUGIN_HOME}/project-souls"
 
 # Soul dirs that setup.sh may choose.
 readonly SHARED_SOUL_DIR="${PLUGIN_HOME}/soul"
@@ -101,6 +123,22 @@ configured_strictness() {
   esac
 }
 
+# configured_dest_strictness — destination-gate strictness: warn|block|ask.
+# Precedence: DEMARKUS_MEMORY_DEST_STRICTNESS env override, then
+# PLUGIN_DEST_STRICTNESS_FILE, then the block default. Unlike the tag gate (which
+# floors at warn so a typo can't silently escalate), block IS the intended
+# default here, so an unrecognized value falls back to block.
+configured_dest_strictness() {
+  local s="${DEMARKUS_MEMORY_DEST_STRICTNESS:-}"
+  if [[ -z "${s}" && -f "${PLUGIN_DEST_STRICTNESS_FILE}" ]]; then
+    s="$(tr -d '[:space:]' < "${PLUGIN_DEST_STRICTNESS_FILE}" 2>/dev/null || true)"
+  fi
+  case "${s}" in
+    warn|block|ask) echo "${s}" ;;
+    *)              echo "block" ;;
+  esac
+}
+
 # knowledge_endpoints — emit each joined knowledge-system slug on its own line
 # (empty when none). Read-only peek at the demarkus-knowledge registry; blank
 # lines and surrounding whitespace are stripped. Mirrors that plugin's own
@@ -116,6 +154,76 @@ knowledge_endpoints() {
 # joined (via the demarkus-knowledge plugin's /knowledge-join).
 knowledge_present() {
   [[ -n "$(knowledge_endpoints)" ]]
+}
+
+# --- remote soul catalog (written by /soul-join) -------------------------------
+#
+# Rows are tab-separated "<slug>\t<host>\t<insecure>\t<token-file>". All readers
+# below skip blank lines and #-comments and split on tab only, so a host or path
+# containing spaces survives intact.
+
+# register_remote_soul SLUG HOST INSECURE TOKEN_FILE — idempotent upsert. Any
+# existing row for SLUG is replaced (a re-join can change host/token), so the
+# catalog never carries two rows for one slug. INSECURE is normalized to 0|1;
+# TOKEN_FILE of "" is stored as "-" (no auth). Returns non-zero on empty slug.
+register_remote_soul() {
+  local slug="$1" host="$2" insecure="$3" token_file="$4"
+  [[ -n "${slug}" && -n "${host}" ]] || return 1
+  case "${insecure}" in 1|true|yes) insecure=1 ;; *) insecure=0 ;; esac
+  [[ -n "${token_file}" ]] || token_file="-"
+  mkdir -p "${PLUGIN_HOME}"
+  touch "${SOULS_REGISTRY}"
+  local tmp="${SOULS_REGISTRY}.tmp"
+  # Drop any prior row for this slug, then append the new one.
+  awk -F '\t' -v s="${slug}" 'NF && $1 !~ /^#/ && $1 != s' "${SOULS_REGISTRY}" > "${tmp}" 2>/dev/null || true
+  printf '%s\t%s\t%s\t%s\n' "${slug}" "${host}" "${insecure}" "${token_file}" >> "${tmp}"
+  mv "${tmp}" "${SOULS_REGISTRY}"
+}
+
+# remote_soul_fields SLUG — echo the row's "HOST\tINSECURE\tTOKEN_FILE" (tab-
+# separated) for SLUG, empty when not registered. The caller reads the three
+# fields with `IFS=$'\t' read -r host insecure token_file <<<"$(...)"`.
+remote_soul_fields() {
+  local slug="$1"
+  [[ -n "${slug}" && -f "${SOULS_REGISTRY}" ]] || return 0
+  awk -F '\t' -v s="${slug}" 'NF && $1 !~ /^#/ && $1 == s { print $2 "\t" $3 "\t" $4; exit }' \
+    "${SOULS_REGISTRY}" 2>/dev/null || true
+}
+
+# list_remote_souls — emit each registered remote-soul slug on its own line
+# (empty when none). Blank lines and #-comments are skipped.
+list_remote_souls() {
+  [[ -f "${SOULS_REGISTRY}" ]] || return 0
+  awk -F '\t' 'NF && $1 !~ /^#/ { print $1 }' "${SOULS_REGISTRY}" 2>/dev/null || true
+}
+
+# is_registered_remote_soul SLUG — true if SLUG is in the catalog.
+is_registered_remote_soul() {
+  local slug="$1"
+  [[ -n "${slug}" ]] || return 1
+  list_remote_souls | grep -qxF "${slug}"
+}
+
+# bind_project_soul DIR SLUG — record that repo DIR writes to catalog soul SLUG
+# by default. Idempotent upsert keyed on DIR. Returns non-zero on empty input.
+bind_project_soul() {
+  local dir="$1" slug="$2"
+  [[ -n "${dir}" && -n "${slug}" ]] || return 1
+  mkdir -p "${PLUGIN_HOME}"
+  touch "${PROJECT_SOULS}"
+  local tmp="${PROJECT_SOULS}.tmp"
+  awk -F '\t' -v d="${dir}" 'NF && $1 !~ /^#/ && $1 != d' "${PROJECT_SOULS}" > "${tmp}" 2>/dev/null || true
+  printf '%s\t%s\n' "${dir}" "${slug}" >> "${tmp}"
+  mv "${tmp}" "${PROJECT_SOULS}"
+}
+
+# project_soul_binding DIR — echo the catalog slug bound to repo DIR, empty when
+# unbound. Exact directory match (no prefix/parent resolution).
+project_soul_binding() {
+  local dir="$1"
+  [[ -n "${dir}" && -f "${PROJECT_SOULS}" ]] || return 0
+  awk -F '\t' -v d="${dir}" 'NF && $1 !~ /^#/ && $1 == d { print $2; exit }' \
+    "${PROJECT_SOULS}" 2>/dev/null || true
 }
 
 # Registry of plain remote promote targets — demarkus servers (no broker) you
@@ -145,20 +253,51 @@ promote_destination_present() {
   knowledge_present || [[ -n "$(promote_targets)" ]]
 }
 
-# publish_gate_scope TOOLNAME — echoes "local" only when the tool targets this
-# plugin's own soul server, empty otherwise. The server is the segment between
-# the leading "mcp__" and the trailing "__mark_publish": either the manually-
-# configured name "demarkus-memory" or the plugin-prefixed "..._demarkus-memory".
-# Matched exactly (not as a "*demarkus-memory*" substring) so an unrelated server
-# whose name merely contains that token isn't swept in. Organizational knowledge
-# systems are gated by the separate demarkus-knowledge plugin, never here.
+# publish_gate_scope TOOLNAME — echoes "local" when the tool targets a soul this
+# plugin owns (so the publish tag-gate fires), empty otherwise. The server is the
+# segment between the leading "mcp__" and the trailing "__mark_publish". Two soul
+# kinds qualify:
+#   - the local managed soul: server name "demarkus-memory" or the plugin-
+#     prefixed "..._demarkus-memory". Matched exactly (not as a
+#     "*demarkus-memory*" substring) so an unrelated server whose name merely
+#     contains that token isn't swept in.
+#   - a remote soul joined via /soul-join: server name equals the registered
+#     catalog slug. Slugs are sanitized to [a-z0-9-] (no underscores) by
+#     soul-join.sh, so they can never collide with the "*_demarkus-memory" arm.
+# Organizational knowledge systems are gated by the separate demarkus-knowledge
+# plugin, never here.
 publish_gate_scope() {
   local tool="$1" server
   server="${tool#mcp__}"
   server="${server%__mark_publish}"
   case "${server}" in
-    demarkus-memory | *_demarkus-memory) echo "local" ;;
+    demarkus-memory | *_demarkus-memory) echo "local"; return ;;
   esac
+  if is_registered_remote_soul "${server}"; then
+    echo "local"
+  fi
+}
+
+# soul_target_id TOOLNAME — echoes the canonical id of the soul a mark_publish /
+# mark_append tool writes to, for comparison against a project binding:
+#   "demarkus-memory"  — the local managed soul (server "demarkus-memory" or the
+#                        plugin-prefixed "..._demarkus-memory")
+#   "<slug>"           — a remote soul joined via /soul-join (server == slug)
+#   (empty)            — the tool targets something else (a knowledge system or an
+#                        unrelated demarkus server): not a soul this plugin routes,
+#                        so the destination gate leaves it alone.
+# The server is the segment between "mcp__" and the trailing "__mark_<verb>", so
+# this handles both publish and append.
+soul_target_id() {
+  local tool="$1" server
+  server="${tool#mcp__}"
+  server="${server%__mark_*}"
+  case "${server}" in
+    demarkus-memory | *_demarkus-memory) echo "demarkus-memory"; return ;;
+  esac
+  if is_registered_remote_soul "${server}"; then
+    echo "${server}"
+  fi
 }
 
 # publish_metadata_check — reads a Claude Code PreToolUse/PostToolUse hook
@@ -492,7 +631,13 @@ _desired_versions() {
 # re-download on the next session start). No sidecar to keep in sync: the
 # binaries are the source of truth, and a partial/failed install simply reads as
 # a mismatch and re-downloads next time.
+# DEMARKUS_BINARIES_REPLACED is a plain (unexported) global ensure_binaries sets
+# to 1 when it actually swapped the on-disk binary this run, 0 otherwise;
+# restart_local_server_on_upgrade reads it (defaulting to 0 when never set) to
+# decide whether to restart the running server onto the new binary. Unexported so
+# it never leaks into the spawned server's environment.
 ensure_binaries() {
+  DEMARKUS_BINARIES_REPLACED=0
   local desired installed
   desired="$(_desired_versions)"
   installed="$(_installed_versions)"
@@ -562,7 +707,50 @@ ensure_binaries() {
     return "${install_rc}"
   fi
 
+  DEMARKUS_BINARIES_REPLACED=1
   log "binaries installed to ${PLUGIN_BIN_DIR}"
+}
+
+# restart_local_server_on_upgrade — when ensure_binaries swapped the binary this
+# run, restart the configured local server onto the new binary using its OWN
+# recorded config (SOUL_DIR/PORT from PLUGIN_CONFIG), so a binary replacement is
+# never left half-applied (process serving the stale binary from memory). No-op
+# when no binary changed or no local soul is configured.
+#
+# Works for every mode, including reuse: a reuse/externally-started server is not
+# tracked by our .pid, so we stop the process found at the configured root first
+# (freeing the UDP port) before ensure_managed_server respawns it on the new
+# binary. This intentionally relaxes the old "never restart a reuse server"
+# policy — restarting it with the same config is what the user asked for, and an
+# upgraded binary that the running server can't see is the bug it fixes. Managed
+# servers are handled by ensure_managed_server via our own .pid as before.
+#
+# Runs in a subshell so load_config can't clobber the caller's SOUL_DIR/PORT/MODE,
+# and never fails the caller: a restart problem is warned, not propagated.
+restart_local_server_on_upgrade() {
+  [[ "${DEMARKUS_BINARIES_REPLACED:-0}" == "1" ]] || return 0
+  (
+    load_config 2>/dev/null || exit 0
+    # Stop an externally-started server at this root (reuse, or an orphan whose
+    # .pid we lost) so the respawn can bind the freed port. Skip when our own
+    # .pid exists — ensure_managed_server stops that one itself.
+    if [[ ! -f "${SOUL_DIR}/.pid" ]]; then
+      local ext_pid
+      ext_pid="$(pid_of_server_at_root "${SOUL_DIR}" 2>/dev/null || true)"
+      if [[ -n "${ext_pid}" ]]; then
+        log "binary upgraded — stopping server at ${SOUL_DIR} (pid=${ext_pid}) to restart on the new binary"
+        kill "${ext_pid}" 2>/dev/null || true
+        local waited=0
+        while (( waited < 30 )) && kill -0 "${ext_pid}" 2>/dev/null; do
+          sleep 0.1; waited=$((waited + 1))
+        done
+        kill -0 "${ext_pid}" 2>/dev/null && kill -9 "${ext_pid}" 2>/dev/null || true
+      fi
+    fi
+    log "binary upgraded — restarting local server (mode=${MODE}, soul=${SOUL_DIR}, port=${PORT}) on the new binary"
+    ensure_managed_server "${SOUL_DIR}" "${PORT}"
+  ) || warn "could not restart the local server after a binary upgrade; run /soul-init to recover"
+  return 0
 }
 
 # _proc_env PID VAR — echoes the value of env var VAR for process PID, or empty.
