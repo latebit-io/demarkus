@@ -31,7 +31,7 @@ Additional terms:
 
 The Mark Protocol uses the URI scheme `mark`. A conforming URI has the form:
 
-```
+```text
 mark://host[:port]/path
 ```
 
@@ -67,7 +67,7 @@ Servers SHOULD use certificates issued by a trusted certificate authority for pr
 
 The Application-Layer Protocol Negotiation (ALPN) identifier for the Mark Protocol is:
 
-```
+```text
 mark
 ```
 
@@ -79,7 +79,7 @@ Servers MUST include `"mark"` in their TLS ALPN extension. Clients MUST request 
 
 A request consists of a request line, optional frontmatter, and an optional body:
 
-```
+```text
 VERB /path\n
 [---\n
 key: value\n
@@ -94,7 +94,7 @@ The request line is a single text line terminated by a newline character (`\n`, 
 
 The request line MUST have the form:
 
-```
+```text
 VERB /path\n
 ```
 
@@ -107,7 +107,7 @@ VERB /path\n
 
 If the line immediately following the request line is exactly `---`, the request includes metadata. Metadata lines follow until a closing `---` line is encountered. The content between the delimiters is parsed as YAML into a flat key-value map where all values are strings.
 
-```
+```text
 ---\n
 key1: value1\n
 key2: value2\n
@@ -132,7 +132,7 @@ Everything after the metadata closing delimiter (or after the request line if no
 
 A response consists of YAML frontmatter followed by an optional markdown body:
 
-```
+```text
 ---\n
 status: <status-value>\n
 key: value\n
@@ -173,16 +173,19 @@ Where the status title is the status value with the first letter capitalised and
 Retrieves a document.
 
 **Request**:
-```
+
+```text
 FETCH /path\n
 ```
 
 **Conditional request metadata** (OPTIONAL):
+
 - `if-none-match`: An ETag value from a previous response.
 - `if-modified-since`: An RFC 3339 timestamp from a previous response.
 
 **Success response** (`ok`):
-```
+
+```text
 ---
 status: ok
 modified: <RFC 3339 timestamp>
@@ -196,7 +199,7 @@ version: <integer>
 
 If the request includes `if-none-match` and it matches the current ETag, or if the request includes `if-modified-since` and the document has not been modified after that time, the server MUST respond with:
 
-```
+```text
 ---
 status: not-modified
 ---
@@ -210,7 +213,7 @@ When both `if-none-match` and `if-modified-since` are present, the server MUST c
 
 A path of the form `/doc.md/vN` (where N is a positive integer) requests a specific version. The response includes additional metadata:
 
-```
+```text
 ---
 status: ok
 modified: <RFC 3339 timestamp>
@@ -221,6 +224,7 @@ current-version: <highest version number>
 ```
 
 **Errors**:
+
 - `not-found`: The document does not exist.
 - `server-error`: Internal error or the file exceeds the size limit.
 
@@ -231,12 +235,14 @@ current-version: <highest version number>
 Lists the contents of a directory.
 
 **Request**:
-```
+
+```text
 LIST /path/\n
 ```
 
 **Success response** (`ok`):
-```
+
+```text
 ---
 status: ok
 entries: <count>
@@ -245,6 +251,7 @@ entries: <count>
 ```
 
 The body MUST be a markdown document containing a list of entries:
+
 - Directories are listed as `- [name/](url-encoded-name/)`
 - Files are listed as `- [name](url-encoded-name)`
 
@@ -253,6 +260,7 @@ Servers MUST exclude hidden files (names beginning with `.`) from directory list
 Servers MUST impose a maximum entry count. The RECOMMENDED limit is **1000** entries. If the listing is truncated, the body SHOULD end with a note indicating truncation.
 
 **Errors**:
+
 - `not-found`: The directory does not exist, or the path refers to a file.
 - `server-error`: Internal error.
 
@@ -261,12 +269,14 @@ Servers MUST impose a maximum entry count. The RECOMMENDED limit is **1000** ent
 Retrieves the version history of a document.
 
 **Request**:
-```
+
+```text
 VERSIONS /path\n
 ```
 
 **Success response** (`ok`):
-```
+
+```text
 ---
 status: ok
 total: <version count>
@@ -278,6 +288,7 @@ chain-error: <error description>
 ```
 
 The body MUST list all versions from newest to oldest:
+
 ```markdown
 # Version History: /path
 
@@ -287,6 +298,7 @@ The body MUST list all versions from newest to oldest:
 ```
 
 **Metadata**:
+
 - `total`: The total number of versions.
 - `current`: The highest version number.
 - `chain-valid`: `"true"` if the hash chain is intact; `"false"` if any link is broken.
@@ -295,6 +307,7 @@ The body MUST list all versions from newest to oldest:
 Only documents with version history (written through the protocol) are served. Flat files without a `versions/` directory are treated as non-existent.
 
 **Errors**:
+
 - `not-found`: The document does not exist or has no version history.
 - `server-error`: Internal error or versioning not configured.
 
@@ -303,7 +316,8 @@ Only documents with version history (written through the protocol) are served. F
 Creates a new immutable version of a document. Requires authentication.
 
 **Request**:
-```
+
+```text
 PUBLISH /path\n
 ---\n
 auth: <raw-token>\n
@@ -316,7 +330,8 @@ The `auth` metadata field is REQUIRED. The server hashes the raw token with SHA-
 The request body is the document content. It is stored as-is (the server prepends its own store frontmatter; the original content is preserved verbatim).
 
 **Success response** (`created`):
-```
+
+```text
 ---
 status: created
 version: <new version number>
@@ -327,6 +342,7 @@ modified: <RFC 3339 timestamp>
 The `created` response MUST NOT include a body.
 
 **Behaviour**:
+
 - PUBLISH creates a new version unless the body is identical to the current version. The server MUST NOT modify or overwrite any existing version.
 - If the body is byte-for-byte identical to the current version's content, the server MUST NOT create a new version. It MUST respond with `ok` and the current version's `version` and `modified` metadata.
 - If the document does not exist, version 1 is created.
@@ -348,16 +364,19 @@ The request MAY include an `expected-version` metadata field containing a decima
 **Note**: Due to the append-only version model, a conflict may be detected after a version file has been written (e.g., a concurrent writer advanced the version between the pre-check and the write). In this case the server still returns `conflict`, but the written version is preserved to maintain hash chain integrity. Since PUBLISH is idempotent (identical content produces a no-op), clients can safely retry on `conflict` by fetching the latest version and re-publishing. For non-idempotent operations like APPEND, clients MUST fetch the latest version and verify whether their append was applied before retrying (see section 6.6).
 
 **Authentication errors**:
+
 - `not-permitted`: No token store configured on the server (publishing disabled).
 - `unauthorized`: Missing `auth` field or token not recognised.
 - `not-permitted`: Token does not grant `publish` on the requested path.
 
 **Archived documents**:
+
 - PUBLISH with a body on an archived document MUST return `archived` and MUST NOT create a new version. The document must be unarchived first.
 - PUBLISH with an empty body on an archived document MUST unarchive the document and return `ok`.
 - PUBLISH with an empty body on an active document MUST return `ok` (no-op).
 
 **Other errors**:
+
 - `not-found`: Path validation failed (e.g., path traversal attempt).
 - `conflict`: `expected-version` does not match the current version (see optimistic concurrency above).
 - `server-error`: Internal error, content exceeds size limit, or publishing not configured.
@@ -367,7 +386,8 @@ The request MAY include an `expected-version` metadata field containing a decima
 Marks a document as archived. Archived documents return `status: archived` on FETCH, but version history is preserved. Version-pinned fetches (e.g., `/doc.md/v3`) continue to work. Requires authentication with the `publish` capability.
 
 **Request**:
-```
+
+```text
 ARCHIVE /path\n
 ---\n
 auth: <raw-token>\n
@@ -375,24 +395,28 @@ auth: <raw-token>\n
 ```
 
 **Success response**:
-```
+
+```text
 ---
 status: ok
 ---
 ```
 
 **Behaviour**:
+
 - ARCHIVE sets the `archived` flag on the current version file. It does NOT create a new version.
 - FETCH on an archived document MUST return `status: archived` with no body.
 - Version-pinned FETCH (e.g., `/doc.md/v3`) MUST still return the content regardless of archive status.
 - To unarchive a document, PUBLISH with an empty body (see section 6.4).
 
 **Authentication errors**:
+
 - `not-permitted`: No token store configured on the server (archiving disabled).
 - `unauthorized`: Missing `auth` field or token not recognised.
 - `not-permitted`: Token does not grant `publish` on the requested path.
 
 **Other errors**:
+
 - `not-found`: Document does not exist or path validation failed.
 - `server-error`: Internal error.
 
@@ -401,7 +425,8 @@ status: ok
 Appends content to the end of an existing document. Creates a new immutable version where the body is the existing content followed by a newline and the appended content. Requires authentication with the `publish` capability.
 
 **Request**:
-```
+
+```text
 APPEND /path\n
 ---\n
 auth: <raw-token>\n
@@ -413,7 +438,8 @@ expected-version: <N>\n
 The `auth` and `expected-version` metadata fields are REQUIRED. The `expected-version` value MUST be >= 1. The request body MUST NOT be empty.
 
 **Success response** (`created`):
-```
+
+```text
 ---
 status: created
 version: <new version number>
@@ -422,6 +448,7 @@ modified: <RFC 3339 timestamp>
 ```
 
 **Behaviour**:
+
 - APPEND reads the current document, concatenates the request body after a newline separator, and writes the result as a new version.
 - The document MUST already exist. APPEND does not create new documents — use PUBLISH for that.
 - The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
@@ -430,11 +457,13 @@ modified: <RFC 3339 timestamp>
 - The new version's publisher metadata is taken from the APPEND request (it is not merged with the prior version's metadata). The OKF type default (§6.4) applies, so an append that declares no `type` to a non-reserved path stores `type: Document`.
 
 **Authentication errors**:
+
 - `not-permitted`: No token store configured on the server.
 - `unauthorized`: Missing `auth` field or token not recognised.
 - `not-permitted`: Token does not grant `publish` on the requested path.
 
 **Other errors**:
+
 - `bad-request`: Missing or invalid `expected-version` (must be >= 1).
 - `not-found`: Document does not exist or path validation failed.
 - `archived`: Document is archived. Unarchive first via PUBLISH with empty body.
@@ -448,7 +477,8 @@ Looks up documents by subject and returns a compact, importance-ranked list of m
 LOOKUP operates over current versions only; archived documents MUST be excluded. The path in the request line is a scope: `LOOKUP /` covers the whole server, `LOOKUP /docs/` restricts to that subtree.
 
 **Request**:
-```
+
+```text
 LOOKUP /docs/\n
 ---\n
 query: auth middleware\n
@@ -464,7 +494,8 @@ auth: <raw-token>\n
 - `auth` (OPTIONAL): a token used to authorise results on read-auth-protected paths (see Read authorisation below).
 
 **Success response** (`ok`):
-```
+
+```text
 ---
 status: ok
 matches: <count>
@@ -482,6 +513,7 @@ The body MUST be a markdown table, one row per result. Columns are the document'
 **Ranking**: results are ordered by (1) the number of distinct query terms matched, then (2) descending `importance`, then (3) descending modification time, then (4) ascending path. Importance influences ordering only among documents that already matched the query; it MUST NOT cause an unmatched document to appear in the results.
 
 **Declared catalog metadata** (set on PUBLISH as publisher metadata):
+
 - `tags`: a comma-separated list of subject labels, e.g. `tags: go,auth,middleware`. The match target for `query`, and available for exact membership matching via `filter`.
 - `importance`: a decimal in the range [0,1] used as the ranking weight. Absent or invalid values MUST be treated as 0.5.
 - `title`: an OPTIONAL one-line title shown in results and included in the `query` match target. When absent, the server SHOULD derive it from the document's first level-1 heading, falling back to the path's base name.
@@ -491,6 +523,7 @@ The body MUST be a markdown table, one row per result. Columns are the document'
 **Read authorisation**: a server that enforces per-path read authorisation MUST filter LOOKUP results so that documents the requester is not authorised to read are omitted entirely — no path, no title, no tags, and not counted in `matches`. Knowledge of a subject MUST NOT reveal the existence of protected documents.
 
 **Errors**:
+
 - `bad-request`: Missing, empty, or too-short `query`, or a malformed `filter`.
 - `not-found`: The scope path does not exist or is not a directory.
 - `server-error`: Internal error.
@@ -572,7 +605,7 @@ Version numbers are positive integers starting at 1, monotonically increasing by
 
 Specific versions are accessed via the path structure:
 
-```
+```text
 /doc.md          → current version
 /doc.md/v1       → version 1
 /doc.md/v42      → version 42
@@ -584,7 +617,7 @@ The version segment MUST match the pattern `v` followed by a positive integer (n
 
 Servers SHOULD store versioned documents using the following layout:
 
-```
+```text
 root/
   doc.md              ← symlink to versions/doc.md.v<current>
   versions/
@@ -602,7 +635,8 @@ Version files are named `<filename>.v<N>` where N is the version number.
 Each version file MUST be prefixed with a store-managed frontmatter block. The block carries the store's own operational fields followed by any publisher-declared metadata.
 
 **Version 1** (genesis):
-```
+
+```text
 ---
 version: 1
 archived: false
@@ -611,7 +645,8 @@ archived: false
 ```
 
 **Version N (N > 1)**:
-```
+
+```text
 ---
 version: <N>
 archived: false
@@ -624,7 +659,7 @@ previous-hash: sha256-<64-char lowercase hex>
 
 Publisher-declared metadata is written into the same block. The field names defined by the Open Knowledge Format — `type`, `title`, `description`, `resource`, `tags`, and `timestamp` — are written as **bare** frontmatter fields so the document's persisted metadata matches the OKF spec for the fields it covers; `tags` is serialized as a YAML flow list. Every other publisher key is written under a `meta.` prefix so it cannot collide with a reserved or OKF-recognized field. For example:
 
-```
+```text
 ---
 version: 3
 archived: false
@@ -647,7 +682,7 @@ Each version file (except version 1) MUST include a `previous-hash` field in its
 
 This forms a hash chain:
 
-```
+```text
 v1 (genesis)     v2                    v3
 ┌────────────┐   ┌─────────────────┐   ┌─────────────────┐
 │ version: 1 │   │ version: 2      │   │ version: 3      │
@@ -770,11 +805,13 @@ Servers MUST enforce read auth on FETCH, LIST, and VERSIONS operations. Content-
 ```
 
 **Token fields**:
+
 - `paths`: Array of glob patterns. `*` matches any single path segment (not recursive).
 - `operations`: Array of permitted operations (`read`, `publish`).
 - `expires`: OPTIONAL RFC 3339 timestamp. If present, the token is invalid after this time.
 
 **Authentication flow**:
+
 1. Client includes `auth: <raw-token>` in request metadata.
 2. Server computes `sha256-<hex of SHA-256(raw-token)>`.
 3. Server looks up the hash in its token store.
@@ -789,6 +826,7 @@ Servers MUST enforce read auth on FETCH, LIST, and VERSIONS operations. Content-
 Servers MUST only serve documents that have been written through the protocol (i.e., documents with a `versions/` directory containing at least one version file). Flat files placed directly on the filesystem without version history MUST be treated as `not-found`.
 
 This ensures every served document has:
+
 - An immutable version chain
 - SHA-256 hash chain for tamper detection
 - Proper store frontmatter
@@ -799,7 +837,7 @@ Every successful FETCH response that serves a document includes a `content-hash`
 
 Clients can fetch a document by its content hash instead of its path:
 
-```
+```text
 FETCH /sha256-<64 hex characters>
 ```
 
@@ -810,6 +848,7 @@ If no document matches the hash, the server returns `not-found`.
 Paths matching `/sha256-<64 hex characters>` are reserved for content-addressed fetch. Servers MUST NOT allow documents to be created at these paths.
 
 **Benefits:**
+
 - Location-independent content retrieval — any server with the content can serve it
 - Client can verify received content matches the requested hash
 - Foundation for distributed mirroring and caching
@@ -886,9 +925,9 @@ These will be specified in future versions of this document.
 - RFC 9000 — QUIC: A UDP-Based Multiplexed and Secure Transport
 - RFC 8446 — The Transport Layer Security (TLS) Protocol Version 1.3
 - RFC 3339 — Date and Time on the Internet: Timestamps
-- CommonMark Specification — https://spec.commonmark.org/
-- YAML 1.2 Specification — https://yaml.org/spec/1.2/
+- CommonMark Specification — <https://spec.commonmark.org/>
+- YAML 1.2 Specification — <https://yaml.org/spec/1.2/>
 
 ---
 
-*Mark Protocol Specification — "The web we want, not the web we got."*
+> Mark Protocol Specification — "The web we want, not the web we got."
