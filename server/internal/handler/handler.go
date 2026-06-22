@@ -768,6 +768,11 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
 	}
+	pubMeta = applyOKFTypeDefault(req.Path, pubMeta)
+	if err := store.ValidateMeta(pubMeta); err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
 
 	expectedVersion := -1 // default: no check when expected-version is absent
 	if ev := req.Metadata["expected-version"]; ev != "" {
@@ -883,6 +888,11 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 
 	pubMeta, err := extractPublisherMeta(req.Metadata)
 	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+	pubMeta = applyOKFTypeDefault(req.Path, pubMeta)
+	if err := store.ValidateMeta(pubMeta); err != nil {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
 	}
@@ -1026,6 +1036,26 @@ func escapeURL(s string) string {
 
 // extractPublisherMeta returns non-control metadata keys from a request.
 // Returns nil if no publisher keys are present.
+// applyOKFTypeDefault gives every published concept document an Open Knowledge
+// Format `type`, demarkus's guarantee that stored documents are typed OKF
+// concepts. Documents that already declare a type, and reserved OKF files
+// (index.md, log.md, which OKF defines as navigation/history rather than
+// concepts), are left unchanged.
+func applyOKFTypeDefault(reqPath string, meta map[string]string) map[string]string {
+	base := path.Base(reqPath)
+	if base == "index.md" || base == "log.md" {
+		return meta
+	}
+	if strings.TrimSpace(meta["type"]) != "" {
+		return meta
+	}
+	if meta == nil {
+		meta = make(map[string]string, 1)
+	}
+	meta["type"] = protocol.OKFDefaultType
+	return meta
+}
+
 func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) {
 	var meta map[string]string
 	size := 0
@@ -1046,7 +1076,7 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 			meta = make(map[string]string)
 		}
 		meta[k] = v
-		size += len(k) + len(v)
+		size += store.SerializedMetaSize(k, v)
 	}
 	if len(meta) > protocol.MaxMetaKeys {
 		return nil, fmt.Errorf("too many metadata keys (max %d)", protocol.MaxMetaKeys)

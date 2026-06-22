@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1137,7 +1138,9 @@ func TestHandlePublish(t *testing.T) {
 	t.Run("duplicate content is no-op", func(t *testing.T) {
 		dir := t.TempDir()
 		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Same\n"), nil); err != nil {
+		// v1 carries the type the handler defaults to, so the republish below is
+		// a true content+metadata duplicate (not a metadata change).
+		if _, err := s.Write("/doc.md", []byte("# Same\n"), map[string]string{"type": protocol.OKFDefaultType}); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
@@ -1887,11 +1890,13 @@ func TestPublisherMetadata(t *testing.T) {
 		s := store.New(dir)
 		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
-		// Build frontmatter with 11 non-control keys.
+		// Build frontmatter with one more than MaxMetaKeys non-control keys,
+		// using short keys/values so the key-count limit trips before the
+		// byte limit.
 		var fm strings.Builder
 		fm.WriteString("---\nauth: " + testSecret + "\n")
-		for i := range 11 {
-			fm.WriteString("key" + strings.Repeat("x", i) + ": val\n")
+		for i := range protocol.MaxMetaKeys + 1 {
+			fm.WriteString("k" + strconv.Itoa(i) + ": v\n")
 		}
 		fm.WriteString("---\n# Content\n")
 
@@ -2007,6 +2012,128 @@ func TestPublisherMetadata(t *testing.T) {
 			default:
 				t.Errorf("unexpected metadata key %q in legacy document", k)
 			}
+		}
+	})
+
+	t.Run("okf type default applied when absent", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\ntitle: Untyped\n---\n# Content\n")
+		h.HandleStream(stream)
+
+		stream = newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse fetch: %v", err)
+		}
+		if resp.Metadata["type"] != protocol.OKFDefaultType {
+			t.Errorf("type: got %q, want default %q", resp.Metadata["type"], protocol.OKFDefaultType)
+		}
+	})
+
+	t.Run("okf type default not applied to reserved index.md", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("PUBLISH /index.md\n---\nauth: " + testSecret + "\n---\n# Hub\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse publish: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Fatalf("publish status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+
+		stream = newMockStream("FETCH /index.md\n")
+		h.HandleStream(stream)
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse fetch: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Fatalf("fetch status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if _, ok := resp.Metadata["type"]; ok {
+			t.Errorf("reserved index.md should not get a default type, got %q", resp.Metadata["type"])
+		}
+	})
+
+	t.Run("explicit type preserved", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\ntype: Metric\n---\n# Content\n")
+		h.HandleStream(stream)
+
+		stream = newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse fetch: %v", err)
+		}
+		if resp.Metadata["type"] != "Metric" {
+			t.Errorf("explicit type: got %q, want %q", resp.Metadata["type"], "Metric")
+		}
+	})
+
+	t.Run("okf type default applied on append", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Start\n"), nil); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\n---\nMore.\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse append: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Fatalf("append status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+
+		stream = newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse fetch: %v", err)
+		}
+		if resp.Metadata["type"] != protocol.OKFDefaultType {
+			t.Errorf("append type default: got %q, want %q", resp.Metadata["type"], protocol.OKFDefaultType)
+		}
+	})
+
+	t.Run("type default pushing over cap returns bad-request", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		// Exactly MaxMetaKeys publisher keys and no type: the default type push
+		// the count to MaxMetaKeys+1, which must be rejected as bad-request (not
+		// fall through to a generic server error at write time).
+		var fm strings.Builder
+		fm.WriteString("---\nauth: " + testSecret + "\n")
+		for i := range protocol.MaxMetaKeys {
+			fm.WriteString("k" + strconv.Itoa(i) + ": v\n")
+		}
+		fm.WriteString("---\n# Content\n")
+
+		stream := newMockStream("PUBLISH /doc.md\n" + fm.String())
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusBadRequest {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusBadRequest)
 		}
 	})
 

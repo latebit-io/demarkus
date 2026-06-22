@@ -1208,6 +1208,113 @@ func TestAppend_Conflict(t *testing.T) {
 	}
 }
 
+func TestWrite_OKFTagsList(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	meta := map[string]string{"tags": "sales, revenue", "importance": "0.8"}
+	if _, err := s.Write("/doc.md", []byte("# Hi\n"), meta); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	vData, err := os.ReadFile(filepath.Join(root, "versions", "doc.md", "v1"))
+	if err != nil {
+		t.Fatalf("read version file: %v", err)
+	}
+	content := string(vData)
+	// tags is an OKF field: bare, serialized as a YAML flow list.
+	if !strings.Contains(content, "\ntags: [sales, revenue]\n") {
+		t.Errorf("expected OKF tags list, got: %q", content)
+	}
+	// importance is not an OKF field: keeps the meta. prefix.
+	if !strings.Contains(content, "\nmeta.importance: 0.8\n") {
+		t.Errorf("expected meta.importance, got: %q", content)
+	}
+
+	// Round-trips back to the bare comma-separated form in the metadata map.
+	got, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Metadata["tags"] != "sales,revenue" {
+		t.Errorf("tags = %q, want %q", got.Metadata["tags"], "sales,revenue")
+	}
+	if got.Metadata["importance"] != "0.8" {
+		t.Errorf("importance = %q, want %q", got.Metadata["importance"], "0.8")
+	}
+}
+
+func TestValidateMeta_TagsCountedAsSerialized(t *testing.T) {
+	// 400 one-char tags: the comma-separated map value is "a,a,...,a" (799 B,
+	// +4 for the key = 803, under MaxMetaBytes), but the on-disk YAML list
+	// "[a, a, ..., a]" is ~1200 B. Counting the serialized form must reject it
+	// so the write cannot overflow the frontmatter budget.
+	tags := strings.Repeat("a,", 399) + "a"
+	csvSize := len("tags") + len(tags)
+	if csvSize > protocol.MaxMetaBytes {
+		t.Fatalf("test setup: csv size %d already exceeds cap %d", csvSize, protocol.MaxMetaBytes)
+	}
+	if got := SerializedMetaSize("tags", tags); got <= protocol.MaxMetaBytes {
+		t.Fatalf("test setup: serialized size %d should exceed cap %d", got, protocol.MaxMetaBytes)
+	}
+
+	s := New(t.TempDir())
+	if _, err := s.Write("/doc.md", []byte("# Hi\n"), map[string]string{"tags": tags}); err == nil {
+		t.Fatal("expected oversized serialized tags to be rejected")
+	}
+}
+
+func TestWrite_ReservedMetaKeyRejected(t *testing.T) {
+	s := New(t.TempDir())
+	for _, k := range []string{"version", "archived", "previous-hash"} {
+		t.Run(k, func(t *testing.T) {
+			_, err := s.Write("/doc.md", []byte("# Hi\n"), map[string]string{k: "x"})
+			if err == nil {
+				t.Fatalf("expected reserved-key %q to be rejected", k)
+			}
+		})
+	}
+}
+
+func TestExtractMetadata_LegacyMetaPrefix(t *testing.T) {
+	// Versions written before the OKF rename carry meta.-prefixed OKF fields.
+	// They must still read back correctly.
+	tests := []struct {
+		name string
+		data string
+		want map[string]string
+	}{
+		{
+			"legacy meta.tags and meta.type",
+			"---\nversion: 1\narchived: false\nmeta.tags: a,b\nmeta.type: journal\n---\n# Hi\n",
+			map[string]string{"tags": "a,b", "type": "journal"},
+		},
+		{
+			"bare okf fields with list tags",
+			"---\nversion: 1\narchived: false\ntags: [a, b]\ntype: journal\n---\n# Hi\n",
+			map[string]string{"tags": "a,b", "type": "journal"},
+		},
+		{
+			"reserved fields never surface",
+			"---\nversion: 2\nprevious-hash: sha256-ff\narchived: true\n---\n# Hi\n",
+			nil,
+		},
+		{
+			"meta-prefixed reserved key not resurrected",
+			"---\nversion: 1\narchived: false\nmeta.archived: true\nmeta.type: note\n---\n# Hi\n",
+			map[string]string{"type": "note"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractMetadata([]byte(tt.data))
+			if !metaEqual(got, tt.want) {
+				t.Errorf("extractMetadata = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWrite_WithMetadata(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
@@ -1224,7 +1331,7 @@ func TestWrite_WithMetadata(t *testing.T) {
 		t.Errorf("metadata type = %q, want %q", doc.Metadata["type"], "journal")
 	}
 
-	// Version file should contain meta. prefixed keys.
+	// Recognized OKF fields serialize bare; other publisher keys keep meta.
 	vData, err := os.ReadFile(filepath.Join(root, "versions", "doc.md", "v1"))
 	if err != nil {
 		t.Fatalf("read version file: %v", err)
@@ -1233,8 +1340,8 @@ func TestWrite_WithMetadata(t *testing.T) {
 	if !strings.Contains(content, "meta.author: claude") {
 		t.Errorf("expected meta.author in version file, got: %q", content)
 	}
-	if !strings.Contains(content, "meta.type: journal") {
-		t.Errorf("expected meta.type in version file, got: %q", content)
+	if !strings.Contains(content, "\ntype: journal\n") {
+		t.Errorf("expected bare OKF type in version file, got: %q", content)
 	}
 
 	// Read back via Get and verify metadata is returned.

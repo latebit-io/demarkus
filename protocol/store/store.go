@@ -72,12 +72,48 @@ var ErrSizeLimit = fmt.Errorf("combined content exceeds size limit")
 
 // maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
 // adds to a version file (version, archived, previous-hash, publisher
-// metadata, and delimiters).
-const maxStoreFrontmatter = 1024
+// metadata, and delimiters). It must cover MaxMetaBytes of publisher metadata
+// plus the operational fields and per-line serialization overhead.
+const maxStoreFrontmatter = 2048
 
-// metaPrefix is the key prefix for publisher-provided metadata in store
-// frontmatter. On disk: "meta.type: journal". Stripped when returned to clients.
+// metaPrefix is the key prefix for non-spec publisher metadata in store
+// frontmatter. On disk: "meta.importance: 0.8". Stripped when returned to
+// clients. Keys recognized by the Open Knowledge Format (see okfKeys) are
+// written bare instead, so the store frontmatter matches the OKF spec for the
+// fields it defines.
 const metaPrefix = "meta."
+
+// okfKeys are the publisher metadata keys recognized by the Open Knowledge
+// Format (OKF) spec. They serialize as bare frontmatter fields (e.g. "tags:")
+// to conform to the spec; every other publisher key keeps the metaPrefix. The
+// in-memory metadata map is bare-keyed either way — only on-disk serialization
+// differs.
+var okfKeys = map[string]bool{
+	"type":        true,
+	"title":       true,
+	"description": true,
+	"resource":    true,
+	"tags":        true,
+	"timestamp":   true,
+}
+
+// reservedMetaKeys are bare frontmatter fields owned by the store. Publishers
+// may not set them (validateMeta rejects them) and extractMetadata never
+// surfaces them as publisher metadata, preventing a publisher from forging
+// store state such as version or archival.
+var reservedMetaKeys = map[string]bool{
+	"version":       true,
+	"previous-hash": true,
+	"archived":      true,
+}
+
+// IsReservedMetaKey reports whether a publisher metadata key is reserved by the
+// store and would be rejected on publish. Callers that build metadata from
+// untrusted sources (e.g. importing external documents) use this to drop or
+// rename colliding keys before publishing.
+func IsReservedMetaKey(key string) bool {
+	return reservedMetaKeys[key]
+}
 
 // isPerDocLayout reports whether a document uses the per-document subdirectory
 // layout (versions/{base}/v{N}) rather than the flat layout (versions/{base}.v{N}).
@@ -211,7 +247,7 @@ func (s *Store) BuildHashIndex() error {
 
 // CurrentDoc describes a current, non-archived document version surfaced by
 // WalkCurrent. Body is the markdown content with store frontmatter stripped;
-// Metadata is the publisher metadata with the "meta." prefix stripped.
+// Metadata is the publisher metadata as a bare-keyed map (see extractMetadata).
 type CurrentDoc struct {
 	Path     string
 	Body     []byte
@@ -720,7 +756,8 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 //	version: N
 //	previous-hash: sha256-<hex>   ← omitted for v1
 //	archived: true|false
-//	meta.key: value               ← publisher metadata (0–10 keys)
+//	tags: [a, b]                  ← recognized OKF fields, written bare
+//	meta.key: value               ← other publisher metadata (0–10 keys total)
 //	---
 //	<original content>
 //
@@ -1163,12 +1200,25 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			sb.WriteString(fmt.Sprintf("%s%s: %s\n", metaPrefix, k, meta[k]))
+			switch {
+			case k == "tags" && okfKeys[k]:
+				sb.WriteString(fmt.Sprintf("tags: %s\n", formatTagsList(meta[k])))
+			case okfKeys[k]:
+				sb.WriteString(fmt.Sprintf("%s: %s\n", k, meta[k]))
+			default:
+				sb.WriteString(fmt.Sprintf("%s%s: %s\n", metaPrefix, k, meta[k]))
+			}
 		}
 	}
 	sb.WriteString("---\n")
 	return append([]byte(sb.String()), content...), nil
 }
+
+// ValidateMeta checks publisher metadata against the store's key, value, count,
+// and size rules. It is exported so a caller that mutates metadata after the
+// handler's initial validation (e.g. injecting a default OKF type) can re-check
+// before the write and surface a precise error rather than a generic failure.
+func ValidateMeta(meta map[string]string) error { return validateMeta(meta) }
 
 // validateMeta checks that metadata keys and values are safe for frontmatter
 // serialization. This is defense in depth — the handler also validates, but
@@ -1176,13 +1226,16 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 func validateMeta(meta map[string]string) error {
 	size := 0
 	for k, v := range meta {
+		if reservedMetaKeys[k] {
+			return fmt.Errorf("metadata key %q is reserved by the store", k)
+		}
 		if !protocol.IsValidMetaKey(k) {
 			return fmt.Errorf("metadata key %q contains invalid characters", k)
 		}
 		if !protocol.IsValidMetaValue(v) {
 			return fmt.Errorf("metadata value for key %q contains newlines", k)
 		}
-		size += len(k) + len(v)
+		size += SerializedMetaSize(k, v)
 	}
 	if len(meta) > protocol.MaxMetaKeys {
 		return fmt.Errorf("too many metadata keys (max %d)", protocol.MaxMetaKeys)
@@ -1193,8 +1246,13 @@ func validateMeta(meta map[string]string) error {
 	return nil
 }
 
-// extractMetadata parses publisher metadata from store frontmatter.
-// Returns keys with the "meta." prefix stripped, or nil if none found.
+// extractMetadata parses publisher metadata from store frontmatter, returning a
+// bare-keyed map (or nil if none found). Two on-disk forms are recognized:
+// recognized OKF fields written bare (okfKeys, "tags" parsed from its YAML
+// list), and every other publisher key carried under metaPrefix (stripped
+// here). Reserved store fields (reservedMetaKeys) and any other bare key are
+// ignored, so operational state never surfaces as publisher metadata. An older
+// "meta."-prefixed tags value is read as-is, keeping prior writes readable.
 func extractMetadata(data []byte) map[string]string {
 	if len(data) < 4 || !bytes.HasPrefix(data, []byte("---\n")) {
 		return nil
@@ -1205,20 +1263,85 @@ func extractMetadata(data []byte) map[string]string {
 	}
 	block := string(data[4 : 4+end])
 	var meta map[string]string
+	set := func(k, v string) {
+		if meta == nil {
+			meta = make(map[string]string)
+		}
+		meta[k] = v
+	}
 	for line := range strings.SplitSeq(block, "\n") {
 		key, val, ok := strings.Cut(line, ": ")
 		if !ok {
 			continue
 		}
 		key = strings.TrimSpace(key)
-		if strings.HasPrefix(key, metaPrefix) {
-			if meta == nil {
-				meta = make(map[string]string)
+		val = strings.TrimRight(val, "\r")
+		switch {
+		case reservedMetaKeys[key]:
+			// Operational field — never publisher metadata.
+		case strings.HasPrefix(key, metaPrefix):
+			// Re-check the unprefixed key so a stored "meta.archived" cannot
+			// resurrect a reserved operational field as publisher metadata.
+			if k := key[len(metaPrefix):]; !reservedMetaKeys[k] {
+				set(k, val)
 			}
-			meta[key[len(metaPrefix):]] = strings.TrimRight(val, "\r")
+		case key == "tags":
+			set(key, parseTagsList(val))
+		case okfKeys[key]:
+			set(key, val)
 		}
 	}
 	return meta
+}
+
+// SerializedMetaSize returns the byte size a publisher key/value pair counts
+// against MaxMetaBytes: the key length plus the value length as actually
+// serialized on disk. The OKF "tags" field is stored as a YAML flow list, which
+// is longer than its comma-separated map form, so counting the raw value would
+// undercount the on-disk size and let a tag-heavy document slip past the budget
+// only to overflow the frontmatter. Per-line delimiters and the "meta." prefix
+// are fixed, bounded overhead covered by maxStoreFrontmatter, not counted here.
+func SerializedMetaSize(key, value string) int {
+	if key == "tags" {
+		return len(key) + len(formatTagsList(value))
+	}
+	return len(key) + len(value)
+}
+
+// FormatTagsList serializes a comma-separated tag string as an OKF YAML flow
+// list. It is exported for the OKF export codec so a bundle's on-disk tags
+// representation matches the store's exactly (a single source of truth for the
+// serialized form that SerializedMetaSize accounts for).
+func FormatTagsList(csv string) string { return formatTagsList(csv) }
+
+// formatTagsList serializes a comma-separated tag string as an OKF YAML flow
+// list, e.g. "sales,revenue" → "[sales, revenue]". Empty input yields "[]".
+func formatTagsList(csv string) string {
+	var tags []string
+	for raw := range strings.SplitSeq(csv, ",") {
+		if t := strings.TrimSpace(raw); t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return "[" + strings.Join(tags, ", ") + "]"
+}
+
+// parseTagsList parses a tags value back to the comma-separated form held in the
+// metadata map. It accepts both the OKF YAML flow list ("[sales, revenue]") and
+// a bare comma-separated string (older "meta.tags" writes), so prior versions
+// stay readable.
+func parseTagsList(v string) string {
+	v = strings.TrimSpace(v)
+	if strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]") {
+		v = v[1 : len(v)-1]
+	}
+	var tags []string
+	for raw := range strings.SplitSeq(v, ",") {
+		if t := strings.TrimSpace(raw); t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return strings.Join(tags, ",")
 }
 
 // metaEqual reports whether two metadata maps are equal.

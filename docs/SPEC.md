@@ -333,6 +333,8 @@ The `created` response MUST NOT include a body.
 - If the document exists, the version number is incremented from the current highest version.
 - If the document exists as a flat file (no version history), the server MUST migrate the flat file to version 1 before creating version 2.
 
+**OKF type default**: when a written document declares no `type` metadata, the server assigns the default `type` (`Document`; see §14), so every stored concept document is a typed Open Knowledge Format concept by construction. This applies to both PUBLISH and APPEND (§6.6). Reserved OKF files (`index.md`, `log.md`) are exempt, as OKF defines them as navigation and history rather than concepts. A document that already declares a `type` is stored unchanged. Because the default is part of the document's metadata, it participates in duplicate detection: republishing a previously untyped document acquires the default type once, creating a single new version.
+
 **Optimistic concurrency** (OPTIONAL):
 
 The request MAY include an `expected-version` metadata field containing a decimal integer. If present, the server compares it to the current document version:
@@ -425,6 +427,7 @@ modified: <RFC 3339 timestamp>
 - The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
 - The `expected-version` metadata field is REQUIRED for APPEND (unlike PUBLISH where it is optional). Since APPEND is non-idempotent, the server cannot safely retry internally. The value MUST be >= 1; the server MUST reject `expected-version: 0` or absent `expected-version` as a bad request.
 - Conflict semantics match PUBLISH (see section 6.4). On conflict, fetch the latest version and verify whether your append was applied before retrying.
+- The new version's publisher metadata is taken from the APPEND request (it is not merged with the prior version's metadata). The OKF type default (§6.4) applies, so an append that declares no `type` to a non-reserved path stores `type: Document`.
 
 **Authentication errors**:
 - `not-permitted`: No token store configured on the server.
@@ -537,6 +540,8 @@ The following status values are reserved for future use:
 | `importance` | PUBLISH | Decimal in [0,1] | Ranking weight used by LOOKUP. Interpreted by the server. Absent or invalid is treated as 0.5. |
 | `title` | PUBLISH | String | One-line title shown in LOOKUP results and matched by `query`. Defaults to the first level-1 heading, then the path base name. |
 
+Beyond the interpreted fields above, a PUBLISH request MAY carry additional publisher metadata as arbitrary `key: value` frontmatter lines. The server stores these opaquely and exposes them to LOOKUP `filter` predicates. Reserved store fields (§9.4) MUST be rejected. §9.4 specifies how publisher metadata is persisted, including the Open Knowledge Format field names that are stored as bare frontmatter fields.
+
 ### 8.2. Response Metadata
 
 | Field | Applicable verbs | Format | Description |
@@ -594,12 +599,13 @@ Version files are named `<filename>.v<N>` where N is the version number.
 
 ### 9.4. Version File Format
 
-Each version file MUST be prefixed with a store-managed frontmatter block:
+Each version file MUST be prefixed with a store-managed frontmatter block. The block carries the store's own operational fields followed by any publisher-declared metadata.
 
 **Version 1** (genesis):
 ```
 ---
 version: 1
+archived: false
 ---
 <original document content>
 ```
@@ -608,12 +614,32 @@ version: 1
 ```
 ---
 version: <N>
+archived: false
 previous-hash: sha256-<64-char lowercase hex>
 ---
 <original document content>
 ```
 
-The store frontmatter is separate from any frontmatter that may exist in the original document content. The original content is stored verbatim after the store frontmatter closing delimiter.
+`version`, `archived`, and `previous-hash` (omitted for version 1) are reserved operational fields owned by the store. Publishers MUST NOT set them, and a server MUST reject a PUBLISH whose metadata declares a reserved key.
+
+Publisher-declared metadata is written into the same block. The field names defined by the Open Knowledge Format — `type`, `title`, `description`, `resource`, `tags`, and `timestamp` — are written as **bare** frontmatter fields so the document's persisted metadata matches the OKF spec for the fields it covers; `tags` is serialized as a YAML flow list. Every other publisher key is written under a `meta.` prefix so it cannot collide with a reserved or OKF-recognized field. For example:
+
+```
+---
+version: 3
+archived: false
+previous-hash: sha256-<64-char lowercase hex>
+meta.importance: 0.8
+tags: [sales, revenue]
+title: Orders
+type: BigQuery Table
+---
+<original document content>
+```
+
+An implementation MAY bound the count and total size of publisher metadata fields (the reference implementation permits up to 50 keys totaling 1024 bytes).
+
+The store frontmatter is separate from any frontmatter that may exist in the original document content; the original content is stored verbatim after the closing delimiter. This block is stripped before a document body is served, so the relationship is one of representation, not interoperable transport: a demarkus document's *content model* is OKF-compatible, but a server does not by itself serve or ingest OKF bundles (see §13).
 
 ### 9.5. Hash Chain
 
@@ -832,6 +858,7 @@ The following features are planned but not part of this specification:
 
 - **Federation**: Cross-server content mirroring and discovery.
 - **Subscriptions**: Notification of document changes.
+- **OKF interop**: An import/export codec that reads and emits [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundles. demarkus already aligns its persisted document metadata with OKF field names (§9.4), so a single document's content model is OKF-compatible; the planned codec adds bundle-level round-tripping (frontmatter on the served document, `index.md`/`log.md` conventions, bundle-relative links), validated against the OKF reference sample bundles. demarkus remains a superset at the system level — it layers versioning, a hash chain, QUIC transport, capability auth, and LOOKUP discovery on top of an OKF-compatible document.
 
 These will be specified in future versions of this document.
 
@@ -851,6 +878,7 @@ These will be specified in future versions of this document.
 | Recommended max LOOKUP results | 1000 |
 | Hash algorithm | SHA-256 |
 | Hash format | `sha256-<64 lowercase hex chars>` |
+| Default OKF type | `Document` |
 
 ## 15. References
 
