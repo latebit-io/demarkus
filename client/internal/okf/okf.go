@@ -345,6 +345,11 @@ func checkLinks(rel string, body []byte, files map[string]bool) []Finding {
 		if dest == "" || strings.Contains(dest, "://") || strings.HasPrefix(dest, "mailto:") {
 			continue
 		}
+		// links.Extract already strips fragments; drop any query/fragment too so
+		// a "/x.md?ref=1" link still resolves to the document path "/x.md".
+		if i := strings.IndexAny(dest, "?#"); i >= 0 {
+			dest = dest[:i]
+		}
 		if !strings.HasSuffix(dest, ".md") {
 			continue
 		}

@@ -1,6 +1,7 @@
 package okf
 
 import (
+	"fmt"
 	"path"
 	"sort"
 	"strings"
@@ -40,11 +41,14 @@ var recognizedSet = map[string]bool{
 // modification time). Reserved files (index.md, log.md) are written body-only,
 // except a root index.md that carries an okf-version, which is re-emitted as
 // okf_version frontmatter. It performs no network I/O.
-func BuildExport(docs []ExportDoc, prefix string) []BundleFile {
+func BuildExport(docs []ExportDoc, prefix string) ([]BundleFile, error) {
 	pfx := strings.Trim(prefix, "/")
 	files := make([]BundleFile, 0, len(docs))
 	for _, d := range docs {
-		rel := relFromPath(d.Path, pfx)
+		rel, err := relFromPath(d.Path, pfx)
+		if err != nil {
+			return nil, err
+		}
 		body := stripAbsLinks(d.Body, pfx)
 		var content string
 		if IsReserved(path.Base(rel)) {
@@ -55,15 +59,22 @@ func BuildExport(docs []ExportDoc, prefix string) []BundleFile {
 		files = append(files, BundleFile{Path: rel, Content: []byte(content)})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	return files
+	return files, nil
 }
 
-func relFromPath(markPath, pfx string) string {
+// relFromPath derives the bundle-relative path for a document, failing closed if
+// the result would escape the bundle root (a hostile or malformed mark path with
+// ".." segments must not let export write outside the output directory).
+func relFromPath(markPath, pfx string) (string, error) {
 	p := strings.TrimPrefix(markPath, "/")
 	if pfx != "" {
 		p = strings.TrimPrefix(p, pfx+"/")
 	}
-	return p
+	clean := path.Clean(p)
+	if clean == ".." || strings.HasPrefix(clean, "../") || clean == "." {
+		return "", fmt.Errorf("export path escapes bundle root: %s", markPath)
+	}
+	return clean, nil
 }
 
 func renderConcept(meta map[string]string, body, modified string) string {

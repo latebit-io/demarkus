@@ -1299,6 +1299,11 @@ func TestExtractMetadata_LegacyMetaPrefix(t *testing.T) {
 			"---\nversion: 2\nprevious-hash: sha256-ff\narchived: true\n---\n# Hi\n",
 			nil,
 		},
+		{
+			"meta-prefixed reserved key not resurrected",
+			"---\nversion: 1\narchived: false\nmeta.archived: true\nmeta.type: note\n---\n# Hi\n",
+			map[string]string{"type": "note"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -1,12 +1,33 @@
 package okf
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
 )
+
+func TestBuildImport_RejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "real.md"), []byte("---\ntype: Doc\n---\n# Real\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A .md symlink pointing at content outside the bundle must be refused, not
+	// followed and published.
+	target := filepath.Join(t.TempDir(), "secret.md")
+	if err := os.WriteFile(target, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "link.md")); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+	if _, err := BuildImport(root, ""); err == nil {
+		t.Error("expected BuildImport to reject a bundle containing a symlink")
+	}
+}
 
 func TestSanitizeKey(t *testing.T) {
 	tests := []struct{ in, want string }{

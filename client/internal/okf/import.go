@@ -43,6 +43,11 @@ func BuildImport(root, prefix string) ([]PublishItem, error) {
 		if err != nil {
 			return err
 		}
+		// Reject symlinks: a crafted bundle could point a *.md symlink at local
+		// content outside the bundle and have it ingested/published.
+		if d.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("bundle contains a symlink, which is not allowed: %s", p)
+		}
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
 			return nil
 		}

@@ -23,10 +23,13 @@ principle is "minimally opinionated — only requires `type`."
 
 ## Decision
 
-Make it opinionated **by construction, not by rejection**. On PUBLISH, when a
+Make it opinionated **by construction, not by rejection**. On a write, when a
 document declares no `type`, the server assigns the default `type` `Document`
-(`protocol.OKFDefaultType`). Implemented in `handlePublish` via
-`applyOKFTypeDefault`, after `extractPublisherMeta` and before the store write.
+(`protocol.OKFDefaultType`). Implemented via `applyOKFTypeDefault` after
+`extractPublisherMeta`, in both `handlePublish` and `handleAppend` — APPEND sets
+the new version's metadata from the request (it does not merge with the prior
+version), so the default applies there too, keeping the type guarantee on every
+write path.
 
 - **Reserved OKF files** (`index.md`, `log.md`) are exempt — OKF defines them as
   navigation/history, not concepts, and they carry no frontmatter.

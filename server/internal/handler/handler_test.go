@@ -2041,12 +2041,22 @@ func TestPublisherMetadata(t *testing.T) {
 
 		stream := newMockStream("PUBLISH /index.md\n---\nauth: " + testSecret + "\n---\n# Hub\n")
 		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse publish: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Fatalf("publish status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
 
 		stream = newMockStream("FETCH /index.md\n")
 		h.HandleStream(stream)
-		resp, err := protocol.ParseResponse(&stream.output)
+		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse fetch: %v", err)
+		}
+		if resp.Status != protocol.StatusOK {
+			t.Fatalf("fetch status: got %q, want %q", resp.Status, protocol.StatusOK)
 		}
 		if _, ok := resp.Metadata["type"]; ok {
 			t.Errorf("reserved index.md should not get a default type, got %q", resp.Metadata["type"])
@@ -2069,6 +2079,61 @@ func TestPublisherMetadata(t *testing.T) {
 		}
 		if resp.Metadata["type"] != "Metric" {
 			t.Errorf("explicit type: got %q, want %q", resp.Metadata["type"], "Metric")
+		}
+	})
+
+	t.Run("okf type default applied on append", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		if _, err := s.Write("/doc.md", []byte("# Start\n"), nil); err != nil {
+			t.Fatal(err)
+		}
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\n---\nMore.\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse append: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Fatalf("append status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+
+		stream = newMockStream("FETCH /doc.md\n")
+		h.HandleStream(stream)
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse fetch: %v", err)
+		}
+		if resp.Metadata["type"] != protocol.OKFDefaultType {
+			t.Errorf("append type default: got %q, want %q", resp.Metadata["type"], protocol.OKFDefaultType)
+		}
+	})
+
+	t.Run("type default pushing over cap returns bad-request", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		// Exactly MaxMetaKeys publisher keys and no type: the default type push
+		// the count to MaxMetaKeys+1, which must be rejected as bad-request (not
+		// fall through to a generic server error at write time).
+		var fm strings.Builder
+		fm.WriteString("---\nauth: " + testSecret + "\n")
+		for i := range protocol.MaxMetaKeys {
+			fm.WriteString("k" + strconv.Itoa(i) + ": v\n")
+		}
+		fm.WriteString("---\n# Content\n")
+
+		stream := newMockStream("PUBLISH /doc.md\n" + fm.String())
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusBadRequest {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusBadRequest)
 		}
 	})
 

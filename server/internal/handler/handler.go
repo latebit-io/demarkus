@@ -769,6 +769,10 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 	pubMeta = applyOKFTypeDefault(req.Path, pubMeta)
+	if err := store.ValidateMeta(pubMeta); err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
 
 	expectedVersion := -1 // default: no check when expected-version is absent
 	if ev := req.Metadata["expected-version"]; ev != "" {
@@ -884,6 +888,11 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 
 	pubMeta, err := extractPublisherMeta(req.Metadata)
 	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+	pubMeta = applyOKFTypeDefault(req.Path, pubMeta)
+	if err := store.ValidateMeta(pubMeta); err != nil {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
 	}

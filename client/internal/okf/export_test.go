@@ -43,11 +43,15 @@ func TestStripAbsLinks(t *testing.T) {
 }
 
 func TestRelFromPath(t *testing.T) {
-	if got := relFromPath("/vendor/tables/o.md", "vendor"); got != "tables/o.md" {
-		t.Errorf("relFromPath vendor = %q", got)
+	if got, err := relFromPath("/vendor/tables/o.md", "vendor"); err != nil || got != "tables/o.md" {
+		t.Errorf("relFromPath vendor = %q, %v", got, err)
 	}
-	if got := relFromPath("/o.md", ""); got != "o.md" {
-		t.Errorf("relFromPath root = %q", got)
+	if got, err := relFromPath("/o.md", ""); err != nil || got != "o.md" {
+		t.Errorf("relFromPath root = %q, %v", got, err)
+	}
+	// A path that climbs out of the bundle root must fail closed.
+	if _, err := relFromPath("/vendor/../../etc/passwd.md", "vendor"); err == nil {
+		t.Error("expected relFromPath to reject a traversing path")
 	}
 }
 
@@ -115,7 +119,10 @@ func TestBuildExport_StripsPrefix(t *testing.T) {
 		{Path: "/vendor/tables/orders.md", Body: "# Orders\n[c](/vendor/tables/customers.md)\n",
 			Metadata: map[string]string{"type": "Table", "tags": "sales"}, Modified: "2026-05-28T14:30:00Z"},
 	}
-	files := BuildExport(docs, "/vendor/")
+	files, err := BuildExport(docs, "/vendor/")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(files) != 1 || files[0].Path != "tables/orders.md" {
 		t.Fatalf("path not stripped: %+v", files)
 	}
@@ -151,7 +158,11 @@ func TestRoundTrip_ImportExportConforms(t *testing.T) {
 	}
 
 	out := t.TempDir()
-	for _, f := range BuildExport(docs, "/vendor/") {
+	files, err := BuildExport(docs, "/vendor/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
 		full := filepath.Join(out, filepath.FromSlash(f.Path))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatal(err)

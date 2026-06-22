@@ -1214,6 +1214,12 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 	return append([]byte(sb.String()), content...), nil
 }
 
+// ValidateMeta checks publisher metadata against the store's key, value, count,
+// and size rules. It is exported so a caller that mutates metadata after the
+// handler's initial validation (e.g. injecting a default OKF type) can re-check
+// before the write and surface a precise error rather than a generic failure.
+func ValidateMeta(meta map[string]string) error { return validateMeta(meta) }
+
 // validateMeta checks that metadata keys and values are safe for frontmatter
 // serialization. This is defense in depth — the handler also validates, but
 // the store is a public API callable outside the network path.
@@ -1274,7 +1280,11 @@ func extractMetadata(data []byte) map[string]string {
 		case reservedMetaKeys[key]:
 			// Operational field — never publisher metadata.
 		case strings.HasPrefix(key, metaPrefix):
-			set(key[len(metaPrefix):], val)
+			// Re-check the unprefixed key so a stored "meta.archived" cannot
+			// resurrect a reserved operational field as publisher metadata.
+			if k := key[len(metaPrefix):]; !reservedMetaKeys[k] {
+				set(k, val)
+			}
 		case key == "tags":
 			set(key, parseTagsList(val))
 		case okfKeys[key]:

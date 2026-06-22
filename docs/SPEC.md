@@ -333,7 +333,7 @@ The `created` response MUST NOT include a body.
 - If the document exists, the version number is incremented from the current highest version.
 - If the document exists as a flat file (no version history), the server MUST migrate the flat file to version 1 before creating version 2.
 
-**OKF type default**: when a published document declares no `type` metadata, the server assigns the default `type` (`Document`; see §14), so every stored concept document is a typed Open Knowledge Format concept by construction. Reserved OKF files (`index.md`, `log.md`) are exempt, as OKF defines them as navigation and history rather than concepts. A document that already declares a `type` is stored unchanged. Because the default is part of the document's metadata, it participates in duplicate detection: republishing a previously untyped document acquires the default type once, creating a single new version.
+**OKF type default**: when a written document declares no `type` metadata, the server assigns the default `type` (`Document`; see §14), so every stored concept document is a typed Open Knowledge Format concept by construction. This applies to both PUBLISH and APPEND (§6.6). Reserved OKF files (`index.md`, `log.md`) are exempt, as OKF defines them as navigation and history rather than concepts. A document that already declares a `type` is stored unchanged. Because the default is part of the document's metadata, it participates in duplicate detection: republishing a previously untyped document acquires the default type once, creating a single new version.
 
 **Optimistic concurrency** (OPTIONAL):
 
@@ -427,6 +427,7 @@ modified: <RFC 3339 timestamp>
 - The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
 - The `expected-version` metadata field is REQUIRED for APPEND (unlike PUBLISH where it is optional). Since APPEND is non-idempotent, the server cannot safely retry internally. The value MUST be >= 1; the server MUST reject `expected-version: 0` or absent `expected-version` as a bad request.
 - Conflict semantics match PUBLISH (see section 6.4). On conflict, fetch the latest version and verify whether your append was applied before retrying.
+- The new version's publisher metadata is taken from the APPEND request (it is not merged with the prior version's metadata). The OKF type default (§6.4) applies, so an append that declares no `type` to a non-reserved path stores `type: Document`.
 
 **Authentication errors**:
 - `not-permitted`: No token store configured on the server.
