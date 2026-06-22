@@ -72,6 +72,28 @@ test_managed_restarts_with_recorded_config() {
     || { echo "restarted with wrong config: $(cat "${mark}")"; return 1; }
 }
 
+test_reuse_stale_pid_healthy_left_alone() {
+  new_home >/dev/null; . "${LIB}"
+  save_config "${HOME}/.demarkus/content" 6309 reuse
+  mkdir -p "${HOME}/.demarkus/content"
+  echo 4242 > "${HOME}/.demarkus/content/.pid"   # stale .pid under a reuse config
+  # A healthy external server the plugin does not own.
+  sleep 30 &
+  local sp=$!
+  pid_of_server_at_root() { echo "${sp}"; }
+  local mark="${HOME}/called"
+  ensure_managed_server() { echo "$*" >"${mark}"; }
+  DEMARKUS_BINARIES_REPLACED=1
+  restart_local_server_on_upgrade
+  # The stale .pid must NOT route into the managed-restart path: healthy server
+  # left running, no respawn.
+  local rc=0
+  kill -0 "${sp}" 2>/dev/null || { echo "reuse + stale .pid killed a healthy external server"; rc=1; }
+  [[ -f "${mark}" ]] && { echo "reuse + stale .pid must not restart via ensure_managed_server"; rc=1; }
+  kill "${sp}" 2>/dev/null || true
+  return "${rc}"
+}
+
 test_reuse_no_external_process_respawns() {
   new_home >/dev/null; . "${LIB}"
   save_config "${HOME}/.demarkus/content" 6309 reuse
