@@ -43,6 +43,9 @@ func main() {
 		case "lookup":
 			lookupMain(os.Args[2:])
 			return
+		case "okf":
+			okfMain(os.Args[2:])
+			return
 		}
 	}
 	requestMain()
