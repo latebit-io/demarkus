@@ -38,7 +38,7 @@ set -euo pipefail
 CLUSTER="${CLUSTER:-knowledge-system}"
 NAMESPACE="${NAMESPACE:-demarkus}"
 RELEASE="${RELEASE:-world-default}"
-SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.17.9}"
+SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.18.0}"
 SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
 BROKER_RELEASE="${BROKER_RELEASE:-broker}"
 BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.1.15}"
