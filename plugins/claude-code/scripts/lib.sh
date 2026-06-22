@@ -41,11 +41,11 @@ readonly DEFAULT_PORT=6310             # plugin's first-choice port for its own 
 readonly ISOLATED_PORT_START=16310
 readonly ISOLATED_PORT_END=16509
 
-readonly SERVER_VERSION="0.17.15"
-readonly CLIENT_VERSION="0.12.39"
+readonly SERVER_VERSION="0.18.0"
+readonly CLIENT_VERSION="0.13.0"
 # demarkus-token moved from the server archive to its own tools/ release
 # in §6.7.A. Pin separately so a tools-only release can be picked up.
-readonly TOOLS_VERSION="0.1.32"
+readonly TOOLS_VERSION="0.2.0"
 
 log()  { echo "[demarkus-memory] $*" >&2; }
 warn() { echo "[demarkus-memory] warning: $*" >&2; }
