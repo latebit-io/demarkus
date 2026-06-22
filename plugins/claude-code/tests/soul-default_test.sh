@@ -109,6 +109,22 @@ test_set_binds_and_upserts() {
   [[ "${n}" -eq 1 ]] || { echo "expected 1 binding row, got ${n}"; return 1; }
 }
 
+test_set_local_when_configured() {
+  new_home >/dev/null; . "${LIB}"
+  seed_local
+  [[ "$(def --set demarkus-memory --bind /repo/x)" == "OK demarkus-memory" ]] \
+    || { echo "set local failed"; return 1; }
+  [[ "$(project_soul_binding /repo/x)" == "demarkus-memory" ]] \
+    || { echo "local binding not applied"; return 1; }
+}
+
+test_set_rejects_flaglike_slug() {
+  new_home >/dev/null
+  local out; out="$(def --set --bind /repo/x 2>&1 || true)"
+  grep -q '^FAIL:' <<<"${out}"               || { echo "flag-like slug should FAIL: ${out}"; return 1; }
+  grep -q 'requires a soul slug' <<<"${out}" || { echo "wrong message: ${out}"; return 1; }
+}
+
 test_set_unjoined_fails() {
   new_home >/dev/null
   local out; out="$(def --set ghost --bind /repo/x 2>&1 || true)"

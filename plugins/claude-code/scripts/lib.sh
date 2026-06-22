@@ -223,9 +223,14 @@ soul_catalog() {
   if local_soul_present; then
     printf 'demarkus-memory\tlocal\t-\t-\n'
   fi
-  [[ -f "${SOULS_REGISTRY}" ]] || return 0
+  # Absent registry → no remotes joined (return 0). But a present-yet-unreadable
+  # registry is an error, not "empty": let it propagate (return 1) instead of
+  # masking a read failure as "no souls" — the CLI's --list would otherwise tell
+  # the user to run /soul-join when the real problem is a permissions fault.
+  [[ -e "${SOULS_REGISTRY}" ]] || return 0
+  [[ -r "${SOULS_REGISTRY}" ]] || return 1
   awk -F '\t' 'NF && $1 !~ /^#/ { print $1 "\tremote\t" $2 "\t" $3 }' \
-    "${SOULS_REGISTRY}" 2>/dev/null || true
+    "${SOULS_REGISTRY}"
 }
 
 # is_catalog_soul SLUG — true when SLUG is a bindable write target: the local

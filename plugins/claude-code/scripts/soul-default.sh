@@ -41,7 +41,11 @@ while (( $# )); do
   case "$1" in
     --list) [[ -z "${MODE}" ]] || fail "choose one of --list / --set"; MODE="list"; shift ;;
     --set)  [[ -z "${MODE}" ]] || fail "choose one of --list / --set"
-            [[ -n "${2:-}" ]] || fail "--set requires a soul slug"; MODE="set"; SLUG="$2"; shift 2 ;;
+            # A slug is sanitized [a-z0-9-] and never leads with '-', so a
+            # dash-prefixed value is a misplaced flag (e.g. `--set --bind X`),
+            # not a slug — reject it directly instead of a misleading later error.
+            [[ -n "${2:-}" && "${2}" != -* ]] || fail "--set requires a soul slug"
+            MODE="set"; SLUG="$2"; shift 2 ;;
     --bind) [[ -n "${2:-}" ]] || fail "--bind requires a directory"; BIND_DIR="$2"; shift 2 ;;
     -*)     fail "unknown option: $1" ;;
     *)      fail "unexpected argument: $1" ;;
