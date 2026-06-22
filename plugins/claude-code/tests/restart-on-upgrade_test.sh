@@ -61,6 +61,8 @@ test_noop_when_no_config() {
 test_managed_restarts_with_recorded_config() {
   new_home >/dev/null; . "${LIB}"
   save_config "${HOME}/.demarkus/soul" 6310 default
+  mkdir -p "${HOME}/.demarkus/soul"
+  echo 4242 > "${HOME}/.demarkus/soul/.pid"   # our managed server is recorded
   local mark="${HOME}/called"
   ensure_managed_server() { echo "$*" >"${mark}"; }
   DEMARKUS_BINARIES_REPLACED=1
@@ -83,10 +85,10 @@ test_reuse_no_external_process_respawns() {
     || { echo "reuse restarted with wrong config: $(cat "${mark}")"; return 1; }
 }
 
-test_reuse_stops_external_then_respawns() {
+test_reuse_healthy_external_left_alone() {
   new_home >/dev/null; . "${LIB}"
   save_config "${HOME}/.demarkus/content" 6309 reuse
-  # A stand-in for the user's externally-started server.
+  # A stand-in for the user's healthy externally-started server.
   sleep 30 &
   local sp=$!
   pid_of_server_at_root() { echo "${sp}"; }
@@ -94,14 +96,12 @@ test_reuse_stops_external_then_respawns() {
   ensure_managed_server() { echo "$*" >"${mark}"; }
   DEMARKUS_BINARIES_REPLACED=1
   restart_local_server_on_upgrade
-  # The external process must have been stopped before respawn.
-  local waited=0
-  while (( waited < 20 )) && kill -0 "${sp}" 2>/dev/null; do sleep 0.1; waited=$((waited + 1)); done
-  if kill -0 "${sp}" 2>/dev/null; then
-    kill "${sp}" 2>/dev/null || true
-    echo "external server was not stopped"; return 1
-  fi
-  [[ -f "${mark}" ]] || { echo "respawn not attempted after stopping external server"; return 1; }
+  # A healthy server we don't own must NOT be killed and must NOT be respawned.
+  local rc=0
+  kill -0 "${sp}" 2>/dev/null || { echo "healthy external server was killed"; rc=1; }
+  [[ -f "${mark}" ]] && { echo "must not respawn over a healthy external server"; rc=1; }
+  kill "${sp}" 2>/dev/null || true   # cleanup
+  return "${rc}"
 }
 
 # ----- runner -----------------------------------------------------------------
