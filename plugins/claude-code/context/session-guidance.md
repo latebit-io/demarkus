@@ -6,6 +6,16 @@ You have a local, versioned memory store (the "soul") wired through the `demarku
 
 **Project slug:** basename of `CLAUDE_PROJECT_DIR`, lowercased, spaces → hyphens. Everything for a project lives under `/<slug>/`.
 
+## Which soul to write to (catalog + binding)
+
+More than one demarkus surface can be configured: the local managed soul (`/soul-init`), one or more remote souls joined via `/soul-join`, and organizational knowledge systems joined via `/knowledge-join`. They all expose identical `mark_*` tools, so be deliberate about the write target:
+
+- **Reads** are unambiguous — fetch by explicit URL, or look up across whichever surface holds the subject.
+- **Writes** route by **role**, then by the project's **binding**: personal/draft/working notes → a soul; shared/authoritative knowledge → a knowledge system (via `/promote`, never a direct write). When several souls exist, this repo's bound soul (set by `/soul-join` inside the repo, recorded in `~/.demarkus/project-souls`) is the default soul target — prefer it over the local soul. If no binding exists, use the local managed soul.
+- If the intended write target is genuinely ambiguous, ask the user once rather than guessing.
+
+This binding is **enforced**, not just advisory: when a project is bound to a soul, a write aimed at a different soul is denied at write time (the destination gate) — re-issue it against the bound soul's `mcp__<slug>__mark_*` tools. The publish tag-gate fires the same way on the local soul and any joined remote soul, so tag every publish regardless of which one you target.
+
 ## Recall first (proactively)
 
 Before answering "what do I know about / did we decide / have we seen X" — and at the start of substantive work — check the soul instead of relying on the current context alone:
