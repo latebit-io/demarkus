@@ -712,18 +712,21 @@ ensure_binaries() {
 }
 
 # restart_local_server_on_upgrade — when ensure_binaries swapped the binary this
-# run, restart the configured local server onto the new binary using its OWN
-# recorded config (SOUL_DIR/PORT from PLUGIN_CONFIG), so a binary replacement is
-# never left half-applied (process serving the stale binary from memory). No-op
-# when no binary changed or no local soul is configured.
+# run, make the configured local server run on the new binary, using its OWN
+# recorded config (SOUL_DIR/PORT from PLUGIN_CONFIG). No-op when no binary
+# changed or no local soul is configured.
 #
-# Works for every mode, including reuse: a reuse/externally-started server is not
-# tracked by our .pid, so we stop the process found at the configured root first
-# (freeing the UDP port) before ensure_managed_server respawns it on the new
-# binary. This intentionally relaxes the old "never restart a reuse server"
-# policy — restarting it with the same config is what the user asked for, and an
-# upgraded binary that the running server can't see is the bug it fixes. Managed
-# servers are handled by ensure_managed_server via our own .pid as before.
+# Two cases, by ownership — and ownership is the MODE, not a .pid file:
+#   - default/isolated: the server is ours. ensure_managed_server restarts it
+#     onto the new binary (handling our .pid itself).
+#   - reuse: the server is the user's, ALWAYS. A .pid is not proof of ownership
+#     here — save_config never clears stale state, so a reuse config can carry an
+#     old .pid (left by a prior managed config at this root, or written by our
+#     own down-start below). Keying the managed path on .pid would let
+#     ensure_managed_server stop that PID and kill a healthy external server —
+#     the exact regression this guards against. So reuse never takes the managed
+#     path: a running server is left alone (warn it's on the old binary), and
+#     only a DOWN one is started on the new binary with the recorded config.
 #
 # Runs in a subshell so load_config can't clobber the caller's SOUL_DIR/PORT/MODE,
 # and never fails the caller: a restart problem is warned, not propagated.
@@ -731,25 +734,29 @@ restart_local_server_on_upgrade() {
   [[ "${DEMARKUS_BINARIES_REPLACED:-0}" == "1" ]] || return 0
   (
     load_config 2>/dev/null || exit 0
-    # Stop an externally-started server at this root (reuse, or an orphan whose
-    # .pid we lost) so the respawn can bind the freed port. Skip when our own
-    # .pid exists — ensure_managed_server stops that one itself.
-    if [[ ! -f "${SOUL_DIR}/.pid" ]]; then
-      local ext_pid
-      ext_pid="$(pid_of_server_at_root "${SOUL_DIR}" 2>/dev/null || true)"
-      if [[ -n "${ext_pid}" ]]; then
-        log "binary upgraded — stopping server at ${SOUL_DIR} (pid=${ext_pid}) to restart on the new binary"
-        kill "${ext_pid}" 2>/dev/null || true
-        local waited=0
-        while (( waited < 30 )) && kill -0 "${ext_pid}" 2>/dev/null; do
-          sleep 0.1; waited=$((waited + 1))
-        done
-        kill -0 "${ext_pid}" 2>/dev/null && kill -9 "${ext_pid}" 2>/dev/null || true
-      fi
+
+    # Our own managed server — safe to restart onto the new binary. Gated on MODE
+    # (not just .pid) so a stale .pid under a reuse config can't trigger this.
+    if [[ "${MODE}" != "reuse" && -f "${SOUL_DIR}/.pid" ]]; then
+      log "binary upgraded — restarting managed server (mode=${MODE}, soul=${SOUL_DIR}, port=${PORT}) on the new binary"
+      ensure_managed_server "${SOUL_DIR}" "${PORT}"
+      exit 0
     fi
-    log "binary upgraded — restarting local server (mode=${MODE}, soul=${SOUL_DIR}, port=${PORT}) on the new binary"
+
+    # Reuse mode, or a managed server that's down: a server we must not assume is
+    # ours. Never kill a running one; only start it if it's down.
+    local ext_pid
+    ext_pid="$(pid_of_server_at_root "${SOUL_DIR}" 2>/dev/null || true)"
+    if [[ -n "${ext_pid}" ]]; then
+      # Healthy and not ours — do not touch it.
+      warn "binary upgraded, but the server at ${SOUL_DIR} (pid=${ext_pid}, mode=${MODE}) is user-managed and still running the old binary; restart it yourself to pick up the new one"
+      exit 0
+    fi
+
+    # Down — start it on the new binary with the recorded config.
+    log "binary upgraded — starting down server (mode=${MODE}, soul=${SOUL_DIR}, port=${PORT}) on the new binary"
     ensure_managed_server "${SOUL_DIR}" "${PORT}"
-  ) || warn "could not restart the local server after a binary upgrade; run /soul-init to recover"
+  ) || warn "could not (re)start the local server after a binary upgrade; run /soul-init to recover"
   return 0
 }
 
