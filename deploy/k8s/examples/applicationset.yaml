@@ -39,7 +39,7 @@ spec:
       source:
         repoURL: ghcr.io/latebit-io/charts
         chart: demarkus-server
-        targetRevision: 0.17.9
+        targetRevision: 0.18.0
         helm:
           releaseName: "{{name}}"
           values: |
