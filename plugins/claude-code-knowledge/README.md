@@ -22,7 +22,7 @@ This plugin downloads no binaries and runs no server. It writes only a small reg
 - `~/.demarkus/plugin-knowledge.require-tags.<slug>` — mirrored required tag axes.
 - `~/.demarkus/plugin-knowledge.require-fields.<slug>` — mirrored required OKF metadata fields (e.g. `type`).
 
-It owns this `plugin-knowledge.*` namespace entirely and never reads or writes the demarkus-memory plugin's files — so it stands alone. The one exception is read-only: it checks for `~/.demarkus/plugin-memory.conf` to tell whether a local soul exists, so the soul↔system guidance only appears when it's relevant (and is simply omitted when it isn't).
+It owns this `plugin-knowledge.*` namespace entirely and never **writes** the demarkus-memory plugin's files — so it stands alone. Its only touch of that state is **read-only**: it checks whether `~/.demarkus/plugin-memory.conf` exists, to tell whether a local soul is configured, so the soul↔system guidance only appears when it's relevant (and is simply omitted when it isn't).
 
 ## Admin: publishing conventions
 
