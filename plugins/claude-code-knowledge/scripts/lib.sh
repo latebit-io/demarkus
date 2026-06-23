@@ -197,6 +197,9 @@ _write_or_clear() {
 mirror_policy() {
   local slug="$1" body
   [[ -n "${slug}" ]] || return 2
+  # Path-safety guard: the slug is interpolated into the mirror file paths, so a
+  # separator/whitespace/control char could escape the intended file. Refuse it.
+  case "${slug}" in *[!A-Za-z0-9._-]*) return 2 ;; esac
   mkdir -p "${PLUGIN_HOME}"
   body="$(cat)"
   _write_or_clear "${PLUGIN_STRICTNESS_FILE}.${slug}"     "$(_policy_field "${body}" strictness)"

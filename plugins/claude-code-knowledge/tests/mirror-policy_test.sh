@@ -95,6 +95,17 @@ test_per_slug_isolation() {
   [[ "${bf}" == "<none>" ]] || { echo "beta must not inherit acme's require_fields; got ${bf}"; return 1; }
 }
 
+test_rejects_path_unsafe_slug() {
+  local h; h="$(mktemp -d)"
+  # A slug with a path separator must be refused, exit non-zero, and write nothing.
+  printf 'strictness: block\n' | HOME="${h}" bash "${MIRROR}" "../evil" >/dev/null 2>&1
+  local rc=$?
+  local wrote; wrote="$(find "${h}/.demarkus" -name 'plugin-knowledge.*' 2>/dev/null | wc -l | tr -d ' ')"
+  rm -rf "${h}"
+  [[ "${rc}" -ne 0 ]] || { echo "unsafe slug must exit non-zero"; return 1; }
+  [[ "${wrote}" == "0" ]] || { echo "unsafe slug must write no mirror file; wrote ${wrote}"; return 1; }
+}
+
 echo "=== mirror-policy tests ==="
 TESTS=$(declare -F | awk '$3 ~ /^test_/ { print $3 }')
 for t in ${TESTS}; do run_test "${t#test_}"; done
