@@ -21,7 +21,7 @@ The canonical layout for a project's memory, lifted from the structure the demar
 ## Conventions
 
 - **Tag every doc on publish** (`metadata.tags` + `importance`) — the publish gate enforces it. The per-project `index.md` hub is the backstop for anything left untagged.
-- **Set the OKF `type` on publish** (`metadata.type`) to the document's kind, so the catalog is OKF-typed and filterable (`mark_lookup` `filter: type=…`). Map the layout to types: `architecture.md` → `Architecture`, `adr/*` → `Decision`, `plans/*` → `Plan`, `journal/*` → `Journal`, `patterns.md`/`guidelines.md` → `Guide`, reference docs → `Reference`. Omit it and the server defaults `type: Document`; `index.md` (and `log.md`) are exempt and stay untyped — don't set a type on a hub.
+- **Set the OKF `type` on publish** — a `type` key in the `metadata` object (`metadata: {"type": "Reference"}`) — to the document's kind, so the catalog is OKF-typed and filterable (`mark_lookup` `filter: type=…`). Map the layout to types: `architecture.md` → `Architecture`, `adr/*` → `Decision`, `plans/*` → `Plan`, `journal/*` → `Journal`, `patterns.md`/`guidelines.md` → `Guide`, reference docs → `Reference`. Omit it and the server defaults `type: Document`; `index.md` (and `log.md`) are exempt and stay untyped — don't set a type on a hub.
 - **No ad-hoc top-level files.** Everything for a project lives under `/<project>/`. If something doesn't fit a file above, put it in `thoughts.md` or ask where it belongs.
 - **Not every project needs every file.** Create a doc when there's something real to put in it. The common core is `index.md`, `journal/`, and whichever of architecture / patterns / decisions the work actually produces.
 

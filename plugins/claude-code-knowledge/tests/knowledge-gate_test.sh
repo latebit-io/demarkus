@@ -308,6 +308,22 @@ test_require_fields_unsupported_field_fail_open() {
   [[ -z "${out}" ]] || { echo "unsupported require_field must fail-open (defer); got: ${out}"; return 1; }
 }
 
+test_require_fields_type_exempt_for_hub() {
+  # index.md / log.md are server-exempt from the type default, so the gate must
+  # not require a type on them even under require_fields: type — else hub
+  # maintenance would block. An untyped index.md publish must defer.
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
+  printf 'type\n' > "${home}/.demarkus/plugin-knowledge.require-fields.acme"
+  local idx log
+  idx="$(printf '{"hook_event_name":"PreToolUse","tool_name":"mcp__acme__mark_publish","tool_input":{"url":"mark://acme/docs/index.md","metadata":{"tags":"x"}}}')"
+  log="$(printf '{"hook_event_name":"PreToolUse","tool_name":"mcp__acme__mark_publish","tool_input":{"url":"mark://acme/log.md","metadata":{"tags":"x"}}}')"
+  local o1 o2; o1="$(gate "${home}" block "${idx}")"; o2="$(gate "${home}" block "${log}")"
+  rm -rf "${home}"
+  [[ -z "${o1}" ]] || { echo "index.md must be exempt from require_fields type; got: ${o1}"; return 1; }
+  [[ -z "${o2}" ]] || { echo "log.md must be exempt from require_fields type; got: ${o2}"; return 1; }
+}
+
 # ----- runner -----------------------------------------------------------
 
 TESTS=$(declare -F | awk '$3 ~ /^test_/ { print $3 }')
