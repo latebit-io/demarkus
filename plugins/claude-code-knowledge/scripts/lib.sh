@@ -158,6 +158,55 @@ register_knowledge_system() {
   printf '%s\n' "${slug}" >> "${PLUGIN_KNOWLEDGE_REGISTRY}"
 }
 
+# _policy_field BODY KEY — echo the value of the first BODY line of the form
+# "KEY: value", where KEY is the line's first non-space token (so a prose mention
+# of the key mid-sentence, or inside backticks, can't match). Trimmed; empty when
+# absent. Pure awk — the enforced core lines sit bare in the policy body, above
+# any prose, so the first match is the real declaration.
+_policy_field() {
+  local body="$1" key="$2"
+  printf '%s\n' "${body}" | awk -v k="${key}" '
+    { line = $0; sub(/^[ \t]+/, "", line) }
+    substr(line, 1, length(k) + 1) == k ":" {
+      v = substr(line, length(k) + 2)
+      sub(/^[ \t]+/, "", v); sub(/[ \t\r]+$/, "", v)
+      print v; exit
+    }'
+}
+
+# _write_or_clear FILE VALUE — atomically write VALUE (one line) to FILE, or
+# remove FILE when VALUE is empty. The remove path is what lets a relaxed policy
+# de-enforce: drop a knob from policy.md and the next mirror clears its file.
+_write_or_clear() {
+  local file="$1" val="$2" tmp
+  if [[ -n "${val}" ]]; then
+    tmp="${file}.tmp.$$"
+    printf '%s\n' "${val}" > "${tmp}" && mv -f "${tmp}" "${file}"
+  else
+    rm -f "${file}"
+  fi
+}
+
+# mirror_policy SLUG — read a knowledge system's policy.md BODY on stdin and
+# deterministically mirror its enforced core to the per-slug local files the
+# publish gate reads (strictness / require_tags / require_fields). A knob absent
+# from the policy clears its file. This replaces the hand-rolled agent-prose
+# mirroring: the agent still fetches policy.md over MCP (a script can't reach the
+# broker) and pipes it here, but the parse + file paths are no longer agent
+# judgment — so a join always mirrors the same way. Idempotent.
+mirror_policy() {
+  local slug="$1" body
+  [[ -n "${slug}" ]] || return 2
+  # Path-safety guard: the slug is interpolated into the mirror file paths, so a
+  # separator/whitespace/control char could escape the intended file. Refuse it.
+  case "${slug}" in *[!A-Za-z0-9._-]*) return 2 ;; esac
+  mkdir -p "${PLUGIN_HOME}"
+  body="$(cat)"
+  _write_or_clear "${PLUGIN_STRICTNESS_FILE}.${slug}"     "$(_policy_field "${body}" strictness)"
+  _write_or_clear "${PLUGIN_REQUIRE_TAGS_FILE}.${slug}"   "$(_policy_field "${body}" require_tags)"
+  _write_or_clear "${PLUGIN_REQUIRE_FIELDS_FILE}.${slug}" "$(_policy_field "${body}" require_fields)"
+}
+
 # is_registered_knowledge_system SLUG — true if SLUG is in the registry.
 is_registered_knowledge_system() {
   local slug="$1"

@@ -19,7 +19,7 @@
       "name": "demarkus-knowledge",
       "source": "./plugins/claude-code-knowledge",
       "description": "Join an organizational demarkus knowledge system from Claude Code — a shared, broker-fronted, versioned markdown catalog. Steers sessions to the shared catalog first, makes it easy to navigate, enforces a publish tag-gate, and curates promoted notes into it via the knowledge-promote cascade. No local server or binaries.",
-      "version": "0.3.3",
+      "version": "0.4.0",
       "category": "memory",
       "tags": ["memory", "knowledge-base", "demarkus", "mark-protocol", "broker", "team"],
       "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code-knowledge"
