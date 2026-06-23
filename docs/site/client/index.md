@@ -12,7 +12,7 @@ If you're new, start with the CLI and confirm you can fetch a document.
 
 ## CLI (`demarkus`)
 
-The CLI supports the read/write verbs (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `APPEND`, `ARCHIVE`) plus `edit`, `graph`, and `lookup` subcommands.
+The CLI supports the read/write verbs (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `APPEND`, `ARCHIVE`) plus `edit`, `graph`, `lookup`, and `okf` subcommands.
 
 ### Common commands
 
@@ -52,6 +52,25 @@ demarkus graph --insecure -depth 3 mark://localhost:6309/index.md
 ```
 
 Graph results are persisted to `~/.mark/graph.json` and accumulate across sessions. Each crawl merges new nodes and edges into the existing graph, so your map of the `mark://` network grows over time.
+
+### Open Knowledge Format codec
+
+`demarkus okf` interoperates with [Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog) bundles — directories of markdown files with YAML frontmatter. A demarkus document is content-compatible with OKF; the codec moves whole bundles in and out of a world.
+
+```bash
+# Validate a bundle for OKF v0.1 conformance
+demarkus okf validate ./my-bundle
+demarkus okf validate --strict ./my-bundle   # warnings become failures
+
+# Import a bundle into a world (sanitizes/caps metadata, rewrites links)
+demarkus okf import ./my-bundle mark://localhost:6309/imported
+demarkus okf import --dry-run ./my-bundle mark://localhost:6309/imported
+
+# Export a world subtree back out as a conformant bundle
+demarkus okf export mark://localhost:6309/imported ./exported
+```
+
+`import`/`export` accept `-auth <token>` and `--insecure` like the other write commands. Import is an upsert: re-importing an unchanged bundle creates no new versions (content-hash dedup). See [Markdown Reference → OKF compatibility](../reference/markdown.md#open-knowledge-format-okf-compatibility).
 
 ## TUI (`demarkus-tui`)
 
