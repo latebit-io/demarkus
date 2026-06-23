@@ -596,6 +596,37 @@ func TestCrawlerGraphExportAndPublish(t *testing.T) {
 	}
 }
 
+func TestCrawlerGraphExportFiltersLoopbackAndNormalizesPorts(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://a.example.com"}
+	cfg.Crawl.MaxDocuments = 100
+
+	client := newMockClient()
+	client.addList("a.example.com:6309", "/", "- [index.md](index.md)\n")
+	// The doc links to loopback + localhost (dev artifacts) and a port-less
+	// external world.
+	client.addDoc("a.example.com:6309", "/index.md",
+		"# A\n[loop](mark://127.0.0.1:6401/x.md) [local](mark://localhost/y.md) [ext](mark://ext.example.com/page.md)",
+		"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	if _, err := crawler.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	exp := crawler.GraphExport()
+
+	// loopback / localhost targets never enter the durable graph.
+	for _, bad := range []string{"127.0.0.1", "localhost"} {
+		if containsMiddle(exp, bad) {
+			t.Errorf("graph export must not contain %q\n---\n%s", bad, exp)
+		}
+	}
+	// the external target is kept, port-normalized to the canonical :6309 form.
+	if !containsMiddle(exp, "mark://a.example.com:6309/index.md | mark://ext.example.com:6309/page.md") {
+		t.Errorf("graph export missing normalized external edge\n---\n%s", exp)
+	}
+}
+
 func contains(s, substr string) bool {
 	return s != "" && substr != "" && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsMiddle(s, substr)))
 }

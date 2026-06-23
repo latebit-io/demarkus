@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 
 	"slices"
 	"strings"
@@ -313,6 +314,13 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 			continue
 		}
 
+		// Don't crawl loopback/localhost — a dev link in a crawled body points
+		// at the crawler's own host, never a real federated world (unreachable
+		// noise + error spam).
+		if isLoopbackHost(host) {
+			continue
+		}
+
 		// Skip if same server.
 		if host == currentHost {
 			continue
@@ -473,10 +481,41 @@ func (c *Crawler) recordEdges(host, path, body string, meta map[string]string) {
 		if !strings.HasPrefix(resolved, "mark://") {
 			continue
 		}
-		c.graph.AddEdge(url, resolved)
+		// Normalize the target's host so it is port-stable (mark://h and
+		// mark://h:6309 are the same node, not two), and drop loopback/localhost
+		// targets so a dev link in a crawled body never becomes a phantom portal
+		// node on the reading-room floor. Private and cluster-internal hosts are
+		// KEPT — real federated worlds (LAN, or a Kubernetes universe) are
+		// addressed by exactly those.
+		th, tp, err := fetch.ParseMarkURL(resolved)
+		if err != nil || isLoopbackHost(th) {
+			continue
+		}
+		c.graph.AddEdge(url, "mark://"+th+tp)
 		linkCount++
 	}
 	c.graph.AddNode(&graph.Node{URL: url, Title: meta["title"], Status: "ok", LinkCount: linkCount})
+}
+
+// isLoopbackHost reports whether a mark:// host (host:port or bare) is loopback,
+// "localhost", or the unspecified address — dev artifacts that must not enter
+// the durable federation graph or the crawl frontier. Private and
+// cluster-internal hosts are deliberately NOT included: real federated worlds (a
+// LAN deployment, or a Kubernetes universe addressing worlds by in-cluster
+// service names) are reached by exactly those.
+func isLoopbackHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if hh, _, err := net.SplitHostPort(h); err == nil {
+		h = hh
+	}
+	h = strings.Trim(h, "[]")
+	if h == "" || h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return false
 }
 
 // GraphExport renders the accumulated link graph as a mark_graph_export
