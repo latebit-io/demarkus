@@ -14,7 +14,7 @@ Resolve the audit root from `$ARGUMENTS`:
 
 Anchor on the scope's hub: `/index.md` or `/<slug>/index.md`.
 
-(Auditing an organizational knowledge-system world is the separate demarkus-knowledge plugin's territory, not this command.)
+(Auditing an organizational knowledge-system world is `/knowledge-doctor`'s territory in the demarkus-knowledge plugin, not this command.)
 
 ## Gather (cheap — two calls)
 
@@ -29,7 +29,7 @@ Anchor on the scope's hub: `/index.md` or `/<slug>/index.md`.
 - **Orphans** — an inventory document that is never the target of any `mark://` edge (no inbound links) and isn't the scope's root hub. It's unreachable except by knowing its path.
 - **Stale index entries** — broken links whose source is a hub/index doc (an index pointing at something gone).
 - **Missing hub** — a `/<project>/` subtree with documents but no `index.md`.
-- **Untitled docs** — nodes shown as `(no title)` (no H1 / declared title).
+- **Untitled docs** — **`ok`** nodes shown as `(no title)` (no H1 / declared title). A `(no title)` on a `not-found` node is the broken-link finding above, not an untitled doc — don't double-report it.
 - **ADR sequence** — for each `adr/` directory, list it and flag duplicate or gapped `NNNN` prefixes.
 
 ## Deep checks (per-doc `mark_fetch` — run on a small scope, or when asked)
@@ -38,6 +38,18 @@ These cost one fetch per document, so only run them for a single project or when
 
 - **Untagged docs** — fetch and check the `tags` metadata is non-empty. An untagged doc is invisible to `mark_lookup`. (This is what the publish gate now prevents going forward; this finds pre-existing ones.)
 - **Duplicate content** — compare `content-hash` across fetched docs; identical hashes under different paths are duplicates.
+- **In-body frontmatter block** *(demarkus-specific)* — a body whose **first non-blank line is `---`** and whose block carries reserved/operational keys (`version`, `previous-hash`, `archived`, `meta.*`) is almost always an **exported demarkus doc pasted back into a publish**. The server stores frontmatter out-of-band and treats a body-leading `---` as literal content, so it renders as a stray horizontal rule + garbled headings, and the in-body `version:` won't match the doc's real fetched `version`. Flag it; fix is strip the block and re-publish with metadata passed out-of-band.
+- **Dangling & unlinked references** — a relationship written in *prose* (or inline code) that the link graph never captured, because only `[text](url)` becomes an edge. A mention like "supersedes ADR 0005" is invisible to every graph-based check above. For each fetched body, scan for high-confidence reference patterns and resolve each against the **inventory** (existence) and the **doc's own parsed links** (already-linked?) — no extra fetches beyond the bodies this tier already pulls:
+  - **Patterns** (keep the set tight — false positives in prose are worse than a missed edge):
+    - ADR references — `ADR[ -]?#?\d{3,4}` (case-insensitive). Canonical target: an inventory path matching `<scope>/adr/NNNN-*.md`.
+    - (Deferred to v2: bare/inline `mark://…` URLs not inside a link. They false-positive on cross-world refs whose existence a single-world audit can't check, and on inline-code placeholders like `` `mark://host/...` ``. Only attempt when you can scope the match to in-world hosts and exclude code spans.)
+  - **Exclude**: the doc's *own* ADR number (self-reference), and any mention inside a fenced (```` ``` ````/`~~~`) code block — a `# ADR 0005` in a code sample is not a real reference (same fence-skip rule `firstH1`/the catalog use).
+  - **Resolve "already-linked?" against the citing body's OWN markdown links — NOT the crawl's edge store.** The crawl seeds from the hub, so an **orphan** doc is never visited and its outbound links never enter the edge store; keying off edges would falsely flag an orphan's real `[ADR 0006](…)` link as unlinked. You already hold every body in this tier — parse each for its own `[text](url)` links and check whether one resolves to the mention's target.
+  - **Classify** each surviving mention:
+    - **Unlinked reference** — the target *exists* in the inventory but the citing body has **no markdown link** to it. The relationship is real and reachable but not traversable. Fix: convert the prose mention to `[ADR 0005](mark://…/0005-…md)`.
+    - **Dangling reference** — the mention resolves to **no inventory doc** at all. It's referenced but absent (the ADR-0006-cites-a-missing-0005 case). Confirm with a single `mark_lookup` over the scope (catalog is authoritative for absence) before reporting. Fix: restore the doc, or correct/remove the reference. If the citing doc itself annotates the absence ("no md file exists"), report it as **known** rather than actionable.
+
+  This is distinct from **Broken links** above: that check follows an *edge* to a missing target; this one finds references that were never edges in the first place.
 
 ## Report
 
@@ -54,6 +66,10 @@ Render plainly, grouped by check, most actionable first. For each finding give t
 
 ### Untagged (<n>)        [deep check — scanned <k>/<N> docs]
 - /<slug>/bar.md — no tags; re-publish with metadata.tags
+
+### Dangling & unlinked references (<n>)        [deep check — scanned <k>/<N> docs]
+- /adr/0006-navigation-rework.md → "ADR 0005" — dangling: no such doc in scope (lookup → no match); restore it or drop the reference
+- /roadmap.md → "ADR 0006" — unlinked: target exists but no edge; convert the prose mention to a [link](mark://…)
 
 ### ADR / index / titles / duplicates …
 ```
