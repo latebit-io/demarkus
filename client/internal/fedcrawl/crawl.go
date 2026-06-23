@@ -505,8 +505,14 @@ func (c *Crawler) recordEdges(host, path, body string, meta map[string]string) {
 // service names) are reached by exactly those.
 func isLoopbackHost(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
+	// Strip the port. SplitHostPort handles host:port and [ipv6]:port; an
+	// unbracketed IPv6 with a port (::1:6309) defeats it (the colons are
+	// ambiguous), so fall back to trimming a trailing :port only when the head
+	// is itself a valid IP.
 	if hh, _, err := net.SplitHostPort(h); err == nil {
 		h = hh
+	} else if i := strings.LastIndex(h, ":"); i > 0 && net.ParseIP(h[:i]) != nil {
+		h = h[:i]
 	}
 	h = strings.Trim(h, "[]")
 	if h == "" || h == "localhost" || strings.HasSuffix(h, ".localhost") {
