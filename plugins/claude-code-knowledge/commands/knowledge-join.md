@@ -60,29 +60,15 @@ If the user invokes without an argument, ask them for the URL before running any
 5. **Adopt the system's conventions (`root` hub).** A knowledge system can publish org-wide conventions to its guaranteed `root` hub world. Once the OAuth flow is complete and you are doing real work against this system, fetch them and follow them:
 
    - `mark_fetch mark://root/.well-known/demarkus/template.md` — the required per-world structure (same shape as the local `/project-template.md`). Follow it.
-   - `mark_fetch mark://root/.well-known/demarkus/policy.md` — strictness + required tags. Mirror the enforceable knobs to local files so the gate (which cannot reach the broker) can apply them:
+   - `mark_fetch mark://root/.well-known/demarkus/policy.md` — the system's write policy. The gate runs offline (it cannot reach the broker), so its enforced core must be mirrored to local files. **Do not hand-write those files** — pipe the fetched policy **body** to the mirror script, which deterministically parses `strictness:` / `require_tags:` / `require_fields:` and writes (or clears) each per-slug file:
 
-     - If it declares a `strictness:` line, write:
+     ```bash
+     cat <<'POLICY' | bash "${CLAUDE_PLUGIN_ROOT}/scripts/mirror-policy.sh" <slug>
+     <the full body returned by the mark_fetch above>
+     POLICY
+     ```
 
-       ```bash
-       printf '%s\n' "<warn|block|ask from policy.md>" > ~/.demarkus/plugin-knowledge.strictness.<slug>
-       ```
-
-     - If it declares a `require_tags:` line (the tag axes every doc must carry, e.g. `category`), mirror the axes so the gate presence-checks them:
-
-       ```bash
-       printf '%s\n' "<axes from policy.md, e.g. category>" > ~/.demarkus/plugin-knowledge.require-tags.<slug>
-       ```
-
-       Each axis is then satisfied by an `axis:value` tag (e.g. `category:project`).
-
-     - If it declares a `require_fields:` line (OKF metadata *fields* every doc must carry, e.g. `type` — the document kind), mirror them so the gate presence-checks them:
-
-       ```bash
-       printf '%s\n' "<fields from policy.md, e.g. type>" > ~/.demarkus/plugin-knowledge.require-fields.<slug>
-       ```
-
-       Each field is then satisfied by a non-empty value for that key in the `metadata` object (e.g. `metadata: {"type": "Reference"}`). Distinct from `require_tags:` — a field is its own metadata key, not an `axis:value` tag. Only `type` is enforced today.
+     A knob absent from the policy clears its mirror file, so relaxing the policy de-enforces. The mirror is a **snapshot, not a live read** — re-run this on a fresh join whenever the policy changes. At publish time the gate then checks each enforced axis (an `axis:value` tag, e.g. `category:project`) and field (a non-empty key in the `metadata` object, e.g. `metadata: {"type": "Reference"}`).
 
    If either document is `not-found`, the system simply hasn't declared that convention yet — skip silently. See `${CLAUDE_PLUGIN_ROOT}/examples/knowledge-system/` for the format an admin publishes.
 
