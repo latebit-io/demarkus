@@ -60,19 +60,29 @@ The server persists each version with its own YAML frontmatter block prepended t
 version: 3
 archived: false
 previous-hash: sha256-abc123…
+type: Document
+title: Architecture Notes
+tags: [architecture, notes]
 meta.author: Fritz
-meta.tags: architecture,notes
 ---
 <your body here>
 ```
 
-Reserved keys: `version`, `previous-hash`, `archived`, plus any `meta.*` keys supplied by the publisher. The handler strips this block before returning the body to clients, so you never see it when you FETCH.
+The block mixes three kinds of keys:
+
+- **Operational** (`version`, `previous-hash`, `archived`) — owned by the store. They are reserved: a publisher that tries to set them is rejected.
+- **Open Knowledge Format fields** (`type`, `title`, `description`, `resource`, `tags`, `timestamp`) — stored *bare* under their OKF names, so a demarkus document is content-compatible with [OKF v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog). `tags` is written as a YAML flow list.
+- **Other publisher metadata** — namespaced under `meta.*` to keep it clear of the reserved and OKF names.
+
+The handler strips this whole block before returning the body to clients, so you never see it when you FETCH.
 
 ### Publisher metadata
 
-To attach structured metadata to a document, pass it as request metadata on `PUBLISH` — **not** by writing YAML inside the body. The server records it under `meta.*` in the on-disk frontmatter and surfaces it in response metadata on FETCH.
+To attach structured metadata to a document, pass it as request metadata on `PUBLISH` — **not** by writing YAML inside the body. Recognized OKF fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`) are stored bare; every other key is namespaced under `meta.*`. All of it is surfaced in response metadata on FETCH.
 
-Limits: up to 10 keys totaling 512 bytes.
+If you don't declare a `type`, the server assigns `type: Document` on PUBLISH and APPEND, so every stored document is a typed OKF concept (the reserved `index.md` and `log.md` are exempt).
+
+Limits: up to 50 keys totaling 1024 bytes (`tags` counted at its serialized list length).
 
 ### Response fields (computed, not stored)
 
@@ -81,6 +91,18 @@ On FETCH, the server returns `modified`, `etag`, and `content-hash` as protocol 
 ### If you write `---` at the top of your body
 
 It's treated as body content — the server does not parse it and does not strip it. Glamour will render `---` as a horizontal rule, so an in-body frontmatter block shows up as two horizontal rules with text between them. Use publisher metadata instead.
+
+## Open Knowledge Format (OKF) compatibility
+
+A single demarkus document is content-compatible with [Google's Open Knowledge Format v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog): the recognized OKF fields are stored under their OKF names (see above), and the server assigns a default `type` so every document is a typed OKF concept.
+
+This is a **document-level** guarantee. At the system level demarkus is a superset — it layers versioning, a SHA-256 hash chain, QUIC transport, capability auth, and LOOKUP around an OKF-compatible document. Demarkus does **not** serve or ingest OKF *bundles* over the wire (frontmatter is stripped before serving, and the `versions/` store is not a bundle tree). Bundle interop is handled out of band by the `demarkus okf` codec:
+
+- `demarkus okf validate <bundle-dir>` — check a directory of markdown files for OKF v0.1 conformance.
+- `demarkus okf import <bundle-dir> mark://host/prefix` — publish an OKF bundle into a demarkus world (sanitizes/caps metadata with warnings, rewrites bundle-absolute links).
+- `demarkus okf export mark://host/prefix <out-dir>` — write a demarkus world subtree back out as a conformant OKF bundle.
+
+See [SPEC §14](../../SPEC.md) for the full field mapping and conformance details.
 
 ## What is not supported
 
@@ -113,8 +135,8 @@ If you want a link to appear in the graph, use `[text](url)` or a reference link
 ## Document size
 
 - Body: up to 1 MiB (`MaxBodyLength = 1048576` bytes)
-- Frontmatter: up to 1 KiB of protocol overhead on disk per version
-- Publisher metadata keys: up to 10 keys, 512 bytes total
+- Publisher metadata: up to 50 keys, 1024 bytes total (`tags` counted at its serialized list length)
+- Stored frontmatter: up to 2 KiB on disk per version (publisher metadata plus the store's own operational fields)
 
 ## Why so minimal?
 

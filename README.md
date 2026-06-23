@@ -44,7 +44,7 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-server` | QUIC server with versioned document store, capability-based auth |
 | `demarkus-token` | Generate and manage write tokens |
 | `demarkus-publish` | Direct-to-store writer for read-only server installs (chroot/RO mode) |
-| `demarkus` | CLI tool for all protocol operations (fetch, publish, append, graph, etc.) |
+| `demarkus` | CLI tool for all protocol operations (fetch, publish, append, graph, okf, etc.) |
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
 
@@ -69,6 +69,8 @@ modified: 2026-01-15T10:30:00Z
 ```
 
 **Verbs**: `FETCH` · `LIST` · `VERSIONS` · `LOOKUP` · `PUBLISH` · `APPEND` · `ARCHIVE`
+
+**Open Knowledge Format**: A demarkus document is content-compatible with [Google's Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog) — recognized OKF fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`) are stored as plain frontmatter, and the server types every document by default. At the system level demarkus is a superset, layering versioning, hash-chain integrity, QUIC transport, and capability auth around an OKF-compatible document. The `demarkus okf` subcommand validates, imports, and exports OKF bundles. See [SPEC §14](docs/SPEC.md).
 
 ## Use Cases
 

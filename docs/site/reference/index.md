@@ -87,6 +87,7 @@ For per-server tokens, use `demarkus token add mark://host:6309 <token>` before 
 ## Authoring
 
 - [Supported Markdown Features](markdown.md) — what the TUI renders and what the link graph tracks
+- [Open Knowledge Format compatibility](markdown.md#open-knowledge-format-okf-compatibility) — OKF field mapping, default `type`, and the `demarkus okf` validate/import/export codec
 
 ## Protocol
 
