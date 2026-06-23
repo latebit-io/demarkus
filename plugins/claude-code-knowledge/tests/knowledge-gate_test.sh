@@ -296,6 +296,18 @@ test_require_fields_isolation() {
   [[ -z "${out}" ]] || { echo "beta must not inherit acme's require-fields; got: ${out}"; return 1; }
 }
 
+test_require_fields_unsupported_field_fail_open() {
+  # The gate can only inspect `type` today; any other declared require_field is
+  # skipped fail-open so it never blocks on what it can't see. Policy lists a
+  # supported field (type, satisfied) + an unsupported one (owner) → defer.
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
+  printf 'type\nowner\n' > "${home}/.demarkus/plugin-knowledge.require-fields.acme"
+  local out; out="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"x","type":"Reference"}')")"
+  rm -rf "${home}"
+  [[ -z "${out}" ]] || { echo "unsupported require_field must fail-open (defer); got: ${out}"; return 1; }
+}
+
 # ----- runner -----------------------------------------------------------
 
 TESTS=$(declare -F | awk '$3 ~ /^test_/ { print $3 }')
