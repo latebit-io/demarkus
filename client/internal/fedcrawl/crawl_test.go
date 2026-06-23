@@ -596,6 +596,57 @@ func TestCrawlerGraphExportAndPublish(t *testing.T) {
 	}
 }
 
+func TestCrawlerGraphExportFiltersLoopbackAndNormalizesPorts(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://a.example.com"}
+	cfg.Crawl.MaxDocuments = 100
+
+	client := newMockClient()
+	client.addList("a.example.com:6309", "/", "- [index.md](index.md)\n")
+	// The doc links to IPv4 loopback, IPv6 loopback, localhost (dev artifacts)
+	// and a port-less external world.
+	client.addDoc("a.example.com:6309", "/index.md",
+		"# A\n[loop](mark://127.0.0.1:6401/x.md) [loop6](mark://[::1]/q.md) [local](mark://localhost/y.md) [ext](mark://ext.example.com/page.md)",
+		"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	if _, err := crawler.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	exp := crawler.GraphExport()
+
+	// loopback (v4 + v6) / localhost targets never enter the durable graph.
+	for _, bad := range []string{"127.0.0.1", "::1", "localhost"} {
+		if containsMiddle(exp, bad) {
+			t.Errorf("graph export must not contain %q\n---\n%s", bad, exp)
+		}
+	}
+	// the external target is kept, port-normalized to the canonical :6309 form.
+	if !containsMiddle(exp, "mark://a.example.com:6309/index.md | mark://ext.example.com:6309/page.md") {
+		t.Errorf("graph export missing normalized external edge\n---\n%s", exp)
+	}
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	cases := map[string]bool{
+		"127.0.0.1:6401":        true,  // IPv4 loopback + port
+		"localhost":             true,  // bare localhost
+		"localhost:6309":        true,  // localhost + port
+		"0.0.0.0:6309":          true,  // unspecified
+		"[::1]:6309":            true,  // bracketed IPv6 loopback + port
+		"::1":                   true,  // bare IPv6 loopback
+		"::1:6309":              true,  // unbracketed IPv6 loopback + port
+		"soul.demarkus.io:6309": false, // real external world
+		"10.0.0.5:6309":         false, // private IP — a real LAN/cluster world, kept
+		"2001:db8::5":           false, // routable IPv6
+	}
+	for in, want := range cases {
+		if got := isLoopbackHost(in); got != want {
+			t.Errorf("isLoopbackHost(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func contains(s, substr string) bool {
 	return s != "" && substr != "" && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsMiddle(s, substr)))
 }
