@@ -76,6 +76,14 @@ If the user invokes without an argument, ask them for the URL before running any
 
        Each axis is then satisfied by an `axis:value` tag (e.g. `category:project`).
 
+     - If it declares a `require_fields:` line (OKF metadata *fields* every doc must carry, e.g. `type` — the document kind), mirror them so the gate presence-checks them:
+
+       ```bash
+       printf '%s\n' "<fields from policy.md, e.g. type>" > ~/.demarkus/plugin-knowledge.require-fields.<slug>
+       ```
+
+       Each field is then satisfied by a non-empty `metadata.<field>` on publish (e.g. `metadata.type="Reference"`). Distinct from `require_tags:` — a field is its own metadata key, not an `axis:value` tag. Only `type` is enforced today.
+
    If either document is `not-found`, the system simply hasn't declared that convention yet — skip silently. See `${CLAUDE_PLUGIN_ROOT}/examples/knowledge-system/` for the format an admin publishes.
 
 6. **Confirm success.** Tell the user, in plain language:

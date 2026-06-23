@@ -235,6 +235,67 @@ test_ks_slug_containing_memory_substring_still_gated() {
     || { echo "a KS slug containing 'demarkus-memory' must still be gated: ${out}"; return 1; }
 }
 
+# require_fields: an OKF metadata field (e.g. type) must be present non-empty in
+# the metadata object — distinct from a tag axis.
+
+test_require_fields_type_present_defers() {
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
+  printf 'type\n' > "${home}/.demarkus/plugin-knowledge.require-fields.acme"
+  local out; out="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"x","type":"Reference"}')")"
+  rm -rf "${home}"
+  [[ -z "${out}" ]] || { echo "required field 'type' present should defer; got: ${out}"; return 1; }
+}
+
+test_require_fields_type_missing_denied() {
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
+  printf 'type\n' > "${home}/.demarkus/plugin-knowledge.require-fields.acme"
+  # Properly tagged but no metadata.type → field violation.
+  local out; out="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"x"}')")"
+  rm -rf "${home}"
+  grep -q '"permissionDecision":"deny"' <<<"${out}" \
+    || { echo "missing required field should deny: ${out}"; return 1; }
+  grep -q 'type' <<<"${out}" \
+    || { echo "reason should name the missing field 'type': ${out}"; return 1; }
+}
+
+test_require_fields_empty_type_denied() {
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
+  printf 'type\n' > "${home}/.demarkus/plugin-knowledge.require-fields.acme"
+  # A present-but-empty type string must not satisfy the field.
+  local out; out="$(gate "${home}" block "$(payload 'mcp__acme__mark_publish' '{"tags":"x","type":"  "}')")"
+  rm -rf "${home}"
+  grep -q '"permissionDecision":"deny"' <<<"${out}" \
+    || { echo "whitespace-only type must not satisfy require_fields: ${out}"; return 1; }
+}
+
+test_require_fields_warn_nudges_post() {
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
+  printf 'type\n' > "${home}/.demarkus/plugin-knowledge.require-fields.acme"
+  # warn (no env): PostToolUse should nudge about the missing field.
+  local pl; pl="$(printf '{"hook_event_name":"PostToolUse","tool_name":"mcp__acme__mark_publish","tool_input":{"url":"/d.md","metadata":{"tags":"x"}}}')"
+  local out; out="$(gate "${home}" - "${pl}")"
+  rm -rf "${home}"
+  grep -q '"additionalContext"' <<<"${out}" \
+    || { echo "warn should nudge on missing field: ${out}"; return 1; }
+  grep -q 'type' <<<"${out}" \
+    || { echo "nudge should name the missing field 'type': ${out}"; return 1; }
+}
+
+test_require_fields_isolation() {
+  local home; home="$(mktemp -d)"
+  HOME="${home}" bash "${REGISTER}" acme 2>/dev/null
+  HOME="${home}" bash "${REGISTER}" beta 2>/dev/null
+  printf 'type\n' > "${home}/.demarkus/plugin-knowledge.require-fields.acme"
+  # beta declares no require-fields; an untyped beta publish must defer.
+  local out; out="$(gate "${home}" block "$(payload 'mcp__beta__mark_publish' '{"tags":"x"}')")"
+  rm -rf "${home}"
+  [[ -z "${out}" ]] || { echo "beta must not inherit acme's require-fields; got: ${out}"; return 1; }
+}
+
 # ----- runner -----------------------------------------------------------
 
 TESTS=$(declare -F | awk '$3 ~ /^test_/ { print $3 }')
