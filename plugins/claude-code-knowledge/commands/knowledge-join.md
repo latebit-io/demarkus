@@ -82,7 +82,7 @@ If the user invokes without an argument, ask them for the URL before running any
        printf '%s\n' "<fields from policy.md, e.g. type>" > ~/.demarkus/plugin-knowledge.require-fields.<slug>
        ```
 
-       Each field is then satisfied by a non-empty `metadata.<field>` on publish (e.g. `metadata.type="Reference"`). Distinct from `require_tags:` — a field is its own metadata key, not an `axis:value` tag. Only `type` is enforced today.
+       Each field is then satisfied by a non-empty value for that key in the `metadata` object (e.g. `metadata: {"type": "Reference"}`). Distinct from `require_tags:` — a field is its own metadata key, not an `axis:value` tag. Only `type` is enforced today.
 
    If either document is `not-found`, the system simply hasn't declared that convention yet — skip silently. See `${CLAUDE_PLUGIN_ROOT}/examples/knowledge-system/` for the format an admin publishes.
 

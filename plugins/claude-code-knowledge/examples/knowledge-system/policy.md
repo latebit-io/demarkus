@@ -34,7 +34,7 @@ Tag as `axis:value` so the catalog stays coherent. The axes named in `require_ta
 
 ## Document type (OKF `type` field)
 
-Distinct from `category:`. `type` is the document's **kind**, carried in the OKF-native `type` metadata field — **not** a tag. Set it on `mark_publish` (`metadata.type`); the server stores it bare and, when omitted, defaults `type: Document` (except `index.md`/`log.md`, which are exempt and stay untyped). Recommended kinds — keep small and stable:
+Distinct from `category:`. `type` is the document's **kind**, carried in the OKF-native `type` metadata field — **not** a tag. Set it on `mark_publish` as a `type` key in the `metadata` object (`metadata: {"type": "Reference"}`); the server stores it bare and, when omitted, defaults `type: Document` (except `index.md`/`log.md`, which are exempt and stay untyped). Recommended kinds — keep small and stable:
 
 > `Reference`, `Decision` (ADR), `Architecture`, `Plan`, `Journal`, `Guide`, `Note`, `Test` — with `Document` as the generic fallback.
 

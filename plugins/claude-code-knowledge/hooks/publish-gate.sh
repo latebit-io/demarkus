@@ -84,7 +84,15 @@ required_fields="$(configured_require_fields "${strict_slug}")"
 set -f
 for field in ${required_fields}; do
   case "${field}" in
-    type) [[ -n "${type_value}" ]] || missing_fields="${missing_fields:+${missing_fields} }type" ;;
+    type)
+      # index.md / log.md are server-exempt from the type default
+      # (applyOKFTypeDefault) — a hub is intentionally untyped, so never require a
+      # type on one. Mirror that exemption here or every hub publish would block.
+      case "${url##*/}" in
+        index.md|log.md) ;;
+        *) [[ -n "${type_value}" ]] || missing_fields="${missing_fields:+${missing_fields} }type" ;;
+      esac
+      ;;
     *)    warn "publish gate: unsupported require_field '${field}' (only 'type' is checked); skipping" ;;
   esac
 done
@@ -106,7 +114,7 @@ if [[ -n "${missing_axes}" ]]; then
 fi
 if [[ -n "${missing_fields}" ]]; then
   [[ -n "${problems}" ]] && problems="${problems}; "
-  problems="${problems}missing required OKF metadata fields: ${missing_fields} (set metadata.${missing_fields%% *}, e.g. metadata.type=\"Reference\")"
+  problems="${problems}missing required OKF metadata fields: ${missing_fields} (set a \"${missing_fields%% *}\" key in the metadata object, e.g. metadata: {\"type\": \"Reference\"})"
 fi
 reason="demarkus publish to ${target} (knowledge system '${strict_slug}') has ${problems}. Re-issue mark_publish with a metadata object: tags (comma-separated subjects derived from the content) and, if set, importance in [0,1]. Tags are what make this document findable via mark_lookup across the shared catalog."
 
