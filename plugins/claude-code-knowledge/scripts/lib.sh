@@ -39,6 +39,15 @@ readonly PLUGIN_STRICTNESS_FILE="${PLUGIN_HOME}/plugin-knowledge.strictness"
 # presence-checks each axis.
 readonly PLUGIN_REQUIRE_TAGS_FILE="${PLUGIN_HOME}/plugin-knowledge.require-tags"
 
+# Required OKF metadata FIELDS a knowledge system declares in its policy
+# (`require_fields:`, e.g. `type` — the document kind). Distinct from
+# require_tags: a field is satisfied by a non-empty `metadata.<field>`, not by
+# an "axis:value" token in the tags. The agent mirrors require_fields into
+# PLUGIN_REQUIRE_FIELDS_FILE.<slug>; the gate presence-checks each. Only `type`
+# is inspected today (the parser captures metadata.type); any other declared
+# field is skipped fail-open — the gate must never block on what it can't see.
+readonly PLUGIN_REQUIRE_FIELDS_FILE="${PLUGIN_HOME}/plugin-knowledge.require-fields"
+
 # Written by the demarkus-memory plugin when a local soul is configured. Read
 # (never written) here so the joined-knowledge guidance can describe the
 # soul↔knowledge-system relationship only when a soul actually exists.
@@ -97,6 +106,18 @@ configured_require_tags() {
   local slug="${1:-}" raw=""
   if [[ -n "${slug}" && -f "${PLUGIN_REQUIRE_TAGS_FILE}.${slug}" ]]; then
     raw="$(cat "${PLUGIN_REQUIRE_TAGS_FILE}.${slug}" 2>/dev/null || true)"
+  fi
+  printf '%s' "${raw}" | tr ',\r\n\t' '    ' | tr -s ' ' | sed 's/^ //;s/ $//'
+}
+
+# configured_require_fields [SLUG] — echo the required OKF metadata fields
+# (space-separated) for this system: a per-slug PLUGIN_REQUIRE_FIELDS_FILE.<slug>,
+# else empty. Same normalization as configured_require_tags. Empty → no field
+# requirement.
+configured_require_fields() {
+  local slug="${1:-}" raw=""
+  if [[ -n "${slug}" && -f "${PLUGIN_REQUIRE_FIELDS_FILE}.${slug}" ]]; then
+    raw="$(cat "${PLUGIN_REQUIRE_FIELDS_FILE}.${slug}" 2>/dev/null || true)"
   fi
   printf '%s' "${raw}" | tr ',\r\n\t' '    ' | tr -s ' ' | sed 's/^ //;s/ $//'
 }
@@ -169,7 +190,7 @@ publish_gate_scope() {
 }
 
 # publish_metadata_check — reads a Claude Code PreToolUse/PostToolUse hook
-# payload (the full JSON object) on stdin and emits exactly six lines:
+# payload (the full JSON object) on stdin and emits exactly seven lines:
 #   1: hook_event_name
 #   2: tool_name
 #   3: TAGS_OK  — "1" if tool_input.metadata.tags is a non-empty (trimmed) string, else "0"
@@ -177,6 +198,8 @@ publish_gate_scope() {
 #   5: url      — tool_input.url (or empty)
 #   6: tags     — the decoded tags string, internal whitespace flattened to one
 #                 line (for axis-presence checks; empty when tagless)
+#   7: type     — the decoded, trimmed metadata.type string (the OKF kind), for
+#                 require_fields presence-checks; empty when absent or non-string
 #
 # Pure awk — NO jq, NO python, nothing outside coreutils. A naive grep for
 # "tags" would false-match the arbitrary `body` value (which can contain literal
@@ -193,6 +216,7 @@ publish_metadata_check() {
       depth = 0; inStr = 0; esc = 0; buf = ""
       ev = ""; tool = ""; url = ""
       tags = ""; haveTags = 0; tagsStr = 0; imp = ""; haveImp = 0
+      mtype = ""; haveType = 0; typeStr = 0
       for (i = 1; i <= n; i++) {
         c = ch[i]
         if (inStr) {
@@ -237,7 +261,12 @@ publish_metadata_check() {
       # presence-check required axes. Only for a genuine JSON-string value.
       tags_emit = (tagsStr ? tags_d : "")
       gsub(/[\n\r\t]/, " ", tags_emit)
-      print ev; print tool; print tags_ok; print imp_ok; print url_d; print tags_emit
+      # Surface metadata.type (the OKF kind) for require_fields presence-checks —
+      # decoded, trimmed, single-line, and only for a genuine JSON-string value.
+      mtype_d = json_unescape(mtype)
+      type_emit = (typeStr ? trim(mtype_d) : "")
+      gsub(/[\n\r\t]/, " ", type_emit)
+      print ev; print tool; print tags_ok; print imp_ok; print url_d; print tags_emit; print type_emit
     }
     function trim(s) { gsub(/^[ \t\r\n]+/, "", s); gsub(/[ \t\r\n]+$/, "", s); return s }
     # json_unescape — decode JSON string escapes (\n \t \r \b \f \/ \" \\ and
@@ -310,6 +339,7 @@ publish_metadata_check() {
       else if (p == "/tool_input/url") url = v
       else if (p == "/tool_input/metadata/tags") { tags = v; haveTags = 1; tagsStr = is_string }
       else if (p == "/tool_input/metadata/importance") { imp = v; haveImp = 1 }
+      else if (p == "/tool_input/metadata/type") { mtype = v; haveType = 1; typeStr = is_string }
     }
   '
 }

@@ -40,6 +40,7 @@ tags_ok="$(sed -n '3p' <<<"${parsed}")"
 imp_ok="$(sed -n '4p' <<<"${parsed}")"
 url="$(sed -n '5p' <<<"${parsed}")"
 tags_value="$(sed -n '6p' <<<"${parsed}")"
+type_value="$(sed -n '7p' <<<"${parsed}")"
 
 # Defensive scope: the matcher is broad (mcp__.*__mark_publish), so a stray
 # non-publish tool must not be acted on.
@@ -74,8 +75,23 @@ if [[ "${tags_ok}" == "1" ]]; then
   set +f
 fi
 
-# Properly tagged + valid importance + all required axes present → nothing to do.
-[[ "${tags_ok}" == "1" && "${imp_ok}" == "1" && -z "${missing_axes}" ]] && exit 0
+# Required OKF metadata fields (policy require_fields:, mirrored locally). A
+# field is satisfied by a non-empty metadata.<field>. Only `type` is inspected
+# today; any other declared field is skipped fail-open — the gate can't see it
+# and must never block on what it can't verify.
+missing_fields=""
+required_fields="$(configured_require_fields "${strict_slug}")"
+set -f
+for field in ${required_fields}; do
+  case "${field}" in
+    type) [[ -n "${type_value}" ]] || missing_fields="${missing_fields:+${missing_fields} }type" ;;
+    *)    warn "publish gate: unsupported require_field '${field}' (only 'type' is checked); skipping" ;;
+  esac
+done
+set +f
+
+# Properly tagged + valid importance + all required axes + all required fields → nothing to do.
+[[ "${tags_ok}" == "1" && "${imp_ok}" == "1" && -z "${missing_axes}" && -z "${missing_fields}" ]] && exit 0
 
 target="${url:-the document}"
 problems=""
@@ -87,6 +103,10 @@ fi
 if [[ -n "${missing_axes}" ]]; then
   [[ -n "${problems}" ]] && problems="${problems}; "
   problems="${problems}missing required tag axes for this knowledge system: ${missing_axes} (tag as \"axis:value\", e.g. ${missing_axes%% *}:<value>)"
+fi
+if [[ -n "${missing_fields}" ]]; then
+  [[ -n "${problems}" ]] && problems="${problems}; "
+  problems="${problems}missing required OKF metadata fields: ${missing_fields} (set metadata.${missing_fields%% *}, e.g. metadata.type=\"Reference\")"
 fi
 reason="demarkus publish to ${target} (knowledge system '${strict_slug}') has ${problems}. Re-issue mark_publish with a metadata object: tags (comma-separated subjects derived from the content) and, if set, importance in [0,1]. Tags are what make this document findable via mark_lookup across the shared catalog."
 
