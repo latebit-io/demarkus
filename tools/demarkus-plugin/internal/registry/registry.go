@@ -301,6 +301,23 @@ func PolicyMirror(slug, body string) error {
 		return err
 	}
 	return withLock(lockPath, func() error {
+		// A queued policy-mirror could run AFTER a knowledge-unregister; under the
+		// shared lock, re-confirm the slug is still registered before writing, so
+		// we don't resurrect policy files for a system that's no longer joined.
+		rows, err := readRecords("knowledge-systems")
+		if err != nil {
+			return err
+		}
+		registered := false
+		for _, row := range rows {
+			if row == slug {
+				registered = true
+				break
+			}
+		}
+		if !registered {
+			return clearPolicyMirror(slug)
+		}
 		fileFor := policyFileFor(slug)
 		for _, key := range policyKeys {
 			val := policyField(body, key)

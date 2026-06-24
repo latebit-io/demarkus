@@ -107,6 +107,10 @@ func TestSoulJoinAndCollision(t *testing.T) {
 
 func TestPolicyMirror(t *testing.T) {
 	home := setupHome(t)
+	// PolicyMirror only writes for a registered slug, so register first.
+	if err := KnowledgeRegister("acme"); err != nil {
+		t.Fatal(err)
+	}
 	body := "strictness: block\nrequire_tags: category team\nrequire_fields: type\n\nsome prose strictness: ignored\n"
 	if err := PolicyMirror("acme", body); err != nil {
 		t.Fatal(err)
@@ -127,6 +131,14 @@ func TestPolicyMirror(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".demarkus", "plugin-knowledge.require-tags.acme")); !os.IsNotExist(err) {
 		t.Error("require_tags file should be cleared when absent from policy")
+	}
+	// Mirroring an UNregistered slug writes nothing (a queued mirror after an
+	// unregister must not resurrect policy files).
+	if err := PolicyMirror("ghost", "strictness: block\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".demarkus", "plugin-knowledge.strictness.ghost")); !os.IsNotExist(err) {
+		t.Error("policy for an unregistered slug should not be written")
 	}
 }
 
