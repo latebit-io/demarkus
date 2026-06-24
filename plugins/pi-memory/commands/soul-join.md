@@ -1,0 +1,100 @@
+---
+description: Join a remote demarkus soul (direct-QUIC) — validates the host, stores the token in a 0600 file (not inline in config), registers it as a managed MCP server, and binds it to this project.
+---
+
+Connect this pi installation to a **remote demarkus soul** — a
+direct-QUIC demarkus-server reached over the network (e.g. `soul.demarkus.io`),
+as opposed to the local soul that `/soul-init` manages or the broker-fronted
+knowledge system that `/knowledge-join` joins.
+
+This replaces hand-wiring a `demarkus-mcp` entry into the MCP config. The managed
+form is strictly better: the auth token lives in a `0600` file and is injected at
+launch via a wrapper, so it never sits in plaintext in your MCP config.
+
+## Argument
+
+```bash
+/soul-join mark://soul.demarkus.io --token <TOKEN> --insecure
+```
+
+- The host may be a `mark://host[:port]` URL or a bare host (scheme inferred).
+- `--token <TOKEN>` is the capability token for the soul. Omit only for a
+  read-only / public soul. The plugin cannot mint a token for a remote server
+  (its `tokens.toml` is not local) — the user supplies one.
+- `--insecure` skips TLS cert verification (needed for some self-hosted souls;
+  `soul.demarkus.io` uses it).
+
+If invoked without a host, ask for it. Do NOT guess. If the user does not give a
+token, ask whether the soul needs one before proceeding.
+
+## Steps
+
+1. **Check for hand-wired souls to adopt.** Run:
+
+   ```bash
+   bash "${DEMARKUS_SCRIPTS}/detect-manual-souls.sh"
+   ```
+
+   - If the output is `NONE`, continue to step 2.
+   - If it starts with `MANUAL`, each following line is
+     `<name>\t<host>\t<insecure>\t<has-token>`. Show the user the unmanaged
+     entries and offer to adopt one: re-join it under managed config. To adopt,
+     use that row's host/insecure as the `/soul-join` arguments below, ask the
+     user for the token (it is in their existing entry — never read or echo it
+     yourself), and after a successful join run `node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" remove <name>` to
+     drop the old hand-wired entry. If they decline, continue.
+
+2. **Validate + register.** Run the helper, passing this project's directory so
+   the soul is bound to the repo:
+
+   ```bash
+   bash "${DEMARKUS_SCRIPTS}/soul-join.sh" <host> [--token <TOKEN>] [--insecure] --bind "${PWD}"
+   ```
+
+   The script normalizes the host, derives a slug from the first DNS label,
+   installs the launch wrapper to a stable path, writes the token to
+   `~/.demarkus/soul-<slug>.token` (mode 600), records the soul in the catalog
+   (`~/.demarkus/souls`), and binds the project. Output is line-oriented
+   `key=value`.
+
+   - On `OK`, parse `slug=`, `host=`, `insecure=`, `token-file=`, `wrapper=`.
+   - On `FAIL: <message>`, do NOT register the MCP server. Show the message verbatim.
+     Common cases: an `https://` URL → tell them to use `/knowledge-join`; a
+     reserved `demarkus-memory` slug → tell them to join a host with a different
+     first label.
+
+   Reachability is not probed (demarkus is QUIC — no HTTP metadata to check like
+   a broker). The first tool call is the real validation; if it fails, re-join
+   (often the fix is adding `--insecure` or a token).
+
+3. **Register the MCP server** against the installed wrapper, in the pi-mcp-adapter
+   config (`~/.config/mcp/mcp.json`):
+
+   ```bash
+   node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" add <slug> bash <wrapper> <slug>
+   ```
+
+   (`<wrapper>` and `<slug>` come from step 2's output.) The token is NOT passed
+   here — the wrapper injects it from the 0600 file. After registering, the user
+   reconnects MCP servers with `/mcp` (or restarts pi) so the new soul's tools
+   load.
+
+4. **Confirm.** Tell the user, in plain language:
+
+   > Joined remote soul **<slug>** at <host>, bound to this project. Its
+   > `mark_*` tools appear as the `<slug>` MCP server, with the token injected
+   > from `<token-file>` (not stored in your MCP config). The publish tag-gate
+   > now enforces tags on writes to it, same as the local soul.
+
+   Mention `node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" list` to see it and `node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" remove <slug>` to undo.
+
+## Don't
+
+- Don't register the MCP server if step 2 emitted `FAIL`.
+- Don't read, echo, or store the token yourself — pass it to `soul-join.sh`,
+  which writes it to the 0600 file. It must never land in the transcript.
+- Don't use this for an `https://` broker — that is `/knowledge-join`.
+- Don't conflate the three soul surfaces:
+  - `/soul-init`: local, plugin-managed demarkus-server, plugin-minted token.
+  - `/soul-join`: remote, direct-QUIC demarkus-server, user-supplied token.
+  - `/knowledge-join`: organizational, HTTPS broker, OAuth via pi.
