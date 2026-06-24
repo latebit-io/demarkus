@@ -1,116 +1,63 @@
 // Server provisioning + MCP wiring for pi. On session start the extension runs
-// the bundled provision.sh (downloads pinned binaries, generates a token, spawns
-// the managed demarkus-server) and ensures pi-mcp-adapter has a config entry for
-// the demarkus-memory MCP server pointing at the bundled mcp-wrapper.sh.
-//
-// pi-mcp-adapter reads MCP server configs from ~/.config/mcp/mcp.json (the
-// generic global), so that is where we register — idempotently merging, never
-// clobbering the user's other servers.
+// the bundled provision.sh (downloads pinned binaries incl. demarkus-plugin,
+// generates a token, spawns the managed demarkus-server), then registers the
+// demarkus-memory MCP server by asking the binary to do it — `demarkus-plugin
+// registry mcp add demarkus-memory <bin> mcp-serve` — so the config-write logic
+// (locking, atomic write, array-shape guard) lives once in the binary instead of
+// being duplicated here. pi-mcp-adapter then connects it from ~/.config/mcp/mcp.json.
 
-import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SCRIPTS_DIR = join(HERE, "..", "scripts");
-const PROVISION_SH = join(SCRIPTS_DIR, "provision.sh");
-const MCP_WRAPPER_SH = join(SCRIPTS_DIR, "mcp-wrapper.sh");
-const MCP_CONFIG = join(homedir(), ".config", "mcp", "mcp.json");
+const BOOTSTRAP_SH = join(HERE, "..", "scripts", "bootstrap.sh");
+const BIN = join(homedir(), ".demarkus", "bin", "demarkus-plugin");
 const MCP_SERVER_NAME = "demarkus-memory";
 
-// provisionServer — run provision.sh; resolves to a warning string on failure
-// (so the caller can surface it), or "" on success. Bounded so a hung download
-// can't wedge session start indefinitely.
-export function provisionServer(): Promise<string> {
+function run(cmd: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile("bash", [PROVISION_SH], { timeout: 120_000 }, (err, _stdout, stderr) => {
+    execFile(cmd, args, { timeout: 120_000 }, (err, _stdout, stderr) => {
       if (err) {
         const tail = (stderr || "").trim().split("\n").slice(-3).join(" ");
-        resolve(`demarkus-memory provisioning failed: ${tail || err.message}. Run /soul-init to recover.`);
+        resolve(tail || err.message);
         return;
       }
-      resolve("");
+      resolve(null);
     });
   });
 }
 
-export type EnsureResult =
-  | { status: "unchanged" }
-  | { status: "written" }
-  | { status: "error"; message: string };
-
-// Synchronous sleep (no busy-spin) for the brief lock retry loop.
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// provisionServer — ensure the demarkus-plugin binary is installed (bootstrap.sh),
+// then run `demarkus-plugin provision` (download server/mcp/token, ensure config,
+// spawn the managed server, seed). Resolves to a warning string on failure, "" on
+// success. Bounded so a hung download can't wedge session start.
+export async function provisionServer(): Promise<string> {
+  const bootErr = await run("bash", [BOOTSTRAP_SH]);
+  if (bootErr) return `demarkus-memory bootstrap failed: ${bootErr}. Run /soul-init to recover.`;
+  const provErr = await run(BIN, ["provision"]);
+  if (provErr) return `demarkus-memory provisioning failed: ${provErr}. Run /soul-init to recover.`;
+  return "";
 }
 
-// withConfigLock — serialize read-modify-write of the shared global mcp.json via
-// an atomic mkdir mutex, so two concurrent session starts (or another MCP config
-// writer) can't clobber each other and drop server entries. Bounded (~1s) then
-// reports an error rather than blocking forever on a stale lock.
-function withConfigLock(fn: () => EnsureResult): EnsureResult {
-  const lock = `${MCP_CONFIG}.lock`;
-  try {
-    mkdirSync(dirname(MCP_CONFIG), { recursive: true });
-  } catch (e) {
-    return { status: "error", message: `cannot create ${dirname(MCP_CONFIG)}: ${String((e as Error)?.message ?? e)}` };
-  }
-  for (let i = 0; i < 50; i++) {
-    try {
-      mkdirSync(lock); // atomic: succeeds only if we created it
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException)?.code === "EEXIST") {
-        sleepSync(20);
-        continue;
-      }
-      return { status: "error", message: `lock error on ${lock}: ${String((e as Error)?.message ?? e)}` };
-    }
-    try {
-      return fn();
-    } finally {
-      try {
-        rmdirSync(lock);
-      } catch {
-        /* best-effort release */
-      }
-    }
-  }
-  return { status: "error", message: `could not acquire ${lock} (held by another process?)` };
-}
+export type EnsureResult = { status: "ok" } | { status: "error"; message: string };
 
-// ensureMcpServerEntry — make sure ~/.config/mcp/mcp.json registers the
-// demarkus-memory server via the bundled wrapper. Idempotent; writes only when
-// the entry is missing or its command path changed. Returns a structured result
-// so the caller can distinguish "already correct" from a real failure (rather
-// than collapsing both into a bare false). The write is locked + atomic
-// (temp file + rename) so a concurrent writer can't tear or drop entries.
+// ensureMcpServerEntry — register the local-soul MCP server (launched via
+// `demarkus-plugin mcp-serve`) through the binary's registry command. Idempotent.
+// Returns an error result if the binary isn't installed yet or the call fails.
 export function ensureMcpServerEntry(): EnsureResult {
-  return withConfigLock(() => {
-    let config: { mcpServers?: Record<string, unknown> } = {};
-    if (existsSync(MCP_CONFIG)) {
-      try {
-        config = JSON.parse(readFileSync(MCP_CONFIG, "utf8")) || {};
-      } catch {
-        // Unparseable config: don't clobber the user's file — surface it.
-        return { status: "error", message: `${MCP_CONFIG} is not valid JSON; fix it by hand` };
-      }
-    }
-    if (typeof config !== "object" || config === null) config = {};
-    if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-
-    const existing = config.mcpServers[MCP_SERVER_NAME] as { command?: string } | undefined;
-    if (existing && existing.command === MCP_WRAPPER_SH) return { status: "unchanged" };
-
-    config.mcpServers[MCP_SERVER_NAME] = { command: MCP_WRAPPER_SH };
-    try {
-      const tmp = `${MCP_CONFIG}.${process.pid}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`);
-      renameSync(tmp, MCP_CONFIG);
-      return { status: "written" };
-    } catch (e) {
-      return { status: "error", message: `could not write ${MCP_CONFIG}: ${String((e as Error)?.message ?? e)}` };
-    }
-  });
+  if (!existsSync(BIN)) {
+    return { status: "error", message: "demarkus-plugin not installed yet (provisioning may have failed)" };
+  }
+  try {
+    execFileSync(BIN, ["registry", "mcp", "add", MCP_SERVER_NAME, BIN, "mcp-serve"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    return { status: "ok" };
+  } catch (e) {
+    return { status: "error", message: String((e as Error)?.message ?? e) };
+  }
 }

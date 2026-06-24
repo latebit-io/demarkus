@@ -16,18 +16,40 @@ export interface GateDecision {
   reason?: string;
 }
 
+// runBin pipes a JSON payload (or none) to a demarkus-plugin subcommand and
+// returns parsed stdout, or null on any failure (missing binary, timeout, parse).
+function runBin<T>(args: string[], payload?: unknown): T | null {
+  if (!existsSync(BIN)) return null;
+  try {
+    const opts: { encoding: "utf8"; timeout: number; input?: string } = { encoding: "utf8", timeout: 5000 };
+    if (payload !== undefined) opts.input = JSON.stringify(payload);
+    const out = execFileSync(BIN, args, opts).trim();
+    if (!out) return null;
+    return JSON.parse(out) as T;
+  } catch {
+    return null;
+  }
+}
+
 // callGate asks `demarkus-plugin gate` to decide a mark_publish/mark_append call.
 // Input is passed through verbatim (the binary unwraps the pi-mcp-adapter proxy
 // shape itself). Returns allow on any failure (missing binary, timeout, parse).
 export function callGate(toolName: string, input: Record<string, unknown>, cwd: string): GateDecision {
-  if (!existsSync(BIN)) return { decision: "allow" };
-  try {
-    const payload = JSON.stringify({ tool: toolName, input, cwd });
-    const out = execFileSync(BIN, ["gate"], { input: payload, encoding: "utf8", timeout: 5000 });
-    const parsed = JSON.parse(out) as GateDecision;
-    if (parsed && typeof parsed.decision === "string") return parsed;
-    return { decision: "allow" };
-  } catch {
-    return { decision: "allow" };
-  }
+  const d = runBin<GateDecision>(["gate"], { tool: toolName, input, cwd });
+  return d && typeof d.decision === "string" ? d : { decision: "allow" };
+}
+
+// callNudge asks `demarkus-plugin nudge` for a recall/promote/session-end
+// reminder; returns the text or "" (no nudge / binary unavailable).
+export function callNudge(req: Record<string, unknown>): string {
+  const o = runBin<{ nudge?: string }>(["nudge"], req);
+  return o?.nudge ?? "";
+}
+
+// callGuidance asks `demarkus-plugin guidance` for the session-start context for
+// SURFACE, wrapping the plugin's bundled static guidance file. "" when there's
+// nothing to inject (or the binary is unavailable).
+export function callGuidance(surface: "memory" | "knowledge", guidanceFile: string): string {
+  const o = runBin<{ context?: string }>(["guidance", "--surface", surface, "--guidance-file", guidanceFile]);
+  return o?.context ?? "";
 }

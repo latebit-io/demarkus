@@ -21,7 +21,7 @@ If the user invokes without an argument, ask them for the URL before running any
 1. **Validate + derive slug.** Run the helper script:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/knowledge-join.sh" <broker-url>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-join <broker-url>
    ```
 
    The script does HTTPS validation, fetches the broker's `/.well-known/oauth-protected-resource` (RFC 9728) to confirm it speaks the MCP gateway, and derives a slug from the broker hostname. Output is line-oriented `key=value`.
@@ -52,7 +52,7 @@ If the user invokes without an argument, ask them for the URL before running any
 4. **Record the system for the publish gate.** After `claude mcp add` succeeds, run:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/register-knowledge.sh" <slug>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register <slug>
    ```
 
    Check the exit status. On success it records the slug so the publish tag-gate enforces tags on writes to this knowledge system, the same way it does for the local soul. (It does not gate unrelated demarkus servers the user may have configured.) **If the script fails (non-zero exit), surface its error to the user and stop here — do not report that the gate is covering this system, because it is not yet.**
@@ -63,7 +63,7 @@ If the user invokes without an argument, ask them for the URL before running any
    - `mark_fetch mark://root/.well-known/demarkus/policy.md` — the system's write policy. The gate runs offline (it cannot reach the broker), so its enforced core must be mirrored to local files. **Do not hand-write those files** — pipe the fetched policy **body** to the mirror script, which deterministically parses `strictness:` / `require_tags:` / `require_fields:` and writes (or clears) each per-slug file:
 
      ```bash
-     cat <<'POLICY' | bash "${CLAUDE_PLUGIN_ROOT}/scripts/mirror-policy.sh" <slug>
+     cat <<'POLICY' | "$HOME/.demarkus/bin/demarkus-plugin" registry policy-mirror <slug>
      <the full body returned by the mark_fetch above>
      POLICY
      ```

@@ -26,8 +26,11 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
 3. **Check the server process.** Read `SOUL_DIR` and `PORT` from the config. Run:
 
    ```text
-   pgrep -af "demarkus-server.*-root ${SOUL_DIR}" || echo "(no server running at ${SOUL_DIR})"
+   ps -axww -o pid=,args= | grep demarkus-server | grep -F -- "-root ${SOUL_DIR}" | grep -v grep || echo "(no server running at ${SOUL_DIR})"
    ```
+
+   (`grep -F` matches `SOUL_DIR` literally, so regex metacharacters or spaces in
+   the path can't mis-detect the server.)
 
 4. **Probe connectivity.** Call `mark_fetch /index.md` via the MCP tool. Note whether it returns `ok`, `not-found`, `unauthorized`, or fails outright.
 

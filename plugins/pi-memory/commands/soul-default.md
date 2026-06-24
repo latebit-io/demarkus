@@ -16,7 +16,7 @@ soul's `<slug>_mark_*` tools directly. This command only moves the default.
 1. **List the catalog.** Run:
 
    ```bash
-   bash "${DEMARKUS_SCRIPTS}/soul-default.sh" --list --bind "${PWD}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --list --bind "${PWD}"
    ```
 
    - `EMPTY` → no souls joined. Tell the user to run `/soul-join` (or `/soul-init`
@@ -33,7 +33,7 @@ soul's `<slug>_mark_*` tools directly. This command only moves the default.
 3. **Save it.** With the chosen `<slug>`:
 
    ```bash
-   bash "${DEMARKUS_SCRIPTS}/soul-default.sh" --set <slug> --bind "${PWD}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --set <slug> --bind "${PWD}"
    ```
 
    - On `OK <slug>`, confirm: "This project now writes to soul **<slug>** by

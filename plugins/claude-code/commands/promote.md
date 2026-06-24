@@ -8,12 +8,12 @@ Promote one soul document from your personal soul (the staging tier) up to a sha
 
 ## Steps
 
-1. **Detection gate.** Run `${CLAUDE_PLUGIN_ROOT}/scripts/detect-promote.sh` via Bash. It lists every destination, one per line:
+1. **Detection gate.** Run `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote` via Bash. It lists every destination, one per line:
    - `knowledge <slug>` → a brokered knowledge system (the `<slug>` MCP server). Destination-selection there uses `mark_worlds` (writable column) + each world's `world.md`.
    - `target <slug> <path> [label]` → a plain remote endpoint and the write `<path>` you declared for it. The destination is that `<slug>`/`<path>` directly — no `mark_worlds`/`world.md` (a plain server has no directory), default autonomy `human-only`.
    - `NONE` → no destination is configured, so promotion is dormant. Offer the two ways to light it up, and act on the user's choice:
      - a brokered system: `/knowledge-join <broker-url>` (demarkus-knowledge plugin);
-     - a plain remote server: register it now — confirm its MCP server slug (from `claude mcp list`) and the write path/prefix, then run `${CLAUDE_PLUGIN_ROOT}/scripts/promote-target.sh add <slug> <path> [label]` and continue.
+     - a plain remote server: register it now — confirm its MCP server slug (from `claude mcp list`) and the write path/prefix, then run `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add <slug> <path> [label]` and continue.
    - If more than one destination is listed, ask which to use; otherwise use the single one. Reach any destination through its `mcp__<slug>__mark_*` tools.
 
 2. **Read the source.** `mark_fetch` the soul path from the soul server (`mcp__demarkus-memory__mark_fetch` or the configured soul server). Note its current version — the back-stamp needs it. If `not-found`, say so and stop.
@@ -33,7 +33,7 @@ Promote one soul document from your personal soul (the staging tier) up to a sha
    promoted: mark://<dest>/<path>@v<N>
    ```
 
-   (`<dest>` is the destination world slug for a brokered system, or the endpoint slug — registered via `promote-target.sh add` — for a plain remote target.)
+   (`<dest>` is the destination world slug for a brokered system, or the endpoint slug — registered via `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add` — for a plain remote target.)
 
    - **Stub (default, link-not-copy).** Replace the body with a short stub — the H1 title, the marker line, and a one-line summary — so recall resolves the link and fetches fresh from knowledge. There is then no rival copy to go stale. Best for reference docs you will not keep editing locally.
    - **Marker only.** Keep the body, put the marker line directly under the H1. Best for living documents (e.g. an active plan) you keep iterating in the soul. The `@v<N>` stamp lets `/soul-refresh` detect when the knowledge copy has moved on.

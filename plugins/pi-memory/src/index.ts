@@ -16,9 +16,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSessionContext } from "./guidance.js";
-import { promoteNudge, recallNudge, SessionActivity } from "./nudges.js";
-import { callGate } from "./plugin.js";
+import { SessionActivity } from "./nudges.js";
+import { callGate, callGuidance, callNudge } from "./plugin.js";
 import { ensureMcpServerEntry, provisionServer } from "./setup.js";
 
 // Minimal structural types — pi's ExtensionAPI is provided at runtime; we keep
@@ -69,6 +68,7 @@ interface ExtensionAPI {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const COMMANDS_DIR = join(HERE, "..", "commands");
 const SCRIPTS_DIR = join(HERE, "..", "scripts");
+const GUIDANCE_FILE = join(HERE, "..", "context", "session-guidance.md");
 const CUSTOM = "demarkus-memory";
 
 // Slash commands → bundled skills. Each command injects its skill's body so the
@@ -130,22 +130,24 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     contextDelivered = false;
     activity = new SessionActivity();
 
+    // Provision first (this installs demarkus-plugin), then register the MCP
+    // server via the binary.
+    const warning = await provisionServer();
+    if (warning) ctx.ui.notify(warning, "warning");
     const mcp = ensureMcpServerEntry();
     if (mcp.status === "error") {
       ctx.ui.notify(`demarkus-memory: MCP registration failed: ${mcp.message}`, "warning");
     }
-    const warning = await provisionServer();
-    if (warning) ctx.ui.notify(warning, "warning");
   });
 
   pi.on("before_agent_start", async (event) => {
     const parts: string[] = [];
     if (!contextDelivered) {
-      const context = buildSessionContext();
+      const context = callGuidance("memory", GUIDANCE_FILE);
       if (context) parts.push(context);
       contextDelivered = true;
     }
-    const recall = recallNudge(event.prompt ?? "");
+    const recall = callNudge({ event: "recall", surface: "memory", prompt: event.prompt ?? "" });
     if (recall) parts.push(recall);
 
     if (parts.length === 0) return undefined;
@@ -170,7 +172,7 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
 
     // Record activity only for calls that survive the gate, so a blocked
     // publish/append doesn't suppress the session-end journal nudge.
-    activity.observe(toolName);
+    activity.observe(toolName, input);
 
     // warn → allow + surface a reminder.
     if (decision.decision === "warn" && decision.reason) {
@@ -178,14 +180,18 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     }
 
     // Promote nudge on a fresh high-signal ADR publish (allowed call).
-    const nudge = promoteNudge(toolName, input);
+    const nudge = callNudge({ event: "promote", tool: toolName, input });
     if (nudge) pi.sendMessage({ customType: CUSTOM, content: nudge, display: false }, { triggerTurn: false });
 
     return undefined;
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    const nudge = activity.journalNudge();
+    const nudge = callNudge({
+      event: "session-end",
+      changedFiles: activity.changedFiles,
+      soulWrite: activity.hadSoulWrite,
+    });
     if (nudge) ctx.ui.notify(nudge, "info");
   });
 

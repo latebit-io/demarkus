@@ -8,7 +8,7 @@ Orient in the organizational demarkus knowledge system(s) this installation has 
 ## Scope
 
 - **blank** → list every joined system and show each one's `root` hub index.
-- **a slug** (the MCP server name from `node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" list`, e.g. `acme`) → focus that one system.
+- **a slug** (the MCP server name from `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp list`, e.g. `acme`) → focus that one system.
 - **a `mark://<world>/` URL** → show that specific world's `index.md` hub.
 
 ## Steps
@@ -32,7 +32,7 @@ Orient in the organizational demarkus knowledge system(s) this installation has 
 3. **Point the way.** Briefly remind the user how to go deeper:
    - `mark_lookup` against the system for a subject (the card catalog).
    - `mark_fetch mark://<world>/index.md` to anchor on a specific world.
-   - `/knowledge-join` to add another system; `node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" list` / `node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" remove <slug>` to manage joined ones.
+   - `/knowledge-join` to add another system; `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp list` / `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp remove <slug>` to manage joined ones.
 
 ## Don't
 

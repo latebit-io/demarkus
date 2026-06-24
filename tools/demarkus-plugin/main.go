@@ -19,8 +19,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/gate"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/nudge"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -34,6 +37,16 @@ func main() {
 	switch os.Args[1] {
 	case "gate":
 		cmdGate()
+	case "nudge":
+		cmdNudge()
+	case "guidance":
+		cmdGuidance()
+	case "registry":
+		cmdRegistry(os.Args[2:])
+	case "mcp-serve":
+		cmdMcpServe(os.Args[2:])
+	case "provision":
+		cmdProvision(os.Args[2:])
 	case "version", "-version", "--version":
 		fmt.Println(version)
 	default:
@@ -46,7 +59,101 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "usage: demarkus-plugin <command>\n\n")
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	fmt.Fprintf(os.Stderr, "  gate      Decide whether a mark_publish/mark_append should proceed (reads JSON on stdin)\n")
+	fmt.Fprintf(os.Stderr, "  nudge     Decide a recall/promote/session-end nudge (reads JSON on stdin)\n")
+	fmt.Fprintf(os.Stderr, "  guidance  Emit the session-start context for a surface (memory|knowledge)\n")
 	fmt.Fprintf(os.Stderr, "  version   Print version and exit\n")
+}
+
+// cmdNudge reads a nudge request as JSON on stdin and emits the reminder.
+// --format json (default) → {"nudge":...}; claude → the event's hookSpecificOutput
+// (recall→UserPromptSubmit, promote→PostToolUse additionalContext; session-end→
+// a Stop decision:block). Empty nudge → no output. Fails silent (no nudge).
+func cmdNudge() {
+	fs := flag.NewFlagSet("nudge", flag.ExitOnError)
+	format := fs.String("format", "json", "output format: json | claude")
+	event := fs.String("event", "", "override event: recall | promote | session-end")
+	surface := fs.String("surface", "", "override surface: memory | knowledge")
+	changed := fs.Bool("changed-files", false, "session-end: the session changed files")
+	soulWrite := fs.Bool("soul-write", false, "session-end: a soul write happened")
+	_ = fs.Parse(os.Args[2:])
+
+	var in nudge.Input
+	raw, _ := io.ReadAll(os.Stdin)
+	if strings.TrimSpace(string(raw)) != "" {
+		if err := json.Unmarshal(raw, &in); err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: parse input: "+err.Error())
+			return
+		}
+	}
+	// Flag overrides let bash adapters pipe a raw Claude payload (for prompt /
+	// tool_input) while setting the event/surface/booleans without building JSON.
+	// Only applied when explicitly passed, so a pi JSON payload's values win otherwise.
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if set["event"] {
+		in.Event = *event
+	}
+	if set["surface"] {
+		in.Surface = *surface
+	}
+	if set["changed-files"] {
+		in.ChangedFiles = *changed
+	}
+	if set["soul-write"] {
+		in.SoulWrite = *soulWrite
+	}
+
+	out, err := nudge.Evaluate(in)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: evaluate: "+err.Error())
+		return
+	}
+	if out.Nudge == "" {
+		return // nothing to surface
+	}
+	if *format == "claude" {
+		switch in.Event {
+		case "session-end":
+			printJSON(map[string]any{"decision": "block", "reason": out.Nudge})
+		case "promote":
+			printJSON(map[string]any{"hookSpecificOutput": map[string]any{
+				"hookEventName": "PostToolUse", "additionalContext": out.Nudge,
+			}})
+		default: // recall
+			printJSON(map[string]any{"hookSpecificOutput": map[string]any{
+				"hookEventName": "UserPromptSubmit", "additionalContext": out.Nudge,
+			}})
+		}
+		return
+	}
+	printJSON(out)
+}
+
+// cmdGuidance emits the session-start context for a surface. --format json
+// (default) → {"context":...}; claude → a SessionStart additionalContext payload.
+// Empty context → no output.
+func cmdGuidance() {
+	fs := flag.NewFlagSet("guidance", flag.ExitOnError)
+	surface := fs.String("surface", "memory", "memory | knowledge")
+	guidanceFile := fs.String("guidance-file", "", "path to the plugin's static guidance markdown")
+	format := fs.String("format", "json", "output format: json | claude")
+	_ = fs.Parse(os.Args[2:])
+
+	out, err := guidance.Evaluate(guidance.Input{Surface: *surface, GuidanceFile: *guidanceFile})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] guidance: "+err.Error())
+		return
+	}
+	if out.Context == "" {
+		return
+	}
+	if *format == "claude" {
+		printJSON(map[string]any{"hookSpecificOutput": map[string]any{
+			"hookEventName": "SessionStart", "additionalContext": out.Context,
+		}})
+		return
+	}
+	printJSON(out)
 }
 
 // cmdGate reads a tool call as JSON on stdin (native {tool,input,cwd} or a Claude

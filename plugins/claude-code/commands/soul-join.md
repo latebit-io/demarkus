@@ -49,35 +49,33 @@ token, ask whether the soul needs one before proceeding.
    the soul is bound to the repo:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/soul-join.sh" <host> [--token <TOKEN>] [--insecure] --bind "${CLAUDE_PROJECT_DIR}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join <host> [--token <TOKEN>] [--insecure] --bind "${CLAUDE_PROJECT_DIR}"
    ```
 
-   The script normalizes the host, derives a slug from the first DNS label,
-   installs the launch wrapper to a stable path, writes the token to
-   `~/.demarkus/soul-<slug>.token` (mode 600), records the soul in the catalog
-   (`~/.demarkus/souls`), and binds the project. Output is line-oriented
+   It normalizes the host, derives a slug from the first DNS label, writes the
+   token to `~/.demarkus/soul-<slug>.token` (mode 600), records the soul in the
+   catalog (`~/.demarkus/souls`), and binds the project. Output is line-oriented
    `key=value`.
 
-   - On `OK`, parse `slug=`, `host=`, `insecure=`, `token-file=`, `wrapper=`.
+   - On `OK`, parse `slug=`, `host=`, `insecure=`, `token-file=`.
    - On `FAIL: <message>`, do NOT run `claude mcp add`. Show the message verbatim.
      Common cases: an `https://` URL → tell them to use `/knowledge-join`; a
      reserved `demarkus-memory` slug → tell them to join a host with a different
-     first label.
+     first label; a slug already joined for a different host.
 
    Reachability is not probed (demarkus is QUIC — no HTTP metadata to check like
    a broker). The first tool call is the real validation; if it fails, re-join
    (often the fix is adding `--insecure` or a token).
 
-3. **Register the MCP server** against the installed wrapper. Default to project
-   scope so the soul travels with this repo; use `--scope user` if the user wants
-   it available in every project:
+3. **Register the MCP server** (launched via `demarkus-plugin mcp-serve`, which
+   injects the token from the 0600 file). Default to project scope so the soul
+   travels with this repo; use `--scope user` for every project:
 
    ```bash
-   claude mcp add <slug> --scope project -- bash <wrapper> <slug>
+   claude mcp add <slug> --scope project -- "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --soul <slug>
    ```
 
-   (`<wrapper>` and `<slug>` come from step 2's output.) The token is NOT passed
-   here — the wrapper injects it from the 0600 file.
+   (`<slug>` comes from step 2's output.) The token is NOT passed here.
 
 4. **Confirm.** Tell the user, in plain language:
 

@@ -197,6 +197,28 @@ func TestKnowledgeGate(t *testing.T) {
 	}
 }
 
+// A policy-declared required field other than `type` must be enforced too — the
+// binary has the full metadata, so it checks any field generically.
+func TestKnowledgeRequiresArbitraryField(t *testing.T) {
+	t.Setenv("DEMARKUS_KNOWLEDGE_STRICTNESS", "block")
+	setupHome(t, map[string]string{
+		"knowledge-systems":                         "knowledge\n",
+		"plugin-knowledge.require-fields.knowledge": "authors\n",
+	})
+	// missing authors → block
+	if d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+		"url": "/k.md", "metadata": map[string]any{"tags": "topic"},
+	}}); d.Decision != "block" {
+		t.Fatalf("missing required 'authors': want block, got %q", d.Decision)
+	}
+	// authors present → allow
+	if d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+		"url": "/k.md", "metadata": map[string]any{"tags": "topic", "authors": "ada"},
+	}}); d.Decision != "allow" {
+		t.Fatalf("authors present: want allow, got %q (%s)", d.Decision, d.Reason)
+	}
+}
+
 func TestMcpProxyUnwrap(t *testing.T) {
 	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
 	setupHome(t, nil)

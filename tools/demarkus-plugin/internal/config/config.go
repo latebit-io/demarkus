@@ -6,6 +6,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -360,4 +361,129 @@ func TagsHaveAxis(tags, axis string) bool {
 		}
 	}
 	return false
+}
+
+// --- promote destinations + knowledge presence (for nudges) -------------------
+
+// KnowledgePresent: at least one knowledge system is joined.
+func KnowledgePresent() (bool, error) {
+	systems, err := ListKnowledgeSystems()
+	return len(systems) > 0, err
+}
+
+// PromoteTargets: registered plain remote promote targets (one per line).
+func PromoteTargets() ([]string, error) {
+	p, err := path("promote-targets")
+	if err != nil {
+		return nil, err
+	}
+	return records(p)
+}
+
+// PromoteDestinationPresent: any promote destination exists — a brokered
+// knowledge system OR a plain remote target. With none, promote is dormant.
+func PromoteDestinationPresent() (bool, error) {
+	kp, err := KnowledgePresent()
+	if err != nil {
+		return false, err
+	}
+	if kp {
+		return true, nil
+	}
+	targets, err := PromoteTargets()
+	return len(targets) > 0, err
+}
+
+// PublishGateScopeLocal: true when a tool targets a soul this plugin routes
+// (local managed soul or a registered remote soul) — i.e. SoulTargetID != "".
+func PublishGateScopeLocal(tool string) (bool, error) {
+	id, err := SoulTargetID(tool)
+	return id != "", err
+}
+
+// --- managed-server config (plugin-memory.conf) -------------------------------
+
+// PluginConfig holds the SOUL_DIR/PORT/MODE the local managed server runs under.
+type PluginConfig struct {
+	SoulDir string
+	Port    string
+	Mode    string
+}
+
+// LoadConfig parses the shell-style plugin-memory.conf (KEY=value lines, possibly
+// printf %q-quoted). Returns nil when the file is absent or incomplete.
+func LoadConfig() (*PluginConfig, error) {
+	p, err := path("plugin-memory.conf")
+	if err != nil {
+		return nil, err
+	}
+	raw, err := readRaw(p)
+	if err != nil || raw == "" {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, ln := range strings.Split(raw, "\n") {
+		for _, key := range []string{"SOUL_DIR", "PORT", "MODE"} {
+			if strings.HasPrefix(ln, key+"=") {
+				v := strings.TrimSpace(strings.TrimPrefix(ln, key+"="))
+				v = unquoteShell(v)
+				out[key] = v
+			}
+		}
+	}
+	if out["SOUL_DIR"] == "" || out["PORT"] == "" || out["MODE"] == "" {
+		return nil, nil
+	}
+	return &PluginConfig{SoulDir: out["SOUL_DIR"], Port: out["PORT"], Mode: out["MODE"]}, nil
+}
+
+// unquoteShell undoes a printf %q quoting for the simple values we store
+// (paths/ints/words): a $'…' or '…' wrapper, then backslash-unescape.
+func unquoteShell(v string) string {
+	if strings.HasPrefix(v, "$'") && strings.HasSuffix(v, "'") && len(v) >= 3 {
+		v = v[2 : len(v)-1]
+	} else if strings.HasPrefix(v, "'") && strings.HasSuffix(v, "'") && len(v) >= 2 {
+		v = v[1 : len(v)-1]
+	}
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		if v[i] == '\\' && i+1 < len(v) {
+			i++
+		}
+		b.WriteByte(v[i])
+	}
+	return b.String()
+}
+
+// StatePath returns the absolute path of a file under ~/.demarkus (e.g. a
+// sentinel). Exported so the guidance command can manage one-time markers.
+func StatePath(name string) (string, error) { return path(name) }
+
+// NormalizeCall unwraps the pi-mcp-adapter "mcp" proxy: when the tool is the
+// literal "mcp", the real tool name is input.tool and the real args are
+// input.args (a JSON string or an object). Direct calls pass through unchanged.
+// Shared by the gate and nudge commands so the unwrap lives in one place.
+func NormalizeCall(tool string, input map[string]any) (string, map[string]any) {
+	if input == nil {
+		input = map[string]any{}
+	}
+	if tool != "mcp" {
+		return tool, input
+	}
+	t, ok := input["tool"].(string)
+	if !ok || t == "" {
+		return tool, input
+	}
+	switch raw := input["args"].(type) {
+	case string:
+		var parsed map[string]any
+		if json.Unmarshal([]byte(raw), &parsed) == nil {
+			return t, parsed
+		}
+		return t, map[string]any{}
+	case map[string]any:
+		return t, raw
+	default:
+		return t, map[string]any{}
+	}
 }

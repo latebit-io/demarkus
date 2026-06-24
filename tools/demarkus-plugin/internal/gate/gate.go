@@ -38,36 +38,6 @@ type Decision struct {
 
 func allow() Decision { return Decision{Decision: "allow"} }
 
-// normalize unwraps the pi-mcp-adapter proxy: when the tool is the literal "mcp",
-// the real tool name is input.tool and the real args are input.args (a JSON
-// string or an object). Direct tool calls pass through unchanged.
-func normalize(in Input) (tool string, args map[string]any) {
-	tool = in.Tool
-	args = in.Input
-	if args == nil {
-		args = map[string]any{}
-	}
-	if tool == "mcp" {
-		if t, ok := args["tool"].(string); ok && t != "" {
-			tool = t
-			switch raw := args["args"].(type) {
-			case string:
-				var parsed map[string]any
-				if json.Unmarshal([]byte(raw), &parsed) == nil {
-					args = parsed
-				} else {
-					args = map[string]any{}
-				}
-			case map[string]any:
-				args = raw
-			default:
-				args = map[string]any{}
-			}
-		}
-	}
-	return tool, args
-}
-
 func metadataOf(args map[string]any) map[string]any {
 	if m, ok := args["metadata"].(map[string]any); ok {
 		return m
@@ -92,12 +62,13 @@ func tagsString(md map[string]any) string {
 	return ""
 }
 
-func typeString(md map[string]any) string {
+// fieldString returns metadata[key] when it's a non-blank string, else "".
+func fieldString(md map[string]any, key string) string {
 	if md == nil {
 		return ""
 	}
-	if t, ok := md["type"].(string); ok {
-		return strings.TrimSpace(t)
+	if v, ok := md[key].(string); ok {
+		return strings.TrimSpace(v)
 	}
 	return ""
 }
@@ -147,7 +118,7 @@ func Evaluate(in Input) (Decision, error) {
 		in.Tool = in.ToolName
 		in.Input = in.ToolInput
 	}
-	tool, args := normalize(in)
+	tool, args := config.NormalizeCall(in.Tool, in.Input)
 	pt, ok := config.ParseTool(tool)
 	if !ok {
 		return allow(), nil
@@ -287,13 +258,17 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 		leaf = leaf[i+1:]
 	}
 	for _, f := range fields {
-		if f == "type" {
-			// index.md / log.md are server-exempt from the OKF type default.
-			if leaf != "index.md" && leaf != "log.md" && typeString(md) == "" {
-				missingFields = append(missingFields, "type")
-			}
+		// index.md / log.md are server-exempt from the OKF `type` default only —
+		// a hub is intentionally untyped. Every other required field is checked
+		// generically: the binary has the full metadata, so any policy-declared
+		// field is satisfied by a non-empty metadata.<field> (unlike the old bash
+		// gate, which could only inspect `type` and silently skipped the rest).
+		if f == "type" && (leaf == "index.md" || leaf == "log.md") {
+			continue
 		}
-		// other fields: skipped fail-open (the gate can't verify them)
+		if fieldString(md, f) == "" {
+			missingFields = append(missingFields, f)
+		}
 	}
 
 	if tagsOK && impOK && len(missingAxes) == 0 && len(missingFields) == 0 {
@@ -314,7 +289,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	}
 	if len(missingFields) > 0 {
 		problems = append(problems, fmt.Sprintf(
-			"missing required OKF metadata fields: %s (set a \"%s\" key in the metadata object, e.g. metadata: {\"type\": \"Reference\"})",
+			"missing required OKF metadata fields: %s (set each as a key in the metadata object, e.g. metadata: {\"%s\": \"...\"})",
 			strings.Join(missingFields, " "), missingFields[0]))
 	}
 	target := url

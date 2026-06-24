@@ -21,7 +21,7 @@ If the user invokes without an argument, ask them for the URL before running any
 1. **Validate + derive slug.** Run the helper script:
 
    ```bash
-   bash "${DEMARKUS_SCRIPTS}/knowledge-join.sh" <broker-url>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-join <broker-url>
    ```
 
    The script does HTTPS validation, fetches the broker's `/.well-known/oauth-protected-resource` (RFC 9728) to confirm it speaks the MCP gateway, and derives a slug from the broker hostname. Output is line-oriented `key=value`.
@@ -44,7 +44,7 @@ If the user invokes without an argument, ask them for the URL before running any
 3. **Register the MCP server** in the pi-mcp-adapter config (`~/.config/mcp/mcp.json`). pi-mcp-adapter auto-detects OAuth from the URL:
 
    ```bash
-   node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" add-http <slug> <mcp-url>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add-http <slug> <mcp-url>
    ```
 
    There is no token to capture or paste here — pi-mcp-adapter runs the OAuth flow against the broker on first use. After registering, the user reconnects with `/mcp` (or restarts pi); complete the auth with `/mcp-auth <slug>` if prompted.
@@ -52,7 +52,7 @@ If the user invokes without an argument, ask them for the URL before running any
 4. **Record the system for the publish gate.** After registering, run:
 
    ```bash
-   bash "${DEMARKUS_SCRIPTS}/register-knowledge.sh" <slug>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register <slug>
    ```
 
    Check the exit status. On success it records the slug so the publish tag-gate enforces tags on writes to this knowledge system, the same way it does for the local soul. (It does not gate unrelated demarkus servers the user may have configured.) **If the script fails (non-zero exit), surface its error to the user and stop here — do not report that the gate is covering this system, because it is not yet.**
@@ -63,20 +63,20 @@ If the user invokes without an argument, ask them for the URL before running any
    - `mark_fetch mark://root/.well-known/demarkus/policy.md` — the system's write policy. The gate runs offline (it cannot reach the broker), so its enforced core must be mirrored to local files. **Do not hand-write those files** — pipe the fetched policy **body** to the mirror script, which deterministically parses `strictness:` / `require_tags:` / `require_fields:` and writes (or clears) each per-slug file:
 
      ```bash
-     cat <<'POLICY' | bash "${DEMARKUS_SCRIPTS}/mirror-policy.sh" <slug>
+     cat <<'POLICY' | "$HOME/.demarkus/bin/demarkus-plugin" registry policy-mirror <slug>
      <the full body returned by the mark_fetch above>
      POLICY
      ```
 
      A knob absent from the policy clears its mirror file, so relaxing the policy de-enforces. The mirror is a **snapshot, not a live read** — re-run this on a fresh join whenever the policy changes. At publish time the gate then checks each enforced axis (an `axis:value` tag, e.g. `category:project`) and field (a non-empty key in the `metadata` object, e.g. `metadata: {"type": "Reference"}`).
 
-   If either document is `not-found`, the system simply hasn't declared that convention yet — skip silently. See `${DEMARKUS_SCRIPTS}/../examples/knowledge-system/` for the format an admin publishes.
+   If either document is `not-found`, the system simply hasn't declared that convention yet — skip silently. See the demarkus-knowledge `examples/knowledge-system/` for the format an admin publishes.
 
 6. **Confirm success.** Tell the user, in plain language:
 
    > Added knowledge system **<slug>** at <url>. pi will run the OAuth flow against the broker the next time it talks to that MCP server (use `/mcp` to connect and `/mcp-auth <slug>` if prompted). After that, the org's full demarkus tool surface (mark_fetch, mark_publish, mark_graph, etc.) is available against worlds the broker exposes (URL form: `mark://<worldName>/<path>`). Its tools appear as `<slug>_mark_*`.
 
-   Mention that they can list joined knowledge systems with `node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" list` and remove this one with `node "${DEMARKUS_SCRIPTS}/mcp-config.mjs" remove <slug>`.
+   Mention that they can list joined knowledge systems with `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp list` and remove this one with `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp remove <slug>`.
 
 ## Don't
 

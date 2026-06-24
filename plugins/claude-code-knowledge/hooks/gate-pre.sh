@@ -7,4 +7,6 @@
 set -uo pipefail
 BIN="${HOME}/.demarkus/bin/demarkus-plugin"
 [ -x "${BIN}" ] || exit 0
-"${BIN}" gate --format claude-pre 2>/dev/null || exit 0
+# Keep stderr visible: the binary logs every fail-open path there, and silencing
+# it would hide a malformed payload or config error that disables enforcement.
+"${BIN}" gate --format claude-pre || exit 0

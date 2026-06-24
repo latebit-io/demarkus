@@ -14,9 +14,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSessionContext } from "./guidance.js";
-import { recallNudge } from "./nudges.js";
-import { callGate } from "./plugin.js";
+import { callGate, callGuidance, callNudge } from "./plugin.js";
 
 interface UI {
   notify(message: string, level?: "info" | "warning" | "error"): void;
@@ -54,6 +52,7 @@ interface ExtensionAPI {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const COMMANDS_DIR = join(HERE, "..", "commands");
 const SCRIPTS_DIR = join(HERE, "..", "scripts");
+const GUIDANCE_FILE = join(HERE, "..", "context", "session-guidance.md");
 const CUSTOM = "demarkus-knowledge";
 
 const COMMANDS: Array<{ name: string; description: string }> = [
@@ -105,11 +104,11 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", (event) => {
     const parts: string[] = [];
     if (!contextDelivered) {
-      const context = buildSessionContext();
+      const context = callGuidance("knowledge", GUIDANCE_FILE);
       if (context) parts.push(context);
       contextDelivered = true;
     }
-    const recall = recallNudge(event.prompt ?? "");
+    const recall = callNudge({ event: "recall", surface: "knowledge", prompt: event.prompt ?? "" });
     if (recall) parts.push(recall);
 
     if (parts.length === 0) return undefined;

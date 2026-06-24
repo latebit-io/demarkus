@@ -1,7 +1,8 @@
 {
   "mcpServers": {
     "demarkus-memory": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-wrapper.sh"
+      "command": "${HOME}/.demarkus/bin/demarkus-plugin",
+      "args": ["mcp-serve"]
     }
   }
 }

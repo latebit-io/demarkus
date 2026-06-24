@@ -10,7 +10,7 @@ Keep promoted soul documents fresh as their published copies evolve. This is the
 
 ## Steps
 
-1. **Detection gate.** Run `${DEMARKUS_SCRIPTS}/detect-promote.sh` via Bash. `NONE` → no destination is configured, so nothing has been promoted anywhere and there is nothing to refresh; say so and stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`). A promoted soul doc records its own `mark://` target in its marker, so refresh works against whichever destination it was promoted to.
+1. **Detection gate.** Run `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote` via Bash. `NONE` → no destination is configured, so nothing has been promoted anywhere and there is nothing to refresh; say so and stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`). A promoted soul doc records its own `mark://` target in its marker, so refresh works against whichever destination it was promoted to.
 
 2. **Find promoted docs.** If `$ARGUMENTS` names a path, use just that one. Otherwise `mark_lookup` the soul with `filter=tag=promoted` to list every promoted document (the `/promote` back-stamp adds that tag). For each, `mark_fetch` it and parse its marker line:
 

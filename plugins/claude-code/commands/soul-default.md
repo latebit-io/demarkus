@@ -16,7 +16,7 @@ soul's `mcp__<slug>__mark_*` tools directly. This command only moves the default
 1. **List the catalog.** Run:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/soul-default.sh" --list --bind "${CLAUDE_PROJECT_DIR}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --list --bind "${CLAUDE_PROJECT_DIR}"
    ```
 
    - `EMPTY` → no souls joined. Tell the user to run `/soul-join` (or `/soul-init`
@@ -33,7 +33,7 @@ soul's `mcp__<slug>__mark_*` tools directly. This command only moves the default
 3. **Save it.** With the chosen `<slug>`:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/soul-default.sh" --set <slug> --bind "${CLAUDE_PROJECT_DIR}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --set <slug> --bind "${CLAUDE_PROJECT_DIR}"
    ```
 
    - On `OK <slug>`, confirm: "This project now writes to soul **<slug>** by
