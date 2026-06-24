@@ -33,14 +33,20 @@ interface BeforeAgentStartEvent {
 }
 type MessageResult = { message: { customType: string; content: string; display: boolean } };
 interface ExtensionAPI {
-  on(event: "session_start", handler: (event: { reason: string }, ctx: ExtensionContext) => void): void;
+  on(event: "session_start", handler: (event: { reason: string }, ctx: ExtensionContext) => void | Promise<void>): void;
   on(
     event: "before_agent_start",
-    handler: (event: BeforeAgentStartEvent, ctx: ExtensionContext) => MessageResult | undefined,
+    handler: (
+      event: BeforeAgentStartEvent,
+      ctx: ExtensionContext,
+    ) => MessageResult | undefined | Promise<MessageResult | undefined>,
   ): void;
   on(
     event: "tool_call",
-    handler: (event: ToolCallEvent, ctx: ExtensionContext) => { block: true; reason: string } | undefined,
+    handler: (
+      event: ToolCallEvent,
+      ctx: ExtensionContext,
+    ) => { block: true; reason: string } | undefined | Promise<{ block: true; reason: string } | undefined>,
   ): void;
   registerCommand(
     name: string,
@@ -101,24 +107,24 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
     contextDelivered = false;
   });
 
-  pi.on("before_agent_start", (event) => {
+  pi.on("before_agent_start", async (event) => {
     const parts: string[] = [];
     if (!contextDelivered) {
-      const context = callGuidance("knowledge", GUIDANCE_FILE);
+      const context = await callGuidance("knowledge", GUIDANCE_FILE);
       if (context) parts.push(context);
       contextDelivered = true;
     }
-    const recall = callNudge({ event: "recall", surface: "knowledge", prompt: event.prompt ?? "" });
+    const recall = await callNudge({ event: "recall", surface: "knowledge", prompt: event.prompt ?? "" });
     if (recall) parts.push(recall);
 
     if (parts.length === 0) return undefined;
     return { message: { customType: CUSTOM, content: parts.join("\n\n"), display: false } };
   });
 
-  pi.on("tool_call", (event) => {
+  pi.on("tool_call", async (event) => {
     const { toolName, input } = normalizeToolCall(event);
     // Shared decision via the demarkus-plugin binary (knowledge tag/axes/fields gate).
-    const decision = callGate(toolName, input, "");
+    const decision = await callGate(toolName, input, "");
     if (decision.decision === "block" || decision.decision === "ask") {
       const reason =
         decision.decision === "ask"

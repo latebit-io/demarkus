@@ -62,15 +62,22 @@ func tagsString(md map[string]any) string {
 	return ""
 }
 
-// fieldString returns metadata[key] when it's a non-blank string, else "".
-func fieldString(md map[string]any, key string) string {
+// fieldPresent reports whether a required metadata field is satisfied. A string
+// must be non-blank; any other non-null value (number, bool, array, object) is
+// accepted as present — only string fields have an emptiness notion, so e.g.
+// metadata.authors: ["ada"] must not read as missing.
+func fieldPresent(md map[string]any, key string) bool {
 	if md == nil {
-		return ""
+		return false
 	}
-	if v, ok := md[key].(string); ok {
-		return strings.TrimSpace(v)
+	v, ok := md[key]
+	if !ok || v == nil {
+		return false
 	}
-	return ""
+	if s, isStr := v.(string); isStr {
+		return strings.TrimSpace(s) != ""
+	}
+	return true
 }
 
 // importanceOK: absent is fine; otherwise a number or non-blank numeric string in
@@ -266,7 +273,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 		if f == "type" && (leaf == "index.md" || leaf == "log.md") {
 			continue
 		}
-		if fieldString(md, f) == "" {
+		if !fieldPresent(md, f) {
 			missingFields = append(missingFields, f)
 		}
 	}

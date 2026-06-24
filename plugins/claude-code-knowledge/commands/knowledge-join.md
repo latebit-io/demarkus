@@ -76,7 +76,14 @@ If the user invokes without an argument, ask them for the URL before running any
 
    > Added knowledge system **<slug>** at <url>. Claude Code will prompt you to complete the OAuth device flow against the broker the next time it talks to that MCP server. After that, the org's full demarkus tool surface (mark_fetch, mark_publish, mark_graph, etc.) is available against worlds the broker exposes (URL form: `mark://<worldName>/<path>`).
 
-   Mention that they can list joined knowledge systems with `claude mcp list` and remove this one with `claude mcp remove <slug>`.
+   Mention that they can list joined knowledge systems with `claude mcp list`. To fully remove this one, both the MCP server **and** the gate registration must go — otherwise the publish gate keeps enforcing tags/axes for a system that's no longer connected:
+
+   ```bash
+   claude mcp remove <slug>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-unregister <slug>
+   ```
+
+   (`knowledge-unregister` also clears the mirrored per-slug policy files.)
 
 ## Don't
 

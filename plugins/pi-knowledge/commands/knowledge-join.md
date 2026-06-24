@@ -76,7 +76,14 @@ If the user invokes without an argument, ask them for the URL before running any
 
    > Added knowledge system **<slug>** at <url>. pi will run the OAuth flow against the broker the next time it talks to that MCP server (use `/mcp` to connect and `/mcp-auth <slug>` if prompted). After that, the org's full demarkus tool surface (mark_fetch, mark_publish, mark_graph, etc.) is available against worlds the broker exposes (URL form: `mark://<worldName>/<path>`). Its tools appear as `<slug>_mark_*`.
 
-   Mention that they can list joined knowledge systems with `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp list` and remove this one with `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp remove <slug>`.
+   Mention that they can list joined knowledge systems with `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp list`. To fully remove this one, both the MCP entry **and** the gate registration must go — otherwise the publish gate keeps enforcing tags/axes for a system that's no longer connected:
+
+   ```bash
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp remove <slug>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-unregister <slug>
+   ```
+
+   (`knowledge-unregister` also clears the mirrored per-slug policy files.)
 
 ## Don't
 

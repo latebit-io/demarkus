@@ -9,11 +9,10 @@ package guidance
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
 )
 
 type Input struct {
@@ -69,29 +68,11 @@ func memory(in Input) (Output, error) {
 	return Output{Context: strings.Join(parts, "\n\n")}, nil
 }
 
-// serverHealthWarning returns a one-line warning when the managed server doesn't
-// look alive, "" when healthy/indeterminate. Managed (default/isolated) modes
-// only; reuse is left to /soul-status.
+// serverHealthWarning delegates to provision.HealthWarning so the health check —
+// including the PID-at-root ownership test that avoids a reused-.pid false
+// positive — lives in exactly one place.
 func serverHealthWarning() (string, error) {
-	cfg, err := config.LoadConfig()
-	if err != nil || cfg == nil {
-		return "", err
-	}
-	if cfg.Mode != "default" && cfg.Mode != "isolated" {
-		return "", nil
-	}
-	pidStr := strings.TrimSpace(readFile(filepath.Join(cfg.SoulDir, ".pid")))
-	alive := false
-	if pid, e := strconv.Atoi(pidStr); e == nil && pid > 0 {
-		if p, e2 := os.FindProcess(pid); e2 == nil {
-			alive = p.Signal(syscall.Signal(0)) == nil
-		}
-	}
-	if alive {
-		return "", nil
-	}
-	return "the demarkus-memory server is not running (no live process for " + cfg.SoulDir +
-		"). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts — run /soul-init to restart, or /soul-status to diagnose.", nil
+	return provision.HealthWarning()
 }
 
 // memoryOffer returns the one-time offer text the first time, "" thereafter.

@@ -31,15 +31,22 @@ func loadMcp(path string) (map[string]any, error) {
 	if json.Unmarshal(b, &obj) != nil {
 		return nil, errors.New(path + " is not valid JSON; fix it by hand before retrying")
 	}
+	// Refuse to clobber a malformed-but-present config: a top-level array/scalar
+	// or an array-valued mcpServers is surfaced as an error rather than silently
+	// reset (which would drop the user's existing servers on the next write).
 	m, ok := obj.(map[string]any)
 	if !ok {
-		m = map[string]any{}
+		return nil, errors.New(path + " is not a JSON object; fix it by hand before retrying")
 	}
-	srv, ok := m["mcpServers"].(map[string]any)
-	if !ok {
-		srv = map[string]any{}
+	if raw, present := m["mcpServers"]; present {
+		srv, ok := raw.(map[string]any)
+		if !ok {
+			return nil, errors.New(path + ": mcpServers is not a JSON object; fix it by hand before retrying")
+		}
+		m["mcpServers"] = srv
+	} else {
+		m["mcpServers"] = map[string]any{}
 	}
-	m["mcpServers"] = srv
 	return m, nil
 }
 

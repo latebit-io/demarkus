@@ -216,6 +216,64 @@ func KnowledgeRegister(slug string) error {
 	})
 }
 
+// KnowledgeUnregister is the inverse of KnowledgeRegister: it drops the slug
+// from the knowledge-systems registry (so the publish gate stops enforcing on
+// it) and clears any mirrored per-slug policy files. Idempotent — removing a
+// slug that was never registered is a no-op. `existed` reports whether the slug
+// was in the registry.
+func KnowledgeUnregister(slug string) (existed bool, err error) {
+	if !slugSafe.MatchString(slug) {
+		return false, fmt.Errorf("invalid slug '%s': only [A-Za-z0-9._-] allowed", slug)
+	}
+	p, err := config.StatePath("knowledge-systems")
+	if err != nil {
+		return false, err
+	}
+	err = withLock(p, func() error {
+		rows, err := readRecords("knowledge-systems")
+		if err != nil {
+			return err
+		}
+		kept := rows[:0]
+		for _, r := range rows {
+			if r == slug {
+				existed = true
+				continue
+			}
+			kept = append(kept, r)
+		}
+		if !existed {
+			return nil
+		}
+		if len(kept) == 0 {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		}
+		return atomicWrite(p, []byte(strings.Join(kept, "\n")+"\n"))
+	})
+	if err != nil {
+		return existed, err
+	}
+	// Clear mirrored policy so a re-join starts clean and the gate doesn't keep
+	// enforcing axes/fields for a system that's no longer joined.
+	for _, name := range []string{
+		"plugin-knowledge.strictness." + slug,
+		"plugin-knowledge.require-tags." + slug,
+		"plugin-knowledge.require-fields." + slug,
+	} {
+		fp, e := config.StatePath(name)
+		if e != nil {
+			return existed, e
+		}
+		if e := os.Remove(fp); e != nil && !os.IsNotExist(e) {
+			return existed, e
+		}
+	}
+	return existed, nil
+}
+
 var policyKeys = []string{"strictness", "require_tags", "require_fields"}
 
 // PolicyMirror parses a knowledge system's policy.md body and mirrors its
@@ -477,8 +535,5 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 }
 
 func atomicWrite0600(path string, data []byte) error {
-	if err := atomicWrite(path, data); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return atomicWritePerm(path, data, 0o600)
 }

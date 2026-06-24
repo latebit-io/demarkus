@@ -32,8 +32,12 @@ case "$(uname -m)" in
 esac
 plat="${os}_${arch}"
 
-command -v curl >/dev/null 2>&1 || { echo "[demarkus] bootstrap: curl required" >&2; exit 1; }
-command -v tar  >/dev/null 2>&1 || { echo "[demarkus] bootstrap: tar required" >&2; exit 1; }
+# Preflight every tool the install path needs, BEFORE any network I/O, so a host
+# missing one fails with an actionable message instead of a bare error mid-way.
+command -v curl    >/dev/null 2>&1 || { echo "[demarkus] bootstrap: curl required" >&2; exit 1; }
+command -v tar     >/dev/null 2>&1 || { echo "[demarkus] bootstrap: tar required" >&2; exit 1; }
+command -v install >/dev/null 2>&1 || { echo "[demarkus] bootstrap: install(1) required" >&2; exit 1; }
+command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || { echo "[demarkus] bootstrap: sha256sum or shasum required" >&2; exit 1; }
 
 mkdir -p "${BIN_DIR}"
 tmp="$(mktemp -d)"

@@ -519,6 +519,10 @@ func ensureTokenEntry(tokensTOML string) error {
 
 	labelPresent := tokensHasLabel(tokensTOML)
 	if fileExists(tokenFile) && fileExists(tokensTOML) && labelPresent {
+		// Reassert 0600 on the idempotent path: an existing token left
+		// world/group-readable (e.g. from an older install) would otherwise stay
+		// exposed forever since we return without regenerating.
+		_ = os.Chmod(tokenFile, 0o600)
 		return nil
 	}
 
@@ -808,10 +812,18 @@ func ensureManagedServer(soulDir string, port int) error {
 		return fmt.Errorf("spawn demarkus-server: %w", err)
 	}
 	pid := cmd.Process.Pid
+	// If we can't record ownership bookkeeping, kill the just-spawned server
+	// rather than leave a detached process with no valid .pid/.server-version
+	// (which a later run can neither recognize nor safely manage).
 	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+		_ = cmd.Process.Kill()
+		os.Remove(pidFile)
 		return err
 	}
 	if err := os.WriteFile(versionFile, []byte(serverVersion+"\n"), 0o644); err != nil {
+		_ = cmd.Process.Kill()
+		os.Remove(pidFile)
+		os.Remove(versionFile)
 		return err
 	}
 	_ = cmd.Process.Release() // fully detach; don't reap
@@ -922,17 +934,52 @@ func seedDoc(seedName, target string) {
 
 // --- exported API ------------------------------------------------------------
 
+// withProvisionLock serializes provisioning across processes (two session starts
+// could otherwise interleave binary installs or both pass the port check before
+// spawning). Atomic mkdir mutex with PID-stamped stale-lock recovery; bounded so
+// a crashed holder can't wedge startup. Held across downloads, so a concurrent
+// first-run waits for the in-flight install rather than racing it.
+func withProvisionLock(fn func() error) error {
+	lockDir, err := underHome(".provision.lock")
+	if err != nil {
+		return err
+	}
+	lockPid := filepath.Join(lockDir, "pid")
+	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
+		return err
+	}
+	for i := 0; i < 900; i++ { // ~180s: enough for a slow first-run download
+		if err := os.Mkdir(lockDir, 0o755); err == nil {
+			_ = os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644)
+			defer os.RemoveAll(lockDir)
+			return fn()
+		} else if !os.IsExist(err) {
+			return err
+		}
+		if b, e := os.ReadFile(lockPid); e == nil {
+			if pid, e2 := strconv.Atoi(strings.TrimSpace(string(b))); e2 == nil && !pidAlive(pid) {
+				_ = os.RemoveAll(lockDir)
+				continue
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("could not acquire provision lock %s (another session provisioning?)", lockDir)
+}
+
 // Provision runs the per-session sequence: load-or-default config, ensure
 // binaries, restart-on-upgrade, ensure/verify the server, seed soul docs. All
 // progress goes to STDERR. (session-start.sh / pi provision.sh main.)
-func Provision() error {
+func Provision() error { return withProvisionLock(provisionLocked) }
+
+func provisionLocked() error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	if cfg == nil {
 		logf("no plugin config — running default setup")
-		if err := Init("default", 0, ""); err != nil {
+		if err := initLocked("default", 0, ""); err != nil { // already holding the lock
 			return err
 		}
 		cfg, err = loadConfig()
@@ -976,6 +1023,10 @@ func Provision() error {
 // For reuse, port and root are required. For default/isolated they are ignored.
 // (setup.sh main → do_default/do_reuse/do_isolated.)
 func Init(mode string, port int, root string) error {
+	return withProvisionLock(func() error { return initLocked(mode, port, root) })
+}
+
+func initLocked(mode string, port int, root string) error {
 	switch mode {
 	case "default":
 		return doDefault()
@@ -1111,8 +1162,11 @@ func HealthWarning() (string, error) {
 	}
 	switch cfg.Mode {
 	case "default", "isolated":
+		// Verify the recorded PID is genuinely OUR demarkus-server for this root,
+		// not just any live process that reused the number — otherwise a stale
+		// .pid would falsely report healthy while memory tools fail.
 		pid := readPID(filepath.Join(cfg.SoulDir, ".pid"))
-		if pid <= 0 || !pidAlive(pid) {
+		if pid <= 0 || !pidIsServerAtRoot(pid, cfg.SoulDir) {
 			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts — run /soul-init to restart, or /soul-status to diagnose.", cfg.SoulDir), nil
 		}
 	case "reuse":

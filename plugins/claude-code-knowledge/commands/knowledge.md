@@ -32,7 +32,7 @@ Orient in the organizational demarkus knowledge system(s) this installation has 
 3. **Point the way.** Briefly remind the user how to go deeper:
    - `mark_lookup` against the system for a subject (the card catalog).
    - `mark_fetch mark://<world>/index.md` to anchor on a specific world.
-   - `/knowledge-join` to add another system; `claude mcp list` / `claude mcp remove <slug>` to manage joined ones.
+   - `/knowledge-join` to add another system; `claude mcp list` to see joined ones. To fully remove one, run both `claude mcp remove <slug>` and `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-unregister <slug>` (the latter stops the publish gate enforcing on it).
 
 ## Don't
 

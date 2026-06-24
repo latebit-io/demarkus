@@ -87,7 +87,7 @@ whether the soul needs a token, ask before proceeding.
 
 ## Don't
 
-- Don't register the MCP server if step 2 emitted `FAIL`.
+- Don't register the MCP server if step 1 emitted `FAIL`.
 - Don't read, echo, or store the token yourself — pass it via the `registry soul-join` command you hand the user,
   which writes it to the 0600 file. It must never land in the transcript.
 - Don't use this for an `https://` broker — that is `/knowledge-join`.

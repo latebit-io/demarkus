@@ -19,7 +19,7 @@ const MCP_SERVER_NAME = "demarkus-memory";
 
 function run(cmd: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 120_000 }, (err, _stdout, stderr) => {
+    execFile(cmd, args, { timeout: 600_000 }, (err, _stdout, stderr) => {
       if (err) {
         const tail = (stderr || "").trim().split("\n").slice(-3).join(" ");
         resolve(tail || err.message);

@@ -143,11 +143,11 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event) => {
     const parts: string[] = [];
     if (!contextDelivered) {
-      const context = callGuidance("memory", GUIDANCE_FILE);
+      const context = await callGuidance("memory", GUIDANCE_FILE);
       if (context) parts.push(context);
       contextDelivered = true;
     }
-    const recall = callNudge({ event: "recall", surface: "memory", prompt: event.prompt ?? "" });
+    const recall = await callNudge({ event: "recall", surface: "memory", prompt: event.prompt ?? "" });
     if (recall) parts.push(recall);
 
     if (parts.length === 0) return undefined;
@@ -159,7 +159,7 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
 
     // The shared demarkus-plugin binary owns the gate decision (publish tag-gate
     // + destination gate), so the logic lives in one place for every harness.
-    const decision = callGate(toolName, input, ctx.cwd);
+    const decision = await callGate(toolName, input, ctx.cwd);
     if (decision.decision === "block" || decision.decision === "ask") {
       // pi's tool_call has no native "ask"; treat it as a block whose reason
       // tells the agent to confirm with the user first.
@@ -180,14 +180,14 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     }
 
     // Promote nudge on a fresh high-signal ADR publish (allowed call).
-    const nudge = callNudge({ event: "promote", tool: toolName, input });
+    const nudge = await callNudge({ event: "promote", tool: toolName, input });
     if (nudge) pi.sendMessage({ customType: CUSTOM, content: nudge, display: false }, { triggerTurn: false });
 
     return undefined;
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
-    const nudge = callNudge({
+  pi.on("session_shutdown", async (_event, ctx) => {
+    const nudge = await callNudge({
       event: "session-end",
       changedFiles: activity.changedFiles,
       soulWrite: activity.hadSoulWrite,

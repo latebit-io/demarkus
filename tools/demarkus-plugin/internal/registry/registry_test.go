@@ -3,7 +3,10 @@ package registry
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
 func setupHome(t *testing.T) string {
@@ -55,15 +58,16 @@ func TestMcpAddRemoveList(t *testing.T) {
 
 func TestMcpRejectsArrayConfig(t *testing.T) {
 	home := setupHome(t)
-	cfg := filepath.Join(home, ".config", "mcp")
-	_ = os.MkdirAll(cfg, 0o755)
-	_ = os.WriteFile(filepath.Join(cfg, "mcp.json"), []byte("[]"), 0o644)
-	if err := McpAdd("foo", "bash", nil); err != nil {
-		t.Fatal(err)
+	cfgDir := filepath.Join(home, ".config", "mcp")
+	_ = os.MkdirAll(cfgDir, 0o755)
+	cfg := filepath.Join(cfgDir, "mcp.json")
+	_ = os.WriteFile(cfg, []byte("[]"), 0o644)
+	// A malformed (array) config must error, NOT be silently reset + written back.
+	if err := McpAdd("foo", "bash", nil); err == nil {
+		t.Fatal("array-shaped config should error, not silently reset")
 	}
-	names, _ := McpList()
-	if len(names) != 1 || names[0] != "foo" {
-		t.Fatalf("array config should reset to a valid object with foo, got %v", names)
+	if b, _ := os.ReadFile(cfg); strings.TrimSpace(string(b)) != "[]" {
+		t.Fatalf("malformed config must be left untouched, got %q", string(b))
 	}
 }
 
@@ -123,6 +127,42 @@ func TestPolicyMirror(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".demarkus", "plugin-knowledge.require-tags.acme")); !os.IsNotExist(err) {
 		t.Error("require_tags file should be cleared when absent from policy")
+	}
+}
+
+func TestKnowledgeRegisterUnregister(t *testing.T) {
+	home := setupHome(t)
+	if err := KnowledgeRegister("acme"); err != nil {
+		t.Fatal(err)
+	}
+	if err := KnowledgeRegister("beta"); err != nil {
+		t.Fatal(err)
+	}
+	// register is idempotent
+	if err := KnowledgeRegister("acme"); err != nil {
+		t.Fatal(err)
+	}
+	// mirror a policy so unregister can prove it clears the per-slug files
+	if err := PolicyMirror("acme", "strictness: block\nrequire_tags: category\n"); err != nil {
+		t.Fatal(err)
+	}
+	existed, err := KnowledgeUnregister("acme")
+	if err != nil || !existed {
+		t.Fatalf("unregister acme: existed=%v err=%v", existed, err)
+	}
+	systems, _ := config.ListKnowledgeSystems()
+	if len(systems) != 1 || systems[0] != "beta" {
+		t.Fatalf("after unregister want [beta], got %v", systems)
+	}
+	for _, name := range []string{"plugin-knowledge.strictness.acme", "plugin-knowledge.require-tags.acme"} {
+		if _, err := os.Stat(filepath.Join(home, ".demarkus", name)); !os.IsNotExist(err) {
+			t.Errorf("%s should be cleared on unregister", name)
+		}
+	}
+	// unregistering an unknown slug is a no-op reporting existed=false
+	existed, err = KnowledgeUnregister("ghost")
+	if err != nil || existed {
+		t.Fatalf("unregister ghost: existed=%v err=%v", existed, err)
 	}
 }
 

@@ -64,12 +64,32 @@ func pidAlive(pid int) bool {
 }
 
 // atomicWrite writes data to path via a temp file + rename (no torn writes).
-func atomicWrite(path string, data []byte) error {
+func atomicWrite(path string, data []byte) error { return atomicWritePerm(path, data, 0o644) }
+
+// atomicWritePerm is atomicWrite with an explicit mode. The temp file is created
+// WITH that mode (via O_CREATE perm) so a secret (e.g. a 0600 token) is never
+// briefly world-readable before a later chmod.
+func atomicWritePerm(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	// O_CREATE perm is masked by umask; enforce the exact mode for secrets.
+	if err := os.Chmod(tmp, perm); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)

@@ -45,14 +45,25 @@ func cmdProvision(args []string) {
 		}
 		fmt.Println(s)
 	case "init":
+		// The mode is the first non-flag arg after "init"; flags may precede or
+		// follow it. Separate them so `provision init reuse --port N` and
+		// `provision init --port N reuse` both parse (and a missing mode errors).
+		mode := ""
+		var flagArgs []string
+		for _, a := range args[1:] {
+			if mode == "" && !strings.HasPrefix(a, "-") {
+				mode = a
+				continue
+			}
+			flagArgs = append(flagArgs, a)
+		}
+		if mode == "" {
+			fail("provision init: requires a mode (default|reuse|isolated)")
+		}
 		fs := flag.NewFlagSet("provision-init", flag.ExitOnError)
 		port := fs.Int("port", 0, "port (reuse mode)")
 		root := fs.String("root", "", "soul root (reuse mode)")
-		_ = fs.Parse(args[2:])
-		mode := ""
-		if len(args) >= 2 {
-			mode = args[1]
-		}
+		_ = fs.Parse(flagArgs)
 		if err := provision.Init(mode, *port, *root); err != nil {
 			fail(err.Error())
 		}
@@ -75,7 +86,7 @@ func fail(msg string) {
 // the mcp-config.mjs JS.
 func cmdRegistry(args []string) {
 	if len(args) == 0 {
-		fail("registry: missing subcommand (mcp|soul-join|soul-default|knowledge-join|knowledge-register|policy-mirror|promote-target|detect-promote)")
+		fail("registry: missing subcommand (mcp|soul-join|soul-default|knowledge-join|knowledge-register|knowledge-unregister|policy-mirror|promote-target|detect-promote)")
 	}
 	switch args[0] {
 	case "mcp":
@@ -94,11 +105,27 @@ func cmdRegistry(args []string) {
 			fail(err.Error())
 		}
 		fmt.Println("OK: registered knowledge system '" + args[1] + "'")
+	case "knowledge-unregister":
+		if len(args) != 2 {
+			fail("knowledge-unregister: usage: registry knowledge-unregister <slug>")
+		}
+		existed, err := registry.KnowledgeUnregister(args[1])
+		if err != nil {
+			fail(err.Error())
+		}
+		if existed {
+			fmt.Println("OK: unregistered knowledge system '" + args[1] + "'")
+		} else {
+			fmt.Println("OK: knowledge system '" + args[1] + "' was not registered")
+		}
 	case "policy-mirror":
 		if len(args) != 2 {
 			fail("policy-mirror: usage: registry policy-mirror <slug> (policy body on stdin)")
 		}
-		body, _ := io.ReadAll(os.Stdin)
+		body, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fail("policy-mirror: read stdin: " + err.Error()) // never mirror a partial read — it would clear enforcement
+		}
 		if err := registry.PolicyMirror(args[1], string(body)); err != nil {
 			fail(err.Error())
 		}
