@@ -64,7 +64,7 @@ readonly ISOLATED_PORT_START=16310
 readonly ISOLATED_PORT_END=16509
 
 readonly SERVER_VERSION="0.18.0"
-readonly CLIENT_VERSION="0.13.0"
+readonly CLIENT_VERSION="0.13.1"
 # demarkus-token moved from the server archive to its own tools/ release
 # in §6.7.A. Pin separately so a tools-only release can be picked up.
 readonly TOOLS_VERSION="0.2.0"
