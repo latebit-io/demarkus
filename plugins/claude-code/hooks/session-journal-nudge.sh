@@ -1,70 +1,90 @@
 #!/usr/bin/env bash
-# Stop hook for the demarkus-memory plugin.
+# Stop adapter for the session-end journal nudge. The Stop mechanics are
+# Claude-specific and stay here: parse the payload, guard against re-blocking,
+# and derive the two signals (did the session change files? did it write to a
+# soul?) from the transcript. The DECISION + text comes from the shared
+# demarkus-plugin binary. Self-contained (no lib.sh) — the small JSON field
+# extractor is inlined so the bash infra can be fully retired.
 #
-# Journaling a significant session is a quality behavior the gate can't backstop
-# (the publish gate only fires when you DO write). This nudges once, at session
-# end, when the session changed files but recorded nothing to any demarkus
-# memory store — so substantive work isn't silently lost to the next session.
-#
-# Stop hooks can only surface a message by blocking (decision:block forces one
-# more turn); there is no non-blocking context channel. So the nudge blocks
-# exactly once and hands the agent an explicit "if it's routine, just stop" out,
-# honoring the don't-journal-trivia restraint. Two independent loop guards:
-#   1. stop_hook_active == true  → already mid stop-cycle, never re-block.
-#   2. a per-session sentinel file → fire at most once per session_id, even if
-#      the block triggers another Stop after the agent journals.
-#
-# Zero runtime deps (pure awk/bash). Fails open: any missing/unreadable input
-# means no nudge — never wedge the session over a heuristic.
+# Stop hooks surface a message only by blocking (decision:block forces one more
+# turn). Two loop guards prevent wedging: stop_hook_active, and a per-session
+# sentinel so it fires at most once. Fails open on anything unexpected.
 
 set -uo pipefail
 
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-SCRIPTS_DIR="${HOOK_DIR}/../scripts"
-# shellcheck source=../scripts/lib.sh
-. "${SCRIPTS_DIR}/lib.sh"
+BIN="${HOME}/.demarkus/bin/demarkus-plugin"
+[ -x "${BIN}" ] || exit 0
+
+# stop_hook_fields — read a flat Stop payload on stdin, emit 3 lines:
+# session_id, transcript_path, stop_hook_active ("true"/"false"). Pure awk,
+# string-boundary aware (a quote inside a value can't end the string early).
+stop_hook_fields() {
+  awk '
+    { data = data $0 "\n" }
+    END {
+      n = split(data, ch, ""); depth = 0; inStr = 0; esc = 0; buf = ""; curkey = ""
+      sid = ""; tpath = ""; active = "false"
+      for (i = 1; i <= n; i++) {
+        c = ch[i]
+        if (inStr) {
+          if (esc) { buf = buf c; esc = 0; continue }
+          if (c == "\\") { buf = buf c; esc = 1; continue }
+          if (c == "\"") { inStr = 0; onstr(buf); buf = ""; continue }
+          buf = buf c; continue
+        }
+        if (c == "\"") { inStr = 1; buf = ""; continue }
+        if (c == " " || c == "\t" || c == "\n" || c == "\r") continue
+        if (c == "{") { depth++; expect[depth] = "key"; continue }
+        if (c == "[") { depth++; expect[depth] = "val"; continue }
+        if (c == "}" || c == "]") { depth--; continue }
+        if (c == ":") { expect[depth] = "val"; continue }
+        if (c == ",") { expect[depth] = "key"; continue }
+        sv = c
+        while (i + 1 <= n) {
+          d = ch[i+1]
+          if (d == "," || d == "}" || d == "]" || d == " " || d == "\t" || d == "\n" || d == "\r") break
+          sv = sv d; i++
+        }
+        if (depth == 1 && curkey == "stop_hook_active") active = sv
+        expect[depth] = "key"
+      }
+      print sid; print tpath; print active
+    }
+    function onstr(s) {
+      if (depth == 1 && expect[depth] == "key") { curkey = s; return }
+      if (depth == 1) {
+        if (curkey == "session_id") sid = s
+        else if (curkey == "transcript_path") tpath = s
+        else if (curkey == "stop_hook_active") active = s
+      }
+    }
+  '
+}
 
 input="$(cat)"
-
 parsed="$(printf '%s' "${input}" | stop_hook_fields)" || exit 0
 sid="$(sed -n '1p' <<<"${parsed}")"
 tpath="$(sed -n '2p' <<<"${parsed}")"
 active="$(sed -n '3p' <<<"${parsed}")"
 
-# Loop guard 1: never block a stop that is itself the product of a prior block.
 [[ "${active}" == "true" ]] && exit 0
-
-# Without a session id we can't dedup safely — don't risk a loop; stay quiet.
 [[ -n "${sid}" ]] || exit 0
-
-# Loop guard 2: at most once per session. Sanitize the id for use in a filename.
 sentinel="${TMPDIR:-/tmp}/demarkus-memory-nudge-${sid//[^A-Za-z0-9_-]/_}"
 [[ -e "${sentinel}" ]] && exit 0
-
-# Need a readable transcript to judge what happened.
 [[ -n "${tpath}" && -r "${tpath}" ]] || exit 0
 
-# Did the session write to a demarkus memory store? Match the structured MCP
-# attribution field and the tool_use call name — both compact-serialized in the
-# transcript JSONL. Prose mentions of "mark_publish" won't match these shapes.
-soul_write=0
+soul_write="false"
 if grep -qE '"attributionMcpTool":"mark_(publish|append)"|"name":"mcp__[^"]*mark_(publish|append)"' "${tpath}"; then
-  soul_write=1
+  soul_write="true"
 fi
-
-# Did the session do real work? File mutations are the low-false-positive signal
-# (a pure-chat/research session won't trip this).
-real_work=0
+changed_files="false"
 if grep -qE '"name":"(Edit|Write|NotebookEdit)"' "${tpath}"; then
-  real_work=1
+  changed_files="true"
 fi
 
-if (( real_work == 1 && soul_write == 0 )); then
-  # Create the sentinel BEFORE blocking so the follow-up Stop won't re-nudge.
+out="$("${BIN}" nudge --event session-end --changed-files="${changed_files}" --soul-write="${soul_write}" --format claude < /dev/null || true)"
+if [[ -n "${out}" ]]; then
   : > "${sentinel}" 2>/dev/null || true
-  reason="This session changed files but recorded nothing to the soul. If something here is worth remembering — a decision, a gotcha, a non-obvious why — capture it now with /soul-journal (or mark_append to today's journal under /<project>/journal/<YYYY-MM-DD>.md). If it's all routine, just say so and stop; you won't be nudged again this session."
-  printf '{"decision":"block","reason":%s}\n' "$(printf '%s' "${reason}" | json_escape)"
-  exit 0
+  printf '%s\n' "${out}"
 fi
-
 exit 0

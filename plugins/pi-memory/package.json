@@ -1,0 +1,40 @@
+{
+  "name": "demarkus-pi-memory",
+  "version": "0.11.3",
+  "description": "Local, versioned memory for the pi coding agent via demarkus. Provisions a local demarkus-server, auto-generates a token, wires the demarkus-memory MCP server through pi-mcp-adapter, injects standing guidance so sessions self-document to the soul, and enforces a publish tag-gate plus a destination gate so documents stay findable and land on the right soul.",
+  "author": "latebit",
+  "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/pi-memory",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-skill",
+    "demarkus",
+    "memory",
+    "markdown",
+    "persistent-memory",
+    "coding-agent"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills/soul-memory/SKILL.md"
+    ]
+  },
+  "files": [
+    "src",
+    "scripts",
+    "skills",
+    "commands",
+    "context",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

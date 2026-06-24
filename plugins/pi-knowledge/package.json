@@ -1,0 +1,40 @@
+{
+  "name": "demarkus-pi-knowledge",
+  "version": "0.4.0",
+  "description": "Join an organizational demarkus knowledge system (a broker-fronted, shared, versioned markdown catalog) from the pi coding agent. Validates and registers the broker as an HTTP/OAuth MCP server via pi-mcp-adapter, steers sessions to consult the shared catalog first, makes it easy to navigate, and enforces a publish tag-gate (tags + required axes + required fields) so shared documents stay findable. No local server, no binaries — pure broker + OAuth.",
+  "author": "latebit",
+  "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/pi-knowledge",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-skill",
+    "demarkus",
+    "knowledge",
+    "markdown",
+    "shared-knowledge",
+    "coding-agent"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills/knowledge-promote/SKILL.md"
+    ]
+  },
+  "files": [
+    "src",
+    "scripts",
+    "skills",
+    "commands",
+    "context",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

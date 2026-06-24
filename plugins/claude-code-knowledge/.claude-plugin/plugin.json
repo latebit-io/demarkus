@@ -21,22 +21,22 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__.*__mark_publish",
+        "matcher": "mcp__.*__mark_(publish|append)",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/publish-gate.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-pre.sh"
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__.*__mark_publish",
+        "matcher": "mcp__.*__mark_(publish|append)",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/publish-gate.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-post.sh"
           }
         ]
       }

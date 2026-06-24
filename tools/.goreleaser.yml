@@ -58,7 +58,24 @@ builds:
     ldflags:
       - -s -w
 
-# Three separate archives so operators pulling only the admin CLI they
+  - id: demarkus-plugin
+    main: ./demarkus-plugin
+    binary: demarkus-plugin
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+# Separate archives so operators (and plugins) pull only the binary they
 # need don't carry the full bundle. Same shape as client/.goreleaser.yml.
 archives:
   - id: demarkus-broker
@@ -75,6 +92,11 @@ archives:
     builds:
       - demarkus-publish
     name_template: "demarkus-publish_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - id: demarkus-plugin
+    builds:
+      - demarkus-plugin
+    name_template: "demarkus-plugin_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "demarkus-tools_checksums.txt"
