@@ -97,6 +97,31 @@ function commandBody(name: string): string {
     .trim();
 }
 
+// pi-mcp-adapter routes MCP calls through a proxy tool named "mcp":
+//   { toolName: "mcp", input: { tool: "<prefixed name>", args: <json-string|object>, server?: string } }
+// Unwrap that to the underlying tool name + parsed args so the gates see the
+// real publish/append call. Direct (non-proxied) tool calls pass through unchanged.
+function normalizeToolCall(event: ToolCallEvent): { toolName: string; input: Record<string, unknown> } {
+  let toolName = event.toolName;
+  let input: Record<string, unknown> = event.input ?? {};
+  if (toolName === "mcp" && typeof input.tool === "string") {
+    toolName = input.tool;
+    const rawArgs = input.args;
+    if (typeof rawArgs === "string") {
+      try {
+        input = JSON.parse(rawArgs);
+      } catch {
+        input = {};
+      }
+    } else if (rawArgs && typeof rawArgs === "object") {
+      input = rawArgs as Record<string, unknown>;
+    } else {
+      input = {};
+    }
+  }
+  return { toolName, input };
+}
+
 export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   let contextDelivered = false;
   let activity = new SessionActivity();
@@ -125,12 +150,12 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    activity.observe(event.toolName);
+    const { toolName, input } = normalizeToolCall(event);
+    activity.observe(toolName);
 
-    const input = event.input ?? {};
     const decisions: GateDecision[] = [
-      destinationGate(event.toolName, input, ctx.cwd),
-      publishTagGate(event.toolName, input),
+      destinationGate(toolName, input, ctx.cwd),
+      publishTagGate(toolName, input),
     ];
 
     // Block on the first blocking decision (destination misroute before tag gate).
@@ -147,7 +172,7 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     }
 
     // Promote nudge on a fresh high-signal ADR publish (allowed call).
-    const nudge = promoteNudge(event.toolName, input);
+    const nudge = promoteNudge(toolName, input);
     if (nudge) pi.sendMessage({ customType: CUSTOM, content: nudge, display: false }, { triggerTurn: false });
 
     return undefined;

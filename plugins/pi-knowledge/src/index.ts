@@ -70,6 +70,31 @@ function commandBody(name: string): string {
     .trim();
 }
 
+// pi-mcp-adapter routes MCP calls through a proxy tool named "mcp":
+//   { toolName: "mcp", input: { tool: "<prefixed name>", args: <json-string|object>, server?: string } }
+// Unwrap that to the underlying tool name + parsed args so the gate sees the
+// real publish call. Direct (non-proxied) tool calls pass through unchanged.
+function normalizeToolCall(event: ToolCallEvent): { toolName: string; input: Record<string, unknown> } {
+  let toolName = event.toolName;
+  let input: Record<string, unknown> = event.input ?? {};
+  if (toolName === "mcp" && typeof input.tool === "string") {
+    toolName = input.tool;
+    const rawArgs = input.args;
+    if (typeof rawArgs === "string") {
+      try {
+        input = JSON.parse(rawArgs);
+      } catch {
+        input = {};
+      }
+    } else if (rawArgs && typeof rawArgs === "object") {
+      input = rawArgs as Record<string, unknown>;
+    } else {
+      input = {};
+    }
+  }
+  return { toolName, input };
+}
+
 export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
   let contextDelivered = false;
 
@@ -92,7 +117,8 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_call", (event) => {
-    const decision = publishGate(event.toolName, event.input ?? {});
+    const { toolName, input } = normalizeToolCall(event);
+    const decision = publishGate(toolName, input);
     if (decision.action === "block") return { block: true, reason: decision.reason };
     if (decision.action === "warn") {
       pi.sendMessage({ customType: CUSTOM, content: decision.reason, display: false }, { triggerTurn: false });
