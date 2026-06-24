@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -45,26 +46,54 @@ func cmdProvision(args []string) {
 		}
 		fmt.Println(s)
 	case "init":
-		// The mode is the first non-flag arg after "init"; flags may precede or
-		// follow it. Separate them so `provision init reuse --port N` and
-		// `provision init --port N reuse` both parse (and a missing mode errors).
+		// Parse flags and the positional mode in ANY order. Go's flag package
+		// stops at the first non-flag token, so it can't handle
+		// `provision init reuse --port N`; and a naive "first non-flag = mode"
+		// scan wrongly grabs a flag's value (`--port 6310 reuse` → mode "6310").
+		// So walk the args ourselves, knowing --port/--root each take a value
+		// (as `--flag V` or `--flag=V`); the first bare token is the mode.
 		mode := ""
-		var flagArgs []string
-		for _, a := range args[1:] {
-			if mode == "" && !strings.HasPrefix(a, "-") {
-				mode = a
-				continue
+		port := 0
+		root := ""
+		rest := args[1:]
+		takeVal := func(i *int, flagName string) string {
+			if eq := strings.IndexByte(rest[*i], '='); eq >= 0 {
+				return rest[*i][eq+1:]
 			}
-			flagArgs = append(flagArgs, a)
+			*i++
+			if *i >= len(rest) {
+				fail("provision init: " + flagName + " requires a value")
+			}
+			return rest[*i]
+		}
+		isFlag := func(a, name string) bool {
+			return a == "--"+name || a == "-"+name || strings.HasPrefix(a, "--"+name+"=") || strings.HasPrefix(a, "-"+name+"=")
+		}
+		for i := 0; i < len(rest); i++ {
+			a := rest[i]
+			switch {
+			case isFlag(a, "port"):
+				v := takeVal(&i, "--port")
+				n, err := strconv.Atoi(v)
+				if err != nil {
+					fail("provision init: --port wants an integer, got '" + v + "'")
+				}
+				port = n
+			case isFlag(a, "root"):
+				root = takeVal(&i, "--root")
+			case strings.HasPrefix(a, "-"):
+				fail("provision init: unknown flag '" + a + "'")
+			default:
+				if mode != "" {
+					fail("provision init: unexpected extra argument '" + a + "'")
+				}
+				mode = a
+			}
 		}
 		if mode == "" {
 			fail("provision init: requires a mode (default|reuse|isolated)")
 		}
-		fs := flag.NewFlagSet("provision-init", flag.ExitOnError)
-		port := fs.Int("port", 0, "port (reuse mode)")
-		root := fs.String("root", "", "soul root (reuse mode)")
-		_ = fs.Parse(flagArgs)
-		if err := provision.Init(mode, *port, *root); err != nil {
+		if err := provision.Init(mode, port, root); err != nil {
 			fail(err.Error())
 		}
 		fmt.Println("OK: provisioned (mode=" + mode + ")")
@@ -86,7 +115,7 @@ func fail(msg string) {
 // the mcp-config.mjs JS.
 func cmdRegistry(args []string) {
 	if len(args) == 0 {
-		fail("registry: missing subcommand (mcp|soul-join|soul-default|knowledge-join|knowledge-register|knowledge-unregister|policy-mirror|promote-target|detect-promote)")
+		fail("registry: missing subcommand (mcp|soul-join|soul-default|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote)")
 	}
 	switch args[0] {
 	case "mcp":
@@ -105,6 +134,14 @@ func cmdRegistry(args []string) {
 			fail(err.Error())
 		}
 		fmt.Println("OK: registered knowledge system '" + args[1] + "'")
+	case "knowledge-list":
+		systems, err := config.ListKnowledgeSystems()
+		if err != nil {
+			fail(err.Error())
+		}
+		for _, s := range systems {
+			fmt.Println(s)
+		}
 	case "knowledge-unregister":
 		if len(args) != 2 {
 			fail("knowledge-unregister: usage: registry knowledge-unregister <slug>")

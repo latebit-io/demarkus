@@ -229,6 +229,10 @@ func KnowledgeUnregister(slug string) (existed bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	// Hold the knowledge-systems lock across BOTH the registry mutation and the
+	// policy-file cleanup, and have PolicyMirror take the same lock, so an
+	// unregister can't race a concurrent re-mirror of the same slug and leave
+	// orphaned policy files the gate would keep enforcing.
 	err = withLock(p, func() error {
 		rows, err := readRecords("knowledge-systems")
 		if err != nil {
@@ -249,62 +253,73 @@ func KnowledgeUnregister(slug string) (existed bool, err error) {
 			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			return nil
+		} else if err := atomicWrite(p, []byte(strings.Join(kept, "\n")+"\n")); err != nil {
+			return err
 		}
-		return atomicWrite(p, []byte(strings.Join(kept, "\n")+"\n"))
+		// Clear mirrored policy so a re-join starts clean and the gate doesn't
+		// keep enforcing axes/fields for a system that's no longer joined.
+		return clearPolicyMirror(slug)
 	})
-	if err != nil {
-		return existed, err
-	}
-	// Clear mirrored policy so a re-join starts clean and the gate doesn't keep
-	// enforcing axes/fields for a system that's no longer joined.
-	for _, name := range []string{
-		"plugin-knowledge.strictness." + slug,
-		"plugin-knowledge.require-tags." + slug,
-		"plugin-knowledge.require-fields." + slug,
-	} {
-		fp, e := config.StatePath(name)
-		if e != nil {
-			return existed, e
-		}
-		if e := os.Remove(fp); e != nil && !os.IsNotExist(e) {
-			return existed, e
-		}
-	}
-	return existed, nil
+	return existed, err
 }
 
 var policyKeys = []string{"strictness", "require_tags", "require_fields"}
 
-// PolicyMirror parses a knowledge system's policy.md body and mirrors its
-// enforced core to the per-slug files the gate reads. A knob absent from the
-// policy clears its file (relaxing de-enforces). Idempotent.
-func PolicyMirror(slug, body string) error {
-	if !slugSafe.MatchString(slug) {
-		return fmt.Errorf("invalid slug '%s': only [A-Za-z0-9._-] allowed", slug)
-	}
-	fileFor := map[string]string{
+func policyFileFor(slug string) map[string]string {
+	return map[string]string{
 		"strictness":     "plugin-knowledge.strictness." + slug,
 		"require_tags":   "plugin-knowledge.require-tags." + slug,
 		"require_fields": "plugin-knowledge.require-fields." + slug,
 	}
-	for _, key := range policyKeys {
-		val := policyField(body, key)
-		p, err := config.StatePath(fileFor[key])
+}
+
+// clearPolicyMirror removes every per-slug policy file. Callers must already hold
+// the knowledge-systems lock.
+func clearPolicyMirror(slug string) error {
+	for _, name := range policyFileFor(slug) {
+		fp, err := config.StatePath(name)
 		if err != nil {
 			return err
 		}
-		if val == "" {
-			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-			continue
-		}
-		if err := atomicWrite(p, []byte(val+"\n")); err != nil {
+		if err := os.Remove(fp); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
 	return nil
+}
+
+// PolicyMirror parses a knowledge system's policy.md body and mirrors its
+// enforced core to the per-slug files the gate reads. A knob absent from the
+// policy clears its file (relaxing de-enforces). Idempotent. Serialized against
+// KnowledgeUnregister via the shared knowledge-systems lock.
+func PolicyMirror(slug, body string) error {
+	if !slugSafe.MatchString(slug) {
+		return fmt.Errorf("invalid slug '%s': only [A-Za-z0-9._-] allowed", slug)
+	}
+	lockPath, err := config.StatePath("knowledge-systems")
+	if err != nil {
+		return err
+	}
+	return withLock(lockPath, func() error {
+		fileFor := policyFileFor(slug)
+		for _, key := range policyKeys {
+			val := policyField(body, key)
+			p, err := config.StatePath(fileFor[key])
+			if err != nil {
+				return err
+			}
+			if val == "" {
+				if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				continue
+			}
+			if err := atomicWrite(p, []byte(val+"\n")); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // policyField returns the value of the first body line "KEY: value" where KEY is

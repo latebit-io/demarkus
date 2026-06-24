@@ -63,9 +63,10 @@ func tagsString(md map[string]any) string {
 }
 
 // fieldPresent reports whether a required metadata field is satisfied. A string
-// must be non-blank; any other non-null value (number, bool, array, object) is
-// accepted as present — only string fields have an emptiness notion, so e.g.
-// metadata.authors: ["ada"] must not read as missing.
+// must be non-blank; a number or bool counts as present; an array or object
+// must be NON-EMPTY (an empty `[]`/`{}` is treated as missing, same as a blank
+// string), so e.g. metadata.authors: ["ada"] is present but metadata.authors: []
+// is not.
 func fieldPresent(md map[string]any, key string) bool {
 	if md == nil {
 		return false
@@ -74,10 +75,16 @@ func fieldPresent(md map[string]any, key string) bool {
 	if !ok || v == nil {
 		return false
 	}
-	if s, isStr := v.(string); isStr {
-		return strings.TrimSpace(s) != ""
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t) != ""
+	case []any:
+		return len(t) > 0
+	case map[string]any:
+		return len(t) > 0
+	default:
+		return true // numbers, bools, etc. count as present
 	}
-	return true
 }
 
 // importanceOK: absent is fine; otherwise a number or non-blank numeric string in

@@ -958,7 +958,26 @@ func withProvisionLock(fn func() error) error {
 		}
 		if b, e := os.ReadFile(lockPid); e == nil {
 			if pid, e2 := strconv.Atoi(strings.TrimSpace(string(b))); e2 == nil && !pidAlive(pid) {
-				_ = os.RemoveAll(lockDir)
+				// Stale-lock recovery, ownership-safe: atomically rename the lock
+				// dir aside (only one racer's rename wins), then RE-READ the
+				// moved-aside pid and confirm it's still dead before deleting. A
+				// blind RemoveAll here could nuke a lock another process freshly
+				// acquired between the read above and the delete; if the rename
+				// turns out to have grabbed such a live lock, we put it back.
+				aside := lockDir + ".stale." + strconv.Itoa(os.Getpid())
+				if os.Rename(lockDir, aside) == nil {
+					restore := false
+					if b2, e3 := os.ReadFile(filepath.Join(aside, "pid")); e3 == nil {
+						if p2, e4 := strconv.Atoi(strings.TrimSpace(string(b2))); e4 == nil && pidAlive(p2) {
+							restore = true // moved a freshly-acquired live lock — undo
+						}
+					}
+					if restore {
+						_ = os.Rename(aside, lockDir)
+					} else {
+						_ = os.RemoveAll(aside)
+					}
+				}
 				continue
 			}
 		}

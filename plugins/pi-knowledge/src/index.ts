@@ -111,8 +111,12 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
     const parts: string[] = [];
     if (!contextDelivered) {
       const context = await callGuidance("knowledge", GUIDANCE_FILE);
-      if (context) parts.push(context);
-      contextDelivered = true;
+      // null = binary failed; leave the flag unset so we retry next turn rather
+      // than dropping guidance for the whole session. "" = ran, nothing to say.
+      if (context !== null) {
+        if (context) parts.push(context);
+        contextDelivered = true;
+      }
     }
     const recall = await callNudge({ event: "recall", surface: "knowledge", prompt: event.prompt ?? "" });
     if (recall) parts.push(recall);
