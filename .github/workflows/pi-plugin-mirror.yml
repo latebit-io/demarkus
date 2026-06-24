@@ -1,0 +1,73 @@
+name: Mirror pi plugins to standalone repos
+
+# Keeps the standalone install repos (latebit-io/demarkus-pi-memory and
+# demarkus-pi-knowledge) in sync with the monorepo. pi's `git:` installer reads a
+# repo's ROOT package.json and has no subdirectory syntax, so each plugin must
+# live at the root of its own repo. On every push to main that touches a plugin,
+# this `git subtree split`s the plugin's subdirectory history and force-pushes it
+# to that plugin's standalone repo's default branch — the CI equivalent of
+# running plugins/setup-pi-repos.sh by hand.
+#
+# Requires a repo secret PI_MIRROR_TOKEN: a token with `contents:write` on BOTH
+# standalone repos (a fine-grained PAT scoped to them, or a GitHub App install
+# token). The default GITHUB_TOKEN only has access to THIS repo, so cross-repo
+# push needs an explicit credential.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugins/pi-memory/**"
+      - "plugins/pi-knowledge/**"
+  workflow_dispatch: {}
+
+# Serialize runs so two quick merges can't race their force-pushes.
+concurrency:
+  group: pi-plugin-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      # One plugin failing shouldn't block mirroring the other.
+      fail-fast: false
+      matrix:
+        include:
+          - prefix: plugins/pi-memory
+            repo: demarkus-pi-memory
+          - prefix: plugins/pi-knowledge
+            repo: demarkus-pi-knowledge
+    steps:
+      - name: Checkout (full history for subtree split)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify git subtree is available
+        run: git subtree --help >/dev/null 2>&1 || git subtree split -h >/dev/null 2>&1 || { echo "git subtree not available on runner"; exit 1; }
+
+      - name: Split subtree and force-push to ${{ matrix.repo }}
+        env:
+          PI_MIRROR_TOKEN: ${{ secrets.PI_MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PI_MIRROR_TOKEN:-}" ]; then
+            echo "::error::PI_MIRROR_TOKEN secret is not set — cannot push to latebit-io/${{ matrix.repo }}"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Recompute the subdirectory's history as a standalone branch.
+          git subtree split --prefix="${{ matrix.prefix }}" -b pi-split
+
+          # Force-push the split history to the standalone repo's default branch.
+          # The token is masked by Actions; restrict it to the push URL only.
+          git push --force \
+            "https://x-access-token:${PI_MIRROR_TOKEN}@github.com/latebit-io/${{ matrix.repo }}.git" \
+            pi-split:main
+
+          echo "Mirrored ${{ matrix.prefix }} → latebit-io/${{ matrix.repo }} (main)"

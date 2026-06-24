@@ -74,4 +74,6 @@ After landing changes to `plugins/pi-knowledge/` in the monorepo, re-publish the
 plugins/setup-pi-repos.sh            # --dry-run to preview
 ```
 
-`setup-pi-repos.sh` runs `git subtree split --prefix=plugins/pi-knowledge` to recompute the subdirectory's history and force-pushes it to the standalone repo's default branch — so the standalone repo always matches the monorepo subtree. It only reads **committed** history, so commit first. Users then pick up the change with `pi update git:github.com/latebit-io/demarkus-pi-knowledge`.
+This is automated: the `.github/workflows/pi-plugin-mirror.yml` workflow runs on every push to `main` that touches `plugins/pi-knowledge/**` and mirrors it for you (it needs a `PI_MIRROR_TOKEN` repo secret with `contents:write` on the standalone repos). The `plugins/setup-pi-repos.sh` script is the manual fallback / bootstrap.
+
+Either way it runs `git subtree split --prefix=plugins/pi-knowledge` to recompute the subdirectory's history and force-pushes it to the standalone repo's default branch — so the standalone repo always matches the monorepo subtree. It only reads **committed** history, so the change must be merged to `main` first. Users then pick up the change with `pi update git:github.com/latebit-io/demarkus-pi-knowledge`.
