@@ -2,6 +2,8 @@
 description: Show the demarkus-memory plugin's connection state and verify it's healthy
 ---
 
+# /soul-status
+
 Diagnose the plugin's current setup: configured mode, soul path, port, server process, installed binaries, and connectivity. Useful when something is acting up or before reporting an issue.
 
 ## Steps
@@ -10,7 +12,7 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
 
 2. **Inspect the binaries.** Run:
 
-   ```
+   ```text
    ls -la ~/.demarkus/bin/ 2>/dev/null
    for b in demarkus-server demarkus-mcp demarkus-token; do
      printf '%s ' "$b"; ~/.demarkus/bin/$b --version 2>/dev/null || echo "(missing or too old for --version)"
@@ -23,7 +25,7 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
 
 3. **Check the server process.** Read `SOUL_DIR` and `PORT` from the config. Run:
 
-   ```
+   ```text
    pgrep -af "demarkus-server.*-root ${SOUL_DIR}" || echo "(no server running at ${SOUL_DIR})"
    ```
 
@@ -31,7 +33,7 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
 
 5. **Render a compact status report.** Use this shape:
 
-   ```
+   ```text
    ## demarkus-memory status
 
    - **Mode:** <default | isolated | reuse>

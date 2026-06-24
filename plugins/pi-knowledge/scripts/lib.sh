@@ -152,6 +152,12 @@ tags_have_axis() {
 register_knowledge_system() {
   local slug="$1"
   [[ -n "${slug}" ]] || return 1
+  # The slug is written verbatim as one registry line and later compared against
+  # MCP server names by the publish gate. Reject anything outside [A-Za-z0-9._-]
+  # (whitespace, newlines, separators) so a malformed slug can't inject extra
+  # registry lines or make the gate enforce on unintended server names — the same
+  # constraint mirror_policy applies to its per-slug files.
+  case "${slug}" in *[!A-Za-z0-9._-]*) return 2 ;; esac
   mkdir -p "${PLUGIN_HOME}"
   touch "${PLUGIN_KNOWLEDGE_REGISTRY}"
   grep -qxF "${slug}" "${PLUGIN_KNOWLEDGE_REGISTRY}" 2>/dev/null && return 0

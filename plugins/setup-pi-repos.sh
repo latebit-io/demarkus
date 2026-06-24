@@ -29,7 +29,18 @@ ORG="${ORG:-latebit-io}"
 VISIBILITY="${VISIBILITY:-public}"
 BRANCH="${BRANCH:-main}"
 DRY_RUN=0
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+# Validate args before any destructive (split/create/push) work — a typo'd flag
+# must not be silently ignored.
+if (( $# > 0 )); then
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    *) echo "error: unknown argument: $1 (usage: setup-pi-repos.sh [--dry-run])" >&2; exit 2 ;;
+  esac
+  if (( $# > 1 )); then
+    echo "error: too many arguments (usage: setup-pi-repos.sh [--dry-run])" >&2
+    exit 2
+  fi
+fi
 
 # plugin-subdir : target-repo-name
 PLUGINS=(

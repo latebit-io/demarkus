@@ -3,11 +3,11 @@
 // guidance; when none are, emit a single one-time pointer to /knowledge-join,
 // then stay quiet.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { listKnowledgeSystems, soulIsConfigured } from "./config.js";
-import { HINT_SENTINEL } from "./paths.js";
+import { HINT_SENTINEL, PLUGIN_HOME } from "./paths.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GUIDANCE_FILE = join(HERE, "..", "context", "session-guidance.md");
@@ -28,6 +28,9 @@ export function buildSessionContext(): string {
     // Point at the join command exactly once, then stay silent.
     if (existsSync(HINT_SENTINEL)) return "";
     try {
+      // The parent dir may not exist on a fresh install with no joined systems;
+      // create it so the sentinel persists and the hint truly shows only once.
+      mkdirSync(PLUGIN_HOME, { recursive: true });
       writeFileSync(HINT_SENTINEL, "");
     } catch {
       /* best-effort */

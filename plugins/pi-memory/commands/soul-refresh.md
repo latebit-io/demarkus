@@ -2,6 +2,8 @@
 description: Refresh promoted soul documents from the knowledge system — the downward leg of the coherence edge (knowledge is authoritative; the soul refreshes from it)
 ---
 
+# /soul-refresh
+
 Keep promoted soul documents fresh as their published copies evolve. This is the **downward** counterpart to `/promote`: once a soul doc is promoted, the authoritative copy lives in the knowledge system and may move on, leaving the soul's copy stale. This command detects that and refreshes — always **directionally**: knowledge is the base of truth, the soul refreshes *from* it, and local soul edits re-enter *upward* through `/promote`'s gate, never as a silent two-way merge.
 
 `$ARGUMENTS` optionally narrows to one soul path; empty means scan all promoted docs.
@@ -12,7 +14,7 @@ Keep promoted soul documents fresh as their published copies evolve. This is the
 
 2. **Find promoted docs.** If `$ARGUMENTS` names a path, use just that one. Otherwise `mark_lookup` the soul with `filter=tag=promoted` to list every promoted document (the `/promote` back-stamp adds that tag). For each, `mark_fetch` it and parse its marker line:
 
-   ```
+   ```text
    promoted: mark://<dest>/<path>@v<N>
    ```
 

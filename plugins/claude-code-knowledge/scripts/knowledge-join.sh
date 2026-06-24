@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 fail() {
   local msg="$1"
   echo "FAIL: ${msg}"
-  echo "[demarkus-memory] error: ${msg}" >&2
+  echo "[demarkus-knowledge] error: ${msg}" >&2
   exit 1
 }
 
@@ -124,7 +124,22 @@ esac
 HOST="${URL#*://}"
 HOST="${HOST%%/*}"
 HOST="${HOST%%:*}"          # strip :port if present
-SLUG_RAW="${HOST%%.*}"      # first DNS label
+
+# Derive the slug from the host's DNS labels. The leftmost label is often a
+# generic infra prefix, and many orgs deploy brokers on the shared
+# `mcp.broker.<org>` shape — blindly taking the first label would collapse every
+# such host to "mcp"/"broker", so they'd overwrite each other in the registry
+# and as MCP server names. Skip leading generic labels and use the first
+# meaningful one; fall back to the leftmost label only if every label is generic.
+_oldifs="$IFS"; IFS='.' read -ra _labels <<<"${HOST}"; IFS="$_oldifs"
+SLUG_RAW=""
+for _label in "${_labels[@]}"; do
+  case "${_label}" in
+    mcp|broker|api|gateway|gw|www) continue ;;
+    *) SLUG_RAW="${_label}"; break ;;
+  esac
+done
+[[ -n "${SLUG_RAW}" ]] || SLUG_RAW="${HOST%%.*}"
 
 # Sanitize: lowercase, replace non-[a-z0-9-] with -, collapse + trim
 # leading/trailing hyphens. The output is what shows up as the MCP

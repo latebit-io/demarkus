@@ -3,6 +3,7 @@
 // these; provisioning + registry mutation stays in the bundled bash.
 
 import { existsSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   KNOWLEDGE_REGISTRY,
   LOCAL_SOUL_ID,
@@ -16,20 +17,27 @@ import {
 
 export type Strictness = "warn" | "block" | "ask";
 
-function readTrimmed(path: string): string {
+// Read a file's contents, treating ONLY "file does not exist" (ENOENT) as
+// empty. Any other error (permissions, I/O) is rethrown rather than masked as
+// "absent" — a config/registry/policy file that's present but unreadable must
+// not silently look empty and disable the gates (it would let non-compliant or
+// misrouted publishes slip through). In a tool_call gate a rethrow fails closed.
+function readRaw(path: string): string {
   try {
-    return readFileSync(path, "utf8").trim();
-  } catch {
-    return "";
+    return readFileSync(path, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return "";
+    throw e;
   }
 }
 
+function readTrimmed(path: string): string {
+  return readRaw(path).trim();
+}
+
 function readLines(path: string): string[] {
-  try {
-    return readFileSync(path, "utf8").split("\n");
-  } catch {
-    return [];
-  }
+  const raw = readRaw(path);
+  return raw === "" ? [] : raw.split("\n");
 }
 
 // Non-blank, non-comment rows with surrounding whitespace trimmed.
@@ -78,11 +86,23 @@ export function isRegisteredRemoteSoul(slug: string): boolean {
   return slug.length > 0 && listRemoteSouls().includes(slug);
 }
 
-// project_soul_binding: the catalog slug bound to repo DIR, exact match.
+// project_soul_binding: the catalog slug bound to repo DIR. Checks DIR then
+// walks up its parents, so a session started in repo/subdir still picks up the
+// binding stored for repo (the nearest ancestor wins). "" when nothing matches.
 export function projectSoulBinding(dir: string): string {
+  const map = new Map<string, string>();
   for (const row of records(PROJECT_SOULS)) {
     const [d, slug] = row.split("\t");
-    if (d === dir) return slug ?? "";
+    if (d) map.set(d, slug ?? "");
+  }
+  if (map.size === 0) return "";
+  let cur = dir;
+  while (cur) {
+    const hit = map.get(cur);
+    if (hit !== undefined) return hit;
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
   }
   return "";
 }

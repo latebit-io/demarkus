@@ -2,6 +2,8 @@
 description: Restore session context from the current project's soul (recent journal, active work)
 ---
 
+# /soul-context
+
 Bring the current project's recent memory into the session so the agent and the user can pick up where they left off. Read-only; does not modify the soul.
 
 ## Steps
@@ -16,7 +18,7 @@ Bring the current project's recent memory into the session so the agent and the 
 
 5. **Summarize for the user.** Render in this shape, plain text, no preamble:
 
-   ```
+   ```text
    ## <Project> — recent context
 
    ### What's in flight

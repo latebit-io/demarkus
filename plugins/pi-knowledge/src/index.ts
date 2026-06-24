@@ -14,9 +14,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { publishGate } from "./gate.js";
 import { buildSessionContext } from "./guidance.js";
 import { recallNudge } from "./nudges.js";
+import { callGate } from "./plugin.js";
 
 interface UI {
   notify(message: string, level?: "info" | "warning" | "error"): void;
@@ -118,10 +118,17 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
 
   pi.on("tool_call", (event) => {
     const { toolName, input } = normalizeToolCall(event);
-    const decision = publishGate(toolName, input);
-    if (decision.action === "block") return { block: true, reason: decision.reason };
-    if (decision.action === "warn") {
-      pi.sendMessage({ customType: CUSTOM, content: decision.reason, display: false }, { triggerTurn: false });
+    // Shared decision via the demarkus-plugin binary (knowledge tag/axes/fields gate).
+    const decision = callGate(toolName, input, "");
+    if (decision.decision === "block" || decision.decision === "ask") {
+      const reason =
+        decision.decision === "ask"
+          ? `${decision.reason ?? "blocked"} Confirm with the user before proceeding.`
+          : (decision.reason ?? "blocked");
+      return { block: true, reason };
+    }
+    if (decision.decision === "warn" && decision.reason) {
+      pi.sendMessage({ customType: CUSTOM, content: `⚠️ ${decision.reason}`, display: false }, { triggerTurn: false });
     }
     return undefined;
   });

@@ -8,7 +8,7 @@
 // clobbering the user's other servers.
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,31 +36,81 @@ export function provisionServer(): Promise<string> {
   });
 }
 
-// ensureMcpServerEntry — make sure ~/.config/mcp/mcp.json registers the
-// demarkus-memory server via the bundled wrapper. Idempotent; only writes when
-// the entry is missing or its command path changed. Returns true if it wrote.
-export function ensureMcpServerEntry(): boolean {
-  let config: { mcpServers?: Record<string, unknown> } = {};
-  if (existsSync(MCP_CONFIG)) {
-    try {
-      config = JSON.parse(readFileSync(MCP_CONFIG, "utf8")) || {};
-    } catch {
-      // Unparseable config: don't clobber the user's file — bail and let them fix it.
-      return false;
-    }
-  }
-  if (typeof config !== "object" || config === null) config = {};
-  if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
+export type EnsureResult =
+  | { status: "unchanged" }
+  | { status: "written" }
+  | { status: "error"; message: string };
 
-  const existing = config.mcpServers[MCP_SERVER_NAME] as { command?: string } | undefined;
-  if (existing && existing.command === MCP_WRAPPER_SH) return false;
+// Synchronous sleep (no busy-spin) for the brief lock retry loop.
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
-  config.mcpServers[MCP_SERVER_NAME] = { command: MCP_WRAPPER_SH };
+// withConfigLock — serialize read-modify-write of the shared global mcp.json via
+// an atomic mkdir mutex, so two concurrent session starts (or another MCP config
+// writer) can't clobber each other and drop server entries. Bounded (~1s) then
+// reports an error rather than blocking forever on a stale lock.
+function withConfigLock(fn: () => EnsureResult): EnsureResult {
+  const lock = `${MCP_CONFIG}.lock`;
   try {
     mkdirSync(dirname(MCP_CONFIG), { recursive: true });
-    writeFileSync(MCP_CONFIG, `${JSON.stringify(config, null, 2)}\n`);
-    return true;
-  } catch {
-    return false;
+  } catch (e) {
+    return { status: "error", message: `cannot create ${dirname(MCP_CONFIG)}: ${String((e as Error)?.message ?? e)}` };
   }
+  for (let i = 0; i < 50; i++) {
+    try {
+      mkdirSync(lock); // atomic: succeeds only if we created it
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code === "EEXIST") {
+        sleepSync(20);
+        continue;
+      }
+      return { status: "error", message: `lock error on ${lock}: ${String((e as Error)?.message ?? e)}` };
+    }
+    try {
+      return fn();
+    } finally {
+      try {
+        rmdirSync(lock);
+      } catch {
+        /* best-effort release */
+      }
+    }
+  }
+  return { status: "error", message: `could not acquire ${lock} (held by another process?)` };
+}
+
+// ensureMcpServerEntry — make sure ~/.config/mcp/mcp.json registers the
+// demarkus-memory server via the bundled wrapper. Idempotent; writes only when
+// the entry is missing or its command path changed. Returns a structured result
+// so the caller can distinguish "already correct" from a real failure (rather
+// than collapsing both into a bare false). The write is locked + atomic
+// (temp file + rename) so a concurrent writer can't tear or drop entries.
+export function ensureMcpServerEntry(): EnsureResult {
+  return withConfigLock(() => {
+    let config: { mcpServers?: Record<string, unknown> } = {};
+    if (existsSync(MCP_CONFIG)) {
+      try {
+        config = JSON.parse(readFileSync(MCP_CONFIG, "utf8")) || {};
+      } catch {
+        // Unparseable config: don't clobber the user's file — surface it.
+        return { status: "error", message: `${MCP_CONFIG} is not valid JSON; fix it by hand` };
+      }
+    }
+    if (typeof config !== "object" || config === null) config = {};
+    if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
+
+    const existing = config.mcpServers[MCP_SERVER_NAME] as { command?: string } | undefined;
+    if (existing && existing.command === MCP_WRAPPER_SH) return { status: "unchanged" };
+
+    config.mcpServers[MCP_SERVER_NAME] = { command: MCP_WRAPPER_SH };
+    try {
+      const tmp = `${MCP_CONFIG}.${process.pid}.tmp`;
+      writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`);
+      renameSync(tmp, MCP_CONFIG);
+      return { status: "written" };
+    } catch (e) {
+      return { status: "error", message: `could not write ${MCP_CONFIG}: ${String((e as Error)?.message ?? e)}` };
+    }
+  });
 }

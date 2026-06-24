@@ -2,6 +2,8 @@
 description: Promote a soul document up to a shared knowledge system — curate, route, gate, publish, and back-stamp the source
 ---
 
+# /promote
+
 Promote one soul document from your personal soul (the staging tier) up to a shared destination (the curated, authoritative tier). A destination is either a **brokered knowledge system** (joined via `/knowledge-join`) or a **plain remote demarkus server** registered as a promote target. This is the bridge between the two plugins: the memory side owns intent, source, registry, and back-stamp; the **execution cascade (triage → distill → dedup → tag → route → gate → publish) is the demarkus-knowledge plugin's `knowledge-promote` skill.** This command orchestrates them and is the manual promotion trigger.
 
 `$ARGUMENTS` is the soul path to promote (e.g. `/demarkus/plans/foo.md`). If empty, ask which document.
@@ -29,7 +31,7 @@ Promote one soul document from your personal soul (the staging tier) up to a sha
 6. **Back-stamp the soul doc (memory side, this command's job — the knowledge plugin never writes the soul).** Apply provenance to the source so it is not re-promoted and does not drift from the now-authoritative copy. Confirm the mode with the user:
    Both modes carry the same machine-readable marker line so `/soul-refresh` can find the doc later and tell which destination version it tracks. Emit it **verbatim** on its own line, where `<dest>`/`<path>` is the published mark from step 5 and `<N>` its version:
 
-   ```
+   ```text
    promoted: mark://<dest>/<path>@v<N>
    ```
 

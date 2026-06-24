@@ -90,6 +90,7 @@ jobs:
       - run: cd tools && go build -o /dev/null ./demarkus-broker
       - run: cd tools && go build -o /dev/null ./demarkus-token
       - run: cd tools && go build -o /dev/null ./demarkus-publish
+      - run: cd tools && go build -o /dev/null ./demarkus-plugin
 
   semver-protocol:
     needs: test-protocol

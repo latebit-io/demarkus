@@ -72,7 +72,7 @@ One fetch per document, so only run these for a single world (or when the user a
 
 Render plainly, grouped by world then by check, most actionable first. Lead with a one-line summary per system (`<system>: <W> worlds, <N> docs, <X> findings`). Shape:
 
-```
+```text
 ## <system> — hygiene report
 
 ### mark://<world>/  (<N> docs, writable: yes/no)   [coverage: your read scope]

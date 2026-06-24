@@ -14,11 +14,18 @@ import {
 
 export type Strictness = "warn" | "block" | "ask";
 
+// Read a file, treating ONLY ENOENT (does-not-exist) as empty. Any other error
+// (permissions, I/O) is rethrown rather than masked as "absent": a registry or
+// policy file that exists but is unreadable must not silently look empty and
+// disable the gate (publishGateScope would stop recognizing joined systems and
+// configuredRequire* would drop all policy requirements). In a tool_call gate a
+// rethrow fails closed.
 function readText(path: string): string {
   try {
     return readFileSync(path, "utf8");
-  } catch {
-    return "";
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return "";
+    throw e;
   }
 }
 

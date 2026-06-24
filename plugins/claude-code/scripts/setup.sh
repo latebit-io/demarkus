@@ -59,6 +59,15 @@ do_reuse() {
   local target_pid
   target_pid=$(pid_of_server_at_root "${root}" 2>/dev/null || true)
   if [[ -n "${target_pid}" ]]; then
+    # Validate that the adopted server is actually listening on --port. mcp-wrapper.sh
+    # always dials mark://localhost:${PORT} from the saved config, so a mistyped or
+    # stale --port would leave the plugin "configured" while every MCP call hits the
+    # wrong endpoint. Resolve the real port from the process and refuse a mismatch.
+    local actual_port
+    actual_port=$(find_running_demarkus | awk -v p="${target_pid}" '$1 == p { print $2; exit }')
+    if [[ -n "${actual_port}" && "${actual_port}" != "${port}" ]]; then
+      die "the demarkus-server at root ${root} (pid ${target_pid}) is listening on port ${actual_port}, not ${port}; re-run with --port ${actual_port}"
+    fi
     if kill -HUP "${target_pid}" 2>/dev/null; then
       log "sent SIGHUP to adopted server (pid=${target_pid}) to reload tokens"
     else

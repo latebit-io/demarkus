@@ -1,3 +1,5 @@
+# demarkus knowledge systems
+
 A demarkus **knowledge system** is an organization's shared, versioned knowledge base, reached over the broker through the MCP tools listed above. It is the authoritative catalog for work that more than one person relies on. Treat it as first-class: for any subject that is shared, organizational, or cross-team, consult the knowledge system **before** answering from this conversation, and record durable shared knowledge there as you go.
 
 ## Consult the knowledge system first (proactively)

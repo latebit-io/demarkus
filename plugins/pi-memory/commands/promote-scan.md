@@ -2,6 +2,8 @@
 description: Sweep the soul for promotion candidates — high-signal, durable, not-yet-promoted docs worth lifting to the knowledge system — and queue them for the gate
 ---
 
+# /promote-scan
+
 Scan the soul for documents worth promoting to a shared knowledge system, and present a ranked candidate list. This is the on-demand, in-session form of the pipeline's batch sweep: it automates the "mark a candidate" step across many docs at once, so you do not have to remember what is ready. It **never** promotes on its own — each candidate goes through `/promote`, which owns the human gate. (The fully autonomous batch sweep is a separate scheduled agent, not this command.)
 
 `$ARGUMENTS` optionally scopes to one project slug; empty means scan every project.
@@ -21,7 +23,7 @@ Scan the soul for documents worth promoting to a shared knowledge system, and pr
 
 5. **Present the ranked list.** Plain text, highest-signal first:
 
-   ```
+   ```text
    ## Promotion candidates — <scope>
 
    1. /<slug>/adr/0007-foo.md — <one line: why it's a candidate>

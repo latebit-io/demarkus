@@ -16,9 +16,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { destinationGate, publishTagGate, type GateDecision } from "./gates.js";
 import { buildSessionContext } from "./guidance.js";
 import { promoteNudge, recallNudge, SessionActivity } from "./nudges.js";
+import { callGate } from "./plugin.js";
 import { ensureMcpServerEntry, provisionServer } from "./setup.js";
 
 // Minimal structural types — pi's ExtensionAPI is provided at runtime; we keep
@@ -130,7 +130,10 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     contextDelivered = false;
     activity = new SessionActivity();
 
-    ensureMcpServerEntry();
+    const mcp = ensureMcpServerEntry();
+    if (mcp.status === "error") {
+      ctx.ui.notify(`demarkus-memory: MCP registration failed: ${mcp.message}`, "warning");
+    }
     const warning = await provisionServer();
     if (warning) ctx.ui.notify(warning, "warning");
   });
@@ -151,24 +154,27 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
 
   pi.on("tool_call", async (event, ctx) => {
     const { toolName, input } = normalizeToolCall(event);
-    activity.observe(toolName);
 
-    const decisions: GateDecision[] = [
-      destinationGate(toolName, input, ctx.cwd),
-      publishTagGate(toolName, input),
-    ];
-
-    // Block on the first blocking decision (destination misroute before tag gate).
-    const blocking = decisions.find((d) => d.action === "block");
-    if (blocking && blocking.action === "block") {
-      return { block: true, reason: blocking.reason };
+    // The shared demarkus-plugin binary owns the gate decision (publish tag-gate
+    // + destination gate), so the logic lives in one place for every harness.
+    const decision = callGate(toolName, input, ctx.cwd);
+    if (decision.decision === "block" || decision.decision === "ask") {
+      // pi's tool_call has no native "ask"; treat it as a block whose reason
+      // tells the agent to confirm with the user first.
+      const reason =
+        decision.decision === "ask"
+          ? `${decision.reason ?? "blocked"} Confirm with the user before proceeding.`
+          : (decision.reason ?? "blocked");
+      return { block: true, reason };
     }
 
-    // Non-blocking warnings surface as injected reminders.
-    for (const d of decisions) {
-      if (d.action === "warn") {
-        pi.sendMessage({ customType: CUSTOM, content: d.reason, display: false }, { triggerTurn: false });
-      }
+    // Record activity only for calls that survive the gate, so a blocked
+    // publish/append doesn't suppress the session-end journal nudge.
+    activity.observe(toolName);
+
+    // warn → allow + surface a reminder.
+    if (decision.decision === "warn" && decision.reason) {
+      pi.sendMessage({ customType: CUSTOM, content: `⚠️ ${decision.reason}`, display: false }, { triggerTurn: false });
     }
 
     // Promote nudge on a fresh high-signal ADR publish (allowed call).

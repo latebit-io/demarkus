@@ -16,14 +16,14 @@ readonly PLUGIN_CONFIG="${PLUGIN_HOME}/plugin-memory.conf"
 readonly PLUGIN_TOKEN_FILE="${PLUGIN_HOME}/plugin-memory.token"
 readonly TOKEN_LABEL="claude-code-plugin"
 
-# Strictness for the publish tag-gate (hooks/publish-gate.sh). One line:
-# warn | block | ask. Kept in its own file, orthogonal to PLUGIN_CONFIG, so
+# Strictness for the publish tag-gate (read by the demarkus-plugin `gate`). One
+# line: warn | block | ask. Kept in its own file, orthogonal to PLUGIN_CONFIG, so
 # setup.sh rewrites of the conf never clobber a chosen strictness. Absent file
 # means the warn default. (Organizational knowledge systems and their per-slug
 # strictness live in the separate demarkus-knowledge plugin, not here.)
 readonly PLUGIN_STRICTNESS_FILE="${PLUGIN_HOME}/plugin-memory.strictness"
 
-# Strictness for the destination gate (hooks/dest-gate.sh): warn | block | ask.
+# Strictness for the destination gate (read by the demarkus-plugin `gate`): warn | block | ask.
 # Separate file from the tag-gate strictness so the two enforcement axes are set
 # independently. Absent file means the block default — an explicit project→soul
 # binding means writes belong to the bound soul, so a misroute is an error to
@@ -162,10 +162,27 @@ knowledge_present() {
 # below skip blank lines and #-comments and split on tab only, so a host or path
 # containing spaces survives intact.
 
+# _registry_lock FILE / _registry_unlock FILE — serialize read-modify-write of a
+# registry FILE via an atomic mkdir mutex (portable; flock isn't on stock macOS).
+# Two concurrent /soul-join or default-binding writes would otherwise both read
+# the same old registry through their AWK filters and the second mv would lose the
+# first's row. Bounded spin (~2s) so a stale lock can't wedge a session.
+_registry_lock() {
+  local lock="$1.lock" i=0
+  while ! mkdir "${lock}" 2>/dev/null; do
+    i=$((i + 1))
+    (( i > 100 )) && return 1
+    sleep 0.02
+  done
+  return 0
+}
+_registry_unlock() { rmdir "$1.lock" 2>/dev/null || true; }
+
 # register_remote_soul SLUG HOST INSECURE TOKEN_FILE — idempotent upsert. Any
 # existing row for SLUG is replaced (a re-join can change host/token), so the
 # catalog never carries two rows for one slug. INSECURE is normalized to 0|1;
 # TOKEN_FILE of "" is stored as "-" (no auth). Returns non-zero on empty slug.
+# Locked + mktemp (unique temp in the same dir) so concurrent upserts can't race.
 register_remote_soul() {
   local slug="$1" host="$2" insecure="$3" token_file="$4"
   [[ -n "${slug}" && -n "${host}" ]] || return 1
@@ -173,11 +190,14 @@ register_remote_soul() {
   [[ -n "${token_file}" ]] || token_file="-"
   mkdir -p "${PLUGIN_HOME}"
   touch "${SOULS_REGISTRY}"
-  local tmp="${SOULS_REGISTRY}.tmp"
+  _registry_lock "${SOULS_REGISTRY}" || { warn "could not lock ${SOULS_REGISTRY}; another write in progress?"; return 1; }
+  local tmp
+  tmp="$(mktemp "${SOULS_REGISTRY}.XXXXXX")" || { _registry_unlock "${SOULS_REGISTRY}"; return 1; }
   # Drop any prior row for this slug, then append the new one.
   awk -F '\t' -v s="${slug}" 'NF && $1 !~ /^#/ && $1 != s' "${SOULS_REGISTRY}" > "${tmp}" 2>/dev/null || true
   printf '%s\t%s\t%s\t%s\n' "${slug}" "${host}" "${insecure}" "${token_file}" >> "${tmp}"
   mv "${tmp}" "${SOULS_REGISTRY}"
+  _registry_unlock "${SOULS_REGISTRY}"
 }
 
 # remote_soul_fields SLUG — echo the row's "HOST\tINSECURE\tTOKEN_FILE" (tab-
@@ -251,10 +271,13 @@ bind_project_soul() {
   [[ -n "${dir}" && -n "${slug}" ]] || return 1
   mkdir -p "${PLUGIN_HOME}"
   touch "${PROJECT_SOULS}"
-  local tmp="${PROJECT_SOULS}.tmp"
+  _registry_lock "${PROJECT_SOULS}" || { warn "could not lock ${PROJECT_SOULS}; another write in progress?"; return 1; }
+  local tmp
+  tmp="$(mktemp "${PROJECT_SOULS}.XXXXXX")" || { _registry_unlock "${PROJECT_SOULS}"; return 1; }
   awk -F '\t' -v d="${dir}" 'NF && $1 !~ /^#/ && $1 != d' "${PROJECT_SOULS}" > "${tmp}" 2>/dev/null || true
   printf '%s\t%s\n' "${dir}" "${slug}" >> "${tmp}"
   mv "${tmp}" "${PROJECT_SOULS}"
+  _registry_unlock "${PROJECT_SOULS}"
 }
 
 # project_soul_binding DIR — echo the catalog slug bound to repo DIR, empty when
@@ -654,15 +677,17 @@ _binary_version() {
 # re-downloads. demarkus-token accepts --version as well as its `version`
 # subcommand, so one flag form covers all three.
 _installed_versions() {
-  printf 'server=%s,client=%s,tools=%s' \
+  printf 'server=%s,client=%s,tools=%s,plugin=%s' \
     "$(_binary_version "${PLUGIN_BIN_DIR}/demarkus-server" --version)" \
     "$(_binary_version "${PLUGIN_BIN_DIR}/demarkus-mcp" --version)" \
-    "$(_binary_version "${PLUGIN_BIN_DIR}/demarkus-token" --version)"
+    "$(_binary_version "${PLUGIN_BIN_DIR}/demarkus-token" --version)" \
+    "$(_binary_version "${PLUGIN_BIN_DIR}/demarkus-plugin" --version)"
 }
 
-# _desired_versions — the version pin the plugin currently expects.
+# _desired_versions — the version pin the plugin currently expects. demarkus-plugin
+# ships in the same tools/ release as demarkus-token, so it shares TOOLS_VERSION.
 _desired_versions() {
-  printf 'server=%s,client=%s,tools=%s' "${SERVER_VERSION}" "${CLIENT_VERSION}" "${TOOLS_VERSION}"
+  printf 'server=%s,client=%s,tools=%s,plugin=%s' "${SERVER_VERSION}" "${CLIENT_VERSION}" "${TOOLS_VERSION}" "${TOOLS_VERSION}"
 }
 
 # ensure_binaries — download + install to PLUGIN_BIN_DIR when the installed
@@ -714,15 +739,15 @@ ensure_binaries() {
 
     local server_archive="demarkus-server_${SERVER_VERSION}_${plat}.tar.gz"
     local server_base="https://github.com/latebit-io/demarkus/releases/download/server%2Fv${SERVER_VERSION}"
-    curl -fsSL -o "${tmp}/${server_archive}"    "${server_base}/${server_archive}"              || die "download ${server_archive}"
-    curl -fsSL -o "${tmp}/server_checksums.txt" "${server_base}/demarkus-server_checksums.txt"  || die "download server checksums"
+    curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -o "${tmp}/${server_archive}"    "${server_base}/${server_archive}"              || die "download ${server_archive}"
+    curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -o "${tmp}/server_checksums.txt" "${server_base}/demarkus-server_checksums.txt"  || die "download server checksums"
     (cd "${tmp}" && sha256_verify server_checksums.txt "${server_archive}")
     tar -xzf "${tmp}/${server_archive}" -C "${tmp}"
 
     local mcp_archive="demarkus-mcp_${CLIENT_VERSION}_${plat}.tar.gz"
     local client_base="https://github.com/latebit-io/demarkus/releases/download/client%2Fv${CLIENT_VERSION}"
-    curl -fsSL -o "${tmp}/${mcp_archive}"       "${client_base}/${mcp_archive}"                 || die "download ${mcp_archive}"
-    curl -fsSL -o "${tmp}/client_checksums.txt" "${client_base}/demarkus-client_checksums.txt"  || die "download client checksums"
+    curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -o "${tmp}/${mcp_archive}"       "${client_base}/${mcp_archive}"                 || die "download ${mcp_archive}"
+    curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -o "${tmp}/client_checksums.txt" "${client_base}/demarkus-client_checksums.txt"  || die "download client checksums"
     (cd "${tmp}" && sha256_verify client_checksums.txt "${mcp_archive}")
     tar -xzf "${tmp}/${mcp_archive}" -C "${tmp}"
 
@@ -730,14 +755,22 @@ ensure_binaries() {
     # plugin installs pulled it from the server archive.
     local token_archive="demarkus-token_${TOOLS_VERSION}_${plat}.tar.gz"
     local tools_base="https://github.com/latebit-io/demarkus/releases/download/tools%2Fv${TOOLS_VERSION}"
-    curl -fsSL -o "${tmp}/${token_archive}"    "${tools_base}/${token_archive}"               || die "download ${token_archive}"
-    curl -fsSL -o "${tmp}/tools_checksums.txt" "${tools_base}/demarkus-tools_checksums.txt"   || die "download tools checksums"
+    curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -o "${tmp}/${token_archive}"    "${tools_base}/${token_archive}"               || die "download ${token_archive}"
+    curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -o "${tmp}/tools_checksums.txt" "${tools_base}/demarkus-tools_checksums.txt"   || die "download tools checksums"
     (cd "${tmp}" && sha256_verify tools_checksums.txt "${token_archive}")
     tar -xzf "${tmp}/${token_archive}" -C "${tmp}"
+
+    # demarkus-plugin: the shared plugin-core binary (gate/nudge/guidance/etc.),
+    # same tools/ release + checksum file as demarkus-token.
+    local plugin_archive="demarkus-plugin_${TOOLS_VERSION}_${plat}.tar.gz"
+    curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -o "${tmp}/${plugin_archive}" "${tools_base}/${plugin_archive}" || die "download ${plugin_archive}"
+    (cd "${tmp}" && sha256_verify tools_checksums.txt "${plugin_archive}")
+    tar -xzf "${tmp}/${plugin_archive}" -C "${tmp}"
 
     install -m 0755 "${tmp}/demarkus-server" "${PLUGIN_BIN_DIR}/demarkus-server"
     install -m 0755 "${tmp}/demarkus-token"  "${PLUGIN_BIN_DIR}/demarkus-token"
     install -m 0755 "${tmp}/demarkus-mcp"    "${PLUGIN_BIN_DIR}/demarkus-mcp"
+    install -m 0755 "${tmp}/demarkus-plugin" "${PLUGIN_BIN_DIR}/demarkus-plugin"
   )
   # Check the subshell exit explicitly rather than relying on the caller's
   # set -e. A failed install needs no cleanup: the next ensure_binaries call
@@ -840,6 +873,30 @@ pid_of_server_at_root() {
   done <<< "${pids}"
 }
 
+# _pid_is_server_at_root PID ROOT — true when PID is a LIVE demarkus-server whose
+# -root flag (or DEMARKUS_ROOT env) equals ROOT. The ownership check that makes
+# reusing/killing a recorded .pid safe: a stale .pid whose number has been reused
+# by an unrelated same-user process must never be treated as our managed server
+# (and so must never be killed). Same literal-match logic as pid_of_server_at_root,
+# but for one specific PID.
+_pid_is_server_at_root() {
+  local pid="$1" target="$2" args env_root
+  [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "${pid}" 2>/dev/null || return 1
+  args=$(ps -p "${pid}" -o args= 2>/dev/null || true)
+  case "${args}" in
+    *demarkus-server*) ;;
+    *) return 1 ;;
+  esac
+  case "${args}" in
+    *" -root ${target} "* | *" -root ${target}" | \
+    *" -root=${target} "* | *" -root=${target}")
+      return 0 ;;
+  esac
+  env_root=$(_proc_env "${pid}" DEMARKUS_ROOT)
+  [[ "${env_root}" == "${target}" ]]
+}
+
 # find_running_demarkus — emits "PID PORT ROOT" per process, one per line.
 # Empty output when no demarkus-server is running. Args take precedence over
 # env vars; falls back to DEMARKUS_PORT/DEMARKUS_ROOT env when flags are absent.
@@ -928,12 +985,17 @@ ensure_token_entry() {
 
   mkdir -p "$(dirname "${tokens_toml}")" "$(dirname "${PLUGIN_TOKEN_FILE}")"
 
-  if ! "${PLUGIN_BIN_DIR}/demarkus-token" generate \
-        -label  "${TOKEN_LABEL}" \
-        -paths  "/*" \
-        -ops    "publish,archive" \
-        -tokens "${tokens_toml}" \
-        2>/dev/null > "${PLUGIN_TOKEN_FILE}.tmp"; then
+  # Generate under umask 077 so the raw-token temp file (and tokens.toml) are
+  # created mode 600 from the start — the redirect would otherwise create
+  # ${PLUGIN_TOKEN_FILE}.tmp world-readable (default umask) for the window before
+  # the chmod below, exposing the token to other local users.
+  if ! ( umask 077
+         "${PLUGIN_BIN_DIR}/demarkus-token" generate \
+           -label  "${TOKEN_LABEL}" \
+           -paths  "/*" \
+           -ops    "publish,archive" \
+           -tokens "${tokens_toml}" \
+           >"${PLUGIN_TOKEN_FILE}.tmp" 2>/dev/null ); then
     rm -f "${PLUGIN_TOKEN_FILE}.tmp"
     die "demarkus-token generate failed (tokens.toml: ${tokens_toml})"
   fi
@@ -943,19 +1005,22 @@ ensure_token_entry() {
   log "generated plugin token (label=${TOKEN_LABEL})"
 }
 
-# managed_server_current PID_FILE VERSION_FILE — true (0) when the managed
-# server recorded in PID_FILE is alive AND the binary version stamped in
-# VERSION_FILE matches the current SERVER_VERSION pin. Any other case (no/garbage
-# PID, dead process, missing or mismatched stamp) is false (1), telling
-# ensure_managed_server to (re)spawn onto the pinned binary. The stamp is what
-# lets a binary upgrade propagate to a still-running server: an unstamped server
-# (older plugin) or a stale stamp both read as not-current → restart.
+# managed_server_current PID_FILE VERSION_FILE ROOT — true (0) when the managed
+# server recorded in PID_FILE is alive, is genuinely OUR demarkus-server for ROOT
+# (not a reused PID), AND the binary version stamped in VERSION_FILE matches the
+# current SERVER_VERSION pin. Any other case (no/garbage PID, dead process, a live
+# PID that isn't our server at ROOT, missing or mismatched stamp) is false (1),
+# telling ensure_managed_server to (re)spawn onto the pinned binary. The stamp is
+# what lets a binary upgrade propagate to a still-running server: an unstamped
+# server (older plugin) or a stale stamp both read as not-current → restart.
 managed_server_current() {
-  local pid_file="$1" version_file="$2"
+  local pid_file="$1" version_file="$2" root="$3"
   [[ -f "${pid_file}" ]] || return 1
   local pid; pid="$(cat "${pid_file}" 2>/dev/null || true)"
   [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
-  kill -0 "${pid}" 2>/dev/null || return 1
+  # Confirm the recorded PID is actually OUR demarkus-server for this root before
+  # trusting it as current — not just any live process holding a reused PID.
+  _pid_is_server_at_root "${pid}" "${root}" || return 1
   local ver; ver="$(cat "${version_file}" 2>/dev/null || true)"
   [[ "${ver}" == "${SERVER_VERSION}" ]]
 }
@@ -986,15 +1051,18 @@ ensure_managed_server() {
   # is "plugin thinks a stale PID is alive, skips spawn, MCP connections fail,
   # user reruns /soul-init" — not data loss. flock would add a macOS/Linux
   # portability burden that isn't worth closing this theoretical race.
-  if managed_server_current "${pid_file}" "${version_file}"; then
+  if managed_server_current "${pid_file}" "${version_file}" "${soul_dir}"; then
     return 0
   fi
   # Not reusable. If a live-but-stale managed server is recorded (binary upgraded
   # under it, or an unstamped server left by an older plugin), stop it before we
   # respawn on the new binary — otherwise the old process keeps serving the stale
-  # binary from memory. A dead/garbage PID just gets its files cleared.
+  # binary from memory. CRITICAL: only kill the recorded PID once we've confirmed
+  # it is genuinely OUR demarkus-server for this root. A dead/garbage PID just
+  # gets its files cleared; a live PID that is NOT our server (stale .pid, number
+  # reused by an unrelated same-user process) is left untouched.
   local running_pid; running_pid="$(cat "${pid_file}" 2>/dev/null || true)"
-  if [[ "${running_pid}" =~ ^[0-9]+$ ]] && kill -0 "${running_pid}" 2>/dev/null; then
+  if _pid_is_server_at_root "${running_pid}" "${soul_dir}"; then
     log "restarting managed demarkus-server onto upgraded binary (target=${SERVER_VERSION})"
     kill "${running_pid}" 2>/dev/null || true
     # Bounded wait for exit (~3s), then escalate to SIGKILL so the respawn below
@@ -1005,6 +1073,8 @@ ensure_managed_server() {
       waited=$((waited + 1))
     done
     kill -0 "${running_pid}" 2>/dev/null && kill -9 "${running_pid}" 2>/dev/null || true
+  elif [[ "${running_pid}" =~ ^[0-9]+$ ]] && kill -0 "${running_pid}" 2>/dev/null; then
+    warn "recorded pid ${running_pid} is live but is not the demarkus-server for ${soul_dir} (stale .pid, reused PID); leaving it alone and clearing our bookkeeping"
   fi
   rm -f "${pid_file}" "${version_file}"
 

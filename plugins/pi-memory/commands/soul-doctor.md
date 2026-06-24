@@ -3,6 +3,8 @@ description: Audit the soul (or a single project) for catalog hygiene — orphan
 argument-hint: "[project-slug | blank = whole local soul]"
 ---
 
+# /soul-doctor
+
 Run a read-only health check over a demarkus knowledge base and report what's rotting. This **never writes** — it surfaces findings and suggests fixes; the user decides what to act on.
 
 ## Scope
@@ -56,7 +58,7 @@ These cost one fetch per document, so only run them for a single project or when
 
 Render plainly, grouped by check, most actionable first. For each finding give the path and a one-line suggested fix. Lead with a one-line summary (`N docs, X findings`). Shape:
 
-```
+```text
 ## <scope> — hygiene report  (<N> docs)
 
 ### Broken links (<n>)

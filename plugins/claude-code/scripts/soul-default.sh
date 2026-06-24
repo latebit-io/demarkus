@@ -59,7 +59,13 @@ current="$(project_soul_binding "${BIND_DIR}")"
 
 case "${MODE}" in
   list)
-    catalog="$(soul_catalog)"
+    # Capture the status explicitly: soul_catalog returns non-zero when the
+    # registry exists but is unreadable. Under `set -e` a bare `$(soul_catalog)`
+    # would abort the script before fail() could emit a parseable FAIL: line for
+    # the slash command, so the user would see a silent exit instead of an error.
+    if ! catalog="$(soul_catalog)"; then
+      fail "could not read the soul catalog (is ${SOULS_REGISTRY} readable?)"
+    fi
     if [[ -z "${catalog}" ]]; then
       echo "EMPTY"
       exit 0

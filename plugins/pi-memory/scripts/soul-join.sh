@@ -119,6 +119,20 @@ mkdir -p "${PLUGIN_BIN_DIR}"
 install -m 0755 "${WRAPPER_SRC}" "${WRAPPER_DST}" \
   || fail "could not install launch wrapper to ${WRAPPER_DST}"
 
+# Slug-collision guard. The slug is derived from only the first DNS label, so two
+# different hosts can collapse to the same slug (e.g. prod.example.com vs
+# prod.internal). register_remote_soul upserts by slug, which would silently
+# retarget every project already bound to this slug — and overwrite its token — at
+# the new host. Refuse when the slug is already taken by a DIFFERENT host; the
+# user must remove the existing entry or join from a host with a different label.
+EXISTING_FIELDS="$(remote_soul_fields "${SLUG}")"
+if [[ -n "${EXISTING_FIELDS}" ]]; then
+  EXISTING_HOST="$(printf '%s' "${EXISTING_FIELDS}" | cut -f1)"
+  if [[ "${EXISTING_HOST}" != "${HOST}" ]]; then
+    fail "soul slug '${SLUG}' is already joined for host '${EXISTING_HOST}'; joining '${HOST}' under the same slug would retarget every project bound to '${SLUG}'. Remove the existing entry first, or join from a host with a different first DNS label."
+  fi
+fi
+
 # Token → 0600 file, never inline. "-" means no auth (a read-only / public soul).
 TOKEN_FILE="-"
 if [[ -n "${TOKEN}" ]]; then

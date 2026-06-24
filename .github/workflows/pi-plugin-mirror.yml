@@ -45,6 +45,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # We push to other repos with PI_MIRROR_TOKEN; don't leave the default
+          # GITHUB_TOKEN persisted in git config for the later git commands.
+          persist-credentials: false
 
       - name: Verify git subtree is available
         run: git subtree --help >/dev/null 2>&1 || git subtree split -h >/dev/null 2>&1 || { echo "git subtree not available on runner"; exit 1; }
