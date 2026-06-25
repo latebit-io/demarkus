@@ -37,8 +37,18 @@ latest() {
     | sed "s#$1/v##" | sort -V | tail -1
 }
 
-# goconst <NAME> -> current value of `NAME = "..."` in provision.go.
-goconst() { sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\1/p" "$provision"; }
+# goconst <NAME> -> current value of `NAME = "..."` in provision.go. Exits non-
+# zero if the const is missing or not a semver, so a parse failure can't silently
+# leave the canonical pin stale while the rest of the bump proceeds.
+goconst() {
+  local value
+  value=$(sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\1/p" "$provision")
+  [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "error: missing or invalid $1 in $provision" >&2
+    exit 1
+  }
+  printf '%s\n' "$value"
+}
 
 emit() {
   echo "$1=$2"
@@ -47,9 +57,17 @@ emit() {
 }
 
 # set_goconst <NAME> <value> — portable in-place edit (temp file; no sed -i).
+# Verifies the const existed before and reads back as <value> after, so a failed
+# replacement (typo'd name, reformatted file) aborts instead of shipping a stale pin.
 set_goconst() {
-  local tmp; tmp=$(mktemp)
+  local tmp
+  goconst "$1" >/dev/null # aborts if the const is absent/malformed
+  tmp=$(mktemp)
   sed -E "s/^([[:space:]]*$1[[:space:]]*=[[:space:]]*)\"[^\"]+\"/\1\"$2\"/" "$provision" >"$tmp" && mv "$tmp" "$provision"
+  [[ "$(goconst "$1")" == "$2" ]] || {
+    echo "error: failed to update $1 to $2 in $provision" >&2
+    exit 1
+  }
 }
 
 # set_bootstrap_tools <value> — update TOOLS_VERSION in every plugin bootstrap.
@@ -58,6 +76,7 @@ set_bootstrap_tools() {
   for f in plugins/*/scripts/bootstrap.sh; do
     [[ -f "$f" ]] || continue
     tmp=$(mktemp)
+    cp -p "$f" "$tmp" # preserve the executable bit (bootstrap.sh is 0755)
     sed -E "s/^(TOOLS_VERSION=)\"[^\"]+\"/\1\"$1\"/" "$f" >"$tmp" && mv "$tmp" "$f"
   done
 }
@@ -77,11 +96,20 @@ bump_json_version() {
 # marketplace entry whose "source" is <source-path>, preserving hand formatting.
 set_marketplace_version() {
   local tmp; tmp=$(mktemp)
+  # awk exits 42 unless EXACTLY one entry matched the source and got its version
+  # updated, so a source typo or reordered field fails loudly instead of leaving
+  # the marketplace stale (or editing the wrong entry) while we emit a bumped version.
   awk -v v="$2" -v src="$1" '
-    index($0, "\"source\": \"" src "\"") { inblock = 1 }
-    inblock && /"version":/ { sub(/"version": "[^"]*"/, "\"version\": \"" v "\""); inblock = 0 }
+    index($0, "\"source\": \"" src "\"") { inblock = 1; seen++ }
+    inblock && /"version":/ { sub(/"version": "[^"]*"/, "\"version\": \"" v "\""); inblock = 0; updated++ }
+    inblock && /^[[:space:]]*}/ { inblock = 0 }
     { print }
-  ' "$marketplace" >"$tmp" && mv "$tmp" "$marketplace"
+    END { if (seen != 1 || updated != 1) exit 42 }
+  ' "$marketplace" >"$tmp" && mv "$tmp" "$marketplace" || {
+    rm -f "$tmp"
+    echo "error: expected exactly one marketplace entry for source '$1' (matched=${seen:-?})" >&2
+    exit 1
+  }
 }
 
 new_server=$(latest server)
