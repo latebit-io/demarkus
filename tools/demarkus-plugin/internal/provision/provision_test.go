@@ -151,9 +151,21 @@ func TestArgsRootMatches(t *testing.T) {
 }
 
 func TestVersionDriftFormatting(t *testing.T) {
-	want := "server=" + serverVersion + ",client=" + clientVersion + ",tools=" + toolsRef()
+	old := Version
+	t.Cleanup(func() { Version = old })
+
+	// A dev build (no real ldflags version) falls back to fallbackToolsVersion.
+	Version = "dev"
+	want := "server=" + serverVersion + ",client=" + clientVersion + ",tools=" + fallbackToolsVersion
 	if got := desiredVersions(); got != want {
-		t.Errorf("desiredVersions() = %q, want %q", got, want)
+		t.Errorf("desiredVersions() [dev] = %q, want %q", got, want)
+	}
+
+	// A real release derives the tools pin from the binary's own version.
+	Version = "9.9.9"
+	want = "server=" + serverVersion + ",client=" + clientVersion + ",tools=9.9.9"
+	if got := desiredVersions(); got != want {
+		t.Errorf("desiredVersions() [release] = %q, want %q", got, want)
 	}
 
 	// With no binaries installed, installedVersions reports all-empty fields,
