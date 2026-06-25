@@ -46,7 +46,7 @@ import (
 const (
 	serverVersion = "0.18.0"
 	clientVersion = "0.13.1"
-	toolsVersion  = "0.3.0"
+	toolsVersion  = "0.3.1"
 )
 
 // Port/range constants (lib.sh).
