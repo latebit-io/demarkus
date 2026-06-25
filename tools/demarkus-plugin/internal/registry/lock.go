@@ -26,7 +26,13 @@ func withLock(path string, fn func() error) error {
 	for range 100 {
 		err := os.Mkdir(lock, 0o755)
 		if err == nil {
-			_ = os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644)
+			// Stamp our PID before running fn. A failed write leaves an unowned
+			// lock dir that stale-lock recovery (which reads this pid) can never
+			// reclaim, wedging future writers — so release and fail instead.
+			if werr := os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644); werr != nil {
+				_ = os.RemoveAll(lock)
+				return werr
+			}
 			return runLocked(lock, fn)
 		}
 		if !os.IsExist(err) {

@@ -980,7 +980,14 @@ func withProvisionLock(fn func() error) error {
 	}
 	for range 900 { // ~180s: enough for a slow first-run download
 		if err := os.Mkdir(lockDir, 0o755); err == nil {
-			_ = os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644)
+			// Record our PID before entering the critical section. If the write
+			// fails, the lock dir has no owner stamp and stale-lock recovery
+			// (which reads this pid to prove the holder is dead) can never reclaim
+			// it — a poison lock that wedges every waiter. So release and fail.
+			if werr := os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644); werr != nil {
+				_ = os.RemoveAll(lockDir)
+				return fmt.Errorf("write provision lock pid: %w", werr)
+			}
 			return runProvisionLocked(lockDir, fn)
 		} else if !os.IsExist(err) {
 			return err
