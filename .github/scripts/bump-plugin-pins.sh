@@ -71,13 +71,26 @@ set_goconst() {
 }
 
 # set_bootstrap_tools <value> — update TOOLS_VERSION in every plugin bootstrap.
+# Fails if the glob matches nothing or any rewrite leaves TOOLS_VERSION != value,
+# so a moved/renamed bootstrap can't drift out of lockstep with provision.go.
 set_bootstrap_tools() {
-  local f tmp
-  for f in plugins/*/scripts/bootstrap.sh; do
-    [[ -f "$f" ]] || continue
+  local f tmp updated
+  local bootstraps=(plugins/*/scripts/bootstrap.sh)
+  [[ -e "${bootstraps[0]}" ]] || {
+    echo "error: no plugin bootstrap.sh files found" >&2
+    exit 1
+  }
+  for f in "${bootstraps[@]}"; do
     tmp=$(mktemp)
     cp -p "$f" "$tmp" # preserve the executable bit (bootstrap.sh is 0755)
-    sed -E "s/^(TOOLS_VERSION=)\"[^\"]+\"/\1\"$1\"/" "$f" >"$tmp" && mv "$tmp" "$f"
+    sed -E "s/^(TOOLS_VERSION=)\"[^\"]+\"/\1\"$1\"/" "$f" >"$tmp"
+    updated=$(sed -nE 's/^TOOLS_VERSION="([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' "$tmp")
+    [[ "$updated" == "$1" ]] || {
+      rm -f "$tmp"
+      echo "error: failed to update TOOLS_VERSION to $1 in $f" >&2
+      exit 1
+    }
+    mv "$tmp" "$f"
   done
 }
 
