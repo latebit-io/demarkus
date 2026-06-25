@@ -23,12 +23,11 @@ func withLock(path string, fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		err := os.Mkdir(lock, 0o755)
 		if err == nil {
 			_ = os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644)
-			defer os.RemoveAll(lock)
-			return fn()
+			return runLocked(lock, fn)
 		}
 		if !os.IsExist(err) {
 			return err
@@ -43,6 +42,14 @@ func withLock(path string, fn func() error) error {
 		time.Sleep(20 * time.Millisecond)
 	}
 	return &lockError{lock}
+}
+
+// runLocked runs fn and releases the lock dir afterward, even if fn panics.
+// Split out of withLock's loop so the cleanup defer isn't registered per
+// iteration (it fires exactly once, on the acquiring iteration's return).
+func runLocked(lock string, fn func() error) error {
+	defer func() { _ = os.RemoveAll(lock) }()
+	return fn()
 }
 
 type lockError struct{ lock string }

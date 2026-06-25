@@ -21,7 +21,7 @@ func setupHome(t *testing.T, files map[string]string) {
 	}
 }
 
-func eval(t *testing.T, in Input) string {
+func eval(t *testing.T, in *Input) string {
 	t.Helper()
 	o, err := Evaluate(in)
 	if err != nil {
@@ -32,28 +32,28 @@ func eval(t *testing.T, in Input) string {
 
 func TestRecallMemory(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
-	if eval(t, Input{Event: "recall", Surface: "memory", Prompt: "did we decide on the cache format?"}) == "" {
+	if eval(t, &Input{Event: "recall", Surface: "memory", Prompt: "did we decide on the cache format?"}) == "" {
 		t.Error("recall question should nudge")
 	}
-	if eval(t, Input{Event: "recall", Surface: "memory", Prompt: "write a function to add two numbers"}) != "" {
+	if eval(t, &Input{Event: "recall", Surface: "memory", Prompt: "write a function to add two numbers"}) != "" {
 		t.Error("plain prompt should not nudge")
 	}
 }
 
 func TestRecallMemorySilentWithoutSoul(t *testing.T) {
 	setupHome(t, nil) // no plugin-memory.conf
-	if eval(t, Input{Event: "recall", Surface: "memory", Prompt: "did we decide?"}) != "" {
+	if eval(t, &Input{Event: "recall", Surface: "memory", Prompt: "did we decide?"}) != "" {
 		t.Error("no soul configured → no nudge")
 	}
 }
 
 func TestRecallKnowledge(t *testing.T) {
 	setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
-	if eval(t, Input{Event: "recall", Surface: "knowledge", Prompt: "what does the org standard say?"}) == "" {
+	if eval(t, &Input{Event: "recall", Surface: "knowledge", Prompt: "what does the org standard say?"}) == "" {
 		t.Error("org recall should nudge when a system is joined")
 	}
 	setupHome(t, nil)
-	if eval(t, Input{Event: "recall", Surface: "knowledge", Prompt: "what does the org say?"}) != "" {
+	if eval(t, &Input{Event: "recall", Surface: "knowledge", Prompt: "what does the org say?"}) != "" {
 		t.Error("no joined system → no knowledge nudge")
 	}
 }
@@ -63,8 +63,8 @@ func TestPromote(t *testing.T) {
 		"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n",
 		"knowledge-systems":  "knowledge\n", // a promote destination exists
 	})
-	base := func(url, body string) Input {
-		return Input{Event: "promote", Tool: "demarkus_memory_mark_publish", Input: map[string]any{"url": url, "body": body}}
+	base := func(url, body string) *Input {
+		return &Input{Event: "promote", Tool: "demarkus_memory_mark_publish", Input: map[string]any{"url": url, "body": body}}
 	}
 	if eval(t, base("/proj/adr/0001-x.md", "decision")) == "" {
 		t.Error("fresh ADR with a destination should nudge")
@@ -79,20 +79,20 @@ func TestPromote(t *testing.T) {
 
 func TestPromoteNoDestination(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
-	if eval(t, Input{Event: "promote", Tool: "demarkus_memory_mark_publish", Input: map[string]any{"url": "/p/adr/0001.md", "body": "d"}}) != "" {
+	if eval(t, &Input{Event: "promote", Tool: "demarkus_memory_mark_publish", Input: map[string]any{"url": "/p/adr/0001.md", "body": "d"}}) != "" {
 		t.Error("no promote destination → no nudge")
 	}
 }
 
 func TestSessionEnd(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
-	if eval(t, Input{Event: "session-end", ChangedFiles: true, SoulWrite: false}) == "" {
+	if eval(t, &Input{Event: "session-end", ChangedFiles: true, SoulWrite: false}) == "" {
 		t.Error("changed files + no soul write → journal nudge")
 	}
-	if eval(t, Input{Event: "session-end", ChangedFiles: true, SoulWrite: true}) != "" {
+	if eval(t, &Input{Event: "session-end", ChangedFiles: true, SoulWrite: true}) != "" {
 		t.Error("a soul write suppresses the nudge")
 	}
-	if eval(t, Input{Event: "session-end", ChangedFiles: false, SoulWrite: false}) != "" {
+	if eval(t, &Input{Event: "session-end", ChangedFiles: false, SoulWrite: false}) != "" {
 		t.Error("no file changes → no nudge")
 	}
 }
