@@ -38,16 +38,35 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
-// Version pins — the source of truth for the managed binaries. demarkus-plugin
-// ships in the same tools/ release as demarkus-token, so its pin == toolsVersion;
-// toolsVersion MUST match the TOOLS_VERSION in every plugin's bootstrap.sh (the
-// bump workflow keeps them in lockstep) or provision would fight bootstrap over
-// which demarkus-plugin to install.
+// Version pins for the SEPARATE server/client modules (their own release
+// cadence; the bump workflow tracks their latest existing releases).
 const (
 	serverVersion = "0.18.0"
 	clientVersion = "0.13.1"
-	toolsVersion  = "0.3.1"
+	// fallbackToolsVersion is used ONLY by dev builds (Version == "dev"), where
+	// there's no real release to derive the tools version from. A real release
+	// uses its own ldflags Version — see toolsRef.
+	fallbackToolsVersion = "0.3.3"
 )
+
+// Version is the binary's own release version, injected from main's ldflags
+// value. demarkus-plugin ships INSIDE the tools release, so the running binary's
+// version is exactly the tools release to fetch demarkus-token from. provision
+// never re-downloads demarkus-plugin itself (bootstrap.sh owns that), which is
+// what avoids the self-referential version skew where a binary would download an
+// older copy of itself.
+var Version = "dev"
+
+var semverRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// toolsRef is the tools release to pull demarkus-token from: the binary's own
+// version when it's a real release, else the dev fallback.
+func toolsRef() string {
+	if semverRe.MatchString(Version) {
+		return Version
+	}
+	return fallbackToolsVersion
+}
 
 // Port/range constants (lib.sh).
 const (
@@ -220,23 +239,26 @@ func shellQuote(s string) string {
 
 // --- version drift (lib.sh _installed_versions/_desired_versions) ------------
 
-// desiredVersions is the pin string the plugin expects, in the bash shape.
+// desiredVersions is the pin string provision expects, in the bash shape. It
+// covers only the binaries provision manages — server, mcp, token. demarkus-plugin
+// is deliberately excluded: bootstrap.sh installs/updates it, and having provision
+// re-fetch it (against a pin that can't match the auto-assigned release tag)
+// caused a self-downgrade cascade.
 func desiredVersions() string {
-	return fmt.Sprintf("server=%s,client=%s,tools=%s,plugin=%s",
-		serverVersion, clientVersion, toolsVersion, toolsVersion)
+	return fmt.Sprintf("server=%s,client=%s,tools=%s",
+		serverVersion, clientVersion, toolsRef())
 }
 
 // installedVersions queries each on-disk binary via --version and assembles the
 // same shape as desiredVersions. A missing/unexecutable/too-old binary yields an
 // empty field, which never equals a desired version, so ensureBinaries
 // re-downloads. demarkus-token accepts --version as well as its `version`
-// subcommand, so one flag form covers all four.
+// subcommand.
 func installedVersions() string {
-	return fmt.Sprintf("server=%s,client=%s,tools=%s,plugin=%s",
+	return fmt.Sprintf("server=%s,client=%s,tools=%s",
 		binaryVersion("demarkus-server"),
 		binaryVersion("demarkus-mcp"),
 		binaryVersion("demarkus-token"),
-		binaryVersion("demarkus-plugin"),
 	)
 }
 
@@ -266,8 +288,13 @@ func binaryVersion(name string) string {
 const (
 	serverReleaseBase = "https://github.com/latebit-io/demarkus/releases/download/server%2Fv" + serverVersion
 	clientReleaseBase = "https://github.com/latebit-io/demarkus/releases/download/client%2Fv" + clientVersion
-	toolsReleaseBase  = "https://github.com/latebit-io/demarkus/releases/download/tools%2Fv" + toolsVersion
 )
+
+// toolsReleaseBase is the release that ships demarkus-token (the same one this
+// binary came from), resolved at runtime from toolsRef.
+func toolsReleaseBase() string {
+	return "https://github.com/latebit-io/demarkus/releases/download/tools%2Fv" + toolsRef()
+}
 
 // ensureBinaries downloads + installs the pinned binaries to ~/.demarkus/bin
 // whenever the installed binaries don't report exactly the pinned versions
@@ -305,7 +332,7 @@ func ensureBinaries() (replaced bool, err error) {
 	defer os.RemoveAll(tmp)
 
 	logf("downloading demarkus binaries (server v%s, client v%s, tools v%s, %s)",
-		serverVersion, clientVersion, toolsVersion, plat)
+		serverVersion, clientVersion, toolsRef(), plat)
 
 	// server archive + checksums.
 	serverArchive := fmt.Sprintf("demarkus-server_%s_%s.tar.gz", serverVersion, plat)
@@ -337,12 +364,17 @@ func ensureBinaries() (replaced bool, err error) {
 		return false, err
 	}
 
-	// token archive (tools release) + tools checksums.
-	tokenArchive := fmt.Sprintf("demarkus-token_%s_%s.tar.gz", toolsVersion, plat)
-	if err := download(toolsReleaseBase+"/"+tokenArchive, filepath.Join(tmp, tokenArchive)); err != nil {
+	// token archive (tools release) + tools checksums. demarkus-token ships in the
+	// same tools release as this binary, so toolsRef() (the running binary's own
+	// version) is exactly the release that has a matching token. demarkus-plugin is
+	// NOT fetched here — bootstrap.sh installs it; provision re-fetching itself is
+	// the self-downgrade bug this fix removes.
+	base := toolsReleaseBase()
+	tokenArchive := fmt.Sprintf("demarkus-token_%s_%s.tar.gz", toolsRef(), plat)
+	if err := download(base+"/"+tokenArchive, filepath.Join(tmp, tokenArchive)); err != nil {
 		return false, fmt.Errorf("download %s: %w", tokenArchive, err)
 	}
-	if err := download(toolsReleaseBase+"/demarkus-tools_checksums.txt", filepath.Join(tmp, "tools_checksums.txt")); err != nil {
+	if err := download(base+"/demarkus-tools_checksums.txt", filepath.Join(tmp, "tools_checksums.txt")); err != nil {
 		return false, fmt.Errorf("download tools checksums: %w", err)
 	}
 	if err := sha256Verify(filepath.Join(tmp, "tools_checksums.txt"), filepath.Join(tmp, tokenArchive)); err != nil {
@@ -352,20 +384,8 @@ func ensureBinaries() (replaced bool, err error) {
 		return false, err
 	}
 
-	// demarkus-plugin archive (same tools release + checksum file as the token).
-	pluginArchive := fmt.Sprintf("demarkus-plugin_%s_%s.tar.gz", toolsVersion, plat)
-	if err := download(toolsReleaseBase+"/"+pluginArchive, filepath.Join(tmp, pluginArchive)); err != nil {
-		return false, fmt.Errorf("download %s: %w", pluginArchive, err)
-	}
-	if err := sha256Verify(filepath.Join(tmp, "tools_checksums.txt"), filepath.Join(tmp, pluginArchive)); err != nil {
-		return false, err
-	}
-	if err := extractTarGz(filepath.Join(tmp, pluginArchive), tmp); err != nil {
-		return false, err
-	}
-
 	// Install 0755 to the bin dir (bash install -m 0755).
-	for _, name := range []string{"demarkus-server", "demarkus-token", "demarkus-mcp", "demarkus-plugin"} {
+	for _, name := range []string{"demarkus-server", "demarkus-token", "demarkus-mcp"} {
 		if err := installFile(filepath.Join(tmp, name), filepath.Join(binDir, name)); err != nil {
 			return false, fmt.Errorf("install %s: %w", name, err)
 		}

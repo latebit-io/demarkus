@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 #
 # Resolve the latest released server/client/tools versions and update the demarkus
-# plugins' binary pins to match. Since the Approach-C refactor the pins live in
-# TWO places that must stay in lockstep:
+# plugins' binary pins to match. The pins live in:
 #
-#   1. tools/demarkus-plugin/internal/provision/provision.go — the Go consts
-#      serverVersion / clientVersion / toolsVersion (source of truth; what the
-#      binary provisions and self-updates to).
+#   1. tools/demarkus-plugin/internal/provision/provision.go — serverVersion /
+#      clientVersion (the server & mcp binaries provision downloads) and
+#      fallbackToolsVersion (the tools release a DEV build pulls demarkus-token
+#      from; a real build uses its own ldflags version).
 #   2. plugins/*/scripts/bootstrap.sh — TOOLS_VERSION (the chicken-and-egg pin
-#      the tiny installer needs to fetch the demarkus-plugin binary itself).
+#      the tiny installer uses to fetch the demarkus-plugin binary itself).
 #
-# toolsVersion and every bootstrap TOOLS_VERSION MUST match, or provision and
-# bootstrap fight over which demarkus-plugin to install.
+# provision no longer re-downloads demarkus-plugin (bootstrap owns it) and derives
+# the token release from the running binary's own version, so the only hard pin
+# for the plugin binary is the bootstrap TOOLS_VERSION; fallbackToolsVersion just
+# tracks it so dev builds fetch a matching token.
 #
 # It also patch-bumps the affected plugins' versions, in two lineages:
 #   - memory    (changes when server|client|tools change): claude-code +
@@ -135,7 +137,7 @@ fi
 
 cur_server=$(goconst serverVersion)
 cur_client=$(goconst clientVersion)
-cur_tools=$(goconst toolsVersion)
+cur_tools=$(goconst fallbackToolsVersion)
 
 emit server "$new_server"
 emit client "$new_client"
@@ -150,7 +152,7 @@ fi
 # Update the Go consts (source of truth) and every bootstrap's TOOLS_VERSION.
 set_goconst serverVersion "$new_server"
 set_goconst clientVersion "$new_client"
-set_goconst toolsVersion "$new_tools"
+set_goconst fallbackToolsVersion "$new_tools"
 [[ "$new_tools" != "$cur_tools" ]] && set_bootstrap_tools "$new_tools"
 
 # Patch-bump the affected lineages.

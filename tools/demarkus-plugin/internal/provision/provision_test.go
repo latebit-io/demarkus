@@ -151,16 +151,17 @@ func TestArgsRootMatches(t *testing.T) {
 }
 
 func TestVersionDriftFormatting(t *testing.T) {
-	want := "server=" + serverVersion + ",client=" + clientVersion + ",tools=" + toolsVersion + ",plugin=" + toolsVersion
+	want := "server=" + serverVersion + ",client=" + clientVersion + ",tools=" + toolsRef()
 	if got := desiredVersions(); got != want {
 		t.Errorf("desiredVersions() = %q, want %q", got, want)
 	}
 
 	// With no binaries installed, installedVersions reports all-empty fields,
-	// which never equals desired → ensureBinaries would re-download.
+	// which never equals desired → ensureBinaries would re-download. (No plugin
+	// field: provision doesn't manage demarkus-plugin — bootstrap.sh does.)
 	t.Setenv("HOME", t.TempDir())
 	got := installedVersions()
-	if got != "server=,client=,tools=,plugin=" {
+	if got != "server=,client=,tools=" {
 		t.Errorf("installedVersions() with no bins = %q", got)
 	}
 	if got == desiredVersions() {
