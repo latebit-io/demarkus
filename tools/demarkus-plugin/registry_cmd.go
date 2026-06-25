@@ -18,6 +18,9 @@ import (
 // cmdProvision runs the server lifecycle (binary install, config, managed server,
 // token, seed). Replaces setup.sh / provision.sh / the lib.sh lifecycle.
 func cmdProvision(args []string) {
+	// Hand the binary's own release version to provision so it fetches the token
+	// from the tools release it shipped in (and never re-downloads itself).
+	provision.Version = version
 	if len(args) == 0 {
 		if err := provision.Provision(); err != nil {
 			fail(err.Error())
