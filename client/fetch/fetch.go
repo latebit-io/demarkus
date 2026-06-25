@@ -4,6 +4,7 @@ package fetch
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -393,18 +394,19 @@ func isTransientError(err error) bool {
 	return false
 }
 
+// isTimeoutError reports whether err (or anything it wraps) is a timeout.
+// It must use errors.As, not a bare type assertion: every error returned from
+// this package is wrapped (e.g. fmt.Errorf("open stream: %w", …)), and a
+// *fmt.wrapError does not itself implement Timeout(). A bare assertion misses
+// the wrapped context.DeadlineExceeded, so a timed-out OpenStreamSync would be
+// classed non-transient and doWithRetry would never evict+redial the dead
+// pooled connection — wedging every subsequent request on that host.
 func isTimeoutError(err error) bool {
-	type timeoutError interface {
-		Timeout() bool
-	}
-	te, ok := err.(timeoutError)
-	return ok && te.Timeout()
+	var te interface{ Timeout() bool }
+	return errors.As(err, &te) && te.Timeout()
 }
 
 func isTemporaryError(err error) bool {
-	type temporaryError interface {
-		Temporary() bool
-	}
-	te, ok := err.(temporaryError)
-	return ok && te.Temporary()
+	var te interface{ Temporary() bool }
+	return errors.As(err, &te) && te.Temporary()
 }
