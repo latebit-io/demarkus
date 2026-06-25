@@ -57,7 +57,7 @@ const (
 // older copy of itself.
 var Version = "dev"
 
-var semverRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
 // toolsRef is the tools release to pull demarkus-token from: the binary's own
 // version when it's a real release, else the dev fallback.
@@ -156,7 +156,7 @@ func sha256Verify(checksumsFile, archive string) error {
 	}
 	name := filepath.Base(archive)
 	expected := ""
-	for _, ln := range strings.Split(string(cb), "\n") {
+	for ln := range strings.SplitSeq(string(cb), "\n") {
 		fields := strings.Fields(ln)
 		if len(fields) >= 2 && fields[len(fields)-1] == name {
 			expected = fields[0]
@@ -170,7 +170,7 @@ func sha256Verify(checksumsFile, archive string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return err
@@ -329,7 +329,7 @@ func ensureBinaries() (replaced bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 
 	logf("downloading demarkus binaries (server v%s, client v%s, tools v%s, %s)",
 		serverVersion, clientVersion, toolsRef(), plat)
@@ -412,7 +412,7 @@ func anyBinaryPresent() bool {
 func download(url, dest string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return err
 	}
@@ -421,7 +421,7 @@ func download(url, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GET %s: status %s", url, resp.Status)
 	}
@@ -431,12 +431,12 @@ func download(url, dest string) error {
 		return err
 	}
 	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, dest)
@@ -449,12 +449,12 @@ func extractTarGz(archive, destDir string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -483,7 +483,7 @@ func extractTarGz(archive, destDir string) error {
 				return err
 			}
 			if _, err := io.Copy(out, tr); err != nil { //nolint:gosec // trusted, sha256-verified archive
-				out.Close()
+				_ = out.Close()
 				return err
 			}
 			if err := out.Close(); err != nil {
@@ -500,23 +500,23 @@ func installFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	tmp := dst + ".tmp"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
+		_ = out.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := out.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, dst)
@@ -572,7 +572,7 @@ func ensureTokenEntry(tokensTOML string) error {
 		if err != nil {
 			return err
 		}
-		defer tf.Close()
+		defer func() { _ = tf.Close() }()
 		gen := exec.Command(tokenBin, "generate",
 			"-label", tokenLabel,
 			"-paths", "/*",
@@ -584,7 +584,7 @@ func ensureTokenEntry(tokensTOML string) error {
 		return gen.Run()
 	})
 	if genErr != nil {
-		os.Remove(tmpTok)
+		_ = os.Remove(tmpTok)
 		return fmt.Errorf("demarkus-token generate failed (tokens.toml: %s): %w", tokensTOML, genErr)
 	}
 
@@ -656,7 +656,7 @@ func findFreePortFrom(start int) (int, error) {
 
 var (
 	rootFlagRe = regexp.MustCompile(`-root[= ]+([^ ]+)`)
-	portFlagRe = regexp.MustCompile(`-port[= ]+([0-9]+)`)
+	portFlagRe = regexp.MustCompile(`-port[= ]+(\d+)`)
 )
 
 // pidOfServerAtRoot returns the PID of a demarkus-server whose -root flag (or
@@ -745,7 +745,7 @@ func findRunningDemarkus() string {
 // portOfRunningServer returns the port reported by findRunningDemarkus for pid,
 // or "" if not found. Used by reuse to validate the adopted server's actual port.
 func portOfRunningServer(pid int) string {
-	for _, ln := range strings.Split(findRunningDemarkus(), "\n") {
+	for ln := range strings.SplitSeq(findRunningDemarkus(), "\n") {
 		fields := strings.Fields(ln)
 		if len(fields) >= 2 && fields[0] == strconv.Itoa(pid) {
 			return fields[1]
@@ -805,8 +805,8 @@ func ensureManagedServer(soulDir string, port int) error {
 	} else if runningPID > 0 && pidAlive(runningPID) {
 		warnf("recorded pid %d is live but is not the demarkus-server for %s (stale .pid, reused PID); leaving it alone and clearing our bookkeeping", runningPID, soulDir)
 	}
-	os.Remove(pidFile)
-	os.Remove(versionFile)
+	_ = os.Remove(pidFile)
+	_ = os.Remove(versionFile)
 
 	if err := os.MkdirAll(soulDir, 0o755); err != nil {
 		return err
@@ -820,7 +820,7 @@ func ensureManagedServer(soulDir string, port int) error {
 	if err != nil {
 		return err
 	}
-	defer lf.Close()
+	defer func() { _ = lf.Close() }()
 
 	cmd := exec.Command(serverBin,
 		"-root", soulDir,
@@ -839,13 +839,13 @@ func ensureManagedServer(soulDir string, port int) error {
 	// (which a later run can neither recognize nor safely manage).
 	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
 		_ = cmd.Process.Kill()
-		os.Remove(pidFile)
+		_ = os.Remove(pidFile)
 		return err
 	}
 	if err := os.WriteFile(versionFile, []byte(serverVersion+"\n"), 0o644); err != nil {
 		_ = cmd.Process.Kill()
-		os.Remove(pidFile)
-		os.Remove(versionFile)
+		_ = os.Remove(pidFile)
+		_ = os.Remove(versionFile)
 		return err
 	}
 	_ = cmd.Process.Release() // fully detach; don't reap
@@ -854,10 +854,10 @@ func ensureManagedServer(soulDir string, port int) error {
 	// once the port is observed bound, or accept once the attempt cap is reached
 	// with the process still alive (permissive when the port probe is unavailable).
 	const maxAttempts = 20 // ~2s at 100ms
-	for attempts := 0; attempts < maxAttempts; attempts++ {
+	for range maxAttempts {
 		if !pidAlive(pid) {
-			os.Remove(pidFile)
-			os.Remove(versionFile)
+			_ = os.Remove(pidFile)
+			_ = os.Remove(versionFile)
 			tailInfo := ""
 			if t := tailFile(logFile, 5); t != "" {
 				tailInfo = "\nrecent log:\n" + t
@@ -956,6 +956,14 @@ func seedDoc(seedName, target string) {
 
 // --- exported API ------------------------------------------------------------
 
+// runProvisionLocked runs fn and releases the provision lock dir afterward, even
+// if fn panics. Split out of withProvisionLock's loop so the cleanup defer isn't
+// registered per iteration (it fires once, on the acquiring iteration's return).
+func runProvisionLocked(lockDir string, fn func() error) error {
+	defer func() { _ = os.RemoveAll(lockDir) }()
+	return fn()
+}
+
 // withProvisionLock serializes provisioning across processes (two session starts
 // could otherwise interleave binary installs or both pass the port check before
 // spawning). Atomic mkdir mutex with PID-stamped stale-lock recovery; bounded so
@@ -970,11 +978,17 @@ func withProvisionLock(fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
 		return err
 	}
-	for i := 0; i < 900; i++ { // ~180s: enough for a slow first-run download
+	for range 900 { // ~180s: enough for a slow first-run download
 		if err := os.Mkdir(lockDir, 0o755); err == nil {
-			_ = os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644)
-			defer os.RemoveAll(lockDir)
-			return fn()
+			// Record our PID before entering the critical section. If the write
+			// fails, the lock dir has no owner stamp and stale-lock recovery
+			// (which reads this pid to prove the holder is dead) can never reclaim
+			// it — a poison lock that wedges every waiter. So release and fail.
+			if werr := os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644); werr != nil {
+				_ = os.RemoveAll(lockDir)
+				return fmt.Errorf("write provision lock pid: %w", werr)
+			}
+			return runProvisionLocked(lockDir, fn)
 		} else if !os.IsExist(err) {
 			return err
 		}
@@ -1244,8 +1258,8 @@ func dirWritable(dir string) bool {
 		return false
 	}
 	name := f.Name()
-	f.Close()
-	os.Remove(name)
+	_ = f.Close()
+	_ = os.Remove(name)
 	return true
 }
 
@@ -1312,7 +1326,7 @@ func pgrepDemarkusServer() []int {
 	}
 	var pids []int
 	self := os.Getpid()
-	for _, ln := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for ln := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
 			continue
@@ -1346,7 +1360,7 @@ func psArgs(pid int) string {
 // Linux (/proc/<pid>/environ) and macOS (ps eww).
 func procEnv(pid int, name string) string {
 	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid)); err == nil {
-		for _, kv := range bytes.Split(b, []byte{0}) {
+		for kv := range bytes.SplitSeq(b, []byte{0}) {
 			s := string(kv)
 			if v, ok := strings.CutPrefix(s, name+"="); ok {
 				return v
@@ -1358,7 +1372,7 @@ func procEnv(pid int, name string) string {
 	if err != nil {
 		return ""
 	}
-	for _, tok := range strings.Fields(string(out)) {
+	for tok := range strings.FieldsSeq(string(out)) {
 		if v, ok := strings.CutPrefix(tok, name+"="); ok {
 			return v
 		}

@@ -50,7 +50,7 @@ const knowledgeRecallNudge = "This reads like a recall question. If it concerns 
 const journalNudge = "This session changed files but recorded nothing to the soul. If something here is worth remembering — a decision, a gotcha, a non-obvious why — capture it with /soul-journal (or mark_append to today's journal under /<project>/journal/<YYYY-MM-DD>.md). If it's all routine, ignore this."
 
 // Evaluate dispatches on the event and returns the nudge text (or empty).
-func Evaluate(in Input) (Output, error) {
+func Evaluate(in *Input) (Output, error) {
 	// Accept the Claude PostToolUse shape (tool_name/tool_input) for promote.
 	if in.Tool == "" && in.ToolName != "" {
 		in.Tool = in.ToolName
@@ -68,7 +68,7 @@ func Evaluate(in Input) (Output, error) {
 	}
 }
 
-func recall(in Input) (Output, error) {
+func recall(in *Input) (Output, error) {
 	lc := strings.ToLower(in.Prompt)
 	if in.Surface == "knowledge" {
 		present, err := config.KnowledgePresent()
@@ -91,7 +91,7 @@ func recall(in Input) (Output, error) {
 	return Output{}, nil
 }
 
-func promote(in Input) (Output, error) {
+func promote(in *Input) (Output, error) {
 	tool, args := config.NormalizeCall(in.Tool, in.Input)
 	pt, ok := config.ParseTool(tool)
 	if !ok || pt.Verb != "publish" {
@@ -122,7 +122,7 @@ func promote(in Input) (Output, error) {
 	return Output{Nudge: "New ADR published to the soul (" + url + "). ADRs are high-signal, shared-team knowledge: if this decision is durable and useful beyond you, /promote " + url + " to lift it into the knowledge system (curate → gate → publish). If it is personal or provisional, leave it here — most soul content correctly stays put."}, nil
 }
 
-func sessionEnd(in Input) (Output, error) {
+func sessionEnd(in *Input) (Output, error) {
 	present, err := config.LocalSoulPresent()
 	if err != nil {
 		return Output{}, err

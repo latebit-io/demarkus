@@ -103,7 +103,7 @@ func cmdNudge() {
 		in.SoulWrite = *soulWrite
 	}
 
-	out, err := nudge.Evaluate(in)
+	out, err := nudge.Evaluate(&in)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: evaluate: "+err.Error())
 		return

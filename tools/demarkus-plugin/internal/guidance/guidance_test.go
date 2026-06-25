@@ -76,10 +76,3 @@ func TestKnowledgeGuidance(t *testing.T) {
 		t.Error("expected the soul↔system note when no soul is configured")
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

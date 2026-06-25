@@ -384,7 +384,7 @@ func cmdMcpServe(args []string) {
 	env := os.Environ()
 	if tokenFile != "" && tokenFile != "-" {
 		tok, err := os.ReadFile(tokenFile)
-		if err == nil && len(strings.TrimSpace(string(tok))) > 0 {
+		if err == nil && strings.TrimSpace(string(tok)) != "" {
 			env = append(env, "DEMARKUS_AUTH="+strings.TrimSpace(string(tok)))
 		} else if *soul != "" {
 			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: token file "+tokenFile+" missing/empty — re-run /soul-join --token")

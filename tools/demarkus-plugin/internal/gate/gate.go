@@ -157,7 +157,7 @@ func Evaluate(in Input) (Decision, error) {
 	return allow(), nil // unrelated server — not ours to gate
 }
 
-func evalMemory(tool string, pt config.ParsedTool, args map[string]any, cwd, soulID string) (Decision, error) {
+func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, soulID string) (Decision, error) {
 	// The destination gate and the publish tag-gate are INDEPENDENT (in Claude
 	// Code they're two separate hooks) — evaluate both and return the most severe
 	// outcome, so e.g. a misroute set to `warn` can't suppress a `block` from the
@@ -303,7 +303,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	}
 	if len(missingFields) > 0 {
 		problems = append(problems, fmt.Sprintf(
-			"missing required OKF metadata fields: %s (set each as a key in the metadata object, e.g. metadata: {\"%s\": \"...\"})",
+			"missing required OKF metadata fields: %s (set each as a key in the metadata object, e.g. metadata: {%q: \"...\"})",
 			strings.Join(missingFields, " "), missingFields[0]))
 	}
 	target := url

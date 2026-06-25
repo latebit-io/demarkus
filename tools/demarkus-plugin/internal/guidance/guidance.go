@@ -15,17 +15,20 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
 )
 
+// Input selects which surface's session guidance to evaluate.
 type Input struct {
 	Surface      string `json:"surface"`      // memory | knowledge
 	GuidanceFile string `json:"guidanceFile"` // path to the plugin's static guidance md
 }
 
+// Output carries the guidance text to inject for a session.
 type Output struct {
 	Context string `json:"context"` // full text to inject; empty = nothing to say
 }
 
 const memoryOfferText = "[One-time setup offer — raise this with the user once, then drop it] demarkus-memory is now wired as your persistent memory store. If the user would like demarkus to be their SINGLE source of durable memory, offer to disable your harness's built-in memory tool so the two don't compete: ask first, and only if they agree, turn it off and report what you changed. If they decline, say nothing further about it. Do not disable anything unasked."
 
+// Evaluate builds the session guidance to inject for the requested surface.
 func Evaluate(in Input) (Output, error) {
 	switch in.Surface {
 	case "knowledge":

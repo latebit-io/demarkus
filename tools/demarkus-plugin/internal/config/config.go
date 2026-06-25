@@ -16,6 +16,7 @@ import (
 // Strictness is the enforcement level a gate applies to a violation.
 type Strictness string
 
+// Enforcement levels a gate can apply to a violation.
 const (
 	Warn  Strictness = "warn"
 	Block Strictness = "block"
@@ -25,7 +26,7 @@ const (
 // LocalSoulID is the reserved catalog id / MCP server name of the local managed soul.
 const LocalSoulID = "demarkus-memory"
 
-// Paths under ~/.demarkus. Resolved once via Home().
+// Home returns the ~/.demarkus base directory that all plugin paths resolve under.
 func Home() (string, error) {
 	h, err := os.UserHomeDir()
 	if err != nil {
@@ -68,7 +69,7 @@ func records(p string) ([]string, error) {
 		return nil, err
 	}
 	var out []string
-	for _, ln := range strings.Split(s, "\n") {
+	for ln := range strings.SplitSeq(s, "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln == "" || strings.HasPrefix(ln, "#") {
 			continue
@@ -104,7 +105,7 @@ func validStrictness(s string, def Strictness) Strictness {
 	}
 }
 
-// MemoryTagStrictness: env override → plugin-memory.strictness → warn (floor).
+// MemoryTagStrictness env override → plugin-memory.strictness → warn (floor).
 func MemoryTagStrictness() (Strictness, error) {
 	if v := os.Getenv("DEMARKUS_MEMORY_STRICTNESS"); v != "" {
 		return validStrictness(v, Warn), nil
@@ -120,7 +121,7 @@ func MemoryTagStrictness() (Strictness, error) {
 	return validStrictness(s, Warn), nil
 }
 
-// MemoryDestStrictness: env override → plugin-memory.dest-strictness → block.
+// MemoryDestStrictness env override → plugin-memory.dest-strictness → block.
 func MemoryDestStrictness() (Strictness, error) {
 	if v := os.Getenv("DEMARKUS_MEMORY_DEST_STRICTNESS"); v != "" {
 		return validStrictness(v, Block), nil
@@ -136,7 +137,7 @@ func MemoryDestStrictness() (Strictness, error) {
 	return validStrictness(s, Block), nil
 }
 
-// KnowledgeStrictness: env override → plugin-knowledge.strictness.<slug> → warn.
+// KnowledgeStrictness env override → plugin-knowledge.strictness.<slug> → warn.
 func KnowledgeStrictness(slug string) (Strictness, error) {
 	if v := os.Getenv("DEMARKUS_KNOWLEDGE_STRICTNESS"); v != "" {
 		return validStrictness(v, Warn), nil
@@ -169,7 +170,7 @@ func tokens(s string) []string {
 	return out
 }
 
-// KnowledgeRequireTags: per-slug required tag axes (e.g. "category team").
+// KnowledgeRequireTags per-slug required tag axes (e.g. "category team").
 func KnowledgeRequireTags(slug string) ([]string, error) {
 	if slug == "" {
 		return nil, nil
@@ -185,7 +186,7 @@ func KnowledgeRequireTags(slug string) ([]string, error) {
 	return tokens(s), nil
 }
 
-// KnowledgeRequireFields: per-slug required OKF metadata fields (e.g. "type").
+// KnowledgeRequireFields per-slug required OKF metadata fields (e.g. "type").
 func KnowledgeRequireFields(slug string) ([]string, error) {
 	if slug == "" {
 		return nil, nil
@@ -203,13 +204,13 @@ func KnowledgeRequireFields(slug string) ([]string, error) {
 
 // --- registries ---------------------------------------------------------------
 
-// LocalSoulPresent: the local managed soul is configured (plugin-memory.conf).
+// LocalSoulPresent the local managed soul is configured (plugin-memory.conf).
 func LocalSoulPresent() (bool, error) { return fileExists("plugin-memory.conf") }
 
 // SoulConfigured is an alias used by the knowledge surface for the soul↔system note.
 func SoulConfigured() (bool, error) { return fileExists("plugin-memory.conf") }
 
-// ListKnowledgeSystems: registered knowledge-system slugs.
+// ListKnowledgeSystems registered knowledge-system slugs.
 func ListKnowledgeSystems() ([]string, error) {
 	p, err := path("knowledge-systems")
 	if err != nil {
@@ -218,7 +219,7 @@ func ListKnowledgeSystems() ([]string, error) {
 	return records(p)
 }
 
-// ListRemoteSouls: registered remote-soul slugs (field 1 of each tab-separated row).
+// ListRemoteSouls registered remote-soul slugs (field 1 of each tab-separated row).
 func ListRemoteSouls() ([]string, error) {
 	p, err := path("souls")
 	if err != nil {
@@ -235,7 +236,7 @@ func ListRemoteSouls() ([]string, error) {
 	return out, nil
 }
 
-// ProjectBinding: the catalog slug bound to DIR, checking DIR then its ancestors
+// ProjectBinding the catalog slug bound to DIR, checking DIR then its ancestors
 // (nearest wins). "" when unbound.
 func ProjectBinding(dir string) (string, error) {
 	p, err := path("project-souls")
@@ -309,7 +310,7 @@ func serverIsLocalSoul(server string) bool {
 	return n == norm(LocalSoulID) || strings.HasSuffix(n, "_"+norm(LocalSoulID))
 }
 
-// SoulTargetID: canonical id of the soul a tool writes to (for binding compare),
+// SoulTargetID canonical id of the soul a tool writes to (for binding compare),
 // or "" when the tool targets a knowledge system or unrelated server.
 func SoulTargetID(tool string) (string, error) {
 	pt, ok := ParseTool(tool)
@@ -331,7 +332,7 @@ func SoulTargetID(tool string) (string, error) {
 	return "", nil
 }
 
-// KnowledgeScope: the registered knowledge-system slug a tool targets, or "".
+// KnowledgeScope the registered knowledge-system slug a tool targets, or "".
 // The local soul is explicitly NOT a knowledge target.
 func KnowledgeScope(tool string) (string, error) {
 	pt, ok := ParseTool(tool)
@@ -353,9 +354,9 @@ func KnowledgeScope(tool string) (string, error) {
 	return "", nil
 }
 
-// TagsHaveAxis: the comma-separated TAGS list contains an "AXIS:value" token.
+// TagsHaveAxis the comma-separated TAGS list contains an "AXIS:value" token.
 func TagsHaveAxis(tags, axis string) bool {
-	for _, tok := range strings.Split(tags, ",") {
+	for tok := range strings.SplitSeq(tags, ",") {
 		if strings.HasPrefix(strings.TrimSpace(tok), axis+":") {
 			return true
 		}
@@ -365,13 +366,13 @@ func TagsHaveAxis(tags, axis string) bool {
 
 // --- promote destinations + knowledge presence (for nudges) -------------------
 
-// KnowledgePresent: at least one knowledge system is joined.
+// KnowledgePresent at least one knowledge system is joined.
 func KnowledgePresent() (bool, error) {
 	systems, err := ListKnowledgeSystems()
 	return len(systems) > 0, err
 }
 
-// PromoteTargets: registered plain remote promote targets (one per line).
+// PromoteTargets registered plain remote promote targets (one per line).
 func PromoteTargets() ([]string, error) {
 	p, err := path("promote-targets")
 	if err != nil {
@@ -380,7 +381,7 @@ func PromoteTargets() ([]string, error) {
 	return records(p)
 }
 
-// PromoteDestinationPresent: any promote destination exists — a brokered
+// PromoteDestinationPresent any promote destination exists — a brokered
 // knowledge system OR a plain remote target. With none, promote is dormant.
 func PromoteDestinationPresent() (bool, error) {
 	kp, err := KnowledgePresent()
@@ -394,7 +395,7 @@ func PromoteDestinationPresent() (bool, error) {
 	return len(targets) > 0, err
 }
 
-// PublishGateScopeLocal: true when a tool targets a soul this plugin routes
+// PublishGateScopeLocal true when a tool targets a soul this plugin routes
 // (local managed soul or a registered remote soul) — i.e. SoulTargetID != "".
 func PublishGateScopeLocal(tool string) (bool, error) {
 	id, err := SoulTargetID(tool)
@@ -422,10 +423,10 @@ func LoadConfig() (*PluginConfig, error) {
 		return nil, err
 	}
 	out := map[string]string{}
-	for _, ln := range strings.Split(raw, "\n") {
+	for ln := range strings.SplitSeq(raw, "\n") {
 		for _, key := range []string{"SOUL_DIR", "PORT", "MODE"} {
-			if strings.HasPrefix(ln, key+"=") {
-				v := strings.TrimSpace(strings.TrimPrefix(ln, key+"="))
+			if after, ok := strings.CutPrefix(ln, key+"="); ok {
+				v := strings.TrimSpace(after)
 				v = unquoteShell(v)
 				out[key] = v
 			}
@@ -463,7 +464,7 @@ func StatePath(name string) (string, error) { return path(name) }
 // literal "mcp", the real tool name is input.tool and the real args are
 // input.args (a JSON string or an object). Direct calls pass through unchanged.
 // Shared by the gate and nudge commands so the unwrap lives in one place.
-func NormalizeCall(tool string, input map[string]any) (string, map[string]any) {
+func NormalizeCall(tool string, input map[string]any) (name string, args map[string]any) {
 	if input == nil {
 		input = map[string]any{}
 	}

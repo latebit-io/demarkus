@@ -1,6 +1,7 @@
 package provision
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"net"
@@ -91,7 +92,7 @@ func TestPortIsFreeAndFindFreePort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	taken := conn.LocalAddr().(*net.UDPAddr).Port
 
 	if portIsFree(taken) {
@@ -253,7 +254,7 @@ func TestSeedDocNeverClobbers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(existing) {
+	if !bytes.Equal(got, existing) {
 		t.Errorf("seedDoc clobbered existing content: %q", got)
 	}
 

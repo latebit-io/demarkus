@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,7 +29,7 @@ func readRecords(name string) ([]string, error) {
 		return nil, err
 	}
 	var out []string
-	for _, ln := range strings.Split(string(b), "\n") {
+	for ln := range strings.SplitSeq(string(b), "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln != "" && !strings.HasPrefix(ln, "#") {
 			out = append(out, ln)
@@ -152,10 +153,8 @@ func IsCatalogSoul(slug string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, s := range remotes {
-		if s == slug {
-			return true, nil
-		}
+	if slices.Contains(remotes, slug) {
+		return true, nil
 	}
 	return false, nil
 }
@@ -206,10 +205,8 @@ func KnowledgeRegister(slug string) error {
 		if err != nil {
 			return err
 		}
-		for _, r := range rows {
-			if r == slug {
-				return nil // already registered
-			}
+		if slices.Contains(rows, slug) {
+			return nil // already registered
 		}
 		rows = append(rows, slug)
 		return atomicWrite(p, []byte(strings.Join(rows, "\n")+"\n"))
@@ -308,13 +305,7 @@ func PolicyMirror(slug, body string) error {
 		if err != nil {
 			return err
 		}
-		registered := false
-		for _, row := range rows {
-			if row == slug {
-				registered = true
-				break
-			}
-		}
+		registered := slices.Contains(rows, slug)
 		if !registered {
 			return clearPolicyMirror(slug)
 		}
@@ -342,7 +333,7 @@ func PolicyMirror(slug, body string) error {
 // policyField returns the value of the first body line "KEY: value" where KEY is
 // the line's first token (so a prose mention can't match). "" when absent.
 func policyField(body, key string) string {
-	for _, ln := range strings.Split(body, "\n") {
+	for ln := range strings.SplitSeq(body, "\n") {
 		t := strings.TrimLeft(ln, " \t")
 		if strings.HasPrefix(t, key+":") {
 			return strings.TrimSpace(t[len(key)+1:])
@@ -354,7 +345,7 @@ func policyField(body, key string) string {
 // --- promote targets ----------------------------------------------------------
 
 // PromoteTargetAdd registers a plain remote promote target "<slug> <path> [label]".
-func PromoteTargetAdd(slug, path string, label string) error {
+func PromoteTargetAdd(slug, path, label string) error {
 	if slug == "" {
 		return fmt.Errorf("add: missing <slug>")
 	}
@@ -391,6 +382,7 @@ func PromoteTargetAdd(slug, path string, label string) error {
 	})
 }
 
+// PromoteTargetList returns the registered plain remote promote targets.
 func PromoteTargetList() ([]string, error) { return readRecords("promote-targets") }
 
 // DetectPromote lists every promote destination (brokered + plain), or nil when
