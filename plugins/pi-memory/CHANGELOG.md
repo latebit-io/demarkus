@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.4
+
+- Repin the shared `demarkus-plugin` binary to `tools/v0.3.5`, which provisions
+  `demarkus-mcp` at `client/v0.13.2`. That release fixes a connection-pool bug
+  where a timed-out QUIC stream-open on a dead pooled connection was never
+  evicted/redialed, wedging every subsequent fetch to a soul until the MCP
+  server restarted.
+
 ## 0.12.3
 
 - Fix: slash commands (`/soul`, `/soul-context`, `/soul-journal`, `/soul-init`,

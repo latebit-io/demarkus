@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.4
+
+- Repin the shared `demarkus-plugin` binary to `tools/v0.3.5` (provisions
+  `demarkus-mcp` at `client/v0.13.2`, which fixes the QUIC connection-pool
+  wedge). Keeps this plugin's pin in lockstep with the memory plugins, since
+  all four share the same `demarkus-plugin` binary install.
+
 ## 0.5.3
 
 - Fix: slash commands (`/knowledge`, `/knowledge-join`, `/knowledge-doctor`)
