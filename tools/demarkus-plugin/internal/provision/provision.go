@@ -38,13 +38,15 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
-// Version pins. These currently live in lib.sh; the binary is the source of
-// truth once provisioning moves in-process. demarkus-plugin ships in the same
-// tools/ release as demarkus-token, so its pin == toolsVersion.
+// Version pins — the source of truth for the managed binaries. demarkus-plugin
+// ships in the same tools/ release as demarkus-token, so its pin == toolsVersion;
+// toolsVersion MUST match the TOOLS_VERSION in every plugin's bootstrap.sh (the
+// bump workflow keeps them in lockstep) or provision would fight bootstrap over
+// which demarkus-plugin to install.
 const (
 	serverVersion = "0.18.0"
-	clientVersion = "0.13.0"
-	toolsVersion  = "0.2.0"
+	clientVersion = "0.13.1"
+	toolsVersion  = "0.3.0"
 )
 
 // Port/range constants (lib.sh).

@@ -70,7 +70,7 @@ func printUsage() {
 // a Stop decision:block). Empty nudge → no output. Fails silent (no nudge).
 func cmdNudge() {
 	fs := flag.NewFlagSet("nudge", flag.ExitOnError)
-	format := fs.String("format", "json", "output format: json | claude")
+	format := fs.String("format", "json", "output format: json | claude | codex")
 	event := fs.String("event", "", "override event: recall | promote | session-end")
 	surface := fs.String("surface", "", "override surface: memory | knowledge")
 	changed := fs.Bool("changed-files", false, "session-end: the session changed files")
@@ -111,7 +111,10 @@ func cmdNudge() {
 	if out.Nudge == "" {
 		return // nothing to surface
 	}
-	if *format == "claude" {
+	// Codex's hook output schema matches Claude's (same event names, same
+	// {decision,reason} / hookSpecificOutput.additionalContext shapes), so the two
+	// harnesses share one mapping.
+	if *format == "claude" || *format == "codex" {
 		switch in.Event {
 		case "session-end":
 			printJSON(map[string]any{"decision": "block", "reason": out.Nudge})
@@ -136,7 +139,7 @@ func cmdGuidance() {
 	fs := flag.NewFlagSet("guidance", flag.ExitOnError)
 	surface := fs.String("surface", "memory", "memory | knowledge")
 	guidanceFile := fs.String("guidance-file", "", "path to the plugin's static guidance markdown")
-	format := fs.String("format", "json", "output format: json | claude")
+	format := fs.String("format", "json", "output format: json | claude | codex")
 	_ = fs.Parse(os.Args[2:])
 
 	out, err := guidance.Evaluate(guidance.Input{Surface: *surface, GuidanceFile: *guidanceFile})
@@ -147,7 +150,7 @@ func cmdGuidance() {
 	if out.Context == "" {
 		return
 	}
-	if *format == "claude" {
+	if *format == "claude" || *format == "codex" {
 		printJSON(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "SessionStart", "additionalContext": out.Context,
 		}})
@@ -163,12 +166,14 @@ func cmdGuidance() {
 //	json        (default) → {"decision":...,"reason":...}        (pi reads this)
 //	claude-pre            → Claude PreToolUse hookSpecificOutput  (deny/ask, else empty)
 //	claude-post           → Claude PostToolUse hookSpecificOutput (warn → additionalContext)
+//	codex-pre             → Codex PreToolUse hookSpecificOutput   (deny; ask folded into deny)
+//	codex-post            → Codex PostToolUse hookSpecificOutput  (warn → additionalContext)
 //
 // FAILS OPEN on any internal error (no output / allow) so a transient fault never
 // blocks a legitimate write; the error is logged to stderr.
 func cmdGate() {
 	fs := flag.NewFlagSet("gate", flag.ExitOnError)
-	format := fs.String("format", "json", "output format: json | claude-pre | claude-post")
+	format := fs.String("format", "json", "output format: json | claude-pre | claude-post | codex-pre | codex-post")
 	_ = fs.Parse(os.Args[2:])
 
 	fail := func(msg string) {
@@ -212,7 +217,23 @@ func emitDecision(d gate.Decision, format string) {
 		printJSON(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "PreToolUse", "permissionDecision": pd, "permissionDecisionReason": d.Reason,
 		}})
-	case "claude-post":
+	case "codex-pre":
+		// Codex's PreToolUse permissionDecision is deny|allow only (no "ask"; that
+		// lives in the separate PermissionRequest event), so fold ask into deny
+		// with a reason that tells the agent to confirm with the user first.
+		reason := d.Reason
+		switch d.Decision {
+		case "block":
+			// keep reason as-is
+		case "ask":
+			reason = d.Reason + " Confirm with the user before proceeding."
+		default:
+			return // allow/warn → no Pre output
+		}
+		printJSON(map[string]any{"hookSpecificOutput": map[string]any{
+			"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason,
+		}})
+	case "claude-post", "codex-post":
 		if d.Decision != "warn" {
 			return // block/ask already handled Pre; allow → nothing
 		}

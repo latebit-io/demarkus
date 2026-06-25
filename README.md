@@ -88,8 +88,10 @@ modified: 2026-01-15T10:30:00Z
 
 - [Caztor](https://github.com/kevinboone/caztor): cross-platform Java GUI browser with preliminary Demarkus support
 - [Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus): publish and browse from Obsidian
-- [Claude Code memory plugin](plugins/claude-code/): zero-config local memory for Claude Code
-- [Claude Code knowledge plugin](plugins/claude-code-knowledge/): join an organizational knowledge system (broker-fronted, MCP OAuth)
+- Coding-agent plugins — same memory + knowledge behavior across harnesses, sharing one decision engine (see [plugins/README.md](plugins/README.md)):
+  - Claude Code: [memory](plugins/claude-code/) · [knowledge](plugins/claude-code-knowledge/)
+  - pi: [memory](plugins/pi-memory/) · [knowledge](plugins/pi-knowledge/)
+  - Codex: [memory](plugins/codex-memory/) · [knowledge](plugins/codex-knowledge/)
 - [OpenClaw skill](https://clawhub.ai/ontehfritz/demarkus): ClawHub skill for OpenClaw agents (see [install guide](https://www.demarkus.io/install/openclaw/))
 
 See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full list.

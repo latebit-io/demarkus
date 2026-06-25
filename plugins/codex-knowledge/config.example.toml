@@ -1,0 +1,46 @@
+# demarkus-knowledge — Codex wiring. install.sh renders this into a
+# marker-delimited managed block in ~/.codex/config.toml (replacing @PLUGIN_DIR@),
+# so a re-run updates in place. You can also merge it by hand.
+#
+# This plugin owns no server and no binaries beyond the shared demarkus-plugin
+# (used only for the gate / guidance / recall logic). The knowledge systems
+# themselves are HTTPS brokers added per-join by `/knowledge-join`, not here — see
+# the commented template at the bottom.
+
+# --- Lifecycle hooks ---------------------------------------------------------
+# SessionStart: install/upgrade the shared binary, inject knowledge guidance.
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/session-start.sh"
+
+# PreToolUse: the publish tag-gate (tags + importance + required axes/fields) on
+# writes to a joined knowledge system. Denies a bad write before it lands.
+[[hooks.PreToolUse]]
+matcher = "mcp__.*__mark_(publish|append)"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/gate-pre.sh"
+
+# PostToolUse: on the default (warn) strictness, surface the tag reminder.
+[[hooks.PostToolUse]]
+matcher = "mcp__.*__mark_(publish|append)"
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/gate-post.sh"
+
+# UserPromptSubmit: a recall reminder when a prompt reads like "what's the standard".
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/recall-nudge.sh"
+
+# --- Joining a knowledge system (done by /knowledge-join, shown for reference) -
+# A knowledge system is an HTTPS broker reached over OAuth. /knowledge-join adds
+# it for you; the equivalent manual wiring is:
+#
+#   [mcp_servers.<slug>]
+#   url = "https://mcp.broker.acme.com/mcp"
+#
+# then `codex mcp login <slug>` to complete OAuth, and
+# `demarkus-plugin registry knowledge-register <slug>` so the gate enforces on it.

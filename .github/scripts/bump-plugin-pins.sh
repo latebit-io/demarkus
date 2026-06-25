@@ -1,21 +1,34 @@
 #!/usr/bin/env bash
 #
-# Resolve the latest released server/client/tools versions and update the
-# demarkus-memory plugin's binary pins (and its patch version) to match.
+# Resolve the latest released server/client/tools versions and update the demarkus
+# plugins' binary pins to match. Since the Approach-C refactor the pins live in
+# TWO places that must stay in lockstep:
 #
-# Idempotent: run it as often as you like. It writes "changed=true" plus the
-# resolved versions to $GITHUB_OUTPUT (and stdout) when it edited files, and
-# "changed=false" when everything was already current. Requires `gh` and `jq`.
+#   1. tools/demarkus-plugin/internal/provision/provision.go — the Go consts
+#      serverVersion / clientVersion / toolsVersion (source of truth; what the
+#      binary provisions and self-updates to).
+#   2. plugins/*/scripts/bootstrap.sh — TOOLS_VERSION (the chicken-and-egg pin
+#      the tiny installer needs to fetch the demarkus-plugin binary itself).
 #
-# Env: GH_REPO (default latebit-io/demarkus), GH_TOKEN for `gh`.
+# toolsVersion and every bootstrap TOOLS_VERSION MUST match, or provision and
+# bootstrap fight over which demarkus-plugin to install.
+#
+# It also patch-bumps the affected plugins' versions, in two lineages:
+#   - memory    (changes when server|client|tools change): claude-code +
+#     pi-memory + the claude-code marketplace entry.
+#   - knowledge (changes when tools changes, via its bootstrap): claude-code-
+#     knowledge + pi-knowledge + the claude-code-knowledge marketplace entry.
+# (The Codex plugins carry no version file — only a bootstrap pin.)
+#
+# Idempotent. Writes "changed=true" plus the resolved versions to $GITHUB_OUTPUT
+# (and stdout) when it edited files, "changed=false" otherwise. Requires gh + jq.
+#
+# Env: GH_REPO (default latebit-io/demarkus), GH_TOKEN for gh.
 set -euo pipefail
 
 repo="${GH_REPO:-latebit-io/demarkus}"
-lib="plugins/claude-code/scripts/lib.sh"
-plugin_json="plugins/claude-code/.claude-plugin/plugin.json"
+provision="tools/demarkus-plugin/internal/provision/provision.go"
 marketplace=".claude-plugin/marketplace.json"
-# The marketplace entry this plugin owns, keyed by its source path.
-plugin_source="./plugins/claude-code"
 
 # latest <module> -> "X.Y.Z" (highest semver among that module's release tags).
 latest() {
@@ -24,13 +37,51 @@ latest() {
     | sed "s#$1/v##" | sort -V | tail -1
 }
 
-# pin <CONST> -> current value of `readonly CONST="..."` in lib.sh.
-pin() { sed -nE "s/^readonly $1=\"([^\"]+)\".*/\1/p" "$lib"; }
+# goconst <NAME> -> current value of `NAME = "..."` in provision.go.
+goconst() { sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\1/p" "$provision"; }
 
 emit() {
   echo "$1=$2"
   [[ -n "${GITHUB_OUTPUT:-}" ]] && echo "$1=$2" >>"$GITHUB_OUTPUT"
   return 0
+}
+
+# set_goconst <NAME> <value> — portable in-place edit (temp file; no sed -i).
+set_goconst() {
+  local tmp; tmp=$(mktemp)
+  sed -E "s/^([[:space:]]*$1[[:space:]]*=[[:space:]]*)\"[^\"]+\"/\1\"$2\"/" "$provision" >"$tmp" && mv "$tmp" "$provision"
+}
+
+# set_bootstrap_tools <value> — update TOOLS_VERSION in every plugin bootstrap.
+set_bootstrap_tools() {
+  local f tmp
+  for f in plugins/*/scripts/bootstrap.sh; do
+    [[ -f "$f" ]] || continue
+    tmp=$(mktemp)
+    sed -E "s/^(TOOLS_VERSION=)\"[^\"]+\"/\1\"$1\"/" "$f" >"$tmp" && mv "$tmp" "$f"
+  done
+}
+
+# bump_json_version <file> — patch-bump the .version field in a JSON file. Echoes
+# the new version. Uses jq (these files round-trip cleanly through it).
+bump_json_version() {
+  local f cur new tmp; f="$1"
+  cur=$(jq -r '.version' "$f")
+  new=$(awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}' <<<"$cur")
+  tmp=$(mktemp)
+  jq --arg v "$new" '.version = $v' "$f" >"$tmp" && mv "$tmp" "$f"
+  echo "$new"
+}
+
+# set_marketplace_version <source-path> <value> — set the version of the
+# marketplace entry whose "source" is <source-path>, preserving hand formatting.
+set_marketplace_version() {
+  local tmp; tmp=$(mktemp)
+  awk -v v="$2" -v src="$1" '
+    index($0, "\"source\": \"" src "\"") { inblock = 1 }
+    inblock && /"version":/ { sub(/"version": "[^"]*"/, "\"version\": \"" v "\""); inblock = 0 }
+    { print }
+  ' "$marketplace" >"$tmp" && mv "$tmp" "$marketplace"
 }
 
 new_server=$(latest server)
@@ -41,9 +92,9 @@ if [[ -z "$new_server" || -z "$new_client" || -z "$new_tools" ]]; then
   exit 1
 fi
 
-cur_server=$(pin SERVER_VERSION)
-cur_client=$(pin CLIENT_VERSION)
-cur_tools=$(pin TOOLS_VERSION)
+cur_server=$(goconst serverVersion)
+cur_client=$(goconst clientVersion)
+cur_tools=$(goconst toolsVersion)
 
 emit server "$new_server"
 emit client "$new_client"
@@ -55,39 +106,30 @@ if [[ "$new_server" == "$cur_server" && "$new_client" == "$cur_client" && "$new_
   exit 0
 fi
 
-# Update the three pins. Write via a temp file rather than `sed -i`, whose flag
-# syntax differs between GNU and BSD sed — this stays portable.
-tmp=$(mktemp)
-sed -E \
-  -e "s/^(readonly SERVER_VERSION=)\"[^\"]+\"/\1\"$new_server\"/" \
-  -e "s/^(readonly CLIENT_VERSION=)\"[^\"]+\"/\1\"$new_client\"/" \
-  -e "s/^(readonly TOOLS_VERSION=)\"[^\"]+\"/\1\"$new_tools\"/" \
-  "$lib" >"$tmp" && mv "$tmp" "$lib"
+# Update the Go consts (source of truth) and every bootstrap's TOOLS_VERSION.
+set_goconst serverVersion "$new_server"
+set_goconst clientVersion "$new_client"
+set_goconst toolsVersion "$new_tools"
+[[ "$new_tools" != "$cur_tools" ]] && set_bootstrap_tools "$new_tools"
 
-# Patch-bump the plugin version, kept in lockstep between plugin.json and the
-# marketplace entry. jq targets the exact entry by source path, so a coincident
-# version on another plugin is never touched.
-cur_ver=$(jq -r '.version' "$plugin_json")
-new_ver=$(awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}' <<<"$cur_ver")
+# Patch-bump the affected lineages.
+memory_changed=false
+knowledge_changed=false
+[[ "$new_server" != "$cur_server" || "$new_client" != "$cur_client" || "$new_tools" != "$cur_tools" ]] && memory_changed=true
+[[ "$new_tools" != "$cur_tools" ]] && knowledge_changed=true
 
-# plugin.json round-trips cleanly through jq (targets .version exactly).
-tmp=$(mktemp)
-jq --arg v "$new_ver" '.version = $v' "$plugin_json" >"$tmp" && mv "$tmp" "$plugin_json"
+if [[ "$memory_changed" == true ]]; then
+  mv_ver="$(bump_json_version plugins/claude-code/.claude-plugin/plugin.json)"
+  set_marketplace_version "./plugins/claude-code" "$mv_ver"
+  _=$(bump_json_version plugins/pi-memory/package.json)
+  emit memory_version "$mv_ver"
+fi
+if [[ "$knowledge_changed" == true ]]; then
+  kv_ver="$(bump_json_version plugins/claude-code-knowledge/.claude-plugin/plugin.json)"
+  set_marketplace_version "./plugins/claude-code-knowledge" "$kv_ver"
+  _=$(bump_json_version plugins/pi-knowledge/package.json)
+  emit knowledge_version "$kv_ver"
+fi
 
-# marketplace.json is edited with awk to preserve its hand-authored formatting
-# (jq would expand the inline tag arrays). Anchor on this plugin's exact source
-# path (literal substring match), then replace the next version line in that
-# entry only — never another plugin's.
-tmp=$(mktemp)
-awk -v v="$new_ver" -v src="$plugin_source" '
-  index($0, "\"source\": \"" src "\"") { inblock = 1 }
-  inblock && /"version":/ {
-    sub(/"version": "[^"]*"/, "\"version\": \"" v "\"")
-    inblock = 0
-  }
-  { print }
-' "$marketplace" >"$tmp" && mv "$tmp" "$marketplace"
-
-emit version "$new_ver"
 emit changed true
-echo "bumped: server $cur_server->$new_server, client $cur_client->$new_client, tools $cur_tools->$new_tools, plugin $cur_ver->$new_ver"
+echo "bumped: server $cur_server->$new_server, client $cur_client->$new_client, tools $cur_tools->$new_tools"

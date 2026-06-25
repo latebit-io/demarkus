@@ -1,0 +1,59 @@
+# demarkus-memory — Codex wiring. install.sh renders this into a marker-delimited
+# managed block in ~/.codex/config.toml (replacing @PLUGIN_DIR@ / @BIN@), so a
+# re-run updates in place instead of duplicating. You can also merge it by hand.
+#
+# Two halves, both pointing at the shared demarkus-plugin binary:
+#   - the local-soul MCP server (mark_* tools), launched via `mcp-serve`
+#   - the lifecycle hooks (gate / nudge / guidance), thin adapters in hooks/
+# All decision LOGIC lives in the binary — identical to the Claude Code and pi
+# plugins. A new harness reimplements nothing; it only re-expresses this wiring.
+
+# --- MCP server: the local managed soul -------------------------------------
+# `mcp-serve` execs demarkus-mcp with the host + token from ~/.demarkus config,
+# so no secret is written here. Tools surface to the model as
+# mcp__demarkus-memory__mark_* (which the PreToolUse matcher below targets).
+[mcp_servers.demarkus-memory]
+command = "@BIN@"
+args = ["mcp-serve"]
+
+# --- Lifecycle hooks ---------------------------------------------------------
+# SessionStart: install/upgrade the binary, provision the managed server, inject
+# standing guidance.
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/session-start.sh"
+
+# PreToolUse: the publish tag-gate + destination gate. Denies a bad write before
+# it lands; the matcher scopes it to soul writes so other tools are untouched.
+[[hooks.PreToolUse]]
+matcher = "mcp__.*__mark_(publish|append)"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/gate-pre.sh"
+
+# PostToolUse: on the default (warn) strictness, surface the tag reminder; and on
+# a fresh ADR publish, nudge promotion.
+[[hooks.PostToolUse]]
+matcher = "mcp__.*__mark_(publish|append)"
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/gate-post.sh"
+
+[[hooks.PostToolUse]]
+matcher = "mcp__.*__mark_publish"
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/promote-nudge.sh"
+
+# UserPromptSubmit: a recall reminder when a prompt reads like "what did we decide".
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/recall-nudge.sh"
+
+# Stop: the session-end journal nudge (fires at most once per session).
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "@PLUGIN_DIR@/hooks/session-journal-nudge.sh"
