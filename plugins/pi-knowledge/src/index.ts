@@ -154,7 +154,10 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
           return;
         }
         const content = args && args.trim() ? `${body}\n\n---\nUser arguments: ${args.trim()}` : body;
-        pi.sendMessage({ customType: `${CUSTOM}-${name}`, content, display: false });
+        // triggerTurn: the command injects the skill body and must start a turn
+        // so the agent acts on it. Without it, an idle session just appends the
+        // message to history and never runs (the command appears to do nothing).
+        pi.sendMessage({ customType: `${CUSTOM}-${name}`, content, display: false }, { triggerTurn: true });
       },
     });
   }
