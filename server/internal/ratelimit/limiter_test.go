@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -22,6 +23,53 @@ func TestAllow(t *testing.T) {
 	// Third request exceeds burst — denied.
 	if l.Allow("10.0.0.1") {
 		t.Fatal("third request should be denied (burst exhausted)")
+	}
+}
+
+// Wait serves a burst immediately (up to the burst size) rather than rejecting,
+// so a bursty-but-legitimate client is paced, not failed.
+func TestWaitAllowsBurst(t *testing.T) {
+	l := New(1, 3) // 1/s sustained, burst of 3
+	defer l.Stop()
+
+	ctx := context.Background()
+	for i := 1; i <= 3; i++ {
+		if err := l.Wait(ctx, "10.0.0.2"); err != nil {
+			t.Fatalf("Wait #%d within burst returned %v, want nil", i, err)
+		}
+	}
+}
+
+// Once the burst is spent the next token is ~1s away; a request whose context
+// deadline passes first must return the context error (fail fast), not block
+// indefinitely — this is what bounds a sustained flood.
+func TestWaitRespectsContextDeadline(t *testing.T) {
+	l := New(1, 1) // 1/s, burst of 1
+	defer l.Stop()
+
+	ip := "10.0.0.3"
+	if err := l.Wait(context.Background(), ip); err != nil {
+		t.Fatalf("first Wait returned %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := l.Wait(ctx, ip); err == nil {
+		t.Fatal("second Wait under a tight deadline returned nil, want a context error")
+	}
+}
+
+// Throttling is per-IP: one IP exhausting its burst must not delay another.
+func TestWaitSeparateIPs(t *testing.T) {
+	l := New(1, 1) // 1/s, burst of 1
+	defer l.Stop()
+
+	ctx := context.Background()
+	if err := l.Wait(ctx, "10.0.0.4"); err != nil {
+		t.Fatalf("IP A first Wait returned %v, want nil", err)
+	}
+	if err := l.Wait(ctx, "10.0.0.5"); err != nil {
+		t.Fatalf("IP B first Wait returned %v, want nil (separate bucket)", err)
 	}
 }
 

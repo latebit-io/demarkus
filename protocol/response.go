@@ -22,6 +22,7 @@ const (
 	StatusConflict     = "conflict"
 	StatusBadRequest   = "bad-request"
 	StatusServerError  = "server-error"
+	StatusRateLimited  = "rate-limited"
 )
 
 // Response represents a Mark Protocol response.

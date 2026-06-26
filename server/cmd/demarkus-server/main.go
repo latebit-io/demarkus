@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -254,6 +255,15 @@ func main() {
 	logger.Info("server stopped")
 }
 
+// writeRateLimited sends a rate-limited status response on the stream. Unlike a
+// bare Close (which the client reads as an empty/statusless reply it cannot tell
+// apart from a dead connection), this carries an explicit status the client can
+// recognize and back off on.
+func writeRateLimited(w io.Writer) error {
+	_, err := protocol.Response{Status: protocol.StatusRateLimited}.WriteTo(w)
+	return err
+}
+
 func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duration, rl *ratelimit.Limiter, logger *slog.Logger) {
 	for {
 		stream, err := conn.AcceptStream(context.Background())
@@ -262,8 +272,28 @@ func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duratio
 		}
 		if rl != nil {
 			ip := ratelimit.ExtractIP(conn.RemoteAddr())
-			if !rl.Allow(ip) {
-				logger.Warn("rate limited")
+			// Throttle over-limit requests to the configured rate rather than
+			// dropping them. A dropped stream is closed with no response, which
+			// the client reads as an empty/statusless reply indistinguishable
+			// from a dead connection (e.g. a graph crawl then records a node
+			// with no title). Pacing keeps bursty-but-legitimate clients working.
+			// Bound the wait by the request timeout so a sustained flood that
+			// can't be served in that window still fails fast instead of queueing.
+			waitCtx := context.Background()
+			var cancel context.CancelFunc
+			if requestTimeout > 0 {
+				waitCtx, cancel = context.WithTimeout(waitCtx, requestTimeout)
+			}
+			err := rl.Wait(waitCtx, ip)
+			if cancel != nil {
+				cancel()
+			}
+			if err != nil {
+				logger.Warn("rate limited", "ip", ip, "error", err)
+				// Reply with an explicit rate-limited status rather than closing
+				// the stream empty: an empty reply is indistinguishable from a
+				// dead connection, so a client cannot tell it was throttled.
+				_ = writeRateLimited(stream)
 				_ = stream.Close()
 				continue
 			}
