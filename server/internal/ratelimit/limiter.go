@@ -2,6 +2,7 @@
 package ratelimit
 
 import (
+	"context"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -64,6 +65,34 @@ func (l *Limiter) Allow(ip string) bool {
 	actual := v.(*entry)
 	actual.lastSeen.Store(now)
 	return actual.limiter.Allow()
+}
+
+// Wait blocks until a token is available for the given IP or ctx is done,
+// returning ctx.Err() in the latter case. Unlike Allow (which rejects an
+// over-limit request outright), Wait *paces* it to the configured rate. This
+// matters for bursty-but-legitimate clients — e.g. a graph crawl firing many
+// concurrent FETCHes — which should be throttled, not failed. Dropping such a
+// request closes its stream with no response, and the client cannot tell that
+// empty reply apart from a dead connection.
+//
+// The caller bounds the wait with ctx (typically the per-request timeout), so a
+// sustained flood that cannot be served within the budget still fails fast
+// rather than queueing unboundedly.
+func (l *Limiter) Wait(ctx context.Context, ip string) error {
+	now := time.Now().UnixNano()
+
+	if v, ok := l.ips.Load(ip); ok {
+		e := v.(*entry)
+		e.lastSeen.Store(now)
+		return e.limiter.Wait(ctx)
+	}
+
+	e := &entry{limiter: rate.NewLimiter(l.rate, l.burst)}
+	e.lastSeen.Store(now)
+	v, _ := l.ips.LoadOrStore(ip, e)
+	actual := v.(*entry)
+	actual.lastSeen.Store(now)
+	return actual.limiter.Wait(ctx)
 }
 
 // Stop terminates the background cleanup goroutine.

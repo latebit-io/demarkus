@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -254,25 +255,71 @@ func main() {
 	logger.Info("server stopped")
 }
 
+// writeRateLimited sends a rate-limited status response on the stream. Unlike a
+// bare Close (which the client reads as an empty/statusless reply it cannot tell
+// apart from a dead connection), this carries an explicit status the client can
+// recognize and back off on.
+func writeRateLimited(w io.Writer) error {
+	_, err := protocol.Response{Status: protocol.StatusRateLimited}.WriteTo(w)
+	return err
+}
+
+// maxRateWaitBudget caps how long a request may block on the rate limiter when
+// no request timeout is configured (DEMARKUS_REQUEST_TIMEOUT of 0 or negative).
+// An unbounded wait could pile up goroutines under a sustained flood.
+const maxRateWaitBudget = 10 * time.Second
+
+// handleConn accepts streams on a connection and dispatches each one to its own
+// goroutine. The accept loop never blocks on the rate limiter — that work lives
+// in serveStream — so a throttled request can't stall acceptance of other
+// streams on the same connection.
 func handleConn(conn *quic.Conn, h *handler.Handler, requestTimeout time.Duration, rl *ratelimit.Limiter, logger *slog.Logger) {
 	for {
 		stream, err := conn.AcceptStream(context.Background())
 		if err != nil {
 			return // connection closed
 		}
-		if rl != nil {
-			ip := ratelimit.ExtractIP(conn.RemoteAddr())
-			if !rl.Allow(ip) {
-				logger.Warn("rate limited")
-				_ = stream.Close()
-				continue
-			}
-		}
-		if requestTimeout > 0 {
-			_ = stream.SetReadDeadline(time.Now().Add(requestTimeout))
-		}
-		go h.HandleStream(stream)
+		go serveStream(conn, stream, h, requestTimeout, rl, logger)
 	}
+}
+
+// serveStream throttles a single request to the per-IP rate, then dispatches it
+// to the handler. Over-limit requests are paced (not dropped) so bursty-but-
+// legitimate clients keep working; a request that still can't be served within
+// the wait budget gets an explicit rate-limited status response rather than an
+// empty close (which a client cannot tell apart from a dead connection).
+func serveStream(conn *quic.Conn, stream *quic.Stream, h *handler.Handler, requestTimeout time.Duration, rl *ratelimit.Limiter, logger *slog.Logger) {
+	if rl != nil {
+		ip := ratelimit.ExtractIP(conn.RemoteAddr())
+		// Always bound the wait. requestTimeout may be 0/negative (timeout
+		// disabled or misconfigured), so fall back to a fixed cap rather than
+		// waiting forever.
+		budget := requestTimeout
+		if budget <= 0 {
+			budget = maxRateWaitBudget
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		err := rl.Wait(ctx, ip)
+		cancel()
+		if err != nil {
+			logger.Warn("rate limited", "ip", ip, "error", err)
+			// A failed write is the silent-close case we're trying to avoid (the
+			// client gets nothing it can distinguish from a dead connection), so
+			// surface it rather than swallowing it.
+			if werr := writeRateLimited(stream); werr != nil {
+				logger.Warn("writing rate-limited response", "ip", ip, "error", werr)
+			}
+			// Close error is non-actionable on an already-rejected stream.
+			_ = stream.Close()
+			return
+		}
+	}
+	if requestTimeout > 0 {
+		// SetReadDeadline only errors on a closed stream; HandleStream then fails
+		// fast on its first read, so the error is non-actionable here.
+		_ = stream.SetReadDeadline(time.Now().Add(requestTimeout))
+	}
+	h.HandleStream(stream)
 }
 
 var (
