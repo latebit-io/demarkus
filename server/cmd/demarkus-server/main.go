@@ -303,12 +303,20 @@ func serveStream(conn *quic.Conn, stream *quic.Stream, h *handler.Handler, reque
 		cancel()
 		if err != nil {
 			logger.Warn("rate limited", "ip", ip, "error", err)
-			_ = writeRateLimited(stream)
+			// A failed write is the silent-close case we're trying to avoid (the
+			// client gets nothing it can distinguish from a dead connection), so
+			// surface it rather than swallowing it.
+			if werr := writeRateLimited(stream); werr != nil {
+				logger.Warn("writing rate-limited response", "ip", ip, "error", werr)
+			}
+			// Close error is non-actionable on an already-rejected stream.
 			_ = stream.Close()
 			return
 		}
 	}
 	if requestTimeout > 0 {
+		// SetReadDeadline only errors on a closed stream; HandleStream then fails
+		// fast on its first read, so the error is non-actionable here.
 		_ = stream.SetReadDeadline(time.Now().Add(requestTimeout))
 	}
 	h.HandleStream(stream)
