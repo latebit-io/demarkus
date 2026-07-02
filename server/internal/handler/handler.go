@@ -343,7 +343,8 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
 	}
-	entries, err := h.Store.ListDir(reqPath)
+	includeArchived := req.Metadata["include-archived"] == "true"
+	entries, err := h.Store.ListDir(reqPath, includeArchived)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(reqPath))
@@ -423,7 +424,8 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 	}
 
 	// No index.md — generate a directory listing.
-	entries, err := h.Store.ListDir(req.Path)
+	includeArchived := req.Metadata["include-archived"] == "true"
+	entries, err := h.Store.ListDir(req.Path, includeArchived)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(req.Path))

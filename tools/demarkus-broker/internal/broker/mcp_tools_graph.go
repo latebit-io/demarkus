@@ -436,7 +436,7 @@ func (g *mcpGateway) walkIndexDir(ctx context.Context, claims *Claims, worldName
 		return errIndexTruncated
 	}
 	listResult, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.List(worldName, dirPath, token)
+		return g.dispatcher.List(worldName, dirPath, token, fetch.ListOptions{})
 	})
 	if err != nil {
 		return fmt.Errorf("list %s: %w", dirPath, err)

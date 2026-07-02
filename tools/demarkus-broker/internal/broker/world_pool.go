@@ -22,7 +22,7 @@ import (
 // tools land in Slices 4–5.
 type worldDispatcher interface {
 	Fetch(worldName, path, token string) (fetch.Result, error)
-	List(worldName, path, token string) (fetch.Result, error)
+	List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	Versions(worldName, path, token string) (fetch.Result, error)
 	Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
@@ -110,13 +110,14 @@ func (p *worldPool) Fetch(worldName, path, token string) (fetch.Result, error) {
 }
 
 // List dispatches a LIST against worldName. Same proxy contract
-// as Fetch — the world's response shape is preserved.
-func (p *worldPool) List(worldName, path, token string) (fetch.Result, error) {
+// as Fetch — the world's response shape is preserved. opts forwards
+// LIST options (e.g. IncludeArchived) to the world verbatim.
+func (p *worldPool) List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error) {
 	c, host, err := p.clientFor(worldName)
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	return c.List(host, path, token)
+	return c.ListWithOptions(host, path, token, opts)
 }
 
 // Versions dispatches a VERSIONS against worldName. Same proxy

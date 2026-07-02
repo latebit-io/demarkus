@@ -153,12 +153,68 @@ func TestListDir(t *testing.T) {
 	}
 
 	s := New(root)
-	entries, err := s.ListDir("/")
+	entries, err := s.ListDir("/", false)
 	if err != nil {
 		t.Fatalf("ListDir: %v", err)
 	}
 	if len(entries) != 2 {
 		t.Errorf("entries = %d, want 2 (excluding .hidden and versions)", len(entries))
+	}
+}
+
+func TestListDir_HidesArchived(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Two live docs at root, one that will be archived, and a directory whose
+	// only document is archived (should be pruned when archived are hidden).
+	for _, p := range []string{"/live.md", "/gone.md", "/attic/old.md"} {
+		if _, err := s.Write(p, []byte("# "+p+"\n"), nil); err != nil {
+			t.Fatalf("Write %s: %v", p, err)
+		}
+	}
+	if err := s.Archive("/gone.md", true); err != nil {
+		t.Fatalf("Archive /gone.md: %v", err)
+	}
+	if err := s.Archive("/attic/old.md", true); err != nil {
+		t.Fatalf("Archive /attic/old.md: %v", err)
+	}
+
+	names := func(entries []os.DirEntry) map[string]bool {
+		m := map[string]bool{}
+		for _, e := range entries {
+			m[e.Name()] = true
+		}
+		return m
+	}
+
+	// Default (hide archived): live.md stays; gone.md is hidden; attic/ is
+	// pruned because its only document is archived.
+	hidden, err := s.ListDir("/", false)
+	if err != nil {
+		t.Fatalf("ListDir hide: %v", err)
+	}
+	h := names(hidden)
+	if !h["live.md"] {
+		t.Errorf("hide: want live.md present, got %v", h)
+	}
+	if h["gone.md"] {
+		t.Errorf("hide: want gone.md hidden, got %v", h)
+	}
+	if h["attic"] {
+		t.Errorf("hide: want all-archived dir attic/ pruned, got %v", h)
+	}
+
+	// include-archived: everything current is listed, including attic/.
+	shown, err := s.ListDir("/", true)
+	if err != nil {
+		t.Fatalf("ListDir show: %v", err)
+	}
+	sh := names(shown)
+	for _, want := range []string{"live.md", "gone.md", "attic"} {
+		if !sh[want] {
+			t.Errorf("show: want %s present, got %v", want, sh)
+		}
 	}
 }
 
@@ -169,7 +225,7 @@ func TestListDir_NotADirectory(t *testing.T) {
 	}
 	s := New(root)
 
-	_, err := s.ListDir("/file.md")
+	_, err := s.ListDir("/file.md", false)
 	if err == nil {
 		t.Fatal("expected error for file")
 	}

@@ -92,7 +92,7 @@ func TestWorldPoolDispatchesUnknownWorldThroughTopLevelMethods(t *testing.T) {
 		fn   func() (fetch.Result, error)
 	}{
 		{"Fetch", func() (fetch.Result, error) { return pool.Fetch("nope", "/foo", "tok") }},
-		{"List", func() (fetch.Result, error) { return pool.List("nope", "/", "tok") }},
+		{"List", func() (fetch.Result, error) { return pool.List("nope", "/", "tok", fetch.ListOptions{}) }},
 		{"Versions", func() (fetch.Result, error) { return pool.Versions("nope", "/foo", "tok") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

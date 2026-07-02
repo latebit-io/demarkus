@@ -360,8 +360,13 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	}, nil
 }
 
-// ListDir returns directory entries at the given path, excluding dot-files.
-func (s *Store) ListDir(reqPath string) ([]os.DirEntry, error) {
+// ListDir returns directory entries at the given path, excluding dot-files
+// and the versions/ directory. When includeArchived is false, archived
+// documents are omitted, as are subdirectories whose entire subtree contains
+// only archived documents (an all-archived directory would otherwise linger as
+// an empty shell). When true, every current entry is returned regardless of
+// archival — the recovery/audit view.
+func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, error) {
 	dirPath, err := s.resolve(reqPath)
 	if err != nil {
 		return nil, err
@@ -380,16 +385,76 @@ func (s *Store) ListDir(reqPath string) ([]os.DirEntry, error) {
 		return nil, err
 	}
 
-	// Filter dot-files and the versions directory.
+	// Filter dot-files and the versions directory, plus archived entries
+	// unless the caller asked to see them.
 	filtered := entries[:0]
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") || name == "versions" {
 			continue
 		}
+		if !includeArchived {
+			child := filepath.Join(dirPath, name)
+			if e.IsDir() {
+				if !dirHasLiveDoc(child) {
+					continue // subtree holds only archived documents
+				}
+			} else if entryArchived(child) {
+				continue
+			}
+		}
 		filtered = append(filtered, e)
 	}
 	return filtered, nil
+}
+
+// entryArchived reports whether a directory entry that is a current-version
+// document symlink points at an archived version. It mirrors the resolve-and-
+// read that walkCurrentFiles performs. A non-symlink entry, a broken link, or
+// an unreadable target is treated as not archived (shown) — the listing errs
+// toward visibility, never hiding something it could not positively classify.
+func entryArchived(childPath string) bool {
+	fi, err := os.Lstat(childPath)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(childPath)
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return false
+	}
+	return isArchived(data)
+}
+
+// dirHasLiveDoc reports whether the directory subtree rooted at dirAbs holds at
+// least one non-archived document. Used to prune directories that contain only
+// archived documents from a filtered listing. Returns false on an unreadable
+// directory so an inaccessible subtree is pruned rather than shown empty.
+func dirHasLiveDoc(dirAbs string) bool {
+	entries, err := os.ReadDir(dirAbs)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || name == "versions" {
+			continue
+		}
+		child := filepath.Join(dirAbs, name)
+		if e.IsDir() {
+			if dirHasLiveDoc(child) {
+				return true
+			}
+			continue
+		}
+		if !entryArchived(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsDir reports whether the given path is a directory within the content root.
