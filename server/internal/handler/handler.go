@@ -410,7 +410,13 @@ func buildLookupResults(query, scope string, rows []catalog.Result) string {
 }
 
 func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
-	// Try index.md first — if the directory has an explicit index, serve it as a normal document.
+	includeArchived := req.Metadata["include-archived"] == "true"
+
+	// Try index.md first — if the directory has an explicit index, serve it as
+	// a normal document. An ARCHIVED index.md is treated like a missing one:
+	// serveDocument would tombstone it, blocking the whole directory view while
+	// LIST still shows the directory's live entries. Fetching the archived
+	// index.md itself (by its own path) still returns the tombstone.
 	indexPath := path.Join(req.Path, "index.md")
 	doc, err := h.Store.Get(indexPath, 0)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -418,13 +424,12 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
-	if err == nil {
+	if err == nil && !doc.Archived {
 		h.serveDocument(w, req, doc, req.Path)
 		return
 	}
 
-	// No index.md — generate a directory listing.
-	includeArchived := req.Metadata["include-archived"] == "true"
+	// No (visible) index.md — generate a directory listing.
 	entries, err := h.Store.ListDir(req.Path, includeArchived)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

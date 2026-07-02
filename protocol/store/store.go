@@ -26,7 +26,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	slashpath "path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -157,7 +159,12 @@ type Store struct {
 	root    string
 	hashMu  sync.RWMutex
 	hashIdx map[string]string // content hash → request path
-	pathIdx map[string]string // request path → content hash (reverse index)
+	// pathIdx maps request path → content hash (reverse index). Beyond hash
+	// lookups, ListDir's archived-filtering treats membership as "current,
+	// non-archived versioned doc" (see liveChildren) — a change to what this
+	// index tracks changes listing behavior. A miss only degrades to a disk
+	// scan, but keep membership semantics exact.
+	pathIdx map[string]string
 }
 
 // New creates a store rooted at the given directory.
@@ -386,12 +393,16 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 	}
 
 	// Filter dot-files and the versions directory, plus archived entries
-	// unless the caller asked to see them. liveChildDirs is computed once (a
-	// single pathIdx pass) so pruning is an O(1) lookup per child directory
-	// rather than a per-directory index scan.
-	var liveDirs map[string]struct{}
+	// unless the caller asked to see them. liveChildren is computed once (a
+	// single pathIdx pass) so classification is an O(1) lookup per entry —
+	// files and directories the index names as live never touch disk.
+	var live liveChildren
+	var absRoot string
 	if !includeArchived {
-		liveDirs = s.liveChildDirs(reqPath)
+		live = s.liveChildren(reqPath)
+		if absRoot, err = s.resolvedRoot(); err != nil {
+			return nil, err
+		}
 	}
 	filtered := entries[:0]
 	for _, e := range entries {
@@ -406,10 +417,10 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 				// documents, so a child it misses may still hold visible
 				// entries (regular/legacy flat files) — scan disk before
 				// pruning rather than hide content the listing would show.
-				if _, ok := liveDirs[name]; !ok && !dirHasVisibleEntry(filepath.Join(dirPath, name)) {
+				if _, ok := live.dirs[name]; !ok && !dirHasVisibleEntry(filepath.Join(dirPath, name), absRoot) {
 					continue // subtree holds only archived documents
 				}
-			} else if entryArchived(filepath.Join(dirPath, name)) {
+			} else if _, ok := live.files[name]; !ok && entryArchived(filepath.Join(dirPath, name), absRoot) {
 				continue
 			}
 		}
@@ -425,41 +436,70 @@ func isHiddenEntry(name string) bool {
 	return strings.HasPrefix(name, ".") || name == "versions"
 }
 
-// liveChildDirs returns the set of immediate child-directory names under the
-// directory request path dirReq that contain at least one current (non-
-// archived) document somewhere in their subtree. It makes a single pass over
-// the in-memory pathIdx — which the store maintains incrementally on every
-// write and archive/unarchive (see UpdateHashIndex / RemoveHashEntry) — so a
-// LIST prunes all-archived directories with one index scan and O(1) lookups,
-// never a recursive filesystem walk on the hot path.
-func (s *Store) liveChildDirs(dirReq string) map[string]struct{} {
-	prefix := strings.TrimRight(dirReq, "/") + "/"
-	out := make(map[string]struct{})
+// liveChildren names the immediate children of a listed directory that the
+// index proves live: files is the live documents directly in the directory,
+// dirs is the child directories holding a live document somewhere beneath.
+type liveChildren struct {
+	files map[string]struct{}
+	dirs  map[string]struct{}
+}
+
+// liveChildren makes a single pass over the in-memory pathIdx — which the
+// store maintains incrementally on every write and archive/unarchive (see
+// UpdateHashIndex / RemoveHashEntry) — and classifies the live docs under the
+// directory request path dirReq, so a LIST answers both "is this file live?"
+// and "does this child directory hold live docs?" with O(1) lookups, never
+// touching disk for indexed entries.
+//
+// The request path is canonicalized first: pathIdx keys are canonical
+// ("/"+filepath.Rel), so a non-canonical caller path ("//docs", "/docs/.")
+// would otherwise match nothing and silently force the disk fallback for
+// every child. Docs with a hidden path segment (dot-named) are skipped even
+// though the index tracks them: a listing never shows them, so counting one
+// as live would keep its parent visible as an empty shell.
+func (s *Store) liveChildren(dirReq string) liveChildren {
+	canon := slashpath.Clean("/" + strings.Trim(dirReq, "/"))
+	prefix := strings.TrimRight(canon, "/") + "/"
+	out := liveChildren{files: make(map[string]struct{}), dirs: make(map[string]struct{})}
 	s.hashMu.RLock()
 	defer s.hashMu.RUnlock()
 	for p := range s.pathIdx {
-		if !strings.HasPrefix(p, prefix) {
+		rest, ok := strings.CutPrefix(p, prefix)
+		if !ok || hasHiddenSegment(rest) {
 			continue
 		}
-		// The first segment after the prefix names an immediate child; a
-		// remaining slash means that child is a directory holding the doc.
-		if child, _, ok := strings.Cut(p[len(prefix):], "/"); ok {
-			out[child] = struct{}{}
+		// A remaining slash means the first segment is a child directory
+		// holding the doc; otherwise the doc is a file directly in dirReq.
+		if child, _, isDir := strings.Cut(rest, "/"); isDir {
+			out.dirs[child] = struct{}{}
+		} else {
+			out.files[rest] = struct{}{}
 		}
 	}
 	return out
+}
+
+// hasHiddenSegment reports whether any segment of the relative slash path
+// would be excluded from a listing by isHiddenEntry.
+func hasHiddenSegment(rel string) bool {
+	for seg := range strings.SplitSeq(rel, "/") {
+		if isHiddenEntry(seg) {
+			return true
+		}
+	}
+	return false
 }
 
 // dirHasVisibleEntry reports whether the directory subtree rooted at dirAbs
 // holds at least one entry a filtered listing would show — any non-archived
 // file, including regular/legacy flat files that pathIdx does not track
 // (entryArchived errs toward visibility for those). It is the slow-path
-// complement to liveChildDirs: only consulted for child directories the index
+// complement to liveChildren: only consulted for child directories the index
 // does not already name, so an indexed (common-case) directory never pays for
 // a disk walk, and an all-archived directory is scanned rather than a live
 // flat file being wrongly hidden. Returns false on an unreadable directory so
 // an inaccessible subtree is pruned rather than shown empty.
-func dirHasVisibleEntry(dirAbs string) bool {
+func dirHasVisibleEntry(dirAbs, absRoot string) bool {
 	entries, err := os.ReadDir(dirAbs)
 	if err != nil {
 		return false
@@ -471,12 +511,12 @@ func dirHasVisibleEntry(dirAbs string) bool {
 		}
 		child := filepath.Join(dirAbs, name)
 		if e.IsDir() {
-			if dirHasVisibleEntry(child) {
+			if dirHasVisibleEntry(child, absRoot) {
 				return true
 			}
 			continue
 		}
-		if !entryArchived(child) {
+		if !entryArchived(child, absRoot) {
 			return true
 		}
 	}
@@ -484,11 +524,16 @@ func dirHasVisibleEntry(dirAbs string) bool {
 }
 
 // entryArchived reports whether a directory entry that is a current-version
-// document symlink points at an archived version. It mirrors the resolve-and-
-// read that walkCurrentFiles performs. A non-symlink entry, a broken link, or
-// an unreadable target is treated as not archived (shown) — the listing errs
+// document symlink points at an archived version. It applies the same guards
+// walkCurrentFiles uses for this resolve-and-read pattern: a target escaping
+// the content root is never opened (isContained), and a non-regular target
+// (FIFO, device — opening one can block forever) is never opened either. The
+// read itself is a bounded prefix: the store-managed frontmatter that carries
+// the archived flag is capped at maxStoreFrontmatter, so the document body is
+// never pulled in. A non-symlink entry, a broken link, an unreadable target,
+// or any guarded state is treated as not archived (shown) — the listing errs
 // toward visibility, never hiding something it could not positively classify.
-func entryArchived(childPath string) bool {
+func entryArchived(childPath, absRoot string) bool {
 	fi, err := os.Lstat(childPath)
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
 		return false
@@ -497,11 +542,26 @@ func entryArchived(childPath string) bool {
 	if err != nil {
 		return false
 	}
-	data, err := os.ReadFile(resolved)
+	if !isContained(resolved, absRoot) {
+		return false
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	f, err := os.Open(resolved)
 	if err != nil {
 		return false
 	}
-	return isArchived(data)
+	defer func() { _ = f.Close() }()
+	// maxStoreFrontmatter bounds the frontmatter block, so this prefix is
+	// guaranteed to contain the closing fence; the slack covers the fences.
+	buf := make([]byte, maxStoreFrontmatter+256)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return false
+	}
+	return isArchived(buf[:n])
 }
 
 // IsDir reports whether the given path is a directory within the content root.

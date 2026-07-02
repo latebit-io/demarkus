@@ -232,6 +232,47 @@ func TestListDir_HidesArchived(t *testing.T) {
 			t.Errorf("show: want %s present, got %v", want, sh)
 		}
 	}
+
+	// Non-canonical request paths must behave identically — the index fast
+	// path canonicalizes before prefix-matching pathIdx's canonical keys.
+	for _, p := range []string{"//", "/."} {
+		nc, err := s.ListDir(p, false)
+		if err != nil {
+			t.Fatalf("ListDir %q: %v", p, err)
+		}
+		if got := names(nc); !got["live.md"] || got["gone.md"] || got["attic"] {
+			t.Errorf("ListDir %q: filtering differs from canonical /: got %v", p, got)
+		}
+	}
+}
+
+func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// A directory whose only doc is dot-named: the listing of the directory
+	// hides the doc (isHiddenEntry), so the directory must be pruned from its
+	// parent too — the index and the disk fallback must agree, or the parent
+	// shows an empty-shell directory.
+	if _, err := s.Write("/work/.scratch.md", []byte("# hidden\n"), nil); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	entries, err := s.ListDir("/", false)
+	if err != nil {
+		t.Fatalf("ListDir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() == "work" {
+			t.Errorf("want work/ pruned (only content is a hidden dot-file), got listed")
+		}
+	}
+	inner, err := s.ListDir("/work", false)
+	if err != nil {
+		t.Fatalf("ListDir /work: %v", err)
+	}
+	if len(inner) != 0 {
+		t.Errorf("LIST /work should hide the dot-file, got %d entries", len(inner))
+	}
 }
 
 func TestListDir_NotADirectory(t *testing.T) {
