@@ -254,9 +254,7 @@ func (c *Client) cachedRequestMeta(host, path, token, verb string, extra map[str
 		if token != "" {
 			req.Metadata["auth"] = token
 		}
-		for k, v := range extra {
-			req.Metadata[k] = v
-		}
+		maps.Copy(req.Metadata, extra)
 
 		// Skip cache for authenticated requests (to avoid persisting private
 		// content to disk) and for option-bearing requests (the cache key does
