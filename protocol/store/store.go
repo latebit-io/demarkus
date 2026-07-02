@@ -386,7 +386,13 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 	}
 
 	// Filter dot-files and the versions directory, plus archived entries
-	// unless the caller asked to see them.
+	// unless the caller asked to see them. liveChildDirs is computed once (a
+	// single pathIdx pass) so pruning is an O(1) lookup per child directory
+	// rather than a per-directory index scan.
+	var liveDirs map[string]struct{}
+	if !includeArchived {
+		liveDirs = s.liveChildDirs(reqPath)
+	}
 	filtered := entries[:0]
 	for _, e := range entries {
 		name := e.Name()
@@ -395,7 +401,7 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 		}
 		if !includeArchived {
 			if e.IsDir() {
-				if !s.dirHasLiveDoc(childReqPath(reqPath, name)) {
+				if _, ok := liveDirs[name]; !ok {
 					continue // subtree holds only archived documents
 				}
 			} else if entryArchived(filepath.Join(dirPath, name)) {
@@ -414,11 +420,29 @@ func isHiddenEntry(name string) bool {
 	return strings.HasPrefix(name, ".") || name == "versions"
 }
 
-// childReqPath joins a directory's request path and an entry name into the
-// child's request path — always slash-separated with a leading slash, matching
-// the keys the store holds in pathIdx.
-func childReqPath(dirReq, name string) string {
-	return strings.TrimRight(dirReq, "/") + "/" + name
+// liveChildDirs returns the set of immediate child-directory names under the
+// directory request path dirReq that contain at least one current (non-
+// archived) document somewhere in their subtree. It makes a single pass over
+// the in-memory pathIdx — which the store maintains incrementally on every
+// write and archive/unarchive (see UpdateHashIndex / RemoveHashEntry) — so a
+// LIST prunes all-archived directories with one index scan and O(1) lookups,
+// never a recursive filesystem walk on the hot path.
+func (s *Store) liveChildDirs(dirReq string) map[string]struct{} {
+	prefix := strings.TrimRight(dirReq, "/") + "/"
+	out := make(map[string]struct{})
+	s.hashMu.RLock()
+	defer s.hashMu.RUnlock()
+	for p := range s.pathIdx {
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		// The first segment after the prefix names an immediate child; a
+		// remaining slash means that child is a directory holding the doc.
+		if child, _, ok := strings.Cut(p[len(prefix):], "/"); ok {
+			out[child] = struct{}{}
+		}
+	}
+	return out
 }
 
 // entryArchived reports whether a directory entry that is a current-version
@@ -440,24 +464,6 @@ func entryArchived(childPath string) bool {
 		return false
 	}
 	return isArchived(data)
-}
-
-// dirHasLiveDoc reports whether any current (non-archived) document lives under
-// the directory request path dirReq. It reads the in-memory pathIdx — which the
-// store maintains incrementally on every write and archive/unarchive (see
-// UpdateHashIndex / RemoveHashEntry) — so pruning an all-archived directory from
-// a listing costs an index scan rather than a recursive filesystem walk on the
-// hot LIST/FETCH path.
-func (s *Store) dirHasLiveDoc(dirReq string) bool {
-	prefix := strings.TrimRight(dirReq, "/") + "/"
-	s.hashMu.RLock()
-	defer s.hashMu.RUnlock()
-	for p := range s.pathIdx {
-		if strings.HasPrefix(p, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // IsDir reports whether the given path is a directory within the content root.
