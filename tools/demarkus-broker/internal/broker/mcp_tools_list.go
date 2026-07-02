@@ -86,12 +86,17 @@ func markListTool() mcp.Tool {
 	return mcp.NewTool("mark_list",
 		mcp.WithDescription(
 			"List documents and subdirectories on a Mark Protocol server. "+
-				"Use this to discover what documents exist. "+
+				"Use this to discover what documents exist. Archived documents are "+
+				"hidden by default, along with directories that contain only archived "+
+				"documents; set include_archived to true for a recovery/audit view. "+
 				mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),
 			mcp.Description(mcpURLDesc),
+		),
+		mcp.WithBoolean("include_archived",
+			mcp.Description("Include archived documents (and all-archived directories) in the listing. Default false."),
 		),
 	)
 }

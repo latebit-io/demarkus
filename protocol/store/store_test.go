@@ -153,12 +153,125 @@ func TestListDir(t *testing.T) {
 	}
 
 	s := New(root)
-	entries, err := s.ListDir("/")
+	entries, err := s.ListDir("/", false)
 	if err != nil {
 		t.Fatalf("ListDir: %v", err)
 	}
 	if len(entries) != 2 {
 		t.Errorf("entries = %d, want 2 (excluding .hidden and versions)", len(entries))
+	}
+}
+
+func TestListDir_HidesArchived(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// Live docs at root, one that will be archived, a directory whose only
+	// document is archived (pruned when hidden), and a nested directory that
+	// keeps a live doc several levels down (must survive pruning).
+	for _, p := range []string{"/live.md", "/gone.md", "/attic/old.md", "/nested/a/b/keep.md"} {
+		if _, err := s.Write(p, []byte("# "+p+"\n"), nil); err != nil {
+			t.Fatalf("Write %s: %v", p, err)
+		}
+	}
+	if err := s.Archive("/gone.md", true); err != nil {
+		t.Fatalf("Archive /gone.md: %v", err)
+	}
+	if err := s.Archive("/attic/old.md", true); err != nil {
+		t.Fatalf("Archive /attic/old.md: %v", err)
+	}
+	// A directory holding only a regular (unversioned, legacy/flat) file:
+	// pathIdx never tracks it, but the listing shows such files, so the
+	// directory must not be pruned.
+	if err := os.MkdirAll(filepath.Join(root, "flatdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "flatdir", "plain.md"), []byte("# flat\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	names := func(entries []os.DirEntry) map[string]bool {
+		m := map[string]bool{}
+		for _, e := range entries {
+			m[e.Name()] = true
+		}
+		return m
+	}
+
+	// Default (hide archived): live.md stays; gone.md is hidden; attic/ is
+	// pruned because its only document is archived.
+	hidden, err := s.ListDir("/", false)
+	if err != nil {
+		t.Fatalf("ListDir hide: %v", err)
+	}
+	h := names(hidden)
+	if !h["live.md"] {
+		t.Errorf("hide: want live.md present, got %v", h)
+	}
+	if h["gone.md"] {
+		t.Errorf("hide: want gone.md hidden, got %v", h)
+	}
+	if h["attic"] {
+		t.Errorf("hide: want all-archived dir attic/ pruned, got %v", h)
+	}
+	if !h["nested"] {
+		t.Errorf("hide: want nested/ kept (live doc several levels down), got %v", h)
+	}
+	if !h["flatdir"] {
+		t.Errorf("hide: want flatdir/ kept (visible unversioned file, unindexed), got %v", h)
+	}
+
+	// include-archived: everything current is listed, including attic/.
+	shown, err := s.ListDir("/", true)
+	if err != nil {
+		t.Fatalf("ListDir show: %v", err)
+	}
+	sh := names(shown)
+	for _, want := range []string{"live.md", "gone.md", "attic"} {
+		if !sh[want] {
+			t.Errorf("show: want %s present, got %v", want, sh)
+		}
+	}
+
+	// Non-canonical request paths must behave identically — the index fast
+	// path canonicalizes before prefix-matching pathIdx's canonical keys.
+	for _, p := range []string{"//", "/."} {
+		nc, err := s.ListDir(p, false)
+		if err != nil {
+			t.Fatalf("ListDir %q: %v", p, err)
+		}
+		if got := names(nc); !got["live.md"] || got["gone.md"] || got["attic"] {
+			t.Errorf("ListDir %q: filtering differs from canonical /: got %v", p, got)
+		}
+	}
+}
+
+func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// A directory whose only doc is dot-named: the listing of the directory
+	// hides the doc (isHiddenEntry), so the directory must be pruned from its
+	// parent too — the index and the disk fallback must agree, or the parent
+	// shows an empty-shell directory.
+	if _, err := s.Write("/work/.scratch.md", []byte("# hidden\n"), nil); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	entries, err := s.ListDir("/", false)
+	if err != nil {
+		t.Fatalf("ListDir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() == "work" {
+			t.Errorf("want work/ pruned (only content is a hidden dot-file), got listed")
+		}
+	}
+	inner, err := s.ListDir("/work", false)
+	if err != nil {
+		t.Fatalf("ListDir /work: %v", err)
+	}
+	if len(inner) != 0 {
+		t.Errorf("LIST /work should hide the dot-file, got %d entries", len(inner))
 	}
 }
 
@@ -169,7 +282,7 @@ func TestListDir_NotADirectory(t *testing.T) {
 	}
 	s := New(root)
 
-	_, err := s.ListDir("/file.md")
+	_, err := s.ListDir("/file.md", false)
 	if err == nil {
 		t.Fatal("expected error for file")
 	}

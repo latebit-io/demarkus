@@ -121,10 +121,27 @@ func (c *Client) Fetch(host, path, token string) (Result, error) {
 	return c.cachedRequest(host, path, token, protocol.VerbFetch)
 }
 
+// ListOptions carries optional parameters for a LIST request.
+type ListOptions struct {
+	// IncludeArchived asks the server to include archived documents (and
+	// directories that contain only archived documents) in the listing.
+	// Default false: archived entries are hidden.
+	IncludeArchived bool
+}
+
 // List retrieves a directory listing from a Mark Protocol server.
 // If token is non-empty, it is sent as the auth metadata for read access to private paths.
 func (c *Client) List(host, path, token string) (Result, error) {
-	return c.cachedRequest(host, path, token, protocol.VerbList)
+	return c.ListWithOptions(host, path, token, ListOptions{})
+}
+
+// ListWithOptions is List with explicit LIST options (e.g. IncludeArchived).
+func (c *Client) ListWithOptions(host, path, token string, opts ListOptions) (Result, error) {
+	var extra map[string]string
+	if opts.IncludeArchived {
+		extra = map[string]string{"include-archived": "true"}
+	}
+	return c.cachedRequestMeta(host, path, token, protocol.VerbList, extra)
 }
 
 // Versions retrieves the version history of a document.
@@ -222,16 +239,27 @@ func (c *Client) Archive(host, path, token string) (Result, error) {
 
 // cachedRequest handles FETCH and LIST with conditional caching.
 func (c *Client) cachedRequest(host, path, token, verb string) (Result, error) {
+	return c.cachedRequestMeta(host, path, token, verb, nil)
+}
+
+// cachedRequestMeta is cachedRequest with extra request metadata (e.g. LIST
+// options). When extra is non-empty the response cache is bypassed: the cache
+// key is (host, path, verb) and does not encode the extra metadata, so a
+// cached option-free response must not satisfy an option-bearing request, nor
+// the reverse.
+func (c *Client) cachedRequestMeta(host, path, token, verb string, extra map[string]string) (Result, error) {
 	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
 		req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
 		if token != "" {
 			req.Metadata["auth"] = token
 		}
+		maps.Copy(req.Metadata, extra)
 
-		// Skip cache for authenticated requests to avoid persisting
-		// private content to disk.
-		useCache := c.opts.Cache != nil && token == ""
+		// Skip cache for authenticated requests (to avoid persisting private
+		// content to disk) and for option-bearing requests (the cache key does
+		// not encode the extra metadata).
+		useCache := c.opts.Cache != nil && token == "" && len(extra) == 0
 
 		var cached *cache.Entry
 		if useCache {

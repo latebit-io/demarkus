@@ -58,6 +58,7 @@ func requestMain() {
 	expectedVersion := flag.Int("expected-version", -1, "version check: -1 skip (default), 0 create-only, >0 require match; required (>0) for APPEND")
 	meta := metaFlag{}
 	flag.Var(meta, "meta", "publisher metadata key=value for PUBLISH/APPEND (repeatable); e.g. -meta tags=go,auth -meta importance=0.9")
+	includeArchived := flag.Bool("include-archived", false, "LIST only: include archived documents (and all-archived directories) in the listing")
 	verbose := flag.Bool("v", false, "show status and metadata header before body")
 	noCache := flag.Bool("no-cache", false, "disable caching")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
@@ -114,7 +115,7 @@ func requestMain() {
 	case protocol.VerbFetch:
 		result, err = client.Fetch(host, path, token)
 	case protocol.VerbList:
-		result, err = client.List(host, path, token)
+		result, err = client.ListWithOptions(host, path, token, fetch.ListOptions{IncludeArchived: *includeArchived})
 	case protocol.VerbVersions:
 		result, err = client.Versions(host, path, token)
 	case protocol.VerbPublish:

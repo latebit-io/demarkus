@@ -190,7 +190,8 @@ func (g *mcpGateway) handleMarkList(_ context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	result, err := g.dispatcher.List(worldName, path, "")
+	opts := fetch.ListOptions{IncludeArchived: req.GetBool("include_archived", false)}
+	result, err := g.dispatcher.List(worldName, path, "", opts)
 	if err != nil {
 		return g.toolErrorFor("list", worldName, err), nil
 	}

@@ -502,6 +502,9 @@ func (s *stubClient) List(host, path, token string) (fetch.Result, error) {
 	}
 	return fetch.Result{}, nil
 }
+func (s *stubClient) ListWithOptions(host, path, token string, _ fetch.ListOptions) (fetch.Result, error) {
+	return s.List(host, path, token)
+}
 func (s *stubClient) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
 	if s.publishFn != nil {
 		return s.publishFn(host, path, body, token, expectedVersion, meta)

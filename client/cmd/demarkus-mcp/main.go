@@ -82,6 +82,7 @@ func main() {
 type markClient interface {
 	Fetch(host, path, token string) (fetch.Result, error)
 	List(host, path, token string) (fetch.Result, error)
+	ListWithOptions(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	Versions(host, path, token string) (fetch.Result, error)
 	Lookup(host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
@@ -152,12 +153,17 @@ func markListTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_list",
 		mcp.WithDescription(
 			"List documents and subdirectories on a Mark Protocol server. "+
-				"Use this to discover what documents exist. "+
+				"Use this to discover what documents exist. Archived documents are "+
+				"hidden by default, along with directories that contain only archived "+
+				"documents; set include_archived to true for a recovery/audit view. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
 			mcp.Description(urlDesc(host)),
+		),
+		mcp.WithBoolean("include_archived",
+			mcp.Description("Include archived documents (and all-archived directories) in the listing. Default false."),
 		),
 	)
 }
@@ -472,7 +478,8 @@ func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	result, err := h.client.List(host, path, h.resolveToken(host))
+	opts := fetch.ListOptions{IncludeArchived: req.GetBool("include_archived", false)}
+	result, err := h.client.ListWithOptions(host, path, h.resolveToken(host), opts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("list failed: %v", err)), nil
 	}

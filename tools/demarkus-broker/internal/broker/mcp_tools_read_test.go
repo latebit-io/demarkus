@@ -79,7 +79,7 @@ func (f *fakeDispatcher) Fetch(worldName, path, token string) (fetch.Result, err
 	return fn(worldName, path, token)
 }
 
-func (f *fakeDispatcher) List(worldName, path, token string) (fetch.Result, error) {
+func (f *fakeDispatcher) List(worldName, path, token string, _ fetch.ListOptions) (fetch.Result, error) {
 	f.mu.Lock()
 	f.listCalls = append(f.listCalls, dispatchCall{worldName, path, token})
 	fn := f.listFn

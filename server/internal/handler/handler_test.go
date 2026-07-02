@@ -529,7 +529,7 @@ func TestFetchDirectory(t *testing.T) {
 		}
 	})
 
-	t.Run("directory with archived index.md returns archived", func(t *testing.T) {
+	t.Run("directory with archived index.md falls back to listing", func(t *testing.T) {
 		if err := s.Archive("/docs/index.md", true); err != nil {
 			t.Fatalf("archive index.md: %v", err)
 		}
@@ -539,8 +539,30 @@ func TestFetchDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
 		}
-		if resp.Status != protocol.StatusArchived {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusArchived)
+		// An archived index.md must not tombstone the whole directory: the
+		// generated listing of live entries is served instead, and the hidden
+		// index.md stays out of it.
+		if resp.Status != protocol.StatusOK {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if !strings.Contains(resp.Body, "# Index of /docs/") {
+			t.Errorf("body should contain generated index header, got %q", resp.Body)
+		}
+		if !strings.Contains(resp.Body, "[guide.md]") {
+			t.Error("body should list live guide.md")
+		}
+		if strings.Contains(resp.Body, "[index.md]") {
+			t.Error("body should not list the archived index.md")
+		}
+		// The archived index.md itself still fetches as a tombstone.
+		docStream := newMockStream("FETCH /docs/index.md\n")
+		h.HandleStream(docStream)
+		docResp, err := protocol.ParseResponse(&docStream.output)
+		if err != nil {
+			t.Fatalf("parse doc response: %v", err)
+		}
+		if docResp.Status != protocol.StatusArchived {
+			t.Errorf("doc status: got %q, want %q", docResp.Status, protocol.StatusArchived)
 		}
 		// Unarchive to avoid affecting subsequent tests
 		if err := s.Archive("/docs/index.md", false); err != nil {
