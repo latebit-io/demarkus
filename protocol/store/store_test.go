@@ -166,9 +166,10 @@ func TestListDir_HidesArchived(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	// Two live docs at root, one that will be archived, and a directory whose
-	// only document is archived (should be pruned when archived are hidden).
-	for _, p := range []string{"/live.md", "/gone.md", "/attic/old.md"} {
+	// Live docs at root, one that will be archived, a directory whose only
+	// document is archived (pruned when hidden), and a nested directory that
+	// keeps a live doc several levels down (must survive pruning).
+	for _, p := range []string{"/live.md", "/gone.md", "/attic/old.md", "/nested/a/b/keep.md"} {
 		if _, err := s.Write(p, []byte("# "+p+"\n"), nil); err != nil {
 			t.Fatalf("Write %s: %v", p, err)
 		}
@@ -203,6 +204,9 @@ func TestListDir_HidesArchived(t *testing.T) {
 	}
 	if h["attic"] {
 		t.Errorf("hide: want all-archived dir attic/ pruned, got %v", h)
+	}
+	if !h["nested"] {
+		t.Errorf("hide: want nested/ kept (live doc several levels down), got %v", h)
 	}
 
 	// include-archived: everything current is listed, including attic/.

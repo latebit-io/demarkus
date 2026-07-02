@@ -390,22 +390,35 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 	filtered := entries[:0]
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasPrefix(name, ".") || name == "versions" {
+		if isHiddenEntry(name) {
 			continue
 		}
 		if !includeArchived {
-			child := filepath.Join(dirPath, name)
 			if e.IsDir() {
-				if !dirHasLiveDoc(child) {
+				if !s.dirHasLiveDoc(childReqPath(reqPath, name)) {
 					continue // subtree holds only archived documents
 				}
-			} else if entryArchived(child) {
+			} else if entryArchived(filepath.Join(dirPath, name)) {
 				continue
 			}
 		}
 		filtered = append(filtered, e)
 	}
 	return filtered, nil
+}
+
+// isHiddenEntry reports whether a directory entry name is always excluded from
+// a listing, regardless of archival: dot-files and the per-document versions/
+// directory. Shared by ListDir so the exclusion list lives in one place.
+func isHiddenEntry(name string) bool {
+	return strings.HasPrefix(name, ".") || name == "versions"
+}
+
+// childReqPath joins a directory's request path and an entry name into the
+// child's request path — always slash-separated with a leading slash, matching
+// the keys the store holds in pathIdx.
+func childReqPath(dirReq, name string) string {
+	return strings.TrimRight(dirReq, "/") + "/" + name
 }
 
 // entryArchived reports whether a directory entry that is a current-version
@@ -429,28 +442,18 @@ func entryArchived(childPath string) bool {
 	return isArchived(data)
 }
 
-// dirHasLiveDoc reports whether the directory subtree rooted at dirAbs holds at
-// least one non-archived document. Used to prune directories that contain only
-// archived documents from a filtered listing. Returns false on an unreadable
-// directory so an inaccessible subtree is pruned rather than shown empty.
-func dirHasLiveDoc(dirAbs string) bool {
-	entries, err := os.ReadDir(dirAbs)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if strings.HasPrefix(name, ".") || name == "versions" {
-			continue
-		}
-		child := filepath.Join(dirAbs, name)
-		if e.IsDir() {
-			if dirHasLiveDoc(child) {
-				return true
-			}
-			continue
-		}
-		if !entryArchived(child) {
+// dirHasLiveDoc reports whether any current (non-archived) document lives under
+// the directory request path dirReq. It reads the in-memory pathIdx — which the
+// store maintains incrementally on every write and archive/unarchive (see
+// UpdateHashIndex / RemoveHashEntry) — so pruning an all-archived directory from
+// a listing costs an index scan rather than a recursive filesystem walk on the
+// hot LIST/FETCH path.
+func (s *Store) dirHasLiveDoc(dirReq string) bool {
+	prefix := strings.TrimRight(dirReq, "/") + "/"
+	s.hashMu.RLock()
+	defer s.hashMu.RUnlock()
+	for p := range s.pathIdx {
+		if strings.HasPrefix(p, prefix) {
 			return true
 		}
 	}
