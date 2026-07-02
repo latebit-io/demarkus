@@ -180,6 +180,15 @@ func TestListDir_HidesArchived(t *testing.T) {
 	if err := s.Archive("/attic/old.md", true); err != nil {
 		t.Fatalf("Archive /attic/old.md: %v", err)
 	}
+	// A directory holding only a regular (unversioned, legacy/flat) file:
+	// pathIdx never tracks it, but the listing shows such files, so the
+	// directory must not be pruned.
+	if err := os.MkdirAll(filepath.Join(root, "flatdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "flatdir", "plain.md"), []byte("# flat\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	names := func(entries []os.DirEntry) map[string]bool {
 		m := map[string]bool{}
@@ -207,6 +216,9 @@ func TestListDir_HidesArchived(t *testing.T) {
 	}
 	if !h["nested"] {
 		t.Errorf("hide: want nested/ kept (live doc several levels down), got %v", h)
+	}
+	if !h["flatdir"] {
+		t.Errorf("hide: want flatdir/ kept (visible unversioned file, unindexed), got %v", h)
 	}
 
 	// include-archived: everything current is listed, including attic/.

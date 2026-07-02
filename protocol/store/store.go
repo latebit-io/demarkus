@@ -401,7 +401,12 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 		}
 		if !includeArchived {
 			if e.IsDir() {
-				if _, ok := liveDirs[name]; !ok {
+				// Fast path: the index names this child as holding a live
+				// versioned doc. Fallback: the index only tracks versioned
+				// documents, so a child it misses may still hold visible
+				// entries (regular/legacy flat files) — scan disk before
+				// pruning rather than hide content the listing would show.
+				if _, ok := liveDirs[name]; !ok && !dirHasVisibleEntry(filepath.Join(dirPath, name)) {
 					continue // subtree holds only archived documents
 				}
 			} else if entryArchived(filepath.Join(dirPath, name)) {
@@ -443,6 +448,39 @@ func (s *Store) liveChildDirs(dirReq string) map[string]struct{} {
 		}
 	}
 	return out
+}
+
+// dirHasVisibleEntry reports whether the directory subtree rooted at dirAbs
+// holds at least one entry a filtered listing would show — any non-archived
+// file, including regular/legacy flat files that pathIdx does not track
+// (entryArchived errs toward visibility for those). It is the slow-path
+// complement to liveChildDirs: only consulted for child directories the index
+// does not already name, so an indexed (common-case) directory never pays for
+// a disk walk, and an all-archived directory is scanned rather than a live
+// flat file being wrongly hidden. Returns false on an unreadable directory so
+// an inaccessible subtree is pruned rather than shown empty.
+func dirHasVisibleEntry(dirAbs string) bool {
+	entries, err := os.ReadDir(dirAbs)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if isHiddenEntry(name) {
+			continue
+		}
+		child := filepath.Join(dirAbs, name)
+		if e.IsDir() {
+			if dirHasVisibleEntry(child) {
+				return true
+			}
+			continue
+		}
+		if !entryArchived(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // entryArchived reports whether a directory entry that is a current-version
