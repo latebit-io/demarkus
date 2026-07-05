@@ -24,6 +24,7 @@ const mcpURLDesc = "mark:// URL, e.g. mark://team-a/index.md"
 // description.
 var mcpToolNames = []string{
 	"mark_fetch",
+	"mark_explore",
 	"mark_list",
 	"mark_versions",
 	"mark_lookup",
@@ -40,8 +41,8 @@ var mcpToolNames = []string{
 	"mark_worlds",
 }
 
-// mcpTools returns the 15 tool definitions exposed by the broker MCP
-// gateway. The first 14 mirror client/cmd/demarkus-mcp's tool surface
+// mcpTools returns the 16 tool definitions exposed by the broker MCP
+// gateway. The first 15 mirror client/cmd/demarkus-mcp's tool surface
 // for parity (so the agent sees the same vocabulary regardless of
 // transport); only the URL-format description differs because the
 // broker addresses worlds by name rather than host:port. mark_worlds
@@ -51,6 +52,7 @@ var mcpToolNames = []string{
 func mcpTools() []mcp.Tool {
 	return []mcp.Tool{
 		markFetchTool(),
+		markExploreTool(),
 		markListTool(),
 		markVersionsTool(),
 		markLookupTool(),
@@ -73,6 +75,36 @@ func markFetchTool() mcp.Tool {
 		mcp.WithDescription(
 			"Fetch a document from a Mark Protocol server. "+
 				"Returns the document status, version, modified timestamp, etag, and markdown body. "+
+				"Documents under 8KB return the full body. Larger documents return an outline "+
+				"instead — the heading tree with #anchors and per-section line counts plus the "+
+				"opening paragraph — so you can pull just the section you need by appending "+
+				"#<anchor> to the url (anchors are GitHub-style slugs; #section fetches work at "+
+				"any size). Re-fetching a document whose full body was already returned this "+
+				"session returns a short 'unchanged' notice when it has not changed. "+
+				"Set force=true for the full body regardless of size or session history. "+
+				mcpURLHint,
+		),
+		mcp.WithString("url",
+			mcp.Required(),
+			mcp.Description(mcpURLDesc+"; append #<anchor> to fetch a single section"),
+		),
+		mcp.WithBoolean("force",
+			mcp.Description("return the full body even if the document is large or unchanged since an earlier fetch this session (default false)"),
+		),
+	)
+}
+
+func markExploreTool() mcp.Tool {
+	return mcp.NewTool("mark_explore",
+		mcp.WithDescription(
+			"Orient around one document in a single call: its outline head (heading "+
+				"tree with #anchors plus the opening paragraph), outbound links, recorded "+
+				"backlinks, and sibling documents in the same directory — each section "+
+				"capped at 10 entries. Use this instead of a fetch + backlinks + list "+
+				"chain when you need to understand what a document covers and what to "+
+				"read next; then mark_fetch url#<anchor> for the sections that matter. "+
+				"Backlinks come from the broker's graph store (mark_graph populates it; "+
+				"per-pod, resets on broker restart). "+
 				mcpURLHint,
 		),
 		mcp.WithString("url",
@@ -86,7 +118,9 @@ func markListTool() mcp.Tool {
 	return mcp.NewTool("mark_list",
 		mcp.WithDescription(
 			"List documents and subdirectories on a Mark Protocol server. "+
-				"Use this to discover what documents exist. Archived documents are "+
+				"Use this to discover what documents exist. To orient around one "+
+				"specific document, prefer mark_explore — it bundles the sibling "+
+				"listing with the outline, links, and backlinks. Archived documents are "+
 				"hidden by default, along with directories that contain only archived "+
 				"documents; set include_archived to true for a recovery/audit view. "+
 				mcpURLHint,
@@ -125,6 +159,9 @@ func markLookupTool() mcp.Tool {
 				"— not document bodies; FETCH the ones you want. This is a catalog lookup, not "+
 				"full-text search: a subject that was never tagged or titled will not be found. "+
 				"Optionally narrow with a comma-separated key=value filter and cap results with limit. "+
+				"Start here when hunting a subject: lookup to find candidate documents, "+
+				"mark_explore the best match to orient, then mark_fetch url#<anchor> for the "+
+				"sections you actually need — full bodies of large documents are rarely necessary. "+
 				mcpURLHint,
 		),
 		mcp.WithString("url",
@@ -295,6 +332,8 @@ func markBacklinksTool() mcp.Tool {
 				"Returns results from previous crawls — run mark_graph first to populate. "+
 				"NOTE: the broker's graph store is ephemeral (per-pod lifetime); a broker restart "+
 				"resets the store and you must re-crawl. "+
+				"mark_explore includes this same backlink list alongside the document's "+
+				"outline, outbound links, and siblings; prefer it for general orientation. "+
 				mcpURLHint,
 		),
 		mcp.WithString("url",

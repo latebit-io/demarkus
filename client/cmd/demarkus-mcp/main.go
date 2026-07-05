@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchdedup"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
@@ -103,19 +104,15 @@ type handler struct {
 	// seenMu guards seen, the per-session fetch dedup state: host+path →
 	// identity of the document version whose full body was already returned
 	// to the agent this session. Process-lifetime only, never persisted —
-	// cross-session staleness risk outweighs the token saving.
+	// cross-session staleness risk outweighs the token saving. Identity
+	// semantics and notice texts live in client/fetchdedup, shared with the
+	// broker MCP gateway so the two surfaces answer identically.
 	seenMu sync.Mutex
-	seen   map[string]seenDoc
-}
-
-// seenDoc identifies a document version already returned in full this session.
-type seenDoc struct {
-	version string
-	etag    string
+	seen   map[string]fetchdedup.Doc
 }
 
 // seenLookup returns the recorded identity for key, if any.
-func (h *handler) seenLookup(key string) (seenDoc, bool) {
+func (h *handler) seenLookup(key string) (fetchdedup.Doc, bool) {
 	h.seenMu.Lock()
 	defer h.seenMu.Unlock()
 	d, ok := h.seen[key]
@@ -123,11 +120,11 @@ func (h *handler) seenLookup(key string) (seenDoc, bool) {
 }
 
 // seenRecord remembers that the full body of key's document was returned.
-func (h *handler) seenRecord(key string, d seenDoc) {
+func (h *handler) seenRecord(key string, d fetchdedup.Doc) {
 	h.seenMu.Lock()
 	defer h.seenMu.Unlock()
 	if h.seen == nil {
-		h.seen = make(map[string]seenDoc)
+		h.seen = make(map[string]fetchdedup.Doc)
 	}
 	h.seen[key] = d
 }
@@ -561,68 +558,34 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	// Dedup needs at least one identity field: with version and etag both
 	// absent, two different bodies would compare equal and a changed
 	// document would be silently reported as unchanged.
-	hasIdentity := version != "" || etag != ""
+	cur := fetchdedup.Doc{Version: version, Etag: etag}
 	prev, seenBefore := h.seenLookup(key)
-	if seenBefore && !force && hasIdentity && prev.version == version && prev.etag == etag {
-		var b strings.Builder
-		b.WriteString("status: unchanged\n")
-		if version != "" {
-			fmt.Fprintf(&b, "version: %s\n", version)
-		}
-		if etag != "" {
-			fmt.Fprintf(&b, "etag: %s\n", etag)
-		}
-		since := "since this session's earlier fetch (etag match)"
-		if version != "" {
-			since = "since v" + version
-		}
-		fmt.Fprintf(&b, "\nunchanged %s — the full body was returned earlier this session; pass force=true to re-read it\n", since)
-		return mcp.NewToolResultText(b.String()), nil
+	if seenBefore && !force && cur.Identified() && prev == cur {
+		return mcp.NewToolResultText(fetchdedup.UnchangedNotice(cur)), nil
 	}
 
 	extra := map[string]string{}
-	if seenBefore && (prev.version != version || prev.etag != etag) {
-		if prev.version != version {
-			extra["note"] = fmt.Sprintf("changed since this session's earlier fetch (v%s -> v%s)", prev.version, version)
-		} else {
-			extra["note"] = fmt.Sprintf("content changed since this session's earlier fetch (still v%s, etag differs)", version)
-		}
+	// cur.Identified() also gates the note: a response that lost both
+	// identity fields has nothing truthful to say about what changed.
+	if seenBefore && cur.Identified() && prev != cur {
+		extra["note"] = fetchdedup.ChangedNote(prev, cur)
 	}
 
 	// Size gate: large documents return an outline unless forced.
 	if !force && len(body) >= outlineThreshold {
 		extra["mode"] = "outline"
 		extra["size"] = fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)
-		return mcp.NewToolResultText(formatResultWith(result, outlineBody(docURL, body),
+		return mcp.NewToolResultText(formatResultWith(result, mdoutline.OutlineBody(docURL, body),
 			extra, "version", "modified", "etag")), nil
 	}
 
-	if hasIdentity {
-		h.seenRecord(key, seenDoc{version: version, etag: etag})
+	if cur.Identified() {
+		h.seenRecord(key, cur)
 	}
 	if len(extra) == 0 {
 		return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
 	}
 	return mcp.NewToolResultText(formatResultWith(result, body, extra, "version", "modified", "etag")), nil
-}
-
-// outlineBody builds the outline-mode body for a large document: heading
-// tree with anchors and line counts, the opening paragraph, and the hint
-// telling the agent how to get more.
-func outlineBody(docURL, body string) string {
-	var b strings.Builder
-	if tree := mdoutline.Outline(body); tree != "" {
-		b.WriteString(tree)
-	} else {
-		b.WriteString("(document has no headings)\n")
-	}
-	if para := mdoutline.OpeningParagraph(body); para != "" {
-		b.WriteString("\n")
-		b.WriteString(para)
-		b.WriteString("\n")
-	}
-	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; force=true for the full body\n", docURL)
-	return b.String()
 }
 
 func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

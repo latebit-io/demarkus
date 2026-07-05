@@ -157,30 +157,14 @@ func (g *mcpGateway) dispatchWithAuth(ctx context.Context, _ *Claims, worldName 
 	return fetch.Result{}, fmt.Errorf("broker: world %s rejected write token after %d attempts (token propagation lag exceeded broker deadline)", worldName, maxAttempts)
 }
 
-// handleMarkFetch implements the mark_fetch tool against the
-// brokered world. Reads are open to any SSO-authenticated caller:
-// the world's tokens.toml is write-only (no `read` operation is
-// granted to any token), so an empty bearer flows through and the
-// document is returned. No token, no mint, no propagation-race
-// retry — that machinery exists solely for writes.
-func (g *mcpGateway) handleMarkFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
-	raw, err := req.RequireString("url")
-	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-	worldName, path, err := parseToolURL(raw)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-	result, err := g.dispatcher.Fetch(worldName, path, "")
-	if err != nil {
-		return g.toolErrorFor("fetch", worldName, err), nil
-	}
-	return mcp.NewToolResultText(formatToolResult(result, "version", "modified", "etag")), nil
-}
+// handleMarkFetch lives in mcp_tools_fetchmode.go together with the
+// outline/section/dedup ergonomics it carries.
 
 // handleMarkList implements the mark_list tool. Reads dispatch
-// unauthenticated; see handleMarkFetch for the rationale.
+// unauthenticated: the world's tokens.toml is write-only (no `read`
+// operation is granted to any token), so an empty bearer flows through
+// and the listing is returned. No token, no mint, no propagation-race
+// retry — that machinery exists solely for writes.
 func (g *mcpGateway) handleMarkList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {

@@ -16,7 +16,7 @@ import (
 // MCPServer and its Streamable HTTP transport, sharing auth +
 // rate-limit machinery with the parent broker Server.
 //
-// All 15 tools have real handlers. Reads dispatch with an empty bearer
+// All 16 tools have real handlers. Reads dispatch with an empty bearer
 // (the world's tokens.toml grants no read op, so the org SSO gate at
 // the broker is the only access control); writes provision a per-world
 // token through worldWriteTokens and dispatch through worldDispatcher.
@@ -36,9 +36,15 @@ type mcpGateway struct {
 	// post-broker design window (see /thoughts.md "On Bucket
 	// Stores").
 	graphStore *graphstore.Store
+	// fetchSeen is the per-MCP-session unchanged-fetch dedup state
+	// (mcp_tools_fetchmode.go). Session entries are evicted by the
+	// OnUnregisterSession hook wired in newMCPGateway; like graphStore
+	// it is ephemeral per-pod state, consistent with the wire-shape-
+	// adapter framing.
+	fetchSeen *sessionSeen
 }
 
-// newMCPGateway constructs a gateway, registers the 15 tool
+// newMCPGateway constructs a gateway, registers the 16 tool
 // definitions (real handlers for Slice 2's read verbs, placeholders
 // for the rest), and wraps the mcp-go MCPServer in a Streamable HTTP
 // transport. The transport is an http.Handler — the caller mounts
@@ -54,6 +60,15 @@ type mcpGateway struct {
 // dispatcher is the worldDispatcher backing the tool handlers.
 // Production wires *worldPool; tests inject a fake.
 func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGateway {
+	// Session-end eviction for the fetch dedup state. The store is
+	// constructed before the MCPServer because the hook closes over it.
+	fetchSeen := newSessionSeen(s.log, s.clock)
+	hooks := &mcpserver.Hooks{}
+	hooks.AddOnUnregisterSession(func(_ context.Context, session mcpserver.ClientSession) {
+		if session != nil {
+			fetchSeen.drop(session.SessionID())
+		}
+	})
 	mcpSrv := mcpserver.NewMCPServer(
 		"demarkus-broker",
 		version,
@@ -62,6 +77,7 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGa
 		// notifications/tools/list_changed advertisement the client
 		// would otherwise expect us to wire up — we never send one.
 		mcpserver.WithToolCapabilities(false),
+		mcpserver.WithHooks(hooks),
 	)
 	g := &mcpGateway{
 		srv:        s,
@@ -72,13 +88,14 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGa
 		// construction, dies with the broker pod. See the
 		// graphStore field doc for the design framing.
 		graphStore: graphstore.New(),
+		fetchSeen:  fetchSeen,
 	}
 	g.registerTools()
 	g.transport = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	return g
 }
 
-// registerTools wires the 15 tool definitions onto the MCP server.
+// registerTools wires the 16 tool definitions onto the MCP server.
 // Tools absent from the toolHandlers map fall through to
 // notImplementedHandler. The per-tool handler map lives in
 // toolHandlers so adding new implementations is a one-line edit and
@@ -100,12 +117,13 @@ func (g *mcpGateway) registerTools() {
 // package-level var) so the handlers carry the gateway receiver
 // without indirection through a global.
 //
-// All 15 tools are real handlers — every entry below points at a
+// All 16 tools are real handlers — every entry below points at a
 // concrete implementation, and notImplementedHandler should never
 // run in production.
 func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 	return map[string]mcpserver.ToolHandlerFunc{
 		"mark_fetch":         g.handleMarkFetch,
+		"mark_explore":       g.handleMarkExplore,
 		"mark_list":          g.handleMarkList,
 		"mark_lookup":        g.handleMarkLookup,
 		"mark_versions":      g.handleMarkVersions,

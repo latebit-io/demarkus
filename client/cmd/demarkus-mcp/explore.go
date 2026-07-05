@@ -60,7 +60,7 @@ func (h *handler) markExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.
 
 	b.WriteString("## Outline\n")
 	if tree := mdoutline.Outline(body); tree != "" {
-		writeCapped(&b, strings.Split(strings.TrimRight(tree, "\n"), "\n"), "headings")
+		mdoutline.CappedList(&b, strings.Split(strings.TrimRight(tree, "\n"), "\n"), exploreSectionCap, "headings")
 	} else {
 		b.WriteString("(no headings)\n")
 	}
@@ -70,12 +70,12 @@ func (h *handler) markExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		b.WriteString("\n")
 	}
 
-	out := outboundLinkLines(body)
+	out := mdoutline.LinkLines(body)
 	fmt.Fprintf(&b, "\n## Outbound links (%d)\n", len(out))
 	if len(out) == 0 {
 		b.WriteString("(none)\n")
 	} else {
-		writeCapped(&b, out, "links")
+		mdoutline.CappedList(&b, out, exploreSectionCap, "links")
 	}
 
 	h.writeBacklinksSection(&b, docURL)
@@ -114,7 +114,7 @@ func (h *handler) writeBacklinksSection(b *strings.Builder, docURL string) {
 			lines[i] = "- " + bl.URL
 		}
 	}
-	writeCapped(b, lines, "backlinks")
+	mdoutline.CappedList(b, lines, exploreSectionCap, "backlinks")
 }
 
 // writeSiblingsSection appends the sibling listing of the document's parent
@@ -141,39 +141,5 @@ func (h *handler) writeSiblingsSection(b *strings.Builder, host, path, token str
 		b.WriteString("(none)\n")
 		return
 	}
-	writeCapped(b, lines, "siblings")
-}
-
-// outboundLinkLines extracts the document's links as one-line entries with
-// titles, deduplicated by destination in document order.
-func outboundLinkLines(body string) []string {
-	seen := make(map[string]bool)
-	var out []string
-	for _, l := range links.ExtractWithPositions(body) {
-		if seen[l.Dest] {
-			continue
-		}
-		seen[l.Dest] = true
-		if l.Text != "" {
-			out = append(out, fmt.Sprintf("- [%s](%s)", l.Text, l.Dest))
-		} else {
-			out = append(out, "- "+l.Dest)
-		}
-	}
-	return out
-}
-
-// writeCapped writes at most exploreSectionCap pre-formatted lines and an
-// honest "+N more <noun>" marker for the overflow.
-func writeCapped(b *strings.Builder, lines []string, noun string) {
-	for i, line := range lines {
-		if i == exploreSectionCap {
-			break
-		}
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-	if n := len(lines) - exploreSectionCap; n > 0 {
-		fmt.Fprintf(b, "+%d more %s\n", n, noun)
-	}
+	mdoutline.CappedList(b, lines, exploreSectionCap, "siblings")
 }
