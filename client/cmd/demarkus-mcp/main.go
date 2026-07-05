@@ -126,12 +126,18 @@ func (h *handler) seenLookup(key string) (seenDoc, bool) {
 // session's earlier full-body fetch. Mirrored by the broker MCP
 // gateway's copy so the two surfaces answer identically.
 func changedNote(prev seenDoc, version string) string {
-	if prev.version != version {
+	// Either side of a version change can be empty (seenRecord only
+	// requires one identity field): spell out identity-type flips
+	// instead of rendering a bare "v" with no number.
+	switch {
+	case prev.version != version && prev.version == "":
+		return fmt.Sprintf("changed since this session's earlier fetch (was etag-only, now v%s)", version)
+	case prev.version != version && version == "":
+		return fmt.Sprintf("changed since this session's earlier fetch (was v%s, now etag-only)", prev.version)
+	case prev.version != version:
 		return fmt.Sprintf("changed since this session's earlier fetch (v%s -> v%s)", prev.version, version)
-	}
-	if version == "" {
-		// Etag-only identity (server sends no version): don't print a
-		// bare "still v".
+	case version == "":
+		// Etag-only identity throughout (server sends no version).
 		return "content changed since this session's earlier fetch (etag differs)"
 	}
 	return fmt.Sprintf("content changed since this session's earlier fetch (still v%s, etag differs)", version)

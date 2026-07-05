@@ -268,6 +268,8 @@ func TestChangedNote(t *testing.T) {
 		want    string
 	}{
 		{"version bump", seenDoc{version: "3"}, "5", "changed since this session's earlier fetch (v3 -> v5)"},
+		{"was etag-only, now versioned", seenDoc{etag: "a"}, "5", "changed since this session's earlier fetch (was etag-only, now v5)"},
+		{"was versioned, now etag-only", seenDoc{version: "3"}, "", "changed since this session's earlier fetch (was v3, now etag-only)"},
 		{"etag rotated, version steady", seenDoc{version: "3", etag: "a"}, "3", "content changed since this session's earlier fetch (still v3, etag differs)"},
 		{"etag-only identity", seenDoc{etag: "a"}, "", "content changed since this session's earlier fetch (etag differs)"},
 	}
