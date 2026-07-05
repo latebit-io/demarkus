@@ -71,6 +71,9 @@ func registerResources(s *mcpserver.MCPServer, h *handler, defaultHost string) {
 func registerListedResources(s *mcpserver.MCPServer, h *handler, defaultHost string) {
 	host, path, err := h.resolveURL("/")
 	if err != nil {
+		// Unreachable in practice (callers gate on -host being set), but a
+		// silent return would make any future regression undiagnosable.
+		log.Printf("resource listing skipped (%v): picker shows well-known entries only", err)
 		return
 	}
 	listing, err := h.client.List(host, path, h.resolveToken(host))
