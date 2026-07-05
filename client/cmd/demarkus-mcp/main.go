@@ -55,7 +55,12 @@ func main() {
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
-	s := mcpserver.NewMCPServer("demarkus-mcp", version)
+	// listChanged on resources: the startup listing registers picker
+	// entries in the background after clients may have connected, and the
+	// notification is what makes them appear without a reconnect.
+	s := mcpserver.NewMCPServer("demarkus-mcp", version,
+		mcpserver.WithResourceCapabilities(false, true),
+	)
 
 	gs, gsErr := graphstore.Load(graphstore.DefaultPath())
 	if gsErr != nil {
@@ -77,6 +82,13 @@ func main() {
 	s.AddTool(markBacklinksTool(*defaultHost), h.markBacklinks)
 	s.AddTool(markGraphExportTool(), h.markGraphExport)
 	s.AddTool(markGraphPublishTool(*defaultHost), h.markGraphPublish)
+
+	registerResources(s, h, *defaultHost)
+	registerPrompts(s, *defaultHost)
+	if *defaultHost != "" {
+		// Best-effort picker population; never blocks or fails startup.
+		go registerListedResources(s, h, *defaultHost)
+	}
 
 	if err := mcpserver.ServeStdio(s); err != nil {
 		log.Fatal(err)
