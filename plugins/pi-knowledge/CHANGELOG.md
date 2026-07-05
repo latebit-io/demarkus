@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.5
+
+- Repin the shared `demarkus-plugin` binary to `tools/v0.4.1` (provisions
+  `demarkus-mcp` at `client/v0.15.0` with the MCP client-ergonomics work:
+  size-adaptive fetch, `#section` slicing, session dedup, `mark_explore`).
+  Keeps this plugin's pin in lockstep with the memory plugins, since all four
+  share the same `demarkus-plugin` binary install.
+
 ## 0.5.4
 
 - Repin the shared `demarkus-plugin` binary to `tools/v0.3.5` (provisions
