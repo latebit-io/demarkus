@@ -3,9 +3,11 @@ package broker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/mdoutline"
@@ -39,49 +41,95 @@ type seenDoc struct {
 
 // sessionSeen is the per-session fetch dedup state: MCP session ID →
 // (world+path → identity of the version whose full body that session
-// already received). Sessions are evicted by the OnUnregisterSession
-// hook; the caps below bound memory if a transport never unregisters.
+// already received). The OnUnregisterSession hook drops a session's
+// state, but mcp-go's Streamable HTTP transport only unregisters on an
+// explicit session DELETE — a client that just drops the connection
+// leaks its entry (mark3labs/mcp-go#723). The caps below therefore WILL
+// be reached on a long-lived pod: the session cap evicts the
+// least-recently-used session (benign — dedup is best-effort, the cost
+// is one extra full read for an evicted-but-live session) and logs so
+// the degradation is observable.
 type sessionSeen struct {
 	mu   sync.Mutex
-	byID map[string]map[string]seenDoc
+	byID map[string]*sessionEntry
+	log  *slog.Logger
+	now  func() time.Time
+}
+
+// sessionEntry carries one session's dedup state plus the LRU stamp the
+// session-cap eviction orders by.
+type sessionEntry struct {
+	docs       map[string]seenDoc
+	lastAccess time.Time
+	capLogged  bool
 }
 
 const (
-	// maxSeenSessions bounds how many concurrent sessions carry dedup
-	// state. Beyond it, new sessions simply get no dedup (correct,
-	// just less token-efficient) rather than evicting someone else's.
+	// maxSeenSessions bounds how many sessions carry dedup state. At
+	// the cap a new session evicts the least-recently-used one.
 	maxSeenSessions = 4096
 	// maxSeenDocsPerSession bounds per-session growth; past it the
-	// session keeps its existing entries but records no new ones.
+	// session keeps its existing entries but records no new ones
+	// (logged once per session).
 	maxSeenDocsPerSession = 1024
 )
 
-func newSessionSeen() *sessionSeen {
-	return &sessionSeen{byID: make(map[string]map[string]seenDoc)}
+func newSessionSeen(log *slog.Logger, now func() time.Time) *sessionSeen {
+	return &sessionSeen{byID: make(map[string]*sessionEntry), log: log, now: now}
 }
 
 func (s *sessionSeen) lookup(sessionID, key string) (seenDoc, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d, ok := s.byID[sessionID][key]
+	e, ok := s.byID[sessionID]
+	if !ok {
+		return seenDoc{}, false
+	}
+	e.lastAccess = s.now()
+	d, ok := e.docs[key]
 	return d, ok
 }
 
 func (s *sessionSeen) record(sessionID, key string, d seenDoc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	docs, ok := s.byID[sessionID]
+	e, ok := s.byID[sessionID]
 	if !ok {
 		if len(s.byID) >= maxSeenSessions {
-			return
+			s.evictOldestLocked()
 		}
-		docs = make(map[string]seenDoc)
-		s.byID[sessionID] = docs
+		e = &sessionEntry{docs: make(map[string]seenDoc)}
+		s.byID[sessionID] = e
 	}
-	if _, exists := docs[key]; !exists && len(docs) >= maxSeenDocsPerSession {
+	e.lastAccess = s.now()
+	if _, exists := e.docs[key]; !exists && len(e.docs) >= maxSeenDocsPerSession {
+		if !e.capLogged {
+			e.capLogged = true
+			s.log.Warn("mcp fetch dedup: per-session doc cap reached; further documents in this session will not dedup",
+				"cap", maxSeenDocsPerSession)
+		}
 		return
 	}
-	docs[key] = d
+	e.docs[key] = d
+}
+
+// evictOldestLocked removes the least-recently-used session's state to
+// make room for a new one. Caller holds s.mu. Session IDs are
+// deliberately not logged (they route Streamable HTTP traffic).
+func (s *sessionSeen) evictOldestLocked() {
+	var oldestID string
+	var oldest time.Time
+	for id, e := range s.byID {
+		if oldestID == "" || e.lastAccess.Before(oldest) {
+			oldestID, oldest = id, e.lastAccess
+		}
+	}
+	if oldestID == "" {
+		return
+	}
+	delete(s.byID, oldestID)
+	s.log.Warn("mcp fetch dedup: session cap reached; evicted least-recently-used session state (likely leaked sessions from clients that disconnected without a session DELETE)",
+		"cap", maxSeenSessions)
 }
 
 func (s *sessionSeen) drop(sessionID string) {

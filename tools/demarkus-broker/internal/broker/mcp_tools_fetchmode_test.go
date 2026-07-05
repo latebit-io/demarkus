@@ -3,10 +3,12 @@ package broker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
@@ -183,14 +185,25 @@ func TestHandleMarkFetchSessionEvictionDropsDedup(t *testing.T) {
 	}
 }
 
+// discardSessionSeen builds a sessionSeen with a discard logger and a
+// deterministic monotonic clock (each call to now advances one second).
+func discardSessionSeen() *sessionSeen {
+	tick := 0
+	base := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	return newSessionSeen(slog.New(slog.DiscardHandler), func() time.Time {
+		tick++
+		return base.Add(time.Duration(tick) * time.Second)
+	})
+}
+
 func TestSessionSeenCaps(t *testing.T) {
 	t.Run("per-session doc cap stops recording", func(t *testing.T) {
-		s := newSessionSeen()
+		s := discardSessionSeen()
 		for i := range maxSeenDocsPerSession + 10 {
 			s.record("s1", fmt.Sprintf("w/doc-%d.md", i), seenDoc{version: "1"})
 		}
 		s.mu.Lock()
-		n := len(s.byID["s1"])
+		n := len(s.byID["s1"].docs)
 		s.mu.Unlock()
 		if n != maxSeenDocsPerSession {
 			t.Errorf("session doc count = %d, want cap %d", n, maxSeenDocsPerSession)
@@ -201,15 +214,30 @@ func TestSessionSeenCaps(t *testing.T) {
 			t.Error("existing entry should still update at cap")
 		}
 	})
-	t.Run("session cap stops new sessions", func(t *testing.T) {
-		s := newSessionSeen()
-		s.byID = make(map[string]map[string]seenDoc, maxSeenSessions)
+	t.Run("session cap evicts the least-recently-used session", func(t *testing.T) {
+		s := discardSessionSeen()
 		for i := range maxSeenSessions {
-			s.byID[fmt.Sprintf("s%d", i)] = map[string]seenDoc{}
+			s.record(fmt.Sprintf("s%d", i), "w/doc.md", seenDoc{version: "1"})
 		}
-		s.record("one-too-many", "w/doc.md", seenDoc{version: "1"})
-		if _, ok := s.lookup("one-too-many", "w/doc.md"); ok {
-			t.Error("record beyond session cap should be a no-op")
+		// Touch s0 so it is no longer the oldest; s1 becomes the LRU.
+		if _, ok := s.lookup("s0", "w/doc.md"); !ok {
+			t.Fatal("s0 should be recorded")
+		}
+		s.record("one-over-cap", "w/doc.md", seenDoc{version: "1"})
+		if _, ok := s.lookup("one-over-cap", "w/doc.md"); !ok {
+			t.Error("new session past the cap should be recorded (evicting the LRU)")
+		}
+		if _, ok := s.lookup("s1", "w/doc.md"); ok {
+			t.Error("least-recently-used session should have been evicted")
+		}
+		if _, ok := s.lookup("s0", "w/doc.md"); !ok {
+			t.Error("recently-touched session must survive the eviction")
+		}
+		s.mu.Lock()
+		n := len(s.byID)
+		s.mu.Unlock()
+		if n != maxSeenSessions {
+			t.Errorf("session count = %d, want cap %d", n, maxSeenSessions)
 		}
 	})
 }

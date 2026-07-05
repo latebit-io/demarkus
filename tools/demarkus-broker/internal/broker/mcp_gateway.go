@@ -62,7 +62,7 @@ type mcpGateway struct {
 func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGateway {
 	// Session-end eviction for the fetch dedup state. The store is
 	// constructed before the MCPServer because the hook closes over it.
-	fetchSeen := newSessionSeen()
+	fetchSeen := newSessionSeen(s.log, s.clock)
 	hooks := &mcpserver.Hooks{}
 	hooks.AddOnUnregisterSession(func(_ context.Context, session mcpserver.ClientSession) {
 		if session != nil {
