@@ -168,7 +168,7 @@ func TestMCPGatewayInitializeHandshake(t *testing.T) {
 	}
 }
 
-func TestMCPGatewayToolsListReturnsExpected13(t *testing.T) {
+func TestMCPGatewayToolsListMatchesAdvertisedNames(t *testing.T) {
 	v := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
 	ts := newTestMCPGateway(t, mcpTestConfig(), v)
 

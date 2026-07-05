@@ -593,7 +593,7 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	if !force && len(body) >= outlineThreshold {
 		extra["mode"] = "outline"
 		extra["size"] = fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)
-		return mcp.NewToolResultText(formatResultWith(result, outlineBody(docURL, body),
+		return mcp.NewToolResultText(formatResultWith(result, mdoutline.OutlineBody(docURL, body),
 			extra, "version", "modified", "etag")), nil
 	}
 
@@ -604,25 +604,6 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
 	}
 	return mcp.NewToolResultText(formatResultWith(result, body, extra, "version", "modified", "etag")), nil
-}
-
-// outlineBody builds the outline-mode body for a large document: heading
-// tree with anchors and line counts, the opening paragraph, and the hint
-// telling the agent how to get more.
-func outlineBody(docURL, body string) string {
-	var b strings.Builder
-	if tree := mdoutline.Outline(body); tree != "" {
-		b.WriteString(tree)
-	} else {
-		b.WriteString("(document has no headings)\n")
-	}
-	if para := mdoutline.OpeningParagraph(body); para != "" {
-		b.WriteString("\n")
-		b.WriteString(para)
-		b.WriteString("\n")
-	}
-	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; force=true for the full body\n", docURL)
-	return b.String()
 }
 
 func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
