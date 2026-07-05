@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -185,20 +186,23 @@ func TestHandleMarkFetchSessionEvictionDropsDedup(t *testing.T) {
 	}
 }
 
-// discardSessionSeen builds a sessionSeen with a discard logger and a
-// deterministic monotonic clock (each call to now advances one second).
-func discardSessionSeen() *sessionSeen {
+// capturedSessionSeen builds a sessionSeen with a log-capturing handler
+// (so tests can assert the cap warnings fire) and a deterministic
+// monotonic clock (each call to now advances one second).
+func capturedSessionSeen() (*sessionSeen, *bytes.Buffer) {
+	var logs bytes.Buffer
 	tick := 0
 	base := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
-	return newSessionSeen(slog.New(slog.DiscardHandler), func() time.Time {
+	s := newSessionSeen(slog.New(slog.NewTextHandler(&logs, nil)), func() time.Time {
 		tick++
 		return base.Add(time.Duration(tick) * time.Second)
 	})
+	return s, &logs
 }
 
 func TestSessionSeenCaps(t *testing.T) {
-	t.Run("per-session doc cap stops recording", func(t *testing.T) {
-		s := discardSessionSeen()
+	t.Run("per-session doc cap stops recording and warns once", func(t *testing.T) {
+		s, logs := capturedSessionSeen()
 		for i := range maxSeenDocsPerSession + 10 {
 			s.record("s1", fmt.Sprintf("w/doc-%d.md", i), seenDoc{version: "1"})
 		}
@@ -213,15 +217,22 @@ func TestSessionSeenCaps(t *testing.T) {
 		if d, _ := s.lookup("s1", "w/doc-0.md"); d.version != "2" {
 			t.Error("existing entry should still update at cap")
 		}
+		// 10 rejected records, but the degradation warns exactly once.
+		if got := strings.Count(logs.String(), "per-session doc cap reached"); got != 1 {
+			t.Errorf("doc-cap warning logged %d times, want exactly 1\nlogs:\n%s", got, logs.String())
+		}
 	})
-	t.Run("session cap evicts the least-recently-used session", func(t *testing.T) {
-		s := discardSessionSeen()
+	t.Run("session cap evicts the least-recently-used session and warns", func(t *testing.T) {
+		s, logs := capturedSessionSeen()
 		for i := range maxSeenSessions {
 			s.record(fmt.Sprintf("s%d", i), "w/doc.md", seenDoc{version: "1"})
 		}
 		// Touch s0 so it is no longer the oldest; s1 becomes the LRU.
 		if _, ok := s.lookup("s0", "w/doc.md"); !ok {
 			t.Fatal("s0 should be recorded")
+		}
+		if logs.Len() != 0 {
+			t.Fatalf("no warning expected before the cap is exceeded, got:\n%s", logs.String())
 		}
 		s.record("one-over-cap", "w/doc.md", seenDoc{version: "1"})
 		if _, ok := s.lookup("one-over-cap", "w/doc.md"); !ok {
@@ -239,7 +250,33 @@ func TestSessionSeenCaps(t *testing.T) {
 		if n != maxSeenSessions {
 			t.Errorf("session count = %d, want cap %d", n, maxSeenSessions)
 		}
+		if got := strings.Count(logs.String(), "session cap reached"); got != 1 {
+			t.Errorf("eviction warning logged %d times, want exactly 1\nlogs:\n%s", got, logs.String())
+		}
 	})
+}
+
+// TestChangedNote pins the identity-delta wording, including the
+// etag-only-identity edge (no version at all) that must not render a
+// bare "still v".
+func TestChangedNote(t *testing.T) {
+	tests := []struct {
+		name    string
+		prev    seenDoc
+		version string
+		want    string
+	}{
+		{"version bump", seenDoc{version: "3"}, "5", "changed since this session's earlier fetch (v3 -> v5)"},
+		{"etag rotated, version steady", seenDoc{version: "3", etag: "a"}, "3", "content changed since this session's earlier fetch (still v3, etag differs)"},
+		{"etag-only identity", seenDoc{etag: "a"}, "", "content changed since this session's earlier fetch (etag differs)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := changedNote(tt.prev, tt.version); got != tt.want {
+				t.Errorf("changedNote = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 // newTestMCPGatewayWith is newTestMCPGateway with an injected

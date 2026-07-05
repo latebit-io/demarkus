@@ -122,6 +122,21 @@ func (h *handler) seenLookup(key string) (seenDoc, bool) {
 	return d, ok
 }
 
+// changedNote describes how the document identity moved since the
+// session's earlier full-body fetch. Mirrored by the broker MCP
+// gateway's copy so the two surfaces answer identically.
+func changedNote(prev seenDoc, version string) string {
+	if prev.version != version {
+		return fmt.Sprintf("changed since this session's earlier fetch (v%s -> v%s)", prev.version, version)
+	}
+	if version == "" {
+		// Etag-only identity (server sends no version): don't print a
+		// bare "still v".
+		return "content changed since this session's earlier fetch (etag differs)"
+	}
+	return fmt.Sprintf("content changed since this session's earlier fetch (still v%s, etag differs)", version)
+}
+
 // seenRecord remembers that the full body of key's document was returned.
 func (h *handler) seenRecord(key string, d seenDoc) {
 	h.seenMu.Lock()
@@ -582,11 +597,7 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	extra := map[string]string{}
 	if seenBefore && (prev.version != version || prev.etag != etag) {
-		if prev.version != version {
-			extra["note"] = fmt.Sprintf("changed since this session's earlier fetch (v%s -> v%s)", prev.version, version)
-		} else {
-			extra["note"] = fmt.Sprintf("content changed since this session's earlier fetch (still v%s, etag differs)", version)
-		}
+		extra["note"] = changedNote(prev, version)
 	}
 
 	// Size gate: large documents return an outline unless forced.

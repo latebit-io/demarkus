@@ -258,6 +258,11 @@ func changedNote(prev seenDoc, version string) string {
 	if prev.version != version {
 		return fmt.Sprintf("changed since this session's earlier fetch (v%s -> v%s)", prev.version, version)
 	}
+	if version == "" {
+		// Etag-only identity (server sends no version): don't print a
+		// bare "still v".
+		return "content changed since this session's earlier fetch (etag differs)"
+	}
 	return fmt.Sprintf("content changed since this session's earlier fetch (still v%s, etag differs)", version)
 }
 

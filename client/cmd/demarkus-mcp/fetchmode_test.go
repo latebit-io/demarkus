@@ -257,6 +257,29 @@ func TestHandlerMarkFetch_EtagOnlyChangeNoted(t *testing.T) {
 	}
 }
 
+// TestChangedNote pins the identity-delta wording, including the
+// etag-only-identity edge (no version at all) that must not render a
+// bare "still v". Mirrored by the broker gateway's copy.
+func TestChangedNote(t *testing.T) {
+	tests := []struct {
+		name    string
+		prev    seenDoc
+		version string
+		want    string
+	}{
+		{"version bump", seenDoc{version: "3"}, "5", "changed since this session's earlier fetch (v3 -> v5)"},
+		{"etag rotated, version steady", seenDoc{version: "3", etag: "a"}, "3", "content changed since this session's earlier fetch (still v3, etag differs)"},
+		{"etag-only identity", seenDoc{etag: "a"}, "", "content changed since this session's earlier fetch (etag differs)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := changedNote(tt.prev, tt.version); got != tt.want {
+				t.Errorf("changedNote = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHandlerMarkFetch_OutlineDoesNotRecordSeen(t *testing.T) {
 	h := &handler{client: fetchStub(bigDoc(), "3", "abc", nil)}
 	url := map[string]any{"url": "mark://example.com/big.md"}
