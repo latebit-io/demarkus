@@ -207,7 +207,9 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 	}
 
 	extra := map[string]string{}
-	if seenBefore && prev != cur {
+	// cur.Identified() also gates the note: a response that lost both
+	// identity fields has nothing truthful to say about what changed.
+	if seenBefore && cur.Identified() && prev != cur {
 		extra["note"] = fetchdedup.ChangedNote(prev, cur)
 	}
 

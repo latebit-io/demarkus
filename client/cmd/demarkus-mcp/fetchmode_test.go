@@ -261,6 +261,34 @@ func TestHandlerMarkFetch_EtagOnlyChangeNoted(t *testing.T) {
 // identity flips) is pinned once in client/fetchdedup's tests — both this
 // binary and the broker gateway render through that package.
 
+func TestHandlerMarkFetch_IdentityLostNoNote(t *testing.T) {
+	// A response that loses BOTH identity fields after an identified
+	// fetch has nothing truthful to say about what changed — the body
+	// comes back with no note (and no dedup).
+	version, etag := "3", "abc"
+	sc := &stubClient{
+		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": version, "etag": etag},
+				Body:     smallDoc,
+			}}, nil
+		},
+	}
+	h := &handler{client: sc}
+	url := map[string]any{"url": "mark://example.com/doc.md"}
+
+	_ = fetchText(t, h, url)
+	version, etag = "", ""
+	text := fetchText(t, h, url)
+	if strings.Contains(text, "note:") {
+		t.Errorf("identity-less response must not carry a changed note, got:\n%s", text)
+	}
+	if !strings.Contains(text, "Setup body.") {
+		t.Error("identity-less response should return the body")
+	}
+}
+
 func TestHandlerMarkFetch_OutlineDoesNotRecordSeen(t *testing.T) {
 	h := &handler{client: fetchStub(bigDoc(), "3", "abc", nil)}
 	url := map[string]any{"url": "mark://example.com/big.md"}

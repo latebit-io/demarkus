@@ -565,7 +565,9 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	}
 
 	extra := map[string]string{}
-	if seenBefore && prev != cur {
+	// cur.Identified() also gates the note: a response that lost both
+	// identity fields has nothing truthful to say about what changed.
+	if seenBefore && cur.Identified() && prev != cur {
 		extra["note"] = fetchdedup.ChangedNote(prev, cur)
 	}
 
