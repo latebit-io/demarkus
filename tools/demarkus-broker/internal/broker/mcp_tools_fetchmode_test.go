@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchdedup"
 	"github.com/latebit-io/demarkus/protocol"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"k8s.io/client-go/kubernetes/fake"
@@ -204,7 +205,7 @@ func TestSessionSeenCaps(t *testing.T) {
 	t.Run("per-session doc cap stops recording and warns once", func(t *testing.T) {
 		s, logs := capturedSessionSeen()
 		for i := range maxSeenDocsPerSession + 10 {
-			s.record("s1", fmt.Sprintf("w/doc-%d.md", i), seenDoc{version: "1"})
+			s.record("s1", fmt.Sprintf("w/doc-%d.md", i), fetchdedup.Doc{Version: "1"})
 		}
 		s.mu.Lock()
 		n := len(s.byID["s1"].docs)
@@ -213,8 +214,8 @@ func TestSessionSeenCaps(t *testing.T) {
 			t.Errorf("session doc count = %d, want cap %d", n, maxSeenDocsPerSession)
 		}
 		// Existing entries still update.
-		s.record("s1", "w/doc-0.md", seenDoc{version: "2"})
-		if d, _ := s.lookup("s1", "w/doc-0.md"); d.version != "2" {
+		s.record("s1", "w/doc-0.md", fetchdedup.Doc{Version: "2"})
+		if d, _ := s.lookup("s1", "w/doc-0.md"); d.Version != "2" {
 			t.Error("existing entry should still update at cap")
 		}
 		// 10 rejected records, but the degradation warns exactly once.
@@ -225,7 +226,7 @@ func TestSessionSeenCaps(t *testing.T) {
 	t.Run("session cap evicts the least-recently-used session and warns", func(t *testing.T) {
 		s, logs := capturedSessionSeen()
 		for i := range maxSeenSessions {
-			s.record(fmt.Sprintf("s%d", i), "w/doc.md", seenDoc{version: "1"})
+			s.record(fmt.Sprintf("s%d", i), "w/doc.md", fetchdedup.Doc{Version: "1"})
 		}
 		// Touch s0 so it is no longer the oldest; s1 becomes the LRU.
 		if _, ok := s.lookup("s0", "w/doc.md"); !ok {
@@ -234,7 +235,7 @@ func TestSessionSeenCaps(t *testing.T) {
 		if logs.Len() != 0 {
 			t.Fatalf("no warning expected before the cap is exceeded, got:\n%s", logs.String())
 		}
-		s.record("one-over-cap", "w/doc.md", seenDoc{version: "1"})
+		s.record("one-over-cap", "w/doc.md", fetchdedup.Doc{Version: "1"})
 		if _, ok := s.lookup("one-over-cap", "w/doc.md"); !ok {
 			t.Error("new session past the cap should be recorded (evicting the LRU)")
 		}
@@ -256,30 +257,9 @@ func TestSessionSeenCaps(t *testing.T) {
 	})
 }
 
-// TestChangedNote pins the identity-delta wording, including the
-// etag-only-identity edge (no version at all) that must not render a
-// bare "still v".
-func TestChangedNote(t *testing.T) {
-	tests := []struct {
-		name    string
-		prev    seenDoc
-		version string
-		want    string
-	}{
-		{"version bump", seenDoc{version: "3"}, "5", "changed since this session's earlier fetch (v3 -> v5)"},
-		{"was etag-only, now versioned", seenDoc{etag: "a"}, "5", "changed since this session's earlier fetch (was etag-only, now v5)"},
-		{"was versioned, now etag-only", seenDoc{version: "3"}, "", "changed since this session's earlier fetch (was v3, now etag-only)"},
-		{"etag rotated, version steady", seenDoc{version: "3", etag: "a"}, "3", "content changed since this session's earlier fetch (still v3, etag differs)"},
-		{"etag-only identity", seenDoc{etag: "a"}, "", "content changed since this session's earlier fetch (etag differs)"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := changedNote(tt.prev, tt.version); got != tt.want {
-				t.Errorf("changedNote = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
+// Identity-delta wording (unchanged notice, changed note, asymmetric
+// identity flips) is pinned once in client/fetchdedup's tests — both the
+// broker gateway and the local demarkus-mcp render through that package.
 
 // newTestMCPGatewayWith is newTestMCPGateway with an injected
 // dispatcher, for HTTP-level tests that need scripted world responses.

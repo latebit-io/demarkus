@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchdedup"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -20,7 +21,9 @@ import (
 // ergonomics (client/cmd/demarkus-mcp markFetch): size-adaptive outline
 // mode, #section slicing, and unchanged-fetch dedup. The mode-selection
 // logic mirrors the local handler the same way formatToolResult mirrors
-// formatResult — deliberately, so the two surfaces answer identically.
+// formatResult — deliberately, so the two surfaces answer identically —
+// while the identity semantics and notice texts are genuinely shared via
+// client/fetchdedup (one copy, not a mirror).
 // The one structural difference is dedup scope: the local client is a
 // per-user process, so a process-lifetime map IS session scope; the
 // broker is multi-tenant, so dedup state is keyed by MCP session and a
@@ -31,13 +34,6 @@ import (
 // returns an outline instead of the full body, unless force=true or a
 // #section is requested. Matches client/cmd/demarkus-mcp.
 const outlineThreshold = 8 * 1024
-
-// seenDoc identifies a document version already returned in full to one
-// MCP session.
-type seenDoc struct {
-	version string
-	etag    string
-}
 
 // sessionSeen is the per-session fetch dedup state: MCP session ID →
 // (world+path → identity of the version whose full body that session
@@ -59,7 +55,7 @@ type sessionSeen struct {
 // sessionEntry carries one session's dedup state plus the LRU stamp the
 // session-cap eviction orders by.
 type sessionEntry struct {
-	docs       map[string]seenDoc
+	docs       map[string]fetchdedup.Doc
 	lastAccess time.Time
 	capLogged  bool
 }
@@ -78,19 +74,19 @@ func newSessionSeen(log *slog.Logger, now func() time.Time) *sessionSeen {
 	return &sessionSeen{byID: make(map[string]*sessionEntry), log: log, now: now}
 }
 
-func (s *sessionSeen) lookup(sessionID, key string) (seenDoc, bool) {
+func (s *sessionSeen) lookup(sessionID, key string) (fetchdedup.Doc, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.byID[sessionID]
 	if !ok {
-		return seenDoc{}, false
+		return fetchdedup.Doc{}, false
 	}
 	e.lastAccess = s.now()
 	d, ok := e.docs[key]
 	return d, ok
 }
 
-func (s *sessionSeen) record(sessionID, key string, d seenDoc) {
+func (s *sessionSeen) record(sessionID, key string, d fetchdedup.Doc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.byID[sessionID]
@@ -98,7 +94,7 @@ func (s *sessionSeen) record(sessionID, key string, d seenDoc) {
 		if len(s.byID) >= maxSeenSessions {
 			s.evictOldestLocked()
 		}
-		e = &sessionEntry{docs: make(map[string]seenDoc)}
+		e = &sessionEntry{docs: make(map[string]fetchdedup.Doc)}
 		s.byID[sessionID] = e
 	}
 	e.lastAccess = s.now()
@@ -198,21 +194,21 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 	// Dedup needs at least one identity field: with version and etag
 	// both absent, two different bodies would compare equal and a
 	// changed document would be silently reported as unchanged.
-	hasIdentity := version != "" || etag != ""
+	cur := fetchdedup.Doc{Version: version, Etag: etag}
 	sessionID := sessionIDFromContext(ctx)
 
-	var prev seenDoc
+	var prev fetchdedup.Doc
 	seenBefore := false
 	if sessionID != "" {
 		prev, seenBefore = g.fetchSeen.lookup(sessionID, key)
 	}
-	if seenBefore && !force && hasIdentity && prev.version == version && prev.etag == etag {
-		return mcp.NewToolResultText(unchangedNotice(version, etag)), nil
+	if seenBefore && !force && cur.Identified() && prev == cur {
+		return mcp.NewToolResultText(fetchdedup.UnchangedNotice(cur)), nil
 	}
 
 	extra := map[string]string{}
-	if seenBefore && (prev.version != version || prev.etag != etag) {
-		extra["note"] = changedNote(prev, version)
+	if seenBefore && prev != cur {
+		extra["note"] = fetchdedup.ChangedNote(prev, cur)
 	}
 
 	// Size gate: large documents return an outline unless forced.
@@ -223,53 +219,13 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 			extra, "version", "modified", "etag")), nil
 	}
 
-	if sessionID != "" && hasIdentity {
-		g.fetchSeen.record(sessionID, key, seenDoc{version: version, etag: etag})
+	if sessionID != "" && cur.Identified() {
+		g.fetchSeen.record(sessionID, key, cur)
 	}
 	if len(extra) == 0 {
 		return mcp.NewToolResultText(formatToolResult(result, "version", "modified", "etag")), nil
 	}
 	return mcp.NewToolResultText(formatToolResultWith(result, body, extra, "version", "modified", "etag")), nil
-}
-
-// unchangedNotice renders the dedup short-circuit response: the document
-// identity plus a pointer at force=true. Only called when at least one of
-// version/etag is non-empty.
-func unchangedNotice(version, etag string) string {
-	var b strings.Builder
-	b.WriteString("status: unchanged\n")
-	if version != "" {
-		fmt.Fprintf(&b, "version: %s\n", version)
-	}
-	if etag != "" {
-		fmt.Fprintf(&b, "etag: %s\n", etag)
-	}
-	since := "since this session's earlier fetch (etag match)"
-	if version != "" {
-		since = "since v" + version
-	}
-	fmt.Fprintf(&b, "\nunchanged %s — the full body was returned earlier this session; pass force=true to re-read it\n", since)
-	return b.String()
-}
-
-// changedNote describes how the document identity moved since the
-// session's earlier full-body fetch.
-func changedNote(prev seenDoc, version string) string {
-	// Either side of a version change can be empty (record only
-	// requires one identity field): spell out identity-type flips
-	// instead of rendering a bare "v" with no number.
-	switch {
-	case prev.version != version && prev.version == "":
-		return fmt.Sprintf("changed since this session's earlier fetch (was etag-only, now v%s)", version)
-	case prev.version != version && version == "":
-		return fmt.Sprintf("changed since this session's earlier fetch (was v%s, now etag-only)", prev.version)
-	case prev.version != version:
-		return fmt.Sprintf("changed since this session's earlier fetch (v%s -> v%s)", prev.version, version)
-	case version == "":
-		// Etag-only identity throughout (server sends no version).
-		return "content changed since this session's earlier fetch (etag differs)"
-	}
-	return fmt.Sprintf("content changed since this session's earlier fetch (still v%s, etag differs)", version)
 }
 
 // formatToolResultWith renders r via formatToolResult with a replacement
