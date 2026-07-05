@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.5
+
+- Repin the shared `demarkus-plugin` binary to `tools/v0.4.1`, which provisions
+  `demarkus-mcp` at `client/v0.15.0` — the MCP client-ergonomics release:
+  size-adaptive `mark_fetch` (outline mode for large documents, `url#anchor`
+  section slicing, `force` override), per-session unchanged-fetch dedup, and
+  the new `mark_explore` neighborhood-card tool.
+
 ## 0.12.4
 
 - Repin the shared `demarkus-plugin` binary to `tools/v0.3.5`, which provisions
