@@ -9,9 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -21,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/cache"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -59,6 +62,7 @@ func main() {
 	}
 	h := &handler{client: client, defaultHost: *defaultHost, token: *token, graphStore: gs}
 	s.AddTool(markFetchTool(*defaultHost), h.markFetch)
+	s.AddTool(markExploreTool(*defaultHost), h.markExplore)
 	s.AddTool(markListTool(*defaultHost), h.markList)
 	s.AddTool(markGraphTool(*defaultHost), h.markGraph)
 	s.AddTool(markVersionsTool(*defaultHost), h.markVersions)
@@ -95,6 +99,37 @@ type handler struct {
 	defaultHost string
 	token       string
 	graphStore  *graphstore.Store
+
+	// seenMu guards seen, the per-session fetch dedup state: host+path →
+	// identity of the document version whose full body was already returned
+	// to the agent this session. Process-lifetime only, never persisted —
+	// cross-session staleness risk outweighs the token saving.
+	seenMu sync.Mutex
+	seen   map[string]seenDoc
+}
+
+// seenDoc identifies a document version already returned in full this session.
+type seenDoc struct {
+	version string
+	etag    string
+}
+
+// seenLookup returns the recorded identity for key, if any.
+func (h *handler) seenLookup(key string) (seenDoc, bool) {
+	h.seenMu.Lock()
+	defer h.seenMu.Unlock()
+	d, ok := h.seen[key]
+	return d, ok
+}
+
+// seenRecord remembers that the full body of key's document was returned.
+func (h *handler) seenRecord(key string, d seenDoc) {
+	h.seenMu.Lock()
+	defer h.seenMu.Unlock()
+	if h.seen == nil {
+		h.seen = make(map[string]seenDoc)
+	}
+	h.seen[key] = d
 }
 
 // resolveToken returns the auth token for a host using the shared cascade:
@@ -140,20 +175,37 @@ func markFetchTool(host string) mcp.Tool {
 		mcp.WithDescription(
 			"Fetch a document from a Mark Protocol server. "+
 				"Returns the document status, version, modified timestamp, etag, and markdown body. "+
+				"Documents under 8KB return the full body. Larger documents return an outline "+
+				"instead — the heading tree with #anchors and per-section line counts plus the "+
+				"opening paragraph — so you can pull just the section you need by appending "+
+				"#<anchor> to the url (anchors are GitHub-style slugs; #section fetches work at "+
+				"any size). Re-fetching a document whose full body was already returned this "+
+				"session returns a short 'unchanged' notice when it has not changed. "+
+				"Set force=true for the full body regardless of size or session history. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description(urlDesc(host)),
+			mcp.Description(urlDesc(host)+"; append #<anchor> to fetch a single section"),
+		),
+		mcp.WithBoolean("force",
+			mcp.Description("return the full body even if the document is large or unchanged since an earlier fetch this session (default false)"),
 		),
 	)
 }
+
+// outlineThreshold is the body size (bytes) above which mark_fetch returns
+// an outline instead of the full body, unless force=true or a #section is
+// requested.
+const outlineThreshold = 8 * 1024
 
 func markListTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_list",
 		mcp.WithDescription(
 			"List documents and subdirectories on a Mark Protocol server. "+
-				"Use this to discover what documents exist. Archived documents are "+
+				"Use this to discover what documents exist. To orient around one "+
+				"specific document, prefer mark_explore — it bundles the sibling "+
+				"listing with the outline, links, and backlinks. Archived documents are "+
 				"hidden by default, along with directories that contain only archived "+
 				"documents; set include_archived to true for a recovery/audit view. "+
 				urlHint(host),
@@ -212,6 +264,9 @@ func markLookupTool(host string) mcp.Tool {
 				"— not document bodies; FETCH the ones you want. This is a catalog lookup, not "+
 				"full-text search: a subject that was never tagged or titled will not be found. "+
 				"Optionally narrow with a comma-separated key=value filter and cap results with limit. "+
+				"Start here when hunting a subject: lookup to find candidate documents, "+
+				"mark_explore the best match to orient, then mark_fetch url#<anchor> for the "+
+				"sections you actually need — full bodies of large documents are rarely necessary. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -410,6 +465,20 @@ func formatResult(r fetch.Result, keys ...string) string {
 	return b.String()
 }
 
+// formatResultWith renders r via formatResult with a replacement body and
+// extra metadata entries. The metadata map is cloned first — r may hold a
+// cached response whose map must never be mutated.
+func formatResultWith(r fetch.Result, body string, extra map[string]string, keys ...string) string {
+	meta := maps.Clone(r.Response.Metadata)
+	if meta == nil {
+		meta = make(map[string]string, len(extra))
+	}
+	maps.Copy(meta, extra)
+	r.Response.Metadata = meta
+	r.Response.Body = body
+	return formatResult(r, keys...)
+}
+
 // agentMeta returns publisher metadata with the "agent" key set to the MCP
 // client name from the session context. If the client name is unavailable,
 // it falls back to "unknown".
@@ -453,8 +522,10 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
+	docURL, anchor, _ := strings.Cut(rawURL, "#")
+	force := req.GetBool("force", false)
 
-	host, path, err := h.resolveURL(rawURL)
+	host, path, err := h.resolveURL(docURL)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
@@ -463,8 +534,95 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("fetch failed: %v", err)), nil
 	}
+	if result.Response.Status != protocol.StatusOK {
+		return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
+	}
 
-	return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
+	body := result.Response.Body
+	version := result.Response.Metadata["version"]
+	etag := result.Response.Metadata["etag"]
+	key := host + path
+
+	// #section slice: works at any size and bypasses dedup — the agent is
+	// asking for content it has not necessarily seen.
+	if anchor != "" {
+		section, ok := mdoutline.Section(body, anchor)
+		if !ok {
+			available := strings.Join(mdoutline.Anchors(body), ", ")
+			if available == "" {
+				available = "(document has no headings)"
+			}
+			return mcp.NewToolResultError(fmt.Sprintf("section #%s not found in %s; available anchors: %s", anchor, docURL, available)), nil
+		}
+		return mcp.NewToolResultText(formatResultWith(result, section,
+			map[string]string{"section": "#" + anchor}, "version", "modified", "etag")), nil
+	}
+
+	// Dedup needs at least one identity field: with version and etag both
+	// absent, two different bodies would compare equal and a changed
+	// document would be silently reported as unchanged.
+	hasIdentity := version != "" || etag != ""
+	prev, seenBefore := h.seenLookup(key)
+	if seenBefore && !force && hasIdentity && prev.version == version && prev.etag == etag {
+		var b strings.Builder
+		b.WriteString("status: unchanged\n")
+		if version != "" {
+			fmt.Fprintf(&b, "version: %s\n", version)
+		}
+		if etag != "" {
+			fmt.Fprintf(&b, "etag: %s\n", etag)
+		}
+		since := "since this session's earlier fetch (etag match)"
+		if version != "" {
+			since = "since v" + version
+		}
+		fmt.Fprintf(&b, "\nunchanged %s — the full body was returned earlier this session; pass force=true to re-read it\n", since)
+		return mcp.NewToolResultText(b.String()), nil
+	}
+
+	extra := map[string]string{}
+	if seenBefore && (prev.version != version || prev.etag != etag) {
+		if prev.version != version {
+			extra["note"] = fmt.Sprintf("changed since this session's earlier fetch (v%s -> v%s)", prev.version, version)
+		} else {
+			extra["note"] = fmt.Sprintf("content changed since this session's earlier fetch (still v%s, etag differs)", version)
+		}
+	}
+
+	// Size gate: large documents return an outline unless forced.
+	if !force && len(body) >= outlineThreshold {
+		extra["mode"] = "outline"
+		extra["size"] = fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)
+		return mcp.NewToolResultText(formatResultWith(result, outlineBody(docURL, body),
+			extra, "version", "modified", "etag")), nil
+	}
+
+	if hasIdentity {
+		h.seenRecord(key, seenDoc{version: version, etag: etag})
+	}
+	if len(extra) == 0 {
+		return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
+	}
+	return mcp.NewToolResultText(formatResultWith(result, body, extra, "version", "modified", "etag")), nil
+}
+
+// outlineBody builds the outline-mode body for a large document: heading
+// tree with anchors and line counts, the opening paragraph, and the hint
+// telling the agent how to get more.
+func outlineBody(docURL, body string) string {
+	var b strings.Builder
+	if tree := mdoutline.Outline(body); tree != "" {
+		b.WriteString(tree)
+	} else {
+		b.WriteString("(document has no headings)\n")
+	}
+	if para := mdoutline.OpeningParagraph(body); para != "" {
+		b.WriteString("\n")
+		b.WriteString(para)
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; force=true for the full body\n", docURL)
+	return b.String()
 }
 
 func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -1136,6 +1294,8 @@ func markBacklinksTool(host string) mcp.Tool {
 		mcp.WithDescription(
 			"Look up which documents link to a given URL, using the local graph store. "+
 				"Returns results from previous crawls — run mark_graph first to populate. "+
+				"mark_explore includes this same backlink list alongside the document's "+
+				"outline, outbound links, and siblings; prefer it for general orientation. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
