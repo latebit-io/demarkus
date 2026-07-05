@@ -53,9 +53,10 @@ type mcpGateway struct {
 //
 // version is plumbed through to the MCPServer constructor so the
 // initialize response surfaces the broker's build version to MCP
-// clients. mcp-go advertises tool capability automatically when AddTool
-// is called; resources and prompts stay absent because the plan's
-// Out-of-Scope excludes them.
+// clients. mcp-go advertises tool/resource/prompt capabilities
+// automatically on registration; resources and prompts joined the
+// surface in the resources+prompts follow-up (mcp_resources.go /
+// mcp_prompts.go), superseding the gateway plan's original Out-of-Scope.
 //
 // dispatcher is the worldDispatcher backing the tool handlers.
 // Production wires *worldPool; tests inject a fake.
@@ -91,6 +92,8 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGa
 		fetchSeen:  fetchSeen,
 	}
 	g.registerTools()
+	g.registerResources()
+	g.registerPrompts()
 	g.transport = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	return g
 }
