@@ -150,14 +150,15 @@ func TestMCPGatewayInitializeHandshake(t *testing.T) {
 	if _, ok := caps["tools"]; !ok {
 		t.Errorf("initialize capabilities missing tools advertisement: %+v", caps)
 	}
-	// Resources and prompts are out-of-scope per the plan — must NOT
-	// appear so a future accidental AddResource/AddPrompt call surfaces
-	// immediately in CI.
-	if _, ok := caps["resources"]; ok {
-		t.Errorf("initialize capabilities advertised resources (plan §Out-of-Scope excludes them): %+v", caps)
+	// Resources and prompts joined the surface in the resources+prompts
+	// follow-up (this flip was the follow-up's declared starting move;
+	// the original gateway plan had them Out-of-Scope). They must now
+	// advertise so Desktop pickers and slash commands light up.
+	if _, ok := caps["resources"]; !ok {
+		t.Errorf("initialize capabilities missing resources advertisement: %+v", caps)
 	}
-	if _, ok := caps["prompts"]; ok {
-		t.Errorf("initialize capabilities advertised prompts (plan §Out-of-Scope excludes them): %+v", caps)
+	if _, ok := caps["prompts"]; !ok {
+		t.Errorf("initialize capabilities missing prompts advertisement: %+v", caps)
 	}
 	info, ok := resp.Result["serverInfo"].(map[string]any)
 	if !ok {
