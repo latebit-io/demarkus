@@ -212,6 +212,51 @@ func TestHandlerMarkFetch_ChangedDocNoted(t *testing.T) {
 	}
 }
 
+func TestHandlerMarkFetch_NoIdentityNoDedup(t *testing.T) {
+	// A server that omits both version and etag gives dedup nothing to
+	// compare — every fetch must return the body, never "unchanged".
+	h := &handler{client: fetchStub(smallDoc, "", "", nil)}
+	url := map[string]any{"url": "mark://example.com/doc.md"}
+
+	for range 2 {
+		text := fetchText(t, h, url)
+		if strings.Contains(text, "status: unchanged") {
+			t.Fatalf("fetch without version/etag must not dedup, got:\n%s", text)
+		}
+		if !strings.Contains(text, "Setup body.") {
+			t.Errorf("fetch should return the body, got:\n%s", text)
+		}
+	}
+}
+
+func TestHandlerMarkFetch_EtagOnlyChangeNoted(t *testing.T) {
+	etag := "abc"
+	sc := &stubClient{
+		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "3", "etag": etag},
+				Body:     smallDoc,
+			}}, nil
+		},
+	}
+	h := &handler{client: sc}
+	url := map[string]any{"url": "mark://example.com/doc.md"}
+
+	_ = fetchText(t, h, url)
+	etag = "def"
+	text := fetchText(t, h, url)
+	if strings.Contains(text, "status: unchanged") {
+		t.Fatal("etag change must bypass the dedup")
+	}
+	if !strings.Contains(text, "note: content changed since this session's earlier fetch (still v3, etag differs)") {
+		t.Errorf("etag-only change should carry a note, got:\n%s", text)
+	}
+	if !strings.Contains(text, "Setup body.") {
+		t.Error("etag-only change should return the body")
+	}
+}
+
 func TestHandlerMarkFetch_OutlineDoesNotRecordSeen(t *testing.T) {
 	h := &handler{client: fetchStub(bigDoc(), "3", "abc", nil)}
 	url := map[string]any{"url": "mark://example.com/big.md"}

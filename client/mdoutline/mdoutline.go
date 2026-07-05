@@ -29,6 +29,12 @@ type Heading struct {
 // order. Setext headings are included; # lines inside code fences and
 // indented code blocks are not headings and are excluded. Anchors follow
 // the GitHub slug convention with duplicate suffixing.
+//
+// Each exported helper reparses body independently, and the End/Lines pass
+// below is O(n²) in heading count. Both are deliberate: bodies are capped
+// by document size (tens of KB, dozens of headings), where a goldmark parse
+// is sub-millisecond, so sharing parsed state across calls would buy
+// nothing measurable at the cost of a stateful API.
 func Headings(body string) []Heading {
 	src := []byte(body)
 	doc := goldmark.DefaultParser().Parse(text.NewReader(src))

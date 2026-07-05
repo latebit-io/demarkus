@@ -558,21 +558,35 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 			map[string]string{"section": "#" + anchor}, "version", "modified", "etag")), nil
 	}
 
+	// Dedup needs at least one identity field: with version and etag both
+	// absent, two different bodies would compare equal and a changed
+	// document would be silently reported as unchanged.
+	hasIdentity := version != "" || etag != ""
 	prev, seenBefore := h.seenLookup(key)
-	if seenBefore && !force && prev.version == version && prev.etag == etag {
+	if seenBefore && !force && hasIdentity && prev.version == version && prev.etag == etag {
 		var b strings.Builder
 		b.WriteString("status: unchanged\n")
-		fmt.Fprintf(&b, "version: %s\n", version)
+		if version != "" {
+			fmt.Fprintf(&b, "version: %s\n", version)
+		}
 		if etag != "" {
 			fmt.Fprintf(&b, "etag: %s\n", etag)
 		}
-		fmt.Fprintf(&b, "\nunchanged since v%s — the full body was returned earlier this session; pass force=true to re-read it\n", version)
+		since := "since this session's earlier fetch (etag match)"
+		if version != "" {
+			since = "since v" + version
+		}
+		fmt.Fprintf(&b, "\nunchanged %s — the full body was returned earlier this session; pass force=true to re-read it\n", since)
 		return mcp.NewToolResultText(b.String()), nil
 	}
 
 	extra := map[string]string{}
-	if seenBefore && prev.version != version {
-		extra["note"] = fmt.Sprintf("changed since this session's earlier fetch (v%s -> v%s)", prev.version, version)
+	if seenBefore && (prev.version != version || prev.etag != etag) {
+		if prev.version != version {
+			extra["note"] = fmt.Sprintf("changed since this session's earlier fetch (v%s -> v%s)", prev.version, version)
+		} else {
+			extra["note"] = fmt.Sprintf("content changed since this session's earlier fetch (still v%s, etag differs)", version)
+		}
 	}
 
 	// Size gate: large documents return an outline unless forced.
@@ -583,7 +597,9 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 			extra, "version", "modified", "etag")), nil
 	}
 
-	h.seenRecord(key, seenDoc{version: version, etag: etag})
+	if hasIdentity {
+		h.seenRecord(key, seenDoc{version: version, etag: etag})
+	}
 	if len(extra) == 0 {
 		return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
 	}
