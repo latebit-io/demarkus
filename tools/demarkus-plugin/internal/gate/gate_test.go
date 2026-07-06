@@ -267,16 +267,35 @@ func TestRetentionGate(t *testing.T) {
 		}
 	})
 
-	t.Run("json number retention asks", func(t *testing.T) {
+	t.Run("float64 retention asks", func(t *testing.T) {
+		// The default JSON decode yields float64 for numbers.
 		if d := mustEval(t, withRetention("demarkus_memory_mark_publish", 20.0)); d.Decision != "ask" {
 			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("json.Number retention asks", func(t *testing.T) {
+		// Adapters decoding with UseNumber hand the gate a json.Number.
+		if d := mustEval(t, withRetention("demarkus_memory_mark_publish", json.Number("20"))); d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("native int retention asks", func(t *testing.T) {
+		// Programmatic callers can build the metadata map with a Go int; it
+		// reaches the server as "20" and prunes, so the gate must catch it.
+		if d := mustEval(t, withRetention("demarkus_memory_mark_publish", 20)); d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+		if d := mustEval(t, withRetention("demarkus_memory_mark_publish", int64(20))); d.Decision != "ask" {
+			t.Fatalf("int64: want ask, got %q (%s)", d.Decision, d.Reason)
 		}
 	})
 
 	t.Run("server-rejectable values pass through", func(t *testing.T) {
 		// None of these can prune — the server rejects them with bad-request,
 		// so a destructive prompt would be misleading.
-		for _, v := range []any{"0", "-1", "abc", "", 0.0, -3.0, 20.5, true, nil} {
+		for _, v := range []any{"0", "-1", "abc", "", 0.0, -3.0, 20.5, true, nil, 0, -2, int64(0)} {
 			if d := mustEval(t, withRetention("demarkus_memory_mark_publish", v)); d.Decision != "allow" {
 				t.Errorf("retention=%v: want allow, got %q (%s)", v, d.Decision, d.Reason)
 			}

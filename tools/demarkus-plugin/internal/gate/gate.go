@@ -117,6 +117,17 @@ func prunableRetention(md map[string]any) (string, bool) {
 		if x == math.Trunc(x) && x >= 1 && x <= math.MaxInt32 {
 			return strconv.Itoa(int(x)), true
 		}
+	case int:
+		// Programmatic callers (not JSON decode) can hand the gate a native
+		// int; it reaches the server as its decimal string and prunes, so a
+		// missing case here would be a silent-allow hole, not a safe default.
+		if x >= 1 {
+			return strconv.Itoa(x), true
+		}
+	case int64:
+		if x >= 1 {
+			return strconv.FormatInt(x, 10), true
+		}
 	}
 	return "", false
 }
