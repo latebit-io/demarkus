@@ -23,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/store"
 )
 
 func main() {
@@ -730,8 +731,9 @@ func confirmRetention(meta map[string]string, yes bool, in *os.File, out io.Writ
 	// Only a positive integer can prune; anything else (0, negative,
 	// non-numeric) is rejected by the server's validation, so a destructive
 	// warning here would be misleading — let the server report the precise
-	// bad-request error instead.
-	if n, err := strconv.Atoi(r); err != nil || n < 1 {
+	// bad-request error instead. store.ParseRetention is the same predicate
+	// the server enforces.
+	if _, ok := store.ParseRetention(r); !ok {
 		return nil
 	}
 	if !term.IsTerminal(int(in.Fd())) {

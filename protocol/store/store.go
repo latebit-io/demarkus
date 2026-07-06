@@ -1080,6 +1080,19 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	return doc, nil
 }
 
+// ParseRetention parses a retention metadata value. ok is true only for a
+// positive integer — the only form that prunes; validateMeta rejects every
+// other value. Exported so clients gating destructive-confirmation UX (the
+// CLI prompt) share the exact predicate the server enforces instead of
+// re-implementing it and drifting.
+func ParseRetention(v string) (n int, ok bool) {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n, true
+}
+
 // retentionValue returns the retention count declared in publisher metadata,
 // or 0 when absent. validateMeta has already rejected non-integer or < 1
 // values, so a parse failure here means the map bypassed validation — treat
@@ -1089,8 +1102,8 @@ func retentionValue(meta map[string]string) int {
 	if !ok {
 		return 0
 	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 {
+	n, ok := ParseRetention(v)
+	if !ok {
 		return 0
 	}
 	return n
@@ -1515,7 +1528,7 @@ func validateMeta(meta map[string]string) error {
 			return fmt.Errorf("metadata value for key %q contains newlines", k)
 		}
 		if k == retentionKey {
-			if n, err := strconv.Atoi(v); err != nil || n < 1 {
+			if _, ok := ParseRetention(v); !ok {
 				return fmt.Errorf("metadata key %q must be a positive integer, got %q", retentionKey, v)
 			}
 		}
