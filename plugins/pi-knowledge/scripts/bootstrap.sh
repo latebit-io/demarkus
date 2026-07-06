@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-TOOLS_VERSION="0.8.0"   # demarkus-plugin ships in the tools/ release
+TOOLS_VERSION="0.8.1"   # demarkus-plugin ships in the tools/ release
 BIN_DIR="${HOME}/.demarkus/bin"
 BIN="${BIN_DIR}/demarkus-plugin"
 

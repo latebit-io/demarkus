@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.12.9
+
+- Repin the shared `demarkus-plugin` binary to `tools/v0.8.1`, which
+  provisions `demarkus-server` at `server/v0.20.0` and `demarkus-mcp` at
+  `client/v0.18.0` — the version retention core: a `retention: N` publish
+  metadata key prunes a document to its newest N versions
+  (`mark_graph_publish` sets it by default on the generated graph document).
+- Session guidance: never set `metadata.retention` unless the user explicitly
+  asked for it — a positive-integer retention permanently deletes all but the
+  newest N versions on that write and every later write carrying the key. The
+  shared gate binary (tools/v0.8.0+) asks for confirmation when a write
+  carries a prunable retention value (`DEMARKUS_RETENTION_STRICTNESS`
+  relaxes or hardens it).
+
+## 0.12.8
+
+- Repin the shared `demarkus-plugin` binary to `tools/v0.8.0` — the version
+  retention release: the unified write-time gate now guards
+  `metadata.retention` on publish/append at ask severity (pi treats ask as
+  block), covering soul and knowledge surfaces alike; `mark_graph_publish`
+  is exempt by design.
+
 ## 0.12.7
 
 - Repin the shared `demarkus-plugin` binary to `tools/v0.6.1`, which provisions
