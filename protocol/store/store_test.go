@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -1795,4 +1797,315 @@ func TestHashIndex(t *testing.T) {
 			t.Error("unarchived doc should be back in index")
 		}
 	})
+}
+
+func TestValidateMeta_Retention(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"positive integer", "20", false},
+		{"one", "1", false},
+		{"zero", "0", true},
+		{"negative", "-3", true},
+		{"non-integer", "abc", true},
+		{"float", "1.5", true},
+		{"empty", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMeta(map[string]string{"retention": tt.value})
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateMeta(retention=%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// writeSequence writes n versions of /doc.md, passing meta only on the final
+// write, and returns the final document.
+func writeSequence(t *testing.T, s *Store, n int, finalMeta map[string]string) *Document {
+	t.Helper()
+	var doc *Document
+	var err error
+	for i := range n {
+		var meta map[string]string
+		if i == n-1 {
+			meta = finalMeta
+		}
+		doc, err = s.Write("/doc.md", fmt.Appendf(nil, "# Version %d", i+1), meta)
+		if err != nil {
+			t.Fatalf("write %d: %v", i+1, err)
+		}
+	}
+	return doc
+}
+
+func remainingVersions(t *testing.T, s *Store) []int {
+	t.Helper()
+	infos, err := s.Versions("/doc.md")
+	if err != nil {
+		t.Fatalf("Versions: %v", err)
+	}
+	nums := make([]int, 0, len(infos))
+	for _, v := range infos {
+		nums = append(nums, v.Version)
+	}
+	sort.Ints(nums)
+	return nums
+}
+
+func TestWrite_RetentionPrunes(t *testing.T) {
+	s := New(t.TempDir())
+	doc := writeSequence(t, s, 10, map[string]string{"retention": "3"})
+
+	if got, want := remainingVersions(t, s), []int{8, 9, 10}; !slices.Equal(got, want) {
+		t.Fatalf("remaining versions = %v, want %v", got, want)
+	}
+	if doc.Prune == nil {
+		t.Fatal("expected prune result on document")
+	}
+	if doc.Prune.From != 1 || doc.Prune.To != 7 || doc.Prune.Err != nil {
+		t.Errorf("prune = {From:%d To:%d Err:%v}, want {From:1 To:7 Err:nil}", doc.Prune.From, doc.Prune.To, doc.Prune.Err)
+	}
+	if err := s.VerifyChain("/doc.md"); err != nil {
+		t.Errorf("VerifyChain after prune: %v", err)
+	}
+	if _, err := s.Get("/doc.md", 1); err == nil {
+		t.Error("pruned version 1 should not be readable")
+	}
+	if doc, err := s.Get("/doc.md", 0); err != nil || doc.Version != 10 {
+		t.Errorf("current version = %d (err %v), want 10", doc.Version, err)
+	}
+}
+
+func TestWrite_NoRetention_NoPrune(t *testing.T) {
+	s := New(t.TempDir())
+	doc := writeSequence(t, s, 5, nil)
+
+	if got := remainingVersions(t, s); len(got) != 5 {
+		t.Errorf("remaining versions = %v, want all 5", got)
+	}
+	if doc.Prune != nil {
+		t.Errorf("prune result = %+v, want nil", doc.Prune)
+	}
+}
+
+func TestWrite_RetentionKeepsCurrent(t *testing.T) {
+	s := New(t.TempDir())
+	writeSequence(t, s, 4, map[string]string{"retention": "1"})
+
+	if got, want := remainingVersions(t, s), []int{4}; !slices.Equal(got, want) {
+		t.Fatalf("remaining versions = %v, want %v", got, want)
+	}
+	// Numbering continues from the pruned history.
+	doc, err := s.Write("/doc.md", []byte("# Version 5"), map[string]string{"retention": "1"})
+	if err != nil {
+		t.Fatalf("write after prune: %v", err)
+	}
+	if doc.Version != 5 {
+		t.Errorf("next version = %d, want 5", doc.Version)
+	}
+	if got, want := remainingVersions(t, s), []int{5}; !slices.Equal(got, want) {
+		t.Errorf("remaining versions = %v, want %v", got, want)
+	}
+}
+
+func TestWrite_RetentionRemoved_StopsPruning(t *testing.T) {
+	s := New(t.TempDir())
+	writeSequence(t, s, 3, map[string]string{"retention": "2"})
+
+	doc, err := s.Write("/doc.md", []byte("# Version 4"), nil)
+	if err != nil {
+		t.Fatalf("write without retention: %v", err)
+	}
+	if doc.Prune != nil {
+		t.Errorf("prune result = %+v, want nil without retention", doc.Prune)
+	}
+	if got, want := remainingVersions(t, s), []int{2, 3, 4}; !slices.Equal(got, want) {
+		t.Errorf("remaining versions = %v, want %v", got, want)
+	}
+}
+
+func TestWrite_RetentionLargerThanHistory_NoPrune(t *testing.T) {
+	s := New(t.TempDir())
+	doc := writeSequence(t, s, 3, map[string]string{"retention": "10"})
+
+	if doc.Prune != nil {
+		t.Errorf("prune result = %+v, want nil", doc.Prune)
+	}
+	if got := remainingVersions(t, s); len(got) != 3 {
+		t.Errorf("remaining versions = %v, want all 3", got)
+	}
+}
+
+func TestPruneVersions_AbortsOnError(t *testing.T) {
+	s := New(t.TempDir())
+	writeSequence(t, s, 5, nil)
+
+	docDir := filepath.Join(s.Root(), "versions", "doc.md")
+	if err := os.Chmod(docDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(docDir, 0o755); err != nil {
+			t.Errorf("restore permissions: %v", err)
+		}
+	})
+
+	res := s.pruneVersions(filepath.Join(s.Root(), "versions"), "doc.md", 5, 2)
+	if res == nil || res.Err == nil {
+		t.Fatalf("prune result = %+v, want error", res)
+	}
+	if res.From != 0 || res.To != 0 {
+		t.Errorf("prune range = %d-%d, want 0-0 (nothing deleted)", res.From, res.To)
+	}
+	if err := os.Chmod(docDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := remainingVersions(t, s); len(got) != 5 {
+		t.Errorf("remaining versions = %v, want all 5 (no gap)", got)
+	}
+	if err := s.VerifyChain("/doc.md"); err != nil {
+		t.Errorf("VerifyChain after failed prune: %v", err)
+	}
+}
+
+func TestWrite_RetentionMigratesFlatLayoutThenPrunes(t *testing.T) {
+	root := t.TempDir()
+	versionsDir := filepath.Join(root, "versions")
+	if err := os.Mkdir(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2; i++ {
+		if err := os.WriteFile(filepath.Join(versionsDir, fmt.Sprintf("doc.md.v%d", i)), fmt.Appendf(nil, "# V%d", i), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("versions", "doc.md.v2"), filepath.Join(root, "doc.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+	doc, err := s.Write("/doc.md", []byte("# V3"), map[string]string{"retention": "1"})
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if doc.Version != 3 {
+		t.Fatalf("version = %d, want 3", doc.Version)
+	}
+	if doc.Prune == nil || doc.Prune.From != 1 || doc.Prune.To != 2 {
+		t.Fatalf("prune result = %+v, want From:1 To:2", doc.Prune)
+	}
+	if got, want := remainingVersions(t, s), []int{3}; !slices.Equal(got, want) {
+		t.Errorf("remaining versions = %v, want %v", got, want)
+	}
+}
+
+func TestWriteVersion_RetentionPrunes(t *testing.T) {
+	s := New(t.TempDir())
+	writeSequence(t, s, 3, nil)
+
+	doc, err := s.WriteVersion("/doc.md", 3, []byte("# Version 4"), map[string]string{"retention": "2"})
+	if err != nil {
+		t.Fatalf("WriteVersion: %v", err)
+	}
+	if doc.Prune == nil || doc.Prune.From != 1 || doc.Prune.To != 2 {
+		t.Fatalf("prune result = %+v, want From:1 To:2", doc.Prune)
+	}
+	if got, want := remainingVersions(t, s), []int{3, 4}; !slices.Equal(got, want) {
+		t.Errorf("remaining versions = %v, want %v", got, want)
+	}
+}
+
+func TestPruneVersions_SymlinkedDocDirCannotEscape(t *testing.T) {
+	// A planted symlink at versions/{base} pointing outside the store must
+	// not let pruning delete files outside the root. Requires local disk
+	// access to set up (the protocol cannot create symlinks) — this guards
+	// the store as a public API and against confused-deputy reuse.
+	root := t.TempDir()
+	outside := t.TempDir()
+	for i := 1; i <= 3; i++ {
+		if err := os.WriteFile(filepath.Join(outside, fmt.Sprintf("v%d", i)), fmt.Appendf(nil, "victim %d", i), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	versionsDir := filepath.Join(root, "versions")
+	if err := os.Mkdir(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(versionsDir, "doc.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+	res := s.pruneVersions(versionsDir, "doc.md", 3, 1)
+	if res == nil || res.Err == nil {
+		t.Fatalf("prune result = %+v, want escape error", res)
+	}
+	if res.From != 0 || res.To != 0 {
+		t.Errorf("prune range = %d-%d, want 0-0 (nothing deleted)", res.From, res.To)
+	}
+	for i := 1; i <= 3; i++ {
+		if _, err := os.Stat(filepath.Join(outside, fmt.Sprintf("v%d", i))); err != nil {
+			t.Errorf("outside file v%d was deleted through the symlink: %v", i, err)
+		}
+	}
+}
+
+func TestPruneVersions_SymlinkVersionFileNotFollowed(t *testing.T) {
+	// A version file that is itself a symlink is unlinked, never followed:
+	// the link target outside the store must survive the prune.
+	root := t.TempDir()
+	outsideFile := filepath.Join(t.TempDir(), "victim.md")
+	if err := os.WriteFile(outsideFile, []byte("victim"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+	writeSequence(t, s, 3, nil)
+	v1 := filepath.Join(root, "versions", "doc.md", "v1")
+	if err := os.Remove(v1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideFile, v1); err != nil {
+		t.Fatal(err)
+	}
+
+	res := s.pruneVersions(filepath.Join(root, "versions"), "doc.md", 3, 1)
+	if res == nil || res.Err != nil {
+		t.Fatalf("prune result = %+v, want clean prune", res)
+	}
+	if res.From != 1 || res.To != 2 {
+		t.Errorf("prune range = %d-%d, want 1-2", res.From, res.To)
+	}
+	if _, err := os.Lstat(v1); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("v1 symlink should be removed, Lstat err = %v", err)
+	}
+	if data, err := os.ReadFile(outsideFile); err != nil || string(data) != "victim" {
+		t.Errorf("symlink target outside the store was touched: data=%q err=%v", data, err)
+	}
+}
+
+func TestPruneVersions_DocDirOutsideRootRejected(t *testing.T) {
+	// A versionsDir that resolves outside the store root is refused before
+	// any deletion is attempted, regardless of how the caller derived it.
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outside, "versions", "doc.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "versions", "doc.md", "v1"), []byte("victim"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+	res := s.pruneVersions(filepath.Join(outside, "versions"), "doc.md", 3, 1)
+	if res == nil || res.Err == nil {
+		t.Fatalf("prune result = %+v, want escape error", res)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "versions", "doc.md", "v1")); err != nil {
+		t.Errorf("file outside the store root was deleted: %v", err)
+	}
 }

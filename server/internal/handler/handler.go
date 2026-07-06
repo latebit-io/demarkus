@@ -792,6 +792,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	}
 
 	doc, err := h.Store.WriteVersion(req.Path, expectedVersion, []byte(req.Body), pubMeta)
+	h.logPrune("PUBLISH", req.Path, tokenLabel, doc)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			h.logger().Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
@@ -916,6 +917,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 	}
 
 	doc, err := h.Store.Append(req.Path, expectedVersion, []byte(req.Body), pubMeta)
+	h.logPrune("APPEND", req.Path, tokenLabel, doc)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
@@ -1039,6 +1041,22 @@ func escapeMD(s string) string {
 
 func escapeURL(s string) string {
 	return url.PathEscape(s)
+}
+
+// logPrune audit-logs retention pruning performed by a write. Version
+// deletions must always be attributable, so this runs on every write outcome
+// that carries a prune result — including conflict paths, where the write
+// (and its prune) happened despite the conflict response.
+func (h *Handler) logPrune(operation, reqPath, tokenLabel string, doc *store.Document) {
+	if doc == nil || doc.Prune == nil {
+		return
+	}
+	p := doc.Prune
+	if p.Err != nil {
+		h.logger().Error("prune incomplete", "audit", true, "operation", operation, "path", sanitize(reqPath), "pruned_from", p.From, "pruned_to", p.To, "token_label", sanitize(tokenLabel), "success", false, "error", p.Err)
+		return
+	}
+	h.logger().Info("prune", "audit", true, "operation", operation, "path", sanitize(reqPath), "pruned_from", p.From, "pruned_to", p.To, "token_label", sanitize(tokenLabel), "success", true)
 }
 
 // extractPublisherMeta returns non-control metadata keys from a request.

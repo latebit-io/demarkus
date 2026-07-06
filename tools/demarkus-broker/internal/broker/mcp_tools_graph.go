@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -205,6 +206,12 @@ func (g *mcpGateway) handleMarkGraphExport(_ context.Context, _ mcp.CallToolRequ
 	return mcp.NewToolResultText(g.graphStore.Export()), nil
 }
 
+// defaultGraphRetention bounds the published graph document's version
+// history — mirrors the local demarkus-mcp default. The graph is a generated
+// artifact republished wholesale on every run, so unbounded history is pure
+// growth; 20 versions is enough to debug a bad crawl.
+const defaultGraphRetention = 20
+
 // handleMarkGraphPublish exports the broker's ephemeral graph
 // store and PUBLISHes it to a target world. Same expected_version
 // + on_conflict semantics as mark_publish (Slice 3); on_conflict
@@ -228,12 +235,19 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	if expectedVersion < 0 {
 		return mcp.NewToolResultError("expected_version must be >= 0"), nil
 	}
+	retention := req.GetInt("retention", defaultGraphRetention)
+	if retention < 0 {
+		return mcp.NewToolResultError("retention must be >= 0 (0 keeps every version)"), nil
+	}
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
 	body := g.graphStore.Export()
 	meta := agentMetaFromClaims(claims)
+	if retention > 0 {
+		meta["retention"] = strconv.Itoa(retention)
+	}
 	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Publish(worldName, urlPath, body, token, expectedVersion, meta)
 	})

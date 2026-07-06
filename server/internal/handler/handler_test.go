@@ -2426,3 +2426,98 @@ func TestReadOnlyMode(t *testing.T) {
 		}
 	})
 }
+
+func TestHandlePublish_Retention(t *testing.T) {
+	const testSecret = "test-retention-secret"
+	tokenStore := auth.NewTokenStore(map[string]auth.Token{
+		protocol.HashToken(testSecret): {
+			Paths:      []string{"/*"},
+			Operations: []string{"publish"},
+		},
+	})
+
+	t.Run("prunes and audit-logs", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		for i := range 5 {
+			if _, err := s.Write("/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil); err != nil {
+				t.Fatalf("write %d: %v", i+1, err)
+			}
+		}
+		var logBuf bytes.Buffer
+		h := &Handler{ContentDir: dir, Store: s, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nretention: 2\n---\n# Version 6\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+		versions, err := s.Versions("/doc.md")
+		if err != nil {
+			t.Fatalf("Versions: %v", err)
+		}
+		if len(versions) != 2 {
+			t.Errorf("remaining versions = %d, want 2", len(versions))
+		}
+		log := logBuf.String()
+		for _, want := range []string{"msg=prune", "operation=PUBLISH", "pruned_from=1", "pruned_to=4", "path=/doc.md", "success=true"} {
+			if !strings.Contains(log, want) {
+				t.Errorf("audit log missing %q:\n%s", want, log)
+			}
+		}
+	})
+
+	t.Run("invalid retention rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nretention: zero\n---\n# Hello\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusBadRequest {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusBadRequest)
+		}
+	})
+
+	t.Run("no prune without retention", func(t *testing.T) {
+		dir := t.TempDir()
+		s := store.New(dir)
+		for i := range 3 {
+			if _, err := s.Write("/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil); err != nil {
+				t.Fatalf("write %d: %v", i+1, err)
+			}
+		}
+		var logBuf bytes.Buffer
+		h := &Handler{ContentDir: dir, Store: s, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+
+		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n---\n# Version 4\n")
+		h.HandleStream(stream)
+
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+		versions, err := s.Versions("/doc.md")
+		if err != nil {
+			t.Fatalf("Versions: %v", err)
+		}
+		if len(versions) != 4 {
+			t.Errorf("remaining versions = %d, want 4", len(versions))
+		}
+		if strings.Contains(logBuf.String(), "msg=prune") {
+			t.Errorf("unexpected prune audit entry:\n%s", logBuf.String())
+		}
+	})
+}
