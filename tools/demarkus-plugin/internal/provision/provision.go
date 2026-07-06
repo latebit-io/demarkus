@@ -41,12 +41,12 @@ import (
 // Version pins for the SEPARATE server/client modules (their own release
 // cadence; the bump workflow tracks their latest existing releases).
 const (
-	serverVersion = "0.19.0"
-	clientVersion = "0.17.0"
+	serverVersion = "0.20.0"
+	clientVersion = "0.18.0"
 	// fallbackToolsVersion is used ONLY by dev builds (Version == "dev"), where
 	// there's no real release to derive the tools version from. A real release
 	// uses its own ldflags Version — see toolsRef.
-	fallbackToolsVersion = "0.6.0"
+	fallbackToolsVersion = "0.8.0"
 )
 
 // Version is the binary's own release version, injected from main's ldflags
