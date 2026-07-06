@@ -597,9 +597,9 @@ Beyond the interpreted fields above, a PUBLISH request MAY carry additional publ
 
 ### 9.1. Version Model
 
-The Mark Protocol uses an append-only version model. Every write to a document creates a new version. Published versions are permanent and MUST NOT be modified or deleted. Version history is an append-only log.
+The Mark Protocol uses an append-only version model. Every write to a document creates a new version. Published versions are permanent and MUST NOT be modified or deleted, with one exception: a publisher-declared retention policy prunes the oldest versions of a document (§9.9). Version history is otherwise an append-only log.
 
-Version numbers are positive integers starting at 1, monotonically increasing by 1 for each write.
+Version numbers are positive integers starting at 1, monotonically increasing by 1 for each write. Retention pruning never affects version numbering.
 
 ### 9.2. Path-Based Version Access
 
@@ -696,14 +696,18 @@ v1 (genesis)     v2                    v3
 
 To verify the integrity of a document's version history:
 
-1. Read all version files, sorted by version number (oldest first).
-2. For each version N > 1:
+1. Read all retained version files, sorted by version number (oldest first).
+2. For each version N after the oldest retained version:
    a. Compute `sha256(<raw bytes of version N-1 file>)`.
    b. Format as `sha256-<hex>`.
    c. Compare with the `previous-hash` value in version N's store frontmatter.
    d. If they do not match, the chain is broken at version N.
 
+The oldest retained version is the verification root: its own `previous-hash` (absent for version 1, referencing a pruned file otherwise) is not checked.
+
 If any version file has been modified after publication, the hash recorded in the next version will not match, and the tampering is detected.
+
+When retention pruning (§9.9) has removed the oldest versions, verification applies to the retained contiguous suffix. The oldest retained version's `previous-hash` references a deleted file and cannot be verified; every later link remains verifiable.
 
 ### 9.7. Immutability Enforcement
 
@@ -717,6 +721,20 @@ When a PUBLISH is performed on a document that exists as a flat file (no version
 2. Migrate the flat file content to `versions/<filename>.v1` with store frontmatter (`version: 1`, no `previous-hash`).
 3. Create the new version as `versions/<filename>.v2` with a `previous-hash` referencing the hash of the migrated v1 file.
 4. Update the current file to a symlink pointing to the new version.
+
+### 9.9. Version Retention
+
+A publisher MAY bound a document's version history by declaring a `retention` metadata key on PUBLISH or APPEND. The value MUST be a positive integer; a server MUST reject a write whose `retention` value is not an integer or is less than 1.
+
+When the newly written version N carries `retention: R` and more than R versions exist, the server MUST delete the stored version files with version numbers less than or equal to N − R, in ascending version order, after the write has succeeded. Deletion MUST stop at the first failure so the retained versions always form a contiguous suffix of the history (§9.6). The current version is never deleted; R ≥ 1 guarantees at least one version remains.
+
+Retention is evaluated per write: a write that omits the key prunes nothing, regardless of what earlier versions declared. Absent retention, the default append-only model applies unchanged. Reads of a pruned version return not-found; VERSIONS lists only the retained versions.
+
+Retention is intended for generated documents that are republished wholesale (graph exports, indexes), where old versions carry no value. It is destructive: pruned versions are unrecoverable through the protocol. Clients SHOULD warn and require explicit confirmation before a write that sets `retention` on a document not known to be generated.
+
+Pruning requires no separate capability — it executes under the write authorization of the PUBLISH or APPEND that carries the key, the same trust level that can archive the document. A server MUST record version deletions in its audit log, attributing them to the authenticated writer (in the reference implementation: path, pruned version range, and token label).
+
+Because pruning is the store's only destructive filesystem operation, deletion paths MUST NOT be derived from request input: version numbers come from enumerating the document's own versions directory, and each deletion MUST be confined to the store root with symlink escapes rejected at delete time (the reference implementation resolves every removal inside an `os.Root` anchored at the store root, so a planted or raced symlink cannot redirect a delete outside the store, and a version file that is itself a symlink is unlinked, never followed).
 
 ## 10. Caching
 

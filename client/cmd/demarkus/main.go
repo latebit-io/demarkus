@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
@@ -20,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/store"
 )
 
 func main() {
@@ -58,6 +62,7 @@ func requestMain() {
 	expectedVersion := flag.Int("expected-version", -1, "version check: -1 skip (default), 0 create-only, >0 require match; required (>0) for APPEND")
 	meta := metaFlag{}
 	flag.Var(meta, "meta", "publisher metadata key=value for PUBLISH/APPEND (repeatable); e.g. -meta tags=go,auth -meta importance=0.9")
+	yes := flag.Bool("yes", false, "skip the confirmation prompt for destructive metadata (retention)")
 	includeArchived := flag.Bool("include-archived", false, "LIST only: include archived documents (and all-archived directories) in the listing")
 	verbose := flag.Bool("v", false, "show status and metadata header before body")
 	noCache := flag.Bool("no-cache", false, "disable caching")
@@ -97,6 +102,14 @@ func requestMain() {
 
 	ts := tokens.LoadDefault()
 	token := tokens.Resolve(*authToken, host, ts)
+	// Confirm destructive metadata before resolveBody so the prompt runs while
+	// stdin is still untouched (resolveBody may consume stdin for the body).
+	// Only PUBLISH/APPEND transmit metadata, so only they can prune.
+	if *verb == protocol.VerbPublish || *verb == protocol.VerbAppend {
+		if err := confirmRetention(metaMap(meta), *yes, os.Stdin, os.Stderr); err != nil {
+			log.Fatal(err)
+		}
+	}
 	reqBody := resolveBody(*verb, *body)
 	if *verb == protocol.VerbAppend {
 		if reqBody == "" {
@@ -704,6 +717,41 @@ func metaMap(m metaFlag) map[string]string {
 		return nil
 	}
 	return m
+}
+
+// confirmRetention guards the destructive retention metadata key: the write
+// carrying it (and every later one) permanently deletes versions older than
+// the newest N. Interactive runs confirm on the prompt; non-interactive runs
+// (stdin is not a TTY) must pass -yes so scripts state the intent explicitly.
+func confirmRetention(meta map[string]string, yes bool, in *os.File, out io.Writer) error {
+	r, ok := meta["retention"]
+	if !ok || yes {
+		return nil
+	}
+	// Only a positive integer can prune; anything else (0, negative,
+	// non-numeric) is rejected by the server's validation, so a destructive
+	// warning here would be misleading — let the server report the precise
+	// bad-request error instead. store.ParseRetention is the same predicate
+	// the server enforces.
+	if _, ok := store.ParseRetention(r); !ok {
+		return nil
+	}
+	if !term.IsTerminal(int(in.Fd())) {
+		return fmt.Errorf("retention=%s permanently deletes older versions on this and every later write carrying it; pass -yes to confirm in non-interactive mode", r)
+	}
+	if _, err := fmt.Fprintf(out, "retention=%s permanently deletes all but the newest %s versions of this document, on this write and every later write carrying the key. Continue? [y/N] ", r, r); err != nil {
+		return fmt.Errorf("write confirmation prompt: %w", err)
+	}
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read confirmation: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return nil
+	default:
+		return fmt.Errorf("aborted: retention not confirmed")
+	}
 }
 
 func validateVerb(verb string) error {

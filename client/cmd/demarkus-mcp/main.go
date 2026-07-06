@@ -331,7 +331,7 @@ func markPublishTool(host string) mcp.Tool {
 			mcp.Description("conflict behavior: \"merge\" (default) returns a merge-candidate body; the agent reviews it (resolving any conflict markers) and calls mark_publish again with expected_version set to the returned publish-at-version. \"fail\" opts out and returns the raw conflict status."),
 		),
 		mcp.WithObject("metadata",
-			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Reserved keys are rejected."),
+			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Reserved keys are rejected. `retention` (positive integer) caps version history: this write and every later write carrying the key permanently delete versions older than the newest N. Destructive and irreversible — confirm with the user before setting it on a document whose history matters; intended for generated documents."),
 		),
 	)
 }
@@ -1327,6 +1327,12 @@ func markGraphExportTool() mcp.Tool {
 	)
 }
 
+// defaultGraphRetention bounds the published graph document's version history.
+// The graph is a generated artifact republished wholesale on every run, so
+// unbounded history is pure growth (one live document reached 545 versions);
+// 20 versions is enough to debug a bad crawl.
+const defaultGraphRetention = 20
+
 func markGraphPublishTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_graph_publish",
 		mcp.WithDescription(
@@ -1345,6 +1351,9 @@ func markGraphPublishTool(host string) mcp.Tool {
 		mcp.WithNumber("expected_version",
 			mcp.Required(),
 			mcp.Description("version number from a prior fetch for conflict detection; use 0 when creating a new document"),
+		),
+		mcp.WithNumber("retention",
+			mcp.Description("how many versions of the graph document to keep (default 20). The graph is regenerated on every publish, so older versions are permanently pruned. Pass 0 to keep every version."),
 		),
 	)
 }
@@ -1386,9 +1395,18 @@ func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError("expected_version must be >= 0"), nil
 	}
 
+	retention := req.GetInt("retention", defaultGraphRetention)
+	if retention < 0 {
+		return mcp.NewToolResultError("retention must be >= 0 (0 keeps every version)"), nil
+	}
+
 	md := h.graphStore.Export()
 
-	result, err := h.client.Publish(host, path, md, token, expectedVersion, agentMeta(ctx))
+	meta := agentMeta(ctx)
+	if retention > 0 {
+		meta["retention"] = strconv.Itoa(retention)
+	}
+	result, err := h.client.Publish(host, path, md, token, expectedVersion, meta)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}

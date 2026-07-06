@@ -46,6 +46,22 @@ type Document struct {
 	Version  int
 	Archived bool
 	Metadata map[string]string
+	// Prune reports retention pruning performed by the write that produced
+	// this document, or nil when no pruning ran. Callers on the network path
+	// audit-log it so version deletions are always attributable.
+	Prune *PruneResult
+}
+
+// PruneResult describes the contiguous range of oldest versions deleted by
+// retention pruning after a successful write. From/To are zero when a
+// deletion failure stopped pruning before anything was removed. Err is
+// non-nil when pruning stopped early; versions From..To were already deleted
+// and the rest remain a contiguous suffix, so the hash chain stays
+// verifiable.
+type PruneResult struct {
+	From int
+	To   int
+	Err  error
 }
 
 // VersionInfo describes a single version of a document.
@@ -98,6 +114,14 @@ var okfKeys = map[string]bool{
 	"tags":        true,
 	"timestamp":   true,
 }
+
+// retentionKey is the publisher metadata key that bounds a document's version
+// history. When the just-written version carries it, the write prunes the
+// oldest versions so at most that many remain (current included). It is
+// publisher metadata, not a reserved store field: any writer with publish
+// capability may set it, the same trust level that can archive the document.
+// Absent retention means keep every version — the default is unchanged.
+const retentionKey = "retention"
 
 // reservedMetaKeys are bare frontmatter fields owned by the store. Publishers
 // may not set them (validateMeta rejects them) and extractMetadata never
@@ -1043,13 +1067,107 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 
 	s.UpdateHashIndex(reqPath, content)
 
-	return &Document{
+	doc := &Document{
 		Content:  content,
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  next,
 		Archived: false,
 		Metadata: meta,
-	}, nil
+	}
+	if keep := retentionValue(meta); keep > 0 {
+		doc.Prune = s.pruneVersions(versionsDir, base, next, keep)
+	}
+	return doc, nil
+}
+
+// ParseRetention parses a retention metadata value. ok is true only for a
+// positive integer — the only form that prunes; validateMeta rejects every
+// other value. Exported so clients gating destructive-confirmation UX (the
+// CLI prompt) share the exact predicate the server enforces instead of
+// re-implementing it and drifting.
+func ParseRetention(v string) (n int, ok bool) {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n, true
+}
+
+// retentionValue returns the retention count declared in publisher metadata,
+// or 0 when absent. validateMeta has already rejected non-integer or < 1
+// values, so a parse failure here means the map bypassed validation — treat
+// it as no retention rather than pruning on a value that was never vetted.
+func retentionValue(meta map[string]string) int {
+	v, ok := meta[retentionKey]
+	if !ok {
+		return 0
+	}
+	n, ok := ParseRetention(v)
+	if !ok {
+		return 0
+	}
+	return n
+}
+
+// pruneVersions deletes the oldest versions of a document so at most keep
+// versions remain, the just-written current version included. Deletion runs
+// oldest-first and stops at the first failure so the surviving versions are
+// always a contiguous suffix — VerifyChain never sees a gap. It runs only
+// after a successful write, which has already migrated the document to the
+// per-doc layout, so only versions/{base}/v{N} files are ever touched.
+//
+// Deletion is the store's only destructive operation, so it takes no chances
+// with the filesystem: version numbers come from ReadDir (never from input),
+// filenames are reconstructed as v{N}, and every removal goes through an
+// os.Root anchored at the store root. os.Root resolves the whole path inside
+// the root at delete time, so a planted symlink (e.g. versions/{base}
+// pointing outside the store) or a directory swapped in mid-prune cannot
+// redirect a delete to a file outside the store, and a version file that is
+// itself a symlink is unlinked, never followed. Returns nil when there was
+// nothing to delete.
+//
+// Deletion is deliberately unbounded per write: the first retained write on a
+// long history prunes the whole backlog inline (that is the upgrade path for
+// documents that accumulated hundreds of versions before retention existed).
+// Steady state deletes one version per write.
+func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *PruneResult {
+	cutoff := current - keep // delete versions <= cutoff
+	if cutoff < 1 {
+		return nil
+	}
+	relDocDir, err := filepath.Rel(s.root, filepath.Join(versionsDir, base))
+	if err != nil || strings.HasPrefix(relDocDir, "..") {
+		return &PruneResult{Err: fmt.Errorf("prune: doc dir escapes store root: %q", relDocDir)}
+	}
+	rootFS, err := os.OpenRoot(s.root)
+	if err != nil {
+		return &PruneResult{Err: fmt.Errorf("prune: open store root: %w", err)}
+	}
+	// Read-only directory handle; nothing actionable on close failure.
+	defer func() { _ = rootFS.Close() }()
+
+	versions := s.findVersionsPerDoc(versionsDir, base)
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].Version < versions[j].Version
+	})
+	var res *PruneResult
+	for _, v := range versions {
+		if v.Version > cutoff {
+			break
+		}
+		if err := rootFS.Remove(filepath.Join(relDocDir, fmt.Sprintf("v%d", v.Version))); err != nil {
+			if res == nil {
+				res = &PruneResult{}
+			}
+			res.Err = fmt.Errorf("prune v%d: %w", v.Version, err)
+			break
+		}
+		if res == nil {
+			res = &PruneResult{From: v.Version}
+		}
+		res.To = v.Version
+	}
+	return res
 }
 
 // prepareExistingDoc handles pre-write checks for existing documents:
@@ -1142,9 +1260,11 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 	// version beyond expectedVersion+1 (e.g. v3 instead of v2). Detect
 	// this and treat it as a conflict. The written version file is kept
 	// to avoid leaving a dangling symlink — it's a valid version with a
-	// correct hash chain, just created under stale assumptions.
+	// correct hash chain, just created under stale assumptions. The prune
+	// result is preserved: the write pruned regardless of the conflict,
+	// and callers must still be able to audit-log the deletion.
 	if doc.Version != expectedVersion+1 {
-		return &Document{Version: doc.Version}, ErrConflict
+		return &Document{Version: doc.Version, Prune: doc.Prune}, ErrConflict
 	}
 
 	return doc, nil
@@ -1407,6 +1527,11 @@ func validateMeta(meta map[string]string) error {
 		if !protocol.IsValidMetaValue(v) {
 			return fmt.Errorf("metadata value for key %q contains newlines", k)
 		}
+		if k == retentionKey {
+			if _, ok := ParseRetention(v); !ok {
+				return fmt.Errorf("metadata key %q must be a positive integer, got %q", retentionKey, v)
+			}
+		}
 		size += SerializedMetaSize(k, v)
 	}
 	if len(meta) > protocol.MaxMetaKeys {
@@ -1549,10 +1674,13 @@ func extractBody(data []byte) []byte {
 // If v1 already exists (concurrent write), it is a no-op.
 // TODO(v1): remove this function; flat files without version history won't exist.
 func (s *Store) migrateFlatFile(versionsDir, base, currentFile string) error {
-	// Check both layouts for an existing v1.
-	perDocV1 := newVersionFilePath(versionsDir, base, 1)
-	if _, err := os.Stat(perDocV1); !errors.Is(err, os.ErrNotExist) {
-		return nil // v1 already exists (new layout)
+	// A document with any per-doc version history is not a flat file. This
+	// must not check for v1 specifically: retention pruning deletes the
+	// oldest versions, and misclassifying a pruned document here would
+	// resurrect a bogus v1 from the current symlink's raw bytes (store
+	// frontmatter included) and break the hash chain.
+	if len(s.findVersionsPerDoc(versionsDir, base)) > 0 {
+		return nil
 	}
 	flatV1 := filepath.Join(versionsDir, fmt.Sprintf("%s.v1", base))
 	if _, err := os.Stat(flatV1); !errors.Is(err, os.ErrNotExist) {

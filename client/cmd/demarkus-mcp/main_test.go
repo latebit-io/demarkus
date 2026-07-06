@@ -1764,3 +1764,75 @@ func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) 
 		t.Errorf("error text %q does not contain %q", text.Text, substr)
 	}
 }
+
+func TestHandlerMarkGraphPublish_Retention(t *testing.T) {
+	newGraphHandler := func(t *testing.T, capture *map[string]string) *handler {
+		t.Helper()
+		gs, err := graphstore.Load(filepath.Join(t.TempDir(), "graph.json"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		sc := &stubClient{
+			publishFn: func(_, _, _, _ string, _ int, meta map[string]string) (fetch.Result, error) {
+				*capture = meta
+				return fetch.Result{Response: protocol.Response{
+					Status:   "created",
+					Metadata: map[string]string{"version": "1", "modified": "2026-03-08T12:00:00Z"},
+				}}, nil
+			},
+		}
+		return &handler{client: sc, graphStore: gs, token: "test-token"}
+	}
+
+	tests := []struct {
+		name          string
+		args          map[string]any
+		wantRetention string
+	}{
+		{
+			name:          "defaults to 20",
+			args:          map[string]any{"url": "mark://target.com/graph.md", "expected_version": float64(0)},
+			wantRetention: "20",
+		},
+		{
+			name:          "explicit override",
+			args:          map[string]any{"url": "mark://target.com/graph.md", "expected_version": float64(0), "retention": float64(5)},
+			wantRetention: "5",
+		},
+		{
+			name:          "zero disables retention",
+			args:          map[string]any{"url": "mark://target.com/graph.md", "expected_version": float64(0), "retention": float64(0)},
+			wantRetention: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var meta map[string]string
+			h := newGraphHandler(t, &meta)
+			result, err := h.markGraphPublish(context.Background(), newCallToolRequest(tt.args))
+			if err != nil {
+				t.Fatalf("unexpected Go error: %v", err)
+			}
+			if result.IsError {
+				t.Fatalf("unexpected tool error: %v", result.Content)
+			}
+			if got := meta["retention"]; got != tt.wantRetention {
+				t.Errorf("retention meta = %q, want %q", got, tt.wantRetention)
+			}
+		})
+	}
+
+	t.Run("negative rejected", func(t *testing.T) {
+		var meta map[string]string
+		h := newGraphHandler(t, &meta)
+		result, err := h.markGraphPublish(context.Background(), newCallToolRequest(map[string]any{
+			"url":              "mark://target.com/graph.md",
+			"expected_version": float64(0),
+			"retention":        float64(-1),
+		}))
+		if err != nil {
+			t.Fatalf("unexpected Go error: %v", err)
+		}
+		assertIsToolError(t, result, "retention must be >= 0")
+	})
+}

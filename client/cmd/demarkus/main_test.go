@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
@@ -130,6 +132,45 @@ func TestEditorCommand(t *testing.T) {
 				if args[i] != tt.wantArgs[i] {
 					t.Errorf("args[%d]: got %q, want %q", i, args[i], tt.wantArgs[i])
 				}
+			}
+		})
+	}
+}
+
+func TestConfirmRetention(t *testing.T) {
+	// A regular file stands in for non-TTY stdin (pipes and redirects).
+	nonTTY, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := nonTTY.Close(); err != nil {
+			t.Errorf("close temp stdin: %v", err)
+		}
+	}()
+
+	tests := []struct {
+		name    string
+		meta    map[string]string
+		yes     bool
+		wantErr bool
+	}{
+		{"no retention key", map[string]string{"tags": "a,b"}, false, false},
+		{"nil meta", nil, false, false},
+		{"retention with -yes", map[string]string{"retention": "5"}, true, false},
+		{"retention non-interactive without -yes", map[string]string{"retention": "5"}, false, true},
+		// Values the server rejects cannot prune, so no confirmation is
+		// required — the server's bad-request error is the real feedback.
+		{"retention zero passes through", map[string]string{"retention": "0"}, false, false},
+		{"retention negative passes through", map[string]string{"retention": "-1"}, false, false},
+		{"retention non-numeric passes through", map[string]string{"retention": "abc"}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out strings.Builder
+			err := confirmRetention(tt.meta, tt.yes, nonTTY, &out)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("confirmRetention() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

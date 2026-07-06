@@ -784,3 +784,75 @@ func TestBrokerCrawlParseURLRejectsNonMark(t *testing.T) {
 // silenceGraphTestNoise keeps go vet happy when the test
 // imports the graph package without obviously using it.
 var _ = graph.New
+
+func TestHandleMarkGraphPublishRetention(t *testing.T) {
+	newGateway := func(t *testing.T, capture *map[string]string) *mcpGateway {
+		t.Helper()
+		return newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{
+			publishFn: func(_, _, _, _ string, _ int, meta map[string]string) (fetch.Result, error) {
+				*capture = meta
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "1", "modified": "2026-05-22T10:00:00Z"},
+				}}, nil
+			},
+		})
+	}
+
+	tests := []struct {
+		name          string
+		args          map[string]any
+		wantRetention string
+	}{
+		{
+			name:          "defaults to 20",
+			args:          map[string]any{"url": "mark://team-a/graph.md", "expected_version": float64(0)},
+			wantRetention: "20",
+		},
+		{
+			name:          "explicit override",
+			args:          map[string]any{"url": "mark://team-a/graph.md", "expected_version": float64(0), "retention": float64(5)},
+			wantRetention: "5",
+		},
+		{
+			name:          "zero disables retention",
+			args:          map[string]any{"url": "mark://team-a/graph.md", "expected_version": float64(0), "retention": float64(0)},
+			wantRetention: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var meta map[string]string
+			g := newGateway(t, &meta)
+			res, err := g.handleMarkGraphPublish(withAliceClaims(context.Background()), callToolReq("mark_graph_publish", tt.args))
+			if err != nil {
+				t.Fatalf("handleMarkGraphPublish: %v", err)
+			}
+			if res.IsError {
+				t.Fatalf("isError = true: %s", toolResultText(t, res))
+			}
+			if got := meta["retention"]; got != tt.wantRetention {
+				t.Errorf("retention meta = %q, want %q", got, tt.wantRetention)
+			}
+		})
+	}
+
+	t.Run("negative rejected", func(t *testing.T) {
+		var meta map[string]string
+		g := newGateway(t, &meta)
+		res, err := g.handleMarkGraphPublish(withAliceClaims(context.Background()), callToolReq("mark_graph_publish", map[string]any{
+			"url":              "mark://team-a/graph.md",
+			"expected_version": float64(0),
+			"retention":        float64(-1),
+		}))
+		if err != nil {
+			t.Fatalf("handleMarkGraphPublish: %v", err)
+		}
+		if !res.IsError {
+			t.Error("isError = false on negative retention, want true")
+		}
+		if text := toolResultText(t, res); !strings.Contains(text, "retention must be >= 0") {
+			t.Errorf("error text = %q, want it to mention 'retention must be >= 0'", text)
+		}
+	})
+}
