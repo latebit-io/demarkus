@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.7
+
+- Repin the shared `demarkus-plugin` binary to `tools/v0.6.1`, which provisions
+  `demarkus-mcp` at `client/v0.17.0` — the MCP resources + prompts release:
+  documents attach as MCP resources (mark:// URI template, `#anchor` section
+  attach, picker entries populated from the soul's top level), and orient /
+  recall / whats-new ship as server-vended prompt commands.
+
 ## 0.12.5
 
 - Repin the shared `demarkus-plugin` binary to `tools/v0.4.1`, which provisions
