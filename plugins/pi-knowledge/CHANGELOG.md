@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.7
+
+- Repin the shared `demarkus-plugin` binary to `tools/v0.6.1` (provisions
+  `demarkus-mcp` at `client/v0.17.0` with MCP resources + prompts). Keeps
+  this plugin's pin in lockstep with the memory plugins, since all four
+  share the same `demarkus-plugin` binary install.
+
 ## 0.5.5
 
 - Repin the shared `demarkus-plugin` binary to `tools/v0.4.1` (provisions
