@@ -696,12 +696,14 @@ v1 (genesis)     v2                    v3
 
 To verify the integrity of a document's version history:
 
-1. Read all version files, sorted by version number (oldest first).
-2. For each version N > 1:
+1. Read all retained version files, sorted by version number (oldest first).
+2. For each version N after the oldest retained version:
    a. Compute `sha256(<raw bytes of version N-1 file>)`.
    b. Format as `sha256-<hex>`.
    c. Compare with the `previous-hash` value in version N's store frontmatter.
    d. If they do not match, the chain is broken at version N.
+
+The oldest retained version is the verification root: its own `previous-hash` (absent for version 1, referencing a pruned file otherwise) is not checked.
 
 If any version file has been modified after publication, the hash recorded in the next version will not match, and the tampering is detected.
 

@@ -1112,6 +1112,11 @@ func retentionValue(meta map[string]string) int {
 // redirect a delete to a file outside the store, and a version file that is
 // itself a symlink is unlinked, never followed. Returns nil when there was
 // nothing to delete.
+//
+// Deletion is deliberately unbounded per write: the first retained write on a
+// long history prunes the whole backlog inline (that is the upgrade path for
+// documents that accumulated hundreds of versions before retention existed).
+// Steady state deletes one version per write.
 func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *PruneResult {
 	cutoff := current - keep // delete versions <= cutoff
 	if cutoff < 1 {

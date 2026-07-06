@@ -851,5 +851,8 @@ func TestHandleMarkGraphPublishRetention(t *testing.T) {
 		if !res.IsError {
 			t.Error("isError = false on negative retention, want true")
 		}
+		if text := toolResultText(t, res); !strings.Contains(text, "retention must be >= 0") {
+			t.Errorf("error text = %q, want it to mention 'retention must be >= 0'", text)
+		}
 	})
 }

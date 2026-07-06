@@ -103,8 +103,11 @@ func requestMain() {
 	token := tokens.Resolve(*authToken, host, ts)
 	// Confirm destructive metadata before resolveBody so the prompt runs while
 	// stdin is still untouched (resolveBody may consume stdin for the body).
-	if err := confirmRetention(metaMap(meta), *yes, os.Stdin, os.Stderr); err != nil {
-		log.Fatal(err)
+	// Only PUBLISH/APPEND transmit metadata, so only they can prune.
+	if *verb == protocol.VerbPublish || *verb == protocol.VerbAppend {
+		if err := confirmRetention(metaMap(meta), *yes, os.Stdin, os.Stderr); err != nil {
+			log.Fatal(err)
+		}
 	}
 	reqBody := resolveBody(*verb, *body)
 	if *verb == protocol.VerbAppend {
