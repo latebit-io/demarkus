@@ -241,3 +241,153 @@ func TestUnrelatedServerAllowed(t *testing.T) {
 		t.Fatalf("unrelated server: want allow, got %q", d.Decision)
 	}
 }
+
+func TestRetentionGate(t *testing.T) {
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+
+	withRetention := func(tool string, retention any) Input {
+		return Input{Tool: tool, Input: map[string]any{
+			"url": "/x.md", "metadata": map[string]any{"tags": "a,b", "retention": retention},
+		}}
+	}
+
+	t.Run("memory publish asks by default", func(t *testing.T) {
+		d := mustEval(t, withRetention("demarkus_memory_mark_publish", "20"))
+		if d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+		if !strings.Contains(d.Reason, "retention=20") || !strings.Contains(d.Reason, "permanently delete") {
+			t.Fatalf("reason should explain the deletion: %s", d.Reason)
+		}
+	})
+
+	t.Run("memory append asks too", func(t *testing.T) {
+		if d := mustEval(t, withRetention("demarkus_memory_mark_append", "5")); d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("float64 retention asks", func(t *testing.T) {
+		// The default JSON decode yields float64 for numbers.
+		if d := mustEval(t, withRetention("demarkus_memory_mark_publish", 20.0)); d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("json.Number retention asks", func(t *testing.T) {
+		// Adapters decoding with UseNumber hand the gate a json.Number.
+		if d := mustEval(t, withRetention("demarkus_memory_mark_publish", json.Number("20"))); d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("native int retention asks", func(t *testing.T) {
+		// Programmatic callers can build the metadata map with a Go int; it
+		// reaches the server as "20" and prunes, so the gate must catch it.
+		if d := mustEval(t, withRetention("demarkus_memory_mark_publish", 20)); d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+		if d := mustEval(t, withRetention("demarkus_memory_mark_publish", int64(20))); d.Decision != "ask" {
+			t.Fatalf("int64: want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("server-rejectable values pass through", func(t *testing.T) {
+		// None of these can prune — the server rejects them with bad-request,
+		// so a destructive prompt would be misleading.
+		for _, v := range []any{"0", "-1", "abc", "", 0.0, -3.0, 20.5, true, nil, 0, -2, int64(0)} {
+			if d := mustEval(t, withRetention("demarkus_memory_mark_publish", v)); d.Decision != "allow" {
+				t.Errorf("retention=%v: want allow, got %q (%s)", v, d.Decision, d.Reason)
+			}
+		}
+	})
+
+	t.Run("absent retention allows", func(t *testing.T) {
+		d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+			"url": "/x.md", "metadata": map[string]any{"tags": "a,b"},
+		}})
+		if d.Decision != "allow" {
+			t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("graph publish is exempt", func(t *testing.T) {
+		// mark_graph_publish sets retention by design on a generated document;
+		// its verb parses as "graph_publish" so neither write gate fires.
+		d := mustEval(t, withRetention("demarkus_memory_mark_graph_publish", "20"))
+		if d.Decision != "allow" {
+			t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("strictness env override", func(t *testing.T) {
+		t.Setenv("DEMARKUS_RETENTION_STRICTNESS", "warn")
+		if d := mustEval(t, withRetention("demarkus_memory_mark_publish", "20")); d.Decision != "warn" {
+			t.Fatalf("want warn, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("block-level tag gate outranks retention ask", func(t *testing.T) {
+		t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
+		d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+			"url": "/x.md", "metadata": map[string]any{"retention": "20"},
+		}})
+		if d.Decision != "block" {
+			t.Fatalf("want block, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("retention ask outranks warn-level tag gate", func(t *testing.T) {
+		t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "warn")
+		d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+			"url": "/x.md", "metadata": map[string]any{"retention": "20"},
+		}})
+		if d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+		if !strings.Contains(d.Reason, "retention") {
+			t.Fatalf("expected retention reason at winning severity, got: %s", d.Reason)
+		}
+	})
+}
+
+func TestRetentionGateKnowledge(t *testing.T) {
+	setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
+
+	t.Run("compliant publish with retention asks", func(t *testing.T) {
+		d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+			"url": "/k.md", "metadata": map[string]any{"tags": "a,b", "retention": "10"},
+		}})
+		if d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("append with retention asks", func(t *testing.T) {
+		d := mustEval(t, Input{Tool: "knowledge_mark_append", Input: map[string]any{
+			"url": "/k.md", "metadata": map[string]any{"retention": "10"},
+		}})
+		if d.Decision != "ask" {
+			t.Fatalf("want ask, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
+	t.Run("append without retention allows", func(t *testing.T) {
+		d := mustEval(t, Input{Tool: "knowledge_mark_append", Input: map[string]any{
+			"url": "/k.md", "body": "more",
+		}})
+		if d.Decision != "allow" {
+			t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+}
+
+func TestPrunableRetentionJSONNumber(t *testing.T) {
+	// Adapters that decode with json.Number must be recognized too.
+	if v, ok := prunableRetention(map[string]any{"retention": json.Number("15")}); !ok || v != "15" {
+		t.Errorf("json.Number 15: got (%q, %v), want (15, true)", v, ok)
+	}
+	if _, ok := prunableRetention(map[string]any{"retention": json.Number("0")}); ok {
+		t.Error("json.Number 0 should not be prunable")
+	}
+}
