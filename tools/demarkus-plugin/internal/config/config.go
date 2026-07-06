@@ -137,6 +137,26 @@ func MemoryDestStrictness() (Strictness, error) {
 	return validStrictness(s, Block), nil
 }
 
+// RetentionStrictness is the enforcement level for the retention guard (a
+// publish/append whose metadata carries a prunable retention value permanently
+// deletes older versions). env override → plugin.retention-strictness → ask:
+// destructive-by-metadata warrants a human decision by default, on every
+// surface the gate covers (soul and knowledge alike).
+func RetentionStrictness() (Strictness, error) {
+	if v := os.Getenv("DEMARKUS_RETENTION_STRICTNESS"); v != "" {
+		return validStrictness(v, Ask), nil
+	}
+	p, err := path("plugin.retention-strictness")
+	if err != nil {
+		return Ask, err
+	}
+	s, err := readTrimmed(p)
+	if err != nil {
+		return Ask, err
+	}
+	return validStrictness(s, Ask), nil
+}
+
 // KnowledgeStrictness env override → plugin-knowledge.strictness.<slug> → warn.
 func KnowledgeStrictness(slug string) (Strictness, error) {
 	if v := os.Getenv("DEMARKUS_KNOWLEDGE_STRICTNESS"); v != "" {

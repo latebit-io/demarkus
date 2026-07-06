@@ -8,9 +8,11 @@ package gate
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
@@ -85,6 +87,67 @@ func fieldPresent(md map[string]any, key string) bool {
 	default:
 		return true // numbers, bools, etc. count as present
 	}
+}
+
+// prunableRetention returns the normalized retention value when metadata
+// carries one the server will accept — a positive integer, the only form that
+// deletes versions (store.ParseRetention is the same predicate the server
+// enforces). Server-rejectable values (0, negative, fractional, non-numeric)
+// don't prompt: that write fails with bad-request and deletes nothing. JSON
+// numbers are accepted alongside strings because the gate sees the raw tool
+// input, before the MCP layer coerces metadata values to strings.
+func prunableRetention(md map[string]any) (string, bool) {
+	if md == nil {
+		return "", false
+	}
+	v, ok := md["retention"]
+	if !ok || v == nil {
+		return "", false
+	}
+	switch x := v.(type) {
+	case string:
+		if n, ok := store.ParseRetention(strings.TrimSpace(x)); ok {
+			return strconv.Itoa(n), true
+		}
+	case json.Number:
+		if n, ok := store.ParseRetention(x.String()); ok {
+			return strconv.Itoa(n), true
+		}
+	case float64:
+		if x == math.Trunc(x) && x >= 1 && x <= math.MaxInt32 {
+			return strconv.Itoa(int(x)), true
+		}
+	}
+	return "", false
+}
+
+// retentionDecision is the retention guard, independent of the tag and
+// destination gates: a publish or append whose metadata carries a prunable
+// retention value permanently deletes older versions, so the agent must
+// confirm with the user before the write goes through. mark_graph_publish is
+// exempt by construction — its verb parses as "graph_publish", and it sets
+// retention by design on a generated document.
+func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, error) {
+	if pt.Verb != "publish" && pt.Verb != "append" {
+		return nil, nil
+	}
+	r, prunes := prunableRetention(metadataOf(args))
+	if !prunes {
+		return nil, nil
+	}
+	target := urlOr(args, "this document")
+	reason := fmt.Sprintf(
+		"demarkus write to %s sets metadata.retention=%s: the server will permanently delete all but the "+
+			"newest %s versions of this document — on this write and every later write carrying the key. "+
+			"This is intended for generated documents (graph exports, indexes). Confirm with the user before "+
+			"proceeding; if history matters, re-issue the write without the retention key. To relax this "+
+			"check, set DEMARKUS_RETENTION_STRICTNESS=warn.",
+		target, r, r)
+	s, err := config.RetentionStrictness()
+	if err != nil {
+		return nil, err
+	}
+	return &Decision{Decision: string(s), Reason: reason}, nil
 }
 
 // importanceOK: absent is fine; otherwise a number or non-blank numeric string in
@@ -186,6 +249,15 @@ func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, soulID
 		}
 	}
 
+	// Retention guard (publish + append): destructive version pruning.
+	rd, err := retentionDecision(pt, args)
+	if err != nil {
+		return Decision{}, err
+	}
+	if rd != nil {
+		decisions = append(decisions, *rd)
+	}
+
 	// Publish tag-gate (publish only): missing tags or out-of-range importance.
 	if pt.Verb == "publish" {
 		md := metadataOf(args)
@@ -240,8 +312,18 @@ func combine(ds []Decision) Decision {
 }
 
 func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Decision, error) {
+	// Retention guard applies to publish and append; the tag/axis gate below is
+	// publish-only. Both are independent — combine to the most severe outcome.
+	var decisions []Decision
+	rd, err := retentionDecision(pt, args)
+	if err != nil {
+		return Decision{}, err
+	}
+	if rd != nil {
+		decisions = append(decisions, *rd)
+	}
 	if pt.Verb != "publish" {
-		return allow(), nil
+		return combine(decisions), nil
 	}
 	md := metadataOf(args)
 	tags := strings.TrimSpace(tagsString(md))
@@ -286,7 +368,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	}
 
 	if tagsOK && impOK && len(missingAxes) == 0 && len(missingFields) == 0 {
-		return allow(), nil
+		return combine(decisions), nil
 	}
 
 	var problems []string
@@ -319,7 +401,8 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	if err != nil {
 		return Decision{}, err
 	}
-	return Decision{Decision: string(s), Reason: reason}, nil
+	decisions = append(decisions, Decision{Decision: string(s), Reason: reason})
+	return combine(decisions), nil
 }
 
 func urlOr(args map[string]any, fallback string) string {
