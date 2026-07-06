@@ -159,6 +159,11 @@ func TestConfirmRetention(t *testing.T) {
 		{"nil meta", nil, false, false},
 		{"retention with -yes", map[string]string{"retention": "5"}, true, false},
 		{"retention non-interactive without -yes", map[string]string{"retention": "5"}, false, true},
+		// Values the server rejects cannot prune, so no confirmation is
+		// required — the server's bad-request error is the real feedback.
+		{"retention zero passes through", map[string]string{"retention": "0"}, false, false},
+		{"retention negative passes through", map[string]string{"retention": "-1"}, false, false},
+		{"retention non-numeric passes through", map[string]string{"retention": "abc"}, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

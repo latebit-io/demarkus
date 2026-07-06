@@ -727,6 +727,13 @@ func confirmRetention(meta map[string]string, yes bool, in *os.File, out io.Writ
 	if !ok || yes {
 		return nil
 	}
+	// Only a positive integer can prune; anything else (0, negative,
+	// non-numeric) is rejected by the server's validation, so a destructive
+	// warning here would be misleading — let the server report the precise
+	// bad-request error instead.
+	if n, err := strconv.Atoi(r); err != nil || n < 1 {
+		return nil
+	}
 	if !term.IsTerminal(int(in.Fd())) {
 		return fmt.Errorf("retention=%s permanently deletes older versions on this and every later write carrying it; pass -yes to confirm in non-interactive mode", r)
 	}
