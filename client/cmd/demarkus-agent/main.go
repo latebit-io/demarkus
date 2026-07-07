@@ -106,6 +106,11 @@ func crawlMain(args []string) {
 	}
 
 	// CLI retention overrides config when set (-1 keeps the config value).
+	// Anything else negative is a mistake; fail loudly instead of silently
+	// falling back to the config value.
+	if *publishRetention < -1 {
+		fatal("invalid -publish-retention (want -1, 0, or a positive count)", "value", *publishRetention)
+	}
 	if *publishRetention >= 0 {
 		cfg.Publish.Retention = *publishRetention
 	}
@@ -228,6 +233,11 @@ func daemonMain(args []string) {
 	}
 
 	// CLI retention overrides config when set (-1 keeps the config value).
+	// Anything else negative is a mistake; fail loudly instead of silently
+	// falling back to the config value.
+	if *publishRetention < -1 {
+		fatal("invalid -publish-retention (want -1, 0, or a positive count)", "value", *publishRetention)
+	}
 	if *publishRetention >= 0 {
 		cfg.Publish.Retention = *publishRetention
 	}
