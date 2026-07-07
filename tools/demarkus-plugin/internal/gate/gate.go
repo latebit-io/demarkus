@@ -54,6 +54,14 @@ func urlOf(args map[string]any) string {
 	return ""
 }
 
+// leafOf returns the basename of a document URL or path.
+func leafOf(url string) string {
+	if i := strings.LastIndex(url, "/"); i >= 0 {
+		return url[i+1:]
+	}
+	return url
+}
+
 func tagsString(md map[string]any) string {
 	if md == nil {
 		return ""
@@ -389,10 +397,7 @@ func knowledgeTagDecision(args map[string]any, slug string) (*Decision, error) {
 	if err != nil {
 		return nil, err
 	}
-	leaf := url
-	if i := strings.LastIndex(leaf, "/"); i >= 0 {
-		leaf = leaf[i+1:]
-	}
+	leaf := leafOf(url)
 	for _, f := range fields {
 		// index.md / log.md are server-exempt from the OKF `type` default only —
 		// a hub is intentionally untyped. Every other required field is checked

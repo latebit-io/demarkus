@@ -27,10 +27,7 @@ func styleDecision(pt config.ParsedTool, args map[string]any) (*Decision, error)
 	if strings.TrimSpace(body) == "" {
 		return nil, nil
 	}
-	leaf := urlOf(args)
-	if i := strings.LastIndex(leaf, "/"); i >= 0 {
-		leaf = leaf[i+1:]
-	}
+	leaf := leafOf(urlOf(args))
 
 	var problems []string
 	if bodyOpensWithFrontmatter(body) {
