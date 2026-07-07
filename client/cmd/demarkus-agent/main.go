@@ -80,6 +80,7 @@ func crawlMain(args []string) {
 	publish := fs.Bool("publish", false, "publish indexes to hubs after crawl")
 	perServer := fs.Bool("per-server", false, "publish per-server indexes instead of aggregated")
 	publishGraph := fs.Bool("publish-graph", false, "publish a link-graph export (/graph.md) to hubs after crawl")
+	publishRetention := fs.Int("publish-retention", -1, "cap published artifacts (/graph.md, hash indexes) to their newest N versions; the server prunes older ones on write; 0 keeps every version; -1 uses the config value (default 20)")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus-agent crawl [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Runs a single federation crawl.\n\n")
@@ -102,6 +103,16 @@ func crawlMain(args []string) {
 	cfg, err := fedcrawl.Load(*configPath, seedList)
 	if err != nil {
 		fatal("load config", "err", err)
+	}
+
+	// CLI retention overrides config when set (-1 keeps the config value).
+	// Anything else negative is a mistake; fail loudly instead of silently
+	// falling back to the config value.
+	if *publishRetention < -1 {
+		fatal("invalid -publish-retention (want -1, 0, or a positive count)", "value", *publishRetention)
+	}
+	if *publishRetention >= 0 {
+		cfg.Publish.Retention = *publishRetention
 	}
 
 	// Validate.
@@ -191,6 +202,7 @@ func daemonMain(args []string) {
 	publish := fs.Bool("publish", false, "publish indexes to hubs after each crawl")
 	perServer := fs.Bool("per-server", false, "publish per-server indexes instead of aggregated")
 	publishGraph := fs.Bool("publish-graph", false, "publish a link-graph export (/graph.md) to hubs after each crawl")
+	publishRetention := fs.Int("publish-retention", -1, "cap published artifacts (/graph.md, hash indexes) to their newest N versions; the server prunes older ones on write; 0 keeps every version; -1 uses the config value (default 20)")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus-agent daemon [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Runs federation crawl as a daemon on a schedule.\n\n")
@@ -218,6 +230,16 @@ func daemonMain(args []string) {
 	cfg, err := fedcrawl.Load(*configPath, seedList)
 	if err != nil {
 		fatal("load config", "err", err)
+	}
+
+	// CLI retention overrides config when set (-1 keeps the config value).
+	// Anything else negative is a mistake; fail loudly instead of silently
+	// falling back to the config value.
+	if *publishRetention < -1 {
+		fatal("invalid -publish-retention (want -1, 0, or a positive count)", "value", *publishRetention)
+	}
+	if *publishRetention >= 0 {
+		cfg.Publish.Retention = *publishRetention
 	}
 
 	// Validate.

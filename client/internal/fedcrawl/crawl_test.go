@@ -36,6 +36,7 @@ type publishCall struct {
 	Body            string
 	Token           string
 	ExpectedVersion int
+	Meta            map[string]string
 }
 
 func newMockClient() *mockClient {
@@ -46,7 +47,7 @@ func newMockClient() *mockClient {
 	}
 }
 
-func (m *mockClient) Publish(host, path, body, token string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
+func (m *mockClient) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, "PUBLISH "+host+path)
@@ -56,6 +57,7 @@ func (m *mockClient) Publish(host, path, body, token string, expectedVersion int
 		Body:            body,
 		Token:           token,
 		ExpectedVersion: expectedVersion,
+		Meta:            meta,
 	})
 	status := protocol.StatusCreated
 	if s, ok := m.publishStatuses[host+path]; ok {
@@ -658,4 +660,74 @@ func containsMiddle(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestPublishRetentionMeta(t *testing.T) {
+	setup := func(retention int) (*Crawler, *mockClient) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://a.example.com"}
+		cfg.Hubs = []string{"mark://hub.example.com"}
+		cfg.Publish.Retention = retention
+		client := newMockClient()
+		client.addList("a.example.com:6309", "/", "- [index.md](index.md)\n")
+		client.addDoc("a.example.com:6309", "/index.md", "# A",
+			"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		crawler := NewCrawler(cfg, client, nil, nil)
+		if _, err := crawler.Run(context.Background()); err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+		return crawler, client
+	}
+
+	t.Run("default caps published artifacts at 20", func(t *testing.T) {
+		if got := DefaultConfig().Publish.Retention; got != 20 {
+			t.Fatalf("default publish.retention = %d, want 20", got)
+		}
+		crawler, client := setup(DefaultConfig().Publish.Retention)
+		if _, err := crawler.PublishGraphToHubs(context.Background(), client); err != nil {
+			t.Fatalf("PublishGraphToHubs() error: %v", err)
+		}
+		if _, err := crawler.PublishToHubs(context.Background(), client, false); err != nil {
+			t.Fatalf("PublishToHubs() error: %v", err)
+		}
+		if len(client.publishes) == 0 {
+			t.Fatal("expected publishes")
+		}
+		for _, call := range client.publishes {
+			if call.Meta["retention"] != "20" {
+				t.Errorf("publish %s%s meta.retention = %q, want %q", call.Host, call.Path, call.Meta["retention"], "20")
+			}
+			if call.Meta["agent"] != "demarkus-agent" {
+				t.Errorf("publish %s%s lost agent meta: %v", call.Host, call.Path, call.Meta)
+			}
+		}
+	})
+
+	t.Run("zero keeps every version", func(t *testing.T) {
+		crawler, client := setup(0)
+		if _, err := crawler.PublishGraphToHubs(context.Background(), client); err != nil {
+			t.Fatalf("PublishGraphToHubs() error: %v", err)
+		}
+		if len(client.publishes) == 0 {
+			t.Fatal("expected publishes")
+		}
+		for _, call := range client.publishes {
+			if _, ok := call.Meta["retention"]; ok {
+				t.Errorf("publish %s%s should carry no retention meta: %v", call.Host, call.Path, call.Meta)
+			}
+		}
+	})
+}
+
+func TestConfigValidate_PublishRetention(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://a.example.com"}
+	cfg.Publish.Retention = -1
+	if err := cfg.Validate(); err == nil {
+		t.Error("negative publish.retention should fail validation")
+	}
+	cfg.Publish.Retention = 0
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("zero publish.retention should validate: %v", err)
+	}
 }
