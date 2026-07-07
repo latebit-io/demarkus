@@ -19,6 +19,7 @@ type Config struct {
 	Crawl      CrawlConfig      `toml:"crawl"`
 	Schedule   ScheduleConfig   `toml:"schedule"`
 	Politeness PolitenessConfig `toml:"politeness"`
+	Publish    PublishConfig    `toml:"publish"`
 }
 
 // CrawlConfig controls the scope and depth of crawling.
@@ -40,6 +41,17 @@ type PolitenessConfig struct {
 	PerServerConcurrency int           `toml:"per_server_concurrency"` // Max concurrent requests per server (default: 2)
 }
 
+// PublishConfig controls hub publications (hash indexes and /graph.md).
+type PublishConfig struct {
+	// Retention caps each published artifact's version history to its newest
+	// N versions — the server prunes older versions on write (retention
+	// publish metadata, SPEC §9.9). Everything the agent publishes is
+	// regenerated wholesale on every run, so old versions are pure growth
+	// (one live graph document reached 545 versions before this existed).
+	// 0 keeps every version. (default: 20)
+	Retention int `toml:"retention"`
+}
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
@@ -55,6 +67,9 @@ func DefaultConfig() Config {
 		Politeness: PolitenessConfig{
 			RequestDelay:         100 * time.Millisecond,
 			PerServerConcurrency: 2,
+		},
+		Publish: PublishConfig{
+			Retention: 20,
 		},
 	}
 }
@@ -130,6 +145,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Politeness.PerServerConcurrency < 1 {
 		return fmt.Errorf("politeness.per_server_concurrency must be at least 1")
+	}
+	if c.Publish.Retention < 0 {
+		return fmt.Errorf("publish.retention must be non-negative (0 keeps every version)")
 	}
 	return nil
 }

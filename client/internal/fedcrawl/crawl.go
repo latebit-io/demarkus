@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -585,9 +586,14 @@ func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, 
 		return ctx.Err()
 	}
 
-	result, err := client.Publish(host, path, body, token, -1, map[string]string{
-		"agent": "demarkus-agent",
-	})
+	meta := map[string]string{"agent": "demarkus-agent"}
+	// Everything published here (hash indexes, /graph.md) is a generated
+	// artifact regenerated wholesale each run — retention keeps its version
+	// history bounded (the server prunes older versions on write, SPEC §9.9).
+	if c.cfg.Publish.Retention > 0 {
+		meta["retention"] = strconv.Itoa(c.cfg.Publish.Retention)
+	}
+	result, err := client.Publish(host, path, body, token, -1, meta)
 	if err != nil {
 		return err
 	}
