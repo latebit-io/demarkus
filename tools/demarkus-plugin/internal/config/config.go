@@ -137,6 +137,25 @@ func MemoryDestStrictness() (Strictness, error) {
 	return validStrictness(s, Block), nil
 }
 
+// StyleStrictness is the enforcement level for the documentation-style guard
+// (frontmatter fence in the body, missing H1, em dashes, duplicate headings).
+// env override → plugin.style-strictness → warn: style steers, it does not
+// wall; the reasons teach the rule at the moment it is broken.
+func StyleStrictness() (Strictness, error) {
+	if v := os.Getenv("DEMARKUS_STYLE_STRICTNESS"); v != "" {
+		return validStrictness(v, Warn), nil
+	}
+	p, err := path("plugin.style-strictness")
+	if err != nil {
+		return Warn, err
+	}
+	s, err := readTrimmed(p)
+	if err != nil {
+		return Warn, err
+	}
+	return validStrictness(s, Warn), nil
+}
+
 // RetentionStrictness is the enforcement level for the retention guard (a
 // publish/append whose metadata carries a prunable retention value permanently
 // deletes older versions). env override → plugin.retention-strictness → ask:

@@ -269,6 +269,15 @@ func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, soulID
 		decisions = append(decisions, *rd)
 	}
 
+	// Documentation-style guard (publish only): body-shape rules.
+	sd, err := styleDecision(pt, args)
+	if err != nil {
+		return Decision{}, err
+	}
+	if sd != nil {
+		decisions = append(decisions, *sd)
+	}
+
 	// Publish tag-gate (publish only): missing tags or out-of-range importance.
 	if pt.Verb == "publish" {
 		md := metadataOf(args)
@@ -323,8 +332,8 @@ func combine(ds []Decision) Decision {
 }
 
 func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Decision, error) {
-	// Retention guard applies to publish and append; the tag/axis gate below is
-	// publish-only. Both are independent — combine to the most severe outcome.
+	// Retention and style guards apply on their own verbs; the tag/axis gate
+	// is publish-only. All are independent — combine to the most severe outcome.
 	var decisions []Decision
 	rd, err := retentionDecision(pt, args)
 	if err != nil {
@@ -333,9 +342,29 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	if rd != nil {
 		decisions = append(decisions, *rd)
 	}
-	if pt.Verb != "publish" {
-		return combine(decisions), nil
+	sd, err := styleDecision(pt, args)
+	if err != nil {
+		return Decision{}, err
 	}
+	if sd != nil {
+		decisions = append(decisions, *sd)
+	}
+	if pt.Verb == "publish" {
+		td, err := knowledgeTagDecision(args, slug)
+		if err != nil {
+			return Decision{}, err
+		}
+		if td != nil {
+			decisions = append(decisions, *td)
+		}
+	}
+	return combine(decisions), nil
+}
+
+// knowledgeTagDecision is the knowledge-system publish tag/axis/field gate:
+// tags present, importance in range, required tag axes and required OKF
+// metadata fields from the system's policy. Returns nil when compliant.
+func knowledgeTagDecision(args map[string]any, slug string) (*Decision, error) {
 	md := metadataOf(args)
 	tags := strings.TrimSpace(tagsString(md))
 	tagsOK := tags != ""
@@ -346,7 +375,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	if tagsOK {
 		axes, err := config.KnowledgeRequireTags(slug)
 		if err != nil {
-			return Decision{}, err
+			return nil, err
 		}
 		for _, axis := range axes {
 			if !config.TagsHaveAxis(tags, axis) {
@@ -358,7 +387,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	var missingFields []string
 	fields, err := config.KnowledgeRequireFields(slug)
 	if err != nil {
-		return Decision{}, err
+		return nil, err
 	}
 	leaf := url
 	if i := strings.LastIndex(leaf, "/"); i >= 0 {
@@ -379,7 +408,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	}
 
 	if tagsOK && impOK && len(missingAxes) == 0 && len(missingFields) == 0 {
-		return combine(decisions), nil
+		return nil, nil
 	}
 
 	var problems []string
@@ -410,10 +439,9 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 		target, slug, strings.Join(problems, "; "))
 	s, err := config.KnowledgeStrictness(slug)
 	if err != nil {
-		return Decision{}, err
+		return nil, err
 	}
-	decisions = append(decisions, Decision{Decision: string(s), Reason: reason})
-	return combine(decisions), nil
+	return &Decision{Decision: string(s), Reason: reason}, nil
 }
 
 func urlOr(args map[string]any, fallback string) string {
