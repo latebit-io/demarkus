@@ -42,7 +42,7 @@ func UnchangedNotice(d Doc) string {
 	if d.Version != "" {
 		since = "since v" + d.Version
 	}
-	fmt.Fprintf(&b, "\nunchanged %s — the full body was returned earlier this session; pass force=true to re-read it\n", since)
+	fmt.Fprintf(&b, "\nunchanged %s; the full body was returned earlier this session; pass force=true to re-read it\n", since)
 	return b.String()
 }
 

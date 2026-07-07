@@ -11,7 +11,7 @@ The Mark Protocol is an application-layer protocol for the transfer of markdown 
 
 ## Status of This Document
 
-This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here — including federation — are considered future extensions and are not part of this specification.
+This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here (including federation) are considered future extensions and are not part of this specification.
 
 ## 1. Terminology
 
@@ -43,7 +43,7 @@ The Mark Protocol runs exclusively over QUIC (RFC 9000). There is no plaintext f
 
 ### 2.3. Content Format
 
-All document content is markdown (CommonMark). Metadata is encoded as YAML frontmatter. There is no support for executable content — no scripts, no embedded code execution, no client-side dynamic behaviour.
+All document content is markdown (CommonMark). Metadata is encoded as YAML frontmatter. There is no support for executable content; no scripts, no embedded code execution, no client-side dynamic behaviour.
 
 ## 3. Transport Layer
 
@@ -450,7 +450,7 @@ modified: <RFC 3339 timestamp>
 **Behaviour**:
 
 - APPEND reads the current document, concatenates the request body after a newline separator, and writes the result as a new version.
-- The document MUST already exist. APPEND does not create new documents — use PUBLISH for that.
+- The document MUST already exist. APPEND does not create new documents: use PUBLISH for that.
 - The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
 - The `expected-version` metadata field is REQUIRED for APPEND (unlike PUBLISH where it is optional). Since APPEND is non-idempotent, the server cannot safely retry internally. The value MUST be >= 1; the server MUST reject `expected-version: 0` or absent `expected-version` as a bad request.
 - Conflict semantics match PUBLISH (see section 6.4). On conflict, fetch the latest version and verify whether your append was applied before retrying.
@@ -472,7 +472,7 @@ modified: <RFC 3339 timestamp>
 
 ### 6.7. LOOKUP
 
-Looks up documents by subject and returns a compact, importance-ranked list of matches. LOOKUP is a discovery aid — a card catalog — not full-text search. It matches a subject query against each document's declared `tags` and title, never against the document body. Servers SHOULD answer LOOKUP from an in-memory catalog and MUST NOT read document bodies at query time.
+Looks up documents by subject and returns a compact, importance-ranked list of matches. LOOKUP is a discovery aid: a card catalog, not full-text search. It matches a subject query against each document's declared `tags` and title, never against the document body. Servers SHOULD answer LOOKUP from an in-memory catalog and MUST NOT read document bodies at query time.
 
 LOOKUP operates over current versions only; archived documents MUST be excluded. The path in the request line is a scope: `LOOKUP /` covers the whole server, `LOOKUP /docs/` restricts to that subtree.
 
@@ -508,7 +508,7 @@ matches: <count>
 | /docs/gateway | 0.50 | Gateway overview | go |
 ```
 
-The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags. The `Path` is server-relative; clients compose the full `mark://host/path` URL from the host they connected to. The response MUST NOT include document body content — clients FETCH the documents they choose. `matches` is the number of rows returned.
+The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags. The `Path` is server-relative; clients compose the full `mark://host/path` URL from the host they connected to. The response MUST NOT include document body content; clients FETCH the documents they choose. `matches` is the number of rows returned.
 
 **Ranking**: results are ordered by (1) the number of distinct query terms matched, then (2) descending `importance`, then (3) descending modification time, then (4) ascending path. Importance influences ordering only among documents that already matched the query; it MUST NOT cause an unmatched document to appear in the results.
 
@@ -520,7 +520,7 @@ The body MUST be a markdown table, one row per result. Columns are the document'
 
 `tags`, `importance`, and `title` are the only publisher metadata keys a server interprets for LOOKUP; all other declared metadata remains opaque and is reachable only through `filter`.
 
-**Read authorisation**: a server that enforces per-path read authorisation MUST filter LOOKUP results so that documents the requester is not authorised to read are omitted entirely — no path, no title, no tags, and not counted in `matches`. Knowledge of a subject MUST NOT reveal the existence of protected documents.
+**Read authorisation**: a server that enforces per-path read authorisation MUST filter LOOKUP results so that documents the requester is not authorised to read are omitted entirely; no path, no title, no tags, and not counted in `matches`. Knowledge of a subject MUST NOT reveal the existence of protected documents.
 
 **Errors**:
 
@@ -657,7 +657,7 @@ previous-hash: sha256-<64-char lowercase hex>
 
 `version`, `archived`, and `previous-hash` (omitted for version 1) are reserved operational fields owned by the store. Publishers MUST NOT set them, and a server MUST reject a PUBLISH whose metadata declares a reserved key.
 
-Publisher-declared metadata is written into the same block. The field names defined by the Open Knowledge Format — `type`, `title`, `description`, `resource`, `tags`, and `timestamp` — are written as **bare** frontmatter fields so the document's persisted metadata matches the OKF spec for the fields it covers; `tags` is serialized as a YAML flow list. Every other publisher key is written under a `meta.` prefix so it cannot collide with a reserved or OKF-recognized field. For example:
+Publisher-declared metadata is written into the same block. The field names defined by the Open Knowledge Format (`type`, `title`, `description`, `resource`, `tags`, and `timestamp`) are written as **bare** frontmatter fields so the document's persisted metadata matches the OKF spec for the fields it covers; `tags` is serialized as a YAML flow list. Every other publisher key is written under a `meta.` prefix so it cannot collide with a reserved or OKF-recognized field. For example:
 
 ```text
 ---
@@ -732,7 +732,7 @@ Retention is evaluated per write: a write that omits the key prunes nothing, reg
 
 Retention is intended for generated documents that are republished wholesale (graph exports, indexes), where old versions carry no value. It is destructive: pruned versions are unrecoverable through the protocol. Clients SHOULD warn and require explicit confirmation before a write that sets `retention` on a document not known to be generated.
 
-Pruning requires no separate capability — it executes under the write authorization of the PUBLISH or APPEND that carries the key, the same trust level that can archive the document. A server MUST record version deletions in its audit log, attributing them to the authenticated writer (in the reference implementation: path, pruned version range, and token label).
+Pruning requires no separate capability: it executes under the write authorization of the PUBLISH or APPEND that carries the key, the same trust level that can archive the document. A server MUST record version deletions in its audit log, attributing them to the authenticated writer (in the reference implementation: path, pruned version range, and token label).
 
 Because pruning is the store's only destructive filesystem operation, deletion paths MUST NOT be derived from request input: version numbers come from enumerating the document's own versions directory, and each deletion MUST be confined to the store root with symlink escapes rejected at delete time (the reference implementation resolves every removal inside an `os.Root` anchored at the store root, so a planted or raced symlink cannot redirect a delete outside the store, and a version file that is itself a symlink is unlinked, never followed).
 
@@ -790,7 +790,7 @@ The Mark Protocol is designed to minimise tracking. Conforming implementations:
 - MUST NOT send referrer information.
 - MUST NOT use cookies or session identifiers.
 - MUST NOT collect IP addresses beyond what QUIC requires for connection handling.
-- SHOULD log only the operation, path, and status — no personally identifiable information.
+- SHOULD log only the operation, path, and status; no personally identifiable information.
 
 ### 11.5. No Client-Side Execution
 
@@ -806,9 +806,9 @@ When the content directory or any document path involves symbolic links, the ser
 
 ### 11.8. Authentication
 
-The Mark Protocol uses capability-based token authentication. Tokens grant specific operations on specific path patterns — they do not identify users.
+The Mark Protocol uses capability-based token authentication. Tokens grant specific operations on specific path patterns; they do not identify users.
 
-**Secure by default**: Servers MUST deny all publish operations when no token store is configured. Reads are public by default — read authentication is opt-in per path.
+**Secure by default**: Servers MUST deny all publish operations when no token store is configured. Reads are public by default: read authentication is opt-in per path.
 
 **Read authentication**: Tokens with the `read` operation protect specific paths. When any token grants `read` on a path pattern, requests to matching paths require a valid read token. Paths not covered by any read token remain public. This enables private intranets (protect `/**`) and mixed public/private servers (protect `/internal/**` while leaving the rest open).
 
@@ -867,7 +867,7 @@ Paths matching `/sha256-<64 hex characters>` are reserved for content-addressed 
 
 **Benefits:**
 
-- Location-independent content retrieval — any server with the content can serve it
+- Location-independent content retrieval: any server with the content can serve it
 - Client can verify received content matches the requested hash
 - Foundation for distributed mirroring and caching
 
@@ -895,7 +895,7 @@ Servers do not crawl or discover content from other servers. Agents fill this ro
 
 **Resolution flow when content is missing:**
 
-1. Agent fetches a document by path — server returns `not-found`.
+1. Agent fetches a document by path: server returns `not-found`.
 2. Agent checks a hub's content index for the document's last known `content-hash`.
 3. Agent finds alternative servers hosting that hash.
 4. Agent fetches `FETCH /sha256-<hash>` from one of those servers.
@@ -903,11 +903,11 @@ Servers do not crawl or discover content from other servers. Agents fill this ro
 
 **Key properties:**
 
-- Servers remain simple — they serve content and answer hash lookups, nothing more.
-- Agents own the discovery logic — crawling, indexing, and routing decisions.
-- Hubs are just servers — the index is a regular published document, not a special protocol feature.
+- Servers remain simple: they serve content and answer hash lookups, nothing more.
+- Agents own the discovery logic: crawling, indexing, and routing decisions.
+- Hubs are just servers: the index is a regular published document, not a special protocol feature.
 - Multiple agents can maintain independent indexes on the same or different hubs.
-- No single point of failure — if a hub is unavailable, agents can query servers directly by hash.
+- No single point of failure: if a hub is unavailable, agents can query servers directly by hash.
 
 ## 13. Future Extensions
 
@@ -915,7 +915,7 @@ The following features are planned but not part of this specification:
 
 - **Federation**: Cross-server content mirroring and discovery.
 - **Subscriptions**: Notification of document changes.
-- **OKF interop**: An import/export codec that reads and emits [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundles. demarkus already aligns its persisted document metadata with OKF field names (§9.4), so a single document's content model is OKF-compatible; the planned codec adds bundle-level round-tripping (frontmatter on the served document, `index.md`/`log.md` conventions, bundle-relative links), validated against the OKF reference sample bundles. demarkus remains a superset at the system level — it layers versioning, a hash chain, QUIC transport, capability auth, and LOOKUP discovery on top of an OKF-compatible document.
+- **OKF interop**: An import/export codec that reads and emits [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundles. demarkus already aligns its persisted document metadata with OKF field names (§9.4), so a single document's content model is OKF-compatible; the planned codec adds bundle-level round-tripping (frontmatter on the served document, `index.md`/`log.md` conventions, bundle-relative links), validated against the OKF reference sample bundles. demarkus remains a superset at the system level; it layers versioning, a hash chain, QUIC transport, capability auth, and LOOKUP discovery on top of an OKF-compatible document.
 
 These will be specified in future versions of this document.
 
@@ -939,13 +939,13 @@ These will be specified in future versions of this document.
 
 ## 15. References
 
-- RFC 2119 — Key words for use in RFCs to Indicate Requirement Levels
-- RFC 9000 — QUIC: A UDP-Based Multiplexed and Secure Transport
-- RFC 8446 — The Transport Layer Security (TLS) Protocol Version 1.3
-- RFC 3339 — Date and Time on the Internet: Timestamps
-- CommonMark Specification — <https://spec.commonmark.org/>
-- YAML 1.2 Specification — <https://yaml.org/spec/1.2/>
+- RFC 2119: Key words for use in RFCs to Indicate Requirement Levels
+- RFC 9000: QUIC: A UDP-Based Multiplexed and Secure Transport
+- RFC 8446: The Transport Layer Security (TLS) Protocol Version 1.3
+- RFC 3339: Date and Time on the Internet: Timestamps
+- CommonMark Specification: <https://spec.commonmark.org/>
+- YAML 1.2 Specification: <https://yaml.org/spec/1.2/>
 
 ---
 
-> Mark Protocol Specification — "The web we want, not the web we got."
+> Mark Protocol Specification: "The web we want, not the web we got."

@@ -248,7 +248,7 @@ func report(r workerResult, elapsed time.Duration) {
 		fmt.Println()
 	}
 	if ok < r.requests-r.errors {
-		fmt.Println("note:        some responses were non-OK statuses — check the breakdown above")
+		fmt.Println("note:        some responses were non-OK statuses; check the breakdown above")
 	}
 
 	lat := r.latencies

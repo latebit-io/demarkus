@@ -200,7 +200,7 @@ func (s *Server) subjectRateLimit(next http.Handler) http.Handler {
 			// requireAuth upstream. Fail closed with 500 so the
 			// regression surfaces immediately rather than silently
 			// disabling rate-limiting on the route.
-			s.log.ErrorContext(r.Context(), "broker: subjectRateLimit missing claims in context — middleware miswired")
+			s.log.ErrorContext(r.Context(), "broker: subjectRateLimit missing claims in context; middleware miswired")
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}

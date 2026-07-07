@@ -41,8 +41,8 @@ func (g *mcpGateway) registerResources() {
 	for _, w := range readableWorlds(g.srv.cfg) {
 		g.mcpServer.AddResource(mcp.NewResource(
 			fmt.Sprintf("mark://%s/index.md", w.Name),
-			w.Name+" — index hub",
-			mcp.WithResourceDescription(fmt.Sprintf("The %s world's index hub — the map of everything it holds.", w.Name)),
+			w.Name+": index hub",
+			mcp.WithResourceDescription(fmt.Sprintf("The %s world's index hub: the map of everything it holds.", w.Name)),
 			mcp.WithMIMEType("text/markdown"),
 		), g.readResource)
 	}

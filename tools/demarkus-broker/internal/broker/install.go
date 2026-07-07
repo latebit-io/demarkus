@@ -44,7 +44,7 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 		// upstream. Fail closed with 500 so a future route-table
 		// edit that drops requireAuth surfaces immediately rather
 		// than serving a bundle to anonymous callers.
-		s.log.ErrorContext(r.Context(), "broker: meInstall missing claims in context — middleware miswired")
+		s.log.ErrorContext(r.Context(), "broker: meInstall missing claims in context; middleware miswired")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

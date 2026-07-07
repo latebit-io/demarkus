@@ -356,7 +356,7 @@ func cmdMcpServe(args []string) {
 	}
 	mcpBin := filepath.Join(binDir, "demarkus-mcp")
 	if _, err := os.Stat(mcpBin); err != nil {
-		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: demarkus-mcp not installed at "+mcpBin+" — run /soul-init")
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: demarkus-mcp not installed at "+mcpBin+"; run /soul-init")
 		os.Exit(1)
 	}
 
@@ -365,7 +365,7 @@ func cmdMcpServe(args []string) {
 	if *soul == "" {
 		cfg, err := config.LoadConfig()
 		if err != nil || cfg == nil {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: no local soul configured — SessionStart may not have run yet")
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: no local soul configured; SessionStart may not have run yet")
 			os.Exit(1)
 		}
 		host = "mark://localhost:" + cfg.Port
@@ -375,7 +375,7 @@ func cmdMcpServe(args []string) {
 	} else {
 		h, ins, tf, ok, err := registry.RemoteSoulRow(*soul)
 		if err != nil || !ok {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: soul '"+*soul+"' not in the catalog — re-run /soul-join")
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: soul '"+*soul+"' not in the catalog; re-run /soul-join")
 			os.Exit(1)
 		}
 		host, insecure, tokenFile = h, ins, tf
@@ -387,7 +387,7 @@ func cmdMcpServe(args []string) {
 		if err == nil && strings.TrimSpace(string(tok)) != "" {
 			env = append(env, "DEMARKUS_AUTH="+strings.TrimSpace(string(tok)))
 		} else if *soul != "" {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: token file "+tokenFile+" missing/empty — re-run /soul-join --token")
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: token file "+tokenFile+" missing/empty; re-run /soul-join --token")
 			os.Exit(1)
 		}
 	}

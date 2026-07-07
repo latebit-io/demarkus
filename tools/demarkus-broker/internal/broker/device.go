@@ -170,7 +170,7 @@ func (s *Server) deviceFormGet(w http.ResponseWriter, r *http.Request) {
 // scenario by construction.
 func (s *Server) deviceFormPost(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginPost(r) {
-		s.log.WarnContext(r.Context(), "broker: device form POST blocked — cross-origin",
+		s.log.WarnContext(r.Context(), "broker: device form POST blocked: cross-origin",
 			"origin", r.Header.Get("Origin"), "host", r.Host)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return

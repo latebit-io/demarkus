@@ -668,7 +668,7 @@ func (s *ServerConfig) applyRefreshDefaults() error {
 	// refresh credential would expire before the bearer it mints,
 	// so the refresh round-trip would never produce a usable token.
 	if s.IDTokenTTL >= s.RefreshTokenTTL {
-		return fmt.Errorf("server.idTokenTTL (%s) must be < server.refreshTokenTTL (%s) — a bearer that outlives its refresh credential cannot be renewed", s.IDTokenTTL, s.RefreshTokenTTL)
+		return fmt.Errorf("server.idTokenTTL (%s) must be < server.refreshTokenTTL (%s); a bearer that outlives its refresh credential cannot be renewed", s.IDTokenTTL, s.RefreshTokenTTL)
 	}
 	return nil
 }

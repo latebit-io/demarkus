@@ -77,7 +77,7 @@ func TestHandleMarkExploreCard(t *testing.T) {
 		"## Outbound links (2)",
 		"- [Alpha](/alpha.md)",
 		"## Backlinks (0)",
-		"(none recorded — run mark_graph to populate",
+		"(none recorded; run mark_graph to populate",
 		"## Siblings in / (3)",
 		"- alpha.md",
 		"- docs/",

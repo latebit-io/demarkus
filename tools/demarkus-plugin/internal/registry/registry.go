@@ -167,7 +167,7 @@ func ProjectBindSet(dir, slug string) error {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("'%s' is not a joined soul — run /soul-join first (see /soul-default --list)", slug)
+		return fmt.Errorf("'%s' is not a joined soul; run /soul-join first (see /soul-default --list)", slug)
 	}
 	p, err := config.StatePath("project-souls")
 	if err != nil {
@@ -475,15 +475,15 @@ func KnowledgeJoin(rawURL string) (*KnowledgeJoinResult, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Head(meta)
 	if err != nil {
-		return nil, fmt.Errorf("broker unreachable at %s (DNS / TCP / TLS failure — check the URL and network)", meta)
+		return nil, fmt.Errorf("broker unreachable at %s (DNS / TCP / TLS failure; check the URL and network)", meta)
 	}
 	_ = resp.Body.Close()
 	switch resp.StatusCode {
 	case 200:
 	case 401, 403:
-		return nil, fmt.Errorf("broker rejected metadata fetch with HTTP %d (the metadata endpoint should be public — confirm this is a Slice 7+ demarkus-broker)", resp.StatusCode)
+		return nil, fmt.Errorf("broker rejected metadata fetch with HTTP %d (the metadata endpoint should be public; confirm this is a Slice 7+ demarkus-broker)", resp.StatusCode)
 	case 404:
-		return nil, fmt.Errorf("broker has no /.well-known/oauth-protected-resource (HTTP 404) — not a Slice 7+ demarkus-broker, or the URL points at the management API instead of the MCP host")
+		return nil, fmt.Errorf("broker has no /.well-known/oauth-protected-resource (HTTP 404); not a Slice 7+ demarkus-broker, or the URL points at the management API instead of the MCP host")
 	default:
 		return nil, fmt.Errorf("broker metadata fetch returned HTTP %d (expected 200)", resp.StatusCode)
 	}
@@ -514,7 +514,7 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 	h := strings.TrimSpace(rawHost)
 	low := strings.ToLower(h)
 	if strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://") {
-		return nil, fmt.Errorf("'%s' is an HTTPS URL — use /knowledge-join for broker-fronted knowledge systems", h)
+		return nil, fmt.Errorf("'%s' is an HTTPS URL; use /knowledge-join for broker-fronted knowledge systems", h)
 	}
 	h = strings.TrimPrefix(h, "mark://")
 	h = strings.TrimRight(h, "/")
@@ -524,7 +524,7 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 		return nil, fmt.Errorf("could not derive a slug from host '%s'", rawHost)
 	}
 	if slug == config.LocalSoulID {
-		return nil, fmt.Errorf("slug '%s' is reserved for the local managed soul — join a host with a different first label", config.LocalSoulID)
+		return nil, fmt.Errorf("slug '%s' is reserved for the local managed soul; join a host with a different first label", config.LocalSoulID)
 	}
 	host := "mark://" + h
 
@@ -533,7 +533,7 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 		return nil, err
 	}
 	if existingHost != "" && existingHost != host {
-		return nil, fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it — remove the existing entry or join from a host with a different first label", slug, existingHost, host)
+		return nil, fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existingHost, host)
 	}
 
 	tokenFile := "-"
