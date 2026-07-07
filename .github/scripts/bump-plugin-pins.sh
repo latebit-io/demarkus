@@ -137,7 +137,15 @@ fi
 
 cur_server=$(goconst serverVersion)
 cur_client=$(goconst clientVersion)
-cur_tools=$(goconst fallbackToolsVersion)
+# The bootstrap TOOLS_VERSION is the real pin (see header); fallbackToolsVersion
+# is dev-only and deliberately NOT the currency signal: using it here would
+# force a provision.go edit on every tools release, which cuts another tools
+# release, which reopens this PR, forever.
+cur_tools=$(sed -nE 's/^TOOLS_VERSION="([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' plugins/claude-code/scripts/bootstrap.sh)
+[[ "$cur_tools" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo "error: missing or invalid TOOLS_VERSION in plugins/claude-code/scripts/bootstrap.sh" >&2
+  exit 1
+}
 
 emit server "$new_server"
 emit client "$new_client"
@@ -149,10 +157,15 @@ if [[ "$new_server" == "$cur_server" && "$new_client" == "$cur_client" && "$new_
   exit 0
 fi
 
-# Update the Go consts (source of truth) and every bootstrap's TOOLS_VERSION.
+# Update the Go consts and every bootstrap's TOOLS_VERSION. fallbackToolsVersion
+# rides along only when provision.go is already changing for a real pin: it is
+# read only by dev builds, and letting it be the sole tools/ change would cut a
+# junk tools release and loop this workflow (release -> bump PR -> release).
 set_goconst serverVersion "$new_server"
 set_goconst clientVersion "$new_client"
-set_goconst fallbackToolsVersion "$new_tools"
+if [[ "$new_server" != "$cur_server" || "$new_client" != "$cur_client" ]]; then
+  set_goconst fallbackToolsVersion "$new_tools"
+fi
 [[ "$new_tools" != "$cur_tools" ]] && set_bootstrap_tools "$new_tools"
 
 # Patch-bump the affected lineages.
