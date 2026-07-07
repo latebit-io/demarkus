@@ -331,7 +331,7 @@ func markPublishTool(host string) mcp.Tool {
 			mcp.Description("conflict behavior: \"merge\" (default) returns a merge-candidate body; the agent reviews it (resolving any conflict markers) and calls mark_publish again with expected_version set to the returned publish-at-version. \"fail\" opts out and returns the raw conflict status."),
 		),
 		mcp.WithObject("metadata",
-			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Reserved keys are rejected. `retention` (positive integer) caps version history: this write and every later write carrying the key permanently delete versions older than the newest N. Destructive and irreversible — confirm with the user before setting it on a document whose history matters; intended for generated documents."),
+			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Reserved keys are rejected. `retention` (positive integer) caps version history: this write and every later write carrying the key permanently delete versions older than the newest N. Destructive and irreversible: confirm with the user before setting it on a document whose history matters; intended for generated documents."),
 		),
 	)
 }
