@@ -207,7 +207,7 @@ func saveConfig(soul string, port int, mode string) error {
 		return err
 	}
 	content := fmt.Sprintf(
-		"# demarkus-memory plugin config — managed by demarkus-plugin provision\nSOUL_DIR=%s\nPORT=%d\nMODE=%s\n",
+		"# demarkus-memory plugin config: managed by demarkus-plugin provision\nSOUL_DIR=%s\nPORT=%d\nMODE=%s\n",
 		shellQuote(soul), port, shellQuote(mode),
 	)
 	tmp := cfg + ".tmp"
@@ -902,7 +902,7 @@ func restartLocalServerOnUpgrade(replaced bool) {
 	// Our own managed server — safe to restart onto the new binary. Gated on MODE
 	// (not just .pid) so a stale .pid under a reuse config can't trigger this.
 	if cfg.Mode != "reuse" && fileExists(filepath.Join(cfg.SoulDir, ".pid")) {
-		logf("binary upgraded — restarting managed server (mode=%s, soul=%s, port=%d) on the new binary", cfg.Mode, cfg.SoulDir, port)
+		logf("binary upgraded; restarting managed server (mode=%s, soul=%s, port=%d) on the new binary", cfg.Mode, cfg.SoulDir, port)
 		if err := ensureManagedServer(cfg.SoulDir, port); err != nil {
 			warnf("could not (re)start the local server after a binary upgrade; run /soul-init to recover: %v", err)
 		}
@@ -915,7 +915,7 @@ func restartLocalServerOnUpgrade(replaced bool) {
 		return
 	}
 
-	logf("binary upgraded — starting down server (mode=%s, soul=%s, port=%d) on the new binary", cfg.Mode, cfg.SoulDir, port)
+	logf("binary upgraded; starting down server (mode=%s, soul=%s, port=%d) on the new binary", cfg.Mode, cfg.SoulDir, port)
 	if err := ensureManagedServer(cfg.SoulDir, port); err != nil {
 		warnf("could not (re)start the local server after a binary upgrade; run /soul-init to recover: %v", err)
 	}
@@ -1033,7 +1033,7 @@ func provisionLocked() error {
 		return err
 	}
 	if cfg == nil {
-		logf("no plugin config — running default setup")
+		logf("no plugin config; running default setup")
 		if err := initLocked("default", 0, ""); err != nil { // already holding the lock
 			return err
 		}
@@ -1099,7 +1099,7 @@ func doDefault() error {
 		return err
 	}
 	if !portIsFree(defaultPort) {
-		logf("port %d is in use — falling back to isolated mode", defaultPort)
+		logf("port %d is in use; falling back to isolated mode", defaultPort)
 		return doIsolated()
 	}
 	soul, err := sharedSoulDir()
@@ -1198,9 +1198,9 @@ func Status() (string, error) {
 		return "", err
 	}
 	if w != "" {
-		return fmt.Sprintf("mode=%s soul=%s port=%s — %s", cfg.Mode, cfg.SoulDir, cfg.Port, w), nil
+		return fmt.Sprintf("mode=%s soul=%s port=%s: %s", cfg.Mode, cfg.SoulDir, cfg.Port, w), nil
 	}
-	return fmt.Sprintf("mode=%s soul=%s port=%s — healthy", cfg.Mode, cfg.SoulDir, cfg.Port), nil
+	return fmt.Sprintf("mode=%s soul=%s port=%s : healthy", cfg.Mode, cfg.SoulDir, cfg.Port), nil
 }
 
 // HealthWarning echoes a one-line human warning when the configured memory server
@@ -1222,11 +1222,11 @@ func HealthWarning() (string, error) {
 		// .pid would falsely report healthy while memory tools fail.
 		pid := readPID(filepath.Join(cfg.SoulDir, ".pid"))
 		if pid <= 0 || !pidIsServerAtRoot(pid, cfg.SoulDir) {
-			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts — run /soul-init to restart, or /soul-status to diagnose.", cfg.SoulDir), nil
+			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.SoulDir), nil
 		}
 	case "reuse":
 		if pidOfServerAtRoot(cfg.SoulDir) == 0 {
-			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started — start that server or run /soul-init to reconfigure.", cfg.SoulDir), nil
+			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.SoulDir), nil
 		}
 	}
 	return "", nil

@@ -84,7 +84,7 @@ func (g *mcpGateway) writeBacklinksSection(b *strings.Builder, docURL string) {
 	backlinks := g.graphStore.BacklinksEnriched(docURL)
 	fmt.Fprintf(b, "\n## Backlinks (%d)\n", len(backlinks))
 	if len(backlinks) == 0 {
-		b.WriteString("(none recorded — run mark_graph to populate; the broker's graph store is per-pod and resets on restart)\n")
+		b.WriteString("(none recorded; run mark_graph to populate; the broker's graph store is per-pod and resets on restart)\n")
 		return
 	}
 	lines := make([]string, len(backlinks))

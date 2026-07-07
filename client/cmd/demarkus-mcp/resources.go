@@ -51,7 +51,7 @@ func registerResources(s *mcpserver.MCPServer, h *handler, defaultHost string) {
 	s.AddResource(mcp.NewResource(
 		defaultHost+"/index.md",
 		"Index hub",
-		mcp.WithResourceDescription("The server's index hub — the map of everything it holds."),
+		mcp.WithResourceDescription("The server's index hub: the map of everything it holds."),
 		mcp.WithMIMEType("text/markdown"),
 	), h.readResource)
 	s.AddResource(mcp.NewResource(

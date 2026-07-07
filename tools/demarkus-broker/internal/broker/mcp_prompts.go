@@ -62,9 +62,9 @@ func orientPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptRe
 	}
 	text := fmt.Sprintf(`Orient around the knowledge-system document %s.
 
-1. Call mark_explore with url %q — one call returns its outline (heading tree with #anchors), opening paragraph, outbound links, backlinks, and siblings.
+1. Call mark_explore with url %q; one call returns its outline (heading tree with #anchors), opening paragraph, outbound links, backlinks, and siblings.
 2. From the outline, call mark_fetch with url "%s#<anchor>" for the one or two sections that matter to the current task. Do not fetch the full body of a large document unless a section fetch proves insufficient (then use force=true).
-3. Answer with: what this document is (one sentence), where it sits (key links/backlinks), and what its most relevant sections say — citing each as %s#<anchor>.`, url, url, url, url)
+3. Answer with: what this document is (one sentence), where it sits (key links/backlinks), and what its most relevant sections say, citing each as %s#<anchor>.`, url, url, url, url)
 	return mcp.NewGetPromptResult("Orient around "+url, []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
 	}), nil
@@ -78,10 +78,10 @@ func recallPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptRe
 	text := fmt.Sprintf(`Recall what this knowledge system knows about: %s.
 
 1. Call mark_worlds to see the readable worlds.
-2. For each world, call mark_lookup with url "mark://<world>/" and query %q — the catalog returns an importance-ranked table of matching documents. If nothing matches anywhere, retry once with a broader or synonymous query before concluding.
+2. For each world, call mark_lookup with url "mark://<world>/" and query %q; the catalog returns an importance-ranked table of matching documents. If nothing matches anywhere, retry once with a broader or synonymous query before concluding.
 3. Call mark_explore on the best match to see its outline and neighborhood; explore a second candidate only if the first does not cover the subject.
-4. Call mark_fetch with url "mark://<world>/<path>#<anchor>" for the sections that actually address the subject — avoid full bodies of large documents.
-5. Report what is known, citing every claim with its mark://<world>/<path> (and #anchor where applicable). If no catalog has anything on the subject, say so plainly — never invent organizational memory.`, subject, subject)
+4. Call mark_fetch with url "mark://<world>/<path>#<anchor>" for the sections that actually address the subject; avoid full bodies of large documents.
+5. Report what is known, citing every claim with its mark://<world>/<path> (and #anchor where applicable). If no catalog has anything on the subject, say so plainly; never invent organizational memory.`, subject, subject)
 	return mcp.NewGetPromptResult("Recall: "+subject, []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
 	}), nil
@@ -103,7 +103,7 @@ func whatsNewPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPrompt
 
 1. %s
 2. %s Each lookup returns the world's catalogued documents modified since then, importance-ranked.
-3. For the handful of most important changed documents, call mark_fetch with a #<anchor> section or rely on the outline — do not fetch full bodies of large documents.
+3. For the handful of most important changed documents, call mark_fetch with a #<anchor> section or rely on the outline; do not fetch full bodies of large documents.
 4. Report a short digest, newest and most important first: each entry is the document (as mark://<world>/<path>), what it covers, and why it likely changed. If nothing changed, say so.`, sinceLine, scopeLine)
 
 	title := "What's new"

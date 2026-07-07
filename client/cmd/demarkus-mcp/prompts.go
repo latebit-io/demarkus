@@ -58,9 +58,9 @@ func orientPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptRe
 	}
 	text := fmt.Sprintf(`Orient around the demarkus document %s.
 
-1. Call mark_explore with url %q — one call returns its outline (heading tree with #anchors), opening paragraph, outbound links, backlinks, and siblings.
+1. Call mark_explore with url %q; one call returns its outline (heading tree with #anchors), opening paragraph, outbound links, backlinks, and siblings.
 2. From the outline, call mark_fetch with url "%s#<anchor>" for the one or two sections that matter to the current task. Do not fetch the full body of a large document unless a section fetch proves insufficient (then use force=true).
-3. Answer with: what this document is (one sentence), where it sits (key links/backlinks), and what its most relevant sections say — citing each as %s#<anchor>.`, url, url, url, url)
+3. Answer with: what this document is (one sentence), where it sits (key links/backlinks), and what its most relevant sections say, citing each as %s#<anchor>.`, url, url, url, url)
 	return mcp.NewGetPromptResult("Orient around "+url, []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
 	}), nil
@@ -73,10 +73,10 @@ func recallPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptRe
 	}
 	text := fmt.Sprintf(`Recall what this demarkus server knows about: %s.
 
-1. Call mark_lookup with url "/" and query %q — the catalog returns an importance-ranked table of matching documents. If nothing matches, retry once with a broader or synonymous query before concluding.
+1. Call mark_lookup with url "/" and query %q; the catalog returns an importance-ranked table of matching documents. If nothing matches, retry once with a broader or synonymous query before concluding.
 2. Call mark_explore on the best match to see its outline and neighborhood; explore a second candidate only if the first does not cover the subject.
-3. Call mark_fetch with url "<path>#<anchor>" for the sections that actually address the subject — avoid full bodies of large documents.
-4. Report what is known, citing every claim with its mark:// path (and #anchor where applicable). If the catalog has nothing on the subject, say so plainly — never invent memory.`, subject, subject)
+3. Call mark_fetch with url "<path>#<anchor>" for the sections that actually address the subject; avoid full bodies of large documents.
+4. Report what is known, citing every claim with its mark:// path (and #anchor where applicable). If the catalog has nothing on the subject, say so plainly; never invent memory.`, subject, subject)
 	return mcp.NewGetPromptResult("Recall: "+subject, []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
 	}), nil
@@ -91,8 +91,8 @@ func whatsNewPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPrompt
 	text := fmt.Sprintf(`Summarize what changed on this demarkus server recently.
 
 1. %s
-2. Call mark_lookup with url "/", query "*", and filter "modified-after=<that date>" — this returns every catalogued document modified since then, importance-ranked.
-3. For the handful of most important changed documents, call mark_fetch with a #<anchor> section or rely on the outline to see what changed — do not fetch full bodies of large documents.
+2. Call mark_lookup with url "/", query "*", and filter "modified-after=<that date>"; this returns every catalogued document modified since then, importance-ranked.
+3. For the handful of most important changed documents, call mark_fetch with a #<anchor> section or rely on the outline to see what changed; do not fetch full bodies of large documents.
 4. Report a short digest, newest and most important first: each entry is the document (as a mark:// path), what it covers, and why it likely changed. If nothing changed, say so.`, sinceLine)
 	title := "What's new"
 	if since != "" {

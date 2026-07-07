@@ -165,7 +165,7 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 	target := urlOr(args, "this document")
 	reason := fmt.Sprintf(
 		"demarkus write to %s sets metadata.retention=%s: the server will permanently delete all but the "+
-			"newest %s versions of this document — on this write and every later write carrying the key. "+
+			"newest %s versions of this document, on this write and every later write carrying the key. "+
 			"This is intended for generated documents (graph exports, indexes). Confirm with the user before "+
 			"proceeding; if history matters, re-issue the write without the retention key. To relax this "+
 			"check, set DEMARKUS_RETENTION_STRICTNESS=warn.",

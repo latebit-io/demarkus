@@ -26,7 +26,7 @@ type Output struct {
 	Context string `json:"context"` // full text to inject; empty = nothing to say
 }
 
-const memoryOfferText = "[One-time setup offer — raise this with the user once, then drop it] demarkus-memory is now wired as your persistent memory store. If the user would like demarkus to be their SINGLE source of durable memory, offer to disable your harness's built-in memory tool so the two don't compete: ask first, and only if they agree, turn it off and report what you changed. If they decline, say nothing further about it. Do not disable anything unasked."
+const memoryOfferText = "[One-time setup offer: raise this with the user once, then drop it] demarkus-memory is now wired as your persistent memory store. If the user would like demarkus to be their SINGLE source of durable memory, offer to disable your harness's built-in memory tool so the two don't compete: ask first, and only if they agree, turn it off and report what you changed. If they decline, say nothing further about it. Do not disable anything unasked."
 
 // Evaluate builds the session guidance to inject for the requested surface.
 func Evaluate(in Input) (Output, error) {
@@ -126,7 +126,7 @@ func knowledge(in Input) (Output, error) {
 		return Output{}, err
 	}
 	if !soul {
-		parts = append(parts, "(No local demarkus soul is configured here, so the soul↔system guidance above is informational only — everything durable goes to the knowledge system.)")
+		parts = append(parts, "(No local demarkus soul is configured here, so the soul↔system guidance above is informational only; everything durable goes to the knowledge system.)")
 	}
 	return Output{Context: strings.Join(parts, "\n\n")}, nil
 }

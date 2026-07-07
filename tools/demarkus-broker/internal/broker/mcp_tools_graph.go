@@ -414,7 +414,7 @@ func (g *mcpGateway) checkIndexManifests(ctx context.Context, claims *Claims, so
 		if terr != nil || tgtManifest.Response.Status != protocol.StatusOK {
 			if !force {
 				return warnings, mcp.NewToolResultError(
-					"target server has no agent manifest — cannot verify it accepts index publications. " +
+					"target server has no agent manifest; cannot verify it accepts index publications. " +
 						"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
 				)
 			}

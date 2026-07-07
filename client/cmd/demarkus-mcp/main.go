@@ -185,8 +185,8 @@ func markFetchTool(host string) mcp.Tool {
 			"Fetch a document from a Mark Protocol server. "+
 				"Returns the document status, version, modified timestamp, etag, and markdown body. "+
 				"Documents under 8KB return the full body. Larger documents return an outline "+
-				"instead — the heading tree with #anchors and per-section line counts plus the "+
-				"opening paragraph — so you can pull just the section you need by appending "+
+				"instead: the heading tree with #anchors and per-section line counts plus the "+
+				"opening paragraph, so you can pull just the section you need by appending "+
 				"#<anchor> to the url (anchors are GitHub-style slugs; #section fetches work at "+
 				"any size). Re-fetching a document whose full body was already returned this "+
 				"session returns a short 'unchanged' notice when it has not changed. "+
@@ -213,7 +213,7 @@ func markListTool(host string) mcp.Tool {
 		mcp.WithDescription(
 			"List documents and subdirectories on a Mark Protocol server. "+
 				"Use this to discover what documents exist. To orient around one "+
-				"specific document, prefer mark_explore — it bundles the sibling "+
+				"specific document, prefer mark_explore: it bundles the sibling "+
 				"listing with the outline, links, and backlinks. Archived documents are "+
 				"hidden by default, along with directories that contain only archived "+
 				"documents; set include_archived to true for a recovery/audit view. "+
@@ -269,13 +269,13 @@ func markLookupTool(host string) mcp.Tool {
 		mcp.WithDescription(
 			"Look up documents by subject against a Mark Protocol server's catalog. "+
 				"Matches the query against each document's declared tags and title and returns "+
-				"an importance-ranked markdown table of matches (path, importance, title, tags) "+
-				"— not document bodies; FETCH the ones you want. This is a catalog lookup, not "+
+				"an importance-ranked markdown table of matches (path, importance, title, tags), "+
+				"not document bodies; FETCH the ones you want. This is a catalog lookup, not "+
 				"full-text search: a subject that was never tagged or titled will not be found. "+
 				"Optionally narrow with a comma-separated key=value filter and cap results with limit. "+
 				"Start here when hunting a subject: lookup to find candidate documents, "+
 				"mark_explore the best match to orient, then mark_fetch url#<anchor> for the "+
-				"sections you actually need — full bodies of large documents are rarely necessary. "+
+				"sections you actually need; full bodies of large documents are rarely necessary. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -1036,7 +1036,7 @@ func (h *handler) checkManifests(sourceHost, targetHost string, dryRun, force bo
 		if err != nil || tgtManifest.Response.Status != protocol.StatusOK {
 			if !force {
 				return warnings, mcp.NewToolResultError(
-					"target server has no agent manifest — cannot verify it accepts index publications. " +
+					"target server has no agent manifest; cannot verify it accepts index publications. " +
 						"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
 				)
 			}
@@ -1268,7 +1268,7 @@ func markBacklinksTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_backlinks",
 		mcp.WithDescription(
 			"Look up which documents link to a given URL, using the local graph store. "+
-				"Returns results from previous crawls — run mark_graph first to populate. "+
+				"Returns results from previous crawls; run mark_graph first to populate. "+
 				"mark_explore includes this same backlink list alongside the document's "+
 				"outline, outbound links, and siblings; prefer it for general orientation. "+
 				urlHint(host),

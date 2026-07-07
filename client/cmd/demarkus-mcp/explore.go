@@ -20,7 +20,7 @@ func markExploreTool(host string) mcp.Tool {
 		mcp.WithDescription(
 			"Orient around one document in a single call: its outline head (heading "+
 				"tree with #anchors plus the opening paragraph), outbound links, recorded "+
-				"backlinks, and sibling documents in the same directory — each section "+
+				"backlinks, and sibling documents in the same directory; each section "+
 				"capped at 10 entries. Use this instead of a fetch + backlinks + list "+
 				"chain when you need to understand what a document covers and what to "+
 				"read next; then mark_fetch url#<anchor> for the sections that matter. "+
@@ -103,7 +103,7 @@ func (h *handler) writeBacklinksSection(b *strings.Builder, docURL string) {
 	backlinks := h.graphStore.BacklinksEnriched(fullURL)
 	fmt.Fprintf(b, "\n## Backlinks (%d)\n", len(backlinks))
 	if len(backlinks) == 0 {
-		b.WriteString("(none recorded — run mark_graph to populate)\n")
+		b.WriteString("(none recorded; run mark_graph to populate)\n")
 		return
 	}
 	lines := make([]string, len(backlinks))

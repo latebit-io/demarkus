@@ -184,7 +184,7 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 		// has been swept or never existed. Surface the failure as a
 		// plain 400; the MCP SDK will see it as an aborted browser
 		// leg.
-		s.log.WarnContext(r.Context(), "broker: auth code callback — pending entry missing",
+		s.log.WarnContext(r.Context(), "broker: auth code callback: pending entry missing",
 			"authCodeID", authCodeID)
 		http.Error(w, "authorization session expired", http.StatusBadRequest)
 		return
