@@ -140,12 +140,24 @@ cur_client=$(goconst clientVersion)
 # The bootstrap TOOLS_VERSION is the real pin (see header); fallbackToolsVersion
 # is dev-only and deliberately NOT the currency signal: using it here would
 # force a provision.go edit on every tools release, which cuts another tools
-# release, which reopens this PR, forever.
-cur_tools=$(sed -nE 's/^TOOLS_VERSION="([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' plugins/claude-code/scripts/bootstrap.sh)
-[[ "$cur_tools" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-  echo "error: missing or invalid TOOLS_VERSION in plugins/claude-code/scripts/bootstrap.sh" >&2
+# release, which reopens this PR, forever. Sample EVERY bootstrap and use the
+# lowest pin, so a partially-bumped tree reads as changed and self-heals (the
+# update path rewrites all bootstraps to the same value) instead of hiding
+# behind changed=false.
+bootstrap_pins=()
+for b in plugins/*/scripts/bootstrap.sh; do
+  v=$(sed -nE 's/^TOOLS_VERSION="([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' "$b")
+  [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "error: missing or invalid TOOLS_VERSION in $b" >&2
+    exit 1
+  }
+  bootstrap_pins+=("$v")
+done
+[[ ${#bootstrap_pins[@]} -gt 0 ]] || {
+  echo "error: no plugin bootstrap.sh files found" >&2
   exit 1
 }
+cur_tools=$(printf '%s\n' "${bootstrap_pins[@]}" | sort -V | head -1)
 
 emit server "$new_server"
 emit client "$new_client"
