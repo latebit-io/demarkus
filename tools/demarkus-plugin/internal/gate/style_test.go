@@ -67,6 +67,15 @@ func TestStyleGate(t *testing.T) {
 		}
 	})
 
+	t.Run("em dash inside a code fence still warns", func(t *testing.T) {
+		// By design: the guide bans em dashes in examples too, and fenced
+		// examples are what readers copy.
+		d := mustEval(t, styleInput("# Title\n\n```text\nquoted — output\n```\n"))
+		if d.Decision != "warn" || !strings.Contains(d.Reason, "em dash") {
+			t.Fatalf("want warn about em dash, got %q (%s)", d.Decision, d.Reason)
+		}
+	})
+
 	t.Run("hash comments in code fences are not headings", func(t *testing.T) {
 		body := "# Title\n\n```bash\n# comment\n# comment\n```\n\nProse.\n"
 		d := mustEval(t, styleInput(body))

@@ -62,6 +62,14 @@ func leafOf(url string) string {
 	return url
 }
 
+// navExempt reports whether leaf is an OKF navigation/history file
+// (index.md, log.md). These are exempt from the H1 rule and the required
+// OKF `type` field: the server never defaults their type, and a hub is
+// intentionally untyped navigation, not a concept document.
+func navExempt(leaf string) bool {
+	return leaf == "index.md" || leaf == "log.md"
+}
+
 func tagsString(md map[string]any) string {
 	if md == nil {
 		return ""
@@ -278,7 +286,7 @@ func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, soulID
 	}
 
 	// Documentation-style guard (publish only): body-shape rules.
-	sd, err := styleDecision(pt, args)
+	sd, err := styleDecision(pt, args, styleRefMemory)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -350,7 +358,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	if rd != nil {
 		decisions = append(decisions, *rd)
 	}
-	sd, err := styleDecision(pt, args)
+	sd, err := styleDecision(pt, args, styleRefKnowledge)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -404,7 +412,7 @@ func knowledgeTagDecision(args map[string]any, slug string) (*Decision, error) {
 		// generically: the binary has the full metadata, so any policy-declared
 		// field is satisfied by a non-empty metadata.<field> (unlike the old bash
 		// gate, which could only inspect `type` and silently skipped the rest).
-		if f == "type" && (leaf == "index.md" || leaf == "log.md") {
+		if f == "type" && navExempt(leaf) {
 			continue
 		}
 		if !fieldPresent(md, f) {

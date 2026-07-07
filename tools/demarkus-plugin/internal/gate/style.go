@@ -12,6 +12,12 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
+// Scope-appropriate style-rule references for styleDecision reasons.
+const (
+	styleRefKnowledge = "See mark://root/.well-known/demarkus/style.md."
+	styleRefMemory    = "Rules: metadata out of band, one # H1, unique headings, no em dashes."
+)
+
 // styleDecision checks a publish body against the style rules that can be
 // verified mechanically: no frontmatter fence opening the body, an H1
 // present, no em dashes, and unique headings (headings are anchors; a
@@ -19,7 +25,11 @@ import (
 // breaking inbound links). Publish only: appends are fragments, where an H1
 // or fence heuristic would misfire. Default severity warn
 // (DEMARKUS_STYLE_STRICTNESS overrides): style steers, it does not wall.
-func styleDecision(pt config.ParsedTool, args map[string]any) (*Decision, error) {
+// guideRef is a scope-appropriate pointer to the style rules, appended to the
+// reason: the knowledge surface cites the system's style.md URL, the memory
+// surface a plain-text summary (a mark://root/ URL does not resolve in a
+// standalone soul).
+func styleDecision(pt config.ParsedTool, args map[string]any, guideRef string) (*Decision, error) {
 	if pt.Verb != "publish" {
 		return nil, nil
 	}
@@ -38,11 +48,15 @@ func styleDecision(pt config.ParsedTool, args map[string]any) (*Decision, error)
 	headings := mdoutline.Headings(body)
 	// index.md and log.md are OKF navigation/history files, exempt from the
 	// H1 rule the same way policy exempts them from `type`.
-	if leaf != "index.md" && leaf != "log.md" && !hasH1(headings) {
+	if !navExempt(leaf) && !hasH1(headings) {
 		problems = append(problems,
 			"no `# H1` heading (the document's name is its H1; add one as the first line)")
 	}
 
+	// Deliberately counts the raw body, code fences included: the style guide
+	// bans em dashes "anywhere: prose, headings, or examples", and fenced
+	// examples are exactly where they would otherwise ship. Severity is warn
+	// by default, so a rare intentional quote can still proceed.
 	if n := strings.Count(body, "—"); n > 0 {
 		problems = append(problems, fmt.Sprintf(
 			"%d em dash(es); the style guide bans them everywhere (prose, headings, examples); use a comma, colon, semicolon, or parentheses", n))
@@ -58,8 +72,8 @@ func styleDecision(pt config.ParsedTool, args map[string]any) (*Decision, error)
 	}
 	target := urlOr(args, "the document")
 	reason := fmt.Sprintf(
-		"demarkus publish to %s has style problems: %s. See mark://root/.well-known/demarkus/style.md. DEMARKUS_STYLE_STRICTNESS adjusts this check (warn/ask/block).",
-		target, strings.Join(problems, " Also: "))
+		"demarkus publish to %s has style problems: %s. %s DEMARKUS_STYLE_STRICTNESS adjusts this check (warn/ask/block).",
+		target, strings.Join(problems, " Also: "), guideRef)
 	s, err := config.StyleStrictness()
 	if err != nil {
 		return nil, err
