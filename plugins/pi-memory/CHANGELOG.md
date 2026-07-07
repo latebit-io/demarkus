@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.10
+
+- Documentation style gate in the shared binary (tools release with the style
+  gate required): publishes are checked for a frontmatter fence opening the
+  body, a missing H1, em dashes, and duplicate headings (headings are section
+  anchors). Default severity warn; DEMARKUS_STYLE_STRICTNESS adjusts. Session
+  guidance explains the gate.
+
 ## 0.12.9
 
 - Repin the shared `demarkus-plugin` binary to `tools/v0.8.1`, which

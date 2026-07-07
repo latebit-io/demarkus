@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.10
+
+- Documentation style gate in the shared binary (tools release with the style
+  gate required) plus writing standards guidance: session guidance points at
+  mark://root/.well-known/demarkus/style.md, and /knowledge-doctor gains a
+  style-guide check (em dashes, duplicate headings) over fetched bodies.
+
 ## 0.5.9
 
 - Repin the shared `demarkus-plugin` binary to `tools/v0.8.1`, which
