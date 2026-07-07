@@ -46,7 +46,7 @@ const (
 	// fallbackToolsVersion is used ONLY by dev builds (Version == "dev"), where
 	// there's no real release to derive the tools version from. A real release
 	// uses its own ldflags Version — see toolsRef.
-	fallbackToolsVersion = "0.10.0"
+	fallbackToolsVersion = "0.10.1"
 )
 
 // Version is the binary's own release version, injected from main's ldflags
