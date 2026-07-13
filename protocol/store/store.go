@@ -944,7 +944,7 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 // forming a hash chain that allows chain integrity to be verified later.
 func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*Document, error) {
 	if int64(len(content)) > protocol.MaxBodyLength {
-		return nil, fmt.Errorf("content exceeds size limit")
+		return nil, ErrSizeLimit
 	}
 	if err := validateMeta(meta); err != nil {
 		return nil, err
@@ -972,12 +972,17 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	// file on disk), start at 1. Otherwise increment from the current version.
 	currentFile := filepath.Join(s.root, dir, base)
 	var next int
-	if _, err := os.Stat(currentFile); err != nil {
+	if info, err := os.Stat(currentFile); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			next = 1
 		} else {
 			return nil, fmt.Errorf("stat current file: %w", err)
 		}
+	} else if info.IsDir() {
+		// Reject the document/directory collision before any version file is
+		// written; failing later on the current-pointer rename would leave a
+		// dangling version file behind.
+		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path", reqPath)
 	} else {
 		next = s.CurrentVersion(reqPath) + 1
 	}
@@ -1006,7 +1011,7 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 
 	// Validate stored size after prepending frontmatter.
 	if int64(len(stored)) > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
-		return nil, fmt.Errorf("content exceeds size limit")
+		return nil, ErrSizeLimit
 	}
 
 	// Immutability guard + atomic write: O_CREATE|O_EXCL fails if the file

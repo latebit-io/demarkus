@@ -317,17 +317,17 @@ func testMissingDocument(t *testing.T, s handler.DocumentStore) {
 func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 	mustWrite(t, s, "/col/doc.md", 0, "x")
 
-	// A document cannot be created where a directory exists. The file store
-	// fails on the current-pointer rename; pgstore rejects in the topology
-	// check. Either way the write must error and no document may be
-	// fetchable at the path afterward. (Residue differs: the file store may
-	// leave a dangling version file behind the failed rename, so the
-	// contract is pinned on Get, not on CurrentVersion.)
+	// A document cannot be created where a directory exists. Both backends
+	// must reject the write before persisting anything: no fetchable
+	// document and no version state may remain.
 	if _, err := s.WriteVersion("/col", 0, []byte("x"), nil); err == nil {
 		t.Error("want error writing document over existing directory /col")
 	}
 	if _, err := s.Get("/col", 0); err == nil {
 		t.Error("collision write left fetchable document at /col")
+	}
+	if cur := s.CurrentVersion("/col"); cur != 0 {
+		t.Errorf("collision write left version state at /col (version %d)", cur)
 	}
 
 	// A document cannot be created beneath an existing document.
@@ -336,6 +336,9 @@ func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 	}
 	if _, err := s.Get("/col/doc.md/child.md", 0); err == nil {
 		t.Error("collision write left fetchable document under /col/doc.md")
+	}
+	if cur := s.CurrentVersion("/col/doc.md/child.md"); cur != 0 {
+		t.Errorf("collision write left version state under /col/doc.md (version %d)", cur)
 	}
 }
 

@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	// Register the pgx database/sql driver.
 	_ "github.com/jackc/pgx/v5/stdlib"
 
@@ -351,6 +353,15 @@ func (s *Store) CurrentVersion(reqPath string) int {
 // LookupHash resolves a body content hash ("sha256-<hex>") to the request
 // path of a current, non-archived document. As with CurrentVersion, an
 // unexpected database failure is logged before reporting a miss.
+//
+// This deliberately queries the indexed body_hash column instead of
+// mirroring the file store's in-RAM index. The file store's "in-memory,
+// rebuilt on startup" lifecycle is an implementation detail of a
+// single-process backend, not part of the DocumentStore contract; a
+// per-process index on a multi-writer backend would serve stale results
+// the moment another process wrote. The database index is the
+// transactionally consistent equivalent, updated by the same transaction
+// as the write it reflects.
 func (s *Store) LookupHash(hash string) (string, bool) {
 	ctx, cancel := opCtx()
 	defer cancel()
@@ -432,7 +443,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 
 func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*store.Document, error) {
 	if int64(len(content)) > protocol.MaxBodyLength {
-		return nil, fmt.Errorf("content exceeds size limit")
+		return nil, store.ErrSizeLimit
 	}
 	if err := store.ValidateMeta(meta); err != nil {
 		return nil, err
@@ -480,22 +491,13 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		if archived {
 			return nil, store.ErrArchived
 		}
-		var tipModified time.Time
-		err = tx.QueryRowContext(ctx, `
-			SELECT stored, modified FROM versions WHERE path = $1 AND version = $2`, p, cur).
-			Scan(&tipStored, &tipModified)
+		var unchanged *store.Document
+		tipStored, unchanged, err = readTipForWrite(ctx, tx, p, cur, content, meta)
 		if err != nil {
-			return nil, fmt.Errorf("read tip %s v%d: %w", reqPath, cur, err)
+			return nil, err
 		}
-		if bytes.Equal(store.ExtractBody(tipStored), content) &&
-			store.MetaEqual(store.ExtractMetadata(tipStored), meta) {
-			return &store.Document{
-				Content:  content,
-				Modified: tipModified.UTC().Truncate(time.Second),
-				Version:  cur,
-				Archived: false,
-				Metadata: meta,
-			}, store.ErrNotModified
+		if unchanged != nil {
+			return unchanged, store.ErrNotModified
 		}
 	}
 
@@ -505,13 +507,22 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		return nil, err
 	}
 	if int64(len(stored)) > int64(protocol.MaxBodyLength+store.MaxStoreFrontmatter) {
-		return nil, fmt.Errorf("content exceeds size limit")
+		return nil, store.ErrSizeLimit
 	}
 
 	now := time.Now().UTC().Truncate(time.Second)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO versions (path, version, stored, body_hash, modified)
 		VALUES ($1, $2, $3, $4, $5)`, p, next, stored, store.ContentHash(content), now); err != nil {
+		// UNIQUE(path, version) is the CAS backstop: a concurrent writer
+		// that slipped past the row lock (both saw no row on a first write)
+		// surfaces here. Fold it into the contract's conflict shape rather
+		// than leaking a raw uniqueness violation, mirroring how the file
+		// store's WriteVersion folds ErrVersionExists into ErrConflict.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+			return &store.Document{Version: s.CurrentVersion(reqPath)}, store.ErrConflict
+		}
 		return nil, fmt.Errorf("insert v%d: %w", next, err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -544,11 +555,55 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 	return doc, nil
 }
 
+// readTipForWrite loads the current version's stored bytes for the hash
+// chain and performs the not-modified dedup: when body and publisher
+// metadata equal the tip, it returns the tip as unchanged and the caller
+// surfaces store.ErrNotModified instead of creating an identical version.
+func readTipForWrite(ctx context.Context, tx *sql.Tx, p string, cur int, content []byte, meta map[string]string) (tipStored []byte, unchanged *store.Document, err error) {
+	var tipModified time.Time
+	err = tx.QueryRowContext(ctx, `
+		SELECT stored, modified FROM versions WHERE path = $1 AND version = $2`, p, cur).
+		Scan(&tipStored, &tipModified)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read tip %s v%d: %w", p, cur, err)
+	}
+	if bytes.Equal(store.ExtractBody(tipStored), content) &&
+		store.MetaEqual(store.ExtractMetadata(tipStored), meta) {
+		return tipStored, &store.Document{
+			Content:  content,
+			Modified: tipModified.UTC().Truncate(time.Second),
+			Version:  cur,
+			Archived: false,
+			Metadata: meta,
+		}, nil
+	}
+	return tipStored, nil, nil
+}
+
 // checkPathTopology rejects a new document whose path collides with the
 // existing tree: a document at an ancestor path (writing under a file) or
 // any document below the path (writing over a directory). It runs inside
 // the write transaction so the check and the insert are atomic.
+//
+// A new document has no row to lock, so concurrent first writes to /a and
+// /a/b could each pass the other's existence check. Transaction-scoped
+// advisory locks on the path and every ancestor, taken root to leaf (the
+// consistent order prevents deadlock), serialize such writers: both /a and
+// /a/b contend on /a's lock. Hash collisions in hashtext cause only false
+// contention, never false acceptance.
 func checkPathTopology(ctx context.Context, tx *sql.Tx, p string) error {
+	segs := strings.Split(p, "/")
+	lockPath := ""
+	for _, seg := range segs {
+		if lockPath != "" {
+			lockPath += "/"
+		}
+		lockPath += seg
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockPath); err != nil {
+			return fmt.Errorf("topology lock %s: %w", lockPath, err)
+		}
+	}
+
 	prefix := p + "/"
 	var isDir bool
 	err := tx.QueryRowContext(ctx, `
@@ -560,7 +615,6 @@ func checkPathTopology(ctx context.Context, tx *sql.Tx, p string) error {
 	if isDir {
 		return fmt.Errorf("cannot publish %s: a directory exists at this path", p)
 	}
-	segs := strings.Split(p, "/")
 	ancestor := ""
 	for _, seg := range segs[:len(segs)-1] {
 		if ancestor != "" {
