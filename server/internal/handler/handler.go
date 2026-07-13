@@ -71,7 +71,7 @@ var reservedKeys = map[string]bool{
 // never returned to the handler.
 type DocumentStore interface {
 	Get(reqPath string, version int) (*store.Document, error)
-	ListDir(reqPath string, includeArchived bool) ([]store.DirEntry, error)
+	ListEntries(reqPath string, includeArchived bool) ([]store.DirEntry, error)
 	IsDir(reqPath string) (bool, error)
 	Versions(reqPath string) ([]store.VersionInfo, error)
 	CurrentVersion(reqPath string) int
@@ -366,7 +366,7 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request) {
 		return
 	}
 	includeArchived := req.Metadata["include-archived"] == "true"
-	entries, err := h.Store.ListDir(reqPath, includeArchived)
+	entries, err := h.Store.ListEntries(reqPath, includeArchived)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(reqPath))
@@ -452,7 +452,7 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 	}
 
 	// No (visible) index.md — generate a directory listing.
-	entries, err := h.Store.ListDir(req.Path, includeArchived)
+	entries, err := h.Store.ListEntries(req.Path, includeArchived)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(req.Path))
@@ -704,11 +704,11 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 	if err := h.Store.Archive(req.Path, true); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Deleted between the Get pre-check and the archive.
-			h.logger().Info("not found", "path", sanitize(req.Path))
+			h.logger().Info("archive failed", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "not found")
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
 		}
-		h.logger().Error("archive failed", "path", sanitize(req.Path), "error", err)
+		h.logger().Error("archive failed", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
@@ -781,11 +781,11 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 			if err := h.Store.Archive(req.Path, false); err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					// Deleted between the Get pre-check and the unarchive.
-					h.logger().Info("not found", "path", sanitize(req.Path))
+					h.logger().Info("unarchive failed", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "not found")
 					h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 					return
 				}
-				h.logger().Error("unarchive failed", "path", sanitize(req.Path), "error", err)
+				h.logger().Error("unarchive failed", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
 				h.writeError(w, protocol.StatusServerError, "internal error")
 				return
 			}
@@ -877,13 +877,13 @@ func (h *Handler) writePublishError(w io.Writer, req protocol.Request, expectedV
 		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
 		h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
 	case errors.Is(err, os.ErrNotExist):
-		h.logger().Warn("path traversal attempt", "path", sanitize(req.Path))
+		h.logger().Info("publish failed", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "not found")
 		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 	case errors.Is(err, store.ErrSizeLimit):
 		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 	default:
-		h.logger().Error("publish failed", "path", sanitize(req.Path), "error", err)
+		h.logger().Error("publish failed", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 	}
 }

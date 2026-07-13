@@ -180,11 +180,14 @@ func main() {
 		docStore, walker = ps, ps
 	case "file":
 		s := store.New(cfg.ContentDir)
+		// BuildHashIndex clears the index before walking; continuing after a
+		// failure would serve hash-based FETCHes from an empty or partial
+		// index, so a broken walk is fatal.
 		if err := s.BuildHashIndex(); err != nil {
-			logger.Warn("hash index build failed", "error", err)
-		} else {
-			logger.Info("content hash index built", "entries", s.HashIndexSize())
+			logger.Error("hash index build failed", "error", err)
+			os.Exit(1)
 		}
+		logger.Info("content hash index built", "entries", s.HashIndexSize())
 		docStore, walker = s, s
 	default:
 		// Unreachable: ValidateStoreBackend rejected unknown values above.

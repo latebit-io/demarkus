@@ -72,7 +72,11 @@ func Open(dsn string, logger *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 	s := NewWithDB(db, logger)
-	if err := s.Init(context.Background()); err != nil {
+	// Bound startup like every other operation: a stalled ping or blocked
+	// DDL must fail fast instead of hanging the server indefinitely.
+	ctx, cancel := opCtx()
+	defer cancel()
+	if err := s.Init(ctx); err != nil {
 		// Best-effort cleanup of a pool that never became usable.
 		_ = db.Close()
 		return nil, err
@@ -164,13 +168,13 @@ func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
 	}, nil
 }
 
-// ListDir lists the children of a directory path, mirroring the file
+// ListEntries lists the children of a directory path, mirroring the file
 // store's semantics: dot-named entries and "versions" are hidden; archived
 // documents are omitted unless includeArchived, and a subdirectory appears
 // only when its subtree holds a visible document. A path with no documents
 // beneath it (and that is not the root) returns os.ErrNotExist, as does a
 // document path.
-func (s *Store) ListDir(reqPath string, includeArchived bool) ([]store.DirEntry, error) {
+func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]store.DirEntry, error) {
 	p := canonical(reqPath)
 	prefix := ""
 	if p != "" {
@@ -460,6 +464,17 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		return &store.Document{Version: cur}, store.ErrConflict
 	}
 
+	// A path cannot be both a document and a directory. The filesystem
+	// enforces this topology for the file store (writes under a document or
+	// over a directory fail on MkdirAll/rename); enforce it here so
+	// ListEntries and IsDir stay unambiguous. Only new documents can
+	// introduce a collision.
+	if cur == 0 {
+		if err := checkPathTopology(ctx, tx, p); err != nil {
+			return nil, err
+		}
+	}
+
 	var tipStored []byte
 	if cur > 0 {
 		if archived {
@@ -529,6 +544,42 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 	return doc, nil
 }
 
+// checkPathTopology rejects a new document whose path collides with the
+// existing tree: a document at an ancestor path (writing under a file) or
+// any document below the path (writing over a directory). It runs inside
+// the write transaction so the check and the insert are atomic.
+func checkPathTopology(ctx context.Context, tx *sql.Tx, p string) error {
+	prefix := p + "/"
+	var isDir bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM documents WHERE path >= $1 AND path < $2)`,
+		prefix, prefixUpperBound(prefix)).Scan(&isDir)
+	if err != nil {
+		return fmt.Errorf("topology check %s: %w", p, err)
+	}
+	if isDir {
+		return fmt.Errorf("cannot publish %s: a directory exists at this path", p)
+	}
+	segs := strings.Split(p, "/")
+	ancestor := ""
+	for _, seg := range segs[:len(segs)-1] {
+		if ancestor != "" {
+			ancestor += "/"
+		}
+		ancestor += seg
+		var isDoc bool
+		err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS (SELECT 1 FROM documents WHERE path = $1)`, ancestor).Scan(&isDoc)
+		if err != nil {
+			return fmt.Errorf("topology check %s: %w", p, err)
+		}
+		if isDoc {
+			return fmt.Errorf("cannot publish %s: a document exists at ancestor %s", p, ancestor)
+		}
+	}
+	return nil
+}
+
 // pruneVersions deletes versions <= cutoff inside the write transaction and
 // reports the contiguous deleted range, mirroring the file store's
 // PruneResult contract. Transactionality makes partial prunes impossible,
@@ -595,10 +646,16 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 }
 
 // Archive toggles the archived flag: the documents row column and the tip
-// version's stored frontmatter, in one transaction. Like the file store it
-// modifies the tip in place rather than creating a new version; the hash
-// chain stays valid because only successors hash their predecessor and the
-// tip has no successor yet.
+// version's stored frontmatter, in one transaction.
+//
+// Modifying the tip in place is a deliberate parity decision, not an
+// immutability violation: the file store's Archive documents that "the
+// archived flag is operational metadata, not content", and creating a new
+// version would pollute history with identical content. Both backends must
+// produce identical stored bytes for the conformance suite and for
+// migration, so this backend mirrors that design exactly. The hash chain
+// stays valid because only successors hash their predecessor and the tip
+// has no successor yet.
 func (s *Store) Archive(reqPath string, archived bool) error {
 	p := canonical(reqPath)
 	if p == "" {

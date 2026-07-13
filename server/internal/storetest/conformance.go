@@ -35,6 +35,7 @@ func RunConformance(t *testing.T, factory Factory) {
 		{"IsDirSemantics", testIsDirSemantics},
 		{"RetentionPrune", testRetentionPrune},
 		{"MissingDocument", testMissingDocument},
+		{"PathCollisions", testPathCollisions},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) {
@@ -242,14 +243,14 @@ func testListDirSemantics(t *testing.T, s handler.DocumentStore) {
 		}
 	}
 
-	entries, err := s.ListDir("/nested", false)
+	entries, err := s.ListEntries("/nested", false)
 	if err != nil || len(entries) != 1 || entries[0].Name != "a" || !entries[0].IsDir {
 		t.Errorf("nested list = (%+v, %v), want single dir 'a'", entries, err)
 	}
-	if _, err := s.ListDir("/does-not-exist", false); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.ListEntries("/does-not-exist", false); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("missing dir: err = %v, want ErrNotExist", err)
 	}
-	if _, err := s.ListDir("/live.md", false); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.ListEntries("/live.md", false); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("doc path list: err = %v, want ErrNotExist", err)
 	}
 }
@@ -313,6 +314,31 @@ func testMissingDocument(t *testing.T, s handler.DocumentStore) {
 	}
 }
 
+func testPathCollisions(t *testing.T, s handler.DocumentStore) {
+	mustWrite(t, s, "/col/doc.md", 0, "x")
+
+	// A document cannot be created where a directory exists. The file store
+	// fails on the current-pointer rename; pgstore rejects in the topology
+	// check. Either way the write must error and no document may be
+	// fetchable at the path afterward. (Residue differs: the file store may
+	// leave a dangling version file behind the failed rename, so the
+	// contract is pinned on Get, not on CurrentVersion.)
+	if _, err := s.WriteVersion("/col", 0, []byte("x"), nil); err == nil {
+		t.Error("want error writing document over existing directory /col")
+	}
+	if _, err := s.Get("/col", 0); err == nil {
+		t.Error("collision write left fetchable document at /col")
+	}
+
+	// A document cannot be created beneath an existing document.
+	if _, err := s.WriteVersion("/col/doc.md/child.md", 0, []byte("x"), nil); err == nil {
+		t.Error("want error writing document under existing document /col/doc.md")
+	}
+	if _, err := s.Get("/col/doc.md/child.md", 0); err == nil {
+		t.Error("collision write left fetchable document under /col/doc.md")
+	}
+}
+
 func mustWrite(t *testing.T, s handler.DocumentStore, path string, expected int, body string) *store.Document {
 	t.Helper()
 	doc, err := s.WriteVersion(path, expected, []byte(body), nil)
@@ -324,7 +350,7 @@ func mustWrite(t *testing.T, s handler.DocumentStore, path string, expected int,
 
 func entryNames(t *testing.T, s handler.DocumentStore, path string, includeArchived bool) map[string]bool {
 	t.Helper()
-	entries, err := s.ListDir(path, includeArchived)
+	entries, err := s.ListEntries(path, includeArchived)
 	if err != nil {
 		t.Fatalf("list %s: %v", path, err)
 	}

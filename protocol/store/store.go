@@ -398,13 +398,27 @@ type DirEntry struct {
 	IsDir bool
 }
 
+// ListEntries returns the backend-neutral directory listing used by the
+// server's DocumentStore contract. It applies the same filtering as ListDir.
+func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]DirEntry, error) {
+	entries, err := s.ListDir(reqPath, includeArchived)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DirEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, DirEntry{Name: e.Name(), IsDir: e.IsDir()})
+	}
+	return out, nil
+}
+
 // ListDir returns directory entries at the given path, excluding dot-files
 // and the versions/ directory. When includeArchived is false, archived
 // documents are omitted, as are subdirectories whose entire subtree contains
 // only archived documents (an all-archived directory would otherwise linger as
 // an empty shell). When true, every current entry is returned regardless of
 // archival — the recovery/audit view.
-func (s *Store) ListDir(reqPath string, includeArchived bool) ([]DirEntry, error) {
+func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, error) {
 	dirPath, err := s.resolve(reqPath)
 	if err != nil {
 		return nil, err
@@ -435,7 +449,7 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]DirEntry, error
 			return nil, err
 		}
 	}
-	filtered := make([]DirEntry, 0, len(entries))
+	filtered := entries[:0]
 	for _, e := range entries {
 		name := e.Name()
 		if isHiddenEntry(name) {
@@ -455,7 +469,7 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]DirEntry, error
 				continue
 			}
 		}
-		filtered = append(filtered, DirEntry{Name: name, IsDir: e.IsDir()})
+		filtered = append(filtered, e)
 	}
 	return filtered, nil
 }
