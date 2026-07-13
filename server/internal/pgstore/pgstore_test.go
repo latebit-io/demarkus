@@ -20,7 +20,7 @@ func TestPostgresConformance(t *testing.T) {
 	if dsn == "" {
 		t.Skip("DEMARKUS_TEST_PG_DSN not set; skipping Postgres conformance")
 	}
-	s, err := pgstore.Open(dsn)
+	s, err := pgstore.Open(dsn, nil)
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}

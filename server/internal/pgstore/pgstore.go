@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	gopath "path"
 	"sort"
@@ -32,14 +33,16 @@ import (
 
 // schema is applied idempotently at startup. Paths are stored canonical:
 // cleaned, no leading slash ("" is the root, "adr/0001.md" a nested doc).
+// Path columns use the C collation so byte-wise range predicates (see
+// prefixUpperBound) are exact and use the primary-key btree.
 const schema = `
 CREATE TABLE IF NOT EXISTS documents (
-	path            text PRIMARY KEY,
+	path            text COLLATE "C" PRIMARY KEY,
 	current_version integer NOT NULL,
 	archived        boolean NOT NULL DEFAULT false
 );
 CREATE TABLE IF NOT EXISTS versions (
-	path      text NOT NULL,
+	path      text COLLATE "C" NOT NULL,
 	version   integer NOT NULL,
 	stored    bytea NOT NULL,
 	body_hash text NOT NULL,
@@ -49,20 +52,28 @@ CREATE TABLE IF NOT EXISTS versions (
 CREATE INDEX IF NOT EXISTS versions_body_hash_idx ON versions (body_hash);
 `
 
+// queryTimeout bounds every store call. The DocumentStore interface carries
+// no context, so the deadline is applied here: a stalled Postgres fails the
+// request instead of holding its goroutine indefinitely.
+const queryTimeout = 10 * time.Second
+
 // Store implements the handler's DocumentStore contract against Postgres.
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	logger *slog.Logger
 }
 
 // Open connects to Postgres with the given DSN, applies the schema, and
-// returns the store. The caller owns closing via Close.
-func Open(dsn string) (*Store, error) {
+// returns the store. The caller owns closing via Close. A nil logger falls
+// back to slog.Default().
+func Open(dsn string, logger *slog.Logger) (*Store, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
-	s := &Store{db: db}
+	s := NewWithDB(db, logger)
 	if err := s.Init(context.Background()); err != nil {
+		// Best-effort cleanup of a pool that never became usable.
 		_ = db.Close()
 		return nil, err
 	}
@@ -70,8 +81,27 @@ func Open(dsn string) (*Store, error) {
 }
 
 // NewWithDB wraps an existing connection pool (tests, custom pooling). The
-// caller must run Init before use.
-func NewWithDB(db *sql.DB) *Store { return &Store{db: db} }
+// caller must run Init before use. A nil logger falls back to slog.Default().
+func NewWithDB(db *sql.DB, logger *slog.Logger) *Store {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Store{db: db, logger: logger}
+}
+
+// opCtx returns the bounded context every store operation runs under.
+func opCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), queryTimeout)
+}
+
+// prefixUpperBound returns the exclusive upper bound of the key range
+// holding every path under a directory prefix. The prefix always ends with
+// '/' (0x2F); bumping that final byte to '0' (0x30) bounds the subtree
+// exactly under the C collation, so "path >= prefix AND path < bound" is an
+// index range scan.
+func prefixUpperBound(prefix string) string {
+	return prefix[:len(prefix)-1] + "0"
+}
 
 // Init verifies connectivity and applies the idempotent schema.
 func (s *Store) Init(ctx context.Context) error {
@@ -108,10 +138,12 @@ func canonical(reqPath string) string {
 // directory paths return os.ErrNotExist.
 func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
 	p := canonical(reqPath)
+	ctx, cancel := opCtx()
+	defer cancel()
 	var stored []byte
 	var modified time.Time
 	var ver int
-	err := s.db.QueryRowContext(context.Background(), `
+	err := s.db.QueryRowContext(ctx, `
 		SELECT v.stored, v.modified, v.version
 		FROM documents d
 		JOIN versions v ON v.path = d.path
@@ -144,8 +176,17 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]store.DirEntry,
 	if p != "" {
 		prefix = p + "/"
 	}
-	rows, err := s.db.QueryContext(context.Background(), `
-		SELECT path, archived FROM documents WHERE starts_with(path, $1)`, prefix)
+	ctx, cancel := opCtx()
+	defer cancel()
+	// Root ("" prefix) legitimately spans the whole table; any other prefix
+	// is an index range scan over the C-collated path key.
+	query := `SELECT path, archived FROM documents`
+	args := []any{}
+	if prefix != "" {
+		query += ` WHERE path >= $1 AND path < $2`
+		args = append(args, prefix, prefixUpperBound(prefix))
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", reqPath, err)
 	}
@@ -228,9 +269,13 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 	if p == "" {
 		return true, nil
 	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	prefix := p + "/"
 	var hasChildren bool
-	err := s.db.QueryRowContext(context.Background(), `
-		SELECT EXISTS (SELECT 1 FROM documents WHERE starts_with(path, $1))`, p+"/").Scan(&hasChildren)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM documents WHERE path >= $1 AND path < $2)`,
+		prefix, prefixUpperBound(prefix)).Scan(&hasChildren)
 	if err != nil {
 		return false, fmt.Errorf("isdir %s: %w", reqPath, err)
 	}
@@ -238,7 +283,7 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 		return true, nil
 	}
 	var isDoc bool
-	err = s.db.QueryRowContext(context.Background(), `
+	err = s.db.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM documents WHERE path = $1)`, p).Scan(&isDoc)
 	if err != nil {
 		return false, fmt.Errorf("isdir %s: %w", reqPath, err)
@@ -253,7 +298,9 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 // a document with no history.
 func (s *Store) Versions(reqPath string) ([]store.VersionInfo, error) {
 	p := canonical(reqPath)
-	rows, err := s.db.QueryContext(context.Background(), `
+	ctx, cancel := opCtx()
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT version, modified FROM versions WHERE path = $1 ORDER BY version DESC`, p)
 	if err != nil {
 		return nil, fmt.Errorf("versions %s: %w", reqPath, err)
@@ -278,28 +325,41 @@ func (s *Store) Versions(reqPath string) ([]store.VersionInfo, error) {
 }
 
 // CurrentVersion returns the current version number, or 0 when the document
-// does not exist.
+// does not exist. The signature cannot carry an error, so an unexpected
+// database failure is logged before reporting absence; otherwise an outage
+// would be indistinguishable from a missing document.
 func (s *Store) CurrentVersion(reqPath string) int {
 	p := canonical(reqPath)
+	ctx, cancel := opCtx()
+	defer cancel()
 	var cur int
-	err := s.db.QueryRowContext(context.Background(), `
+	err := s.db.QueryRowContext(ctx, `
 		SELECT current_version FROM documents WHERE path = $1`, p).Scan(&cur)
 	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.Warn("current version query failed", "path", reqPath, "error", err)
+		}
 		return 0
 	}
 	return cur
 }
 
 // LookupHash resolves a body content hash ("sha256-<hex>") to the request
-// path of a current, non-archived document.
+// path of a current, non-archived document. As with CurrentVersion, an
+// unexpected database failure is logged before reporting a miss.
 func (s *Store) LookupHash(hash string) (string, bool) {
+	ctx, cancel := opCtx()
+	defer cancel()
 	var p string
-	err := s.db.QueryRowContext(context.Background(), `
+	err := s.db.QueryRowContext(ctx, `
 		SELECT d.path FROM documents d
 		JOIN versions v ON v.path = d.path AND v.version = d.current_version
 		WHERE v.body_hash = $1 AND NOT d.archived
 		ORDER BY d.path LIMIT 1`, hash).Scan(&p)
 	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.Warn("hash lookup query failed", "hash", hash, "error", err)
+		}
 		return "", false
 	}
 	return "/" + p, true
@@ -309,7 +369,9 @@ func (s *Store) LookupHash(hash string) (string, bool) {
 // oldest to newest, exactly as the file store does.
 func (s *Store) VerifyChain(reqPath string) error {
 	p := canonical(reqPath)
-	rows, err := s.db.QueryContext(context.Background(), `
+	ctx, cancel := opCtx()
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT version, stored FROM versions WHERE path = $1 ORDER BY version ASC`, p)
 	if err != nil {
 		return fmt.Errorf("list versions: %w", err)
@@ -376,7 +438,8 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		return nil, os.ErrNotExist
 	}
 
-	ctx := context.Background()
+	ctx, cancel := opCtx()
+	defer cancel()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin write: %w", err)
@@ -541,7 +604,8 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 	if p == "" {
 		return os.ErrNotExist
 	}
-	ctx := context.Background()
+	ctx, cancel := opCtx()
+	defer cancel()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin archive: %w", err)
@@ -585,7 +649,9 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 // file store's WalkCurrent so startup catalog builds work on either
 // backend.
 func (s *Store) WalkCurrent(fn func(store.CurrentDoc) error) error {
-	rows, err := s.db.QueryContext(context.Background(), `
+	ctx, cancel := opCtx()
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT d.path, v.stored, v.modified
 		FROM documents d
 		JOIN versions v ON v.path = d.path AND v.version = d.current_version

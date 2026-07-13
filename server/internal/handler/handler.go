@@ -64,10 +64,11 @@ var reservedKeys = map[string]bool{
 // implementation is protocol/store.Store; alternative backends implement the
 // same contract. Error contract: methods that address a missing document or
 // directory return an error satisfying errors.Is(err, os.ErrNotExist), and
-// writes surface the store sentinel errors (store.ErrConflict,
-// store.ErrVersionExists, store.ErrArchived, store.ErrNotModified,
-// store.ErrSizeLimit) so responses map to the same protocol statuses on
-// every backend.
+// writes surface the store sentinel errors the handlers map to protocol
+// statuses (store.ErrConflict, store.ErrArchived, store.ErrNotModified,
+// store.ErrSizeLimit). Backend-internal race signals such as the file
+// store's ErrVersionExists must be folded into ErrConflict by WriteVersion,
+// never returned to the handler.
 type DocumentStore interface {
 	Get(reqPath string, version int) (*store.Document, error)
 	ListDir(reqPath string, includeArchived bool) ([]store.DirEntry, error)
@@ -701,6 +702,12 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 	}
 
 	if err := h.Store.Archive(req.Path, true); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Deleted between the Get pre-check and the archive.
+			h.logger().Info("not found", "path", sanitize(req.Path))
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+			return
+		}
 		h.logger().Error("archive failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
@@ -772,6 +779,12 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 
 		if doc.Archived {
 			if err := h.Store.Archive(req.Path, false); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					// Deleted between the Get pre-check and the unarchive.
+					h.logger().Info("not found", "path", sanitize(req.Path))
+					h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+					return
+				}
 				h.logger().Error("unarchive failed", "path", sanitize(req.Path), "error", err)
 				h.writeError(w, protocol.StatusServerError, "internal error")
 				return
@@ -815,49 +828,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 	doc, err := h.Store.WriteVersion(req.Path, expectedVersion, []byte(req.Body), pubMeta)
 	h.logPrune("PUBLISH", req.Path, tokenLabel, doc)
 	if err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			h.logger().Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
-			var body string
-			if expectedVersion == 0 {
-				body = fmt.Sprintf("# Version Conflict\n\nA document already exists at this path (version %d).\n\nFetch the current version and publish with the correct expected-version to update it.\n", doc.Version)
-			} else {
-				body = fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nPlease fetch the latest version and reapply your edits.\n", expectedVersion, doc.Version)
-			}
-			resp := protocol.Response{
-				Status: protocol.StatusConflict,
-				Metadata: map[string]string{
-					"your-version":   strconv.Itoa(expectedVersion),
-					"server-version": strconv.Itoa(doc.Version),
-				},
-				Body: body,
-			}
-			h.writeResponse(w, resp)
-			return
-		}
-		if errors.Is(err, store.ErrNotModified) {
-			h.logger().Info("publish unchanged", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
-			resp := protocol.Response{
-				Status: protocol.StatusOK,
-				Metadata: map[string]string{
-					"version":  strconv.Itoa(doc.Version),
-					"modified": doc.Modified.Format(time.RFC3339),
-				},
-			}
-			h.writeResponse(w, resp)
-			return
-		}
-		if errors.Is(err, store.ErrArchived) {
-			h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
-			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
-			return
-		}
-		if errors.Is(err, os.ErrNotExist) {
-			h.logger().Warn("path traversal attempt", "path", sanitize(req.Path))
-			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
-			return
-		}
-		h.logger().Error("publish failed", "path", sanitize(req.Path), "error", err)
-		h.writeError(w, protocol.StatusServerError, "internal error")
+		h.writePublishError(w, req, expectedVersion, doc, err, tokenLabel)
 		return
 	}
 
@@ -871,6 +842,50 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		},
 	}
 	h.writeResponse(w, resp)
+}
+
+// writePublishError maps a WriteVersion failure onto the protocol response
+// for PUBLISH, covering every sentinel in the DocumentStore error contract.
+func (h *Handler) writePublishError(w io.Writer, req protocol.Request, expectedVersion int, doc *store.Document, err error, tokenLabel string) {
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		h.logger().Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
+		var body string
+		if expectedVersion == 0 {
+			body = fmt.Sprintf("# Version Conflict\n\nA document already exists at this path (version %d).\n\nFetch the current version and publish with the correct expected-version to update it.\n", doc.Version)
+		} else {
+			body = fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nPlease fetch the latest version and reapply your edits.\n", expectedVersion, doc.Version)
+		}
+		h.writeResponse(w, protocol.Response{
+			Status: protocol.StatusConflict,
+			Metadata: map[string]string{
+				"your-version":   strconv.Itoa(expectedVersion),
+				"server-version": strconv.Itoa(doc.Version),
+			},
+			Body: body,
+		})
+	case errors.Is(err, store.ErrNotModified):
+		h.logger().Info("publish unchanged", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
+		h.writeResponse(w, protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{
+				"version":  strconv.Itoa(doc.Version),
+				"modified": doc.Modified.Format(time.RFC3339),
+			},
+		})
+	case errors.Is(err, store.ErrArchived):
+		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
+		h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
+	case errors.Is(err, os.ErrNotExist):
+		h.logger().Warn("path traversal attempt", "path", sanitize(req.Path))
+		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+	case errors.Is(err, store.ErrSizeLimit):
+		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
+		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+	default:
+		h.logger().Error("publish failed", "path", sanitize(req.Path), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+	}
 }
 
 func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {

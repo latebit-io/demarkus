@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -136,32 +135,10 @@ func main() {
 		pgDSN:        *pgDSN,
 		readOnly:     *readOnly,
 	})
-	switch cfg.StoreBackend {
-	case "", "file":
-		cfg.StoreBackend = "file"
-		if cfg.ContentDir == "" {
-			logger.Error("content directory is required (set DEMARKUS_ROOT or use -root flag)")
-			os.Exit(1)
-		}
-		info, err := os.Stat(cfg.ContentDir)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				logger.Error("content directory does not exist", "path", cfg.ContentDir)
-				os.Exit(1)
-			}
-			logger.Error("cannot stat content directory", "path", cfg.ContentDir, "error", err)
-			os.Exit(1)
-		} else if !info.IsDir() {
-			logger.Error("content directory is not a directory", "path", cfg.ContentDir)
-			os.Exit(1)
-		}
-	case "postgres":
-		if cfg.PostgresDSN == "" {
-			logger.Error("postgres store requires a DSN (set DEMARKUS_PG_DSN or use -pg-dsn flag)")
-			os.Exit(1)
-		}
-	default:
-		logger.Error("unknown store backend (want file or postgres)", "store", cfg.StoreBackend)
+	// Re-validate after flag overrides; NewConfig validated only the
+	// env-derived values.
+	if err := cfg.ValidateStoreBackend(); err != nil {
+		logger.Error("store configuration invalid", "error", err)
 		os.Exit(1)
 	}
 
@@ -189,15 +166,19 @@ func main() {
 	var walker currentWalker
 	switch cfg.StoreBackend {
 	case "postgres":
-		ps, err := pgstore.Open(cfg.PostgresDSN)
+		ps, err := pgstore.Open(cfg.PostgresDSN, logger)
 		if err != nil {
 			logger.Error("postgres store setup failed", "error", err)
 			os.Exit(1)
 		}
-		defer func() { _ = ps.Close() }()
+		defer func() {
+			if err := ps.Close(); err != nil {
+				logger.Warn("postgres store close failed", "error", err)
+			}
+		}()
 		logger.Info("store: postgres backend ready")
 		docStore, walker = ps, ps
-	default:
+	case "file":
 		s := store.New(cfg.ContentDir)
 		if err := s.BuildHashIndex(); err != nil {
 			logger.Warn("hash index build failed", "error", err)
@@ -205,6 +186,12 @@ func main() {
 			logger.Info("content hash index built", "entries", s.HashIndexSize())
 		}
 		docStore, walker = s, s
+	default:
+		// Unreachable: ValidateStoreBackend rejected unknown values above.
+		// Kept explicit so a backend added there but not here fails loudly
+		// instead of silently running on the wrong store.
+		logger.Error("unknown store backend reached store init", "store", cfg.StoreBackend)
+		os.Exit(1)
 	}
 
 	cat := buildCatalog(walker, logger)

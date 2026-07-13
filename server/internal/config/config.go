@@ -63,28 +63,40 @@ func NewConfig() (*Config, error) {
 		return config, fmt.Errorf("DEMARKUS_RATE_BURST must be at least 1 when rate limiting is enabled (got %d)", config.RateBurst)
 	}
 
-	switch config.StoreBackend {
-	case "file":
-		if config.ContentDir == "" {
-			return config, errors.New("DEMARKUS_ROOT environment variable is required")
-		}
-		// Validate content directory exists and is readable.
-		info, err := os.Stat(config.ContentDir)
-		if err != nil {
-			return config, fmt.Errorf("content directory %q: %w", config.ContentDir, err)
-		}
-		if !info.IsDir() {
-			return config, fmt.Errorf("content directory %q is not a directory", config.ContentDir)
-		}
-	case "postgres":
-		if config.PostgresDSN == "" {
-			return config, errors.New("DEMARKUS_PG_DSN is required when DEMARKUS_STORE=postgres")
-		}
-	default:
-		return config, fmt.Errorf("DEMARKUS_STORE must be \"file\" or \"postgres\" (got %q)", config.StoreBackend)
+	if err := config.ValidateStoreBackend(); err != nil {
+		return config, err
 	}
 
 	return config, nil
+}
+
+// ValidateStoreBackend checks the store-backend selection and its required
+// settings. NewConfig calls it against the environment-derived values;
+// main.go calls it again after CLI flag overrides so both configuration
+// paths enforce one contract.
+func (c *Config) ValidateStoreBackend() error {
+	switch c.StoreBackend {
+	case "", "file":
+		c.StoreBackend = "file"
+		if c.ContentDir == "" {
+			return errors.New("content directory is required (set DEMARKUS_ROOT or use -root)")
+		}
+		// Validate content directory exists and is readable.
+		info, err := os.Stat(c.ContentDir)
+		if err != nil {
+			return fmt.Errorf("content directory %q: %w", c.ContentDir, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("content directory %q is not a directory", c.ContentDir)
+		}
+	case "postgres":
+		if c.PostgresDSN == "" {
+			return errors.New("postgres store requires a DSN (set DEMARKUS_PG_DSN or use -pg-dsn)")
+		}
+	default:
+		return fmt.Errorf("store backend must be \"file\" or \"postgres\" (got %q)", c.StoreBackend)
+	}
+	return nil
 }
 
 func getEnv(key, defaultValue string) string {
