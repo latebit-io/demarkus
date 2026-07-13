@@ -60,10 +60,30 @@ var reservedKeys = map[string]bool{
 	"status":          true,
 }
 
+// DocumentStore is the handler's view of a content store. The file-backed
+// implementation is protocol/store.Store; alternative backends implement the
+// same contract. Error contract: methods that address a missing document or
+// directory return an error satisfying errors.Is(err, os.ErrNotExist), and
+// WriteVersion/Append surface version conflicts as store.ErrVersionExists /
+// store.ErrVersionConflict so responses map to the same protocol statuses on
+// every backend.
+type DocumentStore interface {
+	Get(reqPath string, version int) (*store.Document, error)
+	ListDir(reqPath string, includeArchived bool) ([]store.DirEntry, error)
+	IsDir(reqPath string) (bool, error)
+	Versions(reqPath string) ([]store.VersionInfo, error)
+	CurrentVersion(reqPath string) int
+	LookupHash(hash string) (string, bool)
+	VerifyChain(reqPath string) error
+	WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*store.Document, error)
+	Append(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*store.Document, error)
+	Archive(reqPath string, archived bool) error
+}
+
 // Handler serves markdown files from a content directory.
 type Handler struct {
 	ContentDir    string
-	Store         *store.Store
+	Store         DocumentStore
 	Catalog       *catalog.Catalog        // LOOKUP index; nil disables LOOKUP and catalog updates
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
 	Logger        *slog.Logger
@@ -370,7 +390,7 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request) {
 
 // buildDirectoryIndex renders a markdown listing from directory entries.
 // Returns the markdown body and the number of entries included.
-func buildDirectoryIndex(reqPath string, entries []os.DirEntry) (body string, entryCount int) {
+func buildDirectoryIndex(reqPath string, entries []store.DirEntry) (body string, entryCount int) {
 	var sb strings.Builder
 	sb.WriteString("\n# Index of " + escapeMD(reqPath) + "\n\n")
 
@@ -380,9 +400,9 @@ func buildDirectoryIndex(reqPath string, entries []os.DirEntry) (body string, en
 			break
 		}
 		entryCount++
-		display := escapeMD(entry.Name())
-		link := escapeURL(entry.Name())
-		if entry.IsDir() {
+		display := escapeMD(entry.Name)
+		link := escapeURL(entry.Name)
+		if entry.IsDir {
 			sb.WriteString("- [" + display + "/](" + link + "/)\n")
 		} else {
 			sb.WriteString("- [" + display + "](" + link + ")\n")

@@ -391,13 +391,20 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	}, nil
 }
 
+// DirEntry is one entry in a directory listing. It is backend-neutral: a
+// store implementation that is not a filesystem can still produce it.
+type DirEntry struct {
+	Name  string
+	IsDir bool
+}
+
 // ListDir returns directory entries at the given path, excluding dot-files
 // and the versions/ directory. When includeArchived is false, archived
 // documents are omitted, as are subdirectories whose entire subtree contains
 // only archived documents (an all-archived directory would otherwise linger as
 // an empty shell). When true, every current entry is returned regardless of
 // archival — the recovery/audit view.
-func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, error) {
+func (s *Store) ListDir(reqPath string, includeArchived bool) ([]DirEntry, error) {
 	dirPath, err := s.resolve(reqPath)
 	if err != nil {
 		return nil, err
@@ -428,7 +435,7 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 			return nil, err
 		}
 	}
-	filtered := entries[:0]
+	filtered := make([]DirEntry, 0, len(entries))
 	for _, e := range entries {
 		name := e.Name()
 		if isHiddenEntry(name) {
@@ -448,7 +455,7 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 				continue
 			}
 		}
-		filtered = append(filtered, e)
+		filtered = append(filtered, DirEntry{Name: name, IsDir: e.IsDir()})
 	}
 	return filtered, nil
 }

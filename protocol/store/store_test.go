@@ -192,10 +192,10 @@ func TestListDir_HidesArchived(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	names := func(entries []os.DirEntry) map[string]bool {
+	names := func(entries []DirEntry) map[string]bool {
 		m := map[string]bool{}
 		for _, e := range entries {
-			m[e.Name()] = true
+			m[e.Name] = true
 		}
 		return m
 	}
@@ -264,7 +264,7 @@ func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
 		t.Fatalf("ListDir: %v", err)
 	}
 	for _, e := range entries {
-		if e.Name() == "work" {
+		if e.Name == "work" {
 			t.Errorf("want work/ pruned (only content is a hidden dot-file), got listed")
 		}
 	}
