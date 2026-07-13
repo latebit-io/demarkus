@@ -884,55 +884,17 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 		return fmt.Errorf("read version file: %w", err)
 	}
 
-	// Update archived flag in frontmatter via manual string parsing.
-	// buildVersionFile constructs frontmatter from scratch for new versions but
-	// has no inverse (parse-modify-serialize). Introducing a full round-trip
-	// parser just for this one toggle would add complexity with no benefit, so
-	// we update the single field in-place.
-	content := string(data)
-	if !strings.HasPrefix(content, "---\n") {
-		return fmt.Errorf("invalid version file format")
+	// Update the archived flag in-place via the shared frontmatter toggle;
+	// a full parse-modify-serialize round trip would add complexity with no
+	// benefit for this one operational field.
+	newContent, err := SetArchived(data, archived)
+	if err != nil {
+		return err
 	}
-
-	end := strings.Index(content[4:], "\n---\n")
-	if end == -1 {
-		return fmt.Errorf("invalid version file format")
-	}
-
-	frontmatter := content[4 : 4+end]
-	rest := content[4+end+5:]
-
-	// Parse and update frontmatter
-	lines := strings.Split(frontmatter, "\n")
-	found := false
-	for i, line := range lines {
-		key, _, ok := strings.Cut(line, ": ")
-		if ok && strings.TrimSpace(key) == "archived" {
-			if archived {
-				lines[i] = "archived: true"
-			} else {
-				lines[i] = "archived: false"
-			}
-			found = true
-			break
-		}
-	}
-	if !found {
-		// Add archived field if not present
-		if archived {
-			lines = append(lines, "archived: true")
-		} else {
-			lines = append(lines, "archived: false")
-		}
-	}
-
-	// Reconstruct the file
-	newFrontmatter := strings.Join(lines, "\n")
-	newContent := "---\n" + newFrontmatter + "\n---\n" + rest
 
 	// Atomic write: temp file + rename to avoid partial reads on concurrent FETCH.
 	tmp := versionFile + ".tmp"
-	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
+	if err := os.WriteFile(tmp, newContent, 0o644); err != nil {
 		return fmt.Errorf("write temp version file: %w", err)
 	}
 	if err := os.Rename(tmp, versionFile); err != nil {
@@ -1476,41 +1438,16 @@ func joinContent(existing, content []byte) ([]byte, error) {
 // store frontmatter (version, archived, previous-hash, publisher metadata)
 // followed by the document content.
 func buildVersionFile(versionsDir, base string, version int, content []byte, meta map[string]string) ([]byte, error) {
-	if err := validateMeta(meta); err != nil {
-		return nil, err
-	}
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("version: %d\n", version))
-	sb.WriteString("archived: false\n")
+	var prevData []byte
 	if version > 1 {
 		prevFile := resolveVersionFile(versionsDir, base, version-1)
-		prevData, err := os.ReadFile(prevFile)
+		var err error
+		prevData, err = os.ReadFile(prevFile)
 		if err != nil {
 			return nil, fmt.Errorf("read previous version for hashing: %w", err)
 		}
-		h := sha256.Sum256(prevData)
-		sb.WriteString(fmt.Sprintf("previous-hash: sha256-%x\n", h))
 	}
-	if len(meta) > 0 {
-		keys := make([]string, 0, len(meta))
-		for k := range meta {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			switch {
-			case k == "tags" && okfKeys[k]:
-				sb.WriteString(fmt.Sprintf("tags: %s\n", formatTagsList(meta[k])))
-			case okfKeys[k]:
-				sb.WriteString(fmt.Sprintf("%s: %s\n", k, meta[k]))
-			default:
-				sb.WriteString(fmt.Sprintf("%s%s: %s\n", metaPrefix, k, meta[k]))
-			}
-		}
-	}
-	sb.WriteString("---\n")
-	return append([]byte(sb.String()), content...), nil
+	return SerializeVersion(version, prevData, content, meta)
 }
 
 // ValidateMeta checks publisher metadata against the store's key, value, count,

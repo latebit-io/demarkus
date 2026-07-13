@@ -26,6 +26,8 @@ type Config struct {
 	LogFormat      string        // Log format: "text" (default) or "json"
 	LogLevel       string        // Log level: "debug", "info" (default), "warn", "error"
 	ReadOnly       bool          // Reject all write operations (PUBLISH, APPEND, ARCHIVE)
+	StoreBackend   string        // Document store backend: "file" (default) or "postgres"
+	PostgresDSN    string        // Postgres connection string (required for the postgres backend)
 }
 
 // NewConfig loads configuration from environment variables.
@@ -48,6 +50,8 @@ func NewConfig() (*Config, error) {
 	if v := getEnv("DEMARKUS_READ_ONLY", ""); v != "" {
 		config.ReadOnly = v == "1" || v == "true" || v == "yes"
 	}
+	config.StoreBackend = getEnv("DEMARKUS_STORE", "file")
+	config.PostgresDSN = getEnv("DEMARKUS_PG_DSN", "")
 
 	if config.RateLimit < 0 {
 		return config, fmt.Errorf("DEMARKUS_RATE_LIMIT must be non-negative (got %v)", config.RateLimit)
@@ -59,17 +63,25 @@ func NewConfig() (*Config, error) {
 		return config, fmt.Errorf("DEMARKUS_RATE_BURST must be at least 1 when rate limiting is enabled (got %d)", config.RateBurst)
 	}
 
-	if config.ContentDir == "" {
-		return config, errors.New("DEMARKUS_ROOT environment variable is required")
-	}
-
-	// Validate content directory exists and is readable.
-	info, err := os.Stat(config.ContentDir)
-	if err != nil {
-		return config, fmt.Errorf("content directory %q: %w", config.ContentDir, err)
-	}
-	if !info.IsDir() {
-		return config, fmt.Errorf("content directory %q is not a directory", config.ContentDir)
+	switch config.StoreBackend {
+	case "file":
+		if config.ContentDir == "" {
+			return config, errors.New("DEMARKUS_ROOT environment variable is required")
+		}
+		// Validate content directory exists and is readable.
+		info, err := os.Stat(config.ContentDir)
+		if err != nil {
+			return config, fmt.Errorf("content directory %q: %w", config.ContentDir, err)
+		}
+		if !info.IsDir() {
+			return config, fmt.Errorf("content directory %q is not a directory", config.ContentDir)
+		}
+	case "postgres":
+		if config.PostgresDSN == "" {
+			return config, errors.New("DEMARKUS_PG_DSN is required when DEMARKUS_STORE=postgres")
+		}
+	default:
+		return config, fmt.Errorf("DEMARKUS_STORE must be \"file\" or \"postgres\" (got %q)", config.StoreBackend)
 	}
 
 	return config, nil
