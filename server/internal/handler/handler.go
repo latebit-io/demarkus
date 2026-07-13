@@ -64,8 +64,9 @@ var reservedKeys = map[string]bool{
 // implementation is protocol/store.Store; alternative backends implement the
 // same contract. Error contract: methods that address a missing document or
 // directory return an error satisfying errors.Is(err, os.ErrNotExist), and
-// WriteVersion/Append surface version conflicts as store.ErrVersionExists /
-// store.ErrVersionConflict so responses map to the same protocol statuses on
+// writes surface the store sentinel errors (store.ErrConflict,
+// store.ErrVersionExists, store.ErrArchived, store.ErrNotModified,
+// store.ErrSizeLimit) so responses map to the same protocol statuses on
 // every backend.
 type DocumentStore interface {
 	Get(reqPath string, version int) (*store.Document, error)
