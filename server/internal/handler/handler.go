@@ -82,11 +82,26 @@ type DocumentStore interface {
 	Archive(reqPath string, archived bool) error
 }
 
+// LookupCatalog is the handler's view of the LOOKUP index, the catalog seam
+// alternative store backends implement alongside DocumentStore. The in-memory
+// implementation is catalog.Catalog, which the handler keeps current through
+// Put and Remove after each successful write; a backend that maintains its
+// catalog transactionally with the write (pgstore) implements Put and Remove
+// as no-ops. Every implementation must replicate catalog.Catalog's Lookup
+// semantics exactly: match scoring over tags and title, importance-ranked
+// ordering, scope, and filter predicates. Divergence between implementations
+// is a protocol bug; the storetest LOOKUP conformance suite is the contract.
+type LookupCatalog interface {
+	Lookup(query string, opts catalog.Options) ([]catalog.Result, error)
+	Put(docPath string, meta map[string]string, body []byte, modified time.Time)
+	Remove(docPath string)
+}
+
 // Handler serves markdown files from a content directory.
 type Handler struct {
 	ContentDir    string
 	Store         DocumentStore
-	Catalog       *catalog.Catalog        // LOOKUP index; nil disables LOOKUP and catalog updates
+	Catalog       LookupCatalog           // LOOKUP index; nil disables LOOKUP and catalog updates
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
 	Logger        *slog.Logger
 	ReadOnly      bool // reject all write operations
@@ -612,7 +627,12 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request) {
 		}
 	}
 
-	results := h.Catalog.Lookup(query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults})
+	results, err := h.Catalog.Lookup(query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults})
+	if err != nil {
+		h.logger().Error("lookup failed", "path", sanitize(req.Path), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
 
 	// Filter by read authorization before truncating to limit, so protected
 	// documents the requester cannot see never displace authorized matches and
@@ -644,7 +664,7 @@ func (h *Handler) catalogPut(reqPath string, body []byte, meta map[string]string
 	if h.Catalog == nil {
 		return
 	}
-	h.Catalog.Set(catalog.FromDocument(reqPath, meta, body, modified))
+	h.Catalog.Put(reqPath, meta, body, modified)
 }
 
 // catalogRemove drops a document from the LOOKUP catalog. No-op when no catalog

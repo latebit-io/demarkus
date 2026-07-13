@@ -64,7 +64,7 @@ func TestPredicateMatches(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseFilter(%q): %v", tt.filter, err)
 			}
-			if got := matchesAll(e, preds); got != tt.want {
+			if got := MatchesAll(e, preds); got != tt.want {
 				t.Errorf("matchesAll for %q = %v, want %v", tt.filter, got, tt.want)
 			}
 		})

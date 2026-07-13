@@ -55,6 +55,13 @@ func (c *Catalog) Set(e *Entry) {
 	c.entries[e.Path] = e
 }
 
+// Put derives an entry from a written document and records it. It is the
+// in-memory implementation of the handler's LookupCatalog seam; body is the
+// document content with store frontmatter already stripped.
+func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modified time.Time) {
+	c.Set(FromDocument(docPath, meta, body, modified))
+}
+
 // Remove deletes the entry for the given path, if present.
 func (c *Catalog) Remove(docPath string) {
 	c.mu.Lock()
@@ -83,16 +90,18 @@ type Options struct {
 // Lookup returns documents whose tags or title match at least one query term,
 // satisfy every filter predicate, and fall under the scope, ordered by
 // descending match count, then importance, then modification time, then path.
+// The error is always nil; the signature carries it for the handler's
+// LookupCatalog seam, where database-backed implementations can fail.
 //
 // The query "*" matches every catalogued document under the scope (filters
 // still apply): with all match scores equal, the ordering reduces to
 // importance — "the most important documents here" without guessing a
 // subject. This is the whole-catalog view that universe browsers build on.
-func (c *Catalog) Lookup(query string, opts Options) []Result {
+func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
 	matchAll := strings.TrimSpace(query) == "*"
-	terms := tokenize(query)
+	terms := Tokenize(query)
 	if !matchAll && len(terms) == 0 {
-		return nil
+		return nil, nil
 	}
 	scope := normalizeScope(opts.Scope)
 
@@ -102,7 +111,7 @@ func (c *Catalog) Lookup(query string, opts Options) []Result {
 		if !underScope(e.Path, scope) {
 			continue
 		}
-		if !matchesAll(e, opts.Filter) {
+		if !MatchesAll(e, opts.Filter) {
 			continue
 		}
 		if matchAll {
@@ -119,12 +128,13 @@ func (c *Catalog) Lookup(query string, opts Options) []Result {
 	if opts.Max > 0 && len(results) > opts.Max {
 		results = results[:opts.Max]
 	}
-	return results
+	return results, nil
 }
 
-// tokenize lowercases s and splits it into distinct whitespace-separated terms,
-// preserving first-seen order.
-func tokenize(s string) []string {
+// Tokenize lowercases s and splits it into distinct whitespace-separated terms,
+// preserving first-seen order. Exported so alternative LookupCatalog backends
+// tokenize queries identically to the in-memory catalog.
+func Tokenize(s string) []string {
 	seen := make(map[string]bool)
 	var out []string
 	for f := range strings.FieldsSeq(strings.ToLower(s)) {

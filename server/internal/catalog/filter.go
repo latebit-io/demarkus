@@ -78,8 +78,10 @@ func parseFilterTime(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid date %q (want RFC 3339 or YYYY-MM-DD)", s)
 }
 
-// matchesAll reports whether the entry satisfies every predicate.
-func matchesAll(e *Entry, preds []Predicate) bool {
+// MatchesAll reports whether the entry satisfies every predicate. Exported so
+// alternative LookupCatalog backends apply the exact same filter semantics as
+// the in-memory catalog; Predicate fields stay unexported on purpose.
+func MatchesAll(e *Entry, preds []Predicate) bool {
 	for _, p := range preds {
 		if !p.matches(e) {
 			return false

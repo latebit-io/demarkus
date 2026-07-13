@@ -115,11 +115,24 @@ resources:
     cpu: 1000m
     memory: 512Mi
 
-# Liveness + readiness use the demarkus CLI fetching /.well-known/agent-manifest.md
-# (always public per /architecture.md). Cache disabled via -no-cache so probe
-# does not write to the read-only root filesystem.
+# Startup, liveness + readiness use the demarkus CLI fetching
+# /.well-known/agent-manifest.md (always public per /architecture.md). Cache
+# disabled via -no-cache so probe does not write to the read-only root
+# filesystem.
+#
+# The startup probe holds liveness off until the server answers its first
+# request. The server does startup work before it serves anything: file mode
+# walks the world for the hash index and LOOKUP catalog; postgres mode may
+# backfill the catalog table on first boot after an upgrade (bounded at 60s
+# in-process). The default budget (30 x 10s = 300s) comfortably covers both;
+# without it, a slow startup would eat into the liveness failure threshold
+# and a large world could be restart-looped before it ever came up.
 probes:
   enabled: true
+  startup:
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
   liveness:
     initialDelaySeconds: 10
     periodSeconds: 30
