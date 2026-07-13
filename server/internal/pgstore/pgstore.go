@@ -31,6 +31,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
 // schema is applied idempotently at startup. Paths are stored canonical:
@@ -52,12 +53,26 @@ CREATE TABLE IF NOT EXISTS versions (
 	PRIMARY KEY (path, version)
 );
 CREATE INDEX IF NOT EXISTS versions_body_hash_idx ON versions (body_hash);
+CREATE TABLE IF NOT EXISTS catalog (
+	path        text COLLATE "C" PRIMARY KEY,
+	tags        jsonb NOT NULL,
+	tags_lower  jsonb NOT NULL,
+	importance  double precision NOT NULL,
+	title       text NOT NULL,
+	title_lower text NOT NULL,
+	meta        jsonb NOT NULL,
+	modified    timestamptz NOT NULL
+);
 `
 
 // queryTimeout bounds every store call. The DocumentStore interface carries
 // no context, so the deadline is applied here: a stalled Postgres fails the
 // request instead of holding its goroutine indefinitely.
 const queryTimeout = 10 * time.Second
+
+// initTimeout bounds Open's startup work; Init may backfill the whole LOOKUP
+// catalog on first boot, which must not crash-loop under the query budget.
+const initTimeout = 60 * time.Second
 
 // Store implements the handler's DocumentStore contract against Postgres.
 type Store struct {
@@ -74,9 +89,8 @@ func Open(dsn string, logger *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 	s := NewWithDB(db, logger)
-	// Bound startup like every other operation: a stalled ping or blocked
-	// DDL must fail fast instead of hanging the server indefinitely.
-	ctx, cancel := opCtx()
+	// Bound startup so a stalled ping, DDL, or backfill fails fast.
+	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
 	defer cancel()
 	if err := s.Init(ctx); err != nil {
 		// Best-effort cleanup of a pool that never became usable.
@@ -109,7 +123,8 @@ func prefixUpperBound(prefix string) string {
 	return prefix[:len(prefix)-1] + "0"
 }
 
-// Init verifies connectivity and applies the idempotent schema.
+// Init verifies connectivity, applies the idempotent schema, and backfills
+// missing LOOKUP catalog rows (the additive migration for pre-catalog worlds).
 func (s *Store) Init(ctx context.Context) error {
 	if err := s.db.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
@@ -117,7 +132,7 @@ func (s *Store) Init(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
-	return nil
+	return s.backfillCatalog(ctx)
 }
 
 // Close releases the connection pool.
@@ -126,7 +141,7 @@ func (s *Store) Close() error { return s.db.Close() }
 // Reset destroys every document and version. It exists for the conformance
 // suite, which needs a fresh store per run; never call it on live data.
 func (s *Store) Reset(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `TRUNCATE documents, versions`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `TRUNCATE documents, versions, catalog`); err != nil {
 		return fmt.Errorf("reset: %w", err)
 	}
 	return nil
@@ -531,6 +546,11 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		return nil, fmt.Errorf("update current v%d: %w", next, err)
 	}
 
+	// Catalog row rides the write tx: visible to every replica at commit.
+	if err := upsertCatalogRow(ctx, tx, p, catalog.FromDocument("/"+p, meta, content, now)); err != nil {
+		return nil, err
+	}
+
 	doc := &store.Document{
 		Content:  content,
 		Modified: now,
@@ -539,20 +559,33 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		Metadata: meta,
 	}
 
-	if keep := store.RetentionValue(meta); keep > 0 {
-		if cutoff := next - keep; cutoff >= 1 {
-			prune, err := s.pruneVersions(ctx, tx, p, cutoff)
-			if err != nil {
-				return nil, err
-			}
-			doc.Prune = prune
-		}
+	if err := s.applyRetention(ctx, tx, p, next, meta, doc); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit v%d: %w", next, err)
 	}
 	return doc, nil
+}
+
+// applyRetention prunes versions per the write's retention metadata, inside
+// the write transaction, recording the result on doc.
+func (s *Store) applyRetention(ctx context.Context, tx *sql.Tx, p string, next int, meta map[string]string, doc *store.Document) error {
+	keep := store.RetentionValue(meta)
+	if keep <= 0 {
+		return nil
+	}
+	cutoff := next - keep
+	if cutoff < 1 {
+		return nil
+	}
+	prune, err := s.pruneVersions(ctx, tx, p, cutoff)
+	if err != nil {
+		return err
+	}
+	doc.Prune = prune
+	return nil
 }
 
 // readTipForWrite loads the current version's stored bytes for the hash

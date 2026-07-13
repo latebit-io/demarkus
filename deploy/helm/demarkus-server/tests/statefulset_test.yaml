@@ -138,6 +138,8 @@ tests:
       probes.enabled: false
     asserts:
       - notExists:
+          path: spec.template.spec.containers[0].startupProbe
+      - notExists:
           path: spec.template.spec.containers[0].livenessProbe
       - notExists:
           path: spec.template.spec.containers[0].readinessProbe
@@ -154,6 +156,21 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].livenessProbe.exec.command
           content: "mark://localhost:6309/.well-known/agent-manifest.md"
+
+  - it: startup probe gates liveness with a first-boot budget
+    template: statefulset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].startupProbe.exec.command
+          content: "mark://localhost:6309/.well-known/agent-manifest.md"
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 30
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe.initialDelaySeconds
 
   - it: container image is the demarkus-server repo and relies on ENTRYPOINT
     template: statefulset.yaml

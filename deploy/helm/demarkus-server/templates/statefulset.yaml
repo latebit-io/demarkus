@@ -73,6 +73,18 @@ spec:
               protocol: UDP
               containerPort: {{ .Values.server.udpPort }}
           {{- if .Values.probes.enabled }}
+          # Holds liveness off during startup work (world walk / catalog
+          # backfill); see values.yaml.
+          startupProbe:
+            exec:
+              command:
+                - /demarkus
+                - -insecure
+                - -no-cache
+                - {{ printf "mark://localhost:%d/.well-known/agent-manifest.md" (int .Values.server.udpPort) | quote }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
           livenessProbe:
             exec:
               command:

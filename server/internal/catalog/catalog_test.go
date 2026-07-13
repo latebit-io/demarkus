@@ -5,6 +5,17 @@ import (
 	"time"
 )
 
+// mustLookup runs a lookup and fails the test on error (the in-memory catalog
+// never returns one; the signature exists for the LookupCatalog seam).
+func mustLookup(t *testing.T, c *Catalog, query string, opts Options) []Result {
+	t.Helper()
+	rs, err := c.Lookup(query, opts)
+	if err != nil {
+		t.Fatalf("Lookup(%q): %v", query, err)
+	}
+	return rs
+}
+
 // paths returns the result paths in order, for concise assertions.
 func paths(rs []Result) []string {
 	out := make([]string, len(rs))
@@ -70,7 +81,7 @@ func TestLookupMatching(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := paths(c.Lookup(tt.query, Options{}))
+			got := paths(mustLookup(t, c, tt.query, Options{}))
 			if !equalPaths(got, tt.want) {
 				t.Errorf("Lookup(%q) = %v, want %v", tt.query, got, tt.want)
 			}
@@ -89,7 +100,7 @@ func TestLookupRanking(t *testing.T) {
 	// Same score (1) as one-term but lower importance.
 	c.Set(&Entry{Path: "/also-one.md", Tags: []string{"middleware"}, Importance: 0.5, Modified: recent})
 
-	got := paths(c.Lookup("auth middleware", Options{}))
+	got := paths(mustLookup(t, c, "auth middleware", Options{}))
 	want := []string{"/two-terms.md", "/one-term.md", "/also-one.md"}
 	if !equalPaths(got, want) {
 		t.Errorf("ranking = %v, want %v", got, want)
@@ -105,7 +116,7 @@ func TestLookupRankingTiebreaks(t *testing.T) {
 	c.Set(&Entry{Path: "/a.md", Tags: []string{"go"}, Importance: 0.5, Modified: recent})
 	c.Set(&Entry{Path: "/c.md", Tags: []string{"go"}, Importance: 0.5, Modified: old})
 
-	got := paths(c.Lookup("go", Options{}))
+	got := paths(mustLookup(t, c, "go", Options{}))
 	want := []string{"/a.md", "/b.md", "/c.md"} // a,b newer (path tiebreak), c oldest last
 	if !equalPaths(got, want) {
 		t.Errorf("tiebreak = %v, want %v", got, want)
@@ -132,7 +143,7 @@ func TestLookupScope(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := paths(c.Lookup("go", Options{Scope: tt.scope}))
+			got := paths(mustLookup(t, c, "go", Options{Scope: tt.scope}))
 			if !equalPaths(got, tt.want) {
 				t.Errorf("scope %q = %v, want %v", tt.scope, got, tt.want)
 			}
@@ -145,12 +156,12 @@ func TestLookupMax(t *testing.T) {
 	for _, p := range []string{"/a.md", "/b.md", "/c.md", "/d.md"} {
 		c.Set(&Entry{Path: p, Tags: []string{"go"}, Importance: 0.5})
 	}
-	got := c.Lookup("go", Options{Max: 2})
+	got := mustLookup(t, c, "go", Options{Max: 2})
 	if len(got) != 2 {
 		t.Fatalf("Max=2 returned %d results", len(got))
 	}
 	// Max 0 means no cap.
-	if all := c.Lookup("go", Options{Max: 0}); len(all) != 4 {
+	if all := mustLookup(t, c, "go", Options{Max: 0}); len(all) != 4 {
 		t.Fatalf("Max=0 returned %d results, want 4", len(all))
 	}
 }
@@ -164,7 +175,7 @@ func TestLookupWithFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := paths(c.Lookup("go", Options{Filter: preds}))
+	got := paths(mustLookup(t, c, "go", Options{Filter: preds}))
 	want := []string{"/broker.md"}
 	if !equalPaths(got, want) {
 		t.Errorf("filtered lookup = %v, want %v", got, want)
@@ -174,7 +185,7 @@ func TestLookupWithFilter(t *testing.T) {
 func TestLookupScorePopulated(t *testing.T) {
 	c := New()
 	c.Set(&Entry{Path: "/two.md", Tags: []string{"auth", "middleware"}})
-	got := c.Lookup("auth middleware", Options{})
+	got := mustLookup(t, c, "auth middleware", Options{})
 	if len(got) != 1 || got[0].Score != 2 {
 		t.Fatalf("expected one result with score 2, got %+v", got)
 	}
@@ -189,34 +200,34 @@ func TestLookupMatchAll(t *testing.T) {
 
 	// "*" returns every catalogued doc, importance-ranked (scores all zero,
 	// so the tiebreak chain starts at importance).
-	got := paths(c.Lookup("*", Options{}))
+	got := paths(mustLookup(t, c, "*", Options{}))
 	want := []string{"/hub.md", "/docs/deep.md", "/mid.md", "/low.md"}
 	if !equalPaths(got, want) {
 		t.Fatalf("match-all order = %v, want %v", got, want)
 	}
 
 	// Scope and filters still narrow the universe.
-	if got := paths(c.Lookup("*", Options{Scope: "/docs/"})); !equalPaths(got, []string{"/docs/deep.md"}) {
+	if got := paths(mustLookup(t, c, "*", Options{Scope: "/docs/"})); !equalPaths(got, []string{"/docs/deep.md"}) {
 		t.Errorf("scoped match-all = %v", got)
 	}
 	preds, perr := ParseFilter("tag=go")
 	if perr != nil {
 		t.Fatalf("ParseFilter: %v", perr)
 	}
-	if got := paths(c.Lookup("*", Options{Filter: preds})); !equalPaths(got, []string{"/docs/deep.md", "/low.md"}) {
+	if got := paths(mustLookup(t, c, "*", Options{Filter: preds})); !equalPaths(got, []string{"/docs/deep.md", "/low.md"}) {
 		t.Errorf("filtered match-all = %v", got)
 	}
 	// Max caps it like any lookup.
-	if got := paths(c.Lookup("*", Options{Max: 1})); !equalPaths(got, []string{"/hub.md"}) {
+	if got := paths(mustLookup(t, c, "*", Options{Max: 1})); !equalPaths(got, []string{"/hub.md"}) {
 		t.Errorf("capped match-all = %v", got)
 	}
 	// Whitespace-padded star still counts; a star mixed with other terms is
 	// a normal query (star becomes a literal term) — "go" matches its two
 	// docs, NOT the whole catalog.
-	if got := paths(c.Lookup("  *  ", Options{})); len(got) != 4 {
+	if got := paths(mustLookup(t, c, "  *  ", Options{})); len(got) != 4 {
 		t.Errorf("padded star = %v", got)
 	}
-	if got := paths(c.Lookup("* go", Options{})); len(got) != 2 {
+	if got := paths(mustLookup(t, c, "* go", Options{})); len(got) != 2 {
 		t.Errorf("star-with-terms must behave as a term query, got %v", got)
 	}
 }

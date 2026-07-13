@@ -27,15 +27,14 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// currentWalker is the slice of a document store the catalog build needs;
-// both the file store and pgstore provide it.
+// currentWalker is the slice of a document store the catalog build needs.
 type currentWalker interface {
 	WalkCurrent(fn func(store.CurrentDoc) error) error
 }
 
-// buildCatalog builds the LOOKUP catalog by walking the store's current
-// documents. A failed walk leaves an empty catalog (lookups return no matches)
-// rather than aborting startup.
+// buildCatalog builds the in-memory LOOKUP catalog by walking current
+// documents. File-backend only: postgres serves LOOKUP from its catalog
+// table. A failed walk leaves an empty catalog rather than aborting startup.
 func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
 	cat := catalog.New()
 	if err := s.WalkCurrent(func(d store.CurrentDoc) error {
@@ -163,7 +162,7 @@ func main() {
 	defer func() { _ = listener.Close() }()
 
 	var docStore handler.DocumentStore
-	var walker currentWalker
+	var cat handler.LookupCatalog
 	switch cfg.StoreBackend {
 	case "postgres":
 		ps, err := pgstore.Open(cfg.PostgresDSN, logger)
@@ -177,7 +176,8 @@ func main() {
 			}
 		}()
 		logger.Info("store: postgres backend ready")
-		docStore, walker = ps, ps
+		// LOOKUP is DB-backed; a per-process index would diverge across pods.
+		docStore, cat = ps, ps
 	case "file":
 		s := store.New(cfg.ContentDir)
 		// BuildHashIndex clears the index before walking; continuing after a
@@ -188,7 +188,7 @@ func main() {
 			os.Exit(1)
 		}
 		logger.Info("content hash index built", "entries", s.HashIndexSize())
-		docStore, walker = s, s
+		docStore, cat = s, buildCatalog(s, logger)
 	default:
 		// Unreachable: ValidateStoreBackend rejected unknown values above.
 		// Kept explicit so a backend added there but not here fails loudly
@@ -196,8 +196,6 @@ func main() {
 		logger.Error("unknown store backend reached store init", "store", cfg.StoreBackend)
 		os.Exit(1)
 	}
-
-	cat := buildCatalog(walker, logger)
 
 	if cfg.TokensFile != "" {
 		if err := loadTokenStore(cfg.TokensFile); err != nil {

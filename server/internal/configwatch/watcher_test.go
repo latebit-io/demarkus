@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,6 +53,28 @@ func waitForCount(counter *atomic.Int32, want int32, deadline time.Duration) int
 	return counter.Load()
 }
 
+// awaitWatchLive touches a sentinel until a reload proves the watch is
+// registered (fsnotify misses pre-registration events; a single touch would
+// lose that same race), then drains stragglers and resets the counter.
+func awaitWatchLive(t *testing.T, dir string, calls *atomic.Int32, debounce time.Duration) {
+	t.Helper()
+	sentinel := filepath.Join(dir, "watch-live.sentinel")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if err := os.WriteFile(sentinel, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := waitForCount(calls, 1, debounce+250*time.Millisecond); got >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("watch never became live: no reload after repeated sentinel writes")
+		}
+	}
+	time.Sleep(2*debounce + 100*time.Millisecond)
+	calls.Store(0)
+}
+
 func TestRunValidatesInputs(t *testing.T) {
 	tests := []struct {
 		name string
@@ -88,7 +111,7 @@ func TestInPlaceWriteTriggersReload(t *testing.T) {
 	}
 	runInBackground(t, &w)
 
-	time.Sleep(50 * time.Millisecond) // let watcher attach
+	awaitWatchLive(t, dir, &calls, w.Debounce)
 	if err := os.WriteFile(target, []byte("v2"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +137,7 @@ func TestAtomicRenameTriggersReload(t *testing.T) {
 	}
 	runInBackground(t, &w)
 
-	time.Sleep(50 * time.Millisecond)
+	awaitWatchLive(t, dir, &calls, w.Debounce)
 	tmp := filepath.Join(dir, "tokens.toml.tmp")
 	if err := os.WriteFile(tmp, []byte("v2"), 0o600); err != nil {
 		t.Fatal(err)
@@ -133,7 +156,14 @@ func TestAtomicRenameTriggersReload(t *testing.T) {
 // indirection (here "current") into one of several content directories.
 // Swapping the indirection atomically retargets every leaf symlink at once,
 // the same way a process refreshing a mounted config tree does.
+//
+// Skipped on darwin: kqueue diffs directory entries by name, so a same-name
+// atomic symlink swap inside one rescan window emits nothing; Linux inotify
+// reports renames explicitly, so CI enforces the guarantee.
 func TestSymlinkRetargetTriggersReload(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("kqueue cannot observe a same-name atomic symlink swap; see comment above")
+	}
 	dir := t.TempDir()
 
 	v1 := filepath.Join(dir, "v1")
@@ -168,7 +198,7 @@ func TestSymlinkRetargetTriggersReload(t *testing.T) {
 	}
 	runInBackground(t, &w)
 
-	time.Sleep(50 * time.Millisecond)
+	awaitWatchLive(t, dir, &calls, w.Debounce)
 	// Atomic swap of the indirection: stage a new symlink and rename it over
 	// the old one. os.Rename replaces the destination atomically on POSIX.
 	staged := filepath.Join(dir, "current.new")
@@ -195,24 +225,28 @@ func TestDebounceCoalescesBurst(t *testing.T) {
 	w := Watcher{
 		Target:   target,
 		Reload:   func() error { calls.Add(1); return nil },
-		Debounce: 80 * time.Millisecond,
+		Debounce: 400 * time.Millisecond,
 		Logger:   discardLogger(),
 	}
 	runInBackground(t, &w)
 
-	time.Sleep(50 * time.Millisecond)
-	// Fire several writes well within the debounce window.
+	awaitWatchLive(t, dir, &calls, w.Debounce)
+	// The window is wide relative to the write pacing: a scheduler stall
+	// outlasting the debounce would fire it mid-burst and flake exactly-one.
 	for i := range 10 {
 		if err := os.WriteFile(target, []byte{byte('a' + i)}, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 
-	// Let the debounce window elapse and the reload fire.
-	time.Sleep(200 * time.Millisecond)
-	if got := calls.Load(); got != 1 {
+	// One coalesced reload, then a full window proving no straggler.
+	if got := waitForCount(&calls, 1, 2*time.Second); got != 1 {
 		t.Fatalf("expected exactly 1 reload from coalesced burst, got %d", got)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected no further reloads after the burst, got %d", got)
 	}
 }
 
