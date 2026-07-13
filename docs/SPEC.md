@@ -601,6 +601,10 @@ The Mark Protocol uses an append-only version model. Every write to a document c
 
 Version numbers are positive integers starting at 1, monotonically increasing by 1 for each write. Retention pruning never affects version numbering.
 
+The version model is defined over observable protocol behavior, not a storage medium. A server MAY persist versions in any store (the reference implementation ships a filesystem store and a PostgreSQL store) provided the stored version bytes (§9.4), version numbering, hash chain (§9.5), and verb semantics are preserved regardless of the persistence layer.
+
+Immutability covers document content and history, not store-owned operational state: the `archived` field (§9.4) of the current version MAY be updated in place by archive and unarchive operations rather than by creating a new version, since the flag is operational metadata, not content. The hash chain is unaffected because only a successor version hashes its predecessor, and the current version has no successor at the time its flag changes.
+
 ### 9.2. Path-Based Version Access
 
 Specific versions are accessed via the path structure:
@@ -615,7 +619,9 @@ The version segment MUST match the pattern `v` followed by a positive integer (n
 
 ### 9.3. On-Disk Layout
 
-Servers SHOULD store versioned documents using the following layout:
+This section describes the reference layout for filesystem-backed stores. A store backed by another medium (for example a relational database) is exempt from this layout but MUST persist the same stored version bytes (§9.4) and preserve the observable version model (§9.1) under its own representation.
+
+Filesystem-backed servers SHOULD store versioned documents using the following layout:
 
 ```text
 root/
@@ -734,13 +740,13 @@ Retention is intended for generated documents that are republished wholesale (gr
 
 Pruning requires no separate capability: it executes under the write authorization of the PUBLISH or APPEND that carries the key, the same trust level that can archive the document. A server MUST record version deletions in its audit log, attributing them to the authenticated writer (in the reference implementation: path, pruned version range, and token label).
 
-Because pruning is the store's only destructive filesystem operation, deletion paths MUST NOT be derived from request input: version numbers come from enumerating the document's own versions directory, and each deletion MUST be confined to the store root with symlink escapes rejected at delete time (the reference implementation resolves every removal inside an `os.Root` anchored at the store root, so a planted or raced symlink cannot redirect a delete outside the store, and a version file that is itself a symlink is unlinked, never followed).
+Because pruning is the store's only destructive operation, deletion targets MUST NOT be derived from request input: version numbers come from enumerating the document's own stored versions, and each deletion MUST be scoped to the document being pruned. A filesystem store MUST additionally confine every deletion to the store root with symlink escapes rejected at delete time (the reference implementation resolves every removal inside an `os.Root` anchored at the store root, so a planted or raced symlink cannot redirect a delete outside the store, and a version file that is itself a symlink is unlinked, never followed). A database store achieves the same confinement by binding deletions to the document's path and version-number parameters, never to interpolated request text.
 
 ## 10. Caching
 
 ### 10.1. ETag
 
-The server MUST compute an ETag for every successful FETCH response. The ETag is the SHA-256 hash of the raw file bytes (before any frontmatter stripping), formatted as 64 lowercase hexadecimal characters.
+The server MUST compute an ETag for every successful FETCH response. The ETag is the SHA-256 hash of the raw stored version bytes (§9.4, before any frontmatter stripping), formatted as 64 lowercase hexadecimal characters. Because every storage backend persists identical stored version bytes, a document's ETag is the same regardless of the backend serving it.
 
 ### 10.2. Conditional Requests
 
@@ -841,7 +847,7 @@ Servers MUST enforce read auth on FETCH, LIST, and VERSIONS operations. Content-
 
 ### 11.9. Versioned-Only Serving
 
-Servers MUST only serve documents that have been written through the protocol (i.e., documents with a `versions/` directory containing at least one version file). Flat files placed directly on the filesystem without version history MUST be treated as `not-found`.
+Servers MUST only serve documents that have been written through the protocol, i.e., documents with at least one stored version (in the filesystem layout, a `versions/` directory containing at least one version file). Content present in the storage medium without version history — such as flat files placed directly on the filesystem — MUST be treated as `not-found`.
 
 This ensures every served document has:
 

@@ -391,6 +391,27 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	}, nil
 }
 
+// DirEntry is one entry in a directory listing. It is backend-neutral: a
+// store implementation that is not a filesystem can still produce it.
+type DirEntry struct {
+	Name  string
+	IsDir bool
+}
+
+// ListEntries returns the backend-neutral directory listing used by the
+// server's DocumentStore contract. It applies the same filtering as ListDir.
+func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]DirEntry, error) {
+	entries, err := s.ListDir(reqPath, includeArchived)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DirEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, DirEntry{Name: e.Name(), IsDir: e.IsDir()})
+	}
+	return out, nil
+}
+
 // ListDir returns directory entries at the given path, excluding dot-files
 // and the versions/ directory. When includeArchived is false, archived
 // documents are omitted, as are subdirectories whose entire subtree contains
@@ -877,55 +898,17 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 		return fmt.Errorf("read version file: %w", err)
 	}
 
-	// Update archived flag in frontmatter via manual string parsing.
-	// buildVersionFile constructs frontmatter from scratch for new versions but
-	// has no inverse (parse-modify-serialize). Introducing a full round-trip
-	// parser just for this one toggle would add complexity with no benefit, so
-	// we update the single field in-place.
-	content := string(data)
-	if !strings.HasPrefix(content, "---\n") {
-		return fmt.Errorf("invalid version file format")
+	// Update the archived flag in-place via the shared frontmatter toggle;
+	// a full parse-modify-serialize round trip would add complexity with no
+	// benefit for this one operational field.
+	newContent, err := SetArchived(data, archived)
+	if err != nil {
+		return err
 	}
-
-	end := strings.Index(content[4:], "\n---\n")
-	if end == -1 {
-		return fmt.Errorf("invalid version file format")
-	}
-
-	frontmatter := content[4 : 4+end]
-	rest := content[4+end+5:]
-
-	// Parse and update frontmatter
-	lines := strings.Split(frontmatter, "\n")
-	found := false
-	for i, line := range lines {
-		key, _, ok := strings.Cut(line, ": ")
-		if ok && strings.TrimSpace(key) == "archived" {
-			if archived {
-				lines[i] = "archived: true"
-			} else {
-				lines[i] = "archived: false"
-			}
-			found = true
-			break
-		}
-	}
-	if !found {
-		// Add archived field if not present
-		if archived {
-			lines = append(lines, "archived: true")
-		} else {
-			lines = append(lines, "archived: false")
-		}
-	}
-
-	// Reconstruct the file
-	newFrontmatter := strings.Join(lines, "\n")
-	newContent := "---\n" + newFrontmatter + "\n---\n" + rest
 
 	// Atomic write: temp file + rename to avoid partial reads on concurrent FETCH.
 	tmp := versionFile + ".tmp"
-	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
+	if err := os.WriteFile(tmp, newContent, 0o644); err != nil {
 		return fmt.Errorf("write temp version file: %w", err)
 	}
 	if err := os.Rename(tmp, versionFile); err != nil {
@@ -961,7 +944,7 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 // forming a hash chain that allows chain integrity to be verified later.
 func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*Document, error) {
 	if int64(len(content)) > protocol.MaxBodyLength {
-		return nil, fmt.Errorf("content exceeds size limit")
+		return nil, ErrSizeLimit
 	}
 	if err := validateMeta(meta); err != nil {
 		return nil, err
@@ -989,12 +972,17 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	// file on disk), start at 1. Otherwise increment from the current version.
 	currentFile := filepath.Join(s.root, dir, base)
 	var next int
-	if _, err := os.Stat(currentFile); err != nil {
+	if info, err := os.Stat(currentFile); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			next = 1
 		} else {
 			return nil, fmt.Errorf("stat current file: %w", err)
 		}
+	} else if info.IsDir() {
+		// Reject the document/directory collision before any version file is
+		// written; failing later on the current-pointer rename would leave a
+		// dangling version file behind.
+		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path", reqPath)
 	} else {
 		next = s.CurrentVersion(reqPath) + 1
 	}
@@ -1023,7 +1011,7 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 
 	// Validate stored size after prepending frontmatter.
 	if int64(len(stored)) > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
-		return nil, fmt.Errorf("content exceeds size limit")
+		return nil, ErrSizeLimit
 	}
 
 	// Immutability guard + atomic write: O_CREATE|O_EXCL fails if the file
@@ -1469,41 +1457,16 @@ func joinContent(existing, content []byte) ([]byte, error) {
 // store frontmatter (version, archived, previous-hash, publisher metadata)
 // followed by the document content.
 func buildVersionFile(versionsDir, base string, version int, content []byte, meta map[string]string) ([]byte, error) {
-	if err := validateMeta(meta); err != nil {
-		return nil, err
-	}
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("version: %d\n", version))
-	sb.WriteString("archived: false\n")
+	var prevData []byte
 	if version > 1 {
 		prevFile := resolveVersionFile(versionsDir, base, version-1)
-		prevData, err := os.ReadFile(prevFile)
+		var err error
+		prevData, err = os.ReadFile(prevFile)
 		if err != nil {
 			return nil, fmt.Errorf("read previous version for hashing: %w", err)
 		}
-		h := sha256.Sum256(prevData)
-		sb.WriteString(fmt.Sprintf("previous-hash: sha256-%x\n", h))
 	}
-	if len(meta) > 0 {
-		keys := make([]string, 0, len(meta))
-		for k := range meta {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			switch {
-			case k == "tags" && okfKeys[k]:
-				sb.WriteString(fmt.Sprintf("tags: %s\n", formatTagsList(meta[k])))
-			case okfKeys[k]:
-				sb.WriteString(fmt.Sprintf("%s: %s\n", k, meta[k]))
-			default:
-				sb.WriteString(fmt.Sprintf("%s%s: %s\n", metaPrefix, k, meta[k]))
-			}
-		}
-	}
-	sb.WriteString("---\n")
-	return append([]byte(sb.String()), content...), nil
+	return SerializeVersion(version, prevData, content, meta)
 }
 
 // ValidateMeta checks publisher metadata against the store's key, value, count,

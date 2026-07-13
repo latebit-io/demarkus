@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -22,15 +21,22 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/logging"
+	"github.com/latebit-io/demarkus/server/internal/pgstore"
 	"github.com/latebit-io/demarkus/server/internal/ratelimit"
 	servertls "github.com/latebit-io/demarkus/server/internal/tls"
 	"github.com/quic-go/quic-go"
 )
 
+// currentWalker is the slice of a document store the catalog build needs;
+// both the file store and pgstore provide it.
+type currentWalker interface {
+	WalkCurrent(fn func(store.CurrentDoc) error) error
+}
+
 // buildCatalog builds the LOOKUP catalog by walking the store's current
 // documents. A failed walk leaves an empty catalog (lookups return no matches)
 // rather than aborting startup.
-func buildCatalog(s *store.Store, logger *slog.Logger) *catalog.Catalog {
+func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
 	cat := catalog.New()
 	if err := s.WalkCurrent(func(d store.CurrentDoc) error {
 		cat.Set(catalog.FromDocument(d.Path, d.Metadata, d.Body, d.Modified))
@@ -48,12 +54,14 @@ var version = "dev"
 
 // flagOverrides holds the CLI flag values that override env-derived config.
 type flagOverrides struct {
-	root     string
-	tlsCert  string
-	tlsKey   string
-	tokens   string
-	port     int
-	readOnly bool
+	root         string
+	tlsCert      string
+	tlsKey       string
+	tokens       string
+	storeBackend string
+	pgDSN        string
+	port         int
+	readOnly     bool
 }
 
 // applyFlagOverrides applies non-empty/non-zero CLI flags onto cfg. Flags take
@@ -74,6 +82,12 @@ func applyFlagOverrides(cfg *config.Config, o *flagOverrides) {
 	if o.tokens != "" {
 		cfg.TokensFile = o.tokens
 	}
+	if o.storeBackend != "" {
+		cfg.StoreBackend = o.storeBackend
+	}
+	if o.pgDSN != "" {
+		cfg.PostgresDSN = o.pgDSN
+	}
 	if o.readOnly {
 		cfg.ReadOnly = true
 	}
@@ -85,6 +99,8 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
 	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
+	storeBackend := flag.String("store", "", "document store backend: file or postgres (overrides DEMARKUS_STORE)")
+	pgDSN := flag.String("pg-dsn", "", "Postgres connection string for the postgres backend (overrides DEMARKUS_PG_DSN)")
 	readOnly := flag.Bool("read-only", false, "reject all write operations (also enabled via DEMARKUS_READ_ONLY)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
@@ -110,27 +126,19 @@ func main() {
 	}
 
 	applyFlagOverrides(cfg, &flagOverrides{
-		root:     *root,
-		port:     *port,
-		tlsCert:  *tlsCert,
-		tlsKey:   *tlsKey,
-		tokens:   *tokens,
-		readOnly: *readOnly,
+		root:         *root,
+		port:         *port,
+		tlsCert:      *tlsCert,
+		tlsKey:       *tlsKey,
+		tokens:       *tokens,
+		storeBackend: *storeBackend,
+		pgDSN:        *pgDSN,
+		readOnly:     *readOnly,
 	})
-	if cfg.ContentDir == "" {
-		logger.Error("content directory is required (set DEMARKUS_ROOT or use -root flag)")
-		os.Exit(1)
-	}
-	info, err := os.Stat(cfg.ContentDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			logger.Error("content directory does not exist", "path", cfg.ContentDir)
-			os.Exit(1)
-		}
-		logger.Error("cannot stat content directory", "path", cfg.ContentDir, "error", err)
-		os.Exit(1)
-	} else if !info.IsDir() {
-		logger.Error("content directory is not a directory", "path", cfg.ContentDir)
+	// Re-validate after flag overrides; NewConfig validated only the
+	// env-derived values.
+	if err := cfg.ValidateStoreBackend(); err != nil {
+		logger.Error("store configuration invalid", "error", err)
 		os.Exit(1)
 	}
 
@@ -154,14 +162,42 @@ func main() {
 	}
 	defer func() { _ = listener.Close() }()
 
-	s := store.New(cfg.ContentDir)
-	if err := s.BuildHashIndex(); err != nil {
-		logger.Warn("hash index build failed", "error", err)
-	} else {
+	var docStore handler.DocumentStore
+	var walker currentWalker
+	switch cfg.StoreBackend {
+	case "postgres":
+		ps, err := pgstore.Open(cfg.PostgresDSN, logger)
+		if err != nil {
+			logger.Error("postgres store setup failed", "error", err)
+			os.Exit(1)
+		}
+		defer func() {
+			if err := ps.Close(); err != nil {
+				logger.Warn("postgres store close failed", "error", err)
+			}
+		}()
+		logger.Info("store: postgres backend ready")
+		docStore, walker = ps, ps
+	case "file":
+		s := store.New(cfg.ContentDir)
+		// BuildHashIndex clears the index before walking; continuing after a
+		// failure would serve hash-based FETCHes from an empty or partial
+		// index, so a broken walk is fatal.
+		if err := s.BuildHashIndex(); err != nil {
+			logger.Error("hash index build failed", "error", err)
+			os.Exit(1)
+		}
 		logger.Info("content hash index built", "entries", s.HashIndexSize())
+		docStore, walker = s, s
+	default:
+		// Unreachable: ValidateStoreBackend rejected unknown values above.
+		// Kept explicit so a backend added there but not here fails loudly
+		// instead of silently running on the wrong store.
+		logger.Error("unknown store backend reached store init", "store", cfg.StoreBackend)
+		os.Exit(1)
 	}
 
-	cat := buildCatalog(s, logger)
+	cat := buildCatalog(walker, logger)
 
 	if cfg.TokensFile != "" {
 		if err := loadTokenStore(cfg.TokensFile); err != nil {
@@ -176,7 +212,7 @@ func main() {
 
 	h := &handler.Handler{
 		ContentDir: cfg.ContentDir,
-		Store:      s,
+		Store:      docStore,
 		Catalog:    cat,
 		Logger:     logger,
 		ReadOnly:   cfg.ReadOnly,
