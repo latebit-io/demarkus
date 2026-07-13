@@ -1345,7 +1345,7 @@ demarkus-token generate -paths "/*" -ops write -tokens tokens.toml
 ### Encryption at Rest
 
 **Server-side**:
-- Document storage: server's responsibility (filesystem encryption recommended)
+- Document storage: server's responsibility (filesystem encryption recommended; a database-backed store should encrypt the database connection, e.g. `sslmode=require`, and use database-level encryption at rest)
 - Audit logs: should be encrypted
 - Tokens: stored as hashes, not plaintext
 
