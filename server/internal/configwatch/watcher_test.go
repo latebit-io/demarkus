@@ -53,12 +53,9 @@ func waitForCount(counter *atomic.Int32, want int32, deadline time.Duration) int
 	return counter.Load()
 }
 
-// awaitWatchLive proves the watch is established before the change under
-// test: fsnotify only reports changes made after registration, so a flat
-// sleep flakes under load. It touches a sentinel until a reload is observed
-// (a single touch would lose the same race; pausing a debounce window per
-// touch lets a pending reload fire), then drains stragglers and resets the
-// counter.
+// awaitWatchLive touches a sentinel until a reload proves the watch is
+// registered (fsnotify misses pre-registration events; a single touch would
+// lose that same race), then drains stragglers and resets the counter.
 func awaitWatchLive(t *testing.T, dir string, calls *atomic.Int32, debounce time.Duration) {
 	t.Helper()
 	sentinel := filepath.Join(dir, "watch-live.sentinel")
@@ -160,12 +157,9 @@ func TestAtomicRenameTriggersReload(t *testing.T) {
 // Swapping the indirection atomically retargets every leaf symlink at once,
 // the same way a process refreshing a mounted config tree does.
 //
-// Skipped on darwin: fsnotify's kqueue backend diffs directory entries by
-// name, so an atomic same-name swap inside one rescan window emits nothing;
-// catching the staged link's brief existence is a scheduler race (the
-// historical flake here). Linux inotify reports renames explicitly, so CI
-// enforces the guarantee; macOS still works in practice because the staged
-// link's creation fires its own event.
+// Skipped on darwin: kqueue diffs directory entries by name, so a same-name
+// atomic symlink swap inside one rescan window emits nothing; Linux inotify
+// reports renames explicitly, so CI enforces the guarantee.
 func TestSymlinkRetargetTriggersReload(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("kqueue cannot observe a same-name atomic symlink swap; see comment above")

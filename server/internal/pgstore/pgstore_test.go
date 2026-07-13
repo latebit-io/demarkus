@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -200,6 +201,36 @@ func TestPostgresCatalogBackfill(t *testing.T) {
 		t.Fatalf("reconcile init: %v", err)
 	}
 	assertLookupCount(t, s, "go", 2)
+}
+
+// TestPostgresCatalogBackfillBatches forces the backfill past one batch
+// (batch size 100), proving the loop and its per-batch commits terminate.
+func TestPostgresCatalogBackfillBatches(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	if err := s.Reset(ctx); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	const docs = 120
+	for i := range docs {
+		path := fmt.Sprintf("/batch/doc-%03d.md", i)
+		if _, err := s.WriteVersion(path, 0, []byte("x"), map[string]string{"tags": "batch"}); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	db, err := sql.Open("pgx", testDSN(t))
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.ExecContext(ctx, `DELETE FROM catalog`); err != nil {
+		t.Fatalf("clear catalog: %v", err)
+	}
+	assertLookupCount(t, s, "batch", 0)
+	if err := s.Init(ctx); err != nil {
+		t.Fatalf("re-init: %v", err)
+	}
+	assertLookupCount(t, s, "batch", docs)
 }
 
 // assertLookupCount asserts how many documents a lookup matches.

@@ -115,12 +115,9 @@ resources:
     cpu: 1000m
     memory: 512Mi
 
-# All probes use the demarkus CLI fetching /.well-known/agent-manifest.md
-# (always public per /architecture.md); -no-cache keeps the read-only root
-# filesystem untouched. The startup probe (30 x 10s budget) holds liveness
-# off until the server answers: file mode walks the world at startup and
-# postgres mode may backfill the LOOKUP catalog (60s in-process bound), so
-# without it a large world could be restart-looped before ever coming up.
+# Probes exec the demarkus CLI against /.well-known/agent-manifest.md (always
+# public; -no-cache spares the read-only root fs). The startup probe covers
+# world walks and catalog backfill so a slow first boot is not restart-looped.
 probes:
   enabled: true
   startup:

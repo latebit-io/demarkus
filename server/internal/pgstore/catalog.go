@@ -12,12 +12,10 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
-// This file implements the handler's LookupCatalog seam. Catalog rows ride
-// the document write transaction, so every replica's LOOKUP is exactly as
-// current as the store. Parity split: lowercasing happens in Go at write
-// time (Postgres lower() diverges from strings.ToLower on unicode); SQL does
-// scope, scoring, ordering; filters and Max run through shared catalog code
-// so they cannot diverge.
+// Postgres LookupCatalog: rows ride the document write tx, so every
+// replica's LOOKUP is as current as the store. Lowercasing happens in Go at
+// write time (Postgres lower() diverges on unicode); filters reuse shared
+// catalog code so they cannot diverge.
 
 // upsertCatalogRow writes a document tip's catalog row inside the caller's
 // write transaction. Archived state is not stored: Lookup joins
@@ -98,12 +96,35 @@ func jsonObject(m map[string]string) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// backfillCatalog inserts catalog rows for document tips that have none, on
-// every Init: first boot after the table's introduction backfills the world,
-// later boots reconcile stragglers (docs written by an old binary during a
-// rolling deploy). Archived docs get rows too, so unarchive can restore
-// them. ON CONFLICT DO NOTHING keeps concurrent startups idempotent.
+// backfillBatchSize bounds tips (with full stored blobs) held in memory per
+// backfill round.
+const backfillBatchSize = 100
+
+// backfillCatalog inserts catalog rows for tips lacking them (pre-catalog
+// migration, rolling-deploy stragglers, archived docs included). Per-batch
+// commits let an interrupted startup resume where it left off.
 func (s *Store) backfillCatalog(ctx context.Context) error {
+	total := 0
+	for {
+		n, err := s.backfillBatch(ctx)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			break
+		}
+		total += n
+	}
+	if total > 0 {
+		s.logger.Info("lookup catalog backfilled", "entries", total)
+	}
+	return nil
+}
+
+// backfillBatch fills one batch of missing rows; the WHERE c.path IS NULL
+// predicate advances past committed batches, so no cursor is needed.
+// ON CONFLICT DO NOTHING keeps concurrent replica startups idempotent.
+func (s *Store) backfillBatch(ctx context.Context) (int, error) {
 	type tip struct {
 		path     string
 		stored   []byte
@@ -116,28 +137,30 @@ func (s *Store) backfillCatalog(ctx context.Context) error {
 		FROM documents d
 		JOIN versions v ON v.path = d.path AND v.version = d.current_version
 		LEFT JOIN catalog c ON c.path = d.path
-		WHERE c.path IS NULL`)
+		WHERE c.path IS NULL
+		ORDER BY d.path
+		LIMIT $1`, backfillBatchSize)
 	if err != nil {
-		return fmt.Errorf("catalog backfill read: %w", err)
+		return 0, fmt.Errorf("catalog backfill read: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var t tip
 		if err := rows.Scan(&t.path, &t.stored, &t.modified); err != nil {
-			return fmt.Errorf("catalog backfill read: %w", err)
+			return 0, fmt.Errorf("catalog backfill read: %w", err)
 		}
 		tips = append(tips, t)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("catalog backfill read: %w", err)
+		return 0, fmt.Errorf("catalog backfill read: %w", err)
 	}
 	if len(tips) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("catalog backfill: %w", err)
+		return 0, fmt.Errorf("catalog backfill: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, t := range tips {
@@ -145,21 +168,18 @@ func (s *Store) backfillCatalog(ctx context.Context) error {
 			store.ExtractMetadata(t.stored), store.ExtractBody(t.stored),
 			t.modified.UTC().Truncate(time.Second))
 		if err := insertCatalogRowIfAbsent(ctx, tx, t.path, entry); err != nil {
-			return fmt.Errorf("catalog backfill: %w", err)
+			return 0, fmt.Errorf("catalog backfill: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("catalog backfill: %w", err)
+		return 0, fmt.Errorf("catalog backfill: %w", err)
 	}
-	s.logger.Info("lookup catalog backfilled", "entries", len(tips))
-	return nil
+	return len(tips), nil
 }
 
-// Lookup replicates catalog.Catalog.Lookup exactly: score counts distinct
-// query terms matching a tag (exact) or the title (substring), both
-// case-insensitive; ordered by score, importance, modified, path. "*"
-// matches all under scope at score zero. Filters and Max run in Go via
-// shared catalog code.
+// Lookup replicates catalog.Catalog.Lookup's semantics exactly; the
+// storetest LOOKUP conformance suite is the contract. Filters and the Max
+// cap run in Go via shared catalog code.
 func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, error) {
 	matchAll := strings.TrimSpace(query) == "*"
 	terms := catalog.Tokenize(query)
@@ -198,6 +218,11 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 	}
 	// C-collated path asc equals the in-memory byte-wise tiebreak.
 	q += ` ORDER BY m.score DESC, m.importance DESC, m.modified DESC, m.path ASC`
+	// Filters run in Go, so SQL may truncate only when none are present.
+	if len(opts.Filter) == 0 && opts.Max > 0 {
+		args = append(args, opts.Max)
+		q += fmt.Sprintf(` LIMIT $%d`, len(args))
+	}
 
 	ctx, cancel := opCtx()
 	defer cancel()
