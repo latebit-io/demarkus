@@ -55,9 +55,8 @@ func (c *Catalog) Set(e *Entry) {
 	c.entries[e.Path] = e
 }
 
-// Put derives an entry from a written document and records it. It is the
-// in-memory implementation of the handler's LookupCatalog seam; body is the
-// document content with store frontmatter already stripped.
+// Put derives an entry from a written document and records it; body has
+// store frontmatter already stripped.
 func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modified time.Time) {
 	c.Set(FromDocument(docPath, meta, body, modified))
 }
@@ -90,8 +89,7 @@ type Options struct {
 // Lookup returns documents whose tags or title match at least one query term,
 // satisfy every filter predicate, and fall under the scope, ordered by
 // descending match count, then importance, then modification time, then path.
-// The error is always nil; the signature carries it for the handler's
-// LookupCatalog seam, where database-backed implementations can fail.
+// The error is always nil; the signature exists for the LookupCatalog seam.
 //
 // The query "*" matches every catalogued document under the scope (filters
 // still apply): with all match scores equal, the ordering reduces to
@@ -131,9 +129,9 @@ func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
 	return results, nil
 }
 
-// Tokenize lowercases s and splits it into distinct whitespace-separated terms,
-// preserving first-seen order. Exported so alternative LookupCatalog backends
-// tokenize queries identically to the in-memory catalog.
+// Tokenize lowercases s and splits it into distinct whitespace-separated
+// terms, first-seen order. Exported so LookupCatalog backends tokenize
+// identically.
 func Tokenize(s string) []string {
 	seen := make(map[string]bool)
 	var out []string

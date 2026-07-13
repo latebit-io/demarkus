@@ -70,9 +70,8 @@ CREATE TABLE IF NOT EXISTS catalog (
 // request instead of holding its goroutine indefinitely.
 const queryTimeout = 10 * time.Second
 
-// initTimeout bounds Open's startup work. Wider than queryTimeout because
-// Init may backfill the whole LOOKUP catalog on the first start after an
-// upgrade; per-request budgets would crash-loop a large world.
+// initTimeout bounds Open's startup work; Init may backfill the whole LOOKUP
+// catalog on first boot, which must not crash-loop under the query budget.
 const initTimeout = 60 * time.Second
 
 // Store implements the handler's DocumentStore contract against Postgres.
@@ -90,8 +89,7 @@ func Open(dsn string, logger *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 	s := NewWithDB(db, logger)
-	// Bound startup so a stalled ping, blocked DDL, or hung backfill fails
-	// instead of hanging the server indefinitely.
+	// Bound startup so a stalled ping, DDL, or backfill fails fast.
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
 	defer cancel()
 	if err := s.Init(ctx); err != nil {
@@ -126,8 +124,7 @@ func prefixUpperBound(prefix string) string {
 }
 
 // Init verifies connectivity, applies the idempotent schema, and backfills
-// the LOOKUP catalog table from document tips when it is empty (the additive
-// migration for worlds written before the catalog table existed).
+// missing LOOKUP catalog rows (the additive migration for pre-catalog worlds).
 func (s *Store) Init(ctx context.Context) error {
 	if err := s.db.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
@@ -549,8 +546,7 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		return nil, fmt.Errorf("update current v%d: %w", next, err)
 	}
 
-	// The LOOKUP catalog row rides the write transaction: every replica's
-	// Lookup sees this document the instant the write commits.
+	// Catalog row rides the write tx: visible to every replica at commit.
 	if err := upsertCatalogRow(ctx, tx, p, catalog.FromDocument("/"+p, meta, content, now)); err != nil {
 		return nil, err
 	}

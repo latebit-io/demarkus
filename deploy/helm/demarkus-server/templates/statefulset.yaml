@@ -73,9 +73,8 @@ spec:
               protocol: UDP
               containerPort: {{ .Values.server.udpPort }}
           {{- if .Values.probes.enabled }}
-          # Holds liveness off until the first successful response; covers
-          # startup work (hash index + catalog walk in file mode, catalog
-          # backfill in postgres mode) without inflating liveness thresholds.
+          # Holds liveness off during startup work (world walk / catalog
+          # backfill); see values.yaml.
           startupProbe:
             exec:
               command:

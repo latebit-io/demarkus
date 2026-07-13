@@ -9,10 +9,8 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
-// LookupBackend pairs a DocumentStore with the LookupCatalog that observes
-// it, the two halves the handler wires together. For the file backend the
-// catalog is a fresh in-memory catalog.Catalog; for pgstore both fields are
-// the same store, since it maintains its catalog inside write transactions.
+// LookupBackend pairs a DocumentStore with the LookupCatalog observing it:
+// file store + in-memory catalog, or pgstore as both.
 type LookupBackend struct {
 	Store   handler.DocumentStore
 	Catalog handler.LookupCatalog
@@ -22,11 +20,8 @@ type LookupBackend struct {
 type LookupFactory func(t *testing.T) LookupBackend
 
 // RunLookupConformance exercises the LookupCatalog contract: every backend
-// must rank, score, scope, and filter identically to the in-memory catalog.
-// The helpers drive the catalog exactly as the handler does (Put after each
-// successful write, Remove on archive, Put on unarchive), which for
-// transactional backends are no-ops layered over rows the store already
-// maintains — precisely the parity being proven.
+// must rank, score, scope, and filter identically. Helpers drive the catalog
+// exactly as the handler's write paths do.
 func RunLookupConformance(t *testing.T, factory LookupFactory) {
 	subtests := []struct {
 		name string
@@ -51,8 +46,7 @@ func RunLookupConformance(t *testing.T, factory LookupFactory) {
 }
 
 func testLookupMatching(t *testing.T, b LookupBackend) {
-	// Distinct importances make same-score orderings deterministic without
-	// depending on write timestamps.
+	// Distinct importances keep same-score orderings timestamp-independent.
 	catalogPublish(t, b, "/tagged.md", "body", map[string]string{"tags": "auth,Go", "title": "Unrelated", "importance": "0.6"})
 	catalogPublish(t, b, "/titled.md", "body", map[string]string{"tags": "misc", "title": "Auth Middleware Design"})
 	catalogPublish(t, b, "/substring-tag.md", "body", map[string]string{"tags": "golang", "title": "Nothing here"})
@@ -97,9 +91,9 @@ func testLookupRanking(t *testing.T, b LookupBackend) {
 }
 
 func testLookupTiebreaks(t *testing.T, b LookupBackend) {
-	// Same score, same importance: modification time breaks the tie, then
-	// path ascending. Writes stamp their own time, so derive the expected
-	// order from the stored documents instead of assuming same-second writes.
+	// Same score and importance: modified breaks the tie, then path asc.
+	// Derive the expected order from stored timestamps; writes may straddle
+	// a second boundary.
 	catalogPublish(t, b, "/tie/b.md", "x", map[string]string{"tags": "go", "importance": "0.5"})
 	catalogPublish(t, b, "/tie/a.md", "x", map[string]string{"tags": "go", "importance": "0.5"})
 
@@ -209,9 +203,8 @@ func testLookupMaxCap(t *testing.T, b LookupBackend) {
 	assertLookup(t, b, "go", catalog.Options{Max: 0}, "/m1.md", "/m2.md", "/m3.md")
 }
 
-// catalogPublish writes a version and updates the catalog the way the
-// handler's PUBLISH path does. Meta is passed through unvalidated; keep it
-// within store.ValidateMeta bounds.
+// catalogPublish writes a version and updates the catalog like the handler's
+// PUBLISH path.
 func catalogPublish(t *testing.T, b LookupBackend, path, body string, meta map[string]string) {
 	t.Helper()
 	doc, err := b.Store.WriteVersion(path, -1, []byte(body), meta)
@@ -221,8 +214,8 @@ func catalogPublish(t *testing.T, b LookupBackend, path, body string, meta map[s
 	b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
 }
 
-// catalogArchive archives a document and updates the catalog the way the
-// handler's ARCHIVE path does.
+// catalogArchive archives a document and updates the catalog like the
+// handler's ARCHIVE path.
 func catalogArchive(t *testing.T, b LookupBackend, path string) {
 	t.Helper()
 	if err := b.Store.Archive(path, true); err != nil {
@@ -231,8 +224,8 @@ func catalogArchive(t *testing.T, b LookupBackend, path string) {
 	b.Catalog.Remove(path)
 }
 
-// catalogUnarchive unarchives a document and re-registers it the way the
-// handler's empty-body PUBLISH path does.
+// catalogUnarchive unarchives and re-registers a document like the handler's
+// empty-body PUBLISH path.
 func catalogUnarchive(t *testing.T, b LookupBackend, path string) {
 	t.Helper()
 	if err := b.Store.Archive(path, false); err != nil {

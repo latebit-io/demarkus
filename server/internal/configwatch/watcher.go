@@ -3,6 +3,11 @@
 // rename swaps and symlink retargets, where the target inode changes under a
 // stable path. Events are coalesced through a debounce window so a burst of
 // writes triggers one reload.
+//
+// Platform caveat: macOS kqueue diffs directory entries by name, so an
+// atomic same-name symlink swap within one rescan window produces no event;
+// Linux inotify (production) reports renames explicitly. The mount-refresh
+// pattern still works on macOS because staging the new link fires an event.
 package configwatch
 
 import (

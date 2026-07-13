@@ -12,26 +12,16 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
-// This file is the Postgres implementation of the handler's LookupCatalog
-// seam. Catalog rows are written inside the same transaction as the document
-// write (see upsertCatalogRow calls in write), so every replica sees a
-// LOOKUP catalog exactly as current as the store itself; there is no per-pod
-// in-RAM index to diverge.
-//
-// Parity with catalog.Catalog is split deliberately:
-//   - All lowercasing happens in Go at write time (tags_lower, title_lower),
-//     because Postgres lower() and Go strings.ToLower disagree on unicode
-//     edge cases. The SQL query only ever compares Go-lowered values against
-//     Go-lowered query terms (catalog.Tokenize).
-//   - Match scoring, archived exclusion, scope, and ordering run in SQL.
-//   - Filter predicates run in Go through catalog.MatchesAll, the same code
-//     the in-memory catalog uses, so filter semantics cannot diverge.
+// This file implements the handler's LookupCatalog seam. Catalog rows ride
+// the document write transaction, so every replica's LOOKUP is exactly as
+// current as the store. Parity split: lowercasing happens in Go at write
+// time (Postgres lower() diverges from strings.ToLower on unicode); SQL does
+// scope, scoring, ordering; filters and Max run through shared catalog code
+// so they cannot diverge.
 
-// upsertCatalogRow writes the catalog row for a document tip inside the
-// caller's write transaction. entry is derived via catalog.FromDocument, the
-// same derivation the handler performs for the in-memory catalog. Archived
-// state is not stored here: the lookup query joins documents.archived, so
-// archive/unarchive need no catalog writes and unarchive restores the entry.
+// upsertCatalogRow writes a document tip's catalog row inside the caller's
+// write transaction. Archived state is not stored: Lookup joins
+// documents.archived, so archive/unarchive need no catalog writes.
 func upsertCatalogRow(ctx context.Context, tx *sql.Tx, p string, entry *catalog.Entry) error {
 	args, err := catalogRowArgs(p, entry)
 	if err != nil {
@@ -51,9 +41,8 @@ func upsertCatalogRow(ctx context.Context, tx *sql.Tx, p string, entry *catalog.
 	return nil
 }
 
-// insertCatalogRowIfAbsent is the backfill variant of upsertCatalogRow: it
-// never overwrites, so a row created by a concurrent live write (which is
-// newer than the tip the backfill read) always wins.
+// insertCatalogRowIfAbsent is the backfill variant: it never overwrites, so
+// a concurrent live write's newer row always wins.
 func insertCatalogRowIfAbsent(ctx context.Context, tx *sql.Tx, p string, entry *catalog.Entry) error {
 	args, err := catalogRowArgs(p, entry)
 	if err != nil {
@@ -69,8 +58,8 @@ func insertCatalogRowIfAbsent(ctx context.Context, tx *sql.Tx, p string, entry *
 	return nil
 }
 
-// catalogRowArgs encodes an entry as the shared column values of the two
-// catalog INSERT statements. All lowercasing happens here, in Go.
+// catalogRowArgs encodes an entry as the column values shared by both
+// catalog INSERTs. All lowercasing happens here, in Go.
 func catalogRowArgs(p string, entry *catalog.Entry) ([]any, error) {
 	tagsJSON, err := jsonArray(entry.Tags)
 	if err != nil {
@@ -92,8 +81,8 @@ func catalogRowArgs(p string, entry *catalog.Entry) ([]any, error) {
 		entry.Title, strings.ToLower(entry.Title), metaJSON, entry.Modified}, nil
 }
 
-// jsonArray marshals a string slice as a jsonb array, never null: the lookup
-// query feeds the value to jsonb_array_elements_text, which rejects scalars.
+// jsonArray marshals as a jsonb array, never null:
+// jsonb_array_elements_text rejects scalars.
 func jsonArray(ss []string) ([]byte, error) {
 	if ss == nil {
 		ss = []string{}
@@ -109,24 +98,18 @@ func jsonObject(m map[string]string) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// backfillCatalog inserts catalog rows for document tips that have none. It
-// runs on every Init: the first start after this table was introduced
-// backfills the whole world (the additive migration), and later starts
-// reconcile stragglers, e.g. documents written by an old binary during a
-// rolling deploy, which upserted no catalog rows. In the steady state the
-// query matches nothing. Archived documents get rows too; their entries stay
-// invisible to Lookup (the query excludes archived) but must exist so a
-// later unarchive restores them. ON CONFLICT DO NOTHING makes concurrent
-// replica startups idempotent and never overwrites a row a live write
-// created in the meantime.
+// backfillCatalog inserts catalog rows for document tips that have none, on
+// every Init: first boot after the table's introduction backfills the world,
+// later boots reconcile stragglers (docs written by an old binary during a
+// rolling deploy). Archived docs get rows too, so unarchive can restore
+// them. ON CONFLICT DO NOTHING keeps concurrent startups idempotent.
 func (s *Store) backfillCatalog(ctx context.Context) error {
 	type tip struct {
 		path     string
 		stored   []byte
 		modified time.Time
 	}
-	// Materialize before writing: database/sql allows one active statement
-	// per transaction, so reading and inserting cannot interleave.
+	// Materialize first: database/sql allows one active statement per tx.
 	var tips []tip
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT d.path, v.stored, v.modified
@@ -172,19 +155,16 @@ func (s *Store) backfillCatalog(ctx context.Context) error {
 	return nil
 }
 
-// Lookup implements the handler's LookupCatalog seam against the catalog
-// table, replicating catalog.Catalog.Lookup exactly: score is the count of
-// distinct query terms matching a tag (case-insensitive, exact) or the
-// non-empty title (case-insensitive substring); ordering is score desc,
-// importance desc, modified desc, path asc; "*" matches everything under
-// the scope with score zero. Filter predicates and the Max cap are applied
-// in Go via the shared catalog code.
+// Lookup replicates catalog.Catalog.Lookup exactly: score counts distinct
+// query terms matching a tag (exact) or the title (substring), both
+// case-insensitive; ordered by score, importance, modified, path. "*"
+// matches all under scope at score zero. Filters and Max run in Go via
+// shared catalog code.
 func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, error) {
 	matchAll := strings.TrimSpace(query) == "*"
 	terms := catalog.Tokenize(query)
 	if matchAll {
-		// Score must stay zero for every row so ordering reduces to
-		// importance, exactly like the in-memory match-all path.
+		// Zero terms keep every score zero: match-all ordering is importance.
 		terms = nil
 	} else if len(terms) == 0 {
 		return nil, nil
@@ -216,7 +196,7 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 	if !matchAll {
 		q += ` WHERE m.score > 0`
 	}
-	// C-collated path asc equals the in-memory Go byte-wise tiebreak.
+	// C-collated path asc equals the in-memory byte-wise tiebreak.
 	q += ` ORDER BY m.score DESC, m.importance DESC, m.modified DESC, m.path ASC`
 
 	ctx, cancel := opCtx()
@@ -270,14 +250,10 @@ func scanLookupRow(rows *sql.Rows) (catalog.Result, error) {
 	return r, nil
 }
 
-// Put implements the handler's LookupCatalog seam as a no-op: the catalog
-// row was already upserted inside the write transaction that produced the
-// document, which is the whole point of this backend. Doing it again here
-// would race other replicas' writes.
+// Put is a no-op: the write transaction already upserted the row; repeating
+// it here would race other replicas' writes.
 func (s *Store) Put(_ string, _ map[string]string, _ []byte, _ time.Time) {}
 
-// Remove implements the handler's LookupCatalog seam as a no-op: the row is
-// kept and Lookup excludes archived documents via the documents join, so the
-// archive transaction that flipped the flag already hid the entry (and a
-// later unarchive restores it) transactionally.
+// Remove is a no-op: Lookup excludes archived docs via the documents join,
+// so the archive transaction already hid the entry.
 func (s *Store) Remove(_ string) {}

@@ -59,11 +59,8 @@ func openStore(t *testing.T) *pgstore.Store {
 	return s
 }
 
-// TestPostgresLookupConformance runs the LOOKUP conformance suite against
-// pgstore's transactional catalog. The store is both halves of the backend
-// pair: catalog rows are maintained by its write transactions, and the
-// suite's handler-mirroring Put/Remove calls are the same no-ops the real
-// handler makes.
+// TestPostgresLookupConformance runs the LOOKUP conformance suite; the store
+// is both halves of the backend pair (rows maintained by its write txs).
 func TestPostgresLookupConformance(t *testing.T) {
 	s := openStore(t)
 	storetest.RunLookupConformance(t, func(t *testing.T) storetest.LookupBackend {
@@ -107,10 +104,9 @@ func replicaHandler(t *testing.T, s *pgstore.Store, ts *auth.TokenStore) *handle
 	}
 }
 
-// TestPostgresLookupMultiReplica is the multi-replica proof: two handler and
-// catalog instances over one database, with no shared process state. A write
-// handled by one replica must be visible to LOOKUP on the other immediately,
-// and an archive handled by the second must hide the document from the first.
+// TestPostgresLookupMultiReplica: two handler+catalog instances over one
+// database, no shared process state. A write via one must be visible to
+// LOOKUP on the other immediately; an archive via B must hide it from A.
 func TestPostgresLookupMultiReplica(t *testing.T) {
 	storeA, storeB := openStore(t), openStore(t)
 	if err := storeA.Reset(context.Background()); err != nil {
@@ -145,13 +141,10 @@ func TestPostgresLookupMultiReplica(t *testing.T) {
 	}
 }
 
-// TestPostgresCatalogBackfill covers the additive migration: a database with
-// documents but no catalog rows (a world written before the catalog table
-// existed) gets its catalog rebuilt from version tips on Init. Archived
-// documents get rows too, staying hidden until unarchived. Init also
-// reconciles partial gaps (documents that missed their catalog row, e.g.
-// written by an old binary during a rolling deploy) without touching rows
-// that already exist.
+// TestPostgresCatalogBackfill covers the additive migration: Init rebuilds
+// missing catalog rows from version tips (full pre-catalog worlds and
+// partial rolling-deploy gaps), including archived docs, without touching
+// existing rows.
 func TestPostgresCatalogBackfill(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()

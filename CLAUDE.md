@@ -16,6 +16,9 @@ demarkus-memory plugin; this file carries only what's specific to demarkus.
   hold up — disagreement backed by reasoning is expected.
 - Never silently swallow errors. Every error is explicitly handled — logged or
   surfaced. No `_ = fn()` without a comment.
+- Code comments are terse: 1-3 lines stating only what the code can't show
+  (why, invariants, platform caveats). No narration, no essays. When touching
+  code that has verbose comments, tighten them in the same edit.
 - After each implementation, run tests and `bash pre-commit.sh`.
 
 ## Required preflight (every session, before writing code)

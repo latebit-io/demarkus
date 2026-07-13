@@ -83,14 +83,11 @@ type DocumentStore interface {
 }
 
 // LookupCatalog is the handler's view of the LOOKUP index, the catalog seam
-// alternative store backends implement alongside DocumentStore. The in-memory
-// implementation is catalog.Catalog, which the handler keeps current through
-// Put and Remove after each successful write; a backend that maintains its
-// catalog transactionally with the write (pgstore) implements Put and Remove
-// as no-ops. Every implementation must replicate catalog.Catalog's Lookup
-// semantics exactly: match scoring over tags and title, importance-ranked
-// ordering, scope, and filter predicates. Divergence between implementations
-// is a protocol bug; the storetest LOOKUP conformance suite is the contract.
+// beside DocumentStore. The handler calls Put/Remove after successful writes
+// to keep the in-memory catalog current; backends that maintain the catalog
+// in the write transaction (pgstore) no-op them. Implementations must match
+// catalog.Catalog's Lookup semantics exactly; the storetest LOOKUP
+// conformance suite is the contract.
 type LookupCatalog interface {
 	Lookup(query string, opts catalog.Options) ([]catalog.Result, error)
 	Put(docPath string, meta map[string]string, body []byte, modified time.Time)

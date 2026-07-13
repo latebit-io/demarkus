@@ -32,12 +32,9 @@ type currentWalker interface {
 	WalkCurrent(fn func(store.CurrentDoc) error) error
 }
 
-// buildCatalog builds the in-memory LOOKUP catalog by walking the store's
-// current documents. File-backend only: the postgres backend serves LOOKUP
-// from its catalog table (maintained transactionally with each write, shared
-// by every replica), so it neither needs nor gets a per-process index. A
-// failed walk leaves an empty catalog (lookups return no matches) rather
-// than aborting startup.
+// buildCatalog builds the in-memory LOOKUP catalog by walking current
+// documents. File-backend only: postgres serves LOOKUP from its catalog
+// table. A failed walk leaves an empty catalog rather than aborting startup.
 func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
 	cat := catalog.New()
 	if err := s.WalkCurrent(func(d store.CurrentDoc) error {
@@ -179,9 +176,7 @@ func main() {
 			}
 		}()
 		logger.Info("store: postgres backend ready")
-		// LOOKUP is served from the database (catalog rows maintained in the
-		// write transaction), so no per-process catalog build: with replicas
-		// sharing one database, an in-RAM index would diverge across pods.
+		// LOOKUP is DB-backed; a per-process index would diverge across pods.
 		docStore, cat = ps, ps
 	case "file":
 		s := store.New(cfg.ContentDir)
