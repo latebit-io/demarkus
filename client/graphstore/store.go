@@ -194,11 +194,11 @@ func (s *Store) Save() error {
 	return os.Rename(tmp, s.path)
 }
 
-// Merge integrates a crawled graph into the store. Nodes are upserted with
-// fresh timestamps. For every source the crawl actually fetched, the stored
-// outgoing edge set is replaced by the crawl's, so deleted links and dropped
-// rel- predicates do not linger in backlink queries. The etags map provides
-// etag values keyed by URL. Returns the number of nodes upserted.
+// Merge integrates a crawled graph into the store; returns nodes upserted.
+// Stored nodes and their outgoing edge sets are replaced only for sources
+// the crawl actually read: an unread node (error/external/blank) never
+// regresses last-known-good data or drops edges it knows nothing about,
+// though never-seen unread nodes are still recorded.
 func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -212,6 +212,22 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	refreshed := make(map[string]bool)
 
 	for _, n := range g.AllNodes() {
+		if !observedStatus(n.Status) {
+			// Failed fetch: we learned nothing about this node. Keep the
+			// stored copy untouched (its CrawledAt keeps it authoritative
+			// against seeds); only record nodes we have never seen.
+			if s.nodes[n.URL] == nil {
+				s.nodes[n.URL] = &StoredNode{
+					URL:       n.URL,
+					Title:     n.Title,
+					Status:    n.Status,
+					LinkCount: n.LinkCount,
+					CrawledAt: now,
+				}
+				count++
+			}
+			continue
+		}
 		sn := &StoredNode{
 			URL:       n.URL,
 			Title:     n.Title,
@@ -224,9 +240,7 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 		}
 		s.nodes[n.URL] = sn
 		count++
-		if observedStatus(n.Status) {
-			refreshed[n.URL] = true
-		}
+		refreshed[n.URL] = true
 	}
 
 	s.dropEdgesFromLocked(refreshed)
