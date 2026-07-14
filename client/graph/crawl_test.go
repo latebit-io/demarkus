@@ -272,6 +272,22 @@ func TestCrawlRecordsLabelAndAnchor(t *testing.T) {
 	}
 }
 
+func TestCrawlRecordsLinkInsideInlineFormatting(t *testing.T) {
+	f := newMockFetcher()
+	f.add("host:6309", "/index.md", "# Home\n\n## Section\n\n**[Bold link](about.md)**")
+	f.add("host:6309", "/about.md", "# About\n")
+
+	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	if err != nil {
+		t.Fatalf("Crawl() error: %v", err)
+	}
+
+	e := findEdge(t, g, "mark://host:6309/index.md", "mark://host:6309/about.md", "")
+	if e.Label != "Bold link" || e.Anchor != "section" {
+		t.Errorf("edge = %+v, want Label=Bold link Anchor=section", e)
+	}
+}
+
 func TestCrawlAggregatesRepeatedLinks(t *testing.T) {
 	f := newMockFetcher()
 	f.add("host:6309", "/index.md", "# Home\n\n[first](about.md) then [second](about.md)")

@@ -45,6 +45,18 @@ func TestAnchoredLinksEmptyLabel(t *testing.T) {
 	}
 }
 
+func TestAnchoredLinksInsideInlineFormatting(t *testing.T) {
+	body := "# Title\n\n*see* **[bold](a.md)** and _[italic](b.md)_\n"
+	got := AnchoredLinks(body)
+	want := []AnchoredLink{
+		{Dest: "a.md", Label: "bold", Anchor: "title"},
+		{Dest: "b.md", Label: "italic", Anchor: "title"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AnchoredLinks = %+v, want %+v", got, want)
+	}
+}
+
 func TestAnchoredLinksMatchesExtract(t *testing.T) {
 	body := "# Title\n\n[a](a.md) and [a again](a.md#frag)\n\n## Section\n\n[b](b.md) [fragment only](#local)\n"
 	anchored := AnchoredLinks(body)

@@ -107,6 +107,15 @@ func TestExtractWithPositions(t *testing.T) {
 				{Dest: "url.md", Text: "hello world", OpenBracket: 0, CloseBracket: 16},
 			},
 		},
+		{
+			// The link's parent is an inline (Emphasis); the blockStart walk
+			// must skip inline ancestors, whose Lines() panics by contract.
+			name: "link inside bold",
+			body: "**[hello](url.md)**",
+			want: []LinkInfo{
+				{Dest: "url.md", Text: "hello", OpenBracket: 2, CloseBracket: 8},
+			},
+		},
 	}
 
 	for _, tt := range tests {

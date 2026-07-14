@@ -73,9 +73,13 @@ func ExtractWithPositions(body string) []LinkInfo {
 
 		// Inline nodes carry no segments, but the enclosing block does;
 		// headings cannot occur inside a block, so its start is in the same
-		// section as the link.
+		// section as the link. Skip inline ancestors (emphasis wrapping the
+		// link, etc.): BaseInline.Lines() panics by contract.
 		blockStart := -1
 		for p := link.Parent(); p != nil; p = p.Parent() {
+			if p.Type() != ast.TypeBlock {
+				continue
+			}
 			if lines := p.Lines(); lines != nil && lines.Len() > 0 {
 				blockStart = lines.At(0).Start
 				break
