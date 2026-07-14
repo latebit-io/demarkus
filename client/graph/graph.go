@@ -2,7 +2,11 @@
 // discovering link relationships between Mark Protocol documents.
 package graph
 
-import "sync"
+import (
+	"strconv"
+	"strings"
+	"sync"
+)
 
 // Node represents a document in the graph.
 type Node struct {
@@ -14,16 +18,54 @@ type Node struct {
 }
 
 // Edge represents a directed link from one document to another.
+// Identity is {From, To, Rel}: a plain body link (Rel "") and a typed
+// rel-<predicate> edge between the same pair are distinct edges.
 type Edge struct {
-	From string
-	To   string
+	From   string
+	To     string
+	Rel    string // typed-relation predicate ("" for plain body links)
+	Label  string // link label text of the first labeled occurrence
+	Anchor string // source section anchor of that occurrence (no '#')
+	Count  int    // occurrences aggregated into this edge (>= 1)
 }
+
+// Annotation renders the edge's provenance suffix for display.
+func (e *Edge) Annotation() string {
+	return EdgeAnnotation(e.Rel, e.Label, e.Anchor, e.Count)
+}
+
+// EdgeAnnotation renders the terse provenance suffix shared by every edge
+// formatter (client MCP, broker MCP, backlink lists). Empty for a plain
+// single-occurrence edge.
+func EdgeAnnotation(rel, label, anchor string, count int) string {
+	var parts []string
+	if label != "" {
+		parts = append(parts, strconv.Quote(label))
+	}
+	if anchor != "" {
+		parts = append(parts, "#"+anchor)
+	}
+	if count > 1 {
+		parts = append(parts, "x"+strconv.Itoa(count))
+	}
+	s := ""
+	if rel != "" {
+		s = " [" + rel + "]"
+	}
+	if len(parts) > 0 {
+		s += " (" + strings.Join(parts, ", ") + ")"
+	}
+	return s
+}
+
+// edgeKey is the identity of an edge for deduplication.
+type edgeKey struct{ from, to, rel string }
 
 // Graph is a concurrency-safe directed graph of document nodes and link edges.
 type Graph struct {
 	nodes   map[string]*Node
 	edges   []Edge
-	edgeSet map[Edge]struct{}
+	edgeIdx map[edgeKey]int
 	mu      sync.RWMutex
 }
 
@@ -31,7 +73,7 @@ type Graph struct {
 func New() *Graph {
 	return &Graph{
 		nodes:   make(map[string]*Node),
-		edgeSet: make(map[Edge]struct{}),
+		edgeIdx: make(map[edgeKey]int),
 	}
 }
 
@@ -42,17 +84,35 @@ func (g *Graph) AddNode(n *Node) {
 	g.nodes[n.URL] = n
 }
 
-// AddEdge adds a directed edge from one URL to another.
-// Duplicate edges are ignored.
+// AddEdge adds a plain (untyped, unlabeled) directed edge.
+// Occurrences of the same edge aggregate into its Count.
 func (g *Graph) AddEdge(from, to string) {
+	g.AddEdgeInfo(Edge{From: from, To: to})
+}
+
+// AddEdgeInfo adds or aggregates an edge keyed on {From, To, Rel}.
+// Count is normalized to at least 1; duplicates add their Count, and the
+// first occurrence with a non-empty Label supplies Label and Anchor.
+func (g *Graph) AddEdgeInfo(e Edge) { //nolint:gocritic // hugeParam: by value is intentional; the copy is normalized locally before insert
+	if e.Count < 1 {
+		e.Count = 1
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	e := Edge{From: from, To: to}
-	if _, exists := g.edgeSet[e]; exists {
+	key := edgeKey{from: e.From, to: e.To, rel: e.Rel}
+	i, exists := g.edgeIdx[key]
+	if !exists {
+		g.edgeIdx[key] = len(g.edges)
+		g.edges = append(g.edges, e)
 		return
 	}
-	g.edgeSet[e] = struct{}{}
-	g.edges = append(g.edges, e)
+	cur := &g.edges[i]
+	cur.Count += e.Count
+	if cur.Label == "" && e.Label != "" {
+		cur.Label, cur.Anchor = e.Label, e.Anchor
+	} else if cur.Label == "" && cur.Anchor == "" && e.Anchor != "" {
+		cur.Anchor = e.Anchor
+	}
 }
 
 // GetNode returns the node for a URL, or nil if not found.

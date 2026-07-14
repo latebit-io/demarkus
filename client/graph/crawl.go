@@ -4,8 +4,10 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -16,8 +18,9 @@ type Fetcher interface {
 
 // FetchResult holds the response from a fetch operation.
 type FetchResult struct {
-	Status string
-	Body   string
+	Status   string
+	Body     string
+	Metadata map[string]string // publisher metadata from the response, may be nil
 }
 
 // CrawlOptions configures the graph crawler.
@@ -39,6 +42,38 @@ func (o *CrawlOptions) applyDefaults() {
 type crawlItem struct {
 	url   string
 	depth int
+}
+
+// RelRef is a typed-relation reference parsed from rel-<predicate> metadata.
+type RelRef struct {
+	Rel    string // predicate, e.g. "supersedes"
+	Target string // resolved target URL
+}
+
+// RelEdges parses rel-<predicate> publisher-metadata keys into typed-relation
+// references. Values are comma-separated refs resolved against docURL.
+// Malformed refs (empty, internal whitespace) and self-references are skipped
+// silently: bad metadata must never fail a crawl.
+func RelEdges(docURL string, metadata map[string]string) []RelRef {
+	var refs []RelRef
+	for key, val := range metadata {
+		pred, ok := strings.CutPrefix(key, "rel-")
+		if !ok || pred == "" {
+			continue
+		}
+		for ref := range strings.SplitSeq(val, ",") {
+			ref = strings.TrimSpace(ref)
+			if ref == "" || strings.IndexFunc(ref, unicode.IsSpace) >= 0 {
+				continue
+			}
+			resolved := links.Resolve(docURL, ref)
+			if resolved == docURL {
+				continue
+			}
+			refs = append(refs, RelRef{Rel: pred, Target: resolved})
+		}
+	}
+	return refs
 }
 
 // Crawl performs a BFS crawl starting from startURL, following mark:// links
@@ -125,18 +160,26 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 					node.Status = result.Status
 					if result.Status == protocol.StatusOK {
 						node.Title = links.ExtractTitle(result.Body)
-						extracted := links.Extract(result.Body)
-						node.LinkCount = len(extracted)
+						anchored := mdoutline.AnchoredLinks(result.Body)
+						node.LinkCount = len(anchored) // body links only; rel- edges do not count
 
-						for _, dest := range extracted {
-							resolved := links.Resolve(item.url, dest)
-							g.AddEdge(item.url, resolved)
-
+						enqueue := func(resolved string) {
 							if item.depth < opts.MaxDepth && markVisited(resolved) {
 								wg.Add(1)
 								child := crawlItem{url: resolved, depth: item.depth + 1}
 								go func() { queue <- child }()
 							}
+						}
+
+						for _, l := range anchored {
+							resolved := links.Resolve(item.url, l.Dest)
+							g.AddEdgeInfo(Edge{From: item.url, To: resolved, Label: l.Label, Anchor: l.Anchor, Count: 1})
+							enqueue(resolved)
+						}
+
+						for _, r := range RelEdges(item.url, result.Metadata) {
+							g.AddEdgeInfo(Edge{From: item.url, To: r.Target, Rel: r.Rel, Count: 1})
+							enqueue(r.Target)
 						}
 					}
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -133,6 +134,129 @@ func TestMergeAddsEdges(t *testing.T) {
 	}
 }
 
+func TestMergeEnrichedEdgeIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g := graph.New()
+	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md", Label: "B doc", Anchor: "intro", Count: 3})
+	s.Merge(g, nil)
+	s.Merge(g, nil) // re-merging the same crawl must not inflate counts
+
+	edges := s.edges
+	if len(edges) != 1 {
+		t.Fatalf("EdgeCount = %d, want 1", len(edges))
+	}
+	e := edges[0]
+	if e.Label != "B doc" || e.Anchor != "intro" || e.Count != 3 {
+		t.Errorf("edge = %+v, want Label=B doc Anchor=intro Count=3", e)
+	}
+}
+
+func TestMergeReplacesRefreshedSourceEdges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g1 := graph.New()
+	g1.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1})
+	g1.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	g1.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/old.md", Rel: "supersedes"})
+	s.Merge(g1, nil)
+
+	// The doc dropped the link to old.md and its rel- key; a refreshed crawl
+	// must replace the whole outgoing set, not just upsert.
+	g2 := graph.New()
+	g2.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1})
+	g2.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	s.Merge(g2, nil)
+
+	if s.EdgeCount() != 1 {
+		t.Fatalf("EdgeCount = %d, want 1: %+v", s.EdgeCount(), s.edges)
+	}
+	if bl := s.Backlinks("mark://a:6309/old.md"); len(bl) != 0 {
+		t.Errorf("stale backlink survived refresh: %v", bl)
+	}
+}
+
+func TestMergeKeepsEdgesOfUnfetchedSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g1 := graph.New()
+	g1.AddNode(&graph.Node{URL: "mark://a:6309/x.md", Status: "ok", LinkCount: 1})
+	g1.AddEdgeInfo(graph.Edge{From: "mark://a:6309/x.md", To: "mark://a:6309/y.md"})
+	s.Merge(g1, nil)
+
+	// A later crawl that only saw x.md as an error must not drop the edges
+	// recorded when it was last read successfully.
+	g2 := graph.New()
+	g2.AddNode(&graph.Node{URL: "mark://a:6309/x.md", Status: "error"})
+	s.Merge(g2, nil)
+
+	if s.EdgeCount() != 1 {
+		t.Fatalf("EdgeCount = %d, want 1 (error-status source must keep edges)", s.EdgeCount())
+	}
+}
+
+func TestMergeKeepsDistinctRels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g := graph.New()
+	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md", Rel: "supersedes"})
+	s.Merge(g, nil)
+
+	if s.EdgeCount() != 2 {
+		t.Errorf("EdgeCount = %d, want 2", s.EdgeCount())
+	}
+}
+
+func TestLoadLegacyEdgesDefaultsCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	legacy := `{"version":1,"nodes":[{"url":"mark://a:6309/a.md","title":"A","status":"ok","link_count":1,"crawled_at":"2026-01-01T00:00:00Z"}],"edges":[{"from":"mark://a:6309/a.md","to":"mark://a:6309/b.md"}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	edges := s.edges
+	if len(edges) != 1 {
+		t.Fatalf("EdgeCount = %d, want 1", len(edges))
+	}
+	e := edges[0]
+	if e.Count != 1 || e.Rel != "" || e.Label != "" || e.Anchor != "" {
+		t.Errorf("legacy edge = %+v, want Count=1 and empty enrichment", e)
+	}
+}
+
+func TestLoadRejectsSchemaVersionMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	if err := os.WriteFile(path, []byte(`{"version":2,"nodes":[],"edges":[]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "unsupported schema version") {
+		t.Fatalf("Load = %v, want unsupported schema version error", err)
+	}
+}
+
 func TestBacklinks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
 	s, err := Load(path)
@@ -244,17 +368,18 @@ func TestBacklinksEnriched(t *testing.T) {
 	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "A", Status: "ok"})
 	g.AddNode(&graph.Node{URL: "mark://a:6309/b.md", Title: "B", Status: "ok"})
 	g.AddNode(&graph.Node{URL: "mark://a:6309/c.md", Title: "C", Status: "ok"})
-	g.AddEdge("mark://a:6309/a.md", "mark://a:6309/c.md")
+	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md", Label: "see C", Anchor: "notes", Count: 2})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md", Rel: "supersedes"})
 	g.AddEdge("mark://a:6309/b.md", "mark://a:6309/c.md")
 	s.Merge(g, nil)
 
 	entries := s.BacklinksEnriched("mark://a:6309/c.md")
-	if len(entries) != 2 {
-		t.Fatalf("len = %d, want 2", len(entries))
+	if len(entries) != 3 {
+		t.Fatalf("len = %d, want 3", len(entries))
 	}
-	// Sorted alphabetically.
-	if entries[0].URL != "mark://a:6309/a.md" {
-		t.Errorf("entries[0].URL = %q, want a.md", entries[0].URL)
+	// Sorted by URL then Rel: a.md plain, a.md supersedes, b.md.
+	if entries[0].URL != "mark://a:6309/a.md" || entries[0].Rel != "" {
+		t.Errorf("entries[0] = %+v, want a.md plain", entries[0])
 	}
 	if entries[0].Title != "A" {
 		t.Errorf("entries[0].Title = %q, want A", entries[0].Title)
@@ -262,8 +387,32 @@ func TestBacklinksEnriched(t *testing.T) {
 	if entries[0].Status != "ok" {
 		t.Errorf("entries[0].Status = %q, want ok", entries[0].Status)
 	}
-	if entries[1].URL != "mark://a:6309/b.md" {
-		t.Errorf("entries[1].URL = %q, want b.md", entries[1].URL)
+	if entries[0].Label != "see C" || entries[0].Anchor != "notes" || entries[0].Count != 2 {
+		t.Errorf("entries[0] = %+v, want Label=see C Anchor=notes Count=2", entries[0])
+	}
+	if entries[1].URL != "mark://a:6309/a.md" || entries[1].Rel != "supersedes" {
+		t.Errorf("entries[1] = %+v, want a.md supersedes", entries[1])
+	}
+	if entries[2].URL != "mark://a:6309/b.md" {
+		t.Errorf("entries[2].URL = %q, want b.md", entries[2].URL)
+	}
+}
+
+func TestBacklinksDedupesMultiEdgeSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g := graph.New()
+	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md", Rel: "supersedes"})
+	s.Merge(g, nil)
+
+	backlinks := s.Backlinks("mark://a:6309/c.md")
+	if len(backlinks) != 1 {
+		t.Fatalf("len = %d, want 1 (source deduped across its edges)", len(backlinks))
 	}
 }
 
@@ -323,13 +472,13 @@ func TestCrawlAndPersist(t *testing.T) {
 		"host:6309/about.md": {body: "# About\n", etag: "etag-2"},
 	}
 
-	fetchFunc := func(host, path string) (string, string, string, error) {
+	fetchFunc := func(host, path string) (graph.FetchResult, error) {
 		key := host + path
 		p, ok := pages[key]
 		if !ok {
-			return "not-found", "", "", nil
+			return graph.FetchResult{Status: "not-found"}, nil
 		}
-		return "ok", p.body, p.etag, nil
+		return graph.FetchResult{Status: "ok", Body: p.body, Metadata: map[string]string{"etag": p.etag}}, nil
 	}
 
 	parseURL := func(raw string) (string, string, error) {
@@ -384,8 +533,8 @@ func TestCrawlAndPersist(t *testing.T) {
 func TestCrawlAndPersist_NilStore(t *testing.T) {
 	var s *Store
 
-	fetchFunc := func(_, _ string) (string, string, string, error) {
-		return "ok", "# Doc\n", "etag-1", nil
+	fetchFunc := func(_, _ string) (graph.FetchResult, error) {
+		return graph.FetchResult{Status: "ok", Body: "# Doc\n", Metadata: map[string]string{"etag": "etag-1"}}, nil
 	}
 	parseURL := func(_ string) (string, string, error) {
 		return "host:6309", "/doc.md", nil

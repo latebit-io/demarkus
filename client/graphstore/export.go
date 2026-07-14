@@ -14,8 +14,13 @@ import (
 // The title group handles backslash-escaped pipes (\|) so they aren't treated as column delimiters.
 var nodeRowRe = regexp.MustCompile(`^\|\s*\[[^\]]+\]\(([^)]+)\)\s*\|\s*((?:[^\\|]|\\.)*?)\s*\|\s*(\S+)\s*\|\s*(\d+)\s*\|$`)
 
-// edgeRowRe matches an edge table row: | from | to |
-var edgeRowRe = regexp.MustCompile(`^\|\s*(\S+)\s*\|\s*(\S+)\s*\|$`)
+// edgeRowRe matches an enriched edge row: | from | to | rel | label | anchor | count |
+// Rel and anchor may be empty; the label group handles escaped pipes like nodeRowRe's title.
+var edgeRowRe = regexp.MustCompile(`^\|\s*(\S+)\s*\|\s*(\S+)\s*\|\s*(\S*)\s*\|\s*((?:[^\\|]|\\.)*?)\s*\|\s*(\S*)\s*\|\s*(\d+)\s*\|$`)
+
+// legacyEdgeRowRe matches the pre-enrichment two-column row: | from | to |
+// Published /graph.md documents in the wild still carry this shape.
+var legacyEdgeRowRe = regexp.MustCompile(`^\|\s*(\S+)\s*\|\s*(\S+)\s*\|$`)
 
 // Export renders the graph store as a publishable markdown document.
 // The output contains mark:// links so crawling the document naturally
@@ -40,7 +45,10 @@ func (s *Store) Export() string {
 		if edges[i].From != edges[j].From {
 			return edges[i].From < edges[j].From
 		}
-		return edges[i].To < edges[j].To
+		if edges[i].To != edges[j].To {
+			return edges[i].To < edges[j].To
+		}
+		return edges[i].Rel < edges[j].Rel
 	})
 
 	var b strings.Builder
@@ -59,10 +67,11 @@ func (s *Store) Export() string {
 
 	if len(edges) > 0 {
 		b.WriteString("\n## Edges\n\n")
-		b.WriteString("| From | To |\n")
-		b.WriteString("|------|----|")
+		b.WriteString("| From | To | Rel | Label | Anchor | Count |\n")
+		b.WriteString("|------|----|-----|-------|--------|-------|")
 		for _, e := range edges {
-			b.WriteString(fmt.Sprintf("\n| %s | %s |", e.From, e.To))
+			b.WriteString(fmt.Sprintf("\n| %s | %s | %s | %s | %s | %d |",
+				e.From, e.To, e.Rel, escapeCell(e.Label), e.Anchor, max(e.Count, 1)))
 		}
 		b.WriteString("\n")
 	}
@@ -143,11 +152,23 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 				LinkCount: linkCount,
 			})
 		case "edges":
-			m := edgeRowRe.FindStringSubmatch(trimmed)
-			if m == nil {
+			// The two shapes are $-anchored with disjoint column counts,
+			// so they cannot cross-match; enriched first for clarity.
+			if m := edgeRowRe.FindStringSubmatch(trimmed); m != nil {
+				count, _ := strconv.Atoi(m[6])
+				edges = append(edges, StoredEdge{
+					From:   m[1],
+					To:     m[2],
+					Rel:    m[3],
+					Label:  unescapeCell(m[4]),
+					Anchor: m[5],
+					Count:  max(count, 1),
+				})
 				continue
 			}
-			edges = append(edges, StoredEdge{From: m[1], To: m[2]})
+			if m := legacyEdgeRowRe.FindStringSubmatch(trimmed); m != nil {
+				edges = append(edges, StoredEdge{From: m[1], To: m[2], Count: 1})
+			}
 		}
 	}
 

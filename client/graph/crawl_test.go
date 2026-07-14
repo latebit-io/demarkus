@@ -22,6 +22,10 @@ func (m *mockFetcher) add(host, path, body string) {
 	m.pages[host+path] = FetchResult{Status: "ok", Body: body}
 }
 
+func (m *mockFetcher) addWithMeta(host, path, body string, meta map[string]string) {
+	m.pages[host+path] = FetchResult{Status: "ok", Body: body, Metadata: meta}
+}
+
 func (m *mockFetcher) Fetch(host, path string) (FetchResult, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, host+path)
@@ -238,5 +242,118 @@ func TestCrawlNoCycles(t *testing.T) {
 	// Edges should be 3: a->b, b->c, c->a
 	if g.EdgeCount() != 3 {
 		t.Errorf("EdgeCount() = %d, want 3", g.EdgeCount())
+	}
+}
+
+func findEdge(t *testing.T, g *Graph, from, to, rel string) Edge {
+	t.Helper()
+	for _, e := range g.GetEdges() {
+		if e.From == from && e.To == to && e.Rel == rel {
+			return e
+		}
+	}
+	t.Fatalf("edge %s -> %s [%s] not found in %+v", from, to, rel, g.GetEdges())
+	return Edge{}
+}
+
+func TestCrawlRecordsLabelAndAnchor(t *testing.T) {
+	f := newMockFetcher()
+	f.add("host:6309", "/index.md", "# Home\n\n## Section\n\nSee [About page](about.md).")
+	f.add("host:6309", "/about.md", "# About\n")
+
+	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	if err != nil {
+		t.Fatalf("Crawl() error: %v", err)
+	}
+
+	e := findEdge(t, g, "mark://host:6309/index.md", "mark://host:6309/about.md", "")
+	if e.Label != "About page" || e.Anchor != "section" || e.Count != 1 {
+		t.Errorf("edge = %+v, want Label=About page Anchor=section Count=1", e)
+	}
+}
+
+func TestCrawlRecordsLinkInsideInlineFormatting(t *testing.T) {
+	f := newMockFetcher()
+	f.add("host:6309", "/index.md", "# Home\n\n## Section\n\n**[Bold link](about.md)**")
+	f.add("host:6309", "/about.md", "# About\n")
+
+	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	if err != nil {
+		t.Fatalf("Crawl() error: %v", err)
+	}
+
+	e := findEdge(t, g, "mark://host:6309/index.md", "mark://host:6309/about.md", "")
+	if e.Label != "Bold link" || e.Anchor != "section" {
+		t.Errorf("edge = %+v, want Label=Bold link Anchor=section", e)
+	}
+}
+
+func TestCrawlAggregatesRepeatedLinks(t *testing.T) {
+	f := newMockFetcher()
+	f.add("host:6309", "/index.md", "# Home\n\n[first](about.md) then [second](about.md)")
+	f.add("host:6309", "/about.md", "# About\n")
+
+	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	if err != nil {
+		t.Fatalf("Crawl() error: %v", err)
+	}
+
+	e := findEdge(t, g, "mark://host:6309/index.md", "mark://host:6309/about.md", "")
+	if e.Count != 2 {
+		t.Errorf("Count = %d, want 2", e.Count)
+	}
+	if e.Label != "first" {
+		t.Errorf("Label = %q, want first (first label wins)", e.Label)
+	}
+	if n := g.GetNode("mark://host:6309/index.md"); n.LinkCount != 2 {
+		t.Errorf("LinkCount = %d, want 2", n.LinkCount)
+	}
+}
+
+func TestCrawlIngestsRelMetadata(t *testing.T) {
+	f := newMockFetcher()
+	f.addWithMeta("host:6309", "/adr/0004.md", "# ADR 0004\n", map[string]string{
+		"rel-supersedes": "/adr/0002.md, /adr/0003.md",
+		"title":          "ADR 0004",
+	})
+	f.add("host:6309", "/adr/0002.md", "# ADR 0002\n")
+	f.add("host:6309", "/adr/0003.md", "# ADR 0003\n")
+
+	g, err := Crawl(context.Background(), "mark://host:6309/adr/0004.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	if err != nil {
+		t.Fatalf("Crawl() error: %v", err)
+	}
+
+	for _, target := range []string{"mark://host:6309/adr/0002.md", "mark://host:6309/adr/0003.md"} {
+		e := findEdge(t, g, "mark://host:6309/adr/0004.md", target, "supersedes")
+		if e.Count != 1 || e.Label != "" {
+			t.Errorf("edge = %+v, want Count=1 empty Label", e)
+		}
+		n := g.GetNode(target)
+		if n == nil || n.Status != "ok" {
+			t.Errorf("rel target %s not crawled: %+v", target, n)
+		}
+	}
+
+	// rel- edges do not count as body links.
+	if n := g.GetNode("mark://host:6309/adr/0004.md"); n.LinkCount != 0 {
+		t.Errorf("LinkCount = %d, want 0", n.LinkCount)
+	}
+}
+
+func TestCrawlSkipsMalformedRelRefs(t *testing.T) {
+	f := newMockFetcher()
+	f.addWithMeta("host:6309", "/doc.md", "# Doc\n", map[string]string{
+		"rel-supersedes": " , bad ref with spaces, bad\nnewline",
+		"rel-":           "/other.md",
+		"rel-self":       "/doc.md",
+	})
+
+	g, err := Crawl(context.Background(), "mark://host:6309/doc.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	if err != nil {
+		t.Fatalf("Crawl() error: %v", err)
+	}
+	if g.EdgeCount() != 0 {
+		t.Errorf("EdgeCount = %d, want 0: %+v", g.EdgeCount(), g.GetEdges())
 	}
 }

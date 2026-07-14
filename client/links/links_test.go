@@ -107,6 +107,25 @@ func TestExtractWithPositions(t *testing.T) {
 				{Dest: "url.md", Text: "hello world", OpenBracket: 0, CloseBracket: 16},
 			},
 		},
+		{
+			// The link's parent is an inline (Emphasis); the blockStart walk
+			// must skip inline ancestors, whose Lines() panics by contract.
+			name: "link inside bold",
+			body: "**[hello](url.md)**",
+			want: []LinkInfo{
+				{Dest: "url.md", Text: "hello", OpenBracket: 2, CloseBracket: 8},
+			},
+		},
+		{
+			// Links in a later block carry that block's start; the empty-label
+			// link keeps it even though its bracket positions are unknown.
+			name: "block start after leading paragraph",
+			body: "Intro paragraph.\n\n[link](a.md) and [](b.md)\n",
+			want: []LinkInfo{
+				{Dest: "a.md", Text: "link", OpenBracket: 18, CloseBracket: 23, BlockStart: 18},
+				{Dest: "b.md", Text: "", OpenBracket: -1, CloseBracket: -1, BlockStart: 18},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -127,6 +146,9 @@ func TestExtractWithPositions(t *testing.T) {
 				}
 				if got[i].CloseBracket != tt.want[i].CloseBracket {
 					t.Errorf("[%d].CloseBracket = %d, want %d", i, got[i].CloseBracket, tt.want[i].CloseBracket)
+				}
+				if got[i].BlockStart != tt.want[i].BlockStart {
+					t.Errorf("[%d].BlockStart = %d, want %d", i, got[i].BlockStart, tt.want[i].BlockStart)
 				}
 			}
 		})

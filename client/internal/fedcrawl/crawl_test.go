@@ -2,6 +2,7 @@ package fedcrawl
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -67,13 +68,19 @@ func (m *mockClient) Publish(host, path, body, token string, expectedVersion int
 }
 
 func (m *mockClient) addDoc(host, path, body, hash string) {
+	m.addDocWithMeta(host, path, body, hash, nil)
+}
+
+func (m *mockClient) addDocWithMeta(host, path, body, hash string, extra map[string]string) {
+	metadata := map[string]string{
+		"etag":         "etag-" + path,
+		"content-hash": hash,
+	}
+	maps.Copy(metadata, extra)
 	m.pages[host+path] = mockPage{
-		status: protocol.StatusOK,
-		body:   body,
-		metadata: map[string]string{
-			"etag":         "etag-" + path,
-			"content-hash": hash,
-		},
+		status:   protocol.StatusOK,
+		body:     body,
+		metadata: metadata,
 	}
 }
 
@@ -729,5 +736,41 @@ func TestConfigValidate_PublishRetention(t *testing.T) {
 	cfg.Publish.Retention = 0
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("zero publish.retention should validate: %v", err)
+	}
+}
+
+func TestCrawlerRecordsTypedAndProvenancedEdges(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://a.example.com"}
+	cfg.Crawl.MaxDocuments = 100
+
+	client := newMockClient()
+	client.addList("a.example.com:6309", "/", "- [index.md](index.md)\n- [notes.md](notes.md)\n")
+	client.addDocWithMeta("a.example.com:6309", "/index.md",
+		"# A\n\n## Guide\n\nSee [the notes](notes.md).",
+		"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		map[string]string{"rel-supersedes": "/old.md, mark://127.0.0.1:6309/dev.md"})
+	client.addDoc("a.example.com:6309", "/notes.md", "# Notes",
+		"sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	if _, err := crawler.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	exp := crawler.GraphExport()
+	for _, want := range []string{
+		// body link with label and source anchor
+		"| mark://a.example.com:6309/index.md | mark://a.example.com:6309/notes.md |  | the notes | guide | 1 |",
+		// typed relation from rel-supersedes metadata, resolved against the doc URL
+		"| mark://a.example.com:6309/index.md | mark://a.example.com:6309/old.md | supersedes |  |  | 1 |",
+	} {
+		if !contains(exp, want) {
+			t.Errorf("graph export missing %q\n---\n%s", want, exp)
+		}
+	}
+	// The loopback rel target must be filtered like a loopback body link.
+	if contains(exp, "127.0.0.1") {
+		t.Errorf("loopback rel target leaked into export\n---\n%s", exp)
 	}
 }

@@ -49,6 +49,8 @@ The document graph is the navigation system. Keeping it clean preserves usabilit
 3. Agent reads the linking documents to gather context and discover related topics.
 4. Graph persists at `~/.mark/graph.json` — each session builds on previous crawls.
 
+Each backlink carries provenance — the link's label text, the source section anchor it appears under, and an occurrence count — so the agent knows *why* and *where* a document links before fetching it. Publishers can also declare typed relations via `rel-<predicate>` metadata keys (`rel-supersedes: /adr/0002.md`, comma-separated for multiple targets); crawls ingest these as typed edges, so `mark_backlinks` can answer "what replaced this" (`[supersedes]`), not just "what mentions this".
+
 **Why it works:**
 Knowing who links *to* a page is as valuable as knowing what it links *to*. Agents build richer knowledge maps over multiple sessions without re-crawling.
 

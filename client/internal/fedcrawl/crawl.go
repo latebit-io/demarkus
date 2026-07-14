@@ -19,6 +19,7 @@ import (
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -477,25 +478,40 @@ func (c *Crawler) recordEdges(host, path, body string, meta map[string]string) {
 	url := "mark://" + host + path
 	base := "mark://" + host
 	var linkCount int
-	for _, link := range links.Extract(body) {
-		resolved := links.Resolve(base, link)
-		if !strings.HasPrefix(resolved, "mark://") {
+	for _, l := range mdoutline.AnchoredLinks(body) {
+		target, ok := c.normalizeTarget(links.Resolve(base, l.Dest))
+		if !ok {
 			continue
 		}
-		// Normalize the target's host so it is port-stable (mark://h and
-		// mark://h:6309 are the same node, not two), and drop loopback/localhost
-		// targets so a dev link in a crawled body never becomes a phantom portal
-		// node on the reading-room floor. Private and cluster-internal hosts are
-		// KEPT — real federated worlds (LAN, or a Kubernetes universe) are
-		// addressed by exactly those.
-		th, tp, err := fetch.ParseMarkURL(resolved)
-		if err != nil || isLoopbackHost(th) {
-			continue
-		}
-		c.graph.AddEdge(url, "mark://"+th+tp)
+		c.graph.AddEdgeInfo(graph.Edge{From: url, To: target, Label: l.Label, Anchor: l.Anchor, Count: 1})
 		linkCount++
 	}
+	// Typed relations from rel-<predicate> metadata, filtered like body links.
+	for _, r := range graph.RelEdges(url, meta) {
+		target, ok := c.normalizeTarget(r.Target)
+		if !ok {
+			continue
+		}
+		c.graph.AddEdgeInfo(graph.Edge{From: url, To: target, Rel: r.Rel, Count: 1})
+	}
 	c.graph.AddNode(&graph.Node{URL: url, Title: meta["title"], Status: "ok", LinkCount: linkCount})
+}
+
+// normalizeTarget keeps only mark:// targets with a port-stable host
+// (mark://h and mark://h:6309 are the same node, not two) and drops
+// loopback/localhost so a dev link in a crawled body never becomes a phantom
+// portal node on the reading-room floor. Private and cluster-internal hosts
+// are KEPT; real federated worlds (LAN, or a Kubernetes universe) are
+// addressed by exactly those.
+func (c *Crawler) normalizeTarget(resolved string) (string, bool) {
+	if !strings.HasPrefix(resolved, "mark://") {
+		return "", false
+	}
+	th, tp, err := fetch.ParseMarkURL(resolved)
+	if err != nil || isLoopbackHost(th) {
+		return "", false
+	}
+	return "mark://" + th + tp, true
 }
 
 // isLoopbackHost reports whether a mark:// host (host:port or bare) is loopback,

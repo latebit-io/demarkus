@@ -37,9 +37,22 @@ type StoredNode struct {
 }
 
 // StoredEdge is a directed link between two document URLs.
+// Identity is {From, To, Rel}; the enrichment fields are optional so
+// pre-enrichment graph.json files load unchanged (schema stays v1).
 type StoredEdge struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Rel    string `json:"rel,omitempty"`
+	Label  string `json:"label,omitempty"`
+	Anchor string `json:"anchor,omitempty"`
+	Count  int    `json:"count,omitempty"`
+}
+
+// edgeKey is the identity of a stored edge for deduplication.
+type edgeKey struct{ from, to, rel string }
+
+func (e *StoredEdge) key() edgeKey {
+	return edgeKey{from: e.From, to: e.To, rel: e.Rel}
 }
 
 // document is the on-disk JSON envelope.
@@ -55,7 +68,7 @@ type Store struct {
 	mu      sync.RWMutex
 	nodes   map[string]*StoredNode
 	edges   []StoredEdge
-	edgeSet map[StoredEdge]struct{}
+	edgeIdx map[edgeKey]int
 }
 
 // DefaultPath returns the default graph store location (~/.mark/graph.json).
@@ -76,7 +89,7 @@ func DefaultPath() string {
 func New() *Store {
 	return &Store{
 		nodes:   make(map[string]*StoredNode),
-		edgeSet: make(map[StoredEdge]struct{}),
+		edgeIdx: make(map[edgeKey]int),
 	}
 }
 
@@ -91,7 +104,7 @@ func Load(path string) (*Store, error) {
 	s := &Store{
 		path:    path,
 		nodes:   make(map[string]*StoredNode),
-		edgeSet: make(map[StoredEdge]struct{}),
+		edgeIdx: make(map[edgeKey]int),
 	}
 
 	data, err := os.ReadFile(path)
@@ -115,8 +128,11 @@ func Load(path string) (*Store, error) {
 		s.nodes[n.URL] = &n
 	}
 	for _, e := range doc.Edges {
-		if _, exists := s.edgeSet[e]; !exists {
-			s.edgeSet[e] = struct{}{}
+		if e.Count < 1 {
+			e.Count = 1 // legacy rows predate Count; an edge on disk means one occurrence
+		}
+		if _, exists := s.edgeIdx[e.key()]; !exists {
+			s.edgeIdx[e.key()] = len(s.edges)
 			s.edges = append(s.edges, e)
 		}
 	}
@@ -170,14 +186,21 @@ func (s *Store) Save() error {
 }
 
 // Merge integrates a crawled graph into the store. Nodes are upserted with
-// fresh timestamps. Edges are deduplicated. The etags map provides etag values
-// keyed by URL. Returns the number of nodes upserted.
+// fresh timestamps. For every source the crawl actually fetched, the stored
+// outgoing edge set is replaced by the crawl's, so deleted links and dropped
+// rel- predicates do not linger in backlink queries. The etags map provides
+// etag values keyed by URL. Returns the number of nodes upserted.
 func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC()
 	count := 0
+
+	// Sources whose full outgoing set this crawl observed. "external" and
+	// "error" nodes were not read, so their stored edges are kept; a fetched
+	// not-found/archived doc has no links and its old edges rightly drop.
+	refreshed := make(map[string]bool)
 
 	for _, n := range g.AllNodes() {
 		sn := &StoredNode{
@@ -192,12 +215,35 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 		}
 		s.nodes[n.URL] = sn
 		count++
+		if n.Status != "" && n.Status != "external" && n.Status != "error" {
+			refreshed[n.URL] = true
+		}
+	}
+
+	if len(refreshed) > 0 {
+		kept := make([]StoredEdge, 0, len(s.edges))
+		for _, e := range s.edges {
+			if !refreshed[e.From] {
+				kept = append(kept, e)
+			}
+		}
+		if len(kept) != len(s.edges) {
+			s.edges = kept
+			s.edgeIdx = make(map[edgeKey]int, len(kept))
+			for i := range kept {
+				s.edgeIdx[kept[i].key()] = i
+			}
+		}
 	}
 
 	for _, e := range g.GetEdges() {
-		se := StoredEdge{From: e.From, To: e.To}
-		if _, exists := s.edgeSet[se]; !exists {
-			s.edgeSet[se] = struct{}{}
+		se := StoredEdge{From: e.From, To: e.To, Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)}
+		if i, exists := s.edgeIdx[se.key()]; exists {
+			// Last-crawl-wins, mirroring node upserts: re-merging the same
+			// crawl is idempotent and counts never inflate.
+			s.edges[i] = se
+		} else {
+			s.edgeIdx[se.key()] = len(s.edges)
 			s.edges = append(s.edges, se)
 		}
 	}
@@ -206,13 +252,16 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 }
 
 // Backlinks returns all URLs that link to the given URL, sorted alphabetically.
+// A source appears once even when it carries several edges (plain plus typed).
 func (s *Store) Backlinks(url string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	seen := make(map[string]bool)
 	var result []string
 	for _, e := range s.edges {
-		if e.To == url {
+		if e.To == url && !seen[e.From] {
+			seen[e.From] = true
 			result = append(result, e.From)
 		}
 	}
@@ -220,36 +269,42 @@ func (s *Store) Backlinks(url string) []string {
 	return result
 }
 
-// BacklinkEntry is a backlink with enriched node metadata.
+// BacklinkEntry is a backlink with enriched node and edge metadata.
 type BacklinkEntry struct {
 	URL    string
 	Title  string
 	Status string
+	Rel    string // typed-relation predicate ("" for plain body links)
+	Label  string // link label text
+	Anchor string // source section anchor (no '#')
+	Count  int    // occurrences of this edge
 }
 
-// BacklinksEnriched returns backlinks for the given URL, enriched with
-// title and status from the store. Sorted alphabetically by URL.
+// BacklinksEnriched returns backlinks for the given URL, enriched with node
+// title/status and edge provenance. One entry per edge, so a source appears
+// once per relation. Sorted by URL then Rel.
 func (s *Store) BacklinksEnriched(url string) []BacklinkEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var urls []string
+	var entries []BacklinkEntry
 	for _, e := range s.edges {
-		if e.To == url {
-			urls = append(urls, e.From)
+		if e.To != url {
+			continue
 		}
-	}
-	sort.Strings(urls)
-
-	entries := make([]BacklinkEntry, 0, len(urls))
-	for _, u := range urls {
-		entry := BacklinkEntry{URL: u}
-		if n := s.nodes[u]; n != nil {
+		entry := BacklinkEntry{URL: e.From, Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)}
+		if n := s.nodes[e.From]; n != nil {
 			entry.Title = n.Title
 			entry.Status = n.Status
 		}
 		entries = append(entries, entry)
 	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].URL != entries[j].URL {
+			return entries[i].URL < entries[j].URL
+		}
+		return entries[i].Rel < entries[j].Rel
+	})
 	return entries
 }
 
@@ -293,23 +348,25 @@ func (s *Store) ToGraph() *graph.Graph {
 		})
 	}
 	for _, e := range s.edges {
-		g.AddEdge(e.From, e.To)
+		g.AddEdgeInfo(graph.Edge{From: e.From, To: e.To, Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)})
 	}
 	return g
 }
 
-// EtagFetcher wraps a fetch function that returns (status, body, etag, error)
-// and implements graph.Fetcher while collecting etags concurrently.
-// Use Etags() to retrieve the collected etags after crawling.
+// FetchFunc fetches a document and returns its status, body, and publisher
+// metadata; the etag rides in Metadata["etag"].
+type FetchFunc func(host, path string) (graph.FetchResult, error)
+
+// EtagFetcher wraps a FetchFunc and implements graph.Fetcher while collecting
+// etags concurrently. Use Etags() to retrieve them after crawling.
 type EtagFetcher struct {
-	fetchFunc func(host, path string) (status, body, etag string, err error)
+	fetchFunc FetchFunc
 	mu        sync.Mutex
 	etags     map[string]string
 }
 
 // NewEtagFetcher creates a fetcher that collects etags during crawl.
-// The fetchFunc should return (status, body, etag, error) for each document.
-func NewEtagFetcher(fetchFunc func(host, path string) (status, body, etag string, err error)) *EtagFetcher {
+func NewEtagFetcher(fetchFunc FetchFunc) *EtagFetcher {
 	return &EtagFetcher{
 		fetchFunc: fetchFunc,
 		etags:     make(map[string]string),
@@ -318,17 +375,17 @@ func NewEtagFetcher(fetchFunc func(host, path string) (status, body, etag string
 
 // Fetch implements graph.Fetcher.
 func (f *EtagFetcher) Fetch(host, path string) (graph.FetchResult, error) {
-	status, body, etag, err := f.fetchFunc(host, path)
+	res, err := f.fetchFunc(host, path)
 	if err != nil {
 		return graph.FetchResult{}, err
 	}
-	if etag != "" {
+	if etag := res.Metadata["etag"]; etag != "" {
 		url := "mark://" + host + path
 		f.mu.Lock()
 		f.etags[url] = etag
 		f.mu.Unlock()
 	}
-	return graph.FetchResult{Status: status, Body: body}, nil
+	return res, nil
 }
 
 // Etags returns the collected etags keyed by URL.
@@ -348,28 +405,30 @@ type CrawlOptions struct {
 	OnNode   func(*graph.Node) // optional per-node callback
 }
 
-// NewFetchFunc creates a fetch function for CrawlAndPersist from a protocol
-// client and token store. It resolves tokens per host and unpacks the result
-// into (status, body, etag, error).
-func NewFetchFunc(client *fetch.Client, tokenStore *tokens.Store) func(host, path string) (status, body, etag string, err error) {
-	return func(host, path string) (string, string, string, error) {
+// NewFetchFunc creates a FetchFunc for CrawlAndPersist from a protocol
+// client and token store, resolving tokens per host.
+func NewFetchFunc(client *fetch.Client, tokenStore *tokens.Store) FetchFunc {
+	return func(host, path string) (graph.FetchResult, error) {
 		r, fetchErr := client.Fetch(host, path, tokens.Resolve("", host, tokenStore))
 		if fetchErr != nil {
-			return "", "", "", fetchErr
+			return graph.FetchResult{}, fetchErr
 		}
-		return r.Response.Status, r.Response.Body, r.Response.Metadata["etag"], nil
+		return graph.FetchResult{
+			Status:   r.Response.Status,
+			Body:     r.Response.Body,
+			Metadata: r.Response.Metadata,
+		}, nil
 	}
 }
 
 // CrawlAndPersist runs a graph crawl, merges results into the store, and saves.
 // If the store is nil, the crawl runs but results are not persisted.
-// The fetchFunc should return (status, body, etag, error) for each document.
 // The parseURL function parses mark:// URLs into (host, path, error).
 // Returns the crawled graph.
 func (s *Store) CrawlAndPersist(
 	ctx context.Context,
 	startURL string,
-	fetchFunc func(host, path string) (status, body, etag string, err error),
+	fetchFunc FetchFunc,
 	parseURL func(string) (string, string, error),
 	opts CrawlOptions,
 ) (*graph.Graph, error) {

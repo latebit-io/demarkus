@@ -62,7 +62,7 @@ func TestAddEdge(t *testing.T) {
 	}
 }
 
-func TestAddEdgeIgnoresDuplicates(t *testing.T) {
+func TestAddEdgeAggregatesDuplicates(t *testing.T) {
 	g := New()
 	g.AddNode(&Node{URL: "mark://host/a.md"})
 	g.AddNode(&Node{URL: "mark://host/b.md"})
@@ -72,6 +72,62 @@ func TestAddEdgeIgnoresDuplicates(t *testing.T) {
 
 	if g.EdgeCount() != 1 {
 		t.Fatalf("EdgeCount() = %d, want 1", g.EdgeCount())
+	}
+	if got := g.GetEdges()[0].Count; got != 3 {
+		t.Fatalf("Count = %d, want 3", got)
+	}
+}
+
+func TestAddEdgeInfoDistinctRelsAreDistinctEdges(t *testing.T) {
+	g := New()
+	g.AddEdgeInfo(Edge{From: "mark://host/a.md", To: "mark://host/b.md"})
+	g.AddEdgeInfo(Edge{From: "mark://host/a.md", To: "mark://host/b.md", Rel: "supersedes"})
+
+	if g.EdgeCount() != 2 {
+		t.Fatalf("EdgeCount() = %d, want 2", g.EdgeCount())
+	}
+}
+
+func TestAddEdgeInfoFirstLabelWins(t *testing.T) {
+	g := New()
+	g.AddEdgeInfo(Edge{From: "mark://host/a.md", To: "mark://host/b.md"})
+	g.AddEdgeInfo(Edge{From: "mark://host/a.md", To: "mark://host/b.md", Label: "first", Anchor: "intro"})
+	g.AddEdgeInfo(Edge{From: "mark://host/a.md", To: "mark://host/b.md", Label: "second", Anchor: "usage"})
+
+	edges := g.GetEdges()
+	if len(edges) != 1 {
+		t.Fatalf("EdgeCount() = %d, want 1", len(edges))
+	}
+	e := edges[0]
+	if e.Label != "first" || e.Anchor != "intro" {
+		t.Errorf("Label/Anchor = %q/%q, want first/intro", e.Label, e.Anchor)
+	}
+	if e.Count != 3 {
+		t.Errorf("Count = %d, want 3", e.Count)
+	}
+}
+
+func TestEdgeAnnotation(t *testing.T) {
+	tests := []struct {
+		name   string
+		rel    string
+		label  string
+		anchor string
+		count  int
+		want   string
+	}{
+		{"plain", "", "", "", 1, ""},
+		{"rel only", "supersedes", "", "", 1, " [supersedes]"},
+		{"full provenance", "", "Getting started", "intro", 3, ` ("Getting started", #intro, x3)`},
+		{"rel with provenance", "supersedes", "see also", "context", 1, ` [supersedes] ("see also", #context)`},
+		{"count only", "", "", "", 2, " (x2)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EdgeAnnotation(tt.rel, tt.label, tt.anchor, tt.count); got != tt.want {
+				t.Errorf("EdgeAnnotation = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
