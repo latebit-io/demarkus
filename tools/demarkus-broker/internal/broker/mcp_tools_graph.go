@@ -92,21 +92,70 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context, claims *Claims) graphstor
 	}
 }
 
+// seedCheckInterval caps /graph.md seed checks at one per world per
+// interval; the first graph-tool call after a pod restart always checks.
+const seedCheckInterval = 5 * time.Minute
+
+// seedWorldGraph refreshes the broker's ephemeral graph store from the
+// world's published /graph.md aggregate, so a cold pod answers backlinks
+// without a crawl. Local crawls win (see graphstore.SeedFromExport).
+// Never fatal: every failure degrades silently to the unseeded store,
+// warn-logging real errors. Conditional on the stored seed etag; a
+// not-modified response keeps the previously seeded rows.
+func (g *mcpGateway) seedWorldGraph(ctx context.Context, claims *Claims, worldName string) {
+	g.graphSeedMu.Lock()
+	if last, ok := g.graphSeedChecked[worldName]; ok && time.Since(last) < seedCheckInterval {
+		g.graphSeedMu.Unlock()
+		return
+	}
+	if g.graphSeedChecked == nil {
+		g.graphSeedChecked = make(map[string]time.Time)
+	}
+	g.graphSeedChecked[worldName] = time.Now()
+	g.graphSeedMu.Unlock()
+
+	etag := g.graphStore.SeedEtag(worldName)
+	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
+		return g.dispatcher.FetchConditional(worldName, "/graph.md", token, etag)
+	})
+	if err != nil {
+		g.log.Warn("graph seed fetch failed", "world", worldName, "err", err)
+		return
+	}
+	// not-modified means the stored seed is current; any other non-ok
+	// status (a world without /graph.md is normal) means nothing to seed.
+	if result.Response.Status != protocol.StatusOK {
+		return
+	}
+
+	nodes, edges := graphstore.ParseExport(result.Response.Body)
+	if len(nodes) == 0 && len(edges) == 0 {
+		return
+	}
+	g.graphStore.SeedFromExport(nodes, edges)
+	if e := result.Response.Metadata["etag"]; e != "" {
+		g.graphStore.SetSeedEtag(worldName, e)
+	}
+}
+
 // handleMarkBacklinks queries the broker's ephemeral graph store
-// for documents linking to a given URL. Pure local read — no
-// dispatch — because the graph store is the index of "what we've
-// crawled" and that data already lives in the broker's process.
-// First-time callers see an empty result (and a hint to run
-// mark_graph first); broker-pod restarts reset to that state.
-func (g *mcpGateway) handleMarkBacklinks(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
+// for documents linking to a given URL, seeding the store from the
+// world's published /graph.md first so cold pods still answer.
+// First-time callers on a world with no /graph.md see an empty
+// result (and a hint to run mark_graph first).
+func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
 	// Validate the URL shape so an agent typo doesn't silently
 	// produce "no backlinks" against a malformed lookup key.
-	if _, _, perr := parseToolURL(raw); perr != nil {
+	worldName, _, perr := parseToolURL(raw)
+	if perr != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
+	}
+	if claims, ok := claimsFromCtx(ctx); ok {
+		g.seedWorldGraph(ctx, claims, worldName)
 	}
 	backlinks := g.graphStore.BacklinksEnriched(raw)
 	if len(backlinks) == 0 {
@@ -142,7 +191,8 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	if _, _, perr := parseToolURL(raw); perr != nil {
+	worldName, _, perr := parseToolURL(raw)
+	if perr != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
 	}
 	depth := max(1, min(req.GetInt("depth", 2), 5))
@@ -150,6 +200,10 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
+
+	// Seed before crawling so depth-limited crawls still benefit from
+	// hub context.
+	g.seedWorldGraph(ctx, claims, worldName)
 
 	crawled, crawlErr := g.graphStore.CrawlAndPersist(
 		ctx,

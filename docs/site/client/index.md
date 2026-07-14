@@ -51,7 +51,7 @@ demarkus edit --insecure -auth $TOKEN mark://localhost:6309/new-doc.md
 demarkus graph --insecure -depth 3 mark://localhost:6309/index.md
 ```
 
-Graph results are persisted to `~/.mark/graph.json` and accumulate across sessions. Each crawl merges new nodes and edges into the existing graph, so your map of the `mark://` network grows over time.
+Graph results are persisted to `~/.mark/graph.json` and accumulate across sessions. Each crawl merges new nodes and edges into the existing graph, so your map of the `mark://` network grows over time. The MCP graph tools also seed the store from the connected world's published `/graph.md` aggregate, so backlinks answer even before your first crawl; locally crawled data always takes precedence.
 
 ### Open Knowledge Format codec
 

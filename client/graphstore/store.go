@@ -55,20 +55,23 @@ func (e *StoredEdge) key() edgeKey {
 	return edgeKey{from: e.From, to: e.To, rel: e.Rel}
 }
 
-// document is the on-disk JSON envelope.
+// document is the on-disk JSON envelope. SeedEtags is additive (omitted when
+// empty) so pre-seed graph.json files round-trip unchanged; schema stays v1.
 type document struct {
-	Version int          `json:"version"`
-	Nodes   []StoredNode `json:"nodes"`
-	Edges   []StoredEdge `json:"edges"`
+	Version   int               `json:"version"`
+	Nodes     []StoredNode      `json:"nodes"`
+	Edges     []StoredEdge      `json:"edges"`
+	SeedEtags map[string]string `json:"seed_etags,omitempty"`
 }
 
 // Store is the persistent graph state.
 type Store struct {
-	path    string
-	mu      sync.RWMutex
-	nodes   map[string]*StoredNode
-	edges   []StoredEdge
-	edgeIdx map[edgeKey]int
+	path      string
+	mu        sync.RWMutex
+	nodes     map[string]*StoredNode
+	edges     []StoredEdge
+	edgeIdx   map[edgeKey]int
+	seedEtags map[string]string // host -> last seen /graph.md etag
 }
 
 // DefaultPath returns the default graph store location (~/.mark/graph.json).
@@ -88,8 +91,9 @@ func DefaultPath() string {
 // wants the disk-backing.
 func New() *Store {
 	return &Store{
-		nodes:   make(map[string]*StoredNode),
-		edgeIdx: make(map[edgeKey]int),
+		nodes:     make(map[string]*StoredNode),
+		edgeIdx:   make(map[edgeKey]int),
+		seedEtags: make(map[string]string),
 	}
 }
 
@@ -102,9 +106,10 @@ func Load(path string) (*Store, error) {
 	}
 
 	s := &Store{
-		path:    path,
-		nodes:   make(map[string]*StoredNode),
-		edgeIdx: make(map[edgeKey]int),
+		path:      path,
+		nodes:     make(map[string]*StoredNode),
+		edgeIdx:   make(map[edgeKey]int),
+		seedEtags: make(map[string]string),
 	}
 
 	data, err := os.ReadFile(path)
@@ -136,6 +141,7 @@ func Load(path string) (*Store, error) {
 			s.edges = append(s.edges, e)
 		}
 	}
+	maps.Copy(s.seedEtags, doc.SeedEtags)
 
 	return s, nil
 }
@@ -166,6 +172,9 @@ func (s *Store) Save() error {
 		Version: schemaVersion,
 		Nodes:   nodes,
 		Edges:   s.edges,
+	}
+	if len(s.seedEtags) > 0 {
+		doc.SeedEtags = s.seedEtags
 	}
 
 	data, err := json.MarshalIndent(doc, "", "  ")
@@ -215,40 +224,138 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 		}
 		s.nodes[n.URL] = sn
 		count++
-		if n.Status != "" && n.Status != "external" && n.Status != "error" {
+		if observedStatus(n.Status) {
 			refreshed[n.URL] = true
 		}
 	}
 
-	if len(refreshed) > 0 {
-		kept := make([]StoredEdge, 0, len(s.edges))
-		for _, e := range s.edges {
-			if !refreshed[e.From] {
-				kept = append(kept, e)
-			}
-		}
-		if len(kept) != len(s.edges) {
-			s.edges = kept
-			s.edgeIdx = make(map[edgeKey]int, len(kept))
-			for i := range kept {
-				s.edgeIdx[kept[i].key()] = i
-			}
-		}
-	}
+	s.dropEdgesFromLocked(refreshed)
 
 	for _, e := range g.GetEdges() {
 		se := StoredEdge{From: e.From, To: e.To, Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)}
-		if i, exists := s.edgeIdx[se.key()]; exists {
-			// Last-crawl-wins, mirroring node upserts: re-merging the same
-			// crawl is idempotent and counts never inflate.
-			s.edges[i] = se
-		} else {
-			s.edgeIdx[se.key()] = len(s.edges)
-			s.edges = append(s.edges, se)
-		}
+		s.upsertEdgeLocked(&se)
 	}
 
 	return count
+}
+
+// dropEdgesFromLocked removes every stored edge whose From is in sources and
+// rebuilds the index. Caller must hold s.mu.
+func (s *Store) dropEdgesFromLocked(sources map[string]bool) {
+	if len(sources) == 0 {
+		return
+	}
+	kept := make([]StoredEdge, 0, len(s.edges))
+	for _, e := range s.edges {
+		if !sources[e.From] {
+			kept = append(kept, e)
+		}
+	}
+	if len(kept) != len(s.edges) {
+		s.edges = kept
+		s.edgeIdx = make(map[edgeKey]int, len(kept))
+		for i := range kept {
+			s.edgeIdx[kept[i].key()] = i
+		}
+	}
+}
+
+// upsertEdgeLocked inserts or replaces an edge by identity. Last write wins,
+// mirroring node upserts: re-merging the same crawl is idempotent and counts
+// never inflate. Caller must hold s.mu.
+func (s *Store) upsertEdgeLocked(se *StoredEdge) {
+	if i, exists := s.edgeIdx[se.key()]; exists {
+		s.edges[i] = *se
+	} else {
+		s.edgeIdx[se.key()] = len(s.edges)
+		s.edges = append(s.edges, *se)
+	}
+}
+
+// observedStatus reports whether status means the document was actually
+// read, so its recorded outgoing edge set is complete. "external" and
+// "error" nodes were not read; their edge sets carry no information.
+func observedStatus(status string) bool {
+	return status != "" && status != "external" && status != "error"
+}
+
+// authoritativeLocked reports whether the stored node for url reflects a real
+// local crawl: a genuinely fetched status and a non-zero CrawledAt. Seeded
+// nodes carry zero CrawledAt, the durable "not locally observed" marker.
+// Caller must hold s.mu.
+func (s *Store) authoritativeLocked(url string) bool {
+	n := s.nodes[url]
+	if n == nil {
+		return false
+	}
+	return observedStatus(n.Status) && !n.CrawledAt.IsZero()
+}
+
+// SeedFromExport merges a published /graph.md aggregate (as parsed by
+// ParseExport) into the store. Local wins: nodes and edges of a locally
+// authoritative source are never touched. Seeded nodes get zero CrawledAt so
+// a later local crawl flips them authoritative through Merge. For every
+// non-authoritative source in the seed, the stored outgoing edge set is
+// replaced, so stale rows from an earlier seed do not linger. Returns the
+// number of nodes seeded.
+func (s *Store) SeedFromExport(nodes []StoredNode, edges []StoredEdge) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	added := 0
+	for _, n := range nodes {
+		if s.authoritativeLocked(n.URL) {
+			continue
+		}
+		sn := n
+		sn.CrawledAt = time.Time{}
+		sn.Etag = "" // the hub export carries no per-node etags
+		s.nodes[sn.URL] = &sn
+		added++
+	}
+
+	// Sources whose outgoing edge set this seed replaces: every source the
+	// aggregate actually observed (real status) plus every seed-edge From,
+	// excluding locally authoritative ones. Node-based inclusion matters
+	// when a source's outgoing set went to zero: no edge rows remain, yet
+	// its stale seeded edges must still drop (Merge's refreshed criterion,
+	// applied to the seed's view).
+	seeded := make(map[string]bool)
+	for _, n := range nodes {
+		if observedStatus(n.Status) && !s.authoritativeLocked(n.URL) {
+			seeded[n.URL] = true
+		}
+	}
+	for _, e := range edges {
+		if !s.authoritativeLocked(e.From) {
+			seeded[e.From] = true
+		}
+	}
+	s.dropEdgesFromLocked(seeded)
+
+	for _, e := range edges {
+		if !seeded[e.From] {
+			continue
+		}
+		e.Count = max(e.Count, 1)
+		s.upsertEdgeLocked(&e)
+	}
+
+	return added
+}
+
+// SeedEtag returns the last recorded /graph.md etag for host ("" if none).
+func (s *Store) SeedEtag(host string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.seedEtags[host]
+}
+
+// SetSeedEtag records the /graph.md etag for host, persisted by Save.
+func (s *Store) SetSeedEtag(host, etag string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seedEtags[host] = etag
 }
 
 // Backlinks returns all URLs that link to the given URL, sorted alphabetically.

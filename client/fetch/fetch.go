@@ -121,6 +121,18 @@ func (c *Client) Fetch(host, path, token string) (Result, error) {
 	return c.cachedRequest(host, path, token, protocol.VerbFetch)
 }
 
+// FetchConditional is Fetch with an explicit if-none-match etag, for callers
+// that track document freshness themselves (e.g. the graph seeder, whose
+// authenticated fetches skip the disk cache so the built-in conditional path
+// never fires). A not-modified status returns with an empty body. An empty
+// etag degrades to a plain Fetch.
+func (c *Client) FetchConditional(host, path, token, etag string) (Result, error) {
+	if etag == "" {
+		return c.Fetch(host, path, token)
+	}
+	return c.cachedRequestMeta(host, path, token, protocol.VerbFetch, map[string]string{"if-none-match": etag})
+}
+
 // ListOptions carries optional parameters for a LIST request.
 type ListOptions struct {
 	// IncludeArchived asks the server to include archived documents (and
