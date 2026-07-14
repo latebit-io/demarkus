@@ -482,12 +482,13 @@ func TestHandlerMarkAppend_NoToken(t *testing.T) {
 
 // stubClient is a mock markClient for testing handler logic.
 type stubClient struct {
-	fetchFn    func(host, path, token string) (fetch.Result, error)
-	listFn     func(host, path, token string) (fetch.Result, error)
-	versionsFn func(host, path, token string) (fetch.Result, error)
-	publishFn  func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	appendFn   func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	lookupFn   func(host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
+	fetchFn     func(host, path, token string) (fetch.Result, error)
+	fetchCondFn func(host, path, token, etag string) (fetch.Result, error)
+	listFn      func(host, path, token string) (fetch.Result, error)
+	versionsFn  func(host, path, token string) (fetch.Result, error)
+	publishFn   func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	appendFn    func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	lookupFn    func(host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 }
 
 func (s *stubClient) Fetch(host, path, token string) (fetch.Result, error) {
@@ -495,6 +496,14 @@ func (s *stubClient) Fetch(host, path, token string) (fetch.Result, error) {
 		return s.fetchFn(host, path, token)
 	}
 	return fetch.Result{}, nil
+}
+
+func (s *stubClient) FetchConditional(host, path, token, etag string) (fetch.Result, error) {
+	if s.fetchCondFn != nil {
+		return s.fetchCondFn(host, path, token, etag)
+	}
+	// Seed fetches against a stub with no graph.md behave like a missing doc.
+	return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 }
 func (s *stubClient) List(host, path, token string) (fetch.Result, error) {
 	if s.listFn != nil {

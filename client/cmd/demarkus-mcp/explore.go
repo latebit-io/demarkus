@@ -79,7 +79,7 @@ func (h *handler) markExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		mdoutline.CappedList(&b, out, exploreSectionCap, "links")
 	}
 
-	h.writeBacklinksSection(&b, docURL)
+	h.writeBacklinksSection(&b, "mark://"+host+path)
 	h.writeSiblingsSection(&b, host, path, token)
 
 	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; mark_fetch force=true for the full body\n", docURL)
@@ -91,16 +91,15 @@ func (h *handler) markExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.
 }
 
 // writeBacklinksSection appends the backlinks card section from the local
-// graph store. An empty or missing store degrades to a note, never an error.
-func (h *handler) writeBacklinksSection(b *strings.Builder, docURL string) {
-	fullURL := docURL
-	if strings.HasPrefix(docURL, "/") {
-		fullURL = h.defaultHost + docURL
-	}
+// graph store. fullURL must be canonical (mark://host:port/path) to match
+// crawled and seeded row keys. An empty or missing store degrades to a
+// note, never an error.
+func (h *handler) writeBacklinksSection(b *strings.Builder, fullURL string) {
 	if h.graphStore == nil {
 		b.WriteString("\n## Backlinks\n(graph store unavailable)\n")
 		return
 	}
+	h.seedGraph(h.defaultHost)
 	backlinks := h.graphStore.BacklinksEnriched(fullURL)
 	fmt.Fprintf(b, "\n## Backlinks (%d)\n", len(backlinks))
 	if len(backlinks) == 0 {

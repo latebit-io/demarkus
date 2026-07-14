@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graphstore"
@@ -42,6 +44,11 @@ type mcpGateway struct {
 	// it is ephemeral per-pod state, consistent with the wire-shape-
 	// adapter framing.
 	fetchSeen *sessionSeen
+	// graphSeedMu guards graphSeedChecked: worldName → last /graph.md
+	// seed check, the per-pod throttle for seedWorldGraph. The seed
+	// etag itself lives in graphStore (SeedEtag), keyed by worldName.
+	graphSeedMu      sync.Mutex
+	graphSeedChecked map[string]time.Time
 }
 
 // newMCPGateway constructs a gateway, registers the 16 tool

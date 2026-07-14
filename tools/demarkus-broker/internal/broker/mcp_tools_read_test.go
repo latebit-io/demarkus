@@ -24,21 +24,23 @@ import (
 type fakeDispatcher struct {
 	mu sync.Mutex
 
-	fetchFn    func(worldName, path, token string) (fetch.Result, error)
-	listFn     func(worldName, path, token string) (fetch.Result, error)
-	versionsFn func(worldName, path, token string) (fetch.Result, error)
-	lookupFn   func(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
-	publishFn  func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	appendFn   func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	archiveFn  func(worldName, path, token string) (fetch.Result, error)
+	fetchFn     func(worldName, path, token string) (fetch.Result, error)
+	fetchCondFn func(worldName, path, token, etag string) (fetch.Result, error)
+	listFn      func(worldName, path, token string) (fetch.Result, error)
+	versionsFn  func(worldName, path, token string) (fetch.Result, error)
+	lookupFn    func(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
+	publishFn   func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	appendFn    func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	archiveFn   func(worldName, path, token string) (fetch.Result, error)
 
-	fetchCalls    []dispatchCall
-	listCalls     []dispatchCall
-	versionsCalls []dispatchCall
-	lookupCalls   []lookupCall
-	publishCalls  []writeCall
-	appendCalls   []writeCall
-	archiveCalls  []dispatchCall
+	fetchCalls     []dispatchCall
+	fetchCondCalls []condCall
+	listCalls      []dispatchCall
+	versionsCalls  []dispatchCall
+	lookupCalls    []lookupCall
+	publishCalls   []writeCall
+	appendCalls    []writeCall
+	archiveCalls   []dispatchCall
 }
 
 // lookupCall records a LOOKUP dispatch for assertions.
@@ -54,6 +56,15 @@ type dispatchCall struct {
 	worldName string
 	path      string
 	token     string
+}
+
+// condCall records a FetchConditional dispatch (the graph seeder's
+// /graph.md checks) with the if-none-match etag it carried.
+type condCall struct {
+	worldName string
+	path      string
+	token     string
+	etag      string
 }
 
 // writeCall records a Publish/Append invocation. Captures the
@@ -77,6 +88,19 @@ func (f *fakeDispatcher) Fetch(worldName, path, token string) (fetch.Result, err
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
 	}
 	return fn(worldName, path, token)
+}
+
+func (f *fakeDispatcher) FetchConditional(worldName, path, token, etag string) (fetch.Result, error) {
+	f.mu.Lock()
+	f.fetchCondCalls = append(f.fetchCondCalls, condCall{worldName, path, token, etag})
+	fn := f.fetchCondFn
+	f.mu.Unlock()
+	if fn == nil {
+		// Seed fetches against a fake with no /graph.md behave like a
+		// missing doc so graph tests stay unseeded unless they opt in.
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}
+	return fn(worldName, path, token, etag)
 }
 
 func (f *fakeDispatcher) List(worldName, path, token string, _ fetch.ListOptions) (fetch.Result, error) {

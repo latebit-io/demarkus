@@ -22,6 +22,7 @@ import (
 // tools land in Slices 4–5.
 type worldDispatcher interface {
 	Fetch(worldName, path, token string) (fetch.Result, error)
+	FetchConditional(worldName, path, token, etag string) (fetch.Result, error)
 	List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	Versions(worldName, path, token string) (fetch.Result, error)
 	Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
@@ -107,6 +108,16 @@ func (p *worldPool) Fetch(worldName, path, token string) (fetch.Result, error) {
 		return fetch.Result{}, err
 	}
 	return c.Fetch(host, path, token)
+}
+
+// FetchConditional dispatches a FETCH with an explicit if-none-match etag
+// (the graph seeder tracks /graph.md freshness itself).
+func (p *worldPool) FetchConditional(worldName, path, token, etag string) (fetch.Result, error) {
+	c, host, err := p.clientFor(worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+	return c.FetchConditional(host, path, token, etag)
 }
 
 // List dispatches a LIST against worldName. Same proxy contract

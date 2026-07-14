@@ -98,6 +98,7 @@ func main() {
 // markClient defines the fetch operations used by MCP tool handlers.
 type markClient interface {
 	Fetch(host, path, token string) (fetch.Result, error)
+	FetchConditional(host, path, token, etag string) (fetch.Result, error)
 	List(host, path, token string) (fetch.Result, error)
 	ListWithOptions(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	Versions(host, path, token string) (fetch.Result, error)
@@ -121,6 +122,11 @@ type handler struct {
 	// broker MCP gateway so the two surfaces answer identically.
 	seenMu sync.Mutex
 	seen   map[string]fetchdedup.Doc
+
+	// seedMu guards seedChecked: host → last /graph.md seed check, the
+	// per-process throttle for seedGraph. Process-scoped like seen.
+	seedMu      sync.Mutex
+	seedChecked map[string]time.Time
 }
 
 // seenLookup returns the recorded identity for key, if any.
@@ -139,6 +145,58 @@ func (h *handler) seenRecord(key string, d fetchdedup.Doc) {
 		h.seen = make(map[string]fetchdedup.Doc)
 	}
 	h.seen[key] = d
+}
+
+// seedCheckInterval caps /graph.md seed checks at one per host per interval;
+// the first graph-tool call in a session always checks.
+const seedCheckInterval = 5 * time.Minute
+
+// seedGraph refreshes the local graph store from the world's published
+// /graph.md aggregate so backlink queries answer before any local crawl.
+// Local crawls win (see graphstore.SeedFromExport). Never fatal: every
+// failure degrades silently to the unseeded store, warn-logging real errors.
+func (h *handler) seedGraph(base string) {
+	if h.graphStore == nil || base == "" {
+		return
+	}
+	host, path, err := fetch.ParseMarkURL(base + "/graph.md")
+	if err != nil {
+		return
+	}
+
+	h.seedMu.Lock()
+	if last, ok := h.seedChecked[host]; ok && time.Since(last) < seedCheckInterval {
+		h.seedMu.Unlock()
+		return
+	}
+	if h.seedChecked == nil {
+		h.seedChecked = make(map[string]time.Time)
+	}
+	h.seedChecked[host] = time.Now()
+	h.seedMu.Unlock()
+
+	result, err := h.client.FetchConditional(host, path, h.resolveToken(host), h.graphStore.SeedEtag(host))
+	if err != nil {
+		log.Printf("warning: graph seed fetch mark://%s%s: %v", host, path, err)
+		return
+	}
+	// not-modified means the stored seed is current; any other non-ok status
+	// (a world without /graph.md is normal) means nothing to seed.
+	if result.Response.Status != protocol.StatusOK {
+		return
+	}
+
+	nodes, edges := graphstore.ParseExport(result.Response.Body)
+	if len(nodes) == 0 && len(edges) == 0 {
+		return
+	}
+	h.graphStore.SeedFromExport(nodes, edges)
+	if etag := result.Response.Metadata["etag"]; etag != "" {
+		h.graphStore.SetSeedEtag(host, etag)
+	}
+	if err := h.graphStore.Save(); err != nil {
+		log.Printf("warning: graph seed save: %v", err)
+	}
 }
 
 // resolveToken returns the auth token for a host using the shared cascade:
@@ -238,7 +296,8 @@ func markGraphTool(host string) mcp.Tool {
 				"or find broken links. Edges carry provenance (link label, source section "+
 				"anchor, occurrence count) and typed relations ingested from rel-<predicate> "+
 				"publisher metadata. When a local graph store is available, results are "+
-				"persisted for backlink queries. "+
+				"persisted for backlink queries; the store is seeded from the world's "+
+				"published /graph.md when available, and local crawls take precedence. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -1205,18 +1264,20 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 	depth := max(1, min(req.GetInt("depth", 2), 5))
 
-	if _, _, err := h.resolveURL(rawURL); err != nil {
+	host, path, err := h.resolveURL(rawURL)
+	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-
-	startURL := rawURL
-	if strings.HasPrefix(rawURL, "/") {
-		startURL = h.defaultHost + rawURL
-	}
+	// Canonical start URL (default port included) so crawled rows share the
+	// key form of the hub's /graph.md aggregate and backlink lookups.
+	startURL := "mark://" + host + path
 
 	if h.graphStore == nil {
 		return mcp.NewToolResultError("graph store not available"), nil
 	}
+
+	// Seed before crawling so depth-limited crawls still benefit from hub context.
+	h.seedGraph(h.defaultHost)
 
 	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(host, path string) (graph.FetchResult, error) {
 		r, fetchErr := h.client.Fetch(host, path, h.resolveToken(host))
@@ -1275,6 +1336,8 @@ func markBacklinksTool(host string) mcp.Tool {
 		mcp.WithDescription(
 			"Look up which documents link to a given URL, using the local graph store. "+
 				"Returns results from previous crawls; run mark_graph first to populate. "+
+				"The store is seeded from the world's published /graph.md when available, "+
+				"so backlinks answer even before any local crawl; local crawls take precedence. "+
 				"Each backlink shows its provenance (link label, source section anchor, "+
 				"occurrence count) and typed relations like [supersedes] when present. "+
 				"mark_explore includes this same backlink list alongside the document's "+
@@ -1294,17 +1357,20 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("url is required"), nil
 	}
 
-	fullURL := rawURL
-	if strings.HasPrefix(rawURL, "/") {
-		if h.defaultHost == "" {
-			return mcp.NewToolResultError(fmt.Sprintf("bare path %q requires -host flag", rawURL)), nil
-		}
-		fullURL = h.defaultHost + rawURL
+	// Canonicalize (default port included) so the lookup key matches both
+	// crawled and seeded rows: the hub's /graph.md aggregate stores
+	// canonical mark://host:port URLs.
+	host, path, err := h.resolveURL(rawURL)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
+	fullURL := "mark://" + host + path
 
 	if h.graphStore == nil {
 		return mcp.NewToolResultError("graph store not available"), nil
 	}
+
+	h.seedGraph(h.defaultHost)
 
 	backlinks := h.graphStore.BacklinksEnriched(fullURL)
 	if len(backlinks) == 0 {

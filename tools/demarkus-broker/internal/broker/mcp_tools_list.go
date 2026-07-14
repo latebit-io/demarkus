@@ -330,10 +330,12 @@ func markBacklinksTool() mcp.Tool {
 		mcp.WithDescription(
 			"Look up which documents link to a given URL, using the broker's graph store. "+
 				"Returns results from previous crawls; run mark_graph first to populate. "+
+				"The store is seeded from the world's published /graph.md when available, "+
+				"so backlinks answer even on a cold pod; local crawls take precedence. "+
 				"Each backlink shows its provenance (link label, source section anchor, "+
 				"occurrence count) and typed relations like [supersedes] when present. "+
 				"NOTE: the broker's graph store is ephemeral (per-pod lifetime); a broker restart "+
-				"resets the store and you must re-crawl. "+
+				"resets crawled data and re-seeds from /graph.md on the next call. "+
 				"mark_explore includes this same backlink list alongside the document's "+
 				"outline, outbound links, and siblings; prefer it for general orientation. "+
 				mcpURLHint,
@@ -354,7 +356,8 @@ func markGraphTool() mcp.Tool {
 				"or find broken links. Edges carry provenance (link label, source section "+
 				"anchor, occurrence count) and typed relations ingested from rel-<predicate> "+
 				"publisher metadata. When a graph store is available, results are "+
-				"persisted for backlink queries. "+
+				"persisted for backlink queries; the store is seeded from the world's "+
+				"published /graph.md when available, and local crawls take precedence. "+
 				mcpURLHint,
 		),
 		mcp.WithString("url",

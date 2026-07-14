@@ -550,3 +550,207 @@ func TestCrawlAndPersist_NilStore(t *testing.T) {
 		t.Errorf("NodeCount = %d, want 1", g.NodeCount())
 	}
 }
+
+func TestSeedFromExportEmptyStore(t *testing.T) {
+	s := New()
+
+	nodes := []StoredNode{
+		{URL: "mark://a:6309/a.md", Title: "A", Status: "ok", LinkCount: 1},
+		{URL: "mark://a:6309/b.md", Title: "B", Status: "ok"},
+	}
+	edges := []StoredEdge{
+		{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md", Rel: "", Label: "B", Anchor: "intro", Count: 2},
+	}
+
+	added := s.SeedFromExport(nodes, edges)
+	if added != 2 {
+		t.Errorf("added = %d, want 2", added)
+	}
+	if s.EdgeCount() != 1 {
+		t.Errorf("EdgeCount = %d, want 1", s.EdgeCount())
+	}
+	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 || bl[0] != "mark://a:6309/a.md" {
+		t.Errorf("Backlinks = %v, want [mark://a:6309/a.md]", bl)
+	}
+	n := s.GetNode("mark://a:6309/a.md")
+	if n == nil {
+		t.Fatal("seeded node missing")
+	}
+	if !n.CrawledAt.IsZero() {
+		t.Error("seeded node must have zero CrawledAt")
+	}
+}
+
+func TestSeedFromExportLocalWins(t *testing.T) {
+	s := New()
+
+	// Local crawl: a.md links to b.md.
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "Local A", Status: "ok", LinkCount: 1})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	s.Merge(g, nil)
+
+	// Seed claims a.md has a different title and links only to c.md.
+	nodes := []StoredNode{{URL: "mark://a:6309/a.md", Title: "Hub A", Status: "ok", LinkCount: 1}}
+	edges := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md", Count: 1}}
+	added := s.SeedFromExport(nodes, edges)
+
+	if added != 0 {
+		t.Errorf("added = %d, want 0 (authoritative node must not be seeded)", added)
+	}
+	n := s.GetNode("mark://a:6309/a.md")
+	if n.Title != "Local A" {
+		t.Errorf("Title = %q, want %q", n.Title, "Local A")
+	}
+	if n.CrawledAt.IsZero() {
+		t.Error("authoritative node lost its CrawledAt")
+	}
+	if bl := s.Backlinks("mark://a:6309/c.md"); len(bl) != 0 {
+		t.Errorf("seed edges leaked past authoritative source: %v", bl)
+	}
+	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 {
+		t.Errorf("local edge dropped by seed: %v", bl)
+	}
+}
+
+func TestSeedFromExportOverwritesNonAuthoritative(t *testing.T) {
+	s := New()
+
+	// A locally crawled "error" node is not authoritative; seed may replace it.
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Status: "error"})
+	s.Merge(g, nil)
+
+	nodes := []StoredNode{{URL: "mark://a:6309/a.md", Title: "A", Status: "ok", LinkCount: 1}}
+	added := s.SeedFromExport(nodes, nil)
+	if added != 1 {
+		t.Errorf("added = %d, want 1", added)
+	}
+	n := s.GetNode("mark://a:6309/a.md")
+	if n.Status != "ok" || n.Title != "A" {
+		t.Errorf("node = %+v, want seeded ok/A", n)
+	}
+	if !n.CrawledAt.IsZero() {
+		t.Error("seeded copy must carry zero CrawledAt")
+	}
+}
+
+func TestSeedThenCrawlFlipsAuthoritative(t *testing.T) {
+	s := New()
+
+	nodes := []StoredNode{{URL: "mark://a:6309/a.md", Title: "A", Status: "ok", LinkCount: 1}}
+	edges := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/hub-only.md", Count: 1}}
+	s.SeedFromExport(nodes, edges)
+
+	// Local crawl of a.md observes a different outgoing set; Merge's refresh
+	// logic must replace the seeded edges.
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "A", Status: "ok", LinkCount: 1})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	s.Merge(g, nil)
+
+	if bl := s.Backlinks("mark://a:6309/hub-only.md"); len(bl) != 0 {
+		t.Errorf("stale seeded edge survived local crawl: %v", bl)
+	}
+	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 {
+		t.Errorf("crawled edge missing: %v", bl)
+	}
+
+	// Now authoritative: a re-seed must not touch it.
+	s.SeedFromExport(nodes, edges)
+	if bl := s.Backlinks("mark://a:6309/hub-only.md"); len(bl) != 0 {
+		t.Errorf("re-seed overwrote authoritative source: %v", bl)
+	}
+}
+
+func TestSeedRefreshReplacesSeededEdges(t *testing.T) {
+	s := New()
+
+	first := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/old.md", Count: 1}}
+	s.SeedFromExport([]StoredNode{{URL: "mark://a:6309/a.md", Status: "ok"}}, first)
+
+	// The hub aggregate no longer carries the old.md link.
+	second := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/new.md", Count: 1}}
+	s.SeedFromExport([]StoredNode{{URL: "mark://a:6309/a.md", Status: "ok"}}, second)
+
+	if bl := s.Backlinks("mark://a:6309/old.md"); len(bl) != 0 {
+		t.Errorf("stale seeded backlink survived re-seed: %v", bl)
+	}
+	if bl := s.Backlinks("mark://a:6309/new.md"); len(bl) != 1 {
+		t.Errorf("refreshed seed edge missing: %v", bl)
+	}
+}
+
+func TestSeedEtagsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	s.SetSeedEtag("a:6309", "etag-1")
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	s2, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after save: %v", err)
+	}
+	if got := s2.SeedEtag("a:6309"); got != "etag-1" {
+		t.Errorf("SeedEtag = %q, want %q", got, "etag-1")
+	}
+	if got := s2.SeedEtag("other:6309"); got != "" {
+		t.Errorf("SeedEtag unknown host = %q, want empty", got)
+	}
+}
+
+func TestLoadLegacyFileWithoutSeedEtags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	legacy := `{"version":1,"nodes":[],"edges":[]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load legacy: %v", err)
+	}
+	if got := s.SeedEtag("a:6309"); got != "" {
+		t.Errorf("SeedEtag = %q, want empty", got)
+	}
+	s.SetSeedEtag("a:6309", "etag-1")
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save after legacy load: %v", err)
+	}
+}
+
+func TestSeedFromLegacyExport(t *testing.T) {
+	// A /graph.md still in the pre-enrichment two-column edge form must seed.
+	body := `# Document Graph
+
+> Exported: 2026-07-01T00:00:00Z
+> Nodes: 2
+> Edges: 1
+
+## Nodes
+
+| URL | Title | Status | Links |
+|-----|-------|--------|-------|
+| [mark://a:6309/a.md](mark://a:6309/a.md) | A | ok | 1 |
+| [mark://a:6309/b.md](mark://a:6309/b.md) | B | ok | 0 |
+
+## Edges
+
+| From | To |
+|------|----|
+| mark://a:6309/a.md | mark://a:6309/b.md |
+`
+	nodes, edges := ParseExport(body)
+	s := New()
+	if added := s.SeedFromExport(nodes, edges); added != 2 {
+		t.Errorf("added = %d, want 2", added)
+	}
+	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 || bl[0] != "mark://a:6309/a.md" {
+		t.Errorf("Backlinks = %v, want [mark://a:6309/a.md]", bl)
+	}
+}
