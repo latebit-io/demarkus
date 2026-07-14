@@ -79,6 +79,7 @@ func (h *handler) markExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		mdoutline.CappedList(&b, out, exploreSectionCap, "links")
 	}
 
+	h.seedGraph(host)
 	h.writeBacklinksSection(&b, "mark://"+host+path)
 	h.writeSiblingsSection(&b, host, path, token)
 
@@ -99,7 +100,6 @@ func (h *handler) writeBacklinksSection(b *strings.Builder, fullURL string) {
 		b.WriteString("\n## Backlinks\n(graph store unavailable)\n")
 		return
 	}
-	h.seedGraph(h.defaultHost)
 	backlinks := h.graphStore.BacklinksEnriched(fullURL)
 	fmt.Fprintf(b, "\n## Backlinks (%d)\n", len(backlinks))
 	if len(backlinks) == 0 {

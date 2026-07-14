@@ -98,6 +98,30 @@ func TestSeedGraph_DefaultHostWithoutPortCanonicalizes(t *testing.T) {
 	}
 }
 
+// TestSeedGraph_SeedsResolvedHostNotDefault: a full mark:// URL against a
+// non-default host must seed that host's /graph.md (PR 253 review).
+func TestSeedGraph_SeedsResolvedHostNotDefault(t *testing.T) {
+	var gotHosts []string
+	sc := &stubClient{
+		fetchCondFn: func(host, _, _, _ string) (fetch.Result, error) {
+			gotHosts = append(gotHosts, host)
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
+		},
+	}
+	h := &handler{client: sc, defaultHost: "mark://elsewhere:6309", graphStore: emptyGraphStore(t)}
+
+	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "mark://host:6309/b.md"}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if len(gotHosts) != 1 || gotHosts[0] != "host:6309" {
+		t.Errorf("seeded hosts = %v, want [host:6309] (the URL's host, not the default)", gotHosts)
+	}
+	if !strings.Contains(resultText(t, res), "Page A") {
+		t.Errorf("backlinks missing from resolved-host seed: %s", resultText(t, res))
+	}
+}
+
 func TestSeedGraph_NotFoundDegrades(t *testing.T) {
 	sc := &stubClient{
 		fetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {

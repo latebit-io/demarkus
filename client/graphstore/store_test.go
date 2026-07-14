@@ -681,6 +681,41 @@ func TestSeedRefreshReplacesSeededEdges(t *testing.T) {
 	}
 }
 
+func TestSeedRefreshDropsEdgesOfEmptiedSource(t *testing.T) {
+	s := New()
+
+	nodes := []StoredNode{{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1}}
+	edges := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/old.md", Count: 1}}
+	s.SeedFromExport(nodes, edges)
+
+	// The aggregate now says a.md has no outgoing links at all: the node row
+	// is present (observed) but no edge rows remain. The stale seeded edge
+	// must drop even with an empty edge set.
+	s.SeedFromExport([]StoredNode{{URL: "mark://a:6309/a.md", Status: "ok"}}, nil)
+
+	if bl := s.Backlinks("mark://a:6309/old.md"); len(bl) != 0 {
+		t.Errorf("stale seeded edge survived zero-edge re-seed: %v", bl)
+	}
+}
+
+func TestSeedKeepsEdgesOfUnobservedSeedNode(t *testing.T) {
+	s := New()
+
+	s.SeedFromExport(
+		[]StoredNode{{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1}},
+		[]StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md", Count: 1}},
+	)
+
+	// A later seed carries a.md only as an error node with no edges: the
+	// aggregate did not read it, so its recorded edge set says nothing and
+	// the earlier seeded edges must survive.
+	s.SeedFromExport([]StoredNode{{URL: "mark://a:6309/a.md", Status: "error"}}, nil)
+
+	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 {
+		t.Errorf("unobserved seed node dropped edges it knew nothing about: %v", bl)
+	}
+}
+
 func TestSeedEtagsRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
 	s, err := Load(path)

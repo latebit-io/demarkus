@@ -224,7 +224,7 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 		}
 		s.nodes[n.URL] = sn
 		count++
-		if n.Status != "" && n.Status != "external" && n.Status != "error" {
+		if observedStatus(n.Status) {
 			refreshed[n.URL] = true
 		}
 	}
@@ -272,6 +272,13 @@ func (s *Store) upsertEdgeLocked(se *StoredEdge) {
 	}
 }
 
+// observedStatus reports whether status means the document was actually
+// read, so its recorded outgoing edge set is complete. "external" and
+// "error" nodes were not read; their edge sets carry no information.
+func observedStatus(status string) bool {
+	return status != "" && status != "external" && status != "error"
+}
+
 // authoritativeLocked reports whether the stored node for url reflects a real
 // local crawl: a genuinely fetched status and a non-zero CrawledAt. Seeded
 // nodes carry zero CrawledAt, the durable "not locally observed" marker.
@@ -281,10 +288,7 @@ func (s *Store) authoritativeLocked(url string) bool {
 	if n == nil {
 		return false
 	}
-	if n.Status == "" || n.Status == "external" || n.Status == "error" {
-		return false
-	}
-	return !n.CrawledAt.IsZero()
+	return observedStatus(n.Status) && !n.CrawledAt.IsZero()
 }
 
 // SeedFromExport merges a published /graph.md aggregate (as parsed by
@@ -310,7 +314,18 @@ func (s *Store) SeedFromExport(nodes []StoredNode, edges []StoredEdge) int {
 		added++
 	}
 
+	// Sources whose outgoing edge set this seed replaces: every source the
+	// aggregate actually observed (real status) plus every seed-edge From,
+	// excluding locally authoritative ones. Node-based inclusion matters
+	// when a source's outgoing set went to zero: no edge rows remain, yet
+	// its stale seeded edges must still drop (Merge's refreshed criterion,
+	// applied to the seed's view).
 	seeded := make(map[string]bool)
+	for _, n := range nodes {
+		if observedStatus(n.Status) && !s.authoritativeLocked(n.URL) {
+			seeded[n.URL] = true
+		}
+	}
 	for _, e := range edges {
 		if !s.authoritativeLocked(e.From) {
 			seeded[e.From] = true

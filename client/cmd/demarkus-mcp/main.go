@@ -151,18 +151,16 @@ func (h *handler) seenRecord(key string, d fetchdedup.Doc) {
 // the first graph-tool call in a session always checks.
 const seedCheckInterval = 5 * time.Minute
 
-// seedGraph refreshes the local graph store from the world's published
-// /graph.md aggregate so backlink queries answer before any local crawl.
-// Local crawls win (see graphstore.SeedFromExport). Never fatal: every
-// failure degrades silently to the unseeded store, warn-logging real errors.
-func (h *handler) seedGraph(base string) {
-	if h.graphStore == nil || base == "" {
+// seedGraph refreshes the local graph store from the published /graph.md of
+// the world at host (canonical host:port, as returned by resolveURL) so
+// backlink queries answer before any local crawl. Local crawls win (see
+// graphstore.SeedFromExport). Never fatal: every failure degrades silently
+// to the unseeded store, warn-logging real errors.
+func (h *handler) seedGraph(host string) {
+	if h.graphStore == nil || h.client == nil || host == "" {
 		return
 	}
-	host, path, err := fetch.ParseMarkURL(base + "/graph.md")
-	if err != nil {
-		return
-	}
+	const path = "/graph.md"
 
 	h.seedMu.Lock()
 	if last, ok := h.seedChecked[host]; ok && time.Since(last) < seedCheckInterval {
@@ -1277,7 +1275,7 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	// Seed before crawling so depth-limited crawls still benefit from hub context.
-	h.seedGraph(h.defaultHost)
+	h.seedGraph(host)
 
 	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(host, path string) (graph.FetchResult, error) {
 		r, fetchErr := h.client.Fetch(host, path, h.resolveToken(host))
@@ -1370,7 +1368,7 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("graph store not available"), nil
 	}
 
-	h.seedGraph(h.defaultHost)
+	h.seedGraph(host)
 
 	backlinks := h.graphStore.BacklinksEnriched(fullURL)
 	if len(backlinks) == 0 {
