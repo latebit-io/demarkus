@@ -1,6 +1,8 @@
 package mdoutline
 
 import (
+	"sort"
+
 	"github.com/latebit-io/demarkus/client/links"
 )
 
@@ -14,21 +16,24 @@ type AnchoredLink struct {
 
 // AnchoredLinks returns every link in body with its label and the anchor of
 // the innermost heading section containing it. The link set and order match
-// links.Extract.
+// links.Extract. Empty-label links attribute by their enclosing block's
+// start, which sits in the same section since headings cannot split a block.
 func AnchoredLinks(body string) []AnchoredLink {
 	hs := Headings(body)
 	infos := links.ExtractWithPositions(body)
 	out := make([]AnchoredLink, len(infos))
 	for i, info := range infos {
+		pos := info.OpenBracket
+		if pos < 0 {
+			pos = info.BlockStart
+		}
 		anchor := ""
-		if info.OpenBracket >= 0 {
-			// Headings are in Start order, so the last one at or before the
+		if pos >= 0 {
+			// Headings are in Start order; the last one at or before the
 			// link is the innermost enclosing section.
-			for _, h := range hs {
-				if h.Start > info.OpenBracket {
-					break
-				}
-				anchor = h.Anchor
+			idx := sort.Search(len(hs), func(j int) bool { return hs[j].Start > pos })
+			if idx > 0 {
+				anchor = hs[idx-1].Anchor
 			}
 		}
 		out[i] = AnchoredLink{Dest: info.Dest, Label: info.Text, Anchor: anchor}

@@ -34,9 +34,12 @@ func TestAnchoredLinksAboveFirstHeading(t *testing.T) {
 }
 
 func TestAnchoredLinksEmptyLabel(t *testing.T) {
-	body := "# Title\n\n[](a.md)\n"
+	body := "# Title\n\n[](a.md)\n\n## Notes\n\n[](b.md)\n"
 	got := AnchoredLinks(body)
-	want := []AnchoredLink{{Dest: "a.md", Label: "", Anchor: ""}}
+	want := []AnchoredLink{
+		{Dest: "a.md", Label: "", Anchor: "title"},
+		{Dest: "b.md", Label: "", Anchor: "notes"},
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AnchoredLinks = %+v, want %+v", got, want)
 	}

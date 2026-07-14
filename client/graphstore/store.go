@@ -186,14 +186,21 @@ func (s *Store) Save() error {
 }
 
 // Merge integrates a crawled graph into the store. Nodes are upserted with
-// fresh timestamps. Edges are deduplicated. The etags map provides etag values
-// keyed by URL. Returns the number of nodes upserted.
+// fresh timestamps. For every source the crawl actually fetched, the stored
+// outgoing edge set is replaced by the crawl's, so deleted links and dropped
+// rel- predicates do not linger in backlink queries. The etags map provides
+// etag values keyed by URL. Returns the number of nodes upserted.
 func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC()
 	count := 0
+
+	// Sources whose full outgoing set this crawl observed. "external" and
+	// "error" nodes were not read, so their stored edges are kept; a fetched
+	// not-found/archived doc has no links and its old edges rightly drop.
+	refreshed := make(map[string]bool)
 
 	for _, n := range g.AllNodes() {
 		sn := &StoredNode{
@@ -208,6 +215,25 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 		}
 		s.nodes[n.URL] = sn
 		count++
+		if n.Status != "" && n.Status != "external" && n.Status != "error" {
+			refreshed[n.URL] = true
+		}
+	}
+
+	if len(refreshed) > 0 {
+		kept := make([]StoredEdge, 0, len(s.edges))
+		for _, e := range s.edges {
+			if !refreshed[e.From] {
+				kept = append(kept, e)
+			}
+		}
+		if len(kept) != len(s.edges) {
+			s.edges = kept
+			s.edgeIdx = make(map[edgeKey]int, len(kept))
+			for i := range kept {
+				s.edgeIdx[kept[i].key()] = i
+			}
+		}
 	}
 
 	for _, e := range g.GetEdges() {

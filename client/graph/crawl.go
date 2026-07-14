@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mdoutline"
@@ -62,7 +63,7 @@ func RelEdges(docURL string, metadata map[string]string) []RelRef {
 		}
 		for ref := range strings.SplitSeq(val, ",") {
 			ref = strings.TrimSpace(ref)
-			if ref == "" || strings.ContainsAny(ref, " \t") {
+			if ref == "" || strings.IndexFunc(ref, unicode.IsSpace) >= 0 {
 				continue
 			}
 			resolved := links.Resolve(docURL, ref)

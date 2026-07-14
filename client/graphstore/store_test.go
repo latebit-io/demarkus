@@ -156,6 +156,57 @@ func TestMergeEnrichedEdgeIdempotent(t *testing.T) {
 	}
 }
 
+func TestMergeReplacesRefreshedSourceEdges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g1 := graph.New()
+	g1.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1})
+	g1.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	g1.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/old.md", Rel: "supersedes"})
+	s.Merge(g1, nil)
+
+	// The doc dropped the link to old.md and its rel- key; a refreshed crawl
+	// must replace the whole outgoing set, not just upsert.
+	g2 := graph.New()
+	g2.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1})
+	g2.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	s.Merge(g2, nil)
+
+	if s.EdgeCount() != 1 {
+		t.Fatalf("EdgeCount = %d, want 1: %+v", s.EdgeCount(), s.edges)
+	}
+	if bl := s.Backlinks("mark://a:6309/old.md"); len(bl) != 0 {
+		t.Errorf("stale backlink survived refresh: %v", bl)
+	}
+}
+
+func TestMergeKeepsEdgesOfUnfetchedSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	g1 := graph.New()
+	g1.AddNode(&graph.Node{URL: "mark://a:6309/x.md", Status: "ok", LinkCount: 1})
+	g1.AddEdgeInfo(graph.Edge{From: "mark://a:6309/x.md", To: "mark://a:6309/y.md"})
+	s.Merge(g1, nil)
+
+	// A later crawl that only saw x.md as an error must not drop the edges
+	// recorded when it was last read successfully.
+	g2 := graph.New()
+	g2.AddNode(&graph.Node{URL: "mark://a:6309/x.md", Status: "error"})
+	s.Merge(g2, nil)
+
+	if s.EdgeCount() != 1 {
+		t.Fatalf("EdgeCount = %d, want 1 (error-status source must keep edges)", s.EdgeCount())
+	}
+}
+
 func TestMergeKeepsDistinctRels(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
 	s, err := Load(path)

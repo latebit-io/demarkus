@@ -42,8 +42,9 @@ func Resolve(baseURL, dest string) string {
 type LinkInfo struct {
 	Dest         string // link destination (fragment stripped)
 	Text         string // rendered link text
-	OpenBracket  int    // byte offset of '[' in source
-	CloseBracket int    // byte offset of ']' in source
+	OpenBracket  int    // byte offset of '[' in source, -1 for links with no text nodes
+	CloseBracket int    // byte offset of ']' in source, -1 for links with no text nodes
+	BlockStart   int    // byte offset of the enclosing block's start, -1 if unknown; section-level position even when the brackets are unknown
 }
 
 // ExtractWithPositions parses body as markdown and returns link info with source positions.
@@ -70,6 +71,17 @@ func ExtractWithPositions(body string) []LinkInfo {
 			dest = dest[:idx]
 		}
 
+		// Inline nodes carry no segments, but the enclosing block does;
+		// headings cannot occur inside a block, so its start is in the same
+		// section as the link.
+		blockStart := -1
+		for p := link.Parent(); p != nil; p = p.Parent() {
+			if lines := p.Lines(); lines != nil && lines.Len() > 0 {
+				blockStart = lines.At(0).Start
+				break
+			}
+		}
+
 		// Find the byte range of the link text by collecting descendant text segments.
 		firstStart, lastStop := -1, -1
 		var linkText strings.Builder
@@ -92,12 +104,13 @@ func ExtractWithPositions(body string) []LinkInfo {
 
 		if firstStart < 0 {
 			// Link with no text nodes (e.g. [](a.md)) — preserve for navigation
-			// but mark positions as unknown so marker injection skips it.
+			// but mark bracket positions as unknown so marker injection skips it.
 			infos = append(infos, LinkInfo{
 				Dest:         dest,
 				Text:         "",
 				OpenBracket:  -1,
 				CloseBracket: -1,
+				BlockStart:   blockStart,
 			})
 			return ast.WalkContinue, nil
 		}
@@ -118,6 +131,7 @@ func ExtractWithPositions(body string) []LinkInfo {
 			Text:         linkText.String(),
 			OpenBracket:  open,
 			CloseBracket: closeBracket,
+			BlockStart:   blockStart,
 		})
 		return ast.WalkContinue, nil
 	})

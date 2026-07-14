@@ -328,7 +328,7 @@ func TestCrawlIngestsRelMetadata(t *testing.T) {
 func TestCrawlSkipsMalformedRelRefs(t *testing.T) {
 	f := newMockFetcher()
 	f.addWithMeta("host:6309", "/doc.md", "# Doc\n", map[string]string{
-		"rel-supersedes": " , bad ref with spaces",
+		"rel-supersedes": " , bad ref with spaces, bad\nnewline",
 		"rel-":           "/other.md",
 		"rel-self":       "/doc.md",
 	})

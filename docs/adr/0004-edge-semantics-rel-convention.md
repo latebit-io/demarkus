@@ -36,8 +36,12 @@ with zero server, protocol, or store changes.
   crawl add into `Count`; the first occurrence with a non-empty label supplies
   `Label` and `Anchor` (the enclosing section's GitHub-slug anchor, computed
   by `mdoutline.AnchoredLinks` from byte offsets).
-- **Store merge is last-crawl-wins** for the enrichment fields, mirroring node
-  upserts: re-merging the same crawl is idempotent and counts never inflate.
+- **Store merge is last-crawl-wins per source.** For every source the crawl
+  actually fetched (any status except external/error), the stored outgoing
+  edge set is replaced by the crawl's, so deleted links and dropped `rel-`
+  predicates do not linger in backlink queries. Re-merging the same crawl is
+  idempotent and counts never inflate. Sources the crawl did not read keep
+  their stored edges.
 
 ### Typed relations: the `rel-` publisher-metadata convention
 
