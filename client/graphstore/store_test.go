@@ -248,6 +248,9 @@ func TestMergeRecordsNewUnfetchedNodes(t *testing.T) {
 	if n := s.GetNode("https://example.com/page"); n == nil || n.Status != "external" {
 		t.Errorf("external node not recorded: %+v", n)
 	}
+	if n := s.GetNode("mark://a:6309/down.md"); n == nil || n.Status != "error" {
+		t.Errorf("error node not recorded: %+v", n)
+	}
 }
 
 func TestMergeKeepsDistinctRels(t *testing.T) {

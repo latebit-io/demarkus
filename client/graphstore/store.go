@@ -194,14 +194,10 @@ func (s *Store) Save() error {
 	return os.Rename(tmp, s.path)
 }
 
-// Merge integrates a crawled graph into the store. Nodes the crawl actually
-// read are upserted with fresh timestamps; a node the crawl failed to read
-// (error/external/blank status) never clobbers a stored one, so last-known-
-// good title/status survive transient fetch failures instead of regressing
-// (issue #222). For every source the crawl actually fetched, the stored
-// outgoing edge set is replaced by the crawl's, so deleted links and dropped
-// rel- predicates do not linger in backlink queries. The etags map provides
-// etag values keyed by URL. Returns the number of nodes upserted.
+// Merge integrates a crawled graph into the store; returns nodes upserted.
+// Only nodes the crawl actually read are upserted, and only their stored
+// outgoing edge sets replaced: an unread node (error/external/blank) must
+// not regress last-known-good data or drop edges it knows nothing about.
 func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
