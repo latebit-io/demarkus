@@ -195,9 +195,10 @@ func (s *Store) Save() error {
 }
 
 // Merge integrates a crawled graph into the store; returns nodes upserted.
-// Only nodes the crawl actually read are upserted, and only their stored
-// outgoing edge sets replaced: an unread node (error/external/blank) must
-// not regress last-known-good data or drop edges it knows nothing about.
+// Stored nodes and their outgoing edge sets are replaced only for sources
+// the crawl actually read: an unread node (error/external/blank) never
+// regresses last-known-good data or drops edges it knows nothing about,
+// though never-seen unread nodes are still recorded.
 func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

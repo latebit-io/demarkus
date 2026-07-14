@@ -216,6 +216,7 @@ func TestMergePreservesResolvedNodeOnFailedRecrawl(t *testing.T) {
 	g1 := graph.New()
 	g1.AddNode(&graph.Node{URL: "mark://a:6309/doc.md", Title: "Doc", Status: "ok", LinkCount: 2})
 	s.Merge(g1, map[string]string{"mark://a:6309/doc.md": "etag-1"})
+	firstCrawledAt := s.GetNode("mark://a:6309/doc.md").CrawledAt
 
 	g2 := graph.New()
 	g2.AddNode(&graph.Node{URL: "mark://a:6309/doc.md", Status: "error"})
@@ -225,8 +226,8 @@ func TestMergePreservesResolvedNodeOnFailedRecrawl(t *testing.T) {
 	if n.Title != "Doc" || n.Status != "ok" || n.LinkCount != 2 || n.Etag != "etag-1" {
 		t.Errorf("failed re-crawl clobbered resolved node: %+v", n)
 	}
-	if n.CrawledAt.IsZero() {
-		t.Error("preserved node lost its CrawledAt")
+	if !n.CrawledAt.Equal(firstCrawledAt) {
+		t.Errorf("CrawledAt changed on failed re-crawl: got %v, want %v", n.CrawledAt, firstCrawledAt)
 	}
 
 	// Still authoritative: a subsequent seed must not overwrite it either.
