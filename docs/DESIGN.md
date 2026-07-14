@@ -1164,11 +1164,11 @@ When reading a document, the TUI can show a graph view with the current document
 
 ### How It Works
 
-The client crawls outbound `mark://` links from the current document (up to a configurable depth) and builds a directed graph of nodes (documents) and edges (links). Each node carries the document's title, fetch status, and link count. Duplicate edges are deduplicated. The crawl is concurrent and respects visited-URL tracking to avoid cycles.
+The client crawls outbound `mark://` links from the current document (up to a configurable depth) and builds a directed graph of nodes (documents) and edges (links). Each node carries the document's title, fetch status, and link count. Each edge carries provenance — the link's label text, the source section anchor it appears under, and an occurrence count (duplicate links between the same pair aggregate into one counted edge). Publisher metadata keys with the `rel-` prefix (`rel-supersedes: /adr/0002.md`, comma-separated for multiple targets) are ingested as **typed edges**, so the graph can answer "what replaced this" rather than only "what mentions this". Edge identity is `{from, to, rel}`: a plain body link and a typed relation between the same pair are distinct edges. The crawl is concurrent and respects visited-URL tracking to avoid cycles.
 
 ### Graph Enrichment (Future)
 
-The basic graph is link relationships. Over time it can be enriched with:
+Shipped so far: link label, source section anchor, occurrence count, and typed `rel-` edges (see above). Still open:
 
 - **Visit history** — nodes you've read are dimmed or marked
 - **Link density** — documents with many connections appear more prominent, like a PageRank signal
@@ -1306,7 +1306,8 @@ Hubs are the entry points into the information graph:
 - `mark_backlinks` MCP tool — queries the stored graph for reverse links
 - TUI loads the stored graph instantly on `d`, then runs a live crawl in the background to discover new links
 - Hub pattern with `mark_index` — federated content indexing and hash-based resolution across servers
-- Graph as content — `Store.Export()` renders the graph as publishable markdown with `mark://` links; `ParseExport()` parses it back; CLI `demarkus graph export` and MCP `mark_graph_export` tool
+- Graph as content — `Store.Export()` renders the graph as publishable markdown with `mark://` links (six-column Edges table: `From | To | Rel | Label | Anchor | Count`); `ParseExport()` parses it back, accepting the legacy two-column shape too; CLI `demarkus graph export` and MCP `mark_graph_export` tool
+- Edge semantics — edges carry provenance (link label, source section anchor, occurrence count) and typed relations ingested from `rel-<predicate>` publisher metadata (ADR 0004)
 - Agent discovery — `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers
 
 ## Security Considerations

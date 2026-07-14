@@ -235,7 +235,9 @@ func markGraphTool(host string) mcp.Tool {
 			"Crawl outbound links from a document and return the link graph. "+
 				"Follows mark:// links up to the specified depth. External links are "+
 				"recorded but not followed. Use this to understand document relationships "+
-				"or find broken links. When a local graph store is available, results are "+
+				"or find broken links. Edges carry provenance (link label, source section "+
+				"anchor, occurrence count) and typed relations ingested from rel-<predicate> "+
+				"publisher metadata. When a local graph store is available, results are "+
 				"persisted for backlink queries. "+
 				urlHint(host),
 		),
@@ -331,7 +333,7 @@ func markPublishTool(host string) mcp.Tool {
 			mcp.Description("conflict behavior: \"merge\" (default) returns a merge-candidate body; the agent reviews it (resolving any conflict markers) and calls mark_publish again with expected_version set to the returned publish-at-version. \"fail\" opts out and returns the raw conflict status."),
 		),
 		mcp.WithObject("metadata",
-			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Reserved keys are rejected. `retention` (positive integer) caps version history: this write and every later write carrying the key permanently delete versions older than the newest N. Destructive and irreversible: confirm with the user before setting it on a document whose history matters; intended for generated documents."),
+			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Keys with the `rel-` prefix declare typed relations to other documents (e.g. `rel-supersedes: /adr/0002.md`, comma-separated for multiple targets); graph crawls ingest them as typed edges. Reserved keys are rejected. `retention` (positive integer) caps version history: this write and every later write carrying the key permanently delete versions older than the newest N. Destructive and irreversible: confirm with the user before setting it on a document whose history matters; intended for generated documents."),
 		),
 	)
 }
@@ -1216,12 +1218,16 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("graph store not available"), nil
 	}
 
-	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(host, path string) (string, string, string, error) {
+	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(host, path string) (graph.FetchResult, error) {
 		r, fetchErr := h.client.Fetch(host, path, h.resolveToken(host))
 		if fetchErr != nil {
-			return "", "", "", fetchErr
+			return graph.FetchResult{}, fetchErr
 		}
-		return r.Response.Status, r.Response.Body, r.Response.Metadata["etag"], nil
+		return graph.FetchResult{
+			Status:   r.Response.Status,
+			Body:     r.Response.Body,
+			Metadata: r.Response.Metadata,
+		}, nil
 	}, fetch.ParseMarkURL, graphstore.CrawlOptions{
 		MaxDepth: depth,
 		MaxNodes: 200,
@@ -1257,7 +1263,7 @@ func formatGraph(g *graph.Graph, startURL string) string {
 	if len(edges) > 0 {
 		b.WriteString("\nEdges:\n")
 		for _, e := range edges {
-			fmt.Fprintf(&b, "  %s -> %s\n", e.From, e.To)
+			fmt.Fprintf(&b, "  %s -> %s%s\n", e.From, e.To, e.Annotation())
 		}
 	}
 
@@ -1269,6 +1275,8 @@ func markBacklinksTool(host string) mcp.Tool {
 		mcp.WithDescription(
 			"Look up which documents link to a given URL, using the local graph store. "+
 				"Returns results from previous crawls; run mark_graph first to populate. "+
+				"Each backlink shows its provenance (link label, source section anchor, "+
+				"occurrence count) and typed relations like [supersedes] when present. "+
 				"mark_explore includes this same backlink list alongside the document's "+
 				"outline, outbound links, and siblings; prefer it for general orientation. "+
 				urlHint(host),
@@ -1308,10 +1316,11 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 	var b strings.Builder
 	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", fullURL, len(backlinks))
 	for _, bl := range backlinks {
+		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count)
 		if bl.Title != "" {
-			fmt.Fprintf(&b, "- [%s](%s)\n", bl.Title, bl.URL)
+			fmt.Fprintf(&b, "- [%s](%s)%s\n", bl.Title, bl.URL, ann)
 		} else {
-			fmt.Fprintf(&b, "- %s\n", bl.URL)
+			fmt.Fprintf(&b, "- %s%s\n", bl.URL, ann)
 		}
 	}
 	return mcp.NewToolResultText(b.String()), nil

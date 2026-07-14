@@ -856,3 +856,23 @@ func TestHandleMarkGraphPublishRetention(t *testing.T) {
 		}
 	})
 }
+
+// TestFormatGraphSummaryEdgeAnnotationFidelity pins the exact edge-annotation
+// literals against the client's TestFormatGraphEdgeAnnotations so a format
+// drift on either side fails a build.
+func TestFormatGraphSummaryEdgeAnnotationFidelity(t *testing.T) {
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://w/a.md", Status: "ok"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://w/a.md", To: "mark://w/b.md", Rel: "supersedes"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://w/a.md", To: "mark://w/c.md", Label: "Getting started", Anchor: "intro", Count: 3})
+
+	out := formatGraphSummary(g, "mark://w/a.md")
+	for _, want := range []string{
+		"  mark://w/a.md -> mark://w/b.md [supersedes]",
+		"  mark://w/a.md -> mark://w/c.md (\"Getting started\", #intro, x3)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("formatGraphSummary missing %q\n---\n%s", want, out)
+		}
+	}
+}

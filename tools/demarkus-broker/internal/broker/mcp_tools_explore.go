@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
@@ -89,10 +90,11 @@ func (g *mcpGateway) writeBacklinksSection(b *strings.Builder, docURL string) {
 	}
 	lines := make([]string, len(backlinks))
 	for i, bl := range backlinks {
+		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count)
 		if bl.Title != "" {
-			lines[i] = fmt.Sprintf("- [%s](%s)", bl.Title, bl.URL)
+			lines[i] = fmt.Sprintf("- [%s](%s)%s", bl.Title, bl.URL, ann)
 		} else {
-			lines[i] = "- " + bl.URL
+			lines[i] = "- " + bl.URL + ann
 		}
 	}
 	mdoutline.CappedList(b, lines, exploreSectionCap, "backlinks")

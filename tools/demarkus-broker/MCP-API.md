@@ -155,6 +155,7 @@ attempt.
 | `body` | string | yes | Markdown content. |
 | `expected_version` | number | yes | From a prior fetch. `0` to create a new document. |
 | `on_conflict` | string | no | `"merge"` (default) or `"fail"`. |
+| `metadata` | object | no | Publisher metadata (`tags`, `importance`, opaque keys). Keys with the `rel-` prefix declare typed relations to other documents (`rel-supersedes: /adr/0002.md`, comma-separated for multiple targets); graph crawls ingest them as typed edges. |
 
 #### `mark_append`
 
@@ -234,6 +235,8 @@ hub manifest unless `force: true`.
 Look up which documents link to a given URL, using the broker's
 graph store. Returns results from previous `mark_graph` runs;
 returns an empty hint if no crawl has populated the relevant edges.
+Each backlink carries its provenance (link label, source section
+anchor, occurrence count) and typed relations like `[supersedes]`.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -243,8 +246,11 @@ returns an empty hint if no crawl has populated the relevant edges.
 
 Crawl outbound links from a document up to a depth and return the
 link graph. External (non-`mark://`) links are recorded but not
-followed. Results populate the broker's graph store for subsequent
-`mark_backlinks` / `mark_graph_export` / `mark_graph_publish` calls.
+followed. Edges carry provenance (link label, source section anchor,
+occurrence count) and typed relations ingested from `rel-<predicate>`
+publisher metadata. Results populate the broker's graph store for
+subsequent `mark_backlinks` / `mark_graph_export` /
+`mark_graph_publish` calls.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -254,9 +260,11 @@ followed. Results populate the broker's graph store for subsequent
 #### `mark_graph_export`
 
 Export the broker's graph store as a publishable markdown document
-containing `mark://` links. Crawling the exported document naturally
-re-discovers the topology. Returns an empty hint if the store is
-empty.
+containing `mark://` links. The Edges table carries six columns
+(`From | To | Rel | Label | Anchor | Count`); parsers also accept the
+legacy two-column `From | To` shape. Crawling the exported document
+naturally re-discovers the topology. Returns an empty hint if the
+store is empty.
 
 (No parameters.)
 

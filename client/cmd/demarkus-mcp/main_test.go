@@ -1247,6 +1247,26 @@ func TestHandlerMarkGraphExport(t *testing.T) {
 	}
 }
 
+// TestFormatGraphEdgeAnnotations pins the exact edge-annotation literals.
+// The broker's formatGraphSummary mirrors this format; its fidelity test pins
+// the same literals so drift on either side fails a build.
+func TestFormatGraphEdgeAnnotations(t *testing.T) {
+	g := graph.New()
+	g.AddNode(&graph.Node{URL: "mark://w/a.md", Status: "ok"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://w/a.md", To: "mark://w/b.md", Rel: "supersedes"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://w/a.md", To: "mark://w/c.md", Label: "Getting started", Anchor: "intro", Count: 3})
+
+	out := formatGraph(g, "mark://w/a.md")
+	for _, want := range []string{
+		"  mark://w/a.md -> mark://w/b.md [supersedes]",
+		"  mark://w/a.md -> mark://w/c.md (\"Getting started\", #intro, x3)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("formatGraph missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
 func TestHandlerMarkGraphExport_NilStore(t *testing.T) {
 	h := &handler{}
 	ctx := context.Background()

@@ -76,15 +76,19 @@ func brokerCrawlParseURL(raw string) (worldName, urlPath string, err error) {
 // crawl loop. The closure intentionally tolerates per-fetch
 // failure (returns the error to the crawler, which marks the
 // node "error" and continues) — a graph crawl is best-effort.
-func (g *mcpGateway) crawlFetchFn(ctx context.Context, claims *Claims) func(string, string) (string, string, string, error) {
-	return func(worldName, path string) (string, string, string, error) {
+func (g *mcpGateway) crawlFetchFn(ctx context.Context, claims *Claims) graphstore.FetchFunc {
+	return func(worldName, path string) (graph.FetchResult, error) {
 		result, derr := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
 			return g.dispatcher.Fetch(worldName, path, token)
 		})
 		if derr != nil {
-			return "", "", "", derr
+			return graph.FetchResult{}, derr
 		}
-		return result.Response.Status, result.Response.Body, result.Response.Metadata["etag"], nil
+		return graph.FetchResult{
+			Status:   result.Response.Status,
+			Body:     result.Response.Body,
+			Metadata: result.Response.Metadata,
+		}, nil
 	}
 }
 
@@ -113,10 +117,11 @@ func (g *mcpGateway) handleMarkBacklinks(_ context.Context, req mcp.CallToolRequ
 	var b strings.Builder
 	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", raw, len(backlinks))
 	for _, bl := range backlinks {
+		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count)
 		if bl.Title != "" {
-			fmt.Fprintf(&b, "- [%s](%s)\n", bl.Title, bl.URL)
+			fmt.Fprintf(&b, "- [%s](%s)%s\n", bl.Title, bl.URL, ann)
 		} else {
-			fmt.Fprintf(&b, "- %s\n", bl.URL)
+			fmt.Fprintf(&b, "- %s%s\n", bl.URL, ann)
 		}
 	}
 	return mcp.NewToolResultText(b.String()), nil
@@ -165,11 +170,11 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 
 // formatGraphSummary renders a Graph as the same plain-text
 // shape the local demarkus-mcp emits. Duplicated rather than
-// hoisted because the function is ~25 LOC and stable; the
-// proxy-fidelity philosophy (Slice 2's formatToolResult) applies
-// equally here. If the local helper drifts, the proxy-fidelity
-// test in mcp_tools_read_test.go will fail — we can hoist into
-// a shared package then.
+// hoisted because the function is ~25 LOC and stable; the edge
+// annotation itself IS hoisted (graph.EdgeAnnotation), and
+// TestFormatGraphSummaryEdgeAnnotationFidelity pins the same
+// literals as the client's TestFormatGraphEdgeAnnotations so
+// drift on either side fails a build.
 func formatGraphSummary(gr *graph.Graph, startURL string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Crawled %d nodes, %d edges from %s\n", gr.NodeCount(), gr.EdgeCount(), startURL)
@@ -192,7 +197,7 @@ func formatGraphSummary(gr *graph.Graph, startURL string) string {
 	if len(edges) > 0 {
 		b.WriteString("\nEdges:\n")
 		for _, e := range edges {
-			fmt.Fprintf(&b, "  %s -> %s\n", e.From, e.To)
+			fmt.Fprintf(&b, "  %s -> %s%s\n", e.From, e.To, e.Annotation())
 		}
 	}
 

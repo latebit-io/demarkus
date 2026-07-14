@@ -19,10 +19,10 @@ func TestExport(t *testing.T) {
 			},
 		},
 		edges: []StoredEdge{
-			{From: "mark://a:6309/x.md", To: "mark://a:6309/y.md"},
+			{From: "mark://a:6309/x.md", To: "mark://a:6309/y.md", Label: "Y | see", Anchor: "intro", Count: 2},
 		},
-		edgeSet: map[StoredEdge]struct{}{
-			{From: "mark://a:6309/x.md", To: "mark://a:6309/y.md"}: {},
+		edgeIdx: map[edgeKey]int{
+			{from: "mark://a:6309/x.md", to: "mark://a:6309/y.md"}: 0,
 		},
 	}
 
@@ -44,6 +44,12 @@ func TestExport(t *testing.T) {
 	if !strings.Contains(md, "## Edges") {
 		t.Error("missing edges section")
 	}
+	if !strings.Contains(md, "| From | To | Rel | Label | Anchor | Count |") {
+		t.Error("missing enriched edge header")
+	}
+	if !strings.Contains(md, `| mark://a:6309/x.md | mark://a:6309/y.md |  | Y \| see | intro | 2 |`) {
+		t.Error("missing enriched edge row with escaped label")
+	}
 
 	// Nodes should be sorted by URL.
 	xPos := strings.Index(md, "mark://a:6309/x.md")
@@ -56,7 +62,7 @@ func TestExport(t *testing.T) {
 func TestExportEmpty(t *testing.T) {
 	s := &Store{
 		nodes:   make(map[string]*StoredNode),
-		edgeSet: make(map[StoredEdge]struct{}),
+		edgeIdx: make(map[edgeKey]int),
 	}
 
 	md := s.Export()
@@ -117,6 +123,38 @@ func TestParseExport(t *testing.T) {
 	if edges[0].From != "mark://a:6309/x.md" || edges[0].To != "mark://a:6309/y.md" {
 		t.Errorf("edge = %+v, want x.md -> y.md", edges[0])
 	}
+	if edges[0].Count != 1 {
+		t.Errorf("legacy edge Count = %d, want 1", edges[0].Count)
+	}
+}
+
+func TestParseExportEnriched(t *testing.T) {
+	md := `# Document Graph
+
+## Edges
+
+| From | To | Rel | Label | Anchor | Count |
+|------|----|-----|-------|--------|-------|
+| mark://a:6309/x.md | mark://a:6309/y.md |  |  |  | 1 |
+| mark://a:6309/x.md | mark://a:6309/z.md | supersedes |  |  | 1 |
+| mark://a:6309/x.md | mark://b:6309/p.md |  | Getting \| started | intro | 3 |
+`
+
+	_, edges := ParseExport(md)
+
+	want := []StoredEdge{
+		{From: "mark://a:6309/x.md", To: "mark://a:6309/y.md", Count: 1},
+		{From: "mark://a:6309/x.md", To: "mark://a:6309/z.md", Rel: "supersedes", Count: 1},
+		{From: "mark://a:6309/x.md", To: "mark://b:6309/p.md", Label: "Getting | started", Anchor: "intro", Count: 3},
+	}
+	if len(edges) != len(want) {
+		t.Fatalf("len(edges) = %d, want %d", len(edges), len(want))
+	}
+	for i, w := range want {
+		if edges[i] != w {
+			t.Errorf("edges[%d] = %+v, want %+v", i, edges[i], w)
+		}
+	}
 }
 
 func TestExportParseRoundTrip(t *testing.T) {
@@ -136,12 +174,14 @@ func TestExportParseRoundTrip(t *testing.T) {
 			},
 		},
 		edges: []StoredEdge{
-			{From: "mark://a:6309/a.md", To: "mark://b:6309/b.md"},
-			{From: "mark://a:6309/a.md", To: "https://example.com"},
+			{From: "mark://a:6309/a.md", To: "mark://b:6309/b.md", Rel: "supersedes", Count: 1},
+			{From: "mark://a:6309/a.md", To: "mark://b:6309/b.md", Label: "has | pipe", Anchor: "notes", Count: 4},
+			{From: "mark://a:6309/a.md", To: "https://example.com", Count: 1},
 		},
-		edgeSet: map[StoredEdge]struct{}{
-			{From: "mark://a:6309/a.md", To: "mark://b:6309/b.md"}:  {},
-			{From: "mark://a:6309/a.md", To: "https://example.com"}: {},
+		edgeIdx: map[edgeKey]int{
+			{from: "mark://a:6309/a.md", to: "mark://b:6309/b.md", rel: "supersedes"}: 0,
+			{from: "mark://a:6309/a.md", to: "mark://b:6309/b.md"}:                    1,
+			{from: "mark://a:6309/a.md", to: "https://example.com"}:                   2,
 		},
 	}
 
@@ -151,8 +191,24 @@ func TestExportParseRoundTrip(t *testing.T) {
 	if len(nodes) != 3 {
 		t.Fatalf("round-trip nodes: got %d, want 3", len(nodes))
 	}
-	if len(edges) != 2 {
-		t.Fatalf("round-trip edges: got %d, want 2", len(edges))
+	if len(edges) != 3 {
+		t.Fatalf("round-trip edges: got %d, want 3", len(edges))
+	}
+
+	// Verify all original edges are recovered losslessly.
+	edgeMap := make(map[edgeKey]StoredEdge)
+	for _, e := range edges {
+		edgeMap[e.key()] = e
+	}
+	for _, orig := range s.edges {
+		got, ok := edgeMap[orig.key()]
+		if !ok {
+			t.Errorf("missing edge %+v after round-trip", orig)
+			continue
+		}
+		if got != orig {
+			t.Errorf("edge round-trip: got %+v, want %+v", got, orig)
+		}
 	}
 
 	// Verify all original nodes are recovered.
