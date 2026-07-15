@@ -28,9 +28,11 @@ func TestGraphExportContract(t *testing.T) {
 	client.addDocWithMeta(host, "/index.md",
 		"# Team A hub\n\n## Services\n\n- [Applications](/a.md)\n",
 		"sha256-"+strings.Repeat("1", 64), map[string]string{"title": "Team A hub"})
+	// No metadata title: the node's title must come from the H1 fallback
+	// (the golden pins it, since the H1 text matches the old declared title).
 	client.addDocWithMeta(host, "/a.md",
 		"# Applications\n\n## Links\n\n- [B doc](/b.md)\n- [external](https://example.com/ext)\n- [dev](mark://localhost:6309/dev.md)\n",
-		"sha256-"+strings.Repeat("2", 64), map[string]string{"title": "Applications"})
+		"sha256-"+strings.Repeat("2", 64), nil)
 	client.addDocWithMeta(host, "/b.md",
 		"# B doc\n",
 		"sha256-"+strings.Repeat("3", 64), map[string]string{"title": "B doc", "rel-supersedes": "/a.md"})
