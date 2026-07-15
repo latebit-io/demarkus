@@ -96,6 +96,15 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context, claims *Claims) graphstor
 // interval; the first graph-tool call after a pod restart always checks.
 const seedCheckInterval = 5 * time.Minute
 
+// seedGraphStore seeds from every configured world: only hubs publish
+// /graph.md and the broker does not know which world is the hub; the
+// per-world throttle bounds the cost.
+func (g *mcpGateway) seedGraphStore(ctx context.Context, claims *Claims) {
+	for i := range g.srv.cfg.Worlds {
+		g.seedWorldGraph(ctx, claims, g.srv.cfg.Worlds[i].Name)
+	}
+}
+
 // seedWorldGraph refreshes the broker's ephemeral graph store from the
 // world's published /graph.md aggregate, so a cold pod answers backlinks
 // without a crawl. Local crawls win (see graphstore.SeedFromExport).
@@ -177,12 +186,11 @@ func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRe
 	}
 	// Validate the URL shape so an agent typo doesn't silently
 	// produce "no backlinks" against a malformed lookup key.
-	worldName, _, perr := parseToolURL(raw)
-	if perr != nil {
+	if _, _, perr := parseToolURL(raw); perr != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
 	}
 	if claims, ok := claimsFromCtx(ctx); ok {
-		g.seedWorldGraph(ctx, claims, worldName)
+		g.seedGraphStore(ctx, claims)
 	}
 	backlinks := g.graphStore.BacklinksEnriched(raw)
 	if len(backlinks) == 0 {
@@ -218,8 +226,7 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	worldName, _, perr := parseToolURL(raw)
-	if perr != nil {
+	if _, _, perr := parseToolURL(raw); perr != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
 	}
 	depth := max(1, min(req.GetInt("depth", 2), 5))
@@ -230,7 +237,7 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 
 	// Seed before crawling so depth-limited crawls still benefit from
 	// hub context.
-	g.seedWorldGraph(ctx, claims, worldName)
+	g.seedGraphStore(ctx, claims)
 
 	crawled, crawlErr := g.graphStore.CrawlAndPersist(
 		ctx,
