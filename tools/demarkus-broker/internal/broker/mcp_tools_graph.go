@@ -96,9 +96,8 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context, claims *Claims) graphstor
 // interval; the first graph-tool call after a pod restart always checks.
 const seedCheckInterval = 5 * time.Minute
 
-// seedGraphStore seeds from every configured world's /graph.md. The
-// aggregate lives only on hub worlds and the broker does not know which
-// world is the hub; a world without /graph.md not-founds instantly and the
+// seedGraphStore seeds from every configured world: only hubs publish
+// /graph.md and the broker does not know which world is the hub; the
 // per-world throttle bounds the cost.
 func (g *mcpGateway) seedGraphStore(ctx context.Context, claims *Claims) {
 	for i := range g.srv.cfg.Worlds {

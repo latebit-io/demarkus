@@ -17,12 +17,9 @@ const contractGoldenPath = "testdata/graph-export-incluster.md"
 // exportedLineRe matches the volatile timestamp header of an export.
 var exportedLineRe = regexp.MustCompile(`(?m)^> Exported: .*$`)
 
-// TestGraphExportContract pins the exact /graph.md body the agent publishes
-// when crawling an in-cluster topology (worlds seeded by service DNS). The
-// golden file is the producer half of a cross-module contract: the broker's
-// seed path consumes the same file in its own suite, so a drift in either
-// the export shape or the URL forms fails a build instead of shipping.
-// Regenerate with: go test ./internal/fedcrawl -run TestGraphExportContract -update
+// TestGraphExportContract pins the exact /graph.md body published for an
+// in-cluster topology. The golden is the producer half of a cross-module
+// contract; the broker's seed suite consumes the same file (-update regenerates).
 func TestGraphExportContract(t *testing.T) {
 	const host = "team-a.team-a.svc.cluster.local:6309"
 

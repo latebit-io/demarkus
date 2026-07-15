@@ -44,11 +44,9 @@ func seedingDispatcher(etag string) *fakeDispatcher {
 	}
 }
 
-// agentContractGolden is the /graph.md body the REAL federation agent
-// produces for an in-cluster topology, generated and pinned by
-// client/internal/fedcrawl's TestGraphExportContract. Consuming it here is
-// the other half of the cross-module contract: producer drift regenerates
-// the golden, and this suite fails if the seed path stops handling it.
+// agentContractGoldenPath is the real agent's in-cluster /graph.md, pinned
+// by fedcrawl's TestGraphExportContract; consuming it here is the other
+// half of the cross-module contract (producer drift regenerates it).
 const agentContractGoldenPath = "../../../../client/internal/fedcrawl/testdata/graph-export-incluster.md"
 
 func agentContractGolden(t *testing.T) string {
@@ -179,8 +177,15 @@ func TestSeedFindsAggregateOnAnotherWorld(t *testing.T) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.fetchCondCalls) != 2 {
-		t.Errorf("seed checks = %d, want 2 (every configured world once)", len(d.fetchCondCalls))
+	probed := map[string]int{}
+	for _, c := range d.fetchCondCalls {
+		if c.path != "/graph.md" {
+			t.Errorf("seed probed %q, want /graph.md", c.path)
+		}
+		probed[c.worldName]++
+	}
+	if probed["team-a"] != 1 || probed["hub"] != 1 || len(probed) != 2 {
+		t.Errorf("seed probes = %v, want each configured world exactly once", probed)
 	}
 }
 
