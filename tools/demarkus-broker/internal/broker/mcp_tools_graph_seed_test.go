@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,63 @@ func seedingDispatcher(etag string) *fakeDispatcher {
 				Body:     worldGraphBody(),
 			}}, nil
 		},
+	}
+}
+
+// agentContractGolden is the /graph.md body the REAL federation agent
+// produces for an in-cluster topology, generated and pinned by
+// client/internal/fedcrawl's TestGraphExportContract. Consuming it here is
+// the other half of the cross-module contract: producer drift regenerates
+// the golden, and this suite fails if the seed path stops handling it.
+const agentContractGoldenPath = "../../../../client/internal/fedcrawl/testdata/graph-export-incluster.md"
+
+func agentContractGolden(t *testing.T) string {
+	t.Helper()
+	body, err := os.ReadFile(agentContractGoldenPath)
+	if err != nil {
+		t.Fatalf("read agent export contract golden (regenerate with: go test ./internal/fedcrawl -run TestGraphExportContract -update, in client/): %v", err)
+	}
+	return string(body)
+}
+
+// TestSeedConsumesAgentExportContract: the real agent's export (the golden)
+// must seed a cold gateway into answering world-name backlink queries, with
+// every world-address row translated.
+func TestSeedConsumesAgentExportContract(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
+	body := agentContractGolden(t)
+	d := &fakeDispatcher{
+		fetchCondFn: func(worldName, path, _, _ string) (fetch.Result, error) {
+			if worldName == "hub" && path == "/graph.md" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+
+	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
+		"url": "mark://team-a/a.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkBacklinks: %v", err)
+	}
+	text := toolResultText(t, res)
+	// index.md's plain link and b.md's typed rel edge, both translated,
+	// with enriched provenance intact.
+	for _, want := range []string{"mark://team-a/index.md", "mark://team-a/b.md", "[supersedes]"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in backlinks from the agent's real export:\n%s", want, text)
+		}
+	}
+
+	// Addressability invariant: every seeded mark:// row on a configured
+	// world address must be translated; none may keep the dial-address form.
+	for _, n := range g.graphStore.AllNodes() {
+		if strings.Contains(n.URL, ".svc.cluster.local") {
+			t.Errorf("unaddressable seeded row survived translation: %s", n.URL)
+		}
 	}
 }
 
