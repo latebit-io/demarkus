@@ -236,9 +236,11 @@ hub manifest unless `force: true`.
 > world fetches its `/graph.md` aggregate (conditional on the last
 > seen etag, throttled to one check per world per 5 minutes) and
 > merges it into the store, so cold pods answer backlinks without a
-> crawl. Locally crawled data always takes precedence over seeded
-> rows, and a world without `/graph.md` degrades to the unseeded
-> behavior.
+> crawl. Seed rows keyed by a configured world's internal dial address
+> (the form the federation agent publishes) are translated to
+> `mark://{worldName}/...` so they answer world-name queries. Locally
+> crawled data always takes precedence over seeded rows, and a world
+> without `/graph.md` degrades to the unseeded behavior.
 
 #### `mark_backlinks`
 
