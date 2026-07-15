@@ -59,11 +59,9 @@ func internalAddrGraphBody() string {
 	return src.Export()
 }
 
-// TestSeedTranslatesInternalAddressesToWorldNames pins the production
-// topology: the hub aggregate keys rows by cluster-internal DNS, which no
-// legal tool URL can address (world host must not carry a port). Seeding
-// must translate configured world addresses to world names so backlinks
-// answer; unknown hosts stay untouched.
+// TestSeedTranslatesInternalAddressesToWorldNames: the hub aggregate keys
+// rows by cluster-internal DNS, which no legal tool URL can address; seeding
+// must translate world addresses to world names and leave unknown hosts alone.
 func TestSeedTranslatesInternalAddressesToWorldNames(t *testing.T) {
 	d := &fakeDispatcher{
 		fetchCondFn: func(_, path, _, _ string) (fetch.Result, error) {
@@ -85,9 +83,14 @@ func TestSeedTranslatesInternalAddressesToWorldNames(t *testing.T) {
 	if !strings.Contains(text, "Page A") || !strings.Contains(text, "mark://team-a/a.md") {
 		t.Errorf("internal-address seed rows not translated to world names:\n%s", text)
 	}
-	// The external node's URL is not a world address and must stay as-is.
+	// The external URL is not a world address and must stay as-is, on the
+	// node and on the edge destination (asserted via the store; the tool
+	// URL grammar only admits mark:// URLs).
 	if n := g.graphStore.GetNode("https://example.com/ext"); n == nil {
 		t.Error("external node URL was rewritten or dropped")
+	}
+	if bl := g.graphStore.Backlinks("https://example.com/ext"); len(bl) != 1 || bl[0] != "mark://team-a/a.md" {
+		t.Errorf("external edge destination = %v, want [mark://team-a/a.md]", bl)
 	}
 }
 

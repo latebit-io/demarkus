@@ -139,12 +139,9 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, claims *Claims, worldNa
 	}
 }
 
-// translateSeedURLs rewrites node and edge URLs whose host is a configured
-// world's internal dial address into the gateway's mark://{worldName}/{path}
-// form. The hub aggregate is crawled over cluster-internal DNS, but every
-// gateway query and crawl keys on world names (and the tool URL grammar
-// rejects port-carrying hosts), so untranslated rows would be unreachable.
-// Unknown hosts stay as-is: they are labels, not lookup keys.
+// translateSeedURLs rewrites URLs on configured world dial addresses to
+// mark://{worldName}/... form; gateway queries key on world names, so
+// untranslated rows are unreachable. Unknown hosts are labels, kept as-is.
 func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) {
 	worlds := g.srv.cfg.Worlds
 	byAddr := make(map[string]string, len(worlds))
