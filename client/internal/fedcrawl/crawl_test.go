@@ -774,3 +774,42 @@ func TestCrawlerRecordsTypedAndProvenancedEdges(t *testing.T) {
 		t.Errorf("loopback rel target leaked into export\n---\n%s", exp)
 	}
 }
+
+// TestRecordEdgesTitlePrecedence: declared metadata title wins; a doc with
+// only an H1 falls back to it (blank titles propagate to every hub-graph
+// consumer otherwise).
+func TestRecordEdgesTitlePrecedence(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://example.com"}
+	cfg.Politeness.RequestDelay = 0
+
+	client := newMockClient()
+	client.addList("example.com:6309", "/", "- [declared.md](declared.md)\n- [heading.md](heading.md)\n- [bare.md](bare.md)\n")
+	client.addDocWithMeta("example.com:6309", "/declared.md", "# Heading Title\n", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", map[string]string{"title": "Declared Title"})
+	client.addDocWithMeta("example.com:6309", "/heading.md", "# Heading Only\n", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil)
+	client.addDocWithMeta("example.com:6309", "/bare.md", "no heading at all\n", "sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", nil)
+
+	c := NewCrawler(cfg, client, nil, nil)
+	if _, err := c.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := map[string]string{
+		"mark://example.com:6309/declared.md": "Declared Title",
+		"mark://example.com:6309/heading.md":  "Heading Only",
+		"mark://example.com:6309/bare.md":     "",
+	}
+	for _, n := range c.graph.AllNodes() {
+		expect, ok := want[n.URL]
+		if !ok {
+			continue
+		}
+		if n.Title != expect {
+			t.Errorf("title of %s = %q, want %q", n.URL, n.Title, expect)
+		}
+		delete(want, n.URL)
+	}
+	if len(want) != 0 {
+		t.Errorf("nodes not crawled: %v", want)
+	}
+}

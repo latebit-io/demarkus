@@ -494,7 +494,14 @@ func (c *Crawler) recordEdges(host, path, body string, meta map[string]string) {
 		}
 		c.graph.AddEdgeInfo(graph.Edge{From: url, To: target, Rel: r.Rel, Count: 1})
 	}
-	c.graph.AddNode(&graph.Node{URL: url, Title: meta["title"], Status: "ok", LinkCount: linkCount})
+	// Declared metadata title first, H1 fallback like mark_graph's crawler:
+	// most docs carry their title as a heading, not metadata, and a blank
+	// title here propagates to every hub-graph consumer.
+	title := meta["title"]
+	if title == "" {
+		title = links.ExtractTitle(body)
+	}
+	c.graph.AddNode(&graph.Node{URL: url, Title: title, Status: "ok", LinkCount: linkCount})
 }
 
 // normalizeTarget keeps only mark:// targets with a port-stable host
