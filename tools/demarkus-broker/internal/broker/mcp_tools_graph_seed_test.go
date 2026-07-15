@@ -43,6 +43,57 @@ func seedingDispatcher(etag string) *fakeDispatcher {
 	}
 }
 
+// internalAddrGraphBody renders a /graph.md the way the federation agent
+// publishes it in-cluster: rows keyed by internal dial addresses
+// (name.namespace.svc.cluster.local:6309), not world names.
+func internalAddrGraphBody() string {
+	src := graphstore.New()
+	g := graph.New()
+	const base = "mark://team-a.team-a.svc.cluster.local:6309"
+	g.AddNode(&graph.Node{URL: base + "/a.md", Title: "Page A", Status: "ok", LinkCount: 2})
+	g.AddNode(&graph.Node{URL: base + "/b.md", Title: "Page B", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "https://example.com/ext", Status: "external"})
+	g.AddEdgeInfo(graph.Edge{From: base + "/a.md", To: base + "/b.md", Label: "B", Count: 1})
+	g.AddEdgeInfo(graph.Edge{From: base + "/a.md", To: "https://example.com/ext", Count: 1})
+	src.Merge(g, nil)
+	return src.Export()
+}
+
+// TestSeedTranslatesInternalAddressesToWorldNames: the hub aggregate keys
+// rows by cluster-internal DNS, which no legal tool URL can address; seeding
+// must translate world addresses to world names and leave unknown hosts alone.
+func TestSeedTranslatesInternalAddressesToWorldNames(t *testing.T) {
+	d := &fakeDispatcher{
+		fetchCondFn: func(_, path, _, _ string) (fetch.Result, error) {
+			if path != "/graph.md" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: internalAddrGraphBody()}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+
+	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
+		"url": "mark://team-a/b.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkBacklinks: %v", err)
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "Page A") || !strings.Contains(text, "mark://team-a/a.md") {
+		t.Errorf("internal-address seed rows not translated to world names:\n%s", text)
+	}
+	// The external URL is not a world address and must stay as-is, on the
+	// node and on the edge destination (asserted via the store; the tool
+	// URL grammar only admits mark:// URLs).
+	if n := g.graphStore.GetNode("https://example.com/ext"); n == nil {
+		t.Error("external node URL was rewritten or dropped")
+	}
+	if bl := g.graphStore.Backlinks("https://example.com/ext"); len(bl) != 1 || bl[0] != "mark://team-a/a.md" {
+		t.Errorf("external edge destination = %v, want [mark://team-a/a.md]", bl)
+	}
+}
+
 // TestHandleMarkBacklinksColdPodSeedsFromWorldGraph is the headline
 // behavior: a cold gateway answers backlinks from the world's
 // published /graph.md with no prior crawl.

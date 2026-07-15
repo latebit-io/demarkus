@@ -132,9 +132,36 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, claims *Claims, worldNa
 	if len(nodes) == 0 && len(edges) == 0 {
 		return
 	}
+	g.translateSeedURLs(nodes, edges)
 	g.graphStore.SeedFromExport(nodes, edges)
 	if e := result.Response.Metadata["etag"]; e != "" {
 		g.graphStore.SetSeedEtag(worldName, e)
+	}
+}
+
+// translateSeedURLs rewrites URLs on configured world dial addresses to
+// mark://{worldName}/... form; gateway queries key on world names, so
+// untranslated rows are unreachable. Unknown hosts are labels, kept as-is.
+func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) {
+	worlds := g.srv.cfg.Worlds
+	byAddr := make(map[string]string, len(worlds))
+	for i := range worlds {
+		byAddr["mark://"+resolveWorldAddress(&worlds[i])] = "mark://" + worlds[i].Name
+	}
+	translate := func(rawURL string) string {
+		for prefix, world := range byAddr {
+			if rest, ok := strings.CutPrefix(rawURL, prefix); ok && (rest == "" || rest[0] == '/') {
+				return world + rest
+			}
+		}
+		return rawURL
+	}
+	for i := range nodes {
+		nodes[i].URL = translate(nodes[i].URL)
+	}
+	for i := range edges {
+		edges[i].From = translate(edges[i].From)
+		edges[i].To = translate(edges[i].To)
 	}
 }
 
