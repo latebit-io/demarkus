@@ -231,12 +231,12 @@ hub manifest unless `force: true`.
 > persistence is parked for the post-broker design window.
 >
 > To make restarts cheap (not durable), the store is **seeded on
-> demand from each world's published `/graph.md`**: the first
-> `mark_backlinks` / `mark_graph` / `mark_explore` call touching a
-> world fetches its `/graph.md` aggregate (conditional on the last
-> seen etag, throttled to one check per world per 5 minutes) and
-> merges it into the store, so cold pods answer backlinks without a
-> crawl. Seed rows keyed by a configured world's internal dial address
+> demand from the worlds' published `/graph.md`**: any
+> `mark_backlinks` / `mark_graph` / `mark_explore` call checks every
+> configured world for a `/graph.md` aggregate (the hub is the one
+> that has it; conditional on the last seen etag, throttled to one
+> check per world per 5 minutes) and merges it into the store, so
+> cold pods answer backlinks without a crawl. Seed rows keyed by a configured world's internal dial address
 > (the form the federation agent publishes) are translated to
 > `mark://{worldName}/...` so they answer world-name queries. Locally
 > crawled data always takes precedence over seeded rows, and a world

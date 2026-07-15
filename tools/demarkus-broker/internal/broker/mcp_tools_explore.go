@@ -67,7 +67,7 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 	}
 
 	if claims, ok := claimsFromCtx(ctx); ok {
-		g.seedWorldGraph(ctx, claims, worldName)
+		g.seedGraphStore(ctx, claims)
 	}
 	g.writeBacklinksSection(&b, docURL)
 	g.writeSiblingsSection(&b, worldName, path)

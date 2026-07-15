@@ -94,6 +94,38 @@ func TestSeedTranslatesInternalAddressesToWorldNames(t *testing.T) {
 	}
 }
 
+// TestSeedFindsAggregateOnAnotherWorld: the aggregate lives only on the hub
+// world, so a cold query against a different world must still seed it; every
+// configured world is checked, not just the one in the query URL.
+func TestSeedFindsAggregateOnAnotherWorld(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
+	d := &fakeDispatcher{
+		fetchCondFn: func(worldName, path, _, _ string) (fetch.Result, error) {
+			if worldName == "hub" && path == "/graph.md" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: internalAddrGraphBody()}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+
+	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
+		"url": "mark://team-a/b.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkBacklinks: %v", err)
+	}
+	if text := toolResultText(t, res); !strings.Contains(text, "mark://team-a/a.md") {
+		t.Errorf("hub-world aggregate not found from a team-a query:\n%s", text)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.fetchCondCalls) != 2 {
+		t.Errorf("seed checks = %d, want 2 (every configured world once)", len(d.fetchCondCalls))
+	}
+}
+
 // TestHandleMarkBacklinksColdPodSeedsFromWorldGraph is the headline
 // behavior: a cold gateway answers backlinks from the world's
 // published /graph.md with no prior crawl.
