@@ -47,18 +47,22 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus` | CLI tool for all protocol operations (fetch, publish, append, graph, okf, etc.) |
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
+| `demarkus-agent` | Federation agent: crawls worlds, aggregates the link graph, publishes hub indexes |
+| `demarkus-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system |
 
 ## Protocol at a Glance
 
 **Transport**: QUIC (UDP 6309) | **Scheme**: `mark://` | **Content**: Markdown + YAML frontmatter
 
 Request:
-```
+
+```text
 FETCH /hello.md
 ```
 
 Response:
-```
+
+```text
 ---
 status: ok
 version: 3
@@ -76,7 +80,7 @@ modified: 2026-01-15T10:30:00Z
 
 **Agent Memory**: Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/) or install via [OpenClaw](https://www.demarkus.io/install/openclaw/).
 
-**Organizational Knowledge System**: Compose many servers ("worlds") into a broker-fronted universe reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command, `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/), and their agents share organizational memory over MCP, with no per-developer server or token setup. See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
+**Organizational Knowledge System**: Compose many servers ("worlds") into a broker-fronted universe reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command, `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/), and their agents share organizational memory over MCP, with no per-developer server or token setup. Humans browse the same universe in the [web reading room](https://github.com/latebit-io/demarkus-library). See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
 
 **Personal Knowledge Base**: Local server, versioned documents, TUI browser. Everything from first write.
 
@@ -86,6 +90,7 @@ modified: 2026-01-15T10:30:00Z
 
 ## Ecosystem
 
+- [demarkus-library](https://github.com/latebit-io/demarkus-library): web reading room; server-rendered front-end for browsing worlds through the broker (SSO) or direct QUIC
 - [Caztor](https://github.com/kevinboone/caztor): cross-platform Java GUI browser with preliminary Demarkus support
 - [Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus): publish and browse from Obsidian
 - [Claude Code memory plugin](plugins/claude-code/): zero-config local memory for Claude Code
