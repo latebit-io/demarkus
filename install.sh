@@ -739,11 +739,11 @@ read_existing_config() {
   EXISTING_TLS_CERT=""
   EXISTING_TLS_KEY=""
 
-  if [ "$PLATFORM" = "linux" ] && [ -f /etc/systemd/system/demarkus.service ]; then
-    EXISTING_ROOT=$(grep 'DEMARKUS_ROOT=' /etc/systemd/system/demarkus.service 2>/dev/null \
+  if [ "$PLATFORM" = "linux" ] && [ -f "${SYSTEMD_DIR}/demarkus.service" ]; then
+    EXISTING_ROOT=$(grep 'DEMARKUS_ROOT=' "${SYSTEMD_DIR}/demarkus.service" 2>/dev/null \
       | sed 's/.*DEMARKUS_ROOT=//' || true)
     local cert_path
-    cert_path=$(grep 'DEMARKUS_TLS_CERT=' /etc/systemd/system/demarkus.service 2>/dev/null \
+    cert_path=$(grep 'DEMARKUS_TLS_CERT=' "${SYSTEMD_DIR}/demarkus.service" 2>/dev/null \
       | sed 's/.*DEMARKUS_TLS_CERT=//' || true)
     if [ -n "$cert_path" ]; then
       case "$cert_path" in
@@ -752,7 +752,7 @@ read_existing_config() {
           ;;
         *)
           EXISTING_TLS_CERT="$cert_path"
-          EXISTING_TLS_KEY=$(grep 'DEMARKUS_TLS_KEY=' /etc/systemd/system/demarkus.service 2>/dev/null \
+          EXISTING_TLS_KEY=$(grep 'DEMARKUS_TLS_KEY=' "${SYSTEMD_DIR}/demarkus.service" 2>/dev/null \
             | sed 's/.*DEMARKUS_TLS_KEY=//' || true)
           ;;
       esac
@@ -1106,8 +1106,10 @@ do_install() {
       log_error "--broker-oidc-client-secret and --broker-oidc-client-secret-file are mutually exclusive"
       exit 1
     fi
-    if [ ! -r "$broker_oidc_client_secret_file" ]; then
-      log_error "Cannot read secret file: ${broker_oidc_client_secret_file}"
+    # Require a regular file: -r alone accepts FIFOs and devices, and
+    # head would then block the install waiting for input.
+    if [ ! -f "$broker_oidc_client_secret_file" ] || [ ! -r "$broker_oidc_client_secret_file" ]; then
+      log_error "Secret file must be a readable regular file: ${broker_oidc_client_secret_file}"
       exit 1
     fi
     broker_oidc_client_secret=$(head -1 "$broker_oidc_client_secret_file" | tr -d '[:space:]')
@@ -1739,7 +1741,7 @@ _do_update_inner() {
 
   # Harden existing systemd unit if it lacks security directives
   if [ "$PLATFORM" = "linux" ]; then
-    local unit="/etc/systemd/system/demarkus.service"
+    local unit="${SYSTEMD_DIR}/demarkus.service"
     if $SUDO test -f "$unit" && ! $SUDO grep -q 'ProtectSystem' "$unit"; then
       local content_root
       content_root=$($SUDO grep -m1 'DEMARKUS_ROOT=' "$unit" 2>/dev/null \
@@ -1833,8 +1835,8 @@ do_uninstall() {
 
   # Read content root from service file before removing it
   local content_root=""
-  if [ "$PLATFORM" = "linux" ] && $SUDO test -f /etc/systemd/system/demarkus.service; then
-    content_root=$($SUDO grep DEMARKUS_ROOT /etc/systemd/system/demarkus.service 2>/dev/null \
+  if [ "$PLATFORM" = "linux" ] && $SUDO test -f "${SYSTEMD_DIR}/demarkus.service"; then
+    content_root=$($SUDO grep DEMARKUS_ROOT "${SYSTEMD_DIR}/demarkus.service" 2>/dev/null \
       | sed 's/.*=//' || true)
   fi
 
@@ -1842,7 +1844,7 @@ do_uninstall() {
   if [ "$PLATFORM" = "linux" ]; then
     $SUDO systemctl stop demarkus 2>/dev/null || true
     $SUDO systemctl disable demarkus 2>/dev/null || true
-    $SUDO rm -f /etc/systemd/system/demarkus.service
+    $SUDO rm -f "${SYSTEMD_DIR}/demarkus.service"
     $SUDO systemctl daemon-reload 2>/dev/null || true
     log_info "Removed systemd service"
   elif [ "$PLATFORM" = "darwin" ]; then

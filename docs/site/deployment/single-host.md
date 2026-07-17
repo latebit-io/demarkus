@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 # Full stack with SSO (Google/GitHub OAuth app required, see below)
 sudo install -m 600 /dev/null /root/oidc-secret
-printf '%s' '<client-secret>' | sudo tee /root/oidc-secret >/dev/null
+sudoedit /root/oidc-secret     # paste the OAuth client secret, save, quit
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh \
   | sudo bash -s -- --domain example.com --with-broker --with-library \
     --broker-public-url https://broker.example.com \
@@ -20,7 +20,9 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
     --broker-oidc-client-secret-file /root/oidc-secret
 ```
 
-The secret rides a root-readable file, not argv (argv is visible in `ps` and shell history). Omit the OIDC flags to scaffold the broker config for later editing; the unit installs **disabled** and the summary prints the two files to complete plus the `systemctl enable --now` to run. Pin the reading room with `--library-version <x.y.z>` for reproducible installs (the broker is always the same version as the rest of the stack's tools release).
+The secret rides a root-readable file, never argv or a shell command line (both leak via `ps` and history). Omit the OIDC flags to scaffold the broker config for later editing; the unit installs **disabled** and the summary prints the two files to complete plus the `systemctl enable --now` to run.
+
+Version pinning: `--version` pins the server; `--library-version` pins the reading room; the broker always installs from the same tools release as the other stack binaries. Client and tools otherwise resolve to their latest releases — the modules are versioned independently by design.
 
 ## What gets installed
 
