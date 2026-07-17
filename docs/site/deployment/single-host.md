@@ -32,7 +32,9 @@ Version pinning: `--version` pins the server; `--library-version` pins the readi
 | Broker | `demarkus-broker` | loopback TCP 8080 (OAuth/API), 8081 (MCP gateway) | `/etc/demarkus-broker/` |
 | Library | `demarkus-library` | TCP 8090 | `/etc/demarkus-library/` |
 
-The broker binds **loopback only** — its advertised `publicURL` is served by your TLS reverse proxy (see below). With a broker installed, `tokens.toml` moves to `/etc/demarkus/tokens/`, a subdirectory the broker owns, so its atomic writes never require access to the rest of `/etc/demarkus` (where the TLS keys live). This layout is sticky: later reinstalls keep it even without `--with-broker`. To fully remove the broker: `systemctl disable --now demarkus-broker`, move `/etc/demarkus/tokens/tokens.toml` back to `/etc/demarkus/tokens.toml` (restoring `root:demarkus` 640), and re-run the installer.
+The broker binds **loopback only** — its advertised `publicURL` is served by your TLS reverse proxy (see below). With a broker installed, `tokens.toml` moves to `/etc/demarkus/tokens/`, a subdirectory the broker owns, so its atomic writes never require access to the rest of `/etc/demarkus` (where the TLS keys live). This layout is sticky: later reinstalls keep it even without `--with-broker`.
+
+**Removing the stack.** `demarkus-install uninstall` tears down every component (server, broker, library) — services, users, binaries, and the broker's config and state directories (which hold credential-bearing artifacts). To keep the server but revert to server-only token handling: `systemctl disable --now demarkus-broker`, move `/etc/demarkus/tokens/tokens.toml` back to `/etc/demarkus/tokens.toml` (restoring `root:demarkus` 640), and re-run the installer.
 
 Each component runs as its own hardened system user (`ProtectSystem=strict`, minimal `ReadWritePaths`).
 

@@ -9,7 +9,7 @@
 #   curl -fsSL ... | bash -s -- --client-only
 #
 # Single-host stack (server + broker + library on one Linux host):
-#   curl -fsSL ... | bash -s -- --domain example.com --with-broker --with-library \
+#   curl -fsSL ... | sudo bash -s -- --domain example.com --with-broker --with-library \
 #     --broker-public-url https://broker.example.com \
 #     --broker-oidc-issuer https://accounts.google.com \
 #     --broker-oidc-client-id <id> \
@@ -58,8 +58,14 @@ DEFAULT_ROOT_LINUX="/var/lib/demarkus"
 DEFAULT_ROOT_MACOS="$HOME/.demarkus/content"
 SERVICE_NAME="demarkus"
 SCRIPT_VERSION="1"
-# Overridable for tests; production always uses the real systemd path.
-SYSTEMD_DIR="${DEMARKUS_SYSTEMD_DIR:-/etc/systemd/system}"
+# The unit directory is fixed to systemd's search path in production. The
+# test harness redirects it via DEMARKUS_TEST_SYSTEMD_DIR, but only under an
+# explicit test-mode flag, so a stray production override can never write
+# units where `systemctl enable/restart` would fail to find them.
+SYSTEMD_DIR="/etc/systemd/system"
+if [ "${DEMARKUS_INSTALL_TESTMODE:-}" = "1" ] && [ -n "${DEMARKUS_TEST_SYSTEMD_DIR:-}" ]; then
+  SYSTEMD_DIR="$DEMARKUS_TEST_SYSTEMD_DIR"
+fi
 
 # Global state
 SUDO=""       # set to "sudo" if needed for INSTALL_DIR writes
@@ -1845,6 +1851,16 @@ do_uninstall() {
     $SUDO systemctl stop demarkus 2>/dev/null || true
     $SUDO systemctl disable demarkus 2>/dev/null || true
     $SUDO rm -f "${SYSTEMD_DIR}/demarkus.service"
+    # Remove the optional single-host stack components too. Each is a
+    # no-op when it was never installed.
+    for svc in "$BROKER_SERVICE" "$LIBRARY_SERVICE"; do
+      if $SUDO test -f "${SYSTEMD_DIR}/${svc}.service"; then
+        $SUDO systemctl stop "$svc" 2>/dev/null || true
+        $SUDO systemctl disable "$svc" 2>/dev/null || true
+        $SUDO rm -f "${SYSTEMD_DIR}/${svc}.service"
+        log_info "Removed ${svc} service"
+      fi
+    done
     $SUDO systemctl daemon-reload 2>/dev/null || true
     log_info "Removed systemd service"
   elif [ "$PLATFORM" = "darwin" ]; then
@@ -1863,16 +1879,19 @@ do_uninstall() {
   fi
 
   # Remove binaries
-  for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install; do
+  for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install demarkus-broker demarkus-library; do
     $SUDO rm -f "${INSTALL_DIR}/${bin}"
   done
   log_info "Removed binaries from ${INSTALL_DIR}/"
 
-  # Remove config
-  if $SUDO test -d "$CONFIG_DIR"; then
-    $SUDO rm -rf "$CONFIG_DIR"
-    log_info "Removed config directory ${CONFIG_DIR}/"
-  fi
+  # Remove config (server, plus broker/library when present — the broker
+  # config and state hold credential-bearing artifacts, so always clear).
+  for d in "$CONFIG_DIR" "$BROKER_CONFIG_DIR" "$BROKER_STATE_DIR" "$LIBRARY_CONFIG_DIR"; do
+    if [ -n "$d" ] && $SUDO test -d "$d"; then
+      $SUDO rm -rf "$d"
+      log_info "Removed ${d}/"
+    fi
+  done
 
   # Remove content directory
   if [ "$keep_data" = false ]; then
@@ -1886,10 +1905,15 @@ do_uninstall() {
     fi
   fi
 
-  # Remove system user (Linux only)
-  if [ "$PLATFORM" = "linux" ] && id "$SERVICE_NAME" >/dev/null 2>&1; then
-    $SUDO userdel "$SERVICE_NAME" 2>/dev/null || true
-    log_info "Removed system user '${SERVICE_NAME}'"
+  # Remove system users (Linux only). The broker user is removed before
+  # the server user because it is a member of the server group.
+  if [ "$PLATFORM" = "linux" ]; then
+    for u in "$BROKER_SERVICE" "$LIBRARY_SERVICE" "$SERVICE_NAME"; do
+      if id "$u" >/dev/null 2>&1; then
+        $SUDO userdel "$u" 2>/dev/null || true
+        log_info "Removed system user '${u}'"
+      fi
+    done
   fi
 
   # Remove certbot renewal cron
