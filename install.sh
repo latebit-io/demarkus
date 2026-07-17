@@ -10,11 +10,14 @@
 #
 # Single-host stack (server + broker + library on one Linux host):
 #   curl -fsSL ... | bash -s -- --domain example.com --with-broker --with-library \
-#     --broker-public-url https://example.com:8080 \
+#     --broker-public-url https://broker.example.com \
 #     --broker-oidc-issuer https://accounts.google.com \
-#     --broker-oidc-client-id <id> --broker-oidc-client-secret <secret>
-#   Omit the OIDC flags to scaffold the broker config for later editing;
-#   --with-library alone serves a read-only reading room on :8090.
+#     --broker-oidc-client-id <id> \
+#     --broker-oidc-client-secret-file /root/oidc-secret
+#   The broker binds loopback (:8080 OAuth/API, :8081 MCP); front the
+#   public URL with a TLS reverse proxy. Omit the OIDC flags to scaffold
+#   the broker config for later editing; --with-library alone serves a
+#   read-only reading room on :8090. Pin the library with --library-version.
 #
 # For private repos, set GITHUB_TOKEN:
 #   curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
@@ -837,17 +840,21 @@ install_broker() {
   chown root:"$BROKER_SERVICE" "$BROKER_CONFIG_DIR"
   chmod 750 "$BROKER_CONFIG_DIR"
 
-  # Broker writes tokens.toml via temp+rename, so it needs the file AND
-  # group-write on the directory; the server only ever reads.
+  # Broker writes tokens.toml via temp+rename: it owns the tokens
+  # subdirectory (never CONFIG_DIR itself, which holds the TLS keys);
+  # the server traverses and reads via the shared group.
   chown "$BROKER_SERVICE":"$SERVICE_NAME" "$tokens_file"
   chmod 640 "$tokens_file"
-  chgrp "$SERVICE_NAME" "$(dirname "$tokens_file")"
-  chmod 770 "$(dirname "$tokens_file")"
+  chown "$BROKER_SERVICE":"$SERVICE_NAME" "$(dirname "$tokens_file")"
+  chmod 750 "$(dirname "$tokens_file")"
 
+  # With verified TLS the dial address must match the certificate's name;
+  # localhost only works when verification is skipped (self-signed).
   local world_host="localhost:6309"
   local dial_insecure="true"
   if [ -n "$domain" ] && [ "$no_tls" = false ]; then
     dial_insecure="false"
+    world_host="${domain}:6309"
   fi
 
   local cookie_key
@@ -863,11 +870,15 @@ install_broker() {
   local issuer="${oidc_issuer:-https://accounts.google.com}"
   local client_id="${oidc_client_id:-EDIT-ME-client-id}"
 
+  local config_kept=false
   if [ ! -f "${BROKER_CONFIG_DIR}/config.yaml" ]; then
     {
       printf 'storage:\n  backend: file\n  dir: %s\n' "$BROKER_STATE_DIR"
-      printf 'server:\n  addr: ":8080"\n  cookieKey: "%s"\n' "$cookie_key"
-      printf '  publicURL: "%s"\n  mcp:\n    addr: ":8081"\n' "$pub"
+      # Loopback binds: both broker surfaces sit behind a TLS reverse
+      # proxy (publicURL); exposing the plaintext listeners directly
+      # would contradict the advertised https origin.
+      printf 'server:\n  addr: "127.0.0.1:8080"\n  cookieKey: "%s"\n' "$cookie_key"
+      printf '  publicURL: "%s"\n  mcp:\n    addr: "127.0.0.1:8081"\n' "$pub"
       printf 'oidc:\n  issuer: %s\n  clientID: %s\n' "$issuer" "$client_id"
       printf '  redirectURL: %s/auth/callback\n' "$pub"
       printf '  # clientSecret comes from OIDC_CLIENT_SECRET in %s/env\n' "$BROKER_CONFIG_DIR"
@@ -887,7 +898,11 @@ install_broker() {
     chown root:"$BROKER_SERVICE" "${BROKER_CONFIG_DIR}/config.yaml"
     chmod 640 "${BROKER_CONFIG_DIR}/config.yaml"
   else
+    config_kept=true
     log_info "Keeping existing broker config: ${BROKER_CONFIG_DIR}/config.yaml"
+    if [ -n "$oidc_issuer" ] || [ -n "$oidc_client_id" ] || [ -n "$public_url" ]; then
+      log_warn "Broker OIDC flags were given but the existing config was kept; edit ${BROKER_CONFIG_DIR}/config.yaml to apply them"
+    fi
   fi
 
   if [ ! -f "${BROKER_CONFIG_DIR}/env" ]; then
@@ -926,14 +941,16 @@ RestrictSUIDSGID=yes
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable "$BROKER_SERVICE"
 
-  if [ -n "$oidc_issuer" ] && [ -n "$oidc_client_id" ] && [ -n "$oidc_client_secret" ] && [ -n "$public_url" ]; then
+  # Enable only alongside a complete configuration: an enabled unit with
+  # placeholder values would come up broken on every boot.
+  if [ "$config_kept" = true ] || { [ -n "$oidc_issuer" ] && [ -n "$oidc_client_id" ] && [ -n "$oidc_client_secret" ] && [ -n "$public_url" ]; }; then
+    systemctl enable "$BROKER_SERVICE"
     systemctl restart "$BROKER_SERVICE"
-    log_info "Broker started: ${public_url} (MCP gateway :8081)"
+    log_info "Broker started (loopback :8080 OAuth/API, :8081 MCP); front publicURL with a TLS reverse proxy"
   else
-    log_warn "Broker installed but NOT started: OIDC is not configured yet."
-    log_info "Edit ${BROKER_CONFIG_DIR}/config.yaml (publicURL, oidc.clientID) and ${BROKER_CONFIG_DIR}/env (OIDC_CLIENT_SECRET), then: systemctl start ${BROKER_SERVICE}"
+    log_warn "Broker installed but NOT enabled: OIDC is not configured yet."
+    log_info "Edit ${BROKER_CONFIG_DIR}/config.yaml (publicURL, oidc.clientID) and ${BROKER_CONFIG_DIR}/env (OIDC_CLIENT_SECRET), then: systemctl enable --now ${BROKER_SERVICE}"
   fi
 }
 
@@ -941,9 +958,10 @@ EOF
 # (read-only) mode against the local world. Broker/SSO mode is a config
 # change documented in the generated env file and the deployment docs.
 install_library() {
-  local domain="$1"
-  local no_tls="$2"
-  local tmpdir="$3"
+  local lib_version="$1"
+  local domain="$2"
+  local no_tls="$3"
+  local tmpdir="$4"
 
   if [ "$PLATFORM" != "linux" ]; then
     log_warn "--with-library is Linux-only (systemd); skipping library install"
@@ -951,10 +969,11 @@ install_library() {
   fi
 
   log_step "Installing demarkus-library (reading room)"
-  local lib_version
-  lib_version=$(curl -fsSL "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
   if [ -z "$lib_version" ]; then
-    log_error "Could not resolve the latest demarkus-library release"
+    lib_version=$(curl -fsSL "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
+  fi
+  if [ -z "$lib_version" ]; then
+    log_error "Could not resolve the latest demarkus-library release (pin one with --library-version)"
     exit 1
   fi
   local lib_asset="demarkus-library_${lib_version}_${OS}_${GOARCH}.tar.gz"
@@ -1051,10 +1070,12 @@ do_install() {
   local tls_key=""
   local with_broker=false
   local with_library=false
+  local library_version=""
   local broker_public_url=""
   local broker_oidc_issuer=""
   local broker_oidc_client_id=""
   local broker_oidc_client_secret=""
+  local broker_oidc_client_secret_file=""
 
   # Parse flags
   while [ $# -gt 0 ]; do
@@ -1068,13 +1089,33 @@ do_install() {
       --tls-key)     tls_key="$2"; shift 2 ;;
       --with-broker)  with_broker=true; shift ;;
       --with-library) with_library=true; shift ;;
+      --library-version)           library_version="$2"; shift 2 ;;
       --broker-public-url)         broker_public_url="$2"; shift 2 ;;
       --broker-oidc-issuer)        broker_oidc_issuer="$2"; shift 2 ;;
       --broker-oidc-client-id)     broker_oidc_client_id="$2"; shift 2 ;;
       --broker-oidc-client-secret) broker_oidc_client_secret="$2"; shift 2 ;;
+      --broker-oidc-client-secret-file) broker_oidc_client_secret_file="$2"; shift 2 ;;
       *)             log_error "Unknown option: $1"; exit 1 ;;
     esac
   done
+
+  # Prefer the file form for the OIDC secret: an argv secret is visible in
+  # ps and shell history for the install's duration.
+  if [ -n "$broker_oidc_client_secret_file" ]; then
+    if [ -n "$broker_oidc_client_secret" ]; then
+      log_error "--broker-oidc-client-secret and --broker-oidc-client-secret-file are mutually exclusive"
+      exit 1
+    fi
+    if [ ! -r "$broker_oidc_client_secret_file" ]; then
+      log_error "Cannot read secret file: ${broker_oidc_client_secret_file}"
+      exit 1
+    fi
+    broker_oidc_client_secret=$(head -1 "$broker_oidc_client_secret_file" | tr -d '[:space:]')
+    if [ -z "$broker_oidc_client_secret" ]; then
+      log_error "Secret file is empty: ${broker_oidc_client_secret_file}"
+      exit 1
+    fi
+  fi
 
   # Validate TLS flag combinations
   if [ -n "$tls_cert" ] || [ -n "$tls_key" ]; then
@@ -1273,6 +1314,18 @@ do_install() {
   setup_content_dir "$content_root"
 
   local tokens_file="${CONFIG_DIR}/tokens.toml"
+  # With a broker, tokens live in their own subdirectory the broker owns:
+  # atomic replacement needs directory write, and granting that on all of
+  # CONFIG_DIR would let a compromised broker replace the TLS keys too.
+  if [ "$with_broker" = true ] && [ "$PLATFORM" = "linux" ]; then
+    local broker_tokens_dir="${CONFIG_DIR}/tokens"
+    mkdir -p "$broker_tokens_dir"
+    if [ -f "$tokens_file" ] && [ ! -f "${broker_tokens_dir}/tokens.toml" ]; then
+      mv "$tokens_file" "${broker_tokens_dir}/tokens.toml"
+      log_info "Moved tokens file to ${broker_tokens_dir}/ (broker-owned directory)"
+    fi
+    tokens_file="${broker_tokens_dir}/tokens.toml"
+  fi
 
   local raw_token=""
   if [ -f "$tokens_file" ]; then
@@ -1336,15 +1389,15 @@ do_install() {
     install_broker "$tools_version" "$tokens_file" "$domain" "$no_tls" \
       "$broker_oidc_issuer" "$broker_oidc_client_id" "$broker_oidc_client_secret" \
       "$broker_public_url" "$_TMPDIR"
-    if [ "$PLATFORM" = "linux" ] && command -v ufw >/dev/null 2>&1; then
-      ufw allow 8080/tcp >/dev/null 2>&1 || true
-      ufw allow 8081/tcp >/dev/null 2>&1 || true
-    fi
+    # Broker listeners are loopback-only; the reverse proxy's HTTPS port
+    # is the operator's to open. No firewall change here.
   fi
   if [ "$with_library" = true ]; then
-    install_library "$domain" "$no_tls" "$_TMPDIR"
+    install_library "$library_version" "$domain" "$no_tls" "$_TMPDIR"
     if [ "$PLATFORM" = "linux" ] && command -v ufw >/dev/null 2>&1; then
-      ufw allow 8090/tcp >/dev/null 2>&1 || true
+      if ! ufw allow 8090/tcp >/dev/null 2>&1; then
+        log_warn "Could not open TCP 8090 in ufw; the library may be unreachable until you open it"
+      fi
     fi
   fi
   if [ "$PLATFORM" = "darwin" ]; then
