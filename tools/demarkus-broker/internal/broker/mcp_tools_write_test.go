@@ -942,7 +942,7 @@ func TestMCPGatewayMarkPublishEndToEnd(t *testing.T) {
 	}}
 	signer := newTestSigner(t)
 	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
+	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
 	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d))
 	t.Cleanup(ts.Close)
 

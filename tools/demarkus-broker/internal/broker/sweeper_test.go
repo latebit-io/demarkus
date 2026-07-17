@@ -16,7 +16,7 @@ func TestSweepRemovesExpiredRefreshTokens(t *testing.T) {
 	// refresh tokens are the only thing the sweeper retires.
 	k8s := fake.NewSimpleClientset()
 	cfg := testRefreshConfig()
-	rs := NewRefreshStore(cfg, k8s)
+	rs := NewRefreshStore(cfg, NewK8sSecretStore(k8s))
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	rs.clock = func() time.Time { return base }
 

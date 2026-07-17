@@ -162,7 +162,7 @@ func TestGatewayAuthValidBearerStashesClaimsOnContext(t *testing.T) {
 
 	signer := newTestSigner(t)
 	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, v, k8s, nil, nil, nil)
+	brokerSrv := NewServer(cfg, signer, v, NewK8sSecretStore(k8s), nil, nil, nil)
 
 	var seen *Claims
 	var sawClaims bool

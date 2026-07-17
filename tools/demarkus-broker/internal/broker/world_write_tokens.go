@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/token"
-	"k8s.io/client-go/kubernetes"
 )
 
 // worldWriteTokenSecretKey is the data key in the broker's
@@ -55,17 +54,17 @@ type writeTokenRecord struct {
 // only party that ever holds the raw token.
 type worldWriteTokenStore struct {
 	cfg   *Config
-	k8s   kubernetes.Interface
+	store SecretStore
 	clock func() time.Time
 
 	mu    sync.Mutex
 	cache map[string]string // worldName → raw token
 }
 
-func newWorldWriteTokenStore(cfg *Config, k8s kubernetes.Interface) *worldWriteTokenStore {
+func newWorldWriteTokenStore(cfg *Config, store SecretStore) *worldWriteTokenStore {
 	return &worldWriteTokenStore{
 		cfg:   cfg,
-		k8s:   k8s,
+		store: store,
 		clock: time.Now,
 		cache: make(map[string]string),
 	}
@@ -109,15 +108,14 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 	}
 
 	label := worldWriteTokenLabel(worldName)
-	secretName := worldWriteTokenSecretName(worldName)
 
-	// mutateSecret races concurrent broker pods on the broker Secret.
+	// The store mutation races concurrent broker pods on the broker record.
 	// On a fresh world: the closure mints once and the encoded
 	// record lands. On a re-provision (or a loser of the race): the
 	// closure sees existing data and returns it unchanged so the
 	// already-committed token wins.
 	var finalRecord writeTokenRecord
-	err := mutateSecret(ctx, s.k8s, s.cfg.Server.BrokerNamespace, secretName, worldWriteTokenSecretKey, func(existing []byte) ([]byte, error) {
+	err := s.store.Mutate(ctx, s.cfg.worldWriteTokenRef(worldName), func(existing []byte) ([]byte, error) {
 		if len(existing) > 0 {
 			if err := json.Unmarshal(existing, &finalRecord); err != nil {
 				return nil, fmt.Errorf("decode write token record: %w", err)
@@ -180,7 +178,7 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 // never authorize and every write would burn the propagation-race
 // budget pretending kubelet was lagging.
 func (s *worldWriteTokenStore) syncWorldHash(ctx context.Context, world *WorldConfig, label string, entry *token.Entry) error {
-	return mutateSecret(ctx, s.k8s, world.Namespace, world.TokensSecret, TokensSecretKey, func(existing []byte) ([]byte, error) {
+	return s.store.Mutate(ctx, s.cfg.worldTokensRef(world), func(existing []byte) ([]byte, error) {
 		next, err := token.AppendBytes(existing, label, entry)
 		if err == nil {
 			return next, nil

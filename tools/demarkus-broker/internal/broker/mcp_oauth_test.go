@@ -82,7 +82,7 @@ func TestOAuthAuthorizationServerMetadataReusesDiscoveryWhenWired(t *testing.T) 
 	signer := newTestSigner(t)
 	k8s := fake.NewSimpleClientset()
 	// Discovery requires IDTokenSigner (NewServer enforces this).
-	brokerSrv := NewServer(cfg, signer, &fakeVerifier{}, k8s, d, newTestIDTokenSigner(t), nil)
+	brokerSrv := NewServer(cfg, signer, &fakeVerifier{}, NewK8sSecretStore(k8s), d, newTestIDTokenSigner(t), nil)
 	handler := brokerSrv.MCPGateway("test")
 	if handler == nil {
 		t.Fatal("MCPGateway returned nil despite cfg.Server.MCP.Enabled=true")

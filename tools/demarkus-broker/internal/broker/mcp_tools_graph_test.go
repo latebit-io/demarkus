@@ -698,7 +698,7 @@ func TestMCPGatewayMarkGraphEndToEnd(t *testing.T) {
 	}}
 	signer := newTestSigner(t)
 	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
+	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
 	brokerSrv.clock = func() time.Time { return time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC) }
 	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d))
 	t.Cleanup(ts.Close)

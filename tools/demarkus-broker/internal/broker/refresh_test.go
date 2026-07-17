@@ -39,7 +39,7 @@ func testRefreshConfig() *Config {
 
 func newRefreshStoreForTest(t *testing.T, k8s *fake.Clientset) *RefreshStore {
 	t.Helper()
-	s := NewRefreshStore(testRefreshConfig(), k8s)
+	s := NewRefreshStore(testRefreshConfig(), NewK8sSecretStore(k8s))
 	s.clock = func() time.Time { return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC) }
 	return s
 }

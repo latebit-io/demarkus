@@ -84,9 +84,19 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 		return err
 	}
 
-	k8s, err := newKubeClient(kubeconfigPath)
-	if err != nil {
-		return err
+	// Storage backend: kubernetes needs a client; file mode (single-host)
+	// runs with no cluster at all.
+	var store broker.SecretStore
+	var k8s kubernetes.Interface
+	if cfg.FileBackend() {
+		store = broker.NewFileSecretStore()
+		log.Info("broker: file storage backend", "dir", cfg.Storage.Dir)
+	} else {
+		k8s, err = newKubeClient(kubeconfigPath)
+		if err != nil {
+			return err
+		}
+		store = broker.NewK8sSecretStore(k8s)
 	}
 
 	// Discovery does an eager IdP fetch at startup — same failure mode
@@ -114,7 +124,7 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	}
 	log.Info("broker: id_token signer ready", "kid", idTokenSigner.KeyID())
 
-	srv := broker.NewServer(cfg, signer, verifier, k8s, discovery, idTokenSigner, log)
+	srv := broker.NewServer(cfg, signer, verifier, store, discovery, idTokenSigner, log)
 	if cfg.RateLimit.Disabled {
 		log.Info("broker: rate limit disabled (rateLimit.disabled=true)")
 	} else {
@@ -184,16 +194,24 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	if !cfg.Sweeper.Disabled {
 		// Share the Server's refresh-token store so the sweeper
 		// retires expired grants from the same in-memory cache +
-		// Secret view the /device/token refresh-grant handler uses.
+		// store view the /device/token refresh-grant handler uses.
 		// Server owns the lifecycle; Sweeper just borrows.
 		sweeper := broker.NewSweeper(k8s, srv.RefreshStore(), cfg.Sweeper.Interval, log)
-		identity := brokerIdentity()
-		log.Info("broker: starting sweeper",
-			"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,
-			"namespace", cfg.Server.BrokerNamespace, "identity", identity)
-		sweepWG.Go(func() {
-			sweeper.RunLeaderElected(sweepCtx, cfg.Sweeper.LeaseName, cfg.Server.BrokerNamespace, identity)
-		})
+		if cfg.FileBackend() {
+			// Single-instance by construction: no Lease, no election.
+			log.Info("broker: starting sweeper (single-host)", "interval", cfg.Sweeper.Interval)
+			sweepWG.Go(func() {
+				sweeper.Run(sweepCtx)
+			})
+		} else {
+			identity := brokerIdentity()
+			log.Info("broker: starting sweeper",
+				"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,
+				"namespace", cfg.Server.BrokerNamespace, "identity", identity)
+			sweepWG.Go(func() {
+				sweeper.RunLeaderElected(sweepCtx, cfg.Sweeper.LeaseName, cfg.Server.BrokerNamespace, identity)
+			})
+		}
 	} else {
 		log.Info("broker: sweeper disabled (sweeper.disabled=true)")
 	}

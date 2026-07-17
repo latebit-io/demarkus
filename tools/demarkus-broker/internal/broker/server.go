@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"k8s.io/client-go/kubernetes"
 )
 
 // stateCookieName is the name of the signed cookie holding the OIDC state
@@ -107,7 +105,7 @@ type Server struct {
 // compositeVerifier in oidc.go) — callers don't have to wrap
 // manually, and tests that pass &fakeVerifier{} get broker-signed
 // verification "for free" against the supplied signer.
-func NewServer(cfg *Config, signer *Signer, verifier Verifier, k8s kubernetes.Interface, discovery *Discovery, idTokenSigner *IDTokenSigner, log *slog.Logger) *Server {
+func NewServer(cfg *Config, signer *Signer, verifier Verifier, store SecretStore, discovery *Discovery, idTokenSigner *IDTokenSigner, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -162,8 +160,8 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, k8s kubernetes.In
 		clock:             clock,
 		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
 		authCodeStore:     newAuthCodeStore(clock, defaultPendingAuthCodeTTL, defaultAuthCodeTTL),
-		refreshStore:      NewRefreshStore(cfg, k8s),
-		worldWriteTokens:  newWorldWriteTokenStore(cfg, k8s),
+		refreshStore:      NewRefreshStore(cfg, store),
+		worldWriteTokens:  newWorldWriteTokenStore(cfg, store),
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
 	if idTokenSigner != nil {
