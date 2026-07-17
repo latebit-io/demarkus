@@ -1118,6 +1118,25 @@ do_install() {
       log_error "Secret file must be a readable regular file: ${broker_oidc_client_secret_file}"
       exit 1
     fi
+    # Refuse a group/world-accessible secret file: another local user could
+    # read the OIDC client secret. stat is GNU (-c) with a BSD (-f) fallback.
+    local secret_mode secret_owner
+    secret_mode=$(stat -c '%a' "$broker_oidc_client_secret_file" 2>/dev/null \
+      || stat -f '%Lp' "$broker_oidc_client_secret_file" 2>/dev/null || echo "")
+    secret_owner=$(stat -c '%u' "$broker_oidc_client_secret_file" 2>/dev/null \
+      || stat -f '%u' "$broker_oidc_client_secret_file" 2>/dev/null || echo "")
+    if [ -z "$secret_mode" ]; then
+      log_error "Could not stat secret file: ${broker_oidc_client_secret_file}"
+      exit 1
+    fi
+    if [ "$(( 8#$secret_mode & 0077 ))" -ne 0 ]; then
+      log_error "Secret file ${broker_oidc_client_secret_file} is group/world-accessible (mode ${secret_mode}); chmod 600 it first"
+      exit 1
+    fi
+    if [ -n "$secret_owner" ] && [ "$secret_owner" != "$(id -u)" ] && [ "$secret_owner" != "0" ]; then
+      log_error "Secret file ${broker_oidc_client_secret_file} must be owned by you or root (owner uid ${secret_owner})"
+      exit 1
+    fi
     broker_oidc_client_secret=$(head -1 "$broker_oidc_client_secret_file" | tr -d '[:space:]')
     if [ -z "$broker_oidc_client_secret" ]; then
       log_error "Secret file is empty: ${broker_oidc_client_secret_file}"
@@ -1334,12 +1353,18 @@ do_install() {
     log_info "Using broker-owned tokens layout: ${tokens_file}"
   elif [ "$with_broker" = true ] && [ "$PLATFORM" = "linux" ]; then
     local broker_tokens_dir="${CONFIG_DIR}/tokens"
-    mkdir -p "$broker_tokens_dir"
-    if [ -f "$tokens_file" ]; then
-      mv "$tokens_file" "${broker_tokens_dir}/tokens.toml"
-      log_info "Moved tokens file to ${broker_tokens_dir}/ (broker-owned directory)"
+    # Abort on failure: pointing the server at the new path while the old
+    # file is still in place would leave it reading a missing tokens file.
+    if ! mkdir -p "$broker_tokens_dir"; then
+      log_error "Could not create broker tokens directory ${broker_tokens_dir}"
+      exit 1
+    fi
+    if [ -f "$tokens_file" ] && ! mv "$tokens_file" "${broker_tokens_dir}/tokens.toml"; then
+      log_error "Could not move ${tokens_file} into ${broker_tokens_dir}/"
+      exit 1
     fi
     tokens_file="${broker_tokens_dir}/tokens.toml"
+    log_info "Using broker-owned tokens layout: ${tokens_file}"
   fi
 
   local raw_token=""
@@ -1839,6 +1864,23 @@ do_uninstall() {
 
   log_step "Uninstalling Demarkus"
 
+  # Track removal failures so a partial teardown is reported honestly
+  # rather than logging "complete" while artifacts remain. stop/disable
+  # stay best-effort (non-zero when already stopped is expected); the
+  # removal operations are verified.
+  local uninstall_errors=0
+  # remove_path deletes a file or directory and confirms it is gone.
+  remove_path() {
+    local target="$1"
+    $SUDO rm -rf "$target"
+    if $SUDO test -e "$target"; then
+      log_warn "Could not remove ${target}"
+      uninstall_errors=$((uninstall_errors + 1))
+      return 1
+    fi
+    return 0
+  }
+
   # Read content root from service file before removing it
   local content_root=""
   if [ "$PLATFORM" = "linux" ] && $SUDO test -f "${SYSTEMD_DIR}/demarkus.service"; then
@@ -1850,15 +1892,14 @@ do_uninstall() {
   if [ "$PLATFORM" = "linux" ]; then
     $SUDO systemctl stop demarkus 2>/dev/null || true
     $SUDO systemctl disable demarkus 2>/dev/null || true
-    $SUDO rm -f "${SYSTEMD_DIR}/demarkus.service"
+    remove_path "${SYSTEMD_DIR}/demarkus.service"
     # Remove the optional single-host stack components too. Each is a
     # no-op when it was never installed.
     for svc in "$BROKER_SERVICE" "$LIBRARY_SERVICE"; do
       if $SUDO test -f "${SYSTEMD_DIR}/${svc}.service"; then
         $SUDO systemctl stop "$svc" 2>/dev/null || true
         $SUDO systemctl disable "$svc" 2>/dev/null || true
-        $SUDO rm -f "${SYSTEMD_DIR}/${svc}.service"
-        log_info "Removed ${svc} service"
+        remove_path "${SYSTEMD_DIR}/${svc}.service" && log_info "Removed ${svc} service"
       fi
     done
     $SUDO systemctl daemon-reload 2>/dev/null || true
@@ -1880,7 +1921,7 @@ do_uninstall() {
 
   # Remove binaries
   for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install demarkus-broker demarkus-library; do
-    $SUDO rm -f "${INSTALL_DIR}/${bin}"
+    remove_path "${INSTALL_DIR}/${bin}"
   done
   log_info "Removed binaries from ${INSTALL_DIR}/"
 
@@ -1888,8 +1929,7 @@ do_uninstall() {
   # config and state hold credential-bearing artifacts, so always clear).
   for d in "$CONFIG_DIR" "$BROKER_CONFIG_DIR" "$BROKER_STATE_DIR" "$LIBRARY_CONFIG_DIR"; do
     if [ -n "$d" ] && $SUDO test -d "$d"; then
-      $SUDO rm -rf "$d"
-      log_info "Removed ${d}/"
+      remove_path "$d" && log_info "Removed ${d}/"
     fi
   done
 
@@ -1910,8 +1950,12 @@ do_uninstall() {
   if [ "$PLATFORM" = "linux" ]; then
     for u in "$BROKER_SERVICE" "$LIBRARY_SERVICE" "$SERVICE_NAME"; do
       if id "$u" >/dev/null 2>&1; then
-        $SUDO userdel "$u" 2>/dev/null || true
-        log_info "Removed system user '${u}'"
+        if $SUDO userdel "$u" 2>/dev/null; then
+          log_info "Removed system user '${u}'"
+        else
+          log_warn "Could not remove system user '${u}' (still referenced or logged in?)"
+          uninstall_errors=$((uninstall_errors + 1))
+        fi
       fi
     done
   fi
@@ -1921,6 +1965,10 @@ do_uninstall() {
     (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus" | crontab -) 2>/dev/null || true
   fi
 
+  if [ "$uninstall_errors" -ne 0 ]; then
+    log_error "Uninstall completed with ${uninstall_errors} error(s); some artifacts remain (see warnings above)"
+    exit 1
+  fi
   log_step "Uninstall complete"
 }
 
