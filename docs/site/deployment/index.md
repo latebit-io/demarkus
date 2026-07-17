@@ -175,6 +175,7 @@ You should see a successful response with status `ok`.
 
 ## Related
 
+- [Single-Host Stack](single-host.md) — server + broker + library on one VPS, no Kubernetes
 - [Run a Server](../server/index.md)
 - [Security Model](../security/index.md) — read-only mode, chroot install, threat model
 - [Configuration Reference](../reference/index.md)

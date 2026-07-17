@@ -8,6 +8,17 @@
 #   curl -fsSL ... | bash -s -- --tls-cert /path/cert.pem --tls-key /path/key.pem
 #   curl -fsSL ... | bash -s -- --client-only
 #
+# Single-host stack (server + broker + library on one Linux host):
+#   curl -fsSL ... | sudo bash -s -- --domain example.com --with-broker --with-library \
+#     --broker-public-url https://broker.example.com \
+#     --broker-oidc-issuer https://accounts.google.com \
+#     --broker-oidc-client-id <id> \
+#     --broker-oidc-client-secret-file /root/oidc-secret
+#   The broker binds loopback (:8080 OAuth/API, :8081 MCP); front the
+#   public URL with a TLS reverse proxy. Omit the OIDC flags to scaffold
+#   the broker config for later editing; --with-library alone serves a
+#   read-only reading room on :8090. Pin the library with --library-version.
+#
 # For private repos, set GITHUB_TOKEN:
 #   curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
 #     https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh \
@@ -47,6 +58,13 @@ DEFAULT_ROOT_LINUX="/var/lib/demarkus"
 DEFAULT_ROOT_MACOS="$HOME/.demarkus/content"
 SERVICE_NAME="demarkus"
 SCRIPT_VERSION="1"
+# Fixed to systemd's search path in production; the test harness redirects it
+# via DEMARKUS_TEST_SYSTEMD_DIR only under DEMARKUS_INSTALL_TESTMODE=1, so a
+# stray production override cannot misplace units.
+SYSTEMD_DIR="/etc/systemd/system"
+if [ "${DEMARKUS_INSTALL_TESTMODE:-}" = "1" ] && [ -n "${DEMARKUS_TEST_SYSTEMD_DIR:-}" ]; then
+  SYSTEMD_DIR="$DEMARKUS_TEST_SYSTEMD_DIR"
+fi
 
 # Global state
 SUDO=""       # set to "sudo" if needed for INSTALL_DIR writes
@@ -618,7 +636,7 @@ Environment=DEMARKUS_TLS_KEY=${key_path}"
     /home|/home/*|/root|/root/*|/run/user|/run/user/*) protect_home="" ;;
   esac
 
-  cat > /etc/systemd/system/demarkus.service << EOF
+  cat > "${SYSTEMD_DIR}/demarkus.service" << EOF
 [Unit]
 Description=Demarkus Mark Protocol Server
 After=network.target
@@ -726,11 +744,11 @@ read_existing_config() {
   EXISTING_TLS_CERT=""
   EXISTING_TLS_KEY=""
 
-  if [ "$PLATFORM" = "linux" ] && [ -f /etc/systemd/system/demarkus.service ]; then
-    EXISTING_ROOT=$(grep 'DEMARKUS_ROOT=' /etc/systemd/system/demarkus.service 2>/dev/null \
+  if [ "$PLATFORM" = "linux" ] && [ -f "${SYSTEMD_DIR}/demarkus.service" ]; then
+    EXISTING_ROOT=$(grep 'DEMARKUS_ROOT=' "${SYSTEMD_DIR}/demarkus.service" 2>/dev/null \
       | sed 's/.*DEMARKUS_ROOT=//' || true)
     local cert_path
-    cert_path=$(grep 'DEMARKUS_TLS_CERT=' /etc/systemd/system/demarkus.service 2>/dev/null \
+    cert_path=$(grep 'DEMARKUS_TLS_CERT=' "${SYSTEMD_DIR}/demarkus.service" 2>/dev/null \
       | sed 's/.*DEMARKUS_TLS_CERT=//' || true)
     if [ -n "$cert_path" ]; then
       case "$cert_path" in
@@ -739,7 +757,7 @@ read_existing_config() {
           ;;
         *)
           EXISTING_TLS_CERT="$cert_path"
-          EXISTING_TLS_KEY=$(grep 'DEMARKUS_TLS_KEY=' /etc/systemd/system/demarkus.service 2>/dev/null \
+          EXISTING_TLS_KEY=$(grep 'DEMARKUS_TLS_KEY=' "${SYSTEMD_DIR}/demarkus.service" 2>/dev/null \
             | sed 's/.*DEMARKUS_TLS_KEY=//' || true)
           ;;
       esac
@@ -781,6 +799,272 @@ migrate() {
 
 # --- Main flows ---
 
+# --- single-host stack: broker + library beside the server ------------------
+
+BROKER_SERVICE="demarkus-broker"
+BROKER_CONFIG_DIR="/etc/demarkus-broker"
+BROKER_STATE_DIR="/var/lib/demarkus-broker"
+LIBRARY_SERVICE="demarkus-library"
+LIBRARY_CONFIG_DIR="/etc/demarkus-library"
+LIBRARY_REPO="latebit-io/demarkus-library"
+
+# install_broker deploys demarkus-broker in file-backend (single-host) mode:
+# the broker owns tokens.toml writes, the server keeps its read+hot-reload
+# contract, and every credential the broker persists lives in BROKER_STATE_DIR.
+install_broker() {
+  local tools_version="$1"
+  local tokens_file="$2"
+  local domain="$3"
+  local no_tls="$4"
+  local oidc_issuer="$5"
+  local oidc_client_id="$6"
+  local oidc_client_secret="$7"
+  local public_url="$8"
+  local tmpdir="$9"
+
+  if [ "$PLATFORM" != "linux" ]; then
+    log_warn "--with-broker is Linux-only (systemd); skipping broker install"
+    return
+  fi
+
+  log_step "Installing demarkus-broker (single-host mode)"
+  download_and_verify_asset "demarkus-broker" "$tools_version" "tools" "$tmpdir"
+  install_binaries "$tmpdir" "demarkus-broker"
+
+  if ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin "$BROKER_SERVICE"
+  fi
+  # The broker joins the server group so preserved group ownership on
+  # tokens.toml keeps working, and owns the file so atomic replacement
+  # (temp + rename in the tokens directory) needs no privilege.
+  usermod -aG "$SERVICE_NAME" "$BROKER_SERVICE"
+  mkdir -p "$BROKER_STATE_DIR"
+  chown "$BROKER_SERVICE":"$BROKER_SERVICE" "$BROKER_STATE_DIR"
+  chmod 700 "$BROKER_STATE_DIR"
+  mkdir -p "$BROKER_CONFIG_DIR"
+  chown root:"$BROKER_SERVICE" "$BROKER_CONFIG_DIR"
+  chmod 750 "$BROKER_CONFIG_DIR"
+
+  # Broker writes tokens.toml via temp+rename: it owns the tokens
+  # subdirectory (never CONFIG_DIR itself, which holds the TLS keys);
+  # the server traverses and reads via the shared group.
+  chown "$BROKER_SERVICE":"$SERVICE_NAME" "$tokens_file"
+  chmod 640 "$tokens_file"
+  chown "$BROKER_SERVICE":"$SERVICE_NAME" "$(dirname "$tokens_file")"
+  chmod 750 "$(dirname "$tokens_file")"
+
+  # With verified TLS the dial address must match the certificate's name;
+  # localhost only works when verification is skipped (self-signed).
+  local world_host="localhost:6309"
+  local dial_insecure="true"
+  if [ -n "$domain" ] && [ "$no_tls" = false ]; then
+    dial_insecure="false"
+    world_host="${domain}:6309"
+  fi
+
+  local cookie_key
+  cookie_key=$(head -c 32 /dev/urandom | base64)
+  local signing_key
+  signing_key=$(openssl ecparam -genkey -name prime256v1 -noout 2>/dev/null | openssl pkcs8 -topk8 -nocrypt 2>/dev/null)
+  if [ -z "$signing_key" ]; then
+    log_error "openssl is required to generate the broker signing key"
+    exit 1
+  fi
+
+  local pub="${public_url:-https://EDIT-ME.example.com}"
+  local issuer="${oidc_issuer:-https://accounts.google.com}"
+  local client_id="${oidc_client_id:-EDIT-ME-client-id}"
+
+  local config_kept=false
+  if [ ! -f "${BROKER_CONFIG_DIR}/config.yaml" ]; then
+    {
+      printf 'storage:\n  backend: file\n  dir: %s\n' "$BROKER_STATE_DIR"
+      # Loopback binds: both broker surfaces sit behind a TLS reverse
+      # proxy (publicURL); exposing the plaintext listeners directly
+      # would contradict the advertised https origin.
+      printf 'server:\n  addr: "127.0.0.1:8080"\n  cookieKey: "%s"\n' "$cookie_key"
+      printf '  publicURL: "%s"\n  mcp:\n    addr: "127.0.0.1:8081"\n' "$pub"
+      printf 'oidc:\n  issuer: %s\n  clientID: %s\n' "$issuer" "$client_id"
+      printf '  redirectURL: %s/auth/callback\n' "$pub"
+      printf '  # clientSecret comes from OIDC_CLIENT_SECRET in %s/env\n' "$BROKER_CONFIG_DIR"
+      printf '  brokerSigningKey: |\n'
+      printf '%s\n' "$signing_key" | sed 's/^/    /'
+      printf 'worldDialer:\n  insecureSkipVerify: %s\n' "$dial_insecure"
+      printf 'worlds:\n  - name: soul\n'
+      printf '    tokensFile: %s\n' "$tokens_file"
+      printf '    internalAddress: %s\n' "$world_host"
+      printf '    defaultToken:\n      paths: ["/*"]\n'
+      printf '# Library SSO (optional): register the reading room as a\n'
+      printf '# confidential web client. See the single-host deployment docs.\n'
+      printf '# webClients:\n#   - clientID: library\n'
+      printf '#     clientSecretHash: <sha256-hex of a generated secret>\n'
+      printf '#     redirectURIs: ["https://library.example.com/auth/broker/callback"]\n'
+    } > "${BROKER_CONFIG_DIR}/config.yaml"
+    chown root:"$BROKER_SERVICE" "${BROKER_CONFIG_DIR}/config.yaml"
+    chmod 640 "${BROKER_CONFIG_DIR}/config.yaml"
+  else
+    config_kept=true
+    log_info "Keeping existing broker config: ${BROKER_CONFIG_DIR}/config.yaml"
+    if [ -n "$oidc_issuer" ] || [ -n "$oidc_client_id" ] || [ -n "$public_url" ]; then
+      log_warn "Broker OIDC flags were given but the existing config was kept; edit ${BROKER_CONFIG_DIR}/config.yaml to apply them"
+    fi
+  fi
+
+  if [ ! -f "${BROKER_CONFIG_DIR}/env" ]; then
+    printf 'OIDC_CLIENT_SECRET=%s\n' "${oidc_client_secret:-EDIT-ME}" > "${BROKER_CONFIG_DIR}/env"
+    chown root:"$BROKER_SERVICE" "${BROKER_CONFIG_DIR}/env"
+    chmod 640 "${BROKER_CONFIG_DIR}/env"
+  fi
+
+  cat > "${SYSTEMD_DIR}/${BROKER_SERVICE}.service" << EOF
+[Unit]
+Description=Demarkus Broker (single-host mode)
+After=network.target demarkus.service
+
+[Service]
+Type=simple
+User=${BROKER_SERVICE}
+ExecStart=${INSTALL_DIR}/demarkus-broker -config ${BROKER_CONFIG_DIR}/config.yaml
+EnvironmentFile=${BROKER_CONFIG_DIR}/env
+Restart=on-failure
+RestartSec=5
+
+# The broker is a credential-writing service: writable paths are exactly
+# its state dir and the tokens directory it owns.
+ProtectSystem=strict
+ReadWritePaths=${BROKER_STATE_DIR} $(dirname "$tokens_file")
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+
+  # Enable only alongside a complete configuration: an enabled unit with
+  # placeholder values would come up broken on every boot.
+  if [ "$config_kept" = true ] || { [ -n "$oidc_issuer" ] && [ -n "$oidc_client_id" ] && [ -n "$oidc_client_secret" ] && [ -n "$public_url" ]; }; then
+    systemctl enable "$BROKER_SERVICE"
+    systemctl restart "$BROKER_SERVICE"
+    log_info "Broker started (loopback :8080 OAuth/API, :8081 MCP); front publicURL with a TLS reverse proxy"
+  else
+    log_warn "Broker installed but NOT enabled: OIDC is not configured yet."
+    log_info "Edit ${BROKER_CONFIG_DIR}/config.yaml (publicURL, oidc.clientID) and ${BROKER_CONFIG_DIR}/env (OIDC_CLIENT_SECRET), then: systemctl enable --now ${BROKER_SERVICE}"
+  fi
+}
+
+# install_library deploys the demarkus-library reading room in direct-QUIC
+# (read-only) mode against the local world. Broker/SSO mode is a config
+# change documented in the generated env file and the deployment docs.
+install_library() {
+  local lib_version="$1"
+  local domain="$2"
+  local no_tls="$3"
+  local tmpdir="$4"
+
+  if [ "$PLATFORM" != "linux" ]; then
+    log_warn "--with-library is Linux-only (systemd); skipping library install"
+    return
+  fi
+
+  log_step "Installing demarkus-library (reading room)"
+  if [ -z "$lib_version" ]; then
+    lib_version=$(curl -fsSL "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
+  fi
+  if [ -z "$lib_version" ]; then
+    log_error "Could not resolve the latest demarkus-library release (pin one with --library-version)"
+    exit 1
+  fi
+  local lib_asset="demarkus-library_${lib_version}_${OS}_${GOARCH}.tar.gz"
+  local lib_url="https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/${lib_asset}"
+  if ! curl -fsSL "$lib_url" -o "${tmpdir}/${lib_asset}"; then
+    log_error "Could not download ${lib_asset}"
+    exit 1
+  fi
+  if curl -fsSL "https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/demarkus-library_checksums.txt" -o "${tmpdir}/demarkus-library_checksums.txt"; then
+    (cd "$tmpdir" && grep "$lib_asset" demarkus-library_checksums.txt | sha256sum -c - >/dev/null) || {
+      log_error "Checksum verification failed for ${lib_asset}"
+      exit 1
+    }
+  else
+    log_warn "Could not download library checksums; skipping verification"
+  fi
+  tar -xzf "${tmpdir}/${lib_asset}" -C "$tmpdir" demarkus-library
+  $SUDO install -m 755 "${tmpdir}/demarkus-library" "${INSTALL_DIR}/demarkus-library"
+
+  if ! id "$LIBRARY_SERVICE" >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin "$LIBRARY_SERVICE"
+  fi
+  mkdir -p "$LIBRARY_CONFIG_DIR"
+  chown root:"$LIBRARY_SERVICE" "$LIBRARY_CONFIG_DIR"
+  chmod 750 "$LIBRARY_CONFIG_DIR"
+
+  local lib_host="localhost:6309"
+  local lib_insecure="true"
+  if [ -n "$domain" ] && [ "$no_tls" = false ]; then
+    lib_host="$domain"
+    lib_insecure="false"
+  fi
+
+  if [ ! -f "${LIBRARY_CONFIG_DIR}/env" ]; then
+    {
+      printf 'PORT=8090\n'
+      printf 'DEMARKUS_TRANSPORT=quic\n'
+      printf 'DEMARKUS_HOST=%s\n' "$lib_host"
+      printf 'DEMARKUS_INSECURE=%s\n' "$lib_insecure"
+      printf '# Broker/SSO mode (after configuring the broker and a webClients\n'
+      printf '# registry entry; see the single-host deployment docs):\n'
+      printf '# DEMARKUS_TRANSPORT=broker\n'
+      printf '# DEMARKUS_BROKER_URL=https://EDIT-ME.example.com\n'
+      printf '# DEMARKUS_CLIENT_ID=library\n'
+      printf '# DEMARKUS_CLIENT_SECRET=EDIT-ME\n'
+      printf '# DEMARKUS_REDIRECT_URI=https://library.EDIT-ME/auth/broker/callback\n'
+      printf '# DEMARKUS_WORLD=soul\n'
+    } > "${LIBRARY_CONFIG_DIR}/env"
+    chown root:"$LIBRARY_SERVICE" "${LIBRARY_CONFIG_DIR}/env"
+    chmod 640 "${LIBRARY_CONFIG_DIR}/env"
+  else
+    log_info "Keeping existing library config: ${LIBRARY_CONFIG_DIR}/env"
+  fi
+
+  cat > "${SYSTEMD_DIR}/${LIBRARY_SERVICE}.service" << EOF
+[Unit]
+Description=Demarkus Library (reading room)
+After=network.target demarkus.service
+
+[Service]
+Type=simple
+User=${LIBRARY_SERVICE}
+ExecStart=${INSTALL_DIR}/demarkus-library
+EnvironmentFile=${LIBRARY_CONFIG_DIR}/env
+Restart=on-failure
+RestartSec=5
+
+ProtectSystem=strict
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "$LIBRARY_SERVICE"
+  systemctl restart "$LIBRARY_SERVICE"
+  log_info "Library started on :8090 (read-only reading room over ${lib_host})"
+}
+
 do_install() {
   local domain=""
   local content_root=""
@@ -789,6 +1073,14 @@ do_install() {
   local no_tls=false
   local tls_cert=""
   local tls_key=""
+  local with_broker=false
+  local with_library=false
+  local library_version=""
+  local broker_public_url=""
+  local broker_oidc_issuer=""
+  local broker_oidc_client_id=""
+  local broker_oidc_client_secret=""
+  local broker_oidc_client_secret_file=""
 
   # Parse flags
   while [ $# -gt 0 ]; do
@@ -800,9 +1092,56 @@ do_install() {
       --no-tls)      no_tls=true; shift ;;
       --tls-cert)    tls_cert="$2"; shift 2 ;;
       --tls-key)     tls_key="$2"; shift 2 ;;
+      --with-broker)  with_broker=true; shift ;;
+      --with-library) with_library=true; shift ;;
+      --library-version)           library_version="$2"; shift 2 ;;
+      --broker-public-url)         broker_public_url="$2"; shift 2 ;;
+      --broker-oidc-issuer)        broker_oidc_issuer="$2"; shift 2 ;;
+      --broker-oidc-client-id)     broker_oidc_client_id="$2"; shift 2 ;;
+      --broker-oidc-client-secret) broker_oidc_client_secret="$2"; shift 2 ;;
+      --broker-oidc-client-secret-file) broker_oidc_client_secret_file="$2"; shift 2 ;;
       *)             log_error "Unknown option: $1"; exit 1 ;;
     esac
   done
+
+  # Prefer the file form for the OIDC secret: an argv secret is visible in
+  # ps and shell history for the install's duration.
+  if [ -n "$broker_oidc_client_secret_file" ]; then
+    if [ -n "$broker_oidc_client_secret" ]; then
+      log_error "--broker-oidc-client-secret and --broker-oidc-client-secret-file are mutually exclusive"
+      exit 1
+    fi
+    # Require a regular file: -r alone accepts FIFOs and devices, and
+    # head would then block the install waiting for input.
+    if [ ! -f "$broker_oidc_client_secret_file" ] || [ ! -r "$broker_oidc_client_secret_file" ]; then
+      log_error "Secret file must be a readable regular file: ${broker_oidc_client_secret_file}"
+      exit 1
+    fi
+    # Refuse a group/world-accessible secret file: another local user could
+    # read the OIDC client secret. stat is GNU (-c) with a BSD (-f) fallback.
+    local secret_mode secret_owner
+    secret_mode=$(stat -c '%a' "$broker_oidc_client_secret_file" 2>/dev/null \
+      || stat -f '%Lp' "$broker_oidc_client_secret_file" 2>/dev/null || echo "")
+    secret_owner=$(stat -c '%u' "$broker_oidc_client_secret_file" 2>/dev/null \
+      || stat -f '%u' "$broker_oidc_client_secret_file" 2>/dev/null || echo "")
+    if [ -z "$secret_mode" ]; then
+      log_error "Could not stat secret file: ${broker_oidc_client_secret_file}"
+      exit 1
+    fi
+    if [ "$(( 8#$secret_mode & 0077 ))" -ne 0 ]; then
+      log_error "Secret file ${broker_oidc_client_secret_file} is group/world-accessible (mode ${secret_mode}); chmod 600 it first"
+      exit 1
+    fi
+    if [ -n "$secret_owner" ] && [ "$secret_owner" != "$(id -u)" ] && [ "$secret_owner" != "0" ]; then
+      log_error "Secret file ${broker_oidc_client_secret_file} must be owned by you or root (owner uid ${secret_owner})"
+      exit 1
+    fi
+    broker_oidc_client_secret=$(head -1 "$broker_oidc_client_secret_file" | tr -d '[:space:]')
+    if [ -z "$broker_oidc_client_secret" ]; then
+      log_error "Secret file is empty: ${broker_oidc_client_secret_file}"
+      exit 1
+    fi
+  fi
 
   # Validate TLS flag combinations
   if [ -n "$tls_cert" ] || [ -n "$tls_key" ]; then
@@ -1001,6 +1340,27 @@ do_install() {
   setup_content_dir "$content_root"
 
   local tokens_file="${CONFIG_DIR}/tokens.toml"
+  # Broker-owned tokens subdir: the broker needs directory write for atomic
+  # replacement, never on CONFIG_DIR (TLS keys live there). Sticky once
+  # created; reinstalls honor it even without --with-broker (else split brain).
+  if [ -f "${CONFIG_DIR}/tokens/tokens.toml" ]; then
+    tokens_file="${CONFIG_DIR}/tokens/tokens.toml"
+    log_info "Using broker-owned tokens layout: ${tokens_file}"
+  elif [ "$with_broker" = true ] && [ "$PLATFORM" = "linux" ]; then
+    local broker_tokens_dir="${CONFIG_DIR}/tokens"
+    # Abort on failure: pointing the server at the new path while the old
+    # file is still in place would leave it reading a missing tokens file.
+    if ! mkdir -p "$broker_tokens_dir"; then
+      log_error "Could not create broker tokens directory ${broker_tokens_dir}"
+      exit 1
+    fi
+    if [ -f "$tokens_file" ] && ! mv "$tokens_file" "${broker_tokens_dir}/tokens.toml"; then
+      log_error "Could not move ${tokens_file} into ${broker_tokens_dir}/"
+      exit 1
+    fi
+    tokens_file="${broker_tokens_dir}/tokens.toml"
+    log_info "Using broker-owned tokens layout: ${tokens_file}"
+  fi
 
   local raw_token=""
   if [ -f "$tokens_file" ]; then
@@ -1057,6 +1417,24 @@ do_install() {
 
   # Verify the service actually started
   verify_service_running
+
+  # Optional single-host stack components (after the world server is up:
+  # the broker writes its tokens file, the library reads its documents).
+  if [ "$with_broker" = true ]; then
+    install_broker "$tools_version" "$tokens_file" "$domain" "$no_tls" \
+      "$broker_oidc_issuer" "$broker_oidc_client_id" "$broker_oidc_client_secret" \
+      "$broker_public_url" "$_TMPDIR"
+    # Broker listeners are loopback-only; the reverse proxy's HTTPS port
+    # is the operator's to open. No firewall change here.
+  fi
+  if [ "$with_library" = true ]; then
+    install_library "$library_version" "$domain" "$no_tls" "$_TMPDIR"
+    if [ "$PLATFORM" = "linux" ] && command -v ufw >/dev/null 2>&1; then
+      if ! ufw allow 8090/tcp >/dev/null 2>&1; then
+        log_warn "Could not open TCP 8090 in ufw; the library may be unreachable until you open it"
+      fi
+    fi
+  fi
   if [ "$PLATFORM" = "darwin" ]; then
     local log_dir="$HOME/.demarkus/logs"
     if [ -x "${INSTALL_DIR}/demarkus" ]; then
@@ -1389,7 +1767,7 @@ _do_update_inner() {
 
   # Harden existing systemd unit if it lacks security directives
   if [ "$PLATFORM" = "linux" ]; then
-    local unit="/etc/systemd/system/demarkus.service"
+    local unit="${SYSTEMD_DIR}/demarkus.service"
     if $SUDO test -f "$unit" && ! $SUDO grep -q 'ProtectSystem' "$unit"; then
       local content_root
       content_root=$($SUDO grep -m1 'DEMARKUS_ROOT=' "$unit" 2>/dev/null \
@@ -1481,10 +1859,25 @@ do_uninstall() {
 
   log_step "Uninstalling Demarkus"
 
+  # Track removal failures so a partial teardown reports honestly instead of
+  # logging "complete". stop/disable stay best-effort; removals are verified.
+  local uninstall_errors=0
+  # remove_path deletes a file or directory and confirms it is gone.
+  remove_path() {
+    local target="$1"
+    $SUDO rm -rf "$target"
+    if $SUDO test -e "$target"; then
+      log_warn "Could not remove ${target}"
+      uninstall_errors=$((uninstall_errors + 1))
+      return 1
+    fi
+    return 0
+  }
+
   # Read content root from service file before removing it
   local content_root=""
-  if [ "$PLATFORM" = "linux" ] && $SUDO test -f /etc/systemd/system/demarkus.service; then
-    content_root=$($SUDO grep DEMARKUS_ROOT /etc/systemd/system/demarkus.service 2>/dev/null \
+  if [ "$PLATFORM" = "linux" ] && $SUDO test -f "${SYSTEMD_DIR}/demarkus.service"; then
+    content_root=$($SUDO grep DEMARKUS_ROOT "${SYSTEMD_DIR}/demarkus.service" 2>/dev/null \
       | sed 's/.*=//' || true)
   fi
 
@@ -1492,7 +1885,16 @@ do_uninstall() {
   if [ "$PLATFORM" = "linux" ]; then
     $SUDO systemctl stop demarkus 2>/dev/null || true
     $SUDO systemctl disable demarkus 2>/dev/null || true
-    $SUDO rm -f /etc/systemd/system/demarkus.service
+    remove_path "${SYSTEMD_DIR}/demarkus.service"
+    # Remove the optional single-host stack components too. Each is a
+    # no-op when it was never installed.
+    for svc in "$BROKER_SERVICE" "$LIBRARY_SERVICE"; do
+      if $SUDO test -f "${SYSTEMD_DIR}/${svc}.service"; then
+        $SUDO systemctl stop "$svc" 2>/dev/null || true
+        $SUDO systemctl disable "$svc" 2>/dev/null || true
+        remove_path "${SYSTEMD_DIR}/${svc}.service" && log_info "Removed ${svc} service"
+      fi
+    done
     $SUDO systemctl daemon-reload 2>/dev/null || true
     log_info "Removed systemd service"
   elif [ "$PLATFORM" = "darwin" ]; then
@@ -1511,16 +1913,18 @@ do_uninstall() {
   fi
 
   # Remove binaries
-  for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install; do
-    $SUDO rm -f "${INSTALL_DIR}/${bin}"
+  for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install demarkus-broker demarkus-library; do
+    remove_path "${INSTALL_DIR}/${bin}"
   done
   log_info "Removed binaries from ${INSTALL_DIR}/"
 
-  # Remove config
-  if $SUDO test -d "$CONFIG_DIR"; then
-    $SUDO rm -rf "$CONFIG_DIR"
-    log_info "Removed config directory ${CONFIG_DIR}/"
-  fi
+  # Remove config (server, plus broker/library when present — the broker
+  # config and state hold credential-bearing artifacts, so always clear).
+  for d in "$CONFIG_DIR" "$BROKER_CONFIG_DIR" "$BROKER_STATE_DIR" "$LIBRARY_CONFIG_DIR"; do
+    if [ -n "$d" ] && $SUDO test -d "$d"; then
+      remove_path "$d" && log_info "Removed ${d}/"
+    fi
+  done
 
   # Remove content directory
   if [ "$keep_data" = false ]; then
@@ -1534,10 +1938,19 @@ do_uninstall() {
     fi
   fi
 
-  # Remove system user (Linux only)
-  if [ "$PLATFORM" = "linux" ] && id "$SERVICE_NAME" >/dev/null 2>&1; then
-    $SUDO userdel "$SERVICE_NAME" 2>/dev/null || true
-    log_info "Removed system user '${SERVICE_NAME}'"
+  # Remove system users (Linux only). The broker user is removed before
+  # the server user because it is a member of the server group.
+  if [ "$PLATFORM" = "linux" ]; then
+    for u in "$BROKER_SERVICE" "$LIBRARY_SERVICE" "$SERVICE_NAME"; do
+      if id "$u" >/dev/null 2>&1; then
+        if $SUDO userdel "$u" 2>/dev/null; then
+          log_info "Removed system user '${u}'"
+        else
+          log_warn "Could not remove system user '${u}' (still referenced or logged in?)"
+          uninstall_errors=$((uninstall_errors + 1))
+        fi
+      fi
+    done
   fi
 
   # Remove certbot renewal cron
@@ -1545,6 +1958,10 @@ do_uninstall() {
     (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus" | crontab -) 2>/dev/null || true
   fi
 
+  if [ "$uninstall_errors" -ne 0 ]; then
+    log_error "Uninstall completed with ${uninstall_errors} error(s); some artifacts remain (see warnings above)"
+    exit 1
+  fi
   log_step "Uninstall complete"
 }
 
