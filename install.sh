@@ -1143,6 +1143,27 @@ do_install() {
     else
       echo "  demarkus --insecure -X PUBLISH -auth \$TOKEN -body \"# Hello World\" mark://localhost:6309/index.md"
     fi
+
+    # Ready-to-paste join line: one string carries host + token.
+    local join_host="$domain"
+    [ -z "$join_host" ] && join_host=$(hostname 2>/dev/null || echo localhost)
+    local join_url=""
+    if ! join_url=$("${INSTALL_DIR}/demarkus-token" join -host "$join_host" -token "$raw_token"); then
+      log_warn "Could not generate a join URL; run: demarkus-token join -host <host> -token <TOKEN>"
+      join_url=""
+    fi
+    if [ -n "$join_url" ]; then
+      echo ""
+      log_info "Join this server from another machine (paste one line):"
+      echo "  Claude Code (demarkus-memory plugin):  /soul-join $join_url"
+      echo "  CLI:                                   demarkus join '$join_url'"
+      if [ -z "$domain" ]; then
+        log_warn "'$join_host' must resolve from the joining machine; if it doesn't, rebuild the line with the public address: demarkus-token join -host <public-host> -token <TOKEN>"
+      fi
+      if [ -z "$domain" ] || [ "$no_tls" = true ]; then
+        log_info "Self-signed cert: joining clients need --insecure alongside the join URL"
+      fi
+    fi
   fi
   echo ""
   log_info "Generate additional tokens:"

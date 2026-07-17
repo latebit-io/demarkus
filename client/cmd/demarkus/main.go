@@ -21,6 +21,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/bookmarks"
 	"github.com/latebit-io/demarkus/client/internal/cache"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
+	"github.com/latebit-io/demarkus/client/joinurl"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
@@ -40,6 +41,9 @@ func main() {
 			return
 		case "token":
 			tokenMain(os.Args[2:])
+			return
+		case "join":
+			joinMain(os.Args[2:])
 			return
 		case "bookmark":
 			bookmarkMain(os.Args[2:])
@@ -499,6 +503,36 @@ func tokenMain(args []string) {
 	default:
 		log.Fatalf("unknown token command: %s", args[0])
 	}
+}
+
+// joinMain stores the token carried by a join URL for the host, so
+// subsequent requests resolve it automatically.
+func joinMain(args []string) {
+	if len(args) != 1 {
+		fmt.Fprintf(os.Stderr, "usage: demarkus join 'mark://host[:port]#token=...'\n")
+		fmt.Fprintf(os.Stderr, "Stores the join URL's token for the host; quote the URL so the shell keeps the fragment.\n")
+		os.Exit(1)
+	}
+	j, err := joinurl.Parse(args[0])
+	if err != nil {
+		log.Fatal(err)
+	}
+	if j.Token == "" {
+		log.Fatal("join URL carries no token; nothing to store (did the shell strip the #fragment? quote the URL)")
+	}
+	host, _, err := fetch.ParseMarkURL("mark://" + j.Host)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ts, err := tokens.Load(tokens.DefaultPath())
+	if err != nil {
+		log.Fatalf("load tokens: %v", err)
+	}
+	if err := ts.Set(host, j.Token); err != nil {
+		log.Fatalf("save token: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "Joined %s: token stored.\n", host)
+	fmt.Fprintf(os.Stderr, "Try: demarkus mark://%s/index.md\n", host)
 }
 
 func bookmarkMain(args []string) {

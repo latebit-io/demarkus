@@ -373,12 +373,16 @@ func cmdMcpServe(args []string) {
 		tf, _ := config.StatePath("plugin-memory.token")
 		tokenFile = tf
 	} else {
-		h, ins, tf, ok, err := registry.RemoteSoulRow(*soul)
-		if err != nil || !ok {
+		row, ok, err := registry.RemoteSoulRow(*soul)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: catalog lookup failed: "+err.Error())
+			os.Exit(1)
+		}
+		if !ok {
 			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: soul '"+*soul+"' not in the catalog; re-run /soul-join")
 			os.Exit(1)
 		}
-		host, insecure, tokenFile = h, ins, tf
+		host, insecure, tokenFile = row.Host, row.Insecure, row.TokenFile
 	}
 
 	env := os.Environ()

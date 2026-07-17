@@ -54,6 +54,26 @@ A descriptive label is how you'll know which entry to revoke when a device is lo
 ./server/bin/demarkus-token generate -label internal-reader -paths "/internal/**" -ops read -tokens tokens.toml
 ```
 
+### Join URLs (`demarkus-token join`)
+
+A join URL packs the host and token into one paste-able string, so onboarding a device or person is a single step instead of "here's a token, now assemble the flags":
+
+```bash
+# Compose with generate: mint a scoped token, wrap it in a join URL
+./server/bin/demarkus-token generate -label phone -paths "/*" -ops publish -tokens tokens.toml \
+  | ./server/bin/demarkus-token join -host kb.example.com
+# -> mark://kb.example.com#token=...
+```
+
+The recipient pastes it once:
+
+- Claude Code (demarkus-memory plugin): `/soul-join <join-url>` (add `--insecure` for a self-signed server)
+- CLI: `demarkus join '<join-url>'` (quote it; the shell would strip the `#fragment`)
+
+The credential rides in the URL fragment, which never appears in any request; still treat a join URL like the token it carries, and send it over a private channel.
+
+`install.sh` prints a ready-made join URL for the freshly installed server at the end of a server install.
+
 ### Read tokens (private paths)
 
 By default all paths are public. To protect paths, create a token with the `read` operation:

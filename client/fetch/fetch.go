@@ -387,7 +387,6 @@ func (c *Client) getConn(host string) (*quic.Conn, error) {
 	} else {
 		tlsConf.ServerName = host
 	}
-
 	conn, err := quic.DialAddr(ctx, host, tlsConf, c.quicConf)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", host, err)

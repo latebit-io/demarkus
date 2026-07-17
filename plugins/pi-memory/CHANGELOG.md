@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.0
+
+- `/soul-join` accepts a join URL (`mark://host#token=...`, as emitted by
+  install.sh and `demarkus-token join`): the fragment supplies the capability
+  token, so joining a remote soul is one paste-able string instead of
+  host + token assembly (shared binary; requires the tools release with
+  join-URL support).
+
 ## 0.12.10
 
 - Documentation style gate in the shared binary (tools release with the style

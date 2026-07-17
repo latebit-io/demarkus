@@ -14,23 +14,35 @@ launch by `demarkus-plugin mcp-serve`, so it never sits in plaintext in your MCP
 ## Argument
 
 ```bash
-/soul-join mark://soul.demarkus.io --token <TOKEN> --insecure
+# Public / read-only soul (no credential in the transcript)
+/soul-join mark://soul.demarkus.io --insecure
+
+# Tokened soul: the user runs the terminal command themselves (see below);
+# a join URL's #token= fragment or a --token value is a secret and must not
+# be pasted into chat.
 ```
 
-- The host may be a `mark://host[:port]` URL or a bare host (scheme inferred).
+- **Join URL** (`mark://host#token=...`, emitted by install.sh and
+  `demarkus-token join`): the `#token=` fragment supplies the capability
+  token; the helper extracts and stores it. Because the URL carries the
+  secret, it goes into the user-run terminal command, not the slash command.
+- Otherwise the host may be a `mark://host[:port]` URL or a bare host.
 - `--token <TOKEN>` is the capability token for the soul. Omit only for a
   read-only / public soul. The plugin cannot mint a token for a remote server
-  (its `tokens.toml` is not local) — the user supplies one.
-- `--insecure` skips TLS cert verification (needed for some self-hosted souls;
-  `soul.demarkus.io` uses it).
+  (its `tokens.toml` is not local) — the user supplies one. Do not combine
+  with a join URL that already carries a token.
+- `--insecure` skips TLS cert verification (needed for self-signed souls with
+  either form; `soul.demarkus.io` uses it).
 
 **Token handling — do not put the token in the transcript.** A capability token
-is a secret; if it appears in a chat message or a tool-call command line it is
-captured in the session transcript. So for any soul that needs a token, you do
-NOT run the join yourself — instead give the user the exact command and have them
-run it in their own terminal (where the token never reaches you). Never ask the
-user to paste the token to you, and never echo it. (A read-only / public soul
-needs no token, so you may run that join directly.)
+is a secret, and a join URL with a `token=` fragment carries one; if either
+appears in a chat message or a tool-call command line it is captured in the
+session transcript. So for any soul that needs a token, you do NOT run the join
+yourself — instead give the user the exact command (join URL or `<TOKEN>` left
+as a placeholder) and have them run it in their own terminal (where the secret
+never reaches you). Never ask the user to paste the token or join URL to you,
+and never echo one back. (A read-only / public soul needs no token, so you may
+run that join directly.)
 
 If invoked without a host, ask for it. Do NOT guess. If the user does not say
 whether the soul needs a token, ask before proceeding.
@@ -41,18 +53,21 @@ whether the soul needs a token, ask before proceeding.
    the soul is bound to the repo:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join <host> [--token <TOKEN>] [--insecure] --bind "${PWD}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join '<host-or-join-url>' [--token <TOKEN>] [--insecure] --bind "${PWD}"
    ```
 
-   **If the soul needs a token, do NOT run this yourself** — print the command
-   (with `<TOKEN>` left as a placeholder) and ask the user to run it in their own
-   terminal, then paste back only the non-secret `key=value` output lines (slug,
-   host, insecure, token-file). For a no-token (public/read-only) soul, you may
-   run it directly.
+   Quote the argument: a join URL's `#fragment` is shell-significant.
 
-   It normalizes the host, derives a slug from the first DNS label, writes the
-   token to `~/.demarkus/soul-<slug>.token` (mode 600), records the soul in the
-   catalog (`~/.demarkus/souls`), and binds the project. Output is line-oriented
+   **If the soul needs a token, do NOT run this yourself** — print the command
+   (join URL or `<TOKEN>` left as a placeholder) and ask the user to run it in
+   their own terminal, then paste back only the non-secret `key=value` output
+   lines (slug, host, insecure, token-file). For a no-token (public/read-only)
+   soul, you may run it directly.
+
+   It normalizes the host (extracting the token from a join URL), derives a
+   slug from the first DNS label, writes the token to
+   `~/.demarkus/soul-<slug>.token` (mode 600), records the soul in the catalog
+   (`~/.demarkus/souls`), and binds the project. Output is line-oriented
    `key=value`.
 
    - On `OK`, parse `slug=`, `host=`, `insecure=`, `token-file=`.

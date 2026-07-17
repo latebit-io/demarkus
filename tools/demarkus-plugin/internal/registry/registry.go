@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/joinurl"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
@@ -73,29 +74,40 @@ func SoulRegister(slug, host string, insecure bool, tokenFile string) error {
 	})
 }
 
-// RemoteSoulRow returns the catalog row for SLUG (host, insecure, token file).
+// RemoteSoulRow returns the catalog row for SLUG.
 // ok is false when the slug isn't registered.
-func RemoteSoulRow(slug string) (host string, insecure bool, tokenFile string, ok bool, err error) {
+func RemoteSoulRow(slug string) (SoulRow, bool, error) {
 	rows, err := readRecords("souls")
 	if err != nil {
-		return "", false, "", false, err
+		return SoulRow{}, false, err
 	}
 	for _, r := range rows {
 		f := strings.Split(r, "\t")
 		if f[0] == slug {
+			if len(f) < 2 || f[1] == "" {
+				return SoulRow{}, false, fmt.Errorf("souls catalog row for %q has no host; re-run /soul-join", slug)
+			}
+			var row SoulRow
 			if len(f) >= 2 {
-				host = f[1]
+				row.Host = f[1]
 			}
 			if len(f) >= 3 {
-				insecure = f[2] == "1"
+				row.Insecure = f[2] == "1"
 			}
 			if len(f) >= 4 {
-				tokenFile = f[3]
+				row.TokenFile = f[3]
 			}
-			return host, insecure, tokenFile, true, nil
+			return row, true, nil
 		}
 	}
-	return "", false, "", false, nil
+	return SoulRow{}, false, nil
+}
+
+// SoulRow is one souls-catalog record.
+type SoulRow struct {
+	Host      string
+	Insecure  bool
+	TokenFile string
 }
 
 // remoteSoulHost returns the host registered for slug, or "" when not registered.
@@ -510,15 +522,30 @@ type SoulJoinResult struct {
 // 0600 file, registers the catalog row (rejecting a slug collision to a different
 // host), and optionally binds the project. The token never transits any channel
 // but this call's argument + the 0600 file.
+//
+// rawHost may also be a join URL (mark://host#token=...) as emitted by
+// install.sh or demarkus-token join; its fragment supplies the token.
 func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinResult, error) {
 	h := strings.TrimSpace(rawHost)
 	low := strings.ToLower(h)
 	if strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://") {
 		return nil, fmt.Errorf("'%s' is an HTTPS URL; use /knowledge-join for broker-fronted knowledge systems", h)
 	}
-	h = strings.TrimPrefix(h, "mark://")
-	h = strings.TrimRight(h, "/")
-	hostOnly := strings.SplitN(strings.SplitN(h, "/", 2)[0], ":", 2)[0]
+	// Every host form goes through joinurl.Parse so malformed input (paths,
+	// userinfo, query, IPv6 literals) is rejected instead of half-parsed
+	// into a broken catalog row.
+	j, err := joinurl.Parse(h)
+	if err != nil {
+		return nil, err
+	}
+	if j.Token != "" {
+		if token != "" && token != j.Token {
+			return nil, fmt.Errorf("both --token and a join-URL token were given; pass one")
+		}
+		token = j.Token
+	}
+	h = j.Host
+	hostOnly := strings.SplitN(h, ":", 2)[0]
 	slug := deriveSlug(hostOnly)
 	if slug == "" {
 		return nil, fmt.Errorf("could not derive a slug from host '%s'", rawHost)
