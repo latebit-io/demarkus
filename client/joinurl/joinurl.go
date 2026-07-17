@@ -18,9 +18,6 @@ type Join struct {
 
 // Build renders a join URL. Host is required; token is optional.
 func Build(j Join) (string, error) {
-	if strings.ContainsAny(j.Host, "/#?@[") {
-		return "", fmt.Errorf("join URL host must be host[:port], got %q", j.Host)
-	}
 	if err := validateHostPort(j.Host); err != nil {
 		return "", err
 	}
@@ -95,11 +92,18 @@ func Parse(raw string) (Join, error) {
 }
 
 // validateHostPort enforces the host[:port] contract shared by Build and
-// Parse: non-empty hostname, and any port numeric in 1-65535.
+// Parse: hostname restricted to the DNS charset, any port numeric in 1-65535.
 func validateHostPort(host string) error {
 	hostname, port, hasPort := strings.Cut(host, ":")
 	if hostname == "" {
 		return fmt.Errorf("join URL requires a hostname")
+	}
+	for _, c := range hostname {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '-', c == '_':
+		default:
+			return fmt.Errorf("join URL hostname has invalid character %q", c)
+		}
 	}
 	if !hasPort {
 		return nil

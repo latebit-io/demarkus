@@ -43,6 +43,8 @@ func TestBuildRejects(t *testing.T) {
 		{"ipv6 literal host", Join{Host: "[::1]:6309"}},
 		{"port-only host", Join{Host: ":6309"}},
 		{"non-numeric port", Join{Host: "h:bad"}},
+		{"host with space", Join{Host: "h x"}},
+		{"host with bracket", Join{Host: "h]x"}},
 		{"out-of-range port", Join{Host: "h:65536"}},
 		{"zero port", Join{Host: "h:0"}},
 	}
