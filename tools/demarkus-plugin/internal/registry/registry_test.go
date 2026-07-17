@@ -231,4 +231,14 @@ func TestSoulJoinURLWithFragment(t *testing.T) {
 	if _, err := SoulJoin("mark://[2001:db8::1]:6309#token=a", "", false, ""); err == nil {
 		t.Error("expected error for bracketed IPv6 join URL")
 	}
+	// Malformed hosts on the legacy (no-fragment) path fail loudly too.
+	for _, bad := range []string{
+		"mark://kb.example.com?x=1",
+		"mark://user@kb.example.com",
+		"mark://kb.example.com/docs",
+	} {
+		if _, err := SoulJoin(bad, "t", false, ""); err == nil {
+			t.Errorf("expected error for malformed host %q", bad)
+		}
+	}
 }

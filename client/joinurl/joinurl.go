@@ -17,8 +17,8 @@ type Join struct {
 
 // Build renders a join URL. Host is required; token is optional.
 func Build(j Join) (string, error) {
-	if j.Host == "" {
-		return "", fmt.Errorf("join URL requires a host")
+	if j.Host == "" || strings.HasPrefix(j.Host, ":") {
+		return "", fmt.Errorf("join URL requires a hostname")
 	}
 	if strings.ContainsAny(j.Host, "/#?@[") {
 		return "", fmt.Errorf("join URL host must be host[:port], got %q", j.Host)
@@ -49,7 +49,7 @@ func Parse(raw string) (Join, error) {
 	if u.Scheme != "mark" {
 		return Join{}, fmt.Errorf("join URL must use mark:// (got %s://)", u.Scheme)
 	}
-	if u.Host == "" {
+	if u.Host == "" || u.Hostname() == "" {
 		return Join{}, fmt.Errorf("join URL has no host")
 	}
 	// Reject URL state Join cannot represent, so nothing is silently dropped.

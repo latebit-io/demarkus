@@ -531,22 +531,21 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 	if strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://") {
 		return nil, fmt.Errorf("'%s' is an HTTPS URL; use /knowledge-join for broker-fronted knowledge systems", h)
 	}
-	if strings.Contains(h, "#") {
-		j, err := joinurl.Parse(h)
-		if err != nil {
-			return nil, err
-		}
-		if j.Token != "" {
-			if token != "" && token != j.Token {
-				return nil, fmt.Errorf("both --token and a join-URL token were given; pass one")
-			}
-			token = j.Token
-		}
-		h = j.Host
+	// Every host form goes through joinurl.Parse so malformed input (paths,
+	// userinfo, query, IPv6 literals) is rejected instead of half-parsed
+	// into a broken catalog row.
+	j, err := joinurl.Parse(h)
+	if err != nil {
+		return nil, err
 	}
-	h = strings.TrimPrefix(h, "mark://")
-	h = strings.TrimRight(h, "/")
-	hostOnly := strings.SplitN(strings.SplitN(h, "/", 2)[0], ":", 2)[0]
+	if j.Token != "" {
+		if token != "" && token != j.Token {
+			return nil, fmt.Errorf("both --token and a join-URL token were given; pass one")
+		}
+		token = j.Token
+	}
+	h = j.Host
+	hostOnly := strings.SplitN(h, ":", 2)[0]
 	slug := deriveSlug(hostOnly)
 	if slug == "" {
 		return nil, fmt.Errorf("could not derive a slug from host '%s'", rawHost)

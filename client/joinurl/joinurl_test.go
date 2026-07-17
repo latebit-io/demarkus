@@ -41,6 +41,7 @@ func TestBuildRejects(t *testing.T) {
 		{"host with fragment", Join{Host: "h#f"}},
 		{"host with userinfo", Join{Host: "u@h"}},
 		{"ipv6 literal host", Join{Host: "[::1]:6309"}},
+		{"port-only host", Join{Host: ":6309"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -72,6 +73,7 @@ func TestParseForms(t *testing.T) {
 		{"query rejected", "mark://h?x=1#token=t", Join{}, true},
 		{"duplicate token rejected", "h#token=a&token=b", Join{}, true},
 		{"ipv6 literal rejected", "mark://[2001:db8::1]:6309#token=t", Join{}, true},
+		{"port-only authority rejected", "mark://:6309#token=t", Join{}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
