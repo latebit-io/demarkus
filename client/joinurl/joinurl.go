@@ -6,6 +6,7 @@ package joinurl
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -17,11 +18,11 @@ type Join struct {
 
 // Build renders a join URL. Host is required; token is optional.
 func Build(j Join) (string, error) {
-	if j.Host == "" || strings.HasPrefix(j.Host, ":") {
-		return "", fmt.Errorf("join URL requires a hostname")
-	}
 	if strings.ContainsAny(j.Host, "/#?@[") {
 		return "", fmt.Errorf("join URL host must be host[:port], got %q", j.Host)
+	}
+	if err := validateHostPort(j.Host); err != nil {
+		return "", err
 	}
 	s := "mark://" + j.Host
 	if j.Token != "" {
@@ -67,6 +68,9 @@ func Parse(raw string) (Join, error) {
 	if strings.HasPrefix(u.Host, "[") {
 		return Join{}, fmt.Errorf("IPv6 literal hosts are not supported in join URLs; use a DNS name")
 	}
+	if err := validateHostPort(u.Host); err != nil {
+		return Join{}, err
+	}
 	j := Join{Host: u.Host}
 	if u.Fragment == "" {
 		return j, nil
@@ -88,6 +92,30 @@ func Parse(raw string) (Join, error) {
 	}
 	j.Token = vals.Get("token")
 	return j, nil
+}
+
+// validateHostPort enforces the host[:port] contract shared by Build and
+// Parse: non-empty hostname, and any port numeric in 1-65535.
+func validateHostPort(host string) error {
+	hostname, port, hasPort := strings.Cut(host, ":")
+	if hostname == "" {
+		return fmt.Errorf("join URL requires a hostname")
+	}
+	if !hasPort {
+		return nil
+	}
+	if port == "" || len(port) > 5 {
+		return fmt.Errorf("join URL has invalid port %q", port)
+	}
+	for _, c := range port {
+		if c < '0' || c > '9' {
+			return fmt.Errorf("join URL has invalid port %q", port)
+		}
+	}
+	if n, _ := strconv.Atoi(port); n < 1 || n > 65535 {
+		return fmt.Errorf("join URL port %s is out of range (1-65535)", port)
+	}
+	return nil
 }
 
 // HasCredentials reports whether raw looks like a join URL fragment form
