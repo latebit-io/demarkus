@@ -195,7 +195,9 @@ func TestPromoteTargetAdd(t *testing.T) {
 func TestSoulJoinURLWithFragment(t *testing.T) {
 	home := setupHome(t)
 	repo := filepath.Join(home, "repo")
-	_ = os.MkdirAll(repo, 0o755)
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	res, err := SoulJoin("mark://kb.example.com#token=fragtok", "", false, repo)
 	if err != nil {
@@ -224,5 +226,9 @@ func TestSoulJoinURLWithFragment(t *testing.T) {
 	// Bad fragment key fails loudly.
 	if _, err := SoulJoin("mark://kb3.example.com#tokn=a", "", false, ""); err == nil {
 		t.Error("expected error for unknown fragment key")
+	}
+	// Bracketed IPv6 would derive a garbage slug; the join-URL path rejects it.
+	if _, err := SoulJoin("mark://[2001:db8::1]:6309#token=a", "", false, ""); err == nil {
+		t.Error("expected error for bracketed IPv6 join URL")
 	}
 }

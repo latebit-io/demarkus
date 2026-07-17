@@ -374,7 +374,11 @@ func cmdMcpServe(args []string) {
 		tokenFile = tf
 	} else {
 		row, ok, err := registry.RemoteSoulRow(*soul)
-		if err != nil || !ok {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: catalog lookup failed: "+err.Error())
+			os.Exit(1)
+		}
+		if !ok {
 			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: soul '"+*soul+"' not in the catalog; re-run /soul-join")
 			os.Exit(1)
 		}

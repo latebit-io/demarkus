@@ -82,9 +82,15 @@ func cmdJoin(args []string) {
 
 	raw := strings.TrimSpace(*tok)
 	if raw == "" {
-		data, err := io.ReadAll(os.Stdin)
+		// A raw token is 64 hex chars; cap the read so join never buffers a
+		// mistakenly piped file into a "token".
+		const maxTokenInput = 4096
+		data, err := io.ReadAll(io.LimitReader(os.Stdin, maxTokenInput+1))
 		if err != nil {
 			log.Fatalf("read token from stdin: %v", err)
+		}
+		if len(data) > maxTokenInput {
+			log.Fatalf("stdin exceeds %d bytes; that is not a token (pipe demarkus-token generate output)", maxTokenInput)
 		}
 		raw = strings.TrimSpace(string(data))
 	}

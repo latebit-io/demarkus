@@ -14,16 +14,18 @@ launch by `demarkus-plugin mcp-serve`, so it never sits in plaintext in your MCP
 ## Argument
 
 ```bash
-# Join URL (preferred): one string carries the host and token.
-# Emitted by install.sh and demarkus-token join.
-/soul-join mark://kb.example.com#token=<RAW> [--insecure]
+# Public / read-only soul (no credential in the transcript)
+/soul-join mark://soul.demarkus.io --insecure
 
-# Explicit form
-/soul-join mark://soul.demarkus.io --token <TOKEN> --insecure
+# Tokened soul: the user runs the terminal command themselves (see below);
+# a join URL's #token= fragment or a --token value is a secret and must not
+# be pasted into chat.
 ```
 
-- **Join URL**: the `#token=` fragment supplies the capability token; the
-  helper extracts and stores it.
+- **Join URL** (`mark://host#token=...`, emitted by install.sh and
+  `demarkus-token join`): the `#token=` fragment supplies the capability
+  token; the helper extracts and stores it. Because the URL carries the
+  secret, it goes into the user-run terminal command, not the slash command.
 - Otherwise the host may be a `mark://host[:port]` URL or a bare host.
 - `--token <TOKEN>` is the capability token for the soul. Omit only for a
   read-only / public soul. The plugin cannot mint a token for a remote server

@@ -1148,7 +1148,10 @@ do_install() {
     local join_host="$domain"
     [ -z "$join_host" ] && join_host=$(hostname 2>/dev/null || echo localhost)
     local join_url=""
-    join_url=$("${INSTALL_DIR}/demarkus-token" join -host "$join_host" -token "$raw_token" 2>/dev/null) || true
+    if ! join_url=$("${INSTALL_DIR}/demarkus-token" join -host "$join_host" -token "$raw_token"); then
+      log_warn "Could not generate a join URL; run: demarkus-token join -host <host> -token <TOKEN>"
+      join_url=""
+    fi
     if [ -n "$join_url" ]; then
       echo ""
       log_info "Join this server from another machine (paste one line):"

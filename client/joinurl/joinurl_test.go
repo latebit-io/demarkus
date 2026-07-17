@@ -39,6 +39,8 @@ func TestBuildRejects(t *testing.T) {
 		{"empty host", Join{}},
 		{"host with path", Join{Host: "h/x"}},
 		{"host with fragment", Join{Host: "h#f"}},
+		{"host with userinfo", Join{Host: "u@h"}},
+		{"ipv6 literal host", Join{Host: "[::1]:6309"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -66,6 +68,10 @@ func TestParseForms(t *testing.T) {
 		{"with path", "mark://h/docs/x.md", Join{}, true},
 		{"unknown fragment key", "h#token=t&extra=1", Join{}, true},
 		{"future fp key fails loudly", "h#token=t&fp=sha256:ab", Join{}, true},
+		{"userinfo rejected", "mark://user@h#token=t", Join{}, true},
+		{"query rejected", "mark://h?x=1#token=t", Join{}, true},
+		{"duplicate token rejected", "h#token=a&token=b", Join{}, true},
+		{"ipv6 literal rejected", "mark://[2001:db8::1]:6309#token=t", Join{}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

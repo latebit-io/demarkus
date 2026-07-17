@@ -1,11 +1,6 @@
-// Package joinurl builds and parses demarkus join URLs: a single string that
-// carries everything needed to join a server, of the form
-//
-//	mark://host[:port]#token=<raw>
-//
-// The credential rides in the URL fragment, which never appears in any
-// protocol request; the string exists only to be pasted into a join flow
-// (/soul-join, demarkus join) or rendered as a QR code.
+// Package joinurl builds and parses demarkus join URLs
+// (mark://host[:port]#token=<raw>). The credential rides in the URL
+// fragment, which never appears in any protocol request.
 package joinurl
 
 import (
@@ -25,7 +20,7 @@ func Build(j Join) (string, error) {
 	if j.Host == "" {
 		return "", fmt.Errorf("join URL requires a host")
 	}
-	if strings.ContainsAny(j.Host, "/#?") {
+	if strings.ContainsAny(j.Host, "/#?@[") {
 		return "", fmt.Errorf("join URL host must be host[:port], got %q", j.Host)
 	}
 	s := "mark://" + j.Host
@@ -57,8 +52,20 @@ func Parse(raw string) (Join, error) {
 	if u.Host == "" {
 		return Join{}, fmt.Errorf("join URL has no host")
 	}
+	// Reject URL state Join cannot represent, so nothing is silently dropped.
+	if u.User != nil {
+		return Join{}, fmt.Errorf("join URL must not carry userinfo")
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return Join{}, fmt.Errorf("join URL must not carry a query (credentials go in the #fragment)")
+	}
 	if u.Path != "" && u.Path != "/" {
 		return Join{}, fmt.Errorf("join URL must not carry a path (got %q)", u.Path)
+	}
+	// Bracketed IPv6 would be misparsed by downstream host handling (slug
+	// derivation, default-port append); fail loudly until that is fixed.
+	if strings.HasPrefix(u.Host, "[") {
+		return Join{}, fmt.Errorf("IPv6 literal hosts are not supported in join URLs; use a DNS name")
 	}
 	j := Join{Host: u.Host}
 	if u.Fragment == "" {
@@ -71,9 +78,12 @@ func Parse(raw string) (Join, error) {
 	if err != nil {
 		return Join{}, fmt.Errorf("invalid join URL fragment: %w", err)
 	}
-	for k := range vals {
+	for k, v := range vals {
 		if k != "token" {
 			return Join{}, fmt.Errorf("join URL fragment has unknown key %q (expected token)", k)
+		}
+		if len(v) > 1 {
+			return Join{}, fmt.Errorf("join URL fragment repeats %q", k)
 		}
 	}
 	j.Token = vals.Get("token")

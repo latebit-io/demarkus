@@ -84,6 +84,9 @@ func RemoteSoulRow(slug string) (SoulRow, bool, error) {
 	for _, r := range rows {
 		f := strings.Split(r, "\t")
 		if f[0] == slug {
+			if len(f) < 2 || f[1] == "" {
+				return SoulRow{}, false, fmt.Errorf("souls catalog row for %q has no host; re-run /soul-join", slug)
+			}
 			var row SoulRow
 			if len(f) >= 2 {
 				row.Host = f[1]
