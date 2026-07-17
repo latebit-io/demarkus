@@ -58,10 +58,9 @@ DEFAULT_ROOT_LINUX="/var/lib/demarkus"
 DEFAULT_ROOT_MACOS="$HOME/.demarkus/content"
 SERVICE_NAME="demarkus"
 SCRIPT_VERSION="1"
-# The unit directory is fixed to systemd's search path in production. The
-# test harness redirects it via DEMARKUS_TEST_SYSTEMD_DIR, but only under an
-# explicit test-mode flag, so a stray production override can never write
-# units where `systemctl enable/restart` would fail to find them.
+# Fixed to systemd's search path in production; the test harness redirects it
+# via DEMARKUS_TEST_SYSTEMD_DIR only under DEMARKUS_INSTALL_TESTMODE=1, so a
+# stray production override cannot misplace units.
 SYSTEMD_DIR="/etc/systemd/system"
 if [ "${DEMARKUS_INSTALL_TESTMODE:-}" = "1" ] && [ -n "${DEMARKUS_TEST_SYSTEMD_DIR:-}" ]; then
   SYSTEMD_DIR="$DEMARKUS_TEST_SYSTEMD_DIR"
@@ -1341,13 +1340,9 @@ do_install() {
   setup_content_dir "$content_root"
 
   local tokens_file="${CONFIG_DIR}/tokens.toml"
-  # With a broker, tokens live in their own subdirectory the broker owns:
-  # atomic replacement needs directory write, and granting that on all of
-  # CONFIG_DIR would let a compromised broker replace the TLS keys too.
-  # The layout is sticky: once it exists, every reinstall honors it even
-  # without --with-broker, or the server would silently stop observing the
-  # file the broker keeps writing. Disabling broker mode is an explicit
-  # migration (see the single-host deployment docs).
+  # Broker-owned tokens subdir: the broker needs directory write for atomic
+  # replacement, never on CONFIG_DIR (TLS keys live there). Sticky once
+  # created; reinstalls honor it even without --with-broker (else split brain).
   if [ -f "${CONFIG_DIR}/tokens/tokens.toml" ]; then
     tokens_file="${CONFIG_DIR}/tokens/tokens.toml"
     log_info "Using broker-owned tokens layout: ${tokens_file}"
@@ -1864,10 +1859,8 @@ do_uninstall() {
 
   log_step "Uninstalling Demarkus"
 
-  # Track removal failures so a partial teardown is reported honestly
-  # rather than logging "complete" while artifacts remain. stop/disable
-  # stay best-effort (non-zero when already stopped is expected); the
-  # removal operations are verified.
+  # Track removal failures so a partial teardown reports honestly instead of
+  # logging "complete". stop/disable stay best-effort; removals are verified.
   local uninstall_errors=0
   # remove_path deletes a file or directory and confirms it is gone.
   remove_path() {
