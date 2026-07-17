@@ -1317,10 +1317,17 @@ do_install() {
   # With a broker, tokens live in their own subdirectory the broker owns:
   # atomic replacement needs directory write, and granting that on all of
   # CONFIG_DIR would let a compromised broker replace the TLS keys too.
-  if [ "$with_broker" = true ] && [ "$PLATFORM" = "linux" ]; then
+  # The layout is sticky: once it exists, every reinstall honors it even
+  # without --with-broker, or the server would silently stop observing the
+  # file the broker keeps writing. Disabling broker mode is an explicit
+  # migration (see the single-host deployment docs).
+  if [ -f "${CONFIG_DIR}/tokens/tokens.toml" ]; then
+    tokens_file="${CONFIG_DIR}/tokens/tokens.toml"
+    log_info "Using broker-owned tokens layout: ${tokens_file}"
+  elif [ "$with_broker" = true ] && [ "$PLATFORM" = "linux" ]; then
     local broker_tokens_dir="${CONFIG_DIR}/tokens"
     mkdir -p "$broker_tokens_dir"
-    if [ -f "$tokens_file" ] && [ ! -f "${broker_tokens_dir}/tokens.toml" ]; then
+    if [ -f "$tokens_file" ]; then
       mv "$tokens_file" "${broker_tokens_dir}/tokens.toml"
       log_info "Moved tokens file to ${broker_tokens_dir}/ (broker-owned directory)"
     fi

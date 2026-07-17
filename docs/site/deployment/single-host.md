@@ -10,7 +10,8 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
   | sudo bash -s -- --domain example.com --with-library
 
 # Full stack with SSO (Google/GitHub OAuth app required, see below)
-echo -n '<client-secret>' > /root/oidc-secret && chmod 600 /root/oidc-secret
+sudo install -m 600 /dev/null /root/oidc-secret
+printf '%s' '<client-secret>' | sudo tee /root/oidc-secret >/dev/null
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh \
   | sudo bash -s -- --domain example.com --with-broker --with-library \
     --broker-public-url https://broker.example.com \
@@ -29,7 +30,7 @@ The secret rides a root-readable file, not argv (argv is visible in `ps` and she
 | Broker | `demarkus-broker` | loopback TCP 8080 (OAuth/API), 8081 (MCP gateway) | `/etc/demarkus-broker/` |
 | Library | `demarkus-library` | TCP 8090 | `/etc/demarkus-library/` |
 
-The broker binds **loopback only** — its advertised `publicURL` is served by your TLS reverse proxy (see below). With a broker installed, `tokens.toml` moves to `/etc/demarkus/tokens/`, a subdirectory the broker owns, so its atomic writes never require access to the rest of `/etc/demarkus` (where the TLS keys live).
+The broker binds **loopback only** — its advertised `publicURL` is served by your TLS reverse proxy (see below). With a broker installed, `tokens.toml` moves to `/etc/demarkus/tokens/`, a subdirectory the broker owns, so its atomic writes never require access to the rest of `/etc/demarkus` (where the TLS keys live). This layout is sticky: later reinstalls keep it even without `--with-broker`. To fully remove the broker: `systemctl disable --now demarkus-broker`, move `/etc/demarkus/tokens/tokens.toml` back to `/etc/demarkus/tokens.toml` (restoring `root:demarkus` 640), and re-run the installer.
 
 Each component runs as its own hardened system user (`ProtectSystem=strict`, minimal `ReadWritePaths`).
 
