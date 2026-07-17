@@ -45,7 +45,7 @@ func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clien
 	// a fixed date would expire the OIDC state cookie under any real
 	// wall-clock that is later than that date, breaking the callback
 	// tests.
-	brokerSrv = NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
+	brokerSrv = NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
 	// NewTLSServer (not NewServer): the state cookie is set with
 	// Secure=true and Path=/auth/callback, attributes only enforceable
 	// over HTTPS. Without TLS we'd be relying on manual AddCookie calls
@@ -64,7 +64,7 @@ func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clien
 func newTestServerWithSigner(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clientset, signer *IDTokenSigner) (testSrv *httptest.Server, brokerSrv *Server) {
 	t.Helper()
 	cookieSigner := newTestSigner(t)
-	brokerSrv = NewServer(cfg, cookieSigner, verifier, k8s, nil, signer, nil)
+	brokerSrv = NewServer(cfg, cookieSigner, verifier, NewK8sSecretStore(k8s), nil, signer, nil)
 	testSrv = httptest.NewTLSServer(brokerSrv.Routes())
 	t.Cleanup(testSrv.Close)
 	return testSrv, brokerSrv
@@ -111,7 +111,7 @@ func TestNewServerPanicsOnDiscoveryWithoutSigner(t *testing.T) {
 			t.Fatal("expected panic for discovery != nil + idTokenSigner == nil")
 		}
 	}()
-	NewServer(cfg, newTestSigner(t), &fakeVerifier{}, fake.NewSimpleClientset(), d, nil, nil)
+	NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewK8sSecretStore(fake.NewSimpleClientset()), d, nil, nil)
 }
 
 // TestWellKnownDiscoveryRouteRegistered guards the Routes() composition:
@@ -140,7 +140,7 @@ func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 	// IDTokenSigner so the jwks_uri override the discovery doc
 	// advertises actually has a handler mounted. NewServer panics
 	// otherwise.
-	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, fake.NewSimpleClientset(), d, newTestIDTokenSigner(t), nil)
+	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewK8sSecretStore(fake.NewSimpleClientset()), d, newTestIDTokenSigner(t), nil)
 	tsrv := httptest.NewServer(srv.Routes())
 	t.Cleanup(tsrv.Close)
 
@@ -476,7 +476,7 @@ func TestAuthCallbackUnauthorizedDomain(t *testing.T) {
 // Sanity guard so the clock override on Server is exercised at least once.
 func TestServerClockExposed(t *testing.T) {
 	cfg := testConfig()
-	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, fake.NewSimpleClientset(), nil, nil, nil)
+	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewK8sSecretStore(fake.NewSimpleClientset()), nil, nil, nil)
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	s.clock = func() time.Time { return fixed }
 	if !s.clock().Equal(fixed) {

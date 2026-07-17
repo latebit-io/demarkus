@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"k8s.io/client-go/kubernetes"
 )
 
 // RefreshTokensSecretKey is the key inside the broker-namespace
@@ -104,7 +102,7 @@ type refreshTokens struct {
 // migration.
 type RefreshStore struct {
 	cfg    *Config
-	k8s    kubernetes.Interface
+	store  SecretStore
 	clock  func() time.Time
 	randFn func([]byte) (int, error)
 }
@@ -113,10 +111,10 @@ type RefreshStore struct {
 // crypto/rand. Tests override clock and randFn on the returned
 // struct for deterministic behavior. Exported because main.go and
 // the Sweeper share a single instance with the Server (PR4 Step 5).
-func NewRefreshStore(cfg *Config, k8s kubernetes.Interface) *RefreshStore {
+func NewRefreshStore(cfg *Config, store SecretStore) *RefreshStore {
 	return &RefreshStore{
 		cfg:    cfg,
-		k8s:    k8s,
+		store:  store,
 		clock:  time.Now,
 		randFn: rand.Read,
 	}
@@ -151,7 +149,7 @@ func (s *RefreshStore) Issue(ctx context.Context, claims *Claims, clientID strin
 		ExpiresAt: now.Add(ttl),
 		ClientID:  clientID,
 	}
-	err := mutateSecret(ctx, s.k8s, s.cfg.Server.BrokerNamespace, s.cfg.Server.RefreshTokensSecret, RefreshTokensSecretKey, func(existing []byte) ([]byte, error) {
+	err := s.store.Mutate(ctx, s.cfg.refreshTokensRef(), func(existing []byte) ([]byte, error) {
 		store, err := decodeRefreshTokens(existing)
 		if err != nil {
 			return nil, err
@@ -184,7 +182,7 @@ func (s *RefreshStore) Refresh(ctx context.Context, rawToken string) (refreshTok
 	}
 	keyHash := hashRefreshToken(rawToken)
 	var out refreshTokenRecord
-	err := mutateSecret(ctx, s.k8s, s.cfg.Server.BrokerNamespace, s.cfg.Server.RefreshTokensSecret, RefreshTokensSecretKey, func(existing []byte) ([]byte, error) {
+	err := s.store.Mutate(ctx, s.cfg.refreshTokensRef(), func(existing []byte) ([]byte, error) {
 		// Reset on each retry — a conflict-driven re-run must not
 		// leak state from the prior closure invocation.
 		out = refreshTokenRecord{}
@@ -219,7 +217,7 @@ func (s *RefreshStore) Revoke(ctx context.Context, rawToken string) error {
 		return nil
 	}
 	keyHash := hashRefreshToken(rawToken)
-	return mutateSecret(ctx, s.k8s, s.cfg.Server.BrokerNamespace, s.cfg.Server.RefreshTokensSecret, RefreshTokensSecretKey, func(existing []byte) ([]byte, error) {
+	return s.store.Mutate(ctx, s.cfg.refreshTokensRef(), func(existing []byte) ([]byte, error) {
 		if len(existing) == 0 {
 			return existing, nil
 		}
@@ -241,7 +239,7 @@ func (s *RefreshStore) Revoke(ctx context.Context, rawToken string) error {
 // per-tick loop, which is refresh-token-only — Step 5 wires it.
 func (s *RefreshStore) Sweep(ctx context.Context) (int, error) {
 	var swept int
-	err := mutateSecret(ctx, s.k8s, s.cfg.Server.BrokerNamespace, s.cfg.Server.RefreshTokensSecret, RefreshTokensSecretKey, func(existing []byte) ([]byte, error) {
+	err := s.store.Mutate(ctx, s.cfg.refreshTokensRef(), func(existing []byte) ([]byte, error) {
 		// Reset on each retry — same rationale as Refresh.
 		swept = 0
 		if len(existing) == 0 {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -20,12 +21,85 @@ import (
 type Config struct {
 	Server      ServerConfig      `yaml:"server"`
 	OIDC        OIDCConfig        `yaml:"oidc"`
+	Storage     StorageConfig     `yaml:"storage"`
 	Worlds      []WorldConfig     `yaml:"worlds"`
 	WebClients  []WebClientConfig `yaml:"webClients"`
 	Sweeper     SweeperConfig     `yaml:"sweeper"`
 	RateLimit   RateLimitConfig   `yaml:"rateLimit"`
 	WorldDialer WorldDialerConfig `yaml:"worldDialer"`
 }
+
+// StorageConfig selects the credential-persistence backend. "kubernetes"
+// (the default) stores everything in Secrets; "file" is single-host mode:
+// broker state lives under Dir and each world's token hashes go straight
+// into that world's tokensFile, which the co-located demarkus-server
+// already watches and hot-reloads.
+type StorageConfig struct {
+	Backend string `yaml:"backend"`
+	// Dir is the broker's state directory in file mode (refresh tokens,
+	// per-world write-token records). Required when backend is "file".
+	Dir string `yaml:"dir"`
+}
+
+func (c *Config) fileBackend() bool {
+	return c.Storage.Backend == storageBackendFile
+}
+
+// validateStorage normalizes the backend selection and enforces the
+// per-backend requirements (file: a state dir; kubernetes: the broker
+// namespace). Split from validate() for the gocyclo budget.
+func (c *Config) validateStorage() error {
+	switch c.Storage.Backend {
+	case "":
+		c.Storage.Backend = storageBackendKubernetes
+	case storageBackendKubernetes, storageBackendFile:
+	default:
+		return fmt.Errorf("storage.backend must be %q or %q (got %q)", storageBackendKubernetes, storageBackendFile, c.Storage.Backend)
+	}
+	if c.fileBackend() {
+		if c.Storage.Dir == "" {
+			return fmt.Errorf("storage.dir is required when storage.backend is %q", storageBackendFile)
+		}
+		return c.validateFilePaths()
+	}
+	if c.Server.BrokerNamespace == "" {
+		return fmt.Errorf("server.brokerNamespace is required")
+	}
+	return nil
+}
+
+// validateFilePaths rejects tokensFile values aliasing each other or a
+// broker-state file: two stores mutating one document corrupts it.
+func (c *Config) validateFilePaths() error {
+	seen := map[string]string{
+		filepath.Clean(c.refreshTokensRef().Path): "storage.dir refresh-tokens state",
+	}
+	for i := range c.Worlds {
+		w := &c.Worlds[i]
+		seen[filepath.Clean(c.worldWriteTokenRef(w.Name).Path)] = fmt.Sprintf("storage.dir write-token state for world %q", w.Name)
+	}
+	for i := range c.Worlds {
+		w := &c.Worlds[i]
+		if w.TokensFile == "" {
+			continue
+		}
+		p := filepath.Clean(w.TokensFile)
+		if other, ok := seen[p]; ok {
+			return fmt.Errorf("worlds[%d] (%s): tokensFile %q collides with %s", i, w.Name, w.TokensFile, other)
+		}
+		seen[p] = fmt.Sprintf("tokensFile of world %q", w.Name)
+	}
+	return nil
+}
+
+// FileBackend reports whether the broker runs in single-host file mode.
+// Exported for main.go wiring (backend selection, sweeper mode).
+func (c *Config) FileBackend() bool { return c.fileBackend() }
+
+const (
+	storageBackendKubernetes = "kubernetes"
+	storageBackendFile       = "file"
+)
 
 // WebClientConfig registers one confidential web client (RFC 6749 §2.1)
 // at the broker — a server-side app that can keep a secret and receives
@@ -321,6 +395,11 @@ type WorldConfig struct {
 	// The Mark Protocol scheme is always `mark://`; the value here is
 	// host:port only (e.g. `team-a-mark.team-a:6309`).
 	InternalAddress string `yaml:"internalAddress"`
+	// TokensFile is the world server's tokens.toml path on local disk.
+	// Required (and only meaningful) in file-backend mode, where the
+	// broker writes token hashes directly to the file the world server
+	// watches; ignored in kubernetes mode.
+	TokensFile string `yaml:"tokensFile"`
 	// Allow is the per-world authorization predicate. See AllowConfig for
 	// the rules. When every list is empty the world accepts any verified
 	// identity (back-compat with pre-Slice-C configs that had only
@@ -520,8 +599,8 @@ func (c *Config) validate() error {
 	if c.Server.CookieKey == "" {
 		return fmt.Errorf("server.cookieKey is required")
 	}
-	if c.Server.BrokerNamespace == "" {
-		return fmt.Errorf("server.brokerNamespace is required")
+	if err := c.validateStorage(); err != nil {
+		return err
 	}
 	// Normalize before the empty-check so values like "   " or "/" are
 	// caught here instead of silently producing a broken issuer URL
@@ -570,7 +649,7 @@ func (c *Config) validate() error {
 	seen := make(map[string]bool, len(c.Worlds))
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
-		if err := validateWorld(i, w); err != nil {
+		if err := validateWorld(i, w, c.fileBackend()); err != nil {
 			return err
 		}
 		if seen[w.Name] {
@@ -798,16 +877,31 @@ const maxSweeperInterval = 24 * time.Hour
 // gocyclo budget on each function stays inside the linter threshold;
 // the outer loop owns cross-world checks (duplicates), the helper owns
 // single-world checks.
-func validateWorld(i int, w *WorldConfig) error {
+func validateWorld(i int, w *WorldConfig, fileMode bool) error {
 	switch {
 	case w.Name == "":
 		return fmt.Errorf("worlds[%d]: name is required", i)
-	case w.Namespace == "":
-		return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)
-	case w.TokensSecret == "":
-		return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
 	case len(w.DefaultToken.Paths) == 0:
 		return fmt.Errorf("worlds[%d] (%s): defaultToken.paths is required", i, w.Name)
+	}
+	// The location invariants differ per backend: kubernetes worlds live in
+	// a namespace with a tokens Secret; file-mode worlds need a local
+	// tokens.toml path and an explicit dial address (the cluster-DNS
+	// default is meaningless off-cluster).
+	if fileMode {
+		switch {
+		case w.TokensFile == "":
+			return fmt.Errorf("worlds[%d] (%s): tokensFile is required in file-backend mode", i, w.Name)
+		case w.InternalAddress == "":
+			return fmt.Errorf("worlds[%d] (%s): internalAddress is required in file-backend mode", i, w.Name)
+		}
+	} else {
+		switch {
+		case w.Namespace == "":
+			return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)
+		case w.TokensSecret == "":
+			return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
+		}
 	}
 	// All three lists are lowercased+trimmed at load so authorizedWorlds
 	// can do plain string compares on every login. Group-name match is

@@ -345,7 +345,7 @@ func TestMutateSecretConflictRetries(t *testing.T) {
 		return false, nil, nil
 	})
 
-	err := mutateSecret(context.Background(), k8s, "team-a", "team-a-tokens", TokensSecretKey,
+	err := NewK8sSecretStore(k8s).Mutate(context.Background(), SecretRef{Namespace: "team-a", Name: "team-a-tokens", Key: TokensSecretKey},
 		func(existing []byte) ([]byte, error) {
 			return append(append([]byte{}, existing...), []byte("-mutated")...), nil
 		})
@@ -381,7 +381,7 @@ func TestMutateSecretConflictExhaustsRetries(t *testing.T) {
 		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "secrets"}, "team-a-tokens", errors.New("simulated"))
 	})
 
-	err := mutateSecret(context.Background(), k8s, "team-a", "team-a-tokens", TokensSecretKey,
+	err := NewK8sSecretStore(k8s).Mutate(context.Background(), SecretRef{Namespace: "team-a", Name: "team-a-tokens", Key: TokensSecretKey},
 		func(existing []byte) ([]byte, error) { return append(existing, 'x'), nil })
 	if err == nil {
 		t.Fatal("mutateSecret returned nil, want conflict error after retry budget")
@@ -396,7 +396,7 @@ func TestMutateSecretConflictExhaustsRetries(t *testing.T) {
 // mutateSecret materializes a fresh Secret with the key set.
 func TestMutateSecretCreatesWhenAbsent(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
-	err := mutateSecret(context.Background(), k8s, "team-a", "team-a-tokens", TokensSecretKey,
+	err := NewK8sSecretStore(k8s).Mutate(context.Background(), SecretRef{Namespace: "team-a", Name: "team-a-tokens", Key: TokensSecretKey},
 		func(existing []byte) ([]byte, error) {
 			if len(existing) != 0 {
 				t.Errorf("existing = %q, want empty on absent Secret", existing)
@@ -421,7 +421,7 @@ func TestMutateSecretCreatesWhenAbsent(t *testing.T) {
 // depend on this so "absent stays absent" is observable.
 func TestMutateSecretAbsentStaysAbsentOnEmptyResult(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
-	err := mutateSecret(context.Background(), k8s, "team-a", "team-a-tokens", TokensSecretKey,
+	err := NewK8sSecretStore(k8s).Mutate(context.Background(), SecretRef{Namespace: "team-a", Name: "team-a-tokens", Key: TokensSecretKey},
 		func([]byte) ([]byte, error) { return nil, nil })
 	if err != nil {
 		t.Fatalf("mutateSecret: %v", err)

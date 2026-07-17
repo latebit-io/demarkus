@@ -1,17 +1,9 @@
 package broker
 
 import (
-	"bytes"
-	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
-
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -175,82 +167,4 @@ func groupsMatch(have, allowed []string) bool {
 		}
 	}
 	return false
-}
-
-// mutateSecret performs an optimistic-concurrency read-modify-write on
-// the Secret data[key]. If the Secret does not exist, it is created with
-// the named key set to the mutate-result on empty input. Retries
-// resourceVersion conflicts up to maxConflictRetries; surfaces all other
-// errors immediately.
-//
-// Free function rather than a method on any one type so the broker's
-// refreshStore and worldWriteTokenStore can share the same
-// Secret-mutation contract without duplicating the conflict-retry loop.
-// See /guidelines.md "Don't Duplicate Logic".
-func mutateSecret(ctx context.Context, k8s kubernetes.Interface, namespace, name, key string, mutate func([]byte) ([]byte, error)) error {
-	for range maxConflictRetries {
-		secret, getErr := k8s.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
-		if getErr != nil && !apierrors.IsNotFound(getErr) {
-			return fmt.Errorf("get secret %s/%s: %w", namespace, name, getErr)
-		}
-		var existing []byte
-		if getErr == nil {
-			existing = secret.Data[key]
-		}
-		next, err := mutate(existing)
-		if err != nil {
-			return err
-		}
-		if apierrors.IsNotFound(getErr) {
-			// No-op closure on an absent Secret: don't materialize an
-			// empty Secret as a side effect. Refresh-store Revoke and
-			// Sweep both return existing-unchanged when there's
-			// nothing to do; without this guard the first such call
-			// would create a `{key: nil}` Secret that the next call
-			// then has to read back. The no-write contract is
-			// observable (helm-rendered Secrets, audit logs), so
-			// preserving "absent stays absent" is part of the
-			// store's behavior, not an internal detail.
-			if len(next) == 0 {
-				return nil
-			}
-			fresh := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      name,
-					Namespace: namespace,
-				},
-				Type: corev1.SecretTypeOpaque,
-				Data: map[string][]byte{key: next},
-			}
-			_, createErr := k8s.CoreV1().Secrets(namespace).Create(ctx, fresh, metav1.CreateOptions{})
-			if createErr == nil {
-				return nil
-			}
-			if apierrors.IsAlreadyExists(createErr) {
-				continue
-			}
-			return fmt.Errorf("create secret %s/%s: %w", namespace, name, createErr)
-		}
-		// No-op mutation: the value is unchanged, so skip the Update.
-		// Writing it anyway bumps the Secret's resourceVersion, which
-		// triggers a kubelet re-projection on every world tokens.toml
-		// mount and amplifies conflict retries across replicas — the
-		// exact propagation churn the broker works to avoid.
-		if bytes.Equal(existing, next) {
-			return nil
-		}
-		if secret.Data == nil {
-			secret.Data = make(map[string][]byte, 1)
-		}
-		secret.Data[key] = next
-		_, updateErr := k8s.CoreV1().Secrets(namespace).Update(ctx, secret, metav1.UpdateOptions{})
-		if updateErr == nil {
-			return nil
-		}
-		if apierrors.IsConflict(updateErr) {
-			continue
-		}
-		return fmt.Errorf("update secret %s/%s: %w", namespace, name, updateErr)
-	}
-	return fmt.Errorf("conflict on secret %s/%s after %d retries", namespace, name, maxConflictRetries)
 }

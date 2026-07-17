@@ -88,6 +88,13 @@ func (s *Sweeper) RunLeaderElected(ctx context.Context, leaseName, namespace, id
 	})
 }
 
+// Run starts the sweep loop directly, with no leader election: for
+// single-host (file-backend) deployments, which are single-instance by
+// construction. Multi-replica k8s deployments use RunLeaderElected.
+func (s *Sweeper) Run(ctx context.Context) {
+	s.runLoop(ctx)
+}
+
 // runLoop runs an initial sweep then ticks every Sweeper.interval until
 // ctx is canceled. The eager first pass means a freshly-elected leader
 // doesn't have to wait a full interval before pruning expired grants

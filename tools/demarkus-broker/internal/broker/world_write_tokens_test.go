@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,7 +20,7 @@ import (
 func TestWorldWriteTokenStoreProvisionIsIdempotent(t *testing.T) {
 	cfg := testConfig()
 	k8s := fake.NewSimpleClientset()
-	store := newWorldWriteTokenStore(cfg, k8s)
+	store := newWorldWriteTokenStore(cfg, NewK8sSecretStore(k8s))
 
 	first, err := store.Provision(context.Background(), "team-a")
 	if err != nil {
@@ -76,13 +78,13 @@ func TestWorldWriteTokenStoreProvisionRecoversAcrossStores(t *testing.T) {
 	cfg := testConfig()
 	k8s := fake.NewSimpleClientset()
 
-	podA := newWorldWriteTokenStore(cfg, k8s)
+	podA := newWorldWriteTokenStore(cfg, NewK8sSecretStore(k8s))
 	first, err := podA.Provision(context.Background(), "team-a")
 	if err != nil {
 		t.Fatalf("podA.Provision: %v", err)
 	}
 
-	podB := newWorldWriteTokenStore(cfg, k8s)
+	podB := newWorldWriteTokenStore(cfg, NewK8sSecretStore(k8s))
 	second, err := podB.Provision(context.Background(), "team-a")
 	if err != nil {
 		t.Fatalf("podB.Provision: %v", err)
@@ -136,7 +138,7 @@ func TestWorldWriteTokenStoreRewritesStaleWorldEntry(t *testing.T) {
 		Data:       map[string][]byte{TokensSecretKey: staleBytes},
 	})
 
-	store := newWorldWriteTokenStore(cfg, k8s)
+	store := newWorldWriteTokenStore(cfg, NewK8sSecretStore(k8s))
 	raw, err := store.Provision(context.Background(), "team-a")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -181,7 +183,7 @@ func TestWorldWriteTokenStoreProvisionIgnoresConfiguredOperations(t *testing.T) 
 	cfg := testConfig()
 
 	k8s := fake.NewSimpleClientset()
-	store := newWorldWriteTokenStore(cfg, k8s)
+	store := newWorldWriteTokenStore(cfg, NewK8sSecretStore(k8s))
 	if _, err := store.Provision(context.Background(), "team-a"); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -202,7 +204,7 @@ func TestWorldWriteTokenStoreProvisionIgnoresConfiguredOperations(t *testing.T) 
 func TestWorldWriteTokenStoreProvisionUnknownWorld(t *testing.T) {
 	cfg := testConfig()
 	k8s := fake.NewSimpleClientset()
-	store := newWorldWriteTokenStore(cfg, k8s)
+	store := newWorldWriteTokenStore(cfg, NewK8sSecretStore(k8s))
 
 	_, err := store.Provision(context.Background(), "no-such-world")
 	if err == nil {
@@ -230,4 +232,72 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// Invariant: file-backend Provision lands the hash in the world's local
+// tokens.toml, and a broker-restart re-provision converges without a rewrite.
+func TestProvisionFileBackend(t *testing.T) {
+	dir := t.TempDir()
+	tokensFile := filepath.Join(dir, "tokens.toml")
+	cfg := &Config{
+		Storage: StorageConfig{Backend: storageBackendFile, Dir: filepath.Join(dir, "state")},
+		Worlds: []WorldConfig{{
+			Name:            "soul",
+			TokensFile:      tokensFile,
+			InternalAddress: "localhost:6309",
+			DefaultToken:    TokenScope{Paths: []string{"/*"}},
+		}},
+	}
+	store := newWorldWriteTokenStore(cfg, NewFileSecretStore())
+
+	raw, err := store.Provision(context.Background(), "soul")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if raw == "" {
+		t.Fatal("Provision returned empty token")
+	}
+
+	parsed, err := token.ParseBytes(mustRead(t, tokensFile))
+	if err != nil {
+		t.Fatalf("parse tokens.toml: %v", err)
+	}
+	entry, ok := parsed.Tokens[worldWriteTokenLabel("soul")]
+	if !ok {
+		t.Fatalf("tokens.toml missing label %q", worldWriteTokenLabel("soul"))
+	}
+	if entry.Hash != protocol.HashToken(raw) {
+		t.Error("tokens.toml hash does not match minted token")
+	}
+
+	// Fresh store (broker restart): converges on the same token, no rewrite.
+	before := mustStat(t, tokensFile)
+	raw2, err := newWorldWriteTokenStore(cfg, NewFileSecretStore()).Provision(context.Background(), "soul")
+	if err != nil {
+		t.Fatalf("re-Provision: %v", err)
+	}
+	if raw2 != raw {
+		t.Error("re-provision minted a different token instead of converging")
+	}
+	if after := mustStat(t, tokensFile); !after.ModTime().Equal(before.ModTime()) {
+		t.Error("tokens.toml rewritten on steady-state re-provision")
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func mustStat(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
 }

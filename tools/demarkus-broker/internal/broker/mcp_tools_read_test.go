@@ -346,7 +346,7 @@ func newGatewayWithDispatcher(t *testing.T, cfg *Config, d worldDispatcher) *mcp
 	signer := newTestSigner(t)
 	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
 	k8s := fake.NewSimpleClientset()
-	srv := NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
+	srv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
 	srv.clock = func() time.Time { return time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC) }
 	return newMCPGateway(srv, "test", d)
 }
@@ -787,7 +787,7 @@ func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 	}}
 	signer := newTestSigner(t)
 	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, verifier, k8s, nil, nil, nil)
+	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
 	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d))
 	t.Cleanup(ts.Close)
 
