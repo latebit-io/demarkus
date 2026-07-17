@@ -44,12 +44,9 @@ type Server struct {
 	// owns the pending → code → exchange state machine.
 	authCodeStore *authCodeStore
 
-	// RefreshStore owns the Secret-backed map of sha256(refresh_token)
-	// → record. Wired by NewServer with the configured (or defaulted)
-	// broker-namespace Secret. Survives broker restarts unlike
-	// deviceStore. Universe-onboarding PR4. NewServer passes the
-	// kubernetes client straight through so the refresh and
-	// write-token stores share one client.
+	// refreshStore owns the persisted map of sha256(refresh_token) →
+	// record; survives broker restarts unlike deviceStore. NewServer
+	// injects one SecretStore shared with the write-token store.
 	refreshStore *RefreshStore
 
 	// idTokenSigner mints broker-signed id_tokens on the

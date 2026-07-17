@@ -425,3 +425,39 @@ func TestRefreshStoreCollisionRetry(t *testing.T) {
 		t.Errorf("randFn calls = %d, want 2", calls)
 	}
 }
+
+// Invariant: the refresh lifecycle is backend-neutral. One
+// issue/refresh/revoke round trip against the file store, persisted to
+// storage.dir, pins the single-host path end to end (including surviving a
+// broker restart via a fresh store over the same directory).
+func TestRefreshStoreFileBackend(t *testing.T) {
+	cfg := testRefreshConfig()
+	cfg.Storage = StorageConfig{Backend: storageBackendFile, Dir: t.TempDir()}
+	s := NewRefreshStore(cfg, NewFileSecretStore())
+	s.clock = func() time.Time { return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC) }
+	ctx := context.Background()
+
+	claims := Claims{Subject: "user-1", Email: "alice@example.com", EmailVerified: true}
+	raw, err := s.Issue(ctx, &claims, "", cfg.Server.RefreshTokenTTL)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	// Restart: a fresh store over the same dir must honor the grant.
+	s2 := NewRefreshStore(cfg, NewFileSecretStore())
+	s2.clock = s.clock
+	rec, err := s2.Refresh(ctx, raw)
+	if err != nil {
+		t.Fatalf("Refresh after restart: %v", err)
+	}
+	if rec.Claims.Subject != "user-1" {
+		t.Errorf("Subject = %q", rec.Claims.Subject)
+	}
+
+	if err := s2.Revoke(ctx, raw); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if _, err := s2.Refresh(ctx, raw); err == nil {
+		t.Error("Refresh after Revoke succeeded")
+	}
+}

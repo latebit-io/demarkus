@@ -234,10 +234,8 @@ func contains(haystack, needle string) bool {
 	return false
 }
 
-// TestProvisionFileBackend pins the single-host seam: Provision against the
-// file store mints once, lands the hash in the world's local tokens.toml
-// (the file the co-located demarkus-server watches), and re-provision is a
-// no-op that does not rewrite the file.
+// Invariant: file-backend Provision lands the hash in the world's local
+// tokens.toml, and a broker-restart re-provision converges without a rewrite.
 func TestProvisionFileBackend(t *testing.T) {
 	dir := t.TempDir()
 	tokensFile := filepath.Join(dir, "tokens.toml")

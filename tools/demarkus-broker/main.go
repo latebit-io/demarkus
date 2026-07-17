@@ -192,10 +192,8 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 	defer cancelSweep()
 	var sweepWG sync.WaitGroup
 	if !cfg.Sweeper.Disabled {
-		// Share the Server's refresh-token store so the sweeper
-		// retires expired grants from the same in-memory cache +
-		// store view the /device/token refresh-grant handler uses.
-		// Server owns the lifecycle; Sweeper just borrows.
+		// Server owns the refresh store's lifecycle; the sweeper borrows
+		// the same instance so both share one view of the grants.
 		sweeper := broker.NewSweeper(k8s, srv.RefreshStore(), cfg.Sweeper.Interval, log)
 		if cfg.FileBackend() {
 			// Single-instance by construction: no Lease, no election.

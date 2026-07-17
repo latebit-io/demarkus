@@ -23,7 +23,7 @@ func TestFileStoreCreateAndUpdate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if got, _ := os.ReadFile(ref.Path); string(got) != "v1" {
+	if got := mustRead(t, ref.Path); string(got) != "v1" {
 		t.Fatalf("file = %q, want v1", got)
 	}
 
@@ -32,7 +32,7 @@ func TestFileStoreCreateAndUpdate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if got, _ := os.ReadFile(ref.Path); string(got) != "v1-v2" {
+	if got := mustRead(t, ref.Path); string(got) != "v1-v2" {
 		t.Errorf("file = %q, want v1-v2", got)
 	}
 }
@@ -71,9 +71,13 @@ func TestFileStoreNoRewriteOnEqual(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Unchanged value must not be rewritten: the world server's tokens-file
-	// watcher would reload on every no-op otherwise.
+	// watcher would reload on every no-op otherwise. SameFile catches a
+	// rewrite that lands within the filesystem's mtime resolution.
 	if !after.ModTime().Equal(before.ModTime()) {
 		t.Error("file rewritten on unchanged value")
+	}
+	if !os.SameFile(before, after) {
+		t.Error("file replaced (new inode) on unchanged value")
 	}
 }
 
@@ -127,15 +131,22 @@ func TestFileStoreConcurrentMutations(t *testing.T) {
 	s := NewFileSecretStore()
 
 	const n = 20
+	errs := make(chan error, n)
 	var wg sync.WaitGroup
 	for range n {
 		wg.Go(func() {
-			_ = s.Mutate(context.Background(), ref, func(existing []byte) ([]byte, error) {
+			errs <- s.Mutate(context.Background(), ref, func(existing []byte) ([]byte, error) {
 				return append(existing, 'x'), nil
 			})
 		})
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Mutate: %v", err)
+		}
+	}
 	got, err := os.ReadFile(ref.Path)
 	if err != nil {
 		t.Fatal(err)
@@ -229,5 +240,27 @@ func TestValidateKubernetesBackendDefaults(t *testing.T) {
 	broken := strings.Replace(validConfig, "  brokerNamespace: demarkus-broker\n", "", 1)
 	if _, err := LoadConfig(writeConfig(t, broken)); err == nil {
 		t.Error("k8s mode without brokerNamespace should fail")
+	}
+}
+
+func TestValidateFileBackendPathCollisions(t *testing.T) {
+	tests := []struct {
+		name       string
+		tokensFile string
+	}{
+		{"aliases refresh state", "/var/lib/demarkus-broker/refresh_tokens.json"},
+		{"aliases write-token state", "/var/lib/demarkus-broker/demarkus-broker-write-token-team-a.json"},
+		{"aliases via non-clean path", "/var/lib/demarkus-broker/../demarkus-broker/refresh_tokens.json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := fileBackendConfig(func(s string) string {
+				return strings.Replace(s, "    tokensFile: /etc/demarkus/tokens.toml\n",
+					"    tokensFile: "+tt.tokensFile+"\n", 1)
+			})
+			if _, err := LoadConfig(writeConfig(t, body)); err == nil {
+				t.Error("expected collision error")
+			}
+		})
 	}
 }

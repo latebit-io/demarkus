@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -59,10 +60,36 @@ func (c *Config) validateStorage() error {
 		if c.Storage.Dir == "" {
 			return fmt.Errorf("storage.dir is required when storage.backend is %q", storageBackendFile)
 		}
-		return nil
+		return c.validateFilePaths()
 	}
 	if c.Server.BrokerNamespace == "" {
 		return fmt.Errorf("server.brokerNamespace is required")
+	}
+	return nil
+}
+
+// validateFilePaths rejects world tokensFile values that alias each other
+// or a broker-state file under storage.dir: two stores mutating the same
+// document would corrupt it at runtime, and the collision is only ever a
+// config mistake.
+func (c *Config) validateFilePaths() error {
+	seen := map[string]string{
+		filepath.Clean(c.refreshTokensRef().Path): "storage.dir refresh-tokens state",
+	}
+	for i := range c.Worlds {
+		w := &c.Worlds[i]
+		seen[filepath.Clean(c.worldWriteTokenRef(w.Name).Path)] = fmt.Sprintf("storage.dir write-token state for world %q", w.Name)
+	}
+	for i := range c.Worlds {
+		w := &c.Worlds[i]
+		if w.TokensFile == "" {
+			continue
+		}
+		p := filepath.Clean(w.TokensFile)
+		if other, ok := seen[p]; ok {
+			return fmt.Errorf("worlds[%d] (%s): tokensFile %q collides with %s", i, w.Name, w.TokensFile, other)
+		}
+		seen[p] = fmt.Sprintf("tokensFile of world %q", w.Name)
 	}
 	return nil
 }

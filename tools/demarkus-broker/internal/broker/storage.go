@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -166,12 +167,16 @@ func (s *fileSecretStore) Mutate(_ context.Context, ref SecretRef, mutate func([
 		return nil
 	}
 
-	// Preserve the mode of a pre-existing file (install.sh sets group-read
-	// perms so the world server user can read tokens.toml); new files are
+	// Preserve the mode and ownership of a pre-existing file (install.sh
+	// sets group-read so the world server user can read tokens.toml; a
+	// rename would otherwise re-own the file to the broker user and its
+	// primary group, silently revoking the server's read). New files are
 	// owner-only.
 	mode := os.FileMode(0o600)
+	var owner *fileOwner
 	if info, statErr := os.Stat(ref.Path); statErr == nil {
 		mode = info.Mode().Perm()
+		owner = ownerOf(info)
 	}
 	dir := filepath.Dir(ref.Path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -182,29 +187,77 @@ func (s *fileSecretStore) Mutate(_ context.Context, ref SecretRef, mutate func([
 		return fmt.Errorf("create temp for %s: %w", ref.Path, err)
 	}
 	tmpName := tmp.Name()
-	cleanup := func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+	fail := func(step string, cause error) error {
+		return errors.Join(
+			fmt.Errorf("%s for %s: %w", step, ref.Path, cause),
+			removeIfPresent(tmpName),
+		)
 	}
 	if err := tmp.Chmod(mode); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod temp for %s: %w", ref.Path, err)
+		_ = tmp.Close()
+		return fail("chmod temp", err)
+	}
+	if owner != nil {
+		if err := chownPreserving(tmpName, owner); err != nil {
+			_ = tmp.Close()
+			return fail("preserve ownership", err)
+		}
 	}
 	if _, err := tmp.Write(next); err != nil {
-		cleanup()
-		return fmt.Errorf("write temp for %s: %w", ref.Path, err)
+		_ = tmp.Close()
+		return fail("write temp", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		cleanup()
-		return fmt.Errorf("sync temp for %s: %w", ref.Path, err)
+		_ = tmp.Close()
+		return fail("sync temp", err)
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("close temp for %s: %w", ref.Path, err)
+		return fail("close temp", err)
 	}
 	if err := os.Rename(tmpName, ref.Path); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("replace %s: %w", ref.Path, err)
+		return fail("replace", err)
+	}
+	// Sync the directory so the rename itself survives a crash: file
+	// contents were fsynced above, but the new directory entry was not.
+	return syncDir(dir)
+}
+
+func removeIfPresent(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cleanup temp %s: %w", path, err)
+	}
+	return nil
+}
+
+// chownPreserving restores the original owner on the replacement file.
+// An unprivileged broker can always keep a group it belongs to; when it
+// cannot restore the uid (EPERM), the gid alone preserves the shared-group
+// read policy, so that degradation is accepted. Anything else errors: a
+// deployment where the broker can neither own nor re-group the tokens file
+// is misconfigured, and silently re-owning it would revoke the world
+// server's read on the next mutation.
+func chownPreserving(path string, owner *fileOwner) error {
+	if err := os.Chown(path, owner.uid, owner.gid); err == nil {
+		return nil
+	}
+	if err := os.Chown(path, -1, owner.gid); err != nil {
+		return fmt.Errorf("cannot preserve owner uid=%d gid=%d (run the broker as the file's owner or a member of its group): %w", owner.uid, owner.gid, err)
+	}
+	return nil
+}
+
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open dir %s for sync: %w", dir, err)
+	}
+	syncErr := d.Sync()
+	closeErr := d.Close()
+	if syncErr != nil {
+		return fmt.Errorf("sync dir %s: %w", dir, syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close dir %s: %w", dir, closeErr)
 	}
 	return nil
 }

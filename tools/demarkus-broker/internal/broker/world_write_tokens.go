@@ -109,11 +109,8 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 
 	label := worldWriteTokenLabel(worldName)
 
-	// The store mutation races concurrent broker pods on the broker record.
-	// On a fresh world: the closure mints once and the encoded
-	// record lands. On a re-provision (or a loser of the race): the
-	// closure sees existing data and returns it unchanged so the
-	// already-committed token wins.
+	// Invariant: concurrent provisioners converge on the first committed
+	// token; the closure returns existing data unchanged when present.
 	var finalRecord writeTokenRecord
 	err := s.store.Mutate(ctx, s.cfg.worldWriteTokenRef(worldName), func(existing []byte) ([]byte, error) {
 		if len(existing) > 0 {
