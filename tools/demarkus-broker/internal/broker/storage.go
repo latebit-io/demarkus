@@ -167,16 +167,18 @@ func (s *fileSecretStore) Mutate(_ context.Context, ref SecretRef, mutate func([
 		return nil
 	}
 
-	// Preserve the mode and ownership of a pre-existing file (install.sh
-	// sets group-read so the world server user can read tokens.toml; a
-	// rename would otherwise re-own the file to the broker user and its
-	// primary group, silently revoking the server's read). New files are
-	// owner-only.
+	// Preserve a pre-existing file's mode and ownership: rename would
+	// otherwise re-own it to the broker user, revoking the world server's
+	// group-read on tokens.toml. New files are owner-only.
 	mode := os.FileMode(0o600)
 	var owner *fileOwner
 	if info, statErr := os.Stat(ref.Path); statErr == nil {
 		mode = info.Mode().Perm()
 		owner = ownerOf(info)
+	} else if !os.IsNotExist(statErr) {
+		// A file that exists but cannot be statted must not be replaced
+		// with downgraded metadata.
+		return fmt.Errorf("stat %s: %w", ref.Path, statErr)
 	}
 	dir := filepath.Dir(ref.Path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -229,13 +231,9 @@ func removeIfPresent(path string) error {
 	return nil
 }
 
-// chownPreserving restores the original owner on the replacement file.
-// An unprivileged broker can always keep a group it belongs to; when it
-// cannot restore the uid (EPERM), the gid alone preserves the shared-group
-// read policy, so that degradation is accepted. Anything else errors: a
-// deployment where the broker can neither own nor re-group the tokens file
-// is misconfigured, and silently re-owning it would revoke the world
-// server's read on the next mutation.
+// chownPreserving restores the original owner; when uid restoration needs
+// privilege the gid alone keeps the shared-group read policy, so that
+// degradation is accepted. Any other failure errors rather than re-owning.
 func chownPreserving(path string, owner *fileOwner) error {
 	if err := os.Chown(path, owner.uid, owner.gid); err == nil {
 		return nil

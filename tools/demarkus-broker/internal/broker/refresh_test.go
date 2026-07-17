@@ -426,10 +426,8 @@ func TestRefreshStoreCollisionRetry(t *testing.T) {
 	}
 }
 
-// Invariant: the refresh lifecycle is backend-neutral. One
-// issue/refresh/revoke round trip against the file store, persisted to
-// storage.dir, pins the single-host path end to end (including surviving a
-// broker restart via a fresh store over the same directory).
+// Invariant: the refresh lifecycle is backend-neutral and file-backed
+// grants survive a broker restart (fresh store over the same directory).
 func TestRefreshStoreFileBackend(t *testing.T) {
 	cfg := testRefreshConfig()
 	cfg.Storage = StorageConfig{Backend: storageBackendFile, Dir: t.TempDir()}

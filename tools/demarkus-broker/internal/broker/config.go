@@ -68,10 +68,8 @@ func (c *Config) validateStorage() error {
 	return nil
 }
 
-// validateFilePaths rejects world tokensFile values that alias each other
-// or a broker-state file under storage.dir: two stores mutating the same
-// document would corrupt it at runtime, and the collision is only ever a
-// config mistake.
+// validateFilePaths rejects tokensFile values aliasing each other or a
+// broker-state file: two stores mutating one document corrupts it.
 func (c *Config) validateFilePaths() error {
 	seen := map[string]string{
 		filepath.Clean(c.refreshTokensRef().Path): "storage.dir refresh-tokens state",
