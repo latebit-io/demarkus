@@ -15,18 +15,26 @@ launch via a wrapper, so it never sits in plaintext in `.mcp.json` or in
 ## Argument
 
 ```bash
+# Join URL (preferred): one string carries the host and token.
+# Emitted by install.sh and demarkus-token join.
+/soul-join mark://kb.example.com#token=<RAW> [--insecure]
+
+# Explicit form
 /soul-join mark://soul.demarkus.io --token <TOKEN> --insecure
 ```
 
-- The host may be a `mark://host[:port]` URL or a bare host (scheme inferred).
+- **Join URL**: the `#token=` fragment supplies the capability token; the
+  helper extracts and stores it.
+- Otherwise the host may be a `mark://host[:port]` URL or a bare host.
 - `--token <TOKEN>` is the capability token for the soul. Omit only for a
   read-only / public soul. The plugin cannot mint a token for a remote server
-  (its `tokens.toml` is not local) — the user supplies one.
-- `--insecure` skips TLS cert verification (needed for some self-hosted souls;
-  `soul.demarkus.io` uses it).
+  (its `tokens.toml` is not local) — the user supplies one. Do not combine
+  with a join URL that already carries a token.
+- `--insecure` skips TLS cert verification (needed for self-signed souls with
+  either form; `soul.demarkus.io` uses it).
 
 If invoked without a host, ask for it. Do NOT guess. If the user does not give a
-token, ask whether the soul needs one before proceeding.
+join URL or token, ask whether the soul needs one before proceeding.
 
 ## Steps
 
@@ -49,13 +57,15 @@ token, ask whether the soul needs one before proceeding.
    the soul is bound to the repo:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join <host> [--token <TOKEN>] [--insecure] --bind "${CLAUDE_PROJECT_DIR}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join '<host-or-join-url>' [--token <TOKEN>] [--insecure] --bind "${CLAUDE_PROJECT_DIR}"
    ```
 
-   It normalizes the host, derives a slug from the first DNS label, writes the
-   token to `~/.demarkus/soul-<slug>.token` (mode 600), records the soul in the
-   catalog (`~/.demarkus/souls`), and binds the project. Output is line-oriented
-   `key=value`.
+   Quote the argument: a join URL's `#fragment` is shell-significant. The
+   helper normalizes the host (extracting the token from a join URL), derives
+   a slug from the first DNS label, writes the token to
+   `~/.demarkus/soul-<slug>.token` (mode 600), records the soul in the
+   catalog (`~/.demarkus/souls`), and binds the project. Output is
+   line-oriented `key=value`.
 
    - On `OK`, parse `slug=`, `host=`, `insecure=`, `token-file=`.
    - On `FAIL: <message>`, do NOT run `claude mcp add`. Show the message verbatim.
@@ -89,8 +99,9 @@ token, ask whether the soul needs one before proceeding.
 ## Don't
 
 - Don't run `claude mcp add` if step 2 emitted `FAIL`.
-- Don't read, echo, or store the token yourself — pass it to `soul-join.sh`,
-  which writes it to the 0600 file. It must never land in the transcript.
+- Don't read, echo, or store the token yourself — pass the join URL or token
+  through to the helper, which writes it to the 0600 file. A pasted join URL
+  is already in the transcript, but never repeat its fragment back in output.
 - Don't use this for an `https://` broker — that is `/knowledge-join`.
 - Don't conflate the three soul surfaces:
   - `/soul-init`: local, plugin-managed demarkus-server, plugin-minted token.

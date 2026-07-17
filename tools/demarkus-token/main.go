@@ -7,17 +7,20 @@
 //	demarkus-token generate -label fritz-laptop -paths "/docs/*" -ops "publish" -tokens tokens.toml
 //	demarkus-token list -tokens tokens.toml
 //	demarkus-token revoke -label fritz-laptop -tokens tokens.toml
+//	demarkus-token generate -label phone -tokens tokens.toml | demarkus-token join -host kb.example.com
 package main
 
 import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sort"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/joinurl"
 	"github.com/latebit-io/demarkus/protocol/token"
 )
 
@@ -37,6 +40,8 @@ func main() {
 		cmdList(os.Args[2:])
 	case "revoke":
 		cmdRevoke(os.Args[2:])
+	case "join":
+		cmdJoin(os.Args[2:])
 	case "version", "-version", "--version":
 		fmt.Println(version)
 	default:
@@ -51,7 +56,47 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  generate  Generate a new auth token\n")
 	fmt.Fprintf(os.Stderr, "  list      List tokens in a tokens file\n")
 	fmt.Fprintf(os.Stderr, "  revoke    Revoke a token by label\n")
+	fmt.Fprintf(os.Stderr, "  join      Build a paste-ready join URL from a token and host\n")
 	fmt.Fprintf(os.Stderr, "  version   Print version and exit\n")
+}
+
+func cmdJoin(args []string) {
+	fs := flag.NewFlagSet("join", flag.ExitOnError)
+	host := fs.String("host", "", "server host[:port] the join URL targets (required)")
+	tok := fs.String("token", "", "raw token to embed; reads stdin when omitted (pipe from generate)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: demarkus-token join -host HOST [-token RAW]\n\n")
+		fmt.Fprintf(os.Stderr, "Prints a single join URL carrying the token, for /soul-join or\n")
+		fmt.Fprintf(os.Stderr, "'demarkus join'. Compose with generate:\n")
+		fmt.Fprintf(os.Stderr, "  demarkus-token generate -label phone -tokens tokens.toml | demarkus-token join -host kb.example.com\n\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		log.Fatalf("parse flags: %v", err)
+	}
+	if *host == "" {
+		fmt.Fprintf(os.Stderr, "error: -host is required\n\n")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	raw := strings.TrimSpace(*tok)
+	if raw == "" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			log.Fatalf("read token from stdin: %v", err)
+		}
+		raw = strings.TrimSpace(string(data))
+	}
+	if raw == "" {
+		log.Fatal("nothing to embed: provide -token or pipe one in")
+	}
+
+	u, err := joinurl.Build(joinurl.Join{Host: *host, Token: raw})
+	if err != nil {
+		log.Fatalf("build join URL: %v", err)
+	}
+	fmt.Println(u)
 }
 
 func cmdGenerate(args []string) {
