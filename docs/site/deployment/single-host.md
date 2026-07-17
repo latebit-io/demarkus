@@ -38,6 +38,23 @@ The broker binds **loopback only** — its advertised `publicURL` is served by y
 
 Each component runs as its own hardened system user (`ProtectSystem=strict`, minimal `ReadWritePaths`).
 
+## Which tier do you need?
+
+Demarkus onboarding splits by what you want to do, not by where you deploy. Pick the smallest tier that covers your case.
+
+| You want to... | Setup | IdP needed? |
+|---|---|---|
+| **Read** documents (browser or client) | library in quic mode, or any client (`demarkus`, TUI, MCP) | no |
+| **Write** from the CLI, an agent, or Obsidian | a capability token (`demarkus-token generate`), delivered as a [join URL](../tools/index.md) | no |
+| **Onboard people to a shared knowledge system** | broker + OIDC; users run `/knowledge-join <url>` and log in | yes |
+| **Edit in the browser** (the library cataloging desk) | library in **broker mode** + OIDC | yes |
+
+Only the last two need an identity provider, and only browser editing forces it: the library's cataloging desk writes exclusively through broker mode (the direct-QUIC path is read-only by design). Reading and tool-based writing never need an IdP.
+
+### "An IdP" does not mean Google
+
+The broker speaks standard OIDC, so **any** provider works, including a self-hosted one. If you do not want a commercial IdP in the loop, run [Dex](https://dexidp.io/) (a single small container), [Keycloak](https://www.keycloak.org/), or [Authentik](https://goauthentik.io/) and point `oidc.issuer` at it. This keeps a browser-editable, multi-user deployment fully self-hosted with no central authority.
+
 ## How single-host mode works
 
 The broker's `storage.backend: file` replaces its Kubernetes Secret storage:
@@ -50,11 +67,13 @@ The generated `/etc/demarkus-broker/config.yaml` registers the local world as `s
 
 ## OIDC application setup
 
-Register an OAuth app at your IdP (Google Cloud Console, GitHub Developer Settings, Okta, ...):
+Register an OAuth app at your IdP — a commercial one (Google Cloud Console, GitHub Developer Settings, Okta) or a self-hosted one (Dex, Keycloak, Authentik):
 
 - **Redirect URI**: `<broker-public-url>/auth/callback` — must match `oidc.redirectURL` exactly.
 - The client secret never lives in `config.yaml`: it rides `OIDC_CLIENT_SECRET` in `/etc/demarkus-broker/env` (mode 640).
 - Restrict who may log in with `oidc.allowDomains` (hosted-domain allowlist) and per-world `allow` lists.
+
+For a fully self-hosted stack, run Dex alongside the broker (it needs only a static config and a listen port), register the broker as a Dex client, and set `oidc.issuer` to the Dex URL. Everything else on this page is unchanged.
 
 Agents join with `/knowledge-join <broker-public-url>` from the demarkus-knowledge plugin.
 
