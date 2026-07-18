@@ -169,7 +169,8 @@ authelia_rand() {
 
 # install_auth deploys Authelia. All secrets are generated with the freshly
 # installed authelia binary (no extra dependencies). Prints key=value results
-# the caller consumes: owner_user, owner_password, broker_client_secret.
+# the caller consumes: owner_user, owner_password (empty on a rerun),
+# owner_email, broker_client_secret.
 install_auth() {
   local host="$1"
   local owner_email="$2"
@@ -210,19 +211,27 @@ install_auth() {
   # rerun we must NOT regenerate secrets: the kept configuration.yml already
   # holds the broker client digest, the storage encryption key, and the JWKS,
   # so fresh values would desync broker OIDC and print a wrong owner password.
-  local broker_client_secret owner_user owner_password
+  local broker_client_secret="" owner_user="" owner_password="" owner_email_effective=""
   if [ -f "${AUTH_CONFIG_DIR}/configuration.yml" ]; then
     log_info "Existing Authelia config found; reusing persisted credentials" >&2
     # The broker holds the plaintext that matches the kept digest; reuse it.
-    broker_client_secret=$(sed -n 's/^OIDC_CLIENT_SECRET=//p' "${BROKER_CONFIG_DIR}/env" 2>/dev/null | head -1)
+    if [ -f "${BROKER_CONFIG_DIR}/env" ]; then
+      broker_client_secret=$(sed -n 's/^OIDC_CLIENT_SECRET=//p' "${BROKER_CONFIG_DIR}/env" | head -1)
+    fi
     if [ -z "$broker_client_secret" ] || [ "$broker_client_secret" = "EDIT-ME" ]; then
       log_error "Cannot recover the broker OIDC secret from ${BROKER_CONFIG_DIR}/env; the prior install is incomplete. Uninstall and reinstall." >&2
       exit 1
     fi
-    # The owner's plaintext password cannot be recovered from its hash; keep
-    # users.yml as-is and signal the card to report it unchanged (empty).
-    owner_user=$(sed -n 's/^  \([A-Za-z0-9._-][A-Za-z0-9._-]*\):$/\1/p' "${AUTH_CONFIG_DIR}/users.yml" 2>/dev/null | head -1)
+    # Recover the exact owner username and email from the retained users.yml so
+    # the card matches the real account. Usernames may contain '+' (from
+    # plus-addressed emails); the plaintext password can't be recovered from its
+    # hash, so signal the card to report it unchanged (empty).
+    if [ -f "${AUTH_CONFIG_DIR}/users.yml" ]; then
+      owner_user=$(sed -n 's/^  \([A-Za-z0-9._+-][A-Za-z0-9._+-]*\):$/\1/p' "${AUTH_CONFIG_DIR}/users.yml" | head -1)
+      owner_email_effective=$(sed -n 's/^    email: //p' "${AUTH_CONFIG_DIR}/users.yml" | head -1)
+    fi
     [ -z "$owner_user" ] && owner_user="owner"
+    [ -z "$owner_email_effective" ] && owner_email_effective="$owner_email"
     owner_password=""
   else
     # Secrets: raw values only ever exist in this process and the config files.
@@ -309,6 +318,7 @@ install_auth() {
     } > "${AUTH_CONFIG_DIR}/configuration.yml"
     chown root:"$AUTH_SERVICE" "${AUTH_CONFIG_DIR}/configuration.yml"
     chmod 640 "${AUTH_CONFIG_DIR}/configuration.yml"
+    owner_email_effective="$owner_email"
   fi
 
   cat > "${SYSTEMD_DIR}/${AUTH_SERVICE}.service" << EOF
@@ -344,6 +354,7 @@ EOF
 
   printf 'owner_user=%s\n' "$owner_user"
   printf 'owner_password=%s\n' "$owner_password"
+  printf 'owner_email=%s\n' "$owner_email_effective"
   printf 'broker_client_secret=%s\n' "$broker_client_secret"
 }
 
@@ -474,8 +485,12 @@ install_agent() {
   # hot-reloads it) and handed to the agent via DEMARKUS_AUTH. generate
   # prints only the raw token on stdout; all messages go to stderr. Reuse the
   # existing token on a rerun so we never leave a second valid credential behind.
-  local agent_token
-  agent_token=$(sed -n 's/^DEMARKUS_AUTH=//p' "${AGENT_CONFIG_DIR}/env" 2>/dev/null | head -1)
+  local agent_token=""
+  # Guard the read: on a fresh install the env file does not exist yet, and an
+  # unguarded sed on a missing file trips pipefail and aborts before minting.
+  if [ -f "${AGENT_CONFIG_DIR}/env" ]; then
+    agent_token=$(sed -n 's/^DEMARKUS_AUTH=//p' "${AGENT_CONFIG_DIR}/env" | head -1)
+  fi
   if [ -n "$agent_token" ]; then
     log_info "Reusing the existing agent publish token"
   else
@@ -604,7 +619,7 @@ EOF
     log_info "Keeping existing Caddyfile: ${PROXY_CONFIG_DIR}/Caddyfile"
     # Upgrade path: a Caddyfile from before the soul route exists needs the
     # block appended, else soul.<host> never gets a cert and memory stays pending.
-    if ! grep -q "^soul.${host} {" "${PROXY_CONFIG_DIR}/Caddyfile"; then
+    if ! grep -Fqx "soul.${host} {" "${PROXY_CONFIG_DIR}/Caddyfile"; then
       cat >> "${PROXY_CONFIG_DIR}/Caddyfile" << EOF
 
 soul.${host} {
@@ -737,8 +752,12 @@ install_memory() {
   # plugin needs. Appended to the broker-owned tokens.toml (server hot-reloads).
   # The raw token is stashed root-only so reruns reuse it (no duplicate
   # credential) and the operator can recover the join URL later.
-  local soul_token
-  soul_token=$(cat "$SOUL_TOKEN_FILE" 2>/dev/null | tr -d '[:space:]')
+  local soul_token=""
+  # Guard the read: the stash is absent on a fresh install, and an unguarded
+  # read on a missing file trips pipefail and aborts before minting.
+  if [ -f "$SOUL_TOKEN_FILE" ]; then
+    soul_token=$(tr -d '[:space:]' < "$SOUL_TOKEN_FILE")
+  fi
   if [ -n "$soul_token" ]; then
     log_info "Reusing the existing soul capability token" >&2
   else
@@ -954,11 +973,31 @@ main() {
   # The librarian LLM key rides a root-readable file, never argv (which leaks via
   # ps and shell history) — same contract as install.sh's secret-file flags.
   if [ -n "$librarian_key_file" ]; then
-    if [ ! -r "$librarian_key_file" ]; then
-      log_error "Librarian key file not readable: ${librarian_key_file}"
+    # Require a regular file (-r alone accepts FIFOs/devices, which would block
+    # the read) and refuse a group/world-accessible one, mirroring install.sh's
+    # secret-file contract. Read only the first line (bounded).
+    if [ ! -f "$librarian_key_file" ] || [ ! -r "$librarian_key_file" ]; then
+      log_error "Librarian key file must be a readable regular file: ${librarian_key_file}"
       exit 1
     fi
-    librarian_key=$(tr -d '\r\n' < "$librarian_key_file")
+    local key_mode key_owner
+    key_mode=$(stat -c '%a' "$librarian_key_file" 2>/dev/null \
+      || stat -f '%Lp' "$librarian_key_file" 2>/dev/null || echo "")
+    key_owner=$(stat -c '%u' "$librarian_key_file" 2>/dev/null \
+      || stat -f '%u' "$librarian_key_file" 2>/dev/null || echo "")
+    if [ -z "$key_mode" ]; then
+      log_error "Could not stat librarian key file: ${librarian_key_file}"
+      exit 1
+    fi
+    if [ "$(( 8#$key_mode & 0077 ))" -ne 0 ]; then
+      log_error "Librarian key file ${librarian_key_file} is group/world-accessible (mode ${key_mode}); chmod 600 it first"
+      exit 1
+    fi
+    if [ -n "$key_owner" ] && [ "$key_owner" != "$(id -u)" ] && [ "$key_owner" != "0" ]; then
+      log_error "Librarian key file ${librarian_key_file} must be owned by you or root (owner uid ${key_owner})"
+      exit 1
+    fi
+    librarian_key=$(head -1 "$librarian_key_file" | tr -d '[:space:]')
     if [ -z "$librarian_key" ]; then
       log_error "Librarian key file is empty: ${librarian_key_file}"
       exit 1
@@ -998,23 +1037,31 @@ main() {
     migrate_host "$prev_host" "$host"
   fi
 
-  local auth_out owner_user owner_password broker_client_secret
-  auth_out=$(install_auth "$host" "$owner_email" "$tmpdir")
-  owner_user=$(printf '%s\n' "$auth_out" | sed -n 's/^owner_user=//p')
-  owner_password=$(printf '%s\n' "$auth_out" | sed -n 's/^owner_password=//p')
-  broker_client_secret=$(printf '%s\n' "$auth_out" | sed -n 's/^broker_client_secret=//p')
+  # Provisioning functions are invoked directly (not in a command substitution)
+  # so their `exit 1` on error terminates the install instead of only the
+  # subshell; their key=value results go to a temp file we parse afterward.
+  local owner_user owner_password owner_email_out broker_client_secret
+  install_auth "$host" "$owner_email" "$tmpdir" > "${tmpdir}/auth_out"
+  owner_user=$(sed -n 's/^owner_user=//p' "${tmpdir}/auth_out")
+  owner_password=$(sed -n 's/^owner_password=//p' "${tmpdir}/auth_out")
+  owner_email_out=$(sed -n 's/^owner_email=//p' "${tmpdir}/auth_out")
+  broker_client_secret=$(sed -n 's/^broker_client_secret=//p' "${tmpdir}/auth_out")
   # owner_password is intentionally empty on a rerun (the plaintext can't be
   # recovered); only owner_user and the broker secret are load-bearing here.
   if [ -z "$owner_user" ] || [ -z "$broker_client_secret" ]; then
     log_error "Authelia install did not return the generated credentials; aborting"
     exit 1
   fi
+  # On a rerun the account's real email comes from the retained users.yml.
+  [ -n "$owner_email_out" ] && owner_email="$owner_email_out"
 
   # Library SSO credential: broker holds the hash, library holds the secret.
   # Reuse the persisted secret on a rerun so the broker's kept webClients hash
   # stays valid (a fresh secret would break library login).
-  local lib_secret lib_hash
-  lib_secret=$(sed -n 's/^DEMARKUS_CLIENT_SECRET=//p' "${LIBRARY_CONFIG_DIR}/env" 2>/dev/null | head -1)
+  local lib_secret="" lib_hash
+  if [ -f "${LIBRARY_CONFIG_DIR}/env" ]; then
+    lib_secret=$(sed -n 's/^DEMARKUS_CLIENT_SECRET=//p' "${LIBRARY_CONFIG_DIR}/env" | head -1)
+  fi
   if [ -z "$lib_secret" ]; then
     lib_secret=$(head -c 30 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 40)
   fi
@@ -1027,10 +1074,10 @@ main() {
 
   # Memory is on by default: the world doubles as a remote soul. Runs after
   # Caddy so the soul.<host> cert is already being obtained.
-  local mem_out soul_token soul_status
-  mem_out=$(install_memory "$host")
-  soul_token=$(printf '%s\n' "$mem_out" | sed -n 's/^soul_token=//p')
-  soul_status=$(printf '%s\n' "$mem_out" | sed -n 's/^soul_status=//p')
+  local soul_token soul_status
+  install_memory "$host" > "${tmpdir}/mem_out"
+  soul_token=$(sed -n 's/^soul_token=//p' "${tmpdir}/mem_out")
+  soul_status=$(sed -n 's/^soul_status=//p' "${tmpdir}/mem_out")
   if [ -z "$soul_token" ]; then
     log_error "Memory setup did not return a soul token; aborting"
     exit 1
