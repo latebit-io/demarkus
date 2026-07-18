@@ -90,7 +90,7 @@ To put the library behind broker SSO (org login, per-reader identity):
    webClients:
      - clientID: library
        clientSecretHash: <sha256-hex>
-       redirectURIs: ["https://<library-host>/auth/broker/callback"]
+       redirectURIs: ["https://<library-host>/auth/callback"]
        name: reading room
    ```
 

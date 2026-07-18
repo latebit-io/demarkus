@@ -894,11 +894,8 @@ install_broker() {
       printf '    tokensFile: %s\n' "$tokens_file"
       printf '    internalAddress: %s\n' "$world_host"
       printf '    defaultToken:\n      paths: ["/*"]\n'
-      printf '# Library SSO (optional): register the reading room as a\n'
-      printf '# confidential web client. See the single-host deployment docs.\n'
-      printf '# webClients:\n#   - clientID: library\n'
-      printf '#     clientSecretHash: <sha256-hex of a generated secret>\n'
-      printf '#     redirectURIs: ["https://library.example.com/auth/broker/callback"]\n'
+      printf '# Library SSO (register the reading room as a confidential web\n'
+      printf '# client): see https://www.demarkus.io/deployment/single-host/\n'
     } > "${BROKER_CONFIG_DIR}/config.yaml"
     chown root:"$BROKER_SERVICE" "${BROKER_CONFIG_DIR}/config.yaml"
     chmod 640 "${BROKER_CONFIG_DIR}/config.yaml"
@@ -1018,14 +1015,8 @@ install_library() {
       printf 'DEMARKUS_TRANSPORT=quic\n'
       printf 'DEMARKUS_HOST=%s\n' "$lib_host"
       printf 'DEMARKUS_INSECURE=%s\n' "$lib_insecure"
-      printf '# Broker/SSO mode (after configuring the broker and a webClients\n'
-      printf '# registry entry; see the single-host deployment docs):\n'
-      printf '# DEMARKUS_TRANSPORT=broker\n'
-      printf '# DEMARKUS_BROKER_URL=https://EDIT-ME.example.com\n'
-      printf '# DEMARKUS_CLIENT_ID=library\n'
-      printf '# DEMARKUS_CLIENT_SECRET=EDIT-ME\n'
-      printf '# DEMARKUS_REDIRECT_URI=https://library.EDIT-ME/auth/broker/callback\n'
-      printf '# DEMARKUS_WORLD=soul\n'
+      printf '# Broker/SSO mode (per-reader login, browser editing): see\n'
+      printf '# https://www.demarkus.io/deployment/single-host/\n'
     } > "${LIBRARY_CONFIG_DIR}/env"
     chown root:"$LIBRARY_SERVICE" "${LIBRARY_CONFIG_DIR}/env"
     chmod 640 "${LIBRARY_CONFIG_DIR}/env"
