@@ -8,8 +8,6 @@ on:
 permissions:
   contents: write
   packages: write
-  # actions: write lets the final job dispatch the pin-bump workflow.
-  actions: write
 
 jobs:
   detect-changes:
@@ -548,6 +546,10 @@ jobs:
     needs: [release-server, release-client, release-tools]
     if: ${{ !cancelled() && (needs.release-server.result == 'success' || needs.release-client.result == 'success' || needs.release-tools.result == 'success') }}
     runs-on: ubuntu-latest
+    # Job-level permissions replace the workflow block: this job only
+    # dispatches, so it gets exactly actions: write and nothing else.
+    permissions:
+      actions: write
     steps:
       - name: Trigger plugin pin bump
         env:
