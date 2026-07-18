@@ -10,7 +10,7 @@ Demarkus has three install paths, distinguished by **where it runs and who reach
 |---|---|---|---|
 | **demarkus-memory plugin** (`/soul-init`) | your laptop | local only, no ports, no TLS | a personal soul for one agent; nothing to operate |
 | **`install.sh`** | any Linux (or macOS) host | local by default; public with `--domain` | one server: a LAN/dev world, or a public server with real TLS |
-| **`install-stack.sh`** (the appliance) | a **public** Linux VPS | public HTTPS on 80/443 | the full self-hosted knowledge system in one command (see [the five-minute appliance](../deployment/appliance.md)) |
+| **`install-stack.sh`** (the appliance) | a **public** Linux VPS | public HTTPS on 80/443 | the full self-hosted knowledge system in one command, plus the world as your personal remote soul (see [the five-minute appliance](../deployment/appliance.md)) |
 
 The appliance is **not** a local tool: it defaults to `<public-ip>.sslip.io` and provisions Let's Encrypt certificates, both of which need a reachable public address. For a single server that also runs fine on a laptop or private network, use `install.sh` without `--domain`. For a personal, zero-exposure soul, use the plugin.
 

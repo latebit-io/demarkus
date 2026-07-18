@@ -1,6 +1,6 @@
 # The Five-Minute Appliance
 
-Stand up a complete, fully self-hosted knowledge system on one Linux VPS with a single command: world server, knowledge-system broker, web reading room with browser editing, a self-hosted identity provider (Authelia), automatic HTTPS (Caddy), and a background indexing agent. No Kubernetes, no domain, no OAuth app registration, no config files.
+Stand up a complete, fully self-hosted knowledge system on one Linux VPS with a single command: world server, knowledge-system broker, web reading room with browser editing, a self-hosted identity provider (Authelia), automatic HTTPS (Caddy), and a background indexing agent. The same world doubles as your personal remote memory — a soul the demarkus-memory plugin joins over the mark protocol. No Kubernetes, no domain, no OAuth app registration, no config files.
 
 ## Quick start
 
@@ -20,6 +20,9 @@ That is the whole thing. In about two minutes the installer prints a card:
   Owner email:            owner@203.0.113.7.sslip.io
   Agents join with:       /knowledge-join https://broker.203.0.113.7.sslip.io
   Librarian AI:           off (add LLM_API_KEY to /etc/demarkus-library/env)
+
+  Personal memory (demarkus-memory plugin):
+    /soul-join mark://soul.203.0.113.7.sslip.io:6309#token=eyJ...
 ```
 
 Open the library URL, log in with the printed credentials, and you have a working, versioned, browser-editable knowledge base with agent onboarding.
@@ -57,6 +60,7 @@ Everything else is generated: the owner password, all Authelia secrets, the brok
 | Authelia | `demarkus-auth` | loopback :9091 | self-hosted OIDC provider |
 | Caddy | `caddy` | :80/:443 (public) | automatic HTTPS, routes the three subdomains |
 | Indexing agent | `demarkus-agent` | outbound | crawls the world, republishes `/graph.md` every 6h |
+| Soul cert sync | `demarkus-soul-certsync.timer` | — | copies Caddy's `soul.<host>` cert to the world every 12h (renewal) |
 
 Every service is a hardened systemd unit (`ProtectSystem=strict`, minimal `ReadWritePaths`, its own system user). No container runtime is installed; every component is a native binary.
 
@@ -69,7 +73,16 @@ The stack ships [Authelia](https://www.authelia.com/) as a native binary — no 
 - **Change the owner password**: edit `/etc/demarkus-auth/users.yml`, then `systemctl restart demarkus-auth`.
 - **Enable the librarian AI**: add `LLM_API_KEY=...` to `/etc/demarkus-library/env`, then `systemctl restart demarkus-library`.
 - **Add agents**: from Claude Code, `/knowledge-join https://broker.<host>` and log in.
+- **Connect memory**: run the printed `/soul-join mark://soul.<host>:6309#token=...` from the demarkus-memory plugin.
 - **Uninstall everything**: `demarkus-stack uninstall`.
+
+## Personal memory: the world is also your soul
+
+The appliance's world server is exposed a second way — as `soul.<host>` on UDP 6309 — so the [demarkus-memory plugin](../tools/index.md) can use it as a remote soul. Run the printed `/soul-join` line and your agent's memory persists to the same versioned store the knowledge system and reading room already serve. One world, three doors: memory writes over the mark protocol with a capability token (no login), while the knowledge system and library sit behind broker SSO.
+
+The `soul.<host>` subdomain gets its own real Let's Encrypt certificate (obtained by Caddy, synced into the world by a 12h timer), so remote clients connect and validate cleanly with no `--insecure`. On a brand-new droplet the certificate can take a few seconds to issue; if the card prints a "still provisioning" note, use `--insecure` until the renewal timer lands it, then drop the flag.
+
+The memory token grants direct publish access to the world and bypasses the broker's OIDC allowlists by design (it is the operator's own credential). It is printed once, in the card. For a single-operator appliance that is the point; if you are running a shared knowledge base and do not want a token-only write path, simply do not distribute the printed `/soul-join` line.
 
 ## Certificates on first load
 
