@@ -56,6 +56,10 @@ WORLD_SERVICE="demarkus"
 WORLD_GROUP="demarkus"
 WORLD_PUBLIC_PORT="6309"
 WORLD_TLS_DIR="/etc/demarkus/tls"
+SOUL_TOKEN_FILE="/etc/demarkus/soul-join.token"
+# Records the host the stack is currently configured for, so a rerun with a
+# different --domain migrates in place instead of leaving stale per-host config.
+STACK_HOST_FILE="/etc/demarkus/stack-host"
 CERTSYNC_SERVICE="demarkus-soul-certsync"
 CERTSYNC_BIN="${INSTALL_DIR}/demarkus-soul-certsync"
 
@@ -113,6 +117,27 @@ resolve_stack_host() {
     exit 1
   fi
   printf '%s.sslip.io' "$ip"
+}
+
+# migrate_host rewrites every per-host URL/domain from old to new across the
+# config files, in place, so a rerun with a different --domain switches hostname
+# while preserving all secrets and data (the host only ever appears as a
+# subdomain or cookie-domain substring, so a scoped substitution is exact). The
+# caller restarts the affected services afterward. Library env is regenerated
+# each run anyway; it is included for completeness.
+migrate_host() {
+  local old="$1" new="$2"
+  # Escape regex metacharacters (notably dots) in the old host pattern.
+  local esc_old
+  esc_old=$(printf '%s' "$old" | sed 's/[][\.*^$/]/\\&/g')
+  local f
+  for f in "${AUTH_CONFIG_DIR}/configuration.yml" "${BROKER_CONFIG_DIR}/config.yaml" \
+           "${PROXY_CONFIG_DIR}/Caddyfile" "${LIBRARY_CONFIG_DIR}/env"; do
+    if [ -f "$f" ]; then
+      sed -i "s/${esc_old}/${new}/g" "$f" || { log_error "Host migration failed rewriting ${f}"; exit 1; }
+    fi
+  done
+  log_info "Rewrote per-host config ${old} -> ${new}"
 }
 
 # --- base demarkus components (delegated to install.sh) -------------------------
@@ -181,61 +206,79 @@ install_auth() {
   chown "$AUTH_SERVICE":"$AUTH_SERVICE" "$AUTH_STATE_DIR"
   chmod 700 "$AUTH_STATE_DIR"
 
-  # Secrets: raw values only ever exist in this process and the config files.
-  local session_secret storage_key jwt_secret hmac_secret
-  session_secret=$(authelia_rand)
-  storage_key=$(authelia_rand)
-  jwt_secret=$(authelia_rand)
-  hmac_secret=$(authelia_rand)
-  if [ -z "$session_secret" ] || [ -z "$storage_key" ] || [ -z "$jwt_secret" ] || [ -z "$hmac_secret" ]; then
-    log_error "Authelia secret generation failed (crypto rand output not recognized)" >&2
-    exit 1
-  fi
-
-  # Broker OIDC client credential: authelia generates the random secret AND
-  # its digest in one call; plaintext goes to the broker env, digest here.
-  local pbkdf_out broker_client_secret broker_client_digest
-  pbkdf_out=$("${INSTALL_DIR}/authelia" crypto hash generate pbkdf2 --variant sha512 --random --random.length 40 --random.charset alphanumeric 2>/dev/null)
-  broker_client_secret=$(printf '%s\n' "$pbkdf_out" | sed -n 's/^Random Password: //p')
-  broker_client_digest=$(printf '%s\n' "$pbkdf_out" | sed -n 's/^Digest: //p')
-
-  # Owner account: random password, surfaced once in the summary card.
-  local argon_out owner_user owner_password owner_digest
-  owner_user="${owner_email%%@*}"
-  [ -z "$owner_user" ] && owner_user="owner"
-  argon_out=$("${INSTALL_DIR}/authelia" crypto hash generate argon2 --random --random.length 24 --random.charset alphanumeric 2>/dev/null)
-  owner_password=$(printf '%s\n' "$argon_out" | sed -n 's/^Random Password: //p')
-  owner_digest=$(printf '%s\n' "$argon_out" | sed -n 's/^Digest: //p')
-
-  if [ -z "$broker_client_secret" ] || [ -z "$broker_client_digest" ] || [ -z "$owner_password" ] || [ -z "$owner_digest" ]; then
-    log_error "Authelia hash generation failed (crypto hash output not recognized)" >&2
-    exit 1
-  fi
-
-  # OIDC issuer signing key (authelia writes into an existing directory).
-  mkdir -p "${tmpdir}/authelia-jwks"
-  "${INSTALL_DIR}/authelia" crypto pair rsa generate --bits 2048 --directory "${tmpdir}/authelia-jwks" >/dev/null 2>&1
-  if [ ! -f "${tmpdir}/authelia-jwks/private.pem" ]; then
-    log_error "Authelia JWKS key generation failed" >&2
-    exit 1
-  fi
-
-  if [ ! -f "${AUTH_CONFIG_DIR}/users.yml" ]; then
-    {
-      printf 'users:\n'
-      printf '  %s:\n' "$owner_user"
-      printf '    displayname: "%s"\n' "$owner_user"
-      printf '    password: "%s"\n' "$owner_digest"
-      printf '    email: %s\n' "$owner_email"
-      printf '    groups:\n      - admins\n'
-    } > "${AUTH_CONFIG_DIR}/users.yml"
-    chown root:"$AUTH_SERVICE" "${AUTH_CONFIG_DIR}/users.yml"
-    chmod 640 "${AUTH_CONFIG_DIR}/users.yml"
+  # A completed prior install is identified by its configuration.yml. On a
+  # rerun we must NOT regenerate secrets: the kept configuration.yml already
+  # holds the broker client digest, the storage encryption key, and the JWKS,
+  # so fresh values would desync broker OIDC and print a wrong owner password.
+  local broker_client_secret owner_user owner_password
+  if [ -f "${AUTH_CONFIG_DIR}/configuration.yml" ]; then
+    log_info "Existing Authelia config found; reusing persisted credentials" >&2
+    # The broker holds the plaintext that matches the kept digest; reuse it.
+    broker_client_secret=$(sed -n 's/^OIDC_CLIENT_SECRET=//p' "${BROKER_CONFIG_DIR}/env" 2>/dev/null | head -1)
+    if [ -z "$broker_client_secret" ] || [ "$broker_client_secret" = "EDIT-ME" ]; then
+      log_error "Cannot recover the broker OIDC secret from ${BROKER_CONFIG_DIR}/env; the prior install is incomplete. Uninstall and reinstall." >&2
+      exit 1
+    fi
+    # The owner's plaintext password cannot be recovered from its hash; keep
+    # users.yml as-is and signal the card to report it unchanged (empty).
+    owner_user=$(sed -n 's/^  \([A-Za-z0-9._-][A-Za-z0-9._-]*\):$/\1/p' "${AUTH_CONFIG_DIR}/users.yml" 2>/dev/null | head -1)
+    [ -z "$owner_user" ] && owner_user="owner"
+    owner_password=""
   else
-    log_info "Keeping existing Authelia users: ${AUTH_CONFIG_DIR}/users.yml" >&2
-  fi
+    # Secrets: raw values only ever exist in this process and the config files.
+    local session_secret storage_key jwt_secret hmac_secret
+    session_secret=$(authelia_rand)
+    storage_key=$(authelia_rand)
+    jwt_secret=$(authelia_rand)
+    hmac_secret=$(authelia_rand)
+    if [ -z "$session_secret" ] || [ -z "$storage_key" ] || [ -z "$jwt_secret" ] || [ -z "$hmac_secret" ]; then
+      log_error "Authelia secret generation failed (crypto rand output not recognized)" >&2
+      exit 1
+    fi
 
-  if [ ! -f "${AUTH_CONFIG_DIR}/configuration.yml" ]; then
+    # Broker OIDC client credential: authelia generates the random secret AND
+    # its digest in one call; plaintext goes to the broker env, digest here.
+    local pbkdf_out broker_client_digest
+    pbkdf_out=$("${INSTALL_DIR}/authelia" crypto hash generate pbkdf2 --variant sha512 --random --random.length 40 --random.charset alphanumeric 2>/dev/null)
+    broker_client_secret=$(printf '%s\n' "$pbkdf_out" | sed -n 's/^Random Password: //p')
+    broker_client_digest=$(printf '%s\n' "$pbkdf_out" | sed -n 's/^Digest: //p')
+
+    # Owner account: random password, surfaced once in the summary card.
+    local argon_out owner_digest
+    owner_user="${owner_email%%@*}"
+    [ -z "$owner_user" ] && owner_user="owner"
+    argon_out=$("${INSTALL_DIR}/authelia" crypto hash generate argon2 --random --random.length 24 --random.charset alphanumeric 2>/dev/null)
+    owner_password=$(printf '%s\n' "$argon_out" | sed -n 's/^Random Password: //p')
+    owner_digest=$(printf '%s\n' "$argon_out" | sed -n 's/^Digest: //p')
+
+    if [ -z "$broker_client_secret" ] || [ -z "$broker_client_digest" ] || [ -z "$owner_password" ] || [ -z "$owner_digest" ]; then
+      log_error "Authelia hash generation failed (crypto hash output not recognized)" >&2
+      exit 1
+    fi
+
+    # OIDC issuer signing key (authelia writes into an existing directory).
+    mkdir -p "${tmpdir}/authelia-jwks"
+    "${INSTALL_DIR}/authelia" crypto pair rsa generate --bits 2048 --directory "${tmpdir}/authelia-jwks" >/dev/null 2>&1
+    if [ ! -f "${tmpdir}/authelia-jwks/private.pem" ]; then
+      log_error "Authelia JWKS key generation failed" >&2
+      exit 1
+    fi
+
+    if [ ! -f "${AUTH_CONFIG_DIR}/users.yml" ]; then
+      {
+        printf 'users:\n'
+        printf '  %s:\n' "$owner_user"
+        printf '    displayname: "%s"\n' "$owner_user"
+        printf '    password: "%s"\n' "$owner_digest"
+        printf '    email: %s\n' "$owner_email"
+        printf '    groups:\n      - admins\n'
+      } > "${AUTH_CONFIG_DIR}/users.yml"
+      chown root:"$AUTH_SERVICE" "${AUTH_CONFIG_DIR}/users.yml"
+      chmod 640 "${AUTH_CONFIG_DIR}/users.yml"
+    else
+      log_info "Keeping existing Authelia users: ${AUTH_CONFIG_DIR}/users.yml" >&2
+    fi
+
     {
       printf 'server:\n  address: "tcp://127.0.0.1:9091"\n'
       printf 'log:\n  level: info\n'
@@ -266,8 +309,6 @@ install_auth() {
     } > "${AUTH_CONFIG_DIR}/configuration.yml"
     chown root:"$AUTH_SERVICE" "${AUTH_CONFIG_DIR}/configuration.yml"
     chmod 640 "${AUTH_CONFIG_DIR}/configuration.yml"
-  else
-    log_info "Keeping existing Authelia config: ${AUTH_CONFIG_DIR}/configuration.yml" >&2
   fi
 
   cat > "${SYSTEMD_DIR}/${AUTH_SERVICE}.service" << EOF
@@ -376,7 +417,12 @@ configure_library() {
     fi
   } > "$env"
   chmod 640 "$env"
-  chown root:"$LIBRARY_SERVICE" "$env" 2>/dev/null || true
+  # The env holds the OIDC client secret; a failed chown would leave the
+  # library unable to read it, so surface it rather than swallow.
+  if ! chown root:"$LIBRARY_SERVICE" "$env"; then
+    log_error "Could not chown ${env} to ${LIBRARY_SERVICE}; the library could not read its secret"
+    exit 1
+  fi
   systemctl restart "$LIBRARY_SERVICE"
   if [ -n "$librarian_key" ]; then
     log_info "Library in SSO mode with the librarian AI enabled"
@@ -404,12 +450,14 @@ install_agent() {
     log_error "Could not download ${aasset} (needs a client release carrying the agent tarball)"
     exit 1
   fi
-  if curl -fsSL "https://github.com/${GITHUB_REPO}/releases/download/client/v${cver}/demarkus-client_checksums.txt" -o "${tmpdir}/agent-sums.txt"; then
-    (cd "$tmpdir" && grep "$aasset" agent-sums.txt | sha256sum -c - >/dev/null) || {
-      log_error "Checksum verification failed for ${aasset}"; exit 1; }
-  else
-    log_warn "Could not download client checksums; skipping agent verification"
+  # Fail closed: this is our own artifact, so an unverifiable agent binary is
+  # never installed (no silent skip).
+  if ! curl -fsSL "https://github.com/${GITHUB_REPO}/releases/download/client/v${cver}/demarkus-client_checksums.txt" -o "${tmpdir}/agent-sums.txt"; then
+    log_error "Could not download client checksums; refusing to install an unverified agent binary"
+    exit 1
   fi
+  (cd "$tmpdir" && grep "$aasset" agent-sums.txt | sha256sum -c - >/dev/null) || {
+    log_error "Checksum verification failed for ${aasset}"; exit 1; }
   tar -xzf "${tmpdir}/${aasset}" -C "$tmpdir" demarkus-agent
   install -m 755 "${tmpdir}/demarkus-agent" "${INSTALL_DIR}/demarkus-agent"
 
@@ -424,16 +472,22 @@ install_agent() {
 
   # Publish token: appended to the broker-owned tokens.toml (the server
   # hot-reloads it) and handed to the agent via DEMARKUS_AUTH. generate
-  # prints only the raw token on stdout; all messages go to stderr.
+  # prints only the raw token on stdout; all messages go to stderr. Reuse the
+  # existing token on a rerun so we never leave a second valid credential behind.
   local agent_token
-  if ! agent_token=$("${INSTALL_DIR}/demarkus-token" generate -label agent-publish -paths "/*" -ops publish -tokens "$SERVER_TOKENS" 2>/dev/null); then
-    log_error "Could not mint the agent publish token"
-    exit 1
-  fi
-  agent_token=$(printf '%s' "$agent_token" | tr -d '[:space:]')
-  if [ -z "$agent_token" ]; then
-    log_error "Agent publish token was empty"
-    exit 1
+  agent_token=$(sed -n 's/^DEMARKUS_AUTH=//p' "${AGENT_CONFIG_DIR}/env" 2>/dev/null | head -1)
+  if [ -n "$agent_token" ]; then
+    log_info "Reusing the existing agent publish token"
+  else
+    if ! agent_token=$("${INSTALL_DIR}/demarkus-token" generate -label agent-publish -paths "/*" -ops publish -tokens "$SERVER_TOKENS" 2>/dev/null); then
+      log_error "Could not mint the agent publish token"
+      exit 1
+    fi
+    agent_token=$(printf '%s' "$agent_token" | tr -d '[:space:]')
+    if [ -z "$agent_token" ]; then
+      log_error "Agent publish token was empty"
+      exit 1
+    fi
   fi
 
   if [ ! -f "${AGENT_CONFIG_DIR}/config.toml" ]; then
@@ -548,6 +602,17 @@ EOF
     chmod 640 "${PROXY_CONFIG_DIR}/Caddyfile"
   else
     log_info "Keeping existing Caddyfile: ${PROXY_CONFIG_DIR}/Caddyfile"
+    # Upgrade path: a Caddyfile from before the soul route exists needs the
+    # block appended, else soul.<host> never gets a cert and memory stays pending.
+    if ! grep -q "^soul.${host} {" "${PROXY_CONFIG_DIR}/Caddyfile"; then
+      cat >> "${PROXY_CONFIG_DIR}/Caddyfile" << EOF
+
+soul.${host} {
+	respond "demarkus world server — connect over the mark protocol on UDP ${WORLD_PUBLIC_PORT}" 200
+}
+EOF
+      log_info "Added the soul.${host} route to the existing Caddyfile"
+    fi
   fi
 
   if ! "${INSTALL_DIR}/caddy" validate --config "${PROXY_CONFIG_DIR}/Caddyfile" >/dev/null 2>&1; then
@@ -651,8 +716,9 @@ UNIT
   systemctl daemon-reload
   systemctl restart ${WORLD_SERVICE}
 elif [ "\$changed" = 1 ]; then
-  # Renewal: same paths, new content -> reload certs in place.
-  pidof demarkus-server | xargs -r kill -HUP || true
+  # Renewal: same paths, new content -> reload certs in place. Signal only the
+  # managed unit's main process, not every demarkus-server on the host.
+  systemctl kill -s HUP --kill-who=main ${WORLD_SERVICE}.service || true
 fi
 EOF
   chmod 755 "$CERTSYNC_BIN"
@@ -669,15 +735,23 @@ install_memory() {
 
   # Capability token: publish also authorizes APPEND, which is all the memory
   # plugin needs. Appended to the broker-owned tokens.toml (server hot-reloads).
+  # The raw token is stashed root-only so reruns reuse it (no duplicate
+  # credential) and the operator can recover the join URL later.
   local soul_token
-  if ! soul_token=$("${INSTALL_DIR}/demarkus-token" generate -label soul-memory -paths "/*" -ops publish -tokens "$SERVER_TOKENS" 2>/dev/null); then
-    log_error "Could not mint the soul capability token" >&2
-    exit 1
-  fi
-  soul_token=$(printf '%s' "$soul_token" | tr -d '[:space:]')
-  if [ -z "$soul_token" ]; then
-    log_error "Soul capability token was empty" >&2
-    exit 1
+  soul_token=$(cat "$SOUL_TOKEN_FILE" 2>/dev/null | tr -d '[:space:]')
+  if [ -n "$soul_token" ]; then
+    log_info "Reusing the existing soul capability token" >&2
+  else
+    if ! soul_token=$("${INSTALL_DIR}/demarkus-token" generate -label soul-memory -paths "/*" -ops publish -tokens "$SERVER_TOKENS" 2>/dev/null); then
+      log_error "Could not mint the soul capability token" >&2
+      exit 1
+    fi
+    soul_token=$(printf '%s' "$soul_token" | tr -d '[:space:]')
+    if [ -z "$soul_token" ]; then
+      log_error "Soul capability token was empty" >&2
+      exit 1
+    fi
+    ( umask 077; printf '%s\n' "$soul_token" > "$SOUL_TOKEN_FILE" )
   fi
 
   write_certsync "$host"
@@ -710,11 +784,17 @@ EOF
   # Eager first issuance: Caddy (already running) obtains the cert within a few
   # seconds; poll the sync so the card's /soul-join line is truthful. Bounded
   # so a stuck ACME never blocks the install; the timer upgrades it later.
+  # Readiness is authoritative: the world's cert must equal Caddy's CURRENT
+  # soul.<host> cert, so a stale cert from a prior host is never called ready.
   local status="pending" waited=0 max=90
   [ "${DEMARKUS_INSTALL_TESTMODE:-}" = "1" ] && max=0
   while : ; do
     "$CERTSYNC_BIN" >/dev/null 2>&1 || true
-    if [ -f "${WORLD_TLS_DIR}/soul.crt" ]; then status="ready"; break; fi
+    local src=""
+    for c in "${PROXY_STATE_DIR}/caddy/certificates/"*/"soul.${host}/soul.${host}.crt"; do
+      [ -f "$c" ] && src="$c" && break
+    done
+    if [ -n "$src" ] && cmp -s "$src" "${WORLD_TLS_DIR}/soul.crt"; then status="ready"; break; fi
     [ "$waited" -ge "$max" ] && break
     sleep 5; waited=$((waited + 5))
   done
@@ -756,7 +836,11 @@ print_card() {
   log_step "Your knowledge system is running"
   echo ""
   echo "  Library (read + edit):  https://library.${host}"
-  echo "  Login:                  ${owner_user} / ${owner_password}"
+  if [ -n "$owner_password" ]; then
+    echo "  Login:                  ${owner_user} / ${owner_password}"
+  else
+    echo "  Login:                  ${owner_user} / (unchanged — existing users.yml preserved)"
+  fi
   echo "                          (change it: ${AUTH_CONFIG_DIR}/users.yml, then restart demarkus-auth)"
   echo "  Owner email:            ${owner_email}"
   echo "  Agents join with:       /knowledge-join https://broker.${host}"
@@ -782,42 +866,58 @@ print_card() {
 do_uninstall() {
   require_linux_root
   log_step "Removing the stack's identity, proxy, and agent layers"
+  local fail=0
 
-  # Soul cert-sync timer + oneshot, then its world drop-in.
+  # Soul cert-sync timer + oneshot. stop/disable may legitimately fail on an
+  # already-inactive unit, so those stay best-effort; the removals do not.
   if [ -f "${SYSTEMD_DIR}/${CERTSYNC_SERVICE}.timer" ]; then
     systemctl stop "${CERTSYNC_SERVICE}.timer" 2>/dev/null || true
     systemctl disable "${CERTSYNC_SERVICE}.timer" 2>/dev/null || true
-    rm -f "${SYSTEMD_DIR}/${CERTSYNC_SERVICE}.timer" "${SYSTEMD_DIR}/${CERTSYNC_SERVICE}.service"
+    rm -f "${SYSTEMD_DIR}/${CERTSYNC_SERVICE}.timer" "${SYSTEMD_DIR}/${CERTSYNC_SERVICE}.service" \
+      || { log_error "Could not remove ${CERTSYNC_SERVICE} units"; fail=1; }
     log_info "Removed ${CERTSYNC_SERVICE}"
   fi
-  rm -f "${CERTSYNC_BIN}"
-  rm -rf "${WORLD_DROPIN_DIR}"
+  rm -f "${CERTSYNC_BIN}" || { log_error "Could not remove ${CERTSYNC_BIN}"; fail=1; }
+  # Remove only the drop-in we created; leave operator overrides, and drop the
+  # dir only when it is left empty.
+  rm -f "${WORLD_DROPIN_DIR}/appliance-soul-tls.conf" \
+    || { log_error "Could not remove the soul TLS drop-in"; fail=1; }
+  rmdir "${WORLD_DROPIN_DIR}" 2>/dev/null || true
 
   for svc in "$AUTH_SERVICE" "$PROXY_SERVICE" "$AGENT_SERVICE"; do
     if [ -f "${SYSTEMD_DIR}/${svc}.service" ]; then
       systemctl stop "$svc" 2>/dev/null || true
       systemctl disable "$svc" 2>/dev/null || true
-      rm -f "${SYSTEMD_DIR}/${svc}.service"
+      rm -f "${SYSTEMD_DIR}/${svc}.service" || { log_error "Could not remove ${svc}.service"; fail=1; }
       log_info "Removed ${svc}"
     fi
   done
   systemctl daemon-reload 2>/dev/null || true
-  for bin in authelia caddy demarkus-agent; do
-    rm -f "${INSTALL_DIR}/${bin}"
+  for bin in authelia caddy demarkus-agent demarkus-stack; do
+    rm -f "${INSTALL_DIR}/${bin}" || { log_error "Could not remove ${bin}"; fail=1; }
   done
   # Authelia config holds credential hashes; the agent env holds a token.
   for d in "$AUTH_CONFIG_DIR" "$AUTH_STATE_DIR" "$PROXY_CONFIG_DIR" "$PROXY_STATE_DIR" "$AGENT_CONFIG_DIR" "$AGENT_STATE_DIR"; do
-    [ -d "$d" ] && rm -rf "$d" && log_info "Removed ${d}/"
+    if [ -d "$d" ]; then
+      if rm -rf "$d"; then log_info "Removed ${d}/"; else log_error "Could not remove ${d}/"; fail=1; fi
+    fi
   done
   for u in "$AUTH_SERVICE" "$PROXY_SERVICE" "$AGENT_SERVICE"; do
-    id "$u" >/dev/null 2>&1 && userdel "$u" 2>/dev/null && log_info "Removed user ${u}" || true
+    if id "$u" >/dev/null 2>&1; then
+      if userdel "$u" 2>/dev/null; then log_info "Removed user ${u}"; else log_error "Could not remove user ${u}"; fail=1; fi
+    fi
   done
 
   log_step "Delegating server/broker/library teardown to demarkus-install"
   if [ -x "${INSTALL_DIR}/demarkus-install" ]; then
-    "${INSTALL_DIR}/demarkus-install" uninstall "$@"
+    "${INSTALL_DIR}/demarkus-install" uninstall "$@" || { log_error "Base uninstall reported errors"; fail=1; }
   else
     log_warn "demarkus-install not found; server/broker/library not removed"
+    fail=1
+  fi
+  if [ "$fail" -ne 0 ]; then
+    log_error "Stack uninstall completed with errors; some artifacts may remain"
+    exit 1
   fi
   log_step "Stack uninstall complete"
 }
@@ -835,23 +935,51 @@ main() {
   local domain=""
   local owner_email=""
   local library_version=""
+  local librarian_key_file=""
   local librarian_key=""
 
+  # need_val guards value-taking options so a missing operand fails with a clear
+  # message instead of a bare set -u error.
+  need_val() { [ $# -ge 2 ] || { log_error "Option $1 requires a value"; exit 1; }; }
   while [ $# -gt 0 ]; do
     case "$1" in
-      --domain)          domain="$2"; shift 2 ;;
-      --owner-email)     owner_email="$2"; shift 2 ;;
-      --librarian-key)   librarian_key="$2"; shift 2 ;;
-      --library-version) library_version="$2"; shift 2 ;;
+      --domain)            need_val "$@"; domain="$2"; shift 2 ;;
+      --owner-email)       need_val "$@"; owner_email="$2"; shift 2 ;;
+      --librarian-key-file) need_val "$@"; librarian_key_file="$2"; shift 2 ;;
+      --library-version)   need_val "$@"; library_version="$2"; shift 2 ;;
       *) log_error "Unknown option: $1"; exit 1 ;;
     esac
   done
+
+  # The librarian LLM key rides a root-readable file, never argv (which leaks via
+  # ps and shell history) — same contract as install.sh's secret-file flags.
+  if [ -n "$librarian_key_file" ]; then
+    if [ ! -r "$librarian_key_file" ]; then
+      log_error "Librarian key file not readable: ${librarian_key_file}"
+      exit 1
+    fi
+    librarian_key=$(tr -d '\r\n' < "$librarian_key_file")
+    if [ -z "$librarian_key" ]; then
+      log_error "Librarian key file is empty: ${librarian_key_file}"
+      exit 1
+    fi
+  fi
 
   require_linux_root
 
   local host
   host=$(resolve_stack_host "$domain")
-  log_step "Stack host: ${host} (library.${host}, broker.${host}, auth.${host})"
+  # Reject anything that is not a bare hostname before it reaches YAML/Caddy
+  # configs (blocks control chars and injection via --domain/sslip lookups).
+  case "$host" in
+    ""|*[!a-zA-Z0-9.-]*) log_error "Invalid stack host '${host}'"; exit 1 ;;
+  esac
+  if [ -n "$owner_email" ]; then
+    case "$owner_email" in
+      *[!a-zA-Z0-9.@_+-]*) log_error "Invalid owner email '${owner_email}'"; exit 1 ;;
+    esac
+  fi
+  log_step "Stack host: ${host} (library.${host}, broker.${host}, auth.${host}, soul.${host})"
   [ -z "$owner_email" ] && owner_email="owner@${host}"
 
   local tmpdir
@@ -860,19 +988,36 @@ main() {
 
   run_base_install "$library_version"
 
+  # Host migration: a prior install recorded its host; if this run resolves a
+  # different one, rewrite the per-host config before the services restart with
+  # it. Runs after run_base_install so install.sh's kept configs already exist.
+  local prev_host=""
+  [ -f "$STACK_HOST_FILE" ] && prev_host=$(tr -d '[:space:]' < "$STACK_HOST_FILE" 2>/dev/null)
+  if [ -n "$prev_host" ] && [ "$prev_host" != "$host" ]; then
+    log_step "Migrating stack host: ${prev_host} -> ${host}"
+    migrate_host "$prev_host" "$host"
+  fi
+
   local auth_out owner_user owner_password broker_client_secret
   auth_out=$(install_auth "$host" "$owner_email" "$tmpdir")
   owner_user=$(printf '%s\n' "$auth_out" | sed -n 's/^owner_user=//p')
   owner_password=$(printf '%s\n' "$auth_out" | sed -n 's/^owner_password=//p')
   broker_client_secret=$(printf '%s\n' "$auth_out" | sed -n 's/^broker_client_secret=//p')
-  if [ -z "$owner_user" ] || [ -z "$owner_password" ] || [ -z "$broker_client_secret" ]; then
+  # owner_password is intentionally empty on a rerun (the plaintext can't be
+  # recovered); only owner_user and the broker secret are load-bearing here.
+  if [ -z "$owner_user" ] || [ -z "$broker_client_secret" ]; then
     log_error "Authelia install did not return the generated credentials; aborting"
     exit 1
   fi
 
   # Library SSO credential: broker holds the hash, library holds the secret.
+  # Reuse the persisted secret on a rerun so the broker's kept webClients hash
+  # stays valid (a fresh secret would break library login).
   local lib_secret lib_hash
-  lib_secret=$(head -c 30 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 40)
+  lib_secret=$(sed -n 's/^DEMARKUS_CLIENT_SECRET=//p' "${LIBRARY_CONFIG_DIR}/env" 2>/dev/null | head -1)
+  if [ -z "$lib_secret" ]; then
+    lib_secret=$(head -c 30 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 40)
+  fi
   lib_hash=$(printf '%s' "$lib_secret" | sha256sum | cut -d' ' -f1)
 
   configure_broker "$host" "$broker_client_secret" "$lib_hash"
@@ -890,6 +1035,10 @@ main() {
     log_error "Memory setup did not return a soul token; aborting"
     exit 1
   fi
+
+  # Record the host now that the stack is fully configured for it, so the next
+  # rerun can detect and migrate a hostname change.
+  printf '%s\n' "$host" > "$STACK_HOST_FILE"
 
   persist_self
 

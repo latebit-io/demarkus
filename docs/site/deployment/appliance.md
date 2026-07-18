@@ -31,7 +31,7 @@ Open the library URL, log in with the printed credentials, and you have a workin
 
 Without `--domain`, the installer derives the host from the droplet's public IP via [sslip.io](https://sslip.io) wildcard DNS: `library.<ip>.sslip.io`, `broker.<ip>.sslip.io`, `auth.<ip>.sslip.io` all resolve automatically. It is real DNS, so Caddy issues real Let's Encrypt certificates. You configure nothing.
 
-The sslip identity is tied to this machine's IP. When you are keeping the system, move to a real domain:
+The sslip identity is tied to this machine's IP. When you are ready to move to a real domain, point a wildcard A record at the droplet and re-run with `--domain` — it migrates in place, keeping all your content and credentials:
 
 ```bash
 # One wildcard A record: *.kb.example.com -> this droplet's IP, then:
@@ -39,13 +39,15 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-st
   | sudo bash -s -- --domain kb.example.com --owner-email you@example.com
 ```
 
+Re-running the installer is always safe. It reuses the existing credentials (owner password, broker/library secrets, agent and soul tokens) rather than minting new ones, and when the resolved hostname changes it rewrites every per-host URL across Authelia, the broker, the library, and Caddy, then reissues certificates for the new names. Your documents, tokens, and logins survive the move; existing browser sessions are logged out (the cookie domain changed) and the new `soul.<domain>` certificate takes a few seconds to issue. Log in again at the new `library.<domain>` and re-run the printed `/soul-join` line to point memory at the new host.
+
 ## Options
 
 | Flag | Effect |
 |---|---|
-| `--domain <d>` | Use `library.<d>` / `broker.<d>` / `auth.<d>` instead of sslip.io. Needs one wildcard A record. |
+| `--domain <d>` | Use `library.<d>` / `broker.<d>` / `auth.<d>` / `soul.<d>` instead of sslip.io. Needs one wildcard A record. Re-running with a new value migrates the running stack to it. |
 | `--owner-email <e>` | Owner account email (default `owner@<host>`). |
-| `--librarian-key <k>` | Enable the AI librarian with this LLM API key (sets `LLM_API_KEY`). Off by default. |
+| `--librarian-key-file <path>` | Enable the AI librarian, reading the LLM API key from a root-readable file (never argv). Off by default. |
 | `--library-version <v>` | Pin the reading room version (default: latest). |
 
 Everything else is generated: the owner password, all Authelia secrets, the broker and library OIDC client secrets, the agent's publish token. Nothing is prompted.
