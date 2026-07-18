@@ -58,10 +58,9 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
-  # demarkus-agent ships only as a container image (release-client job
-  # bundles it into ghcr.io/.../demarkus-agent). Listed under builds:
-  # so goreleaser cross-compiles per-arch binaries that the Dockerfile
-  # then COPYs in — no archive entry, no end-user binary tarball.
+  # demarkus-agent ships as a container image (release-client bundles it
+  # into ghcr.io/.../demarkus-agent) AND as a linux tarball for native
+  # single-host installs (install.sh --with-agent).
   - id: demarkus-agent
     main: ./cmd/demarkus-agent
     binary: demarkus-agent
@@ -76,7 +75,7 @@ builds:
     goarm:
       - "7"
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{ .Version }}
 
 archives:
   - id: demarkus
@@ -93,6 +92,11 @@ archives:
     builds:
       - demarkus-mcp
     name_template: "demarkus-mcp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - id: demarkus-agent
+    builds:
+      - demarkus-agent
+    name_template: "demarkus-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "demarkus-client_checksums.txt"
