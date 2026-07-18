@@ -8,6 +8,8 @@ on:
 permissions:
   contents: write
   packages: write
+  # actions: write lets the final job dispatch the pin-bump workflow.
+  actions: write
 
 jobs:
   detect-changes:
@@ -535,3 +537,19 @@ jobs:
           VER="${{ needs.semver-tools.outputs.new_version }}"
           helm package deploy/helm/demarkus-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
           helm push "/tmp/charts/demarkus-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+
+  # Dispatch the pin-bump workflow after any binary release. The bump
+  # workflow's own release trigger never fires: GoReleaser publishes with
+  # the default GITHUB_TOKEN, and GitHub suppresses workflow triggering
+  # from events that token creates. workflow_dispatch is the documented
+  # exception to that suppression, so an explicit dispatch here is what
+  # makes the pin chain release-driven instead of daily-cron-driven.
+  dispatch-pin-bump:
+    needs: [release-server, release-client, release-tools]
+    if: ${{ !cancelled() && (needs.release-server.result == 'success' || needs.release-client.result == 'success' || needs.release-tools.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger plugin pin bump
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run plugin-pin-bump.yml --repo "${{ github.repository }}"

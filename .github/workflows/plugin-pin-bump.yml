@@ -2,14 +2,14 @@ name: Bump plugin binary pins
 
 # Keeps the demarkus-memory plugin's pinned managed-binary versions current
 # without manual churn: resolves the latest server/client/tools releases and, if
-# they differ from the pins, opens (or updates) a single PR. Runs daily, on every
-# release, and on demand. The bump is idempotent, so the overlapping triggers
-# converge on one PR.
+# they differ from the pins, opens (or updates) a single PR. Dispatched by
+# release.yml right after any binary release (a release trigger here would be
+# dead: GoReleaser publishes with the default GITHUB_TOKEN, whose events do not
+# trigger workflows). The daily cron is the safety-net backstop. The bump is
+# idempotent, so overlapping triggers converge on one PR.
 on:
   schedule:
     - cron: "23 7 * * *"
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
