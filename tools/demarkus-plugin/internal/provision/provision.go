@@ -42,11 +42,11 @@ import (
 // cadence; the bump workflow tracks their latest existing releases).
 const (
 	serverVersion = "0.21.0"
-	clientVersion = "0.21.3"
+	clientVersion = "0.22.0"
 	// fallbackToolsVersion is used ONLY by dev builds (Version == "dev"), where
 	// there's no real release to derive the tools version from. A real release
 	// uses its own ldflags Version — see toolsRef.
-	fallbackToolsVersion = "0.12.5"
+	fallbackToolsVersion = "0.14.0"
 )
 
 // Version is the binary's own release version, injected from main's ldflags
