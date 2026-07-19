@@ -78,14 +78,18 @@ log_info()  { printf "${GREEN}  ✓${NC} %s\n" "$1"; }
 log_warn()  { printf "${YELLOW}  !${NC} %s\n" "$1"; }
 log_error() { printf "${RED}  ✗${NC} %s\n" "$1"; }
 
-# token_in_store reports whether a raw capability token still authenticates: its
-# hash must be present in the authoritative tokens file (the server's source of
-# truth). sha256(raw) matches protocol.HashToken. Nonzero if the file is missing
-# or the token was revoked / the file rebuilt.
+# token_in_store checks a raw token against the authoritative tokens file (the
+# server's source of truth; sha256(raw) matches protocol.HashToken).
+# Returns 0 present, 1 absent, 2 store missing/unreadable/lookup error.
 token_in_store() {
   local raw="$1" h
   h="sha256-$(printf '%s' "$raw" | sha256sum | cut -d' ' -f1)"
-  grep -q "$h" "$SERVER_TOKENS" 2>/dev/null
+  [ -r "$SERVER_TOKENS" ] || return 2
+  if grep -q "$h" "$SERVER_TOKENS"; then
+    return 0
+  else
+    return $?   # grep: 1 = absent, >1 = lookup error
+  fi
 }
 
 # --- platform -----------------------------------------------------------------
@@ -501,11 +505,19 @@ install_agent() {
   if [ -f "${AGENT_CONFIG_DIR}/env" ]; then
     agent_token=$(sed -n 's/^DEMARKUS_AUTH=//p' "${AGENT_CONFIG_DIR}/env" | head -1)
   fi
-  # Reuse only if the cached token still authenticates against the tokens file;
-  # a revoked or rebuilt store would otherwise leave the agent unable to publish.
-  if [ -n "$agent_token" ] && ! token_in_store "$agent_token"; then
-    log_warn "Cached agent token is no longer in ${SERVER_TOKENS}; minting a fresh one"
-    agent_token=""
+  # Reuse only if the cached token still authenticates against the tokens file.
+  # Rotate only when it is genuinely absent; abort on a store read error rather
+  # than mint a duplicate against a store we could not verify.
+  if [ -n "$agent_token" ]; then
+    local rc=0
+    token_in_store "$agent_token" || rc=$?
+    if [ "$rc" -eq 2 ]; then
+      log_error "Could not read ${SERVER_TOKENS} to validate the agent token; aborting rather than rotating"
+      exit 1
+    elif [ "$rc" -ne 0 ]; then
+      log_warn "Cached agent token is no longer in ${SERVER_TOKENS}; minting a fresh one"
+      agent_token=""
+    fi
   fi
   if [ -n "$agent_token" ]; then
     log_info "Reusing the existing agent publish token"
@@ -775,11 +787,18 @@ install_memory() {
     soul_token=$(tr -d '[:space:]' < "$SOUL_TOKEN_FILE")
   fi
   # Reuse only if the cached token still authenticates: its hash must be present
-  # in the authoritative tokens file, else it was revoked or the file rebuilt
-  # and the printed /soul-join line would be a dead credential.
-  if [ -n "$soul_token" ] && ! token_in_store "$soul_token"; then
-    log_warn "Cached soul token is no longer in ${SERVER_TOKENS}; minting a fresh one" >&2
-    soul_token=""
+  # in the authoritative tokens file, else the printed /soul-join line would be
+  # a dead credential. Rotate only when genuinely absent; abort on a read error.
+  if [ -n "$soul_token" ]; then
+    local rc=0
+    token_in_store "$soul_token" || rc=$?
+    if [ "$rc" -eq 2 ]; then
+      log_error "Could not read ${SERVER_TOKENS} to validate the soul token; aborting rather than rotating" >&2
+      exit 1
+    elif [ "$rc" -ne 0 ]; then
+      log_warn "Cached soul token is no longer in ${SERVER_TOKENS}; minting a fresh one" >&2
+      soul_token=""
+    fi
   fi
   if [ -n "$soul_token" ]; then
     log_info "Reusing the existing soul capability token" >&2
