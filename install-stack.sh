@@ -78,6 +78,16 @@ log_info()  { printf "${GREEN}  ✓${NC} %s\n" "$1"; }
 log_warn()  { printf "${YELLOW}  !${NC} %s\n" "$1"; }
 log_error() { printf "${RED}  ✗${NC} %s\n" "$1"; }
 
+# token_in_store reports whether a raw capability token still authenticates: its
+# hash must be present in the authoritative tokens file (the server's source of
+# truth). sha256(raw) matches protocol.HashToken. Nonzero if the file is missing
+# or the token was revoked / the file rebuilt.
+token_in_store() {
+  local raw="$1" h
+  h="sha256-$(printf '%s' "$raw" | sha256sum | cut -d' ' -f1)"
+  grep -q "$h" "$SERVER_TOKENS" 2>/dev/null
+}
+
 # --- platform -----------------------------------------------------------------
 
 require_linux_root() {
@@ -491,6 +501,12 @@ install_agent() {
   if [ -f "${AGENT_CONFIG_DIR}/env" ]; then
     agent_token=$(sed -n 's/^DEMARKUS_AUTH=//p' "${AGENT_CONFIG_DIR}/env" | head -1)
   fi
+  # Reuse only if the cached token still authenticates against the tokens file;
+  # a revoked or rebuilt store would otherwise leave the agent unable to publish.
+  if [ -n "$agent_token" ] && ! token_in_store "$agent_token"; then
+    log_warn "Cached agent token is no longer in ${SERVER_TOKENS}; minting a fresh one"
+    agent_token=""
+  fi
   if [ -n "$agent_token" ]; then
     log_info "Reusing the existing agent publish token"
   else
@@ -758,6 +774,13 @@ install_memory() {
   if [ -f "$SOUL_TOKEN_FILE" ]; then
     soul_token=$(tr -d '[:space:]' < "$SOUL_TOKEN_FILE")
   fi
+  # Reuse only if the cached token still authenticates: its hash must be present
+  # in the authoritative tokens file, else it was revoked or the file rebuilt
+  # and the printed /soul-join line would be a dead credential.
+  if [ -n "$soul_token" ] && ! token_in_store "$soul_token"; then
+    log_warn "Cached soul token is no longer in ${SERVER_TOKENS}; minting a fresh one" >&2
+    soul_token=""
+  fi
   if [ -n "$soul_token" ]; then
     log_info "Reusing the existing soul capability token" >&2
   else
@@ -985,15 +1008,17 @@ main() {
       || stat -f '%Lp' "$librarian_key_file" 2>/dev/null || echo "")
     key_owner=$(stat -c '%u' "$librarian_key_file" 2>/dev/null \
       || stat -f '%u' "$librarian_key_file" 2>/dev/null || echo "")
-    if [ -z "$key_mode" ]; then
-      log_error "Could not stat librarian key file: ${librarian_key_file}"
+    # Fail closed if stat could not report mode or owner: an undeterminable
+    # secret file is rejected, never silently accepted.
+    if [ -z "$key_mode" ] || [ -z "$key_owner" ]; then
+      log_error "Could not determine mode/owner of librarian key file: ${librarian_key_file}"
       exit 1
     fi
     if [ "$(( 8#$key_mode & 0077 ))" -ne 0 ]; then
       log_error "Librarian key file ${librarian_key_file} is group/world-accessible (mode ${key_mode}); chmod 600 it first"
       exit 1
     fi
-    if [ -n "$key_owner" ] && [ "$key_owner" != "$(id -u)" ] && [ "$key_owner" != "0" ]; then
+    if [ "$key_owner" != "$(id -u)" ] && [ "$key_owner" != "0" ]; then
       log_error "Librarian key file ${librarian_key_file} must be owned by you or root (owner uid ${key_owner})"
       exit 1
     fi
