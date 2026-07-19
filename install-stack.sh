@@ -78,18 +78,40 @@ log_info()  { printf "${GREEN}  ✓${NC} %s\n" "$1"; }
 log_warn()  { printf "${YELLOW}  !${NC} %s\n" "$1"; }
 log_error() { printf "${RED}  ✗${NC} %s\n" "$1"; }
 
-# token_in_store checks a raw token against the authoritative tokens file (the
-# server's source of truth; sha256(raw) matches protocol.HashToken).
-# Returns 0 present, 1 absent, 2 store missing/unreadable/lookup error.
-token_in_store() {
-  local raw="$1" h
+# token_valid checks a raw token against the authoritative tokens file (the
+# server's source of truth; sha256(raw) matches protocol.HashToken). Presence is
+# not enough — the server also rejects expired tokens and ones lacking access —
+# so it validates the shape we mint (publish on /*, honoring expiry).
+# Returns 0 valid, 1 absent-or-unauthorized (rotate), 2 unreadable/decode error.
+token_valid() {
+  local raw="$1" h blk ops paths exp
   h="sha256-$(printf '%s' "$raw" | sha256sum | cut -d' ' -f1)"
   [ -r "$SERVER_TOKENS" ] || return 2
-  if grep -q "$h" "$SERVER_TOKENS"; then
-    return 0
-  else
-    return $?   # grep: 1 = absent, >1 = lookup error
+  # Isolate the [tokens.*] block whose hash matches, emitting its operations,
+  # paths, and expires (prefixed O/P/E) for evaluation below.
+  blk=$(awk -v want="$h" '
+    function val(s){ sub(/^[^=]*=[[:space:]]*/,"",s); gsub(/^"|"$/,"",s); return s }
+    /^\[/ { if (curhash==want && !done){ print "O" ops; print "P" paths; print "E" expv; done=1 }
+            curhash=""; ops=""; paths=""; expv="" }
+    /^[[:space:]]*hash[[:space:]]*=/       { curhash=val($0) }
+    /^[[:space:]]*operations[[:space:]]*=/ { ops=$0 }
+    /^[[:space:]]*paths[[:space:]]*=/      { paths=$0 }
+    /^[[:space:]]*expires[[:space:]]*=/    { expv=val($0) }
+    END { if (curhash==want && !done){ print "O" ops; print "P" paths; print "E" expv } }
+  ' "$SERVER_TOKENS") || return 2
+  [ -n "$blk" ] || return 1
+  ops=$(printf '%s\n' "$blk" | sed -n 's/^O//p')
+  paths=$(printf '%s\n' "$blk" | sed -n 's/^P//p')
+  exp=$(printf '%s\n' "$blk" | sed -n 's/^E//p')
+  case "$ops" in *'"publish"'*) ;; *) return 1 ;; esac
+  case "$paths" in *'"/*"'*) ;; *) return 1 ;; esac
+  if [ -n "$exp" ]; then
+    local exp_epoch now
+    exp_epoch=$(date -d "$exp" +%s 2>/dev/null) || return 2  # unparseable expiry
+    now=$(date +%s)
+    [ "$exp_epoch" -gt "$now" ] || return 1                  # expired
   fi
+  return 0
 }
 
 # --- platform -----------------------------------------------------------------
@@ -510,12 +532,12 @@ install_agent() {
   # than mint a duplicate against a store we could not verify.
   if [ -n "$agent_token" ]; then
     local rc=0
-    token_in_store "$agent_token" || rc=$?
+    token_valid "$agent_token" || rc=$?
     if [ "$rc" -eq 2 ]; then
       log_error "Could not read ${SERVER_TOKENS} to validate the agent token; aborting rather than rotating"
       exit 1
     elif [ "$rc" -ne 0 ]; then
-      log_warn "Cached agent token is no longer in ${SERVER_TOKENS}; minting a fresh one"
+      log_warn "Cached agent token no longer authorizes in ${SERVER_TOKENS}; minting a fresh one"
       agent_token=""
     fi
   fi
@@ -791,12 +813,12 @@ install_memory() {
   # a dead credential. Rotate only when genuinely absent; abort on a read error.
   if [ -n "$soul_token" ]; then
     local rc=0
-    token_in_store "$soul_token" || rc=$?
+    token_valid "$soul_token" || rc=$?
     if [ "$rc" -eq 2 ]; then
       log_error "Could not read ${SERVER_TOKENS} to validate the soul token; aborting rather than rotating" >&2
       exit 1
     elif [ "$rc" -ne 0 ]; then
-      log_warn "Cached soul token is no longer in ${SERVER_TOKENS}; minting a fresh one" >&2
+      log_warn "Cached soul token no longer authorizes in ${SERVER_TOKENS}; minting a fresh one" >&2
       soul_token=""
     fi
   fi
