@@ -87,6 +87,10 @@ token_valid() {
   local raw="$1" h blk ops paths exp
   h="sha256-$(printf '%s' "$raw" | sha256sum | cut -d' ' -f1)"
   [ -r "$SERVER_TOKENS" ] || return 2
+  # Decode gate: `list` parses with the same token.ReadFile the server trusts,
+  # so a store it rejects (malformed TOML anywhere) is a validation error, not
+  # grounds to trust the awk scan below.
+  "${INSTALL_DIR}/demarkus-token" list -tokens "$SERVER_TOKENS" >/dev/null 2>&1 || return 2
   # Isolate the [tokens.*] block whose hash matches, emitting its operations,
   # paths, and expires (prefixed O/P/E) for evaluation below.
   blk=$(awk -v want="$h" '
