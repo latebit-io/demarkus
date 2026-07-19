@@ -30,7 +30,7 @@ Version pinning: `--version` pins the server; `--library-version` pins the readi
 |---|---|---|---|
 | World server | `demarkus` | UDP 6309 (public) | `/etc/demarkus/` |
 | Broker | `demarkus-broker` | loopback TCP 8080 (OAuth/API), 8081 (MCP gateway) | `/etc/demarkus-broker/` |
-| Library | `demarkus-library` | TCP 8090 | `/etc/demarkus-library/` |
+| Library | `demarkus-library` | TCP 443 (HTTPS, when TLS is configured) or TCP 8090 | `/etc/demarkus-library/` |
 
 The broker binds **loopback only** — its advertised `publicURL` is served by your TLS reverse proxy (see below). With a broker installed, `tokens.toml` moves to `/etc/demarkus/tokens/`, a subdirectory the broker owns, so its atomic writes never require access to the rest of `/etc/demarkus` (where the TLS keys live). This layout is sticky: later reinstalls keep it even without `--with-broker`.
 
@@ -79,7 +79,9 @@ Agents join with `/knowledge-join <broker-public-url>` from the demarkus-knowled
 
 ## Library modes
 
-`--with-library` installs the reading room in **direct-QUIC (read-only) mode**: no login, serving your world's documents at port 8090. This works with or without the broker.
+`--with-library` installs the reading room in **direct-QUIC (read-only) mode**: no login, serving your world's documents. This works with or without the broker.
+
+The port and scheme follow the install's TLS setup: with TLS configured (`--domain` or `--tls-cert`/`--tls-key`) the library serves **HTTPS on 443** using the world's certificate — same hostname, same identity, so `https://<domain>/` is the reading room. Without TLS it serves plain HTTP on 8090. `--library-port <n>` overrides either default; the installer refuses a port something else already listens on. On reinstalls an existing `/etc/demarkus-library/env` keeps its `PORT`, so upgrading an old 8090 install to 443 is an env edit (`PORT=443`, plus the `DEMARKUS_TLS_CERT`/`DEMARKUS_TLS_KEY` lines) followed by re-running the installer.
 
 To put the library behind broker SSO (org login, per-reader identity):
 
@@ -95,7 +97,7 @@ To put the library behind broker SSO (org login, per-reader identity):
    ```
 
 3. Switch `/etc/demarkus-library/env` to the broker block (uncomment and fill the `DEMARKUS_TRANSPORT=broker` lines with the plaintext secret).
-4. Redirect URIs must be **absolute https URLs** — front the library with TLS (its own `DEMARKUS_TLS_CERT`/`DEMARKUS_TLS_KEY`, or a reverse proxy such as Caddy/nginx).
+4. Redirect URIs must be **absolute https URLs** — already satisfied on TLS installs, where the library serves HTTPS on 443 with the world's cert. Otherwise front it with TLS (its own `DEMARKUS_TLS_CERT`/`DEMARKUS_TLS_KEY`, or a reverse proxy such as Caddy/nginx).
 5. `systemctl restart demarkus-broker demarkus-library`.
 
 ## TLS and the reverse proxy
@@ -117,6 +119,7 @@ To put the library behind broker SSO (org login, per-reader identity):
 ```bash
 systemctl status demarkus demarkus-broker demarkus-library
 curl -s http://localhost:8080/healthz     # broker
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/   # library (302 to the reading room)
+curl -s -o /dev/null -w "%{http_code}\n" https://<domain>/        # library on TLS installs (302 to the reading room)
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/   # library on no-TLS installs
 demarkus --insecure mark://localhost:6309/index.md                # world
 ```

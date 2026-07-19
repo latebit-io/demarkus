@@ -188,7 +188,9 @@ migrate_host() {
 # self-signed cert and every HTTP surface gets TLS from Caddy.
 run_base_install() {
   local library_version="$1"
-  local base_args=(--with-broker --with-library)
+  # Caddy fronts the library here, so pin it to 8090 regardless of what
+  # install.sh would default to.
+  local base_args=(--with-broker --with-library --library-port 8090)
   if [ -n "$library_version" ]; then
     base_args+=(--library-version "$library_version")
   fi
