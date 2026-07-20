@@ -86,6 +86,22 @@ log_warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$*"; }
 log_error() { printf "${RED}[error]${NC} %s\n" "$*" >&2; }
 log_step()  { printf "${BLUE}==> %s${NC}\n" "$*"; }
 
+# validate_port aborts unless $2 is an integer in [1,65535]; $1 names the
+# source for the error message (a flag or a config file).
+validate_port() {
+  local source="$1"
+  local port="$2"
+  case "$port" in
+    ''|*[!0-9]*)
+      log_error "${source} must be a number (1-65535), got '${port}'"
+      exit 1 ;;
+  esac
+  if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    log_error "${source} must be between 1 and 65535, got '${port}'"
+    exit 1
+  fi
+}
+
 # --- Install permissions ---
 
 _acquire_sudo() {
@@ -1007,6 +1023,7 @@ install_library() {
     local kept_port
     kept_port=$(sed -n 's/^PORT=//p' "${LIBRARY_CONFIG_DIR}/env" | head -1)
     if [ -n "$kept_port" ] && [ "$kept_port" != "$lib_port" ]; then
+      validate_port "PORT in ${LIBRARY_CONFIG_DIR}/env" "$kept_port"
       log_info "Existing library config sets PORT=${kept_port}; edit ${LIBRARY_CONFIG_DIR}/env to change it"
       lib_port="$kept_port"
     fi
@@ -1015,19 +1032,25 @@ install_library() {
   fi
 
   # Fail now rather than install a unit that crash-loops on a taken port.
-  # The library's own listener from a previous install is fine; ss truncates
-  # process names to 15 chars, hence the shortened match.
-  if command -v ss >/dev/null 2>&1; then
-    local port_holder
-    port_holder=$(ss -ltnpH "sport = :${lib_port}" 2>/dev/null | grep -v 'demarkus-librar' || true)
-    if [ -n "$port_holder" ]; then
-      log_error "TCP port ${lib_port} is already in use:"
-      log_error "  ${port_holder}"
-      log_error "Pick a free port with --library-port <port>"
-      exit 1
-    fi
-  else
-    log_warn "ss not found; skipping the port ${lib_port} availability check"
+  # Fail closed: no check means no refusal guarantee. The library's own
+  # listener from a previous install is fine; ss truncates process names
+  # to 15 chars, hence the shortened match.
+  if ! command -v ss >/dev/null 2>&1; then
+    log_error "ss (iproute2) is required for the port availability check; install it and re-run"
+    exit 1
+  fi
+  local ss_out
+  if ! ss_out=$(ss -ltnpH "sport = :${lib_port}" 2>&1); then
+    log_error "Could not check whether TCP port ${lib_port} is free (ss failed): ${ss_out}"
+    exit 1
+  fi
+  local port_holder
+  port_holder=$(printf '%s\n' "$ss_out" | grep -v 'demarkus-librar' || true)
+  if [ -n "$port_holder" ]; then
+    log_error "TCP port ${lib_port} is already in use:"
+    log_error "  ${port_holder}"
+    log_error "Pick a free port with --library-port <port>"
+    exit 1
   fi
 
   if [ -z "$lib_version" ]; then
@@ -1143,7 +1166,8 @@ EOF
   sleep 1
   if ! systemctl is-active --quiet "$LIBRARY_SERVICE"; then
     log_error "Library failed to start. Recent logs:"
-    journalctl -u "$LIBRARY_SERVICE" -n 20 --no-pager 2>/dev/null || true
+    journalctl -u "$LIBRARY_SERVICE" -n 20 --no-pager 2>/dev/null \
+      || log_warn "Could not read logs; run: journalctl -u ${LIBRARY_SERVICE} --no-pager"
     exit 1
   fi
   if command -v ufw >/dev/null 2>&1; then
@@ -1239,13 +1263,7 @@ do_install() {
   fi
 
   if [ -n "$library_port" ]; then
-    case "$library_port" in
-      *[!0-9]*) log_error "--library-port must be a number (1-65535)"; exit 1 ;;
-    esac
-    if [ "$library_port" -lt 1 ] || [ "$library_port" -gt 65535 ]; then
-      log_error "--library-port must be between 1 and 65535"
-      exit 1
-    fi
+    validate_port "--library-port" "$library_port"
   fi
 
   # Validate TLS flag combinations
