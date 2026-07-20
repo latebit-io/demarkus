@@ -17,7 +17,9 @@
 #   The broker binds loopback (:8080 OAuth/API, :8081 MCP); front the
 #   public URL with a TLS reverse proxy. Omit the OIDC flags to scaffold
 #   the broker config for later editing; --with-library alone serves a
-#   read-only reading room on :8090. Pin the library with --library-version.
+#   read-only reading room: HTTPS on :443 with the world's cert when TLS
+#   is configured (--domain or --tls-cert), else HTTP on :8090. Override
+#   with --library-port; pin the version with --library-version.
 #
 # For private repos, set GITHUB_TOKEN:
 #   curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
@@ -83,6 +85,22 @@ log_info()  { printf "${GREEN}[info]${NC}  %s\n" "$*"; }
 log_warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$*"; }
 log_error() { printf "${RED}[error]${NC} %s\n" "$*" >&2; }
 log_step()  { printf "${BLUE}==> %s${NC}\n" "$*"; }
+
+# validate_port aborts unless $2 is an integer in [1,65535]; $1 names the
+# source for the error message (a flag or a config file).
+validate_port() {
+  local source="$1"
+  local port="$2"
+  case "$port" in
+    ''|*[!0-9]*)
+      log_error "${source} must be a number (1-65535), got '${port}'"
+      exit 1 ;;
+  esac
+  if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    log_error "${source} must be between 1 and 65535, got '${port}'"
+    exit 1
+  fi
+}
 
 # --- Install permissions ---
 
@@ -537,6 +555,26 @@ setup_cert_renewal() {
   fi
 }
 
+# setup_library_cert_renewal extends the renewal deploy-hook so certbot also
+# restarts the library serving the same cert (the server reloads on SIGHUP;
+# the library needs a restart). Replaces the server-only cron line.
+setup_library_cert_renewal() {
+  if [ "$PLATFORM" != "linux" ]; then return; fi
+
+  if crontab -l 2>/dev/null | grep -q "try-restart demarkus-library"; then
+    log_info "Certbot renewal cron already restarts the library"
+    return
+  fi
+
+  local hook='pidof demarkus-server | xargs -r kill -HUP; systemctl try-restart demarkus-library'
+  local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\""
+  if ! (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus"; echo "$cron_line") | crontab -; then
+    log_error "Could not update the certbot renewal cron for the library"
+    exit 1
+  fi
+  log_info "Certbot renewal cron now reloads the server and restarts the library"
+}
+
 setup_custom_tls() {
   local cert_src="$1"
   local key_src="$2"
@@ -957,13 +995,17 @@ EOF
 }
 
 # install_library deploys the demarkus-library reading room in direct-QUIC
-# (read-only) mode against the local world. Broker/SSO mode is a config
-# change documented in the generated env file and the deployment docs.
+# (read-only) mode against the local world. With TLS material it serves
+# HTTPS itself on lib_port, reusing the world's cert (one hostname, one
+# identity). Broker/SSO mode is a config change documented in the env file.
 install_library() {
   local lib_version="$1"
   local domain="$2"
   local no_tls="$3"
   local tmpdir="$4"
+  local lib_port="$5"
+  local cert_path="$6"
+  local key_path="$7"
 
   if [ "$PLATFORM" != "linux" ]; then
     log_warn "--with-library is Linux-only (systemd); skipping library install"
@@ -971,6 +1013,56 @@ install_library() {
   fi
 
   log_step "Installing demarkus-library (reading room)"
+
+  # A kept env is authoritative: its PORT and TLS lines win over flags and
+  # defaults, and the capability grant, port check, cert group access, and
+  # firewall rule below must match what the service will actually run with.
+  local lib_cert="$cert_path"
+  local lib_key="$key_path"
+  if [ -f "${LIBRARY_CONFIG_DIR}/env" ]; then
+    local kept_port
+    kept_port=$(sed -n 's/^PORT=//p' "${LIBRARY_CONFIG_DIR}/env" | head -1)
+    if [ -n "$kept_port" ] && [ "$kept_port" != "$lib_port" ]; then
+      validate_port "PORT in ${LIBRARY_CONFIG_DIR}/env" "$kept_port"
+      log_info "Existing library config sets PORT=${kept_port}; edit ${LIBRARY_CONFIG_DIR}/env to change it"
+      lib_port="$kept_port"
+    fi
+    lib_cert=$(sed -n 's/^DEMARKUS_TLS_CERT=//p' "${LIBRARY_CONFIG_DIR}/env" | head -1)
+    lib_key=$(sed -n 's/^DEMARKUS_TLS_KEY=//p' "${LIBRARY_CONFIG_DIR}/env" | head -1)
+  fi
+
+  # Fail now rather than install a unit that crash-loops on a taken port.
+  # Fail closed: no check means no refusal guarantee.
+  if ! command -v ss >/dev/null 2>&1; then
+    log_error "ss (iproute2) is required for the port availability check; install it and re-run"
+    exit 1
+  fi
+  local ss_out
+  if ! ss_out=$(ss -ltnpH "sport = :${lib_port}" 2>&1); then
+    log_error "Could not check whether TCP port ${lib_port} is free (ss failed): ${ss_out}"
+    exit 1
+  fi
+  # Exempt only this unit's own listener, matched by MainPID; a look-alike
+  # process that merely shares the name must still count as a conflict.
+  local unit_pid=""
+  unit_pid=$(systemctl show -p MainPID --value "$LIBRARY_SERVICE" 2>/dev/null) || unit_pid=""
+  local port_holder="$ss_out"
+  if [ -n "$unit_pid" ] && [ "$unit_pid" != "0" ]; then
+    local grep_rc=0
+    port_holder=$(printf '%s\n' "$ss_out" | grep -v "pid=${unit_pid},") || grep_rc=$?
+    # grep 1 = nothing left after filtering; anything higher is a real error.
+    if [ "$grep_rc" -gt 1 ]; then
+      log_error "Could not filter the port ${lib_port} listener list (grep exit ${grep_rc})"
+      exit 1
+    fi
+  fi
+  if [ -n "$port_holder" ]; then
+    log_error "TCP port ${lib_port} is already in use:"
+    log_error "  ${port_holder}"
+    log_error "Pick a free port with --library-port <port>"
+    exit 1
+  fi
+
   if [ -z "$lib_version" ]; then
     lib_version=$(curl -fsSL "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
   fi
@@ -1002,6 +1094,17 @@ install_library() {
   chown root:"$LIBRARY_SERVICE" "$LIBRARY_CONFIG_DIR"
   chmod 750 "$LIBRARY_CONFIG_DIR"
 
+  # Shared cert, shared group: the world's TLS files are root:demarkus 640,
+  # so the library user joins the demarkus group to read them.
+  if [ -n "$lib_cert" ]; then
+    if ! id -nG "$LIBRARY_SERVICE" | tr ' ' '\n' | grep -qx "$SERVICE_NAME"; then
+      if ! usermod -aG "$SERVICE_NAME" "$LIBRARY_SERVICE"; then
+        log_error "Could not add ${LIBRARY_SERVICE} to the ${SERVICE_NAME} group for TLS cert access"
+        exit 1
+      fi
+    fi
+  fi
+
   local lib_host="localhost:6309"
   local lib_insecure="true"
   if [ -n "$domain" ] && [ "$no_tls" = false ]; then
@@ -1011,10 +1114,14 @@ install_library() {
 
   if [ ! -f "${LIBRARY_CONFIG_DIR}/env" ]; then
     {
-      printf 'PORT=8090\n'
+      printf 'PORT=%s\n' "$lib_port"
       printf 'DEMARKUS_TRANSPORT=quic\n'
       printf 'DEMARKUS_HOST=%s\n' "$lib_host"
       printf 'DEMARKUS_INSECURE=%s\n' "$lib_insecure"
+      if [ -n "$lib_cert" ]; then
+        printf 'DEMARKUS_TLS_CERT=%s\n' "$lib_cert"
+        printf 'DEMARKUS_TLS_KEY=%s\n' "$lib_key"
+      fi
       printf '# Broker/SSO mode (per-reader login, browser editing): see\n'
       printf '# https://www.demarkus.io/deployment/single-host/\n'
     } > "${LIBRARY_CONFIG_DIR}/env"
@@ -1022,6 +1129,12 @@ install_library() {
     chmod 640 "${LIBRARY_CONFIG_DIR}/env"
   else
     log_info "Keeping existing library config: ${LIBRARY_CONFIG_DIR}/env"
+  fi
+
+  # Ports below 1024 need the bind capability; the unit runs unprivileged.
+  local cap_line=""
+  if [ "$lib_port" -lt 1024 ]; then
+    cap_line="AmbientCapabilities=CAP_NET_BIND_SERVICE"
   fi
 
   cat > "${SYSTEMD_DIR}/${LIBRARY_SERVICE}.service" << EOF
@@ -1036,6 +1149,7 @@ ExecStart=${INSTALL_DIR}/demarkus-library
 EnvironmentFile=${LIBRARY_CONFIG_DIR}/env
 Restart=on-failure
 RestartSec=5
+${cap_line}
 
 ProtectSystem=strict
 PrivateTmp=yes
@@ -1050,10 +1164,32 @@ RestrictSUIDSGID=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+
+  # Let's Encrypt renewals must also restart the library holding the cert.
+  case "$lib_cert" in
+    /etc/letsencrypt/*) setup_library_cert_renewal ;;
+  esac
+
   systemctl daemon-reload
   systemctl enable "$LIBRARY_SERVICE"
   systemctl restart "$LIBRARY_SERVICE"
-  log_info "Library started on :8090 (read-only reading room over ${lib_host})"
+  sleep 1
+  if ! systemctl is-active --quiet "$LIBRARY_SERVICE"; then
+    log_error "Library failed to start. Recent logs:"
+    journalctl -u "$LIBRARY_SERVICE" -n 20 --no-pager 2>/dev/null \
+      || log_warn "Could not read logs; run: journalctl -u ${LIBRARY_SERVICE} --no-pager"
+    exit 1
+  fi
+  if command -v ufw >/dev/null 2>&1; then
+    if ! ufw allow "${lib_port}/tcp" >/dev/null 2>&1; then
+      log_warn "Could not open TCP ${lib_port} in ufw; the library may be unreachable until you open it"
+    fi
+  fi
+  if [ -n "$lib_cert" ]; then
+    log_info "Library started: HTTPS on :${lib_port} (reading room over ${lib_host})"
+  else
+    log_info "Library started on :${lib_port} (read-only reading room over ${lib_host})"
+  fi
 }
 
 do_install() {
@@ -1067,6 +1203,7 @@ do_install() {
   local with_broker=false
   local with_library=false
   local library_version=""
+  local library_port=""
   local broker_public_url=""
   local broker_oidc_issuer=""
   local broker_oidc_client_id=""
@@ -1086,6 +1223,7 @@ do_install() {
       --with-broker)  with_broker=true; shift ;;
       --with-library) with_library=true; shift ;;
       --library-version)           library_version="$2"; shift 2 ;;
+      --library-port)              library_port="$2"; shift 2 ;;
       --broker-public-url)         broker_public_url="$2"; shift 2 ;;
       --broker-oidc-issuer)        broker_oidc_issuer="$2"; shift 2 ;;
       --broker-oidc-client-id)     broker_oidc_client_id="$2"; shift 2 ;;
@@ -1132,6 +1270,10 @@ do_install() {
       log_error "Secret file is empty: ${broker_oidc_client_secret_file}"
       exit 1
     fi
+  fi
+
+  if [ -n "$library_port" ]; then
+    validate_port "--library-port" "$library_port"
   fi
 
   # Validate TLS flag combinations
@@ -1419,12 +1561,18 @@ do_install() {
     # is the operator's to open. No firewall change here.
   fi
   if [ "$with_library" = true ]; then
-    install_library "$library_version" "$domain" "$no_tls" "$_TMPDIR"
-    if [ "$PLATFORM" = "linux" ] && command -v ufw >/dev/null 2>&1; then
-      if ! ufw allow 8090/tcp >/dev/null 2>&1; then
-        log_warn "Could not open TCP 8090 in ufw; the library may be unreachable until you open it"
+    # Default port: standard HTTPS when TLS material exists (the reading room
+    # is browser-facing), else unprivileged 8090 plain HTTP. Firewall opening
+    # happens inside install_library, which knows the effective port.
+    if [ -z "$library_port" ]; then
+      if [ -n "$tls_cert_path" ]; then
+        library_port=443
+      else
+        library_port=8090
       fi
     fi
+    install_library "$library_version" "$domain" "$no_tls" "$_TMPDIR" \
+      "$library_port" "$tls_cert_path" "$tls_key_path"
   fi
   if [ "$PLATFORM" = "darwin" ]; then
     local log_dir="$HOME/.demarkus/logs"
