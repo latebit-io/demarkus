@@ -1032,9 +1032,7 @@ install_library() {
   fi
 
   # Fail now rather than install a unit that crash-loops on a taken port.
-  # Fail closed: no check means no refusal guarantee. The library's own
-  # listener from a previous install is fine; ss truncates process names
-  # to 15 chars, hence the shortened match.
+  # Fail closed: no check means no refusal guarantee.
   if ! command -v ss >/dev/null 2>&1; then
     log_error "ss (iproute2) is required for the port availability check; install it and re-run"
     exit 1
@@ -1044,8 +1042,20 @@ install_library() {
     log_error "Could not check whether TCP port ${lib_port} is free (ss failed): ${ss_out}"
     exit 1
   fi
-  local port_holder
-  port_holder=$(printf '%s\n' "$ss_out" | grep -v 'demarkus-librar' || true)
+  # Exempt only this unit's own listener, matched by MainPID; a look-alike
+  # process that merely shares the name must still count as a conflict.
+  local unit_pid=""
+  unit_pid=$(systemctl show -p MainPID --value "$LIBRARY_SERVICE" 2>/dev/null) || unit_pid=""
+  local port_holder="$ss_out"
+  if [ -n "$unit_pid" ] && [ "$unit_pid" != "0" ]; then
+    local grep_rc=0
+    port_holder=$(printf '%s\n' "$ss_out" | grep -v "pid=${unit_pid},") || grep_rc=$?
+    # grep 1 = nothing left after filtering; anything higher is a real error.
+    if [ "$grep_rc" -gt 1 ]; then
+      log_error "Could not filter the port ${lib_port} listener list (grep exit ${grep_rc})"
+      exit 1
+    fi
+  fi
   if [ -n "$port_holder" ]; then
     log_error "TCP port ${lib_port} is already in use:"
     log_error "  ${port_holder}"
