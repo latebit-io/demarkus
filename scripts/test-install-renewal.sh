@@ -62,10 +62,21 @@ check() { # check <desc> <condition-cmd...>
   else echo "  FAIL $desc"; fail=$((fail+1)); fi
 }
 
-# count_matches reads stdin and prints the match count. grep -c exits 1 on zero
-# matches, which inside a bare assignment aborts under set -e — turning the
-# regression these checks exist to catch into a crash with no diagnostic.
-count_matches() { grep -c "$1" || true; }
+# count_matches reads stdin and prints the match count. Status 1 is "no
+# matches" and must not abort under set -e; anything above it is a real grep
+# failure and is propagated rather than passed off as a count of zero.
+count_matches() {
+  local out rc=0
+  out=$(grep -c -- "$1") || rc=$?
+  if [ "$rc" -gt 1 ]; then return "$rc"; fi
+  printf '%s\n' "$out"
+}
+
+echo "== the harness's own count helper"
+zero_count=$(printf 'x\n' | count_matches nomatch)
+check "zero matches counts as 0"       test "$zero_count" = "0"
+hard_rc=0; printf 'x\n' | count_matches '[' >/dev/null 2>&1 || hard_rc=$?
+check "real grep errors propagate"     test "$hard_rc" -gt 1
 
 echo "== fresh install (server only)"
 setup_cert_renewal example.com
