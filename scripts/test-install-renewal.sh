@@ -62,6 +62,11 @@ check() { # check <desc> <condition-cmd...>
   else echo "  FAIL $desc"; fail=$((fail+1)); fi
 }
 
+# count_matches reads stdin and prints the match count. grep -c exits 1 on zero
+# matches, which inside a bare assignment aborts under set -e — turning the
+# regression these checks exist to catch into a crash with no diagnostic.
+count_matches() { grep -c "$1" || true; }
+
 echo "== fresh install (server only)"
 setup_cert_renewal example.com
 check "deploy hook written"            test -f "$HOOK"
@@ -175,18 +180,20 @@ check "user job preserved"             grep -q "^15 2 " "$CRON"
 echo "== static: renewal is wired from the main flow, not from setup_tls"
 # The bug was a call-graph one: setup_cert_renewal lived inside setup_tls,
 # which the main flow skips whenever the certificate already exists.
-in_setup_tls=$(awk '/^setup_tls\(\)/{on=1} on && /^}/{print; on=0} on' "$SRC" | grep -c "setup_cert_renewal" || true)
-in_main=$(awk '/# Let.s Encrypt/{on=1} on && /^  elif/{on=0} on' "$SRC" | grep -c "setup_cert_renewal")
+in_setup_tls=$(awk '/^setup_tls\(\)/{on=1} on && /^}/{print; on=0} on' "$SRC" | count_matches "setup_cert_renewal")
+in_main=$(awk '/# Let.s Encrypt/{on=1} on && /^  elif/{on=0} on' "$SRC" | count_matches "setup_cert_renewal")
 check "setup_tls no longer owns renewal"  test "$in_setup_tls" -eq 0
 check "main LE branch calls renewal"      test "$in_main" -ge 1
 
 # Every non-Let's-Encrypt path through the TLS block must tear our wiring down.
-non_le=$(awk '/^  # TLS setup/{on=1} on && /^  # System tuning/{on=0} on' "$SRC" | grep -c "clear_cert_renewal")
+non_le=$(awk '/^  # TLS setup/{on=1} on && /^  # System tuning/{on=0} on' "$SRC" | count_matches "clear_cert_renewal")
 check "non-LE branches clear wiring"      test "$non_le" -eq 3
 # A bare call would discard the teardown result the function now returns.
-guarded=$(grep -c "clear_cert_renewal || report_stale_renewal" "$SRC")
+guarded=$(count_matches "clear_cert_renewal || report_stale_renewal" < "$SRC")
 check "every call site checks result"     test "$guarded" -eq 3
 check "uninstall uses remove_path"        grep -q 'remove_path "$CERT_DEPLOY_HOOK"' "$SRC"
+# Configuring the unit from half a custom-TLS pair crash-loops the service.
+check "custom TLS needs cert and key"     bash -c "awk '/Existing custom certs from a previous install/,/tls_key_path=/' '$SRC' | grep -q 'need both cert.pem and key.pem'"
 # Pipelines must be wrapped: `check ... cmd | grep` would pipe check's own
 # output into grep and lose the result.
 check "uninstall cron failure tracked"    bash -c "awk '/# Remove certbot renewal cron/,/^  fi/' '$SRC' | grep -q uninstall_errors"

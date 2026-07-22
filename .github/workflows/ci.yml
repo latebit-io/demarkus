@@ -138,10 +138,20 @@ jobs:
     if: needs.detect-changes.outputs.install == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Lints and runs a local script; no authenticated git operation, no API call.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # install.sh carries a pre-existing warning/info backlog (SC2034, SC2206,
+      # SC2059, SC2024, SC2001) that is out of scope here, so it is gated at
+      # error only. The test script is new and held to warning.
       - name: Shellcheck install.sh
-        run: shellcheck -S error install.sh scripts/test-install-renewal.sh
+        run: shellcheck -S error install.sh
+      - name: Shellcheck the renewal test
+        run: shellcheck -S warning scripts/test-install-renewal.sh
       - name: Test certbot renewal wiring
         run: bash scripts/test-install-renewal.sh
 

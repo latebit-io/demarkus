@@ -571,9 +571,8 @@ read_crontab() {
 }
 
 # strip_cron_entries prints TABLE without demarkus-owned entries. grep exits 1
-# when it filters every line out, which is the normal "our entry was the only
-# one" case, so only a status above 1 is a real failure. Under set -e an
-# unguarded assignment from that grep would abort the script outright.
+# when it filters everything out, which is success here, and would otherwise
+# trip set -e; only a status above 1 is a real failure.
 strip_cron_entries() {
   local table="$1" out="" rc=0
 
@@ -644,10 +643,9 @@ EOF
 # longer Let's Encrypt backed, so a switch to custom certs or --no-tls does not
 # leave a cron renewing and reloading against a cert nothing uses. Only our own
 # cron line and hook path are touched; user-managed certbot config is left.
-# Returns nonzero if any part of the teardown failed so the caller reports it.
-# Deliberately not fatal: this runs after cert material is already written, and
-# aborting here would leave the service unit unregenerated, which is worse than
-# a leftover entry that renews a certificate nothing reads.
+# Returns nonzero on a failed teardown but is deliberately not fatal: it runs
+# after cert material is written, so aborting would leave the unit
+# unregenerated — worse than a leftover entry renewing an unused cert.
 clear_cert_renewal() {
   if [ "$PLATFORM" != "linux" ]; then return 0; fi
 
@@ -1788,8 +1786,15 @@ do_install() {
     setup_cert_renewal "$domain"
     tls_cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
     tls_key_path="/etc/letsencrypt/live/${domain}/privkey.pem"
-  elif [ -d "${CONFIG_DIR}/tls" ] && [ -f "${CONFIG_DIR}/tls/cert.pem" ]; then
-    # Existing custom certs from a previous install
+  elif [ -d "${CONFIG_DIR}/tls" ] \
+    && { [ -f "${CONFIG_DIR}/tls/cert.pem" ] || [ -f "${CONFIG_DIR}/tls/key.pem" ]; }; then
+    # Existing custom certs from a previous install. Half a pair would configure
+    # the unit against a missing file and crash-loop the service on start.
+    if [ ! -f "${CONFIG_DIR}/tls/cert.pem" ] || [ ! -f "${CONFIG_DIR}/tls/key.pem" ]; then
+      log_error "Incomplete custom TLS material in ${CONFIG_DIR}/tls/: need both cert.pem and key.pem"
+      log_error "Restore the missing file, or pass --tls-cert/--tls-key, or --no-tls"
+      exit 1
+    fi
     log_info "Using existing custom certificates from ${CONFIG_DIR}/tls/"
     clear_cert_renewal || report_stale_renewal
     tls_cert_path="${CONFIG_DIR}/tls/cert.pem"
