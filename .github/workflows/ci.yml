@@ -24,6 +24,7 @@ jobs:
       client: ${{ steps.filter.outputs.client }}
       broker: ${{ steps.filter.outputs.broker }}
       charts: ${{ steps.filter.outputs.charts }}
+      install: ${{ steps.filter.outputs.install }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -45,6 +46,9 @@ jobs:
               - 'protocol/**'
             charts:
               - 'deploy/helm/**'
+            install:
+              - 'install.sh'
+              - 'scripts/test-install-renewal.sh'
 
   test-protocol:
     needs: detect-changes
@@ -128,6 +132,18 @@ jobs:
         run: cd tools && go vet ./demarkus-broker/...
       - name: Build
         run: cd tools && go build -o /dev/null ./demarkus-broker
+
+  test-install:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.install == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck install.sh
+        run: shellcheck -S error install.sh scripts/test-install-renewal.sh
+      - name: Test certbot renewal wiring
+        run: bash scripts/test-install-renewal.sh
 
   test-charts:
     needs: detect-changes

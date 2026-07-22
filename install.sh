@@ -570,15 +570,32 @@ read_crontab() {
   esac
 }
 
+# strip_cron_entries prints TABLE without demarkus-owned entries. grep exits 1
+# when it filters every line out, which is the normal "our entry was the only
+# one" case, so only a status above 1 is a real failure. Under set -e an
+# unguarded assignment from that grep would abort the script outright.
+strip_cron_entries() {
+  local table="$1" out="" rc=0
+
+  if [ -n "$table" ]; then
+    out=$(printf '%s\n' "$table" | grep -Ev "$(cert_cron_pattern)") || rc=$?
+    if [ "$rc" -gt 1 ]; then
+      return "$rc"
+    fi
+  fi
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out"
+  fi
+  return 0
+}
+
 # compose_cron_table prints TABLE with demarkus-owned entries dropped and ENTRY
 # appended. Filtering with grep -v '^$' instead would strip blank lines the user
 # put in their own crontab.
 compose_cron_table() {
-  local table="$1" entry="$2" kept=""
+  local table="$1" entry="$2" kept
 
-  if [ -n "$table" ]; then
-    kept=$(printf '%s\n' "$table" | grep -Ev "$(cert_cron_pattern)")
-  fi
+  kept=$(strip_cron_entries "$table") || return 1
   if [ -n "$kept" ]; then
     printf '%s\n%s\n' "$kept" "$entry"
   else
@@ -643,15 +660,16 @@ clear_cert_renewal() {
       failed=1
     fi
   fi
-  local table rc
-  table=$(read_crontab)
-  rc=$?
+  # Capture guarded with ||: set -e aborts on a bare assignment from a command
+  # substitution that exits nonzero, and rc 1 (no crontab) is a normal state.
+  local table rc=0
+  table=$(read_crontab) || rc=$?
   if [ "$rc" -eq 2 ]; then
     # Leaving a stale entry is recoverable; rewriting from an unread table is not.
     log_warn "Could not read the root crontab; leaving any stale renewal entry in place"
     failed=1
   elif [ "$rc" -eq 0 ] && printf '%s\n' "$table" | grep -Eq "$(cert_cron_pattern)"; then
-    if printf '%s\n' "$table" | grep -Ev "$(cert_cron_pattern)" | crontab -; then
+    if strip_cron_entries "$table" | crontab -; then
       cleared=true
     else
       log_warn "Could not drop the stale certbot renewal cron entry"
@@ -682,14 +700,15 @@ setup_cert_renewal() {
     write_cert_deploy_hook "$hook"
   fi
 
-  local table rc
-  table=$(read_crontab)
-  rc=$?
+  # Guarded with ||: set -e aborts a bare assignment whose command substitution
+  # exits nonzero, and rc 1 (no root crontab yet) is the normal fresh-host case.
+  local table rc=0
+  table=$(read_crontab) || rc=$?
   if [ "$rc" -eq 2 ]; then
     log_error "Could not read the root crontab; refusing to rewrite it. Renewal will not reload the services"
     exit 1
   fi
-  [ "$rc" -eq 1 ] && table=""
+  if [ "$rc" -eq 1 ]; then table=""; fi
 
   if printf '%s\n' "$table" | grep -q "$CERT_CRON_MARKER"; then
     log_info "Certbot renewal cron already configured"
@@ -721,14 +740,13 @@ setup_library_cert_renewal() {
   # server-only install may have written the server-only version of it.
   write_cert_deploy_hook "$hook"
 
-  local table rc
-  table=$(read_crontab)
-  rc=$?
+  local table rc=0
+  table=$(read_crontab) || rc=$?
   if [ "$rc" -eq 2 ]; then
     log_error "Could not read the root crontab; refusing to rewrite it. Renewal will not restart the library"
     exit 1
   fi
-  [ "$rc" -eq 1 ] && table=""
+  if [ "$rc" -eq 1 ]; then table=""; fi
 
   # Ours only: a user job mentioning the library must not suppress our entry.
   if printf '%s\n' "$table" | grep -F "$CERT_CRON_MARKER" | grep -q "try-restart demarkus-library"; then
@@ -2351,14 +2369,13 @@ do_uninstall() {
 
   # Remove certbot renewal cron and the deploy hook
   if [ "$PLATFORM" = "linux" ]; then
-    local cron_table cron_rc
-    cron_table=$(read_crontab)
-    cron_rc=$?
+    local cron_table cron_rc=0
+    cron_table=$(read_crontab) || cron_rc=$?
     if [ "$cron_rc" -eq 2 ]; then
       log_warn "Could not read the root crontab; the renewal entry may remain"
       uninstall_errors=$((uninstall_errors + 1))
     elif [ "$cron_rc" -eq 0 ] && printf '%s\n' "$cron_table" | grep -Eq "$(cert_cron_pattern)"; then
-      if ! printf '%s\n' "$cron_table" | grep -Ev "$(cert_cron_pattern)" | crontab -; then
+      if ! strip_cron_entries "$cron_table" | crontab -; then
         log_warn "Could not drop the certbot renewal entry from the root crontab"
         uninstall_errors=$((uninstall_errors + 1))
       fi
