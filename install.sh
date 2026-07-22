@@ -518,8 +518,8 @@ setup_tls() {
 
   fix_cert_permissions "$domain"
 
-  # Set up auto-renewal with SIGHUP reload
-  setup_cert_renewal "$domain"
+  # Renewal setup belongs to the caller: this function is skipped entirely when
+  # the cert already exists, so wiring it here left re-runs with no reload hook.
 
   log_info "TLS configured for ${domain}"
 }
@@ -540,21 +540,190 @@ fix_cert_permissions() {
   log_info "Certificate permissions updated for ${SERVICE_NAME} user"
 }
 
+CERT_DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/demarkus-reload.sh"
+CERT_CRON_MARKER="# demarkus-managed-renewal"
+
+# cert_cron_pattern matches only cron entries this installer wrote: the marker,
+# or the exact unmarked line older versions produced (setup_cert_renewal
+# migrates those to the marker). A bare "certbot renew.*demarkus" would also
+# match a user's own job that reloads demarkus.
+cert_cron_pattern() {
+  printf '%s|certbot renew --quiet --deploy-hook "pidof demarkus-server' "$CERT_CRON_MARKER"
+}
+
+# read_crontab prints the root crontab. 0 = read it (may be empty), 1 = no
+# crontab installed, 2 = the read failed. crontab -l exits non-zero for both of
+# the latter, and treating a failed read as "empty" makes the usual
+# read-filter-write pipeline install an empty table, destroying the user's jobs.
+# Callers must never write back on 2.
+read_crontab() {
+  local out rc
+  out=$(crontab -l 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  case "$out" in
+    *"no crontab for"*) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# strip_cron_entries prints TABLE without demarkus-owned entries. grep exits 1
+# when it filters everything out, which is success here, and would otherwise
+# trip set -e; only a status above 1 is a real failure.
+strip_cron_entries() {
+  local table="$1" out="" rc=0
+
+  if [ -n "$table" ]; then
+    out=$(printf '%s\n' "$table" | grep -Ev "$(cert_cron_pattern)") || rc=$?
+    if [ "$rc" -gt 1 ]; then
+      return "$rc"
+    fi
+  fi
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out"
+  fi
+  return 0
+}
+
+# compose_cron_table prints TABLE with demarkus-owned entries dropped and ENTRY
+# appended. Filtering with grep -v '^$' instead would strip blank lines the user
+# put in their own crontab.
+compose_cron_table() {
+  local table="$1" entry="$2" kept
+
+  kept=$(strip_cron_entries "$table") || return 1
+  if [ -n "$kept" ]; then
+    printf '%s\n%s\n' "$kept" "$entry"
+  else
+    printf '%s\n' "$entry"
+  fi
+}
+
+# write_cert_deploy_hook installs the reload command as a certbot deploy hook.
+# certbot.timer renews on its own schedule and runs only this directory, so
+# without the file a timer-driven renewal leaves stale certs loaded.
+# Staged through a temp file in the same directory: certbot executes whatever
+# is at this path, so it must never be observable half-written.
+write_cert_deploy_hook() {
+  local hook="$1"
+  local dir tmp
+  dir=$(dirname "$CERT_DEPLOY_HOOK")
+
+  if ! mkdir -p "$dir"; then
+    log_error "Could not create ${dir}; renewals will not reload the services"
+    exit 1
+  fi
+  if ! tmp=$(mktemp "${CERT_DEPLOY_HOOK}.XXXXXX"); then
+    log_error "Could not stage the certbot deploy hook in ${dir}"
+    exit 1
+  fi
+
+  if ! cat > "$tmp" << EOF
+#!/bin/sh
+# Managed by demarkus install.sh. Reloads the certificate holders after a
+# successful renewal, whichever mechanism triggered it.
+${hook}
+EOF
+  then
+    rm -f "$tmp"
+    log_error "Could not write the certbot deploy hook"
+    exit 1
+  fi
+  if ! chmod 755 "$tmp" || ! mv -f "$tmp" "$CERT_DEPLOY_HOOK"; then
+    rm -f "$tmp"
+    log_error "Could not install the certbot deploy hook at ${CERT_DEPLOY_HOOK}"
+    exit 1
+  fi
+}
+
+# clear_cert_renewal drops demarkus-managed renewal wiring when this host is no
+# longer Let's Encrypt backed, so a switch to custom certs or --no-tls does not
+# leave a cron renewing and reloading against a cert nothing uses. Only our own
+# cron line and hook path are touched; user-managed certbot config is left.
+# Returns nonzero on a failed teardown but is deliberately not fatal: it runs
+# after cert material is written, so aborting would leave the unit
+# unregenerated — worse than a leftover entry renewing an unused cert.
+clear_cert_renewal() {
+  if [ "$PLATFORM" != "linux" ]; then return 0; fi
+
+  local cleared=false failed=0
+  if [ -f "$CERT_DEPLOY_HOOK" ]; then
+    if rm -f "$CERT_DEPLOY_HOOK"; then
+      cleared=true
+    else
+      log_warn "Could not remove the stale deploy hook ${CERT_DEPLOY_HOOK}"
+      failed=1
+    fi
+  fi
+  # Capture guarded with ||: set -e aborts on a bare assignment from a command
+  # substitution that exits nonzero, and rc 1 (no crontab) is a normal state.
+  local table rc=0
+  table=$(read_crontab) || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    # Leaving a stale entry is recoverable; rewriting from an unread table is not.
+    log_warn "Could not read the root crontab; leaving any stale renewal entry in place"
+    failed=1
+  elif [ "$rc" -eq 0 ] && printf '%s\n' "$table" | grep -Eq "$(cert_cron_pattern)"; then
+    if strip_cron_entries "$table" | crontab -; then
+      cleared=true
+    else
+      log_warn "Could not drop the stale certbot renewal cron entry"
+      failed=1
+    fi
+  fi
+  if [ "$cleared" = true ]; then
+    log_info "Removed demarkus certbot renewal wiring (no longer using Let's Encrypt)"
+  fi
+  return "$failed"
+}
+
+# report_stale_renewal names what to clean by hand after a failed teardown.
+report_stale_renewal() {
+  log_warn "Stale demarkus renewal wiring may remain; check the root crontab for '${CERT_CRON_MARKER}' and remove ${CERT_DEPLOY_HOOK}"
+}
+
 setup_cert_renewal() {
   local domain="$1"
 
   if [ "$PLATFORM" != "linux" ]; then return; fi
 
   local hook='pidof demarkus-server | xargs -r kill -HUP'
-  local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\""
+  local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\" ${CERT_CRON_MARKER}"
 
-  # Add to root crontab if not already present
-  if ! (crontab -l 2>/dev/null | grep -q "certbot renew.*demarkus"); then
-    (crontab -l 2>/dev/null; echo "$cron_line") | crontab -
-    log_info "Added certbot renewal cron job (twice daily, zero-downtime reload)"
-  else
-    log_info "Certbot renewal cron already configured"
+  # Never downgrade the library-aware hook back to the server-only one.
+  if [ ! -f "$CERT_DEPLOY_HOOK" ] || ! grep -q "demarkus-library" "$CERT_DEPLOY_HOOK"; then
+    write_cert_deploy_hook "$hook"
   fi
+
+  # Guarded with ||: set -e aborts a bare assignment whose command substitution
+  # exits nonzero, and rc 1 (no root crontab yet) is the normal fresh-host case.
+  local table rc=0
+  table=$(read_crontab) || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    log_error "Could not read the root crontab; refusing to rewrite it. Renewal will not reload the services"
+    exit 1
+  fi
+  if [ "$rc" -eq 1 ]; then table=""; fi
+
+  if printf '%s\n' "$table" | grep -q "$CERT_CRON_MARKER"; then
+    log_info "Certbot renewal cron already configured"
+    return
+  fi
+
+  # An unmarked entry from an older install is replaced, not duplicated, so
+  # hosts converge on the marker and stop relying on command matching.
+  local verb="Added"
+  if printf '%s\n' "$table" | grep -Eq "$(cert_cron_pattern)"; then
+    verb="Migrated"
+  fi
+  if ! compose_cron_table "$table" "$cron_line" | crontab -; then
+    log_error "Could not write the certbot renewal cron entry"
+    exit 1
+  fi
+  log_info "${verb} certbot renewal cron job (twice daily, zero-downtime reload)"
 }
 
 # setup_library_cert_renewal extends the renewal deploy-hook so certbot also
@@ -563,14 +732,28 @@ setup_cert_renewal() {
 setup_library_cert_renewal() {
   if [ "$PLATFORM" != "linux" ]; then return; fi
 
-  if crontab -l 2>/dev/null | grep -q "try-restart demarkus-library"; then
+  local hook='pidof demarkus-server | xargs -r kill -HUP; systemctl try-restart demarkus-library'
+
+  # The deploy hook is rewritten even when the cron is already current: the
+  # server-only install may have written the server-only version of it.
+  write_cert_deploy_hook "$hook"
+
+  local table rc=0
+  table=$(read_crontab) || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    log_error "Could not read the root crontab; refusing to rewrite it. Renewal will not restart the library"
+    exit 1
+  fi
+  if [ "$rc" -eq 1 ]; then table=""; fi
+
+  # Ours only: a user job mentioning the library must not suppress our entry.
+  if printf '%s\n' "$table" | grep -F "$CERT_CRON_MARKER" | grep -q "try-restart demarkus-library"; then
     log_info "Certbot renewal cron already restarts the library"
     return
   fi
 
-  local hook='pidof demarkus-server | xargs -r kill -HUP; systemctl try-restart demarkus-library'
-  local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\""
-  if ! (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus"; echo "$cron_line") | crontab -; then
+  local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\" ${CERT_CRON_MARKER}"
+  if ! compose_cron_table "$table" "$cron_line" | crontab -; then
     log_error "Could not update the certbot renewal cron for the library"
     exit 1
   fi
@@ -1588,6 +1771,7 @@ do_install() {
   if [ -n "$tls_cert" ] && [ -n "$tls_key" ]; then
     # User-provided certificates
     setup_custom_tls "$tls_cert" "$tls_key"
+    clear_cert_renewal || report_stale_renewal
     tls_cert_path="${CONFIG_DIR}/tls/cert.pem"
     tls_key_path="${CONFIG_DIR}/tls/key.pem"
   elif [ -n "$domain" ] && [ "$no_tls" = false ]; then
@@ -1598,13 +1782,26 @@ do_install() {
       setup_tls "$domain"
     fi
     fix_cert_permissions "$domain"
+    # Unconditional: a re-run over an existing cert must still get a hook.
+    setup_cert_renewal "$domain"
     tls_cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
     tls_key_path="/etc/letsencrypt/live/${domain}/privkey.pem"
-  elif [ -d "${CONFIG_DIR}/tls" ] && [ -f "${CONFIG_DIR}/tls/cert.pem" ]; then
-    # Existing custom certs from a previous install
+  elif [ -d "${CONFIG_DIR}/tls" ] \
+    && { [ -f "${CONFIG_DIR}/tls/cert.pem" ] || [ -f "${CONFIG_DIR}/tls/key.pem" ]; }; then
+    # Existing custom certs from a previous install. Half a pair would configure
+    # the unit against a missing file and crash-loop the service on start.
+    if [ ! -f "${CONFIG_DIR}/tls/cert.pem" ] || [ ! -f "${CONFIG_DIR}/tls/key.pem" ]; then
+      log_error "Incomplete custom TLS material in ${CONFIG_DIR}/tls/: need both cert.pem and key.pem"
+      log_error "Restore the missing file, or pass --tls-cert/--tls-key, or --no-tls"
+      exit 1
+    fi
     log_info "Using existing custom certificates from ${CONFIG_DIR}/tls/"
+    clear_cert_renewal || report_stale_renewal
     tls_cert_path="${CONFIG_DIR}/tls/cert.pem"
     tls_key_path="${CONFIG_DIR}/tls/key.pem"
+  else
+    # No TLS material: --no-tls, or a domainless install.
+    clear_cert_renewal || report_stale_renewal
   fi
 
   # System tuning
@@ -2175,9 +2372,20 @@ do_uninstall() {
     done
   fi
 
-  # Remove certbot renewal cron
+  # Remove certbot renewal cron and the deploy hook
   if [ "$PLATFORM" = "linux" ]; then
-    (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus" | crontab -) 2>/dev/null || true
+    local cron_table cron_rc=0
+    cron_table=$(read_crontab) || cron_rc=$?
+    if [ "$cron_rc" -eq 2 ]; then
+      log_warn "Could not read the root crontab; the renewal entry may remain"
+      uninstall_errors=$((uninstall_errors + 1))
+    elif [ "$cron_rc" -eq 0 ] && printf '%s\n' "$cron_table" | grep -Eq "$(cert_cron_pattern)"; then
+      if ! strip_cron_entries "$cron_table" | crontab -; then
+        log_warn "Could not drop the certbot renewal entry from the root crontab"
+        uninstall_errors=$((uninstall_errors + 1))
+      fi
+    fi
+    remove_path "$CERT_DEPLOY_HOOK"
   fi
 
   if [ "$uninstall_errors" -ne 0 ]; then
