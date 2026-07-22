@@ -541,6 +541,14 @@ fix_cert_permissions() {
 }
 
 CERT_DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/demarkus-reload.sh"
+CERT_CRON_MARKER="# demarkus-managed-renewal"
+
+# cert_cron_pattern matches only cron entries this installer wrote: the marker,
+# or the unmarked line older versions produced. A bare "certbot renew.*demarkus"
+# would also match a user's own job that reloads demarkus.
+cert_cron_pattern() {
+  printf '%s|certbot renew .*pidof demarkus-server' "$CERT_CRON_MARKER"
+}
 
 # write_cert_deploy_hook installs the reload command as a certbot deploy hook.
 # certbot.timer renews on its own schedule and runs only this directory, so
@@ -594,8 +602,8 @@ clear_cert_renewal() {
       log_warn "Could not remove the stale deploy hook ${CERT_DEPLOY_HOOK}"
     fi
   fi
-  if crontab -l 2>/dev/null | grep -q "certbot renew.*demarkus"; then
-    if (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus") | crontab -; then
+  if crontab -l 2>/dev/null | grep -Eq "$(cert_cron_pattern)"; then
+    if (crontab -l 2>/dev/null | grep -Ev "$(cert_cron_pattern)") | crontab -; then
       cleared=true
     else
       log_warn "Could not drop the stale certbot renewal cron entry"
@@ -612,7 +620,7 @@ setup_cert_renewal() {
   if [ "$PLATFORM" != "linux" ]; then return; fi
 
   local hook='pidof demarkus-server | xargs -r kill -HUP'
-  local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\""
+  local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\" ${CERT_CRON_MARKER}"
 
   # Never downgrade the library-aware hook back to the server-only one.
   if [ ! -f "$CERT_DEPLOY_HOOK" ] || ! grep -q "demarkus-library" "$CERT_DEPLOY_HOOK"; then
@@ -620,7 +628,7 @@ setup_cert_renewal() {
   fi
 
   # Add to root crontab if not already present
-  if ! (crontab -l 2>/dev/null | grep -q "certbot renew.*demarkus"); then
+  if ! (crontab -l 2>/dev/null | grep -Eq "$(cert_cron_pattern)"); then
     (crontab -l 2>/dev/null; echo "$cron_line") | crontab -
     log_info "Added certbot renewal cron job (twice daily, zero-downtime reload)"
   else
@@ -645,8 +653,8 @@ setup_library_cert_renewal() {
     return
   fi
 
-  local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\""
-  if ! (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus"; echo "$cron_line") | crontab -; then
+  local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\" ${CERT_CRON_MARKER}"
+  if ! (crontab -l 2>/dev/null | grep -Ev "$(cert_cron_pattern)"; echo "$cron_line") | crontab -; then
     log_error "Could not update the certbot renewal cron for the library"
     exit 1
   fi
@@ -2260,8 +2268,8 @@ do_uninstall() {
 
   # Remove certbot renewal cron and the deploy hook
   if [ "$PLATFORM" = "linux" ]; then
-    if crontab -l 2>/dev/null | grep -q "certbot renew.*demarkus"; then
-      if ! (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus") | crontab -; then
+    if crontab -l 2>/dev/null | grep -Eq "$(cert_cron_pattern)"; then
+      if ! (crontab -l 2>/dev/null | grep -Ev "$(cert_cron_pattern)") | crontab -; then
         log_warn "Could not drop the certbot renewal entry from the root crontab"
         uninstall_errors=$((uninstall_errors + 1))
       fi
