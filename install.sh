@@ -544,10 +544,46 @@ CERT_DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/demarkus-reload.sh"
 CERT_CRON_MARKER="# demarkus-managed-renewal"
 
 # cert_cron_pattern matches only cron entries this installer wrote: the marker,
-# or the unmarked line older versions produced. A bare "certbot renew.*demarkus"
-# would also match a user's own job that reloads demarkus.
+# or the exact unmarked line older versions produced (setup_cert_renewal
+# migrates those to the marker). A bare "certbot renew.*demarkus" would also
+# match a user's own job that reloads demarkus.
 cert_cron_pattern() {
-  printf '%s|certbot renew .*pidof demarkus-server' "$CERT_CRON_MARKER"
+  printf '%s|certbot renew --quiet --deploy-hook "pidof demarkus-server' "$CERT_CRON_MARKER"
+}
+
+# read_crontab prints the root crontab. 0 = read it (may be empty), 1 = no
+# crontab installed, 2 = the read failed. crontab -l exits non-zero for both of
+# the latter, and treating a failed read as "empty" makes the usual
+# read-filter-write pipeline install an empty table, destroying the user's jobs.
+# Callers must never write back on 2.
+read_crontab() {
+  local out rc
+  out=$(crontab -l 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  case "$out" in
+    *"no crontab for"*) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# compose_cron_table prints TABLE with demarkus-owned entries dropped and ENTRY
+# appended. Filtering with grep -v '^$' instead would strip blank lines the user
+# put in their own crontab.
+compose_cron_table() {
+  local table="$1" entry="$2" kept=""
+
+  if [ -n "$table" ]; then
+    kept=$(printf '%s\n' "$table" | grep -Ev "$(cert_cron_pattern)")
+  fi
+  if [ -n "$kept" ]; then
+    printf '%s\n%s\n' "$kept" "$entry"
+  else
+    printf '%s\n' "$entry"
+  fi
 }
 
 # write_cert_deploy_hook installs the reload command as a certbot deploy hook.
@@ -602,8 +638,14 @@ clear_cert_renewal() {
       log_warn "Could not remove the stale deploy hook ${CERT_DEPLOY_HOOK}"
     fi
   fi
-  if crontab -l 2>/dev/null | grep -Eq "$(cert_cron_pattern)"; then
-    if (crontab -l 2>/dev/null | grep -Ev "$(cert_cron_pattern)") | crontab -; then
+  local table rc
+  table=$(read_crontab)
+  rc=$?
+  if [ "$rc" -eq 2 ]; then
+    # Leaving a stale entry is recoverable; rewriting from an unread table is not.
+    log_warn "Could not read the root crontab; leaving any stale renewal entry in place"
+  elif [ "$rc" -eq 0 ] && printf '%s\n' "$table" | grep -Eq "$(cert_cron_pattern)"; then
+    if printf '%s\n' "$table" | grep -Ev "$(cert_cron_pattern)" | crontab -; then
       cleared=true
     else
       log_warn "Could not drop the stale certbot renewal cron entry"
@@ -627,13 +669,31 @@ setup_cert_renewal() {
     write_cert_deploy_hook "$hook"
   fi
 
-  # Add to root crontab if not already present
-  if ! (crontab -l 2>/dev/null | grep -Eq "$(cert_cron_pattern)"); then
-    (crontab -l 2>/dev/null; echo "$cron_line") | crontab -
-    log_info "Added certbot renewal cron job (twice daily, zero-downtime reload)"
-  else
-    log_info "Certbot renewal cron already configured"
+  local table rc
+  table=$(read_crontab)
+  rc=$?
+  if [ "$rc" -eq 2 ]; then
+    log_error "Could not read the root crontab; refusing to rewrite it. Renewal will not reload the services"
+    exit 1
   fi
+  [ "$rc" -eq 1 ] && table=""
+
+  if printf '%s\n' "$table" | grep -q "$CERT_CRON_MARKER"; then
+    log_info "Certbot renewal cron already configured"
+    return
+  fi
+
+  # An unmarked entry from an older install is replaced, not duplicated, so
+  # hosts converge on the marker and stop relying on command matching.
+  local verb="Added"
+  if printf '%s\n' "$table" | grep -Eq "$(cert_cron_pattern)"; then
+    verb="Migrated"
+  fi
+  if ! compose_cron_table "$table" "$cron_line" | crontab -; then
+    log_error "Could not write the certbot renewal cron entry"
+    exit 1
+  fi
+  log_info "${verb} certbot renewal cron job (twice daily, zero-downtime reload)"
 }
 
 # setup_library_cert_renewal extends the renewal deploy-hook so certbot also
@@ -648,13 +708,23 @@ setup_library_cert_renewal() {
   # server-only install may have written the server-only version of it.
   write_cert_deploy_hook "$hook"
 
-  if crontab -l 2>/dev/null | grep -q "try-restart demarkus-library"; then
+  local table rc
+  table=$(read_crontab)
+  rc=$?
+  if [ "$rc" -eq 2 ]; then
+    log_error "Could not read the root crontab; refusing to rewrite it. Renewal will not restart the library"
+    exit 1
+  fi
+  [ "$rc" -eq 1 ] && table=""
+
+  # Ours only: a user job mentioning the library must not suppress our entry.
+  if printf '%s\n' "$table" | grep -F "$CERT_CRON_MARKER" | grep -q "try-restart demarkus-library"; then
     log_info "Certbot renewal cron already restarts the library"
     return
   fi
 
   local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\" ${CERT_CRON_MARKER}"
-  if ! (crontab -l 2>/dev/null | grep -Ev "$(cert_cron_pattern)"; echo "$cron_line") | crontab -; then
+  if ! compose_cron_table "$table" "$cron_line" | crontab -; then
     log_error "Could not update the certbot renewal cron for the library"
     exit 1
   fi
@@ -2268,8 +2338,14 @@ do_uninstall() {
 
   # Remove certbot renewal cron and the deploy hook
   if [ "$PLATFORM" = "linux" ]; then
-    if crontab -l 2>/dev/null | grep -Eq "$(cert_cron_pattern)"; then
-      if ! (crontab -l 2>/dev/null | grep -Ev "$(cert_cron_pattern)") | crontab -; then
+    local cron_table cron_rc
+    cron_table=$(read_crontab)
+    cron_rc=$?
+    if [ "$cron_rc" -eq 2 ]; then
+      log_warn "Could not read the root crontab; the renewal entry may remain"
+      uninstall_errors=$((uninstall_errors + 1))
+    elif [ "$cron_rc" -eq 0 ] && printf '%s\n' "$cron_table" | grep -Eq "$(cert_cron_pattern)"; then
+      if ! printf '%s\n' "$cron_table" | grep -Ev "$(cert_cron_pattern)" | crontab -; then
         log_warn "Could not drop the certbot renewal entry from the root crontab"
         uninstall_errors=$((uninstall_errors + 1))
       fi
