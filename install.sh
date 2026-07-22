@@ -627,15 +627,20 @@ EOF
 # longer Let's Encrypt backed, so a switch to custom certs or --no-tls does not
 # leave a cron renewing and reloading against a cert nothing uses. Only our own
 # cron line and hook path are touched; user-managed certbot config is left.
+# Returns nonzero if any part of the teardown failed so the caller reports it.
+# Deliberately not fatal: this runs after cert material is already written, and
+# aborting here would leave the service unit unregenerated, which is worse than
+# a leftover entry that renews a certificate nothing reads.
 clear_cert_renewal() {
-  if [ "$PLATFORM" != "linux" ]; then return; fi
+  if [ "$PLATFORM" != "linux" ]; then return 0; fi
 
-  local cleared=false
+  local cleared=false failed=0
   if [ -f "$CERT_DEPLOY_HOOK" ]; then
     if rm -f "$CERT_DEPLOY_HOOK"; then
       cleared=true
     else
       log_warn "Could not remove the stale deploy hook ${CERT_DEPLOY_HOOK}"
+      failed=1
     fi
   fi
   local table rc
@@ -644,16 +649,24 @@ clear_cert_renewal() {
   if [ "$rc" -eq 2 ]; then
     # Leaving a stale entry is recoverable; rewriting from an unread table is not.
     log_warn "Could not read the root crontab; leaving any stale renewal entry in place"
+    failed=1
   elif [ "$rc" -eq 0 ] && printf '%s\n' "$table" | grep -Eq "$(cert_cron_pattern)"; then
     if printf '%s\n' "$table" | grep -Ev "$(cert_cron_pattern)" | crontab -; then
       cleared=true
     else
       log_warn "Could not drop the stale certbot renewal cron entry"
+      failed=1
     fi
   fi
   if [ "$cleared" = true ]; then
     log_info "Removed demarkus certbot renewal wiring (no longer using Let's Encrypt)"
   fi
+  return "$failed"
+}
+
+# report_stale_renewal names what to clean by hand after a failed teardown.
+report_stale_renewal() {
+  log_warn "Stale demarkus renewal wiring may remain; check the root crontab for '${CERT_CRON_MARKER}' and remove ${CERT_DEPLOY_HOOK}"
 }
 
 setup_cert_renewal() {
@@ -1742,7 +1755,7 @@ do_install() {
   if [ -n "$tls_cert" ] && [ -n "$tls_key" ]; then
     # User-provided certificates
     setup_custom_tls "$tls_cert" "$tls_key"
-    clear_cert_renewal
+    clear_cert_renewal || report_stale_renewal
     tls_cert_path="${CONFIG_DIR}/tls/cert.pem"
     tls_key_path="${CONFIG_DIR}/tls/key.pem"
   elif [ -n "$domain" ] && [ "$no_tls" = false ]; then
@@ -1760,12 +1773,12 @@ do_install() {
   elif [ -d "${CONFIG_DIR}/tls" ] && [ -f "${CONFIG_DIR}/tls/cert.pem" ]; then
     # Existing custom certs from a previous install
     log_info "Using existing custom certificates from ${CONFIG_DIR}/tls/"
-    clear_cert_renewal
+    clear_cert_renewal || report_stale_renewal
     tls_cert_path="${CONFIG_DIR}/tls/cert.pem"
     tls_key_path="${CONFIG_DIR}/tls/key.pem"
   else
     # No TLS material: --no-tls, or a domainless install.
-    clear_cert_renewal
+    clear_cert_renewal || report_stale_renewal
   fi
 
   # System tuning
