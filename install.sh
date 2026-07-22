@@ -543,23 +543,67 @@ fix_cert_permissions() {
 CERT_DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/demarkus-reload.sh"
 
 # write_cert_deploy_hook installs the reload command as a certbot deploy hook.
-# The packaged certbot.timer renews on its own schedule and runs only this
-# directory, ignoring our cron's --deploy-hook; without the file, a
-# timer-driven renewal leaves the services holding the previous certificate.
+# certbot.timer renews on its own schedule and runs only this directory, so
+# without the file a timer-driven renewal leaves stale certs loaded.
+# Staged through a temp file in the same directory: certbot executes whatever
+# is at this path, so it must never be observable half-written.
 write_cert_deploy_hook() {
   local hook="$1"
+  local dir tmp
+  dir=$(dirname "$CERT_DEPLOY_HOOK")
 
-  if ! mkdir -p "$(dirname "$CERT_DEPLOY_HOOK")"; then
-    log_error "Could not create $(dirname "$CERT_DEPLOY_HOOK"); renewals will not reload the services"
+  if ! mkdir -p "$dir"; then
+    log_error "Could not create ${dir}; renewals will not reload the services"
     exit 1
   fi
-  cat > "$CERT_DEPLOY_HOOK" << EOF
+  if ! tmp=$(mktemp "${CERT_DEPLOY_HOOK}.XXXXXX"); then
+    log_error "Could not stage the certbot deploy hook in ${dir}"
+    exit 1
+  fi
+
+  if ! cat > "$tmp" << EOF
 #!/bin/sh
 # Managed by demarkus install.sh. Reloads the certificate holders after a
 # successful renewal, whichever mechanism triggered it.
 ${hook}
 EOF
-  chmod 755 "$CERT_DEPLOY_HOOK"
+  then
+    rm -f "$tmp"
+    log_error "Could not write the certbot deploy hook"
+    exit 1
+  fi
+  if ! chmod 755 "$tmp" || ! mv -f "$tmp" "$CERT_DEPLOY_HOOK"; then
+    rm -f "$tmp"
+    log_error "Could not install the certbot deploy hook at ${CERT_DEPLOY_HOOK}"
+    exit 1
+  fi
+}
+
+# clear_cert_renewal drops demarkus-managed renewal wiring when this host is no
+# longer Let's Encrypt backed, so a switch to custom certs or --no-tls does not
+# leave a cron renewing and reloading against a cert nothing uses. Only our own
+# cron line and hook path are touched; user-managed certbot config is left.
+clear_cert_renewal() {
+  if [ "$PLATFORM" != "linux" ]; then return; fi
+
+  local cleared=false
+  if [ -f "$CERT_DEPLOY_HOOK" ]; then
+    if rm -f "$CERT_DEPLOY_HOOK"; then
+      cleared=true
+    else
+      log_warn "Could not remove the stale deploy hook ${CERT_DEPLOY_HOOK}"
+    fi
+  fi
+  if crontab -l 2>/dev/null | grep -q "certbot renew.*demarkus"; then
+    if (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus") | crontab -; then
+      cleared=true
+    else
+      log_warn "Could not drop the stale certbot renewal cron entry"
+    fi
+  fi
+  if [ "$cleared" = true ]; then
+    log_info "Removed demarkus certbot renewal wiring (no longer using Let's Encrypt)"
+  fi
 }
 
 setup_cert_renewal() {
@@ -1620,6 +1664,7 @@ do_install() {
   if [ -n "$tls_cert" ] && [ -n "$tls_key" ]; then
     # User-provided certificates
     setup_custom_tls "$tls_cert" "$tls_key"
+    clear_cert_renewal
     tls_cert_path="${CONFIG_DIR}/tls/cert.pem"
     tls_key_path="${CONFIG_DIR}/tls/key.pem"
   elif [ -n "$domain" ] && [ "$no_tls" = false ]; then
@@ -1637,8 +1682,12 @@ do_install() {
   elif [ -d "${CONFIG_DIR}/tls" ] && [ -f "${CONFIG_DIR}/tls/cert.pem" ]; then
     # Existing custom certs from a previous install
     log_info "Using existing custom certificates from ${CONFIG_DIR}/tls/"
+    clear_cert_renewal
     tls_cert_path="${CONFIG_DIR}/tls/cert.pem"
     tls_key_path="${CONFIG_DIR}/tls/key.pem"
+  else
+    # No TLS material: --no-tls, or a domainless install.
+    clear_cert_renewal
   fi
 
   # System tuning
@@ -2211,8 +2260,13 @@ do_uninstall() {
 
   # Remove certbot renewal cron and the deploy hook
   if [ "$PLATFORM" = "linux" ]; then
-    (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus" | crontab -) 2>/dev/null || true
-    rm -f "$CERT_DEPLOY_HOOK" 2>/dev/null || log_warn "Could not remove ${CERT_DEPLOY_HOOK}"
+    if crontab -l 2>/dev/null | grep -q "certbot renew.*demarkus"; then
+      if ! (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus") | crontab -; then
+        log_warn "Could not drop the certbot renewal entry from the root crontab"
+        uninstall_errors=$((uninstall_errors + 1))
+      fi
+    fi
+    remove_path "$CERT_DEPLOY_HOOK"
   fi
 
   if [ "$uninstall_errors" -ne 0 ]; then
