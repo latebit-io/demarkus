@@ -67,6 +67,8 @@ SYSTEMD_DIR="/etc/systemd/system"
 if [ "${DEMARKUS_INSTALL_TESTMODE:-}" = "1" ] && [ -n "${DEMARKUS_TEST_SYSTEMD_DIR:-}" ]; then
   SYSTEMD_DIR="$DEMARKUS_TEST_SYSTEMD_DIR"
 fi
+# Touched only by the hairpin self-dial fallback (ensure_self_dial).
+HOSTS_FILE="/etc/hosts"
 
 # Global state
 SUDO=""       # set to "sudo" if needed for INSTALL_DIR writes
@@ -644,6 +646,79 @@ verify_service_running() {
     log_info "Check service status with: systemctl status demarkus"
     exit 1
   fi
+}
+
+# self_dial_probe reads the world's health doc at the public domain with
+# certificate verification on; one retry covers a world still settling
+# after a restart.
+self_dial_probe() {
+  local cli="$1"
+  local domain="$2"
+  if timeout 15 "$cli" "mark://${domain}/health" >/dev/null 2>&1; then
+    return 0
+  fi
+  sleep 2
+  timeout 15 "$cli" "mark://${domain}/health" >/dev/null 2>&1
+}
+
+# hosts_maps_domain reports whether a non-comment HOSTS_FILE line already
+# maps the domain (exact token match, not substring).
+hosts_maps_domain() {
+  local domain="$1"
+  awk -v d="$domain" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == d) found = 1 } END { exit found ? 0 : 1 }' "$HOSTS_FILE"
+}
+
+# ensure_self_dial proves this host can read its own world at the public
+# domain; home NAT often cannot loop back, stranding same-host dialers.
+# On failure, pin the domain to loopback in HOSTS_FILE and re-probe.
+ensure_self_dial() {
+  local domain="$1"
+  if [ "$PLATFORM" != "linux" ]; then return; fi
+
+  local cli="${INSTALL_DIR}/demarkus"
+  if [ ! -x "$cli" ]; then
+    log_warn "Client binary not found at ${cli}; skipping the self-dial check for ${domain}"
+    return
+  fi
+  # Fail closed: an unbounded probe could hang on the very black-holed
+  # dial this check exists to detect.
+  if ! command -v timeout >/dev/null 2>&1; then
+    log_error "timeout (coreutils) is required for the self-dial check; install it and re-run"
+    exit 1
+  fi
+
+  log_step "Checking this host can read its own world (mark://${domain})"
+  if self_dial_probe "$cli" "$domain"; then
+    log_info "Self-dial OK"
+    return
+  fi
+
+  if hosts_maps_domain "$domain"; then
+    log_error "mark://${domain} is unreadable from this host even though ${HOSTS_FILE} already maps ${domain}."
+    log_error "Check the world service (journalctl -u demarkus --no-pager), UDP 6309, and that the TLS certificate matches ${domain}"
+    exit 1
+  fi
+
+  log_warn "This host cannot reach its own world at mark://${domain} (likely hairpin NAT)"
+  log_info "Pinning ${domain} to loopback in ${HOSTS_FILE} so same-host components dial locally"
+  # A hosts file without a trailing newline would merge the new entry into
+  # its last line; normalize first.
+  if [ -s "$HOSTS_FILE" ] && [ -n "$(tail -c 1 "$HOSTS_FILE")" ]; then
+    if ! printf '\n' >> "$HOSTS_FILE"; then
+      log_error "Could not update ${HOSTS_FILE}"
+      exit 1
+    fi
+  fi
+  if ! printf '127.0.0.1 %s # demarkus: self-dial (hairpin NAT workaround)\n' "$domain" >> "$HOSTS_FILE"; then
+    log_error "Could not update ${HOSTS_FILE}"
+    exit 1
+  fi
+  if ! self_dial_probe "$cli" "$domain"; then
+    log_error "mark://${domain} is still unreadable after pinning it to loopback."
+    log_error "Check the world service (journalctl -u demarkus --no-pager), UDP 6309, and that the TLS certificate matches ${domain}"
+    exit 1
+  fi
+  log_info "Self-dial OK via loopback; certificate verification stays on"
 }
 
 # --- Service management ---
@@ -1550,6 +1625,14 @@ do_install() {
 
   # Verify the service actually started
   verify_service_running
+
+  # Same-host dialers (broker, library) reach the world by its public name
+  # with verification on; prove that works from this host before installing
+  # them, and pin the name to loopback when hairpin NAT breaks it.
+  if [ "$PLATFORM" = "linux" ] && [ -n "$domain" ] && [ "$no_tls" = false ] \
+    && { [ "$with_broker" = true ] || [ "$with_library" = true ]; }; then
+    ensure_self_dial "$domain"
+  fi
 
   # Optional single-host stack components (after the world server is up:
   # the broker writes its tokens file, the library reads its documents).
