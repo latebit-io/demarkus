@@ -518,8 +518,8 @@ setup_tls() {
 
   fix_cert_permissions "$domain"
 
-  # Set up auto-renewal with SIGHUP reload
-  setup_cert_renewal "$domain"
+  # Renewal setup belongs to the caller: this function is skipped entirely when
+  # the cert already exists, so wiring it here left re-runs with no reload hook.
 
   log_info "TLS configured for ${domain}"
 }
@@ -540,6 +540,28 @@ fix_cert_permissions() {
   log_info "Certificate permissions updated for ${SERVICE_NAME} user"
 }
 
+CERT_DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/demarkus-reload.sh"
+
+# write_cert_deploy_hook installs the reload command as a certbot deploy hook.
+# The packaged certbot.timer renews on its own schedule and runs only this
+# directory, ignoring our cron's --deploy-hook; without the file, a
+# timer-driven renewal leaves the services holding the previous certificate.
+write_cert_deploy_hook() {
+  local hook="$1"
+
+  if ! mkdir -p "$(dirname "$CERT_DEPLOY_HOOK")"; then
+    log_error "Could not create $(dirname "$CERT_DEPLOY_HOOK"); renewals will not reload the services"
+    exit 1
+  fi
+  cat > "$CERT_DEPLOY_HOOK" << EOF
+#!/bin/sh
+# Managed by demarkus install.sh. Reloads the certificate holders after a
+# successful renewal, whichever mechanism triggered it.
+${hook}
+EOF
+  chmod 755 "$CERT_DEPLOY_HOOK"
+}
+
 setup_cert_renewal() {
   local domain="$1"
 
@@ -547,6 +569,11 @@ setup_cert_renewal() {
 
   local hook='pidof demarkus-server | xargs -r kill -HUP'
   local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\""
+
+  # Never downgrade the library-aware hook back to the server-only one.
+  if [ ! -f "$CERT_DEPLOY_HOOK" ] || ! grep -q "demarkus-library" "$CERT_DEPLOY_HOOK"; then
+    write_cert_deploy_hook "$hook"
+  fi
 
   # Add to root crontab if not already present
   if ! (crontab -l 2>/dev/null | grep -q "certbot renew.*demarkus"); then
@@ -563,12 +590,17 @@ setup_cert_renewal() {
 setup_library_cert_renewal() {
   if [ "$PLATFORM" != "linux" ]; then return; fi
 
+  local hook='pidof demarkus-server | xargs -r kill -HUP; systemctl try-restart demarkus-library'
+
+  # The deploy hook is rewritten even when the cron is already current: the
+  # server-only install may have written the server-only version of it.
+  write_cert_deploy_hook "$hook"
+
   if crontab -l 2>/dev/null | grep -q "try-restart demarkus-library"; then
     log_info "Certbot renewal cron already restarts the library"
     return
   fi
 
-  local hook='pidof demarkus-server | xargs -r kill -HUP; systemctl try-restart demarkus-library'
   local cron_line="0 */12 * * * certbot renew --quiet --deploy-hook \"${hook}\""
   if ! (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus"; echo "$cron_line") | crontab -; then
     log_error "Could not update the certbot renewal cron for the library"
@@ -1598,6 +1630,8 @@ do_install() {
       setup_tls "$domain"
     fi
     fix_cert_permissions "$domain"
+    # Unconditional: a re-run over an existing cert must still get a hook.
+    setup_cert_renewal "$domain"
     tls_cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
     tls_key_path="/etc/letsencrypt/live/${domain}/privkey.pem"
   elif [ -d "${CONFIG_DIR}/tls" ] && [ -f "${CONFIG_DIR}/tls/cert.pem" ]; then
@@ -2175,9 +2209,10 @@ do_uninstall() {
     done
   fi
 
-  # Remove certbot renewal cron
+  # Remove certbot renewal cron and the deploy hook
   if [ "$PLATFORM" = "linux" ]; then
     (crontab -l 2>/dev/null | grep -v "certbot renew.*demarkus" | crontab -) 2>/dev/null || true
+    rm -f "$CERT_DEPLOY_HOOK" 2>/dev/null || log_warn "Could not remove ${CERT_DEPLOY_HOOK}"
   fi
 
   if [ "$uninstall_errors" -ne 0 ]; then
