@@ -654,13 +654,11 @@ verify_service_running() {
 self_dial_probe() {
   local cli="$1"
   local domain="$2"
-  local timeout_cmd=""
-  if command -v timeout >/dev/null 2>&1; then timeout_cmd="timeout 15"; fi
-  if $timeout_cmd "$cli" "mark://${domain}/health" >/dev/null 2>&1; then
+  if timeout 15 "$cli" "mark://${domain}/health" >/dev/null 2>&1; then
     return 0
   fi
   sleep 2
-  $timeout_cmd "$cli" "mark://${domain}/health" >/dev/null 2>&1
+  timeout 15 "$cli" "mark://${domain}/health" >/dev/null 2>&1
 }
 
 # hosts_maps_domain reports whether a non-comment HOSTS_FILE line already
@@ -670,12 +668,9 @@ hosts_maps_domain() {
   awk -v d="$domain" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == d) found = 1 } END { exit found ? 0 : 1 }' "$HOSTS_FILE"
 }
 
-# ensure_self_dial verifies this host can read its own world at the public
-# domain. Home-NAT networks often cannot hairpin UDP back to their own
-# public IP, which strands same-host dialers (broker, library): the install
-# looks healthy while the world is unreadable. On failure, pin the domain
-# to loopback in HOSTS_FILE so the dial bypasses NAT while the certificate
-# name keeps matching, then re-probe.
+# ensure_self_dial proves this host can read its own world at the public
+# domain; home NAT often cannot loop back, stranding same-host dialers.
+# On failure, pin the domain to loopback in HOSTS_FILE and re-probe.
 ensure_self_dial() {
   local domain="$1"
   if [ "$PLATFORM" != "linux" ]; then return; fi
@@ -684,6 +679,12 @@ ensure_self_dial() {
   if [ ! -x "$cli" ]; then
     log_warn "Client binary not found at ${cli}; skipping the self-dial check for ${domain}"
     return
+  fi
+  # Fail closed: an unbounded probe could hang on the very black-holed
+  # dial this check exists to detect.
+  if ! command -v timeout >/dev/null 2>&1; then
+    log_error "timeout (coreutils) is required for the self-dial check; install it and re-run"
+    exit 1
   fi
 
   log_step "Checking this host can read its own world (mark://${domain})"
@@ -700,6 +701,14 @@ ensure_self_dial() {
 
   log_warn "This host cannot reach its own world at mark://${domain} (likely hairpin NAT)"
   log_info "Pinning ${domain} to loopback in ${HOSTS_FILE} so same-host components dial locally"
+  # A hosts file without a trailing newline would merge the new entry into
+  # its last line; normalize first.
+  if [ -s "$HOSTS_FILE" ] && [ -n "$(tail -c 1 "$HOSTS_FILE")" ]; then
+    if ! printf '\n' >> "$HOSTS_FILE"; then
+      log_error "Could not update ${HOSTS_FILE}"
+      exit 1
+    fi
+  fi
   if ! printf '127.0.0.1 %s # demarkus: self-dial (hairpin NAT workaround)\n' "$domain" >> "$HOSTS_FILE"; then
     log_error "Could not update ${HOSTS_FILE}"
     exit 1
