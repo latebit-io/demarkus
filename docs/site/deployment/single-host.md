@@ -113,6 +113,7 @@ To put the library behind broker SSO (org login, per-reader identity):
 
   Route the MCP gateway (`127.0.0.1:8081`) from the same or a second hostname as you prefer; `/knowledge-join` and the library talk to whatever `publicURL` resolves to.
 - With a Let's Encrypt domain the generated config dials the world at `<domain>:6309` with verification on (the certificate can never match `localhost`); with a self-signed cert it dials `localhost:6309` with `worldDialer.insecureSkipVerify: true`.
+- Dialing the public domain from the host itself requires hairpin NAT, which home routers often lack (external clients work, same-host components see the world as unreadable). The installer probes this after the world starts and, when the dial fails, pins the domain to loopback in `/etc/hosts` — the dial then bypasses NAT while the certificate name still matches. A failed probe with the pin already in place aborts the install with diagnostics instead.
 
 ## Verify the stack
 
