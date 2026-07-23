@@ -6,7 +6,17 @@ permalink: /install/
 
 # Install
 
-Pick your platform.
+Pick your platform — or take the whole stack in one command.
+
+## Whole system (Linux host)
+
+World server, broker, [reading room](/library/), self-hosted login, HTTPS, and the indexing agent, wired together. No DNS setup required.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | sudo bash
+```
+
+[Full appliance guide →](/install/stack/)
 
 ## macOS
 

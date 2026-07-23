@@ -53,3 +53,5 @@ server/
 
 # Top-level bin/ from main branch checkout
 /bin/
+_preview/
+dist/

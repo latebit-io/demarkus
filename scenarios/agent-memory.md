@@ -13,14 +13,20 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 ## What you'll have
 
 - A Demarkus server holding structured markdown docs
-- The full MCP tool surface available to the agent — `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, and `mark_discover`. `mark_lookup` finds memories by subject (declared tags/title)
+- The full MCP surface: fifteen tools — `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_explore`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish` — plus documents as attachable resources and the `orient` / `recall` / `whats-new` prompts
 - Version history of every memory update
 - Persistent document graph with backlink queries
 - The agent reads context at session start and writes updates at the end
 
-## Quick start: the Claude Code plugin
+## Quick start: the plugins
 
-If you use Claude Code, the `demarkus-memory` plugin is the one-step path — no manual server, token, or MCP config to set up. Install it from the marketplace:
+Claude Code and [pi](https://pi.dev) both have a plugin, with the same behavior
+mapped onto each agent's extension API. They share `~/.demarkus` state, so one
+machine running both has one soul, one token, one registry.
+
+### Claude Code
+
+`demarkus-memory` is the one-step path — no manual server, token, or MCP config. Install it from the marketplace:
 
 ```
 /plugin marketplace add latebit-io/demarkus
@@ -29,9 +35,32 @@ If you use Claude Code, the `demarkus-memory` plugin is the one-step path — no
 
 On the first session it spawns a local `demarkus-server`, auto-generates a publish token, wires the MCP tools, and **seeds the soul** — you never hand-author an index. It adds the `/soul`, `/soul-context`, `/soul-init`, `/soul-journal`, `/soul-status`, and `/soul-doctor` commands plus a `soul-memory` skill that triggers on "remember / recall / save / note" intents.
 
+Hooks keep the catalog honest: a publish without tags is caught at write time, an end-of-session nudge asks for a journal entry when files changed but nothing was recorded, and a "did we decide X" question nudges a recall before you answer from context.
+
 Memory is organized **per project**: each one lives under `/<project>/` (the slug is the basename of your project directory) following the canonical layout the plugin seeds as `/project-template.md`. The agent maintains the per-project `index.md` hub itself as it adds documents.
 
-That is the whole setup for Claude Code. The manual steps below are for other MCP agents, a custom port, or a remote soul server.
+### pi
+
+`demarkus-pi-memory` is the same plugin against pi's extension API. It needs the
+MCP adapter for the tool surface:
+
+```bash
+pi install npm:pi-mcp-adapter
+```
+
+pi's `git:` installer reads a repository's root `package.json`, so a monorepo
+subdirectory can't be git-installed. Install from a checkout:
+
+```bash
+git clone https://github.com/latebit-io/demarkus
+pi install ./demarkus/plugins/pi-memory     # add -l for project-local scope
+```
+
+The soul provisions on the next session. Run `/mcp` once (or restart pi) to
+connect the newly registered server; `/soul-status` diagnoses, `/soul-init`
+reconfigures.
+
+That is the whole setup for either agent. The manual steps below are for other MCP agents, a custom port, or a remote soul server.
 
 ## Manual setup (any MCP agent)
 
@@ -195,7 +224,26 @@ the per-project `index.md` current as the discovery backstop for anything
 > `/<project>/` prefix). That's what the Demarkus project's own soul at
 > `mark://soul.demarkus.io` does — a documented exception, not the default.
 
-## Using a remote soul server
+## Remote souls and promotion
+
+A soul does not have to be local. `/soul-join` takes a join URL — host and token
+in one paste-able string — registers that server as an MCP server, and binds it to
+the current project. `/soul-default` picks which joined soul a project writes to
+when several exist, and the binding is enforced at write time rather than left to
+convention. The [appliance](/install/stack/) prints a ready-made join URL for its
+world.
+
+When a note is ready for other people, `/promote <path>` lifts it to a joined
+[knowledge system](/scenarios/knowledge-system/): the cascade distills it, strips
+personal framing and secrets, dedups against the shared catalog, tags it to that
+system's taxonomy, picks a writable world, and stops at a human gate before
+publishing. `/promote-scan` sweeps the soul for candidates; `/soul-refresh` pulls
+promoted documents back down as the authoritative copy evolves.
+
+Soul is the draft tier, the knowledge system is the authoritative one. Nothing
+auto-publishes.
+
+## Using a remote soul server manually
 
 If you run the soul on a remote host with TLS, remove `-insecure` from the MCP args and use the `mark://` URL with your domain:
 
@@ -225,3 +273,5 @@ demarkus-tui mark://soul.demarkus.io/index.md
 
 - [Soul page](/soul/)
 - [Agent Install](/agent-install/)
+- [Organizational knowledge system](/scenarios/knowledge-system/) — where promoted notes land
+- [The library](/library/) — browse a world in the reading room

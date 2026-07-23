@@ -6,17 +6,23 @@ permalink: /setup/
 
 # Setup
 
-See the platform-specific install guides:
+Whole system on one Linux host:
 
-- [Install on macOS](/install/macos/)
-- [Install on Linux](/install/linux/)
-- [Install on Windows (WSL2)](/install/windows/)
+- [Five-minute appliance](/install/stack/) — world, broker, library, login, HTTPS
 
-Or pick a scenario:
+Platform installs:
 
-- [Personal knowledge base](/scenarios/personal-wiki/)
+- [macOS](/install/macos/)
+- [Linux](/install/linux/)
+- [Windows (WSL2)](/install/windows/)
+- [Docker](/install/docker/)
+
+Or pick a [scenario](/scenarios/):
+
 - [Agent memory](/scenarios/agent-memory/)
-- [Public hub](/scenarios/public-hub/)
+- [Personal knowledge base](/scenarios/personal-wiki/)
 - [Team knowledge base](/scenarios/team/)
+- [Organizational knowledge system](/scenarios/knowledge-system/)
+- [Public hub](/scenarios/public-hub/)
 
 For upgrade and uninstall: [Upgrade & Uninstall](/upgrade/)

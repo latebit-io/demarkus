@@ -3,50 +3,103 @@ layout: default
 title: Demarkus
 ---
 
-Demarkus is a protocol and toolkit for publishing markdown documents with version history, capability-based access, and QUIC transport.
+Demarkus is a protocol and toolkit for publishing markdown with version history, capability-based access, and QUIC transport. Humans and agents read and write the same store.
 
-**What do you want to do?**
+## Start here
 
-- [Set up agent memory - soul (Claude Code / general setup)](/scenarios/agent-memory/) — persistent memory for Claude Code and other LLM agents
-- [Run an organizational knowledge system](/scenarios/knowledge-system/) — broker-fronted universe of worlds, OIDC join via `/knowledge-join`
-- [Set up a team knowledge base](/scenarios/team/) — shared server with token-based write access
-- [Install on macOS](/install/macos/) — one-line install, works today
-- [Install on Linux](/install/linux/) — server + client via install script
-- [Install with Docker](/install/docker/) — multi-arch image, docker-compose ready
-- [Install on Windows (WSL2)](/install/windows/) — Windows setup via WSL2
-- [Install via OpenClaw](/install/openclaw/) — ClawHub skill for OpenClaw agents
-- [Install Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus) — fetch and publish from Obsidian via BRAT
-- [Run a personal knowledge base](/scenarios/personal-wiki/) — local markdown notes, browsable via TUI
-- [Publish a public hub](/scenarios/public-hub/) — VPS + Let's Encrypt + open read access
+Give your agent memory. Nothing to configure — the plugin spawns a local server, mints its own token, and wires the tools. In **Claude Code**:
+
+```
+/plugin marketplace add latebit-io/demarkus
+/plugin install demarkus-memory@demarkus
+```
+
+In **[pi](https://pi.dev)**:
+
+```bash
+pi install npm:pi-mcp-adapter
+pi install ./demarkus/plugins/pi-memory
+```
+
+Both share the same `~/.demarkus` state, so they coexist on one machine. [Agent memory →](/scenarios/agent-memory/)
+
+Ready to share it? One command turns a fresh Linux host into a whole knowledge system — world server, broker, [reading room](/library/), self-hosted login, HTTPS, indexing agent:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | sudo bash
+```
+
+No DNS setup, no accounts. [The five-minute appliance →](/install/stack/)
+
+---
+
+## One protocol, three scales
+
+<div class="tiers">
+  <div class="tier">
+    <p class="tier-kicker">Personal</p>
+    <h3>Local memory</h3>
+    <p>A server on your own machine holding your agent's memory and your notes. No account, no cloud, no network exposure.</p>
+    <p class="tier-links"><a href="/scenarios/agent-memory/">Agent memory</a> · <a href="/scenarios/personal-wiki/">Personal wiki</a></p>
+  </div>
+  <div class="tier">
+    <p class="tier-kicker">Team</p>
+    <h3>A shared world</h3>
+    <p>One server a group reads, a reading room for humans, MCP for agents. Tokens per person, or the appliance's built-in login.</p>
+    <p class="tier-links"><a href="/install/stack/">Five-minute appliance</a> · <a href="/scenarios/team/">Team knowledge base</a></p>
+  </div>
+  <div class="tier">
+    <p class="tier-kicker">Enterprise</p>
+    <h3>A knowledge system</h3>
+    <p>Many worlds behind one broker, your identity provider in front. Teams join with one command; the broker mints per-world tokens.</p>
+    <p class="tier-links"><a href="/scenarios/knowledge-system/">Knowledge system</a> · <a href="/library/">The library</a></p>
+  </div>
+</div>
+
+Store, verbs, history, and MCP surface are identical at every tier — only reach and identity change, so moving up is a deployment change, not a migration. [Compare the tiers →](/scenarios/)
+
+The tiers compose: a developer runs a personal soul and joins the org system in the same agent. `/promote` lifts a ready note up through a curation gate; `/soul-refresh` pulls the authoritative copy back as it changes.
 
 ---
 
 ## What Demarkus is
 
-Demarkus implements the **Mark Protocol** — a minimal protocol for serving versioned markdown over QUIC. It is:
+Demarkus implements the **Mark Protocol** — versioned markdown served over QUIC. It is:
 
 - **Read-only by default** — no writes without explicit auth tokens
 - **Version-preserving** — every change is kept, nothing is deleted
 - **Privacy-first** — no tracking, no cookies, no user agents logged
 - **Self-hostable** — runs on a $30 single-board computer
 - **Graph-aware** — persistent document graph with backlink queries across sessions
+- **OKF-compatible** — interoperates with [Open Knowledge Format](/reference/markdown/#open-knowledge-format-okf-compatibility) v0.1
 
 ## Tools
 
 | Tool | Purpose |
 |------|---------|
 | `demarkus-server` | Serve a directory of markdown files |
-| `demarkus` | CLI: fetch, list, publish, edit, graph, lookup |
-| `demarkus-tui` | Interactive terminal browser with graph view |
-| `demarkus-mcp` | MCP server for LLM agents (graph, backlinks, discovery) |
+| `demarkus` | CLI: fetch, list, publish, edit, graph, lookup, okf |
+| `demarkus-tui` | Terminal browser with graph view |
+| `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |
+| `demarkus-agent` | Indexing agent: crawls worlds, aggregates the graph, publishes hub indexes |
+| `demarkus-broker` | OIDC-fronted MCP gateway composing many worlds into one system |
+| `demarkus-library` | Web reading room with the AI librarian |
 | `demarkus-token` | Generate capability-based auth tokens |
-| `demarkus-publish` | Write directly to the versioned store for read-only server installs |
+| `demarkus-publish` | Write directly to the store for read-only server installs |
+
+## Install
+
+- [Five-minute appliance](/install/stack/) — the whole system on one host
+- [macOS](/install/macos/) · [Linux](/install/linux/) · [Windows (WSL2)](/install/windows/) · [Docker](/install/docker/)
+- [OpenClaw](/install/openclaw/) — ClawHub skill for OpenClaw agents
+- [Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus) — fetch and publish via BRAT
 
 ## Learn more
 
 - [About the Mark Protocol](/about/)
-- [Security Model](/security/) — attack surface, hardening, threat model
+- [The library and the librarian](/library/)
+- [Security model](/security/) — attack surface, hardening, threat model
 - [Ecosystem](/ecosystem/) — browsers, plugins, and tools that speak Demarkus
 - [Soul — the project's live AI memory](/soul/)
-- [Public Hub](https://github.com/latebit-io/demarkus-hub) — discovery index at `mark://hub.demarkus.io`
+- [Public hub](https://github.com/latebit-io/demarkus-hub) — discovery index at `mark://hub.demarkus.io`
 - [GitHub](https://github.com/latebit-io/demarkus)

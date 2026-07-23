@@ -11,8 +11,13 @@
     >
     <a
         class="{% if page.url contains '/scenarios/' %}is-active{% endif %}"
-        href="{{ '/scenarios/personal-wiki/' | relative_url }}"
+        href="{{ '/scenarios/' | relative_url }}"
         >Scenarios</a
+    >
+    <a
+        class="{% if page.url == '/library/' %}is-active{% endif %}"
+        href="{{ '/library/' | relative_url }}"
+        >Library</a
     >
     <a
         class="{% if page.url == '/soul/' %}is-active{% endif %}"

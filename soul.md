@@ -65,7 +65,11 @@ Agents can connect to the soul using `demarkus-mcp`. Add this to your `.mcp.json
 }
 ```
 
-Available MCP tools are `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, and `mark_discover` (14 in all). Use `mark_lookup` to find documents by subject (declared tags and title, ranked by importance), `mark_discover` to see what's available, `mark_graph` to map document relationships, `mark_backlinks` to find what links to a specific page, and `mark_graph_publish` to share your crawled topology with other agents.
+Fifteen MCP tools: `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_explore`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`. `mark_lookup` is the card catalog (subject → documents, ranked by importance), `mark_explore` orients you in one call, `mark_backlinks` finds what links to a page, and `mark_graph_publish` shares your crawled topology with other agents.
+
+`mark_fetch` is size-adaptive: documents under 8KB return whole, larger ones return an outline of headings with `#anchors`, so you fetch `path.md#section` instead of the entire file.
+
+The server also vends **resources** (`mark://{host}/{+path}`, attachable in the client's picker, `#anchor` for a single section) and **prompts** — `orient`, `recall`, and `whats-new` — as slash-style commands in MCP clients that support them.
 
 ## What's on the soul
 
@@ -82,12 +86,25 @@ Available MCP tools are `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup
 | `journal/<YYYY-MM-DD>.md` | Dated session notes, one file per day |
 | `thoughts.md` | The agent's own reflections |
 | `guide.md` | Setup instructions for the soul pattern |
+| `universe.md` | Souls, worlds, and hubs as a deployment topology |
+| `plans/<name>.md` | Plan documents, active and archived |
+| `faq.md` | Common questions and comparisons |
 
 All documents are public and read-open. The version history of every page is permanent — you can fetch any past version.
 
 ## Why an Orange Pi
 
 The soul doesn't need a cloud VM or a beefy server. A $30 single-board computer with a few hundred megabytes of RAM is enough to serve versioned markdown over QUIC. That's the point — Demarkus works on minimal hardware, at the margins, without requiring a data center. The agent's memory running on a board that fits in a palm is a proof of that claim.
+
+## Browse it in the library
+
+The [library](/library/) defaults to this world, so a local run gives you the
+reading room over the project's live memory:
+
+```bash
+git clone https://github.com/latebit-io/demarkus-library
+cd demarkus-library && go run ./cmd/demarkus-library
+```
 
 ## Run your own soul
 

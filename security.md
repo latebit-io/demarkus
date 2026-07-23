@@ -40,7 +40,10 @@ Without a valid token, write requests are rejected. Without read tokens configur
 If an attacker obtains a write token, they can:
 
 - Publish, overwrite, or archive markdown files within the token's path scope
+- Prune version history on a document they can write, by setting `retention` on a publish
 - Nothing else — no code execution, no filesystem escape, no privilege escalation
+
+Retention is the store's only destructive operation. It needs no extra capability — it runs under the same write authorization that could archive the document — so it is constrained instead: deletion targets come from enumerating the document's own stored versions, never from request input; every removal resolves inside an `os.Root` anchored at the store root, so a planted symlink cannot redirect it; and each pruned range is audit-logged with the writer's token label. Clients warn before setting `retention` on a document that is not a generated artifact.
 
 Mitigation:
 
@@ -143,6 +146,16 @@ echo "# Hello" | demarkus-publish -root /srv/demarkus/content -path /index.md
 
 Full versioning is preserved — `demarkus-publish` uses the same store code as the server. The server just serves what's on disk.
 
+## Knowledge system (broker)
+
+In a [knowledge system](/scenarios/knowledge-system/) the broker is the only public surface and worlds stay private behind it.
+
+- Users never hold a world token. They authenticate against your IdP; the broker mints a scoped token per world and proxies the request.
+- Auth follows the MCP authorization spec: discovery (RFC 8414 / 9728), dynamic client registration (RFC 7591), then authorization code with PKCE.
+- The [library](/library/) in broker mode is a confidential web client: tokens stay server-side, the browser holds an opaque session cookie, and state-changing requests carry CSRF protection.
+- The AI librarian works only the read ports the reader has, so it cannot surface a document the reader could not fetch.
+- Compromising the broker exposes what the worlds behind it serve to authenticated callers; it does not grant write capability beyond the tokens it can mint.
+
 ## Comparison
 
 | | SSH | Web + CGI | Gemini | Demarkus |
@@ -157,3 +170,4 @@ Full versioning is preserved — `demarkus-publish` uses the same store code as 
 
 - [Install on Linux](/install/linux/)
 - [Publish a Public Hub](/scenarios/public-hub/)
+- [Organizational knowledge system](/scenarios/knowledge-system/)

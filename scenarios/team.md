@@ -28,6 +28,24 @@ Team server (mark://docs.internal.example.com)
 
 Each team member gets a personal publish token scoped to paths they own. A team lead token covers everything.
 
+## Faster path: the appliance
+
+If you want the reading room, a login page, and MCP for agents rather than
+hand-distributed tokens, one command gives you all of it on the same host:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | \
+  sudo bash -s -- --domain kb.example.com --owner-email you@example.com
+```
+
+That is the [five-minute appliance](/install/stack/): world server, broker,
+[library](/library/), self-hosted OIDC, HTTPS, indexing agent. Teammates log in
+with an account instead of pasting a token, and agents join with
+`/knowledge-join`.
+
+The manual build below is the right choice when you want a plain world with
+capability tokens and no identity layer.
+
 ## Setup
 
 ### 1. Install the server
@@ -150,5 +168,7 @@ demarkus mark://docs.internal.example.com/runbooks/deploy.md/v3
 
 ## Related
 
+- [Five-minute appliance](/install/stack/) — the same tier with login and a reading room
 - [Install on Linux](/install/linux/)
 - [Public hub scenario](/scenarios/public-hub/)
+- [Organizational knowledge system](/scenarios/knowledge-system/) — the next tier up
