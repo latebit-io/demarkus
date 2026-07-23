@@ -12,26 +12,26 @@ Demarkus is a versioned markdown document server. This page describes the attack
 
 The server is deliberately minimal:
 
-- **No code execution** — serves and stores markdown text, nothing else
-- **No shell access** — no CGI, no templates, no scripting
-- **No database** — documents are files on disk
-- **No sessions or cookies** — stateless request handling
-- **Single directory** — all reads and writes are scoped to the content root
-- **7 verbs** — FETCH, LIST, VERSIONS, LOOKUP (read), PUBLISH, APPEND, ARCHIVE (write)
-- **Encrypted transport** — QUIC with TLS (self-signed for local, real certs for production)
-- **Size limits** — 1 MiB body, 64 KB frontmatter per request
-- **Rate limiting** — per-IP request throttling built in
-- **Logs go to stderr** — captured by systemd journal, the server writes nothing outside the content directory
+- **No code execution**: serves and stores markdown text, nothing else
+- **No shell access**: no CGI, no templates, no scripting
+- **No database**: documents are files on disk
+- **No sessions or cookies**: stateless request handling
+- **Single directory**: all reads and writes are scoped to the content root
+- **7 verbs**: FETCH, LIST, VERSIONS, LOOKUP (read), PUBLISH, APPEND, ARCHIVE (write)
+- **Encrypted transport**: QUIC with TLS (self-signed for local, real certs for production)
+- **Size limits**: 1 MiB body, 64 KB frontmatter per request
+- **Rate limiting**: per-IP request throttling built in
+- **Logs go to stderr**: captured by systemd journal, the server writes nothing outside the content directory
 
 ## Authentication
 
-Write operations (PUBLISH, APPEND, ARCHIVE) require a capability token — a SHA-256 hash scoped to specific paths and to an access class (read or write).
+Write operations (PUBLISH, APPEND, ARCHIVE) require a capability token: a SHA-256 hash scoped to specific paths and to an access class (read or write).
 
 - Tokens are generated offline with `demarkus-token generate`
-- Tokens can be scoped to path patterns (e.g., `/docs/*`) and to an access class. The write capability is a single `publish` op that grants PUBLISH, APPEND, and ARCHIVE together — these are not individually grantable. Reads are a separate `read` op, only enforced on paths where a read token exists.
+- Tokens can be scoped to path patterns (e.g., `/docs/*`) and to an access class. The write capability is a single `publish` op that grants PUBLISH, APPEND, and ARCHIVE together: these are not individually grantable. Reads are a separate `read` op, only enforced on paths where a read token exists.
 - Every write is logged with the token label for auditing
 - Tokens are revocable by removing them from the tokens file and sending SIGHUP
-- Read auth is opt-in — configure read tokens for private paths when needed
+- Read auth is opt-in: configure read tokens for private paths when needed
 
 Without a valid token, write requests are rejected. Without read tokens configured, all content is public (the default for public servers).
 
@@ -41,16 +41,16 @@ If an attacker obtains a write token, they can:
 
 - Publish, overwrite, or archive markdown files within the token's path scope
 - Prune version history on a document they can write, by setting `retention` on a publish
-- Nothing else — no code execution, no filesystem escape, no privilege escalation
+- Nothing else: no code execution, no filesystem escape, no privilege escalation
 
-Retention is the store's only destructive operation. It needs no extra capability — it runs under the same write authorization that could archive the document — so it is constrained instead: deletion targets come from enumerating the document's own stored versions, never from request input; every removal resolves inside an `os.Root` anchored at the store root, so a planted symlink cannot redirect it; and each pruned range is audit-logged with the writer's token label. Clients warn before setting `retention` on a document that is not a generated artifact.
+Retention is the store's only destructive operation. It needs no extra capability, since it runs under the same write authorization that could archive the document, so it is constrained instead: deletion targets come from enumerating the document's own stored versions, never from request input; every removal resolves inside an `os.Root` anchored at the store root, so a planted symlink cannot redirect it; and each pruned range is audit-logged with the writer's token label. Clients warn before setting `retention` on a document that is not a generated artifact.
 
 Mitigation:
 
 - Scope tokens narrowly (e.g., `/blog/*` instead of `/*`)
 - Rotate tokens periodically
 - Review audit logs for unexpected writes
-- Every version is immutable — overwritten content is still in the version history
+- Every version is immutable: overwritten content is still in the version history
 
 ## What a Compromised Server Gets You
 
@@ -60,7 +60,7 @@ If an attacker gains control of the server process, they can:
 
 With systemd hardening (see below), they **cannot**:
 
-- Access `/home` (`ProtectHome=yes` — omitted automatically if the content root is under `/home`)
+- Access `/home` (`ProtectHome=yes`: omitted automatically if the content root is under `/home`)
 - Write to `/etc`, `/usr`, or anywhere outside the content root (mounted read-only)
 - Escalate privileges
 - Load kernel modules
@@ -85,9 +85,9 @@ RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 ```
 
-`ProtectSystem=strict` makes the entire filesystem read-only. `ReadWritePaths` grants an exception for the content directory only. The kernel enforces these restrictions — no application changes needed.
+`ProtectSystem=strict` makes the entire filesystem read-only. `ReadWritePaths` grants an exception for the content directory only. The kernel enforces these restrictions, with no application changes needed.
 
-Set `ReadWritePaths` to match your `DEMARKUS_ROOT`. The server only reads the tokens file and TLS certificates, so paths like `/etc/demarkus` don't need write access — `ProtectSystem=strict` already allows reads.
+Set `ReadWritePaths` to match your `DEMARKUS_ROOT`. The server only reads the tokens file and TLS certificates, so paths like `/etc/demarkus` don't need write access; `ProtectSystem=strict` already allows reads.
 
 Verify hardening is active:
 
@@ -101,7 +101,7 @@ Running `demarkus-install update` detects if the systemd unit is missing hardeni
 
 ## Read-Only Mode (Maximum Lockdown)
 
-For Gemini-level security, run the server in read-only mode. All PUBLISH, APPEND, and ARCHIVE requests are rejected — the server needs zero write access to the filesystem.
+For Gemini-level security, run the server in read-only mode. All PUBLISH, APPEND, and ARCHIVE requests are rejected, and the server needs zero write access to the filesystem.
 
 ### Quick setup
 
@@ -133,18 +133,18 @@ The chroot structure:
   tls/key.pem
 ```
 
-The systemd unit uses `RootDirectory` and `ReadOnlyPaths=/` — the process cannot see or write anything outside the chroot.
+The systemd unit uses `RootDirectory` and `ReadOnlyPaths=/`, so the process cannot see or write anything outside the chroot.
 
 ### Publishing content locally
 
-Publish with `demarkus-publish` — it writes directly to the versioned store on disk, bypassing the server:
+Publish with `demarkus-publish`. It writes directly to the versioned store on disk, bypassing the server:
 
 ```bash
 demarkus-publish -root /srv/demarkus/content -path /index.md -body "# Hello"
 echo "# Hello" | demarkus-publish -root /srv/demarkus/content -path /index.md
 ```
 
-Full versioning is preserved — `demarkus-publish` uses the same store code as the server. The server just serves what's on disk.
+Full versioning is preserved: `demarkus-publish` uses the same store code as the server. The server just serves what's on disk.
 
 ## Knowledge system (broker)
 

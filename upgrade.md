@@ -13,7 +13,7 @@ permalink: /upgrade/
 If you installed via the install script, use the built-in update command:
 
 ```bash
-# macOS (no sudo needed — installs to ~/.local/bin or /usr/local/bin based on original install)
+# macOS (no sudo needed; installs to ~/.local/bin or /usr/local/bin based on original install)
 demarkus-install update
 
 # Linux server install (sudo required if installed to /usr/local/bin)
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 - `/etc/demarkus/tokens.toml` (or `~/.demarkus/tokens.toml` on macOS)
 - TLS certificates in `/etc/demarkus/tls/` (or `~/.demarkus/tls/`)
 - Your content directory (untouched)
-- Service configuration (plist or systemd unit) — only rewritten if flags change
+- Service configuration (plist or systemd unit): only rewritten if flags change
 
 ## Check installed version
 

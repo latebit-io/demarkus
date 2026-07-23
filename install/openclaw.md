@@ -20,7 +20,7 @@ Or from the command line:
 clawhub install demarkus
 ```
 
-The skill handles everything — installing Demarkus, storing tokens, and registering with mcporter.
+The skill handles everything: installing Demarkus, storing tokens, and registering with mcporter.
 
 ## In action
 
@@ -57,4 +57,4 @@ Once installed, the agent can use these tools through mcporter:
 
 - [ClawHub listing](https://clawhub.ai/ontehfritz/demarkus)
 - [Agent Memory scenario](/scenarios/agent-memory/)
-- [Soul — the project's live AI memory](/soul/)
+- [Soul: the project's live AI memory](/soul/)

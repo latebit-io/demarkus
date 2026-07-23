@@ -48,7 +48,7 @@ Personal memory:    /soul-join mark://soul.<host>:6309#token=<token>
 
 ## DNS
 
-Without `--domain` the stack names itself `<public-ip>.sslip.io` — real DNS, real
+Without `--domain` the stack names itself `<public-ip>.sslip.io`: real DNS, real
 Let's Encrypt certificates, zero setup. That identity follows the machine's IP, so
 switch to a real domain once you're keeping the system.
 
@@ -98,7 +98,7 @@ seconds. Backlinks and the graph view populate after the agent's first crawl.
 
 ## Beyond one box
 
-The appliance is the whole system on a single host. Same architecture at cluster
-scale — many worlds, GitOps, external secrets, backups — is the [organizational
-knowledge system](/scenarios/knowledge-system/), deployed from a forkable
-template.
+The appliance is the whole system on a single host. The same architecture at
+cluster scale, with many worlds, GitOps, external secrets, and backups, is the
+[organizational knowledge system](/scenarios/knowledge-system/), deployed from a
+forkable template.

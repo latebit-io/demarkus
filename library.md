@@ -16,7 +16,7 @@ read here; agents read the same documents over MCP.
 ## The reading room
 
 **Trail canvas.** Reading columns from root to focus, each pane scrolling on its
-own, with the margin — trust signals, backlinks, properties — summoned per pane.
+own, and the margin (trust signals, backlinks, properties) is summoned per pane.
 The trail URL serializes the whole reading context, so a paste drops someone into
 your reading rather than on a bare document.
 
@@ -24,7 +24,7 @@ your reading rather than on a bare document.
 highlighting, alert callouts, lazy mermaid and KaTeX islands. Tag pages, search,
 edition history, and raw source are routes.
 
-**Hover cards.** In-app links load a small server fragment on hover — title,
+**Hover cards.** In-app links load a small server fragment on hover: title,
 status, opening line.
 
 **The floor.** Universe view over the hub's published topology: every world an
@@ -39,8 +39,8 @@ tokenless QUIC reads. Your read token never leaves your host.
 
 ## The librarian
 
-An agent working the same read-only ports the room uses — fetch, browse, history,
-lookup — answering as a streamed pane, with your current trail as context. It
+An agent working the same read-only ports the room uses (fetch, browse, history,
+lookup), answering as a streamed pane with your current trail as context. It
 can't see documents you can't: access is enforced at the world, not in the
 prompt.
 
@@ -91,7 +91,7 @@ file overriding only those tokens rebrands the room, light and dark.
 ## How it's built
 
 Server-rendered Go (Echo v5, `html/template`, htmx) in a hexagonal
-ports-and-adapters layout — the core knows nothing of Echo, QUIC, or goldmark.
+ports-and-adapters layout, so the core knows nothing of Echo, QUIC, or goldmark.
 SSR-first, htmx-hard, no JSON tier and no client-side state. Assets are vendored
 and served from the binary: no CDN, no Node build, one Go binary.
 

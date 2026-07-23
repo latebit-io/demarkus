@@ -6,7 +6,7 @@ permalink: /install/
 
 # Install
 
-Pick your platform — or take the whole stack in one command.
+Pick your platform, or take the whole stack in one command.
 
 ## Whole system (Linux host)
 
@@ -36,7 +36,7 @@ One-line install. Sets up a systemd service plus the server and client binaries 
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | sudo bash
 ```
 
-[Full Linux guide →](/install/linux/) — includes Let's Encrypt TLS and read-only chroot install.
+[Full Linux guide →](/install/linux/), including Let's Encrypt TLS and the read-only chroot install.
 
 ## Windows (WSL2)
 
@@ -46,7 +46,7 @@ Demarkus runs inside WSL2. Same install script as Linux, run from your WSL2 shel
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | sudo bash
 ```
 
-[Full Windows guide →](/install/windows/) — covers WSL2 setup and systemd enablement.
+[Full Windows guide →](/install/windows/), covering WSL2 setup and systemd enablement.
 
 ## Docker
 
@@ -61,7 +61,7 @@ docker run -d \
   -root /data
 ```
 
-[Full Docker guide →](/install/docker/) — TLS, docker-compose, environment config.
+[Full Docker guide →](/install/docker/): TLS, docker-compose, environment config.
 
 ## OpenClaw
 

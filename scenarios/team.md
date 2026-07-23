@@ -6,12 +6,12 @@ permalink: /scenarios/team/
 
 # Team Knowledge Base
 
-Run a shared Demarkus server for a team — version-controlled docs, per-person or per-role write tokens, and open internal read access.
+Run a shared Demarkus server for a team: version-controlled docs, per-person or per-role write tokens, and open internal read access.
 
 ## What you'll have
 
 - A shared server (VPS or internal host)
-- Read access for the whole team — no auth required
+- Read access for the whole team: no auth required
 - Write access controlled by capability tokens
 - Full version history for accountability and rollback
 - Everyone uses `demarkus-tui` or `demarkus` CLI to read and write
@@ -20,10 +20,10 @@ Run a shared Demarkus server for a team — version-controlled docs, per-person 
 
 ```
 Team server (mark://docs.internal.example.com)
-├── /runbooks/          — ops runbooks
-├── /decisions/         — architecture decision records
-├── /onboarding/        — getting started guides
-└── /projects/<name>/   — per-project docs
+├── /runbooks/          # ops runbooks
+├── /decisions/         # architecture decision records
+├── /onboarding/        # getting started guides
+└── /projects/<name>/   # per-project docs
 ```
 
 Each team member gets a personal publish token scoped to paths they own. A team lead token covers everything.
@@ -84,7 +84,7 @@ sudo demarkus-token generate \
   -label "team-lead"
 ```
 
-The `publish` op grants all writes — PUBLISH, APPEND, and ARCHIVE — for the matched paths. There is no separate `archive` operation.
+The `publish` op grants all writes (PUBLISH, APPEND, and ARCHIVE) for the matched paths. There is no separate `archive` operation.
 
 **Developer token (scoped to their project folder):**
 
@@ -98,7 +98,7 @@ sudo demarkus-token generate \
 
 **Restricting reads (optional):**
 
-By default all reads are open. Reads become gated only once you mint a token that carries the `read` op for a path — at that point that path requires a valid read token. So to make `/projects/secret/*` private, generate a read token for it and hand it only to authorized members:
+By default all reads are open. Reads become gated only once you mint a token that carries the `read` op for a path. From then on that path requires a valid read token. So to make `/projects/secret/*` private, generate a read token for it and hand it only to authorized members:
 
 ```bash
 sudo demarkus-token generate \
@@ -161,14 +161,14 @@ demarkus mark://docs.internal.example.com/runbooks/deploy.md/v3
 
 ## Tips
 
-- Scope tokens narrowly — per-person or per-directory
+- Scope tokens narrowly: per-person or per-directory
 - Use `-label` when generating tokens for audit clarity
 - `demarkus-tui` graph view (`d` key) shows document relationships
-- Version history is permanent — there's no delete, only archive
+- Version history is permanent: there's no delete, only archive
 
 ## Related
 
-- [Five-minute appliance](/install/stack/) — the same tier with login and a reading room
+- [Five-minute appliance](/install/stack/): the same tier with login and a reading room
 - [Install on Linux](/install/linux/)
 - [Public hub scenario](/scenarios/public-hub/)
-- [Organizational knowledge system](/scenarios/knowledge-system/) — the next tier up
+- [Organizational knowledge system](/scenarios/knowledge-system/): the next tier up

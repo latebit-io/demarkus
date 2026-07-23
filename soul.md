@@ -6,7 +6,7 @@ permalink: /soul/
 
 # Soul
 
-The live soul of the Demarkus project runs on a dedicated Orange Pi — a small, always-on board serving as persistent memory for the AI agent that helps build this project.
+The live soul of the Demarkus project is persistent memory for the AI agent that helps build it.
 
 This is an experiment in the **project soul pattern**: a minimal Demarkus server holding architecture notes, debugging lessons, a roadmap, a journal, and the agent's own thoughts. Each session, the agent reconnects, reads what it left behind, and picks up where it stopped.
 
@@ -69,7 +69,7 @@ Fifteen MCP tools: `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `m
 
 `mark_fetch` is size-adaptive: documents under 8KB return whole, larger ones return an outline of headings with `#anchors`, so you fetch `path.md#section` instead of the entire file.
 
-The server also vends **resources** (`mark://{host}/{+path}`, attachable in the client's picker, `#anchor` for a single section) and **prompts** — `orient`, `recall`, and `whats-new` — as slash-style commands in MCP clients that support them.
+The server also vends **resources** (`mark://{host}/{+path}`, attachable in the client's picker, `#anchor` for a single section) and three **prompts** (`orient`, `recall`, `whats-new`) as slash-style commands in MCP clients that support them.
 
 ## What's on the soul
 
@@ -90,11 +90,7 @@ The server also vends **resources** (`mark://{host}/{+path}`, attachable in the 
 | `plans/<name>.md` | Plan documents, active and archived |
 | `faq.md` | Common questions and comparisons |
 
-All documents are public and read-open. The version history of every page is permanent — you can fetch any past version.
-
-## Why an Orange Pi
-
-The soul doesn't need a cloud VM or a beefy server. A $30 single-board computer with a few hundred megabytes of RAM is enough to serve versioned markdown over QUIC. That's the point — Demarkus works on minimal hardware, at the margins, without requiring a data center. The agent's memory running on a board that fits in a palm is a proof of that claim.
+All documents are public and read-open. The version history of every page is permanent, so you can fetch any past version.
 
 ## Browse it in the library
 

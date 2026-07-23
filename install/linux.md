@@ -12,7 +12,7 @@ permalink: /install/linux/
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | sudo bash
 ```
 
-> Pipe into `sudo bash` (not `sudo curl`) so the **installer** runs as root — it needs to write to `/usr/local/bin` and install the systemd service. `sudo curl … | bash` only elevates `curl`, and the server install will abort.
+> Pipe into `sudo bash` (not `sudo curl`) so the **installer** runs as root; it needs to write to `/usr/local/bin` and install the systemd service. `sudo curl … | bash` only elevates `curl`, and the server install will abort.
 
 This installs `demarkus-server`, `demarkus-token`, `demarkus`, `demarkus-tui`, and `demarkus-mcp`.
 
@@ -85,7 +85,7 @@ journalctl -u demarkus -f
 sudo demarkus-install update
 ```
 
-Or re-run the install script — it preserves tokens, TLS certs, and content directory.
+Or re-run the install script. It preserves tokens, TLS certs, and the content directory.
 
 ## Uninstall
 

@@ -37,15 +37,15 @@ Full keyboard reference for `demarkus-tui`.
 
 ## Graph View
 
-Press `d` to open the document graph — a tree of all linked documents reachable from the current URL. The graph is **persistent**: crawl results are stored at `~/.mark/graph.json` and accumulate across sessions. When you open the graph view, the stored graph loads instantly while a live crawl runs in the background to discover new links.
+Press `d` to open the document graph, a tree of all linked documents reachable from the current URL. The graph is **persistent**: crawl results are stored at `~/.mark/graph.json` and accumulate across sessions. When you open the graph view, the stored graph loads instantly while a live crawl runs in the background to discover new links.
 
 The CLI command `demarkus graph` also persists to the same store.
 
 | Key | Action |
 |-----|--------|
 | `d` | Open graph view / show the links (outbound) view |
-| `r` | Backlinks view — what links to the current node |
-| `t` | Topology view — the whole crawled graph |
+| `r` | Backlinks view: what links to the current node |
+| `t` | Topology view: the whole crawled graph |
 | `j` or `Down` | Select next node |
 | `k` or `Up` | Select previous node |
 | `Enter` | Navigate to selected node |

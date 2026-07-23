@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 WSL2 auto-forwards **TCP** to the Windows host, but Demarkus uses **QUIC over UDP** (port 6309), which is not forwarded automatically. You have two options.
 
-### Option A — Connect from inside WSL2 (simplest)
+### Option A: Connect from inside WSL2 (simplest)
 
 Any client running inside WSL2 reaches the server directly at `mark://localhost:6309`:
 
@@ -78,7 +78,7 @@ From PowerShell or CMD, invoke the WSL binary:
 wsl demarkus mark://localhost:6309/index.md
 ```
 
-### Option B — Forward UDP 6309 to Windows
+### Option B: Forward UDP 6309 to Windows
 
 Find your WSL2 IP from inside WSL:
 

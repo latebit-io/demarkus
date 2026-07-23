@@ -6,7 +6,7 @@ permalink: /scenarios/personal-wiki/
 
 # Personal Knowledge Base
 
-Run Demarkus locally as a private markdown wiki — browse with the TUI, publish through the protocol, full version history on every document.
+Run Demarkus locally as a private markdown wiki: browse with the TUI, publish through the protocol, full version history on every document.
 
 ## What you'll have
 
@@ -34,7 +34,7 @@ All writes go through the Mark Protocol. Generate a token to allow publishing:
 demarkus-token generate -paths "/*" -ops publish -tokens ~/.demarkus/tokens.toml
 ```
 
-Copy the raw token from the output — you'll use it as `$TOKEN` below.
+Copy the raw token from the output and use it as `$TOKEN` below.
 
 > If you used the full installer, the tokens file path is already configured. The installer saves an initial token to `~/.demarkus/initial-token.txt`.
 
@@ -50,7 +50,7 @@ The server uses a built-in self-signed certificate and listens on `localhost:630
 
 ### 4. Publish your first documents
 
-Everything goes through the protocol — no writing files directly to disk:
+Everything goes through the protocol, with no writing files directly to disk:
 
 ```bash
 export TOKEN=<your-token>
@@ -120,7 +120,7 @@ If the document doesn't exist yet, it opens an empty editor and creates it on sa
 
 ## Why publish through the protocol?
 
-Writing files directly to the content directory bypasses version history — those changes won't be tracked. Everything published via `demarkus -X PUBLISH` gets a version number, a hash, and an immutable record. That's what makes it a knowledge base rather than just a folder of files.
+Writing files directly to the content directory bypasses version history, so those changes won't be tracked. Everything published via `demarkus -X PUBLISH` gets a version number, a hash, and an immutable record. That's what makes it a knowledge base rather than just a folder of files.
 
 ## Running on startup (macOS)
 

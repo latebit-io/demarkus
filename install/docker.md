@@ -23,13 +23,13 @@ docker run -d \
   -root /data
 ```
 
-Verify it's serving (from a host with the client installed — the `scratch` image has no shell):
+Verify it's serving, from a host with the client installed (the `scratch` image has no shell):
 
 ```bash
 demarkus --insecure mark://localhost:6309/health
 ```
 
-> Use `/health` rather than `/index.md` — a fresh `/srv/site` volume is empty, so `index.md` doesn't exist yet. `/health` always responds. Use `--insecure` because the container uses the built-in self-signed certificate by default.
+> Use `/health` rather than `/index.md`, because a fresh `/srv/site` volume is empty, so `index.md` doesn't exist yet. `/health` always responds. Use `--insecure` because the container uses the built-in self-signed certificate by default.
 
 ## With TLS
 
@@ -118,8 +118,8 @@ docker compose up -d
 
 ## Notes
 
-- The image is built `FROM scratch` — no shell, no OS, just the binary. Keep this in mind for debugging.
-- Content directory and tokens file live on the host via volume mounts — they persist across container restarts and upgrades.
+- The image is built `FROM scratch`: no shell, no OS, just the binary. Keep this in mind for debugging.
+- Content directory and tokens file live on the host via volume mounts, so they persist across container restarts and upgrades.
 - The image exposes UDP port 6309 only. No HTTP, no healthcheck endpoint over TCP.
 
 ## Related

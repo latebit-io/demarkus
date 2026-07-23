@@ -10,7 +10,7 @@ Run a publicly accessible Demarkus server with TLS, open read access, and option
 
 ## The Hub Pattern
 
-A **hub** is a demarkus server that acts as a discovery index — it links to other demarkus servers rather than hosting original content. Think of it as a curated directory for the demarkus network.
+A **hub** is a demarkus server that acts as a discovery index: it links to other demarkus servers rather than hosting original content. Think of it as a curated directory for the demarkus network.
 
 Hubs organize servers into categories (tools, blogs, projects, other hubs) and publish an agent manifest at `/.well-known/agent-manifest.md` so LLM agents can discover and navigate the network automatically.
 
@@ -86,7 +86,7 @@ You should see the document with `status: ok`.
 
 **Option A: Local publishing (recommended for public servers)**
 
-Use `demarkus-publish` to write directly to the versioned store on disk. No network write access needed — the server can run in [read-only mode](/security/#read-only-mode-maximum-lockdown) for maximum security:
+Use `demarkus-publish` to write directly to the versioned store on disk. No network write access is needed, so the server can run in [read-only mode](/security/#read-only-mode-maximum-lockdown) for maximum security:
 
 ```bash
 demarkus-publish -root /srv/site -path /hello.md -body "# Hello"
@@ -123,7 +123,7 @@ Hubs are natural hosts for published graph documents. An agent crawls a set of s
 3. Another agent fetches the published graph and runs `mark_graph` on it
 4. The crawler follows all `mark://` links in the document, reconstructing the topology instantly
 
-The published graph is plain markdown with `mark://` links in a table. No special format — the same link extraction the crawler already uses parses it naturally.
+The published graph is plain markdown with `mark://` links in a table. No special format: the same link extraction the crawler already uses parses it naturally.
 
 ### Multi-agent discovery
 
@@ -131,7 +131,7 @@ Multiple agents can publish their graphs to the same hub:
 
 - Agent A publishes its graph from crawling `mark://server-a.com`
 - Agent B publishes its graph from crawling `mark://server-b.com`
-- Agent C crawls both published graph documents — instantly inheriting both topologies
+- Agent C crawls both published graph documents, inheriting both topologies instantly
 
 Each published graph is versioned, so you get a history of how the network evolved over time.
 
@@ -146,7 +146,7 @@ Each published graph is versioned, so you get a history of how the network evolv
 
 ### Content indexing
 
-Hubs can also host content indexes — hash-based directories that map content hashes to server locations. Use `mark_index` to crawl a server and publish its content index to a hub, and `mark_resolve` to look up content by hash.
+Hubs can also host content indexes, hash-based directories that map content hashes to server locations. Use `mark_index` to crawl a server and publish its content index to a hub, and `mark_resolve` to look up content by hash.
 
 ## Certificate renewal
 
@@ -156,7 +156,7 @@ The installer configures this cron job automatically:
 0 */12 * * * certbot renew --quiet --deploy-hook "pidof demarkus-server | xargs -r kill -HUP"
 ```
 
-The `SIGHUP` signal triggers a zero-downtime certificate reload — no connection drops.
+The `SIGHUP` signal triggers a zero-downtime certificate reload, with no connection drops.
 
 ## Monitoring
 
@@ -174,5 +174,5 @@ demarkus mark://yourdomain.com/health
 ## Related
 
 - [Install on Linux](/install/linux/)
-- [Security Model](/security/) — read-only mode, chroot install, hardening
+- [Security Model](/security/): read-only mode, chroot install, hardening
 - [Troubleshooting](/troubleshooting/)

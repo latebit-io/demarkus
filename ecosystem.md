@@ -31,7 +31,7 @@ Cross-platform Java GUI browser for Gemini, Spartan, Gopher, Nex, and **Demarkus
 The reference terminal browser, built on Bubble Tea and Glamour.
 
 - Source: [client/cmd/demarkus-tui](https://github.com/latebit-io/demarkus/tree/main/client/cmd/demarkus-tui)
-- `demarkus-tui mark://your.server/index.md` — full FETCH / LIST / VERSIONS, link-following, graph view, mouse wheel, external URL launching (the URL is a positional argument; there is no `-host` flag)
+- `demarkus-tui mark://your.server/index.md`: full FETCH / LIST / VERSIONS, link-following, graph view, mouse wheel, external URL launching (the URL is a positional argument; there is no `-host` flag)
 
 ## Plugins
 
@@ -39,32 +39,32 @@ The reference terminal browser, built on Bubble Tea and Glamour.
 
 Fetch, publish, and browse Demarkus documents directly from Obsidian.
 
-- Plugin repo: [latebit-io/obsidian-demarkus](https://github.com/latebit-io/obsidian-demarkus) — install via BRAT
+- Plugin repo: [latebit-io/obsidian-demarkus](https://github.com/latebit-io/obsidian-demarkus), installed via BRAT
 - Source: [plugins/obsidian](https://github.com/latebit-io/demarkus/tree/main/plugins/obsidian)
 
 ### Claude Code
 
 Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/demarkus`). They compose in one install and partition by server scope.
 
-**`demarkus-memory`** — personal agent memory (the [soul pattern](/scenarios/agent-memory/)). Zero-config: spawns a local `demarkus-server`, auto-generates a token, and wires the MCP tools on first session.
+**`demarkus-memory`** is personal agent memory (the [soul pattern](/scenarios/agent-memory/)). Zero-config: spawns a local `demarkus-server`, auto-generates a token, and wires the MCP tools on first session.
 
 - Source: [plugins/claude-code](https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code)
 - Install: `/plugin install demarkus-memory@demarkus`
 - Local soul: `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-status`, `/soul-doctor`
 - Remote souls: `/soul-join <join-url>` adds a remote soul to the catalog and binds it to the project; `/soul-default` picks which one this project writes to
 - Promotion: `/promote <path>` lifts a ready note to a knowledge system through the curation gate, `/promote-scan` sweeps for candidates, `/soul-refresh` pulls promoted docs back as the authoritative copy changes
-- Skill: `soul-memory` — triggers on "remember / recall / save / note" intents
+- Skill: `soul-memory`, which triggers on "remember / recall / save / note" intents
 
-**`demarkus-knowledge`** — join an organizational [knowledge system](/scenarios/knowledge-system/), a broker-fronted universe of worlds. No binaries and no local server: pure broker plus the Claude Code MCP OAuth flow.
+**`demarkus-knowledge`** joins an organizational [knowledge system](/scenarios/knowledge-system/), a broker-fronted universe of worlds. No binaries and no local server: pure broker plus the Claude Code MCP OAuth flow.
 
 - Source: [plugins/claude-code-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code-knowledge)
 - Install: `/plugin install demarkus-knowledge@demarkus`
 - Slash commands: `/knowledge-join <broker-url>`, `/knowledge`, `/knowledge-doctor` (catalog hygiene audit)
-- Skill: `knowledge-promote` — the curation cascade that distills, dedups, tags, routes, and gates a document before it lands in the shared catalog
+- Skill: `knowledge-promote`, the curation cascade that distills, dedups, tags, routes, and gates a document before it lands in the shared catalog
 
 ### pi
 
-The same two plugins, ported to the [pi](https://pi.dev) coding agent and mapped onto its extension API. They share `~/.demarkus` state with the Claude Code plugins — one soul, one token, one set of registries — so both agents can run on the same machine.
+The same two plugins, ported to the [pi](https://pi.dev) coding agent and mapped onto its extension API. They share `~/.demarkus` state with the Claude Code plugins (one soul, one token, one set of registries), so both agents can run on the same machine.
 
 Both need the MCP adapter first:
 
@@ -72,12 +72,12 @@ Both need the MCP adapter first:
 pi install npm:pi-mcp-adapter
 ```
 
-**`demarkus-pi-memory`** — local soul, same zero-config provisioning, gates, and nudges. Commands: `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the `soul-memory` skill.
+**`demarkus-pi-memory`** is the local soul, with the same zero-config provisioning, gates, and nudges. Commands: `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the `soul-memory` skill.
 
-**`demarkus-pi-knowledge`** — join a knowledge system over the adapter's OAuth; no tokens stored locally. Commands: `/knowledge`, `/knowledge-join`, `/knowledge-doctor`, plus the `knowledge-promote` skill.
+**`demarkus-pi-knowledge`** joins a knowledge system over the adapter's OAuth, with no tokens stored locally. Commands: `/knowledge`, `/knowledge-join`, `/knowledge-doctor`, plus the `knowledge-promote` skill.
 
 - Source: [plugins/pi-memory](https://github.com/latebit-io/demarkus/tree/main/plugins/pi-memory) · [plugins/pi-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/pi-knowledge)
-- Install from a checkout — pi's `git:` installer reads a repo's root `package.json`, so a monorepo subdirectory can't be git-installed:
+- Install from a checkout: pi's `git:` installer reads a repo's root `package.json`, so a monorepo subdirectory can't be git-installed:
 
 ```bash
 git clone https://github.com/latebit-io/demarkus

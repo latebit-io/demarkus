@@ -82,7 +82,7 @@ Binaries are placed in `server/bin/`, `client/bin/`, and `tools/bin/`. Requires 
 demarkus-install update
 ```
 
-Or re-run the install script — it preserves your tokens, TLS certs, and content directory.
+Or re-run the install script. It preserves your tokens, TLS certs, and content directory.
 
 ## Uninstall
 
