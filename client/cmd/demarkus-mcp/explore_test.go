@@ -186,6 +186,26 @@ func TestHandlerMarkExplore_NonOKPassthrough(t *testing.T) {
 	}
 }
 
+func TestHandlerMarkExplore_BinaryNotice(t *testing.T) {
+	sc := &stubClient{
+		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "1", "modified": "2026-07-04T00:00:00Z", "etag": "abc"},
+				Body:     "\x89PNG\r\n\x1a\n\xff\xfe\x00",
+			}}, nil
+		},
+	}
+	h := &handler{client: sc}
+	text := exploreText(t, h, "mark://host:6309/img.png")
+	if !strings.Contains(text, "non-markdown or binary document") {
+		t.Errorf("binary body should return the notice, got:\n%s", text)
+	}
+	if strings.Contains(text, "## Outline") {
+		t.Error("binary body must not be run through the outline builder")
+	}
+}
+
 func TestHandlerMarkExplore_InvalidURL(t *testing.T) {
 	h := &handler{client: &stubClient{}}
 	result, err := h.markExplore(context.Background(), newCallToolRequest(map[string]any{"url": "/bare"}))

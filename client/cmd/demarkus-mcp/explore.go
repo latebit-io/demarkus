@@ -57,6 +57,12 @@ func (h *handler) markExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 	body := result.Response.Body
 
+	// Binary/non-UTF-8 body: an outline over it is garbage; return a notice.
+	if binaryBody(body) {
+		return mcp.NewToolResultText(formatResultWith(result, nonMarkdownNotice(len(body)),
+			map[string]string{"mode": "binary"}, "version", "modified", "etag")), nil
+	}
+
 	var b strings.Builder
 
 	b.WriteString("## Outline\n")

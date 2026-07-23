@@ -777,6 +777,14 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		return
 	}
 
+	// Contract before the empty-body shortcut: a non-.md path is rejected
+	// even with an empty body.
+	if err := store.ValidateDocumentContent(req.Path, []byte(req.Body)); err != nil {
+		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid document")
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Handle empty body case: unarchive if archived, no-op if active
 	if req.Body == "" {
 		doc, err := h.Store.Get(req.Path, 0)
@@ -916,10 +924,6 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 		return
 	}
-	if req.Body == "" {
-		h.writeError(w, protocol.StatusServerError, "append requires a body")
-		return
-	}
 
 	var ts *auth.TokenStore
 	if h.GetTokenStore != nil {
@@ -941,6 +945,18 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 			h.logger().Warn("not permitted", "operation", "APPEND", "path", sanitize(req.Path))
 			h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
 		}
+		return
+	}
+
+	// Contract before the empty-body check: a non-.md path is rejected as
+	// bad-request rather than reported as a missing body.
+	if err := store.ValidateDocumentContent(req.Path, []byte(req.Body)); err != nil {
+		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid document")
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Body == "" {
+		h.writeError(w, protocol.StatusServerError, "append requires a body")
 		return
 	}
 

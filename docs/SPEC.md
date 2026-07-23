@@ -124,6 +124,7 @@ Everything after the metadata closing delimiter (or after the request line if no
 
 - The body is OPTIONAL for all verbs.
 - For PUBLISH requests, the body contains the document content.
+- For PUBLISH and APPEND, the body MUST be valid UTF-8. A document is markdown text (§2.3); the server MUST reject a non-UTF-8 body with `bad-request` and MUST NOT store it.
 - There is no protocol-level size limit on the body; servers SHOULD enforce a maximum document size (see Section 12.3).
 
 ## 5. Response Format
@@ -329,6 +330,8 @@ The `auth` metadata field is REQUIRED. The server hashes the raw token with SHA-
 
 The request body is the document content. It is stored as-is (the server prepends its own store frontmatter; the original content is preserved verbatim).
 
+**Document contract**: a published document is markdown text. The request path MUST end in `.md` and the body MUST be valid UTF-8 (§2.3, §4.4). The server MUST reject a path that does not end in `.md`, or a body that is not valid UTF-8, with `bad-request` and MUST NOT create a version. This gate also applies to APPEND (§6.6).
+
 **Success response** (`created`):
 
 ```text
@@ -378,6 +381,7 @@ The request MAY include an `expected-version` metadata field containing a decima
 **Other errors**:
 
 - `not-found`: Path validation failed (e.g., path traversal attempt).
+- `bad-request`: Path does not end in `.md`, or the body is not valid UTF-8 (see Document contract above).
 - `conflict`: `expected-version` does not match the current version (see optimistic concurrency above).
 - `server-error`: Internal error, content exceeds size limit, or publishing not configured.
 
@@ -464,7 +468,7 @@ modified: <RFC 3339 timestamp>
 
 **Other errors**:
 
-- `bad-request`: Missing or invalid `expected-version` (must be >= 1).
+- `bad-request`: Missing or invalid `expected-version` (must be >= 1), a non-`.md` path, or a body that is not valid UTF-8 (see §6.4 Document contract).
 - `not-found`: Document does not exist or path validation failed.
 - `archived`: Document is archived. Unarchive first via PUBLISH with empty body.
 - `conflict`: `expected-version` does not match the current version. Response includes `your-version` and `server-version` metadata.
@@ -543,6 +547,8 @@ Status values are text strings. There are no numeric status codes.
 | `archived` | The document has been archived. Version-pinned fetches still succeed. |
 | `unauthorized` | Missing or invalid authentication token. |
 | `not-permitted` | Valid authentication but insufficient capability for the requested operation or path. |
+| `conflict` | Version conflict; `expected-version` did not match the current version. |
+| `bad-request` | Malformed request, or a document that violates the content contract (non-`.md` path, non-UTF-8 body). |
 | `server-error` | The server encountered an error processing the request. |
 
 ### 7.1. Future Status Values
@@ -551,8 +557,6 @@ The following status values are reserved for future use:
 
 | Value | Intended meaning |
 |---|---|
-| `conflict` | Version conflict (e.g., simultaneous publishes). |
-| `bad-request` | Malformed request. |
 | `too-large` | Document exceeds the size limit. |
 | `unavailable` | Server temporarily cannot fulfil the request. |
 

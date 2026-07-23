@@ -35,6 +35,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -87,6 +88,14 @@ var ErrVersionExists = fmt.Errorf("version already exists")
 
 // ErrSizeLimit is returned when combined content exceeds protocol.MaxBodyLength.
 var ErrSizeLimit = fmt.Errorf("combined content exceeds size limit")
+
+// ErrInvalidPath is returned when a publish path does not end in .md. The
+// protocol serves markdown documents; a non-.md path is not a document (SPEC 2.3).
+var ErrInvalidPath = fmt.Errorf("publish path must end in .md")
+
+// ErrInvalidContent is returned when a document body is not valid UTF-8.
+// Markdown is UTF-8 text; binary content is not a markdown document (SPEC 2.3, 4.4).
+var ErrInvalidContent = fmt.Errorf("document body must be valid UTF-8 text")
 
 // maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
 // adds to a version file (version, archived, previous-hash, publisher
@@ -949,6 +958,9 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	if err := validateMeta(meta); err != nil {
 		return nil, err
 	}
+	if err := ValidateBody(content); err != nil {
+		return nil, err
+	}
 
 	// Validate path stays within the store root (resolve handles traversal + symlinks).
 	if _, err := s.resolve(reqPath); err != nil {
@@ -1474,6 +1486,24 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 // handler's initial validation (e.g. injecting a default OKF type) can re-check
 // before the write and surface a precise error rather than a generic failure.
 func ValidateMeta(meta map[string]string) error { return validateMeta(meta) }
+
+// ValidateDocumentContent enforces the document contract for PUBLISH/APPEND: a
+// .md path with a UTF-8 body. Callers map the errors to bad-request.
+func ValidateDocumentContent(reqPath string, content []byte) error {
+	if !strings.HasSuffix(reqPath, ".md") {
+		return ErrInvalidPath
+	}
+	return ValidateBody(content)
+}
+
+// ValidateBody checks a body is UTF-8 text. Each backend's Write calls it as
+// defense in depth. No .md check here: the store is deliberately path-agnostic.
+func ValidateBody(content []byte) error {
+	if !utf8.Valid(content) {
+		return ErrInvalidContent
+	}
+	return nil
+}
 
 // validateMeta checks that metadata keys and values are safe for frontmatter
 // serialization. This is defense in depth — the handler also validates, but
