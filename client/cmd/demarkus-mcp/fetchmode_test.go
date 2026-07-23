@@ -86,6 +86,36 @@ func TestHandlerMarkFetch_LargeDocForceFullBody(t *testing.T) {
 	}
 }
 
+// binaryDoc is a body that is not valid UTF-8 (PNG magic plus stray bytes),
+// standing in for legacy or out-of-band binary the publish gate can no longer
+// admit but which a fetch might still encounter.
+const binaryDoc = "\x89PNG\r\n\x1a\n\xff\xfe\x00\xb1\xa5"
+
+func TestHandlerMarkFetch_BinaryNotice(t *testing.T) {
+	h := &handler{client: fetchStub(binaryDoc, "1", "abc", nil)}
+	text := fetchText(t, h, map[string]any{"url": "mark://example.com/img.png"})
+	if !strings.Contains(text, "mode: binary") {
+		t.Errorf("binary body should be flagged mode: binary, got:\n%s", text)
+	}
+	if !strings.Contains(text, "non-markdown or binary document") {
+		t.Errorf("binary body should return the notice, got:\n%s", text)
+	}
+	if strings.Contains(text, "\x89PNG") {
+		t.Error("binary bytes must not be rendered into the response")
+	}
+}
+
+func TestHandlerMarkFetch_BinaryForceBypasses(t *testing.T) {
+	h := &handler{client: fetchStub(binaryDoc, "1", "abc", nil)}
+	text := fetchText(t, h, map[string]any{"url": "mark://example.com/img.png", "force": true})
+	if strings.Contains(text, "non-markdown or binary document") {
+		t.Error("force=true should bypass the binary notice and return raw bytes")
+	}
+	if !strings.Contains(text, "\x89PNG") {
+		t.Error("force=true should return the raw body")
+	}
+}
+
 func TestHandlerMarkFetch_SectionSlice(t *testing.T) {
 	tests := []struct {
 		name   string

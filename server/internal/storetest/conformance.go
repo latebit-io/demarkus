@@ -36,6 +36,7 @@ func RunConformance(t *testing.T, factory Factory) {
 		{"RetentionPrune", testRetentionPrune},
 		{"MissingDocument", testMissingDocument},
 		{"PathCollisions", testPathCollisions},
+		{"RejectsBinaryBody", testRejectsBinaryBody},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) {
@@ -339,6 +340,33 @@ func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 	}
 	if cur := s.CurrentVersion("/col/doc.md/child.md"); cur != 0 {
 		t.Errorf("collision write left version state under /col/doc.md (version %d)", cur)
+	}
+}
+
+func testRejectsBinaryBody(t *testing.T, s handler.DocumentStore) {
+	// Not valid UTF-8: a document body is markdown text. Every backend must
+	// refuse to persist it, so binary never reaches the store even through a
+	// caller outside the network path (the handler validates too).
+	binary := []byte{0x89, 'P', 'N', 'G', 0xff, 0xfe, 0x00}
+
+	if _, err := s.WriteVersion("/bin.md", 0, binary, nil); !errors.Is(err, store.ErrInvalidContent) {
+		t.Errorf("WriteVersion binary body: err = %v, want ErrInvalidContent", err)
+	}
+	if _, err := s.Get("/bin.md", 0); err == nil {
+		t.Error("rejected binary write left a fetchable document at /bin.md")
+	}
+	if cur := s.CurrentVersion("/bin.md"); cur != 0 {
+		t.Errorf("rejected binary write left version state at /bin.md (version %d)", cur)
+	}
+
+	// An append that would introduce binary must be rejected too, leaving the
+	// existing text version untouched.
+	mustWrite(t, s, "/doc.md", 0, "# Text\n")
+	if _, err := s.Append("/doc.md", 1, binary, nil); !errors.Is(err, store.ErrInvalidContent) {
+		t.Errorf("Append binary body: err = %v, want ErrInvalidContent", err)
+	}
+	if cur := s.CurrentVersion("/doc.md"); cur != 1 {
+		t.Errorf("rejected binary append advanced /doc.md to version %d, want 1", cur)
 	}
 }
 

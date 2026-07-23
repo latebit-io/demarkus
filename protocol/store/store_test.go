@@ -2109,3 +2109,33 @@ func TestPruneVersions_DocDirOutsideRootRejected(t *testing.T) {
 		t.Errorf("file outside the store root was deleted: %v", err)
 	}
 }
+
+func TestValidateDocumentContent(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xb1, 0xa5}
+	tests := []struct {
+		name    string
+		path    string
+		content []byte
+		want    error
+	}{
+		{"markdown at .md", "/doc.md", []byte("# Hello\n"), nil},
+		{"empty body at .md", "/doc.md", []byte(""), nil},
+		{"utf8 multibyte at .md", "/doc.md", []byte("# café ☕\n"), nil},
+		{"nested .md path", "/a/b/c.md", []byte("x"), nil},
+		{"png bytes at .png", "/img.png", png, ErrInvalidPath},
+		{"text at .txt", "/notes.txt", []byte("plain"), ErrInvalidPath},
+		{"no extension", "/README", []byte("x"), ErrInvalidPath},
+		{"uppercase .MD rejected", "/doc.MD", []byte("x"), ErrInvalidPath},
+		{"png bytes smuggled into .md", "/sneaky.md", png, ErrInvalidContent},
+		{"invalid utf8 in .md", "/doc.md", []byte{0xff, 0xfe}, ErrInvalidContent},
+		{"path checked before content", "/img.png", png, ErrInvalidPath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDocumentContent(tt.path, tt.content)
+			if !errors.Is(err, tt.want) {
+				t.Errorf("ValidateDocumentContent(%q, %d bytes) = %v, want %v", tt.path, len(tt.content), err, tt.want)
+			}
+		})
+	}
+}

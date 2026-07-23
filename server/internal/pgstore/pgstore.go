@@ -463,6 +463,9 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 	if err := store.ValidateMeta(meta); err != nil {
 		return nil, err
 	}
+	if err := store.ValidateBody(content); err != nil {
+		return nil, err
+	}
 	p := canonical(reqPath)
 	if p == "" {
 		return nil, os.ErrNotExist

@@ -1286,6 +1286,58 @@ func TestHandlePublish(t *testing.T) {
 	})
 }
 
+func TestHandleWrite_RejectsNonMarkdown(t *testing.T) {
+	const secret = "reject-secret"
+	ts := auth.NewTokenStore(map[string]auth.Token{
+		protocol.HashToken(secret): {Paths: []string{"/*"}, Operations: []string{"publish"}},
+	})
+	authMeta := "---\nauth: " + secret + "\n---\n"
+	// PNG magic: invalid UTF-8, so it fails the content check even at a .md path.
+	png := "\x89PNG\r\n\x1a\n\xb1\xa5"
+
+	tests := []struct {
+		name string
+		req  string
+	}{
+		{"publish png to .png path", "PUBLISH /img.png\n" + authMeta + png},
+		{"publish png bytes to .md path", "PUBLISH /sneaky.md\n" + authMeta + png},
+		{"publish text to .txt path", "PUBLISH /notes.txt\n" + authMeta + "plain text\n"},
+		{"append needs expected-version too, but path is gated first",
+			"APPEND /img.png\n---\nauth: " + secret + "\nexpected-version: 1\n---\nmore\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+
+			stream := newMockStream(tt.req)
+			h.HandleStream(stream)
+
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status != protocol.StatusBadRequest {
+				t.Errorf("status: got %q, want %q (body: %q)", resp.Status, protocol.StatusBadRequest, resp.Body)
+			}
+		})
+	}
+
+	t.Run("valid markdown still publishes", func(t *testing.T) {
+		dir := t.TempDir()
+		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		stream := newMockStream("PUBLISH /ok.md\n" + authMeta + "# Good\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusCreated {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
+		}
+	})
+}
+
 func TestHandlePublishAuth(t *testing.T) {
 	// Raw secrets used in requests. Store keys are their hashes.
 	const (

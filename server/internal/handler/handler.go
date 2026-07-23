@@ -828,6 +828,11 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
 	}
+	if err := store.ValidateDocumentContent(req.Path, []byte(req.Body)); err != nil {
+		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid document")
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
 
 	expectedVersion := -1 // default: no check when expected-version is absent
 	if ev := req.Metadata["expected-version"]; ev != "" {
@@ -951,6 +956,11 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 	}
 	pubMeta = applyOKFTypeDefault(req.Path, pubMeta)
 	if err := store.ValidateMeta(pubMeta); err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+	if err := store.ValidateDocumentContent(req.Path, []byte(req.Body)); err != nil {
+		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid document")
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
 	}

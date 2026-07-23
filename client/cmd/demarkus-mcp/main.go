@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
@@ -263,6 +264,22 @@ func markFetchTool(host string) mcp.Tool {
 // an outline instead of the full body, unless force=true or a #section is
 // requested.
 const outlineThreshold = 8 * 1024
+
+// nonMarkdownNotice is what the agent-facing render paths (mark_fetch,
+// mark_explore, resource read) return when a body is not valid UTF-8. The
+// publish gate rejects such content, but data predating the gate or loaded
+// into the store out-of-band can still exist; rendering it as text would inject
+// mojibake and control bytes straight into the model's context.
+func nonMarkdownNotice(nBytes int) string {
+	return fmt.Sprintf("non-markdown or binary document (%d bytes); not rendered as text. Retrieve the raw bytes with a non-MCP client, e.g. the demarkus CLI.", nBytes)
+}
+
+// binaryBody reports whether a fetched body is not markdown text and so must
+// not be rendered into the model's context. Every render path shares this one
+// decision. It is intentionally separate from the store's ValidateBody: this is
+// render-time detection on the client, not the persist-time contract, so the
+// client does not depend on server storage internals.
+func binaryBody(body string) bool { return !utf8.ValidString(body) }
 
 func markListTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_list",
@@ -610,6 +627,13 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	version := result.Response.Metadata["version"]
 	etag := result.Response.Metadata["etag"]
 	key := host + path
+
+	// Binary/non-UTF-8 body: render a notice, not mojibake. force lets an
+	// operator pull the raw bytes through MCP anyway.
+	if !force && binaryBody(body) {
+		return mcp.NewToolResultText(formatResultWith(result, nonMarkdownNotice(len(body)),
+			map[string]string{"mode": "binary"}, "version", "modified", "etag")), nil
+	}
 
 	// #section slice: works at any size and bypasses dedup — the agent is
 	// asking for content it has not necessarily seen.
