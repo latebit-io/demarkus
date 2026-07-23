@@ -1487,12 +1487,8 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 // before the write and surface a precise error rather than a generic failure.
 func ValidateMeta(meta map[string]string) error { return validateMeta(meta) }
 
-// ValidateDocumentContent enforces the Mark Protocol document contract for
-// PUBLISH and APPEND: a document lives at a .md path and its body is UTF-8
-// text (markdown). Binary or non-.md content is not a markdown document and is
-// rejected before it reaches the store, where the markdown-derived features
-// (outline, title extraction, link graph) would otherwise produce garbage.
-// Callers map ErrInvalidPath / ErrInvalidContent to a bad-request response.
+// ValidateDocumentContent enforces the document contract for PUBLISH/APPEND: a
+// .md path with a UTF-8 body. Callers map the errors to bad-request.
 func ValidateDocumentContent(reqPath string, content []byte) error {
 	if !strings.HasSuffix(reqPath, ".md") {
 		return ErrInvalidPath
@@ -1500,12 +1496,8 @@ func ValidateDocumentContent(reqPath string, content []byte) error {
 	return ValidateBody(content)
 }
 
-// ValidateBody is the content half of the document contract: a document body is
-// UTF-8 text (markdown). Each store backend's Write calls it as defense in depth
-// (the handler validates the full path+body via ValidateDocumentContent first),
-// so binary never persists even through a caller outside the network path. The
-// path (.md) rule is intentionally not enforced here: the store is path-agnostic
-// (versioning, hash chain, and traversal safety operate on arbitrary paths).
+// ValidateBody checks a body is UTF-8 text. Each backend's Write calls it as
+// defense in depth. No .md check here: the store is deliberately path-agnostic.
 func ValidateBody(content []byte) error {
 	if !utf8.Valid(content) {
 		return ErrInvalidContent

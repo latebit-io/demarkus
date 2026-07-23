@@ -265,20 +265,14 @@ func markFetchTool(host string) mcp.Tool {
 // requested.
 const outlineThreshold = 8 * 1024
 
-// nonMarkdownNotice is what the agent-facing render paths (mark_fetch,
-// mark_explore, resource read) return when a body is not valid UTF-8. The
-// publish gate rejects such content, but data predating the gate or loaded
-// into the store out-of-band can still exist; rendering it as text would inject
-// mojibake and control bytes straight into the model's context.
+// nonMarkdownNotice replaces a non-UTF-8 body in the agent-facing render paths;
+// rendering the raw bytes as text would inject mojibake into the model's context.
 func nonMarkdownNotice(nBytes int) string {
 	return fmt.Sprintf("non-markdown or binary document (%d bytes); not rendered as text. Retrieve the raw bytes with a non-MCP client, e.g. the demarkus CLI.", nBytes)
 }
 
-// binaryBody reports whether a fetched body is not markdown text and so must
-// not be rendered into the model's context. Every render path shares this one
-// decision. It is intentionally separate from the store's ValidateBody: this is
-// render-time detection on the client, not the persist-time contract, so the
-// client does not depend on server storage internals.
+// binaryBody flags a body that must not be rendered as text. Separate from the
+// store's ValidateBody: client render-time check, no dependency on storage.
 func binaryBody(body string) bool { return !utf8.ValidString(body) }
 
 func markListTool(host string) mcp.Tool {
@@ -628,9 +622,9 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	etag := result.Response.Metadata["etag"]
 	key := host + path
 
-	// Binary/non-UTF-8 body: render a notice, not mojibake. force lets an
-	// operator pull the raw bytes through MCP anyway.
-	if !force && binaryBody(body) {
+	// Binary/non-UTF-8 body: always a notice, never bytes. MCP text can't carry
+	// binary faithfully (JSON mangles it); byte-exact retrieval is the CLI's job.
+	if binaryBody(body) {
 		return mcp.NewToolResultText(formatResultWith(result, nonMarkdownNotice(len(body)),
 			map[string]string{"mode": "binary"}, "version", "modified", "etag")), nil
 	}

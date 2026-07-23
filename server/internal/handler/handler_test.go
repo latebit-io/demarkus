@@ -1302,8 +1302,12 @@ func TestHandleWrite_RejectsNonMarkdown(t *testing.T) {
 		{"publish png to .png path", "PUBLISH /img.png\n" + authMeta + png},
 		{"publish png bytes to .md path", "PUBLISH /sneaky.md\n" + authMeta + png},
 		{"publish text to .txt path", "PUBLISH /notes.txt\n" + authMeta + "plain text\n"},
+		// Empty body must not slip past the .md contract via the no-op shortcut.
+		{"publish empty body to .txt path", "PUBLISH /notes.txt\n" + authMeta},
 		{"append needs expected-version too, but path is gated first",
 			"APPEND /img.png\n---\nauth: " + secret + "\nexpected-version: 1\n---\nmore\n"},
+		{"append empty body to .txt path",
+			"APPEND /notes.txt\n---\nauth: " + secret + "\nexpected-version: 1\n---\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

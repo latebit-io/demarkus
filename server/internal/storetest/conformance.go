@@ -344,9 +344,8 @@ func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 }
 
 func testRejectsBinaryBody(t *testing.T, s handler.DocumentStore) {
-	// Not valid UTF-8: a document body is markdown text. Every backend must
-	// refuse to persist it, so binary never reaches the store even through a
-	// caller outside the network path (the handler validates too).
+	// A document body is markdown text; every backend must refuse to persist
+	// non-UTF-8, even when called outside the network path.
 	binary := []byte{0x89, 'P', 'N', 'G', 0xff, 0xfe, 0x00}
 
 	if _, err := s.WriteVersion("/bin.md", 0, binary, nil); !errors.Is(err, store.ErrInvalidContent) {
