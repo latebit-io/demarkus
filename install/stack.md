@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-st
 |---|---|
 | `--domain <host>` | Base domain; `library.`, `broker.`, `auth.`, `soul.` hang off it |
 | `--owner-email <addr>` | First user's email, and the Let's Encrypt contact |
-| `--librarian-key-file <path>` | File holding the LLM key that enables the [librarian](/library/#the-librarian) |
+| `--librarian-key-file <path>` | File holding the LLM API key that enables the [librarian](/library/#configuring-the-provider); pick the provider with `LLM_BASE_URL`/`LLM_MODEL` in the env file |
 | `--library-version <ver>` | Pin a library release instead of the latest |
 
 The librarian key rides a `chmod 600` file, never argv, which leaks through `ps`
@@ -82,8 +82,9 @@ and shell history. A group- or world-readable key file is refused.
 sudoedit /etc/demarkus-auth/users.yml
 sudo systemctl restart demarkus-auth
 
-# enable the librarian later
-echo 'LLM_API_KEY=...' | sudo tee -a /etc/demarkus-library/env
+# enable the librarian later (LLM_API_KEY alone uses OpenRouter + Gemini 2.5 Flash;
+# add LLM_BASE_URL and LLM_MODEL for another OpenAI-compatible provider)
+printf 'LLM_API_KEY=%s\n' "$KEY" | sudo tee -a /etc/demarkus-library/env
 sudo systemctl restart demarkus-library
 
 # remove everything

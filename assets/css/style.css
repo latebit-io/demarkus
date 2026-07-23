@@ -579,6 +579,42 @@ body {
     text-align: center;
 }
 
+/* ---------- Screenshot figures ---------- */
+
+.shot {
+    margin: 1.8rem 0 2rem;
+    background: var(--panel);
+    border: 1px solid var(--rule-soft);
+    border-radius: 3px;
+    padding: 8px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+
+.shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--rule-hair);
+    border-radius: 2px;
+}
+
+.shot figcaption {
+    margin: 0;
+    padding: 0.6rem 0.4rem 0.25rem;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-align: center;
+}
+
+.tier .shot {
+    margin: 0.9rem 0 0;
+    box-shadow: none;
+    padding: 5px;
+}
+
 /* ---------- Footer / colophon ---------- */
 
 .site-footer {

@@ -52,13 +52,14 @@ No DNS setup, no accounts. [The five-minute appliance →](/install/stack/)
     <p class="tier-kicker">Enterprise</p>
     <h3>A knowledge system</h3>
     <p>Many worlds behind one broker, your identity provider in front. Teams join with one command; the broker mints per-world tokens.</p>
+    <figure class="shot"><a href="/library/"><img src="/assets/img/library-trail.png" alt="The library reading room showing two document panes side by side" /></a></figure>
     <p class="tier-links"><a href="/scenarios/knowledge-system/">Knowledge system</a> · <a href="/library/">The library</a></p>
   </div>
 </div>
 
 Store, verbs, history, and MCP surface are identical at every tier. Only reach and identity change, so moving up is a deployment change rather than a migration. [Compare the tiers →](/scenarios/)
 
-The tiers compose: a developer runs a personal soul and joins the org system in the same agent. `/promote` lifts a ready note up through a curation gate; `/soul-refresh` pulls the authoritative copy back as it changes.
+The tiers compose: a developer runs a personal soul and joins the org system in the same agent. The agent captures to the soul as it works, and `/promote` lifts a ready note up through a curation gate; `/soul-refresh` pulls the authoritative copy back as it changes. [How knowledge flows →](/how-it-works/)
 
 ---
 

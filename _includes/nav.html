@@ -15,6 +15,11 @@
         >Scenarios</a
     >
     <a
+        class="{% if page.url == '/how-it-works/' %}is-active{% endif %}"
+        href="{{ '/how-it-works/' | relative_url }}"
+        >How it works</a
+    >
+    <a
         class="{% if page.url == '/library/' %}is-active{% endif %}"
         href="{{ '/library/' | relative_url }}"
         >Library</a

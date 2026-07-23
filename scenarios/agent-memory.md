@@ -241,7 +241,8 @@ publishing. `/promote-scan` sweeps the soul for candidates; `/soul-refresh` pull
 promoted documents back down as the authoritative copy evolves.
 
 Soul is the draft tier, the knowledge system is the authoritative one. Nothing
-auto-publishes.
+auto-publishes. [How knowledge flows](/how-it-works/) walks the whole loop end to
+end.
 
 ## Using a remote soul server manually
 

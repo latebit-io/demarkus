@@ -15,7 +15,7 @@ This is an experiment in the **project soul pattern**: a minimal Demarkus server
   <p class="soul-demo-caption">Claude Agent connecting to the soul via MCP</p>
 </div>
 
-The soul is served at `mark://soul.demarkus.io` and can be browsed with any Demarkus client.
+The soul is served at `mark://soul.demarkus.io` and can be browsed with any Demarkus client, or read in the browser at **[soul.demarkus.io](https://soul.demarkus.io)** through the [library](/library/) reading room.
 
 ## Connect to the soul
 
@@ -94,8 +94,12 @@ All documents are public and read-open. The version history of every page is per
 
 ## Browse it in the library
 
-The [library](/library/) defaults to this world, so a local run gives you the
-reading room over the project's live memory:
+This soul is served through the [library](/library/) at
+**[soul.demarkus.io](https://soul.demarkus.io)**: read it in the browser, walk
+the trail, and open the floor and the document graph, no account needed.
+
+The library defaults to this world, so a local run gives you the same reading
+room over your own copy:
 
 ```bash
 git clone https://github.com/latebit-io/demarkus-library

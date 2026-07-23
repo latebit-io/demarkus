@@ -42,3 +42,6 @@ Claude Code or [pi](https://pi.dev). Both plugin pairs share one `~/.demarkus`
 state. `/promote` lifts a ready note from the private tier to the shared one
 through a curation gate; `/soul-refresh` pulls the authoritative copy back as it
 changes. The two plugins partition by server scope.
+
+For the full agent-driven flow, how data lands in memory and gets promoted up to
+the knowledge system, see [How knowledge flows](/how-it-works/).

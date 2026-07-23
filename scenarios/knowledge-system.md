@@ -106,6 +106,7 @@ A personal [soul](/scenarios/agent-memory/) and an organizational knowledge syst
 
 ## Related
 
+- [How knowledge flows](/how-it-works/): the agent-driven capture-and-promote loop, personal memory up to the shared catalog
 - [Team knowledge base](/scenarios/team/): the single-server tier below this
 - [Agent memory (soul pattern)](/scenarios/agent-memory/): personal agent memory that composes with a knowledge system
 - [Creating an automated knowledge universe](/blog/creating-an-automated-knowledge-universe/): the worlds / hubs / souls design
