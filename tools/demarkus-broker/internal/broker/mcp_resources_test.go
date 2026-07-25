@@ -161,3 +161,29 @@ func TestGatewayReadResource_Errors(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayReadResource_BinaryNotice(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), fetchModeDispatcher(binaryFetchModeDoc, "1", "abc"))
+	contents, err := g.readResource(context.Background(), mcp.ReadResourceRequest{
+		Params: mcp.ReadResourceParams{URI: "mark://team-a/img.png"},
+	})
+	if err != nil {
+		t.Fatalf("readResource: %v", err)
+	}
+	if len(contents) != 1 {
+		t.Fatalf("got %d contents, want 1", len(contents))
+	}
+	text, ok := contents[0].(mcp.TextResourceContents)
+	if !ok {
+		t.Fatalf("contents[0] is %T, want TextResourceContents", contents[0])
+	}
+	if text.MIMEType != "text/plain" {
+		t.Errorf("MIMEType = %q, want text/plain", text.MIMEType)
+	}
+	if !strings.Contains(text.Text, "non-markdown or binary document") {
+		t.Errorf("binary body should return the notice, got:\n%s", text.Text)
+	}
+	if strings.Contains(text.Text, "\x89PNG") {
+		t.Error("binary bytes must not be rendered into the resource")
+	}
+}

@@ -168,3 +168,14 @@ func TestHandleMarkExploreInvalidURL(t *testing.T) {
 		t.Fatal("expected tool error for missing world name")
 	}
 }
+
+func TestHandleMarkExploreBinaryNotice(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), fetchModeDispatcher(binaryFetchModeDoc, "1", "abc"))
+	text := exploreResultText(t, g, "mark://team-a/img.png")
+	if !strings.Contains(text, "non-markdown or binary document") {
+		t.Errorf("binary body should return the notice, got:\n%s", text)
+	}
+	if strings.Contains(text, "## Outline") {
+		t.Error("binary body must not be run through the outline builder")
+	}
+}

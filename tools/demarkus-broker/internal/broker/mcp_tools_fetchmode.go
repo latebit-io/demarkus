@@ -176,6 +176,13 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 	etag := result.Response.Metadata["etag"]
 	key := worldName + path
 
+	// Binary/non-UTF-8 body: always a notice, never bytes. MCP text can't
+	// carry binary faithfully (JSON mangles it). Matches the local client.
+	if mdoutline.BinaryBody(body) {
+		return mcp.NewToolResultText(formatToolResultWith(result, mdoutline.NonMarkdownNotice(len(body)),
+			map[string]string{"mode": "binary"}, "version", "modified", "etag")), nil
+	}
+
 	// #section slice: works at any size and bypasses dedup — the agent
 	// is asking for content it has not necessarily seen.
 	if anchor != "" {

@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
@@ -264,16 +263,6 @@ func markFetchTool(host string) mcp.Tool {
 // an outline instead of the full body, unless force=true or a #section is
 // requested.
 const outlineThreshold = 8 * 1024
-
-// nonMarkdownNotice replaces a non-UTF-8 body in the agent-facing render paths;
-// rendering the raw bytes as text would inject mojibake into the model's context.
-func nonMarkdownNotice(nBytes int) string {
-	return fmt.Sprintf("non-markdown or binary document (%d bytes); not rendered as text. Retrieve the raw bytes with a non-MCP client, e.g. the demarkus CLI.", nBytes)
-}
-
-// binaryBody flags a body that must not be rendered as text. Separate from the
-// store's ValidateBody: client render-time check, no dependency on storage.
-func binaryBody(body string) bool { return !utf8.ValidString(body) }
 
 func markListTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_list",
@@ -624,8 +613,8 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	// Binary/non-UTF-8 body: always a notice, never bytes. MCP text can't carry
 	// binary faithfully (JSON mangles it); byte-exact retrieval is the CLI's job.
-	if binaryBody(body) {
-		return mcp.NewToolResultText(formatResultWith(result, nonMarkdownNotice(len(body)),
+	if mdoutline.BinaryBody(body) {
+		return mcp.NewToolResultText(formatResultWith(result, mdoutline.NonMarkdownNotice(len(body)),
 			map[string]string{"mode": "binary"}, "version", "modified", "etag")), nil
 	}
 
