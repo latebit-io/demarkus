@@ -3,6 +3,7 @@ package mdoutline
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/client/links"
 )
@@ -65,4 +66,15 @@ func CappedList(b *strings.Builder, lines []string, limit int, noun string) {
 	if n := len(lines) - limit; n > 0 {
 		fmt.Fprintf(b, "+%d more %s\n", n, noun)
 	}
+}
+
+// BinaryBody flags a body that must not be rendered as text. Separate from
+// the store's ValidateBody: render-time check, no dependency on storage.
+func BinaryBody(body string) bool { return !utf8.ValidString(body) }
+
+// NonMarkdownNotice replaces a non-UTF-8 body in the agent-facing render
+// paths; rendering the raw bytes as text would inject mojibake into the
+// model's context.
+func NonMarkdownNotice(nBytes int) string {
+	return fmt.Sprintf("non-markdown or binary document (%d bytes); not rendered as text. Retrieve the raw bytes with a non-MCP client, e.g. the demarkus CLI.", nBytes)
 }

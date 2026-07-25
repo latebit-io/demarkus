@@ -352,3 +352,34 @@ func TestHandleMarkFetchNoIdentityNoDedup(t *testing.T) {
 		}
 	}
 }
+
+// binaryFetchModeDoc is a non-UTF-8 body (PNG magic), standing in for legacy
+// or out-of-band binary a brokered fetch might still encounter.
+const binaryFetchModeDoc = "\x89PNG\r\n\x1a\n\xff\xfe\x00\xb1\xa5"
+
+func TestHandleMarkFetchBinaryNotice(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), fetchModeDispatcher(binaryFetchModeDoc, "1", "abc"))
+	text := fetchModeText(withAliceClaims(context.Background()), t, g, map[string]any{"url": "mark://team-a/img.png"})
+	if !strings.Contains(text, "mode: binary") {
+		t.Errorf("binary body should be flagged mode: binary, got:\n%s", text)
+	}
+	if !strings.Contains(text, "non-markdown or binary document") {
+		t.Errorf("binary body should return the notice, got:\n%s", text)
+	}
+	if strings.Contains(text, "\x89PNG") {
+		t.Error("binary bytes must not be rendered into the response")
+	}
+}
+
+func TestHandleMarkFetchBinaryForceStillNotice(t *testing.T) {
+	// force bypasses the size gate, never the binary gate: MCP text cannot
+	// carry binary faithfully, so force=true must still return the notice.
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), fetchModeDispatcher(binaryFetchModeDoc, "1", "abc"))
+	text := fetchModeText(withAliceClaims(context.Background()), t, g, map[string]any{"url": "mark://team-a/img.png", "force": true})
+	if !strings.Contains(text, "non-markdown or binary document") {
+		t.Errorf("force=true must still return the binary notice, got:\n%s", text)
+	}
+	if strings.Contains(text, "\x89PNG") {
+		t.Error("force=true must not leak raw binary bytes")
+	}
+}

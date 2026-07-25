@@ -70,6 +70,14 @@ func (g *mcpGateway) readResource(_ context.Context, req mcp.ReadResourceRequest
 	}
 
 	body := result.Response.Body
+	// Binary/non-UTF-8 body: return a plain-text notice, not mojibake.
+	if mdoutline.BinaryBody(body) {
+		return []mcp.ResourceContents{mcp.TextResourceContents{
+			URI:      raw,
+			MIMEType: "text/plain",
+			Text:     mdoutline.NonMarkdownNotice(len(body)),
+		}}, nil
+	}
 	if anchor != "" {
 		section, ok := mdoutline.Section(body, anchor)
 		if !ok {
