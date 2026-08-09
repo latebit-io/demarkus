@@ -59,6 +59,7 @@ jobs:
                   plugins/claude-code-knowledge/.claude-plugin/plugin.json \
                   plugins/pi-memory/package.json \
                   plugins/pi-knowledge/package.json \
+                  plugins/opencode-memory/package.json \
                   .claude-plugin/marketplace.json
           git commit -m "chore(plugins): bump managed binaries to latest release" \
                      -m "server ${SERVER}, client ${CLIENT}, tools ${TOOLS}."
