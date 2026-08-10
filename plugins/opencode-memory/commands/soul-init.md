@@ -23,8 +23,8 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run this
      Expect the user to either:
 
      - Pick a row (by PID, port, or "the one at /path") → run:
-       `"$HOME/.demarkus/bin/demarkus-plugin" provision init reuse --port <PORT> --root <ROOT>`
-       using the values from the chosen row. This appends a plugin token to that server's `tokens.toml` and sends SIGHUP to reload.
+       `"$HOME/.demarkus/bin/demarkus-plugin" provision init reuse --port <PORT> --root "<ROOT>"`
+       using the values from the chosen row (quote the root path — it may contain spaces). This appends a plugin token to that server's `tokens.toml` and sends SIGHUP to reload.
      - Say "isolated" or "new" → run:
        `"$HOME/.demarkus/bin/demarkus-plugin" provision init isolated`
        This creates a separate soul at `~/.demarkus/plugin-soul/` on a free port in `16310+`.

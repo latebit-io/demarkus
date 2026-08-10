@@ -41,7 +41,7 @@ Promote one soul document from your personal soul (the staging tier) up to a sha
    - **Stub (default, link-not-copy).** Replace the body with a short stub — the H1 title, the marker line, and a one-line summary — so recall resolves the link and fetches fresh from knowledge. There is then no rival copy to go stale. Best for reference docs you will not keep editing locally.
    - **Marker only.** Keep the body, put the marker line directly under the H1. Best for living documents (e.g. an active plan) you keep iterating in the soul. The `@v<N>` stamp lets `/soul-refresh` detect when the knowledge copy has moved on.
 
-   Write the back-stamp with `mark_publish` on the soul at the version from step 2 (republish the chosen body; preserve existing `tags`/`importance` and **add the `promoted` tag** so the doc is discoverable as promoted via `mark_lookup filter=tag=promoted`). Reconciliation is **directional**: knowledge is authoritative, the soul refreshes from it, and any local edits re-enter through the gate (step 3) — never a silent two-way merge.
+   Write the back-stamp with `mark_publish` on the soul at the version from step 2. `mark_publish` **replaces** publisher metadata, so pass the metadata object fetched in step 2 unchanged (`tags`, `importance`, `type`, any custom keys) and **add the `promoted` tag** so the doc is discoverable as promoted via `mark_lookup filter=tag=promoted`. Reconciliation is **directional**: knowledge is authoritative, the soul refreshes from it, and any local edits re-enter through the gate (step 3) — never a silent two-way merge.
 
 7. **Report.** Tell the user the destination `mark://`, the back-stamp mode applied, and the soul path. Reference both by full path.
 

@@ -20,7 +20,7 @@ Anchor on the scope's hub: `/index.md` or `/<slug>/index.md`.
 
 ## Gather (cheap — two calls)
 
-1. **Crawl the link graph.** `mark_graph` on the scope hub with `depth: 5`. Parse:
+1. **Crawl the link graph.** `mark_graph` on the scope hub with `depth: 5`. Edge-based findings (orphans, inbound-link checks) cover only this crawled subgraph — say so in the report, or raise the depth when the scope is deep. Parse:
    - **Nodes:** `[status] <url> "title" N links` — note any status that isn't `ok` (e.g. `archived`), and `(no title)`.
    - **Edges:** `<from> -> <to>` — `mark://` targets are internal; `http(s)` targets are external.
 2. **Inventory.** `mark_list` the scope (recurse into subdirectories) for the full set of documents that actually exist.
@@ -50,7 +50,7 @@ These cost one fetch per document, so only run them for a single project or when
   - **Resolve "already-linked?" against the citing body's OWN markdown links — NOT the crawl's edge store.** The crawl seeds from the hub, so an **orphan** doc is never visited and its outbound links never enter the edge store; keying off edges would falsely flag an orphan's real `[ADR 0006](…)` link as unlinked. You already hold every body in this tier — parse each for its own `[text](url)` links and check whether one resolves to the mention's target.
   - **Classify** each surviving mention:
     - **Unlinked reference** — the target *exists* in the inventory but the citing body has **no markdown link** to it. The relationship is real and reachable but not traversable. Fix: convert the prose mention to `[ADR 0005](mark://…/0005-…md)`.
-    - **Dangling reference** — the mention resolves to **no inventory doc** at all. It's referenced but absent (the ADR-0006-cites-a-missing-0005 case). Confirm with a single `mark_lookup` over the scope (catalog is authoritative for absence) before reporting. Fix: restore the doc, or correct/remove the reference. If the citing doc itself annotates the absence ("no md file exists"), report it as **known** rather than actionable.
+    - **Dangling reference** — the mention resolves to **no inventory doc** at all. It's referenced but absent (the ADR-0006-cites-a-missing-0005 case). Confirm against the `mark_list` inventory already collected — not `mark_lookup`, which misses untagged docs and would falsely report an existing untagged ADR as dangling. Fix: restore the doc, or correct/remove the reference. If the citing doc itself annotates the absence ("no md file exists"), report it as **known** rather than actionable.
 
   This is distinct from **Broken links** above: that check follows an *edge* to a missing target; this one finds references that were never edges in the first place.
 

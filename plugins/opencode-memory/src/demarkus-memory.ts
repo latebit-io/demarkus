@@ -1,21 +1,8 @@
-// demarkus-memory — OpenCode plugin.
-//
-// The OpenCode port of the claude-code demarkus-memory plugin. Same behavior,
-// mapped onto OpenCode's plugin hooks:
-//   - plugin init            → provision the managed server (fire-and-forget)
-//   - config                 → register the demarkus-memory MCP server + the
-//                              /soul-* and /promote commands
-//   - chat.message           → standing guidance (once per session) + recall nudge
-//   - tool.execute.before    → publish tag-gate + destination gate (throw = block)
-//   - tool.execute.after     → gate warn + promote nudge, appended to tool output
-//   - event session.idle     → session-end journal nudge (toast, once per session)
-//
-// Single self-contained file: it is installed into ~/.config/opencode/plugins/
-// by install.sh, which also places assets (commands, context, skills, scripts)
-// under ~/.demarkus/opencode-memory/. All gate/nudge/guidance LOGIC lives in the
-// shared demarkus-plugin binary; this adapter hands it the tool names as-is
-// (the binary parses both mcp__server__mark_* and server_mark_* shapes) and
-// applies the result. Fails open when the binary is absent (pre-provisioning).
+// demarkus-memory — the OpenCode port of the claude-code plugin (hook mapping
+// in README.md). Single self-contained file: OpenCode dir-loads it flat, and
+// install.sh places its assets under ~/.demarkus/opencode-memory/. All
+// gate/nudge/guidance logic lives in the shared demarkus-plugin binary; this
+// adapter fails open when the binary is absent (pre-provisioning).
 
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";

@@ -53,10 +53,15 @@ whether the soul needs a token, ask before proceeding.
    the soul is bound to the repo:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join '<host-or-join-url>' [--token <TOKEN>] [--insecure] --bind "${PWD}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join '<host-or-join-url>' [--token <TOKEN>] [--insecure] --bind "<project-dir>"
    ```
 
-   Quote the argument: a join URL's `#fragment` is shell-significant.
+   Quote the arguments: a join URL's `#fragment` is shell-significant.
+   `<project-dir>` must be the **absolute path of this OpenCode project
+   directory** (the session's working directory) — substitute it literally
+   when printing the command. Never leave `${PWD}` for the user to expand: in
+   a separate terminal their cwd may be elsewhere and the soul would bind to
+   the wrong project.
 
    **If the soul needs a token, do NOT run this yourself** — print the command
    (join URL or `<TOKEN>` left as a placeholder) and ask the user to run it in
@@ -90,11 +95,14 @@ whether the soul needs a token, ask before proceeding.
 3. **Confirm.** Tell the user, in plain language:
 
    > Joined remote soul **<slug>** at <host>, bound to this project. Its
-   > `mark_*` tools appear as the `<slug>` MCP server, with the token injected
-   > from `<token-file>` (not stored in your MCP config). The publish tag-gate
+   > `mark_*` tools appear as the `<slug>` MCP server. The publish tag-gate
    > now enforces tags on writes to it, same as the local soul.
 
-   Mention that joined souls are listed in `~/.demarkus/souls` (TSV: slug, host, insecure, token-file); to undo, delete that row and its token file — the MCP entry disappears on the next opencode restart.
+   If step 1 reported a `token-file`, add: "the token is injected from
+   `<token-file>` (not stored in your MCP config)". For a public/no-token
+   join, say no token file is used instead.
+
+   Mention that joined souls are listed in `~/.demarkus/souls` (TSV: slug, host, insecure, token-file); to undo, delete that row and its token file — the MCP entry disappears on the next opencode restart. Before deleting, check `~/.demarkus/project-souls` for rows bound to the slug: rebind those projects (rerun `/soul-join` or `/soul-default` there) or remove the rows, otherwise the stale binding makes the destination gate block writes to every remaining soul.
 
 ## Don't
 

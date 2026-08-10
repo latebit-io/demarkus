@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# install.sh — install the demarkus-memory OpenCode plugin from a checkout.
-# OpenCode auto-loads plugin files from ~/.config/opencode/plugins/, so no npm
-# publish is needed: this copies the plugin file there and the assets it reads
-# (commands, context, skills, scripts) to ~/.demarkus/opencode-memory/.
-# Idempotent; re-run after pulling to update. Remove with --uninstall.
+# Install the demarkus-memory OpenCode plugin from a checkout: plugin file into
+# OpenCode's auto-loaded plugins dir, assets into ~/.demarkus/opencode-memory/.
+# Idempotent; re-run after pulling to update; --uninstall removes.
 
 set -euo pipefail
 
@@ -24,15 +22,22 @@ for d in src/demarkus-memory.ts commands context scripts skills/soul-memory/SKIL
   [[ -e "${HERE}/${d}" ]] || { echo "[demarkus-memory] install: missing ${d}; run from a full checkout" >&2; exit 1; }
 done
 
-mkdir -p "${OPENCODE_DIR}/plugins" "${SKILL_DEST}" "${ASSETS_DEST}"
+mkdir -p "${OPENCODE_DIR}/plugins" "${SKILL_DEST}"
 install -m 0644 "${HERE}/src/demarkus-memory.ts" "${PLUGIN_DEST}"
 install -m 0644 "${HERE}/skills/soul-memory/SKILL.md" "${SKILL_DEST}/SKILL.md"
-# rsync-free copy: replace asset dirs wholesale so deletions propagate.
+
+# Stage the full asset tree, then swap it in: an interrupted copy must not
+# leave the active install with missing commands/context/scripts.
+staging="${ASSETS_DEST}.staging.$$"
+trap 'rm -rf "${staging}"' EXIT
+rm -rf "${staging}"
+mkdir -p "${staging}"
 for d in commands context scripts; do
-  rm -rf "${ASSETS_DEST}/${d}"
-  cp -R "${HERE}/${d}" "${ASSETS_DEST}/${d}"
+  cp -R "${HERE}/${d}" "${staging}/${d}"
 done
-chmod 0755 "${ASSETS_DEST}/scripts/"*.sh
+chmod 0755 "${staging}/scripts/"*.sh
+rm -rf "${ASSETS_DEST}"
+mv "${staging}" "${ASSETS_DEST}"
 
 echo "[demarkus-memory] installed:"
 echo "  plugin  ${PLUGIN_DEST}"

@@ -103,7 +103,7 @@ bump_json_version() {
   cur=$(jq -r '.version' "$f")
   new=$(awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}' <<<"$cur")
   tmp=$(mktemp)
-  jq --arg v "$new" '.version = $v' "$f" >"$tmp" && mv "$tmp" "$f"
+  jq --arg v "$new" '.version = $v' "$f" >"$tmp" && mv "$tmp" "$f" || return 1
   echo "$new"
 }
 

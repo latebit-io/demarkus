@@ -30,7 +30,7 @@ Keep promoted soul documents fresh as their published copies evolve. This is the
    - **Marker-only (the soul kept a full body).** The local body may have diverged, so do **not** overwrite it silently. Surface the move (`<dest>/<path>` went `v<N>` → `v<M>`) and offer the user two directional choices:
      - **Pull down (authoritative wins):** replace the soul body with the live destination body and bump the marker to `@v<M>`. Use when the soul copy has no local edits worth keeping.
      - **Re-promote (soul proposes upward):** if the soul body has local refinements, those go *up* as a gated update — run `/promote` on this doc (its step 3 already-promoted path routes the edit through the cascade as an update to the existing knowledge doc). Never fold local edits into the authoritative copy without the gate.
-   Always confirm before writing. The marker bump is a `mark_publish` on the soul at its current version.
+   Always confirm before writing. The marker bump is a `mark_publish` on the soul at its current version; `mark_publish` **replaces** publisher metadata, so pass the soul doc's fetched metadata object unchanged (`tags` including `promoted`, `importance`, `type`, custom keys) or the refresh strips it.
 
 5. **Report.** Per doc: in-sync / refreshed (stub) / surfaced-for-decision (marker-only) / dangling. Reference paths in full. If nothing was stale, say so plainly.
 

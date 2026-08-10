@@ -24,7 +24,7 @@ git clone https://github.com/latebit-io/demarkus
 demarkus/plugins/opencode-memory/install.sh
 ```
 
-This copies the plugin to `~/.config/opencode/plugins/demarkus-memory.ts`, the skill to `~/.config/opencode/skills/soul-memory/`, and the assets it reads to `~/.demarkus/opencode-memory/`. Start (or restart) OpenCode; the first session provisions the soul. Restart once after the first session so the newly-registered MCP server connects. Diagnose with `/soul-status`, reconfigure with `/soul-init`, remove with `install.sh --uninstall`.
+This copies the plugin to `$XDG_CONFIG_HOME/opencode/plugins/demarkus-memory.ts` (default `~/.config/opencode/plugins/`), the skill to the sibling `skills/soul-memory/`, and the assets it reads to `~/.demarkus/opencode-memory/`. Start (or restart) OpenCode; the first session provisions the soul. Restart once after the first session so the newly-registered MCP server connects. Diagnose with `/soul-status`, reconfigure with `/soul-init`, remove with `install.sh --uninstall`.
 
 Update by pulling the repo and re-running `install.sh`.
 

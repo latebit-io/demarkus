@@ -58,5 +58,7 @@ fi
 [[ "${expected}" == "${actual}" ]] || { echo "[demarkus] bootstrap: checksum mismatch for ${arc}" >&2; exit 1; }
 
 tar -xzf "${tmp}/${arc}" -C "${tmp}"
-install -m 0755 "${tmp}/demarkus-plugin" "${BIN}"
+# Two concurrent bootstraps must not let a reader exec a half-written binary.
+install -m 0755 "${tmp}/demarkus-plugin" "${BIN}.new.$$"
+mv -f "${BIN}.new.$$" "${BIN}"
 echo "[demarkus] bootstrap: installed demarkus-plugin v${TOOLS_VERSION}" >&2

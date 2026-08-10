@@ -40,4 +40,4 @@ Scan the soul for documents worth promoting to a shared knowledge system, and pr
 - Don't promote anything here — this command only surfaces candidates; `/promote` runs the gate per doc.
 - Don't re-list already-promoted docs (the `tag=promoted` set from step 2).
 - Don't pad the list to look productive. A ruthless shortlist is the point; if most of the soul qualified, the bar would be wrong.
-- Don't scan toward a non-existent destination — stop at the detection gate when no knowledge system is joined.
+- Don't scan toward a non-existent destination — stop at the detection gate only when `registry detect-promote` returns `NONE` (a plain `target` destination is as valid as a knowledge system).

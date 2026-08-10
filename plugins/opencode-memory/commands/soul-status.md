@@ -15,22 +15,29 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
    ```text
    ls -la ~/.demarkus/bin/ 2>/dev/null
    for b in demarkus-server demarkus-mcp demarkus-token; do
-     printf '%s ' "$b"; ~/.demarkus/bin/$b --version 2>/dev/null || echo "(missing or too old for --version)"
+     printf '%s ' "$b"
+     if [ ! -e ~/.demarkus/bin/$b ]; then echo "(not installed)"
+     elif [ ! -x ~/.demarkus/bin/$b ]; then echo "(present but not executable)"
+     else ~/.demarkus/bin/$b --version 2>&1 | head -1
+     fi
    done
    ```
 
-   Note which binaries are present and what versions they report. A binary that
-   prints "(missing or too old for --version)" predates the `--version` flag and
-   will be upgraded on the next session start.
+   Note which binaries are present and what versions they report — and keep the
+   causes distinct: "(not installed)" means bootstrap never ran or failed (run
+   /soul-init); "(present but not executable)" is a permissions problem; a
+   present binary whose `--version` errors either predates the flag (upgraded
+   on the next session start) or is broken — report the actual error text, do
+   not collapse these into one message.
 
 3. **Check the server process.** Read `SOUL_DIR` and `PORT` from the config. Run:
 
    ```text
-   ps -axww -o pid=,args= | grep demarkus-server | grep -F -- "-root ${SOUL_DIR}" | grep -v grep || echo "(no server running at ${SOUL_DIR})"
+   ps -axww -o pid=,args= | awk -v root="${SOUL_DIR}" '/demarkus-server/ { for (i = 1; i < NF; i++) if ($i == "-root" && $(i+1) == root) print }' | grep . || echo "(no server running at ${SOUL_DIR})"
    ```
 
-   (`grep -F` matches `SOUL_DIR` literally, so regex metacharacters or spaces in
-   the path can't mis-detect the server.)
+   (The awk compares the `-root` argument exactly, so `/tmp/soul` cannot match
+   a server running at `/tmp/soul-old`; a substring grep would.)
 
 4. **Probe connectivity.** Call `mark_fetch /index.md` via the MCP tool. Note whether it returns `ok`, `not-found`, `unauthorized`, or fails outright.
 
@@ -47,7 +54,8 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
    - **Connectivity:** ok | not-found (empty soul) | unauthorized (token mismatch) | unreachable
 
    <If anything is degraded, suggest the specific fix:>
-   - Server not running → "Run /soul-init to restart, or check that demarkus-server is in the bin directory."
+   - Server not running (managed/isolated mode) → "Run /soul-init to restart, or check that demarkus-server is in the bin directory."
+   - Server not running (reuse mode) → the plugin does not manage that server's lifecycle; "Restart it with its own service manager or original launch command, or rerun /soul-init to switch modes."
    - Connectivity unauthorized → "Token mismatch — rerun /soul-init."
    - Binaries missing or stale → "Delete ~/.demarkus/bin/ and restart opencode."
    ```
