@@ -10,6 +10,11 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run this
 
    `"$HOME/.demarkus/bin/demarkus-plugin" provision detect`
 
+   Every `provision` command below can fail: check its exit status, and on
+   failure show the user its error output and **stop** — do not continue to
+   MCP registration or report success. Report mode, soul path, and port only
+   after provisioning succeeds.
+
 2. Read the output carefully:
 
    - If the output is exactly `NO_SERVER`, no demarkus-server is running. Run:

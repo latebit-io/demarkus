@@ -33,11 +33,12 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
 3. **Check the server process.** Read `SOUL_DIR` and `PORT` from the config. Run:
 
    ```text
-   ps -axww -o pid=,args= | awk -v root="${SOUL_DIR}" '/demarkus-server/ { for (i = 1; i < NF; i++) if ($i == "-root" && $(i+1) == root) print }' | grep . || echo "(no server running at ${SOUL_DIR})"
+   ps -axww -o pid=,args= | awk -v pat=" -root ${SOUL_DIR}" '/demarkus-server/ { p = index($0, pat); if (p) { c = substr($0, p + length(pat), 1); if (c == "" || c == " ") print } }' | grep . || echo "(no server running at ${SOUL_DIR})"
    ```
 
-   (The awk compares the `-root` argument exactly, so `/tmp/soul` cannot match
-   a server running at `/tmp/soul-old`; a substring grep would.)
+   (The awk matches the whole `-root <path>` argument with a boundary check, so
+   it survives spaces in the path and `/tmp/soul` cannot match a server running
+   at `/tmp/soul-old`.)
 
 4. **Probe connectivity.** Call `mark_fetch /index.md` via the MCP tool. Note whether it returns `ok`, `not-found`, `unauthorized`, or fails outright.
 

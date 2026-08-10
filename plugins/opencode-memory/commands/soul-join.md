@@ -66,8 +66,10 @@ whether the soul needs a token, ask before proceeding.
    **If the soul needs a token, do NOT run this yourself** — print the command
    (join URL or `<TOKEN>` left as a placeholder) and ask the user to run it in
    their own terminal, then paste back only the non-secret `key=value` output
-   lines (slug, host, insecure, token-file). For a no-token (public/read-only)
-   soul, you may run it directly.
+   lines (slug, host, insecure, token-file). Tell them explicitly to replace
+   `<TOKEN>` with the real secret before running (the literal placeholder is a
+   shell syntax error) and never to paste the token back to you. For a
+   no-token (public/read-only) soul, you may run it directly.
 
    It normalizes the host (extracting the token from a join URL), derives a
    slug from the first DNS label, writes the token to

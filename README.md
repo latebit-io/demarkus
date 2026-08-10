@@ -95,6 +95,7 @@ modified: 2026-01-15T10:30:00Z
 - [Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus): publish and browse from Obsidian
 - [Claude Code memory plugin](plugins/claude-code/): zero-config local memory for Claude Code
 - [Claude Code knowledge plugin](plugins/claude-code-knowledge/): join an organizational knowledge system (broker-fronted, MCP OAuth)
+- [OpenCode memory plugin](plugins/opencode-memory/): the same local memory for OpenCode (one shared soul across harnesses)
 - [OpenClaw skill](https://clawhub.ai/ontehfritz/demarkus): ClawHub skill for OpenClaw agents (see [install guide](https://www.demarkus.io/install/openclaw/))
 
 See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full list.

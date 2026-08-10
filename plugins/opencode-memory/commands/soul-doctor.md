@@ -36,7 +36,7 @@ Anchor on the scope's hub: `/index.md` or `/<slug>/index.md`.
 
 ## Deep checks (per-doc `mark_fetch` — run on a small scope, or when asked)
 
-These cost one fetch per document, so only run them for a single project or when the user asks for a thorough audit. **If you cap or sample, say so explicitly in the report — don't imply full coverage.**
+These cost one fetch per document, so only run them for a single project or when the user asks for a thorough audit. Hard bound: fetch at most **100** documents per audit (prefer hub-linked and recently modified docs when sampling); past that, stop and report the limit and how many documents were skipped. **If you cap or sample, say so explicitly in the report — don't imply full coverage.**
 
 - **Untagged docs** — fetch and check the `tags` metadata is non-empty. An untagged doc is invisible to `mark_lookup`. (This is what the publish gate now prevents going forward; this finds pre-existing ones.)
 - **Duplicate content** — compare `content-hash` across fetched docs; identical hashes under different paths are duplicates.
