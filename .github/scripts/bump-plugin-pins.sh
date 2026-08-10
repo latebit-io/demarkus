@@ -103,7 +103,7 @@ bump_json_version() {
   cur=$(jq -r '.version' "$f")
   new=$(awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}' <<<"$cur")
   tmp=$(mktemp)
-  jq --arg v "$new" '.version = $v' "$f" >"$tmp" && mv "$tmp" "$f"
+  jq --arg v "$new" '.version = $v' "$f" >"$tmp" && mv "$tmp" "$f" || return 1
   echo "$new"
 }
 
@@ -190,6 +190,7 @@ if [[ "$memory_changed" == true ]]; then
   mv_ver="$(bump_json_version plugins/claude-code/.claude-plugin/plugin.json)"
   set_marketplace_version "./plugins/claude-code" "$mv_ver"
   _=$(bump_json_version plugins/pi-memory/package.json)
+  _=$(bump_json_version plugins/opencode-memory/package.json)
   emit memory_version "$mv_ver"
 fi
 if [[ "$knowledge_changed" == true ]]; then
