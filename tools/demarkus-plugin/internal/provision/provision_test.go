@@ -269,3 +269,125 @@ func TestSeedDocNeverClobbers(t *testing.T) {
 		t.Errorf("seeded content does not look like index.md: %q", b[:min(40, len(b))])
 	}
 }
+
+func TestTokenScopeStale(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	entry := func(paths string) string {
+		return "[tokens." + tokenLabel + "]\nhash = \"abc\"\npaths = [" + paths + "]\noperations = [\"publish\"]\n"
+	}
+
+	tests := []struct {
+		name  string
+		body  string
+		stale bool
+	}{
+		{"old single-segment scope", entry(`"/*"`), true},
+		{"recursive scope", entry(`"/**"`), false},
+		{"both patterns present", entry(`"/*", "/**"`), false},
+		{"other label only", "[tokens.other]\nhash = \"x\"\npaths = [\"/*\"]\noperations = [\"publish\"]\n", false},
+		{"unparseable file", "not toml [[[", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := write(strings.ReplaceAll(tt.name, " ", "-")+".toml", tt.body)
+			if got := tokenScopeStale(p); got != tt.stale {
+				t.Errorf("tokenScopeStale = %v, want %v", got, tt.stale)
+			}
+		})
+	}
+
+	if tokenScopeStale(filepath.Join(dir, "missing.toml")) {
+		t.Error("missing file reported stale")
+	}
+}
+
+// TestEnsureTokenEntryScope pins the minted scope to the recursive "/**" and
+// the remint-on-stale-scope behavior, via a fake demarkus-token binary that
+// logs its argv and mirrors generate's tokens.toml append.
+func TestEnsureTokenEntryScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	binDir := filepath.Join(home, ".demarkus", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	argsLog := filepath.Join(home, "args.log")
+	fake := `#!/bin/bash
+echo "$@" >> "` + argsLog + `"
+cmd="$1"; shift
+label=""; paths=""; tokens=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -label) label="$2"; shift 2 ;;
+    -paths) paths="$2"; shift 2 ;;
+    -tokens) tokens="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ "$cmd" == "generate" ]]; then
+  printf '\n[tokens.%s]\nhash = "fake"\npaths = ["%s"]\noperations = ["publish", "archive"]\n' "$label" "$paths" >> "$tokens"
+  echo "raw-token-value"
+fi
+`
+	if err := os.WriteFile(filepath.Join(binDir, "demarkus-token"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	soul := filepath.Join(home, "root")
+	if err := os.MkdirAll(soul, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tokensTOML := filepath.Join(soul, "tokens.toml")
+	readLog := func() string {
+		b, _ := os.ReadFile(argsLog)
+		return string(b)
+	}
+
+	// Fresh install mints with the recursive scope.
+	if err := ensureTokenEntry(tokensTOML); err != nil {
+		t.Fatalf("fresh mint: %v", err)
+	}
+	if !strings.Contains(readLog(), "-paths /**") {
+		t.Fatalf("fresh mint did not use /**; argv log:\n%s", readLog())
+	}
+	toml, err := os.ReadFile(tokensTOML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(toml), `"/**"`) {
+		t.Fatalf("tokens.toml entry not recursive:\n%s", toml)
+	}
+
+	// Provisioned-and-current is a no-op: no further binary invocations.
+	before := readLog()
+	if err := ensureTokenEntry(tokensTOML); err != nil {
+		t.Fatalf("idempotent rerun: %v", err)
+	}
+	if readLog() != before {
+		t.Fatalf("idempotent rerun invoked demarkus-token; argv log:\n%s", readLog())
+	}
+
+	// An old install with the single-segment "/*" scope is revoked and reminted.
+	stale := "[tokens." + tokenLabel + "]\nhash = \"old\"\npaths = [\"/*\"]\noperations = [\"publish\"]\n"
+	if err := os.WriteFile(tokensTOML, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTokenEntry(tokensTOML); err != nil {
+		t.Fatalf("stale-scope remint: %v", err)
+	}
+	log := readLog()
+	if !strings.Contains(log, "revoke -label "+tokenLabel) {
+		t.Errorf("stale scope did not revoke; argv log:\n%s", log)
+	}
+	if strings.Count(log, "-paths /**") != 2 {
+		t.Errorf("stale scope did not remint with /**; argv log:\n%s", log)
+	}
+}

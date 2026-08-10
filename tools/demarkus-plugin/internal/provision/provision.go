@@ -29,12 +29,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/token"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
@@ -528,7 +530,8 @@ func installFile(src, dst string) error {
 // ~/.demarkus/plugin-memory.token (mode 0600), and appends an entry for
 // tokenLabel to tokensTOML. Idempotent: a no-op when the token file and a
 // matching tokens.toml entry already exist. Stale state (token file gone but the
-// label still present) is revoked before regenerating.
+// label still present, or an entry with the old single-segment "/*" scope) is
+// revoked before regenerating.
 func ensureTokenEntry(tokensTOML string) error {
 	tokenFile, err := pluginToken()
 	if err != nil {
@@ -540,7 +543,7 @@ func ensureTokenEntry(tokensTOML string) error {
 	}
 
 	labelPresent := tokensHasLabel(tokensTOML)
-	if fileExists(tokenFile) && fileExists(tokensTOML) && labelPresent {
+	if fileExists(tokenFile) && fileExists(tokensTOML) && labelPresent && !tokenScopeStale(tokensTOML) {
 		// Reassert 0600 on the idempotent path: an existing token left
 		// world/group-readable (e.g. from an older install) would otherwise stay
 		// exposed forever since we return without regenerating.
@@ -575,7 +578,9 @@ func ensureTokenEntry(tokensTOML string) error {
 		defer func() { _ = tf.Close() }()
 		gen := exec.Command(tokenBin, "generate",
 			"-label", tokenLabel,
-			"-paths", "/*",
+			// "/**" is recursive; "/*" only matches single-segment paths and
+			// forced agents to widen the scope by hand after install.
+			"-paths", "/**",
 			"-ops", "publish,archive",
 			"-tokens", tokensTOML,
 		)
@@ -595,6 +600,16 @@ func ensureTokenEntry(tokensTOML string) error {
 		return err
 	}
 	logf("generated plugin token (label=%s)", tokenLabel)
+
+	// A server already running against this root loaded the pre-remint token
+	// table; without a reload the fresh raw token fails auth until restart.
+	if pid := pidOfServerAtRoot(filepath.Dir(tokensTOML)); pid > 0 {
+		if err := signalPID(pid, syscall.SIGHUP); err == nil {
+			logf("sent SIGHUP to server (pid=%d) to reload reminted token", pid)
+		} else {
+			warnf("SIGHUP to pid %d failed; reminted token inactive until the server restarts", pid)
+		}
+	}
 	return nil
 }
 
@@ -606,6 +621,23 @@ func tokensHasLabel(tokensTOML string) bool {
 		return false
 	}
 	return strings.Contains(string(b), "tokens."+tokenLabel+"]")
+}
+
+// tokenScopeStale reports whether the plugin's entry still carries the old
+// "/*" scope, which only matches single-segment paths and blocked writes to
+// nested docs until an agent widened it by hand. Stale entries are revoked and
+// reminted with "/**". Unreadable files are not stale: regenerating on a parse
+// error would clobber a tokens.toml we can't safely interpret.
+func tokenScopeStale(tokensTOML string) bool {
+	f, err := token.ReadFile(tokensTOML)
+	if err != nil {
+		return false
+	}
+	entry, ok := f.Tokens[tokenLabel]
+	if !ok {
+		return false
+	}
+	return slices.Contains(entry.Paths, "/*") && !slices.Contains(entry.Paths, "/**")
 }
 
 // withUmask runs fn with the process umask set to mask, restoring it after.
