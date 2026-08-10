@@ -363,8 +363,10 @@ if [[ "$cmd" == "revoke" ]]; then
   : > "$tokens"
 fi
 if [[ "$cmd" == "generate" ]]; then
-  printf '\n[tokens.%s]\nhash = "fake"\npaths = ["%s"]\noperations = ["publish", "archive"]\n' "$label" "$paths" >> "$tokens"
-  echo "raw-token-value"
+  raw="raw-token-value"
+  sum=$(printf %s "$raw" | shasum -a 256 | cut -d' ' -f1)
+  printf '\n[tokens.%s]\nhash = "sha256-%s"\npaths = ["%s"]\noperations = ["publish", "archive"]\n' "$label" "$sum" "$paths" >> "$tokens"
+  echo "$raw"
 fi
 `
 	if err := os.WriteFile(filepath.Join(binDir, "demarkus-token"), []byte(fake), 0o755); err != nil {
@@ -462,6 +464,102 @@ fi
 	if err := ensureTokenEntry(tokensTOML); err == nil {
 		t.Error("malformed tokens.toml did not surface an error")
 	}
+
+	// A raw token that no longer matches the entry's hash (leftovers of a
+	// failed run) fails the gate and is reminted.
+	if err := os.Remove(tokensTOML); err != nil { // clear the malformed file
+		t.Fatal(err)
+	}
+	if err := ensureTokenEntry(tokensTOML); err != nil {
+		t.Fatalf("re-mint after malformed: %v", err)
+	}
+	tokenFile, err := pluginToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenFile, []byte("not-the-minted-raw"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log = phaseLog(func() {
+		if err := ensureTokenEntry(tokensTOML); err != nil {
+			t.Fatalf("mismatched-raw remint: %v", err)
+		}
+	})
+	if !strings.Contains(log, "-paths /**") {
+		t.Errorf("mismatched raw token did not trigger a remint; argv:\n%s", log)
+	}
+}
+
+// TestEnsureTokenEntryReload covers the reload branch via the test seams: a
+// failed reload aborts before the token file is committed, and the next run
+// re-enters the mint path and re-signals.
+func TestEnsureTokenEntryReload(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	binDir := filepath.Join(home, ".demarkus", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := `#!/bin/bash
+cmd="$1"; shift
+label=""; paths=""; tokens=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -label) label="$2"; shift 2 ;;
+    -paths) paths="$2"; shift 2 ;;
+    -tokens) tokens="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ "$cmd" == "revoke" ]] && : > "$tokens"
+if [[ "$cmd" == "generate" ]]; then
+  raw="raw-token-value"
+  sum=$(printf %s "$raw" | shasum -a 256 | cut -d' ' -f1)
+  printf '\n[tokens.%s]\nhash = "sha256-%s"\npaths = ["%s"]\noperations = ["publish", "archive"]\n' "$label" "$sum" "$paths" >> "$tokens"
+  echo "$raw"
+fi
+`
+	if err := os.WriteFile(filepath.Join(binDir, "demarkus-token"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	soul := filepath.Join(home, "root")
+	if err := os.MkdirAll(soul, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tokensTOML := filepath.Join(soul, "tokens.toml")
+	tokenFile, err := pluginToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origFind, origReload := findServerAtRoot, reloadServer
+	t.Cleanup(func() { findServerAtRoot, reloadServer = origFind, origReload })
+	findServerAtRoot = func(string) int { return 4242 }
+	reloads := 0
+	reloadServer = func(int) error { reloads++; return errors.New("injected reload failure") }
+
+	if err := ensureTokenEntry(tokensTOML); err == nil {
+		t.Fatal("failed reload did not surface an error")
+	}
+	if reloads != 1 {
+		t.Fatalf("reloads = %d, want 1", reloads)
+	}
+	if fileExists(tokenFile) {
+		t.Error("token file committed despite failed reload; gate would skip the retry")
+	}
+
+	// The next run retries: mint again, reload succeeds, token file commits.
+	reloadServer = func(int) error { reloads++; return nil }
+	if err := ensureTokenEntry(tokensTOML); err != nil {
+		t.Fatalf("retry after failed reload: %v", err)
+	}
+	if reloads != 2 {
+		t.Fatalf("reloads = %d, want 2", reloads)
+	}
+	if !fileExists(tokenFile) {
+		t.Error("token file missing after successful retry")
+	}
 }
 
 // TestSignalReload covers the nil paths: live owned child, then vanished pid.
@@ -490,5 +588,13 @@ func TestSignalReload(t *testing.T) {
 
 	if err := signalReload(pid); err != nil {
 		t.Errorf("signalReload(dead pid) = %v, want nil", err)
+	}
+
+	// Non-positive pids are rejected before any signal: kill(0)/kill(-1)
+	// broadcast to the process group / all reachable processes.
+	for _, bad := range []int{0, -1} {
+		if err := signalReload(bad); err == nil {
+			t.Errorf("signalReload(%d) = nil, want error", bad)
+		}
 	}
 }

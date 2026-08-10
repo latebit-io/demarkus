@@ -36,6 +36,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/token"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
@@ -551,7 +552,7 @@ func ensureTokenEntry(tokensTOML string) error {
 	if err != nil {
 		return err
 	}
-	if fileExists(tokenFile) && present && !scopeStale(&entry) {
+	if present && !scopeStale(&entry) && rawMatchesEntry(tokenFile, &entry) {
 		// Reassert 0600 on the idempotent path: an existing token left
 		// world/group-readable (e.g. from an older install) would otherwise stay
 		// exposed forever since we return without regenerating.
@@ -604,6 +605,17 @@ func ensureTokenEntry(tokensTOML string) error {
 		return fmt.Errorf("demarkus-token generate failed (tokens.toml: %s): %w", tokensTOML, genErr)
 	}
 
+	// Reload BEFORE committing the raw token: a running server holds the
+	// pre-remint table, and committing only after a successful reload keeps the
+	// gate's invariant — a matching token file implies the server loaded it, so
+	// any failure here self-heals via a remint on the next run.
+	if pid := findServerAtRoot(filepath.Dir(tokensTOML)); pid > 0 {
+		if err := reloadServer(pid); err != nil {
+			_ = os.Remove(tmpTok) // best-effort; a leftover .tmp never satisfies the gate
+			return fmt.Errorf("reload reminted token: %w", err)
+		}
+	}
+
 	if err := os.Rename(tmpTok, tokenFile); err != nil {
 		return err
 	}
@@ -611,19 +623,24 @@ func ensureTokenEntry(tokensTOML string) error {
 		return err
 	}
 	logf("generated plugin token (label=%s)", tokenLabel)
-
-	// A running server still holds the pre-remint token table; reload or the
-	// fresh raw token fails auth. On failure, drop the token file so the next
-	// run re-enters the mint path and re-signals.
-	if pid := pidOfServerAtRoot(filepath.Dir(tokensTOML)); pid > 0 {
-		if err := signalReload(pid); err != nil {
-			if removeErr := os.Remove(tokenFile); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				return fmt.Errorf("reload reminted token: %w; remove token file for retry: %v", err, removeErr)
-			}
-			return fmt.Errorf("reload reminted token: %w", err)
-		}
-	}
 	return nil
+}
+
+// Test seams: reload-path coverage stubs these without a live server.
+var (
+	findServerAtRoot = pidOfServerAtRoot
+	reloadServer     = signalReload
+)
+
+// rawMatchesEntry reports whether the raw token on disk hashes to the entry's
+// hash. False on a missing or unreadable file: an inconsistent pair (e.g.
+// leftovers of a failed run) must fall through to a remint.
+func rawMatchesEntry(tokenFile string, entry *token.Entry) bool {
+	raw, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return false
+	}
+	return protocol.HashToken(strings.TrimSpace(string(raw))) == entry.Hash
 }
 
 // signalReload SIGHUPs a server so it reloads tokens.toml. A vanished process
