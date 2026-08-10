@@ -17,7 +17,13 @@ Local, versioned project memory (the "soul") for [OpenCode](https://opencode.ai)
 
 ## Install
 
-No npm involved; OpenCode auto-loads plugin files from its global plugins directory:
+No npm involved; OpenCode auto-loads plugin files from its global plugins directory. One-liner (downloads the plugin from the repo):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+```
+
+Or from a checkout:
 
 ```bash
 git clone https://github.com/latebit-io/demarkus
@@ -26,7 +32,7 @@ demarkus/plugins/opencode-memory/install.sh
 
 This copies the plugin to `$XDG_CONFIG_HOME/opencode/plugins/demarkus-memory.ts` (default `~/.config/opencode/plugins/`), the skill to the sibling `skills/soul-memory/`, and the assets it reads to `~/.demarkus/opencode-memory/`. Start (or restart) OpenCode; the first session provisions the soul. Restart once after the first session so the newly-registered MCP server connects. Diagnose with `/soul-status`, reconfigure with `/soul-init`, remove with `install.sh --uninstall`.
 
-Update by pulling the repo and re-running `install.sh`.
+Update by re-running the one-liner (or `git pull` + `install.sh` from a checkout). `DEMARKUS_REF=<branch>` pins the git ref for the standalone install.
 
 ## Architecture
 
