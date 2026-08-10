@@ -96,6 +96,8 @@ modified: 2026-01-15T10:30:00Z
 - [Claude Code memory plugin](plugins/claude-code/): zero-config local memory for Claude Code
 - [Claude Code knowledge plugin](plugins/claude-code-knowledge/): join an organizational knowledge system (broker-fronted, MCP OAuth)
 - [OpenCode memory plugin](plugins/opencode-memory/): the same local memory for OpenCode (one shared soul across harnesses)
+- [pi memory plugin](plugins/pi-memory/): the same local memory for the pi coding agent
+- [pi knowledge plugin](plugins/pi-knowledge/): join an organizational knowledge system from pi
 - [OpenClaw skill](https://clawhub.ai/ontehfritz/demarkus): ClawHub skill for OpenClaw agents (see [install guide](https://www.demarkus.io/install/openclaw/))
 
 See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full list.

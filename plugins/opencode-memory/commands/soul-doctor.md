@@ -25,6 +25,8 @@ Anchor on the scope's hub: `/index.md` or `/<slug>/index.md`.
    - **Edges:** `<from> -> <to>` — `mark://` targets are internal; `http(s)` targets are external.
 2. **Inventory.** `mark_list` the scope (recurse into subdirectories) for the full set of documents that actually exist.
 
+   If either call fails (unauthorized, server unreachable, transport error) or returns partial output, surface the exact failure and **stop** — an audit built on a failed or partial gather reports false broken links and orphans. Empty-soul handling applies only to *successful* empty responses.
+
 ## Core checks (from the graph + inventory — no per-doc fetching)
 
 - **Broken links** — an edge whose `mark://` target does not exist. The inventory (`mark_list`) is the source of truth for existence — **not** the crawl: a target can be absent from the graph's Nodes simply because it sat beyond the crawl depth, which is *not* a broken link. So flag a target only when it's missing from the inventory, and confirm each suspect with a single `mark_fetch` (`not-found`) before reporting `source → missing-target`.

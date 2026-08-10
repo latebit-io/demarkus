@@ -33,12 +33,16 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
 3. **Check the server process.** Read `SOUL_DIR` and `PORT` from the config. Run:
 
    ```text
-   ps -axww -o pid=,args= | awk -v pat=" -root ${SOUL_DIR}" '/demarkus-server/ { p = index($0, pat); if (p) { c = substr($0, p + length(pat), 1); if (c == "" || c == " ") print } }' | grep . || echo "(no server running at ${SOUL_DIR})"
+   scan=$(ps -axww -o pid=,args= | awk -v pat=" -root ${SOUL_DIR}" -v pp=" -port ${PORT}" '/demarkus-server/ { p = index($0, pat); q = index($0, pp); if (p && q) { c = substr($0, p + length(pat), 1); d = substr($0, q + length(pp), 1); if ((c == "" || c == " ") && (d == "" || d == " ")) print } }') || { echo "(process inspection failed — inspect ps output manually)"; }
+   [ -n "${scan}" ] && printf '%s\n' "${scan}" || echo "(no server running at ${SOUL_DIR} on port ${PORT})"
    ```
 
-   (The awk matches the whole `-root <path>` argument with a boundary check, so
-   it survives spaces in the path and `/tmp/soul` cannot match a server running
-   at `/tmp/soul-old`.)
+   (The awk matches the whole `-root <path>` **and** `-port <PORT>` arguments
+   with boundary checks, so spaced paths survive, `/tmp/soul` cannot match
+   `/tmp/soul-old`, and a same-root server on another port is not mistaken for
+   the configured one. The no-server message is printed only after a successful
+   scan with zero matches; a failed `ps`/`awk` is surfaced, not converted into
+   "no server".)
 
 4. **Probe connectivity.** Call `mark_fetch /index.md` via the MCP tool. Note whether it returns `ok`, `not-found`, `unauthorized`, or fails outright.
 

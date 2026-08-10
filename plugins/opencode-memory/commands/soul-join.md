@@ -53,15 +53,17 @@ whether the soul needs a token, ask before proceeding.
    the soul is bound to the repo:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join '<host-or-join-url>' [--token <TOKEN>] [--insecure] --bind "<project-dir>"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join '<host-or-join-url>' [--token <TOKEN>] [--insecure] --bind '<project-dir>'
    ```
 
    Quote the arguments: a join URL's `#fragment` is shell-significant.
    `<project-dir>` must be the **absolute path of this OpenCode project
    directory** (the session's working directory) — substitute it literally
-   when printing the command. Never leave `${PWD}` for the user to expand: in
-   a separate terminal their cwd may be elsewhere and the soul would bind to
-   the wrong project.
+   when printing the command, inside single quotes so spaces and shell
+   metacharacters (`$`, backticks, backslashes) stay literal (escape an
+   embedded single quote as `'\''`). Never leave `${PWD}` for the user to
+   expand: in a separate terminal their cwd may be elsewhere and the soul
+   would bind to the wrong project.
 
    **If the soul needs a token, do NOT run this yourself** — print the command
    (join URL or `<TOKEN>` left as a placeholder) and ask the user to run it in

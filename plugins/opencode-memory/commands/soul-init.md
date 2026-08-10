@@ -10,9 +10,10 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run this
 
    `"$HOME/.demarkus/bin/demarkus-plugin" provision detect`
 
-   Every `provision` command below can fail: check its exit status, and on
-   failure show the user its error output and **stop** — do not continue to
-   MCP registration or report success. Report mode, soul path, and port only
+   Every `provision` command in this flow — `detect` included — can fail:
+   check each exit status, and on a non-zero exit or unexpected output show
+   the user the error output and **stop** — no server selection, no MCP
+   registration, no success report. Report mode, soul path, and port only
    after provisioning succeeds.
 
 2. Read the output carefully:
@@ -28,8 +29,10 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run this
      Expect the user to either:
 
      - Pick a row (by PID, port, or "the one at /path") → run:
-       `"$HOME/.demarkus/bin/demarkus-plugin" provision init reuse --port <PORT> --root "<ROOT>"`
-       using the values from the chosen row (quote the root path — it may contain spaces). This appends a plugin token to that server's `tokens.toml` and sends SIGHUP to reload.
+       `"$HOME/.demarkus/bin/demarkus-plugin" provision init reuse --port <PORT> --root '<ROOT>'`
+       using the values from the chosen row. Single-quote the substituted root
+       path so spaces and shell metacharacters (`$`, backticks, backslashes)
+       stay literal; if the path itself contains a single quote, escape it as `'\''`. This appends a plugin token to that server's `tokens.toml` and sends SIGHUP to reload.
      - Say "isolated" or "new" → run:
        `"$HOME/.demarkus/bin/demarkus-plugin" provision init isolated`
        This creates a separate soul at `~/.demarkus/plugin-soul/` on a free port in `16310+`.
