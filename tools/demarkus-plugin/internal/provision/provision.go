@@ -534,12 +534,9 @@ func installFile(src, dst string) error {
 
 // --- token (lib.sh ensure_token_entry) ---------------------------------------
 
-// ensureTokenEntry generates a plugin-scoped token, writes the raw token to
-// ~/.demarkus/plugin-memory.token (mode 0600), and appends an entry for
-// tokenLabel to tokensTOML. Idempotent: a no-op when the token file and a
-// current tokens.toml entry already exist. Stale state (token file gone but the
-// label still present, or an entry with the legacy scope) is revoked before
-// regenerating.
+// ensureTokenEntry mints the plugin token (raw to plugin-memory.token, entry to
+// tokensTOML). Idempotent when both exist with a current scope; stale state
+// (missing token file, or a legacy-scope entry) is revoked and reminted.
 func ensureTokenEntry(tokensTOML string) error {
 	tokenFile, err := pluginToken()
 	if err != nil {
@@ -615,14 +612,14 @@ func ensureTokenEntry(tokensTOML string) error {
 	}
 	logf("generated plugin token (label=%s)", tokenLabel)
 
-	// A server already running against this root loaded the pre-remint token
-	// table; without a reload the fresh raw token fails auth until restart.
-	// On failure, drop the token file so the next run re-enters the mint path
-	// (and re-signals) instead of passing the idempotent gate with a token the
-	// server never loaded.
+	// A running server still holds the pre-remint token table; reload or the
+	// fresh raw token fails auth. On failure, drop the token file so the next
+	// run re-enters the mint path and re-signals.
 	if pid := pidOfServerAtRoot(filepath.Dir(tokensTOML)); pid > 0 {
 		if err := signalReload(pid); err != nil {
-			_ = os.Remove(tokenFile)
+			if removeErr := os.Remove(tokenFile); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return fmt.Errorf("reload reminted token: %w; remove token file for retry: %v", err, removeErr)
+			}
 			return fmt.Errorf("reload reminted token: %w", err)
 		}
 	}

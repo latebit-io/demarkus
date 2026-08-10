@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/token"
@@ -463,20 +464,29 @@ fi
 	}
 }
 
-// TestSignalReload covers the nil paths directly: a live process we own is
-// signalled, and a vanished pid is tolerated (the respawn path takes over).
-// The hard-error branch (e.g. EPERM) needs a process under another uid and is
-// not reachable from a unit test.
+// TestSignalReload covers the nil paths: live owned child, then vanished pid.
+// The hard-error branch (EPERM) needs a foreign-uid process; not unit-reachable.
 func TestSignalReload(t *testing.T) {
 	cmd := exec.Command("sleep", "30")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	// Kill on an already-reaped child returns ErrProcessDone; safe to ignore.
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	pid := cmd.Process.Pid
+
 	if err := signalReload(pid); err != nil {
-		t.Errorf("signalReload(live child) = %v", err)
+		t.Fatalf("signalReload(live child) = %v", err)
 	}
-	_ = cmd.Wait() // reaps the HUP-terminated child
+	// The child must die to our SIGHUP, not run out its sleep.
+	err := cmd.Wait()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("child exit was not an ExitError: %v", err)
+	}
+	if sig := ee.ProcessState.Sys().(syscall.WaitStatus).Signal(); sig != syscall.SIGHUP {
+		t.Fatalf("child terminated by %v, want SIGHUP", sig)
+	}
 
 	if err := signalReload(pid); err != nil {
 		t.Errorf("signalReload(dead pid) = %v, want nil", err)
