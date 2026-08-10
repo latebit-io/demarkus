@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -459,5 +460,25 @@ fi
 	}
 	if err := ensureTokenEntry(tokensTOML); err == nil {
 		t.Error("malformed tokens.toml did not surface an error")
+	}
+}
+
+// TestSignalReload covers the nil paths directly: a live process we own is
+// signalled, and a vanished pid is tolerated (the respawn path takes over).
+// The hard-error branch (e.g. EPERM) needs a process under another uid and is
+// not reachable from a unit test.
+func TestSignalReload(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	if err := signalReload(pid); err != nil {
+		t.Errorf("signalReload(live child) = %v", err)
+	}
+	_ = cmd.Wait() // reaps the HUP-terminated child
+
+	if err := signalReload(pid); err != nil {
+		t.Errorf("signalReload(dead pid) = %v, want nil", err)
 	}
 }

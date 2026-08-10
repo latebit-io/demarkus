@@ -567,10 +567,11 @@ func ensureTokenEntry(tokensTOML string) error {
 	// so surface it here where the cause is clear.
 	if present {
 		revoke := exec.Command(tokenBin, "revoke", "-label", tokenLabel, "-tokens", tokensTOML)
+		var stderr bytes.Buffer
 		revoke.Stdout = io.Discard
-		revoke.Stderr = io.Discard
+		revoke.Stderr = &stderr
 		if err := revoke.Run(); err != nil {
-			return fmt.Errorf("revoke stale plugin token (label=%s, tokens.toml: %s): %w", tokenLabel, tokensTOML, err)
+			return fmt.Errorf("revoke stale plugin token (label=%s, tokens.toml: %s): %w: %s", tokenLabel, tokensTOML, err, strings.TrimSpace(stderr.String()))
 		}
 	}
 
@@ -616,8 +617,12 @@ func ensureTokenEntry(tokensTOML string) error {
 
 	// A server already running against this root loaded the pre-remint token
 	// table; without a reload the fresh raw token fails auth until restart.
+	// On failure, drop the token file so the next run re-enters the mint path
+	// (and re-signals) instead of passing the idempotent gate with a token the
+	// server never loaded.
 	if pid := pidOfServerAtRoot(filepath.Dir(tokensTOML)); pid > 0 {
 		if err := signalReload(pid); err != nil {
+			_ = os.Remove(tokenFile)
 			return fmt.Errorf("reload reminted token: %w", err)
 		}
 	}
