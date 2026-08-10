@@ -30,7 +30,10 @@ prev=""
 # On any exit: restore the backed-up asset tree if the swap never completed,
 # then drop temp dirs.
 cleanup() {
-  if [[ -n "${prev}" && -e "${prev}" && ! -e "${ASSETS_DEST}" ]]; then mv "${prev}" "${ASSETS_DEST}"; fi
+  if [[ -n "${prev}" && -e "${prev}" && ! -e "${ASSETS_DEST}" ]]; then
+    mv "${prev}" "${ASSETS_DEST}" \
+      || echo "[demarkus-memory] install: restoring previous assets failed; backup preserved at ${prev}" >&2
+  fi
   rm -rf "${tmpdir}" "${staging}"
 }
 trap cleanup EXIT
@@ -84,8 +87,13 @@ if mv "${staging}/assets" "${ASSETS_DEST}"; then
   rm -rf "${prev}" "${staging}"
   staging=""
 else
-  [[ -e "${prev}" ]] && mv "${prev}" "${ASSETS_DEST}"
-  echo "[demarkus-memory] install: asset swap failed; previous assets restored" >&2
+  if [[ ! -e "${prev}" ]]; then
+    echo "[demarkus-memory] install: asset swap failed (fresh install, nothing to restore)" >&2
+  elif mv "${prev}" "${ASSETS_DEST}"; then
+    echo "[demarkus-memory] install: asset swap failed; previous assets restored" >&2
+  else
+    echo "[demarkus-memory] install: asset swap failed AND restore failed; backup preserved at ${prev}" >&2
+  fi
   exit 1
 fi
 
