@@ -74,7 +74,7 @@ Render plainly, grouped by check, most actionable first. For each finding give t
 
 ### Dangling & unlinked references (<n>)        [deep check — scanned <k>/<N> docs]
 - /adr/0006-navigation-rework.md → "ADR 0005" — dangling: no such doc in scope (mark_list → no match); restore it or drop the reference
-- /roadmap.md → "ADR 0006" — unlinked: target exists but no edge; convert the prose mention to a [link](mark://…)
+- /roadmap.md → "ADR 0006" — unlinked: target exists but the citing body has no Markdown link; link the prose mention to the canonical target
 
 ### ADR / index / titles / duplicates …
 ```

@@ -6,7 +6,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
 #
 # Idempotent; re-run to update; --uninstall removes. DEMARKUS_REF pins the
-# git ref for standalone installs (default main).
+# standalone install to a branch, tag, or full commit SHA (default main;
+# pass a SHA or tag for a reproducible install).
 
 set -euo pipefail
 
@@ -25,7 +26,13 @@ fi
 
 tmpdir=""
 staging=""
-cleanup() { rm -rf "${tmpdir}" "${staging}"; }
+prev=""
+# On any exit: restore the backed-up asset tree if the swap never completed,
+# then drop temp dirs.
+cleanup() {
+  if [[ -n "${prev}" && -e "${prev}" && ! -e "${ASSETS_DEST}" ]]; then mv "${prev}" "${ASSETS_DEST}"; fi
+  rm -rf "${tmpdir}" "${staging}"
+}
 trap cleanup EXIT
 
 # Source resolution: a checkout when run next to the plugin files, otherwise
@@ -38,8 +45,9 @@ if [[ ! -e "${SRC}/src/demarkus-memory.ts" ]]; then
   tmpdir="$(mktemp -d)"
   topdir="demarkus-${REF//\//-}"
   echo "[demarkus-memory] downloading plugin (ref ${REF})..." >&2
+  # codeload accepts a branch, tag, or commit SHA as the trailing ref.
   curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 \
-    "https://codeload.github.com/latebit-io/demarkus/tar.gz/refs/heads/${REF}" \
+    "https://codeload.github.com/latebit-io/demarkus/tar.gz/${REF}" \
     | tar -xz -C "${tmpdir}" "${topdir}/plugins/opencode-memory" \
     || { echo "[demarkus-memory] install: download/extract failed for ref ${REF}" >&2; exit 1; }
   SRC="${tmpdir}/${topdir}/plugins/opencode-memory"
@@ -49,22 +57,37 @@ for d in src/demarkus-memory.ts commands context scripts skills/soul-memory/SKIL
   [[ -e "${SRC}/${d}" ]] || { echo "[demarkus-memory] install: missing ${d} in ${SRC}" >&2; exit 1; }
 done
 
-mkdir -p "${OPENCODE_DIR}/plugins" "${SKILL_DEST}"
-install -m 0644 "${SRC}/src/demarkus-memory.ts" "${PLUGIN_DEST}"
-install -m 0644 "${SRC}/skills/soul-memory/SKILL.md" "${SKILL_DEST}/SKILL.md"
-
-# Stage the full asset tree, then swap it in: an interrupted copy must not
-# leave the active install with missing commands/context/scripts.
+# Stage EVERYTHING first, then commit: a failure mid-install must leave the
+# previous installation intact and never a mix of old and new revisions.
 staging="${ASSETS_DEST}.staging.$$"
 rm -rf "${staging}"
-mkdir -p "${staging}"
+mkdir -p "${staging}/assets"
 for d in commands context scripts; do
-  cp -R "${SRC}/${d}" "${staging}/${d}"
+  cp -R "${SRC}/${d}" "${staging}/assets/${d}"
 done
-chmod 0755 "${staging}/scripts/"*.sh
-rm -rf "${ASSETS_DEST}"
-mv "${staging}" "${ASSETS_DEST}"
-staging=""
+chmod 0755 "${staging}/assets/scripts/"*.sh
+install -m 0644 "${SRC}/src/demarkus-memory.ts" "${staging}/demarkus-memory.ts"
+install -m 0644 "${SRC}/skills/soul-memory/SKILL.md" "${staging}/SKILL.md"
+for f in demarkus-memory.ts SKILL.md assets/commands assets/context assets/scripts/bootstrap.sh; do
+  [[ -s "${staging}/${f}" || -d "${staging}/${f}" ]] || { echo "[demarkus-memory] install: staging incomplete (${f})" >&2; exit 1; }
+done
+
+# Commit: per-file renames are atomic; the asset tree swaps via a backup that
+# is restored if the new tree cannot be moved into place.
+mkdir -p "${OPENCODE_DIR}/plugins" "${SKILL_DEST}"
+mv -f "${staging}/demarkus-memory.ts" "${PLUGIN_DEST}"
+mv -f "${staging}/SKILL.md" "${SKILL_DEST}/SKILL.md"
+prev="${ASSETS_DEST}.prev.$$"
+rm -rf "${prev}"
+[[ -e "${ASSETS_DEST}" ]] && mv "${ASSETS_DEST}" "${prev}"
+if mv "${staging}/assets" "${ASSETS_DEST}"; then
+  rm -rf "${prev}" "${staging}"
+  staging=""
+else
+  [[ -e "${prev}" ]] && mv "${prev}" "${ASSETS_DEST}"
+  echo "[demarkus-memory] install: asset swap failed; previous assets restored" >&2
+  exit 1
+fi
 
 echo "[demarkus-memory] installed:"
 echo "  plugin  ${PLUGIN_DEST}"
