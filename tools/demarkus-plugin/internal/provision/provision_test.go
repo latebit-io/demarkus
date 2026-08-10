@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/latebit-io/demarkus/protocol/token"
 )
 
 // TestDetectPlatform checks the OS_arch mapping produces a sane release suffix on
@@ -270,41 +273,61 @@ func TestSeedDocNeverClobbers(t *testing.T) {
 	}
 }
 
-func TestTokenScopeStale(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, body string) string {
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	entry := func(paths string) string {
-		return "[tokens." + tokenLabel + "]\nhash = \"abc\"\npaths = [" + paths + "]\noperations = [\"publish\"]\n"
-	}
-
+func TestScopeStale(t *testing.T) {
 	tests := []struct {
 		name  string
-		body  string
+		paths []string
 		stale bool
 	}{
-		{"old single-segment scope", entry(`"/*"`), true},
-		{"recursive scope", entry(`"/**"`), false},
-		{"both patterns present", entry(`"/*", "/**"`), false},
-		{"other label only", "[tokens.other]\nhash = \"x\"\npaths = [\"/*\"]\noperations = [\"publish\"]\n", false},
-		{"unparseable file", "not toml [[[", false},
+		{"legacy single-segment scope", []string{"/*"}, true},
+		{"recursive scope", []string{"/**"}, false},
+		{"both patterns present", []string{"/*", "/**"}, false},
+		{"unrelated scope", []string{"/docs/*"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := write(strings.ReplaceAll(tt.name, " ", "-")+".toml", tt.body)
-			if got := tokenScopeStale(p); got != tt.stale {
-				t.Errorf("tokenScopeStale = %v, want %v", got, tt.stale)
+			if got := scopeStale(&token.Entry{Paths: tt.paths}); got != tt.stale {
+				t.Errorf("scopeStale(%v) = %v, want %v", tt.paths, got, tt.stale)
 			}
 		})
 	}
+}
 
-	if tokenScopeStale(filepath.Join(dir, "missing.toml")) {
-		t.Error("missing file reported stale")
+func TestPluginEntry(t *testing.T) {
+	dir := t.TempDir()
+	pluginStanza := token.FormatEntry(tokenLabel, &token.Entry{Hash: "abc", Paths: []string{"/*"}, Operations: []string{"publish"}})
+	otherStanza := token.FormatEntry("other", &token.Entry{Hash: "x", Paths: []string{"/*"}, Operations: []string{"publish"}})
+
+	tests := []struct {
+		name    string
+		body    string // empty means don't write the file
+		present bool
+		wantErr bool
+	}{
+		{"plugin entry present", pluginStanza, true, false},
+		{"other label only", otherStanza, false, false},
+		{"unparseable file", "not toml [[[", false, true},
+		{"missing file", "", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "-")+".toml")
+			if tt.body != "" {
+				if err := os.WriteFile(p, []byte(tt.body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			entry, present, err := pluginEntry(p)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("pluginEntry err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if present != tt.present {
+				t.Errorf("present = %v, want %v", present, tt.present)
+			}
+			if present && len(entry.Paths) == 0 {
+				t.Error("present entry has no paths")
+			}
+		})
 	}
 }
 
@@ -332,6 +355,11 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
+if [[ "$cmd" == "revoke" ]]; then
+  [[ -n "$FAKE_REVOKE_FAIL" ]] && exit 1
+  # Fixtures hold only the plugin's stanza, so revoke == truncate.
+  : > "$tokens"
+fi
 if [[ "$cmd" == "generate" ]]; then
   printf '\n[tokens.%s]\nhash = "fake"\npaths = ["%s"]\noperations = ["publish", "archive"]\n' "$label" "$paths" >> "$tokens"
   echo "raw-token-value"
@@ -347,47 +375,89 @@ fi
 	}
 	tokensTOML := filepath.Join(soul, "tokens.toml")
 	readLog := func() string {
-		b, _ := os.ReadFile(argsLog)
+		t.Helper()
+		b, err := os.ReadFile(argsLog)
+		if errors.Is(err, os.ErrNotExist) {
+			return ""
+		}
+		if err != nil {
+			t.Fatalf("read args log: %v", err)
+		}
 		return string(b)
 	}
+	// phaseLog scopes assertions to the invocations one phase made.
+	phaseLog := func(fn func()) string {
+		t.Helper()
+		before := len(readLog())
+		fn()
+		return readLog()[before:]
+	}
+	staleStanza := token.FormatEntry(tokenLabel, &token.Entry{Hash: "old", Paths: []string{"/*"}, Operations: []string{"publish"}})
 
 	// Fresh install mints with the recursive scope.
-	if err := ensureTokenEntry(tokensTOML); err != nil {
-		t.Fatalf("fresh mint: %v", err)
-	}
-	if !strings.Contains(readLog(), "-paths /**") {
-		t.Fatalf("fresh mint did not use /**; argv log:\n%s", readLog())
-	}
-	toml, err := os.ReadFile(tokensTOML)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(toml), `"/**"`) {
-		t.Fatalf("tokens.toml entry not recursive:\n%s", toml)
+	log := phaseLog(func() {
+		if err := ensureTokenEntry(tokensTOML); err != nil {
+			t.Fatalf("fresh mint: %v", err)
+		}
+	})
+	if !strings.Contains(log, "-paths /**") {
+		t.Fatalf("fresh mint did not use /**; argv:\n%s", log)
 	}
 
 	// Provisioned-and-current is a no-op: no further binary invocations.
-	before := readLog()
-	if err := ensureTokenEntry(tokensTOML); err != nil {
-		t.Fatalf("idempotent rerun: %v", err)
-	}
-	if readLog() != before {
-		t.Fatalf("idempotent rerun invoked demarkus-token; argv log:\n%s", readLog())
+	log = phaseLog(func() {
+		if err := ensureTokenEntry(tokensTOML); err != nil {
+			t.Fatalf("idempotent rerun: %v", err)
+		}
+	})
+	if log != "" {
+		t.Fatalf("idempotent rerun invoked demarkus-token; argv:\n%s", log)
 	}
 
 	// An old install with the single-segment "/*" scope is revoked and reminted.
-	stale := "[tokens." + tokenLabel + "]\nhash = \"old\"\npaths = [\"/*\"]\noperations = [\"publish\"]\n"
-	if err := os.WriteFile(tokensTOML, []byte(stale), 0o600); err != nil {
+	if err := os.WriteFile(tokensTOML, []byte(staleStanza), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureTokenEntry(tokensTOML); err != nil {
-		t.Fatalf("stale-scope remint: %v", err)
-	}
-	log := readLog()
+	log = phaseLog(func() {
+		if err := ensureTokenEntry(tokensTOML); err != nil {
+			t.Fatalf("stale-scope remint: %v", err)
+		}
+	})
 	if !strings.Contains(log, "revoke -label "+tokenLabel) {
-		t.Errorf("stale scope did not revoke; argv log:\n%s", log)
+		t.Errorf("stale scope did not revoke; argv:\n%s", log)
 	}
-	if strings.Count(log, "-paths /**") != 2 {
-		t.Errorf("stale scope did not remint with /**; argv log:\n%s", log)
+	if !strings.Contains(log, "-paths /**") {
+		t.Errorf("stale scope did not remint with /**; argv:\n%s", log)
+	}
+	f, err := token.ReadFile(tokensTOML)
+	if err != nil {
+		t.Fatalf("reminted tokens.toml unparseable: %v", err)
+	}
+	got, ok := f.Tokens[tokenLabel]
+	if !ok {
+		t.Fatalf("reminted tokens.toml lacks %s entry", tokenLabel)
+	}
+	if len(got.Paths) != 1 || got.Paths[0] != "/**" {
+		t.Errorf("reminted entry paths = %v, want [/**]", got.Paths)
+	}
+
+	// A revoke failure surfaces instead of proceeding to a colliding generate.
+	if err := os.WriteFile(tokensTOML, []byte(staleStanza), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_REVOKE_FAIL", "1")
+	if err := ensureTokenEntry(tokensTOML); err == nil {
+		t.Error("revoke failure did not surface an error")
+	}
+	t.Setenv("FAKE_REVOKE_FAIL", "")
+
+	// A tokens.toml we cannot parse fails provisioning rather than being
+	// silently treated as current (or clobbered).
+	malformed := "[tokens." + tokenLabel + "]\nnot toml [[["
+	if err := os.WriteFile(tokensTOML, []byte(malformed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTokenEntry(tokensTOML); err == nil {
+		t.Error("malformed tokens.toml did not surface an error")
 	}
 }

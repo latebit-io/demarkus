@@ -80,6 +80,14 @@ const (
 
 const tokenLabel = "claude-code-plugin"
 
+// tokenPaths is the scope minted for the plugin token. legacyTokenPaths is the
+// pre-fix scope: path.Match's "*" does not cross "/", so it blocked writes to
+// nested docs; entries still carrying it are revoked and reminted.
+const (
+	tokenPaths       = "/**"
+	legacyTokenPaths = "/*"
+)
+
 //go:embed seed/index.md seed/project-template.md
 var seedFS embed.FS
 
@@ -529,9 +537,9 @@ func installFile(src, dst string) error {
 // ensureTokenEntry generates a plugin-scoped token, writes the raw token to
 // ~/.demarkus/plugin-memory.token (mode 0600), and appends an entry for
 // tokenLabel to tokensTOML. Idempotent: a no-op when the token file and a
-// matching tokens.toml entry already exist. Stale state (token file gone but the
-// label still present, or an entry with the old single-segment "/*" scope) is
-// revoked before regenerating.
+// current tokens.toml entry already exist. Stale state (token file gone but the
+// label still present, or an entry with the legacy scope) is revoked before
+// regenerating.
 func ensureTokenEntry(tokensTOML string) error {
 	tokenFile, err := pluginToken()
 	if err != nil {
@@ -542,8 +550,11 @@ func ensureTokenEntry(tokensTOML string) error {
 		return err
 	}
 
-	labelPresent := tokensHasLabel(tokensTOML)
-	if fileExists(tokenFile) && fileExists(tokensTOML) && labelPresent && !tokenScopeStale(tokensTOML) {
+	entry, present, err := pluginEntry(tokensTOML)
+	if err != nil {
+		return err
+	}
+	if fileExists(tokenFile) && present && !scopeStale(&entry) {
 		// Reassert 0600 on the idempotent path: an existing token left
 		// world/group-readable (e.g. from an older install) would otherwise stay
 		// exposed forever since we return without regenerating.
@@ -552,11 +563,15 @@ func ensureTokenEntry(tokensTOML string) error {
 	}
 
 	// Stale state — revoke any prior entry with our label before regenerating.
-	if labelPresent {
+	// A failed revoke would make the generate below fail on a label collision,
+	// so surface it here where the cause is clear.
+	if present {
 		revoke := exec.Command(tokenBin, "revoke", "-label", tokenLabel, "-tokens", tokensTOML)
 		revoke.Stdout = io.Discard
 		revoke.Stderr = io.Discard
-		_ = revoke.Run() // best-effort
+		if err := revoke.Run(); err != nil {
+			return fmt.Errorf("revoke stale plugin token (label=%s, tokens.toml: %s): %w", tokenLabel, tokensTOML, err)
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(tokensTOML), 0o755); err != nil {
@@ -578,9 +593,7 @@ func ensureTokenEntry(tokensTOML string) error {
 		defer func() { _ = tf.Close() }()
 		gen := exec.Command(tokenBin, "generate",
 			"-label", tokenLabel,
-			// "/**" is recursive; "/*" only matches single-segment paths and
-			// forced agents to widen the scope by hand after install.
-			"-paths", "/**",
+			"-paths", tokenPaths,
 			"-ops", "publish,archive",
 			"-tokens", tokensTOML,
 		)
@@ -604,40 +617,47 @@ func ensureTokenEntry(tokensTOML string) error {
 	// A server already running against this root loaded the pre-remint token
 	// table; without a reload the fresh raw token fails auth until restart.
 	if pid := pidOfServerAtRoot(filepath.Dir(tokensTOML)); pid > 0 {
-		if err := signalPID(pid, syscall.SIGHUP); err == nil {
-			logf("sent SIGHUP to server (pid=%d) to reload reminted token", pid)
-		} else {
-			warnf("SIGHUP to pid %d failed; reminted token inactive until the server restarts", pid)
+		if err := signalReload(pid); err != nil {
+			return fmt.Errorf("reload reminted token: %w", err)
 		}
 	}
 	return nil
 }
 
-// tokensHasLabel reports whether tokensTOML contains a "[tokens.<label>]"
-// section (bash grep "tokens\.LABEL\]").
-func tokensHasLabel(tokensTOML string) bool {
-	b, err := os.ReadFile(tokensTOML)
-	if err != nil {
-		return false
+// signalReload SIGHUPs a server so it reloads tokens.toml. A vanished process
+// is fine: the respawn path loads the fresh table.
+func signalReload(pid int) error {
+	err := signalPID(pid, syscall.SIGHUP)
+	switch {
+	case err == nil:
+		logf("sent SIGHUP to server (pid=%d) to reload tokens", pid)
+		return nil
+	case errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH):
+		return nil
+	default:
+		return fmt.Errorf("SIGHUP to server pid %d: %w", pid, err)
 	}
-	return strings.Contains(string(b), "tokens."+tokenLabel+"]")
 }
 
-// tokenScopeStale reports whether the plugin's entry still carries the old
-// "/*" scope, which only matches single-segment paths and blocked writes to
-// nested docs until an agent widened it by hand. Stale entries are revoked and
-// reminted with "/**". Unreadable files are not stale: regenerating on a parse
-// error would clobber a tokens.toml we can't safely interpret.
-func tokenScopeStale(tokensTOML string) bool {
+// pluginEntry parses tokensTOML and returns the plugin's entry and whether it
+// exists. A missing file is absence, not an error. Parse errors surface: an
+// uninterpretable tokens.toml must not pass as current (or be clobbered).
+func pluginEntry(tokensTOML string) (token.Entry, bool, error) {
 	f, err := token.ReadFile(tokensTOML)
+	if errors.Is(err, os.ErrNotExist) {
+		return token.Entry{}, false, nil
+	}
 	if err != nil {
-		return false
+		return token.Entry{}, false, fmt.Errorf("inspect plugin token entry: %w", err)
 	}
 	entry, ok := f.Tokens[tokenLabel]
-	if !ok {
-		return false
-	}
-	return slices.Contains(entry.Paths, "/*") && !slices.Contains(entry.Paths, "/**")
+	return entry, ok, nil
+}
+
+// scopeStale reports whether an entry still carries the legacy scope without
+// the current one. A manually widened entry listing both is left alone.
+func scopeStale(entry *token.Entry) bool {
+	return slices.Contains(entry.Paths, legacyTokenPaths) && !slices.Contains(entry.Paths, tokenPaths)
 }
 
 // withUmask runs fn with the process umask set to mask, restoring it after.
@@ -1199,10 +1219,10 @@ func doReuse(port int, root string) error {
 		if actualPort != "" && actualPort != strconv.Itoa(port) {
 			return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, actualPort, port, actualPort)
 		}
-		if err := signalPID(targetPID, syscall.SIGHUP); err == nil {
-			logf("sent SIGHUP to adopted server (pid=%d) to reload tokens", targetPID)
-		} else {
-			warnf("SIGHUP to pid %d failed; tokens may not be active until the server restarts", targetPID)
+		// Warn-only here: the adopted server may not be ours, and with no remint
+		// implied the loaded token table is usually already current.
+		if err := signalReload(targetPID); err != nil {
+			warnf("%v; tokens may not be active until the server restarts", err)
 		}
 	} else {
 		warnf("no running server found with -root %s; proceeding with config, but /soul-init may need a rerun once it's up", root)
