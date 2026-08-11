@@ -482,12 +482,13 @@ Or via directory-level `.mark-acl` files:
 
 ```
 content-root/
-  doc.md -> versions/doc.md.v42  # symlink to current
+  doc.md -> versions/doc.md/v42  # symlink to current
   versions/
-    doc.md.v1
-    doc.md.v2
-    ...
-    doc.md.v42
+    doc.md/
+      v1
+      v2
+      ...
+      v42
 ```
 
 **Security Audit Log** (server-side only, not public):

@@ -155,13 +155,28 @@ func TestListDir(t *testing.T) {
 		}
 	}
 
+	// A doc published under a "versions" path segment must not surface the
+	// root versions/ directory in listings either.
+	if _, err := s.Write("/versions/doc.md", []byte("# in versions\n"), nil); err != nil {
+		t.Fatalf("Write /versions/doc.md: %v", err)
+	}
+
 	for _, includeArchived := range []bool{false, true} {
 		entries, err := s.ListDir("/", includeArchived)
 		if err != nil {
 			t.Fatalf("ListDir(includeArchived=%v): %v", includeArchived, err)
 		}
-		if len(entries) != 2 {
-			t.Errorf("includeArchived=%v: entries = %d, want 2 (excluding .hidden, versions, flat.md)", includeArchived, len(entries))
+		got := map[string]bool{}
+		for _, e := range entries {
+			got[e.Name()] = true
+		}
+		if !got["a.md"] || !got["b.md"] || len(got) != 2 {
+			t.Errorf("includeArchived=%v: entries = %v, want exactly a.md and b.md", includeArchived, got)
+		}
+		for _, hidden := range []string{".hidden", "versions", "flat.md"} {
+			if got[hidden] {
+				t.Errorf("includeArchived=%v: %s must not be listed", includeArchived, hidden)
+			}
 		}
 	}
 }
@@ -1106,6 +1121,38 @@ func TestMigrateLegacyLayout(t *testing.T) {
 	// Idempotent: a second run performs no work and breaks nothing.
 	if err := s.migrateLegacyLayout(); err != nil {
 		t.Fatalf("second migrateLegacyLayout: %v", err)
+	}
+}
+
+// TODO(v1): remove this test with migrateLegacyLayout.
+func TestOpen_MigratesLegacyLayout(t *testing.T) {
+	root := t.TempDir()
+	versionsDir := filepath.Join(root, "versions")
+	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A leading-zero name parses to the same version number but must be
+	// moved under its on-disk name — a reconstructed "doc.md.v1" would
+	// ENOENT and block Open on every start.
+	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v01"), []byte("---\nversion: 1\n---\n# v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	doc, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatalf("Get after Open: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+
+	// Open on a fresh root is a no-op.
+	if _, err := Open(t.TempDir()); err != nil {
+		t.Fatalf("Open on fresh root: %v", err)
 	}
 }
 
