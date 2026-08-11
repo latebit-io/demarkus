@@ -333,20 +333,22 @@ func TestPluginEntry(t *testing.T) {
 	}
 }
 
-// TestEnsureTokenEntryScope pins the minted scope to the recursive "/**" and
-// the remint-on-stale-scope behavior, via a fake demarkus-token binary that
-// logs its argv and mirrors generate's tokens.toml append.
-func TestEnsureTokenEntryScope(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
+// writeFakeTokenBin installs a fake demarkus-token under $HOME/.demarkus/bin
+// that mirrors revoke (truncate; fixtures hold only the plugin's stanza, and
+// FAKE_REVOKE_FAIL=1 forces failure) and generate (real sha256- hash so the
+// gate's verification runs). A non-empty argsLog gets each invocation's argv.
+func writeFakeTokenBin(t *testing.T, home, argsLog string) {
+	t.Helper()
 	binDir := filepath.Join(home, ".demarkus", "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	argsLog := filepath.Join(home, "args.log")
+	logLine := ""
+	if argsLog != "" {
+		logLine = `echo "$@" >> "` + argsLog + `"`
+	}
 	fake := `#!/bin/bash
-echo "$@" >> "` + argsLog + `"
+` + logLine + `
 cmd="$1"; shift
 label=""; paths=""; tokens=""
 while [[ $# -gt 0 ]]; do
@@ -359,12 +361,16 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ "$cmd" == "revoke" ]]; then
   [[ -n "$FAKE_REVOKE_FAIL" ]] && exit 1
-  # Fixtures hold only the plugin's stanza, so revoke == truncate.
   : > "$tokens"
 fi
 if [[ "$cmd" == "generate" ]]; then
   raw="raw-token-value"
-  sum=$(printf %s "$raw" | shasum -a 256 | cut -d' ' -f1)
+  # sha256sum on minimal Linux images, shasum on macOS; neither alone is portable.
+  if command -v sha256sum >/dev/null 2>&1; then
+    sum=$(printf %s "$raw" | sha256sum | cut -d' ' -f1)
+  else
+    sum=$(printf %s "$raw" | shasum -a 256 | cut -d' ' -f1)
+  fi
   printf '\n[tokens.%s]\nhash = "sha256-%s"\npaths = ["%s"]\noperations = ["publish", "archive"]\n' "$label" "$sum" "$paths" >> "$tokens"
   echo "$raw"
 fi
@@ -372,6 +378,16 @@ fi
 	if err := os.WriteFile(filepath.Join(binDir, "demarkus-token"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestEnsureTokenEntryScope pins the minted scope to the recursive "/**" and
+// the remint-on-stale-scope behavior, via a fake demarkus-token binary that
+// logs its argv and mirrors generate's tokens.toml append.
+func TestEnsureTokenEntryScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	argsLog := filepath.Join(home, "args.log")
+	writeFakeTokenBin(t, home, argsLog)
 
 	soul := filepath.Join(home, "root")
 	if err := os.MkdirAll(soul, 0o755); err != nil {
@@ -496,33 +512,8 @@ fi
 func TestEnsureTokenEntryReload(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	writeFakeTokenBin(t, home, "")
 
-	binDir := filepath.Join(home, ".demarkus", "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fake := `#!/bin/bash
-cmd="$1"; shift
-label=""; paths=""; tokens=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -label) label="$2"; shift 2 ;;
-    -paths) paths="$2"; shift 2 ;;
-    -tokens) tokens="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-[[ "$cmd" == "revoke" ]] && : > "$tokens"
-if [[ "$cmd" == "generate" ]]; then
-  raw="raw-token-value"
-  sum=$(printf %s "$raw" | shasum -a 256 | cut -d' ' -f1)
-  printf '\n[tokens.%s]\nhash = "sha256-%s"\npaths = ["%s"]\noperations = ["publish", "archive"]\n' "$label" "$sum" "$paths" >> "$tokens"
-  echo "$raw"
-fi
-`
-	if err := os.WriteFile(filepath.Join(binDir, "demarkus-token"), []byte(fake), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	soul := filepath.Join(home, "root")
 	if err := os.MkdirAll(soul, 0o755); err != nil {
 		t.Fatal(err)
