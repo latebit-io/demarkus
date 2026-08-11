@@ -25,10 +25,16 @@ eval "$(awk '/^ensure_token\(\)/,/^\}$/' "$SRC")"
 
 INSTALL_DIR="$TMP/bin"
 SERVER_TOKENS="$TMP/tokens.toml"
+# Read the mint policy from the installer itself, then pin it: a regression of
+# TOKEN_PATHS back to "/*" must fail here, not silently satisfy the fixtures.
 # shellcheck disable=SC2034 # consumed by the eval'd ensure_token
-TOKEN_PATHS="/**"
+TOKEN_PATHS="$(sed -n 's/^TOKEN_PATHS="\([^"]*\)"$/\1/p' "$SRC")"
 # shellcheck disable=SC2034 # consumed by the eval'd ensure_token
-TOKEN_OPS="publish"
+TOKEN_OPS="$(sed -n 's/^TOKEN_OPS="\([^"]*\)"$/\1/p' "$SRC")"
+if [ "$TOKEN_PATHS" != "/**" ] || [ "$TOKEN_OPS" != "publish" ]; then
+  echo "unexpected installer token policy: paths=$TOKEN_PATHS ops=$TOKEN_OPS" >&2
+  exit 1
+fi
 mkdir -p "$INSTALL_DIR"
 
 # Stub demarkus-token mirroring the real behavior ensure_token relies on:
@@ -49,7 +55,9 @@ while [ $# -gt 0 ]; do
 done
 case "$cmd" in
   list)   [ -r "$tokens" ] || exit 1 ;;
-  revoke) echo "revoke $label" >> "${STUB_CALLS:?}"; : > "$tokens" ;;
+  revoke)
+    [ -n "${FAKE_REVOKE_FAIL:-}" ] && exit 1
+    echo "revoke $label" >> "${STUB_CALLS:?}"; : > "$tokens" ;;
   generate)
     echo "generate $label $paths" >> "${STUB_CALLS:?}"
     raw="minted-raw-token"
@@ -140,7 +148,19 @@ else
   fails=$((fails + 1))
 fi
 
-# No cached token: straight mint (revoke is best-effort first).
+# Revoke failure fails closed: no mint attempted against an unverified store.
+write_entry cached-raw '"/*"'
+: > "$STUB_CALLS"
+rc=0
+out=$(FAKE_REVOKE_FAIL=1 ensure_token test "test" cached-raw) || rc=$?
+if [ "$rc" -ne 0 ] && ! grep -q '^generate' "$STUB_CALLS"; then
+  echo "ok: revoke failure fails closed without minting"
+else
+  echo "FAIL: revoke-failure path (rc=$rc, calls=$(cat "$STUB_CALLS"))" >&2
+  fails=$((fails + 1))
+fi
+
+# No cached token: idempotent revoke first, then mint.
 write_entry raw9 '"/**"'
 : > "$STUB_CALLS"
 out=$(ensure_token test "test" "")

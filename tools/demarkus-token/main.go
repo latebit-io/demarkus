@@ -192,8 +192,9 @@ func cmdRevoke(args []string) {
 	fs := flag.NewFlagSet("revoke", flag.ExitOnError)
 	label := fs.String("label", "", "label of the token to revoke (required)")
 	tokensFile := fs.String("tokens", "", "path to tokens.toml file (required)")
+	ifPresent := fs.Bool("if-present", false, "treat an absent label (or absent tokens file) as success; real store failures still error")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus-token revoke -label NAME -tokens FILE\n\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus-token revoke [-if-present] -label NAME -tokens FILE\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -207,9 +208,17 @@ func cmdRevoke(args []string) {
 
 	file, err := token.ReadFile(*tokensFile)
 	if err != nil {
+		if *ifPresent && errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "Tokens file %s absent; nothing to revoke\n", *tokensFile)
+			return
+		}
 		log.Fatalf("%v", err)
 	}
 	if _, ok := file.Tokens[*label]; !ok {
+		if *ifPresent {
+			fmt.Fprintf(os.Stderr, "Token %q not present in %s; nothing to revoke\n", *label, *tokensFile)
+			return
+		}
 		log.Fatalf("token %q not found in %s", *label, *tokensFile)
 	}
 	delete(file.Tokens, *label)

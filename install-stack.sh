@@ -148,10 +148,13 @@ ensure_token() {
     printf '%s' "$tok"
     return 0
   fi
-  # generate refuses a duplicate label, so drop any stale entry first. A
-  # not-found revoke is the normal fresh-mint case; a genuine store failure
-  # repeats at generate below, which fails closed.
-  "${INSTALL_DIR}/demarkus-token" revoke -label "$label" -tokens "$SERVER_TOKENS" >/dev/null 2>&1 || true
+  # generate refuses a duplicate label, so drop any stale entry first.
+  # -if-present makes the absent-label fresh-mint case a success while a real
+  # store failure (permissions, malformed TOML) still surfaces here.
+  if ! "${INSTALL_DIR}/demarkus-token" revoke -if-present -label "$label" -tokens "$SERVER_TOKENS" >/dev/null 2>&1; then
+    log_error "Could not revoke the stale ${label} token in ${SERVER_TOKENS}" >&2
+    return 1
+  fi
   if ! tok=$("${INSTALL_DIR}/demarkus-token" generate -label "$label" -paths "$TOKEN_PATHS" -ops "$TOKEN_OPS" -tokens "$SERVER_TOKENS" 2>/dev/null); then
     log_error "Could not mint the ${noun} token" >&2
     return 1

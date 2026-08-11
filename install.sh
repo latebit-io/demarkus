@@ -1201,6 +1201,18 @@ install_broker() {
     if [ -n "$oidc_issuer" ] || [ -n "$oidc_client_id" ] || [ -n "$public_url" ]; then
       log_warn "Broker OIDC flags were given but the existing config was kept; edit ${BROKER_CONFIG_DIR}/config.yaml to apply them"
     fi
+    # Migrate the managed defaultToken scope: /* only matches single-segment
+    # paths, so broker-minted world tokens born under it fail on nested docs.
+    # Scoped to the line directly under defaultToken:, so a custom scope on
+    # another world is never touched. The broker restarts later in this run.
+    if sed -n '/defaultToken:/{n;p;}' "${BROKER_CONFIG_DIR}/config.yaml" | grep -q 'paths: \["/\*"\]'; then
+      sed -i '/defaultToken:/{n;s|paths: \["/\*"\]|paths: ["/**"]|;}' "${BROKER_CONFIG_DIR}/config.yaml"
+      if ! sed -n '/defaultToken:/{n;p;}' "${BROKER_CONFIG_DIR}/config.yaml" | grep -q 'paths: \["/\*\*"\]'; then
+        log_error "Could not migrate defaultToken.paths to /** in ${BROKER_CONFIG_DIR}/config.yaml; edit it manually"
+        exit 1
+      fi
+      log_info "Migrated broker defaultToken.paths to the recursive /** scope"
+    fi
   fi
 
   if [ ! -f "${BROKER_CONFIG_DIR}/env" ]; then
