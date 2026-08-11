@@ -8,9 +8,9 @@ _No projects yet. Add a link below when the agent creates a project subtree._
 
 ## Per-Project Structure
 
-Each `/<project>/` subtree follows the canonical layout defined in **[/project-template.md](/project-template.md)** — the single source of truth. In brief: a maintained `index.md` hub, plus `architecture.md`, `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `thoughts.md`, an `adr/` directory (one ADR per decision), a `plans/` directory, and `journal/<YYYY-MM-DD>.md` dated notes.
+Each `/<project>/` subtree follows the canonical layout carried by the memory plugin's soul-memory skill. In brief: a maintained `index.md` hub, plus `architecture.md`, `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `thoughts.md`, an `adr/` directory (one ADR per decision), a `plans/` directory, and `journal/<YYYY-MM-DD>.md` dated notes.
 
-The agent keeps this layout consistent across projects so `/soul`, `/soul-journal`, and the memory skill always know where to look. See `/project-template.md` for the full descriptions and conventions.
+The agent keeps this layout consistent across projects so `/soul`, `/soul-journal`, and the memory skill always know where to look. To tailor the layout, publish `/project-template.md` at the soul root — when present it overrides the skill's built-in layout.
 
 ## Technical
 

@@ -59,7 +59,7 @@ If the user invokes without an argument, ask them for the URL before running any
 
 5. **Adopt the system's conventions (`root` hub).** A knowledge system can publish org-wide conventions to its guaranteed `root` hub world. Once the OAuth flow is complete and you are doing real work against this system, fetch them and follow them:
 
-   - `mark_fetch mark://root/.well-known/demarkus/template.md` — the required per-world structure (same shape as the local `/project-template.md`). Follow it.
+   - `mark_fetch mark://root/.well-known/demarkus/template.md` — the required per-world structure. Follow it.
    - `mark_fetch mark://root/.well-known/demarkus/policy.md` — the system's write policy. The gate runs offline (it cannot reach the broker), so its enforced core must be mirrored to local files. **Do not hand-write those files** — pipe the fetched policy **body** to the mirror script, which deterministically parses `strictness:` / `require_tags:` / `require_fields:` and writes (or clears) each per-slug file:
 
      ```bash
