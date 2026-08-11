@@ -16,4 +16,7 @@ for mod in protocol server client tools; do
   (cd "$mod" && golangci-lint run ./...)
 done
 
+echo "Checking comment length on changed code..."
+bash scripts/check-comment-length.sh
+
 echo "✓ All checks passed"

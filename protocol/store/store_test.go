@@ -2291,10 +2291,8 @@ func TestPruneVersions_SymlinkedDocDirCannotEscape(t *testing.T) {
 }
 
 func TestPruneVersions_SymlinkVersionFileNotFollowed(t *testing.T) {
-	// A symlink planted at a version slot is not a version
-	// (perDocVersionNumber counts regular files only): pruning neither
-	// follows nor deletes it, and the link target outside the store
-	// survives untouched.
+	// A planted symlink at a version slot is not a version: pruning
+	// neither follows nor deletes it, and its target survives untouched.
 	root := t.TempDir()
 	outsideFile := filepath.Join(t.TempDir(), "victim.md")
 	if err := os.WriteFile(outsideFile, []byte("victim"), 0o644); err != nil {
