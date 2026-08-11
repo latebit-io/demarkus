@@ -452,6 +452,7 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 	if !includeArchived {
 		live = s.liveChildren(reqPath)
 	}
+	dc := s.docCandidates(dirPath)
 	filtered := entries[:0]
 	for _, e := range entries {
 		name := e.Name()
@@ -486,7 +487,7 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 			filtered = append(filtered, e)
 			continue
 		}
-		if !s.isDocumentEntry(dirPath, e) {
+		if !dc.isDocument(name) {
 			continue
 		}
 		if !includeArchived && entryArchived(filepath.Join(dirPath, name), absRoot) {
@@ -497,14 +498,42 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 	return filtered, nil
 }
 
-// isDocumentEntry reports whether a file entry in dirAbs is a document a
-// listing may show: it has per-doc version history, so Get would serve it
-// (SPEC 9.8) — the single definition ListDir and the directory walks share.
-// A symlink is not trusted on its own: a hand-placed or orphaned current
-// pointer without versions must not be listed (a listing never names an
-// entry FETCH refuses, SPEC 6.2).
-func (s *Store) isDocumentEntry(dirAbs string, e os.DirEntry) bool {
-	return highestPerDocVersion(filepath.Join(dirAbs, "versions"), e.Name()) > 0
+// docCandidates answers "is this file entry a served document?" for one
+// directory (SPEC 9.8): its per-doc directory holds at least one version, so
+// Get would serve it. A symlink is not trusted on its own — a hand-placed or
+// orphaned current pointer without versions must not be listed (a listing
+// never names an entry FETCH refuses, SPEC 6.2). The candidate set (one
+// ReadDir of versions/) is memoized on first use, so a directory of N
+// non-documents costs one syscall instead of N probes and a fully indexed
+// listing never loads it; the per-candidate confirm keeps an empty
+// crash-artifact directory unlisted. The set is built from Lstat-level entry
+// types, a strict subset of what the confirm would accept: a symlinked
+// per-doc directory is deliberately not a candidate.
+type docCandidates struct {
+	dirAbs string
+	bases  map[string]bool
+	loaded bool
+}
+
+func (s *Store) docCandidates(dirAbs string) *docCandidates {
+	return &docCandidates{dirAbs: dirAbs}
+}
+
+func (dc *docCandidates) isDocument(name string) bool {
+	if !dc.loaded {
+		dc.loaded = true
+		entries, err := os.ReadDir(filepath.Join(dc.dirAbs, "versions"))
+		if err != nil {
+			return false
+		}
+		dc.bases = make(map[string]bool, len(entries))
+		for _, e := range entries {
+			if e.IsDir() {
+				dc.bases[e.Name()] = true
+			}
+		}
+	}
+	return dc.bases[name] && highestPerDocVersion(filepath.Join(dc.dirAbs, "versions"), name) > 0
 }
 
 // isHiddenEntry reports whether a directory entry name is always excluded from
@@ -582,21 +611,28 @@ func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) boo
 	if err != nil {
 		return false
 	}
+	// Files first: a qualifying file at this level answers with at most one
+	// candidate load, before any subtree recursion is paid.
+	dc := s.docCandidates(dirAbs)
+	var dirs []string
 	for _, e := range entries {
 		name := e.Name()
 		if isHiddenEntry(name) {
 			continue
 		}
 		if e.IsDir() {
-			if s.dirHasDocument(filepath.Join(dirAbs, name), absRoot, includeArchived) {
-				return true
-			}
+			dirs = append(dirs, name)
 			continue
 		}
-		if !s.isDocumentEntry(dirAbs, e) {
+		if !dc.isDocument(name) {
 			continue
 		}
 		if includeArchived || !entryArchived(filepath.Join(dirAbs, name), absRoot) {
+			return true
+		}
+	}
+	for _, name := range dirs {
+		if s.dirHasDocument(filepath.Join(dirAbs, name), absRoot, includeArchived) {
 			return true
 		}
 	}
@@ -774,9 +810,12 @@ func highestPerDocVersion(versionsDir, base string) int {
 }
 
 // perDocVersionNumber parses a per-doc version filename ("v{N}", N >= 1),
-// returning 0 for directories and any other name.
+// returning 0 for any other name. Regular files only: version files are
+// store-written and immutable, so a symlink (or anything else) planted in a
+// per-doc directory is never counted as a version, anywhere the store
+// answers version questions.
 func perDocVersionNumber(e os.DirEntry) int {
-	if e.IsDir() {
+	if !e.Type().IsRegular() {
 		return 0
 	}
 	name := e.Name()
@@ -1700,16 +1739,34 @@ func (s *Store) migrateLegacyVersionsDir(versionsDir string) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", versionsDir, err)
 	}
-	docs := make(map[string][]legacyFile)
+	// byVersion picks one filename per (base, n). Names can collide on the
+	// normalized version ("doc.md.v01" vs "doc.md.v1"); the canonical
+	// (unpadded) name wins deliberately and the loser is left on disk as an
+	// unserved stray, so a collision never deletes content or blocks Open.
+	byVersion := make(map[string]map[int]string)
 	for _, e := range entries {
-		if e.IsDir() {
+		// Regular files only: a symlink named like a version would otherwise
+		// be moved into the per-doc dir (redundant defense; version reads
+		// reject non-regular entries too, see perDocVersionNumber).
+		if !e.Type().IsRegular() {
 			continue
 		}
-		if base, n, ok := legacyVersion(e.Name()); ok {
-			docs[base] = append(docs[base], legacyFile{e.Name(), n})
+		base, n, ok := legacyVersion(e.Name())
+		if !ok {
+			continue
+		}
+		if byVersion[base] == nil {
+			byVersion[base] = make(map[int]string)
+		}
+		if _, exists := byVersion[base][n]; !exists || e.Name() == fmt.Sprintf("%s.v%d", base, n) {
+			byVersion[base][n] = e.Name()
 		}
 	}
-	for base, files := range docs {
+	for base, versions := range byVersion {
+		files := make([]legacyFile, 0, len(versions))
+		for n, name := range versions {
+			files = append(files, legacyFile{name, n})
+		}
 		currentFile := filepath.Join(filepath.Dir(versionsDir), base)
 		if err := s.migrateToPerDocDir(versionsDir, base, currentFile, files); err != nil {
 			return fmt.Errorf("migrate %s: %w", currentFile, err)
@@ -1756,10 +1813,9 @@ func (s *Store) migrateToPerDocDir(versionsDir, base, currentFile string, files 
 		oldPath := filepath.Join(versionsDir, f.name)
 		newPath := newVersionFilePath(versionsDir, base, f.n)
 
-		// Skip if already migrated (e.g. by a concurrent opener). Best-effort
-		// removal: a leftover duplicate is re-skipped on the next open.
+		// Destination already exists: a concurrent opener moved this version
+		// first (collisions were resolved at grouping time, one name per n).
 		if _, err := os.Stat(newPath); err == nil {
-			_ = os.Remove(oldPath)
 			continue
 		}
 

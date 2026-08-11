@@ -1191,6 +1191,72 @@ func TestMigrateLegacyLayout_SkipsStrayFiles(t *testing.T) {
 	}
 }
 
+// TODO(v1): remove this test with migrateLegacyLayout.
+func TestMigrateLegacyLayout_SkipsSymlinkVersion(t *testing.T) {
+	root := t.TempDir()
+	versionsDir := filepath.Join(root, "versions")
+	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(target, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink named like a legacy version must not be migrated into the
+	// per-doc dir, where name-only detection would serve it as a version.
+	if err := os.Symlink(target, filepath.Join(versionsDir, "doc.md.v1")); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+	if err := s.migrateLegacyLayout(); err != nil {
+		t.Fatalf("migrateLegacyLayout: %v", err)
+	}
+	if fi, err := os.Lstat(filepath.Join(versionsDir, "doc.md.v1")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("symlink version was moved or replaced: %v %v", fi, err)
+	}
+	if _, err := os.Stat(filepath.Join(versionsDir, "doc.md", "v1")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("symlink migrated into per-doc dir: %v", err)
+	}
+}
+
+// TODO(v1): remove this test with migrateLegacyLayout.
+func TestMigrateLegacyLayout_NormalizedCollisionKeepsBoth(t *testing.T) {
+	root := t.TempDir()
+	versionsDir := filepath.Join(root, "versions")
+	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Both names normalize to v1. The canonical (unpadded) name wins the
+	// slot deliberately; the padded loser survives on disk as a stray.
+	contents := map[string]string{"doc.md.v1": "# canonical\n", "doc.md.v01": "# padded\n"}
+	for name, body := range contents {
+		if err := os.WriteFile(filepath.Join(versionsDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := New(root)
+	if err := s.migrateLegacyLayout(); err != nil {
+		t.Fatalf("migrateLegacyLayout: %v", err)
+	}
+
+	migrated, err := os.ReadFile(filepath.Join(versionsDir, "doc.md", "v1"))
+	if err != nil {
+		t.Fatalf("no migrated v1: %v", err)
+	}
+	if string(migrated) != "# canonical\n" {
+		t.Errorf("migrated v1 = %q, want the canonical name's content", migrated)
+	}
+	stray, err := os.ReadFile(filepath.Join(versionsDir, "doc.md.v01"))
+	if err != nil || string(stray) != "# padded\n" {
+		t.Errorf("collision loser doc.md.v01 = %q (err %v), want untouched stray", stray, err)
+	}
+	if _, err := os.Stat(filepath.Join(versionsDir, "doc.md.v1")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("canonical flat file should have been moved: %v", err)
+	}
+}
+
 func TestWrite_SubdirectoryPerDocLayout(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
@@ -2217,8 +2283,10 @@ func TestPruneVersions_SymlinkedDocDirCannotEscape(t *testing.T) {
 }
 
 func TestPruneVersions_SymlinkVersionFileNotFollowed(t *testing.T) {
-	// A version file that is itself a symlink is unlinked, never followed:
-	// the link target outside the store must survive the prune.
+	// A symlink planted at a version slot is not a version
+	// (perDocVersionNumber counts regular files only): pruning neither
+	// follows nor deletes it, and the link target outside the store
+	// survives untouched.
 	root := t.TempDir()
 	outsideFile := filepath.Join(t.TempDir(), "victim.md")
 	if err := os.WriteFile(outsideFile, []byte("victim"), 0o644); err != nil {
@@ -2239,11 +2307,13 @@ func TestPruneVersions_SymlinkVersionFileNotFollowed(t *testing.T) {
 	if res == nil || res.Err != nil {
 		t.Fatalf("prune result = %+v, want clean prune", res)
 	}
-	if res.From != 1 || res.To != 2 {
-		t.Errorf("prune range = %d-%d, want 1-2", res.From, res.To)
+	// The planted symlink is invisible to version enumeration, so only the
+	// real v2 is pruned.
+	if res.From != 2 || res.To != 2 {
+		t.Errorf("prune range = %d-%d, want 2-2", res.From, res.To)
 	}
-	if _, err := os.Lstat(v1); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("v1 symlink should be removed, Lstat err = %v", err)
+	if fi, err := os.Lstat(v1); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("planted symlink should remain untouched, Lstat = %v %v", fi, err)
 	}
 	if data, err := os.ReadFile(outsideFile); err != nil || string(data) != "victim" {
 		t.Errorf("symlink target outside the store was touched: data=%q err=%v", data, err)
