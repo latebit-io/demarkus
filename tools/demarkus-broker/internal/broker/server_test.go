@@ -114,13 +114,9 @@ func TestNewServerPanicsOnDiscoveryWithoutSigner(t *testing.T) {
 	NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewK8sSecretStore(fake.NewSimpleClientset()), d, nil, nil)
 }
 
-// TestWellKnownDiscoveryRouteRegistered guards the Routes() composition:
-// when a Discovery is wired into NewServer, the broker mux exposes it at
-// /.well-known/openid-configuration AND the RFC 8414 alias
-// /.well-known/oauth-authorization-server (strict clients require the
-// latter on the issuer's origin — this listener). The discovery_test.go
-// suite covers the proxy + cache mechanics; this test just confirms the
-// mount points so a future refactor can't quietly drop a registration.
+// TestWellKnownDiscoveryRouteRegistered guards Routes() composition: with
+// Discovery wired, the mux serves openid-configuration AND the RFC 8414
+// alias (strict clients need the latter on the issuer origin — this listener).
 func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 	idpMux := http.NewServeMux()
 	idpMux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
@@ -154,8 +150,11 @@ func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s status = %d", path, resp.StatusCode)
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatalf("read %s body: %v", path, err)
+		}
 		var doc map[string]any
 		if err := json.Unmarshal(body, &doc); err != nil {
 			t.Fatalf("decode %s: %v", path, err)

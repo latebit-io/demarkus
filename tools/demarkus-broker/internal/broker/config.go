@@ -280,12 +280,10 @@ type MCPConfig struct {
 	// MCP surface bind their own listeners — the chart routes the
 	// two through distinct Ingress hosts or paths.
 	Addr string `yaml:"addr"`
-	// PublicURL is the gateway's externally-reachable base URL (e.g.
-	// https://knowledge.acmecorp.com) under split-host ingress, where
-	// it differs from Server.PublicURL (the issuer host). Feeds the
-	// RFC 9728 `resource` field and the 401 resource_metadata link.
-	// Defaults to Server.PublicURL so single-host deployments need no
-	// new config.
+	// PublicURL is the gateway's externally-reachable base URL when
+	// split-host ingress gives it a different hostname than the issuer
+	// (Server.PublicURL, the default). Feeds RFC 9728 `resource` + the
+	// 401 resource_metadata link.
 	PublicURL string `yaml:"publicURL"`
 	// TLS terminates HTTPS at the broker when CertFile and KeyFile
 	// are set. Leave blank to run plain HTTP inside the cluster (the
@@ -753,26 +751,26 @@ func (s *ServerConfig) applyRefreshDefaults() error {
 // outer function inside the gocyclo budget. PollInterval must be
 // strictly less than the TTL — a configuration where every legitimate
 // poll trips slow_down would deadlock a real client.
-// normalizePublicURL trims whitespace and a trailing slash and enforces
-// absolute-URL shape — without scheme+host the value would render nonsense
-// like "/device/authorize" into the discovery doc, which every OIDC client
-// rejects. Empty after trim is returned as-is; required-ness is the caller's
-// rule.
+// normalizePublicURL trims whitespace + trailing slash and enforces
+// absolute-URL shape with no query/fragment — a bad value renders broken
+// URLs into discovery metadata. Empty passes through; required is the caller's rule.
 func normalizePublicURL(field, raw string) (string, error) {
 	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
 	if trimmed == "" {
 		return "", nil
 	}
-	if u, err := url.Parse(trimmed); err != nil || u.Scheme == "" || u.Host == "" {
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Scheme == "" || u.Host == "" {
 		return "", fmt.Errorf("%s must be an absolute URL (got %q)", field, trimmed)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("%s must not carry a query or fragment (got %q)", field, trimmed)
 	}
 	return trimmed, nil
 }
 
-// normalizePublicURLs canonicalizes the two externally-advertised base URLs
-// at load so every downstream consumer sees a canonical form. publicURL is
-// required (it is the issuer); mcp.publicURL falls back to it so single-host
-// deployments need no extra config.
+// normalizePublicURLs canonicalizes the advertised base URLs at load.
+// publicURL is required (the issuer); mcp.publicURL falls back to it.
 func (s *ServerConfig) normalizePublicURLs() error {
 	var err error
 	if s.PublicURL, err = normalizePublicURL("server.publicURL", s.PublicURL); err != nil {

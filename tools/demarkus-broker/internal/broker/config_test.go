@@ -519,6 +519,29 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "server.mcp.publicURL must be an absolute URL",
 		},
 		{
+			// A query or fragment would corrupt the string-appended
+			// metadata URLs (resource, resource_metadata).
+			name: "server.mcp.publicURL with query rejected",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				"publicURL: \"https://broker.example.com\"\n  mcp:\n    publicURL: \"https://gateway.example.com?x=1\"", 1),
+			wantErr: "server.mcp.publicURL must not carry a query or fragment",
+		},
+		{
+			name: "server.mcp.publicURL with fragment rejected",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				"publicURL: \"https://broker.example.com\"\n  mcp:\n    publicURL: \"https://gateway.example.com#frag\"", 1),
+			wantErr: "server.mcp.publicURL must not carry a query or fragment",
+		},
+		{
+			name: "server.publicURL with query rejected",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				`publicURL: "https://broker.example.com?x=1"`, 1),
+			wantErr: "server.publicURL must not carry a query or fragment",
+		},
+		{
 			// publicURL is optional — when omitted (validConfig), it
 			// must round-trip to the zero value. /me/install will
 			// skip worlds whose PublicURL is blank.

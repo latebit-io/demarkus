@@ -168,16 +168,9 @@ const (
 	prmPath = "/.well-known/oauth-protected-resource"
 )
 
-// Routes returns the http.Handler for the MCP listener. /mcp is the
-// JSON-RPC + SSE endpoint behind the gateway auth chain; the OAuth
-// metadata endpoints are unauthenticated by design (RFC 9728 + 8414
-// require public discoverability — the whole point of the metadata
-// surface is that an unauthenticated client can read it to learn how
-// to authenticate).
-//
-// Authorization-server metadata is deliberately NOT served here: RFC
-// 8414 §3.3 requires it at the issuer's own origin (the management
-// listener); a copy here breaks strict clients.
+// Routes returns the http.Handler for the MCP listener. Metadata routes
+// are unauthenticated by design (RFC 9728/8414 discovery). AS metadata is
+// NOT served here: RFC 8414 §3.3 wants the issuer's origin, not the gateway's.
 func (g *mcpGateway) Routes() http.Handler {
 	mux := http.NewServeMux()
 	// /mcp accepts both POST (request/notification) and GET (SSE

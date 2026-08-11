@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
+
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestOAuthProtectedResourceMetadata(t *testing.T) {
@@ -30,7 +34,10 @@ func TestOAuthProtectedResourceMetadata(t *testing.T) {
 				t.Error("Cache-Control header missing — intermediaries lose the caching hint that mirrors the OIDC well-known")
 			}
 
-			body, _ := io.ReadAll(resp.Body)
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
 			var doc map[string]any
 			if err := json.Unmarshal(body, &doc); err != nil {
 				t.Fatalf("decode metadata: %v\nbody: %s", err, body)
@@ -59,9 +66,14 @@ func TestOAuthProtectedResourceMetadata(t *testing.T) {
 }
 
 func TestOAuthAuthorizationServerNeverOnGateway(t *testing.T) {
-	// RFC 8414 §3.3: AS metadata lives on the issuer's origin (the
-	// management listener) only; the gateway must 404 unconditionally.
-	ts := newTestMCPGateway(t, mcpTestConfig(), &fakeVerifier{})
+	// RFC 8414 §3.3: AS metadata lives on the issuer's origin only; the
+	// gateway must 404 even with Discovery wired (the state that used to
+	// mount the alias).
+	d, _ := newTestDiscovery(t, newFakeDiscoveryIdP(t), time.Minute)
+	brokerSrv := NewServer(mcpTestConfig(), newTestSigner(t), &fakeVerifier{},
+		NewK8sSecretStore(fake.NewSimpleClientset()), d, newTestIDTokenSigner(t), nil)
+	ts := httptest.NewServer(brokerSrv.MCPGateway("test"))
+	t.Cleanup(ts.Close)
 
 	resp, err := http.Get(ts.URL + "/.well-known/oauth-authorization-server")
 	if err != nil {

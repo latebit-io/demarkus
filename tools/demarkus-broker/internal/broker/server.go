@@ -207,10 +207,8 @@ func (s *Server) Routes() http.Handler {
 	// rate limit. Polling-friendly: device-flow clients fetch it once
 	// per /soul-join and never again; intermediaries cache via the
 	// Cache-Control header the Discovery handler emits.
-	// oauth-authorization-server is the same document at the RFC 8414
-	// path: §3.3 requires it on the issuer's origin, which is this
-	// listener (issuer = server.publicURL). RFC 8414 §3 tolerates the
-	// extra OIDC fields.
+	// oauth-authorization-server aliases the same doc at the RFC 8414
+	// path; §3.3 requires it on the issuer's origin, which is this listener.
 	if s.discovery != nil {
 		mux.Handle("GET /.well-known/openid-configuration", s.discovery.Handler())
 		mux.Handle("GET /.well-known/oauth-authorization-server", s.discovery.Handler())
