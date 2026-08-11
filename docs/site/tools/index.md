@@ -33,7 +33,7 @@ A descriptive label is how you'll know which entry to revoke when a device is lo
 ### Generate a token (publish access)
 
 ```bash
-./server/bin/demarkus-token generate -label my-laptop -paths "/*" -ops publish -tokens tokens.toml
+./server/bin/demarkus-token generate -label my-laptop -paths "/**" -ops publish -tokens tokens.toml
 ```
 
 - `-label` is required.
@@ -44,11 +44,11 @@ A descriptive label is how you'll know which entry to revoke when a device is lo
 ### Scope tokens by path
 
 ```bash
-# Publish-only to /docs/*
-./server/bin/demarkus-token generate -label docs-writer -paths "/docs/*" -ops publish -tokens tokens.toml
+# Publish-only to everything under /docs/
+./server/bin/demarkus-token generate -label docs-writer -paths "/docs/**" -ops publish -tokens tokens.toml
 
 # Read + publish to everything
-./server/bin/demarkus-token generate -label admin -paths "/*" -ops "read,publish" -tokens tokens.toml
+./server/bin/demarkus-token generate -label admin -paths "/**" -ops "read,publish" -tokens tokens.toml
 
 # Read-only access to private paths
 ./server/bin/demarkus-token generate -label internal-reader -paths "/internal/**" -ops read -tokens tokens.toml
@@ -60,7 +60,7 @@ A join URL packs the host and token into one paste-able string, so onboarding a 
 
 ```bash
 # Compose with generate: mint a scoped token, wrap it in a join URL
-./server/bin/demarkus-token generate -label phone -paths "/*" -ops publish -tokens tokens.toml \
+./server/bin/demarkus-token generate -label phone -paths "/**" -ops publish -tokens tokens.toml \
   | ./server/bin/demarkus-token join -host kb.example.com
 # -> mark://kb.example.com#token=...
 ```

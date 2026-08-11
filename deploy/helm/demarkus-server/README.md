@@ -81,7 +81,7 @@ Three modes — pick one:
 | Key | Default | Notes |
 |---|---|---|
 | `tokens.admin.label` | `admin` | TOML `[tokens.<label>]` |
-| `tokens.admin.paths` | `["/*"]` | Path globs the token may operate on |
+| `tokens.admin.paths` | `["/**"]` | Path globs the token may operate on |
 | `tokens.admin.operations` | `["publish", "read"]` | |
 | `tokens.admin.token` | `""` (auto-generated) | Set to a literal raw token to skip auto-generation |
 | `tokens.emitRawValues` | `true` | Emit the raw-token Secret for broker discovery |

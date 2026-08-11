@@ -60,7 +60,7 @@ worlds:
     allow:
       emails: ["alice@example.com"]
     defaultToken:
-      paths: ["/*"]
+      paths: ["/**"]
       operations: ["read", "publish"]
       expiresAfter: 24h
   - name: world-b
@@ -69,7 +69,7 @@ worlds:
     allow:
       emails: ["alice@example.com"]
     defaultToken:
-      paths: ["/*"]
+      paths: ["/**"]
       operations: ["read", "publish"]
       expiresAfter: 24h
 

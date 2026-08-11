@@ -1189,7 +1189,7 @@ install_broker() {
       printf 'worlds:\n  - name: soul\n'
       printf '    tokensFile: %s\n' "$tokens_file"
       printf '    internalAddress: %s\n' "$world_host"
-      printf '    defaultToken:\n      paths: ["/*"]\n'
+      printf '    defaultToken:\n      paths: ["/**"]\n'
       printf '# Library SSO (register the reading room as a confidential web\n'
       printf '# client): see https://www.demarkus.io/deployment/single-host/\n'
     } > "${BROKER_CONFIG_DIR}/config.yaml"

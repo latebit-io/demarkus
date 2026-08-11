@@ -4,7 +4,7 @@
 //
 // Usage:
 //
-//	demarkus-token generate -label fritz-laptop -paths "/docs/*" -ops "publish" -tokens tokens.toml
+//	demarkus-token generate -label fritz-laptop -paths "/docs/**" -ops "publish" -tokens tokens.toml
 //	demarkus-token list -tokens tokens.toml
 //	demarkus-token revoke -label fritz-laptop -tokens tokens.toml
 //	demarkus-token generate -label phone -tokens tokens.toml | demarkus-token join -host kb.example.com
@@ -108,7 +108,7 @@ func cmdJoin(args []string) {
 func cmdGenerate(args []string) {
 	fs := flag.NewFlagSet("generate", flag.ExitOnError)
 	label := fs.String("label", "", "human-readable label for this token (required)")
-	paths := fs.String("paths", "/*", "comma-separated path patterns (e.g. \"/docs/*,/public/*\")")
+	paths := fs.String("paths", "/**", "comma-separated path patterns; /** is recursive, a single * does not cross / (e.g. \"/docs/*,/public/**\")")
 	ops := fs.String("ops", "publish", "comma-separated operations (e.g. \"read,publish\")")
 	tokensFile := fs.String("tokens", "", "path to tokens.toml file (appends entry if provided)")
 	fs.Usage = func() {

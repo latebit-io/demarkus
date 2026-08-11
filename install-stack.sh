@@ -43,6 +43,10 @@ BROKER_CONFIG_DIR="/etc/demarkus-broker"
 LIBRARY_CONFIG_DIR="/etc/demarkus-library"
 LIBRARY_SERVICE="demarkus-library"
 SERVER_TOKENS="/etc/demarkus/tokens/tokens.toml"
+# Mint policy for stack tokens: /** is recursive (a single * does not cross /).
+# token_valid enforces the same shape, so legacy /* tokens rotate on rerun.
+TOKEN_PATHS="/**"
+TOKEN_OPS="publish"
 AGENT_SERVICE="demarkus-agent"
 AGENT_CONFIG_DIR="/etc/demarkus-agent"
 AGENT_STATE_DIR="/var/lib/demarkus-agent"
@@ -81,7 +85,8 @@ log_error() { printf "${RED}  ✗${NC} %s\n" "$1"; }
 # token_valid checks a raw token against the authoritative tokens file (the
 # server's source of truth; sha256(raw) matches protocol.HashToken). Presence is
 # not enough — the server also rejects expired tokens and ones lacking access —
-# so it validates the shape we mint (publish on /*, honoring expiry).
+# so it validates the shape we mint (publish on /**, honoring expiry). Legacy
+# tokens minted with the single-segment /* scope fail this and get rotated.
 # Returns 0 valid, 1 absent-or-unauthorized (rotate), 2 unreadable/decode error.
 token_valid() {
   local raw="$1" h blk ops paths exp
@@ -107,8 +112,8 @@ token_valid() {
   ops=$(printf '%s\n' "$blk" | sed -n 's/^O//p')
   paths=$(printf '%s\n' "$blk" | sed -n 's/^P//p')
   exp=$(printf '%s\n' "$blk" | sed -n 's/^E//p')
-  case "$ops" in *'"publish"'*) ;; *) return 1 ;; esac
-  case "$paths" in *'"/*"'*) ;; *) return 1 ;; esac
+  case "$ops" in *"\"${TOKEN_OPS}\""*) ;; *) return 1 ;; esac
+  case "$paths" in *"\"${TOKEN_PATHS}\""*) ;; *) return 1 ;; esac
   if [ -n "$exp" ]; then
     local exp_epoch now
     exp_epoch=$(date -d "$exp" +%s 2>/dev/null) || return 2  # unparseable expiry
@@ -116,6 +121,47 @@ token_valid() {
     [ "$exp_epoch" -gt "$now" ] || return 1                  # expired
   fi
   return 0
+}
+
+# ensure_token <label> <noun> <cached-raw> prints a valid raw token on stdout;
+# all logs go to stderr. Reuses the cached token when it still authenticates,
+# else rotates: revoke the stale label, mint TOKEN_PATHS/TOKEN_OPS. Returns 1
+# on failure — the exit belongs to the caller, since command substitution runs
+# this in a subshell where an exit would only kill the substitution.
+ensure_token() {
+  local label="$1" noun="$2" tok="$3" rc=0
+  # Reuse only if the cached token still authenticates against the tokens
+  # file. Rotate only when it is genuinely absent or the wrong shape; abort on
+  # a store read error rather than mint a duplicate against an unverified store.
+  if [ -n "$tok" ]; then
+    token_valid "$tok" || rc=$?
+    if [ "$rc" -eq 2 ]; then
+      log_error "Could not read ${SERVER_TOKENS} to validate the ${noun} token; aborting rather than rotating" >&2
+      return 1
+    elif [ "$rc" -ne 0 ]; then
+      log_warn "Cached ${noun} token no longer authorizes in ${SERVER_TOKENS}; minting a fresh one" >&2
+      tok=""
+    fi
+  fi
+  if [ -n "$tok" ]; then
+    log_info "Reusing the existing ${noun} token" >&2
+    printf '%s' "$tok"
+    return 0
+  fi
+  # generate refuses a duplicate label, so drop any stale entry first. A
+  # not-found revoke is the normal fresh-mint case; a genuine store failure
+  # repeats at generate below, which fails closed.
+  "${INSTALL_DIR}/demarkus-token" revoke -label "$label" -tokens "$SERVER_TOKENS" >/dev/null 2>&1 || true
+  if ! tok=$("${INSTALL_DIR}/demarkus-token" generate -label "$label" -paths "$TOKEN_PATHS" -ops "$TOKEN_OPS" -tokens "$SERVER_TOKENS" 2>/dev/null); then
+    log_error "Could not mint the ${noun} token" >&2
+    return 1
+  fi
+  tok=$(printf '%s' "$tok" | tr -d '[:space:]')
+  if [ -z "$tok" ]; then
+    log_error "Minted ${noun} token was empty" >&2
+    return 1
+  fi
+  printf '%s' "$tok"
 }
 
 # --- platform -----------------------------------------------------------------
@@ -533,33 +579,7 @@ install_agent() {
   if [ -f "${AGENT_CONFIG_DIR}/env" ]; then
     agent_token=$(sed -n 's/^DEMARKUS_AUTH=//p' "${AGENT_CONFIG_DIR}/env" | head -1)
   fi
-  # Reuse only if the cached token still authenticates against the tokens file.
-  # Rotate only when it is genuinely absent; abort on a store read error rather
-  # than mint a duplicate against a store we could not verify.
-  if [ -n "$agent_token" ]; then
-    local rc=0
-    token_valid "$agent_token" || rc=$?
-    if [ "$rc" -eq 2 ]; then
-      log_error "Could not read ${SERVER_TOKENS} to validate the agent token; aborting rather than rotating"
-      exit 1
-    elif [ "$rc" -ne 0 ]; then
-      log_warn "Cached agent token no longer authorizes in ${SERVER_TOKENS}; minting a fresh one"
-      agent_token=""
-    fi
-  fi
-  if [ -n "$agent_token" ]; then
-    log_info "Reusing the existing agent publish token"
-  else
-    if ! agent_token=$("${INSTALL_DIR}/demarkus-token" generate -label agent-publish -paths "/*" -ops publish -tokens "$SERVER_TOKENS" 2>/dev/null); then
-      log_error "Could not mint the agent publish token"
-      exit 1
-    fi
-    agent_token=$(printf '%s' "$agent_token" | tr -d '[:space:]')
-    if [ -z "$agent_token" ]; then
-      log_error "Agent publish token was empty"
-      exit 1
-    fi
-  fi
+  agent_token=$(ensure_token agent-publish "agent publish" "$agent_token") || exit 1
 
   if [ ! -f "${AGENT_CONFIG_DIR}/config.toml" ]; then
     {
@@ -814,34 +834,11 @@ install_memory() {
   if [ -f "$SOUL_TOKEN_FILE" ]; then
     soul_token=$(tr -d '[:space:]' < "$SOUL_TOKEN_FILE")
   fi
-  # Reuse only if the cached token still authenticates: its hash must be present
-  # in the authoritative tokens file, else the printed /soul-join line would be
-  # a dead credential. Rotate only when genuinely absent; abort on a read error.
-  if [ -n "$soul_token" ]; then
-    local rc=0
-    token_valid "$soul_token" || rc=$?
-    if [ "$rc" -eq 2 ]; then
-      log_error "Could not read ${SERVER_TOKENS} to validate the soul token; aborting rather than rotating" >&2
-      exit 1
-    elif [ "$rc" -ne 0 ]; then
-      log_warn "Cached soul token no longer authorizes in ${SERVER_TOKENS}; minting a fresh one" >&2
-      soul_token=""
-    fi
-  fi
-  if [ -n "$soul_token" ]; then
-    log_info "Reusing the existing soul capability token" >&2
-  else
-    if ! soul_token=$("${INSTALL_DIR}/demarkus-token" generate -label soul-memory -paths "/*" -ops publish -tokens "$SERVER_TOKENS" 2>/dev/null); then
-      log_error "Could not mint the soul capability token" >&2
-      exit 1
-    fi
-    soul_token=$(printf '%s' "$soul_token" | tr -d '[:space:]')
-    if [ -z "$soul_token" ]; then
-      log_error "Soul capability token was empty" >&2
-      exit 1
-    fi
-    ( umask 077; printf '%s\n' "$soul_token" > "$SOUL_TOKEN_FILE" )
-  fi
+  soul_token=$(ensure_token soul-memory "soul capability" "$soul_token") || exit 1
+  # Re-stash unconditionally: same bytes on reuse, fresh value after a
+  # rotation; the chmod reasserts 0600 on a stash left loose by older installs.
+  ( umask 077; printf '%s\n' "$soul_token" > "$SOUL_TOKEN_FILE" )
+  chmod 600 "$SOUL_TOKEN_FILE"
 
   write_certsync "$host"
 

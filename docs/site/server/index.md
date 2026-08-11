@@ -31,7 +31,7 @@ Writes are denied unless you provide a tokens file. Reads are public by default.
 #### 1) Generate a token
 
 ```bash
-./server/bin/demarkus-token generate -paths "/*" -ops publish -tokens /etc/demarkus/tokens.toml
+./server/bin/demarkus-token generate -paths "/**" -ops publish -tokens /etc/demarkus/tokens.toml
 ```
 
 #### 2) Start the server with tokens
