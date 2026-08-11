@@ -4,11 +4,16 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/latebit-io/demarkus/protocol/token"
 )
 
 // TestDetectPlatform checks the OS_arch mapping produces a sane release suffix on
@@ -267,5 +272,320 @@ func TestSeedDocNeverClobbers(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "# Projects") {
 		t.Errorf("seeded content does not look like index.md: %q", b[:min(40, len(b))])
+	}
+}
+
+func TestScopeStale(t *testing.T) {
+	tests := []struct {
+		name  string
+		paths []string
+		stale bool
+	}{
+		{"legacy single-segment scope", []string{"/*"}, true},
+		{"recursive scope", []string{"/**"}, false},
+		{"both patterns present", []string{"/*", "/**"}, false},
+		{"unrelated scope", []string{"/docs/*"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := scopeStale(&token.Entry{Paths: tt.paths}); got != tt.stale {
+				t.Errorf("scopeStale(%v) = %v, want %v", tt.paths, got, tt.stale)
+			}
+		})
+	}
+}
+
+func TestPluginEntry(t *testing.T) {
+	dir := t.TempDir()
+	pluginStanza := token.FormatEntry(tokenLabel, &token.Entry{Hash: "abc", Paths: []string{"/*"}, Operations: []string{"publish"}})
+	otherStanza := token.FormatEntry("other", &token.Entry{Hash: "x", Paths: []string{"/*"}, Operations: []string{"publish"}})
+
+	tests := []struct {
+		name    string
+		body    string // empty means don't write the file
+		present bool
+		wantErr bool
+	}{
+		{"plugin entry present", pluginStanza, true, false},
+		{"other label only", otherStanza, false, false},
+		{"unparseable file", "not toml [[[", false, true},
+		{"missing file", "", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "-")+".toml")
+			if tt.body != "" {
+				if err := os.WriteFile(p, []byte(tt.body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			entry, present, err := pluginEntry(p)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("pluginEntry err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if present != tt.present {
+				t.Errorf("present = %v, want %v", present, tt.present)
+			}
+			if present && len(entry.Paths) == 0 {
+				t.Error("present entry has no paths")
+			}
+		})
+	}
+}
+
+// writeFakeTokenBin installs a fake demarkus-token under $HOME/.demarkus/bin
+// that mirrors revoke (truncate; fixtures hold only the plugin's stanza, and
+// FAKE_REVOKE_FAIL=1 forces failure) and generate (real sha256- hash so the
+// gate's verification runs). A non-empty argsLog gets each invocation's argv.
+func writeFakeTokenBin(t *testing.T, home, argsLog string) {
+	t.Helper()
+	binDir := filepath.Join(home, ".demarkus", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logLine := ""
+	if argsLog != "" {
+		logLine = `echo "$@" >> "` + argsLog + `"`
+	}
+	fake := `#!/bin/bash
+` + logLine + `
+cmd="$1"; shift
+label=""; paths=""; tokens=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -label) label="$2"; shift 2 ;;
+    -paths) paths="$2"; shift 2 ;;
+    -tokens) tokens="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ "$cmd" == "revoke" ]]; then
+  [[ -n "$FAKE_REVOKE_FAIL" ]] && exit 1
+  : > "$tokens"
+fi
+if [[ "$cmd" == "generate" ]]; then
+  raw="raw-token-value"
+  # sha256sum on minimal Linux images, shasum on macOS; neither alone is portable.
+  if command -v sha256sum >/dev/null 2>&1; then
+    sum=$(printf %s "$raw" | sha256sum | cut -d' ' -f1)
+  else
+    sum=$(printf %s "$raw" | shasum -a 256 | cut -d' ' -f1)
+  fi
+  printf '\n[tokens.%s]\nhash = "sha256-%s"\npaths = ["%s"]\noperations = ["publish", "archive"]\n' "$label" "$sum" "$paths" >> "$tokens"
+  echo "$raw"
+fi
+`
+	if err := os.WriteFile(filepath.Join(binDir, "demarkus-token"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEnsureTokenEntryScope pins the minted scope to the recursive "/**" and
+// the remint-on-stale-scope behavior, via a fake demarkus-token binary that
+// logs its argv and mirrors generate's tokens.toml append.
+func TestEnsureTokenEntryScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	argsLog := filepath.Join(home, "args.log")
+	writeFakeTokenBin(t, home, argsLog)
+
+	soul := filepath.Join(home, "root")
+	if err := os.MkdirAll(soul, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tokensTOML := filepath.Join(soul, "tokens.toml")
+	readLog := func() string {
+		t.Helper()
+		b, err := os.ReadFile(argsLog)
+		if errors.Is(err, os.ErrNotExist) {
+			return ""
+		}
+		if err != nil {
+			t.Fatalf("read args log: %v", err)
+		}
+		return string(b)
+	}
+	// phaseLog scopes assertions to the invocations one phase made.
+	phaseLog := func(fn func()) string {
+		t.Helper()
+		before := len(readLog())
+		fn()
+		return readLog()[before:]
+	}
+	staleStanza := token.FormatEntry(tokenLabel, &token.Entry{Hash: "old", Paths: []string{"/*"}, Operations: []string{"publish"}})
+
+	// Fresh install mints with the recursive scope.
+	log := phaseLog(func() {
+		if err := ensureTokenEntry(tokensTOML); err != nil {
+			t.Fatalf("fresh mint: %v", err)
+		}
+	})
+	if !strings.Contains(log, "-paths /**") {
+		t.Fatalf("fresh mint did not use /**; argv:\n%s", log)
+	}
+
+	// Provisioned-and-current is a no-op: no further binary invocations.
+	log = phaseLog(func() {
+		if err := ensureTokenEntry(tokensTOML); err != nil {
+			t.Fatalf("idempotent rerun: %v", err)
+		}
+	})
+	if log != "" {
+		t.Fatalf("idempotent rerun invoked demarkus-token; argv:\n%s", log)
+	}
+
+	// An old install with the single-segment "/*" scope is revoked and reminted.
+	if err := os.WriteFile(tokensTOML, []byte(staleStanza), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log = phaseLog(func() {
+		if err := ensureTokenEntry(tokensTOML); err != nil {
+			t.Fatalf("stale-scope remint: %v", err)
+		}
+	})
+	if !strings.Contains(log, "revoke -label "+tokenLabel) {
+		t.Errorf("stale scope did not revoke; argv:\n%s", log)
+	}
+	if !strings.Contains(log, "-paths /**") {
+		t.Errorf("stale scope did not remint with /**; argv:\n%s", log)
+	}
+	f, err := token.ReadFile(tokensTOML)
+	if err != nil {
+		t.Fatalf("reminted tokens.toml unparseable: %v", err)
+	}
+	got, ok := f.Tokens[tokenLabel]
+	if !ok {
+		t.Fatalf("reminted tokens.toml lacks %s entry", tokenLabel)
+	}
+	if len(got.Paths) != 1 || got.Paths[0] != "/**" {
+		t.Errorf("reminted entry paths = %v, want [/**]", got.Paths)
+	}
+
+	// A revoke failure surfaces instead of proceeding to a colliding generate.
+	if err := os.WriteFile(tokensTOML, []byte(staleStanza), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_REVOKE_FAIL", "1")
+	if err := ensureTokenEntry(tokensTOML); err == nil {
+		t.Error("revoke failure did not surface an error")
+	}
+	t.Setenv("FAKE_REVOKE_FAIL", "")
+
+	// A tokens.toml we cannot parse fails provisioning rather than being
+	// silently treated as current (or clobbered).
+	malformed := "[tokens." + tokenLabel + "]\nnot toml [[["
+	if err := os.WriteFile(tokensTOML, []byte(malformed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTokenEntry(tokensTOML); err == nil {
+		t.Error("malformed tokens.toml did not surface an error")
+	}
+
+	// A raw token that no longer matches the entry's hash (leftovers of a
+	// failed run) fails the gate and is reminted.
+	if err := os.Remove(tokensTOML); err != nil { // clear the malformed file
+		t.Fatal(err)
+	}
+	if err := ensureTokenEntry(tokensTOML); err != nil {
+		t.Fatalf("re-mint after malformed: %v", err)
+	}
+	tokenFile, err := pluginToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenFile, []byte("not-the-minted-raw"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log = phaseLog(func() {
+		if err := ensureTokenEntry(tokensTOML); err != nil {
+			t.Fatalf("mismatched-raw remint: %v", err)
+		}
+	})
+	if !strings.Contains(log, "-paths /**") {
+		t.Errorf("mismatched raw token did not trigger a remint; argv:\n%s", log)
+	}
+}
+
+// TestEnsureTokenEntryReload covers the reload branch via the test seams: a
+// failed reload aborts before the token file is committed, and the next run
+// re-enters the mint path and re-signals.
+func TestEnsureTokenEntryReload(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeFakeTokenBin(t, home, "")
+
+	soul := filepath.Join(home, "root")
+	if err := os.MkdirAll(soul, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tokensTOML := filepath.Join(soul, "tokens.toml")
+	tokenFile, err := pluginToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origFind, origReload := findServerAtRoot, reloadServer
+	t.Cleanup(func() { findServerAtRoot, reloadServer = origFind, origReload })
+	findServerAtRoot = func(string) int { return 4242 }
+	reloads := 0
+	reloadServer = func(int) error { reloads++; return errors.New("injected reload failure") }
+
+	if err := ensureTokenEntry(tokensTOML); err == nil {
+		t.Fatal("failed reload did not surface an error")
+	}
+	if reloads != 1 {
+		t.Fatalf("reloads = %d, want 1", reloads)
+	}
+	if fileExists(tokenFile) {
+		t.Error("token file committed despite failed reload; gate would skip the retry")
+	}
+
+	// The next run retries: mint again, reload succeeds, token file commits.
+	reloadServer = func(int) error { reloads++; return nil }
+	if err := ensureTokenEntry(tokensTOML); err != nil {
+		t.Fatalf("retry after failed reload: %v", err)
+	}
+	if reloads != 2 {
+		t.Fatalf("reloads = %d, want 2", reloads)
+	}
+	if !fileExists(tokenFile) {
+		t.Error("token file missing after successful retry")
+	}
+}
+
+// TestSignalReload covers the nil paths: live owned child, then vanished pid.
+// The hard-error branch (EPERM) needs a foreign-uid process; not unit-reachable.
+func TestSignalReload(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Kill on an already-reaped child returns ErrProcessDone; safe to ignore.
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	pid := cmd.Process.Pid
+
+	if err := signalReload(pid); err != nil {
+		t.Fatalf("signalReload(live child) = %v", err)
+	}
+	// The child must die to our SIGHUP, not run out its sleep.
+	err := cmd.Wait()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("child exit was not an ExitError: %v", err)
+	}
+	if sig := ee.ProcessState.Sys().(syscall.WaitStatus).Signal(); sig != syscall.SIGHUP {
+		t.Fatalf("child terminated by %v, want SIGHUP", sig)
+	}
+
+	if err := signalReload(pid); err != nil {
+		t.Errorf("signalReload(dead pid) = %v, want nil", err)
+	}
+
+	// Non-positive pids are rejected before any signal: kill(0)/kill(-1)
+	// broadcast to the process group / all reachable processes.
+	for _, bad := range []int{0, -1} {
+		if err := signalReload(bad); err == nil {
+			t.Errorf("signalReload(%d) = nil, want error", bad)
+		}
 	}
 }

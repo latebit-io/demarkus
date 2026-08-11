@@ -29,12 +29,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/token"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
@@ -77,6 +80,14 @@ const (
 )
 
 const tokenLabel = "claude-code-plugin"
+
+// tokenPaths is the scope minted for the plugin token. legacyTokenPaths is the
+// pre-fix scope: path.Match's "*" does not cross "/", so it blocked writes to
+// nested docs; entries still carrying it are revoked and reminted.
+const (
+	tokenPaths       = "/**"
+	legacyTokenPaths = "/*"
+)
 
 //go:embed seed/index.md seed/project-template.md
 var seedFS embed.FS
@@ -524,11 +535,9 @@ func installFile(src, dst string) error {
 
 // --- token (lib.sh ensure_token_entry) ---------------------------------------
 
-// ensureTokenEntry generates a plugin-scoped token, writes the raw token to
-// ~/.demarkus/plugin-memory.token (mode 0600), and appends an entry for
-// tokenLabel to tokensTOML. Idempotent: a no-op when the token file and a
-// matching tokens.toml entry already exist. Stale state (token file gone but the
-// label still present) is revoked before regenerating.
+// ensureTokenEntry mints the plugin token (raw to plugin-memory.token, entry to
+// tokensTOML). Idempotent when both exist with a current scope; stale state
+// (missing token file, or a legacy-scope entry) is revoked and reminted.
 func ensureTokenEntry(tokensTOML string) error {
 	tokenFile, err := pluginToken()
 	if err != nil {
@@ -539,8 +548,11 @@ func ensureTokenEntry(tokensTOML string) error {
 		return err
 	}
 
-	labelPresent := tokensHasLabel(tokensTOML)
-	if fileExists(tokenFile) && fileExists(tokensTOML) && labelPresent {
+	entry, present, err := pluginEntry(tokensTOML)
+	if err != nil {
+		return err
+	}
+	if present && !scopeStale(&entry) && rawMatchesEntry(tokenFile, &entry) {
 		// Reassert 0600 on the idempotent path: an existing token left
 		// world/group-readable (e.g. from an older install) would otherwise stay
 		// exposed forever since we return without regenerating.
@@ -549,11 +561,16 @@ func ensureTokenEntry(tokensTOML string) error {
 	}
 
 	// Stale state — revoke any prior entry with our label before regenerating.
-	if labelPresent {
+	// A failed revoke would make the generate below fail on a label collision,
+	// so surface it here where the cause is clear.
+	if present {
 		revoke := exec.Command(tokenBin, "revoke", "-label", tokenLabel, "-tokens", tokensTOML)
+		var stderr bytes.Buffer
 		revoke.Stdout = io.Discard
-		revoke.Stderr = io.Discard
-		_ = revoke.Run() // best-effort
+		revoke.Stderr = &stderr
+		if err := revoke.Run(); err != nil {
+			return fmt.Errorf("revoke stale plugin token (label=%s, tokens.toml: %s): %w: %s", tokenLabel, tokensTOML, err, strings.TrimSpace(stderr.String()))
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(tokensTOML), 0o755); err != nil {
@@ -575,7 +592,7 @@ func ensureTokenEntry(tokensTOML string) error {
 		defer func() { _ = tf.Close() }()
 		gen := exec.Command(tokenBin, "generate",
 			"-label", tokenLabel,
-			"-paths", "/*",
+			"-paths", tokenPaths,
 			"-ops", "publish,archive",
 			"-tokens", tokensTOML,
 		)
@@ -588,6 +605,17 @@ func ensureTokenEntry(tokensTOML string) error {
 		return fmt.Errorf("demarkus-token generate failed (tokens.toml: %s): %w", tokensTOML, genErr)
 	}
 
+	// Reload BEFORE committing the raw token: a running server holds the
+	// pre-remint table, and committing only after a successful reload keeps the
+	// gate's invariant — a matching token file implies the server loaded it, so
+	// any failure here self-heals via a remint on the next run.
+	if pid := findServerAtRoot(filepath.Dir(tokensTOML)); pid > 0 {
+		if err := reloadServer(pid); err != nil {
+			_ = os.Remove(tmpTok) // best-effort; a leftover .tmp never satisfies the gate
+			return fmt.Errorf("reload reminted token: %w", err)
+		}
+	}
+
 	if err := os.Rename(tmpTok, tokenFile); err != nil {
 		return err
 	}
@@ -598,14 +626,57 @@ func ensureTokenEntry(tokensTOML string) error {
 	return nil
 }
 
-// tokensHasLabel reports whether tokensTOML contains a "[tokens.<label>]"
-// section (bash grep "tokens\.LABEL\]").
-func tokensHasLabel(tokensTOML string) bool {
-	b, err := os.ReadFile(tokensTOML)
+// Test seams: reload-path coverage stubs these without a live server.
+var (
+	findServerAtRoot = pidOfServerAtRoot
+	reloadServer     = signalReload
+)
+
+// rawMatchesEntry reports whether the raw token on disk hashes to the entry's
+// hash. False on a missing or unreadable file: an inconsistent pair (e.g.
+// leftovers of a failed run) must fall through to a remint.
+func rawMatchesEntry(tokenFile string, entry *token.Entry) bool {
+	raw, err := os.ReadFile(tokenFile)
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(b), "tokens."+tokenLabel+"]")
+	return protocol.HashToken(strings.TrimSpace(string(raw))) == entry.Hash
+}
+
+// signalReload SIGHUPs a server so it reloads tokens.toml. A vanished process
+// is fine: the respawn path loads the fresh table.
+func signalReload(pid int) error {
+	err := signalPID(pid, syscall.SIGHUP)
+	switch {
+	case err == nil:
+		logf("sent SIGHUP to server (pid=%d) to reload tokens", pid)
+		return nil
+	case errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH):
+		return nil
+	default:
+		return fmt.Errorf("SIGHUP to server pid %d: %w", pid, err)
+	}
+}
+
+// pluginEntry parses tokensTOML and returns the plugin's entry and whether it
+// exists. A missing file is absence, not an error. Parse errors surface: an
+// uninterpretable tokens.toml must not pass as current (or be clobbered).
+func pluginEntry(tokensTOML string) (token.Entry, bool, error) {
+	f, err := token.ReadFile(tokensTOML)
+	if errors.Is(err, os.ErrNotExist) {
+		return token.Entry{}, false, nil
+	}
+	if err != nil {
+		return token.Entry{}, false, fmt.Errorf("inspect plugin token entry: %w", err)
+	}
+	entry, ok := f.Tokens[tokenLabel]
+	return entry, ok, nil
+}
+
+// scopeStale reports whether an entry still carries the legacy scope without
+// the current one. A manually widened entry listing both is left alone.
+func scopeStale(entry *token.Entry) bool {
+	return slices.Contains(entry.Paths, legacyTokenPaths) && !slices.Contains(entry.Paths, tokenPaths)
 }
 
 // withUmask runs fn with the process umask set to mask, restoring it after.
@@ -1167,10 +1238,10 @@ func doReuse(port int, root string) error {
 		if actualPort != "" && actualPort != strconv.Itoa(port) {
 			return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, actualPort, port, actualPort)
 		}
-		if err := signalPID(targetPID, syscall.SIGHUP); err == nil {
-			logf("sent SIGHUP to adopted server (pid=%d) to reload tokens", targetPID)
-		} else {
-			warnf("SIGHUP to pid %d failed; tokens may not be active until the server restarts", targetPID)
+		// Warn-only here: the adopted server may not be ours, and with no remint
+		// implied the loaded token table is usually already current.
+		if err := signalReload(targetPID); err != nil {
+			warnf("%v; tokens may not be active until the server restarts", err)
 		}
 	} else {
 		warnf("no running server found with -root %s; proceeding with config, but /soul-init may need a rerun once it's up", root)
