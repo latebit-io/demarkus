@@ -145,12 +145,17 @@ ingress:
 ```
 
 Splitting the hosts avoids `.well-known/*` path collisions: the
-management API serves `/.well-known/openid-configuration` and
-`/.well-known/jwks.json` for OIDC discovery, while the MCP gateway
-serves `/.well-known/oauth-protected-resource` (RFC 9728) and
-`/.well-known/oauth-authorization-server` (RFC 8414) for OAuth
-metadata. Two hostnames, two TLS contexts, no path-routing
-fragility, and operators rotate certs on either side independently.
+management API (the issuer origin) serves
+`/.well-known/openid-configuration`,
+`/.well-known/oauth-authorization-server` (RFC 8414 — must live on
+the issuer's origin per §3.3, strict clients validate issuer ==
+fetch origin) and `/.well-known/jwks.json`, while the MCP gateway
+serves only `/.well-known/oauth-protected-resource` (RFC 9728,
+bare and path-inserted `/mcp` forms). Set `server.mcp.publicURL`
+to the gateway host so the `resource` field and the 401
+`resource_metadata` link name the gateway, not the issuer. Two
+hostnames, two TLS contexts, no path-routing fragility, and
+operators rotate certs on either side independently.
 
 ### TLS termination
 
@@ -190,16 +195,18 @@ The gateway implements MCP's [authorization
 spec](https://modelcontextprotocol.io/specification/2024-11-05/basic/authorization)
 using the broker's existing OIDC machinery:
 
-- `GET /.well-known/oauth-protected-resource` (RFC 9728) — declares
-  the resource server and points clients at the authorization-server
-  metadata.
-- `GET /.well-known/oauth-authorization-server` (RFC 8414) —
-  authorization-server metadata. Aliases the broker's existing OIDC
-  Discovery handler (`/.well-known/openid-configuration` on the
-  management API) so the broker advertises itself as both the MCP
-  resource server AND the authorization server. The actual IdP
-  (Google, Okta, Entra) is one hop deeper, handled by the broker's
-  existing PR3 device-flow + PR4 refresh-grant code.
+- `GET /.well-known/oauth-protected-resource` (RFC 9728, also the
+  path-inserted `/mcp` form) — declares the resource server
+  (`resource` = gateway host `/mcp`) and points clients at the
+  authorization server (`authorization_servers` = the management
+  host, i.e. `server.publicURL`).
+- `GET /.well-known/oauth-authorization-server` (RFC 8414) — served
+  on the **management host**, aliasing the OIDC Discovery handler
+  (`/.well-known/openid-configuration`): §3.3 requires the metadata
+  on the issuer's own origin, so the gateway deliberately does not
+  serve it. The actual IdP (Google, Okta, Entra) is one hop deeper,
+  handled by the broker's existing PR3 device-flow + PR4
+  refresh-grant code.
 - `POST /mcp` — single JSON-RPC endpoint. Unauthenticated requests
   receive `401 + WWW-Authenticate: Bearer
   resource_metadata="...oauth-protected-resource"` per RFC 6750 +

@@ -8,10 +8,9 @@ import (
 // oauthProtectedResource implements RFC 9728 — Protected Resource
 // Metadata. MCP clients (and any OAuth-aware caller) read this
 // document to discover which authorization server issues tokens
-// accepted by /mcp. The broker is its own authorization server, so
-// `authorization_servers` is single-element and points at the broker's
-// own PublicURL — the authorization-server metadata lives at
-// /.well-known/oauth-authorization-server on the same origin.
+// accepted by /mcp. The broker is its own authorization server:
+// `authorization_servers` = Server.PublicURL (the issuer); `resource` =
+// MCP.PublicURL (the gateway host, distinct under split-host ingress).
 //
 // RFC 9728 §2 fields exposed:
 //
@@ -33,10 +32,9 @@ import (
 // the well-known surface uses so an intermediary CDN treats them
 // uniformly.
 func (g *mcpGateway) oauthProtectedResource(w http.ResponseWriter, _ *http.Request) {
-	base := g.srv.cfg.Server.PublicURL
 	body := map[string]any{
-		"resource":                 base + "/mcp",
-		"authorization_servers":    []string{base},
+		"resource":                 g.srv.cfg.Server.MCP.PublicURL + mcpPath,
+		"authorization_servers":    []string{g.srv.cfg.Server.PublicURL},
 		"bearer_methods_supported": []string{"header"},
 		"scopes_supported":         []string{"mark.read", "mark.write"},
 	}

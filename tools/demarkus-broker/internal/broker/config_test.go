@@ -488,6 +488,60 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 		{
+			// mcp.publicURL empty falls back to the issuer host so
+			// single-host deployments need no new config.
+			name: "server.mcp.publicURL defaults to server.publicURL",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				if c.Server.MCP.PublicURL != c.Server.PublicURL {
+					t.Errorf("MCP.PublicURL = %q, want fallback to %q", c.Server.MCP.PublicURL, c.Server.PublicURL)
+				}
+			},
+		},
+		{
+			// Split-host: gateway host set explicitly, trailing slash
+			// stripped like server.publicURL.
+			name: "server.mcp.publicURL honored and normalized",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				"publicURL: \"https://broker.example.com\"\n  mcp:\n    publicURL: \"https://gateway.example.com/\"", 1),
+			validate: func(t *testing.T, c *Config) {
+				if c.Server.MCP.PublicURL != "https://gateway.example.com" {
+					t.Errorf("MCP.PublicURL = %q, want https://gateway.example.com", c.Server.MCP.PublicURL)
+				}
+			},
+		},
+		{
+			name: "server.mcp.publicURL without scheme rejected",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				"publicURL: \"https://broker.example.com\"\n  mcp:\n    publicURL: \"gateway.example.com\"", 1),
+			wantErr: "server.mcp.publicURL must be an absolute URL",
+		},
+		{
+			// A query or fragment would corrupt the string-appended
+			// metadata URLs (resource, resource_metadata).
+			name: "server.mcp.publicURL with query rejected",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				"publicURL: \"https://broker.example.com\"\n  mcp:\n    publicURL: \"https://gateway.example.com?x=1\"", 1),
+			wantErr: "server.mcp.publicURL must not carry a query or fragment",
+		},
+		{
+			name: "server.mcp.publicURL with fragment rejected",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				"publicURL: \"https://broker.example.com\"\n  mcp:\n    publicURL: \"https://gateway.example.com#frag\"", 1),
+			wantErr: "server.mcp.publicURL must not carry a query or fragment",
+		},
+		{
+			name: "server.publicURL with query rejected",
+			body: strings.Replace(validConfig,
+				`publicURL: "https://broker.example.com"`,
+				`publicURL: "https://broker.example.com?x=1"`, 1),
+			wantErr: "server.publicURL must not carry a query or fragment",
+		},
+		{
 			// publicURL is optional — when omitted (validConfig), it
 			// must round-trip to the zero value. /me/install will
 			// skip worlds whose PublicURL is blank.

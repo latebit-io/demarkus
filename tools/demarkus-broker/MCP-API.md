@@ -25,9 +25,12 @@ For deployment instructions, TLS, and Ingress topology, see
   the device-flow completion, PR3). Unverified-email tokens are
   rejected at the gateway boundary.
 - **OAuth metadata**: standard discovery via RFC 9728
-  (`/.well-known/oauth-protected-resource`) and RFC 8414
-  (`/.well-known/oauth-authorization-server`). An unauthenticated
-  request to `/mcp` receives `401 + WWW-Authenticate: Bearer
+  (`/.well-known/oauth-protected-resource`, bare and path-inserted
+  `/mcp` forms, on the gateway listener) and RFC 8414
+  (`/.well-known/oauth-authorization-server`, on the management
+  listener — §3.3 requires the issuer's own origin). An
+  unauthenticated request to `/mcp` receives `401 +
+  WWW-Authenticate: Bearer
   resource_metadata="…oauth-protected-resource"` per RFC 6750 + RFC
   9728, so a fresh client knows where to bootstrap.
 

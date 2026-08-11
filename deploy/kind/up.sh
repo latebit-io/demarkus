@@ -511,10 +511,12 @@ if [[ "$WITH_BROKER" == "true" ]]; then
     # below (broker-auth-code-grant plan, PR3).
     echo "--- driving MCP gateway smoke checks from an ephemeral curl pod"
     BROKER_MCP_URL="http://$BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8081"
+    BROKER_MGMT_URL="http://$BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8080"
     kubectl run -n "$NAMESPACE" mcp-smoke --rm -i --restart=Never \
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
 BROKER_MCP='"$BROKER_MCP_URL"'
+BROKER_MGMT='"$BROKER_MGMT_URL"'
 CURL="curl -sS --connect-timeout 5 --max-time 15"
 
 # Wait for the MCP Service endpoint to be reachable. Service object
@@ -532,11 +534,20 @@ META=$($CURL "$BROKER_MCP/.well-known/oauth-protected-resource")
 echo "$META" | grep -q "resource" || { echo "FAIL: oauth-protected-resource missing resource field"; echo "$META"; exit 1; }
 echo "OK: /.well-known/oauth-protected-resource"
 
-# 2. RFC 8414 metadata endpoint. Auth-server metadata — aliases
-#    the broker OIDC Discovery handler. Plain GET, no auth.
-META=$($CURL "$BROKER_MCP/.well-known/oauth-authorization-server")
-echo "$META" | grep -q "issuer" || { echo "FAIL: oauth-authorization-server missing issuer field"; echo "$META"; exit 1; }
-echo "OK: /.well-known/oauth-authorization-server"
+# 2. RFC 8414 metadata lives on the ISSUER host (management listener)
+#    only — RFC 8414 s3.3 requires issuer == fetch origin, so the
+#    gateway must NOT serve it (strict clients hard-fail on the copy).
+META=$($CURL "$BROKER_MGMT/.well-known/oauth-authorization-server")
+echo "$META" | grep -q "issuer" || { echo "FAIL: oauth-authorization-server missing issuer field on management host"; echo "$META"; exit 1; }
+echo "OK: management /.well-known/oauth-authorization-server"
+HTTP=$($CURL -o /dev/null -w "%{http_code}" "$BROKER_MCP/.well-known/oauth-authorization-server")
+[ "$HTTP" = "404" ] || { echo "FAIL: gateway serves oauth-authorization-server (got $HTTP, want 404)"; exit 1; }
+echo "OK: gateway oauth-authorization-server 404"
+
+# 2b. RFC 9728 s3.1 path-inserted form for resource <host>/mcp.
+META=$($CURL "$BROKER_MCP/.well-known/oauth-protected-resource/mcp")
+echo "$META" | grep -q "resource" || { echo "FAIL: path-inserted oauth-protected-resource/mcp missing resource field"; echo "$META"; exit 1; }
+echo "OK: /.well-known/oauth-protected-resource/mcp"
 
 # 3. /mcp without auth must 401 with a WWW-Authenticate challenge
 #    per RFC 6750 + RFC 9728 — point fresh clients at the metadata
@@ -825,6 +836,7 @@ probe the broker (from another shell):
 probe the MCP gateway:
   kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE-demarkus-broker 8081:8081
   curl http://localhost:8081/.well-known/oauth-protected-resource
+  # RFC 8414 auth-server metadata is on the management listener (:8080), not here
 
 server fetch from inside the cluster:
   kubectl -n $NAMESPACE exec -it $POD -- \\

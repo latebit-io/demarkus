@@ -160,28 +160,27 @@ func (g *mcpGateway) notImplementedHandler(_ context.Context, req mcp.CallToolRe
 	return mcp.NewToolResultError(fmt.Sprintf("tool %q not yet implemented (Slice 1 gateway foundation)", req.Params.Name)), nil
 }
 
-// Routes returns the http.Handler for the MCP listener. /mcp is the
-// JSON-RPC + SSE endpoint behind the gateway auth chain; the OAuth
-// metadata endpoints are unauthenticated by design (RFC 9728 + 8414
-// require public discoverability — the whole point of the metadata
-// surface is that an unauthenticated client can read it to learn how
-// to authenticate).
-//
-// /.well-known/oauth-authorization-server is registered only when
-// Discovery is wired. The handler reuses the existing OIDC discovery
-// body — RFC 8414 §3 tolerates extra fields, and the broker is its
-// own authorization server so the two metadata documents describe
-// the same surface.
+// mcpPath is the gateway's JSON-RPC endpoint path. The RFC 9728
+// `resource` field and the path-inserted metadata route derive from
+// it so the three can never drift apart.
+const (
+	mcpPath = "/mcp"
+	prmPath = "/.well-known/oauth-protected-resource"
+)
+
+// Routes returns the http.Handler for the MCP listener. Metadata routes
+// are unauthenticated by design (RFC 9728/8414 discovery). AS metadata is
+// NOT served here: RFC 8414 §3.3 wants the issuer's origin, not the gateway's.
 func (g *mcpGateway) Routes() http.Handler {
 	mux := http.NewServeMux()
 	// /mcp accepts both POST (request/notification) and GET (SSE
 	// listen channel) per the Streamable HTTP spec. No method filter
 	// on the route so mcp-go's transport sees every request type.
-	mux.Handle("/mcp", g.srv.gatewayAuth(g.srv.subjectRateLimit(g.transport)))
-	mux.HandleFunc("GET /.well-known/oauth-protected-resource", g.oauthProtectedResource)
-	if g.srv.discovery != nil {
-		mux.Handle("GET /.well-known/oauth-authorization-server", g.srv.discovery.Handler())
-	}
+	mux.Handle(mcpPath, g.srv.gatewayAuth(g.srv.subjectRateLimit(g.transport)))
+	mux.HandleFunc("GET "+prmPath, g.oauthProtectedResource)
+	// prmPath+mcpPath is RFC 9728 §3.1's path-inserted form for a
+	// resource URL that carries a path. Same document.
+	mux.HandleFunc("GET "+prmPath+mcpPath, g.oauthProtectedResource)
 	return mux
 }
 

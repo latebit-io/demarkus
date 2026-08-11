@@ -56,7 +56,7 @@ func TestGatewayAuthMissingBearerReturns401WithChallenge(t *testing.T) {
 	if m == nil {
 		t.Fatalf("WWW-Authenticate missing resource_metadata param: %q", challenge)
 	}
-	wantMetadata := cfg.Server.PublicURL + "/.well-known/oauth-protected-resource"
+	wantMetadata := cfg.Server.MCP.PublicURL + "/.well-known/oauth-protected-resource"
 	if m[1] != wantMetadata {
 		t.Errorf("resource_metadata = %q, want %q", m[1], wantMetadata)
 	}

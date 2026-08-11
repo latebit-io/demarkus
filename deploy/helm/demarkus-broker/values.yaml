@@ -99,6 +99,10 @@ server:
     # the management API and the MCP surface bind distinct listeners.
     # The Service exposes both ports; the Ingress routes by hostname.
     addr: ":8081"
+    # Externally-reachable base URL of the MCP gateway, no trailing slash.
+    # Set when ingress.mcp.host differs from ingress.host (feeds RFC 9728
+    # `resource` + the 401 resource_metadata link). Empty = server.publicURL.
+    publicURL: ""
     # TLS termination at the broker for the MCP listener. Two modes:
     #
     #   1. existingSecretRef.name unset (default) — broker speaks
