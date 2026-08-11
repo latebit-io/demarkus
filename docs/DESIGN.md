@@ -384,7 +384,7 @@ acl:
 **Token Generation**:
 ```bash
 # Generate a token and append to tokens file
-demarkus-token generate -paths "/docs/*,/public/*" -ops write -tokens tokens.toml
+demarkus-token generate -paths "/docs/**,/public/**" -ops write -tokens tokens.toml
 # Prints raw token (give to client, shown once)
 # Appends SHA-256 hash to tokens.toml
 ```
@@ -393,8 +393,8 @@ demarkus-token generate -paths "/docs/*,/public/*" -ops write -tokens tokens.tom
 ```toml
 # tokens.toml
 [tokens]
-"sha256-a1b2c3d4..." = { paths = ["/docs/*", "/public/*"], operations = ["publish"] }
-"sha256-e5f6a7b8..." = { paths = ["/*"], operations = ["read", "publish"], expires = "2026-12-31T23:59:59Z" }
+"sha256-a1b2c3d4..." = { paths = ["/docs/**", "/public/**"], operations = ["publish"] }
+"sha256-e5f6a7b8..." = { paths = ["/**"], operations = ["read", "publish"], expires = "2026-12-31T23:59:59Z" }
 ```
 
 **Token Usage** (client sends raw token, server hashes before lookup):
@@ -1339,7 +1339,7 @@ Hubs are the entry points into the information graph:
 **Token Generation**:
 ```bash
 # Generate a token and append to the server's tokens file
-demarkus-token generate -paths "/*" -ops write -tokens tokens.toml
+demarkus-token generate -paths "/**" -ops write -tokens tokens.toml
 # Prints raw token once; server stores only the SHA-256 hash
 ```
 

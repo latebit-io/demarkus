@@ -4,7 +4,7 @@
 //
 // Usage:
 //
-//	demarkus-token generate -label fritz-laptop -paths "/docs/*" -ops "publish" -tokens tokens.toml
+//	demarkus-token generate -label fritz-laptop -paths "/docs/**" -ops "publish" -tokens tokens.toml
 //	demarkus-token list -tokens tokens.toml
 //	demarkus-token revoke -label fritz-laptop -tokens tokens.toml
 //	demarkus-token generate -label phone -tokens tokens.toml | demarkus-token join -host kb.example.com
@@ -108,7 +108,7 @@ func cmdJoin(args []string) {
 func cmdGenerate(args []string) {
 	fs := flag.NewFlagSet("generate", flag.ExitOnError)
 	label := fs.String("label", "", "human-readable label for this token (required)")
-	paths := fs.String("paths", "/*", "comma-separated path patterns (e.g. \"/docs/*,/public/*\")")
+	paths := fs.String("paths", "/**", "comma-separated path patterns; /** is recursive, a single * does not cross / (e.g. \"/docs/*,/public/**\")")
 	ops := fs.String("ops", "publish", "comma-separated operations (e.g. \"read,publish\")")
 	tokensFile := fs.String("tokens", "", "path to tokens.toml file (appends entry if provided)")
 	fs.Usage = func() {
@@ -192,8 +192,9 @@ func cmdRevoke(args []string) {
 	fs := flag.NewFlagSet("revoke", flag.ExitOnError)
 	label := fs.String("label", "", "label of the token to revoke (required)")
 	tokensFile := fs.String("tokens", "", "path to tokens.toml file (required)")
+	ifPresent := fs.Bool("if-present", false, "treat an absent label (or absent tokens file) as success; real store failures still error")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus-token revoke -label NAME -tokens FILE\n\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus-token revoke [-if-present] -label NAME -tokens FILE\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -207,9 +208,17 @@ func cmdRevoke(args []string) {
 
 	file, err := token.ReadFile(*tokensFile)
 	if err != nil {
+		if *ifPresent && errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "Tokens file %s absent; nothing to revoke\n", *tokensFile)
+			return
+		}
 		log.Fatalf("%v", err)
 	}
 	if _, ok := file.Tokens[*label]; !ok {
+		if *ifPresent {
+			fmt.Fprintf(os.Stderr, "Token %q not present in %s; nothing to revoke\n", *label, *tokensFile)
+			return
+		}
 		log.Fatalf("token %q not found in %s", *label, *tokensFile)
 	}
 	delete(file.Tokens, *label)

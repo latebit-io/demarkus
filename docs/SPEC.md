@@ -828,13 +828,13 @@ Servers MUST enforce read auth on FETCH, LIST, and VERSIONS operations. Content-
 
 ```toml
 [tokens]
-"sha256-a1b2c3d4..." = { paths = ["/docs/*"], operations = ["publish"] }
-"sha256-e5f6a7b8..." = { paths = ["/*"], operations = ["read", "publish"], expires = "2026-12-31T23:59:59Z" }
+"sha256-a1b2c3d4..." = { paths = ["/docs/**"], operations = ["publish"] }
+"sha256-e5f6a7b8..." = { paths = ["/**"], operations = ["read", "publish"], expires = "2026-12-31T23:59:59Z" }
 ```
 
 **Token fields**:
 
-- `paths`: Array of glob patterns. `*` matches any single path segment (not recursive).
+- `paths`: Array of glob patterns. `*` matches any single path segment (not recursive). `**` matches recursively: a trailing `/**` grants everything under the prefix, and an infix `/**/` matches any number of intermediate segments. At most one `**` per pattern.
 - `operations`: Array of permitted operations (`read`, `publish`).
 - `expires`: OPTIONAL RFC 3339 timestamp. If present, the token is invalid after this time.
 

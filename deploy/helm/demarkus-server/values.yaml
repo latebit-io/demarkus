@@ -83,7 +83,7 @@ tls:
 tokens:
   admin:
     label: admin
-    paths: ["/*"]
+    paths: ["/**"]
     operations: ["publish", "read"]
     # Explicit token value; if empty, auto-generated on first install.
     token: ""

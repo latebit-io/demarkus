@@ -1189,7 +1189,7 @@ install_broker() {
       printf 'worlds:\n  - name: soul\n'
       printf '    tokensFile: %s\n' "$tokens_file"
       printf '    internalAddress: %s\n' "$world_host"
-      printf '    defaultToken:\n      paths: ["/*"]\n'
+      printf '    defaultToken:\n      paths: ["/**"]\n'
       printf '# Library SSO (register the reading room as a confidential web\n'
       printf '# client): see https://www.demarkus.io/deployment/single-host/\n'
     } > "${BROKER_CONFIG_DIR}/config.yaml"
@@ -1200,6 +1200,39 @@ install_broker() {
     log_info "Keeping existing broker config: ${BROKER_CONFIG_DIR}/config.yaml"
     if [ -n "$oidc_issuer" ] || [ -n "$oidc_client_id" ] || [ -n "$public_url" ]; then
       log_warn "Broker OIDC flags were given but the existing config was kept; edit ${BROKER_CONFIG_DIR}/config.yaml to apply them"
+    fi
+    # Migrate the managed soul world's defaultToken from the single-segment /*
+    # scope (fails on nested docs) to /**. Other worlds are untouched; the
+    # broker restarts later in this run.
+    # The scan exits 0 when the soul world carries the legacy scope, 1 when
+    # not; anything else is an awk/read failure and must abort, not skip.
+    local cfg="${BROKER_CONFIG_DIR}/config.yaml"
+    local legacy_scope='/^  - name: /{soul=($3=="soul")} soul && prev ~ /defaultToken:[[:space:]]*$/ && $0 ~ /^      paths: \["\/\*"\]$/{found=1} {prev=$0} END{exit !found}'
+    local scope_rc=0
+    awk "$legacy_scope" "$cfg" || scope_rc=$?
+    if [ "$scope_rc" -gt 1 ]; then
+      log_error "Could not scan ${cfg} for the legacy soul token scope"
+      exit 1
+    fi
+    if [ "$scope_rc" -eq 0 ]; then
+      if ! awk '/^  - name: /{soul=($3=="soul")}
+        { if (soul && prev ~ /defaultToken:[[:space:]]*$/ && $0 ~ /^      paths: \["\/\*"\]$/) $0="      paths: [\"/**\"]"
+          prev=$0; print }' "$cfg" > "${cfg}.tmp" || ! mv "${cfg}.tmp" "$cfg"; then
+        rm -f "${cfg}.tmp"
+        log_error "Could not migrate the soul defaultToken.paths to /** in ${cfg}; edit it manually"
+        exit 1
+      fi
+      if ! chown root:"$BROKER_SERVICE" "$cfg" || ! chmod 640 "$cfg"; then
+        log_error "Could not restore ownership and permissions on ${cfg}"
+        exit 1
+      fi
+      scope_rc=0
+      awk "$legacy_scope" "$cfg" || scope_rc=$?
+      if [ "$scope_rc" -ne 1 ]; then
+        log_error "soul defaultToken.paths still \"/*\" (or unverifiable) after migration in ${cfg}; edit it manually"
+        exit 1
+      fi
+      log_info "Migrated the soul world's defaultToken.paths to the recursive /** scope"
     fi
   fi
 

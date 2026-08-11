@@ -48,7 +48,9 @@ jobs:
               - 'deploy/helm/**'
             install:
               - 'install.sh'
+              - 'install-stack.sh'
               - 'scripts/test-install-renewal.sh'
+              - 'scripts/test-install-stack-tokens.sh'
 
   test-protocol:
     needs: detect-changes
@@ -150,10 +152,16 @@ jobs:
       # error only. The test script is new and held to warning.
       - name: Shellcheck install.sh
         run: shellcheck -S error install.sh
+      - name: Shellcheck install-stack.sh
+        run: shellcheck -S error install-stack.sh
       - name: Shellcheck the renewal test
         run: shellcheck -S warning scripts/test-install-renewal.sh
+      - name: Shellcheck the stack-tokens test
+        run: shellcheck -S warning scripts/test-install-stack-tokens.sh
       - name: Test certbot renewal wiring
         run: bash scripts/test-install-renewal.sh
+      - name: Test stack token rotation
+        run: bash scripts/test-install-stack-tokens.sh
 
   test-charts:
     needs: detect-changes
