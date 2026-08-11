@@ -29,21 +29,19 @@ func TestGet_FlatFileRejected(t *testing.T) {
 	}
 }
 
-// TODO(v1): update this test to use per-doc layout once flat layout support is removed.
 func TestGet_VersionedFile(t *testing.T) {
 	root := t.TempDir()
-	versionsDir := filepath.Join(root, "versions")
-	if err := os.Mkdir(versionsDir, 0o755); err != nil {
+	docDir := filepath.Join(root, "versions", "doc.md")
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), []byte("# V1"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(docDir, "v1"), []byte("# V1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), []byte("# V2"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(docDir, "v2"), []byte("# V2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Current file (would be a symlink in production)
-	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("# V2"), 0o644); err != nil {
+	if err := os.Symlink(filepath.Join("versions", "doc.md", "v2"), filepath.Join(root, "doc.md")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -143,24 +141,28 @@ func TestIsDir(t *testing.T) {
 
 func TestListDir(t *testing.T) {
 	root := t.TempDir()
-	for _, f := range []struct{ name, content string }{
-		{"a.md", "a"}, {"b.md", "b"}, {".hidden", "hidden"},
-	} {
-		if err := os.WriteFile(filepath.Join(root, f.name), []byte(f.content), 0o644); err != nil {
+	s := New(root)
+	for _, p := range []string{"/a.md", "/b.md"} {
+		if _, err := s.Write(p, []byte("# "+p+"\n"), nil); err != nil {
+			t.Fatalf("Write %s: %v", p, err)
+		}
+	}
+	// Excluded regardless of view: dot-files, versions/, and a versionless
+	// flat file (not a document, SPEC 9.8).
+	for _, name := range []string{".hidden", "flat.md"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Mkdir(filepath.Join(root, "versions"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
-	s := New(root)
-	entries, err := s.ListDir("/", false)
-	if err != nil {
-		t.Fatalf("ListDir: %v", err)
-	}
-	if len(entries) != 2 {
-		t.Errorf("entries = %d, want 2 (excluding .hidden and versions)", len(entries))
+	for _, includeArchived := range []bool{false, true} {
+		entries, err := s.ListDir("/", includeArchived)
+		if err != nil {
+			t.Fatalf("ListDir(includeArchived=%v): %v", includeArchived, err)
+		}
+		if len(entries) != 2 {
+			t.Errorf("includeArchived=%v: entries = %d, want 2 (excluding .hidden, versions, flat.md)", includeArchived, len(entries))
+		}
 	}
 }
 
@@ -182,9 +184,8 @@ func TestListDir_HidesArchived(t *testing.T) {
 	if err := s.Archive("/attic/old.md", true); err != nil {
 		t.Fatalf("Archive /attic/old.md: %v", err)
 	}
-	// A directory holding only a regular (unversioned, legacy/flat) file:
-	// pathIdx never tracks it, but the listing shows such files, so the
-	// directory must not be pruned.
+	// A directory holding only a versionless flat file: not a document
+	// (SPEC 9.8), so the directory holds nothing listable and is pruned.
 	if err := os.MkdirAll(filepath.Join(root, "flatdir"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -219,11 +220,12 @@ func TestListDir_HidesArchived(t *testing.T) {
 	if !h["nested"] {
 		t.Errorf("hide: want nested/ kept (live doc several levels down), got %v", h)
 	}
-	if !h["flatdir"] {
-		t.Errorf("hide: want flatdir/ kept (visible unversioned file, unindexed), got %v", h)
+	if h["flatdir"] {
+		t.Errorf("hide: want document-free flatdir/ pruned, got %v", h)
 	}
 
-	// include-archived: everything current is listed, including attic/.
+	// include-archived: every document is listed, including attic/; a
+	// document-free directory stays excluded even in the audit view.
 	shown, err := s.ListDir("/", true)
 	if err != nil {
 		t.Fatalf("ListDir show: %v", err)
@@ -233,6 +235,9 @@ func TestListDir_HidesArchived(t *testing.T) {
 		if !sh[want] {
 			t.Errorf("show: want %s present, got %v", want, sh)
 		}
+	}
+	if sh["flatdir"] {
+		t.Errorf("show: want document-free flatdir/ excluded, got %v", sh)
 	}
 
 	// Non-canonical request paths must behave identically — the index fast
@@ -303,22 +308,23 @@ func TestVersions_FlatFileRejected(t *testing.T) {
 	}
 }
 
-// TODO(v1): update this test to use per-doc layout once flat layout support is removed.
 func TestVersions_MultipleVersions(t *testing.T) {
 	root := t.TempDir()
-	versionsDir := filepath.Join(root, "versions")
-	if err := os.Mkdir(versionsDir, 0o755); err != nil {
+	docDir := filepath.Join(root, "versions", "doc.md")
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []struct{ name, content string }{
-		{filepath.Join(root, "doc.md"), "current"},
-		{filepath.Join(versionsDir, "doc.md.v1"), "v1"},
-		{filepath.Join(versionsDir, "doc.md.v2"), "v2"},
-		{filepath.Join(versionsDir, "doc.md.v3"), "v3"},
+		{filepath.Join(docDir, "v1"), "v1"},
+		{filepath.Join(docDir, "v2"), "v2"},
+		{filepath.Join(docDir, "v3"), "v3"},
 	} {
 		if err := os.WriteFile(f.name, []byte(f.content), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.Symlink(filepath.Join("versions", "doc.md", "v3"), filepath.Join(root, "doc.md")); err != nil {
+		t.Fatal(err)
 	}
 
 	s := New(root)
@@ -959,8 +965,62 @@ func TestVerifyChain_Tampered(t *testing.T) {
 	}
 }
 
-// TODO(v1): remove this test once flat layout support and migration code are removed.
-func TestWrite_MigratesOldLayoutToPerDoc(t *testing.T) {
+// TODO(v1): remove this test with migrateLegacyLayout.
+func TestListDir_LegacyLayoutVisibility(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	// A legacy-layout doc (regular current pointer, flat-layout version
+	// history) is invisible until migrateLegacyLayout converts it; after
+	// migration it is listed and keeps its unindexed parent visible.
+	legacyDir := filepath.Join(root, "legacy")
+	if err := os.MkdirAll(filepath.Join(legacyDir, "versions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1 := []byte("---\nversion: 1\narchived: false\n---\n# legacy\n")
+	if err := os.WriteFile(filepath.Join(legacyDir, "versions", "old.md.v1"), v1, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "old.md"), v1, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	names := func(entries []os.DirEntry) map[string]bool {
+		m := map[string]bool{}
+		for _, e := range entries {
+			m[e.Name()] = true
+		}
+		return m
+	}
+
+	preMigrate, err := s.ListDir("/", false)
+	if err != nil {
+		t.Fatalf("ListDir / before migration: %v", err)
+	}
+	if r := names(preMigrate); r["legacy"] {
+		t.Errorf("unmigrated legacy/ dir listed: %v", r)
+	}
+	if err := s.migrateLegacyLayout(); err != nil {
+		t.Fatalf("migrateLegacyLayout: %v", err)
+	}
+	inLegacy, err := s.ListDir("/legacy", false)
+	if err != nil {
+		t.Fatalf("ListDir /legacy: %v", err)
+	}
+	if l := names(inLegacy); !l["old.md"] {
+		t.Errorf("migrated legacy-layout doc not listed: %v", l)
+	}
+	atRoot, err := s.ListDir("/", false)
+	if err != nil {
+		t.Fatalf("ListDir / after migration: %v", err)
+	}
+	if r := names(atRoot); !r["legacy"] {
+		t.Errorf("legacy/ dir pruned despite holding a migrated doc: %v", r)
+	}
+}
+
+// TODO(v1): remove this test with migrateLegacyLayout.
+func TestMigrateLegacyLayout(t *testing.T) {
 	root := t.TempDir()
 
 	// Set up old flat layout manually: versions/doc.md.v1 and versions/doc.md.v2.
@@ -986,16 +1046,25 @@ func TestWrite_MigratesOldLayoutToPerDoc(t *testing.T) {
 
 	s := New(root)
 
-	// Reads should work with old layout.
+	// Unmigrated legacy layout is invisible to the read path.
+	if _, err := s.Get("/doc.md", 0); err == nil {
+		t.Fatal("Get before migration should fail: read path is per-doc only")
+	}
+
+	if err := s.migrateLegacyLayout(); err != nil {
+		t.Fatalf("migrateLegacyLayout: %v", err)
+	}
+
+	// Reads work after migration.
 	doc, err := s.Get("/doc.md", 0)
 	if err != nil {
-		t.Fatalf("Get before migration: %v", err)
+		t.Fatalf("Get after migration: %v", err)
 	}
 	if doc.Version != 2 {
 		t.Errorf("version = %d, want 2", doc.Version)
 	}
 
-	// Write v3, which should trigger migration.
+	// Writes continue the chain.
 	doc, err = s.Write("/doc.md", []byte("# V3\n"), nil)
 	if err != nil {
 		t.Fatalf("Write v3: %v", err)
@@ -1032,6 +1101,46 @@ func TestWrite_MigratesOldLayoutToPerDoc(t *testing.T) {
 	// Hash chain should be valid across the migration boundary.
 	if err := s.VerifyChain("/doc.md"); err != nil {
 		t.Errorf("chain verification failed after migration: %v", err)
+	}
+
+	// Idempotent: a second run performs no work and breaks nothing.
+	if err := s.migrateLegacyLayout(); err != nil {
+		t.Fatalf("second migrateLegacyLayout: %v", err)
+	}
+}
+
+// TODO(v1): remove this test with migrateLegacyLayout.
+func TestMigrateLegacyLayout_SkipsStrayFiles(t *testing.T) {
+	root := t.TempDir()
+	versionsDir := filepath.Join(root, "versions")
+	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Junk seen in the wild: "..v1" (an old bug publishing base "."), a
+	// non-markdown name, and a hidden name. None may derive a migration
+	// target; "..v1" would otherwise aim the current pointer at root itself.
+	for _, name := range []string{"..v1", "data.txt.v1", ".hidden.md.v1"} {
+		if err := os.WriteFile(filepath.Join(versionsDir, name), []byte("junk"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(versionsDir, "real.md.v1"), []byte("---\nversion: 1\n---\n# real\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(root)
+	if err := s.migrateLegacyLayout(); err != nil {
+		t.Fatalf("migrateLegacyLayout: %v", err)
+	}
+
+	// The real doc migrated and serves; the junk stayed put, untouched.
+	if _, err := s.Get("/real.md", 0); err != nil {
+		t.Errorf("migrated real.md not served: %v", err)
+	}
+	for _, name := range []string{"..v1", "data.txt.v1", ".hidden.md.v1"} {
+		if _, err := os.Stat(filepath.Join(versionsDir, name)); err != nil {
+			t.Errorf("stray %s was moved or deleted: %v", name, err)
+		}
 	}
 }
 
@@ -1114,7 +1223,7 @@ func TestWrite_SubdirectoryPerDocLayout(t *testing.T) {
 	}
 }
 
-func TestWrite_SubdirectoryMigration(t *testing.T) {
+func TestMigrateLegacyLayout_Subdirectory(t *testing.T) {
 	root := t.TempDir()
 
 	// Set up old flat layout in a subdirectory.
@@ -1133,17 +1242,20 @@ func TestWrite_SubdirectoryMigration(t *testing.T) {
 	}
 
 	s := New(root)
+	if err := s.migrateLegacyLayout(); err != nil {
+		t.Fatalf("migrateLegacyLayout: %v", err)
+	}
 
-	// Read should work with old layout.
+	// Read works after migration.
 	doc, err := s.Get("/docs/guides/setup.md", 0)
 	if err != nil {
-		t.Fatalf("Get before migration: %v", err)
+		t.Fatalf("Get after migration: %v", err)
 	}
 	if doc.Version != 1 {
 		t.Errorf("version = %d, want 1", doc.Version)
 	}
 
-	// Write v2 triggers migration.
+	// Write v2 continues the chain.
 	doc, err = s.Write("/docs/guides/setup.md", []byte("# Updated Guide\n"), nil)
 	if err != nil {
 		t.Fatalf("Write v2: %v", err)
@@ -1972,7 +2084,7 @@ func TestPruneVersions_AbortsOnError(t *testing.T) {
 	}
 }
 
-func TestWrite_RetentionMigratesFlatLayoutThenPrunes(t *testing.T) {
+func TestWrite_RetentionAfterLegacyMigrationPrunes(t *testing.T) {
 	root := t.TempDir()
 	versionsDir := filepath.Join(root, "versions")
 	if err := os.Mkdir(versionsDir, 0o755); err != nil {
@@ -1988,6 +2100,9 @@ func TestWrite_RetentionMigratesFlatLayoutThenPrunes(t *testing.T) {
 	}
 
 	s := New(root)
+	if err := s.migrateLegacyLayout(); err != nil {
+		t.Fatalf("migrateLegacyLayout: %v", err)
+	}
 	doc, err := s.Write("/doc.md", []byte("# V3"), map[string]string{"retention": "1"})
 	if err != nil {
 		t.Fatalf("write: %v", err)

@@ -478,7 +478,7 @@ Or via directory-level `.mark-acl` files:
 
 ### Versioning & Audit Trail
 
-**Every write creates a new version** (immutable history). Only documents written through the protocol are served — flat files without version history are treated as non-existent.
+**Every write creates a new version** (immutable history). Only documents written through the protocol are served — flat files without version history are not documents: FETCH treats them as non-existent, LIST omits them, and a PUBLISH to their path replaces them.
 
 ```
 content-root/
