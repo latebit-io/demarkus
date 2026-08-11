@@ -522,6 +522,10 @@ func (s *Store) docCandidates(dirAbs string) *docCandidates {
 func (dc *docCandidates) isDocument(name string) bool {
 	if !dc.loaded {
 		dc.loaded = true
+		// A failed ReadDir leaves an empty set for the whole listing —
+		// deliberately, matching dirHasDocument and highestPerDocVersion:
+		// an inaccessible versions/ hides its documents rather than serving
+		// them broken, and heals when the permission problem does.
 		entries, err := os.ReadDir(filepath.Join(dc.dirAbs, "versions"))
 		if err != nil {
 			return false

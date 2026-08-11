@@ -1255,6 +1255,14 @@ func TestMigrateLegacyLayout_NormalizedCollisionKeepsBoth(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(versionsDir, "doc.md.v1")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("canonical flat file should have been moved: %v", err)
 	}
+	// The repaired current pointer makes the document fetchable end to end.
+	doc, err := s.Get("/doc.md", 0)
+	if err != nil {
+		t.Fatalf("Get after migration: %v", err)
+	}
+	if doc.Version != 1 || string(doc.Content) != "# canonical\n" {
+		t.Errorf("Get = v%d %q, want v1 with the canonical content", doc.Version, doc.Content)
+	}
 }
 
 func TestWrite_SubdirectoryPerDocLayout(t *testing.T) {
