@@ -1201,17 +1201,26 @@ install_broker() {
     if [ -n "$oidc_issuer" ] || [ -n "$oidc_client_id" ] || [ -n "$public_url" ]; then
       log_warn "Broker OIDC flags were given but the existing config was kept; edit ${BROKER_CONFIG_DIR}/config.yaml to apply them"
     fi
-    # Migrate the managed defaultToken scope: /* only matches single-segment
-    # paths, so broker-minted world tokens born under it fail on nested docs.
-    # Scoped to the line directly under defaultToken:, so a custom scope on
-    # another world is never touched. The broker restarts later in this run.
-    if sed -n '/defaultToken:/{n;p;}' "${BROKER_CONFIG_DIR}/config.yaml" | grep -q 'paths: \["/\*"\]'; then
-      sed -i '/defaultToken:/{n;s|paths: \["/\*"\]|paths: ["/**"]|;}' "${BROKER_CONFIG_DIR}/config.yaml"
-      if ! sed -n '/defaultToken:/{n;p;}' "${BROKER_CONFIG_DIR}/config.yaml" | grep -q 'paths: \["/\*\*"\]'; then
-        log_error "Could not migrate defaultToken.paths to /** in ${BROKER_CONFIG_DIR}/config.yaml; edit it manually"
+    # Migrate the managed soul world's defaultToken from the single-segment /*
+    # scope (fails on nested docs) to /**. Other worlds are untouched; the
+    # broker restarts later in this run.
+    local cfg="${BROKER_CONFIG_DIR}/config.yaml"
+    local legacy_scope='/^  - name: /{soul=($3=="soul")} soul && prev ~ /defaultToken:[[:space:]]*$/ && $0 ~ /^      paths: \["\/\*"\]$/{found=1} {prev=$0} END{exit !found}'
+    if awk "$legacy_scope" "$cfg"; then
+      if ! awk '/^  - name: /{soul=($3=="soul")}
+        { if (soul && prev ~ /defaultToken:[[:space:]]*$/ && $0 ~ /^      paths: \["\/\*"\]$/) $0="      paths: [\"/**\"]"
+          prev=$0; print }' "$cfg" > "${cfg}.tmp" || ! mv "${cfg}.tmp" "$cfg"; then
+        rm -f "${cfg}.tmp"
+        log_error "Could not migrate the soul defaultToken.paths to /** in ${cfg}; edit it manually"
         exit 1
       fi
-      log_info "Migrated broker defaultToken.paths to the recursive /** scope"
+      chown root:"$BROKER_SERVICE" "$cfg"
+      chmod 640 "$cfg"
+      if awk "$legacy_scope" "$cfg"; then
+        log_error "soul defaultToken.paths still \"/*\" after migration in ${cfg}; edit it manually"
+        exit 1
+      fi
+      log_info "Migrated the soul world's defaultToken.paths to the recursive /** scope"
     fi
   fi
 

@@ -44,6 +44,7 @@ mkdir -p "$INSTALL_DIR"
 cat > "$INSTALL_DIR/demarkus-token" <<'EOF'
 #!/usr/bin/env bash
 cmd="$1"; shift
+argv="$*"
 label=""; paths=""; tokens=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,6 +58,12 @@ case "$cmd" in
   list)   [ -r "$tokens" ] || exit 1 ;;
   revoke)
     [ -n "${FAKE_REVOKE_FAIL:-}" ] && exit 1
+    # Mirror the real CLI: plain revoke fails on an absent label, so a caller
+    # that drops -if-present must fail this test, not pass by stub leniency.
+    case " $argv " in
+      *" -if-present "*) ;;
+      *) echo "revoke requires -if-present" >&2; exit 2 ;;
+    esac
     echo "revoke $label" >> "${STUB_CALLS:?}"; : > "$tokens" ;;
   generate)
     echo "generate $label $paths" >> "${STUB_CALLS:?}"
