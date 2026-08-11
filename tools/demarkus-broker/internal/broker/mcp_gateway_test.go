@@ -14,13 +14,13 @@ import (
 )
 
 // mcpTestConfig returns a Config like testConfig() but with the MCP
-// gateway configured. Setting MCP.Addr is the on-switch; PublicURL is
-// set so the gateway's auth challenge and OAuth metadata documents
-// include the broker's external URL.
+// gateway configured. Setting MCP.Addr is the on-switch. The two
+// PublicURLs are deliberately distinct (split-host topology) so tests
+// catch any handler building a URL from the wrong one.
 func mcpTestConfig() *Config {
 	cfg := testConfig()
 	cfg.Server.PublicURL = "https://broker.example.com"
-	cfg.Server.MCP = MCPConfig{Addr: ":0"}
+	cfg.Server.MCP = MCPConfig{Addr: ":0", PublicURL: "https://gateway.example.com"}
 	return cfg
 }
 

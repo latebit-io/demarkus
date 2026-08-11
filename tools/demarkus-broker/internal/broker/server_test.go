@@ -116,9 +116,11 @@ func TestNewServerPanicsOnDiscoveryWithoutSigner(t *testing.T) {
 
 // TestWellKnownDiscoveryRouteRegistered guards the Routes() composition:
 // when a Discovery is wired into NewServer, the broker mux exposes it at
-// /.well-known/openid-configuration. The discovery_test.go suite covers
-// the proxy + cache mechanics; this test just confirms the mount point so
-// a future refactor can't quietly drop the route registration.
+// /.well-known/openid-configuration AND the RFC 8414 alias
+// /.well-known/oauth-authorization-server (strict clients require the
+// latter on the issuer's origin — this listener). The discovery_test.go
+// suite covers the proxy + cache mechanics; this test just confirms the
+// mount points so a future refactor can't quietly drop a registration.
 func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 	idpMux := http.NewServeMux()
 	idpMux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
@@ -144,21 +146,23 @@ func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 	tsrv := httptest.NewServer(srv.Routes())
 	t.Cleanup(tsrv.Close)
 
-	resp, err := testClient(tsrv).Get(tsrv.URL + "/.well-known/openid-configuration")
-	if err != nil {
-		t.Fatalf("GET well-known: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d", resp.StatusCode)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	var doc map[string]any
-	if err := json.Unmarshal(body, &doc); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got, _ := doc["issuer"].(string); got != "https://broker.example.com" {
-		t.Errorf("issuer = %q, want broker URL (override applied via mounted route)", got)
+	for _, path := range []string{"/.well-known/openid-configuration", "/.well-known/oauth-authorization-server"} {
+		resp, err := testClient(tsrv).Get(tsrv.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status = %d", path, resp.StatusCode)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		var doc map[string]any
+		if err := json.Unmarshal(body, &doc); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		if got, _ := doc["issuer"].(string); got != "https://broker.example.com" {
+			t.Errorf("%s issuer = %q, want broker URL (override applied via mounted route)", path, got)
+		}
 	}
 }
 

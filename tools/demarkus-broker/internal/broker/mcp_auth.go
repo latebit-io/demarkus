@@ -82,7 +82,9 @@ func canonicalEmail(email string) string {
 // authorization-server metadata, and initiates the OAuth dance — no
 // hard-coded broker URL required on the client side.
 func (s *Server) writeMCPAuthChallenge(w http.ResponseWriter, errCode, body string) {
-	metadataURL := s.cfg.Server.PublicURL + "/.well-known/oauth-protected-resource"
+	// Built from the gateway's own host — the metadata path only
+	// exists on the MCP listener, not the issuer host.
+	metadataURL := s.cfg.Server.MCP.PublicURL + prmPath
 	challenge := fmt.Sprintf(`Bearer realm="demarkus-broker", error=%q, resource_metadata=%q`, errCode, metadataURL)
 	w.Header().Set("WWW-Authenticate", challenge)
 	http.Error(w, body, http.StatusUnauthorized)

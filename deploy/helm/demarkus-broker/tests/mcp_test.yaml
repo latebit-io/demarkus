@@ -137,6 +137,22 @@ tests:
           path: stringData["config.yaml"]
           pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*firstMintMaxAttempts: 6\s*\n\s*firstMintInitialBackoff: "250ms"\s*\n\s*firstMintMaxBackoff: "8s"'
 
+  - it: config.yaml omits mcp.publicURL when unset (falls back to server.publicURL in the broker)
+    template: secret-config.yaml
+    asserts:
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*publicURL:'
+
+  - it: server.mcp.publicURL renders into the mcp block (split-host ingress)
+    template: secret-config.yaml
+    set:
+      server.mcp.publicURL: https://knowledge.example.com
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*publicURL: "https://knowledge.example.com"'
+
   - it: config.yaml omits mcp.tls block when no existingSecretRef set
     template: secret-config.yaml
     asserts:
