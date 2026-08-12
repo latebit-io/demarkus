@@ -2,6 +2,7 @@ package listwalk
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -41,18 +42,53 @@ func TestWalk(t *testing.T) {
 		}
 	})
 
-	t.Run("listing cycle terminates", func(t *testing.T) {
-		l := &stubLister{listings: map[string]string{
-			"/":     "- [loop/](loop/)\n- [a.md](a.md)\n",
-			"/loop": "- [loop/](loop/)\n- [b.md](b.md)\n",
-		}}
+	t.Run("self-referencing listing terminates at MaxDepth", func(t *testing.T) {
+		// A hostile server serving a self-listing at every depth mints
+		// ever-deeper distinct paths; only MaxDepth stops it.
+		listings := map[string]string{"/": "- [loop/](loop/)\n- [a.md](a.md)\n"}
+		dir := "/loop"
+		for range 6 {
+			listings[dir] = "- [loop/](loop/)\n- [b.md](b.md)\n"
+			dir += "/loop"
+		}
+		l := &stubLister{listings: listings}
 		var got []string
-		w := Walker{Client: l, Host: "h"}
+		w := Walker{Client: l, Host: "h", MaxDepth: 3}
 		if err := w.Walk("/", func(p string) error { got = append(got, p); return nil }); err != nil {
 			t.Fatalf("Walk: %v", err)
 		}
-		if len(got) != 2 {
-			t.Errorf("got %d files, want 2 (%v)", len(got), got)
+		// a.md + b.md at depths 1..3.
+		if len(got) != 4 {
+			t.Errorf("got %d files, want 4 (%v)", len(got), got)
+		}
+	})
+
+	t.Run("list budget returns ErrListBudget", func(t *testing.T) {
+		listings := map[string]string{"/": "- [d0/](d0/)\n"}
+		dir := "/d0"
+		for i := range 6 {
+			listings[dir] = fmt.Sprintf("- [d%d/](d%d/)\n", i+1, i+1)
+			dir += fmt.Sprintf("/d%d", i+1)
+		}
+		l := &stubLister{listings: listings}
+		w := Walker{Client: l, Host: "h", MaxLists: 3}
+		if err := w.Walk("/", func(string) error { return nil }); !errors.Is(err, ErrListBudget) {
+			t.Fatalf("got %v, want ErrListBudget", err)
+		}
+	})
+
+	t.Run("OnSkip observes lenient skips", func(t *testing.T) {
+		l := &stubLister{
+			listings: map[string]string{"/": "- [sub/](sub/)\n- [bad](/etc/passwd)\n- [a.md](a.md)\n"},
+			statuses: map[string]string{"/sub": protocol.StatusUnauthorized},
+		}
+		var skips []string
+		w := Walker{Client: l, Host: "h", OnSkip: func(p, reason string) { skips = append(skips, p+": "+reason) }}
+		if err := w.Walk("/", func(string) error { return nil }); err != nil {
+			t.Fatalf("Walk: %v", err)
+		}
+		if len(skips) != 2 {
+			t.Errorf("skips = %v, want unauthorized listing + invalid entry", skips)
 		}
 	})
 
@@ -107,6 +143,20 @@ func TestWalk(t *testing.T) {
 		}
 		if len(got) != 1 || got[0] != "/docs/ok.md" {
 			t.Errorf("got %v, want [/docs/ok.md]", got)
+		}
+	})
+
+	t.Run("strict errors on escaping entry", func(t *testing.T) {
+		l := &stubLister{listings: map[string]string{
+			"/docs": "- [esc](../secret.md)\n",
+		}}
+		w := Walker{Client: l, Host: "h", Strict: true}
+		err := w.Walk("/docs", func(string) error {
+			t.Error("visit must not run for an invalid entry in strict mode")
+			return nil
+		})
+		if err == nil {
+			t.Fatal("expected error for escaping entry in strict mode")
 		}
 	})
 

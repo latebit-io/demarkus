@@ -26,6 +26,7 @@ func RunConformance(t *testing.T, factory Factory) {
 		fn   func(t *testing.T, s handler.DocumentStore)
 	}{
 		{"WriteGetRoundtrip", testWriteGetRoundtrip},
+		{"DocumentOwnedFrontmatter", testDocumentOwnedFrontmatter},
 		{"VersionHistory", testVersionHistory},
 		{"ConflictSemantics", testConflictSemantics},
 		{"NotModifiedDedup", testNotModifiedDedup},
@@ -71,6 +72,27 @@ func testWriteGetRoundtrip(t *testing.T, s handler.DocumentStore) {
 	}
 	if got.Metadata["tags"] == "" || got.Metadata["importance"] != "0.5" {
 		t.Errorf("metadata roundtrip = %v", got.Metadata)
+	}
+}
+
+// testDocumentOwnedFrontmatter pins that a body beginning with its own YAML
+// fence survives byte-exact: only the store's frontmatter may be stripped,
+// never the document's (a second ExtractBody would eat it).
+func testDocumentOwnedFrontmatter(t *testing.T, s handler.DocumentStore) {
+	body := []byte("---\ntitle: mine\n---\n# Doc\n")
+	doc, err := s.WriteVersion("/fm.md", 0, body, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if !bytes.Equal(doc.Content, body) {
+		t.Errorf("write-returned body = %q, want %q", doc.Content, body)
+	}
+	got, err := s.Get("/fm.md", 0)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got.Content, body) {
+		t.Errorf("get body = %q, want %q", got.Content, body)
 	}
 }
 

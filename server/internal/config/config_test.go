@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"testing"
 
@@ -230,5 +232,31 @@ func TestNewConfig_ReadOnlyDefault(t *testing.T) {
 	}
 	if cfg.ReadOnly {
 		t.Error("expected ReadOnly to be false by default")
+	}
+}
+
+func TestNewConfig_InvalidReadOnly(t *testing.T) {
+	for _, val := range []string{"tru", "yess", "2", "on"} {
+		t.Run(val, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("DEMARKUS_ROOT", dir)
+			t.Setenv("DEMARKUS_READ_ONLY", val)
+
+			_, err := NewConfig()
+			if err == nil {
+				t.Fatalf("expected error for DEMARKUS_READ_ONLY=%q", val)
+			}
+		})
+	}
+}
+
+func TestValidate_NonFiniteRateLimit(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		t.Run(fmt.Sprint(v), func(t *testing.T) {
+			cfg := &Config{ContentDir: t.TempDir(), RateLimit: v, RateBurst: 100}
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("expected validation error for rate limit %v", v)
+			}
+		})
 	}
 }

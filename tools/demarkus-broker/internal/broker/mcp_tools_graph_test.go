@@ -876,3 +876,52 @@ func TestFormatGraphSummaryEdgeAnnotationFidelity(t *testing.T) {
 		}
 	}
 }
+
+func TestGraphWriteHandlersDenyNonWriter(t *testing.T) {
+	// mark_graph_publish and mark_index (publishing) enforce the same
+	// writer-allow gate as every other write verb.
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	ctx := ctxWithClaims(context.Background(), &Claims{
+		Subject:       "google|carol",
+		Email:         "carol@otherco.test", // not in example.com domain
+		EmailVerified: true,
+	})
+
+	t.Run("mark_graph_publish", func(t *testing.T) {
+		res, err := g.handleMarkGraphPublish(ctx, callToolReq("mark_graph_publish", map[string]any{
+			"url":              "mark://team-a/graph.md",
+			"expected_version": float64(0),
+		}))
+		if err != nil {
+			t.Fatalf("handleMarkGraphPublish: %v", err)
+		}
+		if !res.IsError {
+			t.Fatal("isError = false for non-writer identity, want true")
+		}
+		if text := toolResultText(t, res); !strings.Contains(text, "write access denied") {
+			t.Errorf("tool error = %q, want writer-allow rejection", text)
+		}
+	})
+
+	t.Run("mark_index", func(t *testing.T) {
+		res, err := g.handleMarkIndex(ctx, callToolReq("mark_index", map[string]any{
+			"source": "mark://team-a/",
+			"target": "mark://team-a/index.md",
+		}))
+		if err != nil {
+			t.Fatalf("handleMarkIndex: %v", err)
+		}
+		if !res.IsError {
+			t.Fatal("isError = false for non-writer identity, want true")
+		}
+		if text := toolResultText(t, res); !strings.Contains(text, "write access denied") {
+			t.Errorf("tool error = %q, want writer-allow rejection", text)
+		}
+	})
+
+	if len(d.publishCalls) != 0 {
+		t.Errorf("dispatcher.Publish called %d times for denied writes, want 0", len(d.publishCalls))
+	}
+}

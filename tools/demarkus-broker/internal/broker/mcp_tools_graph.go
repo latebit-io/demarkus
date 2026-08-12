@@ -315,6 +315,10 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
+	// Same writer-allow gate every other write verb enforces.
+	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
+		return errRes, nil
+	}
 	body := g.graphStore.Export()
 	meta := agentMetaFromClaims(claims)
 	if retention > 0 {
@@ -380,6 +384,12 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
+	// Writer-allow gate on the publish target; dry_run writes nothing.
+	if !dryRun {
+		if _, errRes := g.gateWrite(claims, targetWorld); errRes != nil {
+			return errRes, nil
+		}
+	}
 
 	// Manifest safeguards. Source warning is informational;
 	// target absence is a hard block unless force or dry_run.
@@ -409,7 +419,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	if !strings.HasSuffix(sourceRoot, "/") {
 		sourceRoot += "/"
 	}
-	walkErr := g.walkIndexDir(ctx, claims, sourceWorld, sourcePath, sourceScheme, sourceRoot, &entries, visited)
+	walkErr := g.walkIndexDir(ctx, sourceWorld, sourcePath, sourceScheme, sourceRoot, &entries, visited)
 	if walkErr != nil && !errors.Is(walkErr, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", walkErr)), nil
 	}
@@ -517,20 +527,21 @@ func (g *mcpGateway) checkIndexManifests(ctx context.Context, sourceWorld, targe
 //     escapes this root (e.g. via "../" in a LIST destination)
 //     are skipped silently. The index is "what's under
 //     sourcePath", not "what the world feels like serving."
-func (g *mcpGateway) walkIndexDir(ctx context.Context, claims *Claims, worldName, dirPath, sourceScheme, sourceRoot string, entries *[]index.Entry, visited map[string]struct{}) error {
+func (g *mcpGateway) walkIndexDir(ctx context.Context, worldName, dirPath, sourceScheme, sourceRoot string, entries *[]index.Entry, visited map[string]struct{}) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if len(*entries) >= maxIndexDocuments {
 		return errIndexTruncated
 	}
-	listResult, err := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.List(worldName, dirPath, token, fetch.ListOptions{})
-	})
+	listResult, err := g.dispatcher.List(worldName, dirPath, "", fetch.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("list %s: %w", dirPath, err)
 	}
 	if listResult.Response.Status != protocol.StatusOK {
-		// Skip silently — the world may be enforcing
-		// path-level RBAC on this subtree. Other accessible
-		// subtrees still index.
+		// Skipped, not fatal: other subtrees still index. Logged so an
+		// incomplete index is never a silent success.
+		g.log.Warn("mark_index: directory skipped", "world", worldName, "dir", dirPath, "status", listResult.Response.Status)
 		return nil
 	}
 	for _, dest := range links.Extract(listResult.Response.Body) {
@@ -563,19 +574,19 @@ func (g *mcpGateway) walkIndexDir(ctx context.Context, claims *Claims, worldName
 				continue
 			}
 			visited[canonical] = struct{}{}
-			if recErr := g.walkIndexDir(ctx, claims, worldName, fullPath, sourceScheme, sourceRoot, entries, visited); recErr != nil {
+			if recErr := g.walkIndexDir(ctx, worldName, fullPath, sourceScheme, sourceRoot, entries, visited); recErr != nil {
 				return recErr
 			}
 			continue
 		}
 		// File — fetch and collect content-hash.
-		doc, ferr := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
-			return g.dispatcher.Fetch(worldName, fullPath, token)
-		})
+		doc, ferr := g.dispatcher.Fetch(worldName, fullPath, "")
 		if ferr != nil {
+			g.log.Warn("mark_index: document skipped", "world", worldName, "path", fullPath, "err", ferr)
 			continue
 		}
 		if doc.Response.Status != protocol.StatusOK {
+			g.log.Warn("mark_index: document skipped", "world", worldName, "path", fullPath, "status", doc.Response.Status)
 			continue
 		}
 		contentHash := doc.Response.Metadata["content-hash"]

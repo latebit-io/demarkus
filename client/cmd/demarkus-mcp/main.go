@@ -1149,7 +1149,8 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 	// Crawl source server.
 	sourceScheme := "mark://" + sourceHost
-	entries, err := h.collectEntries(sourceHost, sourcePath, h.resolveToken(sourceHost))
+	entries, crawlWarnings, err := h.collectEntries(sourceHost, sourcePath, h.resolveToken(sourceHost))
+	warnings = append(warnings, crawlWarnings...)
 	if err != nil && !errors.Is(err, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
 	} else if errors.Is(err, errIndexTruncated) {
@@ -1203,12 +1204,20 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	return mcp.NewToolResultText(b.String()), nil
 }
 
-// collectEntries walks the server's listings and fetches each document,
-// collecting content-hash index entries. Returns errIndexTruncated (with the
-// entries gathered so far) once maxIndexDocuments is reached.
-func (h *handler) collectEntries(host, dirPath, token string) ([]index.Entry, error) {
+// collectEntries walks the listings and fetches each document, collecting
+// content-hash index entries. Skips come back as warnings (a partial index is
+// never a silent success); errIndexTruncated caps at maxIndexDocuments.
+func (h *handler) collectEntries(host, dirPath, token string) ([]index.Entry, []string, error) {
 	var entries []index.Entry
-	w := listwalk.Walker{Client: h.client, Host: host, Token: token}
+	var warnings []string
+	w := listwalk.Walker{
+		Client: h.client,
+		Host:   host,
+		Token:  token,
+		OnSkip: func(p, reason string) {
+			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: %s", p, reason))
+		},
+	}
 	err := w.Walk(dirPath, func(fullPath string) error {
 		if len(entries) >= maxIndexDocuments {
 			return errIndexTruncated
@@ -1217,9 +1226,11 @@ func (h *handler) collectEntries(host, dirPath, token string) ([]index.Entry, er
 		// Fetch and collect content-hash.
 		doc, err := h.client.Fetch(host, fullPath, token)
 		if err != nil {
-			return nil // skip unreachable documents
+			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: %v", fullPath, err))
+			return nil
 		}
 		if doc.Response.Status != protocol.StatusOK {
+			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: %s", fullPath, doc.Response.Status))
 			return nil
 		}
 		contentHash, ok := doc.Response.Metadata["content-hash"]
@@ -1233,7 +1244,11 @@ func (h *handler) collectEntries(host, dirPath, token string) ([]index.Entry, er
 		})
 		return nil
 	})
-	return entries, err
+	if errors.Is(err, listwalk.ErrListBudget) {
+		warnings = append(warnings, "warning: directory budget exhausted, index is incomplete")
+		err = nil
+	}
+	return entries, warnings, err
 }
 
 // timeNow is a variable for testing.

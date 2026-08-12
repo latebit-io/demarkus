@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"time"
@@ -49,9 +50,7 @@ func NewConfig() (*Config, error) {
 	config.RateBurst = getEnvAsInt("DEMARKUS_RATE_BURST", 100, &errs)
 	config.LogFormat = getEnv("DEMARKUS_LOG_FORMAT", "text")
 	config.LogLevel = getEnv("DEMARKUS_LOG_LEVEL", "info")
-	if v := getEnv("DEMARKUS_READ_ONLY", ""); v != "" {
-		config.ReadOnly = v == "1" || v == "true" || v == "yes"
-	}
+	config.ReadOnly = getEnvAsBool("DEMARKUS_READ_ONLY", false, &errs)
 	config.StoreBackend = getEnv("DEMARKUS_STORE", "file")
 	config.PostgresDSN = getEnv("DEMARKUS_PG_DSN", "")
 
@@ -63,7 +62,9 @@ func NewConfig() (*Config, error) {
 // path enforces one contract.
 func (c *Config) Validate() error {
 	var errs []error
-	if c.RateLimit < 0 {
+	if math.IsNaN(c.RateLimit) || math.IsInf(c.RateLimit, 0) {
+		errs = append(errs, fmt.Errorf("rate limit must be finite (got %v)", c.RateLimit))
+	} else if c.RateLimit < 0 {
 		errs = append(errs, fmt.Errorf("rate limit must be non-negative (got %v)", c.RateLimit))
 	}
 	if c.RateBurst < 0 {
@@ -137,6 +138,21 @@ func getEnvAsFloat64(key string, defaultValue float64, errs *[]error) float64 {
 		return defaultValue
 	}
 	return value
+}
+
+func getEnvAsBool(key string, defaultValue bool, errs *[]error) bool {
+	valueStr := getEnv(key, "")
+	switch valueStr {
+	case "":
+		return defaultValue
+	case "1", "true", "yes":
+		return true
+	case "0", "false", "no":
+		return false
+	default:
+		*errs = append(*errs, fmt.Errorf("%s: invalid boolean %q (use 1/true/yes or 0/false/no)", key, valueStr))
+		return defaultValue
+	}
 }
 
 func getEnvAsDuration(key string, defaultValue time.Duration, errs *[]error) time.Duration {

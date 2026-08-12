@@ -359,9 +359,9 @@ func TestProcessMarkersWideRunes(t *testing.T) {
 	s := func(i int) string { return string(markerStart(i)) }
 	e := func(i int) string { return string(markerEnd(i)) }
 
-	// "你好" renders as 4 terminal cells; the link region after it must start
-	// at cell 4, not rune 2, or mouse hit-testing selects the wrong link.
-	rendered := "你好" + s(0) + "link" + e(0) + " /u.md end"
+	// "你好" is 4 cells: the region must start at cell 4, not rune 2. The
+	// URL's wide rune exercises extendingCol accounting past the end marker.
+	rendered := "你好" + s(0) + "link" + e(0) + " /文.md end"
 	_, regions := processMarkers(rendered, -1, -1)
 
 	if len(regions) != 1 {
@@ -371,9 +371,9 @@ func TestProcessMarkersWideRunes(t *testing.T) {
 	if r.startCol != 4 {
 		t.Errorf("startCol = %d, want 4 (cell width, not rune count)", r.startCol)
 	}
-	// "link" (4) + " " (1) + "/u.md" (5) = 10 cells from start 4 = endCol 14
-	if r.endCol != 14 {
-		t.Errorf("endCol = %d, want 14", r.endCol)
+	// "link" (4) + " " (1) + "/文.md" ("/"=1, 文=2, ".md"=3 → 6) = 11 cells from start 4 = endCol 15
+	if r.endCol != 15 {
+		t.Errorf("endCol = %d, want 15", r.endCol)
 	}
 }
 

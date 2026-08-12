@@ -818,12 +818,19 @@ func TestCrawlerListingCycle(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://example.com"}
 	cfg.Crawl.MaxDocuments = 100
+	cfg.Crawl.MaxDepth = 3
 	cfg.Politeness.RequestDelay = 0
 
 	client := newMockClient()
-	// /loop/ lists itself: without cycle detection this recurses until MaxDepth.
+	// A self-referencing listing served at EVERY depth mints ever-deeper
+	// distinct paths; termination is demonstrated by MaxDepth, not by the
+	// visited set or a missing mock response.
 	client.addList("example.com:6309", "/", "- [a.md](a.md)\n- [loop/](loop/)\n")
-	client.addList("example.com:6309", "/loop/", "- [loop/](loop/)\n- [b.md](b.md)\n")
+	dir := "/loop/"
+	for range 8 {
+		client.addList("example.com:6309", dir, "- [loop/](loop/)\n- [b.md](b.md)\n")
+		dir += "loop/"
+	}
 	client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	client.addDoc("example.com:6309", "/loop/b.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
@@ -832,6 +839,7 @@ func TestCrawlerListingCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
+	// a.md + /loop/b.md; deeper b.md paths have no documents behind them.
 	if result.DocumentsCrawled != 2 {
 		t.Errorf("DocumentsCrawled = %d, want 2", result.DocumentsCrawled)
 	}

@@ -215,15 +215,17 @@ type serverWalk struct {
 	host    string
 	token   string
 	count   int
-	visited map[string]bool // normalized paths, cycle guard
+	lists   int             // LIST requests issued to this server
+	visited map[string]bool // normalized paths, dedups repeated references
 }
 
 // walkDir recursively walks a directory on a server, collecting hashes and discovering links.
 func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) error {
 	c := s.c
 
-	// Check limits. MaxDepth bounds directory nesting; the visited set breaks
-	// listing cycles (a hostile or buggy server linking back to an ancestor).
+	// MaxDepth is the cycle-safety bound: a self-referencing listing mints
+	// ever-deeper distinct paths the visited set cannot catch. The LIST
+	// budget bounds breadth (MaxDocuments caps FETCHes, not listings).
 	if int(s.run.docCount.Load()) >= c.cfg.Crawl.MaxDocuments {
 		return nil
 	}
@@ -234,6 +236,11 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 		return nil
 	}
 	s.visited[dirPath] = true
+	if s.lists >= max(c.cfg.Crawl.MaxDocuments, 100) {
+		s.run.recordError("server %s: list budget exhausted at %s, crawl incomplete", s.host, dirPath)
+		return nil
+	}
+	s.lists++
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -261,7 +268,9 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 
 		entry, ok := listwalk.ResolveEntry(dirPath, dest)
 		if !ok {
-			continue // absolute, escaping, or undecodable; never valid in a listing
+			// Absolute, escaping, or undecodable; never valid in a listing.
+			s.run.recordError("server %s: invalid listing entry %q in %s", s.host, dest, dirPath)
+			continue
 		}
 		fullPath := entry.Path
 
