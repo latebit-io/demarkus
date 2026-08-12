@@ -1183,6 +1183,15 @@ func TestMigrateLegacyLayout_HiddenDirDocuments(t *testing.T) {
 	if doc.Version != 1 {
 		t.Errorf("version = %d, want 1", doc.Version)
 	}
+
+	// Explicit-version retrieval (getVersion) must reach it too.
+	doc, err = s.Get("/.well-known/agent-manifest.md", 1)
+	if err != nil {
+		t.Fatalf("Get manifest v1: %v", err)
+	}
+	if !bytes.Contains(doc.Content, []byte("# manifest")) {
+		t.Errorf("v1 content = %q, want the manifest body", doc.Content)
+	}
 }
 
 // TODO(v1): remove this test with migrateLegacyLayout.
