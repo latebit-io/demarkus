@@ -34,7 +34,7 @@
     "CHANGELOG.md"
   ],
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@earendil-works/pi-coding-agent": ">=0.79.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   }
