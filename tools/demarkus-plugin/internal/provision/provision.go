@@ -751,7 +751,7 @@ func signalReload(pid int) error {
 	case err == nil:
 		logf("sent SIGHUP to server (pid=%d) to reload tokens", pid)
 		return nil
-	case errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH):
+	case alreadyExited(err):
 		return nil
 	default:
 		return fmt.Errorf("SIGHUP to server pid %d: %w", pid, err)
@@ -953,14 +953,18 @@ func stopStaleManagedServer(runningPID int, soulDir string) error {
 		return nil
 	}
 	logf("restarting managed demarkus-server onto upgraded binary (target=%s)", serverVersion)
-	_ = signalPID(runningPID, syscall.SIGTERM)
+	if err := signalPID(runningPID, syscall.SIGTERM); err != nil && !alreadyExited(err) {
+		warnf("SIGTERM to managed server pid %d: %v", runningPID, err)
+	}
 	// Bounded wait for exit (~3s), then escalate to SIGKILL so the respawn
 	// can bind the freed UDP port.
 	for waited := 0; waited < 30 && pidAlive(runningPID); waited++ {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if pidAlive(runningPID) {
-		_ = signalPID(runningPID, syscall.SIGKILL) // escalation; exit confirmed below
+		if err := signalPID(runningPID, syscall.SIGKILL); err != nil && !alreadyExited(err) {
+			warnf("SIGKILL to managed server pid %d: %v", runningPID, err)
+		}
 		for waited := 0; waited < 10 && pidAlive(runningPID); waited++ {
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -1584,6 +1588,12 @@ func pidAlive(pid int) bool {
 	}
 	err = p.Signal(syscall.Signal(0))
 	return err == nil || err == syscall.EPERM
+}
+
+// alreadyExited reports a signal failure that just means the process is gone,
+// which is the outcome the stop sequence wants, not a warning.
+func alreadyExited(err error) bool {
+	return errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH)
 }
 
 func signalPID(pid int, sig syscall.Signal) error {
