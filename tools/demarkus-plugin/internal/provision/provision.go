@@ -183,23 +183,30 @@ func migrateManagedTokens(soulDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cur, err := tokensPathFor(soulDir)
-	if err != nil {
-		return "", err
+	legacy := filepath.Join(soulDir, "tokens.toml")
+	if fileExists(newPath) {
+		// Retry a legacy cleanup that failed after a successful copy on a
+		// prior run; a leftover copy keeps token material in the content root.
+		if fileExists(legacy) {
+			if err := os.Remove(legacy); err != nil {
+				return "", fmt.Errorf("remove leftover legacy tokens.toml: %w", err)
+			}
+		}
+		return newPath, nil
 	}
-	if cur == newPath {
-		return newPath, nil // migrated already, or fresh: ensureTokenEntry populates it
+	if !fileExists(legacy) {
+		return newPath, nil // fresh install: ensureTokenEntry populates it
 	}
 	if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
 		return "", err
 	}
-	if err := os.Rename(cur, newPath); err != nil {
+	if err := os.Rename(legacy, newPath); err != nil {
 		// Cross-device fallback: project souls can sit on another volume.
-		if err := installFile(cur, newPath, 0o600); err != nil {
+		if err := installFile(legacy, newPath, 0o600); err != nil {
 			return "", fmt.Errorf("migrate tokens.toml out of soul root: %w", err)
 		}
-		if err := os.Remove(cur); err != nil {
-			warnf("remove legacy tokens.toml %s after copy: %v", cur, err)
+		if err := os.Remove(legacy); err != nil {
+			return "", fmt.Errorf("remove legacy tokens.toml after copy: %w", err)
 		}
 	}
 	logf("moved tokens.toml out of the soul root (%s)", newPath)
@@ -600,7 +607,11 @@ func installFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = in.Close() }()
+	defer func() {
+		if err := in.Close(); err != nil {
+			warnf("close %s after copy: %v", src, err)
+		}
+	}()
 	tmp := dst + ".tmp"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
@@ -931,6 +942,35 @@ func managedServerCurrent(pidFile, versionFile, root string) bool {
 	return strings.TrimSpace(string(ver)) == serverVersion
 }
 
+// stopStaleManagedServer stops a live-but-stale managed server and confirms it
+// exited: the caller's token migration moves the file the old server reads. A
+// live PID that is not our server for soulDir is left untouched (kill safety).
+func stopStaleManagedServer(runningPID int, soulDir string) error {
+	if !pidIsServerAtRoot(runningPID, soulDir) {
+		if runningPID > 0 && pidAlive(runningPID) {
+			warnf("recorded pid %d is live but is not the demarkus-server for %s (stale .pid, reused PID); leaving it alone and clearing our bookkeeping", runningPID, soulDir)
+		}
+		return nil
+	}
+	logf("restarting managed demarkus-server onto upgraded binary (target=%s)", serverVersion)
+	_ = signalPID(runningPID, syscall.SIGTERM)
+	// Bounded wait for exit (~3s), then escalate to SIGKILL so the respawn
+	// can bind the freed UDP port.
+	for waited := 0; waited < 30 && pidAlive(runningPID); waited++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if pidAlive(runningPID) {
+		_ = signalPID(runningPID, syscall.SIGKILL) // escalation; exit confirmed below
+		for waited := 0; waited < 10 && pidAlive(runningPID); waited++ {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if pidAlive(runningPID) {
+		return fmt.Errorf("prior managed server (pid %d) still alive after SIGKILL; aborting respawn", runningPID)
+	}
+	return nil
+}
+
 // ensureManagedServer spawns a demarkus-server for soulDir on port if ours isn't
 // already running and current. Writes the PID to <soulDir>/.pid and the spawned
 // binary's version to <soulDir>/.server-version. For default/isolated modes only.
@@ -949,20 +989,8 @@ func ensureManagedServer(soulDir string, port int) error {
 
 	// Not reusable. Stop a live-but-stale managed server before respawning — but
 	// only after confirming it is genuinely ours for this root.
-	runningPID := readPID(pidFile)
-	if pidIsServerAtRoot(runningPID, soulDir) {
-		logf("restarting managed demarkus-server onto upgraded binary (target=%s)", serverVersion)
-		_ = signalPID(runningPID, syscall.SIGTERM)
-		// Bounded wait for exit (~3s), then escalate to SIGKILL so the respawn
-		// can bind the freed UDP port.
-		for waited := 0; waited < 30 && pidAlive(runningPID); waited++ {
-			time.Sleep(100 * time.Millisecond)
-		}
-		if pidAlive(runningPID) {
-			_ = signalPID(runningPID, syscall.SIGKILL)
-		}
-	} else if runningPID > 0 && pidAlive(runningPID) {
-		warnf("recorded pid %d is live but is not the demarkus-server for %s (stale .pid, reused PID); leaving it alone and clearing our bookkeeping", runningPID, soulDir)
+	if err := stopStaleManagedServer(readPID(pidFile), soulDir); err != nil {
+		return err
 	}
 	_ = os.Remove(pidFile)
 	_ = os.Remove(versionFile)

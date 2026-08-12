@@ -699,6 +699,21 @@ func TestManagedTokensMigration(t *testing.T) {
 	if again, err := migrateManagedTokens(soul); err != nil || again != newPath {
 		t.Fatalf("rerun migrateManagedTokens = %q, %v; want %q", again, err, newPath)
 	}
+
+	// A leftover legacy file (failed removal after a prior copy) is cleaned up
+	// on the next run without touching the migrated file.
+	if err := os.WriteFile(legacy, []byte("leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := migrateManagedTokens(soul); err != nil || got != newPath {
+		t.Fatalf("leftover-cleanup migrateManagedTokens = %q, %v; want %q", got, err, newPath)
+	}
+	if fileExists(legacy) {
+		t.Error("leftover legacy tokens.toml not removed on rerun")
+	}
+	if data, err := os.ReadFile(newPath); err != nil || string(data) != "[tokens]\n" {
+		t.Fatalf("migrated file changed by leftover cleanup: %q, %v", data, err)
+	}
 }
 
 // TestSignalReload covers the nil paths: live owned child, then vanished pid.
