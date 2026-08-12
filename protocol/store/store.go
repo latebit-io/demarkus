@@ -2,7 +2,9 @@
 //
 // The store manages documents in a content directory. Only documents written
 // through the protocol (with a versions directory) are served. Flat files
-// without version history are treated as non-existent.
+// without version history are not documents (SPEC 9.8, 11.9): FETCH treats
+// them as non-existent, LIST omits them, and a publish to their path replaces
+// them without incorporating their content.
 //
 // Layout (per-document subdirectory):
 //
@@ -14,10 +16,11 @@
 //	      v2
 //	      v3
 //
-// The store also supports a legacy flat layout (versions/doc.md.v{N}) for
-// backward compatibility. Old-layout documents are migrated to the per-document
-// subdirectory layout on the next write.
-// TODO(v1): remove flat layout support and migration code.
+// A legacy flat layout (versions/doc.md.v{N}) predates the per-document
+// subdirectory layout. The read and write paths assume per-doc layout only;
+// callers opening a store over a pre-existing root run MigrateLegacyLayout
+// once at startup to convert any remaining legacy files.
+// TODO(v1): remove MigrateLegacyLayout once no pre-per-doc stores remain.
 package store
 
 import (
@@ -150,31 +153,6 @@ func IsReservedMetaKey(key string) bool {
 	return reservedMetaKeys[key]
 }
 
-// isPerDocLayout reports whether a document uses the per-document subdirectory
-// layout (versions/{base}/v{N}) rather than the flat layout (versions/{base}.v{N}).
-// TODO(v1): remove once all stores have been migrated; assume per-doc layout.
-func isPerDocLayout(versionsDir, base string) bool {
-	info, err := os.Stat(filepath.Join(versionsDir, base))
-	return err == nil && info.IsDir()
-}
-
-// resolveVersionFile returns the absolute path to an existing version file,
-// checking per-doc layout first then falling back to flat layout. This handles
-// partially-migrated stores where some versions may still be in the old layout.
-// TODO(v1): remove flat layout fallback; always use per-doc path directly.
-func resolveVersionFile(versionsDir, base string, version int) string {
-	perDoc := filepath.Join(versionsDir, base, fmt.Sprintf("v%d", version))
-	if _, err := os.Stat(perDoc); err == nil {
-		return perDoc
-	}
-	flat := filepath.Join(versionsDir, fmt.Sprintf("%s.v%d", base, version))
-	if _, err := os.Stat(flat); err == nil {
-		return flat
-	}
-	// Neither exists; return per-doc path so callers get a meaningful error.
-	return perDoc
-}
-
 // newVersionFilePath returns the absolute path for a new version file,
 // always using the per-document subdirectory layout.
 func newVersionFilePath(versionsDir, base string, version int) string {
@@ -200,13 +178,25 @@ type Store struct {
 	pathIdx map[string]string
 }
 
-// New creates a store rooted at the given directory.
+// New creates a store rooted at the given directory. For a pre-existing root
+// use Open, which migrates any legacy-layout version files first.
 func New(root string) *Store {
 	return &Store{
 		root:    root,
 		hashIdx: make(map[string]string),
 		pathIdx: make(map[string]string),
 	}
+}
+
+// Open returns a store for an existing root, migrating legacy flat-layout
+// versions first: an unmigrated root would hide every legacy document and
+// restart its numbering. TODO(v1): fold into New with migrateLegacyLayout.
+func Open(root string) (*Store, error) {
+	s := New(root)
+	if err := s.migrateLegacyLayout(); err != nil {
+		return nil, fmt.Errorf("migrate legacy layout: %w", err)
+	}
+	return s, nil
 }
 
 // contentHash computes the sha256 content hash for a document body.
@@ -421,12 +411,9 @@ func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]DirEntry, e
 	return out, nil
 }
 
-// ListDir returns directory entries at the given path, excluding dot-files
-// and the versions/ directory. When includeArchived is false, archived
-// documents are omitted, as are subdirectories whose entire subtree contains
-// only archived documents (an all-archived directory would otherwise linger as
-// an empty shell). When true, every current entry is returned regardless of
-// archival — the recovery/audit view.
+// ListDir returns entries at reqPath, excluding dot-files, versions/, and
+// non-documents (SPEC 9.8/11.9). includeArchived=false also omits archived
+// docs and document-free subtrees; true is the recovery/audit view.
 func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, error) {
 	dirPath, err := s.resolve(reqPath)
 	if err != nil {
@@ -450,37 +437,86 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 	// unless the caller asked to see them. liveChildren is computed once (a
 	// single pathIdx pass) so classification is an O(1) lookup per entry —
 	// files and directories the index names as live never touch disk.
+	absRoot, err := s.resolvedRoot()
+	if err != nil {
+		return nil, err
+	}
 	var live liveChildren
-	var absRoot string
 	if !includeArchived {
 		live = s.liveChildren(reqPath)
-		if absRoot, err = s.resolvedRoot(); err != nil {
-			return nil, err
-		}
 	}
+	dc := s.docCandidates(dirPath)
 	filtered := entries[:0]
 	for _, e := range entries {
 		name := e.Name()
 		if isHiddenEntry(name) {
 			continue
 		}
-		if !includeArchived {
-			if e.IsDir() {
-				// Fast path: the index names this child as holding a live
-				// versioned doc. Fallback: the index only tracks versioned
-				// documents, so a child it misses may still hold visible
-				// entries (regular/legacy flat files) — scan disk before
-				// pruning rather than hide content the listing would show.
-				if _, ok := live.dirs[name]; !ok && !dirHasVisibleEntry(filepath.Join(dirPath, name), absRoot) {
-					continue // subtree holds only archived documents
+		if e.IsDir() {
+			if includeArchived {
+				// Recovery/audit view: any document in the subtree, archived
+				// included, keeps the directory visible.
+				if !s.dirHasDocument(filepath.Join(dirPath, name), absRoot, true) {
+					continue
 				}
-			} else if _, ok := live.files[name]; !ok && entryArchived(filepath.Join(dirPath, name), absRoot) {
-				continue
+			} else {
+				// Index fast path; on a miss, scan disk before pruning
+				// rather than hide content the listing would show.
+				if _, ok := live.dirs[name]; !ok && !s.dirHasDocument(filepath.Join(dirPath, name), absRoot, false) {
+					continue // subtree holds no listable documents
+				}
 			}
+			filtered = append(filtered, e)
+			continue
+		}
+		// Index fast path: a live indexed doc is a document by construction;
+		// the include-archived view's nil map misses into the disk checks.
+		if _, ok := live.files[name]; ok {
+			filtered = append(filtered, e)
+			continue
+		}
+		if !dc.isDocument(name) {
+			continue
+		}
+		if !includeArchived && entryArchived(filepath.Join(dirPath, name), absRoot) {
+			continue
 		}
 		filtered = append(filtered, e)
 	}
 	return filtered, nil
+}
+
+// docCandidates answers "is this file entry a served document?" (SPEC 9.8):
+// its per-doc dir holds a version, so Get would serve it; a symlink earns no
+// trust on its own (SPEC 6.2). Memoizes one versions/ ReadDir per listing.
+type docCandidates struct {
+	dirAbs string
+	bases  map[string]bool
+	loaded bool
+}
+
+func (s *Store) docCandidates(dirAbs string) *docCandidates {
+	return &docCandidates{dirAbs: dirAbs}
+}
+
+func (dc *docCandidates) isDocument(name string) bool {
+	if !dc.loaded {
+		dc.loaded = true
+		// A failed ReadDir leaves an empty set: an inaccessible versions/
+		// hides its documents rather than serving them broken (same
+		// trade-off as dirHasDocument and highestPerDocVersion).
+		entries, err := os.ReadDir(filepath.Join(dc.dirAbs, "versions"))
+		if err != nil {
+			return false
+		}
+		dc.bases = make(map[string]bool, len(entries))
+		for _, e := range entries {
+			if e.IsDir() {
+				dc.bases[e.Name()] = true
+			}
+		}
+	}
+	return dc.bases[name] && highestPerDocVersion(filepath.Join(dc.dirAbs, "versions"), name) > 0
 }
 
 // isHiddenEntry reports whether a directory entry name is always excluded from
@@ -544,33 +580,36 @@ func hasHiddenSegment(rel string) bool {
 	return false
 }
 
-// dirHasVisibleEntry reports whether the directory subtree rooted at dirAbs
-// holds at least one entry a filtered listing would show — any non-archived
-// file, including regular/legacy flat files that pathIdx does not track
-// (entryArchived errs toward visibility for those). It is the slow-path
-// complement to liveChildren: only consulted for child directories the index
-// does not already name, so an indexed (common-case) directory never pays for
-// a disk walk, and an all-archived directory is scanned rather than a live
-// flat file being wrongly hidden. Returns false on an unreadable directory so
-// an inaccessible subtree is pruned rather than shown empty.
-func dirHasVisibleEntry(dirAbs, absRoot string) bool {
+// dirHasDocument reports whether the subtree holds a document the listing
+// view would show (SPEC 11.9); liveChildren's slow-path complement, walked
+// only for unindexed children. Unreadable dirs prune rather than show empty.
+func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) bool {
 	entries, err := os.ReadDir(dirAbs)
 	if err != nil {
 		return false
 	}
+	// Files first: a qualifying file at this level answers with at most one
+	// candidate load, before any subtree recursion is paid.
+	dc := s.docCandidates(dirAbs)
+	var dirs []string
 	for _, e := range entries {
 		name := e.Name()
 		if isHiddenEntry(name) {
 			continue
 		}
-		child := filepath.Join(dirAbs, name)
 		if e.IsDir() {
-			if dirHasVisibleEntry(child, absRoot) {
-				return true
-			}
+			dirs = append(dirs, name)
 			continue
 		}
-		if !entryArchived(child, absRoot) {
+		if !dc.isDocument(name) {
+			continue
+		}
+		if includeArchived || !entryArchived(filepath.Join(dirAbs, name), absRoot) {
+			return true
+		}
+	}
+	for _, name := range dirs {
+		if s.dirHasDocument(filepath.Join(dirAbs, name), absRoot, includeArchived) {
 			return true
 		}
 	}
@@ -722,22 +761,49 @@ func (s *Store) resolve(reqPath string) (string, error) {
 // CurrentVersion returns the latest version number for a document.
 // Returns 0 if no version history exists.
 func (s *Store) CurrentVersion(reqPath string) int {
-	versions := s.findVersions(reqPath)
-	if len(versions) == 0 {
-		return 0
-	}
-	latest := 0
-	for _, v := range versions {
-		if v.Version > latest {
-			latest = v.Version
-		}
-	}
-	return latest
+	cleaned := filepath.Clean(reqPath)
+	cleaned = strings.TrimLeft(cleaned, "/")
+	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
+	return highestPerDocVersion(versionsDir, filepath.Base(cleaned))
 }
 
-// findVersions looks for versioned files in the versions directory.
-// Supports both per-document subdirectory layout (versions/{base}/v{N})
-// and flat layout (versions/{base}.v{N}).
+// highestPerDocVersion returns the highest version in base's per-doc dir,
+// or 0 (names-only, no stats). An unreadable dir is also 0: an inaccessible
+// doc hides rather than serves broken, and heals with the permission.
+func highestPerDocVersion(versionsDir, base string) int {
+	entries, err := os.ReadDir(filepath.Join(versionsDir, base))
+	if err != nil {
+		return 0
+	}
+	highest := 0
+	for _, e := range entries {
+		if n := perDocVersionNumber(e); n > highest {
+			highest = n
+		}
+	}
+	return highest
+}
+
+// perDocVersionNumber parses a per-doc version filename ("v{N}", N >= 1),
+// 0 otherwise. Regular files only: a planted symlink is never a version,
+// anywhere the store answers version questions.
+func perDocVersionNumber(e os.DirEntry) int {
+	if !e.Type().IsRegular() {
+		return 0
+	}
+	name := e.Name()
+	if !strings.HasPrefix(name, "v") {
+		return 0
+	}
+	n, err := strconv.Atoi(name[1:])
+	if err != nil || n < 1 {
+		return 0
+	}
+	return n
+}
+
+// findVersions looks for versioned files in the versions directory
+// (per-document subdirectory layout, versions/{base}/v{N}).
 // Returns nil if no versions directory or no matching files exist.
 func (s *Store) findVersions(reqPath string) []VersionInfo {
 	cleaned := filepath.Clean(reqPath)
@@ -745,11 +811,7 @@ func (s *Store) findVersions(reqPath string) []VersionInfo {
 	base := filepath.Base(cleaned)
 
 	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
-
-	if isPerDocLayout(versionsDir, base) {
-		return s.findVersionsPerDoc(versionsDir, base)
-	}
-	return s.findVersionsFlat(versionsDir, base)
+	return s.findVersionsPerDoc(versionsDir, base)
 }
 
 // findVersionsPerDoc reads versions from the per-document subdirectory layout.
@@ -762,43 +824,8 @@ func (s *Store) findVersionsPerDoc(versionsDir, base string) []VersionInfo {
 
 	var versions []VersionInfo
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), "v") {
-			continue
-		}
-		numStr := e.Name()[1:] // strip "v" prefix
-		num, err := strconv.Atoi(numStr)
-		if err != nil || num < 1 {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		versions = append(versions, VersionInfo{
-			Version:  num,
-			Modified: info.ModTime().UTC().Truncate(time.Second),
-		})
-	}
-	return versions
-}
-
-// findVersionsFlat reads versions from the flat layout.
-// TODO(v1): remove this function; all stores will use per-doc layout.
-func (s *Store) findVersionsFlat(versionsDir, base string) []VersionInfo {
-	entries, err := os.ReadDir(versionsDir)
-	if err != nil {
-		return nil
-	}
-
-	prefix := base + ".v"
-	var versions []VersionInfo
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
-			continue
-		}
-		numStr := strings.TrimPrefix(e.Name(), prefix)
-		num, err := strconv.Atoi(numStr)
-		if err != nil || num < 1 {
+		num := perDocVersionNumber(e)
+		if num == 0 {
 			continue
 		}
 		info, err := e.Info()
@@ -820,22 +847,11 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 	cleaned = strings.TrimLeft(cleaned, "/")
 	base := filepath.Base(cleaned)
 
-	// Try per-doc layout first, fall back to flat layout for backward compatibility.
-	// TODO(v1): remove flat layout fallback.
 	dir := filepath.Dir(cleaned)
 	perDocPath := "/" + filepath.Join(dir, "versions", base, fmt.Sprintf("v%d", version))
 	filePath, err := s.resolve(perDocPath)
-	if err == nil {
-		if _, statErr := os.Stat(filePath); statErr != nil {
-			filePath = "" // per-doc path resolved but file doesn't exist; try flat
-		}
-	}
-	if filePath == "" {
-		flatPath := "/" + filepath.Join(dir, "versions", fmt.Sprintf("%s.v%d", base, version))
-		filePath, err = s.resolve(flatPath)
-		if err != nil {
-			return nil, err
-		}
+	if err != nil {
+		return nil, err
 	}
 
 	info, err := os.Stat(filePath)
@@ -887,10 +903,8 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 		return os.ErrNotExist
 	}
 
-	// Resolve the version file path, trying per-doc layout first.
-	// TODO(v1): remove flat layout fallback.
 	versionsDir := filepath.Join(s.root, dir, "versions")
-	resolvedFile := resolveVersionFile(versionsDir, base, currentVersion)
+	resolvedFile := newVersionFilePath(versionsDir, base, currentVersion)
 	rel, _ := filepath.Rel(s.root, resolvedFile)
 	versionRelPath := "/" + rel
 	versionFile, err := s.resolve(versionRelPath)
@@ -1000,9 +1014,9 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	}
 
 	// For existing documents: reject writes to archived documents (closes
-	// TOCTOU gap with handler), run migrations, and check for duplicate content.
+	// TOCTOU gap with handler) and check for duplicate content.
 	if next > 1 {
-		doc, err := s.prepareExistingDoc(versionsDir, base, currentFile, next, content, meta)
+		doc, err := s.prepareExistingDoc(versionsDir, base, next, content, meta)
 		if doc != nil || err != nil {
 			return doc, err
 		}
@@ -1170,11 +1184,9 @@ func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *Prun
 	return res
 }
 
-// prepareExistingDoc handles pre-write checks for existing documents:
-// rejects archived documents, migrates flat files and old layout to per-doc
-// subdirectories, and returns ErrNotModified if content is unchanged.
-// Returns (nil, nil) when the caller should proceed with writing a new version.
-func (s *Store) prepareExistingDoc(versionsDir, base, currentFile string, next int, content []byte, meta map[string]string) (*Document, error) {
+// prepareExistingDoc rejects archived documents and returns ErrNotModified
+// on unchanged content; (nil, nil) means proceed with a new version.
+func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content []byte, meta map[string]string) (*Document, error) {
 	archived, err := s.isCurrentArchived(versionsDir, base, next-1)
 	if err != nil {
 		return nil, err
@@ -1182,17 +1194,8 @@ func (s *Store) prepareExistingDoc(versionsDir, base, currentFile string, next i
 	if archived {
 		return nil, ErrArchived
 	}
-	if err := s.migrateFlatFile(versionsDir, base, currentFile); err != nil {
-		return nil, err
-	}
-	if !isPerDocLayout(versionsDir, base) {
-		if err := s.migrateToPerDocDir(versionsDir, base, currentFile); err != nil {
-			return nil, err
-		}
-	}
 
 	// Skip creating a new version if content and metadata are identical.
-	// After migration, always use per-doc layout for reads.
 	prevFile := newVersionFilePath(versionsDir, base, next-1)
 	prevData, err := os.ReadFile(prevFile)
 	if err != nil {
@@ -1337,8 +1340,8 @@ func (s *Store) VerifyChain(reqPath string) error {
 	for i, curr := range versions[1:] {
 		prev := versions[i]
 
-		prevFile := resolveVersionFile(versionsDir, base, prev.Version)
-		currFile := resolveVersionFile(versionsDir, base, curr.Version)
+		prevFile := newVersionFilePath(versionsDir, base, prev.Version)
+		currFile := newVersionFilePath(versionsDir, base, curr.Version)
 
 		prevData, err := os.ReadFile(prevFile)
 		if err != nil {
@@ -1471,7 +1474,7 @@ func joinContent(existing, content []byte) ([]byte, error) {
 func buildVersionFile(versionsDir, base string, version int, content []byte, meta map[string]string) ([]byte, error) {
 	var prevData []byte
 	if version > 1 {
-		prevFile := resolveVersionFile(versionsDir, base, version-1)
+		prevFile := newVersionFilePath(versionsDir, base, version-1)
 		var err error
 		prevData, err = os.ReadFile(prevFile)
 		if err != nil {
@@ -1662,110 +1665,137 @@ func extractBody(data []byte) []byte {
 	return data[4+end+5:]
 }
 
-// migrateFlatFile promotes a flat file (no version history) to v1 in the
-// versions directory using the per-document subdirectory layout.
-// If v1 already exists (concurrent write), it is a no-op.
-// TODO(v1): remove this function; flat files without version history won't exist.
-func (s *Store) migrateFlatFile(versionsDir, base, currentFile string) error {
-	// A document with any per-doc version history is not a flat file. This
-	// must not check for v1 specifically: retention pruning deletes the
-	// oldest versions, and misclassifying a pruned document here would
-	// resurrect a bogus v1 from the current symlink's raw bytes (store
-	// frontmatter included) and break the hash chain.
-	if len(s.findVersionsPerDoc(versionsDir, base)) > 0 {
-		return nil
-	}
-	flatV1 := filepath.Join(versionsDir, fmt.Sprintf("%s.v1", base))
-	if _, err := os.Stat(flatV1); !errors.Is(err, os.ErrNotExist) {
-		return nil // v1 already exists (old layout, will be migrated by migrateToPerDocDir)
-	}
-	flatData, err := os.ReadFile(currentFile)
-	if err != nil {
-		return fmt.Errorf("read flat file for migration: %w", err)
-	}
-
-	// Create per-document subdirectory.
-	docDir := filepath.Join(versionsDir, base)
-	if err := os.MkdirAll(docDir, 0o755); err != nil {
-		return fmt.Errorf("create per-doc dir for migration: %w", err)
-	}
-
-	v1File := newVersionFilePath(versionsDir, base, 1)
-	v1Data := []byte("---\nversion: 1\n---\n")
-	v1Data = append(v1Data, flatData...)
-	// Use exclusive create to prevent overwriting a v1 that appeared
-	// between the Stat check and now (TOCTOU race).
-	f, err := os.OpenFile(v1File, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		if os.IsExist(err) {
-			return nil // v1 was created concurrently
+// migrateLegacyLayout moves legacy versions/{base}.v{N} files to the
+// per-doc layout and repairs current pointers. Idempotent; runs from Open
+// before any serving. TODO(v1): remove once no pre-per-doc stores remain.
+func (s *Store) migrateLegacyLayout() error {
+	return filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("migrate flat file to v1: %w", err)
+		if !d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if path != s.root && strings.HasPrefix(name, ".") {
+			return filepath.SkipDir
+		}
+		if name != "versions" {
+			return nil
+		}
+		if merr := s.migrateLegacyVersionsDir(path); merr != nil {
+			return merr
+		}
+		return filepath.SkipDir // per-doc subdirs hold only version files
+	})
+}
+
+// legacyFile pairs a legacy version file's on-disk name with its parsed
+// version: the two can diverge ("doc.md.v01" parses to 1), and a
+// reconstructed name would miss the file and abort the migration.
+type legacyFile struct {
+	name string
+	n    int
+}
+
+// migrateLegacyVersionsDir migrates every legacy-layout document in one
+// versions directory. A single ReadDir groups version files by document;
+// the per-base worker gets the list so nothing rescans the directory.
+func (s *Store) migrateLegacyVersionsDir(versionsDir string) error {
+	entries, err := os.ReadDir(versionsDir)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", versionsDir, err)
 	}
-	if _, err := f.Write(v1Data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(v1File)
-		return fmt.Errorf("migrate flat file to v1: %w", err)
+	// One filename per (base, n): normalized collisions ("doc.md.v01" vs
+	// "doc.md.v1") resolve to the canonical name; the loser stays on disk
+	// as an unserved stray, never deleted, never blocking Open.
+	byVersion := make(map[string]map[int]string)
+	for _, e := range entries {
+		// Regular files only: a symlink named like a version would otherwise
+		// be moved into the per-doc dir (redundant defense; version reads
+		// reject non-regular entries too, see perDocVersionNumber).
+		if !e.Type().IsRegular() {
+			continue
+		}
+		base, n, ok := legacyVersion(e.Name())
+		if !ok {
+			continue
+		}
+		if byVersion[base] == nil {
+			byVersion[base] = make(map[int]string)
+		}
+		if _, exists := byVersion[base][n]; !exists || e.Name() == fmt.Sprintf("%s.v%d", base, n) {
+			byVersion[base][n] = e.Name()
+		}
 	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(v1File)
-		return fmt.Errorf("migrate flat file to v1: %w", err)
+	for base, versions := range byVersion {
+		files := make([]legacyFile, 0, len(versions))
+		for n, name := range versions {
+			files = append(files, legacyFile{name, n})
+		}
+		currentFile := filepath.Join(filepath.Dir(versionsDir), base)
+		if err := s.migrateToPerDocDir(versionsDir, base, currentFile, files); err != nil {
+			return fmt.Errorf("migrate %s: %w", currentFile, err)
+		}
 	}
 	return nil
 }
 
-// migrateToPerDocDir moves version files from the flat layout (versions/{base}.v{N})
-// to the per-document subdirectory layout (versions/{base}/v{N}).
-// Updates the current symlink to point at the new location.
-// No-op if already using per-document layout or no flat files exist.
-// TODO(v1): remove this function; all stores will use per-doc layout.
-func (s *Store) migrateToPerDocDir(versionsDir, base, currentFile string) error {
+// legacyVersion parses a legacy version filename ({base}.v{N}). Visible
+// markdown basenames only: the protocol publishes nothing else, and a stray
+// "..v1" (base ".") would aim the current-pointer at the directory itself.
+func legacyVersion(name string) (base string, n int, ok bool) {
+	i := strings.LastIndex(name, ".v")
+	if i <= 0 {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(name[i+2:])
+	if err != nil || n < 1 {
+		return "", 0, false
+	}
+	base = name[:i]
+	if !strings.HasSuffix(base, ".md") || isHiddenEntry(base) {
+		return "", 0, false
+	}
+	return base, n, true
+}
+
+// migrateToPerDocDir moves base's legacy version files into its per-doc dir
+// and points the current symlink at the highest version present after the
+// move (a crash may have split layouts). TODO(v1): remove with migration.
+func (s *Store) migrateToPerDocDir(versionsDir, base, currentFile string, files []legacyFile) error {
 	// Create per-document subdirectory.
 	docDir := filepath.Join(versionsDir, base)
 	if err := os.MkdirAll(docDir, 0o755); err != nil {
 		return fmt.Errorf("create per-doc dir for migration: %w", err)
 	}
 
-	// Find all flat-layout version files for this document.
-	entries, err := os.ReadDir(versionsDir)
-	if err != nil {
-		return fmt.Errorf("read versions dir for migration: %w", err)
-	}
+	for _, f := range files {
+		oldPath := filepath.Join(versionsDir, f.name)
+		newPath := newVersionFilePath(versionsDir, base, f.n)
 
-	prefix := base + ".v"
-	var highestVersion int
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
-			continue
-		}
-		numStr := strings.TrimPrefix(e.Name(), prefix)
-		num, err := strconv.Atoi(numStr)
-		if err != nil || num < 1 {
-			continue
-		}
-
-		oldPath := filepath.Join(versionsDir, e.Name())
-		newPath := newVersionFilePath(versionsDir, base, num)
-
-		// Skip if already migrated (e.g. concurrent migration).
+		// Destination already exists: a concurrent opener moved this version
+		// first (collisions were resolved at grouping time, one name per n).
 		if _, err := os.Stat(newPath); err == nil {
-			_ = os.Remove(oldPath)
-			if num > highestVersion {
-				highestVersion = num
-			}
 			continue
 		}
 
 		if err := os.Rename(oldPath, newPath); err != nil {
-			return fmt.Errorf("migrate version %d: %w", num, err)
-		}
-		if num > highestVersion {
-			highestVersion = num
+			// A concurrent opener can win the rename between the Stat above
+			// and here; the version arriving is success, not failure.
+			if errors.Is(err, os.ErrNotExist) {
+				if _, statErr := os.Stat(newPath); statErr == nil {
+					continue
+				}
+			}
+			return fmt.Errorf("migrate version %d: %w", f.n, err)
 		}
 	}
 
-	// Update symlink to point at the new location.
-	if highestVersion > 0 {
+	// Point the current symlink at the highest per-doc version now present —
+	// scanned after the moves, so versions a crashed migration already moved
+	// are counted and the pointer never regresses.
+	if highestVersion := highestPerDocVersion(versionsDir, base); highestVersion > 0 {
 		relTarget := newVersionSymlinkTarget(base, highestVersion)
 		tmpLink := currentFile + ".tmp"
 		_ = os.Remove(tmpLink)
@@ -1785,7 +1815,7 @@ func (s *Store) migrateToPerDocDir(versionsDir, base, currentFile string) error 
 // Returns (false, nil) if the file doesn't exist (new document).
 // Returns an error for non-ErrNotExist read failures.
 func (s *Store) isCurrentArchived(versionsDir, base string, version int) (bool, error) {
-	path := resolveVersionFile(versionsDir, base, version)
+	path := newVersionFilePath(versionsDir, base, version)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
