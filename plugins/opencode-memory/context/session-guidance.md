@@ -26,7 +26,7 @@ Before answering "what do I know about / did we decide / have we seen X" — and
 
 ## Record as you go (proactively)
 
-When something is worth persisting, write it without being prompted. The full per-project layout lives in `/project-template.md` at the soul root (the canonical source); the common routes:
+When something is worth persisting, write it without being prompted. The full per-project layout lives in the `soul-memory` skill (a `/project-template.md` published at the soul root overrides it); the common routes:
 
 - **Decision** → an ADR at `/<slug>/adr/<NNNN>-<title>.md`
 - **Lesson from a bug / a gotcha** → `/<slug>/debugging.md` (often the highest recall value)

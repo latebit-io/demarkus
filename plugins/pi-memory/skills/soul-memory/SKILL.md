@@ -28,7 +28,7 @@ Before reading or writing, resolve the project slug:
 
 ## Per-project structure
 
-The canonical layout lives in **`/project-template.md`** at the soul root (seeded on first session, user-customizable). Fetch it when in doubt — it is the single source of truth. In brief, each `/<project>/` subtree uses:
+This skill carries the canonical layout. A `/project-template.md` published at the soul root overrides it — fetch that and follow it when it exists. Only `not-found` means no override; any other fetch failure (transport, auth, server error) is a real error — surface it and stop instead of silently falling back to this layout. Each `/<project>/` subtree uses:
 
 - `/<project>/index.md` — the project hub; links to every doc below and anchors discovery
 - `/<project>/architecture.md` — system design, module boundaries, key decisions
@@ -41,6 +41,8 @@ The canonical layout lives in **`/project-template.md`** at the soul root (seede
 - `/<project>/adr/<NNNN>-<slug>.md` — Architecture Decision Records (one per decision, zero-padded 4-digit sequence)
 - `/<project>/plans/<name>.md` — plan documents (lifecycle carried in the text)
 - `/<project>/journal/<YYYY-MM-DD>.md` — dated session notes, one file per day
+
+Map the layout to the OKF `type` on publish: `architecture.md` → `Architecture`, `adr/*` → `Decision`, `plans/*` and `roadmap.md` → `Plan`, `journal/*` → `Journal`, `patterns.md`/`guidelines.md`/`debugging.md` → `Guide`, standalone reference docs → `Reference`. `debt.md` and `thoughts.md` take the server default (`Document`); hubs (`index.md`) stay untyped.
 
 ## Tool routing
 
@@ -63,7 +65,7 @@ Write intents — route to the right file for the content type:
 - **Technical debt** → `/<project>/debt.md`.
 - **Plan document** → `/<project>/plans/<name>.md` (carry active / completed / archived in the text).
 - **Open question / idea, not yet decided** → `/<project>/thoughts.md`.
-- **Cross-project or global note** → if it does not fit a project, ask the user where it belongs. Do not create ad-hoc top-level files (the soul root holds only `/index.md` and `/project-template.md`).
+- **Cross-project or global note** → if it does not fit a project, ask the user where it belongs. Do not create ad-hoc top-level files (the soul root holds only `/index.md` and an optional `/project-template.md` override).
 
 **On every `mark_publish`, set `metadata`:** `tags` (comma-separated subjects — the primary match target for `mark_lookup`) and, sparingly, `importance` (0–1, default 0.5; reserve high values for genuinely central docs like index hubs and architecture). An untagged document can only be found by words in its title, so tagging on write is what makes later recall work. The server does not infer either field — you choose them. Reserved keys are rejected; any other metadata key is stored opaquely and reachable through lookup's `filter` axis.
 
@@ -75,7 +77,7 @@ Always reference what you saved by full path so the user can find it again.
 
 ## Creating a new project
 
-When the user wants to start memory for a project that does not exist in `/index.md` yet (fetch `/project-template.md` first if you need the full layout):
+When the user wants to start memory for a project that does not exist in `/index.md` yet (the per-project structure above is the layout; a published `/project-template.md` override wins):
 
 1. Confirm the slug (basename of the project cwd, lowercased, spaces → hyphens)
 2. Create the project hub `/<slug>/index.md` with `mark_publish` `expected_version: 0` — a short page that will link to the project's docs as they appear. Don't pre-create empty stubs for every template file; add docs when there's something real to put in them.
@@ -87,5 +89,5 @@ When the user wants to start memory for a project that does not exist in `/index
 - Don't fabricate memory. If `mark_fetch` returns `not-found`, the document does not exist — say so.
 - Don't invent expected_versions. Use 0 for new documents; fetch first when updating.
 - Don't bypass the MCP tools with shell commands — the soul is the source of truth.
-- Don't create top-level files outside `/<project>/` subtrees except for `/index.md` itself.
+- Don't create top-level files outside `/<project>/` subtrees except for `/index.md` and a `/project-template.md` layout override.
 - Don't save secrets, credentials, or anything the user has not explicitly authorized.

@@ -36,6 +36,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/token"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -89,8 +90,17 @@ const (
 	legacyTokenPaths = "/*"
 )
 
-//go:embed seed/index.md seed/project-template.md
+//go:embed seed/index.md
 var seedFS embed.FS
+
+// pristineTemplateHashes are the sha256 of every project-template.md the old
+// filesystem seeding ever shipped. The layout now lives in the soul-memory
+// skill; a flat copy matching one of these is an untouched seed, safe to delete.
+var pristineTemplateHashes = map[string]bool{
+	"2573bd505e8ed7f3573a2fd24e903b2dbf65df4dc03a933a8f5a10f63610c7a6": true,
+	"e62bf567bf066d421ce7808cc7ee5077a2a6179b52b5b521fc25721b2960e109": true,
+	"1e28177e16d4e580b34566a62d804809fe90c1ca188424ca51b20f4f9c351e93": true,
+}
 
 // log writes a progress line to stderr, matching the bash "[demarkus-memory] …".
 func logf(format string, a ...any) {
@@ -994,35 +1004,110 @@ func restartLocalServerOnUpgrade(replaced bool) {
 
 // --- seed (lib.sh seed_doc + session-start.sh seed_souldocs) -----------------
 
-// seedSoulDocs copies the embedded index.md and project-template.md into soulDir
-// when absent. Best-effort; never clobbers existing content (a user's customized
-// doc survives across sessions).
-func seedSoulDocs(soulDir string) {
-	seedDoc("index.md", filepath.Join(soulDir, "index.md"))
-	seedDoc("project-template.md", filepath.Join(soulDir, "project-template.md"))
+// seedClient is the protocol surface seeding needs; *fetch.Client satisfies it.
+type seedClient interface {
+	Fetch(host, path, token string) (fetch.Result, error)
+	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 }
 
-// seedDoc copies the embedded seed seedName to target if target's directory is
-// writable and target is absent. A no-op (best-effort) otherwise; logs only on
-// an actual copy.
-func seedDoc(seedName, target string) {
-	dir := filepath.Dir(target)
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() || !dirWritable(dir) {
-		return
-	}
-	if fileExists(target) {
-		return
-	}
-	data, err := seedFS.ReadFile("seed/" + seedName)
+// seedSoulDocs seeds index.md via PUBLISH so it gets version history; a
+// flat file on disk is not FETCHable (issue #288). Best-effort: failures
+// warn and provision continues.
+func seedSoulDocs(port int) {
+	tokenFile, err := pluginToken()
 	if err != nil {
+		warnf("could not locate plugin token; skipping doc seeding: %v", err)
 		return
 	}
-	if err := os.WriteFile(target, data, 0o644); err != nil {
-		warnf("could not seed %s (write failed); continuing", target)
+	raw, err := os.ReadFile(tokenFile)
+	if err != nil {
+		warnf("could not read plugin token; skipping doc seeding: %v", err)
 		return
 	}
-	logf("seeded %s", target)
+	// Tight localhost timeouts for this best-effort session-start path. The
+	// client retries transient errors 5x, so a down server still costs ~5s of
+	// dial timeouts here (vs ~50s on the defaults); a wedged one ~25s per op.
+	cl := fetch.NewClient(fetch.Options{Insecure: true, DialTimeout: time.Second, RequestTimeout: 5 * time.Second})
+	defer cl.Close()
+	host := "localhost:" + strconv.Itoa(port)
+	seedDoc(cl, host, strings.TrimSpace(string(raw)), "index.md", map[string]string{
+		"tags":       "index,hub,projects,navigation",
+		"importance": "0.9",
+		// no OKF type: hubs stay untyped
+	})
+}
+
+// cleanupLegacyTemplate deletes the old seeding's flat project-template.md
+// (never FETCHable, issue #288) when pristine; the layout now ships in the
+// soul-memory skill. A customized copy stays until its owner republishes.
+func cleanupLegacyTemplate(soulDir string) {
+	const name = "project-template.md"
+	flatPath := filepath.Join(soulDir, name)
+	fi, err := os.Lstat(flatPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			warnf("could not stat %s: %v", flatPath, err)
+		}
+		return
+	}
+	if !fi.Mode().IsRegular() {
+		return // a symlink is an already-versioned doc
+	}
+	flat, err := os.ReadFile(flatPath)
+	if err != nil {
+		warnf("could not read flat %s: %v", name, err)
+		return
+	}
+	sum := sha256.Sum256(flat)
+	if !pristineTemplateHashes[hex.EncodeToString(sum[:])] {
+		return
+	}
+	if err := os.Remove(flatPath); err != nil {
+		warnf("could not remove legacy flat %s: %v", name, err)
+		return
+	}
+	logf("removed legacy flat %s (the layout now ships in the soul-memory skill)", name)
+}
+
+// seedDoc publishes the embedded seed for name at the soul root unless the
+// server already serves it. Create-only: over a legacy flat file this relies
+// on the store's flat-to-v1 migration, whose conflict preserves user content.
+func seedDoc(cl seedClient, host, tok, name string, meta map[string]string) {
+	docPath := "/" + name
+	res, err := cl.Fetch(host, docPath, tok)
+	if err != nil {
+		warnf("could not check %s before seeding (server unreachable?): %v", docPath, err)
+		return
+	}
+	switch res.Response.Status {
+	case protocol.StatusNotFound:
+		// not served; seed below
+	case protocol.StatusOK, protocol.StatusArchived:
+		return // already versioned, or deliberately archived
+	default:
+		warnf("unexpected status %q checking %s; not seeding", res.Response.Status, docPath)
+		return
+	}
+
+	content, err := seedFS.ReadFile("seed/" + name)
+	if err != nil {
+		warnf("embedded seed %s unreadable: %v", name, err)
+		return
+	}
+	// expected-version 0 = create-only: a concurrent writer winning the race is fine.
+	pres, err := cl.Publish(host, docPath, string(content), tok, 0, meta)
+	if err != nil {
+		warnf("could not seed %s: %v", docPath, err)
+		return
+	}
+	switch pres.Response.Status {
+	case protocol.StatusCreated, protocol.StatusOK:
+		logf("seeded %s", docPath)
+	case protocol.StatusConflict:
+		// a concurrent writer created it; nothing to do
+	default:
+		warnf("could not seed %s: server returned %q", docPath, pres.Response.Status)
+	}
 }
 
 // --- exported API ------------------------------------------------------------
@@ -1093,56 +1178,80 @@ func withProvisionLock(fn func() error) error {
 	return fmt.Errorf("could not acquire provision lock %s (another session provisioning?)", lockDir)
 }
 
-// Provision runs the per-session sequence: load-or-default config, ensure
-// binaries, restart-on-upgrade, ensure/verify the server, seed soul docs. All
-// progress goes to STDERR. (session-start.sh / pi provision.sh main.)
-func Provision() error { return withProvisionLock(provisionLocked) }
+// Provision runs the per-session sequence: config, binaries, server, seed.
+// Progress goes to STDERR. Seeding runs after the lock: create-only publish
+// is race-safe, and a wedged server must not serialize session starts.
+func Provision() error {
+	seedPort := 0
+	if err := withProvisionLock(func() error {
+		var err error
+		seedPort, err = provisionLocked()
+		return err
+	}); err != nil {
+		return err
+	}
+	if seedPort > 0 {
+		seedSoulDocs(seedPort)
+	}
+	return nil
+}
 
-func provisionLocked() error {
+// provisionLocked does the lock-held provisioning work and returns the port to
+// seed against, or 0 when seeding should be skipped.
+func provisionLocked() (int, error) {
 	cfg, err := loadConfig()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if cfg == nil {
 		logf("no plugin config; running default setup")
 		if err := initLocked("default", 0, ""); err != nil { // already holding the lock
-			return err
+			return 0, err
 		}
 		cfg, err = loadConfig()
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if cfg == nil {
-			return fmt.Errorf("default setup completed but plugin-memory.conf is missing or invalid")
+			return 0, fmt.Errorf("default setup completed but plugin-memory.conf is missing or invalid")
 		}
 	}
 
 	replaced, err := ensureBinaries()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	restartLocalServerOnUpgrade(replaced)
 
 	port, perr := strconv.Atoi(strings.TrimSpace(cfg.Port))
+	seed := true
 	switch cfg.Mode {
 	case "default", "isolated":
 		if perr != nil {
-			return fmt.Errorf("malformed PORT %q in plugin-memory.conf", cfg.Port)
+			return 0, fmt.Errorf("malformed PORT %q in plugin-memory.conf", cfg.Port)
 		}
 		if err := ensureManagedServer(cfg.SoulDir, port); err != nil {
-			return err
+			return 0, err
 		}
 	case "reuse":
+		if perr != nil {
+			warnf("malformed PORT %q in plugin-memory.conf; skipping doc seeding", cfg.Port)
+			seed = false
+		}
 		if pidOfServerAtRoot(cfg.SoulDir) == 0 {
 			warnf("configured to reuse server at %s but none is running; run /soul-init to reconfigure", cfg.SoulDir)
+			seed = false // known down; don't pay the seeding dial retries
 		}
 	default:
-		return fmt.Errorf("unknown MODE in plugin-memory.conf: %s", cfg.Mode)
+		return 0, fmt.Errorf("unknown MODE in plugin-memory.conf: %s", cfg.Mode)
 	}
 
-	seedSoulDocs(cfg.SoulDir)
+	cleanupLegacyTemplate(cfg.SoulDir) // local-only; runs even when seeding is skipped
 	logf("ready (mode=%s, soul=%s, port=%s)", cfg.Mode, cfg.SoulDir, cfg.Port)
-	return nil
+	if !seed {
+		port = 0
+	}
+	return port, nil
 }
 
 // Init runs setup for the given mode: "default" | "reuse" | "isolated".
@@ -1320,18 +1429,6 @@ func DetectServers() (string, error) {
 func fileExists(p string) bool {
 	info, err := os.Stat(p)
 	return err == nil && !info.IsDir()
-}
-
-func dirWritable(dir string) bool {
-	// Probe with a temp file; the bash uses `-w`. A failed create means not writable.
-	f, err := os.CreateTemp(dir, ".demarkus-wtest-")
-	if err != nil {
-		return false
-	}
-	name := f.Name()
-	_ = f.Close()
-	_ = os.Remove(name)
-	return true
 }
 
 // readPID reads and validates the bare positive integer in a .pid file, or 0.
