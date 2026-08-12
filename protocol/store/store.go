@@ -1676,11 +1676,10 @@ func (s *Store) migrateLegacyLayout() error {
 		if !d.IsDir() {
 			return nil
 		}
-		name := d.Name()
-		if path != s.root && strings.HasPrefix(name, ".") {
-			return filepath.SkipDir
-		}
-		if name != "versions" {
+		// Hidden directories are walked too: FETCH serves explicit hidden
+		// paths (/.well-known/agent-manifest.md), so their legacy versions
+		// must migrate; skipping them broke the manifest on soul.demarkus.io.
+		if d.Name() != "versions" {
 			return nil
 		}
 		if merr := s.migrateLegacyVersionsDir(path); merr != nil {

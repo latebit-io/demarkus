@@ -1157,6 +1157,35 @@ func TestOpen_MigratesLegacyLayout(t *testing.T) {
 }
 
 // TODO(v1): remove this test with migrateLegacyLayout.
+func TestMigrateLegacyLayout_HiddenDirDocuments(t *testing.T) {
+	root := t.TempDir()
+	wkDir := filepath.Join(root, ".well-known", "versions")
+	if err := os.MkdirAll(wkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// FETCH serves explicit hidden paths (the agent manifest), so legacy
+	// versions under hidden directories must migrate like any other.
+	if err := os.WriteFile(filepath.Join(wkDir, "agent-manifest.md.v1"), []byte("---\nversion: 1\n---\n# manifest\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("versions", "agent-manifest.md.v1"), filepath.Join(root, ".well-known", "agent-manifest.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	doc, err := s.Get("/.well-known/agent-manifest.md", 0)
+	if err != nil {
+		t.Fatalf("Get manifest after migration: %v", err)
+	}
+	if doc.Version != 1 {
+		t.Errorf("version = %d, want 1", doc.Version)
+	}
+}
+
+// TODO(v1): remove this test with migrateLegacyLayout.
 func TestMigrateLegacyLayout_SkipsStrayFiles(t *testing.T) {
 	root := t.TempDir()
 	versionsDir := filepath.Join(root, "versions")
