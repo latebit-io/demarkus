@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
@@ -235,7 +234,7 @@ func catalogUnarchive(t *testing.T, b LookupBackend, path string) {
 	if err != nil {
 		t.Fatalf("get after unarchive %s: %v", path, err)
 	}
-	b.Catalog.Put(path, doc.Metadata, store.ExtractBody(doc.Content), doc.Modified)
+	b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
 }
 
 // mustLookup runs a lookup, failing the test on error.

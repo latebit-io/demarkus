@@ -43,7 +43,9 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// Document holds a document's content and metadata.
+// Document holds a document's content and metadata. Content is always the
+// body only — store frontmatter is stripped on every path (Get, Write,
+// WriteVersion, Append); operational state travels in the dedicated fields.
 type Document struct {
 	Content  []byte
 	Modified time.Time
@@ -382,7 +384,7 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	ver := s.CurrentVersion(reqPath)
 
 	return &Document{
-		Content:  data,
+		Content:  extractBody(data),
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  ver,
 		Archived: isArchived(data),
@@ -868,7 +870,7 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 	}
 
 	return &Document{
-		Content:  data,
+		Content:  extractBody(data),
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  version,
 		Archived: isArchived(data),
@@ -1304,8 +1306,7 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 		return nil, err
 	}
 
-	existing := extractBody(baseDoc.Content)
-	combined, err := joinContent(existing, content)
+	combined, err := joinContent(baseDoc.Content, content)
 	if err != nil {
 		return nil, err
 	}

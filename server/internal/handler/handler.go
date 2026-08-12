@@ -312,8 +312,8 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 }
 
 // serveDocument handles the common document-serving logic: archived check,
-// conditional request handling (etag / if-modified-since), frontmatter
-// stripping, and response assembly.
+// conditional request handling (etag / if-modified-since), and response
+// assembly. doc.Content is body-only per the store contract.
 func (h *Handler) serveDocument(w io.Writer, req protocol.Request, doc *store.Document, logPath string) {
 	if doc.Archived {
 		h.logger().Info("archived", "path", sanitize(logPath))
@@ -336,7 +336,7 @@ func (h *Handler) serveDocument(w io.Writer, req protocol.Request, doc *store.Do
 		}
 	}
 
-	body := stripFrontmatter(string(doc.Content))
+	body := string(doc.Content)
 	// Copy publisher metadata first, then set server-owned keys so they can't be overwritten.
 	meta := make(map[string]string)
 	copyPublisherMeta(meta, doc.Metadata)
@@ -497,7 +497,7 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 		return
 	}
 
-	body := stripFrontmatter(string(doc.Content))
+	body := string(doc.Content)
 
 	// Copy publisher metadata first, then set server-owned keys so they can't be overwritten.
 	meta := make(map[string]string)
@@ -812,7 +812,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 				return
 			}
 			h.logger().Info("unarchive", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
-			h.catalogPut(req.Path, []byte(stripFrontmatter(string(doc.Content))), doc.Metadata, doc.Modified)
+			h.catalogPut(req.Path, doc.Content, doc.Metadata, doc.Modified)
 		}
 
 		// Return OK (no-op for active documents, or unarchive response)
@@ -1077,19 +1077,6 @@ func sanitize(s string) string {
 
 func statusTitle(s string) string {
 	return strings.ToUpper(s[:1]) + strings.ReplaceAll(s[1:], "-", " ")
-}
-
-func stripFrontmatter(content string) string {
-	if !strings.HasPrefix(content, "---\n") {
-		return content
-	}
-
-	end := strings.Index(content[4:], "\n---\n")
-	if end == -1 {
-		return content
-	}
-
-	return content[4+end+5:]
 }
 
 var mdReplacer = strings.NewReplacer(

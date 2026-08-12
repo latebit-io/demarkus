@@ -813,3 +813,52 @@ func TestRecordEdgesTitlePrecedence(t *testing.T) {
 		t.Errorf("nodes not crawled: %v", want)
 	}
 }
+
+func TestCrawlerListingCycle(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://example.com"}
+	cfg.Crawl.MaxDocuments = 100
+	cfg.Politeness.RequestDelay = 0
+
+	client := newMockClient()
+	// /loop/ lists itself: without cycle detection this recurses until MaxDepth.
+	client.addList("example.com:6309", "/", "- [a.md](a.md)\n- [loop/](loop/)\n")
+	client.addList("example.com:6309", "/loop/", "- [loop/](loop/)\n- [b.md](b.md)\n")
+	client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	client.addDoc("example.com:6309", "/loop/b.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	result, err := crawler.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if result.DocumentsCrawled != 2 {
+		t.Errorf("DocumentsCrawled = %d, want 2", result.DocumentsCrawled)
+	}
+}
+
+func TestCrawlerMaxDepth(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://example.com"}
+	cfg.Crawl.MaxDepth = 1
+	cfg.Crawl.MaxDocuments = 100
+	cfg.Politeness.RequestDelay = 0
+
+	client := newMockClient()
+	client.addList("example.com:6309", "/", "- [top.md](top.md)\n- [d1/](d1/)\n")
+	client.addList("example.com:6309", "/d1/", "- [mid.md](mid.md)\n- [d2/](d2/)\n")
+	client.addList("example.com:6309", "/d1/d2/", "- [deep.md](deep.md)\n")
+	client.addDoc("example.com:6309", "/top.md", "# Top", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	client.addDoc("example.com:6309", "/d1/mid.md", "# Mid", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	client.addDoc("example.com:6309", "/d1/d2/deep.md", "# Deep", "sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	result, err := crawler.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	// depth 0 = /, depth 1 = /d1/; /d1/d2/ is depth 2 and must not be listed.
+	if result.DocumentsCrawled != 2 {
+		t.Errorf("DocumentsCrawled = %d, want 2 (deep.md is past MaxDepth)", result.DocumentsCrawled)
+	}
+}

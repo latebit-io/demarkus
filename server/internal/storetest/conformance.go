@@ -54,12 +54,17 @@ func testWriteGetRoundtrip(t *testing.T, s handler.DocumentStore) {
 	if doc.Version != 1 {
 		t.Errorf("create version = %d, want 1", doc.Version)
 	}
+	// Contract: Content is body-only on write returns too.
+	if !bytes.Equal(doc.Content, []byte("# First\n")) {
+		t.Errorf("write-returned body = %q, want %q", doc.Content, "# First\n")
+	}
 	got, err := s.Get("/notes/first.md", 0)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if body := store.ExtractBody(got.Content); !bytes.Equal(body, []byte("# First\n")) {
-		t.Errorf("body = %q, want %q", body, "# First\n")
+	// Contract: Content is body-only on every path — no store frontmatter.
+	if !bytes.Equal(got.Content, []byte("# First\n")) {
+		t.Errorf("body = %q, want %q", got.Content, "# First\n")
 	}
 	if got.Version != 1 || got.Archived {
 		t.Errorf("got version=%d archived=%v, want 1 false", got.Version, got.Archived)
@@ -81,8 +86,8 @@ func testVersionHistory(t *testing.T, s handler.DocumentStore) {
 	if err != nil {
 		t.Fatalf("get v1: %v", err)
 	}
-	if body := store.ExtractBody(old.Content); string(body) != "v1" {
-		t.Errorf("v1 body = %q", body)
+	if string(old.Content) != "v1" {
+		t.Errorf("v1 body = %q", old.Content)
 	}
 	vs, err := s.Versions("/doc.md")
 	if err != nil {
@@ -191,11 +196,15 @@ func testAppendSemantics(t *testing.T, s handler.DocumentStore) {
 	if err != nil || doc.Version != 2 {
 		t.Fatalf("append = (%+v, %v), want v2", doc, err)
 	}
+	// Contract: Content is body-only on append returns too.
+	if string(doc.Content) != "line1\nline2" {
+		t.Errorf("append-returned body = %q, want %q", doc.Content, "line1\nline2")
+	}
 	got, err := s.Get("/log.md", 0)
 	if err != nil {
 		t.Fatalf("get after append: %v", err)
 	}
-	if body := string(store.ExtractBody(got.Content)); body != "line1\nline2" {
+	if body := string(got.Content); body != "line1\nline2" {
 		t.Errorf("appended body = %q, want %q", body, "line1\nline2")
 	}
 

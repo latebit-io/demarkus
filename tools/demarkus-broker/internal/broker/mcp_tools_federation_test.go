@@ -428,37 +428,34 @@ func TestHandleMarkResolveAllCandidatesFailReportsLast(t *testing.T) {
 	}
 }
 
-func TestHandleMarkResolveReusesAuthRetryAcrossCandidates(t *testing.T) {
-	// Each candidate fetch goes through dispatchWithAuth, so a
-	// candidate that returns `unauthorized` triggers the same
-	// propagation-race retry the read handlers use. Pin that
-	// behavior: candidate-A 401 → retry → ok; candidate-B never
-	// touched because A resolved.
+func TestHandleMarkResolveReadsDispatchUnauthenticated(t *testing.T) {
+	// Resolve is a read: every fetch dispatches once with an empty bearer
+	// (no write-token provisioning, no auth retry); a 401 candidate is a skip.
 	cfg := mcpTestConfig()
-	cfg.Server.MCP.FirstMintMaxAttempts = 3
-	cfg.Server.MCP.FirstMintInitialBackoff = 1
-	cfg.Server.MCP.FirstMintMaxBackoff = 2
 
-	var attempt int32
+	var calls int32
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		fetchFn: func(_, path, token string) (fetch.Result, error) {
+			if token != "" {
+				t.Errorf("read dispatched with token %q, want empty bearer", token)
+			}
 			if path == "/hub/index.md" {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
 					Body: indexBody(
 						[3]string{testHashA, "mark://team-a", "/foo.md"},
+						[3]string{testHashA, "mark://team-b", "/foo.md"},
 					),
 				}}, nil
 			}
-			n := atomic.AddInt32(&attempt, 1)
-			if n == 1 {
-				// Fresh-mint 401 — broker should retry.
+			if atomic.AddInt32(&calls, 1) == 1 {
+				// First candidate 401s: must be skipped, not retried.
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
 			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"content-hash": testHashA},
-				Body:     "resolved after retry",
+				Body:     "resolved from second candidate",
 			}}, nil
 		},
 	}
@@ -471,10 +468,13 @@ func TestHandleMarkResolveReusesAuthRetryAcrossCandidates(t *testing.T) {
 		t.Fatalf("handleMarkResolve: %v", err)
 	}
 	if res.IsError {
-		t.Fatalf("isError = true after propagation-race retry should have resolved: %s", toolResultText(t, res))
+		t.Fatalf("isError = true, want skip-then-resolve: %s", toolResultText(t, res))
 	}
-	if text := toolResultText(t, res); !strings.Contains(text, "resolved after retry") {
-		t.Errorf("expected the retried success, got:\n%s", text)
+	if text := toolResultText(t, res); !strings.Contains(text, "resolved from second candidate") {
+		t.Errorf("expected second-candidate success, got:\n%s", text)
+	}
+	if n := atomic.LoadInt32(&calls); n != 2 {
+		t.Errorf("candidate fetches = %d, want 2 (one per candidate, no retries)", n)
 	}
 }
 

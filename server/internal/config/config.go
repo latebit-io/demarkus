@@ -30,21 +30,23 @@ type Config struct {
 	PostgresDSN    string        // Postgres connection string (required for the postgres backend)
 }
 
-// NewConfig loads configuration from environment variables.
-// Environment variables are prefixed with DEMARKUS_.
+// NewConfig loads DEMARKUS_-prefixed environment configuration. Unparseable
+// values are errors, not silent defaults. Semantic rules live in Validate,
+// which the caller runs after CLI-flag overrides.
 func NewConfig() (*Config, error) {
 	config := &Config{}
+	var errs []error
 
-	config.Port = getEnvAsInt("DEMARKUS_PORT", protocol.DefaultPort)
+	config.Port = getEnvAsInt("DEMARKUS_PORT", protocol.DefaultPort, &errs)
 	config.ContentDir = getEnv("DEMARKUS_ROOT", "")
-	config.MaxStreams = getEnvAsInt("DEMARKUS_MAX_STREAMS", 10)
-	config.IdleTimeout = getEnvAsDuration("DEMARKUS_IDLE_TIMEOUT", 30*time.Second)
-	config.RequestTimeout = getEnvAsDuration("DEMARKUS_REQUEST_TIMEOUT", 10*time.Second)
+	config.MaxStreams = getEnvAsInt("DEMARKUS_MAX_STREAMS", 10, &errs)
+	config.IdleTimeout = getEnvAsDuration("DEMARKUS_IDLE_TIMEOUT", 30*time.Second, &errs)
+	config.RequestTimeout = getEnvAsDuration("DEMARKUS_REQUEST_TIMEOUT", 10*time.Second, &errs)
 	config.TLSCert = getEnv("DEMARKUS_TLS_CERT", "")
 	config.TLSKey = getEnv("DEMARKUS_TLS_KEY", "")
 	config.TokensFile = getEnv("DEMARKUS_TOKENS", "")
-	config.RateLimit = getEnvAsFloat64("DEMARKUS_RATE_LIMIT", 50)
-	config.RateBurst = getEnvAsInt("DEMARKUS_RATE_BURST", 100)
+	config.RateLimit = getEnvAsFloat64("DEMARKUS_RATE_LIMIT", 50, &errs)
+	config.RateBurst = getEnvAsInt("DEMARKUS_RATE_BURST", 100, &errs)
 	config.LogFormat = getEnv("DEMARKUS_LOG_FORMAT", "text")
 	config.LogLevel = getEnv("DEMARKUS_LOG_LEVEL", "info")
 	if v := getEnv("DEMARKUS_READ_ONLY", ""); v != "" {
@@ -53,27 +55,31 @@ func NewConfig() (*Config, error) {
 	config.StoreBackend = getEnv("DEMARKUS_STORE", "file")
 	config.PostgresDSN = getEnv("DEMARKUS_PG_DSN", "")
 
-	if config.RateLimit < 0 {
-		return config, fmt.Errorf("DEMARKUS_RATE_LIMIT must be non-negative (got %v)", config.RateLimit)
-	}
-	if config.RateBurst < 0 {
-		return config, fmt.Errorf("DEMARKUS_RATE_BURST must be non-negative (got %d)", config.RateBurst)
-	}
-	if config.RateLimit > 0 && config.RateBurst < 1 {
-		return config, fmt.Errorf("DEMARKUS_RATE_BURST must be at least 1 when rate limiting is enabled (got %d)", config.RateBurst)
-	}
+	return config, errors.Join(errs...)
+}
 
-	if err := config.ValidateStoreBackend(); err != nil {
-		return config, err
+// Validate checks the semantic rules (rate limits, store backend) on the
+// final values. Called once after CLI-flag overrides so every configuration
+// path enforces one contract.
+func (c *Config) Validate() error {
+	var errs []error
+	if c.RateLimit < 0 {
+		errs = append(errs, fmt.Errorf("rate limit must be non-negative (got %v)", c.RateLimit))
 	}
-
-	return config, nil
+	if c.RateBurst < 0 {
+		errs = append(errs, fmt.Errorf("rate burst must be non-negative (got %d)", c.RateBurst))
+	}
+	if c.RateLimit > 0 && c.RateBurst < 1 {
+		errs = append(errs, fmt.Errorf("rate burst must be at least 1 when rate limiting is enabled (got %d)", c.RateBurst))
+	}
+	if err := c.ValidateStoreBackend(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 // ValidateStoreBackend checks the store-backend selection and its required
-// settings. NewConfig calls it against the environment-derived values;
-// main.go calls it again after CLI flag overrides so both configuration
-// paths enforce one contract.
+// settings on the final (post-override) values.
 func (c *Config) ValidateStoreBackend() error {
 	switch c.StoreBackend {
 	case "", "file":
@@ -107,37 +113,40 @@ func getEnv(key, defaultValue string) string {
 	return value
 }
 
-func getEnvAsInt(key string, defaultValue int) int {
+func getEnvAsInt(key string, defaultValue int, errs *[]error) int {
 	valueStr := getEnv(key, "")
 	if valueStr == "" {
 		return defaultValue
 	}
 	value, err := strconv.Atoi(valueStr)
 	if err != nil {
+		*errs = append(*errs, fmt.Errorf("%s: invalid integer %q", key, valueStr))
 		return defaultValue
 	}
 	return value
 }
 
-func getEnvAsFloat64(key string, defaultValue float64) float64 {
+func getEnvAsFloat64(key string, defaultValue float64, errs *[]error) float64 {
 	valueStr := getEnv(key, "")
 	if valueStr == "" {
 		return defaultValue
 	}
 	value, err := strconv.ParseFloat(valueStr, 64)
 	if err != nil {
+		*errs = append(*errs, fmt.Errorf("%s: invalid number %q", key, valueStr))
 		return defaultValue
 	}
 	return value
 }
 
-func getEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
+func getEnvAsDuration(key string, defaultValue time.Duration, errs *[]error) time.Duration {
 	valueStr := getEnv(key, "")
 	if valueStr == "" {
 		return defaultValue
 	}
 	value, err := time.ParseDuration(valueStr)
 	if err != nil {
+		*errs = append(*errs, fmt.Errorf("%s: invalid duration %q", key, valueStr))
 		return defaultValue
 	}
 	return value

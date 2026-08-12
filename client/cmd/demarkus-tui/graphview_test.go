@@ -315,7 +315,7 @@ func TestRenderTopologyView(t *testing.T) {
 	})
 }
 
-func TestTruncateRunes(t *testing.T) {
+func TestTruncateCells(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -330,9 +330,9 @@ func TestTruncateRunes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := truncateRunes(tt.input, tt.max)
+			got := truncateCells(tt.input, tt.max)
 			if got != tt.expected {
-				t.Errorf("truncateRunes(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.expected)
+				t.Errorf("truncateCells(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.expected)
 			}
 		})
 	}

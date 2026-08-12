@@ -25,6 +25,11 @@ const (
 	StatusRateLimited  = "rate-limited"
 )
 
+// MaxResponseLength bounds a response read so a misbehaving server cannot
+// OOM the client. Sized to hold a merge-conflict body carrying two full
+// MaxBodyLength documents plus markers, frontmatter, and generated listings.
+const MaxResponseLength = 4 * MaxBodyLength
+
 // Response represents a Mark Protocol response.
 type Response struct {
 	Status   string
@@ -36,9 +41,9 @@ type Response struct {
 // The response has optional YAML frontmatter delimited by "---" lines,
 // followed by the markdown body.
 func ParseResponse(r io.Reader) (Response, error) {
-	data, err := io.ReadAll(r)
+	data, err := readBounded(r, MaxResponseLength, "response")
 	if err != nil {
-		return Response{}, fmt.Errorf("reading response: %w", err)
+		return Response{}, err
 	}
 
 	content := string(data)

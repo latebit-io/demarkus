@@ -177,7 +177,7 @@ func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
 		return nil, fmt.Errorf("get %s: %w", reqPath, err)
 	}
 	return &store.Document{
-		Content:  stored,
+		Content:  store.ExtractBody(stored),
 		Modified: modified.UTC().Truncate(time.Second),
 		Version:  ver,
 		Archived: store.IsArchived(stored),
@@ -727,8 +727,7 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 		return nil, err
 	}
 
-	existing := store.ExtractBody(baseDoc.Content)
-	combined, err := store.JoinContent(existing, content)
+	combined, err := store.JoinContent(baseDoc.Content, content)
 	if err != nil {
 		return nil, err
 	}

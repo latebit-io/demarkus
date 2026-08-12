@@ -10,70 +10,18 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"syscall"
 	"time"
+
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
 )
 
-// withLock runs fn while holding an atomic mkdir mutex for path+".lock". The
-// holder records its PID in the lock dir so a lock whose owner has died (crashed
-// mid-write) is reclaimed instead of wedging future writers. Bounded ~2s.
+// withLock runs fn while holding an atomic mkdir mutex for path+".lock".
+// Bounded ~2s.
 func withLock(path string, fn func() error) error {
-	lock := path + ".lock"
-	lockPid := filepath.Join(lock, "pid")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	for range 100 {
-		err := os.Mkdir(lock, 0o755)
-		if err == nil {
-			// Stamp our PID before running fn. A failed write leaves an unowned
-			// lock dir that stale-lock recovery (which reads this pid) can never
-			// reclaim, wedging future writers — so release and fail instead.
-			if werr := os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644); werr != nil {
-				_ = os.RemoveAll(lock)
-				return werr
-			}
-			return runLocked(lock, fn)
-		}
-		if !os.IsExist(err) {
-			return err
-		}
-		// stale-lock recovery: reclaim if the recorded owner is gone
-		if owner, e := os.ReadFile(lockPid); e == nil {
-			if pid, e2 := strconv.Atoi(string(trimSpace(owner))); e2 == nil && !pidAlive(pid) {
-				_ = os.RemoveAll(lock)
-				continue
-			}
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return &lockError{lock}
-}
-
-// runLocked runs fn and releases the lock dir afterward, even if fn panics.
-// Split out of withLock's loop so the cleanup defer isn't registered per
-// iteration (it fires exactly once, on the acquiring iteration's return).
-func runLocked(lock string, fn func() error) error {
-	defer func() { _ = os.RemoveAll(lock) }()
-	return fn()
-}
-
-type lockError struct{ lock string }
-
-func (e *lockError) Error() string {
-	return "could not acquire " + e.lock + " (held by another process?)"
-}
-
-func pidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = p.Signal(syscall.Signal(0))
-	return err == nil || err == syscall.EPERM
+	return lockdir.WithLock(path+".lock", 100, 20*time.Millisecond, fn)
 }
 
 // atomicWrite writes data to path via a temp file + rename (no torn writes).
@@ -106,15 +54,4 @@ func atomicWritePerm(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp, path)
-}
-
-func trimSpace(b []byte) []byte {
-	i, j := 0, len(b)
-	for i < j && (b[i] == ' ' || b[i] == '\n' || b[i] == '\r' || b[i] == '\t') {
-		i++
-	}
-	for j > i && (b[j-1] == ' ' || b[j-1] == '\n' || b[j-1] == '\r' || b[j-1] == '\t') {
-		j--
-	}
-	return b[i:j]
 }

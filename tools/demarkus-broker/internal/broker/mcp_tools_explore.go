@@ -24,7 +24,7 @@ const exploreSectionCap = 10
 // of its parent directory. Mirrors client/cmd/demarkus-mcp markExplore;
 // the broker differences are the world-name URL shape and that backlinks
 // come from the broker's ephemeral graph store.
-func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
+func (g *mcpGateway) handleMarkExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -72,9 +72,7 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 		mdoutline.CappedList(&b, out, exploreSectionCap, "links")
 	}
 
-	if claims, ok := claimsFromCtx(ctx); ok {
-		g.seedGraphStore(ctx, claims)
-	}
+	g.seedGraphStore()
 	g.writeBacklinksSection(&b, docURL)
 	g.writeSiblingsSection(&b, worldName, path)
 

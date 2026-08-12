@@ -17,6 +17,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
+	"github.com/latebit-io/demarkus/client/internal/listwalk"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mdoutline"
@@ -99,6 +100,8 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 		errorsMu.Unlock()
 	}
 
+	run := &crawlRun{docCount: &docCount, queue: queue, wg: &wg, recordError: recordError}
+
 	// Process servers from queue.
 	worker := func() {
 		for host := range queue {
@@ -111,7 +114,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 				}
 
 				// Crawl this server.
-				count, err := c.crawlServer(ctx, host, &docCount, queue, &wg, recordError)
+				count, err := c.crawlServer(ctx, run, host)
 				if err != nil {
 					recordError("server %s: %v", host, err)
 					return
@@ -179,23 +182,58 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	return result, nil
 }
 
+// crawlRun bundles the run-wide state shared by every server walk in one
+// Run invocation.
+type crawlRun struct {
+	docCount    *atomic.Int32
+	queue       chan<- string
+	wg          *sync.WaitGroup
+	recordError func(string, ...any)
+}
+
 // crawlServer crawls a single server, collecting hashes and discovering new servers.
 // Returns the number of documents successfully crawled.
-func (c *Crawler) crawlServer(ctx context.Context, host string, docCount *atomic.Int32, queue chan<- string, wg *sync.WaitGroup, recordError func(string, ...any)) (int, error) {
-	token := c.resolveToken(host)
-	var count int
+func (c *Crawler) crawlServer(ctx context.Context, run *crawlRun, host string) (int, error) {
+	walk := &serverWalk{
+		c:       c,
+		run:     run,
+		host:    host,
+		token:   c.resolveToken(host),
+		visited: make(map[string]bool),
+	}
 
 	// Start from root.
-	err := c.walkDir(ctx, host, "/", token, docCount, queue, wg, &count, recordError)
-	return count, err
+	err := walk.walkDir(ctx, "/", 0)
+	return walk.count, err
+}
+
+// serverWalk carries the per-server walk state so it isn't threaded as
+// parameters through every recursion level.
+type serverWalk struct {
+	c       *Crawler
+	run     *crawlRun
+	host    string
+	token   string
+	count   int
+	visited map[string]bool // normalized paths, cycle guard
 }
 
 // walkDir recursively walks a directory on a server, collecting hashes and discovering links.
-func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docCount *atomic.Int32, queue chan<- string, wg *sync.WaitGroup, count *int, recordError func(string, ...any)) error {
-	// Check limits.
-	if int(docCount.Load()) >= c.cfg.Crawl.MaxDocuments {
+func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) error {
+	c := s.c
+
+	// Check limits. MaxDepth bounds directory nesting; the visited set breaks
+	// listing cycles (a hostile or buggy server linking back to an ancestor).
+	if int(s.run.docCount.Load()) >= c.cfg.Crawl.MaxDocuments {
 		return nil
 	}
+	if depth > c.cfg.Crawl.MaxDepth {
+		return nil
+	}
+	if s.visited[dirPath] {
+		return nil
+	}
+	s.visited[dirPath] = true
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -206,7 +244,7 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 	}
 
 	// List directory.
-	result, err := c.client.List(host, dirPath, token)
+	result, err := c.client.List(s.host, dirPath, s.token)
 	if err != nil {
 		return fmt.Errorf("list %s: %w", dirPath, err)
 	}
@@ -221,29 +259,33 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 			return ctx.Err()
 		}
 
-		// Build full path.
-		fullPath := dirPath
-		if !strings.HasSuffix(fullPath, "/") {
-			fullPath += "/"
+		entry, ok := listwalk.ResolveEntry(dirPath, dest)
+		if !ok {
+			continue // absolute, escaping, or undecodable; never valid in a listing
 		}
-		fullPath += dest
+		fullPath := entry.Path
 
-		if strings.HasSuffix(dest, "/") {
+		if entry.IsDir {
 			// Directory — recurse.
-			if err := c.walkDir(ctx, host, fullPath, token, docCount, queue, wg, count, recordError); err != nil {
+			if err := s.walkDir(ctx, fullPath+"/", depth+1); err != nil {
 				// Only abort on cancellation; record other errors and continue.
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return err
 				}
-				recordError("dir %s%s: %v", host, fullPath, err)
+				s.run.recordError("dir %s%s: %v", s.host, fullPath, err)
 			}
 			continue
 		}
 
+		if s.visited[fullPath] {
+			continue
+		}
+		s.visited[fullPath] = true
+
 		// File — atomically reserve a slot before Fetch.
-		newCount := int(docCount.Add(1))
+		newCount := int(s.run.docCount.Add(1))
 		if newCount > c.cfg.Crawl.MaxDocuments {
-			docCount.Add(-1) // Roll back reservation
+			s.run.docCount.Add(-1) // Roll back reservation
 			return nil
 		}
 
@@ -252,14 +294,14 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 			time.Sleep(c.cfg.Politeness.RequestDelay)
 		}
 
-		doc, err := c.client.Fetch(host, fullPath, token)
+		doc, err := c.client.Fetch(s.host, fullPath, s.token)
 		if err != nil {
-			docCount.Add(-1) // Roll back reservation
-			recordError("fetch %s%s: %v", host, fullPath, err)
+			s.run.docCount.Add(-1) // Roll back reservation
+			s.run.recordError("fetch %s%s: %v", s.host, fullPath, err)
 			continue
 		}
 
-		url := "mark://" + host + fullPath
+		url := "mark://" + s.host + fullPath
 
 		// Record visit.
 		if c.state != nil {
@@ -269,7 +311,7 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 		}
 
 		if doc.Response.Status != protocol.StatusOK {
-			docCount.Add(-1) // Roll back reservation
+			s.run.docCount.Add(-1) // Roll back reservation
 			continue
 		}
 
@@ -278,7 +320,7 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 		if _, ok := protocol.IsHashPath(contentHash); ok {
 			entry := index.Entry{
 				Hash:   contentHash,
-				Server: "mark://" + host,
+				Server: "mark://" + s.host,
 				Path:   fullPath,
 			}
 			c.mu.Lock()
@@ -288,12 +330,12 @@ func (c *Crawler) walkDir(ctx context.Context, host, dirPath, token string, docC
 
 		// Record this document's outbound links into the graph (the durable
 		// topology map the hub publishes for the reading room's floor).
-		c.recordEdges(host, fullPath, doc.Response.Body, doc.Response.Metadata)
+		c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
 
 		// Discover cross-server links.
-		c.discoverServers(doc.Response.Body, host, queue, wg)
+		c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg)
 
-		*count++
+		s.count++
 	}
 
 	return nil
@@ -474,8 +516,8 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 // demarkus documents); external links are left out. The graph is the source
 // for the hub graph export — the durable, transport-symmetric topology the
 // reading-room floor renders (plans "Floor enrichment", decision 11).
-func (c *Crawler) recordEdges(host, path, body string, meta map[string]string) {
-	url := "mark://" + host + path
+func (c *Crawler) recordEdges(host, docPath, body string, meta map[string]string) {
+	url := "mark://" + host + docPath
 	base := "mark://" + host
 	var linkCount int
 	for _, l := range mdoutline.AnchoredLinks(body) {
@@ -604,7 +646,7 @@ type PublishClient interface {
 // expected_version=-1 (no check) for idempotent re-publish. The server's
 // no-op-on-duplicate-content behavior prevents version churn when the
 // computed index is identical to the previous run.
-func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, path, body, token string) error {
+func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, docPath, body, token string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -616,7 +658,7 @@ func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, 
 	if c.cfg.Publish.Retention > 0 {
 		meta["retention"] = strconv.Itoa(c.cfg.Publish.Retention)
 	}
-	result, err := client.Publish(host, path, body, token, -1, meta)
+	result, err := client.Publish(host, docPath, body, token, -1, meta)
 	if err != nil {
 		return err
 	}

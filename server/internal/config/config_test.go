@@ -89,37 +89,34 @@ func TestNewConfig_RateLimitDisabled(t *testing.T) {
 	}
 }
 
-func TestNewConfig_RateBurstZeroWithLimitEnabled(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("DEMARKUS_ROOT", dir)
-	t.Setenv("DEMARKUS_RATE_LIMIT", "50")
-	t.Setenv("DEMARKUS_RATE_BURST", "0")
-
-	_, err := NewConfig()
-	if err == nil {
-		t.Fatal("expected error for zero burst with rate limiting enabled")
+func TestValidate_RateRules(t *testing.T) {
+	tests := []struct {
+		name      string
+		rateLimit float64
+		rateBurst int
+		wantErr   bool
+	}{
+		{"defaults valid", 50, 100, false},
+		{"disabled valid", 0, 0, false},
+		{"zero burst with limit enabled", 50, 0, true},
+		{"negative rate limit", -10, 100, true},
+		{"negative rate burst", 50, -5, true},
 	}
-}
-
-func TestNewConfig_NegativeRateLimit(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("DEMARKUS_ROOT", dir)
-	t.Setenv("DEMARKUS_RATE_LIMIT", "-10")
-
-	_, err := NewConfig()
-	if err == nil {
-		t.Fatal("expected error for negative rate limit")
-	}
-}
-
-func TestNewConfig_NegativeRateBurst(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("DEMARKUS_ROOT", dir)
-	t.Setenv("DEMARKUS_RATE_BURST", "-5")
-
-	_, err := NewConfig()
-	if err == nil {
-		t.Fatal("expected error for negative rate burst")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				ContentDir: t.TempDir(),
+				RateLimit:  tt.rateLimit,
+				RateBurst:  tt.rateBurst,
+			}
+			err := cfg.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -128,12 +125,9 @@ func TestNewConfig_InvalidRateLimit(t *testing.T) {
 	t.Setenv("DEMARKUS_ROOT", dir)
 	t.Setenv("DEMARKUS_RATE_LIMIT", "not-a-number")
 
-	cfg, err := NewConfig()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.RateLimit != 50 {
-		t.Errorf("rate limit: got %v, want default %v", cfg.RateLimit, 50.0)
+	_, err := NewConfig()
+	if err == nil {
+		t.Fatal("expected error for unparseable DEMARKUS_RATE_LIMIT")
 	}
 }
 
@@ -142,15 +136,17 @@ func TestNewConfig_MissingRoot(t *testing.T) {
 		t.Fatalf("unsetenv: %v", err)
 	}
 
+	// NewConfig defers store-backend checks so CLI flags can complete them;
+	// ValidateStoreBackend is where a missing root must fail.
 	cfg, err := NewConfig()
-	if err == nil {
-		t.Fatal("expected error for missing DEMARKUS_ROOT")
-	}
-	if cfg == nil {
-		t.Fatal("expected config with defaults even when root is missing")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Port != protocol.DefaultPort {
 		t.Errorf("port: got %d, want default %d", cfg.Port, protocol.DefaultPort)
+	}
+	if err := cfg.ValidateStoreBackend(); err == nil {
+		t.Fatal("expected ValidateStoreBackend error for missing DEMARKUS_ROOT")
 	}
 }
 
@@ -173,12 +169,20 @@ func TestNewConfig_InvalidInt(t *testing.T) {
 	t.Setenv("DEMARKUS_ROOT", dir)
 	t.Setenv("DEMARKUS_PORT", "not-a-number")
 
-	cfg, err := NewConfig()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := NewConfig()
+	if err == nil {
+		t.Fatal("expected error for unparseable DEMARKUS_PORT")
 	}
-	if cfg.Port != protocol.DefaultPort {
-		t.Errorf("port: got %d, want default %d", cfg.Port, protocol.DefaultPort)
+}
+
+func TestNewConfig_InvalidDuration(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEMARKUS_ROOT", dir)
+	t.Setenv("DEMARKUS_IDLE_TIMEOUT", "30")
+
+	_, err := NewConfig()
+	if err == nil {
+		t.Fatal("expected error for unparseable DEMARKUS_IDLE_TIMEOUT")
 	}
 }
 

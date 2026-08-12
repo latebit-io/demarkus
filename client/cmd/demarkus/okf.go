@@ -3,16 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/internal/listwalk"
 	"github.com/latebit-io/demarkus/client/internal/okf"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
-	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -175,7 +173,7 @@ func okfExportMain(args []string) {
 	if root == "" {
 		root = "/"
 	}
-	paths, err := enumerateDocs(client, host, root, token, map[string]struct{}{})
+	paths, err := enumerateDocs(client, host, root, token)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "okf export: %v\n", err)
 		os.Exit(1)
@@ -233,34 +231,14 @@ func publisherMeta(respMeta map[string]string) map[string]string {
 // enumerateDocs recursively LISTs dir and returns the mark paths of every ".md"
 // document beneath it, skipping the server's own version directories (already
 // filtered server-side).
-func enumerateDocs(client *fetch.Client, host, dir, token string, seen map[string]struct{}) ([]string, error) {
-	if _, ok := seen[dir]; ok {
-		return nil, fmt.Errorf("list cycle detected at %s", dir)
-	}
-	seen[dir] = struct{}{}
-
-	result, err := client.List(host, dir, token)
-	if err != nil {
-		return nil, fmt.Errorf("list %s: %w", dir, err)
-	}
-	if result.Response.Status != protocol.StatusOK {
-		return nil, fmt.Errorf("list %s: server returned %q", dir, result.Response.Status)
-	}
+func enumerateDocs(client *fetch.Client, host, dir, token string) ([]string, error) {
 	var docs []string
-	for _, dest := range links.Extract(result.Response.Body) {
-		name, err := url.PathUnescape(dest)
-		if err != nil {
-			return nil, fmt.Errorf("list %s: decode entry %q: %w", dir, dest, err)
+	w := listwalk.Walker{Client: client, Host: host, Token: token, Strict: true}
+	err := w.Walk(dir, func(docPath string) error {
+		if strings.HasSuffix(docPath, ".md") {
+			docs = append(docs, docPath)
 		}
-		if sub, ok := strings.CutSuffix(name, "/"); ok {
-			child, err := enumerateDocs(client, host, path.Join(dir, sub), token, seen)
-			if err != nil {
-				return nil, err
-			}
-			docs = append(docs, child...)
-		} else if strings.HasSuffix(name, ".md") {
-			docs = append(docs, path.Join(dir, name))
-		}
-	}
-	return docs, nil
+		return nil
+	})
+	return docs, err
 }

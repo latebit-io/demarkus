@@ -23,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
+	runewidth "github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 )
 
@@ -1497,9 +1498,10 @@ func processMarkers(rendered string, selectedIdx, hoverIdx int) (string, []linkR
 				continue
 			}
 			seenURLChar = true
-			extendingCol++
+			w := runewidth.RuneWidth(r)
+			extendingCol += w
 			result.WriteRune(r)
-			visualCol++
+			visualCol += w
 			continue
 		}
 
@@ -1526,7 +1528,9 @@ func processMarkers(rendered string, selectedIdx, hoverIdx int) (string, []linkR
 		}
 
 		result.WriteRune(r)
-		visualCol++
+		// Mouse hit-testing is in terminal cells, not runes: CJK and emoji
+		// occupy two columns, combining marks zero.
+		visualCol += runewidth.RuneWidth(r)
 	}
 
 	// Flush state at end of input.

@@ -12,22 +12,9 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// mcp_tools_federation.go ships the federation READ tools for
-// Slice 4a of the broker MCP gateway plan: `mark_discover` and
-// `mark_resolve`. Both reuse dispatchWithAuth so the
-// propagation-race retry + cache-hit-401 invalidation built in
-// Slice 2 work here too.
-//
-// Slice 4b (deferred): `mark_backlinks` and `mark_graph`. Those
-// need a broker-side graph store and additional client/internal
-// hoists; the design question (persistent vs ephemeral vs
-// defer-to-local) is intentionally left open for that follow-up.
-//
-// Cross-knowledge-system resolution is out of scope for Slice 4a.
-// A `mark_resolve` index entry pointing at a server URL the
-// broker has no WorldConfig for surfaces as a per-candidate
-// `not a knowledge-system world` log line; resolution continues
-// with the next candidate.
+// mcp_tools_federation.go ships the federation READ tools `mark_discover`
+// and `mark_resolve`, dispatching unauthenticated like every read.
+// Cross-knowledge-system resolution is out of scope: unknown servers skip.
 
 // handleMarkDiscover implements the mark_discover tool. The tool
 // is a thin wrapper around `mark_fetch /.well-known/agent-manifest.md`
@@ -36,7 +23,7 @@ import (
 // just calling mark_fetch) because the agent's prompt-side
 // discovery convention is "ask the server what you can do" and
 // that's easier to express as a dedicated verb.
-func (g *mcpGateway) handleMarkDiscover(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
+func (g *mcpGateway) handleMarkDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -45,13 +32,7 @@ func (g *mcpGateway) handleMarkDiscover(ctx context.Context, req mcp.CallToolReq
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	claims, ok := claimsFromCtx(ctx)
-	if !ok {
-		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
-	}
-	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Fetch(worldName, protocol.WellKnownManifestPath, token)
-	})
+	result, err := g.dispatcher.Fetch(worldName, protocol.WellKnownManifestPath, "")
 	if err != nil {
 		return g.toolErrorFor("discover", worldName, err), nil
 	}
@@ -72,7 +53,7 @@ func (g *mcpGateway) handleMarkDiscover(ctx context.Context, req mcp.CallToolReq
 // next candidate. Cross-org resolution is out of scope for
 // Slice 4a; an index that points exclusively at outside servers
 // returns the descriptive "could not resolve" tool error.
-func (g *mcpGateway) handleMarkResolve(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (g *mcpGateway) handleMarkResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	hash, err := req.RequireString("hash")
 	if err != nil {
 		return mcp.NewToolResultError("hash is required"), nil
@@ -88,15 +69,9 @@ func (g *mcpGateway) handleMarkResolve(ctx context.Context, req mcp.CallToolRequ
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid index URL: %v", err)), nil
 	}
-	claims, ok := claimsFromCtx(ctx)
-	if !ok {
-		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
-	}
 
 	// 1. Fetch the index document.
-	indexResult, err := g.dispatchWithAuth(ctx, claims, indexWorld, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Fetch(indexWorld, indexPath, token)
-	})
+	indexResult, err := g.dispatcher.Fetch(indexWorld, indexPath, "")
 	if err != nil {
 		return g.toolErrorFor("resolve (index fetch)", indexWorld, err), nil
 	}
@@ -124,7 +99,7 @@ func (g *mcpGateway) handleMarkResolve(ctx context.Context, req mcp.CallToolRequ
 	// candidate's complaint.
 	var lastErr string
 	for _, m := range matches {
-		result, perCandidateErr := g.resolveCandidate(ctx, claims, m, hash)
+		result, perCandidateErr := g.resolveCandidate(m, hash)
 		if perCandidateErr != "" {
 			lastErr = perCandidateErr
 			continue
@@ -141,28 +116,18 @@ func (g *mcpGateway) handleMarkResolve(ctx context.Context, req mcp.CallToolRequ
 // handleMarkResolve so the per-candidate decision tree (parse
 // server URL → dispatch → status check → content-hash verify)
 // stays readable.
-func (g *mcpGateway) resolveCandidate(ctx context.Context, claims *Claims, entry index.Entry, hash string) (result fetch.Result, skipReason string) {
+func (g *mcpGateway) resolveCandidate(entry index.Entry, hash string) (result fetch.Result, skipReason string) {
 	candidateWorld, _, perr := parseToolURL(entry.Server)
 	if perr != nil {
 		return fetch.Result{}, fmt.Sprintf("%s: invalid server URL: %v", entry.Server, perr)
 	}
-	result, derr := g.dispatchWithAuth(ctx, claims, candidateWorld, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Fetch(candidateWorld, "/"+hash, token)
-	})
+	result, derr := g.dispatcher.Fetch(candidateWorld, "/"+hash, "")
 	if derr != nil {
 		var notFound *errWorldNotFound
-		// Both errWorldNotFound (world isn't in cfg.Worlds) and
-		// ErrNotAuthorized (world is in cfg.Worlds but the
-		// identity's AllowConfig denied the write) collapse to
-		// "this broker can't reach
-		// this candidate for me" from the agent's perspective.
-		// Different distinct internal causes — same user-facing
-		// recovery (try the next candidate, or accept that
-		// resolution failed). Slice 4a scope: surface cleanly
-		// so the agent understands the skip rather than seeing
-		// a noisy raw broker error.
-		if errors.As(derr, &notFound) || errors.Is(derr, ErrNotAuthorized) {
-			return fetch.Result{}, fmt.Sprintf("%s: not a knowledge-system world (broker has no config or no authorized access for this server)", entry.Server)
+		// A candidate the broker has no WorldConfig for is a clean skip
+		// (try the next candidate), not a noisy raw broker error.
+		if errors.As(derr, &notFound) {
+			return fetch.Result{}, fmt.Sprintf("%s: not a knowledge-system world (broker has no config for this server)", entry.Server)
 		}
 		return fetch.Result{}, fmt.Sprintf("%s: %v", entry.Server, derr)
 	}

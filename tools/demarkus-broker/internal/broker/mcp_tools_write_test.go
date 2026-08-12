@@ -917,6 +917,51 @@ func TestWriteHandlersInheritPropagationRaceRetry(t *testing.T) {
 	}
 }
 
+// TestWriteDispatchRecoversFromRotatedWorldSecret pins the 401 invalidation
+// path: a cached token the world no longer accepts is re-provisioned
+// mid-dispatch, so a rotated world Secret recovers within one call.
+func TestWriteDispatchRecoversFromRotatedWorldSecret(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Server.MCP.FirstMintMaxAttempts = 3
+	cfg.Server.MCP.FirstMintInitialBackoff = 1
+	cfg.Server.MCP.FirstMintMaxBackoff = 2
+
+	var attempts int32
+	d := &fakeDispatcher{
+		publishFn: func(_, _, _, token string, _ int, _ map[string]string) (fetch.Result, error) {
+			atomic.AddInt32(&attempts, 1)
+			if token == "stale-rotated-away" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "1"},
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	// Simulate the stale cache a rotation leaves behind: the pod still
+	// holds a token the world no longer recognizes.
+	g.srv.worldWriteTokens.mu.Lock()
+	g.srv.worldWriteTokens.cache["team-a"] = "stale-rotated-away"
+	g.srv.worldWriteTokens.mu.Unlock()
+
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url":              "mark://team-a/foo.md",
+		"body":             "hello",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true, want recovery after re-provision: %s", toolResultText(t, res))
+	}
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Errorf("publish attempts = %d, want 2 (stale 401, fresh ok)", got)
+	}
+}
+
 // TestMCPGatewayMarkPublishEndToEnd drives mark_publish through
 // the full Streamable HTTP transport including gatewayAuth and
 // session keying. The Slice 2 end-to-end test covers the read

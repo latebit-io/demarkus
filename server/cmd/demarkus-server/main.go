@@ -120,8 +120,12 @@ func main() {
 	// Create logger early so all subsequent output is structured.
 	logger := logging.New(cfg.LogFormat, cfg.LogLevel, nil)
 
+	// Fail-closed: running with silently-defaulted or invalid values (e.g. a
+	// typo'd port or a rate limiter that rejects everything) is worse than
+	// refusing to start.
 	if err != nil {
-		logger.Warn("config", "error", err)
+		logger.Error("config invalid", "error", err)
+		os.Exit(1)
 	}
 
 	applyFlagOverrides(cfg, &flagOverrides{
@@ -134,10 +138,9 @@ func main() {
 		pgDSN:        *pgDSN,
 		readOnly:     *readOnly,
 	})
-	// Re-validate after flag overrides; NewConfig validated only the
-	// env-derived values.
-	if err := cfg.ValidateStoreBackend(); err != nil {
-		logger.Error("store configuration invalid", "error", err)
+	// Semantic validation runs once, on the final post-override values.
+	if err := cfg.Validate(); err != nil {
+		logger.Error("configuration invalid", "error", err)
 		os.Exit(1)
 	}
 
