@@ -28,6 +28,7 @@ jobs:
             server:
               - 'server/**'
               - 'protocol/**'
+              - 'client/**'
               - 'deploy/helm/demarkus-server/**'
             client:
               - 'client/**'
@@ -36,6 +37,7 @@ jobs:
             tools:
               - 'tools/**'
               - 'protocol/**'
+              - 'client/**'
               - 'deploy/helm/demarkus-broker/**'
 
   test-protocol:
@@ -140,12 +142,11 @@ jobs:
           tag_prefix: "server/v"
           major_pattern: "BREAKING CHANGE:"
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
-          # Chart and image are released together at the same version,
-          # so a chart-only commit must bump the version too. Without
-          # the chart path here, fix(server-chart) commits would slip
-          # past the change-path gate, leave should_release=false, and
-          # silently never publish.
-          change_path: "server/ deploy/helm/demarkus-server/"
+          # Chart and image release together, so chart-only commits must
+          # bump too. protocol/ is compiled in via replace directives, and
+          # the image bundles the client CLI for chart exec probes: a fix
+          # in either that skips this gate silently never ships (#295).
+          change_path: "server/ protocol/ client/ deploy/helm/demarkus-server/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -178,7 +179,7 @@ jobs:
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           # See server's change_path note: chart-only commits must
           # bump the version so the chart actually publishes.
-          change_path: "client/ deploy/helm/demarkus-agent/"
+          change_path: "client/ protocol/ deploy/helm/demarkus-agent/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -211,7 +212,7 @@ jobs:
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           # See server's change_path note: chart-only commits must
           # bump the version so the chart actually publishes.
-          change_path: "tools/ deploy/helm/demarkus-broker/"
+          change_path: "tools/ protocol/ client/ deploy/helm/demarkus-broker/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
