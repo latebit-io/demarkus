@@ -22,8 +22,8 @@ import (
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/internal/cache"
+	"github.com/latebit-io/demarkus/client/internal/listwalk"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
-	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
@@ -1148,9 +1148,10 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	// Crawl source server.
-	var entries []index.Entry
 	sourceScheme := "mark://" + sourceHost
-	if err := h.walkDir(sourceHost, sourcePath, sourceScheme, &entries, h.resolveToken(sourceHost)); err != nil && !errors.Is(err, errIndexTruncated) {
+	entries, crawlWarnings, err := h.collectEntries(sourceHost, sourcePath, h.resolveToken(sourceHost))
+	warnings = append(warnings, crawlWarnings...)
+	if err != nil && !errors.Is(err, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
 	} else if errors.Is(err, errIndexTruncated) {
 		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
@@ -1203,59 +1204,51 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	return mcp.NewToolResultText(b.String()), nil
 }
 
-// walkDir recursively lists and fetches documents from a server, collecting content hashes.
-// The token is resolved once at the call site and threaded through recursion.
-func (h *handler) walkDir(host, dirPath, sourceScheme string, entries *[]index.Entry, token string) error {
-	if len(*entries) >= maxIndexDocuments {
-		return errIndexTruncated
+// collectEntries walks the listings and fetches each document, collecting
+// content-hash index entries. Skips come back as warnings (a partial index is
+// never a silent success); errIndexTruncated caps at maxIndexDocuments.
+func (h *handler) collectEntries(host, dirPath, token string) ([]index.Entry, []string, error) {
+	var entries []index.Entry
+	var warnings []string
+	w := listwalk.Walker{
+		Client: h.client,
+		Host:   host,
+		Token:  token,
+		OnSkip: func(p, reason string) {
+			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: %s", p, reason))
+		},
 	}
-
-	result, err := h.client.List(host, dirPath, token)
-	if err != nil {
-		return fmt.Errorf("list %s: %w", dirPath, err)
-	}
-	if result.Response.Status != protocol.StatusOK {
-		return nil // skip inaccessible directories
-	}
-
-	for _, dest := range links.Extract(result.Response.Body) {
-		if len(*entries) >= maxIndexDocuments {
+	err := w.Walk(dirPath, func(fullPath string) error {
+		if len(entries) >= maxIndexDocuments {
 			return errIndexTruncated
 		}
 
-		fullPath := dirPath
-		if !strings.HasSuffix(fullPath, "/") {
-			fullPath += "/"
-		}
-		fullPath += dest
-
-		if strings.HasSuffix(dest, "/") {
-			// Directory — recurse.
-			if err := h.walkDir(host, fullPath, sourceScheme, entries, token); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// File — fetch and collect content-hash.
+		// Fetch and collect content-hash.
 		doc, err := h.client.Fetch(host, fullPath, token)
 		if err != nil {
-			continue // skip unreachable documents
+			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: %v", fullPath, err))
+			return nil
 		}
 		if doc.Response.Status != protocol.StatusOK {
-			continue
+			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: %s", fullPath, doc.Response.Status))
+			return nil
 		}
 		contentHash, ok := doc.Response.Metadata["content-hash"]
 		if _, valid := protocol.IsHashPath(contentHash); !ok || !valid {
-			continue
+			return nil
 		}
-		*entries = append(*entries, index.Entry{
+		entries = append(entries, index.Entry{
 			Hash:   contentHash,
-			Server: sourceScheme,
+			Server: "mark://" + host,
 			Path:   fullPath,
 		})
+		return nil
+	})
+	if errors.Is(err, listwalk.ErrListBudget) {
+		warnings = append(warnings, "warning: directory budget exhausted, index is incomplete")
+		err = nil
 	}
-	return nil
+	return entries, warnings, err
 }
 
 // timeNow is a variable for testing.

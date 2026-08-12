@@ -74,6 +74,36 @@ func TestParseResponse(t *testing.T) {
 	}
 }
 
+func TestParseResponseSizeLimit(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{"at limit", MaxResponseLength, false},
+		{"over limit", MaxResponseLength + 1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := strings.Repeat("a", tt.size)
+			got, err := ParseResponse(strings.NewReader(input))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got.Body) != tt.size {
+				t.Errorf("body length: got %d, want %d", len(got.Body), tt.size)
+			}
+		})
+	}
+}
+
 func TestResponseWriteTo(t *testing.T) {
 	resp := Response{
 		Status:   StatusOK,

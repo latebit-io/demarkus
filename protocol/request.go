@@ -125,14 +125,23 @@ func parseRequestLine(br *bufio.Reader) (verb, path string, err error) {
 // that would exceed the combined frontmatter + body + delimiter budget.
 func readBoundedPayload(br *bufio.Reader) ([]byte, error) {
 	limit := int64(MaxRequestFrontmatterLength + MaxBodyLength + requestWireOverhead)
-	rest, err := io.ReadAll(io.LimitReader(br, limit+1))
+	rest, err := readBounded(br, limit, "request payload")
 	if err != nil {
-		return nil, fmt.Errorf("reading request body: %w", err)
-	}
-	if int64(len(rest)) > limit {
-		return nil, fmt.Errorf("request payload exceeds limit: %d bytes", len(rest))
+		return nil, err
 	}
 	return rest, nil
+}
+
+// readBounded reads r to EOF, erroring when the input exceeds limit bytes.
+func readBounded(r io.Reader, limit int64, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", what, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s exceeds limit: %d bytes max", what, limit)
+	}
+	return data, nil
 }
 
 // splitFrontmatterAndBody separates a request payload into its frontmatter and

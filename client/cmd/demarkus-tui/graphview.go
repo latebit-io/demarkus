@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
+	runewidth "github.com/mattn/go-runewidth"
 )
 
 // viewMode distinguishes between document reading and graph exploration.
@@ -192,9 +193,9 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 
 		line := fmt.Sprintf("%s%s%s%s %s%s", cursor, indent, connector, icon, label, density)
 
-		// Truncate to width (rune-safe for multi-byte icons).
+		// Truncate to terminal cells (CJK/emoji are double-width).
 		if width > 5 {
-			line = truncateRunes(line, width-2)
+			line = truncateCells(line, width-2)
 		}
 
 		b.WriteString(line)
@@ -205,16 +206,14 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 	return b.String()
 }
 
-// truncateRunes truncates s to maxRunes runes, appending "..." if truncated.
-func truncateRunes(s string, maxRunes int) string {
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
-		return s
+// truncateCells truncates s to maxCells terminal cells (double-width runes
+// must not overflow), "..." tail. Truncate returns s unchanged when it fits;
+// the <3 branch guards its tail-wider-than-width edge (bare "...").
+func truncateCells(s string, maxCells int) string {
+	if maxCells < 3 {
+		return runewidth.Truncate(s, maxCells, "")
 	}
-	if maxRunes < 3 {
-		return string(runes[:maxRunes])
-	}
-	return string(runes[:maxRunes-3]) + "..."
+	return runewidth.Truncate(s, maxCells, "...")
 }
 
 func statusIcon(status string) string {
@@ -257,7 +256,7 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 
 		line := fmt.Sprintf("%s%s %s", cursor, icon, label)
 		if width > 5 {
-			line = truncateRunes(line, width-2)
+			line = truncateCells(line, width-2)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
@@ -297,7 +296,7 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 
 		line := fmt.Sprintf("%s%s %s%s", cursor, icon, label, density)
 		if width > 5 {
-			line = truncateRunes(line, width-2)
+			line = truncateCells(line, width-2)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')

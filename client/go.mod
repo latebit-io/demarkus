@@ -10,6 +10,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/latebit-io/demarkus/protocol v0.0.0
 	github.com/mark3labs/mcp-go v0.44.0
+	github.com/mattn/go-runewidth v0.0.21
 	github.com/quic-go/quic-go v0.59.0
 	github.com/yuin/goldmark v1.7.8
 	golang.org/x/term v0.39.0
@@ -36,7 +37,6 @@ require (
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
-	github.com/mattn/go-runewidth v0.0.21 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

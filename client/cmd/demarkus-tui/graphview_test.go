@@ -315,7 +315,7 @@ func TestRenderTopologyView(t *testing.T) {
 	})
 }
 
-func TestTruncateRunes(t *testing.T) {
+func TestTruncateCells(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -325,14 +325,18 @@ func TestTruncateRunes(t *testing.T) {
 		{"no truncation", "hello", 10, "hello"},
 		{"exact fit", "hello", 5, "hello"},
 		{"truncate ASCII", "hello world", 8, "hello..."},
-		{"truncate with multi-byte", "> ● Soul Index [5←]", 12, "> ● Soul ..."},
+		// CJK is unambiguously double-width; results are stable regardless
+		// of go-runewidth's East Asian mode (● and ← are ambiguous-width,
+		// so they stay out of assertions).
+		{"truncate CJK", "你好世界超宽", 9, "你好世..."},
+		{"CJK exact fit", "你好", 4, "你好"},
 		{"very short max", "hello", 2, "he"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := truncateRunes(tt.input, tt.max)
+			got := truncateCells(tt.input, tt.max)
 			if got != tt.expected {
-				t.Errorf("truncateRunes(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.expected)
+				t.Errorf("truncateCells(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.expected)
 			}
 		})
 	}

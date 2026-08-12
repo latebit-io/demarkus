@@ -69,18 +69,12 @@ func brokerCrawlParseURL(raw string) (worldName, urlPath string, err error) {
 	return worldName, urlPath, nil
 }
 
-// crawlFetchFn returns a closure suitable for
-// graphstore.CrawlAndPersist's fetchFunc parameter. Each per-URL
-// fetch threads through dispatchWithAuth so the broker's
-// session cache + propagation-race retry apply even inside the
-// crawl loop. The closure intentionally tolerates per-fetch
-// failure (returns the error to the crawler, which marks the
-// node "error" and continues) — a graph crawl is best-effort.
-func (g *mcpGateway) crawlFetchFn(ctx context.Context, claims *Claims) graphstore.FetchFunc {
+// crawlFetchFn returns graphstore.CrawlAndPersist's fetchFunc. Reads
+// dispatch unauthenticated; per-fetch failures are tolerated (the crawler
+// marks the node "error" and continues) — a graph crawl is best-effort.
+func (g *mcpGateway) crawlFetchFn() graphstore.FetchFunc {
 	return func(worldName, path string) (graph.FetchResult, error) {
-		result, derr := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-			return g.dispatcher.Fetch(worldName, path, token)
-		})
+		result, derr := g.dispatcher.Fetch(worldName, path, "")
 		if derr != nil {
 			return graph.FetchResult{}, derr
 		}
@@ -99,9 +93,9 @@ const seedCheckInterval = 5 * time.Minute
 // seedGraphStore seeds from every configured world: only hubs publish
 // /graph.md and the broker does not know which world is the hub; the
 // per-world throttle bounds the cost.
-func (g *mcpGateway) seedGraphStore(ctx context.Context, claims *Claims) {
+func (g *mcpGateway) seedGraphStore() {
 	for i := range g.srv.cfg.Worlds {
-		g.seedWorldGraph(ctx, claims, g.srv.cfg.Worlds[i].Name)
+		g.seedWorldGraph(g.srv.cfg.Worlds[i].Name)
 	}
 }
 
@@ -111,7 +105,7 @@ func (g *mcpGateway) seedGraphStore(ctx context.Context, claims *Claims) {
 // Never fatal: every failure degrades silently to the unseeded store,
 // warn-logging real errors. Conditional on the stored seed etag; a
 // not-modified response keeps the previously seeded rows.
-func (g *mcpGateway) seedWorldGraph(ctx context.Context, claims *Claims, worldName string) {
+func (g *mcpGateway) seedWorldGraph(worldName string) {
 	g.graphSeedMu.Lock()
 	if last, ok := g.graphSeedChecked[worldName]; ok && time.Since(last) < seedCheckInterval {
 		g.graphSeedMu.Unlock()
@@ -124,9 +118,7 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, claims *Claims, worldNa
 	g.graphSeedMu.Unlock()
 
 	etag := g.graphStore.SeedEtag(worldName)
-	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.FetchConditional(worldName, "/graph.md", token, etag)
-	})
+	result, err := g.dispatcher.FetchConditional(worldName, "/graph.md", "", etag)
 	if err != nil {
 		g.log.Warn("graph seed fetch failed", "world", worldName, "err", err)
 		return
@@ -179,7 +171,7 @@ func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []gr
 // world's published /graph.md first so cold pods still answer.
 // First-time callers on a world with no /graph.md see an empty
 // result (and a hint to run mark_graph first).
-func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
+func (g *mcpGateway) handleMarkBacklinks(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -189,9 +181,7 @@ func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRe
 	if _, _, perr := parseToolURL(raw); perr != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
 	}
-	if claims, ok := claimsFromCtx(ctx); ok {
-		g.seedGraphStore(ctx, claims)
-	}
+	g.seedGraphStore()
 	backlinks := g.graphStore.BacklinksEnriched(raw)
 	if len(backlinks) == 0 {
 		return mcp.NewToolResultText(
@@ -211,16 +201,9 @@ func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRe
 	return mcp.NewToolResultText(b.String()), nil
 }
 
-// handleMarkGraph crawls a seed URL and writes discovered nodes
-// + edges to the broker's ephemeral graph store. Depth defaults
-// to 2, capped at 5 (the local demarkus-mcp's convention). Each
-// per-URL fetch inside the crawl goes through dispatchWithAuth
-// so propagation-race retry + session-cache reuse apply.
-//
-// MaxNodes=200 matches the local server. Without a cap, a
-// poorly-shaped graph (linking everything to everything) could
-// pin the broker pod's memory; 200 is generous for the typical
-// agent-knowledge-base shape.
+// handleMarkGraph crawls a seed URL into the broker's ephemeral graph
+// store. Depth defaults to 2, capped at 5; MaxNodes=200 (both the local
+// demarkus-mcp's conventions). Crawl fetches dispatch unauthenticated.
 func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
@@ -230,19 +213,15 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
 	}
 	depth := max(1, min(req.GetInt("depth", 2), 5))
-	claims, ok := claimsFromCtx(ctx)
-	if !ok {
-		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
-	}
 
 	// Seed before crawling so depth-limited crawls still benefit from
 	// hub context.
-	g.seedGraphStore(ctx, claims)
+	g.seedGraphStore()
 
 	crawled, crawlErr := g.graphStore.CrawlAndPersist(
 		ctx,
 		raw,
-		g.crawlFetchFn(ctx, claims),
+		g.crawlFetchFn(),
 		brokerCrawlParseURL,
 		graphstore.CrawlOptions{
 			MaxDepth: depth,
@@ -336,12 +315,16 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
+	// Same writer-allow gate every other write verb enforces.
+	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
+		return errRes, nil
+	}
 	body := g.graphStore.Export()
 	meta := agentMetaFromClaims(claims)
 	if retention > 0 {
 		meta["retention"] = strconv.Itoa(retention)
 	}
-	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
+	result, err := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Publish(worldName, urlPath, body, token, expectedVersion, meta)
 	})
 	if err != nil {
@@ -401,41 +384,42 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
+	// Writer-allow gate on the publish target; dry_run writes nothing.
+	if !dryRun {
+		if _, errRes := g.gateWrite(claims, targetWorld); errRes != nil {
+			return errRes, nil
+		}
+	}
 
 	// Manifest safeguards. Source warning is informational;
 	// target absence is a hard block unless force or dry_run.
-	warnings, block := g.checkIndexManifests(ctx, claims, sourceWorld, targetWorld, dryRun, force)
+	warnings, block := g.checkIndexManifests(ctx, sourceWorld, targetWorld, dryRun, force)
 	if block != nil {
 		return block, nil
 	}
 
-	// Crawl source world. The walkIndexDir helper handles depth
-	// recursion + the maxIndexDocuments cap + cycle detection.
-	var entries []index.Entry
+	// Crawl source world. sourceRoot bounds every destination (no "../"
+	// escapes); visited is seeded with the root so a listing entry
+	// resolving back to it cannot re-walk the tree.
 	sourceScheme := "mark://" + sourceWorld
-	// visited is the cycle-detection + path-escape gate. A world
-	// that responds to LIST with directory entries linking back
-	// to ancestor paths (whether by buggy server or hostile
-	// content) would otherwise recurse forever — maxIndexDocuments
-	// bounds file appends but not directory traversal. Keyed on
-	// the canonical (path.Clean-normalized) directory path so two
-	// representations of the same dir (e.g. /docs/ and /docs)
-	// collapse to one entry.
-	visited := map[string]struct{}{}
-	// sourceRoot is the canonical form of the user-supplied
-	// starting directory. walkIndexDir refuses to recurse into
-	// paths that don't stay under it, blocking path-escape via
-	// "../" in LIST destinations.
 	sourceRoot := path.Clean(sourcePath)
 	if !strings.HasSuffix(sourceRoot, "/") {
 		sourceRoot += "/"
 	}
-	walkErr := g.walkIndexDir(ctx, claims, sourceWorld, sourcePath, sourceScheme, sourceRoot, &entries, visited)
+	iw := &indexWalk{
+		g:            g,
+		worldName:    sourceWorld,
+		sourceScheme: sourceScheme,
+		sourceRoot:   sourceRoot,
+		visited:      map[string]struct{}{sourceRoot: {}},
+	}
+	walkErr := iw.walk(ctx, sourcePath, 0)
+	entries := iw.entries
 	if walkErr != nil && !errors.Is(walkErr, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", walkErr)), nil
 	}
 	if errors.Is(walkErr, errIndexTruncated) {
-		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
+		warnings = append(warnings, "warning: crawl bounds reached, some content may not be indexed")
 	}
 
 	body := index.Build(sourceScheme, time.Now(), entries)
@@ -452,7 +436,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 
 	// Merge with existing index if updating an existing target.
 	if expectedVersion > 0 {
-		existing, fetchErr := g.dispatchWithAuth(ctx, claims, targetWorld, func(token string) (fetch.Result, error) {
+		existing, fetchErr := g.dispatchWithAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
 			return g.dispatcher.Fetch(targetWorld, targetPath, token)
 		})
 		if fetchErr != nil {
@@ -468,7 +452,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	}
 
 	meta := agentMetaFromClaims(claims)
-	result, err := g.dispatchWithAuth(ctx, claims, targetWorld, func(token string) (fetch.Result, error) {
+	result, err := g.dispatchWithAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Publish(targetWorld, targetPath, body, token, expectedVersion, meta)
 	})
 	if err != nil {
@@ -492,16 +476,16 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 // world that hasn't said "yes, accept index publications") —
 // force=true bypasses the block with a recorded warning so an
 // operator who intends the publish anyway can opt in.
-func (g *mcpGateway) checkIndexManifests(ctx context.Context, claims *Claims, sourceWorld, targetWorld string, dryRun, force bool) ([]string, *mcp.CallToolResult) {
+func (g *mcpGateway) checkIndexManifests(ctx context.Context, sourceWorld, targetWorld string, dryRun, force bool) ([]string, *mcp.CallToolResult) {
 	var warnings []string
-	srcManifest, err := g.dispatchWithAuth(ctx, claims, sourceWorld, func(token string) (fetch.Result, error) {
+	srcManifest, err := g.dispatchWithAuth(ctx, sourceWorld, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Fetch(sourceWorld, protocol.WellKnownManifestPath, token)
 	})
 	if err != nil || srcManifest.Response.Status != protocol.StatusOK {
 		warnings = append(warnings, "warning: source server has no agent manifest")
 	}
 	if !dryRun {
-		tgtManifest, terr := g.dispatchWithAuth(ctx, claims, targetWorld, func(token string) (fetch.Result, error) {
+		tgtManifest, terr := g.dispatchWithAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
 			return g.dispatcher.Fetch(targetWorld, protocol.WellKnownManifestPath, token)
 		})
 		if terr != nil || tgtManifest.Response.Status != protocol.StatusOK {
@@ -517,45 +501,53 @@ func (g *mcpGateway) checkIndexManifests(ctx context.Context, claims *Claims, so
 	return warnings, nil
 }
 
-// walkIndexDir recursively LISTs a world's directory tree and
-// FETCHes each file to collect its content-hash. Honors the
-// maxIndexDocuments cap by returning errIndexTruncated, which
-// the outer handler decodes into a "warning, index truncated"
-// rather than a hard error. Inaccessible directories (a LIST
-// that fails or returns non-ok) are skipped silently — they may
-// be perfectly legitimate paths the broker's mint scope just
-// doesn't cover this call.
-//
-// Two safety properties guard against pathological LIST
-// responses (cycles, path escapes — whether from a misbehaving
-// world or a malicious one):
-//
-//   - visited keys on canonical (path.Clean-normalized)
-//     directory paths. A directory entry linking back to an
-//     ancestor (or to itself) short-circuits before recursing.
-//   - sourceRoot is the canonical form of the user-supplied
-//     starting directory; directories whose canonical path
-//     escapes this root (e.g. via "../" in a LIST destination)
-//     are skipped silently. The index is "what's under
-//     sourcePath", not "what the world feels like serving."
-func (g *mcpGateway) walkIndexDir(ctx context.Context, claims *Claims, worldName, dirPath, sourceScheme, sourceRoot string, entries *[]index.Entry, visited map[string]struct{}) error {
-	if len(*entries) >= maxIndexDocuments {
+// mark_index traversal bounds, independent of maxIndexDocuments: depth is
+// the cycle-safety valve (self-referencing listings mint ever-deeper paths
+// visited cannot catch), the LIST budget bounds breadth and fileless chains.
+const (
+	maxIndexDepth = 16
+	maxIndexLists = 4096
+)
+
+// indexWalk carries mark_index's crawl state. visited keys on canonical
+// directory paths; sourceRoot bounds every directory AND file destination
+// (escape via "../" in a LIST entry is skipped).
+type indexWalk struct {
+	g            *mcpGateway
+	worldName    string
+	sourceScheme string
+	sourceRoot   string
+	entries      []index.Entry
+	visited      map[string]struct{}
+	lists        int
+}
+
+// walk LISTs the tree and FETCHes each file for its content-hash. Bound
+// violations return errIndexTruncated (a handler warning); skipped
+// directories/documents are warn-logged, never a silent success.
+func (iw *indexWalk) walk(ctx context.Context, dirPath string, depth int) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if len(iw.entries) >= maxIndexDocuments || iw.lists >= maxIndexLists {
 		return errIndexTruncated
 	}
-	listResult, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.List(worldName, dirPath, token, fetch.ListOptions{})
-	})
+	if depth > maxIndexDepth {
+		iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", dirPath, "reason", "max depth reached")
+		return errIndexTruncated
+	}
+	iw.lists++
+	listResult, err := iw.g.dispatcher.List(iw.worldName, dirPath, "", fetch.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("list %s: %w", dirPath, err)
 	}
 	if listResult.Response.Status != protocol.StatusOK {
-		// Skip silently — the world may be enforcing
-		// path-level RBAC on this subtree. Other accessible
-		// subtrees still index.
+		// Skipped, not fatal: other subtrees still index.
+		iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", dirPath, "status", listResult.Response.Status)
 		return nil
 	}
 	for _, dest := range links.Extract(listResult.Response.Body) {
-		if len(*entries) >= maxIndexDocuments {
+		if len(iw.entries) >= maxIndexDocuments {
 			return errIndexTruncated
 		}
 		fullPath := dirPath
@@ -563,50 +555,51 @@ func (g *mcpGateway) walkIndexDir(ctx context.Context, claims *Claims, worldName
 			fullPath += "/"
 		}
 		fullPath += dest
+		// Canonicalize every destination; the index covers the subtree the
+		// user pointed at, not the world's whole filesystem.
+		canonical := path.Clean(fullPath)
 		if strings.HasSuffix(dest, "/") {
-			// Canonicalize before deciding whether to recurse.
-			// path.Clean collapses ".", ".." and double-slashes
-			// to a normalized form we can compare for cycles
-			// and check against the source root.
-			canonical := path.Clean(fullPath)
 			if !strings.HasSuffix(canonical, "/") {
 				canonical += "/"
 			}
-			if !strings.HasPrefix(canonical, sourceRoot) {
-				// Path-escape attempt (e.g., a LIST entry
-				// of "../" climbing above the source). Skip
-				// silently — the index covers the subtree
-				// the user pointed at, not the world's
-				// whole filesystem.
+			if !strings.HasPrefix(canonical, iw.sourceRoot) {
+				iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", canonical, "reason", "escapes source root")
 				continue
 			}
-			if _, seen := visited[canonical]; seen {
+			if _, seen := iw.visited[canonical]; seen {
 				continue
 			}
-			visited[canonical] = struct{}{}
-			if recErr := g.walkIndexDir(ctx, claims, worldName, fullPath, sourceScheme, sourceRoot, entries, visited); recErr != nil {
+			iw.visited[canonical] = struct{}{}
+			// Recurse on the canonical form so the peer sees normalized
+			// paths (child/../sibling/ never goes out on the wire).
+			if recErr := iw.walk(ctx, canonical, depth+1); recErr != nil {
 				return recErr
 			}
 			continue
 		}
+		if !strings.HasPrefix(canonical, iw.sourceRoot) {
+			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "reason", "escapes source root")
+			continue
+		}
 		// File — fetch and collect content-hash.
-		doc, ferr := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
-			return g.dispatcher.Fetch(worldName, fullPath, token)
-		})
+		doc, ferr := iw.g.dispatcher.Fetch(iw.worldName, canonical, "")
 		if ferr != nil {
+			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "err", ferr)
 			continue
 		}
 		if doc.Response.Status != protocol.StatusOK {
+			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "status", doc.Response.Status)
 			continue
 		}
 		contentHash := doc.Response.Metadata["content-hash"]
 		if _, valid := protocol.IsHashPath(contentHash); !valid || contentHash == "" {
+			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "reason", "missing or invalid content-hash")
 			continue
 		}
-		*entries = append(*entries, index.Entry{
+		iw.entries = append(iw.entries, index.Entry{
 			Hash:   contentHash,
-			Server: sourceScheme,
-			Path:   fullPath,
+			Server: iw.sourceScheme,
+			Path:   canonical,
 		})
 	}
 	return nil

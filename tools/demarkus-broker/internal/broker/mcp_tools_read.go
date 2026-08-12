@@ -83,39 +83,15 @@ func parseToolURL(raw string) (worldName, path string, err error) {
 	return worldName, path, nil
 }
 
-// worldOp is the closure form of a dispatcher call. The handler
-// captures the per-verb args (path, body, expectedVersion, meta)
-// in its closure; the retry loop only knows about token. This
-// keeps dispatchWithAuth verb-agnostic — the write verbs (publish,
-// append, archive) and the federation/graph tools share the same
-// auth-race machinery without an enum + switch threaded through
-// every call site. The three core read verbs (fetch, list,
-// versions) dispatch unauthenticated and skip this path entirely
-// — reads are open to any SSO-authed caller.
+// worldOp is the closure form of a dispatcher call: the handler captures the
+// per-verb args in its closure, keeping dispatchWithAuth verb-agnostic. Write
+// verbs only — every read dispatches unauthenticated with an empty bearer.
 type worldOp func(token string) (fetch.Result, error)
 
-// dispatchWithAuth resolves the per-world write token and invokes
-// op against it, retrying the SAME token on `unauthorized`
-// responses to absorb the one-time kubelet propagation lag the
-// first time a fresh world is provisioned. The claims argument is
-// kept on the signature for callsite stability but no longer
-// drives the mint — there is one long-lived write token per
-// world, persisted in a broker-namespace Secret, shared across
-// every authorized writer. Writer authorization is enforced at
-// the handler boundary (see write handlers in mcp_tools_write.go)
-// before dispatchWithAuth is invoked at all.
-//
-// Retry budget: FirstMintMaxAttempts bounds the total attempts
-// (initial + retries) against a single token. After the very
-// first Provision call lands on a fresh world, kubelet projects
-// the new Secret within seconds-to-minutes; subsequent dispatches
-// to the same world hit the cache and return on the first call.
-//
-// All non-`unauthorized` responses (ok / not-modified / not-found /
-// archived / not-permitted / conflict / bad-request / server-error)
-// are forwarded verbatim per the byte-for-byte proxy contract.
-// Transport errors short-circuit immediately.
-func (g *mcpGateway) dispatchWithAuth(ctx context.Context, _ *Claims, worldName string, op worldOp) (fetch.Result, error) {
+// dispatchWithAuth resolves the per-world write token and invokes op with it,
+// retrying with backoff on `unauthorized`; writer authorization happens at
+// the handler boundary (mcp_tools_write.go) before dispatch.
+func (g *mcpGateway) dispatchWithAuth(ctx context.Context, worldName string, op worldOp) (fetch.Result, error) {
 	mcpCfg := g.srv.cfg.Server.MCP
 	maxAttempts := mcpCfg.FirstMintMaxAttempts
 	if maxAttempts <= 0 {
@@ -128,7 +104,8 @@ func (g *mcpGateway) dispatchWithAuth(ctx context.Context, _ *Claims, worldName 
 		return fetch.Result{}, err
 	}
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	reprovisioned := false
+	for attempt := range maxAttempts {
 		if attempt > 0 {
 			// Backoff before the retry, not before the first attempt.
 			// Context cancellation short-circuits so a client hangup
@@ -152,6 +129,16 @@ func (g *mcpGateway) dispatchWithAuth(ctx context.Context, _ *Claims, worldName 
 		}
 		if result.Response.Status != protocol.StatusUnauthorized {
 			return result, nil
+		}
+		// First 401 only: invalidate + re-provision (syncWorldHash reconciles a
+		// rotated world Secret). Later 401s are kubelet propagation lag, where
+		// re-provisioning would re-read the same token at 2 round trips a retry.
+		if !reprovisioned {
+			reprovisioned = true
+			g.srv.worldWriteTokens.Invalidate(worldName)
+			if tok, err = g.srv.worldWriteTokens.Provision(ctx, worldName); err != nil {
+				return fetch.Result{}, err
+			}
 		}
 	}
 	return fetch.Result{}, fmt.Errorf("broker: world %s rejected write token after %d attempts (token propagation lag exceeded broker deadline)", worldName, maxAttempts)

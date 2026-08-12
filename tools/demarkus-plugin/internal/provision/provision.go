@@ -40,6 +40,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/token"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
 )
 
 // Version pins for the SEPARATE server/client modules (their own release
@@ -853,7 +854,7 @@ func pidIsServerAtRoot(pid int, root string) bool {
 	if pid <= 0 {
 		return false
 	}
-	if !pidAlive(pid) {
+	if !lockdir.PidAlive(pid) {
 		return false
 	}
 	args := psArgs(pid)
@@ -947,7 +948,7 @@ func managedServerCurrent(pidFile, versionFile, root string) bool {
 // live PID that is not our server for soulDir is left untouched (kill safety).
 func stopStaleManagedServer(runningPID int, soulDir string) error {
 	if !pidIsServerAtRoot(runningPID, soulDir) {
-		if runningPID > 0 && pidAlive(runningPID) {
+		if runningPID > 0 && lockdir.PidAlive(runningPID) {
 			warnf("recorded pid %d is live but is not the demarkus-server for %s (stale .pid, reused PID); leaving it alone and clearing our bookkeeping", runningPID, soulDir)
 		}
 		return nil
@@ -958,18 +959,18 @@ func stopStaleManagedServer(runningPID int, soulDir string) error {
 	}
 	// Bounded wait for exit (~3s), then escalate to SIGKILL so the respawn
 	// can bind the freed UDP port.
-	for waited := 0; waited < 30 && pidAlive(runningPID); waited++ {
+	for waited := 0; waited < 30 && lockdir.PidAlive(runningPID); waited++ {
 		time.Sleep(100 * time.Millisecond)
 	}
-	if pidAlive(runningPID) {
+	if lockdir.PidAlive(runningPID) {
 		if err := signalPID(runningPID, syscall.SIGKILL); err != nil && !alreadyExited(err) {
 			warnf("SIGKILL to managed server pid %d: %v", runningPID, err)
 		}
-		for waited := 0; waited < 10 && pidAlive(runningPID); waited++ {
+		for waited := 0; waited < 10 && lockdir.PidAlive(runningPID); waited++ {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	if pidAlive(runningPID) {
+	if lockdir.PidAlive(runningPID) {
 		return fmt.Errorf("prior managed server (pid %d) still alive after SIGKILL; aborting respawn", runningPID)
 	}
 	return nil
@@ -1063,7 +1064,7 @@ func ensureManagedServer(soulDir string, port int) error {
 	// with the process still alive (permissive when the port probe is unavailable).
 	const maxAttempts = 20 // ~2s at 100ms
 	for range maxAttempts {
-		if !pidAlive(pid) {
+		if !lockdir.PidAlive(pid) {
 			_ = os.Remove(pidFile)
 			_ = os.Remove(versionFile)
 			tailInfo := ""
@@ -1239,70 +1240,15 @@ func seedDoc(cl seedClient, host, tok, name string, meta map[string]string) {
 
 // --- exported API ------------------------------------------------------------
 
-// runProvisionLocked runs fn and releases the provision lock dir afterward, even
-// if fn panics. Split out of withProvisionLock's loop so the cleanup defer isn't
-// registered per iteration (it fires once, on the acquiring iteration's return).
-func runProvisionLocked(lockDir string, fn func() error) error {
-	defer func() { _ = os.RemoveAll(lockDir) }()
-	return fn()
-}
-
-// withProvisionLock serializes provisioning across processes (two session starts
-// could otherwise interleave binary installs or both pass the port check before
-// spawning). Atomic mkdir mutex with PID-stamped stale-lock recovery; bounded so
-// a crashed holder can't wedge startup. Held across downloads, so a concurrent
-// first-run waits for the in-flight install rather than racing it.
+// withProvisionLock serializes provisioning across processes (concurrent
+// session starts would otherwise interleave binary installs). Held across
+// downloads; ~180s bound covers a slow first-run download.
 func withProvisionLock(fn func() error) error {
 	lockDir, err := underHome(".provision.lock")
 	if err != nil {
 		return err
 	}
-	lockPid := filepath.Join(lockDir, "pid")
-	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
-		return err
-	}
-	for range 900 { // ~180s: enough for a slow first-run download
-		if err := os.Mkdir(lockDir, 0o755); err == nil {
-			// Record our PID before entering the critical section. If the write
-			// fails, the lock dir has no owner stamp and stale-lock recovery
-			// (which reads this pid to prove the holder is dead) can never reclaim
-			// it — a poison lock that wedges every waiter. So release and fail.
-			if werr := os.WriteFile(lockPid, []byte(strconv.Itoa(os.Getpid())), 0o644); werr != nil {
-				_ = os.RemoveAll(lockDir)
-				return fmt.Errorf("write provision lock pid: %w", werr)
-			}
-			return runProvisionLocked(lockDir, fn)
-		} else if !os.IsExist(err) {
-			return err
-		}
-		if b, e := os.ReadFile(lockPid); e == nil {
-			if pid, e2 := strconv.Atoi(strings.TrimSpace(string(b))); e2 == nil && !pidAlive(pid) {
-				// Stale-lock recovery, ownership-safe: atomically rename the lock
-				// dir aside (only one racer's rename wins), then RE-READ the
-				// moved-aside pid and confirm it's still dead before deleting. A
-				// blind RemoveAll here could nuke a lock another process freshly
-				// acquired between the read above and the delete; if the rename
-				// turns out to have grabbed such a live lock, we put it back.
-				aside := lockDir + ".stale." + strconv.Itoa(os.Getpid())
-				if os.Rename(lockDir, aside) == nil {
-					restore := false
-					if b2, e3 := os.ReadFile(filepath.Join(aside, "pid")); e3 == nil {
-						if p2, e4 := strconv.Atoi(strings.TrimSpace(string(b2))); e4 == nil && pidAlive(p2) {
-							restore = true // moved a freshly-acquired live lock — undo
-						}
-					}
-					if restore {
-						_ = os.Rename(aside, lockDir)
-					} else {
-						_ = os.RemoveAll(aside)
-					}
-				}
-				continue
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return fmt.Errorf("could not acquire provision lock %s (another session provisioning?)", lockDir)
+	return lockdir.WithLock(lockDir, 900, 200*time.Millisecond, fn)
 }
 
 // Provision runs the per-session sequence: config, binaries, server, seed.
@@ -1575,19 +1521,6 @@ func readPID(pidFile string) int {
 		return 0
 	}
 	return pid
-}
-
-// pidAlive reports whether pid is a live process (kill -0).
-func pidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = p.Signal(syscall.Signal(0))
-	return err == nil || err == syscall.EPERM
 }
 
 // alreadyExited reports a signal failure that just means the process is gone,

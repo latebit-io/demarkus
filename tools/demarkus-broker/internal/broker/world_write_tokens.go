@@ -81,6 +81,15 @@ func (s *worldWriteTokenStore) Get(worldName string) (string, bool) {
 	return tok, ok
 }
 
+// Invalidate drops the cached token so the next Provision re-reads the
+// broker Secret and reconciles the world's tokens.toml (syncWorldHash).
+// Called on 401: the world's tokens Secret may have been reset or rotated.
+func (s *worldWriteTokenStore) Invalidate(worldName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.cache, worldName)
+}
+
 // Provision returns the raw write token for worldName, minting and
 // persisting one if no broker pod has done it yet. Idempotent and
 // safe across concurrent broker pods: the broker-namespace

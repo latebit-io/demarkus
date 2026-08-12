@@ -24,7 +24,7 @@ type Config struct {
 
 // CrawlConfig controls the scope and depth of crawling.
 type CrawlConfig struct {
-	MaxDepth     int `toml:"max_depth"`     // Max link hops per server (default: 2)
+	MaxDepth     int `toml:"max_depth"`     // Max directory nesting per server (default: 8); the cycle-safety bound: self-referencing listings mint ever-deeper paths the visited set cannot catch
 	MaxServers   int `toml:"max_servers"`   // Max servers to discover (default: 50)
 	MaxDocuments int `toml:"max_documents"` // Max documents per crawl run (default: 1000)
 	Workers      int `toml:"workers"`       // Concurrent fetch goroutines (default: 5)
@@ -56,7 +56,7 @@ type PublishConfig struct {
 func DefaultConfig() Config {
 	return Config{
 		Crawl: CrawlConfig{
-			MaxDepth:     2,
+			MaxDepth:     8,
 			MaxServers:   50,
 			MaxDocuments: 1000,
 			Workers:      5,

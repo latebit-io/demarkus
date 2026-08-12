@@ -144,7 +144,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 		// `conflict` status when expectedVersion doesn't match,
 		// and we forward that verbatim. Same shape the
 		// pre-Slice-6 surface exposed.
-		result, perr := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
+		result, perr := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 			return g.dispatcher.Publish(worldName, path, body, token, expectedVersion, meta)
 		})
 		if perr != nil {
@@ -155,7 +155,6 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 		adapter := &brokerMergeAdapter{
 			g:         g,
 			ctx:       ctx,
-			claims:    claims,
 			worldName: worldName,
 		}
 		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, meta)
@@ -184,7 +183,6 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 type brokerMergeAdapter struct {
 	g         *mcpGateway
 	ctx       context.Context
-	claims    *Claims
 	worldName string
 }
 
@@ -195,7 +193,7 @@ type brokerMergeAdapter struct {
 // brokered access.
 func (a *brokerMergeAdapter) FetchVersion(path string, version int) (merge.Doc, error) {
 	versionedPath := strings.TrimRight(path, "/") + "/v" + strconv.Itoa(version)
-	r, err := a.g.dispatchWithAuth(a.ctx, a.claims, a.worldName, func(token string) (fetch.Result, error) {
+	r, err := a.g.dispatchWithAuth(a.ctx, a.worldName, func(token string) (fetch.Result, error) {
 		return a.g.dispatcher.Fetch(a.worldName, versionedPath, token)
 	})
 	if err != nil {
@@ -208,7 +206,7 @@ func (a *brokerMergeAdapter) FetchVersion(path string, version int) (merge.Doc, 
 // dispatchWithAuth round trip; cache hit if the session already
 // fetched this path within idle window.
 func (a *brokerMergeAdapter) FetchCurrent(path string) (merge.Doc, error) {
-	r, err := a.g.dispatchWithAuth(a.ctx, a.claims, a.worldName, func(token string) (fetch.Result, error) {
+	r, err := a.g.dispatchWithAuth(a.ctx, a.worldName, func(token string) (fetch.Result, error) {
 		return a.g.dispatcher.Fetch(a.worldName, path, token)
 	})
 	if err != nil {
@@ -225,7 +223,7 @@ func (a *brokerMergeAdapter) FetchCurrent(path string) (merge.Doc, error) {
 // which echoes the published version/modified/server-version
 // keys).
 func (a *brokerMergeAdapter) Publish(path, body string, expectedVersion int, meta map[string]string) (merge.PublishResult, error) {
-	r, err := a.g.dispatchWithAuth(a.ctx, a.claims, a.worldName, func(token string) (fetch.Result, error) {
+	r, err := a.g.dispatchWithAuth(a.ctx, a.worldName, func(token string) (fetch.Result, error) {
 		return a.g.dispatcher.Publish(a.worldName, path, body, token, expectedVersion, meta)
 	})
 	if err != nil {
@@ -358,7 +356,7 @@ func (g *mcpGateway) handleMarkAppend(ctx context.Context, req mcp.CallToolReque
 		// the actual append so a propagation-race or stale-
 		// cache 401 here is absorbed by the retry loop and
 		// doesn't fail the whole append call.
-		vResult, vErr := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
+		vResult, vErr := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 			return g.dispatcher.Versions(worldName, path, token)
 		})
 		if vErr != nil {
@@ -378,7 +376,7 @@ func (g *mcpGateway) handleMarkAppend(ctx context.Context, req mcp.CallToolReque
 		expectedVersion = resolved
 	}
 	meta := agentMetaFromClaims(claims)
-	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
+	result, err := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Append(worldName, path, body, token, expectedVersion, meta)
 	})
 	if err != nil {
@@ -408,7 +406,7 @@ func (g *mcpGateway) handleMarkArchive(ctx context.Context, req mcp.CallToolRequ
 	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
 		return errRes, nil
 	}
-	result, err := g.dispatchWithAuth(ctx, claims, worldName, func(token string) (fetch.Result, error) {
+	result, err := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Archive(worldName, path, token)
 	})
 	if err != nil {

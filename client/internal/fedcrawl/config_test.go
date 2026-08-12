@@ -9,8 +9,8 @@ import (
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Crawl.MaxDepth != 2 {
-		t.Errorf("MaxDepth = %d, want 2", cfg.Crawl.MaxDepth)
+	if cfg.Crawl.MaxDepth != 8 {
+		t.Errorf("MaxDepth = %d, want 8", cfg.Crawl.MaxDepth)
 	}
 	if cfg.Crawl.MaxServers != 50 {
 		t.Errorf("MaxServers = %d, want 50", cfg.Crawl.MaxServers)
