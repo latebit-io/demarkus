@@ -137,6 +137,85 @@ func binPath(name string) (string, error) {
 	return filepath.Join(d, name), nil
 }
 
+// soulID is a stable per-soul identifier: basename for readability plus a
+// path hash for uniqueness across souls.
+func soulID(soulDir string) string {
+	sum := sha256.Sum256([]byte(soulDir))
+	return filepath.Base(soulDir) + "-" + hex.EncodeToString(sum[:4])
+}
+
+// managedServerLogPath places the managed server's log under ~/.demarkus/logs,
+// never inside soulDir, which the server watches for tokens.toml changes (#289).
+func managedServerLogPath(soulDir string) (string, error) {
+	return underHome(filepath.Join("logs", "server-"+soulID(soulDir)+".log"))
+}
+
+// managedTokensPath is the out-of-root tokens.toml for soulDir's managed
+// server: token data does not belong inside the served content root (#289
+// follow-up). Managed modes only; reuse mode keeps <root>/tokens.toml.
+func managedTokensPath(soulDir string) (string, error) {
+	return underHome(filepath.Join("tokens", soulID(soulDir), "tokens.toml"))
+}
+
+// tokensPathFor resolves the live tokens.toml for soulDir: the out-of-root
+// path once migrated, a legacy <soulDir>/tokens.toml until then (the running
+// server's -tokens flag still points there), the new path on fresh installs.
+func tokensPathFor(soulDir string) (string, error) {
+	newPath, err := managedTokensPath(soulDir)
+	if err != nil {
+		return "", err
+	}
+	if fileExists(newPath) {
+		return newPath, nil
+	}
+	// TODO: drop the legacy branch once released installs have migrated.
+	if legacy := filepath.Join(soulDir, "tokens.toml"); fileExists(legacy) {
+		return legacy, nil
+	}
+	return newPath, nil
+}
+
+// migrateManagedTokens moves a legacy <soulDir>/tokens.toml to the out-of-root
+// path and returns the final path. Only call with the managed server stopped:
+// a live server reads the legacy path.
+func migrateManagedTokens(soulDir string) (string, error) {
+	newPath, err := managedTokensPath(soulDir)
+	if err != nil {
+		return "", err
+	}
+	cur, err := tokensPathFor(soulDir)
+	if err != nil {
+		return "", err
+	}
+	if cur == newPath {
+		return newPath, nil // migrated already, or fresh: ensureTokenEntry populates it
+	}
+	if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.Rename(cur, newPath); err != nil {
+		// Cross-device fallback: project souls can sit on another volume.
+		if err := installFile(cur, newPath, 0o600); err != nil {
+			return "", fmt.Errorf("migrate tokens.toml out of soul root: %w", err)
+		}
+		if err := os.Remove(cur); err != nil {
+			warnf("remove legacy tokens.toml %s after copy: %v", cur, err)
+		}
+	}
+	logf("moved tokens.toml out of the soul root (%s)", newPath)
+	return newPath, nil
+}
+
+// ensureManagedTokenEntry mints the plugin token against the resolved managed
+// tokens path for soul.
+func ensureManagedTokenEntry(soul string) error {
+	tokensTOML, err := tokensPathFor(soul)
+	if err != nil {
+		return err
+	}
+	return ensureTokenEntry(soul, tokensTOML)
+}
+
 // --- detectPlatform (lib.sh detect_platform) ---------------------------------
 
 // detectPlatform maps GOOS/GOARCH onto the release artifact suffix, e.g.
@@ -407,7 +486,7 @@ func ensureBinaries() (replaced bool, err error) {
 
 	// Install 0755 to the bin dir (bash install -m 0755).
 	for _, name := range []string{"demarkus-server", "demarkus-token", "demarkus-mcp"} {
-		if err := installFile(filepath.Join(tmp, name), filepath.Join(binDir, name)); err != nil {
+		if err := installFile(filepath.Join(tmp, name), filepath.Join(binDir, name), 0o755); err != nil {
 			return false, fmt.Errorf("install %s: %w", name, err)
 		}
 	}
@@ -515,15 +594,15 @@ func extractTarGz(archive, destDir string) error {
 	return nil
 }
 
-// installFile copies src to dst with mode 0755 (atomic via temp + rename).
-func installFile(src, dst string) error {
+// installFile copies src to dst with the given mode (atomic via temp + rename).
+func installFile(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
 	tmp := dst + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
@@ -536,7 +615,7 @@ func installFile(src, dst string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Chmod(tmp, 0o755); err != nil {
+	if err := os.Chmod(tmp, mode); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -545,10 +624,10 @@ func installFile(src, dst string) error {
 
 // --- token (lib.sh ensure_token_entry) ---------------------------------------
 
-// ensureTokenEntry mints the plugin token (raw to plugin-memory.token, entry to
-// tokensTOML). Idempotent when both exist with a current scope; stale state
-// (missing token file, or a legacy-scope entry) is revoked and reminted.
-func ensureTokenEntry(tokensTOML string) error {
+// ensureTokenEntry mints the plugin token (raw to plugin-memory.token, entry
+// to tokensTOML, which may live outside root, the server root used to find a
+// live server to reload). Idempotent when current; stale state is reminted.
+func ensureTokenEntry(root, tokensTOML string) error {
 	tokenFile, err := pluginToken()
 	if err != nil {
 		return err
@@ -619,7 +698,7 @@ func ensureTokenEntry(tokensTOML string) error {
 	// pre-remint table, and committing only after a successful reload keeps the
 	// gate's invariant — a matching token file implies the server loaded it, so
 	// any failure here self-heals via a remint on the next run.
-	if pid := findServerAtRoot(filepath.Dir(tokensTOML)); pid > 0 {
+	if pid := findServerAtRoot(root); pid > 0 {
 		if err := reloadServer(pid); err != nil {
 			_ = os.Remove(tmpTok) // best-effort; a leftover .tmp never satisfies the gate
 			return fmt.Errorf("reload reminted token: %w", err)
@@ -863,7 +942,6 @@ func managedServerCurrent(pidFile, versionFile, root string) bool {
 func ensureManagedServer(soulDir string, port int) error {
 	pidFile := filepath.Join(soulDir, ".pid")
 	versionFile := filepath.Join(soulDir, ".server-version")
-	logFile := filepath.Join(soulDir, ".log")
 
 	if managedServerCurrent(pidFile, versionFile, soulDir) {
 		return nil
@@ -888,13 +966,30 @@ func ensureManagedServer(soulDir string, port int) error {
 	}
 	_ = os.Remove(pidFile)
 	_ = os.Remove(versionFile)
+	// Pre-#289 the log sat at <soulDir>/.log, inside the server's tokens-watch
+	// directory, feeding the watcher its own output. Remove it on migration.
+	legacyLog := filepath.Join(soulDir, ".log")
+	if err := os.Remove(legacyLog); err != nil && !os.IsNotExist(err) {
+		warnf("remove legacy server log %s: %v", legacyLog, err)
+	}
 
 	if err := os.MkdirAll(soulDir, 0o755); err != nil {
+		return err
+	}
+	tokensPath, err := migrateManagedTokens(soulDir)
+	if err != nil {
 		return err
 	}
 
 	serverBin, err := binPath("demarkus-server")
 	if err != nil {
+		return err
+	}
+	logFile, err := managedServerLogPath(soulDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
 		return err
 	}
 	lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -906,7 +1001,7 @@ func ensureManagedServer(soulDir string, port int) error {
 	cmd := exec.Command(serverBin,
 		"-root", soulDir,
 		"-port", strconv.Itoa(port),
-		"-tokens", filepath.Join(soulDir, "tokens.toml"),
+		"-tokens", tokensPath,
 	)
 	cmd.Stdout = lf
 	cmd.Stderr = lf
@@ -1286,7 +1381,7 @@ func doDefault() error {
 	if err != nil {
 		return err
 	}
-	if err := ensureTokenEntry(filepath.Join(soul, "tokens.toml")); err != nil {
+	if err := ensureManagedTokenEntry(soul); err != nil {
 		return err
 	}
 	if err := ensureManagedServer(soul, defaultPort); err != nil {
@@ -1311,7 +1406,7 @@ func doIsolated() error {
 	if err != nil {
 		return err
 	}
-	if err := ensureTokenEntry(filepath.Join(soul, "tokens.toml")); err != nil {
+	if err := ensureManagedTokenEntry(soul); err != nil {
 		return err
 	}
 	if err := ensureManagedServer(soul, port); err != nil {
@@ -1331,7 +1426,9 @@ func doReuse(port int, root string) error {
 	if _, err := ensureBinaries(); err != nil {
 		return err
 	}
-	if err := ensureTokenEntry(filepath.Join(root, "tokens.toml")); err != nil {
+	// Adopted external server: its -tokens flag conventionally points at
+	// <root>/tokens.toml; that file is not ours to relocate.
+	if err := ensureTokenEntry(root, filepath.Join(root, "tokens.toml")); err != nil {
 		return err
 	}
 

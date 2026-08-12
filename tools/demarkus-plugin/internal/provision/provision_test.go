@@ -506,7 +506,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 
 	// Fresh install mints with the recursive scope.
 	log := phaseLog(func() {
-		if err := ensureTokenEntry(tokensTOML); err != nil {
+		if err := ensureTokenEntry(soul, tokensTOML); err != nil {
 			t.Fatalf("fresh mint: %v", err)
 		}
 	})
@@ -516,7 +516,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 
 	// Provisioned-and-current is a no-op: no further binary invocations.
 	log = phaseLog(func() {
-		if err := ensureTokenEntry(tokensTOML); err != nil {
+		if err := ensureTokenEntry(soul, tokensTOML); err != nil {
 			t.Fatalf("idempotent rerun: %v", err)
 		}
 	})
@@ -529,7 +529,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	log = phaseLog(func() {
-		if err := ensureTokenEntry(tokensTOML); err != nil {
+		if err := ensureTokenEntry(soul, tokensTOML); err != nil {
 			t.Fatalf("stale-scope remint: %v", err)
 		}
 	})
@@ -556,7 +556,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("FAKE_REVOKE_FAIL", "1")
-	if err := ensureTokenEntry(tokensTOML); err == nil {
+	if err := ensureTokenEntry(soul, tokensTOML); err == nil {
 		t.Error("revoke failure did not surface an error")
 	}
 	t.Setenv("FAKE_REVOKE_FAIL", "")
@@ -567,7 +567,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 	if err := os.WriteFile(tokensTOML, []byte(malformed), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureTokenEntry(tokensTOML); err == nil {
+	if err := ensureTokenEntry(soul, tokensTOML); err == nil {
 		t.Error("malformed tokens.toml did not surface an error")
 	}
 
@@ -576,7 +576,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 	if err := os.Remove(tokensTOML); err != nil { // clear the malformed file
 		t.Fatal(err)
 	}
-	if err := ensureTokenEntry(tokensTOML); err != nil {
+	if err := ensureTokenEntry(soul, tokensTOML); err != nil {
 		t.Fatalf("re-mint after malformed: %v", err)
 	}
 	tokenFile, err := pluginToken()
@@ -587,7 +587,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	log = phaseLog(func() {
-		if err := ensureTokenEntry(tokensTOML); err != nil {
+		if err := ensureTokenEntry(soul, tokensTOML); err != nil {
 			t.Fatalf("mismatched-raw remint: %v", err)
 		}
 	})
@@ -620,7 +620,7 @@ func TestEnsureTokenEntryReload(t *testing.T) {
 	reloads := 0
 	reloadServer = func(int) error { reloads++; return errors.New("injected reload failure") }
 
-	if err := ensureTokenEntry(tokensTOML); err == nil {
+	if err := ensureTokenEntry(soul, tokensTOML); err == nil {
 		t.Fatal("failed reload did not surface an error")
 	}
 	if reloads != 1 {
@@ -632,7 +632,7 @@ func TestEnsureTokenEntryReload(t *testing.T) {
 
 	// The next run retries: mint again, reload succeeds, token file commits.
 	reloadServer = func(int) error { reloads++; return nil }
-	if err := ensureTokenEntry(tokensTOML); err != nil {
+	if err := ensureTokenEntry(soul, tokensTOML); err != nil {
 		t.Fatalf("retry after failed reload: %v", err)
 	}
 	if reloads != 2 {
@@ -640,6 +640,64 @@ func TestEnsureTokenEntryReload(t *testing.T) {
 	}
 	if !fileExists(tokenFile) {
 		t.Error("token file missing after successful retry")
+	}
+}
+
+// TestManagedTokensMigration pins the #289 follow-up: tokens.toml moves out of
+// the content root on respawn; resolution prefers legacy until migrated.
+func TestManagedTokensMigration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	soul := filepath.Join(home, "soul")
+	if err := os.MkdirAll(soul, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	newPath, err := managedTokensPath(soul)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(newPath, soul+string(os.PathSeparator)) {
+		t.Fatalf("managed tokens path %s is inside the soul root", newPath)
+	}
+
+	// Fresh install: nothing on disk resolves to the new path.
+	if got, err := tokensPathFor(soul); err != nil || got != newPath {
+		t.Fatalf("fresh tokensPathFor = %q, %v; want %q", got, err, newPath)
+	}
+
+	// A legacy file wins resolution until migrated: the running server's
+	// -tokens flag still points there.
+	legacy := filepath.Join(soul, "tokens.toml")
+	if err := os.WriteFile(legacy, []byte("[tokens]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := tokensPathFor(soul); err != nil || got != legacy {
+		t.Fatalf("unmigrated tokensPathFor = %q, %v; want %q", got, err, legacy)
+	}
+
+	// Migration moves the file, preserving content; resolution flips.
+	migrated, err := migrateManagedTokens(soul)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated != newPath {
+		t.Fatalf("migrateManagedTokens = %q, want %q", migrated, newPath)
+	}
+	data, err := os.ReadFile(newPath)
+	if err != nil || string(data) != "[tokens]\n" {
+		t.Fatalf("migrated content = %q, %v; want original body", data, err)
+	}
+	if fileExists(legacy) {
+		t.Error("legacy tokens.toml still present after migration")
+	}
+	if got, err := tokensPathFor(soul); err != nil || got != newPath {
+		t.Fatalf("post-migration tokensPathFor = %q, %v; want %q", got, err, newPath)
+	}
+
+	// Idempotent rerun leaves the migrated file alone.
+	if again, err := migrateManagedTokens(soul); err != nil || again != newPath {
+		t.Fatalf("rerun migrateManagedTokens = %q, %v; want %q", again, err, newPath)
 	}
 }
 
