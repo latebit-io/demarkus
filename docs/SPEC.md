@@ -256,7 +256,7 @@ The body MUST be a markdown document containing a list of entries:
 - Directories are listed as `- [name/](url-encoded-name/)`
 - Files are listed as `- [name](url-encoded-name)`
 
-Servers MUST exclude hidden files (names beginning with `.`) from directory listings.
+Servers MUST exclude hidden files (names beginning with `.`) from directory listings. Servers MUST also exclude non-document files — content with no version history, which FETCH would refuse (§11.9) — so a listing never names an entry that cannot be fetched.
 
 Servers MUST impose a maximum entry count. The RECOMMENDED limit is **1000** entries. If the listing is truncated, the body SHOULD end with a note indicating truncation.
 
@@ -350,7 +350,7 @@ The `created` response MUST NOT include a body.
 - If the body is byte-for-byte identical to the current version's content, the server MUST NOT create a new version. It MUST respond with `ok` and the current version's `version` and `modified` metadata.
 - If the document does not exist, version 1 is created.
 - If the document exists, the version number is incremented from the current highest version.
-- If the document exists as a flat file (no version history), the server MUST migrate the flat file to version 1 before creating version 2.
+- A flat file (no version history) at the path is not a document (§11.9). PUBLISH treats the path as non-existent: version 1 is created and the file is replaced by the current-version pointer. Servers MUST NOT incorporate the flat file's content into version history.
 
 **OKF type default**: when a written document declares no `type` metadata, the server assigns the default `type` (`Document`; see §14), so every stored concept document is a typed Open Knowledge Format concept by construction. This applies to both PUBLISH and APPEND (§6.6). Reserved OKF files (`index.md`, `log.md`) are exempt, as OKF defines them as navigation and history rather than concepts. A document that already declares a `type` is stored unchanged. Because the default is part of the document's metadata, it participates in duplicate detection: republishing a previously untyped document acquires the default type once, creating a single new version.
 
@@ -625,20 +625,21 @@ The version segment MUST match the pattern `v` followed by a positive integer (n
 
 This section describes the reference layout for filesystem-backed stores. A store backed by another medium (for example a relational database) is exempt from this layout but MUST persist the same stored version bytes (§9.4) and preserve the observable version model (§9.1) under its own representation.
 
-Filesystem-backed servers SHOULD store versioned documents using the following layout:
+Filesystem-backed servers SHOULD store versioned documents using the per-document subdirectory layout:
 
 ```text
 root/
-  doc.md              ← symlink to versions/doc.md.v<current>
+  doc.md              ← symlink to versions/doc.md/v<current>
   versions/
-    doc.md.v1
-    doc.md.v2
-    doc.md.v<N>
+    doc.md/
+      v1
+      v2
+      v<N>
 ```
 
-The current file (`doc.md`) SHOULD be a symbolic link to the latest version file. Version files reside in a `versions/` subdirectory at the same level as the document.
+The current file (`doc.md`) SHOULD be a symbolic link to the latest version file. Each document's version files reside in their own subdirectory of `versions/`, at the same level as the document, named `v<N>` where N is the version number.
 
-Version files are named `<filename>.v<N>` where N is the version number.
+An older layout named version files `versions/<filename>.v<N>` directly in the `versions/` directory. Servers encountering it MUST migrate those files into the per-document layout before serving the store (§9.8).
 
 ### 9.4. Version File Format
 
@@ -723,14 +724,11 @@ When retention pruning (§9.9) has removed the oldest versions, verification app
 
 Servers MUST NOT overwrite existing version files. Before writing a new version file, the server MUST verify that no file exists at the target path. If the target file already exists, the write MUST fail.
 
-### 9.8. Flat File Migration
+### 9.8. Non-Document Files
 
-When a PUBLISH is performed on a document that exists as a flat file (no version history), the server MUST:
+A flat file present in the storage medium without version history never passed the protocol's write path: no token authorized it, no content contract validated it, and no hash chain anchors it. It is not a document (§11.9). Servers MUST NOT migrate such a file's content into version history; a PUBLISH to its path creates version 1 from the request body and replaces the file with the current-version pointer.
 
-1. Create the versions directory if it does not exist.
-2. Migrate the flat file content to `versions/<filename>.v1` with store frontmatter (`version: 1`, no `previous-hash`).
-3. Create the new version as `versions/<filename>.v2` with a `previous-hash` referencing the hash of the migrated v1 file.
-4. Update the current file to a symlink pointing to the new version.
+This is distinct from the legacy flat *layout* (`versions/<filename>.v<N>`), whose versions were written through the protocol and MUST be preserved by layout migration to the on-disk layout of §9.3.
 
 ### 9.9. Version Retention
 
@@ -851,7 +849,7 @@ Servers MUST enforce read auth on FETCH, LIST, and VERSIONS operations. Content-
 
 ### 11.9. Versioned-Only Serving
 
-Servers MUST only serve documents that have been written through the protocol, i.e., documents with at least one stored version (in the filesystem layout, a `versions/` directory containing at least one version file). Content present in the storage medium without version history — such as flat files placed directly on the filesystem — MUST be treated as `not-found`.
+Servers MUST only serve documents that have been written through the protocol, i.e., documents with at least one stored version (in the filesystem layout, a `versions/` directory containing at least one version file). Content present in the storage medium without version history — such as flat files placed directly on the filesystem — MUST be treated as `not-found` and MUST be excluded from LIST responses (§6.2). A directory whose subtree contains no documents MUST likewise be excluded.
 
 This ensures every served document has:
 

@@ -179,7 +179,13 @@ func main() {
 		// LOOKUP is DB-backed; a per-process index would diverge across pods.
 		docStore, cat = ps, ps
 	case "file":
-		s := store.New(cfg.ContentDir)
+		// Open migrates any legacy-layout version files; serving an
+		// unmigrated root would hide every legacy document, so failure is fatal.
+		s, err := store.Open(cfg.ContentDir)
+		if err != nil {
+			logger.Error("store open failed", "error", err)
+			os.Exit(1)
+		}
 		// BuildHashIndex clears the index before walking; continuing after a
 		// failure would serve hash-based FETCHes from an empty or partial
 		// index, so a broken walk is fatal.

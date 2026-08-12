@@ -42,7 +42,7 @@ This skill carries the canonical layout. A `/project-template.md` published at t
 - `/<project>/plans/<name>.md` — plan documents (lifecycle carried in the text)
 - `/<project>/journal/<YYYY-MM-DD>.md` — dated session notes, one file per day
 
-Map the layout to the OKF `type` on publish: `architecture.md` → `Architecture`, `adr/*` → `Decision`, `plans/*` → `Plan`, `journal/*` → `Journal`, `patterns.md`/`guidelines.md` → `Guide`, reference docs → `Reference`. Hubs (`index.md`) stay untyped.
+Map the layout to the OKF `type` on publish: `architecture.md` → `Architecture`, `adr/*` → `Decision`, `plans/*` and `roadmap.md` → `Plan`, `journal/*` → `Journal`, `patterns.md`/`guidelines.md`/`debugging.md` → `Guide`, standalone reference docs → `Reference`. `debt.md` and `thoughts.md` take the server default (`Document`); hubs (`index.md`) stay untyped.
 
 ## Tool routing
 
