@@ -137,6 +137,92 @@ func binPath(name string) (string, error) {
 	return filepath.Join(d, name), nil
 }
 
+// soulID is a stable per-soul identifier: basename for readability plus a
+// path hash for uniqueness across souls.
+func soulID(soulDir string) string {
+	sum := sha256.Sum256([]byte(soulDir))
+	return filepath.Base(soulDir) + "-" + hex.EncodeToString(sum[:4])
+}
+
+// managedServerLogPath places the managed server's log under ~/.demarkus/logs,
+// never inside soulDir, which the server watches for tokens.toml changes (#289).
+func managedServerLogPath(soulDir string) (string, error) {
+	return underHome(filepath.Join("logs", "server-"+soulID(soulDir)+".log"))
+}
+
+// managedTokensPath is the out-of-root tokens.toml for soulDir's managed
+// server: token data does not belong inside the served content root (#289
+// follow-up). Managed modes only; reuse mode keeps <root>/tokens.toml.
+func managedTokensPath(soulDir string) (string, error) {
+	return underHome(filepath.Join("tokens", soulID(soulDir), "tokens.toml"))
+}
+
+// tokensPathFor resolves the live tokens.toml for soulDir: the out-of-root
+// path once migrated, a legacy <soulDir>/tokens.toml until then (the running
+// server's -tokens flag still points there), the new path on fresh installs.
+func tokensPathFor(soulDir string) (string, error) {
+	newPath, err := managedTokensPath(soulDir)
+	if err != nil {
+		return "", err
+	}
+	if fileExists(newPath) {
+		return newPath, nil
+	}
+	// TODO: drop the legacy branch once released installs have migrated.
+	if legacy := filepath.Join(soulDir, "tokens.toml"); fileExists(legacy) {
+		return legacy, nil
+	}
+	return newPath, nil
+}
+
+// migrateManagedTokens moves a legacy <soulDir>/tokens.toml to the out-of-root
+// path and returns the final path. Only call with the managed server stopped:
+// a live server reads the legacy path.
+func migrateManagedTokens(soulDir string) (string, error) {
+	newPath, err := managedTokensPath(soulDir)
+	if err != nil {
+		return "", err
+	}
+	legacy := filepath.Join(soulDir, "tokens.toml")
+	if fileExists(newPath) {
+		// Retry a legacy cleanup that failed after a successful copy on a
+		// prior run; a leftover copy keeps token material in the content root.
+		if fileExists(legacy) {
+			if err := os.Remove(legacy); err != nil {
+				return "", fmt.Errorf("remove leftover legacy tokens.toml: %w", err)
+			}
+		}
+		return newPath, nil
+	}
+	if !fileExists(legacy) {
+		return newPath, nil // fresh install: ensureTokenEntry populates it
+	}
+	if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.Rename(legacy, newPath); err != nil {
+		// Cross-device fallback: project souls can sit on another volume.
+		if err := installFile(legacy, newPath, 0o600); err != nil {
+			return "", fmt.Errorf("migrate tokens.toml out of soul root: %w", err)
+		}
+		if err := os.Remove(legacy); err != nil {
+			return "", fmt.Errorf("remove legacy tokens.toml after copy: %w", err)
+		}
+	}
+	logf("moved tokens.toml out of the soul root (%s)", newPath)
+	return newPath, nil
+}
+
+// ensureManagedTokenEntry mints the plugin token against the resolved managed
+// tokens path for soul.
+func ensureManagedTokenEntry(soul string) error {
+	tokensTOML, err := tokensPathFor(soul)
+	if err != nil {
+		return err
+	}
+	return ensureTokenEntry(soul, tokensTOML)
+}
+
 // --- detectPlatform (lib.sh detect_platform) ---------------------------------
 
 // detectPlatform maps GOOS/GOARCH onto the release artifact suffix, e.g.
@@ -407,7 +493,7 @@ func ensureBinaries() (replaced bool, err error) {
 
 	// Install 0755 to the bin dir (bash install -m 0755).
 	for _, name := range []string{"demarkus-server", "demarkus-token", "demarkus-mcp"} {
-		if err := installFile(filepath.Join(tmp, name), filepath.Join(binDir, name)); err != nil {
+		if err := installFile(filepath.Join(tmp, name), filepath.Join(binDir, name), 0o755); err != nil {
 			return false, fmt.Errorf("install %s: %w", name, err)
 		}
 	}
@@ -515,15 +601,19 @@ func extractTarGz(archive, destDir string) error {
 	return nil
 }
 
-// installFile copies src to dst with mode 0755 (atomic via temp + rename).
-func installFile(src, dst string) error {
+// installFile copies src to dst with the given mode (atomic via temp + rename).
+func installFile(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = in.Close() }()
+	defer func() {
+		if err := in.Close(); err != nil {
+			warnf("close %s after copy: %v", src, err)
+		}
+	}()
 	tmp := dst + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
@@ -536,7 +626,7 @@ func installFile(src, dst string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Chmod(tmp, 0o755); err != nil {
+	if err := os.Chmod(tmp, mode); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -545,10 +635,10 @@ func installFile(src, dst string) error {
 
 // --- token (lib.sh ensure_token_entry) ---------------------------------------
 
-// ensureTokenEntry mints the plugin token (raw to plugin-memory.token, entry to
-// tokensTOML). Idempotent when both exist with a current scope; stale state
-// (missing token file, or a legacy-scope entry) is revoked and reminted.
-func ensureTokenEntry(tokensTOML string) error {
+// ensureTokenEntry mints the plugin token (raw to plugin-memory.token, entry
+// to tokensTOML, which may live outside root, the server root used to find a
+// live server to reload). Idempotent when current; stale state is reminted.
+func ensureTokenEntry(root, tokensTOML string) error {
 	tokenFile, err := pluginToken()
 	if err != nil {
 		return err
@@ -619,7 +709,7 @@ func ensureTokenEntry(tokensTOML string) error {
 	// pre-remint table, and committing only after a successful reload keeps the
 	// gate's invariant — a matching token file implies the server loaded it, so
 	// any failure here self-heals via a remint on the next run.
-	if pid := findServerAtRoot(filepath.Dir(tokensTOML)); pid > 0 {
+	if pid := findServerAtRoot(root); pid > 0 {
 		if err := reloadServer(pid); err != nil {
 			_ = os.Remove(tmpTok) // best-effort; a leftover .tmp never satisfies the gate
 			return fmt.Errorf("reload reminted token: %w", err)
@@ -661,7 +751,7 @@ func signalReload(pid int) error {
 	case err == nil:
 		logf("sent SIGHUP to server (pid=%d) to reload tokens", pid)
 		return nil
-	case errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH):
+	case alreadyExited(err):
 		return nil
 	default:
 		return fmt.Errorf("SIGHUP to server pid %d: %w", pid, err)
@@ -852,6 +942,39 @@ func managedServerCurrent(pidFile, versionFile, root string) bool {
 	return strings.TrimSpace(string(ver)) == serverVersion
 }
 
+// stopStaleManagedServer stops a live-but-stale managed server and confirms it
+// exited: the caller's token migration moves the file the old server reads. A
+// live PID that is not our server for soulDir is left untouched (kill safety).
+func stopStaleManagedServer(runningPID int, soulDir string) error {
+	if !pidIsServerAtRoot(runningPID, soulDir) {
+		if runningPID > 0 && pidAlive(runningPID) {
+			warnf("recorded pid %d is live but is not the demarkus-server for %s (stale .pid, reused PID); leaving it alone and clearing our bookkeeping", runningPID, soulDir)
+		}
+		return nil
+	}
+	logf("restarting managed demarkus-server onto upgraded binary (target=%s)", serverVersion)
+	if err := signalPID(runningPID, syscall.SIGTERM); err != nil && !alreadyExited(err) {
+		warnf("SIGTERM to managed server pid %d: %v", runningPID, err)
+	}
+	// Bounded wait for exit (~3s), then escalate to SIGKILL so the respawn
+	// can bind the freed UDP port.
+	for waited := 0; waited < 30 && pidAlive(runningPID); waited++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if pidAlive(runningPID) {
+		if err := signalPID(runningPID, syscall.SIGKILL); err != nil && !alreadyExited(err) {
+			warnf("SIGKILL to managed server pid %d: %v", runningPID, err)
+		}
+		for waited := 0; waited < 10 && pidAlive(runningPID); waited++ {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if pidAlive(runningPID) {
+		return fmt.Errorf("prior managed server (pid %d) still alive after SIGKILL; aborting respawn", runningPID)
+	}
+	return nil
+}
+
 // ensureManagedServer spawns a demarkus-server for soulDir on port if ours isn't
 // already running and current. Writes the PID to <soulDir>/.pid and the spawned
 // binary's version to <soulDir>/.server-version. For default/isolated modes only.
@@ -863,7 +986,6 @@ func managedServerCurrent(pidFile, versionFile, root string) bool {
 func ensureManagedServer(soulDir string, port int) error {
 	pidFile := filepath.Join(soulDir, ".pid")
 	versionFile := filepath.Join(soulDir, ".server-version")
-	logFile := filepath.Join(soulDir, ".log")
 
 	if managedServerCurrent(pidFile, versionFile, soulDir) {
 		return nil
@@ -871,30 +993,35 @@ func ensureManagedServer(soulDir string, port int) error {
 
 	// Not reusable. Stop a live-but-stale managed server before respawning — but
 	// only after confirming it is genuinely ours for this root.
-	runningPID := readPID(pidFile)
-	if pidIsServerAtRoot(runningPID, soulDir) {
-		logf("restarting managed demarkus-server onto upgraded binary (target=%s)", serverVersion)
-		_ = signalPID(runningPID, syscall.SIGTERM)
-		// Bounded wait for exit (~3s), then escalate to SIGKILL so the respawn
-		// can bind the freed UDP port.
-		for waited := 0; waited < 30 && pidAlive(runningPID); waited++ {
-			time.Sleep(100 * time.Millisecond)
-		}
-		if pidAlive(runningPID) {
-			_ = signalPID(runningPID, syscall.SIGKILL)
-		}
-	} else if runningPID > 0 && pidAlive(runningPID) {
-		warnf("recorded pid %d is live but is not the demarkus-server for %s (stale .pid, reused PID); leaving it alone and clearing our bookkeeping", runningPID, soulDir)
+	if err := stopStaleManagedServer(readPID(pidFile), soulDir); err != nil {
+		return err
 	}
 	_ = os.Remove(pidFile)
 	_ = os.Remove(versionFile)
+	// Pre-#289 the log sat at <soulDir>/.log, inside the server's tokens-watch
+	// directory, feeding the watcher its own output. Remove it on migration.
+	legacyLog := filepath.Join(soulDir, ".log")
+	if err := os.Remove(legacyLog); err != nil && !os.IsNotExist(err) {
+		warnf("remove legacy server log %s: %v", legacyLog, err)
+	}
 
 	if err := os.MkdirAll(soulDir, 0o755); err != nil {
+		return err
+	}
+	tokensPath, err := migrateManagedTokens(soulDir)
+	if err != nil {
 		return err
 	}
 
 	serverBin, err := binPath("demarkus-server")
 	if err != nil {
+		return err
+	}
+	logFile, err := managedServerLogPath(soulDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
 		return err
 	}
 	lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -906,7 +1033,7 @@ func ensureManagedServer(soulDir string, port int) error {
 	cmd := exec.Command(serverBin,
 		"-root", soulDir,
 		"-port", strconv.Itoa(port),
-		"-tokens", filepath.Join(soulDir, "tokens.toml"),
+		"-tokens", tokensPath,
 	)
 	cmd.Stdout = lf
 	cmd.Stderr = lf
@@ -1286,7 +1413,7 @@ func doDefault() error {
 	if err != nil {
 		return err
 	}
-	if err := ensureTokenEntry(filepath.Join(soul, "tokens.toml")); err != nil {
+	if err := ensureManagedTokenEntry(soul); err != nil {
 		return err
 	}
 	if err := ensureManagedServer(soul, defaultPort); err != nil {
@@ -1311,7 +1438,7 @@ func doIsolated() error {
 	if err != nil {
 		return err
 	}
-	if err := ensureTokenEntry(filepath.Join(soul, "tokens.toml")); err != nil {
+	if err := ensureManagedTokenEntry(soul); err != nil {
 		return err
 	}
 	if err := ensureManagedServer(soul, port); err != nil {
@@ -1331,7 +1458,9 @@ func doReuse(port int, root string) error {
 	if _, err := ensureBinaries(); err != nil {
 		return err
 	}
-	if err := ensureTokenEntry(filepath.Join(root, "tokens.toml")); err != nil {
+	// Adopted external server: its -tokens flag conventionally points at
+	// <root>/tokens.toml; that file is not ours to relocate.
+	if err := ensureTokenEntry(root, filepath.Join(root, "tokens.toml")); err != nil {
 		return err
 	}
 
@@ -1459,6 +1588,12 @@ func pidAlive(pid int) bool {
 	}
 	err = p.Signal(syscall.Signal(0))
 	return err == nil || err == syscall.EPERM
+}
+
+// alreadyExited reports a signal failure that just means the process is gone,
+// which is the outcome the stop sequence wants, not a warning.
+func alreadyExited(err error) bool {
+	return errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH)
 }
 
 func signalPID(pid int, sig syscall.Signal) error {

@@ -57,6 +57,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 
 	dir := filepath.Dir(w.Target)
+	cleanTarget := filepath.Clean(w.Target)
 	fw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("configwatch: create watcher: %w", err)
@@ -89,9 +90,12 @@ func (w *Watcher) Run(ctx context.Context) error {
 				return nil
 			}
 			w.Logger.Warn("configwatch: error", "target", w.Target, "error", err)
-		case _, ok := <-fw.Events:
+		case ev, ok := <-fw.Events:
 			if !ok {
 				return nil
+			}
+			if !eventRelevant(ev, cleanTarget) {
+				continue
 			}
 			if armed && !timer.Stop() {
 				select {
@@ -110,6 +114,16 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// eventRelevant drops Write/Chmod events on sibling files (a co-located log
+// once fed the watcher its own "reloaded" lines forever, #289). The target
+// itself and structural ops (create/rename/remove: swaps) still reload.
+func eventRelevant(ev fsnotify.Event, cleanTarget string) bool {
+	if ev.Name == "" || filepath.Clean(ev.Name) == cleanTarget {
+		return true
+	}
+	return ev.Op&(fsnotify.Create|fsnotify.Rename|fsnotify.Remove) != 0
 }
 
 // reloadWithRetry calls reload and retries once on a transient ErrNotExist,

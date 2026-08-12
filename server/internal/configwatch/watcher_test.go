@@ -3,6 +3,7 @@ package configwatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -53,14 +54,14 @@ func waitForCount(counter *atomic.Int32, want int32, deadline time.Duration) int
 	return counter.Load()
 }
 
-// awaitWatchLive touches a sentinel until a reload proves the watch is
-// registered (fsnotify misses pre-registration events; a single touch would
-// lose that same race), then drains stragglers and resets the counter.
+// awaitWatchLive creates fresh sentinels until a reload proves the watch is
+// registered (fsnotify misses pre-registration events; sibling Writes are
+// filtered, so only a Create proves liveness), then resets the counter.
 func awaitWatchLive(t *testing.T, dir string, calls *atomic.Int32, debounce time.Duration) {
 	t.Helper()
-	sentinel := filepath.Join(dir, "watch-live.sentinel")
 	deadline := time.Now().Add(10 * time.Second)
-	for {
+	for i := 0; ; i++ {
+		sentinel := filepath.Join(dir, fmt.Sprintf("watch-live-%d.sentinel", i))
 		if err := os.WriteFile(sentinel, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -247,6 +248,50 @@ func TestDebounceCoalescesBurst(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("expected no further reloads after the burst, got %d", got)
+	}
+}
+
+// TestSiblingWritesDoNotTriggerReload is the #289 regression: a log file in
+// the watched directory being appended to must not cause reloads, or a server
+// logging "reloaded" into that file feeds the watcher forever.
+func TestSiblingWritesDoNotTriggerReload(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tokens.toml")
+	if err := os.WriteFile(target, []byte("v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(dir, ".log")
+	lf, err := os.OpenFile(sibling, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := lf.Close(); err != nil {
+			t.Errorf("close sibling log: %v", err)
+		}
+	}()
+
+	var calls atomic.Int32
+	w := Watcher{
+		Target:   target,
+		Reload:   func() error { calls.Add(1); return nil },
+		Debounce: 20 * time.Millisecond,
+		Logger:   discardLogger(),
+	}
+	runInBackground(t, &w)
+
+	awaitWatchLive(t, dir, &calls, w.Debounce)
+	for range 10 {
+		if _, err := lf.WriteString("configwatch: reloaded\n"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// A full debounce window plus slack with zero reloads proves the filter.
+	time.Sleep(2*w.Debounce + 200*time.Millisecond)
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("expected 0 reloads from sibling writes, got %d", got)
 	}
 }
 
