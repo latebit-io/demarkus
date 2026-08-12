@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// nameSeq makes stage/aside names unique across goroutines in one process;
+// nameSeq makes reclaim aside-names unique across goroutines in one process;
 // the PID alone is not enough when several writers race in-process.
 var nameSeq atomic.Uint64
 
@@ -45,9 +45,15 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 				reclaimStale(lockDir)
 				continue
 			}
-		} else if errors.Is(readErr, os.ErrNotExist) && dirExists(lockDir) {
-			reclaimStale(lockDir)
-			continue
+		} else if errors.Is(readErr, os.ErrNotExist) {
+			exists, statErr := dirExists(lockDir)
+			if statErr != nil {
+				return statErr
+			}
+			if exists {
+				reclaimStale(lockDir)
+				continue
+			}
 		}
 		time.Sleep(sleep)
 	}
@@ -55,12 +61,15 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 }
 
 // tryAcquire stages a dir already containing the PID stamp and renames it
-// into the lock location. Rename onto an existing stamped (non-empty) lock
-// fails, which is the contention signal; there is no unstamped window.
+// into the lock location: no unstamped window, rename onto a stamped lock
+// fails (contention). MkdirTemp naming makes leftover stages collision-free.
 func tryAcquire(lockDir string) (bool, error) {
-	stage := fmt.Sprintf("%s.stage.%d-%d", lockDir, os.Getpid(), nameSeq.Add(1))
-	if err := os.Mkdir(stage, 0o755); err != nil {
+	stage, err := os.MkdirTemp(filepath.Dir(lockDir), filepath.Base(lockDir)+".stage-")
+	if err != nil {
 		return false, fmt.Errorf("stage lock: %w", err)
+	}
+	if err := os.Chmod(stage, 0o755); err != nil {
+		return false, errors.Join(fmt.Errorf("stage lock perms: %w", err), os.RemoveAll(stage))
 	}
 	if err := os.WriteFile(filepath.Join(stage, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
 		return false, errors.Join(fmt.Errorf("stamp lock pid: %w", err), os.RemoveAll(stage))
@@ -112,9 +121,17 @@ func runLocked(lockDir string, fn func() error) (err error) {
 	return fn()
 }
 
-func dirExists(path string) bool {
+// dirExists distinguishes "not there" from a failing Stat; unexpected
+// failures surface instead of degrading into an acquisition timeout.
+func dirExists(path string) (bool, error) {
 	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat %s: %w", path, err)
+	}
+	return info.IsDir(), nil
 }
 
 // PidAlive reports whether pid refers to a live process.

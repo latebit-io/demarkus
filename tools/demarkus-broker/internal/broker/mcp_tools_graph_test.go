@@ -921,7 +921,10 @@ func TestGraphWriteHandlersDenyNonWriter(t *testing.T) {
 		}
 	})
 
-	if len(d.publishCalls) != 0 {
-		t.Errorf("dispatcher.Publish called %d times for denied writes, want 0", len(d.publishCalls))
+	// Denied writes must produce no dispatcher activity at all: no
+	// publishes, and no pre-gate reads (manifest checks, crawl).
+	if n := len(d.publishCalls) + len(d.fetchCalls) + len(d.fetchCondCalls) + len(d.listCalls); n != 0 {
+		t.Errorf("dispatcher saw %d calls for denied writes, want 0 (publish=%d fetch=%d fetchCond=%d list=%d)",
+			n, len(d.publishCalls), len(d.fetchCalls), len(d.fetchCondCalls), len(d.listCalls))
 	}
 }

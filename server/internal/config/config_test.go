@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -256,6 +257,24 @@ func TestValidate_NonFiniteRateLimit(t *testing.T) {
 			cfg := &Config{ContentDir: t.TempDir(), RateLimit: v, RateBurst: 100}
 			if err := cfg.Validate(); err == nil {
 				t.Fatalf("expected validation error for rate limit %v", v)
+			}
+		})
+	}
+}
+
+func TestValidate_NegativeTimeouts(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		mut  func(*Config)
+	}{
+		{"negative idle timeout", func(c *Config) { c.IdleTimeout = -time.Second }},
+		{"negative request timeout", func(c *Config) { c.RequestTimeout = -time.Second }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{ContentDir: t.TempDir(), RateLimit: 50, RateBurst: 100}
+			tt.mut(cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
 			}
 		})
 	}

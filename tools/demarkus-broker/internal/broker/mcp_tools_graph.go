@@ -398,33 +398,28 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 		return block, nil
 	}
 
-	// Crawl source world. The walkIndexDir helper handles depth
-	// recursion + the maxIndexDocuments cap + cycle detection.
-	var entries []index.Entry
+	// Crawl source world. sourceRoot bounds every destination (no "../"
+	// escapes); visited is seeded with the root so a listing entry
+	// resolving back to it cannot re-walk the tree.
 	sourceScheme := "mark://" + sourceWorld
-	// visited is the cycle-detection + path-escape gate. A world
-	// that responds to LIST with directory entries linking back
-	// to ancestor paths (whether by buggy server or hostile
-	// content) would otherwise recurse forever — maxIndexDocuments
-	// bounds file appends but not directory traversal. Keyed on
-	// the canonical (path.Clean-normalized) directory path so two
-	// representations of the same dir (e.g. /docs/ and /docs)
-	// collapse to one entry.
-	visited := map[string]struct{}{}
-	// sourceRoot is the canonical form of the user-supplied
-	// starting directory. walkIndexDir refuses to recurse into
-	// paths that don't stay under it, blocking path-escape via
-	// "../" in LIST destinations.
 	sourceRoot := path.Clean(sourcePath)
 	if !strings.HasSuffix(sourceRoot, "/") {
 		sourceRoot += "/"
 	}
-	walkErr := g.walkIndexDir(ctx, sourceWorld, sourcePath, sourceScheme, sourceRoot, &entries, visited)
+	iw := &indexWalk{
+		g:            g,
+		worldName:    sourceWorld,
+		sourceScheme: sourceScheme,
+		sourceRoot:   sourceRoot,
+		visited:      map[string]struct{}{sourceRoot: {}},
+	}
+	walkErr := iw.walk(ctx, sourcePath, 0)
+	entries := iw.entries
 	if walkErr != nil && !errors.Is(walkErr, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", walkErr)), nil
 	}
 	if errors.Is(walkErr, errIndexTruncated) {
-		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
+		warnings = append(warnings, "warning: crawl bounds reached, some content may not be indexed")
 	}
 
 	body := index.Build(sourceScheme, time.Now(), entries)
@@ -506,46 +501,53 @@ func (g *mcpGateway) checkIndexManifests(ctx context.Context, sourceWorld, targe
 	return warnings, nil
 }
 
-// walkIndexDir recursively LISTs a world's directory tree and
-// FETCHes each file to collect its content-hash. Honors the
-// maxIndexDocuments cap by returning errIndexTruncated, which
-// the outer handler decodes into a "warning, index truncated"
-// rather than a hard error. Inaccessible directories (a LIST
-// that fails or returns non-ok) are skipped silently — they may
-// be perfectly legitimate paths the broker's mint scope just
-// doesn't cover this call.
-//
-// Two safety properties guard against pathological LIST
-// responses (cycles, path escapes — whether from a misbehaving
-// world or a malicious one):
-//
-//   - visited keys on canonical (path.Clean-normalized)
-//     directory paths. A directory entry linking back to an
-//     ancestor (or to itself) short-circuits before recursing.
-//   - sourceRoot is the canonical form of the user-supplied
-//     starting directory; directories whose canonical path
-//     escapes this root (e.g. via "../" in a LIST destination)
-//     are skipped silently. The index is "what's under
-//     sourcePath", not "what the world feels like serving."
-func (g *mcpGateway) walkIndexDir(ctx context.Context, worldName, dirPath, sourceScheme, sourceRoot string, entries *[]index.Entry, visited map[string]struct{}) error {
+// mark_index traversal bounds, independent of maxIndexDocuments: depth is
+// the cycle-safety valve (self-referencing listings mint ever-deeper paths
+// visited cannot catch), the LIST budget bounds breadth and fileless chains.
+const (
+	maxIndexDepth = 16
+	maxIndexLists = 4096
+)
+
+// indexWalk carries mark_index's crawl state. visited keys on canonical
+// directory paths; sourceRoot bounds every directory AND file destination
+// (escape via "../" in a LIST entry is skipped).
+type indexWalk struct {
+	g            *mcpGateway
+	worldName    string
+	sourceScheme string
+	sourceRoot   string
+	entries      []index.Entry
+	visited      map[string]struct{}
+	lists        int
+}
+
+// walk LISTs the tree and FETCHes each file for its content-hash. Bound
+// violations return errIndexTruncated (a handler warning); skipped
+// directories/documents are warn-logged, never a silent success.
+func (iw *indexWalk) walk(ctx context.Context, dirPath string, depth int) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if len(*entries) >= maxIndexDocuments {
+	if len(iw.entries) >= maxIndexDocuments || iw.lists >= maxIndexLists {
 		return errIndexTruncated
 	}
-	listResult, err := g.dispatcher.List(worldName, dirPath, "", fetch.ListOptions{})
+	if depth > maxIndexDepth {
+		iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", dirPath, "reason", "max depth reached")
+		return errIndexTruncated
+	}
+	iw.lists++
+	listResult, err := iw.g.dispatcher.List(iw.worldName, dirPath, "", fetch.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("list %s: %w", dirPath, err)
 	}
 	if listResult.Response.Status != protocol.StatusOK {
-		// Skipped, not fatal: other subtrees still index. Logged so an
-		// incomplete index is never a silent success.
-		g.log.Warn("mark_index: directory skipped", "world", worldName, "dir", dirPath, "status", listResult.Response.Status)
+		// Skipped, not fatal: other subtrees still index.
+		iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", dirPath, "status", listResult.Response.Status)
 		return nil
 	}
 	for _, dest := range links.Extract(listResult.Response.Body) {
-		if len(*entries) >= maxIndexDocuments {
+		if len(iw.entries) >= maxIndexDocuments {
 			return errIndexTruncated
 		}
 		fullPath := dirPath
@@ -553,50 +555,46 @@ func (g *mcpGateway) walkIndexDir(ctx context.Context, worldName, dirPath, sourc
 			fullPath += "/"
 		}
 		fullPath += dest
+		// Canonicalize every destination; the index covers the subtree the
+		// user pointed at, not the world's whole filesystem.
+		canonical := path.Clean(fullPath)
 		if strings.HasSuffix(dest, "/") {
-			// Canonicalize before deciding whether to recurse.
-			// path.Clean collapses ".", ".." and double-slashes
-			// to a normalized form we can compare for cycles
-			// and check against the source root.
-			canonical := path.Clean(fullPath)
 			if !strings.HasSuffix(canonical, "/") {
 				canonical += "/"
 			}
-			if !strings.HasPrefix(canonical, sourceRoot) {
-				// Path-escape attempt (e.g., a LIST entry
-				// of "../" climbing above the source). Skip
-				// silently — the index covers the subtree
-				// the user pointed at, not the world's
-				// whole filesystem.
+			if !strings.HasPrefix(canonical, iw.sourceRoot) {
+				continue // path-escape attempt
+			}
+			if _, seen := iw.visited[canonical]; seen {
 				continue
 			}
-			if _, seen := visited[canonical]; seen {
-				continue
-			}
-			visited[canonical] = struct{}{}
-			if recErr := g.walkIndexDir(ctx, worldName, fullPath, sourceScheme, sourceRoot, entries, visited); recErr != nil {
+			iw.visited[canonical] = struct{}{}
+			if recErr := iw.walk(ctx, fullPath, depth+1); recErr != nil {
 				return recErr
 			}
 			continue
 		}
+		if !strings.HasPrefix(canonical, iw.sourceRoot) {
+			continue // file destination escaping the root; never fetch it
+		}
 		// File — fetch and collect content-hash.
-		doc, ferr := g.dispatcher.Fetch(worldName, fullPath, "")
+		doc, ferr := iw.g.dispatcher.Fetch(iw.worldName, canonical, "")
 		if ferr != nil {
-			g.log.Warn("mark_index: document skipped", "world", worldName, "path", fullPath, "err", ferr)
+			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "err", ferr)
 			continue
 		}
 		if doc.Response.Status != protocol.StatusOK {
-			g.log.Warn("mark_index: document skipped", "world", worldName, "path", fullPath, "status", doc.Response.Status)
+			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "status", doc.Response.Status)
 			continue
 		}
 		contentHash := doc.Response.Metadata["content-hash"]
 		if _, valid := protocol.IsHashPath(contentHash); !valid || contentHash == "" {
 			continue
 		}
-		*entries = append(*entries, index.Entry{
+		iw.entries = append(iw.entries, index.Entry{
 			Hash:   contentHash,
-			Server: sourceScheme,
-			Path:   fullPath,
+			Server: iw.sourceScheme,
+			Path:   canonical,
 		})
 	}
 	return nil
