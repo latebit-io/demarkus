@@ -1010,10 +1010,9 @@ type seedClient interface {
 	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 }
 
-// seedSoulDocs ensures index.md is a served document, publishing through the
-// protocol so it gets version history. A flat file written straight to disk
-// LISTs but FETCH refuses it (issue #288), so seeding must go through PUBLISH.
-// Best-effort: failures warn and provision continues.
+// seedSoulDocs seeds index.md via PUBLISH so it gets version history; a
+// flat file on disk is not FETCHable (issue #288). Best-effort: failures
+// warn and provision continues.
 func seedSoulDocs(port int) {
 	tokenFile, err := pluginToken()
 	if err != nil {
@@ -1038,10 +1037,9 @@ func seedSoulDocs(port int) {
 	})
 }
 
-// cleanupLegacyTemplate deletes the flat project-template.md the old seeding
-// wrote (never FETCHable, issue #288) when it is a pristine seed copy. The
-// canonical layout now ships in the soul-memory skill; a customized copy is
-// left for the store's flat-file migration (roadmap: LIST/FETCH agree fix).
+// cleanupLegacyTemplate deletes the old seeding's flat project-template.md
+// (never FETCHable, issue #288) when pristine; the layout now ships in the
+// soul-memory skill. A customized copy stays until its owner republishes.
 func cleanupLegacyTemplate(soulDir string) {
 	const name = "project-template.md"
 	flatPath := filepath.Join(soulDir, name)
@@ -1180,12 +1178,9 @@ func withProvisionLock(fn func() error) error {
 	return fmt.Errorf("could not acquire provision lock %s (another session provisioning?)", lockDir)
 }
 
-// Provision runs the per-session sequence: load-or-default config, ensure
-// binaries, restart-on-upgrade, ensure/verify the server, seed soul docs. All
-// progress goes to STDERR. (session-start.sh / pi provision.sh main.)
-// Seeding runs after the lock is released: it is race-safe on its own
-// (create-only publish, conflict = someone else won) and a slow or wedged
-// server must not serialize concurrent session starts behind it.
+// Provision runs the per-session sequence: config, binaries, server, seed.
+// Progress goes to STDERR. Seeding runs after the lock: create-only publish
+// is race-safe, and a wedged server must not serialize session starts.
 func Provision() error {
 	seedPort := 0
 	if err := withProvisionLock(func() error {

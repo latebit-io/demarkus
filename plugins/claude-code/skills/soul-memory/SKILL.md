@@ -89,5 +89,5 @@ When the user wants to start memory for a project that does not exist in `/index
 - Don't fabricate memory. If `mark_fetch` returns `not-found`, the document does not exist — say so.
 - Don't invent expected_versions. Use 0 for new documents; fetch first when updating.
 - Don't bypass the MCP tools with shell commands — the soul is the source of truth.
-- Don't create top-level files outside `/<project>/` subtrees except for `/index.md` itself.
+- Don't create top-level files outside `/<project>/` subtrees except for `/index.md` and a `/project-template.md` layout override.
 - Don't save secrets, credentials, or anything the user has not explicitly authorized.
