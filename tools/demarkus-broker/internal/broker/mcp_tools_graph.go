@@ -563,19 +563,23 @@ func (iw *indexWalk) walk(ctx context.Context, dirPath string, depth int) error 
 				canonical += "/"
 			}
 			if !strings.HasPrefix(canonical, iw.sourceRoot) {
-				continue // path-escape attempt
+				iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", canonical, "reason", "escapes source root")
+				continue
 			}
 			if _, seen := iw.visited[canonical]; seen {
 				continue
 			}
 			iw.visited[canonical] = struct{}{}
-			if recErr := iw.walk(ctx, fullPath, depth+1); recErr != nil {
+			// Recurse on the canonical form so the peer sees normalized
+			// paths (child/../sibling/ never goes out on the wire).
+			if recErr := iw.walk(ctx, canonical, depth+1); recErr != nil {
 				return recErr
 			}
 			continue
 		}
 		if !strings.HasPrefix(canonical, iw.sourceRoot) {
-			continue // file destination escaping the root; never fetch it
+			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "reason", "escapes source root")
+			continue
 		}
 		// File — fetch and collect content-hash.
 		doc, ferr := iw.g.dispatcher.Fetch(iw.worldName, canonical, "")
@@ -589,6 +593,7 @@ func (iw *indexWalk) walk(ctx context.Context, dirPath string, depth int) error 
 		}
 		contentHash := doc.Response.Metadata["content-hash"]
 		if _, valid := protocol.IsHashPath(contentHash); !valid || contentHash == "" {
+			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "reason", "missing or invalid content-hash")
 			continue
 		}
 		iw.entries = append(iw.entries, index.Entry{

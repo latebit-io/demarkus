@@ -40,12 +40,13 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 		// missing entirely (legacy pre-staging crash left an unstamped dir;
 		// staged acquisition can no longer produce one).
 		b, readErr := os.ReadFile(lockPid)
-		if readErr == nil {
+		switch {
+		case readErr == nil:
 			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(b))); convErr == nil && !PidAlive(pid) {
 				reclaimStale(lockDir)
 				continue
 			}
-		} else if errors.Is(readErr, os.ErrNotExist) {
+		case errors.Is(readErr, os.ErrNotExist):
 			exists, statErr := dirExists(lockDir)
 			if statErr != nil {
 				return statErr
@@ -54,6 +55,9 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 				reclaimStale(lockDir)
 				continue
 			}
+		default:
+			// Permission/IO/ENOTDIR: surface now, not as a timeout later.
+			return fmt.Errorf("read lock pid %s: %w", lockPid, readErr)
 		}
 		time.Sleep(sleep)
 	}

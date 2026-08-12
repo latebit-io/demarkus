@@ -73,8 +73,9 @@ func (c *Config) Validate() error {
 	if c.RateLimit > 0 && c.RateBurst < 1 {
 		errs = append(errs, fmt.Errorf("rate burst must be at least 1 when rate limiting is enabled (got %d)", c.RateBurst))
 	}
-	// Negative timeouts silently disable deadlines rather than expiring
-	// requests; zero stays valid (documented no-deadline mode).
+	// Negative timeouts are invalid (they'd silently disable deadlines).
+	// Zero stays valid: RequestTimeout 0 = no per-request deadline,
+	// IdleTimeout 0 = quic-go's default idle timeout.
 	if c.IdleTimeout < 0 {
 		errs = append(errs, fmt.Errorf("idle timeout must be non-negative (got %v)", c.IdleTimeout))
 	}
