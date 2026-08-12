@@ -80,6 +80,23 @@ func TestWithLock(t *testing.T) {
 		}
 	})
 
+	t.Run("reclaims lock with malformed pid stamp", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "state.lock")
+		if err := os.Mkdir(lock, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lock, "pid"), []byte("not-a-pid"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ran := false
+		if err := WithLock(lock, 100, time.Millisecond, func() error { ran = true; return nil }); err != nil {
+			t.Fatalf("WithLock: %v", err)
+		}
+		if !ran {
+			t.Error("fn did not run after corrupt-stamp reclaim")
+		}
+	})
+
 	t.Run("times out on live holder", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "state.lock")
 		if err := os.Mkdir(lock, 0o755); err != nil {

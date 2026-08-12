@@ -42,7 +42,15 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 		b, readErr := os.ReadFile(lockPid)
 		switch {
 		case readErr == nil:
-			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(b))); convErr == nil && !PidAlive(pid) {
+			pid, convErr := strconv.Atoi(strings.TrimSpace(string(b)))
+			if convErr != nil {
+				// Corrupt stamp: staged acquisition only writes valid PIDs,
+				// so reclaim like the unstamped-legacy case (self-heal)
+				// rather than treating it as live contention.
+				reclaimStale(lockDir)
+				continue
+			}
+			if !PidAlive(pid) {
 				reclaimStale(lockDir)
 				continue
 			}
