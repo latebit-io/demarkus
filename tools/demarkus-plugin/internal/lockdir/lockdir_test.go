@@ -80,6 +80,23 @@ func TestWithLock(t *testing.T) {
 		}
 	})
 
+	t.Run("acquires over empty legacy lock dir", func(t *testing.T) {
+		// Pre-staging crash between mkdir and stamp left an EMPTY dir.
+		// Mixed-version writers never overlap (see package doc), so this is
+		// always garbage; acquisition must succeed, not time out.
+		lock := filepath.Join(t.TempDir(), "state.lock")
+		if err := os.Mkdir(lock, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		ran := false
+		if err := WithLock(lock, 100, time.Millisecond, func() error { ran = true; return nil }); err != nil {
+			t.Fatalf("WithLock: %v", err)
+		}
+		if !ran {
+			t.Error("fn did not run over empty legacy lock dir")
+		}
+	})
+
 	t.Run("reclaims lock with malformed pid stamp", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "state.lock")
 		if err := os.Mkdir(lock, 0o755); err != nil {
