@@ -28,7 +28,7 @@ Before reading or writing, resolve the project slug:
 
 ## Per-project structure
 
-This skill carries the canonical layout. A `/project-template.md` published at the soul root overrides it — fetch that and follow it when it exists (`not-found` means no override). Each `/<project>/` subtree uses:
+This skill carries the canonical layout. A `/project-template.md` published at the soul root overrides it — fetch that and follow it when it exists. Only `not-found` means no override; any other fetch failure (transport, auth, server error) is a real error — surface it and stop instead of silently falling back to this layout. Each `/<project>/` subtree uses:
 
 - `/<project>/index.md` — the project hub; links to every doc below and anchors discovery
 - `/<project>/architecture.md` — system design, module boundaries, key decisions
