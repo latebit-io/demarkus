@@ -10,7 +10,7 @@
       "name": "demarkus-memory",
       "source": "./plugins/claude-code",
       "description": "Zero-config local memory for Claude Code. Spawns a local demarkus-server and wires MCP tools for fetch/publish/append/graph/lookup over your own versioned markdown store, and self-documents sessions to it. /soul-join adds remote souls to a catalog with per-project binding and a destination gate; a join URL (host and token in one paste-able string) joins a remote soul in one step. With a promote destination configured — a joined knowledge system or a registered plain remote demarkus server — /promote lifts ready notes up to it, /promote-scan sweeps for candidates, an ADR publish nudges promotion, and /soul-refresh pulls promoted docs back as they evolve.",
-      "version": "0.13.21",
+      "version": "0.13.22",
       "category": "memory",
       "tags": ["memory", "demarkus", "mark-protocol", "local-first"],
       "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code"
@@ -19,7 +19,7 @@
       "name": "demarkus-knowledge",
       "source": "./plugins/claude-code-knowledge",
       "description": "Join an organizational demarkus knowledge system from Claude Code — a shared, broker-fronted, versioned markdown catalog. Steers sessions to the shared catalog first, makes it easy to navigate, enforces a publish tag-gate, and curates promoted notes into it via the knowledge-promote cascade. No local server or binaries.",
-      "version": "0.5.37",
+      "version": "0.5.38",
       "category": "memory",
       "tags": ["memory", "knowledge-base", "demarkus", "mark-protocol", "broker", "team"],
       "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code-knowledge"
