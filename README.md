@@ -10,7 +10,7 @@ Run a single personal server, or compose many into an organizational **knowledge
 
 ### Agent memory plugins (start here)
 
-The fastest way to try Demarkus: give your coding agent persistent, versioned memory. The plugins manage their own binaries — no separate install needed.
+The fastest way to try Demarkus: give your coding agent persistent, versioned memory. The plugins manage their own binaries no separate install needed.
 
 **Claude Code**
 
