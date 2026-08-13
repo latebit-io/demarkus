@@ -8,6 +8,38 @@ Run a single personal server, or compose many into an organizational **knowledge
 
 ## Install
 
+### Agent memory plugins (start here)
+
+The fastest way to try Demarkus: give your coding agent persistent, versioned memory. The plugins manage their own binaries — no separate install needed.
+
+**Claude Code**
+
+```text
+/plugin marketplace add latebit-io/demarkus
+/plugin install demarkus-memory@demarkus
+```
+
+Teams: `/plugin install demarkus-knowledge@demarkus` to join a shared [knowledge system](plugins/claude-code-knowledge/).
+
+**OpenCode**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+```
+
+**pi**
+
+```bash
+pi install npm:pi-mcp-adapter
+pi install git:github.com/latebit-io/demarkus-pi-memory
+```
+
+Teams: [pi knowledge plugin](plugins/pi-knowledge/). Details: [pi memory plugin](plugins/pi-memory/).
+
+**Other agents**: [OpenClaw skill](https://www.demarkus.io/install/openclaw/)
+
+### Binaries
+
 ```bash
 # macOS / Linux: server + client
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
