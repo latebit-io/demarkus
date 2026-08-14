@@ -41,6 +41,12 @@ Anchor on the scope's hub: `/index.md` or `/<slug>/index.md`.
 These cost one fetch per document, so only run them for a single project or when the user asks for a thorough audit. Hard bound: fetch at most **100** documents per audit (prefer hub-linked and recently modified docs when sampling); past that, stop and report the limit and how many documents were skipped. **If you cap or sample, say so explicitly in the report — don't imply full coverage.**
 
 - **Untagged docs** — fetch and check the `tags` metadata is non-empty. An untagged doc is invisible to `mark_lookup`. (This is what the publish gate now prevents going forward; this finds pre-existing ones.)
+- **Metadata lost across versions** *(legacy servers)* — an untagged doc that **used to** carry tags. Servers before the APPEND metadata merge wrote the appended version with only `{agent: …}`, so every `mark_append` silently dropped the doc's `tags`, `importance`, `title`, and `type` and knocked it out of `mark_lookup`. Once every server the soul writes to has the merge, this check only ever finds pre-existing damage; retire it when the corpus is clean. Journals, appended every session, are the usual victims. Run this only on docs the untagged check already flagged, and only when they have more than one version:
+  1. `mark_versions` on the doc (a version fetch also reports `current-version`).
+  2. Fetch versions newest-first below the current one — `mark_fetch /<path>/v<N>` — and stop at the first that carries `tags`. **Cap at 10 fetches per doc**, then try `v1` as a last probe and give up; disclose any doc you gave up on.
+  3. Report the recovered `tags`/`importance`/`type`/`title` verbatim and the version they came from. That payload *is* the repair.
+
+  Keep it distinct from **Untagged docs**: a doc untagged since `v1` was never tagged (a curation exercise, judgement required), while a doc that *lost* tags is a regression with a known-correct answer. Fix, as a separate explicit write step since this command never writes: `mark_publish` the **current body** with the recovered metadata and `expected_version` set to the current version. Don't re-publish the old body; the appended content is real.
 - **Duplicate content** — compare `content-hash` across fetched docs; identical hashes under different paths are duplicates.
 - **Untyped docs (OKF `type`)** *(advisory)* — fetch and read the `type` metadata; a doc with no `type` or `type: Document` is un-kinded. Setting a `type` key in the `metadata` object (`Reference`/`Decision`/`Architecture`/`Plan`/`Journal`/`Guide`/…) makes the soul OKF-typed and filterable (`mark_lookup` `filter: type=…`). **Exempt `index.md` and `log.md`** — the server never defaults their type, so an untyped hub is correct. Advisory only: a local soul declares no `require_fields`, so this is a backfill suggestion, not a violation.
 - **In-body frontmatter block** *(demarkus-specific)* — a body whose **first non-blank line is `---`** and whose block carries reserved/operational keys (`version`, `previous-hash`, `archived`, `meta.*`) is almost always an **exported demarkus doc pasted back into a publish**. The server stores frontmatter out-of-band and treats a body-leading `---` as literal content, so it renders as a stray horizontal rule + garbled headings, and the in-body `version:` won't match the doc's real fetched `version`. Flag it; fix is strip the block and re-publish with metadata passed out-of-band.
@@ -71,6 +77,9 @@ Render plainly, grouped by check, most actionable first. For each finding give t
 
 ### Untagged (<n>)        [deep check — scanned <k>/<N> docs]
 - /<slug>/bar.md — no tags; re-publish with metadata.tags
+
+### Metadata lost across versions (<n>)        [deep check — scanned <k>/<N> docs]
+- /journal/2026-08-12.md — tagged at v1 (11 tags, importance 0.6, type Journal), none at v5; re-publish the current body with the v1 metadata
 
 ### Dangling & unlinked references (<n>)        [deep check — scanned <k>/<N> docs]
 - /adr/0006-navigation-rework.md → "ADR 0005" — dangling: no such doc in scope (mark_list → no match); restore it or drop the reference

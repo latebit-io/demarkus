@@ -46,7 +46,7 @@ A style gate also warns at write time on body-shape problems: a frontmatter fenc
 
 Soft checks back you up at the moment they matter: the publish gate (tags), a session-end nudge to journal if you changed files but recorded nothing, and a recall nudge when you ask a "did we / what did we decide" question. They're reminders, not substitutes — routing to the right file is still purely on you, and you shouldn't wait to be nudged.
 
-`mark_append` can't carry metadata — tags/importance are fixed at the doc's last `mark_publish`. When an append adds a materially new subject, re-publish the doc with extended `tags` so the catalog stays accurate.
+`mark_append` carries a doc's catalog metadata forward: the server keeps the current version's tags, importance, title, and type on the appended version, so an append never drops a doc out of `mark_lookup`. It does not *extend* them, so when an append adds a materially new subject, re-publish the doc with extended `tags`.
 
 ## Restraint
 

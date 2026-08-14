@@ -9,8 +9,10 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
@@ -32,6 +34,7 @@ func RunConformance(t *testing.T, factory Factory) {
 		{"NotModifiedDedup", testNotModifiedDedup},
 		{"ArchiveLifecycle", testArchiveLifecycle},
 		{"AppendSemantics", testAppendSemantics},
+		{"AppendMetadataMerge", testAppendMetadataMerge},
 		{"ListDirSemantics", testListDirSemantics},
 		{"IsDirSemantics", testIsDirSemantics},
 		{"RetentionPrune", testRetentionPrune},
@@ -240,6 +243,78 @@ func testAppendSemantics(t *testing.T, s handler.DocumentStore) {
 	if _, err := s.Append("/nope.md", 1, []byte("x"), nil); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("append missing: err = %v, want ErrNotExist", err)
 	}
+}
+
+// testAppendMetadataMerge covers SPEC 6.6: an append inherits the base
+// version's publisher metadata, request keys winning. Without the merge the
+// document loses its tags and falls out of LOOKUP.
+func testAppendMetadataMerge(t *testing.T, s handler.DocumentStore) {
+	seed := map[string]string{"tags": "alpha, beta", "importance": "0.9", "type": "Plan", "title": "Kept"}
+	if _, err := s.WriteVersion("/tagged.md", 0, []byte("# Kept\n"), seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got := appendMeta(t, s, "/tagged.md", 1, map[string]string{"agent": "claude"})
+	if got["tags"] == "" || got["importance"] != "0.9" {
+		t.Errorf("inherited metadata = %v, want tags and importance 0.9 preserved", got)
+	}
+	if got["type"] != "Plan" {
+		t.Errorf("type = %q, want Plan preserved (not overwritten by the OKF default)", got["type"])
+	}
+	if got["agent"] != "claude" {
+		t.Errorf("agent = %q, want the request key applied", got["agent"])
+	}
+
+	// Request keys win over the base version's.
+	got = appendMeta(t, s, "/tagged.md", 2, map[string]string{"importance": "0.2"})
+	if got["importance"] != "0.2" || got["tags"] == "" {
+		t.Errorf("override = %v, want importance 0.2 with tags still inherited", got)
+	}
+
+	// retention is never inherited: pruning is destructive and must be
+	// declared by the write that performs it.
+	if _, err := s.WriteVersion("/pruned.md", 0, []byte("v1"), map[string]string{"retention": "2", "tags": "x"}); err != nil {
+		t.Fatalf("seed retention: %v", err)
+	}
+	got = appendMeta(t, s, "/pruned.md", 1, nil)
+	if got["retention"] != "" {
+		t.Errorf("retention = %q, want it dropped rather than inherited", got["retention"])
+	}
+	if got["tags"] != "x" {
+		t.Errorf("tags = %q, want x inherited alongside the dropped retention", got["tags"])
+	}
+
+	// An untagged document stays untagged rather than gaining junk.
+	mustWrite(t, s, "/plain.md", 0, "body")
+	got = appendMeta(t, s, "/plain.md", 1, nil)
+	if got["tags"] != "" || got["importance"] != "" {
+		t.Errorf("untagged append metadata = %v, want no tags or importance", got)
+	}
+
+	// The merge can breach the caps both sides satisfy alone; that is a
+	// metadata error, not a generic write failure.
+	wide := map[string]string{"tags": strings.Repeat("x", protocol.MaxMetaBytes-32)}
+	if _, err := s.WriteVersion("/wide.md", 0, []byte("v1"), wide); err != nil {
+		t.Fatalf("seed wide: %v", err)
+	}
+	_, err := s.Append("/wide.md", 1, []byte("v2"), map[string]string{"title": strings.Repeat("y", 64)})
+	if !errors.Is(err, store.ErrInvalidMeta) {
+		t.Errorf("over-cap merge: err = %v, want ErrInvalidMeta", err)
+	}
+}
+
+// appendMeta appends to a document and returns the stored metadata of the
+// version the append produced.
+func appendMeta(t *testing.T, s handler.DocumentStore, path string, expected int, meta map[string]string) map[string]string {
+	t.Helper()
+	if _, err := s.Append(path, expected, []byte("more"), meta); err != nil {
+		t.Fatalf("append %s v%d: %v", path, expected, err)
+	}
+	doc, err := s.Get(path, 0)
+	if err != nil {
+		t.Fatalf("get %s after append: %v", path, err)
+	}
+	return doc.Metadata
 }
 
 func testListDirSemantics(t *testing.T, s handler.DocumentStore) {
