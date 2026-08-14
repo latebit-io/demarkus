@@ -39,6 +39,14 @@ Anchor on the scope's hub: `/index.md` or `/<slug>/index.md`.
 These cost one fetch per document, so only run them for a single project or when the user asks for a thorough audit. **If you cap or sample, say so explicitly in the report — don't imply full coverage.**
 
 - **Untagged docs** — fetch and check the `tags` metadata is non-empty. An untagged doc is invisible to `mark_lookup`. (This is what the publish gate now prevents going forward; this finds pre-existing ones.)
+- **Metadata lost across versions** *(legacy servers)* — an untagged doc that **used to** carry tags. Servers before the APPEND metadata merge wrote each appended version with only `{agent: …}`, dropping the doc's `tags`, `importance`, `title`, and `type` and knocking it out of `mark_lookup`; journals, appended every session, are the usual victims. Retire the check once the corpus is clean. Run it only on docs the untagged check already flagged that have more than one version:
+  1. `mark_versions`. If `chain-valid` is false, report the `chain-error` and mark the doc **inconclusive**: metadata read out of a broken chain is not evidence.
+  2. Fetch versions newest-first below the current one (`mark_fetch /<path>/v<N>`) until one carries `tags`. Spend at most 10 fetches per doc and 100 across the audit; say which docs you truncated, and treat a hit found after truncating as low-confidence.
+  3. Report the recovered `tags`/`importance`/`type`/`title` and the version they came from, as a **repair candidate**. Any failed call leaves the doc inconclusive; never infer metadata a call did not return.
+
+  A doc untagged since `v1` was never tagged, a curation exercise. A doc that *lost* tags is a candidate, not a verdict: a later `mark_publish` may have dropped them deliberately. Appends between the two versions point at legacy damage, a publish points at intent. Get the user's confirmation before restoring.
+
+  Repair, as a separate write step since this command never writes: `mark_fetch` with **`force=true`** (a plain fetch returns an outline for bodies of 8KB or more, and publishing an outline destroys the doc). If its version differs from the one you audited, another writer moved the doc: re-run the check instead. Then `mark_publish` that body with the current metadata map **plus** the recovered fields (publish replaces the map, so an omission deletes opaque keys), `retention` only if the user asks, `expected_version` at the current version, and `on_conflict: "fail"`. On any error or conflict, report it exactly, stop, and say the doc is unchanged.
 - **Duplicate content** — compare `content-hash` across fetched docs; identical hashes under different paths are duplicates.
 - **Untyped docs (OKF `type`)** *(advisory)* — fetch and read the `type` metadata; a doc with no `type` or `type: Document` is un-kinded. Setting a `type` key in the `metadata` object (`Reference`/`Decision`/`Architecture`/`Plan`/`Journal`/`Guide`/…) makes the soul OKF-typed and filterable (`mark_lookup` `filter: type=…`). **Exempt `index.md` and `log.md`** — the server never defaults their type, so an untyped hub is correct. Advisory only: a local soul declares no `require_fields`, so this is a backfill suggestion, not a violation.
 - **In-body frontmatter block** *(demarkus-specific)* — a body whose **first non-blank line is `---`** and whose block carries reserved/operational keys (`version`, `previous-hash`, `archived`, `meta.*`) is almost always an **exported demarkus doc pasted back into a publish**. The server stores frontmatter out-of-band and treats a body-leading `---` as literal content, so it renders as a stray horizontal rule + garbled headings, and the in-body `version:` won't match the doc's real fetched `version`. Flag it; fix is strip the block and re-publish with metadata passed out-of-band.
@@ -69,6 +77,9 @@ Render plainly, grouped by check, most actionable first. For each finding give t
 
 ### Untagged (<n>)        [deep check — scanned <k>/<N> docs]
 - /<slug>/bar.md — no tags; re-publish with metadata.tags
+
+### Metadata lost across versions (<n>)        [deep check — scanned <k>/<N> docs]
+- /journal/2026-08-12.md — candidate: tagged at v1 (11 tags, importance 0.6, type Journal), none at v5; repair = force-fetch v5, publish that body with v5's metadata map plus the v1 fields, `expected_version: 5`, `on_conflict: "fail"`
 
 ### Dangling & unlinked references (<n>)        [deep check — scanned <k>/<N> docs]
 - /adr/0006-navigation-rework.md → "ADR 0005" — dangling: no such doc in scope (lookup → no match); restore it or drop the reference

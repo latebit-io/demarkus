@@ -422,6 +422,10 @@ func markAppendTool(host string) mcp.Tool {
 				"expected_version is optional: when omitted or 0, the tool calls VERSIONS to get the "+
 				"current version automatically. Set it explicitly if you already know the version "+
 				"from a prior fetch. "+
+				"The document keeps its catalog metadata across an append: the server carries the "+
+				"current version's tags, importance, title, and type onto the new version, so an "+
+				"append never drops a document out of mark_lookup. Use mark_publish to change or "+
+				"remove metadata. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",

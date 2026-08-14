@@ -62,14 +62,10 @@ var reservedKeys = map[string]bool{
 
 // DocumentStore is the handler's view of a content store. The file-backed
 // implementation is protocol/store.Store; alternative backends implement the
-// same contract. Error contract: methods that address a missing document or
-// directory return an error satisfying errors.Is(err, os.ErrNotExist), and
-// writes surface the store sentinel errors the handlers map to protocol
-// statuses (store.ErrConflict, store.ErrArchived, store.ErrNotModified,
-// store.ErrSizeLimit). Backend-internal race signals such as the file
-// store's ErrVersionExists must be folded into ErrConflict by WriteVersion,
-// never returned to the handler.
+// same contract, including the per-method error contracts below.
 type DocumentStore interface {
+	// A missing document or directory returns an error satisfying
+	// errors.Is(err, os.ErrNotExist). Applies to every addressing method.
 	Get(reqPath string, version int) (*store.Document, error)
 	ListEntries(reqPath string, includeArchived bool) ([]store.DirEntry, error)
 	IsDir(reqPath string) (bool, error)
@@ -77,6 +73,9 @@ type DocumentStore interface {
 	CurrentVersion(reqPath string) int
 	LookupHash(hash string) (string, bool)
 	VerifyChain(reqPath string) error
+	// Writes surface the sentinels the handlers map to protocol statuses:
+	// ErrConflict, ErrArchived, ErrNotModified, ErrSizeLimit, ErrInvalidMeta.
+	// The file store's ErrVersionExists is folded into ErrConflict here.
 	WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*store.Document, error)
 	Append(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*store.Document, error)
 	Archive(reqPath string, archived bool) error
@@ -831,7 +830,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
 	}
-	pubMeta = applyOKFTypeDefault(req.Path, pubMeta)
+	pubMeta = store.ApplyOKFTypeDefault(req.Path, pubMeta)
 	if err := store.ValidateMeta(pubMeta); err != nil {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
@@ -904,6 +903,9 @@ func (h *Handler) writePublishError(w io.Writer, req protocol.Request, expectedV
 	case errors.Is(err, store.ErrSizeLimit):
 		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+	case errors.Is(err, store.ErrInvalidMeta):
+		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid metadata")
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
 	default:
 		h.logger().Error("publish failed", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
@@ -965,7 +967,8 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
 	}
-	pubMeta = applyOKFTypeDefault(req.Path, pubMeta)
+	// No OKF type default here: the store applies it after merging the base
+	// version's metadata, so an append never overwrites a declared type.
 	if err := store.ValidateMeta(pubMeta); err != nil {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
@@ -1012,6 +1015,11 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 		if errors.Is(err, store.ErrSizeLimit) {
 			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
 			h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+			return
+		}
+		if errors.Is(err, store.ErrInvalidMeta) {
+			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "merged metadata invalid")
+			h.writeError(w, protocol.StatusBadRequest, err.Error())
 			return
 		}
 		h.logger().Error("append failed", "path", sanitize(req.Path), "error", err)
@@ -1114,26 +1122,6 @@ func (h *Handler) logPrune(operation, reqPath, tokenLabel string, doc *store.Doc
 
 // extractPublisherMeta returns non-control metadata keys from a request.
 // Returns nil if no publisher keys are present.
-// applyOKFTypeDefault gives every published concept document an Open Knowledge
-// Format `type`, demarkus's guarantee that stored documents are typed OKF
-// concepts. Documents that already declare a type, and reserved OKF files
-// (index.md, log.md, which OKF defines as navigation/history rather than
-// concepts), are left unchanged.
-func applyOKFTypeDefault(reqPath string, meta map[string]string) map[string]string {
-	base := path.Base(reqPath)
-	if base == "index.md" || base == "log.md" {
-		return meta
-	}
-	if strings.TrimSpace(meta["type"]) != "" {
-		return meta
-	}
-	if meta == nil {
-		meta = make(map[string]string, 1)
-	}
-	meta["type"] = protocol.OKFDefaultType
-	return meta
-}
-
 func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) {
 	var meta map[string]string
 	size := 0

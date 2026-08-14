@@ -731,7 +731,9 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	if err != nil {
 		return nil, err
 	}
-	return s.WriteVersion(reqPath, expectedVersion, combined, meta)
+	// write validates the merged map: both sides pass the caps individually,
+	// their union need not.
+	return s.WriteVersion(reqPath, expectedVersion, combined, store.PrepareAppendMeta(reqPath, baseDoc.Metadata, meta))
 }
 
 // Archive toggles the archived flag: the documents row column and the tip

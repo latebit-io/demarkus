@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	slashpath "path"
 	"path/filepath"
@@ -101,6 +102,11 @@ var ErrInvalidPath = fmt.Errorf("publish path must end in .md")
 // ErrInvalidContent is returned when a document body is not valid UTF-8.
 // Markdown is UTF-8 text; binary content is not a markdown document (SPEC 2.3, 4.4).
 var ErrInvalidContent = fmt.Errorf("document body must be valid UTF-8 text")
+
+// ErrInvalidMeta is returned when publisher metadata breaks the key, value,
+// count, or size rules. Writes surface it past a caller's pre-check, since
+// APPEND's merge (SPEC 6.6) can breach caps both sides satisfied alone.
+var ErrInvalidMeta = fmt.Errorf("invalid publisher metadata")
 
 // maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
 // adds to a version file (version, archived, previous-hash, publisher
@@ -1311,7 +1317,9 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 		return nil, err
 	}
 
-	return s.WriteVersion(reqPath, expectedVersion, combined, meta)
+	// Write validates the merged map: both sides pass the caps individually,
+	// their union need not.
+	return s.WriteVersion(reqPath, expectedVersion, combined, PrepareAppendMeta(reqPath, baseDoc.Metadata, meta))
 }
 
 // VerifyChain checks the hash chain integrity for a document.
@@ -1491,6 +1499,37 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 // before the write and surface a precise error rather than a generic failure.
 func ValidateMeta(meta map[string]string) error { return validateMeta(meta) }
 
+// mergeAppendMeta layers an APPEND's metadata over the base version's, request
+// keys winning (SPEC 6.6); without it an append drops the doc out of LOOKUP.
+// retention is never inherited: pruning belongs to the write declaring it.
+func mergeAppendMeta(base, req map[string]string) map[string]string {
+	if len(base) == 0 && len(req) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(base)+len(req))
+	maps.Copy(merged, base)
+	delete(merged, retentionKey)
+	maps.Copy(merged, req)
+	return merged
+}
+
+// ApplyOKFTypeDefault types every written concept document (SPEC 6.4), leaving
+// a declared type and the reserved OKF files alone. Copies rather than stamping
+// the caller's map, which may belong to a fetched Document.
+func ApplyOKFTypeDefault(reqPath string, meta map[string]string) map[string]string {
+	switch slashpath.Base(reqPath) {
+	case "index.md", "log.md":
+		return meta
+	}
+	if strings.TrimSpace(meta["type"]) != "" {
+		return meta
+	}
+	typed := make(map[string]string, len(meta)+1)
+	maps.Copy(typed, meta)
+	typed["type"] = protocol.OKFDefaultType
+	return typed
+}
+
 // ValidateDocumentContent enforces the document contract for PUBLISH/APPEND: a
 // .md path with a UTF-8 body. Callers map the errors to bad-request.
 func ValidateDocumentContent(reqPath string, content []byte) error {
@@ -1509,33 +1548,33 @@ func ValidateBody(content []byte) error {
 	return nil
 }
 
-// validateMeta checks that metadata keys and values are safe for frontmatter
-// serialization. This is defense in depth — the handler also validates, but
-// the store is a public API callable outside the network path.
+// validateMeta checks metadata is safe for frontmatter serialization. Defense
+// in depth: the handler validates too, but the store is callable off the
+// network path. Failures wrap ErrInvalidMeta so callers can classify them.
 func validateMeta(meta map[string]string) error {
 	size := 0
 	for k, v := range meta {
 		if reservedMetaKeys[k] {
-			return fmt.Errorf("metadata key %q is reserved by the store", k)
+			return fmt.Errorf("%w: key %q is reserved by the store", ErrInvalidMeta, k)
 		}
 		if !protocol.IsValidMetaKey(k) {
-			return fmt.Errorf("metadata key %q contains invalid characters", k)
+			return fmt.Errorf("%w: key %q contains invalid characters", ErrInvalidMeta, k)
 		}
 		if !protocol.IsValidMetaValue(v) {
-			return fmt.Errorf("metadata value for key %q contains newlines", k)
+			return fmt.Errorf("%w: value for key %q contains newlines", ErrInvalidMeta, k)
 		}
 		if k == retentionKey {
 			if _, ok := ParseRetention(v); !ok {
-				return fmt.Errorf("metadata key %q must be a positive integer, got %q", retentionKey, v)
+				return fmt.Errorf("%w: key %q must be a positive integer, got %q", ErrInvalidMeta, retentionKey, v)
 			}
 		}
 		size += SerializedMetaSize(k, v)
 	}
 	if len(meta) > protocol.MaxMetaKeys {
-		return fmt.Errorf("too many metadata keys (max %d)", protocol.MaxMetaKeys)
+		return fmt.Errorf("%w: too many metadata keys (max %d)", ErrInvalidMeta, protocol.MaxMetaKeys)
 	}
 	if size > protocol.MaxMetaBytes {
-		return fmt.Errorf("metadata too large (max %d bytes)", protocol.MaxMetaBytes)
+		return fmt.Errorf("%w: metadata too large (max %d bytes)", ErrInvalidMeta, protocol.MaxMetaBytes)
 	}
 	return nil
 }

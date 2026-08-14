@@ -458,7 +458,10 @@ modified: <RFC 3339 timestamp>
 - The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
 - The `expected-version` metadata field is REQUIRED for APPEND (unlike PUBLISH where it is optional). Since APPEND is non-idempotent, the server cannot safely retry internally. The value MUST be >= 1; the server MUST reject `expected-version: 0` or absent `expected-version` as a bad request.
 - Conflict semantics match PUBLISH (see section 6.4). On conflict, fetch the latest version and verify whether your append was applied before retrying.
-- The new version's publisher metadata is taken from the APPEND request (it is not merged with the prior version's metadata). The OKF type default (§6.4) applies, so an append that declares no `type` to a non-reserved path stores `type: Document`.
+- The new version's publisher metadata is the base version's metadata with the APPEND request's metadata layered over it; a key present in both takes the request's value. A document therefore keeps its `tags`, `importance`, `title`, and `type` across an append, and stays in the LOOKUP catalog (§6.7). Replacing metadata wholesale, including removing a key, requires PUBLISH.
+- `retention` (§9.9) is the one key that is NOT inherited: pruning is destructive, so it applies only to a write that declares it. An append to a document published with `retention` does not prune unless the append itself carries the key.
+- The OKF type default (§6.4) applies after the merge, so an append to a non-reserved path whose base version declares no `type` stores `type: Document`, while a declared type survives.
+- The merged metadata MUST satisfy whatever metadata key-count and size limits the implementation enforces (§9.4). An append whose merge breaches them is a `bad-request`.
 
 **Authentication errors**:
 
@@ -468,7 +471,7 @@ modified: <RFC 3339 timestamp>
 
 **Other errors**:
 
-- `bad-request`: Missing or invalid `expected-version` (must be >= 1), a non-`.md` path, or a body that is not valid UTF-8 (see §6.4 Document contract).
+- `bad-request`: Missing or invalid `expected-version` (must be >= 1), a non-`.md` path, a body that is not valid UTF-8 (see §6.4 Document contract), or merged metadata that breaches a limit the server enforces (§9.4).
 - `not-found`: Document does not exist or path validation failed.
 - `archived`: Document is archived. Unarchive first via PUBLISH with empty body.
 - `conflict`: `expected-version` does not match the current version. Response includes `your-version` and `server-version` metadata.
@@ -736,7 +739,7 @@ A publisher MAY bound a document's version history by declaring a `retention` me
 
 When the newly written version N carries `retention: R` and more than R versions exist, the server MUST delete the stored version files with version numbers less than or equal to N − R, in ascending version order, after the write has succeeded. Deletion MUST stop at the first failure so the retained versions always form a contiguous suffix of the history (§9.6). The current version is never deleted; R ≥ 1 guarantees at least one version remains.
 
-Retention is evaluated per write: a write that omits the key prunes nothing, regardless of what earlier versions declared. Absent retention, the default append-only model applies unchanged. Reads of a pruned version return not-found; VERSIONS lists only the retained versions.
+Retention is evaluated per write: a write that omits the key prunes nothing, regardless of what earlier versions declared. This holds for APPEND despite its metadata merge (§6.6): `retention` is never inherited from the base version, so an append prunes only when the append itself declares it. Absent retention, the default append-only model applies unchanged. Reads of a pruned version return not-found; VERSIONS lists only the retained versions.
 
 Retention is intended for generated documents that are republished wholesale (graph exports, indexes), where old versions carry no value. It is destructive: pruned versions are unrecoverable through the protocol. Clients SHOULD warn and require explicit confirmation before a write that sets `retention` on a document not known to be generated.
 

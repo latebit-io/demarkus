@@ -37,7 +37,7 @@ Append the following entry to today's journal file for the current project. One 
 
      Leave `expected_version` unset so the tool auto-resolves it. Always prefix the entry body with a leading blank line so it separates visually from the previous entry.
 
-     `mark_append` cannot carry metadata, so today's creation-time `tags`/`importance` stand. If this new entry introduces a materially new subject worth finding later, fetch the file and re-publish it (`mark_publish`, full current body, correct `expected_version`) with `tags` extended to cover it. Skip this for routine same-topic appends — don't republish gratuitously.
+     `mark_append` carries the doc's catalog metadata forward (`retention` excepted), so today's creation-time `tags`/`importance` stand. If this new entry introduces a materially new subject worth finding later, fetch the file and re-publish it (`mark_publish`, full current body, correct `expected_version`) with the doc's whole current metadata resent and `tags` extended to cover the new subject; `mark_publish` replaces the map, so a tags-only publish would drop `importance`, `title`, and `type`. Skip this for routine same-topic appends — don't republish gratuitously.
 
 4. **Confirm.** Tell the user the full path you wrote to so they can find it.
 

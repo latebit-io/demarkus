@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"io"
 	"strings"
 	"testing"
 
@@ -175,10 +176,22 @@ func TestHandleLookupReadAuthFiltering(t *testing.T) {
 	})
 }
 
-// TestHandleLookupCatalogUpdates verifies PUBLISH/ARCHIVE keep the catalog in
-// sync through the handler's write paths.
-func TestHandleLookupCatalogUpdates(t *testing.T) {
-	const secret = "write-secret"
+// mustStatus parses a handler response, failing the test on a malformed one so
+// a format regression is never mistaken for a status mismatch.
+func mustStatus(t *testing.T, out io.Reader) string {
+	t.Helper()
+	resp, err := protocol.ParseResponse(out)
+	if err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	return resp.Status
+}
+
+// catalogHandler returns a handler with a live catalog and a publish token,
+// plus the token's secret, for tests that drive the write paths.
+func catalogHandler(t *testing.T) (h *Handler, secret string) {
+	t.Helper()
+	secret = "write-secret"
 	ts := auth.NewTokenStore(map[string]auth.Token{
 		protocol.HashToken(secret): {
 			Paths:      []string{"/*"},
@@ -186,13 +199,19 @@ func TestHandleLookupCatalogUpdates(t *testing.T) {
 		},
 	})
 	dir := t.TempDir()
-	h := &Handler{
+	return &Handler{
 		ContentDir:    dir,
 		Store:         store.New(dir),
 		Catalog:       catalog.New(),
 		Logger:        discardLogger,
 		GetTokenStore: func() *auth.TokenStore { return ts },
-	}
+	}, secret
+}
+
+// TestHandleLookupCatalogUpdates verifies PUBLISH/ARCHIVE keep the catalog in
+// sync through the handler's write paths.
+func TestHandleLookupCatalogUpdates(t *testing.T) {
+	h, secret := catalogHandler(t)
 
 	// Not present before publishing.
 	if resp := sendLookup(t, h, lookupReq("/", "query: middleware")); resp.Metadata["matches"] != "0" {
@@ -202,8 +221,8 @@ func TestHandleLookupCatalogUpdates(t *testing.T) {
 	// PUBLISH adds it to the catalog.
 	pub := newMockStream("PUBLISH /auth.md\n---\nauth: " + secret + "\ntags: middleware,go\n---\n# Auth Middleware\n")
 	h.HandleStream(pub)
-	if resp, _ := protocol.ParseResponse(&pub.output); resp.Status != protocol.StatusCreated {
-		t.Fatalf("publish status = %q, want created", resp.Status)
+	if status := mustStatus(t, &pub.output); status != protocol.StatusCreated {
+		t.Fatalf("publish status = %q, want created", status)
 	}
 	resp := sendLookup(t, h, lookupReq("/", "query: middleware"))
 	if resp.Metadata["matches"] != "1" {
@@ -222,11 +241,53 @@ func TestHandleLookupCatalogUpdates(t *testing.T) {
 	// ARCHIVE removes it from the catalog.
 	arch := newMockStream("ARCHIVE /auth.md\n---\nauth: " + secret + "\n---\n")
 	h.HandleStream(arch)
-	if resp, _ := protocol.ParseResponse(&arch.output); resp.Status != protocol.StatusOK {
-		t.Fatalf("archive status = %q, want ok", resp.Status)
+	if status := mustStatus(t, &arch.output); status != protocol.StatusOK {
+		t.Fatalf("archive status = %q, want ok", status)
 	}
 	if resp := sendLookup(t, h, lookupReq("/", "query: middleware")); resp.Metadata["matches"] != "0" {
 		t.Errorf("post-archive matches = %q, want 0", resp.Metadata["matches"])
+	}
+}
+
+// TestHandleLookupCatalogSurvivesAppend guards the defect where an APPEND
+// re-indexed the catalog from the request's metadata alone, dropping the
+// document's tags and importance so it fell out of LOOKUP entirely.
+func TestHandleLookupCatalogSurvivesAppend(t *testing.T) {
+	h, secret := catalogHandler(t)
+
+	// "rbac" appears only in the tags, never in the H1: a title-matching query
+	// would pass through the catalog's H1 fallback even with every tag gone.
+	pub := newMockStream("PUBLISH /auth.md\n---\nauth: " + secret + "\ntags: rbac,go\nimportance: 0.9\n---\n# Auth Middleware\n")
+	h.HandleStream(pub)
+	if status := mustStatus(t, &pub.output); status != protocol.StatusCreated {
+		t.Fatalf("publish status = %q, want created", status)
+	}
+
+	app := newMockStream("APPEND /auth.md\n---\nauth: " + secret + "\nexpected-version: 1\nagent: claude\n---\n\n## More\n")
+	h.HandleStream(app)
+	if status := mustStatus(t, &app.output); status != protocol.StatusCreated {
+		t.Fatalf("append status = %q, want created", status)
+	}
+
+	resp := sendLookup(t, h, lookupReq("/", "query: rbac"))
+	if resp.Metadata["matches"] != "1" {
+		t.Fatalf("post-append matches = %q, want 1 (tags dropped by append)", resp.Metadata["matches"])
+	}
+	if !strings.Contains(resp.Body, "/auth.md") {
+		t.Errorf("appended doc missing from lookup:\n%s", resp.Body)
+	}
+
+	fetch := newMockStream("FETCH /auth.md\n")
+	h.HandleStream(fetch)
+	got, err := protocol.ParseResponse(&fetch.output)
+	if err != nil {
+		t.Fatalf("parse fetch: %v", err)
+	}
+	if got.Metadata["importance"] != "0.9" {
+		t.Errorf("importance = %q, want 0.9 carried through the append", got.Metadata["importance"])
+	}
+	if got.Metadata["agent"] != "claude" {
+		t.Errorf("agent = %q, want the append's own key applied", got.Metadata["agent"])
 	}
 }
 

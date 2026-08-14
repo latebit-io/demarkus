@@ -121,6 +121,13 @@ func JoinContent(existing, content []byte) ([]byte, error) { return joinContent(
 // or 0 when absent or invalid.
 func RetentionValue(meta map[string]string) int { return retentionValue(meta) }
 
+// PrepareAppendMeta builds the publisher metadata an APPEND stores: the base
+// version's merged with the request's, then typed (SPEC 6.6). Both backends
+// call it so the rules cannot drift; the write itself validates the result.
+func PrepareAppendMeta(reqPath string, base, req map[string]string) map[string]string {
+	return ApplyOKFTypeDefault(reqPath, mergeAppendMeta(base, req))
+}
+
 // MaxStoreFrontmatter is the maximum overhead the store-managed frontmatter
 // adds to stored version bytes; backends bound stored size by
 // protocol.MaxBodyLength + MaxStoreFrontmatter.
