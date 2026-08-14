@@ -60,7 +60,7 @@ The publisher declares it.
 
 - `metadata.importance` on `mark_publish`, float in [0,1], stored out of band, indexed into the catalog.
 - Absent, unparseable, or out-of-range values default to 0.5.
-- Gotcha: a version's metadata is taken from the write that created it, never merged with the previous version (SPEC §6.6). The `mark_append` tool sends no tags, so appending to a tagged document drops its tags and resets importance to 0.5. Re-publish the full body to restore them.
+- APPEND merges: a new version carries the base version's metadata with the request's layered over it (SPEC §6.6), so importance and tags survive an append. `retention` is the exception and is never inherited. Servers predating that merge dropped both, which is why some older documents sit at 0.5 with no tags; re-publish the full body with the recovered metadata to repair one.
 
 ## How does the agent decide importance?
 
@@ -179,7 +179,7 @@ Fifteen `mark_*` MCP tools.
 | `mark_explore` | One doc's outline, outbound links, backlinks, and siblings in one call |
 | `mark_lookup` | Catalog lookup: importance-ranked matches on tags and titles |
 | `mark_publish` | Create or update a document; metadata, optimistic concurrency, diff3 on conflict |
-| `mark_append` | Append to an existing document; sends no tags, so it resets the document's catalog metadata |
+| `mark_append` | Append to an existing document; the server carries its catalog metadata forward |
 | `mark_archive` | Archive a document; body and catalog entry withdrawn, history preserved |
 | `mark_versions` | Version history with hash-chain validation |
 | `mark_graph` | Crawl outbound `mark://` links; persists edges to the graph store |
@@ -254,5 +254,5 @@ of core is in DESIGN.md under "Why not search?".
 - Full-text or semantic search requires an added component; until then recall depends on tagging discipline.
 - Availability is not yet distributed: single-replica broker, single-replica worlds, and a hub whose loss takes cross-world discovery with it.
 - Writes inside a world share one token, so per-user attribution rests on the provenance recorded in documents, not on the credential.
-- `mark_append` replaces a document's metadata rather than merging it, so appending to a tagged document silently drops its tags.
+- Legacy servers replaced a document's metadata on append rather than merging it, so documents appended before the merge landed may still be missing tags.
 - Behavior at large scale is unproven: catalog size, crawl cost, and cross-world graph growth have not been tested at enterprise corpus sizes.

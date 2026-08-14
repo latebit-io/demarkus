@@ -461,7 +461,7 @@ modified: <RFC 3339 timestamp>
 - The new version's publisher metadata is the base version's metadata with the APPEND request's metadata layered over it; a key present in both takes the request's value. A document therefore keeps its `tags`, `importance`, `title`, and `type` across an append, and stays in the LOOKUP catalog (§6.7). Replacing metadata wholesale, including removing a key, requires PUBLISH.
 - `retention` (§9.9) is the one key that is NOT inherited: pruning is destructive, so it applies only to a write that declares it. An append to a document published with `retention` does not prune unless the append itself carries the key.
 - The OKF type default (§6.4) applies after the merge, so an append to a non-reserved path whose base version declares no `type` stores `type: Document`, while a declared type survives.
-- The merged metadata MUST satisfy the metadata key-count and size limits (§9.4). An append whose merge breaches them is a `bad-request`.
+- The merged metadata MUST satisfy whatever metadata key-count and size limits the implementation enforces (§9.4). An append whose merge breaches them is a `bad-request`.
 
 **Authentication errors**:
 
@@ -471,7 +471,7 @@ modified: <RFC 3339 timestamp>
 
 **Other errors**:
 
-- `bad-request`: Missing or invalid `expected-version` (must be >= 1), a non-`.md` path, a body that is not valid UTF-8 (see §6.4 Document contract), or merged metadata that breaches the §9.4 limits.
+- `bad-request`: Missing or invalid `expected-version` (must be >= 1), a non-`.md` path, a body that is not valid UTF-8 (see §6.4 Document contract), or merged metadata that breaches a limit the server enforces (§9.4).
 - `not-found`: Document does not exist or path validation failed.
 - `archived`: Document is archived. Unarchive first via PUBLISH with empty body.
 - `conflict`: `expected-version` does not match the current version. Response includes `your-version` and `server-version` metadata.
