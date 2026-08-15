@@ -20,7 +20,7 @@ Keep promoted soul documents fresh as their published copies evolve. This is the
 
    `<dest>` is the world slug for a brokered system, or the endpoint slug for a plain remote target; `<N>` is the destination version this soul copy was last synced to. A doc with the `promoted` tag but no parseable marker is malformed — report it and skip (do not guess a destination).
 
-3. **Check each against the live copy.** Through the destination's MCP server (`<slug>_mark_fetch` / `<slug>_mark_versions`), read the current version of `mark://<dest>/<path>` — call it `<M>`. If a knowledge destination's tools are absent (this plugin auto-wires souls, not brokered knowledge systems), tell the user to add the broker as a remote MCP server in `opencode.json` and restart opencode; do not improvise.
+3. **Check each against the live copy.** Through the destination's MCP server (`<slug>_mark_fetch` / `<slug>_mark_versions`), read the current version of `mark://<dest>/<path>` — call it `<M>`. If a knowledge destination's tools are absent, install the OpenCode knowledge plugin and restart OpenCode. Existing shared registrations load automatically; run `/knowledge-join <broker-url>` only when the destination is not registered. Do not improvise.
    - `<M> == <N>` → in sync. Skip silently.
    - the destination doc is `not-found` (archived or moved) → surface it; the link is dangling. Do not delete the soul doc — tell the user and let them decide. Skip the auto-refresh.
    - `<M> > <N>` → the authoritative copy moved on. Refresh, per the doc's mode (step 4).

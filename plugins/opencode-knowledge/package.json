@@ -1,0 +1,26 @@
+{
+  "name": "demarkus-opencode-knowledge",
+  "version": "0.5.44",
+  "description": "Join an organizational demarkus knowledge system from OpenCode. Registers broker-backed remote MCP servers with OAuth, injects catalog guidance, and enforces knowledge publishing policy.",
+  "author": "latebit",
+  "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/opencode-knowledge",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "demarkus",
+    "knowledge",
+    "markdown",
+    "shared-knowledge",
+    "coding-agent"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.ts && bash tests/install.test.sh",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

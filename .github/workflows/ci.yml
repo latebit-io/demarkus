@@ -25,6 +25,7 @@ jobs:
       broker: ${{ steps.filter.outputs.broker }}
       charts: ${{ steps.filter.outputs.charts }}
       install: ${{ steps.filter.outputs.install }}
+      opencode_plugins: ${{ steps.filter.outputs.opencode_plugins }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -51,6 +52,9 @@ jobs:
               - 'install-stack.sh'
               - 'scripts/test-install-renewal.sh'
               - 'scripts/test-install-stack-tokens.sh'
+            opencode_plugins:
+              - 'plugins/opencode-memory/**'
+              - 'plugins/opencode-knowledge/**'
 
   test-protocol:
     needs: detect-changes
@@ -162,6 +166,33 @@ jobs:
         run: bash scripts/test-install-renewal.sh
       - name: Test stack token rotation
         run: bash scripts/test-install-stack-tokens.sh
+
+  test-opencode-plugins:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.opencode_plugins == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install plugin development dependencies
+        run: |
+          npm install --prefix plugins/opencode-memory
+          npm install --prefix plugins/opencode-knowledge
+      - name: Typecheck adapters
+        run: |
+          npm run typecheck --prefix plugins/opencode-memory
+          npm run typecheck --prefix plugins/opencode-knowledge
+      - name: Test knowledge adapter
+        run: npm test --prefix plugins/opencode-knowledge
+      - name: Check installers
+        run: |
+          bash -n plugins/opencode-memory/install.sh plugins/opencode-memory/scripts/bootstrap.sh
+          bash -n plugins/opencode-knowledge/install.sh plugins/opencode-knowledge/scripts/bootstrap.sh
+          shellcheck -S warning plugins/opencode-memory/install.sh plugins/opencode-memory/scripts/bootstrap.sh
+          shellcheck -S warning plugins/opencode-knowledge/install.sh plugins/opencode-knowledge/scripts/bootstrap.sh
 
   test-charts:
     needs: detect-changes

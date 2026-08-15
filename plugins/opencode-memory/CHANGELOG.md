@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.29
+
+- Register as the shared OpenCode gate owner so the memory and knowledge plugins can coexist without duplicate policy decisions or warnings.
+- Log fail-open helper failures and ignore synthetic guidance when detecting recall prompts.
+- Treat the tools pin as a minimum so an older co-installed plugin cannot downgrade a newer helper binary.
+
 ## 0.13.27
 
 - Update check on plugin init: `demarkus-plugin update-check` compares the installed version against the manifest on `main`, and the adapter toasts when a newer release exists (notify-only, never self-installing). Throttled to once per 24h by the binary, silent when offline, turned off with `DEMARKUS_UPDATE_CHECK=0` or `~/.demarkus/plugin.update-check`. Requires a tools release carrying `update-check`; until the pin moves, the check is a no-op.
