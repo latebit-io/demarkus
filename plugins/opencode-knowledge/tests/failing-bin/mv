@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${1:-}" == *.new.* && "${2:-}" == */demarkus-knowledge.ts ]]; then
+  exit 97
+fi
+
+exec "${REAL_MV:?}" "$@"

@@ -7,7 +7,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OPENCODE_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/opencode"
 PLUGIN_DEST="${OPENCODE_DIR}/plugins/demarkus-knowledge.ts"
-SKILL_DEST="${OPENCODE_DIR}/skills/knowledge-promote"
+SKILLS_DIR="${OPENCODE_DIR}/skills"
+SKILL_DEST="${SKILLS_DIR}/knowledge-promote"
 ASSETS_DEST="${HOME}/.demarkus/opencode-knowledge"
 MEMORY_PLUGIN="${OPENCODE_DIR}/plugins/demarkus-memory.ts"
 
@@ -27,12 +28,50 @@ fi
 tmpdir=""
 staging=""
 previous_assets=""
-cleanup() {
-  if [[ -n "${previous_assets}" && -e "${previous_assets}" && ! -e "${ASSETS_DEST}" ]]; then
-    mv "${previous_assets}" "${ASSETS_DEST}" \
-      || echo "[demarkus-knowledge] install: asset restore failed; backup preserved at ${previous_assets}" >&2
+previous_plugin=""
+previous_skill=""
+plugin_staged=""
+skill_staged=""
+deployment_started=false
+committed=false
+assets_deployed=false
+plugin_deployed=false
+skill_deployed=false
+
+restore_component() {
+  local label="$1" destination="$2" previous="$3" deployed="$4"
+  if [[ -e "${previous}" || -L "${previous}" ]]; then
+    rm -rf "${destination}" \
+      || { echo "[demarkus-knowledge] install: removing failed ${label} deployment failed" >&2; return 1; }
+    mv "${previous}" "${destination}" \
+      || { echo "[demarkus-knowledge] install: restoring ${label} failed; backup preserved at ${previous}" >&2; return 1; }
+  elif [[ "${deployed}" == true ]]; then
+    rm -rf "${destination}" \
+      || { echo "[demarkus-knowledge] install: removing new ${label} after failure failed" >&2; return 1; }
   fi
-  rm -rf "${tmpdir}" "${staging}"
+}
+
+cleanup() {
+  local status=$? rollback_failed=false
+  local leftover
+  set +e
+  if [[ "${deployment_started}" == true && "${committed}" != true ]]; then
+    restore_component "plugin" "${PLUGIN_DEST}" "${previous_plugin}" "${plugin_deployed}" || rollback_failed=true
+    restore_component "skill" "${SKILL_DEST}" "${previous_skill}" "${skill_deployed}" || rollback_failed=true
+    restore_component "assets" "${ASSETS_DEST}" "${previous_assets}" "${assets_deployed}" || rollback_failed=true
+  fi
+  for leftover in "${tmpdir}" "${staging}" "${plugin_staged}" "${skill_staged}"; do
+    [[ -n "${leftover}" ]] || continue
+    if ! rm -rf "${leftover}"; then
+      echo "[demarkus-knowledge] install: temporary cleanup failed at ${leftover}" >&2
+      [[ "${committed}" == true ]] || status=1
+    fi
+  done
+  if [[ "${rollback_failed}" == true ]]; then
+    status=1
+  fi
+  trap - EXIT
+  exit "${status}"
 }
 trap cleanup EXIT
 
@@ -70,24 +109,44 @@ for path in demarkus-knowledge.ts SKILL.md assets/package.json assets/commands a
     || { echo "[demarkus-knowledge] install: staging incomplete (${path})" >&2; exit 1; }
 done
 
-# Install assets first and adapter last. A loaded old adapter can consume new
-# assets, while a new adapter must never observe an incomplete asset tree.
-mkdir -p "${OPENCODE_DIR}/plugins" "${SKILL_DEST}"
+# Stage each cross-directory component beside its destination so final moves
+# are atomic even when XDG_CONFIG_HOME and HOME use different filesystems.
+mkdir -p "${OPENCODE_DIR}/plugins" "${SKILLS_DIR}"
+plugin_staged="${PLUGIN_DEST}.new.$$"
+skill_staged="${SKILL_DEST}.new.$$"
+rm -rf "${plugin_staged}" "${skill_staged}"
+install -m 0644 "${staging}/demarkus-knowledge.ts" "${plugin_staged}"
+mkdir "${skill_staged}"
+install -m 0644 "${staging}/SKILL.md" "${skill_staged}/SKILL.md"
+
 previous_assets="${ASSETS_DEST}.prev.$$"
-rm -rf "${previous_assets}"
-[[ -e "${ASSETS_DEST}" ]] && mv "${ASSETS_DEST}" "${previous_assets}"
-if ! mv "${staging}/assets" "${ASSETS_DEST}"; then
-  if [[ -e "${previous_assets}" ]] && mv "${previous_assets}" "${ASSETS_DEST}"; then
-    echo "[demarkus-knowledge] install: asset swap failed; previous assets restored" >&2
-  else
-    echo "[demarkus-knowledge] install: asset swap and restore failed; inspect ${previous_assets}" >&2
+previous_plugin="${PLUGIN_DEST}.prev.$$"
+previous_skill="${SKILL_DEST}.prev.$$"
+rm -rf "${previous_assets}" "${previous_plugin}" "${previous_skill}"
+
+deployment_started=true
+[[ -e "${ASSETS_DEST}" || -L "${ASSETS_DEST}" ]] && mv "${ASSETS_DEST}" "${previous_assets}"
+[[ -e "${SKILL_DEST}" || -L "${SKILL_DEST}" ]] && mv "${SKILL_DEST}" "${previous_skill}"
+[[ -e "${PLUGIN_DEST}" || -L "${PLUGIN_DEST}" ]] && mv "${PLUGIN_DEST}" "${previous_plugin}"
+
+mv "${staging}/assets" "${ASSETS_DEST}"
+assets_deployed=true
+mv "${skill_staged}" "${SKILL_DEST}"
+skill_deployed=true
+mv "${plugin_staged}" "${PLUGIN_DEST}"
+plugin_deployed=true
+
+committed=true
+for backup in "${previous_assets}" "${previous_plugin}" "${previous_skill}"; do
+  if ! rm -rf "${backup}"; then
+    echo "[demarkus-knowledge] install: installed successfully, but old backup cleanup failed at ${backup}" >&2
   fi
-  exit 1
-fi
-install -m 0644 "${staging}/SKILL.md" "${SKILL_DEST}/SKILL.md"
-install -m 0644 "${staging}/demarkus-knowledge.ts" "${PLUGIN_DEST}"
-rm -rf "${previous_assets}" "${staging}"
+done
 previous_assets=""
+previous_plugin=""
+previous_skill=""
+plugin_staged=""
+skill_staged=""
 staging=""
 
 echo "[demarkus-knowledge] installed:"

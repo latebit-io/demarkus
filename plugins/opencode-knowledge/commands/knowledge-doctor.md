@@ -19,13 +19,14 @@ For every world:
 
 1. Call `mark_graph` on `mark://<world>/index.md` with depth 5. Broker graph state is ephemeral, so this crawl is mandatory before backlink or orphan analysis.
 2. Recursively inventory the world with `mark_list mark://<world>/`.
-3. Preserve node status, title, outbound edges, and cross-world targets from the crawl.
+3. For every inventory document absent from the root crawl's successful nodes, including nodes whose root-crawl status was `[error]`, call `mark_graph` on that document with depth 1. This seeds outbound edges from disconnected, failed, and beyond-depth documents, making inbound-edge coverage complete for the inventoried world.
+4. Preserve node status, title, outbound edges, and cross-world targets from all crawls. Retry each unsuccessful source once. If any source still fails, mark orphan analysis for that world incomplete and do not report definitive orphans.
 
 ## Core Checks
 
 - Broken links: report `[not-found]` crawl nodes directly. For targets absent from crawl nodes, confirm against the appropriate world's inventory before reporting.
 - Unroutable references: classify `[error]` links by `mark_worlds` membership. Nonmember hosts are external or cross-system pointers, not missing in-system documents. Retry member-world dispatch errors once.
-- Orphans: inventory documents with no inbound edge from any crawled world, excluding each root hub.
+- Orphans: inventory documents with no inbound edge after the root and supplemental crawls, excluding each root hub. Report the number of successfully crawled inventory documents so the coverage boundary is explicit.
 - Stale indexes: broken targets linked from `index.md`.
 - Missing hubs: populated subtrees without `index.md`.
 - Untitled documents: `[ok]` nodes without a title. Do not double-report missing or error nodes as untitled.

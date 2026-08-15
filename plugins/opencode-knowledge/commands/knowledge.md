@@ -21,7 +21,7 @@ Orient in joined organizational knowledge systems. This is the shared, broker-fr
 3. Report `not-found`, authorization failures, and unavailable tools exactly. Never invent hub or policy content.
 4. Point deeper with `mark_lookup` for a subject and `mark_fetch mark://<world>/index.md` for a world.
 
-Use `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list` to list gate registrations. To remove one, run both `registry mcp remove <slug>` and `registry knowledge-unregister <slug>`, then restart OpenCode.
+Use `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list` to list gate registrations. Before removing one, confirm with the user because the MCP endpoint catalog is shared with pi. Then run `opencode mcp logout <slug>`, `registry mcp remove <slug>`, and `registry knowledge-unregister <slug>` in that order before restarting OpenCode. Removing the shared MCP row disconnects pi too.
 
 ## Don't
 

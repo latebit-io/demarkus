@@ -28,7 +28,12 @@ version_at_least() {
 }
 
 installed=""
-[[ -x "${BIN}" ]] && installed="$("${BIN}" version 2>/dev/null || true)"
+if [[ -x "${BIN}" ]]; then
+  if ! installed="$("${BIN}" version 2>&1)"; then
+    echo "[demarkus] bootstrap: existing helper version check failed: ${installed}" >&2
+    installed=""
+  fi
+fi
 if [[ -n "${installed}" ]] && version_at_least "${installed}" "${TOOLS_VERSION}"; then
   exit 0
 fi

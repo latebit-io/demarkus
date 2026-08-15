@@ -33,6 +33,26 @@ assets="${HOME}/.demarkus/opencode-knowledge"
 "${ROOT}/install.sh" >/dev/null
 [[ -s "${plugin}" && -s "${assets}/context/session-guidance.md" ]]
 
+# A failure on the final adapter swap must restore all three old components.
+printf '%s\n' '// previous plugin' >>"${plugin}"
+printf '%s\n' '<!-- previous skill -->' >>"${skill}"
+printf '%s\n' 'previous assets' >>"${assets}/package.json"
+before="$(cksum "${plugin}" "${skill}" "${assets}/package.json")"
+REAL_MV="$(command -v mv)"
+export REAL_MV
+if PATH="${ROOT}/tests/failing-bin:${PATH}" "${ROOT}/install.sh" >/dev/null 2>&1; then
+  echo "injected adapter deployment failure should fail installation" >&2
+  exit 1
+fi
+after="$(cksum "${plugin}" "${skill}" "${assets}/package.json")"
+[[ "${before}" == "${after}" ]]
+if compgen -G "${assets}.prev.*" >/dev/null ||
+  compgen -G "${plugin}.prev.*" >/dev/null ||
+  compgen -G "${skill}.prev.*" >/dev/null; then
+  echo "rollback left backup files behind" >&2
+  exit 1
+fi
+
 mkdir -p "${HOME}/.demarkus"
 touch "${HOME}/.demarkus/knowledge-systems"
 "${ROOT}/install.sh" --uninstall >/dev/null

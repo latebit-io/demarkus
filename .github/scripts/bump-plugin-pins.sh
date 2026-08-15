@@ -197,7 +197,10 @@ if [[ "$knowledge_changed" == true ]]; then
   kv_ver="$(bump_json_version plugins/claude-code-knowledge/.claude-plugin/plugin.json)"
   set_marketplace_version "./plugins/claude-code-knowledge" "$kv_ver"
   _=$(bump_json_version plugins/pi-knowledge/package.json)
-  _=$(bump_json_version plugins/opencode-knowledge/package.json)
+  if ! bump_json_version plugins/opencode-knowledge/package.json >/dev/null; then
+    echo "error: failed to bump plugins/opencode-knowledge/package.json" >&2
+    exit 1
+  fi
   emit knowledge_version "$kv_ver"
 fi
 
