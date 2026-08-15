@@ -11,19 +11,8 @@ SKILLS_DIR="${OPENCODE_DIR}/skills"
 SKILL_DEST="${SKILLS_DIR}/knowledge-promote"
 ASSETS_DEST="${HOME}/.demarkus/opencode-knowledge"
 MEMORY_PLUGIN="${OPENCODE_DIR}/plugins/demarkus-memory.ts"
-
-if [[ "${1:-}" == "--uninstall" ]]; then
-  rm -f "${PLUGIN_DEST}"
-  rm -rf "${SKILL_DEST}" "${ASSETS_DEST}"
-  echo "[demarkus-knowledge] uninstalled plugin, skill, and assets. Shared registry and OAuth state remain."
-  exit 0
-fi
-
-if [[ -e "${MEMORY_PLUGIN}" ]] && ! grep -q 'io.demarkus.opencode.gate-adapters' "${MEMORY_PLUGIN}"; then
-  echo "[demarkus-knowledge] install: update demarkus-opencode-memory first; the installed adapter cannot coordinate publish gates" >&2
-  echo "  curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash" >&2
-  exit 1
-fi
+LOCK_DIR="${HOME}/.demarkus/opencode-knowledge.install.lock"
+LOCK_TOKEN="owner.$$.$RANDOM"
 
 tmpdir=""
 staging=""
@@ -37,6 +26,21 @@ committed=false
 assets_deployed=false
 plugin_deployed=false
 skill_deployed=false
+lock_owned=false
+
+acquire_lock() {
+  mkdir -p "${HOME}/.demarkus"
+  if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+    echo "[demarkus-knowledge] install: another installer or stale lock exists at ${LOCK_DIR}" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$$" >"${LOCK_DIR}/${LOCK_TOKEN}"; then
+    rmdir "${LOCK_DIR}" \
+      || echo "[demarkus-knowledge] install: failed lock cleanup at ${LOCK_DIR}" >&2
+    return 1
+  fi
+  lock_owned=true
+}
 
 restore_component() {
   local label="$1" destination="$2" previous="$3" deployed="$4"
@@ -70,10 +74,36 @@ cleanup() {
   if [[ "${rollback_failed}" == true ]]; then
     status=1
   fi
+  if [[ "${lock_owned}" == true ]]; then
+    if [[ ! -f "${LOCK_DIR}/${LOCK_TOKEN}" || -L "${LOCK_DIR}/${LOCK_TOKEN}" ]]; then
+      echo "[demarkus-knowledge] install: lock ownership changed; preserving ${LOCK_DIR}" >&2
+      status=1
+    else
+      if ! rm -f "${LOCK_DIR}/${LOCK_TOKEN}" || ! rmdir "${LOCK_DIR}"; then
+        echo "[demarkus-knowledge] install: releasing lock ${LOCK_DIR} failed" >&2
+        status=1
+      fi
+    fi
+  fi
   trap - EXIT
   exit "${status}"
 }
 trap cleanup EXIT
+
+acquire_lock
+
+if [[ "${1:-}" == "--uninstall" ]]; then
+  rm -f "${PLUGIN_DEST}"
+  rm -rf "${SKILL_DEST}" "${ASSETS_DEST}"
+  echo "[demarkus-knowledge] uninstalled plugin, skill, and assets. Shared registry and OAuth state remain."
+  exit 0
+fi
+
+if [[ -e "${MEMORY_PLUGIN}" ]] && ! grep -q 'io.demarkus.opencode.gate-adapters' "${MEMORY_PLUGIN}"; then
+  echo "[demarkus-knowledge] install: update demarkus-opencode-memory first; the installed adapter cannot coordinate publish gates" >&2
+  echo "  curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash" >&2
+  exit 1
+fi
 
 SRC="${HERE}"
 if [[ ! -e "${SRC}/src/demarkus-knowledge.ts" ]]; then

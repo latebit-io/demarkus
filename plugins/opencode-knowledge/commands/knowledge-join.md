@@ -69,6 +69,8 @@ If no URL was supplied, ask for it. Do not guess.
 
    Remove the temporary file afterward. Surface mirror and cleanup failures separately. Never embed broker-controlled policy text in shell source, a heredoc, command substitution, or command-line arguments.
 
+   If policy mirroring fails, the join is incomplete and must not reach step 7. Report the failure, then roll back the new connection in this order: `opencode mcp logout '<slug>'`, `registry mcp remove '<slug>'`, and `registry knowledge-unregister '<slug>'`. Surface every rollback failure separately and tell the user exactly what remains registered. They may rerun `/knowledge-join` after correcting the policy or mirror failure.
+
    Missing documents mean the system has not declared those conventions. Do not invent them.
 
 7. Confirm: joined `<slug>` at `<url>`; tools appear as `<slug>_mark_*` after restart and OAuth. The publish gate enforces the mirrored policy only for registered knowledge systems.

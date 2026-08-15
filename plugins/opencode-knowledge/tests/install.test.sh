@@ -17,7 +17,22 @@ if "${ROOT}/install.sh" >/dev/null 2>&1; then
 fi
 rm "${XDG_CONFIG_HOME}/opencode/plugins/demarkus-memory.ts"
 
+lock="${HOME}/.demarkus/opencode-knowledge.install.lock"
+mkdir "${lock}"
+if "${ROOT}/install.sh" >/dev/null 2>&1; then
+  echo "active installer lock should block installation" >&2
+  exit 1
+fi
+rm -rf "${lock}"
+
+mkdir "${lock}"
+if "${ROOT}/install.sh" >/dev/null 2>&1; then
+  echo "stale installer lock should require explicit cleanup" >&2
+  exit 1
+fi
+rm -rf "${lock}"
 "${ROOT}/install.sh" >/dev/null
+[[ ! -e "${lock}" ]]
 
 plugin="${XDG_CONFIG_HOME}/opencode/plugins/demarkus-knowledge.ts"
 skill="${XDG_CONFIG_HOME}/opencode/skills/knowledge-promote/SKILL.md"
