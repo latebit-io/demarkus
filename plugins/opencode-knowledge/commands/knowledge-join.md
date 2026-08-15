@@ -34,7 +34,7 @@ If no URL was supplied, ask for it. Do not guess.
 
    If the normalized slug is `demarkus-memory` or ends in `-demarkus-memory`, stop. Those names are classified as local-soul tools; the broker needs a different hostname label.
 
-   Before step 3, acquire a same-slug join lock with `mkdir "$HOME/.demarkus/knowledge-join.<slug>.lock"`. If it already exists, stop rather than racing another join; never inspect files inside it. Release this lock after step 4 or on any earlier failure. A stale lock requires explicit user-approved removal.
+   Before step 3, acquire a same-slug operation lock with `mkdir "$HOME/.demarkus/knowledge-join.<slug>.lock"`. If it already exists, stop rather than racing another join or removal; never inspect files inside it. Hold the lock through endpoint registration, OAuth, document fetches, policy mirroring, and final readiness checks. On failure, keep it until rollback and all absence checks finish. Only this operation may remove its lock; surface a removal failure and do not report the operation fully complete. A stale lock requires explicit user-approved removal.
 
 3. For a new slug, register the endpoint used by the OpenCode config hook:
 
@@ -52,7 +52,7 @@ If no URL was supplied, ask for it. Do not guess.
 
    If this fails after step 3 created a new endpoint, run `knowledge-unregister '<slug>'` in case registration partially succeeded, then remove the endpoint. Verify absence from `registry knowledge-list`, `registry mcp list`, and the per-slug policy mirror files. Surface every failure and never report a partially joined system as ready.
 
-   For every failure after step 3, use the same rollback sequence: `opencode mcp logout '<slug>'` if OAuth was attempted, `registry mcp remove '<slug>'`, then `registry knowledge-unregister '<slug>'`. Check each result separately. If unregister leaves any per-slug mirror files, remove those three plugin-owned files explicitly and report that recovery. Verify registry and mirror-file absence immediately; after restarting OpenCode, also verify `opencode mcp list` no longer contains the slug. Rejoin only after all checks pass.
+   For every failure after step 3, use the same rollback sequence: `opencode mcp logout '<slug>'` if OAuth was attempted, `registry mcp remove '<slug>'`, then `registry knowledge-unregister '<slug>'`. Check each result separately. If unregister leaves any per-slug mirror files, remove those three plugin-owned files explicitly and report that recovery. Verify registry and mirror-file absence immediately; after restarting OpenCode, also verify `opencode mcp list` no longer contains the slug. Release the operation lock only after these rollback checks finish, and surface any lock removal failure. Rejoin only after all checks pass and the lock is gone.
 
 5. Restart OpenCode so the remote MCP tools load, then complete OAuth when prompted. If automatic authentication does not start, run:
 
@@ -85,9 +85,9 @@ If no URL was supplied, ask for it. Do not guess.
 
    Missing documents mean the system has not declared those conventions. Do not invent them.
 
-7. Confirm: joined `<slug>` at `<url>`; tools appear as `<slug>_mark_*` after restart and OAuth. The publish gate enforces the mirrored policy only for registered knowledge systems.
+7. After all readiness checks pass, release the operation lock as the final mutation. If lock removal fails, surface it and do not report the join fully complete. Otherwise confirm: joined `<slug>` at `<url>`; tools appear as `<slug>_mark_*` after restart and OAuth. The publish gate enforces the mirrored policy only for registered knowledge systems.
 
-To remove it, run all three commands, then restart OpenCode:
+To remove it, first acquire the identical same-slug operation lock with `mkdir "$HOME/.demarkus/knowledge-join.<slug>.lock"`. If it exists, stop rather than racing a join or removal; a stale lock requires explicit user-approved removal. Then run all three commands and restart OpenCode while holding the lock:
 
 ```bash
 opencode mcp logout '<slug>'
@@ -95,7 +95,7 @@ opencode mcp logout '<slug>'
 "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-unregister '<slug>'
 ```
 
-Capture and check each command result separately. Verify the slug is absent from `registry mcp list` and `registry knowledge-list`, verify no per-slug policy mirror files remain, restart OpenCode, then verify `opencode mcp list` is also clear. Report OAuth, endpoint, registration, and mirror state that remains after any failure. Confirm complete removal only when all commands and absence checks succeed. The endpoint catalog is shared with pi; removing its row disconnects that harness too.
+Capture and check each command result separately. Verify the slug is absent from `registry mcp list` and `registry knowledge-list`, verify no per-slug policy mirror files remain, restart OpenCode, then verify `opencode mcp list` is also clear. Report OAuth, endpoint, registration, and mirror state that remains after any failure. Release the operation lock only after all removal and absence checks finish. Surface a lock removal failure and do not report removal fully complete. Confirm complete removal only when all commands and absence checks succeed and the lock is gone. The endpoint catalog is shared with pi; removing its row disconnects that harness too.
 
 ## Don't
 
