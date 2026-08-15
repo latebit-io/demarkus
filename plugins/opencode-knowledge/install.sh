@@ -63,13 +63,16 @@ transactional_uninstall() {
   deployment_started=true
 
   if [[ -e "${PLUGIN_DEST}" || -L "${PLUGIN_DEST}" ]]; then
-    mv "${PLUGIN_DEST}" "${previous_plugin}"
+    mv "${PLUGIN_DEST}" "${previous_plugin}" \
+      || { echo "[demarkus-knowledge] uninstall: moving plugin to backup failed" >&2; return 1; }
   fi
   if [[ -e "${SKILL_DEST}" || -L "${SKILL_DEST}" ]]; then
-    mv "${SKILL_DEST}" "${previous_skill}"
+    mv "${SKILL_DEST}" "${previous_skill}" \
+      || { echo "[demarkus-knowledge] uninstall: moving skill to backup failed" >&2; return 1; }
   fi
   if [[ -e "${ASSETS_DEST}" || -L "${ASSETS_DEST}" ]]; then
-    mv "${ASSETS_DEST}" "${previous_assets}"
+    mv "${ASSETS_DEST}" "${previous_assets}" \
+      || { echo "[demarkus-knowledge] uninstall: moving assets to backup failed" >&2; return 1; }
   fi
 
   # All active paths are now absent. Backup deletion is cleanup, not rollback:
@@ -192,11 +195,14 @@ deployment_started=true
 [[ -e "${SKILL_DEST}" || -L "${SKILL_DEST}" ]] && mv "${SKILL_DEST}" "${previous_skill}"
 [[ -e "${PLUGIN_DEST}" || -L "${PLUGIN_DEST}" ]] && mv "${PLUGIN_DEST}" "${previous_plugin}"
 
-mv "${staging}/assets" "${ASSETS_DEST}"
+mv "${staging}/assets" "${ASSETS_DEST}" \
+  || { echo "[demarkus-knowledge] install: deploying assets failed" >&2; exit 1; }
 assets_deployed=true
-mv "${skill_staged}" "${SKILL_DEST}"
+mv "${skill_staged}" "${SKILL_DEST}" \
+  || { echo "[demarkus-knowledge] install: deploying skill failed" >&2; exit 1; }
 skill_deployed=true
-mv "${plugin_staged}" "${PLUGIN_DEST}"
+mv "${plugin_staged}" "${PLUGIN_DEST}" \
+  || { echo "[demarkus-knowledge] install: deploying plugin failed" >&2; exit 1; }
 plugin_deployed=true
 
 committed=true
@@ -210,7 +216,6 @@ previous_plugin=""
 previous_skill=""
 plugin_staged=""
 skill_staged=""
-staging=""
 
 echo "[demarkus-knowledge] installed:"
 echo "  plugin  ${PLUGIN_DEST}"

@@ -50,7 +50,7 @@ If no URL was supplied, ask for it. Do not guess.
    "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>'
    ```
 
-   If this fails after step 3 created a new endpoint, run `knowledge-unregister '<slug>'` in case registration partially succeeded, then remove the endpoint. Verify absence from `registry knowledge-list`, `registry mcp list`, and the per-slug policy mirror files. Surface every failure and never report a partially joined system as ready.
+   If this fails after step 3 created a new endpoint, use the rollback sequence in the next paragraph. Do not use a different command order for this branch. Verify absence from `registry knowledge-list`, `registry mcp list`, and the per-slug policy mirror files. Surface every failure and never report a partially joined system as ready.
 
    For every failure after step 3, use the same rollback sequence: `opencode mcp logout '<slug>'` if OAuth was attempted, `registry mcp remove '<slug>'`, then `registry knowledge-unregister '<slug>'`. Check each result separately. If unregister leaves any per-slug mirror files, remove those three plugin-owned files explicitly and report that recovery. Verify registry and mirror-file absence immediately; after restarting OpenCode, also verify `opencode mcp list` no longer contains the slug. Release the operation lock only after these rollback checks finish, and surface any lock removal failure. Rejoin only after all checks pass and the lock is gone.
 
