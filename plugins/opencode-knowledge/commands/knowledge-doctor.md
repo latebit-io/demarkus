@@ -20,7 +20,7 @@ Before the first broker call, record one command-wide deadline five minutes in t
 For every world:
 
 1. Call `mark_graph` on `mark://<world>/index.md` with depth 5. Broker graph state is ephemeral, so this crawl is mandatory before backlink or orphan analysis.
-2. Recursively inventory the world with `mark_list mark://<world>/`.
+2. Recursively inventory the world with `mark_list mark://<world>/`. Treat any call failure, truncation, partial-result marker, or unavailable subtree as incomplete inventory. Preserve and report entries already returned, list skipped or unavailable scope, mark the world's orphan analysis incomplete, and suppress definitive orphan conclusions; never treat a partial inventory as the full document set.
 3. For every inventory document absent from the root crawl's successful nodes, including nodes whose root-crawl status was `[error]`, call `mark_graph` on that document with depth 1. This seeds outbound edges from disconnected, failed, and beyond-depth documents.
 4. Bound supplemental crawling across the entire command to 100 `mark_graph` calls within the command-wide deadline. Retries count against the same call budget. Stop immediately when either limit is reached; preserve status and edges already collected, report skipped documents, mark affected worlds incomplete, and suppress definitive orphan findings for them.
 5. Preserve node status, title, outbound edges, and cross-world targets from all completed crawls. Retry each unsuccessful source once only while budget remains. If any source still fails, mark orphan analysis for that world incomplete and do not report definitive orphans.

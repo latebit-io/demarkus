@@ -54,7 +54,9 @@ printf '%s\n' '<!-- previous skill -->' >>"${skill}"
 printf '%s\n' 'previous assets' >>"${assets}/package.json"
 before="$(cksum "${plugin}" "${skill}" "${assets}/package.json")"
 REAL_MV="$(command -v mv)"
+REAL_RM="$(command -v rm)"
 export REAL_MV
+export REAL_RM
 if PATH="${ROOT}/tests/failing-bin:${PATH}" "${ROOT}/install.sh" >/dev/null 2>&1; then
   echo "injected adapter deployment failure should fail installation" >&2
   exit 1
@@ -90,8 +92,6 @@ fi
 after="$(cksum "${plugin}" "${skill}" "${assets}/package.json")"
 [[ "${before}" == "${after}" ]]
 
-REAL_RM="$(command -v rm)"
-export REAL_RM
 if FAIL_RM_MODE=uninstall-backup PATH="${ROOT}/tests/failing-bin:${PATH}" "${ROOT}/install.sh" --uninstall >/dev/null 2>&1; then
   echo "injected uninstall backup cleanup failure should fail" >&2
   exit 1
