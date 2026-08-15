@@ -1,6 +1,6 @@
 {
   "name": "demarkus-pi-memory",
-  "version": "0.13.27",
+  "version": "0.13.28",
   "description": "Local, versioned memory for the pi coding agent via demarkus. Provisions a local demarkus-server, auto-generates a token, wires the demarkus-memory MCP server through pi-mcp-adapter, injects standing guidance so sessions self-document to the soul, and enforces a publish tag-gate plus a destination gate so documents stay findable and land on the right soul.",
   "author": "latebit",
   "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/pi-memory",
