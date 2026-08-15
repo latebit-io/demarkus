@@ -56,7 +56,7 @@ if [[ ! -e "${SRC}/src/demarkus-memory.ts" ]]; then
   SRC="${tmpdir}/${topdir}/plugins/opencode-memory"
 fi
 
-for d in src/demarkus-memory.ts commands context scripts skills/soul-memory/SKILL.md; do
+for d in src/demarkus-memory.ts package.json commands context scripts skills/soul-memory/SKILL.md; do
   [[ -e "${SRC}/${d}" ]] || { echo "[demarkus-memory] install: missing ${d} in ${SRC}" >&2; exit 1; }
 done
 
@@ -69,9 +69,12 @@ for d in commands context scripts; do
   cp -R "${SRC}/${d}" "${staging}/assets/${d}"
 done
 chmod 0755 "${staging}/assets/scripts/"*.sh
+# The manifest travels with the assets: the update check reads its version, and
+# OpenCode's flat plugin file has nowhere else to carry one.
+install -m 0644 "${SRC}/package.json" "${staging}/assets/package.json"
 install -m 0644 "${SRC}/src/demarkus-memory.ts" "${staging}/demarkus-memory.ts"
 install -m 0644 "${SRC}/skills/soul-memory/SKILL.md" "${staging}/SKILL.md"
-for f in demarkus-memory.ts SKILL.md assets/commands assets/context assets/scripts/bootstrap.sh; do
+for f in demarkus-memory.ts SKILL.md assets/package.json assets/commands assets/context assets/scripts/bootstrap.sh; do
   [[ -s "${staging}/${f}" || -d "${staging}/${f}" ]] || { echo "[demarkus-memory] install: staging incomplete (${f})" >&2; exit 1; }
 done
 

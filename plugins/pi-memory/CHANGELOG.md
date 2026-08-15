@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.27
+
+- Update check on session start: `demarkus-plugin update-check` compares the shipped `package.json` version against the manifest on the monorepo's `main`, and the extension notifies when a newer release exists (notify-only, never self-installing). Throttled to once per 24h by the binary, silent when offline, turned off with `DEMARKUS_UPDATE_CHECK=0` or `~/.demarkus/plugin.update-check`. Requires a tools release carrying `update-check`; until the pin moves, the check is a no-op.
+
 ## 0.13.0
 
 - `/soul-join` accepts a join URL (`mark://host#token=...`, as emitted by

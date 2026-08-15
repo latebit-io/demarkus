@@ -176,6 +176,32 @@ func RetentionStrictness() (Strictness, error) {
 	return validStrictness(s, Ask), nil
 }
 
+// UpdateCheckEnabled reports whether the plugin update check may run.
+// env override → plugin.update-check → on: a notice once a day is cheap, and a
+// user who wants it gone gets a file, not just an env var a GUI launch drops.
+func UpdateCheckEnabled() (bool, error) {
+	if v := os.Getenv("DEMARKUS_UPDATE_CHECK"); v != "" {
+		return !isOff(v), nil
+	}
+	p, err := path("plugin.update-check")
+	if err != nil {
+		return true, err
+	}
+	s, err := readTrimmed(p)
+	if err != nil {
+		return true, err
+	}
+	return !isOff(s), nil
+}
+
+func isOff(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "0", "off", "false", "no":
+		return true
+	}
+	return false
+}
+
 // KnowledgeStrictness env override → plugin-knowledge.strictness.<slug> → warn.
 func KnowledgeStrictness(slug string) (Strictness, error) {
 	if v := os.Getenv("DEMARKUS_KNOWLEDGE_STRICTNESS"); v != "" {
