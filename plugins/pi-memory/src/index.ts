@@ -2,7 +2,8 @@
 //
 // The pi port of the claude-code demarkus-memory plugin. Same behavior, mapped
 // onto pi's extension API:
-//   - session_start      → provision the managed server + wire the MCP entry
+//   - session_start      → provision the managed server + wire the MCP entry,
+//                          plus a notify-only update check (throttled, daily)
 //   - before_agent_start → inject standing guidance (once) + recall nudge
 //   - tool_call          → publish tag-gate + destination gate + promote nudge
 //   - session_shutdown   → journal nudge
@@ -17,7 +18,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionActivity } from "./nudges.js";
-import { callGate, callGuidance, callNudge } from "./plugin.js";
+import { callGate, callGuidance, callNudge, callUpdateCheck } from "./plugin.js";
 import { ensureMcpServerEntry, provisionServer } from "./setup.js";
 
 // Minimal structural types — pi's ExtensionAPI is provided at runtime; we keep
@@ -69,6 +70,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const COMMANDS_DIR = join(HERE, "..", "commands");
 const SCRIPTS_DIR = join(HERE, "..", "scripts");
 const GUIDANCE_FILE = join(HERE, "..", "context", "session-guidance.md");
+const MANIFEST = join(HERE, "..", "package.json");
+const PLUGIN_NAME = "demarkus-pi-memory";
+const MANIFEST_URL = "https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/pi-memory/package.json";
+const UPDATE_COMMAND = "pi update git:github.com/latebit-io/demarkus-pi-memory (or re-run pi install from an updated checkout)";
 const CUSTOM = "demarkus-memory";
 
 // Slash commands → bundled skills. Each command injects its skill's body so the
@@ -122,6 +127,24 @@ function normalizeToolCall(event: ToolCallEvent): { toolName: string; input: Rec
   return { toolName, input };
 }
 
+// The plugin's own version, from the manifest pi installed alongside src/.
+async function checkForUpdate(): Promise<string> {
+  let installed = "";
+  try {
+    installed = (JSON.parse(readFileSync(MANIFEST, "utf8")) as { version?: string }).version ?? "";
+  } catch (e) {
+    console.error(`[demarkus-memory] update check: unreadable manifest ${MANIFEST}: ${e}`);
+    return "";
+  }
+  if (!installed) return "";
+  return callUpdateCheck({
+    plugin: PLUGIN_NAME,
+    installed,
+    manifestUrl: MANIFEST_URL,
+    updateCommand: UPDATE_COMMAND,
+  });
+}
+
 export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   let contextDelivered = false;
   let activity = new SessionActivity();
@@ -138,6 +161,12 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     if (mcp.status === "error") {
       ctx.ui.notify(`demarkus-memory: MCP registration failed: ${mcp.message}`, "warning");
     }
+
+    // After provisioning, which is what installs the binary this call needs.
+    // Fire-and-forget: a notice must never delay the session.
+    void checkForUpdate().then((message) => {
+      if (message) ctx.ui.notify(message);
+    });
   });
 
   pi.on("before_agent_start", async (event) => {

@@ -6,7 +6,7 @@
 
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -15,7 +15,10 @@ const ASSETS = join(homedir(), ".demarkus", "opencode-memory");
 const COMMANDS_DIR = join(ASSETS, "commands");
 const SCRIPTS_DIR = join(ASSETS, "scripts");
 const GUIDANCE_FILE = join(ASSETS, "context", "session-guidance.md");
+const MANIFEST = join(ASSETS, "package.json");
 const MCP_SERVER_NAME = "demarkus-memory";
+const PLUGIN_NAME = "demarkus-opencode-memory";
+const RAW_BASE = "https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory";
 
 interface GateDecision {
   decision: "allow" | "warn" | "block" | "ask";
@@ -26,6 +29,10 @@ interface GateDecision {
 // resolves parsed stdout, or null on any failure (missing binary, timeout, parse).
 function runBin<T>(args: string[], payload?: unknown): Promise<T | null> {
   return new Promise((resolve) => {
+    if (!existsSync(BIN)) {
+      resolve(null);
+      return;
+    }
     const child = execFile(BIN, args, { encoding: "utf8", timeout: 5000 }, (err, stdout) => {
       if (err) {
         resolve(null);
@@ -100,6 +107,31 @@ async function provision(): Promise<string> {
   return run(BIN, ["provision"], "provisioning", 600_000);
 }
 
+// Update notice. The binary owns the throttle, fetch, and comparison; the
+// adapter owns its release identity and where its version is recorded (the
+// manifest install.sh copied alongside the assets).
+async function checkForUpdate(): Promise<string> {
+  let installed = "";
+  try {
+    installed = (JSON.parse(readFileSync(MANIFEST, "utf8")) as { version?: string }).version ?? "";
+  } catch (e) {
+    // ENOENT = installed before the manifest was shipped; anything else is real.
+    if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      console.error(`[demarkus-memory] update check: unreadable manifest ${MANIFEST}: ${e}`);
+    }
+    return "";
+  }
+  if (!installed) return "";
+  const out = await runBin<{ message?: string }>([
+    "update-check",
+    "--plugin", PLUGIN_NAME,
+    "--installed", installed,
+    "--manifest-url", `${RAW_BASE}/package.json`,
+    "--update-command", `curl -fsSL ${RAW_BASE}/install.sh | bash`,
+  ]);
+  return out?.message ?? "";
+}
+
 // Load a command markdown: parse the frontmatter description, strip the fence,
 // resolve ${DEMARKUS_SCRIPTS} to the installed scripts dir.
 function loadCommand(file: string): { description: string; template: string } {
@@ -157,6 +189,12 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       });
   };
   ensureProvisioned();
+
+  // Fire-and-forget alongside provisioning: an update notice must never delay
+  // startup or block on the network.
+  void checkForUpdate().then((message) => {
+    if (message) void toast(message);
+  });
 
   return {
     // Register the MCP servers and the slash commands by mutating the merged

@@ -72,3 +72,26 @@ export async function callGuidance(surface: "memory" | "knowledge", guidanceFile
   const o = await runBin<{ context?: string }>(["guidance", "--surface", surface, "--guidance-file", guidanceFile]);
   return o === null ? null : (o.context ?? "");
 }
+
+// callUpdateCheck asks the binary whether a newer release of this plugin exists;
+// the caller supplies its release identity. Resolves "" when current, throttled,
+// turned off, or the binary is unavailable.
+export async function callUpdateCheck(req: {
+  plugin: string;
+  installed: string;
+  manifestUrl: string;
+  updateCommand: string;
+}): Promise<string> {
+  const o = await runBin<{ message?: string }>([
+    "update-check",
+    "--plugin",
+    req.plugin,
+    "--installed",
+    req.installed,
+    "--manifest-url",
+    req.manifestUrl,
+    "--update-command",
+    req.updateCommand,
+  ]);
+  return o?.message ?? "";
+}

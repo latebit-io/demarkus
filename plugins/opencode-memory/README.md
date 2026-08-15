@@ -32,11 +32,25 @@ demarkus/plugins/opencode-memory/install.sh
 
 This copies the plugin to `$XDG_CONFIG_HOME/opencode/plugins/demarkus-memory.ts` (default `~/.config/opencode/plugins/`), the skill to the sibling `skills/soul-memory/`, and the assets it reads to `~/.demarkus/opencode-memory/`. Start (or restart) OpenCode; the first session provisions the soul. Restart once after the first session so the newly-registered MCP server connects. Diagnose with `/soul-status`, reconfigure with `/soul-init`, remove with `install.sh --uninstall`.
 
-Update by re-running the one-liner (or `git pull` + `install.sh` from a checkout). `DEMARKUS_REF=<branch>` pins the git ref for the standalone install.
+### Update
+
+Re-run the installer; it is idempotent and stages before it commits, so a failed update leaves the previous install intact:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+# or, from a checkout
+git -C demarkus pull && demarkus/plugins/opencode-memory/install.sh
+```
+
+`DEMARKUS_REF=<branch|tag|sha>` pins the git ref for the standalone install. Restart OpenCode afterwards; the managed binaries update themselves on the next session from the pins the new plugin carries.
+
+### Update check
+
+On plugin init the adapter reads its version from the `package.json` that `install.sh` copies into `~/.demarkus/opencode-memory/`, and hands it to `demarkus-plugin update-check` together with this plugin's manifest URL and update command; the binary compares against the manifest on `main` and the adapter toasts whatever it returns. Notify-only: nothing installs itself, since the plugin file is already loaded and a rewrite could not take effect until the next restart. The binary throttles to one check per 24h (stamp: `~/.demarkus/.update-check-demarkus-opencode-memory`), the call is fire-and-forget so it cannot delay startup, and it stays silent when offline or before provisioning has installed the binary. Turn it off with `DEMARKUS_UPDATE_CHECK=0` or by writing `0` to `~/.demarkus/plugin.update-check`. A `DEMARKUS_REF`-pinned install still compares against `main`, so a pinned older revision reports an update.
 
 ## Architecture
 
-- `src/demarkus-memory.ts` — the whole adapter, one self-contained file (OpenCode's plugin dir loads flat files). All gate/nudge/guidance logic lives in the shared `demarkus-plugin` binary; the adapter hands it normalized JSON and applies the result. Fails open when the binary is absent.
+- `src/demarkus-memory.ts` — the whole adapter, one self-contained file (OpenCode's plugin dir loads flat files). All gate/nudge/guidance/update-check logic lives in the shared `demarkus-plugin` binary; the adapter hands it normalized JSON and applies the result. Fails open when the binary is absent.
 - `scripts/bootstrap.sh` — pinned binary installer, reused verbatim from the Claude Code plugin (single source of truth for provisioning).
 - `commands/*.md` — slash-command prompt bodies, registered via the `config` hook.
 - `skills/soul-memory/` — the on-demand memory-routing skill, installed into OpenCode's native skills directory.

@@ -39,9 +39,27 @@ pi install git:github.com/latebit-io/demarkus-pi-memory
 
 On the next session the soul is provisioned automatically. Run `/mcp` (or restart pi) once after the first session to connect the newly-registered `demarkus-memory` server. Use `/soul-status` to diagnose, `/soul-init` to reconfigure (adopt an existing server, switch modes). Remove with `pi remove ./demarkus/plugins/pi-memory`.
 
+### Update
+
+The command depends on how it was installed:
+
+```bash
+# installed from a local checkout
+git -C demarkus pull && pi install ./demarkus/plugins/pi-memory
+
+# installed via the git: one-liner
+pi update git:github.com/latebit-io/demarkus-pi-memory
+```
+
+The standalone repo is mirrored from the monorepo on every push to `main`, so a `git:` update picks up a change once that mirror workflow has run. Restart pi (or run `/mcp`) after an update that changes the MCP wiring.
+
+### Update check
+
+On session start, after provisioning, the extension hands `demarkus-plugin update-check` its own `package.json` version along with this plugin's manifest URL and update command; the binary compares against the manifest on the monorepo's `main` branch and the extension notifies when a newer release exists. Notify-only: nothing installs itself, since pi owns the package lifecycle. The binary throttles to one check per 24h (stamp: `~/.demarkus/.update-check-demarkus-pi-memory`), the call is fire-and-forget so it cannot delay the session, and it stays silent when offline. Turn it off with `DEMARKUS_UPDATE_CHECK=0` or by writing `0` to `~/.demarkus/plugin.update-check`. It reads the monorepo (the source of truth), so a `git:`-installed copy can see the notice a workflow run before the mirror repo carries the new version.
+
 ## Architecture
 
-- `src/*.ts` — native TypeScript: config/registry readers, the publish + destination gates, nudges, session-start guidance, and MCP wiring (loaded directly by pi via `tsx`, no build step).
+- `src/*.ts` — native TypeScript: config/registry readers, the publish + destination gates, nudges, session-start guidance, the update check, and MCP wiring (loaded directly by pi via `tsx`, no build step).
 - `scripts/*.sh` — the demarkus binary/server lifecycle, reused verbatim from the Claude Code plugin (single source of truth for provisioning); `provision.sh` is the per-session entrypoint and `mcp-config.mjs` registers remote-soul MCP servers.
 - `commands/*.md` — slash-command prompt bodies, injected by the extension.
 - `skills/soul-memory/` — the on-demand memory-routing skill.

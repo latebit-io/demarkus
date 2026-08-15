@@ -9,8 +9,7 @@
 //	echo '{"tool":"...","input":{...},"cwd":"..."}' | demarkus-plugin gate
 //	demarkus-plugin version
 //
-// Subcommands beyond `gate` (nudge, guidance, registry, provision, mcp-serve)
-// are introduced in later phases.
+// Subcommands: gate, nudge, guidance, update-check, registry, provision, mcp-serve.
 package main
 
 import (
@@ -24,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/gate"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/nudge"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/update"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -41,6 +41,8 @@ func main() {
 		cmdNudge()
 	case "guidance":
 		cmdGuidance()
+	case "update-check":
+		cmdUpdateCheck()
 	case "registry":
 		cmdRegistry(os.Args[2:])
 	case "mcp-serve":
@@ -61,6 +63,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  gate      Decide whether a mark_publish/mark_append should proceed (reads JSON on stdin)\n")
 	fmt.Fprintf(os.Stderr, "  nudge     Decide a recall/promote/session-end nudge (reads JSON on stdin)\n")
 	fmt.Fprintf(os.Stderr, "  guidance  Emit the session-start context for a surface (memory|knowledge)\n")
+	fmt.Fprintf(os.Stderr, "  update-check  Report whether a newer release of the calling plugin exists\n")
 	fmt.Fprintf(os.Stderr, "  version   Print version and exit\n")
 }
 
@@ -124,6 +127,33 @@ func cmdNudge() {
 				"hookEventName": "UserPromptSubmit", "additionalContext": out.Nudge,
 			}})
 		}
+		return
+	}
+	printJSON(out)
+}
+
+// cmdUpdateCheck reports whether a newer release of the calling plugin exists:
+// {"message":...}, no output otherwise. The adapter supplies its own release
+// identity (only it knows its channel); fails silent on any error.
+func cmdUpdateCheck() {
+	fs := flag.NewFlagSet("update-check", flag.ExitOnError)
+	plugin := fs.String("plugin", "", "calling plugin's package name")
+	installed := fs.String("installed", "", "version the plugin is running")
+	manifestURL := fs.String("manifest-url", "", "URL of the published JSON manifest carrying {\"version\":...}")
+	updateCommand := fs.String("update-command", "", "what the user runs to update this plugin")
+	fs.Parse(os.Args[2:]) //nolint:errcheck // ExitOnError reports and exits
+
+	out, err := update.Evaluate(update.Input{
+		Plugin:        *plugin,
+		Installed:     *installed,
+		ManifestURL:   *manifestURL,
+		UpdateCommand: *updateCommand,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] update-check: "+err.Error())
+		return
+	}
+	if out.Message == "" {
 		return
 	}
 	printJSON(out)
