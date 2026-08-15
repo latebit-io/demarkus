@@ -135,6 +135,24 @@ func TestMalformedStampIsDue(t *testing.T) {
 	}
 }
 
+func TestFutureStampIsDue(t *testing.T) {
+	in, stamp := serve(t, `{"version":"0.14.0"}`, http.StatusOK)
+	if err := os.MkdirAll(filepath.Dir(stamp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ahead := strconv.FormatInt(time.Now().Add(48*time.Hour).Unix(), 10)
+	if err := os.WriteFile(stamp, []byte(ahead), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Evaluate(in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if out.Message == "" {
+		t.Error("a stamp ahead of the clock must not throttle the check")
+	}
+}
+
 func TestFetchFailureLeavesNoStamp(t *testing.T) {
 	in, stamp := serve(t, `{"version":"0.14.0"}`, http.StatusInternalServerError)
 	if _, err := Evaluate(in); err == nil {

@@ -73,9 +73,8 @@ export async function callGuidance(surface: "memory" | "knowledge", guidanceFile
   return o === null ? null : (o.context ?? "");
 }
 
-// callUpdateCheck asks `demarkus-plugin update-check` whether a newer release of
-// this plugin exists. The binary owns the throttle, fetch, and comparison; the
-// caller supplies its release identity. Resolves "" when current, throttled,
+// callUpdateCheck asks the binary whether a newer release of this plugin exists;
+// the caller supplies its release identity. Resolves "" when current, throttled,
 // turned off, or the binary is unavailable.
 export async function callUpdateCheck(req: {
   plugin: string;

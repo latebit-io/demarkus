@@ -141,7 +141,7 @@ func cmdUpdateCheck() {
 	installed := fs.String("installed", "", "version the plugin is running")
 	manifestURL := fs.String("manifest-url", "", "URL of the published JSON manifest carrying {\"version\":...}")
 	updateCommand := fs.String("update-command", "", "what the user runs to update this plugin")
-	_ = fs.Parse(os.Args[2:])
+	fs.Parse(os.Args[2:]) //nolint:errcheck // ExitOnError reports and exits
 
 	out, err := update.Evaluate(update.Input{
 		Plugin:        *plugin,

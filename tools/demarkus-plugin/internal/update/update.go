@@ -1,11 +1,6 @@
-// Package update implements the plugin update check shared by every harness
-// adapter: compare the version a plugin was installed at against its published
-// manifest, and return the notice to surface. The adapters own their release
-// identity (manifest URL, update command); the throttle, fetch, comparison, and
-// message shape live here.
-//
-// Notify-only by design: the plugin is already loaded when the check runs, so
-// self-installing could not take effect before a restart.
+// Package update implements the plugin update check: the adapters own their
+// release identity, this owns the throttle, fetch, comparison, and message.
+// Notify-only; the plugin is already loaded, so installing could not take hold.
 package update
 
 import (
@@ -96,9 +91,9 @@ func (in Input) validate() error {
 	return nil
 }
 
-// due reports whether the throttle window has elapsed. A missing stamp means
-// never checked; an unreadable or malformed one counts as due, since a corrupt
-// throttle must not disable the check forever.
+// due reports whether the throttle window has elapsed. A missing, unreadable,
+// malformed, or future-dated stamp counts as due: a corrupt throttle must not
+// disable the check forever.
 func due(stamp string) bool {
 	b, err := os.ReadFile(stamp)
 	if err != nil {
@@ -109,9 +104,17 @@ func due(stamp string) bool {
 	}
 	secs, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] update-check: malformed stamp, checking anyway: "+err.Error())
 		return true
 	}
-	return time.Since(time.Unix(secs, 0)) >= interval
+	// A stamp ahead of the clock (skew, or a correction since it was written)
+	// would otherwise throttle until that future time plus the interval.
+	elapsed := time.Since(time.Unix(secs, 0))
+	if elapsed < 0 {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] update-check: stamp is in the future, checking anyway")
+		return true
+	}
+	return elapsed >= interval
 }
 
 func writeStamp(stamp string) error {
