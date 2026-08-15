@@ -55,6 +55,40 @@ restore_component() {
   fi
 }
 
+transactional_uninstall() {
+  local suffix="$$.$RANDOM" backup cleanup_failed=false
+  previous_plugin="${PLUGIN_DEST}.uninstall.${suffix}"
+  previous_skill="${SKILLS_DIR}/.knowledge-promote.uninstall.${suffix}"
+  previous_assets="${ASSETS_DEST}.uninstall.${suffix}"
+  deployment_started=true
+
+  if [[ -e "${PLUGIN_DEST}" || -L "${PLUGIN_DEST}" ]]; then
+    mv "${PLUGIN_DEST}" "${previous_plugin}"
+  fi
+  if [[ -e "${SKILL_DEST}" || -L "${SKILL_DEST}" ]]; then
+    mv "${SKILL_DEST}" "${previous_skill}"
+  fi
+  if [[ -e "${ASSETS_DEST}" || -L "${ASSETS_DEST}" ]]; then
+    mv "${ASSETS_DEST}" "${previous_assets}"
+  fi
+
+  # All active paths are now absent. Backup deletion is cleanup, not rollback:
+  # once deletion starts it may partially succeed and cannot be reversed safely.
+  committed=true
+  for backup in "${previous_plugin}" "${previous_skill}" "${previous_assets}"; do
+    if ! rm -rf "${backup}"; then
+      echo "[demarkus-knowledge] uninstall: removed active components, but backup cleanup failed at ${backup}" >&2
+      cleanup_failed=true
+    fi
+  done
+  if [[ "${cleanup_failed}" == true ]]; then
+    return 1
+  fi
+  previous_plugin=""
+  previous_skill=""
+  previous_assets=""
+}
+
 cleanup() {
   local status=$? rollback_failed=false
   local leftover
@@ -93,8 +127,7 @@ trap cleanup EXIT
 acquire_lock
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-  rm -f "${PLUGIN_DEST}"
-  rm -rf "${SKILL_DEST}" "${ASSETS_DEST}"
+  transactional_uninstall
   echo "[demarkus-knowledge] uninstalled plugin, skill, and assets. Shared registry and OAuth state remain."
   exit 0
 fi

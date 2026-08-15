@@ -68,6 +68,42 @@ if compgen -G "${assets}.prev.*" >/dev/null ||
   exit 1
 fi
 
+before="$(cksum "${plugin}" "${skill}" "${assets}/package.json")"
+if FAIL_MV_MODE=uninstall PATH="${ROOT}/tests/failing-bin:${PATH}" "${ROOT}/install.sh" --uninstall >/dev/null 2>&1; then
+  echo "injected uninstall move failure should fail" >&2
+  exit 1
+fi
+after="$(cksum "${plugin}" "${skill}" "${assets}/package.json")"
+[[ "${before}" == "${after}" ]]
+if compgen -G "${assets}.uninstall.*" >/dev/null ||
+  compgen -G "${plugin}.uninstall.*" >/dev/null ||
+  compgen -G "${XDG_CONFIG_HOME}/opencode/skills/.knowledge-promote.uninstall.*" >/dev/null; then
+  echo "uninstall rollback left backup files behind" >&2
+  exit 1
+fi
+
+before="$(cksum "${plugin}" "${skill}" "${assets}/package.json")"
+if FAIL_MV_MODE=uninstall-assets PATH="${ROOT}/tests/failing-bin:${PATH}" "${ROOT}/install.sh" --uninstall >/dev/null 2>&1; then
+  echo "injected final uninstall move failure should fail" >&2
+  exit 1
+fi
+after="$(cksum "${plugin}" "${skill}" "${assets}/package.json")"
+[[ "${before}" == "${after}" ]]
+
+REAL_RM="$(command -v rm)"
+export REAL_RM
+if FAIL_RM_MODE=uninstall-backup PATH="${ROOT}/tests/failing-bin:${PATH}" "${ROOT}/install.sh" --uninstall >/dev/null 2>&1; then
+  echo "injected uninstall backup cleanup failure should fail" >&2
+  exit 1
+fi
+[[ ! -e "${plugin}" && ! -e "${skill}" && ! -e "${assets}" ]]
+for leftover in "${plugin}.uninstall."* \
+  "${XDG_CONFIG_HOME}/opencode/skills/.knowledge-promote.uninstall."* \
+  "${assets}.uninstall."*; do
+  [[ -e "${leftover}" || -L "${leftover}" ]] || continue
+  "${REAL_RM}" -rf "${leftover}"
+done
+
 mkdir -p "${HOME}/.demarkus"
 touch "${HOME}/.demarkus/knowledge-systems"
 "${ROOT}/install.sh" --uninstall >/dev/null

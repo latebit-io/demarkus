@@ -13,6 +13,8 @@ Run a read-only health check over organizational knowledge systems. Never repair
 
 For each system call `mark_worlds`. Record `writable`; a fix is actionable only in a writable world. State that visibility is limited by the caller's read authorization.
 
+Before the first broker call, record one command-wide deadline five minutes in the future. Check remaining time before every `mark_worlds`, `mark_graph`, `mark_list`, `mark_fetch`, `mark_lookup`, `mark_versions`, and `mark_backlinks` call, including root, supplemental, retry, and deep-check calls. Stop starting calls when the deadline expires; preserve collected results, list skipped work, mark affected worlds incomplete, and suppress conclusions that require missing coverage. OpenCode exposes no per-call timeout or cancellation argument for these MCP tools, so the deadline is advisory for a call already in flight; state this limitation in the report if an in-flight call returns after the deadline.
+
 ## Gather
 
 For every world:
@@ -20,7 +22,7 @@ For every world:
 1. Call `mark_graph` on `mark://<world>/index.md` with depth 5. Broker graph state is ephemeral, so this crawl is mandatory before backlink or orphan analysis.
 2. Recursively inventory the world with `mark_list mark://<world>/`.
 3. For every inventory document absent from the root crawl's successful nodes, including nodes whose root-crawl status was `[error]`, call `mark_graph` on that document with depth 1. This seeds outbound edges from disconnected, failed, and beyond-depth documents.
-4. Bound supplemental crawling across the entire command to 100 `mark_graph` calls or 5 minutes, whichever comes first. Retries count against the same budget. Stop immediately when either limit is reached; preserve status and edges already collected, report skipped documents, mark affected worlds incomplete, and suppress definitive orphan findings for them.
+4. Bound supplemental crawling across the entire command to 100 `mark_graph` calls within the command-wide deadline. Retries count against the same call budget. Stop immediately when either limit is reached; preserve status and edges already collected, report skipped documents, mark affected worlds incomplete, and suppress definitive orphan findings for them.
 5. Preserve node status, title, outbound edges, and cross-world targets from all completed crawls. Retry each unsuccessful source once only while budget remains. If any source still fails, mark orphan analysis for that world incomplete and do not report definitive orphans.
 
 ## Core Checks

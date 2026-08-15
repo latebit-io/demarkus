@@ -6,4 +6,12 @@ if [[ "${1:-}" == *.new.* && "${2:-}" == */demarkus-knowledge.ts ]]; then
   exit 97
 fi
 
+if [[ "${FAIL_MV_MODE:-}" == "uninstall" && "${1:-}" == */knowledge-promote && "${2:-}" == *.uninstall.* ]]; then
+  exit 98
+fi
+
+if [[ "${FAIL_MV_MODE:-}" == "uninstall-assets" && "${1:-}" == */opencode-knowledge && "${2:-}" == *.uninstall.* ]]; then
+  exit 99
+fi
+
 exec "${REAL_MV:?}" "$@"
