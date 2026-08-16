@@ -36,8 +36,8 @@ function reportFailure(operation: string, detail: string): void {
 }
 
 // runBin pipes an optional JSON payload to a demarkus-plugin subcommand and
-// resolves parsed stdout, or null on any failure (missing binary, timeout, parse).
-function runBin<T>(args: string[], payload?: unknown, emptyIsNull = false): Promise<T | null> {
+// resolves parsed stdout, {} for an allowed empty response, or null on failure.
+function runBin<T>(args: string[], payload?: unknown, allowEmpty = false): Promise<T | null> {
   return new Promise((resolve) => {
     const operation = args[0] ?? "helper";
     if (!existsSync(BIN)) {
@@ -53,7 +53,11 @@ function runBin<T>(args: string[], payload?: unknown, emptyIsNull = false): Prom
       }
       const output = (stdout || "").trim();
       if (!output) {
-        if (!emptyIsNull) reportFailure(operation, "helper returned an empty response");
+        if (allowEmpty) {
+          resolve({} as T);
+          return;
+        }
+        reportFailure(operation, "helper returned an empty response");
         resolve(null);
         return;
       }
@@ -76,13 +80,17 @@ async function callGate(toolName: string, input: Record<string, unknown>, cwd: s
 }
 
 async function callNudge(req: Record<string, unknown>): Promise<string> {
-  const o = await runBin<{ nudge?: string }>(["nudge"], req);
+  const o = await runBin<{ nudge?: string }>(["nudge"], req, true);
   return o?.nudge ?? "";
 }
 
 // null = binary unavailable/failed (caller retries next turn); "" = ran, nothing to say.
 async function callGuidance(): Promise<string | null> {
-  const o = await runBin<{ context?: string }>(["guidance", "--surface", "memory", "--guidance-file", GUIDANCE_FILE]);
+  const o = await runBin<{ context?: string }>(
+    ["guidance", "--surface", "memory", "--guidance-file", GUIDANCE_FILE],
+    undefined,
+    true,
+  );
   return o === null ? null : (o.context ?? "");
 }
 
