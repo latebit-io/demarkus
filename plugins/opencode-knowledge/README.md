@@ -57,7 +57,7 @@ Rerun the installer and restart OpenCode. `DEMARKUS_REF=<branch|tag|sha>` pins s
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash -s -- --uninstall
 ```
 
-Uninstall leaves shared registrations and OAuth state intact. Remove a joined system separately with `opencode mcp logout <slug>`, `registry mcp remove <slug>`, and `registry knowledge-unregister <slug>`, then restart OpenCode. A manually configured `config.mcp[slug]` entry must be removed through the same config mechanism that created it. The MCP endpoint catalog is shared with pi.
+Uninstall leaves shared registrations and OAuth state intact. Before removing a joined system, confirm that deleting its shared endpoint will also disconnect pi. Then run `opencode mcp logout <slug>`, `registry mcp remove <slug>`, and `registry knowledge-unregister <slug>`, and restart OpenCode. A manually configured `config.mcp[slug]` entry must be removed through the same config mechanism that created it.
 
 ## Development
 
