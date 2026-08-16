@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/op
 Or from a checkout:
 
 ```bash
-demarkus/plugins/opencode-knowledge/install.sh
+./plugins/opencode-knowledge/install.sh
 ```
 
 Restart OpenCode. Existing systems already present in both `~/.demarkus/knowledge-systems` and `~/.config/mcp/mcp.json` load automatically; use `/knowledge` to verify them. To add a new system, run:
@@ -57,7 +57,7 @@ Rerun the installer and restart OpenCode. `DEMARKUS_REF=<branch|tag|sha>` pins s
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash -s -- --uninstall
 ```
 
-Uninstall leaves shared registrations and OAuth state intact. Before removing a joined system, confirm that deleting its shared endpoint will also disconnect pi. Then run `opencode mcp logout <slug>`, `registry mcp remove <slug>`, and `registry knowledge-unregister <slug>`, and restart OpenCode. A manually configured `config.mcp[slug]` entry must be removed through the same config mechanism that created it.
+Uninstall leaves shared registrations and OAuth state intact. Before removing a joined system, confirm that deleting its shared endpoint will also disconnect pi. Then run `opencode mcp logout <slug>`, `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp remove <slug>`, and `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-unregister <slug>`, and restart OpenCode. A manually configured `config.mcp[slug]` entry must be removed through the same config mechanism that created it.
 
 ## Development
 
