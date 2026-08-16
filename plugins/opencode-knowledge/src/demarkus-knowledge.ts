@@ -49,7 +49,7 @@ function reportFailure(operation: string, detail: string): void {
   console.error(`[demarkus-knowledge] ${message}`);
 }
 
-function runBin<T>(args: string[], payload?: unknown, emptyIsNull = false): Promise<T | null> {
+function runBin<T>(args: string[], payload?: unknown, allowEmpty = false): Promise<T | null> {
   return new Promise((resolve) => {
     const operation = args[0] ?? "helper";
     if (!existsSync(BIN)) {
@@ -65,7 +65,11 @@ function runBin<T>(args: string[], payload?: unknown, emptyIsNull = false): Prom
       }
       const output = (stdout || "").trim();
       if (!output) {
-        if (!emptyIsNull) reportFailure(operation, "helper returned an empty response");
+        if (allowEmpty) {
+          resolve({} as T);
+          return;
+        }
+        reportFailure(operation, "helper returned an empty response");
         resolve(null);
         return;
       }
@@ -86,7 +90,7 @@ async function callGate(toolName: string, input: Record<string, unknown>, cwd: s
 }
 
 async function callNudge(request: Record<string, unknown>): Promise<string> {
-  const output = await runBin<{ nudge?: string }>(["nudge"], request);
+  const output = await runBin<{ nudge?: string }>(["nudge"], request, true);
   return output?.nudge ?? "";
 }
 
@@ -97,7 +101,7 @@ async function callGuidance(): Promise<string | null> {
     "knowledge",
     "--guidance-file",
     GUIDANCE_FILE,
-  ]);
+  ], undefined, true);
   return output === null ? null : (output.context ?? "");
 }
 
