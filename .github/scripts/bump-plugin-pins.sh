@@ -17,10 +17,10 @@
 #
 # It also patch-bumps the affected plugins' versions, in two lineages:
 #   - memory    (changes when server|client|tools change): claude-code +
-#     pi-memory + the claude-code marketplace entry.
+#     pi-memory + opencode-memory + the claude-code marketplace entry.
 #   - knowledge (changes when tools changes, via its bootstrap): claude-code-
-#     knowledge + pi-knowledge + the claude-code-knowledge marketplace entry.
-# (The Codex plugins carry no version file — only a bootstrap pin.)
+#     knowledge + pi-knowledge + opencode-knowledge + the claude-code-knowledge
+#     marketplace entry.
 #
 # Idempotent. Writes "changed=true" plus the resolved versions to $GITHUB_OUTPUT
 # (and stdout) when it edited files, "changed=false" otherwise. Requires gh + jq.
@@ -197,6 +197,10 @@ if [[ "$knowledge_changed" == true ]]; then
   kv_ver="$(bump_json_version plugins/claude-code-knowledge/.claude-plugin/plugin.json)"
   set_marketplace_version "./plugins/claude-code-knowledge" "$kv_ver"
   _=$(bump_json_version plugins/pi-knowledge/package.json)
+  if ! bump_json_version plugins/opencode-knowledge/package.json >/dev/null; then
+    echo "error: failed to bump plugins/opencode-knowledge/package.json" >&2
+    exit 1
+  fi
   emit knowledge_version "$kv_ver"
 fi
 

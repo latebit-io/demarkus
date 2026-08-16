@@ -17,7 +17,7 @@ Promote one soul document from your personal soul (the staging tier) up to a sha
      - a brokered system: `/knowledge-join <broker-url>` (demarkus-knowledge plugin);
      - a plain remote server: register it now — confirm its MCP server slug (from the `mcp` entries in opencode.json) and the write path/prefix, then run `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add <slug> <path> [label]` and continue.
    - If more than one destination is listed, ask which to use; otherwise use the single one. Reach any destination through its `<slug>_mark_*` tools.
-   - **OpenCode limitation:** this plugin auto-wires soul MCP servers but not brokered knowledge systems (no opencode-knowledge plugin yet). If a `knowledge <slug>` destination's `<slug>_mark_*` tools are absent, tell the user to add the knowledge system's broker as a remote MCP server in `opencode.json` and restart opencode; do not improvise another write path.
+   - If a `knowledge <slug>` destination's `<slug>_mark_*` tools are absent, install the OpenCode knowledge plugin and restart OpenCode. Existing shared registrations load automatically; run `/knowledge-join <broker-url>` only when the destination is not registered. Do not improvise another write path.
 
 2. **Read the source.** `mark_fetch` the soul path from the soul server (`demarkus-memory_mark_fetch` or the configured soul server). Note its current version — the back-stamp needs it. If `not-found`, say so and stop.
 

@@ -15,8 +15,26 @@ TOOLS_VERSION="0.15.0"   # demarkus-plugin ships in the tools/ release
 BIN_DIR="${HOME}/.demarkus/bin"
 BIN="${BIN_DIR}/demarkus-plugin"
 
-# Already at the pinned version? Nothing to do.
-if [[ -x "${BIN}" ]] && [[ "$("${BIN}" version 2>/dev/null || true)" == "${TOOLS_VERSION}" ]]; then
+# Multiple OpenCode adapters may bootstrap concurrently. Never let an older
+# installed plugin downgrade a helper that already satisfies its minimum.
+version_at_least() {
+  local have_major have_minor have_patch need_major need_minor need_patch
+  IFS=. read -r have_major have_minor have_patch <<<"$1"
+  IFS=. read -r need_major need_minor need_patch <<<"$2"
+  [[ "${have_major}" =~ ^[0-9]+$ && "${have_minor}" =~ ^[0-9]+$ && "${have_patch}" =~ ^[0-9]+$ ]] || return 1
+  ((have_major > need_major)) ||
+    ((have_major == need_major && have_minor > need_minor)) ||
+    ((have_major == need_major && have_minor == need_minor && have_patch >= need_patch))
+}
+
+installed=""
+if [[ -x "${BIN}" ]]; then
+  if ! installed="$("${BIN}" version 2>&1)"; then
+    echo "[demarkus] bootstrap: existing helper version check failed: ${installed}" >&2
+    installed=""
+  fi
+fi
+if [[ -n "${installed}" ]] && version_at_least "${installed}" "${TOOLS_VERSION}"; then
   exit 0
 fi
 

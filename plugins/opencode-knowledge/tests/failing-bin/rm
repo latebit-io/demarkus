@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${FAIL_RM_MODE:-}" == "uninstall-backup" ]]; then
+  for argument in "$@"; do
+    if [[ "${argument}" == *.uninstall.* ]]; then
+      exit 96
+    fi
+  done
+fi
+
+exec "${REAL_RM:?}" "$@"

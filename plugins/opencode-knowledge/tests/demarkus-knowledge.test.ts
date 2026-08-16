@@ -1,0 +1,95 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { loadCommand, ownsGate, wireKnowledgeMcp } from "../src/demarkus-knowledge.ts";
+
+function fixture(): { root: string; systems: string; mcp: string } {
+  const root = mkdtempSync(join(tmpdir(), "demarkus-opencode-knowledge-"));
+  return { root, systems: join(root, "knowledge-systems"), mcp: join(root, "mcp.json") };
+}
+
+test("wireKnowledgeMcp registers only joined remote systems", () => {
+  const paths = fixture();
+  writeFileSync(paths.systems, "# joined\nacme\n");
+  writeFileSync(
+    paths.mcp,
+    JSON.stringify({
+      mcpServers: {
+        acme: { url: "https://mcp.acme.test/mcp", auth: "oauth" },
+        unrelated: { url: "https://other.test/mcp", auth: "oauth" },
+      },
+    }),
+  );
+  const mcp: Record<string, unknown> = {};
+
+  wireKnowledgeMcp(mcp, { knowledgeSystems: paths.systems, mcpCatalog: paths.mcp });
+
+  assert.deepEqual(mcp, {
+    acme: { type: "remote", url: "https://mcp.acme.test/mcp", enabled: true },
+  });
+});
+
+test("wireKnowledgeMcp preserves explicit OpenCode configuration", () => {
+  const paths = fixture();
+  writeFileSync(paths.systems, "acme\n");
+  writeFileSync(paths.mcp, JSON.stringify({ mcpServers: { acme: { url: "https://catalog.test/mcp" } } }));
+  const explicit = { type: "remote", url: "https://explicit.test/mcp", enabled: false };
+  const mcp: Record<string, unknown> = { acme: explicit };
+
+  wireKnowledgeMcp(mcp, { knowledgeSystems: paths.systems, mcpCatalog: paths.mcp });
+
+  assert.equal(mcp.acme, explicit);
+});
+
+test("wireKnowledgeMcp reports a registered system without an endpoint", () => {
+  const paths = fixture();
+  writeFileSync(paths.systems, "acme\n");
+  writeFileSync(paths.mcp, JSON.stringify({ mcpServers: {} }));
+  const reports: string[] = [];
+
+  wireKnowledgeMcp({}, { knowledgeSystems: paths.systems, mcpCatalog: paths.mcp }, (message) => reports.push(message));
+
+  assert.deepEqual(reports, ["joined system 'acme' has no MCP endpoint; rerun /knowledge-join in OpenCode"]);
+});
+
+test("memory adapter owns the shared gate when both plugins are loaded", () => {
+  assert.equal(ownsGate("knowledge", new Set(["knowledge"])), true);
+  assert.equal(ownsGate("knowledge", new Set(["knowledge", "memory"])), false);
+  assert.equal(ownsGate("memory", new Set(["knowledge", "memory"])), true);
+});
+
+test("wireKnowledgeMcp rejects the reserved local-memory slug", () => {
+  const paths = fixture();
+  writeFileSync(paths.systems, "acme-demarkus-memory\n");
+  writeFileSync(
+    paths.mcp,
+    JSON.stringify({ mcpServers: { "acme-demarkus-memory": { url: "https://knowledge.test/mcp" } } }),
+  );
+  const reports: string[] = [];
+  const mcp: Record<string, unknown> = {
+    "acme-demarkus-memory": { type: "remote", url: "https://explicit.test/mcp", enabled: true },
+  };
+
+  wireKnowledgeMcp(mcp, { knowledgeSystems: paths.systems, mcpCatalog: paths.mcp }, (message) => reports.push(message));
+
+  assert.deepEqual(mcp, {
+    "acme-demarkus-memory": { type: "remote", url: "https://explicit.test/mcp", enabled: false },
+  });
+  assert.deepEqual(reports, [
+    "knowledge slug 'acme-demarkus-memory' is reserved by local-soul tool normalization and was disabled; unregister it",
+  ]);
+});
+
+test("loadCommand strips frontmatter and appends OpenCode arguments", () => {
+  const paths = fixture();
+  const commands = join(paths.root, "commands");
+  mkdirSync(commands);
+  writeFileSync(join(commands, "knowledge.md"), "---\ndescription: Show knowledge\n---\n\nDo the work.\n");
+
+  assert.deepEqual(loadCommand("knowledge.md", commands), {
+    description: "Show knowledge",
+    template: "Do the work.\n\nUser arguments (may be empty): $ARGUMENTS",
+  });
+});

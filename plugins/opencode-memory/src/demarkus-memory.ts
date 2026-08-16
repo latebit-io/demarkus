@@ -19,28 +19,42 @@ const MANIFEST = join(ASSETS, "package.json");
 const MCP_SERVER_NAME = "demarkus-memory";
 const PLUGIN_NAME = "demarkus-opencode-memory";
 const RAW_BASE = "https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory";
+const GATE_ADAPTERS = Symbol.for("io.demarkus.opencode.gate-adapters");
 
 interface GateDecision {
   decision: "allow" | "warn" | "block" | "ask";
   reason?: string;
 }
 
+const reportedFailures = new Set<string>();
+
+function reportFailure(operation: string, detail: string): void {
+  const message = `${operation}: ${detail}`;
+  if (reportedFailures.has(message)) return;
+  reportedFailures.add(message);
+  console.error(`[demarkus-memory] ${message}`);
+}
+
 // runBin pipes an optional JSON payload to a demarkus-plugin subcommand and
 // resolves parsed stdout, or null on any failure (missing binary, timeout, parse).
 function runBin<T>(args: string[], payload?: unknown): Promise<T | null> {
   return new Promise((resolve) => {
+    const operation = args[0] ?? "helper";
     if (!existsSync(BIN)) {
+      reportFailure(operation, `${BIN} is not installed; this call is allowed to continue`);
       resolve(null);
       return;
     }
     const child = execFile(BIN, args, { encoding: "utf8", timeout: 5000 }, (err, stdout) => {
       if (err) {
+        reportFailure(operation, err.message);
         resolve(null);
         return;
       }
       try {
         resolve(JSON.parse((stdout || "").trim()) as T);
-      } catch {
+      } catch (error) {
+        reportFailure(operation, `invalid helper response: ${error}`);
         resolve(null);
       }
     });
@@ -150,7 +164,24 @@ type ToastClient = {
   tui?: { showToast?: (args: { body: { message: string; variant: string } }) => Promise<unknown> };
 };
 
+type GateGlobal = typeof globalThis & { [key: symbol]: unknown };
+
+function gateAdapters(directory: string): Set<string> {
+  const root = globalThis as GateGlobal;
+  const current = root[GATE_ADAPTERS];
+  const registry = current instanceof Map ? (current as Map<string, Set<string>>) : new Map<string, Set<string>>();
+  if (!(current instanceof Map)) root[GATE_ADAPTERS] = registry;
+  let adapters = registry.get(directory);
+  if (!adapters) {
+    adapters = new Set<string>();
+    registry.set(directory, adapters);
+  }
+  return adapters;
+}
+
 export const DemarkusMemoryPlugin = async ({ client, directory }: { client: ToastClient; directory: string }) => {
+  const adapters = gateAdapters(directory);
+  adapters.add("memory");
   const sessions = new Map<string, SessionState>();
   // Warn reasons carried from the before-hook to the after-hook (block/ask
   // never reach after: before throws), so the gate subprocess runs once per
@@ -259,7 +290,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
     ) => {
       const s = state(output.message.sessionID ?? "default");
       const promptText = output.parts
-        .filter((p) => p.type === "text" && typeof p.text === "string")
+        .filter((p) => p.synthetic !== true && p.type === "text" && typeof p.text === "string")
         .map((p) => p.text)
         .join("\n");
 
@@ -299,7 +330,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       input: { tool: string; sessionID?: string; callID?: string },
       output: { args: Record<string, unknown> },
     ) => {
-      if (!isSoulWrite(input.tool)) return;
+      if (!isSoulWrite(input.tool) || !adapters.has("memory")) return;
       const decision = await callGate(input.tool, output.args ?? {}, directory);
       if (decision.decision === "block") {
         throw new Error(decision.reason ?? "demarkus-memory gate blocked this write");
@@ -321,6 +352,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       input: { tool: string; sessionID?: string; callID?: string; args?: Record<string, unknown> },
       output: { output: string },
     ) => {
+      if (!adapters.has("memory")) return;
       const s = state(input.sessionID ?? "default");
       if (!isSoulWrite(input.tool)) {
         if (isFileMutation(input.tool)) s.changedFiles = true;

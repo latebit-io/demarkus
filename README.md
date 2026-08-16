@@ -27,6 +27,12 @@ Teams: `/plugin install demarkus-knowledge@demarkus` to join a shared [knowledge
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
 ```
 
+Teams: install the [OpenCode knowledge plugin](plugins/opencode-knowledge/) to join a shared knowledge system:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash
+```
+
 **pi**
 
 ```bash
@@ -131,6 +137,12 @@ modified: 2026-01-15T10:30:00Z
 
   ```bash
   curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+  ```
+
+- [OpenCode knowledge plugin](plugins/opencode-knowledge/): join an organizational knowledge system through broker OAuth. Install:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash
   ```
 
 - [pi memory plugin](plugins/pi-memory/): the same local memory for the pi coding agent
