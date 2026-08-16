@@ -37,7 +37,7 @@ function reportFailure(operation: string, detail: string): void {
 
 // runBin pipes an optional JSON payload to a demarkus-plugin subcommand and
 // resolves parsed stdout, or null on any failure (missing binary, timeout, parse).
-function runBin<T>(args: string[], payload?: unknown): Promise<T | null> {
+function runBin<T>(args: string[], payload?: unknown, emptyIsNull = false): Promise<T | null> {
   return new Promise((resolve) => {
     const operation = args[0] ?? "helper";
     if (!existsSync(BIN)) {
@@ -51,8 +51,14 @@ function runBin<T>(args: string[], payload?: unknown): Promise<T | null> {
         resolve(null);
         return;
       }
+      const output = (stdout || "").trim();
+      if (!output) {
+        if (!emptyIsNull) reportFailure(operation, "helper returned an empty response");
+        resolve(null);
+        return;
+      }
       try {
-        resolve(JSON.parse((stdout || "").trim()) as T);
+        resolve(JSON.parse(output) as T);
       } catch (error) {
         reportFailure(operation, `invalid helper response: ${error}`);
         resolve(null);
@@ -142,7 +148,7 @@ async function checkForUpdate(): Promise<string> {
     "--installed", installed,
     "--manifest-url", `${RAW_BASE}/package.json`,
     "--update-command", `curl -fsSL ${RAW_BASE}/install.sh | bash`,
-  ]);
+  ], undefined, true);
   return out?.message ?? "";
 }
 
@@ -154,7 +160,7 @@ function loadCommand(file: string): { description: string; template: string } {
   const description = fm?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? "";
   const body = (fm ? raw.slice(fm[0].length) : raw).replace(/\$\{DEMARKUS_SCRIPTS\}/g, SCRIPTS_DIR).trim();
   // $ARGUMENTS lets the user pass arguments; harmless when empty.
-  const template = `${body}\n\nUser arguments (may be empty): $ARGUMENTS`;
+  const template = `${body}\n\nUser arguments (may be empty): $ARGUMENTS\n`;
   return { description, template };
 }
 

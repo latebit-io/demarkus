@@ -49,7 +49,7 @@ function reportFailure(operation: string, detail: string): void {
   console.error(`[demarkus-knowledge] ${message}`);
 }
 
-function runBin<T>(args: string[], payload?: unknown): Promise<T | null> {
+function runBin<T>(args: string[], payload?: unknown, emptyIsNull = false): Promise<T | null> {
   return new Promise((resolve) => {
     const operation = args[0] ?? "helper";
     if (!existsSync(BIN)) {
@@ -63,8 +63,14 @@ function runBin<T>(args: string[], payload?: unknown): Promise<T | null> {
         resolve(null);
         return;
       }
+      const output = (stdout || "").trim();
+      if (!output) {
+        if (!emptyIsNull) reportFailure(operation, "helper returned an empty response");
+        resolve(null);
+        return;
+      }
       try {
-        resolve(JSON.parse((stdout || "").trim()) as T);
+        resolve(JSON.parse(output) as T);
       } catch (error) {
         reportFailure(operation, `invalid helper response: ${error}`);
         resolve(null);
@@ -221,7 +227,7 @@ async function checkForUpdate(): Promise<string> {
     `${RAW_BASE}/package.json`,
     "--update-command",
     `curl -fsSL ${RAW_BASE}/install.sh | bash`,
-  ]);
+  ], undefined, true);
   return output?.message ?? "";
 }
 
@@ -232,7 +238,7 @@ export function loadCommand(file: string, commandsDir = COMMANDS_DIR): { descrip
   const body = (frontmatter ? raw.slice(frontmatter[0].length) : raw)
     .replace(/\$\{DEMARKUS_SCRIPTS\}/g, SCRIPTS_DIR)
     .trim();
-  return { description, template: `${body}\n\nUser arguments (may be empty): $ARGUMENTS` };
+  return { description, template: `${body}\n\nUser arguments (may be empty): $ARGUMENTS\n` };
 }
 
 export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: ToastClient; directory: string }) => {

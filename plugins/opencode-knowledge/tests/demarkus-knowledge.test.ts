@@ -90,6 +90,6 @@ test("loadCommand strips frontmatter and appends OpenCode arguments", () => {
 
   assert.deepEqual(loadCommand("knowledge.md", commands), {
     description: "Show knowledge",
-    template: "Do the work.\n\nUser arguments (may be empty): $ARGUMENTS",
+    template: "Do the work.\n\nUser arguments (may be empty): $ARGUMENTS\n",
   });
 });
