@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -595,6 +597,135 @@ func TestCrawlAndPersist_NilStore(t *testing.T) {
 	}
 	if g.NodeCount() != 1 {
 		t.Errorf("NodeCount = %d, want 1", g.NodeCount())
+	}
+}
+
+// canonicalizingParseURL mirrors fetch.ParseMarkURL: it splits a mark:// URL
+// and supplies the default port when the address omits one.
+func canonicalizingParseURL(raw string) (host, path string, err error) {
+	rest, ok := strings.CutPrefix(raw, "mark://")
+	if !ok {
+		return "", "", fmt.Errorf("invalid URL: %s", raw)
+	}
+	host, path = rest, "/"
+	if i := strings.Index(rest, "/"); i >= 0 {
+		host, path = rest[:i], rest[i:]
+	}
+	if !strings.Contains(host, ":") {
+		host += ":6309"
+	}
+	return host, path, nil
+}
+
+func crawlTwoPageSite(t *testing.T, startURL string) *Store {
+	t.Helper()
+
+	pages := map[string]struct{ body, etag string }{
+		"host:6309/index.md": {body: "# Home\n[About](/about.md)\n", etag: "etag-1"},
+		"host:6309/about.md": {body: "# About\n", etag: "etag-2"},
+	}
+	fetchFunc := func(host, path string) (graph.FetchResult, error) {
+		p, ok := pages[host+path]
+		if !ok {
+			return graph.FetchResult{Status: "not-found"}, nil
+		}
+		return graph.FetchResult{Status: "ok", Body: p.body, Metadata: map[string]string{"etag": p.etag}}, nil
+	}
+
+	s, err := Load(filepath.Join(t.TempDir(), "graph.json"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := s.CrawlAndPersist(context.Background(), startURL, fetchFunc, canonicalizingParseURL, CrawlOptions{
+		MaxDepth: 2,
+	}); err != nil {
+		t.Fatalf("CrawlAndPersist(%s): %v", startURL, err)
+	}
+	return s
+}
+
+// A portless start URL must still key nodes canonically: the CLI passed the
+// raw address through, forking the store into two key spaces and leaving every
+// etag unattached, since EtagFetcher keys etags canonically.
+func TestCrawlAndPersistCanonicalizesStartURL(t *testing.T) {
+	s := crawlTwoPageSite(t, "mark://host/index.md")
+
+	if n := s.GetNode("mark://host/index.md"); n != nil {
+		t.Errorf("node stored under non-canonical key %q", n.URL)
+	}
+	n := s.GetNode("mark://host:6309/index.md")
+	if n == nil {
+		t.Fatal("no node under canonical key mark://host:6309/index.md")
+	}
+	if n.Etag != "etag-1" {
+		t.Errorf("Etag = %q, want %q (etag map is keyed canonically)", n.Etag, "etag-1")
+	}
+	if s.GetNode("mark://host:6309/about.md") == nil {
+		t.Error("linked node not stored under a canonical key")
+	}
+	for _, e := range s.edges {
+		if !strings.HasPrefix(e.From, "mark://host:6309/") || !strings.HasPrefix(e.To, "mark://host:6309/") {
+			t.Errorf("edge %s -> %s is not canonical", e.From, e.To)
+		}
+	}
+}
+
+// Crawl records a non-mark:// start as external without consulting the
+// parser, so canonicalization must not reach for one either.
+func TestCrawlAndPersistExternalStartNeedsNoParser(t *testing.T) {
+	s := New()
+
+	fetchFunc := func(_, _ string) (graph.FetchResult, error) {
+		t.Error("fetch called for an external start URL")
+		return graph.FetchResult{}, nil
+	}
+
+	g, err := s.CrawlAndPersist(context.Background(), "https://example.com/page", fetchFunc, nil, CrawlOptions{})
+	if err != nil {
+		t.Fatalf("CrawlAndPersist: %v", err)
+	}
+	n := g.GetNode("https://example.com/page")
+	if n == nil || n.Status != "external" {
+		t.Errorf("node = %+v, want status external", n)
+	}
+}
+
+// A mark:// crawl without a parser must fail up front: Crawl would otherwise
+// dereference the nil parser in a worker goroutine and panic the process.
+func TestCrawlAndPersistMarkStartRequiresParser(t *testing.T) {
+	s := New()
+
+	fetchFunc := func(_, _ string) (graph.FetchResult, error) {
+		return graph.FetchResult{Status: "ok"}, nil
+	}
+
+	_, err := s.CrawlAndPersist(context.Background(), "mark://host/doc.md", fetchFunc, nil, CrawlOptions{})
+	if err == nil {
+		t.Fatal("CrawlAndPersist with nil parseURL: expected an error")
+	}
+	if !strings.Contains(err.Error(), "parseURL is required") {
+		t.Errorf("error = %q, want it to name the missing parser", err)
+	}
+}
+
+// Every crawler (CLI, TUI, MCP, broker) must agree on node identity for the
+// same document, whichever address form its caller supplied.
+func TestCrawlAndPersistKeysMatchAcrossURLForms(t *testing.T) {
+	keys := func(s *Store) []string {
+		nodes := s.AllNodes()
+		out := make([]string, 0, len(nodes))
+		for _, n := range nodes {
+			out = append(out, n.URL)
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	withPort := keys(crawlTwoPageSite(t, "mark://host:6309/index.md"))
+	withoutPort := keys(crawlTwoPageSite(t, "mark://host/index.md"))
+
+	if !slices.Equal(withPort, withoutPort) {
+		t.Errorf("node keys differ by start-URL form:\n with port: %v\n without:   %v", withPort, withoutPort)
 	}
 }
 

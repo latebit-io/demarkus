@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -542,10 +543,9 @@ func NewFetchFunc(client *fetch.Client, tokenStore *tokens.Store) FetchFunc {
 	}
 }
 
-// CrawlAndPersist runs a graph crawl, merges results into the store, and saves.
-// If the store is nil, the crawl runs but results are not persisted.
-// The parseURL function parses mark:// URLs into (host, path, error).
-// Returns the crawled graph.
+// CrawlAndPersist crawls from startURL, merges the result into the store, and
+// saves; a nil store crawls without persisting. parseURL splits mark:// URLs
+// and canonicalizes startURL, so any address form the user typed is accepted.
 func (s *Store) CrawlAndPersist(
 	ctx context.Context,
 	startURL string,
@@ -553,6 +553,20 @@ func (s *Store) CrawlAndPersist(
 	parseURL func(string) (string, string, error),
 	opts CrawlOptions,
 ) (*graph.Graph, error) {
+	// Canonical mark://host:port/path is the node-identity contract shared by
+	// stored keys, the etag map, and /graph.md. Only mark:// URLs are parsed;
+	// Crawl records anything else as an external node without a parser.
+	if strings.HasPrefix(startURL, "mark://") {
+		if parseURL == nil {
+			// Crawl would dereference the nil parser inside a worker goroutine,
+			// panicking the process where a caller cannot recover.
+			return nil, fmt.Errorf("crawl %s: parseURL is required for mark:// URLs", startURL)
+		}
+		if host, path, parseErr := parseURL(startURL); parseErr == nil {
+			startURL = "mark://" + host + path
+		}
+	}
+
 	fetcher := NewEtagFetcher(fetchFunc)
 
 	var nodeCount atomic.Int32
