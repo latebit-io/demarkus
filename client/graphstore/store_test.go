@@ -670,6 +670,44 @@ func TestCrawlAndPersistCanonicalizesStartURL(t *testing.T) {
 	}
 }
 
+// Crawl records a non-mark:// start as external without consulting the
+// parser, so canonicalization must not reach for one either.
+func TestCrawlAndPersistExternalStartNeedsNoParser(t *testing.T) {
+	s := New()
+
+	fetchFunc := func(_, _ string) (graph.FetchResult, error) {
+		t.Error("fetch called for an external start URL")
+		return graph.FetchResult{}, nil
+	}
+
+	g, err := s.CrawlAndPersist(context.Background(), "https://example.com/page", fetchFunc, nil, CrawlOptions{})
+	if err != nil {
+		t.Fatalf("CrawlAndPersist: %v", err)
+	}
+	n := g.GetNode("https://example.com/page")
+	if n == nil || n.Status != "external" {
+		t.Errorf("node = %+v, want status external", n)
+	}
+}
+
+// A mark:// crawl without a parser must fail up front: Crawl would otherwise
+// dereference the nil parser in a worker goroutine and panic the process.
+func TestCrawlAndPersistMarkStartRequiresParser(t *testing.T) {
+	s := New()
+
+	fetchFunc := func(_, _ string) (graph.FetchResult, error) {
+		return graph.FetchResult{Status: "ok"}, nil
+	}
+
+	_, err := s.CrawlAndPersist(context.Background(), "mark://host/doc.md", fetchFunc, nil, CrawlOptions{})
+	if err == nil {
+		t.Fatal("CrawlAndPersist with nil parseURL: expected an error")
+	}
+	if !strings.Contains(err.Error(), "parseURL is required") {
+		t.Errorf("error = %q, want it to name the missing parser", err)
+	}
+}
+
 // Every crawler (CLI, TUI, MCP, broker) must agree on node identity for the
 // same document, whichever address form its caller supplied.
 func TestCrawlAndPersistKeysMatchAcrossURLForms(t *testing.T) {

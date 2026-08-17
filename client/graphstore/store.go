@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -553,10 +554,17 @@ func (s *Store) CrawlAndPersist(
 	opts CrawlOptions,
 ) (*graph.Graph, error) {
 	// Canonical mark://host:port/path is the node-identity contract shared by
-	// stored keys, the etag map, and /graph.md. A parse error means a non-mark://
-	// start, which Crawl records as external, so pass it through untouched.
-	if host, path, parseErr := parseURL(startURL); parseErr == nil {
-		startURL = "mark://" + host + path
+	// stored keys, the etag map, and /graph.md. Only mark:// URLs are parsed;
+	// Crawl records anything else as an external node without a parser.
+	if strings.HasPrefix(startURL, "mark://") {
+		if parseURL == nil {
+			// Crawl would dereference the nil parser inside a worker goroutine,
+			// panicking the process where a caller cannot recover.
+			return nil, fmt.Errorf("crawl %s: parseURL is required for mark:// URLs", startURL)
+		}
+		if host, path, parseErr := parseURL(startURL); parseErr == nil {
+			startURL = "mark://" + host + path
+		}
 	}
 
 	fetcher := NewEtagFetcher(fetchFunc)
