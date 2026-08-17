@@ -140,22 +140,26 @@ func (g *mcpGateway) seedWorldGraph(worldName string) {
 	}
 }
 
-// translateSeedURLs rewrites URLs on configured world dial addresses to
-// mark://{worldName}/... form; gateway queries key on world names, so
-// untranslated rows are unreachable. Unknown hosts are labels, kept as-is.
+// translateSeedURLs rewrites world dial addresses to mark://{worldName}/...;
+// gateway queries key on world names, so untranslated rows are unreachable.
+// Unknown hosts stay as labels. Both sides canonicalize (ADR 0005).
 func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) {
 	worlds := g.srv.cfg.Worlds
 	byAddr := make(map[string]string, len(worlds))
 	for i := range worlds {
-		byAddr["mark://"+resolveWorldAddress(&worlds[i])] = "mark://" + worlds[i].Name
+		// CanonicalURL normalizes an empty path to "/"; the prefix match wants a
+		// bare authority, so trim it back off.
+		addr := strings.TrimSuffix(links.CanonicalURL("mark://"+resolveWorldAddress(&worlds[i])), "/")
+		byAddr[addr] = "mark://" + worlds[i].Name
 	}
 	translate := func(rawURL string) string {
+		canon := links.CanonicalURL(rawURL)
 		for prefix, world := range byAddr {
-			if rest, ok := strings.CutPrefix(rawURL, prefix); ok && (rest == "" || rest[0] == '/') {
+			if rest, ok := strings.CutPrefix(canon, prefix); ok && (rest == "" || rest[0] == '/') {
 				return world + rest
 			}
 		}
-		return rawURL
+		return canon
 	}
 	for i := range nodes {
 		nodes[i].URL = translate(nodes[i].URL)

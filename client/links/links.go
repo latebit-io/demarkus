@@ -3,12 +3,20 @@ package links
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
+
+	"github.com/latebit-io/demarkus/protocol"
 )
+
+const markScheme = "mark://"
+
+// defaultPort is protocol.DefaultPort as a string, for URL port comparison.
+var defaultPort = strconv.Itoa(protocol.DefaultPort)
 
 // Extract parses body as markdown and returns all link destinations,
 // excluding fragment-only links. Fragments are stripped from destinations
@@ -36,6 +44,44 @@ func Resolve(baseURL, dest string) string {
 		return dest
 	}
 	return base.ResolveReference(ref).String()
+}
+
+// CanonicalURL returns the graph-identity form of a mark:// URL: the authority
+// with the default port removed (ADR 0005). A dial address keeps its port; an
+// identity does not. Anything else is returned unchanged.
+func CanonicalURL(raw string) string {
+	if !strings.HasPrefix(raw, markScheme) {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	host := u.Hostname()
+	if host == "" {
+		return raw
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]" // IPv6 literal; Hostname() strips the brackets
+	}
+	if port := u.Port(); port != "" && port != defaultPort {
+		host += ":" + port
+	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	return markScheme + host + path
+}
+
+// NodeURL builds a graph node identity from a parsed host and path. host may
+// carry a dial port; identity drops the default one. Build identities with
+// this rather than concatenating, so the rule lives in exactly one place.
+func NodeURL(host, path string) string {
+	if path == "" {
+		path = "/"
+	}
+	return CanonicalURL(markScheme + host + path)
 }
 
 // LinkInfo describes a link extracted from markdown, including its position in the source.

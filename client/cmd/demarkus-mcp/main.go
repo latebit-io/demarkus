@@ -24,6 +24,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/cache"
 	"github.com/latebit-io/demarkus/client/internal/listwalk"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
@@ -1270,9 +1271,9 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	// Canonical start URL (default port included) so crawled rows share the
-	// key form of the hub's /graph.md aggregate and backlink lookups.
-	startURL := "mark://" + host + path
+	// Node identity omits the default port (ADR 0005), so crawled rows share
+	// the key form of the hub's /graph.md aggregate and backlink lookups.
+	startURL := links.NodeURL(host, path)
 
 	if h.graphStore == nil {
 		return mcp.NewToolResultError("graph store not available"), nil
@@ -1366,7 +1367,7 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	fullURL := "mark://" + host + path
+	fullURL := links.NodeURL(host, path)
 
 	if h.graphStore == nil {
 		return mcp.NewToolResultError("graph store not available"), nil

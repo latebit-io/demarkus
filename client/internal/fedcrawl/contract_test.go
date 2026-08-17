@@ -66,10 +66,14 @@ func TestGraphExportContract(t *testing.T) {
 		t.Errorf("agent /graph.md export drifted from the contract golden.\nIf intentional, regenerate with -update and re-run the broker suite (it consumes this file).\ngot:\n%s\nwant:\n%s", got, want)
 	}
 
-	// Contract facts the consumer relies on, pinned independently of bytes:
-	// rows key on the internal dial address, and non-mark targets never enter.
-	if !strings.Contains(got, "mark://"+host+"/a.md") {
-		t.Error("export lost the internal dial-address URL form")
+	// Contract facts pinned independently of bytes: rows key on the internal
+	// address in identity form with the dial port removed (ADR 0005), and
+	// non-mark targets never enter. The broker canonicalizes to match.
+	if !strings.Contains(got, "mark://team-a.team-a.svc.cluster.local/a.md") {
+		t.Error("export lost the internal address URL form")
+	}
+	if strings.Contains(got, host) {
+		t.Errorf("export carries a dial address, not a node identity: %s", host)
 	}
 	if strings.Contains(got, "https://example.com/ext") || strings.Contains(got, "localhost") {
 		t.Error("external or loopback target leaked into the federation export")

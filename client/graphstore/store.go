@@ -22,10 +22,16 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
+	"github.com/latebit-io/demarkus/client/links"
 )
 
 // schemaVersion is the on-disk format version. Increment on breaking changes.
-const schemaVersion = 1
+// v2 keys nodes by canonical identity, the authority without the default
+// port (ADR 0005); v1 files are migrated on load.
+const schemaVersion = 2
+
+// minSchemaVersion is the oldest on-disk format still readable.
+const minSchemaVersion = 1
 
 // StoredNode is a graph node with persistence metadata.
 type StoredNode struct {
@@ -125,18 +131,26 @@ func Load(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse graph store %q: %w", path, err)
 	}
-	if doc.Version != schemaVersion {
-		return nil, fmt.Errorf("graph store %q: unsupported schema version %d (expected %d)", path, doc.Version, schemaVersion)
+	if doc.Version < minSchemaVersion || doc.Version > schemaVersion {
+		return nil, fmt.Errorf("graph store %q: unsupported schema version %d (expected %d..%d)", path, doc.Version, minSchemaVersion, schemaVersion)
 	}
 
+	// v1 keyed nodes by whatever the crawler was handed, so one document could
+	// appear under both mark://host/x and mark://host:6309/x. Canonicalizing on
+	// load merges those, keeping the more recently crawled copy.
 	for i := range doc.Nodes {
 		n := doc.Nodes[i]
+		n.URL = links.CanonicalURL(n.URL)
+		if prev := s.nodes[n.URL]; prev != nil && prev.CrawledAt.After(n.CrawledAt) {
+			continue
+		}
 		s.nodes[n.URL] = &n
 	}
 	for _, e := range doc.Edges {
 		if e.Count < 1 {
 			e.Count = 1 // legacy rows predate Count; an edge on disk means one occurrence
 		}
+		e.From, e.To = links.CanonicalURL(e.From), links.CanonicalURL(e.To)
 		if _, exists := s.edgeIdx[e.key()]; !exists {
 			s.edgeIdx[e.key()] = len(s.edges)
 			s.edges = append(s.edges, e)
@@ -213,6 +227,7 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	refreshed := make(map[string]bool)
 
 	for _, n := range g.AllNodes() {
+		n.URL = links.CanonicalURL(n.URL)
 		if !observedStatus(n.Status) {
 			// Failed fetch: we learned nothing about this node. Keep the
 			// stored copy untouched (its CrawledAt keeps it authoritative
@@ -247,7 +262,7 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	s.dropEdgesFromLocked(refreshed)
 
 	for _, e := range g.GetEdges() {
-		se := StoredEdge{From: e.From, To: e.To, Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)}
+		se := StoredEdge{From: links.CanonicalURL(e.From), To: links.CanonicalURL(e.To), Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)}
 		s.upsertEdgeLocked(&se)
 	}
 
@@ -319,6 +334,9 @@ func (s *Store) SeedFromExport(nodes []StoredNode, edges []StoredEdge) int {
 
 	added := 0
 	for _, n := range nodes {
+		// Another producer's export may predate ADR 0005 or address its worlds
+		// differently; normalize before it reaches a stored key.
+		n.URL = links.CanonicalURL(n.URL)
 		if s.authoritativeLocked(n.URL) {
 			continue
 		}
@@ -341,9 +359,11 @@ func (s *Store) SeedFromExport(nodes []StoredNode, edges []StoredEdge) int {
 			seeded[n.URL] = true
 		}
 	}
-	for _, e := range edges {
-		if !s.authoritativeLocked(e.From) {
-			seeded[e.From] = true
+	for i := range edges {
+		edges[i].From = links.CanonicalURL(edges[i].From)
+		edges[i].To = links.CanonicalURL(edges[i].To)
+		if !s.authoritativeLocked(edges[i].From) {
+			seeded[edges[i].From] = true
 		}
 	}
 	s.dropEdgesFromLocked(seeded)
@@ -376,6 +396,7 @@ func (s *Store) SetSeedEtag(host, etag string) {
 // Backlinks returns all URLs that link to the given URL, sorted alphabetically.
 // A source appears once even when it carries several edges (plain plus typed).
 func (s *Store) Backlinks(url string) []string {
+	url = links.CanonicalURL(url)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -406,6 +427,7 @@ type BacklinkEntry struct {
 // title/status and edge provenance. One entry per edge, so a source appears
 // once per relation. Sorted by URL then Rel.
 func (s *Store) BacklinksEnriched(url string) []BacklinkEntry {
+	url = links.CanonicalURL(url)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -444,6 +466,7 @@ func (s *Store) AllNodes() []StoredNode {
 
 // GetNode returns the stored node for a URL, or nil if not found.
 func (s *Store) GetNode(url string) *StoredNode {
+	url = links.CanonicalURL(url)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	n := s.nodes[url]
@@ -502,7 +525,8 @@ func (f *EtagFetcher) Fetch(host, path string) (graph.FetchResult, error) {
 		return graph.FetchResult{}, err
 	}
 	if etag := res.Metadata["etag"]; etag != "" {
-		url := "mark://" + host + path
+		// host carries the dial port; the etag map is keyed by node identity.
+		url := links.NodeURL(host, path)
 		f.mu.Lock()
 		f.etags[url] = etag
 		f.mu.Unlock()
@@ -553,18 +577,11 @@ func (s *Store) CrawlAndPersist(
 	parseURL func(string) (string, string, error),
 	opts CrawlOptions,
 ) (*graph.Graph, error) {
-	// Canonical mark://host:port/path is the node-identity contract shared by
-	// stored keys, the etag map, and /graph.md. Only mark:// URLs are parsed;
-	// Crawl records anything else as an external node without a parser.
-	if strings.HasPrefix(startURL, "mark://") {
-		if parseURL == nil {
-			// Crawl would dereference the nil parser inside a worker goroutine,
-			// panicking the process where a caller cannot recover.
-			return nil, fmt.Errorf("crawl %s: parseURL is required for mark:// URLs", startURL)
-		}
-		if host, path, parseErr := parseURL(startURL); parseErr == nil {
-			startURL = "mark://" + host + path
-		}
+	// Crawl canonicalizes the start itself, but a nil parser would only be
+	// dereferenced inside a worker goroutine, panicking the process where no
+	// caller can recover. Fail here instead.
+	if strings.HasPrefix(startURL, "mark://") && parseURL == nil {
+		return nil, fmt.Errorf("crawl %s: parseURL is required for mark:// URLs", startURL)
 	}
 
 	fetcher := NewEtagFetcher(fetchFunc)
