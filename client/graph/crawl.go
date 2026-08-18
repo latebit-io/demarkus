@@ -55,6 +55,9 @@ type RelRef struct {
 // Malformed refs (empty, internal whitespace) and self-references are skipped
 // silently: bad metadata must never fail a crawl.
 func RelEdges(docURL string, metadata map[string]string) []RelRef {
+	// Callers may pass a dial address (fedcrawl does); compare like with like
+	// so a self-reference is not mistaken for an edge to a different node.
+	docURL = links.CanonicalURL(docURL)
 	var refs []RelRef
 	for key, val := range metadata {
 		pred, ok := strings.CutPrefix(key, "rel-")

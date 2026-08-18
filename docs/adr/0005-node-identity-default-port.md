@@ -1,6 +1,9 @@
 # ADR 0005 — Node identity omits the default port
 
-Status: proposed (2026-08-17)
+Status: proposed (2026-08-17), amended the same day after implementing it on
+`feat/node-identity-default-port`. Three claims below were wrong as first
+written and are corrected in place; the amendments section records what
+changed and why.
 
 ## Context
 
@@ -61,10 +64,18 @@ identity gets its own exported helper, and the transport keeps its own.
 
 ### Normalize at every keyed door, not just the crawl
 
-The store takes an injected canonicalizer, following the existing `parseURL`
-pattern so the store never hardcodes a rule that is wrong for the broker.
-Hardcoding "strip 6309" inside `graphstore` would rewrite `mark://servicing/x`
-as `mark://servicing:6309/x` and corrupt every brokered world key.
+One package-level function, `links.CanonicalURL`, is enough. Stripping a
+default port is correct for both transports: a brokered world name carries no
+port, so the rule is a no-op there. Injection was specified in the first draft
+out of caution and proved unnecessary. The caution was real but belonged to the
+*old* rule: hardcoding "add 6309" would have rewritten `mark://servicing/x` as
+`mark://servicing:6309/x` and corrupted every brokered world key. Direction
+matters, and only one direction is safe to hardcode.
+
+Identity is built in one place too. `links.NodeURL(host, path)` constructs it
+from parsed parts, so no caller assembles an identity by concatenation. A test
+pins `NodeURL(h, p) == CanonicalURL("mark://" + h + p)` so the constructor and
+the normalizer cannot drift.
 
 It is applied on ingest (`Merge`, `SeedFromExport`, the crawl entry) and on
 read (`GetNode`, `Backlinks`, `BacklinksEnriched`). Read-side normalization is
@@ -79,8 +90,13 @@ written under the old rule keep parsing, and their rows are stripped on the way
 in. `graph.json` bumps `schemaVersion` from 1 to 2 and strips keys on load, so
 existing stores migrate instead of being rejected by the version check.
 
-There is no flag day and no coordinated release. Hub aggregates can be
-republished whenever it suits.
+Accept-both is what removes the flag day, and it has to, because the published
+`/graph.md` changes shape the moment this ships. The agent's export is rendered
+from a `graphstore`, so canonicalizing the store necessarily canonicalizes the
+export. The wire format is not a separate decision that can be sequenced later.
+What accept-both buys is that no consumer has to upgrade in lockstep: an old
+export lands correctly in a new store, and a new export lands correctly in any
+consumer that canonicalizes on ingest.
 
 ## Consequences
 
@@ -105,6 +121,35 @@ republished whenever it suits.
   asserts that the two spellings agree rather than which one wins. That is the
   test carrying the real invariant.
 
+## What implementation changed
+
+Amended 2026-08-17 after building this on `feat/node-identity-default-port`.
+
+- **The wire format is not sequenceable.** The first draft said hub aggregates
+  could be republished at leisure. They cannot: the agent renders `/graph.md`
+  from a `graphstore`, so canonicalizing the store canonicalizes the export in
+  the same commit. Accept-both stopped being a convenience and became the
+  mechanism that makes the change survivable.
+- **Injection was unnecessary.** See the decision section. One package-level
+  function serves both transports because only one direction of normalization
+  is safe to hardcode.
+- **The etag coupling bit a second time.** `EtagFetcher` keyed etags by
+  `"mark://" + host + path` with the dial port, so under the new rule they
+  missed exactly as they had under the old one, silently turning conditional
+  re-crawl back into a full refetch. Two different rules, same bug, because
+  identity was being assembled by hand in more than one place. That is what
+  motivated `links.NodeURL`.
+- **The broker needed a matching change, and a subtle one.** Its seed
+  translation keyed world prefixes on dial addresses with ports, so portless
+  export rows stopped translating and every seeded row became unreachable.
+  Canonicalizing both sides fixed it, but `CanonicalURL` normalizes an empty
+  path to `/`, which broke the bare-authority prefix match until the trailing
+  slash was trimmed. The cross-module contract test caught both.
+- **Fedcrawl was deliberately left alone.** Its crawl state and hash-index
+  entries key on dial addresses by design, and its graph is normalized at the
+  `graphstore.Merge` boundary anyway. Forcing identity there would break
+  `state.GetURL` and the index contract for no gain.
+
 ## Alternatives rejected
 
 - **Keep the port always.** Internally consistent, and it is what the current
@@ -114,8 +159,11 @@ republished whenever it suits.
 - **Normalize on read only.** Cheaper, and it would answer queries correctly
   today. Rejected because stored data stays forked on disk, so every export and
   every seed keeps propagating both spellings.
-- **Hardcode the rule inside `graphstore`.** Rejected as wrong for the broker,
-  as above.
+- **Hardcode the old rule inside `graphstore`.** Adding the default port in
+  the store would have corrupted every brokered world key. Stripping it, the
+  rule chosen here, is safe to hardcode because it is a no-op on a world name.
+  The asymmetry is the point: normalization may only ever remove information
+  that the scheme already implies.
 - **Reject non-canonical input.** Honest, and it surfaces the problem instead
   of hiding it. Rejected because a store seeded from another world's `/graph.md`
   cannot control what that producer wrote, and refusing to seed is worse than
@@ -125,5 +173,9 @@ republished whenever it suits.
 
 - Whether the LOOKUP catalog and the OKF export should adopt the same identity
   rule. They key by path within a world today and are unaffected.
+- A distinct `NodeURL` type so the compiler rejects a hand-built identity.
+  `links.NodeURL` puts the rule in one place but cannot stop a future caller
+  from concatenating a fifth one. Making it a named type touches every
+  signature that carries a node URL, so it wants its own change.
 - Case normalization of the authority. `mark://Host/x` and `mark://host/x`
   remain distinct until there is evidence anyone writes the former.

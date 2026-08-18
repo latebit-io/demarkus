@@ -61,6 +61,12 @@ func mockParseURL(raw string) (host, path string, err error) {
 // withDefaultPort mirrors fetch.ParseMarkURL: a dial address needs a port even
 // though the canonical identity omits the default one (ADR 0005).
 func withDefaultPort(host string) string {
+	if strings.HasPrefix(host, "[") {
+		if strings.HasSuffix(host, "]") { // bracketed IPv6, no port
+			return host + ":6309"
+		}
+		return host
+	}
 	if strings.Contains(host, ":") {
 		return host
 	}
@@ -365,5 +371,45 @@ func TestCrawlSkipsMalformedRelRefs(t *testing.T) {
 	}
 	if g.EdgeCount() != 0 {
 		t.Errorf("EdgeCount = %d, want 0: %+v", g.EdgeCount(), g.GetEdges())
+	}
+}
+
+// A rel- target that points back at the document is a self-reference even when
+// the caller addressed the document by its dial address. fedcrawl does exactly
+// that, so comparing raw strings would emit a bogus self-edge.
+func TestRelEdgesSkipsSelfReferenceAcrossURLForms(t *testing.T) {
+	for _, docURL := range []string{"mark://host:6309/doc.md", "mark://host/doc.md"} {
+		refs := RelEdges(docURL, map[string]string{"rel-supersedes": "/doc.md, /other.md"})
+		if len(refs) != 1 {
+			t.Fatalf("RelEdges(%q) = %+v, want only the non-self target", docURL, refs)
+		}
+		if refs[0].Target != "mark://host/other.md" {
+			t.Errorf("target = %q, want mark://host/other.md", refs[0].Target)
+		}
+	}
+}
+
+// A bracketed IPv6 authority carries the default port for dialing and drops it
+// for identity, the same as any other host.
+func TestCrawlIPv6Identity(t *testing.T) {
+	f := newMockFetcher()
+	f.add("[::1]:6309", "/doc.md", "# Doc\n\n[Other](/other.md)\n")
+	f.add("[::1]:6309", "/other.md", "# Other\n")
+
+	g, err := Crawl(context.Background(), "mark://[::1]/doc.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	if err != nil {
+		t.Fatalf("Crawl() error: %v", err)
+	}
+	n := g.GetNode("mark://[::1]/doc.md")
+	if n == nil || n.Status != "ok" {
+		t.Fatalf("node = %+v, want an ok node under the identity key", n)
+	}
+	if g.GetNode("mark://[::1]/other.md") == nil {
+		t.Error("linked IPv6 node missing under its identity key")
+	}
+	for _, e := range g.GetEdges() {
+		if strings.Contains(e.From, ":6309") || strings.Contains(e.To, ":6309") {
+			t.Errorf("edge %s -> %s kept the dial port", e.From, e.To)
+		}
 	}
 }

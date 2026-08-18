@@ -1360,9 +1360,8 @@ func (h *handler) markBacklinks(_ context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("url is required"), nil
 	}
 
-	// Canonicalize (default port included) so the lookup key matches both
-	// crawled and seeded rows: the hub's /graph.md aggregate stores
-	// canonical mark://host:port URLs.
+	// Key on node identity, which omits the default port (ADR 0005), so the
+	// lookup matches both crawled and seeded rows.
 	host, path, err := h.resolveURL(rawURL)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil

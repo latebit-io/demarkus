@@ -630,7 +630,7 @@ func TestCrawlerGraphExportFiltersLoopbackAndNormalizesPorts(t *testing.T) {
 			t.Errorf("graph export must not contain %q\n---\n%s", bad, exp)
 		}
 	}
-	// the external target is kept, port-normalized to the canonical :6309 form.
+	// the external target is kept, normalized to identity form (ADR 0005).
 	if !containsMiddle(exp, "mark://a.example.com/index.md | mark://ext.example.com/page.md") {
 		t.Errorf("graph export missing normalized external edge\n---\n%s", exp)
 	}
