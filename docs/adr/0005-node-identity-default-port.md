@@ -1,9 +1,10 @@
 # ADR 0005 — Node identity omits the default port
 
-Status: proposed (2026-08-17), amended the same day after implementing it on
-`feat/node-identity-default-port`. Three claims below were wrong as first
-written and are corrected in place; the amendments section records what
-changed and why.
+Status: accepted (2026-08-18). Shipped in PR #320 (`2964a35`); the managed
+binary pins that close the mixed-version window followed in #319 and #321.
+Amended before acceptance from what implementing it taught: three claims below
+were wrong as first written and are corrected in place, and the "What
+implementation changed" section records what moved and why.
 
 ## Context
 
