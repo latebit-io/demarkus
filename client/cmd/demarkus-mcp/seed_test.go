@@ -66,7 +66,7 @@ func TestSeedGraph_ColdStoreAnswersBacklinks(t *testing.T) {
 		t.Fatalf("unexpected tool error: %v", res.Content)
 	}
 	text := resultText(t, res)
-	if !strings.Contains(text, "Page A") || !strings.Contains(text, "mark://host:6309/a.md") {
+	if !strings.Contains(text, "Page A") || !strings.Contains(text, "mark://host/a.md") {
 		t.Errorf("seeded backlink missing from output: %s", text)
 	}
 	if gotPath != "/graph.md" {

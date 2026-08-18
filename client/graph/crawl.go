@@ -55,6 +55,9 @@ type RelRef struct {
 // Malformed refs (empty, internal whitespace) and self-references are skipped
 // silently: bad metadata must never fail a crawl.
 func RelEdges(docURL string, metadata map[string]string) []RelRef {
+	// Callers may pass a dial address (fedcrawl does); compare like with like
+	// so a self-reference is not mistaken for an edge to a different node.
+	docURL = links.CanonicalURL(docURL)
 	var refs []RelRef
 	for key, val := range metadata {
 		pred, ok := strings.CutPrefix(key, "rel-")
@@ -66,7 +69,7 @@ func RelEdges(docURL string, metadata map[string]string) []RelRef {
 			if ref == "" || strings.IndexFunc(ref, unicode.IsSpace) >= 0 {
 				continue
 			}
-			resolved := links.Resolve(docURL, ref)
+			resolved := links.CanonicalURL(links.Resolve(docURL, ref))
 			if resolved == docURL {
 				continue
 			}
@@ -85,6 +88,10 @@ func RelEdges(docURL string, metadata map[string]string) []RelRef {
 func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(string) (string, string, error), opts CrawlOptions) (*Graph, error) {
 	opts.applyDefaults()
 	g := New()
+
+	// Node identity is canonical from the first key onward (ADR 0005), so a
+	// caller passing a dial address cannot fork the graph into two key spaces.
+	startURL = links.CanonicalURL(startURL)
 
 	queue := make(chan crawlItem, 1000)
 	var wg sync.WaitGroup
@@ -172,7 +179,7 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 						}
 
 						for _, l := range anchored {
-							resolved := links.Resolve(item.url, l.Dest)
+							resolved := links.CanonicalURL(links.Resolve(item.url, l.Dest))
 							g.AddEdgeInfo(Edge{From: item.url, To: resolved, Label: l.Label, Anchor: l.Anchor, Count: 1})
 							enqueue(resolved)
 						}

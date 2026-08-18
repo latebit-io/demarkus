@@ -1202,7 +1202,7 @@ func TestHandlerMarkBacklinks_HappyPath(t *testing.T) {
 	if !strings.Contains(text.Text, "Page B") {
 		t.Errorf("expected backlink title 'Page B' in output: %s", text.Text)
 	}
-	if !strings.Contains(text.Text, "mark://host:6309/a.md") {
+	if !strings.Contains(text.Text, "mark://host/a.md") {
 		t.Errorf("expected backlink URL in output: %s", text.Text)
 	}
 }
@@ -1248,7 +1248,7 @@ func TestHandlerMarkGraphExport(t *testing.T) {
 	if !strings.Contains(text.Text, "# Document Graph") {
 		t.Error("expected markdown title in output")
 	}
-	if !strings.Contains(text.Text, "mark://host:6309/a.md") {
+	if !strings.Contains(text.Text, "mark://host/a.md") {
 		t.Error("expected node URL in output")
 	}
 	if !strings.Contains(text.Text, "## Edges") {
@@ -1348,7 +1348,7 @@ func TestHandlerMarkGraphPublish(t *testing.T) {
 	if !strings.Contains(publishedBody, "# Document Graph") {
 		t.Error("published body should contain graph export")
 	}
-	if !strings.Contains(publishedBody, "mark://host:6309/a.md") {
+	if !strings.Contains(publishedBody, "mark://host/a.md") {
 		t.Error("published body should contain node URLs")
 	}
 }

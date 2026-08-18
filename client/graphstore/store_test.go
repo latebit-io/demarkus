@@ -43,13 +43,13 @@ func TestSaveLoad(t *testing.T) {
 	}
 
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/index.md", Title: "Home", Status: "ok", LinkCount: 2})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/about.md", Title: "About", Status: "ok", LinkCount: 0})
-	g.AddEdge("mark://a:6309/index.md", "mark://a:6309/about.md")
+	g.AddNode(&graph.Node{URL: "mark://a/index.md", Title: "Home", Status: "ok", LinkCount: 2})
+	g.AddNode(&graph.Node{URL: "mark://a/about.md", Title: "About", Status: "ok", LinkCount: 0})
+	g.AddEdge("mark://a/index.md", "mark://a/about.md")
 
 	etags := map[string]string{
-		"mark://a:6309/index.md": "etag-1",
-		"mark://a:6309/about.md": "etag-2",
+		"mark://a/index.md": "etag-1",
+		"mark://a/about.md": "etag-2",
 	}
 	count := s.Merge(g, etags)
 	if count != 2 {
@@ -71,7 +71,7 @@ func TestSaveLoad(t *testing.T) {
 		t.Errorf("EdgeCount = %d, want 1", s2.EdgeCount())
 	}
 
-	n := s2.GetNode("mark://a:6309/index.md")
+	n := s2.GetNode("mark://a/index.md")
 	if n == nil {
 		t.Fatal("GetNode returned nil")
 	}
@@ -94,17 +94,17 @@ func TestMergeUpdatesNode(t *testing.T) {
 	}
 
 	g1 := graph.New()
-	g1.AddNode(&graph.Node{URL: "mark://a:6309/doc.md", Title: "Old", Status: "ok"})
+	g1.AddNode(&graph.Node{URL: "mark://a/doc.md", Title: "Old", Status: "ok"})
 	s.Merge(g1, nil)
 
 	g2 := graph.New()
-	g2.AddNode(&graph.Node{URL: "mark://a:6309/doc.md", Title: "New", Status: "ok"})
+	g2.AddNode(&graph.Node{URL: "mark://a/doc.md", Title: "New", Status: "ok"})
 	s.Merge(g2, nil)
 
 	if s.NodeCount() != 1 {
 		t.Errorf("NodeCount = %d, want 1", s.NodeCount())
 	}
-	n := s.GetNode("mark://a:6309/doc.md")
+	n := s.GetNode("mark://a/doc.md")
 	if n.Title != "New" {
 		t.Errorf("Title = %q, want %q", n.Title, "New")
 	}
@@ -118,17 +118,17 @@ func TestMergeAddsEdges(t *testing.T) {
 	}
 
 	g1 := graph.New()
-	g1.AddNode(&graph.Node{URL: "mark://a:6309/a.md"})
-	g1.AddNode(&graph.Node{URL: "mark://a:6309/b.md"})
-	g1.AddEdge("mark://a:6309/a.md", "mark://a:6309/b.md")
+	g1.AddNode(&graph.Node{URL: "mark://a/a.md"})
+	g1.AddNode(&graph.Node{URL: "mark://a/b.md"})
+	g1.AddEdge("mark://a/a.md", "mark://a/b.md")
 	s.Merge(g1, nil)
 
 	g2 := graph.New()
-	g2.AddNode(&graph.Node{URL: "mark://a:6309/a.md"})
-	g2.AddNode(&graph.Node{URL: "mark://a:6309/b.md"})
-	g2.AddNode(&graph.Node{URL: "mark://a:6309/c.md"})
-	g2.AddEdge("mark://a:6309/a.md", "mark://a:6309/b.md") // duplicate
-	g2.AddEdge("mark://a:6309/a.md", "mark://a:6309/c.md") // new
+	g2.AddNode(&graph.Node{URL: "mark://a/a.md"})
+	g2.AddNode(&graph.Node{URL: "mark://a/b.md"})
+	g2.AddNode(&graph.Node{URL: "mark://a/c.md"})
+	g2.AddEdge("mark://a/a.md", "mark://a/b.md") // duplicate
+	g2.AddEdge("mark://a/a.md", "mark://a/c.md") // new
 	s.Merge(g2, nil)
 
 	if s.EdgeCount() != 2 {
@@ -144,7 +144,7 @@ func TestMergeEnrichedEdgeIdempotent(t *testing.T) {
 	}
 
 	g := graph.New()
-	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md", Label: "B doc", Anchor: "intro", Count: 3})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/b.md", Label: "B doc", Anchor: "intro", Count: 3})
 	s.Merge(g, nil)
 	s.Merge(g, nil) // re-merging the same crawl must not inflate counts
 
@@ -166,22 +166,22 @@ func TestMergeReplacesRefreshedSourceEdges(t *testing.T) {
 	}
 
 	g1 := graph.New()
-	g1.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1})
-	g1.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
-	g1.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/old.md", Rel: "supersedes"})
+	g1.AddNode(&graph.Node{URL: "mark://a/a.md", Status: "ok", LinkCount: 1})
+	g1.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/b.md"})
+	g1.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/old.md", Rel: "supersedes"})
 	s.Merge(g1, nil)
 
 	// The doc dropped the link to old.md and its rel- key; a refreshed crawl
 	// must replace the whole outgoing set, not just upsert.
 	g2 := graph.New()
-	g2.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1})
-	g2.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	g2.AddNode(&graph.Node{URL: "mark://a/a.md", Status: "ok", LinkCount: 1})
+	g2.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/b.md"})
 	s.Merge(g2, nil)
 
 	if s.EdgeCount() != 1 {
 		t.Fatalf("EdgeCount = %d, want 1: %+v", s.EdgeCount(), s.edges)
 	}
-	if bl := s.Backlinks("mark://a:6309/old.md"); len(bl) != 0 {
+	if bl := s.Backlinks("mark://a/old.md"); len(bl) != 0 {
 		t.Errorf("stale backlink survived refresh: %v", bl)
 	}
 }
@@ -194,14 +194,14 @@ func TestMergeKeepsEdgesOfUnfetchedSources(t *testing.T) {
 	}
 
 	g1 := graph.New()
-	g1.AddNode(&graph.Node{URL: "mark://a:6309/x.md", Status: "ok", LinkCount: 1})
-	g1.AddEdgeInfo(graph.Edge{From: "mark://a:6309/x.md", To: "mark://a:6309/y.md"})
+	g1.AddNode(&graph.Node{URL: "mark://a/x.md", Status: "ok", LinkCount: 1})
+	g1.AddEdgeInfo(graph.Edge{From: "mark://a/x.md", To: "mark://a/y.md"})
 	s.Merge(g1, nil)
 
 	// A later crawl that only saw x.md as an error must not drop the edges
 	// recorded when it was last read successfully.
 	g2 := graph.New()
-	g2.AddNode(&graph.Node{URL: "mark://a:6309/x.md", Status: "error"})
+	g2.AddNode(&graph.Node{URL: "mark://a/x.md", Status: "error"})
 	s.Merge(g2, nil)
 
 	if s.EdgeCount() != 1 {
@@ -216,15 +216,15 @@ func TestMergePreservesResolvedNodeOnFailedRecrawl(t *testing.T) {
 	s := New()
 
 	g1 := graph.New()
-	g1.AddNode(&graph.Node{URL: "mark://a:6309/doc.md", Title: "Doc", Status: "ok", LinkCount: 2})
-	s.Merge(g1, map[string]string{"mark://a:6309/doc.md": "etag-1"})
-	firstCrawledAt := s.GetNode("mark://a:6309/doc.md").CrawledAt
+	g1.AddNode(&graph.Node{URL: "mark://a/doc.md", Title: "Doc", Status: "ok", LinkCount: 2})
+	s.Merge(g1, map[string]string{"mark://a/doc.md": "etag-1"})
+	firstCrawledAt := s.GetNode("mark://a/doc.md").CrawledAt
 
 	g2 := graph.New()
-	g2.AddNode(&graph.Node{URL: "mark://a:6309/doc.md", Status: "error"})
+	g2.AddNode(&graph.Node{URL: "mark://a/doc.md", Status: "error"})
 	s.Merge(g2, nil)
 
-	n := s.GetNode("mark://a:6309/doc.md")
+	n := s.GetNode("mark://a/doc.md")
 	if n.Title != "Doc" || n.Status != "ok" || n.LinkCount != 2 || n.Etag != "etag-1" {
 		t.Errorf("failed re-crawl clobbered resolved node: %+v", n)
 	}
@@ -233,8 +233,8 @@ func TestMergePreservesResolvedNodeOnFailedRecrawl(t *testing.T) {
 	}
 
 	// Still authoritative: a subsequent seed must not overwrite it either.
-	s.SeedFromExport([]StoredNode{{URL: "mark://a:6309/doc.md", Title: "Hub Doc", Status: "ok"}}, nil)
-	if n := s.GetNode("mark://a:6309/doc.md"); n.Title != "Doc" {
+	s.SeedFromExport([]StoredNode{{URL: "mark://a/doc.md", Title: "Hub Doc", Status: "ok"}}, nil)
+	if n := s.GetNode("mark://a/doc.md"); n.Title != "Doc" {
 		t.Errorf("seed overwrote node preserved through a failed re-crawl: %+v", n)
 	}
 }
@@ -244,14 +244,14 @@ func TestMergeRecordsNewUnfetchedNodes(t *testing.T) {
 
 	g := graph.New()
 	g.AddNode(&graph.Node{URL: "https://example.com/page", Status: "external"})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/down.md", Status: "error"})
+	g.AddNode(&graph.Node{URL: "mark://a/down.md", Status: "error"})
 	if count := s.Merge(g, nil); count != 2 {
 		t.Errorf("Merge count = %d, want 2 (never-seen nodes still recorded)", count)
 	}
 	if n := s.GetNode("https://example.com/page"); n == nil || n.Status != "external" {
 		t.Errorf("external node not recorded: %+v", n)
 	}
-	if n := s.GetNode("mark://a:6309/down.md"); n == nil || n.Status != "error" {
+	if n := s.GetNode("mark://a/down.md"); n == nil || n.Status != "error" {
 		t.Errorf("error node not recorded: %+v", n)
 	}
 }
@@ -264,8 +264,8 @@ func TestMergeKeepsDistinctRels(t *testing.T) {
 	}
 
 	g := graph.New()
-	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
-	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md", Rel: "supersedes"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/b.md"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/b.md", Rel: "supersedes"})
 	s.Merge(g, nil)
 
 	if s.EdgeCount() != 2 {
@@ -275,7 +275,7 @@ func TestMergeKeepsDistinctRels(t *testing.T) {
 
 func TestLoadLegacyEdgesDefaultsCount(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
-	legacy := `{"version":1,"nodes":[{"url":"mark://a:6309/a.md","title":"A","status":"ok","link_count":1,"crawled_at":"2026-01-01T00:00:00Z"}],"edges":[{"from":"mark://a:6309/a.md","to":"mark://a:6309/b.md"}]}`
+	legacy := `{"version":1,"nodes":[{"url":"mark://a/a.md","title":"A","status":"ok","link_count":1,"crawled_at":"2026-01-01T00:00:00Z"}],"edges":[{"from":"mark://a/a.md","to":"mark://a/b.md"}]}`
 	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -296,13 +296,53 @@ func TestLoadLegacyEdgesDefaultsCount(t *testing.T) {
 
 func TestLoadRejectsSchemaVersionMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
-	if err := os.WriteFile(path, []byte(`{"version":2,"nodes":[],"edges":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":3,"nodes":[],"edges":[]}`), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), "unsupported schema version") {
 		t.Fatalf("Load = %v, want unsupported schema version error", err)
+	}
+}
+
+// A v1 store keyed nodes by whatever the crawler was handed, so one document
+// could sit under both spellings. Load migrates to identity keys (ADR 0005)
+// and keeps the more recently crawled copy of a merged pair.
+func TestLoadMigratesV1KeysToIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	v1 := `{"version":1,"nodes":[
+		{"url":"mark://a:6309/index.md","title":"stale","status":"ok","crawled_at":"2026-01-01T00:00:00Z"},
+		{"url":"mark://a/index.md","title":"fresh","status":"ok","crawled_at":"2026-06-01T00:00:00Z"},
+		{"url":"mark://a:7000/other.md","title":"other world","status":"ok","crawled_at":"2026-06-01T00:00:00Z"}
+	],"edges":[
+		{"from":"mark://a:6309/index.md","to":"mark://a/about.md"},
+		{"from":"mark://a/index.md","to":"mark://a:6309/about.md"}
+	]}`
+	if err := os.WriteFile(path, []byte(v1), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load v1: %v", err)
+	}
+
+	if s.NodeCount() != 2 {
+		t.Errorf("NodeCount = %d, want 2 (the two spellings merge)", s.NodeCount())
+	}
+	n := s.GetNode("mark://a/index.md")
+	if n == nil || n.Title != "fresh" {
+		t.Errorf("merged node = %+v, want the more recently crawled copy", n)
+	}
+	if s.GetNode("mark://a:7000/other.md") == nil {
+		t.Error("non-default port dropped; it names a different server")
+	}
+	if len(s.edges) != 1 {
+		t.Errorf("edges = %+v, want the two spellings deduped to 1", s.edges)
+	}
+	if bl := s.Backlinks("mark://a/about.md"); len(bl) != 1 || bl[0] != "mark://a/index.md" {
+		t.Errorf("Backlinks = %v, want [mark://a/index.md]", bl)
 	}
 }
 
@@ -314,22 +354,22 @@ func TestBacklinks(t *testing.T) {
 	}
 
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "A"})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/b.md", Title: "B"})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/c.md", Title: "C"})
-	g.AddEdge("mark://a:6309/a.md", "mark://a:6309/c.md")
-	g.AddEdge("mark://a:6309/b.md", "mark://a:6309/c.md")
+	g.AddNode(&graph.Node{URL: "mark://a/a.md", Title: "A"})
+	g.AddNode(&graph.Node{URL: "mark://a/b.md", Title: "B"})
+	g.AddNode(&graph.Node{URL: "mark://a/c.md", Title: "C"})
+	g.AddEdge("mark://a/a.md", "mark://a/c.md")
+	g.AddEdge("mark://a/b.md", "mark://a/c.md")
 	s.Merge(g, nil)
 
-	backlinks := s.Backlinks("mark://a:6309/c.md")
+	backlinks := s.Backlinks("mark://a/c.md")
 	if len(backlinks) != 2 {
 		t.Fatalf("len(backlinks) = %d, want 2", len(backlinks))
 	}
-	if backlinks[0] != "mark://a:6309/a.md" {
-		t.Errorf("backlinks[0] = %q, want %q", backlinks[0], "mark://a:6309/a.md")
+	if backlinks[0] != "mark://a/a.md" {
+		t.Errorf("backlinks[0] = %q, want %q", backlinks[0], "mark://a/a.md")
 	}
-	if backlinks[1] != "mark://a:6309/b.md" {
-		t.Errorf("backlinks[1] = %q, want %q", backlinks[1], "mark://a:6309/b.md")
+	if backlinks[1] != "mark://a/b.md" {
+		t.Errorf("backlinks[1] = %q, want %q", backlinks[1], "mark://a/b.md")
 	}
 }
 
@@ -340,7 +380,7 @@ func TestBacklinksNone(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	backlinks := s.Backlinks("mark://a:6309/unknown.md")
+	backlinks := s.Backlinks("mark://a/unknown.md")
 	if len(backlinks) != 0 {
 		t.Errorf("len(backlinks) = %d, want 0", len(backlinks))
 	}
@@ -354,9 +394,9 @@ func TestToGraph(t *testing.T) {
 	}
 
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "A", Status: "ok", LinkCount: 1})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/b.md", Title: "B", Status: "ok"})
-	g.AddEdge("mark://a:6309/a.md", "mark://a:6309/b.md")
+	g.AddNode(&graph.Node{URL: "mark://a/a.md", Title: "A", Status: "ok", LinkCount: 1})
+	g.AddNode(&graph.Node{URL: "mark://a/b.md", Title: "B", Status: "ok"})
+	g.AddEdge("mark://a/a.md", "mark://a/b.md")
 	s.Merge(g, nil)
 
 	g2 := s.ToGraph()
@@ -367,7 +407,7 @@ func TestToGraph(t *testing.T) {
 		t.Errorf("EdgeCount = %d, want 1", g2.EdgeCount())
 	}
 
-	n := g2.GetNode("mark://a:6309/a.md")
+	n := g2.GetNode("mark://a/a.md")
 	if n == nil {
 		t.Fatal("GetNode returned nil")
 	}
@@ -388,7 +428,7 @@ func TestSaveAtomic(t *testing.T) {
 	}
 
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md"})
+	g.AddNode(&graph.Node{URL: "mark://a/a.md"})
 	s.Merge(g, nil)
 
 	if err := s.Save(); err != nil {
@@ -414,20 +454,20 @@ func TestBacklinksEnriched(t *testing.T) {
 	}
 
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "A", Status: "ok"})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/b.md", Title: "B", Status: "ok"})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/c.md", Title: "C", Status: "ok"})
-	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md", Label: "see C", Anchor: "notes", Count: 2})
-	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md", Rel: "supersedes"})
-	g.AddEdge("mark://a:6309/b.md", "mark://a:6309/c.md")
+	g.AddNode(&graph.Node{URL: "mark://a/a.md", Title: "A", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "mark://a/b.md", Title: "B", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "mark://a/c.md", Title: "C", Status: "ok"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/c.md", Label: "see C", Anchor: "notes", Count: 2})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/c.md", Rel: "supersedes"})
+	g.AddEdge("mark://a/b.md", "mark://a/c.md")
 	s.Merge(g, nil)
 
-	entries := s.BacklinksEnriched("mark://a:6309/c.md")
+	entries := s.BacklinksEnriched("mark://a/c.md")
 	if len(entries) != 3 {
 		t.Fatalf("len = %d, want 3", len(entries))
 	}
 	// Sorted by URL then Rel: a.md plain, a.md supersedes, b.md.
-	if entries[0].URL != "mark://a:6309/a.md" || entries[0].Rel != "" {
+	if entries[0].URL != "mark://a/a.md" || entries[0].Rel != "" {
 		t.Errorf("entries[0] = %+v, want a.md plain", entries[0])
 	}
 	if entries[0].Title != "A" {
@@ -439,10 +479,10 @@ func TestBacklinksEnriched(t *testing.T) {
 	if entries[0].Label != "see C" || entries[0].Anchor != "notes" || entries[0].Count != 2 {
 		t.Errorf("entries[0] = %+v, want Label=see C Anchor=notes Count=2", entries[0])
 	}
-	if entries[1].URL != "mark://a:6309/a.md" || entries[1].Rel != "supersedes" {
+	if entries[1].URL != "mark://a/a.md" || entries[1].Rel != "supersedes" {
 		t.Errorf("entries[1] = %+v, want a.md supersedes", entries[1])
 	}
-	if entries[2].URL != "mark://a:6309/b.md" {
+	if entries[2].URL != "mark://a/b.md" {
 		t.Errorf("entries[2].URL = %q, want b.md", entries[2].URL)
 	}
 }
@@ -455,11 +495,11 @@ func TestBacklinksDedupesMultiEdgeSources(t *testing.T) {
 	}
 
 	g := graph.New()
-	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md"})
-	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md", Rel: "supersedes"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/c.md"})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/c.md", Rel: "supersedes"})
 	s.Merge(g, nil)
 
-	backlinks := s.Backlinks("mark://a:6309/c.md")
+	backlinks := s.Backlinks("mark://a/c.md")
 	if len(backlinks) != 1 {
 		t.Fatalf("len = %d, want 1 (source deduped across its edges)", len(backlinks))
 	}
@@ -472,7 +512,7 @@ func TestBacklinksEnrichedNone(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	entries := s.BacklinksEnriched("mark://a:6309/unknown.md")
+	entries := s.BacklinksEnriched("mark://a/unknown.md")
 	if len(entries) != 0 {
 		t.Errorf("len = %d, want 0", len(entries))
 	}
@@ -490,8 +530,8 @@ func TestAllNodes(t *testing.T) {
 	}
 
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "A", Status: "ok"})
-	g.AddNode(&graph.Node{URL: "mark://a:6309/b.md", Title: "B", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "mark://a/a.md", Title: "A", Status: "ok"})
+	g.AddNode(&graph.Node{URL: "mark://a/b.md", Title: "B", Status: "ok"})
 	s.Merge(g, nil)
 
 	nodes := s.AllNodes()
@@ -503,7 +543,7 @@ func TestAllNodes(t *testing.T) {
 	for _, n := range nodes {
 		urls[n.URL] = true
 	}
-	if !urls["mark://a:6309/a.md"] || !urls["mark://a:6309/b.md"] {
+	if !urls["mark://a/a.md"] || !urls["mark://a/b.md"] {
 		t.Errorf("missing expected URLs: %v", urls)
 	}
 }
@@ -530,20 +570,8 @@ func TestCrawlAndPersist(t *testing.T) {
 		return graph.FetchResult{Status: "ok", Body: p.body, Metadata: map[string]string{"etag": p.etag}}, nil
 	}
 
-	parseURL := func(raw string) (string, string, error) {
-		if len(raw) > 7 && raw[:7] == "mark://" {
-			rest := raw[7:]
-			for i := range len(rest) {
-				if rest[i] == '/' {
-					return rest[:i], rest[i:], nil
-				}
-			}
-		}
-		return "", "", fmt.Errorf("invalid URL: %s", raw)
-	}
-
 	var nodeCount atomic.Int32
-	g, err := s.CrawlAndPersist(context.Background(), "mark://host:6309/index.md", fetchFunc, parseURL, CrawlOptions{
+	g, err := s.CrawlAndPersist(context.Background(), "mark://host:6309/index.md", fetchFunc, canonicalizingParseURL, CrawlOptions{
 		MaxDepth: 2,
 		MaxNodes: 100,
 		OnNode: func(_ *graph.Node) {
@@ -644,27 +672,29 @@ func crawlTwoPageSite(t *testing.T, startURL string) *Store {
 	return s
 }
 
-// A portless start URL must still key nodes canonically: the CLI passed the
-// raw address through, forking the store into two key spaces and leaving every
-// etag unattached, since EtagFetcher keys etags canonically.
+// A start URL carrying the default port must still key nodes by identity
+// (ADR 0005): the CLI passed the raw address through, forking the store into
+// two key spaces and leaving every etag unattached.
 func TestCrawlAndPersistCanonicalizesStartURL(t *testing.T) {
-	s := crawlTwoPageSite(t, "mark://host/index.md")
+	s := crawlTwoPageSite(t, "mark://host:6309/index.md")
 
-	if n := s.GetNode("mark://host/index.md"); n != nil {
-		t.Errorf("node stored under non-canonical key %q", n.URL)
+	for url := range s.nodes {
+		if strings.Contains(url, ":6309") {
+			t.Errorf("node stored under a dial address, not an identity: %q", url)
+		}
 	}
-	n := s.GetNode("mark://host:6309/index.md")
+	n := s.GetNode("mark://host/index.md")
 	if n == nil {
-		t.Fatal("no node under canonical key mark://host:6309/index.md")
+		t.Fatal("no node under canonical key mark://host/index.md")
 	}
 	if n.Etag != "etag-1" {
-		t.Errorf("Etag = %q, want %q (etag map is keyed canonically)", n.Etag, "etag-1")
+		t.Errorf("Etag = %q, want %q (etag map is keyed by identity)", n.Etag, "etag-1")
 	}
-	if s.GetNode("mark://host:6309/about.md") == nil {
+	if s.GetNode("mark://host/about.md") == nil {
 		t.Error("linked node not stored under a canonical key")
 	}
 	for _, e := range s.edges {
-		if !strings.HasPrefix(e.From, "mark://host:6309/") || !strings.HasPrefix(e.To, "mark://host:6309/") {
+		if !strings.HasPrefix(e.From, "mark://host/") || !strings.HasPrefix(e.To, "mark://host/") {
 			t.Errorf("edge %s -> %s is not canonical", e.From, e.To)
 		}
 	}
@@ -733,11 +763,11 @@ func TestSeedFromExportEmptyStore(t *testing.T) {
 	s := New()
 
 	nodes := []StoredNode{
-		{URL: "mark://a:6309/a.md", Title: "A", Status: "ok", LinkCount: 1},
-		{URL: "mark://a:6309/b.md", Title: "B", Status: "ok"},
+		{URL: "mark://a/a.md", Title: "A", Status: "ok", LinkCount: 1},
+		{URL: "mark://a/b.md", Title: "B", Status: "ok"},
 	}
 	edges := []StoredEdge{
-		{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md", Rel: "", Label: "B", Anchor: "intro", Count: 2},
+		{From: "mark://a/a.md", To: "mark://a/b.md", Rel: "", Label: "B", Anchor: "intro", Count: 2},
 	}
 
 	added := s.SeedFromExport(nodes, edges)
@@ -747,10 +777,10 @@ func TestSeedFromExportEmptyStore(t *testing.T) {
 	if s.EdgeCount() != 1 {
 		t.Errorf("EdgeCount = %d, want 1", s.EdgeCount())
 	}
-	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 || bl[0] != "mark://a:6309/a.md" {
-		t.Errorf("Backlinks = %v, want [mark://a:6309/a.md]", bl)
+	if bl := s.Backlinks("mark://a/b.md"); len(bl) != 1 || bl[0] != "mark://a/a.md" {
+		t.Errorf("Backlinks = %v, want [mark://a/a.md]", bl)
 	}
-	n := s.GetNode("mark://a:6309/a.md")
+	n := s.GetNode("mark://a/a.md")
 	if n == nil {
 		t.Fatal("seeded node missing")
 	}
@@ -764,29 +794,29 @@ func TestSeedFromExportLocalWins(t *testing.T) {
 
 	// Local crawl: a.md links to b.md.
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "Local A", Status: "ok", LinkCount: 1})
-	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	g.AddNode(&graph.Node{URL: "mark://a/a.md", Title: "Local A", Status: "ok", LinkCount: 1})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/b.md"})
 	s.Merge(g, nil)
 
 	// Seed claims a.md has a different title and links only to c.md.
-	nodes := []StoredNode{{URL: "mark://a:6309/a.md", Title: "Hub A", Status: "ok", LinkCount: 1}}
-	edges := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/c.md", Count: 1}}
+	nodes := []StoredNode{{URL: "mark://a/a.md", Title: "Hub A", Status: "ok", LinkCount: 1}}
+	edges := []StoredEdge{{From: "mark://a/a.md", To: "mark://a/c.md", Count: 1}}
 	added := s.SeedFromExport(nodes, edges)
 
 	if added != 0 {
 		t.Errorf("added = %d, want 0 (authoritative node must not be seeded)", added)
 	}
-	n := s.GetNode("mark://a:6309/a.md")
+	n := s.GetNode("mark://a/a.md")
 	if n.Title != "Local A" {
 		t.Errorf("Title = %q, want %q", n.Title, "Local A")
 	}
 	if n.CrawledAt.IsZero() {
 		t.Error("authoritative node lost its CrawledAt")
 	}
-	if bl := s.Backlinks("mark://a:6309/c.md"); len(bl) != 0 {
+	if bl := s.Backlinks("mark://a/c.md"); len(bl) != 0 {
 		t.Errorf("seed edges leaked past authoritative source: %v", bl)
 	}
-	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 {
+	if bl := s.Backlinks("mark://a/b.md"); len(bl) != 1 {
 		t.Errorf("local edge dropped by seed: %v", bl)
 	}
 }
@@ -796,15 +826,15 @@ func TestSeedFromExportOverwritesNonAuthoritative(t *testing.T) {
 
 	// A locally crawled "error" node is not authoritative; seed may replace it.
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Status: "error"})
+	g.AddNode(&graph.Node{URL: "mark://a/a.md", Status: "error"})
 	s.Merge(g, nil)
 
-	nodes := []StoredNode{{URL: "mark://a:6309/a.md", Title: "A", Status: "ok", LinkCount: 1}}
+	nodes := []StoredNode{{URL: "mark://a/a.md", Title: "A", Status: "ok", LinkCount: 1}}
 	added := s.SeedFromExport(nodes, nil)
 	if added != 1 {
 		t.Errorf("added = %d, want 1", added)
 	}
-	n := s.GetNode("mark://a:6309/a.md")
+	n := s.GetNode("mark://a/a.md")
 	if n.Status != "ok" || n.Title != "A" {
 		t.Errorf("node = %+v, want seeded ok/A", n)
 	}
@@ -816,27 +846,27 @@ func TestSeedFromExportOverwritesNonAuthoritative(t *testing.T) {
 func TestSeedThenCrawlFlipsAuthoritative(t *testing.T) {
 	s := New()
 
-	nodes := []StoredNode{{URL: "mark://a:6309/a.md", Title: "A", Status: "ok", LinkCount: 1}}
-	edges := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/hub-only.md", Count: 1}}
+	nodes := []StoredNode{{URL: "mark://a/a.md", Title: "A", Status: "ok", LinkCount: 1}}
+	edges := []StoredEdge{{From: "mark://a/a.md", To: "mark://a/hub-only.md", Count: 1}}
 	s.SeedFromExport(nodes, edges)
 
 	// Local crawl of a.md observes a different outgoing set; Merge's refresh
 	// logic must replace the seeded edges.
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://a:6309/a.md", Title: "A", Status: "ok", LinkCount: 1})
-	g.AddEdgeInfo(graph.Edge{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md"})
+	g.AddNode(&graph.Node{URL: "mark://a/a.md", Title: "A", Status: "ok", LinkCount: 1})
+	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/b.md"})
 	s.Merge(g, nil)
 
-	if bl := s.Backlinks("mark://a:6309/hub-only.md"); len(bl) != 0 {
+	if bl := s.Backlinks("mark://a/hub-only.md"); len(bl) != 0 {
 		t.Errorf("stale seeded edge survived local crawl: %v", bl)
 	}
-	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 {
+	if bl := s.Backlinks("mark://a/b.md"); len(bl) != 1 {
 		t.Errorf("crawled edge missing: %v", bl)
 	}
 
 	// Now authoritative: a re-seed must not touch it.
 	s.SeedFromExport(nodes, edges)
-	if bl := s.Backlinks("mark://a:6309/hub-only.md"); len(bl) != 0 {
+	if bl := s.Backlinks("mark://a/hub-only.md"); len(bl) != 0 {
 		t.Errorf("re-seed overwrote authoritative source: %v", bl)
 	}
 }
@@ -844,17 +874,17 @@ func TestSeedThenCrawlFlipsAuthoritative(t *testing.T) {
 func TestSeedRefreshReplacesSeededEdges(t *testing.T) {
 	s := New()
 
-	first := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/old.md", Count: 1}}
-	s.SeedFromExport([]StoredNode{{URL: "mark://a:6309/a.md", Status: "ok"}}, first)
+	first := []StoredEdge{{From: "mark://a/a.md", To: "mark://a/old.md", Count: 1}}
+	s.SeedFromExport([]StoredNode{{URL: "mark://a/a.md", Status: "ok"}}, first)
 
 	// The hub aggregate no longer carries the old.md link.
-	second := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/new.md", Count: 1}}
-	s.SeedFromExport([]StoredNode{{URL: "mark://a:6309/a.md", Status: "ok"}}, second)
+	second := []StoredEdge{{From: "mark://a/a.md", To: "mark://a/new.md", Count: 1}}
+	s.SeedFromExport([]StoredNode{{URL: "mark://a/a.md", Status: "ok"}}, second)
 
-	if bl := s.Backlinks("mark://a:6309/old.md"); len(bl) != 0 {
+	if bl := s.Backlinks("mark://a/old.md"); len(bl) != 0 {
 		t.Errorf("stale seeded backlink survived re-seed: %v", bl)
 	}
-	if bl := s.Backlinks("mark://a:6309/new.md"); len(bl) != 1 {
+	if bl := s.Backlinks("mark://a/new.md"); len(bl) != 1 {
 		t.Errorf("refreshed seed edge missing: %v", bl)
 	}
 }
@@ -862,16 +892,16 @@ func TestSeedRefreshReplacesSeededEdges(t *testing.T) {
 func TestSeedRefreshDropsEdgesOfEmptiedSource(t *testing.T) {
 	s := New()
 
-	nodes := []StoredNode{{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1}}
-	edges := []StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/old.md", Count: 1}}
+	nodes := []StoredNode{{URL: "mark://a/a.md", Status: "ok", LinkCount: 1}}
+	edges := []StoredEdge{{From: "mark://a/a.md", To: "mark://a/old.md", Count: 1}}
 	s.SeedFromExport(nodes, edges)
 
 	// The aggregate now says a.md has no outgoing links at all: the node row
 	// is present (observed) but no edge rows remain. The stale seeded edge
 	// must drop even with an empty edge set.
-	s.SeedFromExport([]StoredNode{{URL: "mark://a:6309/a.md", Status: "ok"}}, nil)
+	s.SeedFromExport([]StoredNode{{URL: "mark://a/a.md", Status: "ok"}}, nil)
 
-	if bl := s.Backlinks("mark://a:6309/old.md"); len(bl) != 0 {
+	if bl := s.Backlinks("mark://a/old.md"); len(bl) != 0 {
 		t.Errorf("stale seeded edge survived zero-edge re-seed: %v", bl)
 	}
 }
@@ -880,16 +910,16 @@ func TestSeedKeepsEdgesOfUnobservedSeedNode(t *testing.T) {
 	s := New()
 
 	s.SeedFromExport(
-		[]StoredNode{{URL: "mark://a:6309/a.md", Status: "ok", LinkCount: 1}},
-		[]StoredEdge{{From: "mark://a:6309/a.md", To: "mark://a:6309/b.md", Count: 1}},
+		[]StoredNode{{URL: "mark://a/a.md", Status: "ok", LinkCount: 1}},
+		[]StoredEdge{{From: "mark://a/a.md", To: "mark://a/b.md", Count: 1}},
 	)
 
 	// A later seed carries a.md only as an error node with no edges: the
 	// aggregate did not read it, so its recorded edge set says nothing and
 	// the earlier seeded edges must survive.
-	s.SeedFromExport([]StoredNode{{URL: "mark://a:6309/a.md", Status: "error"}}, nil)
+	s.SeedFromExport([]StoredNode{{URL: "mark://a/a.md", Status: "error"}}, nil)
 
-	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 {
+	if bl := s.Backlinks("mark://a/b.md"); len(bl) != 1 {
 		t.Errorf("unobserved seed node dropped edges it knew nothing about: %v", bl)
 	}
 }
@@ -949,21 +979,21 @@ func TestSeedFromLegacyExport(t *testing.T) {
 
 | URL | Title | Status | Links |
 |-----|-------|--------|-------|
-| [mark://a:6309/a.md](mark://a:6309/a.md) | A | ok | 1 |
-| [mark://a:6309/b.md](mark://a:6309/b.md) | B | ok | 0 |
+| [mark://a/a.md](mark://a/a.md) | A | ok | 1 |
+| [mark://a/b.md](mark://a/b.md) | B | ok | 0 |
 
 ## Edges
 
 | From | To |
 |------|----|
-| mark://a:6309/a.md | mark://a:6309/b.md |
+| mark://a/a.md | mark://a/b.md |
 `
 	nodes, edges := ParseExport(body)
 	s := New()
 	if added := s.SeedFromExport(nodes, edges); added != 2 {
 		t.Errorf("added = %d, want 2", added)
 	}
-	if bl := s.Backlinks("mark://a:6309/b.md"); len(bl) != 1 || bl[0] != "mark://a:6309/a.md" {
-		t.Errorf("Backlinks = %v, want [mark://a:6309/a.md]", bl)
+	if bl := s.Backlinks("mark://a/b.md"); len(bl) != 1 || bl[0] != "mark://a/a.md" {
+		t.Errorf("Backlinks = %v, want [mark://a/a.md]", bl)
 	}
 }

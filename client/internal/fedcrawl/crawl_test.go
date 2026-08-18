@@ -578,9 +578,9 @@ func TestCrawlerGraphExportAndPublish(t *testing.T) {
 		"# Document Graph",
 		"## Edges",
 		// intra-server edge (relative link resolved)
-		"mark://a.example.com:6309/index.md | mark://a.example.com:6309/notes.md",
+		"mark://a.example.com/index.md | mark://a.example.com/notes.md",
 		// cross-server edge — the connection that makes a portal/edge on the floor
-		"mark://a.example.com:6309/index.md | mark://b.example.com:6309/page.md",
+		"mark://a.example.com/index.md | mark://b.example.com/page.md",
 	} {
 		if !contains(exp, want) {
 			t.Errorf("graph export missing %q\n---\n%s", want, exp)
@@ -630,8 +630,8 @@ func TestCrawlerGraphExportFiltersLoopbackAndNormalizesPorts(t *testing.T) {
 			t.Errorf("graph export must not contain %q\n---\n%s", bad, exp)
 		}
 	}
-	// the external target is kept, port-normalized to the canonical :6309 form.
-	if !containsMiddle(exp, "mark://a.example.com:6309/index.md | mark://ext.example.com:6309/page.md") {
+	// the external target is kept, normalized to identity form (ADR 0005).
+	if !containsMiddle(exp, "mark://a.example.com/index.md | mark://ext.example.com/page.md") {
 		t.Errorf("graph export missing normalized external edge\n---\n%s", exp)
 	}
 }
@@ -761,9 +761,9 @@ func TestCrawlerRecordsTypedAndProvenancedEdges(t *testing.T) {
 	exp := crawler.GraphExport()
 	for _, want := range []string{
 		// body link with label and source anchor
-		"| mark://a.example.com:6309/index.md | mark://a.example.com:6309/notes.md |  | the notes | guide | 1 |",
+		"| mark://a.example.com/index.md | mark://a.example.com/notes.md |  | the notes | guide | 1 |",
 		// typed relation from rel-supersedes metadata, resolved against the doc URL
-		"| mark://a.example.com:6309/index.md | mark://a.example.com:6309/old.md | supersedes |  |  | 1 |",
+		"| mark://a.example.com/index.md | mark://a.example.com/old.md | supersedes |  |  | 1 |",
 	} {
 		if !contains(exp, want) {
 			t.Errorf("graph export missing %q\n---\n%s", want, exp)

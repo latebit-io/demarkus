@@ -1,6 +1,7 @@
 package links
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -260,5 +261,61 @@ func TestExtractTitle(t *testing.T) {
 				t.Errorf("ExtractTitle() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCanonicalURL(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"default port stripped", "mark://host:6309/x.md", "mark://host/x.md"},
+		{"already canonical", "mark://host/x.md", "mark://host/x.md"},
+		{"non-default port kept", "mark://host:7000/x.md", "mark://host:7000/x.md"},
+		{"broker world untouched", "mark://servicing/x.md", "mark://servicing/x.md"},
+		{"broker world with default port", "mark://servicing:6309/x.md", "mark://servicing/x.md"},
+		{"empty path becomes root", "mark://host:6309", "mark://host/"},
+		{"directory path kept", "mark://host:6309/plans/", "mark://host/plans/"},
+		{"ipv6 default port", "mark://[::1]:6309/x.md", "mark://[::1]/x.md"},
+		{"ipv6 non-default port", "mark://[::1]:7000/x.md", "mark://[::1]:7000/x.md"},
+		{"external untouched", "https://example.com/x", "https://example.com/x"},
+		{"relative untouched", "/plans/x.md", "/plans/x.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CanonicalURL(tt.in)
+			if got != tt.want {
+				t.Errorf("CanonicalURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+			if again := CanonicalURL(got); again != got {
+				t.Errorf("not idempotent: CanonicalURL(%q) = %q", got, again)
+			}
+		})
+	}
+}
+
+// NodeURL and CanonicalURL must not drift: one builds identity from parsed
+// parts, the other normalizes a whole URL, and both encode the same rule.
+func TestNodeURLMatchesCanonicalURL(t *testing.T) {
+	cases := []struct{ host, path string }{
+		{"host:6309", "/x.md"},
+		{"host", "/x.md"},
+		{"host:7000", "/x.md"},
+		{"servicing", "/x.md"},
+		{"host:6309", "/plans/"},
+		{"[::1]:6309", "/x.md"},
+		{"host:6309", ""},
+	}
+	for _, c := range cases {
+		got := NodeURL(c.host, c.path)
+		path := c.path
+		if path == "" {
+			path = "/"
+		}
+		if want := CanonicalURL("mark://" + c.host + path); got != want {
+			t.Errorf("NodeURL(%q, %q) = %q, want %q", c.host, c.path, got, want)
+		}
+		if strings.HasSuffix(c.host, ":6309") && strings.Contains(got, ":6309") {
+			t.Errorf("NodeURL(%q, %q) = %q, kept the default port", c.host, c.path, got)
+		}
 	}
 }

@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -39,7 +40,7 @@ func (m *mockFetcher) Fetch(host, path string) (FetchResult, error) {
 }
 
 func mockParseURL(raw string) (host, path string, err error) {
-	// Minimal parser for mark://host:6309/path
+	// Minimal parser for mark://host/path
 	if len(raw) < 7 || raw[:7] != "mark://" {
 		return "", "", fmt.Errorf("not a mark URL: %s", raw)
 	}
@@ -52,16 +53,31 @@ func mockParseURL(raw string) (host, path string, err error) {
 		}
 	}
 	if slashIdx < 0 {
-		return rest, "/", nil
+		return withDefaultPort(rest), "/", nil
 	}
-	return rest[:slashIdx], rest[slashIdx:], nil
+	return withDefaultPort(rest[:slashIdx]), rest[slashIdx:], nil
+}
+
+// withDefaultPort mirrors fetch.ParseMarkURL: a dial address needs a port even
+// though the canonical identity omits the default one (ADR 0005).
+func withDefaultPort(host string) string {
+	if strings.HasPrefix(host, "[") {
+		if strings.HasSuffix(host, "]") { // bracketed IPv6, no port
+			return host + ":6309"
+		}
+		return host
+	}
+	if strings.Contains(host, ":") {
+		return host
+	}
+	return host + ":6309"
 }
 
 func TestCrawlSinglePage(t *testing.T) {
 	f := newMockFetcher()
 	f.add("host:6309", "/index.md", "# Home\n\nNo links here.")
 
-	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
@@ -69,7 +85,7 @@ func TestCrawlSinglePage(t *testing.T) {
 	if g.NodeCount() != 1 {
 		t.Fatalf("NodeCount() = %d, want 1", g.NodeCount())
 	}
-	n := g.GetNode("mark://host:6309/index.md")
+	n := g.GetNode("mark://host/index.md")
 	if n == nil {
 		t.Fatal("start node not found")
 	}
@@ -89,7 +105,7 @@ func TestCrawlFollowsLinks(t *testing.T) {
 	f.add("host:6309", "/index.md", "# Home\n\nGo to [about](about.md).")
 	f.add("host:6309", "/about.md", "# About\n\nBack to [home](index.md).")
 
-	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
@@ -101,7 +117,7 @@ func TestCrawlFollowsLinks(t *testing.T) {
 		t.Fatalf("EdgeCount() = %d, want 2", g.EdgeCount())
 	}
 
-	about := g.GetNode("mark://host:6309/about.md")
+	about := g.GetNode("mark://host/about.md")
 	if about == nil {
 		t.Fatal("about node not found")
 	}
@@ -117,24 +133,24 @@ func TestCrawlRespectsDepthLimit(t *testing.T) {
 	f.add("host:6309", "/c.md", "# C\n\n[d](d.md)")
 	f.add("host:6309", "/d.md", "# D\n\nEnd.")
 
-	g, err := Crawl(context.Background(), "mark://host:6309/a.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/a.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
 
 	// a(0) -> b(1) -> c(2) -> d would be depth 3, should not be crawled
-	if g.GetNode("mark://host:6309/a.md") == nil {
+	if g.GetNode("mark://host/a.md") == nil {
 		t.Error("a not found")
 	}
-	if g.GetNode("mark://host:6309/b.md") == nil {
+	if g.GetNode("mark://host/b.md") == nil {
 		t.Error("b not found")
 	}
-	if g.GetNode("mark://host:6309/c.md") == nil {
+	if g.GetNode("mark://host/c.md") == nil {
 		t.Error("c not found")
 	}
 	// d should not be fetched (depth 3), but it may exist as an unfetched node
 	// since c links to it — however c is at depth 2 so its links are NOT followed
-	if n := g.GetNode("mark://host:6309/d.md"); n != nil {
+	if n := g.GetNode("mark://host/d.md"); n != nil {
 		t.Errorf("d should not be discovered, but found with status %q", n.Status)
 	}
 }
@@ -144,12 +160,12 @@ func TestCrawlHandlesNotFound(t *testing.T) {
 	f.add("host:6309", "/index.md", "# Home\n\n[missing](missing.md)")
 	// missing.md is not added, so it returns not-found
 
-	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
 
-	missing := g.GetNode("mark://host:6309/missing.md")
+	missing := g.GetNode("mark://host/missing.md")
 	if missing == nil {
 		t.Fatal("missing node not found in graph")
 	}
@@ -162,7 +178,7 @@ func TestCrawlExternalLinksNotCrawled(t *testing.T) {
 	f := newMockFetcher()
 	f.add("host:6309", "/index.md", "# Home\n\n[ext](https://example.com)")
 
-	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
@@ -188,7 +204,7 @@ func TestCrawlCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	g, err := Crawl(ctx, "mark://host:6309/a.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(ctx, "mark://host/a.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
@@ -213,7 +229,7 @@ func TestCrawlOnNodeCallback(t *testing.T) {
 		mu.Unlock()
 	}
 
-	g, err := Crawl(context.Background(), "mark://host:6309/a.md", f, mockParseURL, CrawlOptions{MaxDepth: 2, OnNode: onNode})
+	g, err := Crawl(context.Background(), "mark://host/a.md", f, mockParseURL, CrawlOptions{MaxDepth: 2, OnNode: onNode})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
@@ -230,7 +246,7 @@ func TestCrawlNoCycles(t *testing.T) {
 	f.add("host:6309", "/b.md", "# B\n\n[c](c.md)")
 	f.add("host:6309", "/c.md", "# C\n\n[a](a.md)")
 
-	g, err := Crawl(context.Background(), "mark://host:6309/a.md", f, mockParseURL, CrawlOptions{MaxDepth: 10})
+	g, err := Crawl(context.Background(), "mark://host/a.md", f, mockParseURL, CrawlOptions{MaxDepth: 10})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
@@ -261,12 +277,12 @@ func TestCrawlRecordsLabelAndAnchor(t *testing.T) {
 	f.add("host:6309", "/index.md", "# Home\n\n## Section\n\nSee [About page](about.md).")
 	f.add("host:6309", "/about.md", "# About\n")
 
-	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
 
-	e := findEdge(t, g, "mark://host:6309/index.md", "mark://host:6309/about.md", "")
+	e := findEdge(t, g, "mark://host/index.md", "mark://host/about.md", "")
 	if e.Label != "About page" || e.Anchor != "section" || e.Count != 1 {
 		t.Errorf("edge = %+v, want Label=About page Anchor=section Count=1", e)
 	}
@@ -277,12 +293,12 @@ func TestCrawlRecordsLinkInsideInlineFormatting(t *testing.T) {
 	f.add("host:6309", "/index.md", "# Home\n\n## Section\n\n**[Bold link](about.md)**")
 	f.add("host:6309", "/about.md", "# About\n")
 
-	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
 
-	e := findEdge(t, g, "mark://host:6309/index.md", "mark://host:6309/about.md", "")
+	e := findEdge(t, g, "mark://host/index.md", "mark://host/about.md", "")
 	if e.Label != "Bold link" || e.Anchor != "section" {
 		t.Errorf("edge = %+v, want Label=Bold link Anchor=section", e)
 	}
@@ -293,19 +309,19 @@ func TestCrawlAggregatesRepeatedLinks(t *testing.T) {
 	f.add("host:6309", "/index.md", "# Home\n\n[first](about.md) then [second](about.md)")
 	f.add("host:6309", "/about.md", "# About\n")
 
-	g, err := Crawl(context.Background(), "mark://host:6309/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
 
-	e := findEdge(t, g, "mark://host:6309/index.md", "mark://host:6309/about.md", "")
+	e := findEdge(t, g, "mark://host/index.md", "mark://host/about.md", "")
 	if e.Count != 2 {
 		t.Errorf("Count = %d, want 2", e.Count)
 	}
 	if e.Label != "first" {
 		t.Errorf("Label = %q, want first (first label wins)", e.Label)
 	}
-	if n := g.GetNode("mark://host:6309/index.md"); n.LinkCount != 2 {
+	if n := g.GetNode("mark://host/index.md"); n.LinkCount != 2 {
 		t.Errorf("LinkCount = %d, want 2", n.LinkCount)
 	}
 }
@@ -319,13 +335,13 @@ func TestCrawlIngestsRelMetadata(t *testing.T) {
 	f.add("host:6309", "/adr/0002.md", "# ADR 0002\n")
 	f.add("host:6309", "/adr/0003.md", "# ADR 0003\n")
 
-	g, err := Crawl(context.Background(), "mark://host:6309/adr/0004.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/adr/0004.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
 
-	for _, target := range []string{"mark://host:6309/adr/0002.md", "mark://host:6309/adr/0003.md"} {
-		e := findEdge(t, g, "mark://host:6309/adr/0004.md", target, "supersedes")
+	for _, target := range []string{"mark://host/adr/0002.md", "mark://host/adr/0003.md"} {
+		e := findEdge(t, g, "mark://host/adr/0004.md", target, "supersedes")
 		if e.Count != 1 || e.Label != "" {
 			t.Errorf("edge = %+v, want Count=1 empty Label", e)
 		}
@@ -336,7 +352,7 @@ func TestCrawlIngestsRelMetadata(t *testing.T) {
 	}
 
 	// rel- edges do not count as body links.
-	if n := g.GetNode("mark://host:6309/adr/0004.md"); n.LinkCount != 0 {
+	if n := g.GetNode("mark://host/adr/0004.md"); n.LinkCount != 0 {
 		t.Errorf("LinkCount = %d, want 0", n.LinkCount)
 	}
 }
@@ -349,11 +365,51 @@ func TestCrawlSkipsMalformedRelRefs(t *testing.T) {
 		"rel-self":       "/doc.md",
 	})
 
-	g, err := Crawl(context.Background(), "mark://host:6309/doc.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host/doc.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
 	if g.EdgeCount() != 0 {
 		t.Errorf("EdgeCount = %d, want 0: %+v", g.EdgeCount(), g.GetEdges())
+	}
+}
+
+// A rel- target that points back at the document is a self-reference even when
+// the caller addressed the document by its dial address. fedcrawl does exactly
+// that, so comparing raw strings would emit a bogus self-edge.
+func TestRelEdgesSkipsSelfReferenceAcrossURLForms(t *testing.T) {
+	for _, docURL := range []string{"mark://host:6309/doc.md", "mark://host/doc.md"} {
+		refs := RelEdges(docURL, map[string]string{"rel-supersedes": "/doc.md, /other.md"})
+		if len(refs) != 1 {
+			t.Fatalf("RelEdges(%q) = %+v, want only the non-self target", docURL, refs)
+		}
+		if refs[0].Target != "mark://host/other.md" {
+			t.Errorf("target = %q, want mark://host/other.md", refs[0].Target)
+		}
+	}
+}
+
+// A bracketed IPv6 authority carries the default port for dialing and drops it
+// for identity, the same as any other host.
+func TestCrawlIPv6Identity(t *testing.T) {
+	f := newMockFetcher()
+	f.add("[::1]:6309", "/doc.md", "# Doc\n\n[Other](/other.md)\n")
+	f.add("[::1]:6309", "/other.md", "# Other\n")
+
+	g, err := Crawl(context.Background(), "mark://[::1]/doc.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	if err != nil {
+		t.Fatalf("Crawl() error: %v", err)
+	}
+	n := g.GetNode("mark://[::1]/doc.md")
+	if n == nil || n.Status != "ok" {
+		t.Fatalf("node = %+v, want an ok node under the identity key", n)
+	}
+	if g.GetNode("mark://[::1]/other.md") == nil {
+		t.Error("linked IPv6 node missing under its identity key")
+	}
+	for _, e := range g.GetEdges() {
+		if strings.Contains(e.From, ":6309") || strings.Contains(e.To, ":6309") {
+			t.Errorf("edge %s -> %s kept the dial port", e.From, e.To)
+		}
 	}
 }

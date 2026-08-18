@@ -86,7 +86,7 @@ func (h *handler) markExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	h.seedGraph(host)
-	h.writeBacklinksSection(&b, "mark://"+host+path)
+	h.writeBacklinksSection(&b, links.NodeURL(host, path))
 	h.writeSiblingsSection(&b, host, path, token)
 
 	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; mark_fetch force=true for the full body\n", docURL)

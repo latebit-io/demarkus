@@ -117,7 +117,9 @@ func TestHandlerMarkExplore_BacklinksFromStore(t *testing.T) {
 	h := &handler{client: exploreStub(), graphStore: gs}
 	text := exploreText(t, h, "mark://host:6309/hub.md")
 
-	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "[Page A](mark://host:6309/a.md)") {
+	// The card shows node identity, which omits the default port (ADR 0005),
+	// even though the caller addressed the document by its dial address.
+	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "[Page A](mark://host/a.md)") {
 		t.Errorf("expected enriched backlink in card:\n%s", text)
 	}
 }
