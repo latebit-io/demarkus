@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# Test: install.sh update path — update_stack_component must refresh the
-# optional single-host components (broker, library) in place where they are
-# installed, skip them silently where they are not, and never touch config or
-# systemd units. Regression for a stack host whose library was installed once
-# and then never refreshed by `demarkus-install update`.
+# Test: update_stack_component refreshes an installed broker/library in place,
+# skips an absent one, and never touches config or units. Regression for a
+# stack host whose library was installed once and never refreshed by `update`.
 #
-# Functions are sourced out of install.sh and run against a fake INSTALL_DIR
-# and SYSTEMD_DIR. Nothing touches the real system and nothing is downloaded.
+# Sourced out of install.sh against a fake INSTALL_DIR/SYSTEMD_DIR; no network.
 #
 # Usage: bash scripts/test-install-update-stack.sh [path/to/install.sh]
 set -euo pipefail
@@ -23,7 +20,9 @@ log_step() { :; }
 
 INSTALL_DIR="$TMP/bin"
 SYSTEMD_DIR="$TMP/systemd"
+# shellcheck disable=SC2034  # consumed by the function sourced from install.sh
 PLATFORM="linux"
+# shellcheck disable=SC2034  # consumed by the function sourced from install.sh
 SUDO=""
 mkdir -p "$INSTALL_DIR" "$SYSTEMD_DIR"
 
@@ -73,8 +72,16 @@ update_stack_component "demarkus-broker" "demarkus-broker" "" "$TMP"
 grep -q "^download" "$CALLS" && fail "broker updated without a tools version"
 grep -q "try-restart" "$CALLS" && fail "broker restarted without being updated"
 
-# 6. Non-linux hosts have no stack services.
+# 6. An explicit pin is honoured instead of resolving latest.
 : > "$CALLS"
+touch "$INSTALL_DIR/demarkus-library"; chmod +x "$INSTALL_DIR/demarkus-library"
+update_stack_component "demarkus-library" "demarkus-library" "0.23.2" "$TMP"
+grep -q "^fetch_library 0.23.2 " "$CALLS" || fail "pinned library version not passed through: $(cat "$CALLS")"
+rm -f "$INSTALL_DIR/demarkus-library"
+
+# 7. Non-linux hosts have no stack services.
+: > "$CALLS"
+# shellcheck disable=SC2034  # consumed by the function sourced from install.sh
 PLATFORM="darwin"
 update_stack_component "demarkus-library" "demarkus-library" "" "$TMP"
 [ ! -s "$CALLS" ] || fail "stack update must be linux-only, got: $(cat "$CALLS")"

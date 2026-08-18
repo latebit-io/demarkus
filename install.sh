@@ -28,6 +28,7 @@
 #
 # After install:
 #   demarkus-install update          # update to latest version
+#                                    #   --library-version pins the reading room
 #   demarkus-install uninstall       # remove everything
 #
 set -euo pipefail
@@ -1285,10 +1286,9 @@ EOF
   fi
 }
 
-# fetch_library_binary resolves, downloads, verifies and installs the
-# demarkus-library binary, leaving the resolved version in _LIBRARY_VERSION.
-# Shared by install_library and the update path so a stack host cannot drift
-# by having the library installed once and never refreshed again.
+# fetch_library_binary downloads, verifies and installs demarkus-library,
+# leaving the resolved version in _LIBRARY_VERSION. Shared with the update path
+# so install and update cannot drift apart.
 fetch_library_binary() {
   local lib_version="$1"
   local tmpdir="$2"
@@ -2066,12 +2066,14 @@ do_install_client() {
 
 do_update() {
   local version=""
+  local library_version=""
 
   # Parse flags
   while [ $# -gt 0 ]; do
     case "$1" in
-      --version) version="$2"; shift 2 ;;
-      *)         log_error "Unknown option: $1"; exit 1 ;;
+      --version)         version="$2"; shift 2 ;;
+      --library-version) library_version="$2"; shift 2 ;;
+      *)                 log_error "Unknown option: $1"; exit 1 ;;
     esac
   done
 
@@ -2127,19 +2129,17 @@ do_update() {
     $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
     # Re-execute with the new script for migrations
     exec "${INSTALL_DIR}/demarkus-install" _do_update_inner \
-      --from "$current_version" --to "$version"
+      --from "$current_version" --to "$version" --library-version "$library_version"
   fi
 
-  _do_update_inner --from "$current_version" --to "$version"
+  _do_update_inner --from "$current_version" --to "$version" --library-version "$library_version"
 }
 
-# update_stack_component refreshes an optional single-host component in place
-# when it is installed: binary only, never its config or systemd unit. A
-# component that is absent is skipped silently, so this is safe on a plain
-# server-only install. Restart is try-restart: it is a no-op when the unit
-# exists but is stopped.
+# update_stack_component refreshes an installed single-host component in place:
+# binary only, never its config or unit. Absent components are skipped, so a
+# server-only install is unaffected. version empty means latest, as elsewhere.
 update_stack_component() {
-  local binary="$1" service="$2" tools_version="$3" tmpdir="$4"
+  local binary="$1" service="$2" version="$3" tmpdir="$4"
 
   if [ "$PLATFORM" != "linux" ]; then
     return
@@ -2151,17 +2151,17 @@ update_stack_component() {
   log_step "Updating ${binary}"
   case "$binary" in
     demarkus-library)
-      fetch_library_binary "" "$tmpdir"
+      fetch_library_binary "$version" "$tmpdir"
       log_info "${binary} updated to ${_LIBRARY_VERSION}"
       ;;
     *)
-      if [ -z "$tools_version" ]; then
+      if [ -z "$version" ]; then
         log_warn "No tools release resolved; skipping ${binary} update"
         return
       fi
-      download_and_verify_asset "$binary" "$tools_version" "tools" "$tmpdir"
+      download_and_verify_asset "$binary" "$version" "tools" "$tmpdir"
       install_binaries "$tmpdir" "$binary"
-      log_info "${binary} updated to ${tools_version}"
+      log_info "${binary} updated to ${version}"
       ;;
   esac
   $SUDO systemctl try-restart "$service" 2>/dev/null \
@@ -2169,12 +2169,13 @@ update_stack_component() {
 }
 
 _do_update_inner() {
-  local from="" to=""
+  local from="" to="" library_version=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --from) from="$2"; shift 2 ;;
-      --to)   to="$2"; shift 2 ;;
-      *)      shift ;;
+      --from)            from="$2"; shift 2 ;;
+      --to)              to="$2"; shift 2 ;;
+      --library-version) library_version="$2"; shift 2 ;;
+      *)                 shift ;;
     esac
   done
 
@@ -2211,12 +2212,10 @@ _do_update_inner() {
     log_warn "Could not find tools release; skipping demarkus-token/demarkus-publish update"
   fi
 
-  # The stack components (broker, library) are installed once by install /
-  # install-stack and were never refreshed here, so a single-host deployment
-  # silently drifted behind for as long as it had been running. Refresh each
-  # one only where it is actually installed; config and units are untouched.
+  # Installed once by install/install-stack and never refreshed here, so a
+  # single-host deployment drifted behind for as long as it ran.
   update_stack_component "demarkus-broker" "$BROKER_SERVICE" "$tools_version" "$_TMPDIR"
-  update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "" "$_TMPDIR"
+  update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "$library_version" "$_TMPDIR"
 
   # Run migrations before replacing binaries
   migrate "$from" "$to"
