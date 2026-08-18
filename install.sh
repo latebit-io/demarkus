@@ -417,6 +417,16 @@ download_and_verify_asset() {
 
 # --- Install functions ---
 
+# install_binary_atomic replaces dest by rename, never opening it for write:
+# a running executable rejects that with ETXTBSY ("Text file busy"). Staging
+# beside dest keeps the rename on one filesystem, so it is atomic.
+install_binary_atomic() {
+  local src="$1" dest="$2"
+
+  $SUDO install -m 755 "$src" "${dest}.new" || return 1
+  $SUDO mv -f "${dest}.new" "$dest"
+}
+
 install_binaries() {
   local tmpdir="$1"
   shift
@@ -1315,7 +1325,7 @@ fetch_library_binary() {
     log_warn "Could not download library checksums; skipping verification"
   fi
   tar -xzf "${tmpdir}/${lib_asset}" -C "$tmpdir" demarkus-library
-  $SUDO install -m 755 "${tmpdir}/demarkus-library" "${INSTALL_DIR}/demarkus-library"
+  install_binary_atomic "${tmpdir}/demarkus-library" "${INSTALL_DIR}/demarkus-library"
   _LIBRARY_VERSION="$lib_version"
 }
 
@@ -2160,7 +2170,7 @@ update_stack_component() {
         return
       fi
       download_and_verify_asset "$binary" "$version" "tools" "$tmpdir"
-      install_binaries "$tmpdir" "$binary"
+      install_binary_atomic "${tmpdir}/${binary}" "${INSTALL_DIR}/${binary}"
       log_info "${binary} updated to ${version}"
       ;;
   esac

@@ -31,7 +31,7 @@ CALLS="$TMP/calls"
 : > "$CALLS"
 fetch_library_binary() { echo "fetch_library $*" >> "$CALLS"; _LIBRARY_VERSION="9.9.9"; }
 download_and_verify_asset() { echo "download $1 $2" >> "$CALLS"; }
-install_binaries() { echo "install $2" >> "$CALLS"; }
+install_binary_atomic() { echo "install $(basename "$2")" >> "$CALLS"; }
 # Stub systemctl so a restart is recorded, never executed.
 systemctl() { echo "systemctl $*" >> "$CALLS"; }
 
@@ -85,5 +85,21 @@ rm -f "$INSTALL_DIR/demarkus-library"
 PLATFORM="darwin"
 update_stack_component "demarkus-library" "demarkus-library" "" "$TMP"
 [ ! -s "$CALLS" ] || fail "stack update must be linux-only, got: $(cat "$CALLS")"
+
+# 8. install_binary_atomic must replace by rename, not write in place: writing
+# over a live executable fails with ETXTBSY. A rename gives dest a new inode;
+# an in-place copy keeps the old one, so the inode is the observable proof.
+eval "$(awk '/^install_binary_atomic\(\)/,/^\}$/' "$SRC")"
+inode_of() { ls -i "$1" | awk '{print $1}'; }
+DEST="$TMP/bin/demarkus-fake"
+printf 'old\n' > "$DEST"; chmod 755 "$DEST"
+BEFORE=$(inode_of "$DEST")
+printf 'new\n' > "$TMP/new-binary"
+install_binary_atomic "$TMP/new-binary" "$DEST" || fail "atomic replace failed"
+AFTER=$(inode_of "$DEST")
+[ "$BEFORE" != "$AFTER" ] || fail "dest was written in place (inode unchanged); a live executable would give ETXTBSY"
+grep -q "^new$" "$DEST" || fail "new content not in place"
+[ -x "$DEST" ] || fail "replacement is not executable"
+[ ! -e "${DEST}.new" ] || fail "staging file left behind"
 
 echo "PASS: update_stack_component"
