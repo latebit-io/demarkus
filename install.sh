@@ -1285,6 +1285,40 @@ EOF
   fi
 }
 
+# fetch_library_binary resolves, downloads, verifies and installs the
+# demarkus-library binary, leaving the resolved version in _LIBRARY_VERSION.
+# Shared by install_library and the update path so a stack host cannot drift
+# by having the library installed once and never refreshed again.
+fetch_library_binary() {
+  local lib_version="$1"
+  local tmpdir="$2"
+
+  if [ -z "$lib_version" ]; then
+    lib_version=$(curl -fsSL "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
+  fi
+  if [ -z "$lib_version" ]; then
+    log_error "Could not resolve the latest demarkus-library release (pin one with --library-version)"
+    exit 1
+  fi
+  local lib_asset="demarkus-library_${lib_version}_${OS}_${GOARCH}.tar.gz"
+  local lib_url="https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/${lib_asset}"
+  if ! curl -fsSL "$lib_url" -o "${tmpdir}/${lib_asset}"; then
+    log_error "Could not download ${lib_asset}"
+    exit 1
+  fi
+  if curl -fsSL "https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/demarkus-library_checksums.txt" -o "${tmpdir}/demarkus-library_checksums.txt"; then
+    (cd "$tmpdir" && grep "$lib_asset" demarkus-library_checksums.txt | sha256sum -c - >/dev/null) || {
+      log_error "Checksum verification failed for ${lib_asset}"
+      exit 1
+    }
+  else
+    log_warn "Could not download library checksums; skipping verification"
+  fi
+  tar -xzf "${tmpdir}/${lib_asset}" -C "$tmpdir" demarkus-library
+  $SUDO install -m 755 "${tmpdir}/demarkus-library" "${INSTALL_DIR}/demarkus-library"
+  _LIBRARY_VERSION="$lib_version"
+}
+
 # install_library deploys the demarkus-library reading room in direct-QUIC
 # (read-only) mode against the local world. With TLS material it serves
 # HTTPS itself on lib_port, reusing the world's cert (one hostname, one
@@ -1354,29 +1388,8 @@ install_library() {
     exit 1
   fi
 
-  if [ -z "$lib_version" ]; then
-    lib_version=$(curl -fsSL "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
-  fi
-  if [ -z "$lib_version" ]; then
-    log_error "Could not resolve the latest demarkus-library release (pin one with --library-version)"
-    exit 1
-  fi
-  local lib_asset="demarkus-library_${lib_version}_${OS}_${GOARCH}.tar.gz"
-  local lib_url="https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/${lib_asset}"
-  if ! curl -fsSL "$lib_url" -o "${tmpdir}/${lib_asset}"; then
-    log_error "Could not download ${lib_asset}"
-    exit 1
-  fi
-  if curl -fsSL "https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/demarkus-library_checksums.txt" -o "${tmpdir}/demarkus-library_checksums.txt"; then
-    (cd "$tmpdir" && grep "$lib_asset" demarkus-library_checksums.txt | sha256sum -c - >/dev/null) || {
-      log_error "Checksum verification failed for ${lib_asset}"
-      exit 1
-    }
-  else
-    log_warn "Could not download library checksums; skipping verification"
-  fi
-  tar -xzf "${tmpdir}/${lib_asset}" -C "$tmpdir" demarkus-library
-  $SUDO install -m 755 "${tmpdir}/demarkus-library" "${INSTALL_DIR}/demarkus-library"
+  fetch_library_binary "$lib_version" "$tmpdir"
+  lib_version="$_LIBRARY_VERSION"
 
   if ! id "$LIBRARY_SERVICE" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /usr/sbin/nologin "$LIBRARY_SERVICE"
@@ -2120,6 +2133,41 @@ do_update() {
   _do_update_inner --from "$current_version" --to "$version"
 }
 
+# update_stack_component refreshes an optional single-host component in place
+# when it is installed: binary only, never its config or systemd unit. A
+# component that is absent is skipped silently, so this is safe on a plain
+# server-only install. Restart is try-restart: it is a no-op when the unit
+# exists but is stopped.
+update_stack_component() {
+  local binary="$1" service="$2" tools_version="$3" tmpdir="$4"
+
+  if [ "$PLATFORM" != "linux" ]; then
+    return
+  fi
+  if [ ! -x "${INSTALL_DIR}/${binary}" ] && ! $SUDO test -f "${SYSTEMD_DIR}/${service}.service"; then
+    return
+  fi
+
+  log_step "Updating ${binary}"
+  case "$binary" in
+    demarkus-library)
+      fetch_library_binary "" "$tmpdir"
+      log_info "${binary} updated to ${_LIBRARY_VERSION}"
+      ;;
+    *)
+      if [ -z "$tools_version" ]; then
+        log_warn "No tools release resolved; skipping ${binary} update"
+        return
+      fi
+      download_and_verify_asset "$binary" "$tools_version" "tools" "$tmpdir"
+      install_binaries "$tmpdir" "$binary"
+      log_info "${binary} updated to ${tools_version}"
+      ;;
+  esac
+  $SUDO systemctl try-restart "$service" 2>/dev/null \
+    || log_warn "Could not restart ${service}; restart it by hand"
+}
+
 _do_update_inner() {
   local from="" to=""
   while [ $# -gt 0 ]; do
@@ -2162,6 +2210,13 @@ _do_update_inner() {
   else
     log_warn "Could not find tools release; skipping demarkus-token/demarkus-publish update"
   fi
+
+  # The stack components (broker, library) are installed once by install /
+  # install-stack and were never refreshed here, so a single-host deployment
+  # silently drifted behind for as long as it had been running. Refresh each
+  # one only where it is actually installed; config and units are untouched.
+  update_stack_component "demarkus-broker" "$BROKER_SERVICE" "$tools_version" "$_TMPDIR"
+  update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "" "$_TMPDIR"
 
   # Run migrations before replacing binaries
   migrate "$from" "$to"
