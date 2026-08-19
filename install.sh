@@ -28,11 +28,14 @@
 #
 # After install:
 #   demarkus-install update          # update to latest version
+#                                    #   --library-version pins the reading room
 #   demarkus-install uninstall       # remove everything
 #
 set -euo pipefail
 
 GITHUB_REPO="latebit-io/demarkus"
+# Bound every GitHub call so a stalled request cannot hang an install forever.
+CURL_TIMEOUT_ARGS=(--connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2)
 INSTALL_DIR="/usr/local/bin"
 
 # If demarkus is already installed somewhere, use that directory so
@@ -239,7 +242,7 @@ fi
 github_api() {
   local url="$1"
   set +u
-  curl -fsSL "${CURL_AUTH_ARGS[@]}" "$url" 2>/dev/null
+  curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "${CURL_AUTH_ARGS[@]}" "$url" 2>/dev/null
   set -u
 }
 
@@ -293,7 +296,7 @@ download_asset_file() {
       return 1
     fi
 
-    curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" \
+    curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" -H "Authorization: token ${GITHUB_TOKEN}" \
       -H "Accept: application/octet-stream" \
       -o "$output_path" "$asset_url" || return 1
   else
@@ -301,7 +304,7 @@ download_asset_file() {
     local encoded_tag
     encoded_tag=$(printf '%s' "$tag" | sed 's|/|%2F|g')
     local url="https://github.com/${GITHUB_REPO}/releases/download/${encoded_tag}/${filename}"
-    curl -fsSL -o "$output_path" "$url" || return 1
+    curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" -o "$output_path" "$url" || return 1
   fi
 }
 
@@ -415,6 +418,17 @@ download_and_verify_asset() {
 }
 
 # --- Install functions ---
+
+# install_binary_atomic replaces dest by rename, never opening it for write:
+# a running executable rejects that with ETXTBSY ("Text file busy"). The stage
+# is per-process and beside dest, so the rename is atomic on one filesystem.
+install_binary_atomic() {
+  local src="$1" dest="$2"
+  local stage="${dest}.new.$$"
+
+  $SUDO install -m 755 "$src" "$stage" || return 1
+  $SUDO mv -f "$stage" "$dest" || { $SUDO rm -f "$stage"; return 1; }
+}
 
 install_binaries() {
   local tmpdir="$1"
@@ -1285,6 +1299,39 @@ EOF
   fi
 }
 
+# fetch_library_binary downloads, verifies and installs demarkus-library,
+# leaving the resolved version in _LIBRARY_VERSION. Shared with the update path
+# so install and update cannot drift apart.
+fetch_library_binary() {
+  local lib_version="$1"
+  local tmpdir="$2"
+
+  if [ -z "$lib_version" ]; then
+    lib_version=$(curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
+  fi
+  if [ -z "$lib_version" ]; then
+    log_error "Could not resolve the latest demarkus-library release (pin one with --library-version)"
+    exit 1
+  fi
+  local lib_asset="demarkus-library_${lib_version}_${OS}_${GOARCH}.tar.gz"
+  local lib_url="https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/${lib_asset}"
+  if ! curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "$lib_url" -o "${tmpdir}/${lib_asset}"; then
+    log_error "Could not download ${lib_asset}"
+    exit 1
+  fi
+  if curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/demarkus-library_checksums.txt" -o "${tmpdir}/demarkus-library_checksums.txt"; then
+    (cd "$tmpdir" && grep "$lib_asset" demarkus-library_checksums.txt | sha256sum -c - >/dev/null) || {
+      log_error "Checksum verification failed for ${lib_asset}"
+      exit 1
+    }
+  else
+    log_warn "Could not download library checksums; skipping verification"
+  fi
+  tar -xzf "${tmpdir}/${lib_asset}" -C "$tmpdir" demarkus-library
+  install_binary_atomic "${tmpdir}/demarkus-library" "${INSTALL_DIR}/demarkus-library"
+  _LIBRARY_VERSION="$lib_version"
+}
+
 # install_library deploys the demarkus-library reading room in direct-QUIC
 # (read-only) mode against the local world. With TLS material it serves
 # HTTPS itself on lib_port, reusing the world's cert (one hostname, one
@@ -1354,29 +1401,8 @@ install_library() {
     exit 1
   fi
 
-  if [ -z "$lib_version" ]; then
-    lib_version=$(curl -fsSL "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
-  fi
-  if [ -z "$lib_version" ]; then
-    log_error "Could not resolve the latest demarkus-library release (pin one with --library-version)"
-    exit 1
-  fi
-  local lib_asset="demarkus-library_${lib_version}_${OS}_${GOARCH}.tar.gz"
-  local lib_url="https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/${lib_asset}"
-  if ! curl -fsSL "$lib_url" -o "${tmpdir}/${lib_asset}"; then
-    log_error "Could not download ${lib_asset}"
-    exit 1
-  fi
-  if curl -fsSL "https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/demarkus-library_checksums.txt" -o "${tmpdir}/demarkus-library_checksums.txt"; then
-    (cd "$tmpdir" && grep "$lib_asset" demarkus-library_checksums.txt | sha256sum -c - >/dev/null) || {
-      log_error "Checksum verification failed for ${lib_asset}"
-      exit 1
-    }
-  else
-    log_warn "Could not download library checksums; skipping verification"
-  fi
-  tar -xzf "${tmpdir}/${lib_asset}" -C "$tmpdir" demarkus-library
-  $SUDO install -m 755 "${tmpdir}/demarkus-library" "${INSTALL_DIR}/demarkus-library"
+  fetch_library_binary "$lib_version" "$tmpdir"
+  lib_version="$_LIBRARY_VERSION"
 
   if ! id "$LIBRARY_SERVICE" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /usr/sbin/nologin "$LIBRARY_SERVICE"
@@ -1916,7 +1942,7 @@ do_install() {
     local tmp_script
     tmp_script=$(mktemp)
     set +u
-    if curl -fsSL "${CURL_AUTH_ARGS[@]}" "$script_url" -o "$tmp_script" 2>/dev/null; then
+    if curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "${CURL_AUTH_ARGS[@]}" "$script_url" -o "$tmp_script" 2>/dev/null; then
       set -u
       $SUDO mv "$tmp_script" "${INSTALL_DIR}/demarkus-install"
       $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
@@ -2053,12 +2079,14 @@ do_install_client() {
 
 do_update() {
   local version=""
+  local library_version=""
 
   # Parse flags
   while [ $# -gt 0 ]; do
     case "$1" in
-      --version) version="$2"; shift 2 ;;
-      *)         log_error "Unknown option: $1"; exit 1 ;;
+      --version)         version="$2"; shift 2 ;;
+      --library-version) library_version="$2"; shift 2 ;;
+      *)                 log_error "Unknown option: $1"; exit 1 ;;
     esac
   done
 
@@ -2089,7 +2117,14 @@ do_update() {
   fi
 
   if [ "$current_version" = "$version" ]; then
-    log_info "Already at v${version}, nothing to do."
+    log_info "Server already at v${version}; checking stack components."
+    # _TMPDIR, not a local: fetch_library_binary exits on a fatal download or
+    # checksum failure, and only the EXIT trap runs then.
+    _TMPDIR=$(mktemp -d) || { log_error "Failed to create temporary directory"; exit 1; }
+    update_stack_components "$(fetch_latest_version "tools")" "$library_version" "$_TMPDIR"
+    rm -rf "$_TMPDIR"
+    _TMPDIR=""
+    exit_on_stack_failure
     return
   fi
 
@@ -2102,7 +2137,7 @@ do_update() {
   local script_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh"
   local new_script
   set +u
-  new_script=$(curl -fsSL "${CURL_AUTH_ARGS[@]}" "$script_url" 2>/dev/null) || {
+  new_script=$(curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "${CURL_AUTH_ARGS[@]}" "$script_url" 2>/dev/null) || {
     set -u
     log_warn "Could not fetch updated install script, continuing with current version"
     new_script=""
@@ -2114,19 +2149,96 @@ do_update() {
     $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
     # Re-execute with the new script for migrations
     exec "${INSTALL_DIR}/demarkus-install" _do_update_inner \
-      --from "$current_version" --to "$version"
+      --from "$current_version" --to "$version" --library-version "$library_version"
   fi
 
-  _do_update_inner --from "$current_version" --to "$version"
+  _do_update_inner --from "$current_version" --to "$version" --library-version "$library_version"
+}
+
+# stack_component_installed reports whether an optional component is present,
+# by binary or by unit: install_binary_atomic may put it somewhere else.
+stack_component_installed() {
+  local binary="$1" service="$2"
+
+  [ -x "${INSTALL_DIR}/${binary}" ] || $SUDO test -f "${SYSTEMD_DIR}/${service}.service"
+}
+
+# update_stack_components refreshes both optional components. Shared by the
+# upgrade path and the server-already-current path, where a stale library is
+# still worth updating.
+update_stack_components() {
+  local tools_version="$1" library_version="$2" tmpdir="$3"
+
+  # These components are systemd services; nothing to refresh elsewhere, and
+  # the checks below would otherwise fail an update on a stray binary.
+  if [ "$PLATFORM" != "linux" ]; then
+    return
+  fi
+
+  # An empty tools version would otherwise make the broker branch log a skip
+  # and return success, reporting a clean update that never refreshed it.
+  if [ -z "$tools_version" ] && stack_component_installed "demarkus-broker" "$BROKER_SERVICE"; then
+    log_error "Could not resolve the tools release; the installed broker cannot be updated"
+    exit 1
+  fi
+
+  update_stack_component "demarkus-broker" "$BROKER_SERVICE" "$tools_version" "$tmpdir"
+  update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "$library_version" "$tmpdir"
+}
+
+# update_stack_component refreshes an installed single-host component in place:
+# binary only, never its config or unit. Absent components are skipped, so a
+# server-only install is unaffected. version empty means latest, as elsewhere.
+update_stack_component() {
+  local binary="$1" service="$2" version="$3" tmpdir="$4"
+
+  if [ "$PLATFORM" != "linux" ]; then
+    return
+  fi
+  if ! stack_component_installed "$binary" "$service"; then
+    return
+  fi
+
+  log_step "Updating ${binary}"
+  case "$binary" in
+    demarkus-library)
+      fetch_library_binary "$version" "$tmpdir"
+      log_info "${binary} updated to ${_LIBRARY_VERSION}"
+      ;;
+    *)
+      if [ -z "$version" ]; then
+        log_warn "No tools release resolved; skipping ${binary} update"
+        return
+      fi
+      download_and_verify_asset "$binary" "$version" "tools" "$tmpdir"
+      install_binary_atomic "${tmpdir}/${binary}" "${INSTALL_DIR}/${binary}"
+      log_info "${binary} updated to ${version}"
+      ;;
+  esac
+  if ! $SUDO systemctl try-restart "$service" 2>/dev/null; then
+    log_warn "Could not restart ${service}; the new binary is installed but not running"
+    _STACK_RESTART_FAILED=1
+  fi
+}
+
+# exit_on_stack_failure turns a swallowed restart failure into a nonzero exit:
+# the binary is in place but the old one is still serving, which must not look
+# like a clean update to whatever ran it.
+exit_on_stack_failure() {
+  if [ "${_STACK_RESTART_FAILED:-0}" = "1" ]; then
+    log_error "A stack component was updated but could not be restarted"
+    exit 1
+  fi
 }
 
 _do_update_inner() {
-  local from="" to=""
+  local from="" to="" library_version=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --from) from="$2"; shift 2 ;;
-      --to)   to="$2"; shift 2 ;;
-      *)      shift ;;
+      --from)            from="$2"; shift 2 ;;
+      --to)              to="$2"; shift 2 ;;
+      --library-version) library_version="$2"; shift 2 ;;
+      *)                 shift ;;
     esac
   done
 
@@ -2162,6 +2274,10 @@ _do_update_inner() {
   else
     log_warn "Could not find tools release; skipping demarkus-token/demarkus-publish update"
   fi
+
+  # Installed once by install/install-stack and never refreshed here, so a
+  # single-host deployment drifted behind for as long as it ran.
+  update_stack_components "$tools_version" "$library_version" "$_TMPDIR"
 
   # Run migrations before replacing binaries
   migrate "$from" "$to"
@@ -2294,6 +2410,7 @@ RestrictSUIDSGID=yes
   fi
 
   log_step "Updated to v${to}"
+  exit_on_stack_failure
 }
 
 do_uninstall() {
@@ -2468,11 +2585,13 @@ main() {
       echo "  --tls-key FILE     Path to TLS private key (PEM)"
       echo "  --root DIR         Content directory (default: platform-specific)"
       echo "  --version X.Y.Z    Install specific version (default: latest)"
+      echo "  --library-version X.Y.Z  Reading-room version (default: latest)"
       echo "  --client-only      Only install the client binary"
       echo "  --no-tls           Skip TLS setup"
       echo ""
       echo "Update options:"
       echo "  --version X.Y.Z    Update to specific version (default: latest)"
+      echo "  --library-version X.Y.Z  Reading-room version (default: latest)"
       echo ""
       echo "Uninstall options:"
       echo "  --keep-data        Don't remove content directory"

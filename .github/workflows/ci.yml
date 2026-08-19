@@ -52,6 +52,7 @@ jobs:
               - 'install-stack.sh'
               - 'scripts/test-install-renewal.sh'
               - 'scripts/test-install-stack-tokens.sh'
+              - 'scripts/test-install-update-stack.sh'
             opencode_plugins:
               - 'plugins/opencode-memory/**'
               - 'plugins/opencode-knowledge/**'
@@ -162,10 +163,14 @@ jobs:
         run: shellcheck -S warning scripts/test-install-renewal.sh
       - name: Shellcheck the stack-tokens test
         run: shellcheck -S warning scripts/test-install-stack-tokens.sh
+      - name: Shellcheck the update-stack test
+        run: shellcheck -S warning scripts/test-install-update-stack.sh
       - name: Test certbot renewal wiring
         run: bash scripts/test-install-renewal.sh
       - name: Test stack token rotation
         run: bash scripts/test-install-stack-tokens.sh
+      - name: Test stack component updates
+        run: bash scripts/test-install-update-stack.sh
 
   test-opencode-plugins:
     needs: detect-changes
