@@ -149,8 +149,8 @@ func Tokenize(s string) []string {
 }
 
 // MatchScore counts how many distinct query terms appear in the entry's tags
-// (exact, case-insensitive) or title (substring, case-insensitive). Exported
-// so test harnesses rank rows by the same rule instead of a copy.
+// (exact, case-insensitive) or title (substring, case-insensitive); terms are
+// lowercased and deduplicated here so every caller scores alike.
 func MatchScore(e *Entry, terms []string) int {
 	lowerTitle := strings.ToLower(e.Title)
 	lowerTags := make(map[string]bool, len(e.Tags))
@@ -158,7 +158,13 @@ func MatchScore(e *Entry, terms []string) int {
 		lowerTags[strings.ToLower(t)] = true
 	}
 	score := 0
+	seen := make(map[string]bool, len(terms))
 	for _, term := range terms {
+		term = strings.ToLower(strings.TrimSpace(term))
+		if term == "" || seen[term] {
+			continue
+		}
+		seen[term] = true
 		if lowerTags[term] || (lowerTitle != "" && strings.Contains(lowerTitle, term)) {
 			score++
 		}
