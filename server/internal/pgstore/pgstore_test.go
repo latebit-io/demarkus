@@ -1,13 +1,11 @@
 package pgstore_test
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 
@@ -16,10 +14,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/pgstore"
+	"github.com/latebit-io/demarkus/server/internal/pgstore/pgtest"
 	"github.com/latebit-io/demarkus/server/internal/storetest"
 )
 
@@ -38,31 +36,13 @@ func TestPostgresConformance(t *testing.T) {
 	})
 }
 
-// testDSN returns the conformance database DSN or skips the test. CI sets
-// DEMARKUS_TEST_PG_REQUIRED so a missing DSN fails instead of skipping:
-// backend parity must be proven on every run, never silently dropped.
-func testDSN(t testing.TB) string {
-	t.Helper()
-	dsn := os.Getenv("DEMARKUS_TEST_PG_DSN")
-	if dsn == "" {
-		if os.Getenv("DEMARKUS_TEST_PG_REQUIRED") != "" {
-			t.Fatal("DEMARKUS_TEST_PG_DSN not set but DEMARKUS_TEST_PG_REQUIRED is; Postgres coverage is mandatory here")
-		}
-		t.Skip("DEMARKUS_TEST_PG_DSN not set; skipping Postgres test")
-	}
-	return dsn
-}
+// pgSchema isolates this package's tables from other test packages.
+const pgSchema = "pgstore"
 
-// openStore opens a pgstore against the test database with a quiet logger.
+// openStore returns the package's shared pgstore, reset to empty.
 func openStore(t testing.TB) *pgstore.Store {
 	t.Helper()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	s, err := pgstore.Open(testDSN(t), logger)
-	if err != nil {
-		t.Fatalf("open postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
+	return pgtest.Open(t, pgSchema)
 }
 
 // TestPostgresLookupConformance runs the LOOKUP conformance suite; the store
@@ -82,59 +62,32 @@ func pgBackend(t testing.TB, s *pgstore.Store) storetest.LookupBackend {
 	return storetest.LookupBackend{Store: s, Catalog: s}
 }
 
-// mockStream is the minimal handler.Stream for driving requests in tests.
-type mockStream struct {
-	io.Reader
-	output bytes.Buffer
-}
-
-func (m *mockStream) Write(p []byte) (int, error) { return m.output.Write(p) }
-func (m *mockStream) Close() error                { return nil }
-
-// send runs one raw request through a handler and returns the parsed response.
-func send(t *testing.T, h *handler.Handler, request string) protocol.Response {
-	t.Helper()
-	stream := &mockStream{Reader: strings.NewReader(request)}
-	h.HandleStream(stream)
-	resp, err := protocol.ParseResponse(&stream.output)
-	if err != nil {
-		t.Fatalf("parse response: %v", err)
-	}
-	return resp
-}
-
-// replicaHandler wraps a store in a handler the way main.go wires postgres
-// mode: the store is both DocumentStore and LookupCatalog, no catalog build.
-func replicaHandler(t *testing.T, s *pgstore.Store, ts *auth.TokenStore) *handler.Handler {
-	t.Helper()
-	return &handler.Handler{
-		Store:         s,
-		Catalog:       s,
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-		GetTokenStore: func() *auth.TokenStore { return ts },
-	}
-}
-
 // TestPostgresLookupMultiReplica: two handler+catalog instances over one
 // database, no shared process state. A write via one must be visible to
 // LOOKUP on the other immediately; an archive via B must hide it from A.
 func TestPostgresLookupMultiReplica(t *testing.T) {
-	storeA, storeB := openStore(t), openStore(t)
-	if err := storeA.Reset(context.Background()); err != nil {
-		t.Fatalf("reset: %v", err)
+	// Two pools over one schema, not the shared cached store: the point is
+	// zero shared process state between the replicas.
+	storeA := openStore(t)
+	storeB, err := pgstore.Open(pgtest.SchemaDSN(t, pgSchema), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open replica B: %v", err)
 	}
-	const secret = "replica-secret"
-	ts := auth.NewTokenStore(map[string]auth.Token{
-		protocol.HashToken(secret): {Paths: []string{"/**"}, Operations: []string{"publish"}},
+	t.Cleanup(func() {
+		if err := storeB.Close(); err != nil {
+			t.Errorf("close replica B: %v", err)
+		}
 	})
-	replicaA, replicaB := replicaHandler(t, storeA, ts), replicaHandler(t, storeB, ts)
+	secret := storetest.HandlerToken
+	replicaA := storetest.NewHandler(storetest.LookupBackend{Store: storeA, Catalog: storeA})
+	replicaB := storetest.NewHandler(storetest.LookupBackend{Store: storeB, Catalog: storeB})
 
-	pub := send(t, replicaA, "PUBLISH /notes/auth.md\n---\nauth: "+secret+"\ntags: middleware,go\n---\n# Auth Middleware\n")
+	pub := storetest.SendRaw(t, replicaA, "PUBLISH /notes/auth.md\n---\nauth: "+secret+"\ntags: middleware,go\n---\n# Auth Middleware\n")
 	if pub.Status != protocol.StatusCreated {
 		t.Fatalf("publish via A: status = %q, want created", pub.Status)
 	}
 
-	look := send(t, replicaB, "LOOKUP /\n---\nquery: middleware\n---\n")
+	look := storetest.SendRaw(t, replicaB, "LOOKUP /\n---\nquery: middleware\n---\n")
 	if look.Status != protocol.StatusOK || look.Metadata["matches"] != "1" {
 		t.Fatalf("lookup via B: status %q matches %q, want ok/1", look.Status, look.Metadata["matches"])
 	}
@@ -142,11 +95,11 @@ func TestPostgresLookupMultiReplica(t *testing.T) {
 		t.Errorf("lookup via B missing the document A published:\n%s", look.Body)
 	}
 
-	arch := send(t, replicaB, "ARCHIVE /notes/auth.md\n---\nauth: "+secret+"\n---\n")
+	arch := storetest.SendRaw(t, replicaB, "ARCHIVE /notes/auth.md\n---\nauth: "+secret+"\n---\n")
 	if arch.Status != protocol.StatusOK {
 		t.Fatalf("archive via B: status = %q, want ok", arch.Status)
 	}
-	look = send(t, replicaA, "LOOKUP /\n---\nquery: middleware\n---\n")
+	look = storetest.SendRaw(t, replicaA, "LOOKUP /\n---\nquery: middleware\n---\n")
 	if look.Metadata["matches"] != "0" {
 		t.Errorf("lookup via A after archive via B: matches = %q, want 0", look.Metadata["matches"])
 	}
@@ -159,9 +112,6 @@ func TestPostgresLookupMultiReplica(t *testing.T) {
 func TestPostgresCatalogBackfill(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
-	if err := s.Reset(ctx); err != nil {
-		t.Fatalf("reset: %v", err)
-	}
 	if _, err := s.WriteVersion("/live.md", 0, []byte("# Live\n"), map[string]string{"tags": "go"}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -174,7 +124,7 @@ func TestPostgresCatalogBackfill(t *testing.T) {
 
 	// Simulate the pre-catalog world: rows exist for documents and versions
 	// but the catalog table is empty.
-	db, err := sql.Open("pgx", testDSN(t))
+	db, err := sql.Open("pgx", pgtest.SchemaDSN(t, pgSchema))
 	if err != nil {
 		t.Fatalf("open raw db: %v", err)
 	}
@@ -218,9 +168,6 @@ func TestPostgresCatalogBackfill(t *testing.T) {
 func TestPostgresCatalogBackfillBatches(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
-	if err := s.Reset(ctx); err != nil {
-		t.Fatalf("reset: %v", err)
-	}
 	const docs = 120
 	for i := range docs {
 		path := fmt.Sprintf("/batch/doc-%03d.md", i)
@@ -228,7 +175,7 @@ func TestPostgresCatalogBackfillBatches(t *testing.T) {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
-	db, err := sql.Open("pgx", testDSN(t))
+	db, err := sql.Open("pgx", pgtest.SchemaDSN(t, pgSchema))
 	if err != nil {
 		t.Fatalf("open raw db: %v", err)
 	}
@@ -268,9 +215,33 @@ func TestPostgresDifferential(t *testing.T) {
 // FuzzPostgresDifferential lets the fuzzer pick seeds for deeper runs. Fuzz
 // workers share one database, so: go test -run '^$' -fuzz FuzzPostgresDifferential -fuzztime 2m -parallel 1
 func FuzzPostgresDifferential(f *testing.F) {
+	pgtest.RequireSerialFuzz(f)
 	s := openStore(f)
 	f.Add(int64(99))
 	f.Fuzz(func(t *testing.T, seed int64) {
 		storetest.RunDifferentialSeed(t, storetest.FileBackend(t), pgBackend(t, s), seed, storetest.DifferentialConfig{Ops: 100})
 	})
+}
+
+// TestPostgresHandlerDifferential is the handler-level parity gate: the same
+// request sequence through a file-backed and a pg-backed Handler.
+func TestPostgresHandlerDifferential(t *testing.T) {
+	s := openStore(t)
+	ref := func(t *testing.T) storetest.LookupBackend { return storetest.FileBackend(t) }
+	cand := func(t *testing.T) storetest.LookupBackend { return pgBackend(t, s) }
+	storetest.RunHandlerDifferential(t, ref, cand, storetest.DifferentialConfig{})
+}
+
+// FuzzPostgresHandlerDifferential: deeper handler-level runs; -parallel 1.
+func FuzzPostgresHandlerDifferential(f *testing.F) {
+	pgtest.RequireSerialFuzz(f)
+	s := openStore(f)
+	f.Add(int64(7))
+	f.Fuzz(func(t *testing.T, seed int64) {
+		storetest.RunHandlerDifferentialSeed(t, storetest.FileBackend(t), pgBackend(t, s), seed, storetest.DifferentialConfig{Ops: 100})
+	})
+}
+
+func BenchmarkPostgresHandler(b *testing.B) {
+	storetest.RunHandlerBenchmarks(b, func(t testing.TB) storetest.LookupBackend { return pgBackend(t, openStore(t)) })
 }

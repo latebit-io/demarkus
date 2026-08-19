@@ -235,11 +235,10 @@ func main() {
 	}
 
 	h := &handler.Handler{
-		ContentDir: cfg.ContentDir,
-		Store:      docStore,
-		Catalog:    cat,
-		Logger:     logger,
-		ReadOnly:   cfg.ReadOnly,
+		Store:    docStore,
+		Catalog:  cat,
+		Logger:   logger,
+		ReadOnly: cfg.ReadOnly,
 		GetTokenStore: func() *auth.TokenStore {
 			tokenMu.RLock()
 			defer tokenMu.RUnlock()

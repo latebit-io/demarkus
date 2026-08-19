@@ -140,6 +140,11 @@ func (s *Store) Close() error { return s.db.Close() }
 // Reset destroys every document and version. It exists for the conformance
 // suite, which needs a fresh store per run; never call it on live data.
 func (s *Store) Reset(ctx context.Context) error {
+	// TRUNCATE, not DELETE: DELETE leaves dead tuples that bloat the catalog
+	// scan and distort benchmarks until autovacuum runs. Bounded: TRUNCATE
+	// takes ACCESS EXCLUSIVE and would wait forever on a leaked transaction.
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 	if _, err := s.db.ExecContext(ctx, `TRUNCATE documents, versions, catalog`); err != nil {
 		return fmt.Errorf("reset: %w", err)
 	}

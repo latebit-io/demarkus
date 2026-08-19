@@ -120,7 +120,7 @@ func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
 			results = append(results, Result{Entry: *e})
 			continue
 		}
-		if score := matchScore(e, terms); score > 0 {
+		if score := MatchScore(e, terms); score > 0 {
 			results = append(results, Result{Entry: *e, Score: score})
 		}
 	}
@@ -148,16 +148,23 @@ func Tokenize(s string) []string {
 	return out
 }
 
-// matchScore counts how many distinct query terms appear in the entry's tags
-// (exact, case-insensitive) or title (substring, case-insensitive).
-func matchScore(e *Entry, terms []string) int {
+// MatchScore counts how many distinct query terms appear in the entry's tags
+// (exact, case-insensitive) or title (substring, case-insensitive); terms are
+// lowercased and deduplicated here so every caller scores alike.
+func MatchScore(e *Entry, terms []string) int {
 	lowerTitle := strings.ToLower(e.Title)
 	lowerTags := make(map[string]bool, len(e.Tags))
 	for _, t := range e.Tags {
 		lowerTags[strings.ToLower(t)] = true
 	}
 	score := 0
+	seen := make(map[string]bool, len(terms))
 	for _, term := range terms {
+		term = strings.ToLower(strings.TrimSpace(term))
+		if term == "" || seen[term] {
+			continue
+		}
+		seen[term] = true
 		if lowerTags[term] || (lowerTitle != "" && strings.Contains(lowerTitle, term)) {
 			score++
 		}

@@ -92,9 +92,8 @@ type LookupCatalog interface {
 	Remove(docPath string)
 }
 
-// Handler serves markdown files from a content directory.
+// Handler serves the Mark protocol over a DocumentStore.
 type Handler struct {
-	ContentDir    string
 	Store         DocumentStore
 	Catalog       LookupCatalog           // LOOKUP index; nil disables LOOKUP and catalog updates
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied

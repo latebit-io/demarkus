@@ -6,9 +6,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/auth"
-	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
 // lookupReq builds a LOOKUP request with the given metadata lines.
@@ -28,21 +26,34 @@ func sendLookup(t *testing.T, h *Handler, request string) protocol.Response {
 	return resp
 }
 
-// lookupHandler returns a handler whose catalog holds the given entries and
-// whose store is rooted at an empty temp dir (so scope "/" needs no fixtures).
-func lookupHandler(t *testing.T, entries ...*catalog.Entry) *Handler {
-	t.Helper()
-	cat := catalog.New()
-	for _, e := range entries {
-		cat.Set(e)
-	}
-	return &Handler{ContentDir: t.TempDir(), Store: store.New(t.TempDir()), Catalog: cat, Logger: discardLogger}
+// seedDoc is one document to publish before a LOOKUP test: path and the
+// publisher metadata the catalog derives its entry from.
+type seedDoc struct {
+	path string
+	meta map[string]string
 }
 
-func TestHandleLookupBasic(t *testing.T) {
-	h := lookupHandler(t,
-		&catalog.Entry{Path: "/docs/auth.md", Tags: []string{"auth", "go"}, Title: "Auth design", Importance: 0.9},
-		&catalog.Entry{Path: "/docs/misc.md", Tags: []string{"misc"}, Title: "Unrelated", Importance: 0.5},
+// lookupHandler returns a handler over b with docs published through the
+// store and registered in the catalog the way the handler's PUBLISH path
+// does, so the test means the same thing on every backend.
+func lookupHandler(t *testing.T, b backend, docs ...seedDoc) *Handler {
+	t.Helper()
+	for _, d := range docs {
+		doc, err := b.Store.WriteVersion(d.path, -1, []byte("# "+d.path+"\n"), d.meta)
+		if err != nil {
+			t.Fatalf("seed %s: %v", d.path, err)
+		}
+		b.Catalog.Put(d.path, doc.Metadata, doc.Content, doc.Modified)
+	}
+	return newHandler(b, nil)
+}
+
+func TestHandleLookupBasic(t *testing.T) { forEachBackend(t, testHandleLookupBasic) }
+
+func testHandleLookupBasic(t *testing.T, newBackend backendFactory) {
+	h := lookupHandler(t, newBackend(t),
+		seedDoc{"/docs/auth.md", map[string]string{"tags": "auth, go", "title": "Auth design", "importance": "0.9"}},
+		seedDoc{"/docs/misc.md", map[string]string{"tags": "misc", "title": "Unrelated", "importance": "0.5"}},
 	)
 	resp := sendLookup(t, h, lookupReq("/", "query: auth"))
 
@@ -66,8 +77,10 @@ func TestHandleLookupBasic(t *testing.T) {
 	}
 }
 
-func TestHandleLookupValidation(t *testing.T) {
-	h := lookupHandler(t, &catalog.Entry{Path: "/a.md", Tags: []string{"go"}})
+func TestHandleLookupValidation(t *testing.T) { forEachBackend(t, testHandleLookupValidation) }
+
+func testHandleLookupValidation(t *testing.T, newBackend backendFactory) {
+	h := lookupHandler(t, newBackend(t), seedDoc{"/a.md", map[string]string{"tags": "go"}})
 
 	tests := []struct {
 		name   string
@@ -92,8 +105,10 @@ func TestHandleLookupValidation(t *testing.T) {
 	}
 }
 
-func TestHandleLookupEmptyResults(t *testing.T) {
-	h := lookupHandler(t, &catalog.Entry{Path: "/a.md", Tags: []string{"go"}})
+func TestHandleLookupEmptyResults(t *testing.T) { forEachBackend(t, testHandleLookupEmptyResults) }
+
+func testHandleLookupEmptyResults(t *testing.T, newBackend backendFactory) {
+	h := lookupHandler(t, newBackend(t), seedDoc{"/a.md", map[string]string{"tags": "go"}})
 	resp := sendLookup(t, h, lookupReq("/", "query: kubernetes"))
 
 	if resp.Status != protocol.StatusOK {
@@ -108,8 +123,10 @@ func TestHandleLookupEmptyResults(t *testing.T) {
 	}
 }
 
-func TestHandleLookupScopeNotFound(t *testing.T) {
-	h := lookupHandler(t, &catalog.Entry{Path: "/a.md", Tags: []string{"go"}})
+func TestHandleLookupScopeNotFound(t *testing.T) { forEachBackend(t, testHandleLookupScopeNotFound) }
+
+func testHandleLookupScopeNotFound(t *testing.T, newBackend backendFactory) {
+	h := lookupHandler(t, newBackend(t), seedDoc{"/a.md", map[string]string{"tags": "go"}})
 	resp := sendLookup(t, h, lookupReq("/nope/", "query: go"))
 	if resp.Status != protocol.StatusNotFound {
 		t.Errorf("status = %q, want not-found", resp.Status)
@@ -117,18 +134,20 @@ func TestHandleLookupScopeNotFound(t *testing.T) {
 }
 
 func TestHandleLookupNotConfigured(t *testing.T) {
-	h := &Handler{ContentDir: t.TempDir(), Store: store.New(t.TempDir()), Logger: discardLogger}
+	h := &Handler{Store: fileBackend(t).Store, Logger: discardLogger}
 	resp := sendLookup(t, h, lookupReq("/", "query: go"))
 	if resp.Status != protocol.StatusServerError {
 		t.Errorf("status = %q, want server-error", resp.Status)
 	}
 }
 
-func TestHandleLookupLimit(t *testing.T) {
-	h := lookupHandler(t,
-		&catalog.Entry{Path: "/a.md", Tags: []string{"go"}, Importance: 0.9},
-		&catalog.Entry{Path: "/b.md", Tags: []string{"go"}, Importance: 0.8},
-		&catalog.Entry{Path: "/c.md", Tags: []string{"go"}, Importance: 0.7},
+func TestHandleLookupLimit(t *testing.T) { forEachBackend(t, testHandleLookupLimit) }
+
+func testHandleLookupLimit(t *testing.T, newBackend backendFactory) {
+	h := lookupHandler(t, newBackend(t),
+		seedDoc{"/a.md", map[string]string{"tags": "go", "importance": "0.9"}},
+		seedDoc{"/b.md", map[string]string{"tags": "go", "importance": "0.8"}},
+		seedDoc{"/c.md", map[string]string{"tags": "go", "importance": "0.7"}},
 	)
 	resp := sendLookup(t, h, lookupReq("/", "query: go", "limit: 2"))
 	if resp.Metadata["matches"] != "2" {
@@ -139,6 +158,10 @@ func TestHandleLookupLimit(t *testing.T) {
 // TestHandleLookupReadAuthFiltering is the leakage test: protected documents
 // the requester cannot read must never appear in results.
 func TestHandleLookupReadAuthFiltering(t *testing.T) {
+	forEachBackend(t, testHandleLookupReadAuthFiltering)
+}
+
+func testHandleLookupReadAuthFiltering(t *testing.T, newBackend backendFactory) {
 	const readSecret = "read-secret"
 	ts := auth.NewTokenStore(map[string]auth.Token{
 		protocol.HashToken(readSecret): {
@@ -146,9 +169,9 @@ func TestHandleLookupReadAuthFiltering(t *testing.T) {
 			Operations: []string{"read"},
 		},
 	})
-	h := lookupHandler(t,
-		&catalog.Entry{Path: "/public/doc.md", Tags: []string{"auth"}, Title: "Public"},
-		&catalog.Entry{Path: "/private/secret.md", Tags: []string{"auth"}, Title: "Secret"},
+	h := lookupHandler(t, newBackend(t),
+		seedDoc{"/public/doc.md", map[string]string{"tags": "auth", "title": "Public"}},
+		seedDoc{"/private/secret.md", map[string]string{"tags": "auth", "title": "Secret"}},
 	)
 	h.GetTokenStore = func() *auth.TokenStore { return ts }
 
@@ -189,7 +212,7 @@ func mustStatus(t *testing.T, out io.Reader) string {
 
 // catalogHandler returns a handler with a live catalog and a publish token,
 // plus the token's secret, for tests that drive the write paths.
-func catalogHandler(t *testing.T) (h *Handler, secret string) {
+func catalogHandler(t *testing.T, b backend) (h *Handler, secret string) {
 	t.Helper()
 	secret = "write-secret"
 	ts := auth.NewTokenStore(map[string]auth.Token{
@@ -198,11 +221,9 @@ func catalogHandler(t *testing.T) (h *Handler, secret string) {
 			Operations: []string{"publish"},
 		},
 	})
-	dir := t.TempDir()
 	return &Handler{
-		ContentDir:    dir,
-		Store:         store.New(dir),
-		Catalog:       catalog.New(),
+		Store:         b.Store,
+		Catalog:       b.Catalog,
 		Logger:        discardLogger,
 		GetTokenStore: func() *auth.TokenStore { return ts },
 	}, secret
@@ -210,8 +231,10 @@ func catalogHandler(t *testing.T) (h *Handler, secret string) {
 
 // TestHandleLookupCatalogUpdates verifies PUBLISH/ARCHIVE keep the catalog in
 // sync through the handler's write paths.
-func TestHandleLookupCatalogUpdates(t *testing.T) {
-	h, secret := catalogHandler(t)
+func TestHandleLookupCatalogUpdates(t *testing.T) { forEachBackend(t, testHandleLookupCatalogUpdates) }
+
+func testHandleLookupCatalogUpdates(t *testing.T, newBackend backendFactory) {
+	h, secret := catalogHandler(t, newBackend(t))
 
 	// Not present before publishing.
 	if resp := sendLookup(t, h, lookupReq("/", "query: middleware")); resp.Metadata["matches"] != "0" {
@@ -253,7 +276,11 @@ func TestHandleLookupCatalogUpdates(t *testing.T) {
 // re-indexed the catalog from the request's metadata alone, dropping the
 // document's tags and importance so it fell out of LOOKUP entirely.
 func TestHandleLookupCatalogSurvivesAppend(t *testing.T) {
-	h, secret := catalogHandler(t)
+	forEachBackend(t, testHandleLookupCatalogSurvivesAppend)
+}
+
+func testHandleLookupCatalogSurvivesAppend(t *testing.T, newBackend backendFactory) {
+	h, secret := catalogHandler(t, newBackend(t))
 
 	// "rbac" appears only in the tags, never in the H1: a title-matching query
 	// would pass through the catalog's H1 fallback even with every tag gone.
@@ -291,12 +318,14 @@ func TestHandleLookupCatalogSurvivesAppend(t *testing.T) {
 	}
 }
 
-func TestHandleLookupMatchAll(t *testing.T) {
+func TestHandleLookupMatchAll(t *testing.T) { forEachBackend(t, testHandleLookupMatchAll) }
+
+func testHandleLookupMatchAll(t *testing.T, newBackend backendFactory) {
 	// "*" passes the length validation and returns the whole catalog under
 	// the scope in importance order — the universe-browser query.
-	h := lookupHandler(t,
-		&catalog.Entry{Path: "/hub.md", Tags: []string{"hub"}, Title: "Hub", Importance: 0.9},
-		&catalog.Entry{Path: "/note.md", Tags: []string{"misc"}, Title: "Note", Importance: 0.3},
+	h := lookupHandler(t, newBackend(t),
+		seedDoc{"/hub.md", map[string]string{"tags": "hub", "title": "Hub", "importance": "0.9"}},
+		seedDoc{"/note.md", map[string]string{"tags": "misc", "title": "Note", "importance": "0.3"}},
 	)
 	resp := sendLookup(t, h, lookupReq("/", "query: '*'"))
 	if resp.Status != protocol.StatusOK {
