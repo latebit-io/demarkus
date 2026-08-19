@@ -237,6 +237,10 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 	}
 	walkErr := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			if path == absRoot {
+				// An unreadable root is not a partial walk: nothing was indexed.
+				return fmt.Errorf("walk content root: %w", err)
+			}
 			return skip(path, err)
 		}
 		if d.IsDir() {

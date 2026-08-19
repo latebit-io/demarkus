@@ -88,3 +88,26 @@ func TestBuildHashIndex_ReportsSkippedEntries(t *testing.T) {
 		t.Errorf("LookupHash after partial walk = (%q, %v), want /good.md", p, ok)
 	}
 }
+
+// TestBuildHashIndex_UnreadableRootIsFatal pins that a root the walk cannot
+// open is a real error, not a partial walk with zero entries.
+func TestBuildHashIndex_UnreadableRootIsFatal(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	root := t.TempDir()
+	s := New(root)
+	if _, err := s.Write("/doc.md", []byte("x"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+
+	err := s.BuildHashIndex()
+	var partial *PartialWalkError
+	if err == nil || errors.As(err, &partial) {
+		t.Fatalf("BuildHashIndex err = %v, want a non-partial error", err)
+	}
+}
