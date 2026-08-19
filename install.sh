@@ -34,6 +34,8 @@
 set -euo pipefail
 
 GITHUB_REPO="latebit-io/demarkus"
+# Bound every GitHub call so a stalled request cannot hang an install forever.
+CURL_TIMEOUT_ARGS=(--connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2)
 INSTALL_DIR="/usr/local/bin"
 
 # If demarkus is already installed somewhere, use that directory so
@@ -1305,7 +1307,7 @@ fetch_library_binary() {
   local tmpdir="$2"
 
   if [ -z "$lib_version" ]; then
-    lib_version=$(curl -fsSL "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
+    lib_version=$(curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "https://api.github.com/repos/${LIBRARY_REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/')
   fi
   if [ -z "$lib_version" ]; then
     log_error "Could not resolve the latest demarkus-library release (pin one with --library-version)"
@@ -1313,11 +1315,11 @@ fetch_library_binary() {
   fi
   local lib_asset="demarkus-library_${lib_version}_${OS}_${GOARCH}.tar.gz"
   local lib_url="https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/${lib_asset}"
-  if ! curl -fsSL "$lib_url" -o "${tmpdir}/${lib_asset}"; then
+  if ! curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "$lib_url" -o "${tmpdir}/${lib_asset}"; then
     log_error "Could not download ${lib_asset}"
     exit 1
   fi
-  if curl -fsSL "https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/demarkus-library_checksums.txt" -o "${tmpdir}/demarkus-library_checksums.txt"; then
+  if curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/demarkus-library_checksums.txt" -o "${tmpdir}/demarkus-library_checksums.txt"; then
     (cd "$tmpdir" && grep "$lib_asset" demarkus-library_checksums.txt | sha256sum -c - >/dev/null) || {
       log_error "Checksum verification failed for ${lib_asset}"
       exit 1
@@ -2115,7 +2117,12 @@ do_update() {
   fi
 
   if [ "$current_version" = "$version" ]; then
-    log_info "Already at v${version}, nothing to do."
+    log_info "Server already at v${version}; checking stack components."
+    local tmpdir
+    tmpdir=$(mktemp -d) || { log_error "Failed to create temporary directory"; exit 1; }
+    update_stack_components "$(fetch_latest_version "tools")" "$library_version" "$tmpdir"
+    rm -rf "$tmpdir"
+    exit_on_stack_failure
     return
   fi
 
@@ -2144,6 +2151,16 @@ do_update() {
   fi
 
   _do_update_inner --from "$current_version" --to "$version" --library-version "$library_version"
+}
+
+# update_stack_components refreshes both optional components. Shared by the
+# upgrade path and the server-already-current path, where a stale library is
+# still worth updating.
+update_stack_components() {
+  local tools_version="$1" library_version="$2" tmpdir="$3"
+
+  update_stack_component "demarkus-broker" "$BROKER_SERVICE" "$tools_version" "$tmpdir"
+  update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "$library_version" "$tmpdir"
 }
 
 # update_stack_component refreshes an installed single-host component in place:
@@ -2175,8 +2192,20 @@ update_stack_component() {
       log_info "${binary} updated to ${version}"
       ;;
   esac
-  $SUDO systemctl try-restart "$service" 2>/dev/null \
-    || log_warn "Could not restart ${service}; restart it by hand"
+  if ! $SUDO systemctl try-restart "$service" 2>/dev/null; then
+    log_warn "Could not restart ${service}; the new binary is installed but not running"
+    _STACK_RESTART_FAILED=1
+  fi
+}
+
+# exit_on_stack_failure turns a swallowed restart failure into a nonzero exit:
+# the binary is in place but the old one is still serving, which must not look
+# like a clean update to whatever ran it.
+exit_on_stack_failure() {
+  if [ "${_STACK_RESTART_FAILED:-0}" = "1" ]; then
+    log_error "A stack component was updated but could not be restarted"
+    exit 1
+  fi
 }
 
 _do_update_inner() {
@@ -2225,8 +2254,7 @@ _do_update_inner() {
 
   # Installed once by install/install-stack and never refreshed here, so a
   # single-host deployment drifted behind for as long as it ran.
-  update_stack_component "demarkus-broker" "$BROKER_SERVICE" "$tools_version" "$_TMPDIR"
-  update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "$library_version" "$_TMPDIR"
+  update_stack_components "$tools_version" "$library_version" "$_TMPDIR"
 
   # Run migrations before replacing binaries
   migrate "$from" "$to"
@@ -2359,6 +2387,7 @@ RestrictSUIDSGID=yes
   fi
 
   log_step "Updated to v${to}"
+  exit_on_stack_failure
 }
 
 do_uninstall() {
@@ -2533,11 +2562,13 @@ main() {
       echo "  --tls-key FILE     Path to TLS private key (PEM)"
       echo "  --root DIR         Content directory (default: platform-specific)"
       echo "  --version X.Y.Z    Install specific version (default: latest)"
+      echo "  --library-version X.Y.Z  Reading-room version (default: latest)"
       echo "  --client-only      Only install the client binary"
       echo "  --no-tls           Skip TLS setup"
       echo ""
       echo "Update options:"
       echo "  --version X.Y.Z    Update to specific version (default: latest)"
+      echo "  --library-version X.Y.Z  Reading-room version (default: latest)"
       echo ""
       echo "Uninstall options:"
       echo "  --keep-data        Don't remove content directory"

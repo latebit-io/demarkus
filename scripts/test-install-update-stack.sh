@@ -79,14 +79,31 @@ update_stack_component "demarkus-library" "demarkus-library" "0.23.2" "$TMP"
 grep -q "^fetch_library 0.23.2 " "$CALLS" || fail "pinned library version not passed through: $(cat "$CALLS")"
 rm -f "$INSTALL_DIR/demarkus-library"
 
-# 7. Non-linux hosts have no stack services.
+# 7. Default (empty) version reaches the resolver rather than being skipped.
+: > "$CALLS"
+touch "$INSTALL_DIR/demarkus-library"; chmod +x "$INSTALL_DIR/demarkus-library"
+update_stack_component "demarkus-library" "demarkus-library" "" "$TMP"
+grep -q "^fetch_library  " "$CALLS" || grep -q "^fetch_library $" "$CALLS" \
+  || grep -qE "^fetch_library( |$)" "$CALLS" || fail "empty version did not reach the resolver: $(cat "$CALLS")"
+
+# 8. A failed restart is recorded, not swallowed.
+: > "$CALLS"
+_STACK_RESTART_FAILED=0
+systemctl() { echo "systemctl $*" >> "$CALLS"; return 1; }
+update_stack_component "demarkus-library" "demarkus-library" "" "$TMP"
+[ "${_STACK_RESTART_FAILED:-0}" = "1" ] || fail "a failed restart must be recorded"
+systemctl() { echo "systemctl $*" >> "$CALLS"; }
+_STACK_RESTART_FAILED=0
+rm -f "$INSTALL_DIR/demarkus-library"
+
+# 9. Non-linux hosts have no stack services.
 : > "$CALLS"
 # shellcheck disable=SC2034  # consumed by the function sourced from install.sh
 PLATFORM="darwin"
 update_stack_component "demarkus-library" "demarkus-library" "" "$TMP"
 [ ! -s "$CALLS" ] || fail "stack update must be linux-only, got: $(cat "$CALLS")"
 
-# 8. install_binary_atomic must replace by rename, not write in place: writing
+# 10. install_binary_atomic must replace by rename, not write in place: writing
 # over a live executable fails with ETXTBSY. A rename gives dest a new inode;
 # an in-place copy keeps the old one, so the inode is the observable proof.
 eval "$(awk '/^install_binary_atomic\(\)/,/^\}$/' "$SRC")"
