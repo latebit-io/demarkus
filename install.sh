@@ -2118,10 +2118,12 @@ do_update() {
 
   if [ "$current_version" = "$version" ]; then
     log_info "Server already at v${version}; checking stack components."
-    local tmpdir
-    tmpdir=$(mktemp -d) || { log_error "Failed to create temporary directory"; exit 1; }
-    update_stack_components "$(fetch_latest_version "tools")" "$library_version" "$tmpdir"
-    rm -rf "$tmpdir"
+    # _TMPDIR, not a local: fetch_library_binary exits on a fatal download or
+    # checksum failure, and only the EXIT trap runs then.
+    _TMPDIR=$(mktemp -d) || { log_error "Failed to create temporary directory"; exit 1; }
+    update_stack_components "$(fetch_latest_version "tools")" "$library_version" "$_TMPDIR"
+    rm -rf "$_TMPDIR"
+    _TMPDIR=""
     exit_on_stack_failure
     return
   fi
