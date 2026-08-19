@@ -34,6 +34,7 @@ import (
 	"os"
 	slashpath "path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -177,10 +178,10 @@ func newVersionSymlinkTarget(base string, version int) string {
 type Store struct {
 	root   string
 	hashMu sync.RWMutex
-	// hashIdx: content hash → canonical request paths whose current body has
-	// that hash. LookupHash picks the smallest path, as pgstore's ORDER BY
-	// path does, so backends and a rebuilt index agree on shared bodies.
-	hashIdx map[string]map[string]struct{}
+	// hashIdx: content hash → sorted canonical request paths whose current
+	// body has that hash. LookupHash answers the smallest, as pgstore's ORDER
+	// BY path does, so backends and a rebuilt index agree on shared bodies.
+	hashIdx map[string][]string
 	// pathIdx: canonical request path → content hash. liveChildren also reads
 	// membership as "current, non-archived doc" for ListDir filtering, so
 	// keep membership semantics exact; a miss only degrades to a disk scan.
@@ -192,7 +193,7 @@ type Store struct {
 func New(root string) *Store {
 	return &Store{
 		root:    root,
-		hashIdx: make(map[string]map[string]struct{}),
+		hashIdx: make(map[string][]string),
 		pathIdx: make(map[string]string),
 	}
 }
@@ -273,7 +274,7 @@ func (s *Store) BuildHashIndex() error {
 	s.hashMu.Lock()
 	defer s.hashMu.Unlock()
 
-	s.hashIdx = make(map[string]map[string]struct{})
+	s.hashIdx = make(map[string][]string)
 	s.pathIdx = make(map[string]string)
 
 	return s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
@@ -286,12 +287,9 @@ func (s *Store) BuildHashIndex() error {
 // earlier hash it was indexed under. Caller holds hashMu.
 func (s *Store) indexLocked(reqPath, hash string) {
 	s.unindexLocked(reqPath)
-	paths, ok := s.hashIdx[hash]
-	if !ok {
-		paths = make(map[string]struct{})
-		s.hashIdx[hash] = paths
-	}
-	paths[reqPath] = struct{}{}
+	paths := s.hashIdx[hash]
+	i, _ := slices.BinarySearch(paths, reqPath)
+	s.hashIdx[hash] = slices.Insert(paths, i, reqPath)
 	s.pathIdx[reqPath] = hash
 }
 
@@ -302,11 +300,14 @@ func (s *Store) unindexLocked(reqPath string) {
 		return
 	}
 	delete(s.pathIdx, reqPath)
-	if paths := s.hashIdx[hash]; paths != nil {
-		delete(paths, reqPath)
-		if len(paths) == 0 {
-			delete(s.hashIdx, hash)
-		}
+	paths := s.hashIdx[hash]
+	if i, found := slices.BinarySearch(paths, reqPath); found {
+		paths = slices.Delete(paths, i, i+1)
+	}
+	if len(paths) == 0 {
+		delete(s.hashIdx, hash)
+	} else {
+		s.hashIdx[hash] = paths
 	}
 }
 
@@ -341,13 +342,10 @@ func (s *Store) WalkCurrent(fn func(CurrentDoc) error) error {
 func (s *Store) LookupHash(hash string) (string, bool) {
 	s.hashMu.RLock()
 	defer s.hashMu.RUnlock()
-	best := ""
-	for p := range s.hashIdx[hash] {
-		if best == "" || p < best {
-			best = p
-		}
+	if paths := s.hashIdx[hash]; len(paths) > 0 {
+		return paths[0], true
 	}
-	return best, best != ""
+	return "", false
 }
 
 // UpdateHashIndex adds or updates the hash index entry for a document.
@@ -795,11 +793,10 @@ func (s *Store) resolve(reqPath string) (string, error) {
 // CurrentVersion returns the latest version number for a document.
 // Returns 0 if no version history exists.
 func (s *Store) CurrentVersion(reqPath string) int {
-	if ContainsDotDot(reqPath) {
+	cleaned, err := RelPath(reqPath)
+	if err != nil {
 		return 0
 	}
-	cleaned := filepath.Clean(reqPath)
-	cleaned = strings.TrimLeft(cleaned, "/")
 	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
 	return highestPerDocVersion(versionsDir, filepath.Base(cleaned))
 }
@@ -880,12 +877,10 @@ func (s *Store) findVersionsPerDoc(versionsDir, base string) []VersionInfo {
 // getVersion retrieves a specific version of a document from the versions directory.
 // Uses resolve() for path validation — same security as all other path access.
 func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
-	// filepath.Join below would clean ".." away; reject it like resolve does.
-	if ContainsDotDot(reqPath) {
-		return nil, os.ErrNotExist
+	cleaned, err := RelPath(reqPath)
+	if err != nil {
+		return nil, err
 	}
-	cleaned := filepath.Clean(reqPath)
-	cleaned = strings.TrimLeft(cleaned, "/")
 	base := filepath.Base(cleaned)
 
 	dir := filepath.Dir(cleaned)
@@ -1010,23 +1005,25 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	if err := validateWrite(content, meta); err != nil {
 		return nil, err
 	}
-	if ContainsDotDot(reqPath) {
-		return nil, os.ErrNotExist
-	}
+	return s.write(reqPath, content, meta)
+}
 
-	cleaned := filepath.Clean(reqPath)
-	cleaned = strings.TrimLeft(cleaned, "/")
+// write is the validated core shared by Write and WriteVersion.
+func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*Document, error) {
+	cleaned, err := RelPath(reqPath)
+	if err != nil {
+		return nil, err
+	}
 	base := filepath.Base(cleaned)
 	dir := filepath.Dir(cleaned)
 
-	// Writing beneath a document is a topology collision, reported the same
-	// way as writing over a directory (pgstore.checkPathTopology agrees).
-	if anc := s.documentAncestor(cleaned); anc != "" {
-		return nil, fmt.Errorf("cannot publish %s: a document exists at ancestor /%s", reqPath, anc)
-	}
-
 	// Validate path stays within the store root (resolve handles traversal + symlinks).
 	if _, err := s.resolve(reqPath); err != nil {
+		if errors.Is(err, errUnderDocument) {
+			// Topology collision, same class as writing over a directory
+			// (pgstore.checkPathTopology agrees).
+			return nil, fmt.Errorf("cannot publish %s: a document exists at an ancestor", reqPath)
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, os.ErrNotExist
 		}
@@ -1285,7 +1282,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		return nil, os.ErrNotExist
 	}
 	if expectedVersion < 0 {
-		return s.Write(reqPath, content, meta)
+		return s.write(reqPath, content, meta)
 	}
 
 	current := s.CurrentVersion(reqPath)
@@ -1293,7 +1290,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		return &Document{Version: current}, ErrConflict
 	}
 
-	doc, err := s.Write(reqPath, content, meta)
+	doc, err := s.write(reqPath, content, meta)
 	if err != nil {
 		if errors.Is(err, ErrVersionExists) {
 			// Lost the O_EXCL race: another writer created the expected
@@ -1446,21 +1443,34 @@ func resolveNonExistent(path string) (string, error) {
 		return filepath.Abs(path)
 	}
 	// A non-directory ancestor (a document's current pointer) cannot have
-	// children: the path addresses nothing. Report ErrNotExist here rather
-	// than letting a later stat surface ENOTDIR as an internal error.
+	// children; surface that as ErrNotExist rather than a later ENOTDIR.
 	if len(tail) > 0 {
 		if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
-			return "", os.ErrNotExist
+			return "", errUnderDocument
 		}
 	}
 	return filepath.Join(append([]string{resolved}, tail...)...), nil
 }
+
+// errUnderDocument marks a path beneath a document. Readers see ErrNotExist;
+// write maps it to the topology collision error.
+var errUnderDocument = fmt.Errorf("%w: path is beneath a document", os.ErrNotExist)
 
 // CanonicalPath is the one spelling of a request path shared by every index
 // keyed on paths (hash index, catalog, pgstore rows): slash-cleaned, single
 // leading slash, root is "/". Callers reject traversal via ContainsDotDot.
 func CanonicalPath(reqPath string) string {
 	return slashpath.Clean("/" + reqPath)
+}
+
+// RelPath is the storage-relative form of a request path: CanonicalPath
+// without the leading slash, "" for the root. ".." is rejected with
+// os.ErrNotExist so traversal never reaches a backend.
+func RelPath(reqPath string) (string, error) {
+	if ContainsDotDot(reqPath) {
+		return "", os.ErrNotExist
+	}
+	return strings.TrimPrefix(CanonicalPath(reqPath), "/"), nil
 }
 
 // ContainsDotDot reports whether the path contains a ".." segment. Every
@@ -1621,19 +1631,6 @@ func validateWrite(content []byte, meta map[string]string) error {
 		return err
 	}
 	return ValidateBody(content)
-}
-
-// documentAncestor returns the nearest proper ancestor of cleaned (no leading
-// slash) that is a document, archived or not, or "" when none is.
-func (s *Store) documentAncestor(cleaned string) string {
-	parts := strings.Split(cleaned, "/")
-	for i := 1; i < len(parts); i++ {
-		anc := strings.Join(parts[:i], "/")
-		if s.CurrentVersion(anc) > 0 {
-			return anc
-		}
-	}
-	return ""
 }
 
 // validateMeta checks metadata is safe for frontmatter serialization. Defense

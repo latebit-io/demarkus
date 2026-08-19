@@ -1,9 +1,11 @@
 package storetest
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
@@ -202,39 +204,72 @@ func testLookupMaxCap(t *testing.T, b LookupBackend) {
 	assertLookup(t, b, "go", catalog.Options{Max: 0}, "/m1.md", "/m2.md", "/m3.md")
 }
 
-// catalogPublish writes a version and updates the catalog like the handler's
-// PUBLISH path.
-func catalogPublish(t *testing.T, b LookupBackend, path, body string, meta map[string]string) {
-	t.Helper()
-	doc, err := b.Store.WriteVersion(path, -1, []byte(body), meta)
-	if err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
-	b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
+// FileBackend is the file store paired with the in-memory catalog: the
+// reference backend every other one is compared against.
+func FileBackend(t testing.TB) LookupBackend {
+	return LookupBackend{Store: store.New(t.TempDir()), Catalog: catalog.New()}
 }
 
-// catalogArchive archives a document and updates the catalog like the
-// handler's ARCHIVE path.
-func catalogArchive(t *testing.T, b LookupBackend, path string) {
-	t.Helper()
+// The *Into helpers drive a backend exactly as the handler's write paths do
+// (store op, then catalog maintenance) and return the store's error; the
+// conformance and differential suites share them so they cannot drift.
+
+func publishInto(b LookupBackend, path string, expected int, body []byte, meta map[string]string) (*store.Document, error) {
+	doc, err := b.Store.WriteVersion(path, expected, body, meta)
+	if err == nil {
+		b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
+	}
+	return doc, err
+}
+
+func appendInto(b LookupBackend, path string, expected int, body []byte, meta map[string]string) (*store.Document, error) {
+	doc, err := b.Store.Append(path, expected, body, meta)
+	if err == nil {
+		b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
+	}
+	return doc, err
+}
+
+func archiveInto(b LookupBackend, path string) error {
 	if err := b.Store.Archive(path, true); err != nil {
-		t.Fatalf("archive %s: %v", path, err)
+		return err
 	}
 	b.Catalog.Remove(path)
+	return nil
 }
 
-// catalogUnarchive unarchives and re-registers a document like the handler's
-// empty-body PUBLISH path.
-func catalogUnarchive(t *testing.T, b LookupBackend, path string) {
-	t.Helper()
+// unarchiveInto mirrors the handler's empty-body PUBLISH path.
+func unarchiveInto(b LookupBackend, path string) error {
 	if err := b.Store.Archive(path, false); err != nil {
-		t.Fatalf("unarchive %s: %v", path, err)
+		return err
 	}
 	doc, err := b.Store.Get(path, 0)
 	if err != nil {
-		t.Fatalf("get after unarchive %s: %v", path, err)
+		return fmt.Errorf("get after unarchive: %w", err)
 	}
 	b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
+	return nil
+}
+
+func catalogPublish(t *testing.T, b LookupBackend, path, body string, meta map[string]string) {
+	t.Helper()
+	if _, err := publishInto(b, path, -1, []byte(body), meta); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func catalogArchive(t *testing.T, b LookupBackend, path string) {
+	t.Helper()
+	if err := archiveInto(b, path); err != nil {
+		t.Fatalf("archive %s: %v", path, err)
+	}
+}
+
+func catalogUnarchive(t *testing.T, b LookupBackend, path string) {
+	t.Helper()
+	if err := unarchiveInto(b, path); err != nil {
+		t.Fatalf("unarchive %s: %v", path, err)
+	}
 }
 
 // mustLookup runs a lookup, failing the test on error.

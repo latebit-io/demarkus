@@ -71,6 +71,8 @@ type DocumentStore interface {
 	IsDir(reqPath string) (bool, error)
 	Versions(reqPath string) ([]store.VersionInfo, error)
 	CurrentVersion(reqPath string) int
+	// LookupHash resolves a live document by body hash; when several share
+	// the body, the smallest path wins.
 	LookupHash(hash string) (string, bool)
 	VerifyChain(reqPath string) error
 	// Writes surface the sentinels the handlers map to protocol statuses:

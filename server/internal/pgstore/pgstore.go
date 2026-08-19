@@ -146,20 +146,10 @@ func (s *Store) Reset(ctx context.Context) error {
 	return nil
 }
 
-// canonical normalizes a request path to the storage key: CanonicalPath
-// without the leading slash, "" for the root. ".." is rejected with
-// os.ErrNotExist rather than cleaned away, matching the file store.
-func canonical(reqPath string) (string, error) {
-	if store.ContainsDotDot(reqPath) {
-		return "", os.ErrNotExist
-	}
-	return strings.TrimPrefix(store.CanonicalPath(reqPath), "/"), nil
-}
-
 // Get retrieves a document. version 0 means current. Missing documents and
 // directory paths return os.ErrNotExist.
 func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
-	p, err := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +186,7 @@ func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
 // beneath it (and that is not the root) returns os.ErrNotExist, as does a
 // document path.
 func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]store.DirEntry, error) {
-	p, err := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +283,7 @@ func hiddenName(name string) bool {
 // other path is a directory when documents exist beneath it. A document
 // path reports false; a missing path returns os.ErrNotExist.
 func (s *Store) IsDir(reqPath string) (bool, error) {
-	p, err := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return false, err
 	}
@@ -328,7 +318,7 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 // Versions returns the version history newest first, or os.ErrNotExist for
 // a document with no history.
 func (s *Store) Versions(reqPath string) ([]store.VersionInfo, error) {
-	p, err := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +353,7 @@ func (s *Store) Versions(reqPath string) ([]store.VersionInfo, error) {
 // database failure is logged before reporting absence; otherwise an outage
 // would be indistinguishable from a missing document.
 func (s *Store) CurrentVersion(reqPath string) int {
-	p, err := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return 0
 	}
@@ -414,7 +404,7 @@ func (s *Store) LookupHash(hash string) (string, bool) {
 // VerifyChain checks previous-hash integrity across the retained versions,
 // oldest to newest, exactly as the file store does.
 func (s *Store) VerifyChain(reqPath string) error {
-	p, err := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return err
 	}
@@ -479,7 +469,7 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 	if err := store.ValidateWrite(content, meta); err != nil {
 		return nil, err
 	}
-	p, err := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return nil, err
 	}
@@ -768,7 +758,7 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 // stays valid because only successors hash their predecessor and the tip
 // has no successor yet.
 func (s *Store) Archive(reqPath string, archived bool) error {
-	p, err := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return err
 	}

@@ -16,10 +16,12 @@ import (
 
 // DifferentialConfig tunes a differential run. Zero values take defaults.
 type DifferentialConfig struct {
-	Seeds         []int64 // one subtest per seed; default 12 fixed seeds
-	Ops           int     // operations per seed; default 200
-	SnapshotEvery int     // full-state comparison cadence in ops; default 10
+	Seeds []int64 // one subtest per seed; default 12 fixed seeds
+	Ops   int     // operations per seed; default 200
 }
+
+// snapshotEvery is the full-state comparison cadence in ops.
+const snapshotEvery = 10
 
 // RunDifferential drives one seeded random op sequence through a reference and
 // a candidate backend, comparing every return and periodically the full state.
@@ -42,22 +44,16 @@ func RunDifferentialSeed(t *testing.T, ref, cand LookupBackend, seed int64, cfg 
 	if cfg.Ops <= 0 {
 		cfg.Ops = 200
 	}
-	if cfg.SnapshotEvery <= 0 {
-		cfg.SnapshotEvery = 10
-	}
 	d := &differential{t: t, ref: ref, cand: cand, rng: rand.New(rand.NewSource(seed)), seed: seed}
 	for i := range cfg.Ops {
 		op := d.nextOp()
 		d.history = append(d.history, op.String())
 		d.apply(op)
+		if !t.Failed() && ((i+1)%snapshotEvery == 0 || i == cfg.Ops-1) {
+			d.compareSnapshots()
+		}
 		if t.Failed() {
 			return
-		}
-		if (i+1)%cfg.SnapshotEvery == 0 || i == cfg.Ops-1 {
-			d.compareSnapshots()
-			if t.Failed() {
-				return
-			}
 		}
 	}
 }
@@ -91,17 +87,15 @@ type op struct {
 	okf     bool
 }
 
+func (k opKind) String() string {
+	return [...]string{"write", "append", "archive", "unarchive"}[k]
+}
+
 func (o op) String() string {
-	switch o.kind {
-	case opWrite:
-		return fmt.Sprintf("write %s exp=%s body=%d meta=%d okf=%v", o.path, o.expMode, o.body, o.meta, o.okf)
-	case opAppend:
-		return fmt.Sprintf("append %s exp=%s body=%d meta=%d okf=%v", o.path, o.expMode, o.body, o.meta, o.okf)
-	case opArchive:
-		return "archive " + o.path
-	default:
-		return "unarchive " + o.path
+	if o.kind == opArchive || o.kind == opUnarchive {
+		return o.kind.String() + " " + o.path
 	}
+	return fmt.Sprintf("%s %s exp=%s body=%d meta=%d okf=%v", o.kind, o.path, o.expMode, o.body, o.meta, o.okf)
 }
 
 // Pools. Paths deliberately include collisions both ways, dot names, unicode,
@@ -169,9 +163,9 @@ func (d *differential) nextOp() op {
 		o.kind = opUnarchive
 	}
 	if o.kind == opWrite || o.kind == opAppend {
-		o.body = r.Intn(len(diffBodies) + 1) // +1 selects the oversized body
-		if o.body == len(diffBodies) && r.Intn(10) != 0 {
-			o.body = r.Intn(len(diffBodies))
+		o.body = r.Intn(len(diffBodies))
+		if r.Intn(100) == 0 {
+			o.body = len(diffBodies) // the oversized body, kept rare: 1 MiB per write
 		}
 		o.meta = r.Intn(len(diffMetas))
 		o.okf = r.Intn(2) == 0
@@ -202,11 +196,14 @@ func expectedFor(mode string, cur int) int {
 	case "create":
 		return 0
 	case "stale":
+		if cur == 0 {
+			return 1 // cur-1 would be -1, the skip-check sentinel
+		}
 		return cur - 1
 	case "ahead":
 		return cur + 1
 	case "far":
-		return 99
+		return cur + 50
 	default:
 		return cur
 	}
@@ -245,36 +242,16 @@ func (d *differential) apply(o op) {
 
 func (d *differential) applyOne(b LookupBackend, o op, cur int) string {
 	switch o.kind {
-	case opWrite, opAppend:
-		body, meta := d.bodyFor(o), d.metaFor(o)
-		expected := expectedFor(o.expMode, cur)
-		var doc *store.Document
-		var err error
-		if o.kind == opWrite {
-			doc, err = b.Store.WriteVersion(o.path, expected, body, meta)
-		} else {
-			doc, err = b.Store.Append(o.path, expected, body, meta)
-		}
-		if err == nil {
-			b.Catalog.Put(o.path, doc.Metadata, doc.Content, doc.Modified)
-		}
+	case opWrite:
+		doc, err := publishInto(b, o.path, expectedFor(o.expMode, cur), d.bodyFor(o), d.metaFor(o))
+		return errClass(err) + " " + describeDoc(doc)
+	case opAppend:
+		doc, err := appendInto(b, o.path, expectedFor(o.expMode, cur), d.bodyFor(o), d.metaFor(o))
 		return errClass(err) + " " + describeDoc(doc)
 	case opArchive:
-		err := b.Store.Archive(o.path, true)
-		if err == nil {
-			b.Catalog.Remove(o.path)
-		}
-		return errClass(err)
+		return errClass(archiveInto(b, o.path))
 	default:
-		err := b.Store.Archive(o.path, false)
-		if err == nil {
-			doc, gerr := b.Store.Get(o.path, 0)
-			if gerr != nil {
-				return "unarchive-get " + errClass(gerr)
-			}
-			b.Catalog.Put(o.path, doc.Metadata, doc.Content, doc.Modified)
-		}
-		return errClass(err)
+		return errClass(unarchiveInto(b, o.path))
 	}
 }
 
@@ -318,25 +295,10 @@ func describeDoc(doc *store.Document) string {
 		doc.Version, doc.Archived, !doc.Modified.IsZero(), doc.Content, describeMeta(doc.Metadata), prune)
 }
 
+// describeMeta renders metadata with sorted keys (fmt sorts map keys); nil
+// and empty both print as map[], which is the intended equivalence.
 func describeMeta(m map[string]string) string {
-	if len(m) == 0 {
-		return "{}"
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var sb strings.Builder
-	sb.WriteString("{")
-	for i, k := range keys {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		fmt.Fprintf(&sb, "%s=%q", k, m[k])
-	}
-	sb.WriteString("}")
-	return sb.String()
+	return fmt.Sprintf("%q", m)
 }
 
 // compareSnapshots renders the full observable state of both backends over

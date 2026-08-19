@@ -16,7 +16,6 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
@@ -70,12 +69,17 @@ func openStore(t testing.TB) *pgstore.Store {
 // is both halves of the backend pair (rows maintained by its write txs).
 func TestPostgresLookupConformance(t *testing.T) {
 	s := openStore(t)
-	storetest.RunLookupConformance(t, func(t *testing.T) storetest.LookupBackend {
-		if err := s.Reset(context.Background()); err != nil {
-			t.Fatalf("reset: %v", err)
-		}
-		return storetest.LookupBackend{Store: s, Catalog: s}
-	})
+	storetest.RunLookupConformance(t, func(t *testing.T) storetest.LookupBackend { return pgBackend(t, s) })
+}
+
+// pgBackend resets the shared store and returns it as both halves of the
+// lookup pair (catalog rows are maintained by its write transactions).
+func pgBackend(t testing.TB, s *pgstore.Store) storetest.LookupBackend {
+	t.Helper()
+	if err := s.Reset(context.Background()); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	return storetest.LookupBackend{Store: s, Catalog: s}
 }
 
 // mockStream is the minimal handler.Stream for driving requests in tests.
@@ -256,15 +260,8 @@ func assertLookupCount(t *testing.T, s *pgstore.Store, query string, want int) {
 // from it over seeded random operation sequences.
 func TestPostgresDifferential(t *testing.T) {
 	s := openStore(t)
-	ref := func(t *testing.T) storetest.LookupBackend {
-		return storetest.LookupBackend{Store: store.New(t.TempDir()), Catalog: catalog.New()}
-	}
-	cand := func(t *testing.T) storetest.LookupBackend {
-		if err := s.Reset(context.Background()); err != nil {
-			t.Fatalf("reset: %v", err)
-		}
-		return storetest.LookupBackend{Store: s, Catalog: s}
-	}
+	ref := func(t *testing.T) storetest.LookupBackend { return storetest.FileBackend(t) }
+	cand := func(t *testing.T) storetest.LookupBackend { return pgBackend(t, s) }
 	storetest.RunDifferential(t, ref, cand, storetest.DifferentialConfig{})
 }
 
@@ -274,11 +271,6 @@ func FuzzPostgresDifferential(f *testing.F) {
 	s := openStore(f)
 	f.Add(int64(99))
 	f.Fuzz(func(t *testing.T, seed int64) {
-		if err := s.Reset(context.Background()); err != nil {
-			t.Fatalf("reset: %v", err)
-		}
-		ref := storetest.LookupBackend{Store: store.New(t.TempDir()), Catalog: catalog.New()}
-		cand := storetest.LookupBackend{Store: s, Catalog: s}
-		storetest.RunDifferentialSeed(t, ref, cand, seed, storetest.DifferentialConfig{Ops: 100})
+		storetest.RunDifferentialSeed(t, storetest.FileBackend(t), pgBackend(t, s), seed, storetest.DifferentialConfig{Ops: 100})
 	})
 }
