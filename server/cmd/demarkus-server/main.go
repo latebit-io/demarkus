@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -37,15 +38,29 @@ type currentWalker interface {
 // table. A failed walk leaves an empty catalog rather than aborting startup.
 func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
 	cat := catalog.New()
-	if err := s.WalkCurrent(func(d store.CurrentDoc) error {
+	err := s.WalkCurrent(func(d store.CurrentDoc) error {
 		cat.Set(catalog.FromDocument(d.Path, d.Metadata, d.Body, d.Modified))
 		return nil
-	}); err != nil {
+	})
+	if err != nil && !logPartialWalk(logger, "lookup catalog", err) {
 		logger.Warn("lookup catalog build failed", "error", err)
-	} else {
-		logger.Info("lookup catalog built", "entries", cat.Len())
+		return cat
 	}
+	logger.Info("lookup catalog built", "entries", cat.Len())
 	return cat
+}
+
+// logPartialWalk reports each entry a completed walk skipped and returns
+// true; any other error returns false for the caller to handle.
+func logPartialWalk(logger *slog.Logger, what string, err error) bool {
+	var partial *store.PartialWalkError
+	if !errors.As(err, &partial) {
+		return false
+	}
+	for _, e := range partial.Skipped {
+		logger.Warn(what+" skipped entry", "path", e.Path, "error", e.Err)
+	}
+	return true
 }
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -189,10 +204,9 @@ func main() {
 			logger.Error("store open failed", "error", err)
 			os.Exit(1)
 		}
-		// BuildHashIndex clears the index before walking; continuing after a
-		// failure would serve hash-based FETCHes from an empty or partial
-		// index, so a broken walk is fatal.
-		if err := s.BuildHashIndex(); err != nil {
+		// A broken walk is fatal (an empty index would fail every hash FETCH);
+		// a walk that merely skipped entries is logged per entry and served.
+		if err := s.BuildHashIndex(); err != nil && !logPartialWalk(logger, "hash index", err) {
 			logger.Error("hash index build failed", "error", err)
 			os.Exit(1)
 		}

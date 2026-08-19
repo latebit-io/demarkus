@@ -1,6 +1,9 @@
 package store
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,4 +61,30 @@ func keysOf(m map[string]CurrentDoc) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestBuildHashIndex_ReportsSkippedEntries pins that an unindexable entry
+// (here a dangling current-version symlink) is reported, not swallowed, and
+// does not prevent the rest of the root from being indexed.
+func TestBuildHashIndex_ReportsSkippedEntries(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	if _, err := s.Write("/good.md", []byte("good"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("versions/missing.md/v1", filepath.Join(root, "dangling.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := s.BuildHashIndex()
+	var partial *PartialWalkError
+	if !errors.As(err, &partial) {
+		t.Fatalf("BuildHashIndex err = %v, want *PartialWalkError", err)
+	}
+	if len(partial.Skipped) != 1 || filepath.Base(partial.Skipped[0].Path) != "dangling.md" {
+		t.Errorf("skipped = %+v, want the dangling symlink", partial.Skipped)
+	}
+	if p, ok := s.LookupHash(ContentHash([]byte("good"))); !ok || p != "/good.md" {
+		t.Errorf("LookupHash after partial walk = (%q, %v), want /good.md", p, ok)
+	}
 }

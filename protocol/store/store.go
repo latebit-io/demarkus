@@ -227,9 +227,17 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 		return err
 	}
 
-	return filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+	// Entries that cannot be indexed are skipped, never fatal: one broken
+	// symlink must not take the server down. They are reported as a
+	// PartialWalkError so the caller can surface the degradation.
+	var skipped []SkippedEntry
+	skip := func(path string, err error) error {
+		skipped = append(skipped, SkippedEntry{Path: path, Err: err})
+		return nil
+	}
+	walkErr := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable entries
+			return skip(path, err)
 		}
 		if d.IsDir() {
 			if d.Name() == "versions" {
@@ -244,28 +252,57 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 		// Resolve symlink and ensure target stays within the content root.
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil {
-			return nil // skip broken symlinks
+			return skip(path, err)
 		}
 		if !isContained(resolved, absRoot) {
-			return nil // skip symlinks that escape the content root
+			return skip(path, errSymlinkEscapes)
 		}
 		info, err := os.Stat(resolved)
-		if err != nil || info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
-			return nil // skip unreadable or oversized files
+		if err != nil {
+			return skip(path, err)
+		}
+		if info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
+			return skip(path, ErrSizeLimit)
 		}
 		data, err := os.ReadFile(resolved)
 		if err != nil {
-			return nil // skip unreadable files
+			return skip(path, err)
 		}
 		if isArchived(data) {
 			return nil
 		}
 		rel, err := filepath.Rel(absRoot, path)
 		if err != nil {
-			return nil
+			return skip(path, err)
 		}
-		return fn("/"+rel, data, info.ModTime().UTC().Truncate(time.Second))
+		return fn("/"+filepath.ToSlash(rel), data, info.ModTime().UTC().Truncate(time.Second))
 	})
+	if walkErr != nil {
+		return walkErr
+	}
+	if len(skipped) > 0 {
+		return &PartialWalkError{Skipped: skipped}
+	}
+	return nil
+}
+
+var errSymlinkEscapes = errors.New("current-version symlink escapes the content root")
+
+// SkippedEntry is a content-root entry a walk could not index.
+type SkippedEntry struct {
+	Path string
+	Err  error
+}
+
+// PartialWalkError reports a walk that completed but skipped entries: the
+// derived index is missing them. Callers log it rather than treating the
+// build as whole or aborting.
+type PartialWalkError struct {
+	Skipped []SkippedEntry
+}
+
+func (e *PartialWalkError) Error() string {
+	return fmt.Sprintf("walk skipped %d entries (first %s: %v)", len(e.Skipped), e.Skipped[0].Path, e.Skipped[0].Err)
 }
 
 // BuildHashIndex walks the content root and indexes current versions by content hash.
