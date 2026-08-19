@@ -8,7 +8,10 @@ package storetest
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,9 +23,31 @@ import (
 // Factory returns a fresh, empty DocumentStore for one conformance subtest.
 type Factory func(t *testing.T) handler.DocumentStore
 
+// Tamper overwrites the stored bytes of one version behind the store's back
+// (a disk write, a raw UPDATE) so the suite can prove VerifyChain detects
+// corruption on every backend.
+type Tamper func(t testing.TB, s handler.DocumentStore, path string, version int, stored []byte)
+
+// FileTamper is the file store's Tamper: it rewrites the version file.
+func FileTamper(t testing.TB, s handler.DocumentStore, path string, version int, stored []byte) {
+	t.Helper()
+	fs, ok := s.(*store.Store)
+	if !ok {
+		t.Fatalf("FileTamper: store is %T, want *store.Store", s)
+	}
+	file, err := fs.VersionFilePath(path, version)
+	if err != nil {
+		t.Fatalf("FileTamper: %v", err)
+	}
+	if err := os.WriteFile(file, stored, 0o644); err != nil {
+		t.Fatalf("FileTamper: %v", err)
+	}
+}
+
 // RunConformance exercises the DocumentStore contract against the backend
-// the factory produces.
-func RunConformance(t *testing.T, factory Factory) {
+// the factory produces. tamper is required: a backend that cannot be
+// corrupted out of band cannot prove its chain verification works.
+func RunConformance(t *testing.T, factory Factory, tamper Tamper) {
 	subtests := []struct {
 		name string
 		fn   func(t *testing.T, s handler.DocumentStore)
@@ -37,12 +62,14 @@ func RunConformance(t *testing.T, factory Factory) {
 		{"AppendMetadataMerge", testAppendMetadataMerge},
 		{"ListDirSemantics", testListDirSemantics},
 		{"IsDirSemantics", testIsDirSemantics},
-		{"RetentionPrune", testRetentionPrune},
+		{"Retention", testRetention},
 		{"MissingDocument", testMissingDocument},
 		{"PathCollisions", testPathCollisions},
 		{"RejectsBinaryBody", testRejectsBinaryBody},
 		{"SharedBodyHash", testSharedBodyHash},
 		{"BodySizeLimit", testBodySizeLimit},
+		{"InvalidMetadata", testInvalidMetadata},
+		{"VerifyChainTampered", func(t *testing.T, s handler.DocumentStore) { testVerifyChainTampered(t, s, tamper) }},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) {
@@ -75,8 +102,19 @@ func testWriteGetRoundtrip(t *testing.T, s handler.DocumentStore) {
 	if got.Version != 1 || got.Archived {
 		t.Errorf("got version=%d archived=%v, want 1 false", got.Version, got.Archived)
 	}
-	if got.Metadata["tags"] == "" || got.Metadata["importance"] != "0.5" {
-		t.Errorf("metadata roundtrip = %v", got.Metadata)
+	// Contract: OKF fields (tags, type) and meta.-prefixed keys read back as
+	// one map, tags in bare comma-separated form.
+	want := map[string]string{"tags": "a,b", "importance": "0.5"}
+	if !maps.Equal(doc.Metadata, want) || !maps.Equal(got.Metadata, want) {
+		t.Errorf("metadata roundtrip: write %v get %v, want %v", doc.Metadata, got.Metadata, want)
+	}
+	plain := mustWrite(t, s, "/plain.md", 0, "# Hello\n")
+	got, err = s.Get("/plain.md", 0)
+	if err != nil {
+		t.Fatalf("get plain: %v", err)
+	}
+	if plain.Metadata != nil || got.Metadata != nil {
+		t.Errorf("nil metadata came back as write %v get %v", plain.Metadata, got.Metadata)
 	}
 }
 
@@ -172,10 +210,14 @@ func testNotModifiedDedup(t *testing.T, s handler.DocumentStore) {
 	if cur := s.CurrentVersion("/dup.md"); cur != 1 {
 		t.Errorf("CurrentVersion after dedup = %d, want 1", cur)
 	}
-	// Same body, different metadata is a real new version.
+	// Same body, different metadata is a real new version; so is dropping it.
 	doc, err = s.WriteVersion("/dup.md", 1, []byte("body"), map[string]string{"tags": "changed"})
 	if err != nil || doc.Version != 2 {
 		t.Errorf("meta change = (%+v, %v), want v2", doc, err)
+	}
+	doc, err = s.WriteVersion("/dup.md", 2, []byte("body"), nil)
+	if err != nil || doc.Version != 3 || doc.Metadata != nil {
+		t.Errorf("meta drop = (%+v, %v), want v3 with nil metadata", doc, err)
 	}
 }
 
@@ -259,6 +301,10 @@ func testAppendMetadataMerge(t *testing.T, s handler.DocumentStore) {
 	got := appendMeta(t, s, "/tagged.md", 1, map[string]string{"agent": "claude"})
 	if got["tags"] == "" || got["importance"] != "0.9" {
 		t.Errorf("inherited metadata = %v, want tags and importance 0.9 preserved", got)
+	}
+	// The base version keeps what it was written with.
+	if v1, err := s.Get("/tagged.md", 1); err != nil || v1.Metadata["agent"] != "" || v1.Metadata["title"] != "Kept" {
+		t.Errorf("v1 metadata after append = %v (err %v), want the seed untouched", v1.Metadata, err)
 	}
 	if got["type"] != "Plan" {
 		t.Errorf("type = %q, want Plan preserved (not overwritten by the OKF default)", got["type"])
@@ -381,29 +427,51 @@ func testIsDirSemantics(t *testing.T, s handler.DocumentStore) {
 	}
 }
 
-func testRetentionPrune(t *testing.T, s handler.DocumentStore) {
-	mustWrite(t, s, "/r.md", 0, "v1")
-	mustWrite(t, s, "/r.md", 1, "v2")
-	mustWrite(t, s, "/r.md", 2, "v3")
-	doc, err := s.WriteVersion("/r.md", 3, []byte("v4"), map[string]string{"retention": "2"})
-	if err != nil {
-		t.Fatalf("retained write: %v", err)
+// testRetention pins retention: the window is applied on the write that
+// carries it, numbering continues past pruned history, an unretained write
+// stops pruning, and a window wider than the history is a no-op.
+func testRetention(t *testing.T, s handler.DocumentStore) {
+	doc := writeN(t, s, "/r.md", 4, map[string]string{"retention": "2"})
+	if doc.Prune == nil || doc.Prune.From != 1 || doc.Prune.To != 2 || doc.Prune.Err != nil {
+		t.Errorf("prune = %+v, want From 1 To 2 Err nil", doc.Prune)
 	}
-	if doc.Prune == nil || doc.Prune.From != 1 || doc.Prune.To != 2 {
-		t.Errorf("prune = %+v, want From 1 To 2", doc.Prune)
-	}
-	vs, err := s.Versions("/r.md")
-	if err != nil {
-		t.Fatalf("versions: %v", err)
-	}
-	if len(vs) != 2 || vs[0].Version != 4 || vs[1].Version != 3 {
-		t.Errorf("surviving versions = %+v, want [4 3]", vs)
+	if got, want := versionNums(t, s, "/r.md"), []int{4, 3}; !slices.Equal(got, want) {
+		t.Errorf("surviving versions = %v, want %v", got, want)
 	}
 	if err := s.VerifyChain("/r.md"); err != nil {
 		t.Errorf("VerifyChain after prune: %v", err)
 	}
 	if _, err := s.Get("/r.md", 1); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("pruned version get: err = %v, want ErrNotExist", err)
+	}
+	if cur, err := s.Get("/r.md", 0); err != nil || cur.Version != 4 {
+		t.Errorf("current after prune = v%d (err %v), want v4", cur.Version, err)
+	}
+
+	if doc := writeN(t, s, "/none.md", 5, nil); doc.Prune != nil || len(versionNums(t, s, "/none.md")) != 5 {
+		t.Errorf("no retention: prune = %+v, want nil and all 5 versions", doc.Prune)
+	}
+
+	writeN(t, s, "/one.md", 4, map[string]string{"retention": "1"})
+	next, err := s.WriteVersion("/one.md", 4, []byte("# Version 5"), map[string]string{"retention": "1"})
+	if err != nil {
+		t.Fatalf("write after prune: %v", err)
+	}
+	if got := versionNums(t, s, "/one.md"); next.Version != 5 || !slices.Equal(got, []int{5}) {
+		t.Errorf("retention 1: next = v%d, remaining = %v, want v5 and [5]", next.Version, got)
+	}
+
+	writeN(t, s, "/stop.md", 3, map[string]string{"retention": "2"})
+	plain, err := s.WriteVersion("/stop.md", 3, []byte("# Version 4"), nil)
+	if err != nil {
+		t.Fatalf("unretained write: %v", err)
+	}
+	if got := versionNums(t, s, "/stop.md"); plain.Prune != nil || !slices.Equal(got, []int{4, 3, 2}) {
+		t.Errorf("retention removed: prune = %+v, remaining = %v, want nil and [4 3 2]", plain.Prune, got)
+	}
+
+	if doc := writeN(t, s, "/wide.md", 3, map[string]string{"retention": "10"}); doc.Prune != nil || len(versionNums(t, s, "/wide.md")) != 3 {
+		t.Errorf("retention wider than history: prune = %+v, want nil and all 3 versions", doc.Prune)
 	}
 }
 
@@ -529,6 +597,107 @@ func testBodySizeLimit(t *testing.T, s handler.DocumentStore) {
 	if cur := s.CurrentVersion("/max.md"); cur != 1 {
 		t.Errorf("rejected append advanced /max.md to version %d, want 1", cur)
 	}
+}
+
+// testInvalidMetadata pins the metadata rejections applied before anything is
+// stored: reserved keys, malformed keys and values, bad retention values, and
+// tags whose serialized form overflows although the comma-separated value fits.
+func testInvalidMetadata(t *testing.T, s handler.DocumentStore) {
+	bigTags := strings.Repeat("a,", 399) + "a"
+	if len("tags")+len(bigTags) > protocol.MaxMetaBytes || store.SerializedMetaSize("tags", bigTags) <= protocol.MaxMetaBytes {
+		t.Fatalf("test setup: tags must fit as csv and overflow serialized")
+	}
+	cases := []struct {
+		name string
+		meta map[string]string
+	}{
+		{"reserved version", map[string]string{"version": "x"}},
+		{"reserved archived", map[string]string{"archived": "x"}},
+		{"reserved previous-hash", map[string]string{"previous-hash": "x"}},
+		{"uppercase key", map[string]string{"Type": "note"}},
+		{"underscore key", map[string]string{"my_key": "val"}},
+		{"empty key", map[string]string{"": "val"}},
+		{"newline in value", map[string]string{"type": "note\nevil: injected"}},
+		{"retention zero", map[string]string{"retention": "0"}},
+		{"retention negative", map[string]string{"retention": "-3"}},
+		{"retention non-integer", map[string]string{"retention": "abc"}},
+		{"retention float", map[string]string{"retention": "1.5"}},
+		{"retention empty", map[string]string{"retention": ""}},
+		{"serialized tags over cap", map[string]string{"tags": bigTags}},
+	}
+	mustWrite(t, s, "/base.md", 0, "# Base\n")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := s.WriteVersion("/inv.md", 0, []byte("# Hi\n"), c.meta); !errors.Is(err, store.ErrInvalidMeta) {
+				t.Errorf("write: err = %v, want ErrInvalidMeta", err)
+			}
+			if _, err := s.Append("/base.md", 1, []byte("x"), c.meta); !errors.Is(err, store.ErrInvalidMeta) {
+				t.Errorf("append: err = %v, want ErrInvalidMeta", err)
+			}
+		})
+	}
+	// Nothing was stored by the rejected writes.
+	if cur := s.CurrentVersion("/inv.md"); cur != 0 {
+		t.Errorf("rejected writes left version %d", cur)
+	}
+	if cur := s.CurrentVersion("/base.md"); cur != 1 {
+		t.Errorf("rejected appends advanced /base.md to version %d", cur)
+	}
+	// Valid retention values are accepted.
+	for _, v := range []string{"1", "20"} {
+		if _, err := s.WriteVersion("/ok.md", -1, []byte(v), map[string]string{"retention": v}); err != nil {
+			t.Errorf("retention %q rejected: %v", v, err)
+		}
+	}
+}
+
+// testVerifyChainTampered corrupts v1 after v2 links to it: VerifyChain must
+// report a broken chain while Versions still lists both.
+func testVerifyChainTampered(t *testing.T, s handler.DocumentStore, tamper Tamper) {
+	writeN(t, s, "/dir/t.md", 2, nil)
+	if err := s.VerifyChain("/dir/t.md"); err != nil {
+		t.Fatalf("VerifyChain before tamper: %v", err)
+	}
+	tamper(t, s, "/dir/t.md", 1, []byte("# TAMPERED\n"))
+	err := s.VerifyChain("/dir/t.md")
+	if err == nil || !strings.Contains(err.Error(), "chain broken") {
+		t.Errorf("VerifyChain after tamper: err = %v, want chain broken", err)
+	}
+	if got := versionNums(t, s, "/dir/t.md"); !slices.Equal(got, []int{2, 1}) {
+		t.Errorf("Versions after tamper = %v, want [2 1]", got)
+	}
+}
+
+// writeN writes n versions of path, passing meta only on the last write,
+// and returns the final document.
+func writeN(t *testing.T, s handler.DocumentStore, path string, n int, finalMeta map[string]string) *store.Document {
+	t.Helper()
+	var doc *store.Document
+	for i := 1; i <= n; i++ {
+		var meta map[string]string
+		if i == n {
+			meta = finalMeta
+		}
+		var err error
+		if doc, err = s.WriteVersion(path, i-1, fmt.Appendf(nil, "# Version %d", i), meta); err != nil {
+			t.Fatalf("write %s v%d: %v", path, i, err)
+		}
+	}
+	return doc
+}
+
+// versionNums returns the surviving version numbers, newest first.
+func versionNums(t *testing.T, s handler.DocumentStore, path string) []int {
+	t.Helper()
+	infos, err := s.Versions(path)
+	if err != nil {
+		t.Fatalf("versions %s: %v", path, err)
+	}
+	nums := make([]int, 0, len(infos))
+	for _, v := range infos {
+		nums = append(nums, v.Version)
+	}
+	return nums
 }
 
 func mustWrite(t *testing.T, s handler.DocumentStore, path string, expected int, body string) *store.Document {

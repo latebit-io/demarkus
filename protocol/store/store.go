@@ -168,6 +168,12 @@ func newVersionFilePath(versionsDir, base string, version int) string {
 	return filepath.Join(versionsDir, base, fmt.Sprintf("v%d", version))
 }
 
+// versionRelPath is the root-relative location of one version of rel:
+// <dir>/versions/<base>/vN.
+func versionRelPath(rel string, version int) string {
+	return filepath.Join(filepath.Dir(rel), "versions", filepath.Base(rel), fmt.Sprintf("v%d", version))
+}
+
 // newVersionSymlinkTarget returns the relative symlink target for a new version,
 // always using the per-document subdirectory layout.
 func newVersionSymlinkTarget(base string, version int) string {
@@ -423,6 +429,17 @@ func (s *Store) HashIndexSize() int {
 // Root returns the content directory path.
 func (s *Store) Root() string {
 	return s.root
+}
+
+// VersionFilePath returns where version N of reqPath lives on disk, for
+// tools and tests that touch the layout directly. It does not check that
+// the file exists or follow symlinks.
+func (s *Store) VersionFilePath(reqPath string, version int) (string, error) {
+	rel, err := RelPath(reqPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s.root, versionRelPath(rel, version)), nil
 }
 
 // Get retrieves a document at the given path. If version is 0, returns the
@@ -930,11 +947,7 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := filepath.Base(cleaned)
-
-	dir := filepath.Dir(cleaned)
-	perDocPath := "/" + filepath.Join(dir, "versions", base, fmt.Sprintf("v%d", version))
-	filePath, err := s.resolve(perDocPath)
+	filePath, err := s.resolve("/" + versionRelPath(cleaned, version))
 	if err != nil {
 		return nil, err
 	}

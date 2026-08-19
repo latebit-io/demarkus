@@ -2,16 +2,11 @@ package pgstore_test
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
 	"strings"
 	"testing"
-
-	// Register the pgx database/sql driver for the raw handle the backfill
-	// test uses to clear the catalog table out of band.
-	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
@@ -33,7 +28,12 @@ func TestPostgresConformance(t *testing.T) {
 			t.Fatalf("reset: %v", err)
 		}
 		return s
-	})
+	}, pgTamper)
+}
+
+// pgTamper is the Postgres Tamper: a raw UPDATE on the package schema.
+func pgTamper(t testing.TB, _ handler.DocumentStore, path string, version int, stored []byte) {
+	pgtest.TamperVersion(t, pgSchema, path, version, stored)
 }
 
 // pgSchema isolates this package's tables from other test packages.
@@ -124,14 +124,7 @@ func TestPostgresCatalogBackfill(t *testing.T) {
 
 	// Simulate the pre-catalog world: rows exist for documents and versions
 	// but the catalog table is empty.
-	db, err := sql.Open("pgx", pgtest.SchemaDSN(t, pgSchema))
-	if err != nil {
-		t.Fatalf("open raw db: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-	if _, err := db.ExecContext(ctx, `DELETE FROM catalog`); err != nil {
-		t.Fatalf("clear catalog: %v", err)
-	}
+	pgtest.Exec(t, pgSchema, `DELETE FROM catalog`)
 	assertLookupCount(t, s, "go", 0)
 
 	if err := s.Init(ctx); err != nil {
@@ -153,9 +146,7 @@ func TestPostgresCatalogBackfill(t *testing.T) {
 	assertLookupCount(t, s, "go", 2)
 
 	// A partial gap (one document missing its row) is reconciled too.
-	if _, err := db.ExecContext(ctx, `DELETE FROM catalog WHERE path = 'live.md'`); err != nil {
-		t.Fatalf("clear one row: %v", err)
-	}
+	pgtest.Exec(t, pgSchema, `DELETE FROM catalog WHERE path = 'live.md'`)
 	assertLookupCount(t, s, "go", 1)
 	if err := s.Init(ctx); err != nil {
 		t.Fatalf("reconcile init: %v", err)
@@ -175,14 +166,7 @@ func TestPostgresCatalogBackfillBatches(t *testing.T) {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
-	db, err := sql.Open("pgx", pgtest.SchemaDSN(t, pgSchema))
-	if err != nil {
-		t.Fatalf("open raw db: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-	if _, err := db.ExecContext(ctx, `DELETE FROM catalog`); err != nil {
-		t.Fatalf("clear catalog: %v", err)
-	}
+	pgtest.Exec(t, pgSchema, `DELETE FROM catalog`)
 	assertLookupCount(t, s, "batch", 0)
 	if err := s.Init(ctx); err != nil {
 		t.Fatalf("re-init: %v", err)

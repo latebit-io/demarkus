@@ -12,7 +12,7 @@ import (
 func TestFileStoreConformance(t *testing.T) {
 	RunConformance(t, func(t *testing.T) handler.DocumentStore {
 		return store.New(t.TempDir())
-	})
+	}, FileTamper)
 }
 
 // TestFileStoreLookupConformance runs the LOOKUP conformance suite against

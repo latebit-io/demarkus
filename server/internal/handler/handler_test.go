@@ -1027,10 +1027,10 @@ func testFetchVersion(t *testing.T, newBackend backendFactory) {
 	})
 }
 
-func TestVersionsChainValid(t *testing.T) {
-	// File-only: the tampered case rewrites a version file on disk.
-	dir := t.TempDir()
-	b := fileBackendAt(dir)
+func TestVersionsChainValid(t *testing.T) { forEachBackend(t, testVersionsChainValid) }
+
+func testVersionsChainValid(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
 
 	// Write versions through the store to get proper hash chain.
 	mustWrite(t, b, "/doc.md", []byte("# V1\n"), nil)
@@ -1052,11 +1052,7 @@ func TestVersionsChainValid(t *testing.T) {
 	})
 
 	t.Run("tampered chain", func(t *testing.T) {
-		// Corrupt v1 on disk (per-document subdirectory layout).
-		v1Path := filepath.Join(dir, "versions", "doc.md", "v1")
-		if err := os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		b.Tamper(t, "/doc.md", 1, []byte("# TAMPERED\n"))
 
 		stream := newMockStream("VERSIONS /doc.md\n")
 		h.HandleStream(stream)
