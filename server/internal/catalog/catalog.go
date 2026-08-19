@@ -120,7 +120,7 @@ func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
 			results = append(results, Result{Entry: *e})
 			continue
 		}
-		if score := MatchScore(e, terms); score > 0 {
+		if score := matchScore(e, terms); score > 0 {
 			results = append(results, Result{Entry: *e, Score: score})
 		}
 	}
@@ -149,22 +149,36 @@ func Tokenize(s string) []string {
 }
 
 // MatchScore counts how many distinct query terms appear in the entry's tags
-// (exact, case-insensitive) or title (substring, case-insensitive); terms are
-// lowercased and deduplicated here so every caller scores alike.
+// (exact, case-insensitive) or title (substring, case-insensitive). Terms are
+// normalized here; Lookup normalizes once via Tokenize and uses matchScore.
 func MatchScore(e *Entry, terms []string) int {
-	lowerTitle := strings.ToLower(e.Title)
-	lowerTags := make(map[string]bool, len(e.Tags))
-	for _, t := range e.Tags {
-		lowerTags[strings.ToLower(t)] = true
-	}
-	score := 0
+	return matchScore(e, normalizeTerms(terms))
+}
+
+// normalizeTerms lowercases, trims, drops empties, and dedupes in order.
+func normalizeTerms(terms []string) []string {
 	seen := make(map[string]bool, len(terms))
+	out := make([]string, 0, len(terms))
 	for _, term := range terms {
 		term = strings.ToLower(strings.TrimSpace(term))
 		if term == "" || seen[term] {
 			continue
 		}
 		seen[term] = true
+		out = append(out, term)
+	}
+	return out
+}
+
+// matchScore scores against already-normalized terms.
+func matchScore(e *Entry, terms []string) int {
+	lowerTitle := strings.ToLower(e.Title)
+	lowerTags := make(map[string]bool, len(e.Tags))
+	for _, t := range e.Tags {
+		lowerTags[strings.ToLower(t)] = true
+	}
+	score := 0
+	for _, term := range terms {
 		if lowerTags[term] || (lowerTitle != "" && strings.Contains(lowerTitle, term)) {
 			score++
 		}
