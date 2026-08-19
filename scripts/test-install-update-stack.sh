@@ -20,7 +20,7 @@ log_step() { :; }
 
 INSTALL_DIR="$TMP/bin"
 SYSTEMD_DIR="$TMP/systemd"
-# shellcheck disable=SC2034  # consumed by the function sourced from install.sh
+# shellcheck disable=SC2034  # read by the functions sourced from install.sh
 PLATFORM="linux"
 # shellcheck disable=SC2034  # consumed by the function sourced from install.sh
 SUDO=""
@@ -100,10 +100,10 @@ rm -f "$INSTALL_DIR/demarkus-library"
 
 # 9. Non-linux hosts have no stack services.
 : > "$CALLS"
-# shellcheck disable=SC2034  # consumed by the function sourced from install.sh
 PLATFORM="darwin"
 update_stack_component "demarkus-library" "demarkus-library" "" "$TMP"
 [ ! -s "$CALLS" ] || fail "stack update must be linux-only, got: $(cat "$CALLS")"
+PLATFORM="linux"
 
 # 10. An unresolvable tools release must fail loudly when a broker is installed,
 # not log a skip and report success.
@@ -119,7 +119,18 @@ rm -f "$INSTALL_DIR/demarkus-broker"
 # With no broker installed the same call is a no-op, not a failure.
 ( update_stack_components "" "" "$TMP" ) 2>/dev/null || fail "absent broker must not fail the update"
 
-# 11. install_binary_atomic must replace by rename, not write in place: writing
+# 11. A non-linux host skips the whole refresh, even with a stray binary and no
+# resolvable tools release: the platform check must precede the broker guard.
+PLATFORM="darwin"
+touch "$INSTALL_DIR/demarkus-broker"; chmod +x "$INSTALL_DIR/demarkus-broker"
+: > "$CALLS"
+( update_stack_components "" "" "$TMP" ) 2>/dev/null || fail "non-linux refresh must not fail the update"
+[ ! -s "$CALLS" ] || fail "non-linux host attempted a component refresh: $(cat "$CALLS")"
+rm -f "$INSTALL_DIR/demarkus-broker"
+# shellcheck disable=SC2034  # read by the functions sourced from install.sh
+PLATFORM="linux"
+
+# 12. install_binary_atomic must replace by rename, not write in place: writing
 # over a live executable fails with ETXTBSY. A rename gives dest a new inode;
 # an in-place copy keeps the old one, so the inode is the observable proof.
 eval "$(awk '/^install_binary_atomic\(\)/,/^\}$/' "$SRC")"

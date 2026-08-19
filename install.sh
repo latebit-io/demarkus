@@ -2169,6 +2169,12 @@ stack_component_installed() {
 update_stack_components() {
   local tools_version="$1" library_version="$2" tmpdir="$3"
 
+  # These components are systemd services; nothing to refresh elsewhere, and
+  # the checks below would otherwise fail an update on a stray binary.
+  if [ "$PLATFORM" != "linux" ]; then
+    return
+  fi
+
   # An empty tools version would otherwise make the broker branch log a skip
   # and return success, reporting a clean update that never refreshed it.
   if [ -z "$tools_version" ] && stack_component_installed "demarkus-broker" "$BROKER_SERVICE"; then
