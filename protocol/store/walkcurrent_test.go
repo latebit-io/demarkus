@@ -1,6 +1,9 @@
 package store
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,4 +61,78 @@ func keysOf(m map[string]CurrentDoc) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestBuildHashIndex_ReportsSkippedEntries pins that an unindexable entry
+// (here a dangling current-version symlink) is reported, not swallowed, and
+// does not prevent the rest of the root from being indexed.
+func TestBuildHashIndex_ReportsSkippedEntries(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	if _, err := s.Write("/good.md", []byte("good"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("versions/missing.md/v1", filepath.Join(root, "dangling.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := s.BuildHashIndex()
+	var partial *PartialWalkError
+	if !errors.As(err, &partial) {
+		t.Fatalf("BuildHashIndex err = %v, want *PartialWalkError", err)
+	}
+	if len(partial.Skipped) != 1 || filepath.Base(partial.Skipped[0].Path) != "dangling.md" {
+		t.Errorf("skipped = %+v, want the dangling symlink", partial.Skipped)
+	}
+	if p, ok := s.LookupHash(ContentHash([]byte("good"))); !ok || p != "/good.md" {
+		t.Errorf("LookupHash after partial walk = (%q, %v), want /good.md", p, ok)
+	}
+}
+
+// TestBuildHashIndex_RootFailureIsFatal pins that a root the walk cannot open
+// is a real error, not a partial walk with zero entries. The missing-root case
+// is deterministic everywhere; the permission case needs a non-root uid.
+func TestBuildHashIndex_RootFailureIsFatal(t *testing.T) {
+	newRoot := func(t *testing.T) (string, *Store) {
+		root := filepath.Join(t.TempDir(), "content")
+		if err := os.Mkdir(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		s := New(root)
+		if _, err := s.Write("/doc.md", []byte("x"), nil); err != nil {
+			t.Fatal(err)
+		}
+		return root, s
+	}
+	assertFatal := func(t *testing.T, s *Store) {
+		t.Helper()
+		err := s.BuildHashIndex()
+		var partial *PartialWalkError
+		if err == nil || errors.As(err, &partial) {
+			t.Fatalf("BuildHashIndex err = %v, want a non-partial error", err)
+		}
+	}
+
+	t.Run("missing root", func(t *testing.T) {
+		root, s := newRoot(t)
+		if err := os.RemoveAll(root); err != nil {
+			t.Fatal(err)
+		}
+		assertFatal(t, s)
+	})
+	t.Run("unreadable root", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		root, s := newRoot(t)
+		if err := os.Chmod(root, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := os.Chmod(root, 0o755); err != nil {
+				t.Errorf("restore root permissions: %v", err)
+			}
+		})
+		assertFatal(t, s)
+	})
 }

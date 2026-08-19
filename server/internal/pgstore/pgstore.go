@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	gopath "path"
 	"sort"
 	"strings"
 	"time"
@@ -147,24 +146,19 @@ func (s *Store) Reset(ctx context.Context) error {
 	return nil
 }
 
-// canonical normalizes a request path to the storage key: cleaned, no
-// leading slash. "" is the root. ".." segments cannot survive path.Clean
-// of a rooted path, so traversal cannot escape the keyspace.
-func canonical(reqPath string) string {
-	p := gopath.Clean("/" + reqPath)
-	return strings.TrimPrefix(p, "/")
-}
-
 // Get retrieves a document. version 0 means current. Missing documents and
 // directory paths return os.ErrNotExist.
 func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
-	p := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := opCtx()
 	defer cancel()
 	var stored []byte
 	var modified time.Time
 	var ver int
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		SELECT v.stored, v.modified, v.version
 		FROM documents d
 		JOIN versions v ON v.path = d.path
@@ -192,7 +186,10 @@ func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
 // beneath it (and that is not the root) returns os.ErrNotExist, as does a
 // document path.
 func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]store.DirEntry, error) {
-	p := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
+	if err != nil {
+		return nil, err
+	}
 	prefix := ""
 	if p != "" {
 		prefix = p + "/"
@@ -286,7 +283,10 @@ func hiddenName(name string) bool {
 // other path is a directory when documents exist beneath it. A document
 // path reports false; a missing path returns os.ErrNotExist.
 func (s *Store) IsDir(reqPath string) (bool, error) {
-	p := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
+	if err != nil {
+		return false, err
+	}
 	if p == "" {
 		return true, nil
 	}
@@ -294,7 +294,7 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 	defer cancel()
 	prefix := p + "/"
 	var hasChildren bool
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM documents WHERE path >= $1 AND path < $2)`,
 		prefix, prefixUpperBound(prefix)).Scan(&hasChildren)
 	if err != nil {
@@ -318,7 +318,10 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 // Versions returns the version history newest first, or os.ErrNotExist for
 // a document with no history.
 func (s *Store) Versions(reqPath string) ([]store.VersionInfo, error) {
-	p := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := opCtx()
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx, `
@@ -350,11 +353,14 @@ func (s *Store) Versions(reqPath string) ([]store.VersionInfo, error) {
 // database failure is logged before reporting absence; otherwise an outage
 // would be indistinguishable from a missing document.
 func (s *Store) CurrentVersion(reqPath string) int {
-	p := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
+	if err != nil {
+		return 0
+	}
 	ctx, cancel := opCtx()
 	defer cancel()
 	var cur int
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		SELECT current_version FROM documents WHERE path = $1`, p).Scan(&cur)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -398,7 +404,10 @@ func (s *Store) LookupHash(hash string) (string, bool) {
 // VerifyChain checks previous-hash integrity across the retained versions,
 // oldest to newest, exactly as the file store does.
 func (s *Store) VerifyChain(reqPath string) error {
-	p := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := opCtx()
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx, `
@@ -457,16 +466,13 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 }
 
 func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*store.Document, error) {
-	if int64(len(content)) > protocol.MaxBodyLength {
-		return nil, store.ErrSizeLimit
-	}
-	if err := store.ValidateMeta(meta); err != nil {
+	if err := store.ValidateWrite(content, meta); err != nil {
 		return nil, err
 	}
-	if err := store.ValidateBody(content); err != nil {
+	p, err := store.RelPath(reqPath)
+	if err != nil {
 		return nil, err
 	}
-	p := canonical(reqPath)
 	if p == "" {
 		return nil, os.ErrNotExist
 	}
@@ -549,8 +555,12 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		return nil, fmt.Errorf("update current v%d: %w", next, err)
 	}
 
+	// Catalog row and returned Metadata use the persisted form, as the file
+	// store does; the request map may spell tags differently.
+	persisted := store.ExtractMetadata(stored)
+
 	// Catalog row rides the write tx: visible to every replica at commit.
-	if err := upsertCatalogRow(ctx, tx, p, catalog.FromDocument("/"+p, meta, content, now)); err != nil {
+	if err := upsertCatalogRow(ctx, tx, p, catalog.FromDocument("/"+p, persisted, content, now)); err != nil {
 		return nil, err
 	}
 
@@ -559,7 +569,7 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		Modified: now,
 		Version:  next,
 		Archived: false,
-		Metadata: meta,
+		Metadata: persisted,
 	}
 
 	if err := s.applyRetention(ctx, tx, p, next, meta, doc); err != nil {
@@ -717,6 +727,11 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	if err := store.ValidateMeta(meta); err != nil {
 		return nil, err
 	}
+	// Reject traversal explicitly, as the file store does, rather than relying
+	// on the CurrentVersion fallback below reading 0 for an invalid path.
+	if _, err := store.RelPath(reqPath); err != nil {
+		return nil, err
+	}
 
 	baseDoc, err := s.Get(reqPath, expectedVersion)
 	if err != nil {
@@ -748,7 +763,10 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 // stays valid because only successors hash their predecessor and the tip
 // has no successor yet.
 func (s *Store) Archive(reqPath string, archived bool) error {
-	p := canonical(reqPath)
+	p, err := store.RelPath(reqPath)
+	if err != nil {
+		return err
+	}
 	if p == "" {
 		return os.ErrNotExist
 	}

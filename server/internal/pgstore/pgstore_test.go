@@ -38,18 +38,23 @@ func TestPostgresConformance(t *testing.T) {
 	})
 }
 
-// testDSN returns the conformance database DSN or skips the test.
-func testDSN(t *testing.T) string {
+// testDSN returns the conformance database DSN or skips the test. CI sets
+// DEMARKUS_TEST_PG_REQUIRED so a missing DSN fails instead of skipping:
+// backend parity must be proven on every run, never silently dropped.
+func testDSN(t testing.TB) string {
 	t.Helper()
 	dsn := os.Getenv("DEMARKUS_TEST_PG_DSN")
 	if dsn == "" {
+		if os.Getenv("DEMARKUS_TEST_PG_REQUIRED") != "" {
+			t.Fatal("DEMARKUS_TEST_PG_DSN not set but DEMARKUS_TEST_PG_REQUIRED is; Postgres coverage is mandatory here")
+		}
 		t.Skip("DEMARKUS_TEST_PG_DSN not set; skipping Postgres test")
 	}
 	return dsn
 }
 
 // openStore opens a pgstore against the test database with a quiet logger.
-func openStore(t *testing.T) *pgstore.Store {
+func openStore(t testing.TB) *pgstore.Store {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s, err := pgstore.Open(testDSN(t), logger)
@@ -64,12 +69,17 @@ func openStore(t *testing.T) *pgstore.Store {
 // is both halves of the backend pair (rows maintained by its write txs).
 func TestPostgresLookupConformance(t *testing.T) {
 	s := openStore(t)
-	storetest.RunLookupConformance(t, func(t *testing.T) storetest.LookupBackend {
-		if err := s.Reset(context.Background()); err != nil {
-			t.Fatalf("reset: %v", err)
-		}
-		return storetest.LookupBackend{Store: s, Catalog: s}
-	})
+	storetest.RunLookupConformance(t, func(t *testing.T) storetest.LookupBackend { return pgBackend(t, s) })
+}
+
+// pgBackend resets the shared store and returns it as both halves of the
+// lookup pair (catalog rows are maintained by its write transactions).
+func pgBackend(t testing.TB, s *pgstore.Store) storetest.LookupBackend {
+	t.Helper()
+	if err := s.Reset(context.Background()); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	return storetest.LookupBackend{Store: s, Catalog: s}
 }
 
 // mockStream is the minimal handler.Stream for driving requests in tests.
@@ -243,4 +253,24 @@ func assertLookupCount(t *testing.T, s *pgstore.Store, query string, want int) {
 	if len(rs) != want {
 		t.Errorf("lookup %q matched %d, want %d (results %+v)", query, len(rs), want, rs)
 	}
+}
+
+// TestPostgresDifferential is the primary parity gate: the file store is the
+// reference implementation and pgstore must be observably indistinguishable
+// from it over seeded random operation sequences.
+func TestPostgresDifferential(t *testing.T) {
+	s := openStore(t)
+	ref := func(t *testing.T) storetest.LookupBackend { return storetest.FileBackend(t) }
+	cand := func(t *testing.T) storetest.LookupBackend { return pgBackend(t, s) }
+	storetest.RunDifferential(t, ref, cand, storetest.DifferentialConfig{})
+}
+
+// FuzzPostgresDifferential lets the fuzzer pick seeds for deeper runs. Fuzz
+// workers share one database, so: go test -run '^$' -fuzz FuzzPostgresDifferential -fuzztime 2m -parallel 1
+func FuzzPostgresDifferential(f *testing.F) {
+	s := openStore(f)
+	f.Add(int64(99))
+	f.Fuzz(func(t *testing.T, seed int64) {
+		storetest.RunDifferentialSeed(t, storetest.FileBackend(t), pgBackend(t, s), seed, storetest.DifferentialConfig{Ops: 100})
+	})
 }

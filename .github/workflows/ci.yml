@@ -79,6 +79,24 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.server == 'true'
     runs-on: ubuntu-latest
+    # Backend parity is a core invariant, so pgstore tests must run here, not
+    # skip: DEMARKUS_TEST_PG_REQUIRED turns a missing DSN into a failure.
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: demarkus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DEMARKUS_TEST_PG_DSN: postgres://postgres:postgres@localhost:5432/demarkus_test
+      DEMARKUS_TEST_PG_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

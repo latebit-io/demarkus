@@ -41,6 +41,8 @@ func RunConformance(t *testing.T, factory Factory) {
 		{"MissingDocument", testMissingDocument},
 		{"PathCollisions", testPathCollisions},
 		{"RejectsBinaryBody", testRejectsBinaryBody},
+		{"SharedBodyHash", testSharedBodyHash},
+		{"BodySizeLimit", testBodySizeLimit},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) {
@@ -472,6 +474,60 @@ func testRejectsBinaryBody(t *testing.T, s handler.DocumentStore) {
 	}
 	if cur := s.CurrentVersion("/doc.md"); cur != 1 {
 		t.Errorf("rejected binary append advanced /doc.md to version %d, want 1", cur)
+	}
+}
+
+// testSharedBodyHash pins LookupHash when several live documents share a
+// body: the smallest path wins, and updating or archiving one never drops
+// the others.
+func testSharedBodyHash(t *testing.T, s handler.DocumentStore) {
+	hash := store.ContentHash([]byte("same"))
+	mustWrite(t, s, "/b.md", 0, "same")
+	mustWrite(t, s, "/a.md", 0, "same")
+	mustWrite(t, s, "/c.md", 0, "same")
+	if p, ok := s.LookupHash(hash); !ok || p != "/a.md" {
+		t.Errorf("LookupHash shared = (%q, %v), want smallest path /a.md", p, ok)
+	}
+	if err := s.Archive("/a.md", true); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := s.LookupHash(hash); !ok || p != "/b.md" {
+		t.Errorf("LookupHash after archiving /a.md = (%q, %v), want /b.md", p, ok)
+	}
+	mustWrite(t, s, "/b.md", 1, "changed")
+	if p, ok := s.LookupHash(hash); !ok || p != "/c.md" {
+		t.Errorf("LookupHash after rewriting /b.md = (%q, %v), want /c.md", p, ok)
+	}
+	if p, ok := s.LookupHash(store.ContentHash([]byte("changed"))); !ok || p != "/b.md" {
+		t.Errorf("LookupHash new body = (%q, %v), want /b.md", p, ok)
+	}
+	if err := s.Archive("/a.md", false); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := s.LookupHash(hash); !ok || p != "/a.md" {
+		t.Errorf("LookupHash after unarchiving /a.md = (%q, %v), want /a.md", p, ok)
+	}
+}
+
+// testBodySizeLimit pins the body boundary: exactly MaxBodyLength is stored,
+// one byte more is ErrSizeLimit, and an append whose joined content crosses
+// the limit is rejected without advancing the version.
+func testBodySizeLimit(t *testing.T, s handler.DocumentStore) {
+	atLimit := bytes.Repeat([]byte("x"), protocol.MaxBodyLength)
+	if _, err := s.WriteVersion("/max.md", 0, atLimit, nil); err != nil {
+		t.Fatalf("write at limit: %v", err)
+	}
+	if _, err := s.WriteVersion("/over.md", 0, append(atLimit, 'x'), nil); !errors.Is(err, store.ErrSizeLimit) {
+		t.Errorf("write over limit: err = %v, want ErrSizeLimit", err)
+	}
+	if cur := s.CurrentVersion("/over.md"); cur != 0 {
+		t.Errorf("over-limit write left version %d", cur)
+	}
+	if _, err := s.Append("/max.md", 1, []byte("y"), nil); !errors.Is(err, store.ErrSizeLimit) {
+		t.Errorf("append crossing limit: err = %v, want ErrSizeLimit", err)
+	}
+	if cur := s.CurrentVersion("/max.md"); cur != 1 {
+		t.Errorf("rejected append advanced /max.md to version %d, want 1", cur)
 	}
 }
 
