@@ -207,10 +207,13 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 		JOIN documents d ON d.path = c.path
 		WHERE NOT d.archived`
 	args := []any{termsJSON}
-	if scope := canonical(opts.Scope); scope != "" {
-		prefix := scope + "/"
+	// Same scope normalization as the in-memory catalog, minus the leading
+	// slash stored paths lack; an uncleaned scope matches nothing on both.
+	if scope := catalog.NormalizeScope(opts.Scope); scope != "/" {
+		key := strings.TrimPrefix(scope, "/")
+		prefix := key + "/"
 		sel += ` AND (c.path = $2 OR (c.path >= $3 AND c.path < $4))`
-		args = append(args, scope, prefix, prefixUpperBound(prefix))
+		args = append(args, key, prefix, prefixUpperBound(prefix))
 	}
 	q := `SELECT * FROM (` + sel + `) m`
 	if !matchAll {

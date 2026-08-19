@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/latebit-io/demarkus/protocol/store"
 )
 
 // Entry is a single document's catalog record.
@@ -50,6 +52,7 @@ func New() *Catalog {
 // Set adds or replaces the entry for e.Path. The catalog takes ownership of e;
 // the caller must not mutate it afterward.
 func (c *Catalog) Set(e *Entry) {
+	e.Path = store.CanonicalPath(e.Path)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[e.Path] = e
@@ -65,7 +68,7 @@ func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modif
 func (c *Catalog) Remove(docPath string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.entries, docPath)
+	delete(c.entries, store.CanonicalPath(docPath))
 }
 
 // Len returns the number of cataloged documents.
@@ -101,7 +104,7 @@ func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
 	if !matchAll && len(terms) == 0 {
 		return nil, nil
 	}
-	scope := normalizeScope(opts.Scope)
+	scope := NormalizeScope(opts.Scope)
 
 	c.mu.RLock()
 	var results []Result
@@ -179,9 +182,10 @@ func sortResults(rs []Result) {
 	})
 }
 
-// normalizeScope returns a leading-slashed, trailing-slash-trimmed scope, or
-// "/" for the whole-server scope.
-func normalizeScope(s string) string {
+// NormalizeScope returns a leading-slashed, trailing-slash-trimmed scope, or
+// "/" for the whole-server scope. Exported so every LookupCatalog backend
+// scopes identically; it deliberately does not clean the path.
+func NormalizeScope(s string) string {
 	if s == "" || s == "/" {
 		return "/"
 	}

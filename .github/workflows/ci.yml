@@ -79,6 +79,26 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.server == 'true'
     runs-on: ubuntu-latest
+    # Backend parity is a core invariant: the pgstore conformance and
+    # differential suites must run here, not skip. DEMARKUS_TEST_PG_REQUIRED
+    # turns the DSN-missing skip into a failure so a broken service wiring
+    # cannot silently drop Postgres coverage.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: demarkus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DEMARKUS_TEST_PG_DSN: postgres://postgres:postgres@localhost:5432/demarkus_test
+      DEMARKUS_TEST_PG_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

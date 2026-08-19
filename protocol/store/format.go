@@ -132,3 +132,7 @@ func PrepareAppendMeta(reqPath string, base, req map[string]string) map[string]s
 // adds to stored version bytes; backends bound stored size by
 // protocol.MaxBodyLength + MaxStoreFrontmatter.
 const MaxStoreFrontmatter = maxStoreFrontmatter
+
+// ValidateWrite checks the size, metadata, and encoding of a write request
+// in the order every backend applies before reading any state.
+func ValidateWrite(content []byte, meta map[string]string) error { return validateWrite(content, meta) }

@@ -175,14 +175,15 @@ func newVersionSymlinkTarget(base string, version int) string {
 
 // Store provides read access to a versioned document directory.
 type Store struct {
-	root    string
-	hashMu  sync.RWMutex
-	hashIdx map[string]string // content hash → request path
-	// pathIdx maps request path → content hash (reverse index). Beyond hash
-	// lookups, ListDir's archived-filtering treats membership as "current,
-	// non-archived versioned doc" (see liveChildren) — a change to what this
-	// index tracks changes listing behavior. A miss only degrades to a disk
-	// scan, but keep membership semantics exact.
+	root   string
+	hashMu sync.RWMutex
+	// hashIdx: content hash → canonical request paths whose current body has
+	// that hash. LookupHash picks the smallest path, as pgstore's ORDER BY
+	// path does, so backends and a rebuilt index agree on shared bodies.
+	hashIdx map[string]map[string]struct{}
+	// pathIdx: canonical request path → content hash. liveChildren also reads
+	// membership as "current, non-archived doc" for ListDir filtering, so
+	// keep membership semantics exact; a miss only degrades to a disk scan.
 	pathIdx map[string]string
 }
 
@@ -191,7 +192,7 @@ type Store struct {
 func New(root string) *Store {
 	return &Store{
 		root:    root,
-		hashIdx: make(map[string]string),
+		hashIdx: make(map[string]map[string]struct{}),
 		pathIdx: make(map[string]string),
 	}
 }
@@ -272,15 +273,41 @@ func (s *Store) BuildHashIndex() error {
 	s.hashMu.Lock()
 	defer s.hashMu.Unlock()
 
-	s.hashIdx = make(map[string]string)
+	s.hashIdx = make(map[string]map[string]struct{})
 	s.pathIdx = make(map[string]string)
 
 	return s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
-		hash := contentHash(extractBody(data))
-		s.hashIdx[hash] = reqPath
-		s.pathIdx[reqPath] = hash
+		s.indexLocked(reqPath, contentHash(extractBody(data)))
 		return nil
 	})
+}
+
+// indexLocked records reqPath (already canonical) under hash, dropping any
+// earlier hash it was indexed under. Caller holds hashMu.
+func (s *Store) indexLocked(reqPath, hash string) {
+	s.unindexLocked(reqPath)
+	paths, ok := s.hashIdx[hash]
+	if !ok {
+		paths = make(map[string]struct{})
+		s.hashIdx[hash] = paths
+	}
+	paths[reqPath] = struct{}{}
+	s.pathIdx[reqPath] = hash
+}
+
+// unindexLocked removes reqPath from both maps. Caller holds hashMu.
+func (s *Store) unindexLocked(reqPath string) {
+	hash, ok := s.pathIdx[reqPath]
+	if !ok {
+		return
+	}
+	delete(s.pathIdx, reqPath)
+	if paths := s.hashIdx[hash]; paths != nil {
+		delete(paths, reqPath)
+		if len(paths) == 0 {
+			delete(s.hashIdx, hash)
+		}
+	}
 }
 
 // CurrentDoc describes a current, non-archived document version surfaced by
@@ -309,42 +336,41 @@ func (s *Store) WalkCurrent(fn func(CurrentDoc) error) error {
 	})
 }
 
-// LookupHash returns the request path for a content hash, or false if not found.
+// LookupHash returns the request path for a content hash, or false if not
+// found. When several live documents share the body, the smallest path wins.
 func (s *Store) LookupHash(hash string) (string, bool) {
 	s.hashMu.RLock()
 	defer s.hashMu.RUnlock()
-	path, ok := s.hashIdx[hash]
-	return path, ok
+	best := ""
+	for p := range s.hashIdx[hash] {
+		if best == "" || p < best {
+			best = p
+		}
+	}
+	return best, best != ""
 }
 
 // UpdateHashIndex adds or updates the hash index entry for a document.
+// Keys are canonical so "/d/e/" and "/d/e" index one document, as
+// BuildHashIndex derives from the walk.
 func (s *Store) UpdateHashIndex(reqPath string, body []byte) {
-	hash := contentHash(body)
 	s.hashMu.Lock()
 	defer s.hashMu.Unlock()
-	// Remove old hash entry for this path (content changed)
-	if oldHash, ok := s.pathIdx[reqPath]; ok {
-		delete(s.hashIdx, oldHash)
-	}
-	s.hashIdx[hash] = reqPath
-	s.pathIdx[reqPath] = hash
+	s.indexLocked(CanonicalPath(reqPath), contentHash(body))
 }
 
 // RemoveHashEntry removes the hash index entry for a given request path.
 func (s *Store) RemoveHashEntry(reqPath string) {
 	s.hashMu.Lock()
 	defer s.hashMu.Unlock()
-	if hash, ok := s.pathIdx[reqPath]; ok {
-		delete(s.hashIdx, hash)
-		delete(s.pathIdx, reqPath)
-	}
+	s.unindexLocked(CanonicalPath(reqPath))
 }
 
-// HashIndexSize returns the number of entries in the hash index.
+// HashIndexSize returns the number of indexed documents.
 func (s *Store) HashIndexSize() int {
 	s.hashMu.RLock()
 	defer s.hashMu.RUnlock()
-	return len(s.hashIdx)
+	return len(s.pathIdx)
 }
 
 // Root returns the content directory path.
@@ -556,7 +582,7 @@ type liveChildren struct {
 // though the index tracks them: a listing never shows them, so counting one
 // as live would keep its parent visible as an empty shell.
 func (s *Store) liveChildren(dirReq string) liveChildren {
-	canon := slashpath.Clean("/" + strings.Trim(dirReq, "/"))
+	canon := CanonicalPath(dirReq)
 	prefix := strings.TrimRight(canon, "/") + "/"
 	out := liveChildren{files: make(map[string]struct{}), dirs: make(map[string]struct{})}
 	s.hashMu.RLock()
@@ -731,7 +757,7 @@ func (s *Store) resolve(reqPath string) (string, error) {
 	// Reject paths that contain .. segments. filepath.Clean collapses traversal
 	// attempts into valid-looking paths (e.g., /../etc/passwd → etc/passwd), so
 	// we check the original path for traversal intent as defense-in-depth.
-	if containsDotDot(reqPath) {
+	if ContainsDotDot(reqPath) {
 		return "", os.ErrNotExist
 	}
 
@@ -769,6 +795,9 @@ func (s *Store) resolve(reqPath string) (string, error) {
 // CurrentVersion returns the latest version number for a document.
 // Returns 0 if no version history exists.
 func (s *Store) CurrentVersion(reqPath string) int {
+	if ContainsDotDot(reqPath) {
+		return 0
+	}
 	cleaned := filepath.Clean(reqPath)
 	cleaned = strings.TrimLeft(cleaned, "/")
 	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
@@ -851,6 +880,10 @@ func (s *Store) findVersionsPerDoc(versionsDir, base string) []VersionInfo {
 // getVersion retrieves a specific version of a document from the versions directory.
 // Uses resolve() for path validation — same security as all other path access.
 func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
+	// filepath.Join below would clean ".." away; reject it like resolve does.
+	if ContainsDotDot(reqPath) {
+		return nil, os.ErrNotExist
+	}
 	cleaned := filepath.Clean(reqPath)
 	cleaned = strings.TrimLeft(cleaned, "/")
 	base := filepath.Base(cleaned)
@@ -974,14 +1007,22 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 // The previous-hash is the SHA-256 of the raw on-disk bytes of version N-1,
 // forming a hash chain that allows chain integrity to be verified later.
 func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*Document, error) {
-	if int64(len(content)) > protocol.MaxBodyLength {
-		return nil, ErrSizeLimit
-	}
-	if err := validateMeta(meta); err != nil {
+	if err := validateWrite(content, meta); err != nil {
 		return nil, err
 	}
-	if err := ValidateBody(content); err != nil {
-		return nil, err
+	if ContainsDotDot(reqPath) {
+		return nil, os.ErrNotExist
+	}
+
+	cleaned := filepath.Clean(reqPath)
+	cleaned = strings.TrimLeft(cleaned, "/")
+	base := filepath.Base(cleaned)
+	dir := filepath.Dir(cleaned)
+
+	// Writing beneath a document is a topology collision, reported the same
+	// way as writing over a directory (pgstore.checkPathTopology agrees).
+	if anc := s.documentAncestor(cleaned); anc != "" {
+		return nil, fmt.Errorf("cannot publish %s: a document exists at ancestor /%s", reqPath, anc)
 	}
 
 	// Validate path stays within the store root (resolve handles traversal + symlinks).
@@ -991,11 +1032,6 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 		}
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
-
-	cleaned := filepath.Clean(reqPath)
-	cleaned = strings.TrimLeft(cleaned, "/")
-	base := filepath.Base(cleaned)
-	dir := filepath.Dir(cleaned)
 
 	versionsDir := filepath.Join(s.root, dir, "versions")
 	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
@@ -1089,12 +1125,15 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 
 	s.UpdateHashIndex(reqPath, content)
 
+	// Metadata is the persisted form (what Get returns), not the request
+	// map: "alpha, beta" is stored as a tags list and reads back "alpha,beta",
+	// and the catalog must see one spelling whichever path populated it.
 	doc := &Document{
 		Content:  content,
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  next,
 		Archived: false,
-		Metadata: meta,
+		Metadata: extractMetadata(stored),
 	}
 	if keep := retentionValue(meta); keep > 0 {
 		doc.Prune = s.pruneVersions(versionsDir, base, next, keep)
@@ -1237,6 +1276,14 @@ func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content [
 //
 // Returns ErrConflict if the expectation is violated.
 func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*Document, error) {
+	// Request-shaped checks come before any state read so an invalid write
+	// never masquerades as a conflict; pgstore orders its checks the same way.
+	if err := validateWrite(content, meta); err != nil {
+		return nil, err
+	}
+	if ContainsDotDot(reqPath) {
+		return nil, os.ErrNotExist
+	}
 	if expectedVersion < 0 {
 		return s.Write(reqPath, content, meta)
 	}
@@ -1295,7 +1342,7 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	if err := validateMeta(meta); err != nil {
 		return nil, err
 	}
-	if containsDotDot(reqPath) {
+	if ContainsDotDot(reqPath) {
 		return nil, os.ErrNotExist
 	}
 
@@ -1398,11 +1445,28 @@ func resolveNonExistent(path string) (string, error) {
 	if err != nil {
 		return filepath.Abs(path)
 	}
+	// A non-directory ancestor (a document's current pointer) cannot have
+	// children: the path addresses nothing. Report ErrNotExist here rather
+	// than letting a later stat surface ENOTDIR as an internal error.
+	if len(tail) > 0 {
+		if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
+			return "", os.ErrNotExist
+		}
+	}
 	return filepath.Join(append([]string{resolved}, tail...)...), nil
 }
 
-// containsDotDot reports whether the path contains a ".." segment.
-func containsDotDot(path string) bool {
+// CanonicalPath is the one spelling of a request path shared by every index
+// keyed on paths (hash index, catalog, pgstore rows): slash-cleaned, single
+// leading slash, root is "/". Callers reject traversal via ContainsDotDot.
+func CanonicalPath(reqPath string) string {
+	return slashpath.Clean("/" + reqPath)
+}
+
+// ContainsDotDot reports whether the path contains a ".." segment. Every
+// backend rejects such paths with os.ErrNotExist; exported so they share one
+// definition of traversal.
+func ContainsDotDot(path string) bool {
 	for seg := range strings.SplitSeq(path, "/") {
 		if seg == ".." {
 			return true
@@ -1546,6 +1610,30 @@ func ValidateBody(content []byte) error {
 		return ErrInvalidContent
 	}
 	return nil
+}
+
+// validateWrite checks the size, metadata, and encoding of a write request.
+func validateWrite(content []byte, meta map[string]string) error {
+	if int64(len(content)) > protocol.MaxBodyLength {
+		return ErrSizeLimit
+	}
+	if err := validateMeta(meta); err != nil {
+		return err
+	}
+	return ValidateBody(content)
+}
+
+// documentAncestor returns the nearest proper ancestor of cleaned (no leading
+// slash) that is a document, archived or not, or "" when none is.
+func (s *Store) documentAncestor(cleaned string) string {
+	parts := strings.Split(cleaned, "/")
+	for i := 1; i < len(parts); i++ {
+		anc := strings.Join(parts[:i], "/")
+		if s.CurrentVersion(anc) > 0 {
+			return anc
+		}
+	}
+	return ""
 }
 
 // validateMeta checks metadata is safe for frontmatter serialization. Defense

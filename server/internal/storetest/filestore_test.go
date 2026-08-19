@@ -24,3 +24,13 @@ func TestFileStoreLookupConformance(t *testing.T) {
 		return LookupBackend{Store: store.New(t.TempDir()), Catalog: catalog.New()}
 	})
 }
+
+// TestFileStoreDifferentialSelf runs the differential harness with the file
+// store on both sides. It proves the harness itself is deterministic and
+// backend-neutral: a self-diff failure is a harness bug, not a store bug.
+func TestFileStoreDifferentialSelf(t *testing.T) {
+	factory := func(t *testing.T) LookupBackend {
+		return LookupBackend{Store: store.New(t.TempDir()), Catalog: catalog.New()}
+	}
+	RunDifferential(t, factory, factory, DifferentialConfig{Seeds: []int64{1, 2}, Ops: 80})
+}

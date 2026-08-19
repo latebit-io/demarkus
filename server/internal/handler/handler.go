@@ -127,7 +127,7 @@ func (h *Handler) HandleStream(stream Stream) {
 
 	// Reject path traversal attempts before any handler logic (including auth)
 	// to prevent scope bypass via paths like /allowed/../secret.md.
-	if containsDotDot(req.Path) {
+	if store.ContainsDotDot(req.Path) {
 		h.logger().Warn("path traversal attempt blocked", "path", sanitize(req.Path))
 		h.writeError(stream, protocol.StatusNotFound, req.Path+" not found")
 		return
@@ -1061,16 +1061,6 @@ func (h *Handler) writeResponse(w io.Writer, resp protocol.Response) {
 	if _, err := resp.WriteTo(w); err != nil {
 		h.logger().Error("write response failed", "error", err)
 	}
-}
-
-// containsDotDot reports whether the path contains a ".." segment.
-func containsDotDot(p string) bool {
-	for seg := range strings.SplitSeq(p, "/") {
-		if seg == ".." {
-			return true
-		}
-	}
-	return false
 }
 
 // sanitize strips control characters from a string for safe logging.
