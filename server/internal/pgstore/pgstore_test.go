@@ -239,3 +239,7 @@ func FuzzPostgresHandlerDifferential(f *testing.F) {
 		storetest.RunHandlerDifferentialSeed(t, storetest.FileBackend(t), pgBackend(t, s), seed, storetest.DifferentialConfig{Ops: 100})
 	})
 }
+
+func BenchmarkPostgresHandler(b *testing.B) {
+	storetest.RunHandlerBenchmarks(b, func(t testing.TB) storetest.LookupBackend { return pgBackend(t, openStore(t)) })
+}

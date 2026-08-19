@@ -140,8 +140,7 @@ func requestFor(o op, cur int) protocol.Request {
 var rfc3339 = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ`)
 
 // normalize renders a response without wall-clock values: the modified key
-// is dropped and timestamps in bodies are masked. LOOKUP rows are sorted
-// because their modified tiebreak is wall clock too.
+// is dropped, timestamps in bodies are masked, and LOOKUP ties are neutralized.
 func normalize(resp protocol.Response) string {
 	var sb strings.Builder
 	sb.WriteString(resp.Status)
@@ -152,12 +151,44 @@ func normalize(resp protocol.Response) string {
 	}
 	body := rfc3339.ReplaceAllString(resp.Body, "<ts>")
 	if strings.HasPrefix(body, "\n# Lookup matches") {
-		lines := strings.Split(body, "\n")
-		sort.Strings(lines)
-		body = strings.Join(lines, "\n")
+		body = sortLookupTies(body)
 	}
 	fmt.Fprintf(&sb, " body=%q", body)
 	return sb.String()
+}
+
+// sortLookupTies sorts only runs of adjacent LOOKUP rows with equal
+// importance: after score and importance the tiebreak is wall-clock
+// modified, so only those neighbours may legitimately differ in order.
+func sortLookupTies(body string) string {
+	lines := strings.Split(body, "\n")
+	importance := func(line string) (string, bool) {
+		if !strings.HasPrefix(line, "| /") {
+			return "", false
+		}
+		cells := strings.Split(line, " | ")
+		if len(cells) < 2 {
+			return "", false
+		}
+		return cells[1], true
+	}
+	for i := 0; i < len(lines); {
+		imp, ok := importance(lines[i])
+		if !ok {
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(lines) {
+			if next, ok := importance(lines[j]); !ok || next != imp {
+				break
+			}
+			j++
+		}
+		sort.Strings(lines[i:j])
+		i = j
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (d *handlerDifferential) compareSnapshots() {
@@ -173,8 +204,10 @@ func handlerSnapshot(t *testing.T, h *handler.Handler, b LookupBackend) []string
 	for _, p := range diffDocPaths {
 		add("fetch "+p, request(protocol.VerbFetch, p, nil, ""))
 		add("versions "+p, request(protocol.VerbVersions, p, nil, ""))
+		// Old versions are immutable and were compared when they were the tip;
+		// the first version, the tip, and the miss past it carry the signal.
 		cur := b.Store.CurrentVersion(p)
-		for v := 1; v <= cur+1; v++ {
+		for _, v := range slices.Compact([]int{1, max(cur, 1), cur + 1}) {
 			add(fmt.Sprintf("fetch %s/v%d", p, v), request(protocol.VerbFetch, fmt.Sprintf("%s/v%d", p, v), nil, ""))
 		}
 	}

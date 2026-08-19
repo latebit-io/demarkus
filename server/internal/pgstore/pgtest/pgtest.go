@@ -44,11 +44,13 @@ var schemaName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // search_path, for raw handles that must see the same tables as Open.
 func SchemaDSN(t testing.TB, schema string) string {
 	t.Helper()
-	if !schemaName.MatchString(schema) {
-		t.Fatalf("pgtest schema %q: must match %s", schema, schemaName)
-	}
 	base := dsn(t)
 	ensureSchema(t, base, schema)
+	// libpq keyword/value DSNs take a space-separated parameter; URL DSNs a
+	// query parameter.
+	if !strings.HasPrefix(base, "postgres://") && !strings.HasPrefix(base, "postgresql://") {
+		return base + " search_path=" + schema
+	}
 	sep := "?"
 	if strings.Contains(base, "?") {
 		sep = "&"
@@ -83,8 +85,13 @@ func Open(t testing.TB, schema string) *pgstore.Store {
 	return s
 }
 
+// ensureSchema creates the schema. The name is validated here, next to the
+// identifier interpolation, so every caller gets the guarantee.
 func ensureSchema(t testing.TB, dsn, schema string) {
 	t.Helper()
+	if !schemaName.MatchString(schema) {
+		t.Fatalf("pgtest schema %q: must match %s", schema, schemaName)
+	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("open bootstrap handle: %v", err)

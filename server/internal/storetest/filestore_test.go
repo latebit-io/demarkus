@@ -36,3 +36,7 @@ func TestFileStoreHandlerDifferentialSelf(t *testing.T) {
 	factory := func(t *testing.T) LookupBackend { return FileBackend(t) }
 	RunHandlerDifferential(t, factory, factory, DifferentialConfig{Seeds: []int64{1, 2}, Ops: 80})
 }
+
+func BenchmarkFileHandler(b *testing.B) {
+	RunHandlerBenchmarks(b, FileBackend)
+}
