@@ -242,7 +242,7 @@ fi
 github_api() {
   local url="$1"
   set +u
-  curl -fsSL "${CURL_AUTH_ARGS[@]}" "$url" 2>/dev/null
+  curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "${CURL_AUTH_ARGS[@]}" "$url" 2>/dev/null
   set -u
 }
 
@@ -296,7 +296,7 @@ download_asset_file() {
       return 1
     fi
 
-    curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" \
+    curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" -H "Authorization: token ${GITHUB_TOKEN}" \
       -H "Accept: application/octet-stream" \
       -o "$output_path" "$asset_url" || return 1
   else
@@ -304,7 +304,7 @@ download_asset_file() {
     local encoded_tag
     encoded_tag=$(printf '%s' "$tag" | sed 's|/|%2F|g')
     local url="https://github.com/${GITHUB_REPO}/releases/download/${encoded_tag}/${filename}"
-    curl -fsSL -o "$output_path" "$url" || return 1
+    curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" -o "$output_path" "$url" || return 1
   fi
 }
 
@@ -1942,7 +1942,7 @@ do_install() {
     local tmp_script
     tmp_script=$(mktemp)
     set +u
-    if curl -fsSL "${CURL_AUTH_ARGS[@]}" "$script_url" -o "$tmp_script" 2>/dev/null; then
+    if curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "${CURL_AUTH_ARGS[@]}" "$script_url" -o "$tmp_script" 2>/dev/null; then
       set -u
       $SUDO mv "$tmp_script" "${INSTALL_DIR}/demarkus-install"
       $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
@@ -2137,7 +2137,7 @@ do_update() {
   local script_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh"
   local new_script
   set +u
-  new_script=$(curl -fsSL "${CURL_AUTH_ARGS[@]}" "$script_url" 2>/dev/null) || {
+  new_script=$(curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "${CURL_AUTH_ARGS[@]}" "$script_url" 2>/dev/null) || {
     set -u
     log_warn "Could not fetch updated install script, continuing with current version"
     new_script=""
@@ -2155,11 +2155,26 @@ do_update() {
   _do_update_inner --from "$current_version" --to "$version" --library-version "$library_version"
 }
 
+# stack_component_installed reports whether an optional component is present,
+# by binary or by unit: install_binary_atomic may put it somewhere else.
+stack_component_installed() {
+  local binary="$1" service="$2"
+
+  [ -x "${INSTALL_DIR}/${binary}" ] || $SUDO test -f "${SYSTEMD_DIR}/${service}.service"
+}
+
 # update_stack_components refreshes both optional components. Shared by the
 # upgrade path and the server-already-current path, where a stale library is
 # still worth updating.
 update_stack_components() {
   local tools_version="$1" library_version="$2" tmpdir="$3"
+
+  # An empty tools version would otherwise make the broker branch log a skip
+  # and return success, reporting a clean update that never refreshed it.
+  if [ -z "$tools_version" ] && stack_component_installed "demarkus-broker" "$BROKER_SERVICE"; then
+    log_error "Could not resolve the tools release; the installed broker cannot be updated"
+    exit 1
+  fi
 
   update_stack_component "demarkus-broker" "$BROKER_SERVICE" "$tools_version" "$tmpdir"
   update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "$library_version" "$tmpdir"
@@ -2174,7 +2189,7 @@ update_stack_component() {
   if [ "$PLATFORM" != "linux" ]; then
     return
   fi
-  if [ ! -x "${INSTALL_DIR}/${binary}" ] && ! $SUDO test -f "${SYSTEMD_DIR}/${service}.service"; then
+  if ! stack_component_installed "$binary" "$service"; then
     return
   fi
 

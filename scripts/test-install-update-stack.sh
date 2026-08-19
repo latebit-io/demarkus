@@ -35,6 +35,8 @@ install_binary_atomic() { echo "install $(basename "$2")" >> "$CALLS"; }
 # Stub systemctl so a restart is recorded, never executed.
 systemctl() { echo "systemctl $*" >> "$CALLS"; }
 
+eval "$(awk '/^stack_component_installed\(\)/,/^\}$/' "$SRC")"
+eval "$(awk '/^update_stack_components\(\)/,/^\}$/' "$SRC")"
 eval "$(awk '/^update_stack_component\(\)/,/^\}$/' "$SRC")"
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
@@ -103,7 +105,21 @@ PLATFORM="darwin"
 update_stack_component "demarkus-library" "demarkus-library" "" "$TMP"
 [ ! -s "$CALLS" ] || fail "stack update must be linux-only, got: $(cat "$CALLS")"
 
-# 10. install_binary_atomic must replace by rename, not write in place: writing
+# 10. An unresolvable tools release must fail loudly when a broker is installed,
+# not log a skip and report success.
+# shellcheck disable=SC2034  # consumed by the functions sourced from install.sh
+BROKER_SERVICE="demarkus-broker"
+# shellcheck disable=SC2034  # consumed by the functions sourced from install.sh
+LIBRARY_SERVICE="demarkus-library"
+touch "$INSTALL_DIR/demarkus-broker"; chmod +x "$INSTALL_DIR/demarkus-broker"
+if ( update_stack_components "" "" "$TMP" ) 2>/dev/null; then
+  fail "an installed broker with no tools release must not report success"
+fi
+rm -f "$INSTALL_DIR/demarkus-broker"
+# With no broker installed the same call is a no-op, not a failure.
+( update_stack_components "" "" "$TMP" ) 2>/dev/null || fail "absent broker must not fail the update"
+
+# 11. install_binary_atomic must replace by rename, not write in place: writing
 # over a live executable fails with ETXTBSY. A rename gives dest a new inode;
 # an in-place copy keeps the old one, so the inode is the observable proof.
 eval "$(awk '/^install_binary_atomic\(\)/,/^\}$/' "$SRC")"
