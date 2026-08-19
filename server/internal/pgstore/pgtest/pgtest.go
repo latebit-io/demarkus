@@ -21,6 +21,7 @@ import (
 	// pgx database/sql driver for the schema bootstrap handle.
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/pgstore"
 )
 
@@ -84,6 +85,7 @@ func RequireSerialFuzz(f *testing.F) {
 var (
 	storesMu sync.Mutex
 	stores   = map[string]*pgstore.Store{}
+	raws     = map[string]*sql.DB{}
 )
 
 // Open returns the package's pgstore over schema, opened once per process and
@@ -106,6 +108,49 @@ func Open(t testing.TB, schema string) *pgstore.Store {
 		t.Fatalf("reset postgres (schema %s): %v", schema, err)
 	}
 	return s
+}
+
+// DB returns a raw handle on schema, opened once per process, for tests
+// that must read or corrupt tables behind the store's back.
+func DB(t testing.TB, schema string) *sql.DB {
+	t.Helper()
+	storesMu.Lock()
+	defer storesMu.Unlock()
+	if db, ok := raws[schema]; ok {
+		return db
+	}
+	db, err := sql.Open("pgx", SchemaDSN(t, schema))
+	if err != nil {
+		t.Fatalf("open raw handle (schema %s): %v", schema, err)
+	}
+	raws[schema] = db
+	return db
+}
+
+// Exec runs one statement on the schema's raw handle under a bounded context.
+func Exec(t testing.TB, schema, query string, args ...any) sql.Result {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := DB(t, schema).ExecContext(ctx, query, args...)
+	if err != nil {
+		t.Fatalf("exec %q: %v", query, err)
+	}
+	return res
+}
+
+// TamperVersion overwrites one version's stored bytes out of band, for
+// tests that prove VerifyChain catches corruption. path is a request path.
+func TamperVersion(t testing.TB, schema, path string, version int, stored []byte) {
+	t.Helper()
+	rel, err := store.RelPath(path)
+	if err != nil {
+		t.Fatalf("tamper %s: %v", path, err)
+	}
+	res := Exec(t, schema, `UPDATE versions SET stored = $3 WHERE path = $1 AND version = $2`, rel, version, stored)
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("tamper %s v%d: %d rows affected (err %v), want 1", path, version, n, err)
+	}
 }
 
 // ensureSchema creates the schema. The name is validated here, next to the

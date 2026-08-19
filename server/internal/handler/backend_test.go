@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"os"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/store"
@@ -10,9 +11,12 @@ import (
 )
 
 // backend is one DocumentStore plus its LookupCatalog, wired as main.go does.
+// Tamper overwrites one version's stored bytes behind the store's back so
+// chain verification can be proven on every backend.
 type backend struct {
 	Store   DocumentStore
 	Catalog LookupCatalog
+	Tamper  func(t testing.TB, path string, version int, stored []byte)
 }
 
 // backendFactory returns a fresh, empty backend.
@@ -23,7 +27,18 @@ func fileBackend(t testing.TB) backend { return fileBackendAt(t.TempDir()) }
 
 // fileBackendAt roots the file store at dir, for tests that touch the disk.
 func fileBackendAt(dir string) backend {
-	return backend{Store: store.New(dir), Catalog: catalog.New()}
+	s := store.New(dir)
+	tamper := func(t testing.TB, path string, version int, stored []byte) {
+		t.Helper()
+		file, err := s.VersionFilePath(path, version)
+		if err != nil {
+			t.Fatalf("tamper %s v%d: %v", path, version, err)
+		}
+		if err := os.WriteFile(file, stored, 0o644); err != nil {
+			t.Fatalf("tamper %s v%d: %v", path, version, err)
+		}
+	}
+	return backend{Store: s, Catalog: catalog.New(), Tamper: tamper}
 }
 
 // postgresBackend returns the package's shared pgstore (own schema, reset)
@@ -31,8 +46,12 @@ func fileBackendAt(dir string) backend {
 // DEMARKUS_TEST_PG_DSN unless DEMARKUS_TEST_PG_REQUIRED is set.
 func postgresBackend(t testing.TB) backend {
 	t.Helper()
-	s := pgtest.Open(t, "handler")
-	return backend{Store: s, Catalog: s}
+	const schema = "handler"
+	s := pgtest.Open(t, schema)
+	tamper := func(t testing.TB, path string, version int, stored []byte) {
+		pgtest.TamperVersion(t, schema, path, version, stored)
+	}
+	return backend{Store: s, Catalog: s, Tamper: tamper}
 }
 
 // forEachBackend runs fn once per backend so every handler test proves the

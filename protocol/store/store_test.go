@@ -939,44 +939,30 @@ func TestArchive(t *testing.T) {
 	})
 }
 
-func TestVerifyChain_Valid(t *testing.T) {
-	root := t.TempDir()
-	s := New(root)
-
-	for i := 1; i <= 3; i++ {
-		if _, err := s.Write("/doc.md", fmt.Appendf(nil, "# V%d\n", i), nil); err != nil {
-			t.Fatalf("write v%d: %v", i, err)
+// TestVersionFilePath pins the layout accessor against what Get reads: a
+// nested document tampered through it breaks the chain.
+func TestVersionFilePath(t *testing.T) {
+	s := New(t.TempDir())
+	for _, body := range []string{"# V1\n", "# V2\n"} {
+		if _, err := s.Write("/a/b/doc.md", []byte(body), nil); err != nil {
+			t.Fatalf("write: %v", err)
 		}
 	}
-
-	if err := s.VerifyChain("/doc.md"); err != nil {
-		t.Errorf("expected valid chain, got error: %v", err)
+	if _, err := s.VersionFilePath("/../doc.md", 1); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("traversal: err = %v, want ErrNotExist", err)
 	}
-}
-
-func TestVerifyChain_Tampered(t *testing.T) {
-	root := t.TempDir()
-	s := New(root)
-
-	if _, err := s.Write("/doc.md", []byte("# V1\n"), nil); err != nil {
-		t.Fatalf("write v1: %v", err)
+	file, err := s.VersionFilePath("/a/b/doc.md", 1)
+	if err != nil {
+		t.Fatalf("VersionFilePath: %v", err)
 	}
-	if _, err := s.Write("/doc.md", []byte("# V2\n"), nil); err != nil {
-		t.Fatalf("write v2: %v", err)
-	}
-
-	// Tamper with v1 after the chain is formed.
-	v1Path := filepath.Join(root, "versions", "doc.md", "v1")
-	if err := os.WriteFile(v1Path, []byte("# TAMPERED\n"), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte("# TAMPERED\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	err := s.VerifyChain("/doc.md")
-	if err == nil {
-		t.Fatal("expected chain verification error after tampering")
+	if got, err := s.Get("/a/b/doc.md", 1); err != nil || string(got.Content) != "# TAMPERED\n" {
+		t.Errorf("Get v1 after tamper = %q (err %v), want the tampered bytes", got.Content, err)
 	}
-	if !strings.Contains(err.Error(), "chain broken") {
-		t.Errorf("unexpected error: %v", err)
+	if err := s.VerifyChain("/a/b/doc.md"); err == nil || !strings.Contains(err.Error(), "chain broken") {
+		t.Errorf("VerifyChain after tamper: err = %v, want chain broken", err)
 	}
 }
 
@@ -1630,38 +1616,6 @@ func TestWrite_OKFTagsList(t *testing.T) {
 	}
 }
 
-func TestValidateMeta_TagsCountedAsSerialized(t *testing.T) {
-	// 400 one-char tags: the comma-separated map value is "a,a,...,a" (799 B,
-	// +4 for the key = 803, under MaxMetaBytes), but the on-disk YAML list
-	// "[a, a, ..., a]" is ~1200 B. Counting the serialized form must reject it
-	// so the write cannot overflow the frontmatter budget.
-	tags := strings.Repeat("a,", 399) + "a"
-	csvSize := len("tags") + len(tags)
-	if csvSize > protocol.MaxMetaBytes {
-		t.Fatalf("test setup: csv size %d already exceeds cap %d", csvSize, protocol.MaxMetaBytes)
-	}
-	if got := SerializedMetaSize("tags", tags); got <= protocol.MaxMetaBytes {
-		t.Fatalf("test setup: serialized size %d should exceed cap %d", got, protocol.MaxMetaBytes)
-	}
-
-	s := New(t.TempDir())
-	if _, err := s.Write("/doc.md", []byte("# Hi\n"), map[string]string{"tags": tags}); err == nil {
-		t.Fatal("expected oversized serialized tags to be rejected")
-	}
-}
-
-func TestWrite_ReservedMetaKeyRejected(t *testing.T) {
-	s := New(t.TempDir())
-	for _, k := range []string{"version", "archived", "previous-hash"} {
-		t.Run(k, func(t *testing.T) {
-			_, err := s.Write("/doc.md", []byte("# Hi\n"), map[string]string{k: "x"})
-			if err == nil {
-				t.Fatalf("expected reserved-key %q to be rejected", k)
-			}
-		})
-	}
-}
-
 func TestExtractMetadata_LegacyMetaPrefix(t *testing.T) {
 	// Versions written before the OKF rename carry meta.-prefixed OKF fields.
 	// They must still read back correctly.
@@ -1782,75 +1736,6 @@ func TestWrite_NilMetadata(t *testing.T) {
 	}
 }
 
-func TestWrite_MetadataChangedCreatesNewVersion(t *testing.T) {
-	root := t.TempDir()
-	s := New(root)
-
-	content := []byte("# Hello\n")
-
-	// Write v1 with metadata.
-	_, err := s.Write("/doc.md", content, map[string]string{"type": "note"})
-	if err != nil {
-		t.Fatalf("Write v1: %v", err)
-	}
-
-	// Same content, same metadata → ErrNotModified.
-	_, err = s.Write("/doc.md", content, map[string]string{"type": "note"})
-	if !errors.Is(err, ErrNotModified) {
-		t.Fatalf("expected ErrNotModified, got: %v", err)
-	}
-
-	// Same content, different metadata → new version.
-	doc, err := s.Write("/doc.md", content, map[string]string{"type": "journal"})
-	if err != nil {
-		t.Fatalf("Write v2: %v", err)
-	}
-	if doc.Version != 2 {
-		t.Errorf("version = %d, want 2", doc.Version)
-	}
-	if doc.Metadata["type"] != "journal" {
-		t.Errorf("metadata type = %q, want %q", doc.Metadata["type"], "journal")
-	}
-}
-
-func TestAppend_WithMetadata(t *testing.T) {
-	root := t.TempDir()
-	s := New(root)
-
-	// v1 with metadata.
-	_, err := s.Write("/doc.md", []byte("# Hello"), map[string]string{"type": "note"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Append with different metadata.
-	doc, err := s.Append("/doc.md", 1, []byte("More."), map[string]string{"type": "journal"})
-	if err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if doc.Version != 2 {
-		t.Errorf("version = %d, want 2", doc.Version)
-	}
-
-	// v2 should have the new metadata.
-	got, err := s.Get("/doc.md", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Metadata["type"] != "journal" {
-		t.Errorf("v2 metadata type = %q, want %q", got.Metadata["type"], "journal")
-	}
-
-	// v1 should retain its original metadata.
-	v1, err := s.Get("/doc.md", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v1.Metadata["type"] != "note" {
-		t.Errorf("v1 metadata type = %q, want %q", v1.Metadata["type"], "note")
-	}
-}
-
 func TestExtractMetadata(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1879,29 +1764,6 @@ func TestExtractMetadata(t *testing.T) {
 				if got[k] != v {
 					t.Errorf("key %q: got %q, want %q", k, got[k], v)
 				}
-			}
-		})
-	}
-}
-
-func TestWrite_InvalidMetadataRejected(t *testing.T) {
-	root := t.TempDir()
-	s := New(root)
-
-	tests := []struct {
-		name string
-		meta map[string]string
-	}{
-		{"uppercase key", map[string]string{"Type": "note"}},
-		{"underscore key", map[string]string{"my_key": "val"}},
-		{"newline in value", map[string]string{"type": "note\nevil: injected"}},
-		{"empty key", map[string]string{"": "val"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := s.Write("/doc.md", []byte("# Hello"), tt.meta)
-			if err == nil {
-				t.Error("expected error for invalid metadata, got nil")
 			}
 		})
 	}
@@ -2127,90 +1989,6 @@ func remainingVersions(t *testing.T, s *Store) []int {
 	return nums
 }
 
-func TestWrite_RetentionPrunes(t *testing.T) {
-	s := New(t.TempDir())
-	doc := writeSequence(t, s, 10, map[string]string{"retention": "3"})
-
-	if got, want := remainingVersions(t, s), []int{8, 9, 10}; !slices.Equal(got, want) {
-		t.Fatalf("remaining versions = %v, want %v", got, want)
-	}
-	if doc.Prune == nil {
-		t.Fatal("expected prune result on document")
-	}
-	if doc.Prune.From != 1 || doc.Prune.To != 7 || doc.Prune.Err != nil {
-		t.Errorf("prune = {From:%d To:%d Err:%v}, want {From:1 To:7 Err:nil}", doc.Prune.From, doc.Prune.To, doc.Prune.Err)
-	}
-	if err := s.VerifyChain("/doc.md"); err != nil {
-		t.Errorf("VerifyChain after prune: %v", err)
-	}
-	if _, err := s.Get("/doc.md", 1); err == nil {
-		t.Error("pruned version 1 should not be readable")
-	}
-	if doc, err := s.Get("/doc.md", 0); err != nil || doc.Version != 10 {
-		t.Errorf("current version = %d (err %v), want 10", doc.Version, err)
-	}
-}
-
-func TestWrite_NoRetention_NoPrune(t *testing.T) {
-	s := New(t.TempDir())
-	doc := writeSequence(t, s, 5, nil)
-
-	if got := remainingVersions(t, s); len(got) != 5 {
-		t.Errorf("remaining versions = %v, want all 5", got)
-	}
-	if doc.Prune != nil {
-		t.Errorf("prune result = %+v, want nil", doc.Prune)
-	}
-}
-
-func TestWrite_RetentionKeepsCurrent(t *testing.T) {
-	s := New(t.TempDir())
-	writeSequence(t, s, 4, map[string]string{"retention": "1"})
-
-	if got, want := remainingVersions(t, s), []int{4}; !slices.Equal(got, want) {
-		t.Fatalf("remaining versions = %v, want %v", got, want)
-	}
-	// Numbering continues from the pruned history.
-	doc, err := s.Write("/doc.md", []byte("# Version 5"), map[string]string{"retention": "1"})
-	if err != nil {
-		t.Fatalf("write after prune: %v", err)
-	}
-	if doc.Version != 5 {
-		t.Errorf("next version = %d, want 5", doc.Version)
-	}
-	if got, want := remainingVersions(t, s), []int{5}; !slices.Equal(got, want) {
-		t.Errorf("remaining versions = %v, want %v", got, want)
-	}
-}
-
-func TestWrite_RetentionRemoved_StopsPruning(t *testing.T) {
-	s := New(t.TempDir())
-	writeSequence(t, s, 3, map[string]string{"retention": "2"})
-
-	doc, err := s.Write("/doc.md", []byte("# Version 4"), nil)
-	if err != nil {
-		t.Fatalf("write without retention: %v", err)
-	}
-	if doc.Prune != nil {
-		t.Errorf("prune result = %+v, want nil without retention", doc.Prune)
-	}
-	if got, want := remainingVersions(t, s), []int{2, 3, 4}; !slices.Equal(got, want) {
-		t.Errorf("remaining versions = %v, want %v", got, want)
-	}
-}
-
-func TestWrite_RetentionLargerThanHistory_NoPrune(t *testing.T) {
-	s := New(t.TempDir())
-	doc := writeSequence(t, s, 3, map[string]string{"retention": "10"})
-
-	if doc.Prune != nil {
-		t.Errorf("prune result = %+v, want nil", doc.Prune)
-	}
-	if got := remainingVersions(t, s); len(got) != 3 {
-		t.Errorf("remaining versions = %v, want all 3", got)
-	}
-}
-
 func TestPruneVersions_AbortsOnError(t *testing.T) {
 	s := New(t.TempDir())
 	writeSequence(t, s, 5, nil)
@@ -2273,22 +2051,6 @@ func TestWrite_RetentionAfterLegacyMigrationPrunes(t *testing.T) {
 		t.Fatalf("prune result = %+v, want From:1 To:2", doc.Prune)
 	}
 	if got, want := remainingVersions(t, s), []int{3}; !slices.Equal(got, want) {
-		t.Errorf("remaining versions = %v, want %v", got, want)
-	}
-}
-
-func TestWriteVersion_RetentionPrunes(t *testing.T) {
-	s := New(t.TempDir())
-	writeSequence(t, s, 3, nil)
-
-	doc, err := s.WriteVersion("/doc.md", 3, []byte("# Version 4"), map[string]string{"retention": "2"})
-	if err != nil {
-		t.Fatalf("WriteVersion: %v", err)
-	}
-	if doc.Prune == nil || doc.Prune.From != 1 || doc.Prune.To != 2 {
-		t.Fatalf("prune result = %+v, want From:1 To:2", doc.Prune)
-	}
-	if got, want := remainingVersions(t, s), []int{3, 4}; !slices.Equal(got, want) {
 		t.Errorf("remaining versions = %v, want %v", got, want)
 	}
 }
