@@ -60,6 +60,9 @@ func logPartialWalk(logger *slog.Logger, what string, err error) bool {
 	for _, e := range partial.Skipped {
 		logger.Warn(what+" skipped entry", "path", e.Path, "error", e.Err)
 	}
+	if partial.Total > len(partial.Skipped) {
+		logger.Warn(what+" skipped more entries than listed", "total", partial.Total, "listed", len(partial.Skipped))
+	}
 	return true
 }
 

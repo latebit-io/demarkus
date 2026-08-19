@@ -89,25 +89,50 @@ func TestBuildHashIndex_ReportsSkippedEntries(t *testing.T) {
 	}
 }
 
-// TestBuildHashIndex_UnreadableRootIsFatal pins that a root the walk cannot
-// open is a real error, not a partial walk with zero entries.
-func TestBuildHashIndex_UnreadableRootIsFatal(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions")
+// TestBuildHashIndex_RootFailureIsFatal pins that a root the walk cannot open
+// is a real error, not a partial walk with zero entries. The missing-root case
+// is deterministic everywhere; the permission case needs a non-root uid.
+func TestBuildHashIndex_RootFailureIsFatal(t *testing.T) {
+	newRoot := func(t *testing.T) (string, *Store) {
+		root := filepath.Join(t.TempDir(), "content")
+		if err := os.Mkdir(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		s := New(root)
+		if _, err := s.Write("/doc.md", []byte("x"), nil); err != nil {
+			t.Fatal(err)
+		}
+		return root, s
 	}
-	root := t.TempDir()
-	s := New(root)
-	if _, err := s.Write("/doc.md", []byte("x"), nil); err != nil {
-		t.Fatal(err)
+	assertFatal := func(t *testing.T, s *Store) {
+		t.Helper()
+		err := s.BuildHashIndex()
+		var partial *PartialWalkError
+		if err == nil || errors.As(err, &partial) {
+			t.Fatalf("BuildHashIndex err = %v, want a non-partial error", err)
+		}
 	}
-	if err := os.Chmod(root, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
 
-	err := s.BuildHashIndex()
-	var partial *PartialWalkError
-	if err == nil || errors.As(err, &partial) {
-		t.Fatalf("BuildHashIndex err = %v, want a non-partial error", err)
-	}
+	t.Run("missing root", func(t *testing.T) {
+		root, s := newRoot(t)
+		if err := os.RemoveAll(root); err != nil {
+			t.Fatal(err)
+		}
+		assertFatal(t, s)
+	})
+	t.Run("unreadable root", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		root, s := newRoot(t)
+		if err := os.Chmod(root, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := os.Chmod(root, 0o755); err != nil {
+				t.Errorf("restore root permissions: %v", err)
+			}
+		})
+		assertFatal(t, s)
+	})
 }

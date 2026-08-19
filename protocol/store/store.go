@@ -230,9 +230,12 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 	// Entries that cannot be indexed are skipped, never fatal: one broken
 	// symlink must not take the server down. They are reported as a
 	// PartialWalkError so the caller can surface the degradation.
-	var skipped []SkippedEntry
+	partial := &PartialWalkError{}
 	skip := func(path string, err error) error {
-		skipped = append(skipped, SkippedEntry{Path: path, Err: err})
+		partial.Total++
+		if len(partial.Skipped) < maxSkippedSample {
+			partial.Skipped = append(partial.Skipped, SkippedEntry{Path: path, Err: err})
+		}
 		return nil
 	}
 	walkErr := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
@@ -284,11 +287,15 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 	if walkErr != nil {
 		return walkErr
 	}
-	if len(skipped) > 0 {
-		return &PartialWalkError{Skipped: skipped}
+	if partial.Total > 0 {
+		return partial
 	}
 	return nil
 }
+
+// maxSkippedSample bounds the entries a PartialWalkError retains; a badly
+// damaged root must not exhaust memory during startup.
+const maxSkippedSample = 32
 
 var errSymlinkEscapes = errors.New("current-version symlink escapes the content root")
 
@@ -300,13 +307,14 @@ type SkippedEntry struct {
 
 // PartialWalkError reports a walk that completed but skipped entries: the
 // derived index is missing them. Callers log it rather than treating the
-// build as whole or aborting.
+// build as whole or aborting. Skipped holds at most maxSkippedSample entries.
 type PartialWalkError struct {
+	Total   int
 	Skipped []SkippedEntry
 }
 
 func (e *PartialWalkError) Error() string {
-	return fmt.Sprintf("walk skipped %d entries (first %s: %v)", len(e.Skipped), e.Skipped[0].Path, e.Skipped[0].Err)
+	return fmt.Sprintf("walk skipped %d entries (first %s: %v)", e.Total, e.Skipped[0].Path, e.Skipped[0].Err)
 }
 
 // BuildHashIndex walks the content root and indexes current versions by content hash.

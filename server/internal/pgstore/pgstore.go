@@ -727,6 +727,11 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	if err := store.ValidateMeta(meta); err != nil {
 		return nil, err
 	}
+	// Reject traversal explicitly, as the file store does, rather than relying
+	// on the CurrentVersion fallback below reading 0 for an invalid path.
+	if _, err := store.RelPath(reqPath); err != nil {
+		return nil, err
+	}
 
 	baseDoc, err := s.Get(reqPath, expectedVersion)
 	if err != nil {
