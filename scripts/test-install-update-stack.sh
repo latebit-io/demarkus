@@ -100,6 +100,6 @@ AFTER=$(inode_of "$DEST")
 [ "$BEFORE" != "$AFTER" ] || fail "dest was written in place (inode unchanged); a live executable would give ETXTBSY"
 grep -q "^new$" "$DEST" || fail "new content not in place"
 [ -x "$DEST" ] || fail "replacement is not executable"
-[ ! -e "${DEST}.new" ] || fail "staging file left behind"
+[ -z "$(find "$TMP/bin" -name 'demarkus-fake.new.*' 2>/dev/null)" ] || fail "staging file left behind"
 
 echo "PASS: update_stack_component"

@@ -418,13 +418,14 @@ download_and_verify_asset() {
 # --- Install functions ---
 
 # install_binary_atomic replaces dest by rename, never opening it for write:
-# a running executable rejects that with ETXTBSY ("Text file busy"). Staging
-# beside dest keeps the rename on one filesystem, so it is atomic.
+# a running executable rejects that with ETXTBSY ("Text file busy"). The stage
+# is per-process and beside dest, so the rename is atomic on one filesystem.
 install_binary_atomic() {
   local src="$1" dest="$2"
+  local stage="${dest}.new.$$"
 
-  $SUDO install -m 755 "$src" "${dest}.new" || return 1
-  $SUDO mv -f "${dest}.new" "$dest"
+  $SUDO install -m 755 "$src" "$stage" || return 1
+  $SUDO mv -f "$stage" "$dest" || { $SUDO rm -f "$stage"; return 1; }
 }
 
 install_binaries() {
