@@ -48,25 +48,14 @@ func setupContentDir(t *testing.T, files map[string]string) string {
 	return dir
 }
 
-// setupVersionedDir creates a content directory and writes files through the
-// store so they have proper version history. Returns the dir and store.
-func setupVersionedDir(t *testing.T, files map[string]string) (string, *store.Store) {
-	t.Helper()
-	dir := t.TempDir()
-	s := store.New(dir)
-	for name, content := range files {
-		if _, err := s.Write("/"+name, []byte(content), nil); err != nil {
-			t.Fatalf("setupVersionedDir: write %s: %v", name, err)
-		}
-	}
-	return dir, s
-}
+func TestHandleFetch(t *testing.T) { forEachBackend(t, testHandleFetch) }
 
-func TestHandleFetch(t *testing.T) {
-	dir, s := setupVersionedDir(t, map[string]string{
+func testHandleFetch(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
 		"hello.md": "# Hello World\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	t.Run("existing file", func(t *testing.T) {
 		stream := newMockStream("FETCH /hello.md\n")
@@ -108,11 +97,7 @@ func TestHandleFetch(t *testing.T) {
 	})
 
 	t.Run("fetch by content hash", func(t *testing.T) {
-		// Build the hash index so hash lookup works
-		if err := s.BuildHashIndex(); err != nil {
-			t.Fatalf("BuildHashIndex: %v", err)
-		}
-
+		// Both backends index the body hash on write; no rebuild needed.
 		// First fetch to get the content-hash
 		stream := newMockStream("FETCH /hello.md\n")
 		h.HandleStream(stream)
@@ -150,10 +135,11 @@ func TestHandleFetch(t *testing.T) {
 	})
 
 	t.Run("flat file not served", func(t *testing.T) {
+		// File-only: a raw file without version history is a file-store fixture.
 		flatDir := setupContentDir(t, map[string]string{
 			"flat.md": "# Flat\n",
 		})
-		flatH := &Handler{ContentDir: flatDir, Store: store.New(flatDir), Logger: discardLogger}
+		flatH := &Handler{Store: store.New(flatDir), Logger: discardLogger}
 
 		stream := newMockStream("FETCH /flat.md\n")
 		flatH.HandleStream(stream)
@@ -207,11 +193,14 @@ func TestHandleFetch(t *testing.T) {
 	})
 }
 
-func TestHealthCheck(t *testing.T) {
-	dir, s := setupVersionedDir(t, map[string]string{
+func TestHealthCheck(t *testing.T) { forEachBackend(t, testHealthCheck) }
+
+func testHealthCheck(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
 		"hello.md": "# Hello\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	stream := newMockStream("FETCH /health\n")
 	h.HandleStream(stream)
@@ -228,11 +217,14 @@ func TestHealthCheck(t *testing.T) {
 	}
 }
 
-func TestEtagInResponse(t *testing.T) {
-	dir, s := setupVersionedDir(t, map[string]string{
+func TestEtagInResponse(t *testing.T) { forEachBackend(t, testEtagInResponse) }
+
+func testEtagInResponse(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
 		"hello.md": "# Hello World\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	stream := newMockStream("FETCH /hello.md\n")
 	h.HandleStream(stream)
@@ -249,11 +241,14 @@ func TestEtagInResponse(t *testing.T) {
 	}
 }
 
-func TestConditionalFetch(t *testing.T) {
-	dir, s := setupVersionedDir(t, map[string]string{
+func TestConditionalFetch(t *testing.T) { forEachBackend(t, testConditionalFetch) }
+
+func testConditionalFetch(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
 		"hello.md": "# Hello World\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	// First fetch to get etag and modified time.
 	stream := newMockStream("FETCH /hello.md\n")
@@ -337,8 +332,10 @@ func TestSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create content directory with a versioned file and a symlink pointing outside.
-	dir, s := setupVersionedDir(t, map[string]string{
+	// File-only: plants a symlink inside the content root.
+	dir := t.TempDir()
+	b := fileBackendAt(dir)
+	seedBackend(t, b, map[string]string{
 		"public.md": "# Public\n",
 	})
 	symlinkPath := filepath.Join(dir, "evil.md")
@@ -346,7 +343,7 @@ func TestSymlinkEscape(t *testing.T) {
 		t.Skipf("cannot create symlink: %v", err)
 	}
 
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	t.Run("symlink escape blocked", func(t *testing.T) {
 		stream := newMockStream("FETCH /evil.md\n")
@@ -384,23 +381,20 @@ func TestSymlinkEscape(t *testing.T) {
 	})
 }
 
-func TestHandleList(t *testing.T) {
-	dir := t.TempDir()
-	s := store.New(dir)
+func TestHandleList(t *testing.T) { forEachBackend(t, testHandleList) }
+
+func testHandleList(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
 	for _, f := range []struct{ path, content string }{
 		{"/index.md", "# Index\n"},
 		{"/about.md", "# About\n"},
 		{"/docs/guide.md", "# Guide\n"},
 		{"/docs/reference.md", "# Reference\n"},
 	} {
-		if _, err := s.Write(f.path, []byte(f.content), nil); err != nil {
-			t.Fatalf("write %s: %v", f.path, err)
-		}
+		mustWrite(t, b, f.path, []byte(f.content), nil)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".hidden"), []byte("secret\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	mustWrite(t, b, "/.hidden.md", []byte("secret\n"), nil)
+	h := newHandler(b, nil)
 
 	t.Run("list root directory", func(t *testing.T) {
 		stream := newMockStream("LIST /\n")
@@ -490,9 +484,10 @@ func TestHandleList(t *testing.T) {
 	})
 }
 
-func TestFetchDirectory(t *testing.T) {
-	dir := t.TempDir()
-	s := store.New(dir)
+func TestFetchDirectory(t *testing.T) { forEachBackend(t, testFetchDirectory) }
+
+func testFetchDirectory(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
 
 	// Create files: docs/ has an index.md, api/ does not
 	for _, f := range []struct{ path, content string }{
@@ -501,11 +496,9 @@ func TestFetchDirectory(t *testing.T) {
 		{"/api/users.md", "# Users API\n"},
 		{"/api/auth.md", "# Auth API\n"},
 	} {
-		if _, err := s.Write(f.path, []byte(f.content), nil); err != nil {
-			t.Fatalf("write %s: %v", f.path, err)
-		}
+		mustWrite(t, b, f.path, []byte(f.content), nil)
 	}
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	t.Run("directory with index.md serves document", func(t *testing.T) {
 		stream := newMockStream("FETCH /docs/\n")
@@ -530,7 +523,7 @@ func TestFetchDirectory(t *testing.T) {
 	})
 
 	t.Run("directory with archived index.md falls back to listing", func(t *testing.T) {
-		if err := s.Archive("/docs/index.md", true); err != nil {
+		if err := b.Store.Archive("/docs/index.md", true); err != nil {
 			t.Fatalf("archive index.md: %v", err)
 		}
 		stream := newMockStream("FETCH /docs/\n")
@@ -565,7 +558,7 @@ func TestFetchDirectory(t *testing.T) {
 			t.Errorf("doc status: got %q, want %q", docResp.Status, protocol.StatusArchived)
 		}
 		// Unarchive to avoid affecting subsequent tests
-		if err := s.Archive("/docs/index.md", false); err != nil {
+		if err := b.Store.Archive("/docs/index.md", false); err != nil {
 			t.Fatalf("unarchive index.md: %v", err)
 		}
 	})
@@ -646,16 +639,13 @@ func TestFetchDirectory(t *testing.T) {
 	})
 }
 
-func TestMultipleLeadingSlashes(t *testing.T) {
-	dir := t.TempDir()
-	s := store.New(dir)
-	if _, err := s.Write("/hello.md", []byte("# Hello\n"), nil); err != nil {
-		t.Fatalf("write hello: %v", err)
-	}
-	if _, err := s.Write("/docs/guide.md", []byte("# Guide\n"), nil); err != nil {
-		t.Fatalf("write guide: %v", err)
-	}
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+func TestMultipleLeadingSlashes(t *testing.T) { forEachBackend(t, testMultipleLeadingSlashes) }
+
+func testMultipleLeadingSlashes(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	mustWrite(t, b, "/hello.md", []byte("# Hello\n"), nil)
+	mustWrite(t, b, "/docs/guide.md", []byte("# Guide\n"), nil)
+	h := newHandler(b, nil)
 
 	fetchPaths := []string{"///hello.md", "//hello.md", "////hello.md"}
 	for _, p := range fetchPaths {
@@ -690,11 +680,14 @@ func TestMultipleLeadingSlashes(t *testing.T) {
 	}
 }
 
-func TestDeeplyNestedTraversal(t *testing.T) {
-	dir, s := setupVersionedDir(t, map[string]string{
+func TestDeeplyNestedTraversal(t *testing.T) { forEachBackend(t, testDeeplyNestedTraversal) }
+
+func testDeeplyNestedTraversal(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
 		"safe.md": "# Safe\n",
 	})
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	paths := []string{
 		"/a/../../b/../../etc/passwd",
@@ -755,7 +748,7 @@ func TestRelativeContentDir(t *testing.T) {
 	}
 
 	relStore := store.New("./site")
-	h := &Handler{ContentDir: "./site", Store: relStore, Logger: discardLogger}
+	h := &Handler{Store: relStore, Logger: discardLogger}
 
 	t.Run("fetch works with relative content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /page.md\n")
@@ -832,7 +825,7 @@ func TestContentDirAsSymlink(t *testing.T) {
 	}
 
 	symlinkStore := store.New(symlinkDir)
-	h := &Handler{ContentDir: symlinkDir, Store: symlinkStore, Logger: discardLogger}
+	h := &Handler{Store: symlinkStore, Logger: discardLogger}
 
 	t.Run("fetch through symlinked content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /file.md\n")
@@ -889,16 +882,17 @@ func TestContentDirAsSymlink(t *testing.T) {
 	})
 }
 
-func TestHandleVersions(t *testing.T) {
-	dir, s := setupVersionedDir(t, map[string]string{
+func TestHandleVersions(t *testing.T) { forEachBackend(t, testHandleVersions) }
+
+func testHandleVersions(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
 		"doc.md": "# V1\n",
 	})
 	// Write a second version.
-	if _, err := s.Write("/doc.md", []byte("# V2\n"), nil); err != nil {
-		t.Fatalf("write v2: %v", err)
-	}
+	mustWrite(t, b, "/doc.md", []byte("# V2\n"), nil)
 
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	t.Run("version history", func(t *testing.T) {
 		stream := newMockStream("VERSIONS /doc.md\n")
@@ -929,11 +923,8 @@ func TestHandleVersions(t *testing.T) {
 		flatDir := setupContentDir(t, map[string]string{
 			"flat.md": "# Flat\n",
 		})
-		flatH := &Handler{
-			ContentDir: flatDir,
-			Store:      store.New(flatDir),
-			Logger:     discardLogger,
-		}
+		// File-only: raw flat file fixture.
+		flatH := &Handler{Store: store.New(flatDir), Logger: discardLogger}
 
 		stream := newMockStream("VERSIONS /flat.md\n")
 		flatH.HandleStream(stream)
@@ -961,7 +952,7 @@ func TestHandleVersions(t *testing.T) {
 	})
 
 	t.Run("no store configured", func(t *testing.T) {
-		noStoreH := &Handler{ContentDir: dir, Logger: discardLogger}
+		noStoreH := &Handler{Logger: discardLogger}
 
 		stream := newMockStream("VERSIONS /doc.md\n")
 		noStoreH.HandleStream(stream)
@@ -976,15 +967,16 @@ func TestHandleVersions(t *testing.T) {
 	})
 }
 
-func TestFetchVersion(t *testing.T) {
-	dir, s := setupVersionedDir(t, map[string]string{
+func TestFetchVersion(t *testing.T) { forEachBackend(t, testFetchVersion) }
+
+func testFetchVersion(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
 		"doc.md": "# Version One\n",
 	})
-	if _, err := s.Write("/doc.md", []byte("# Version Two\n"), nil); err != nil {
-		t.Fatalf("write v2: %v", err)
-	}
+	mustWrite(t, b, "/doc.md", []byte("# Version Two\n"), nil)
 
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	t.Run("fetch specific version", func(t *testing.T) {
 		stream := newMockStream("FETCH /doc.md/v1\n")
@@ -1036,18 +1028,15 @@ func TestFetchVersion(t *testing.T) {
 }
 
 func TestVersionsChainValid(t *testing.T) {
+	// File-only: the tampered case rewrites a version file on disk.
 	dir := t.TempDir()
-	s := store.New(dir)
+	b := fileBackendAt(dir)
 
 	// Write versions through the store to get proper hash chain.
-	if _, err := s.Write("/doc.md", []byte("# V1\n"), nil); err != nil {
-		t.Fatalf("write v1: %v", err)
-	}
-	if _, err := s.Write("/doc.md", []byte("# V2\n"), nil); err != nil {
-		t.Fatalf("write v2: %v", err)
-	}
+	mustWrite(t, b, "/doc.md", []byte("# V1\n"), nil)
+	mustWrite(t, b, "/doc.md", []byte("# V2\n"), nil)
 
-	h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+	h := newHandler(b, nil)
 
 	t.Run("valid chain", func(t *testing.T) {
 		stream := newMockStream("VERSIONS /doc.md\n")
@@ -1085,7 +1074,9 @@ func TestVersionsChainValid(t *testing.T) {
 	})
 }
 
-func TestHandlePublish(t *testing.T) {
+func TestHandlePublish(t *testing.T) { forEachBackend(t, testHandlePublish) }
+
+func testHandlePublish(t *testing.T, newBackend backendFactory) {
 	// A permissive token store for tests that need to exercise write logic.
 	const testSecret = "test-publish-secret"
 	publishTokenStore := auth.NewTokenStore(map[string]auth.Token{
@@ -1097,8 +1088,8 @@ func TestHandlePublish(t *testing.T) {
 	authMeta := "---\nauth: " + testSecret + "\n---\n"
 
 	t.Run("creates new document", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /new.md\n" + authMeta + "# Hello\n")
 		h.HandleStream(stream)
@@ -1119,12 +1110,9 @@ func TestHandlePublish(t *testing.T) {
 	})
 
 	t.Run("creates new version of existing document", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Original\n"), nil); err != nil {
-			t.Fatalf("write v1: %v", err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# Original\n"), nil)
+		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# Updated\n")
 		h.HandleStream(stream)
@@ -1142,8 +1130,7 @@ func TestHandlePublish(t *testing.T) {
 	})
 
 	t.Run("no store configured", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		h := &Handler{Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# New\n")
 		h.HandleStream(stream)
@@ -1158,14 +1145,11 @@ func TestHandlePublish(t *testing.T) {
 	})
 
 	t.Run("duplicate content is no-op", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
+		b := newBackend(t)
 		// v1 carries the type the handler defaults to, so the republish below is
 		// a true content+metadata duplicate (not a metadata change).
-		if _, err := s.Write("/doc.md", []byte("# Same\n"), map[string]string{"type": protocol.OKFDefaultType}); err != nil {
-			t.Fatalf("write v1: %v", err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		mustWrite(t, b, "/doc.md", []byte("# Same\n"), map[string]string{"type": protocol.OKFDefaultType})
+		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# Same\n")
 		h.HandleStream(stream)
@@ -1183,8 +1167,8 @@ func TestHandlePublish(t *testing.T) {
 	})
 
 	t.Run("path traversal blocked", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /../../etc/passwd\n" + authMeta + "# evil\n")
 		h.HandleStream(stream)
@@ -1199,15 +1183,10 @@ func TestHandlePublish(t *testing.T) {
 	})
 
 	t.Run("conflict on stale expected-version", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
-			t.Fatalf("write v1: %v", err)
-		}
-		if _, err := s.Write("/doc.md", []byte("# v2\n"), nil); err != nil {
-			t.Fatalf("write v2: %v", err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# v1\n"), nil)
+		mustWrite(t, b, "/doc.md", []byte("# v2\n"), nil)
+		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n# stale edit\n")
 		h.HandleStream(stream)
@@ -1225,12 +1204,9 @@ func TestHandlePublish(t *testing.T) {
 	})
 
 	t.Run("matching expected-version succeeds", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
-			t.Fatalf("write v1: %v", err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# v1\n"), nil)
+		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n# v2\n")
 		h.HandleStream(stream)
@@ -1248,12 +1224,9 @@ func TestHandlePublish(t *testing.T) {
 	})
 
 	t.Run("no expected-version is backward compatible", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# v1\n"), nil); err != nil {
-			t.Fatalf("write v1: %v", err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# v1\n"), nil)
+		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# v2 no check\n")
 		h.HandleStream(stream)
@@ -1268,8 +1241,8 @@ func TestHandlePublish(t *testing.T) {
 	})
 
 	t.Run("invalid expected-version returns bad-request", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, publishTokenStore)
 
 		for _, ev := range []string{"abc", "-1", "1.5"} {
 			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"" + ev + "\"\n---\n# content\n")
@@ -1287,6 +1260,10 @@ func TestHandlePublish(t *testing.T) {
 }
 
 func TestHandleWrite_RejectsNonMarkdown(t *testing.T) {
+	forEachBackend(t, testHandleWrite_RejectsNonMarkdown)
+}
+
+func testHandleWrite_RejectsNonMarkdown(t *testing.T, newBackend backendFactory) {
 	const secret = "reject-secret"
 	ts := auth.NewTokenStore(map[string]auth.Token{
 		protocol.HashToken(secret): {Paths: []string{"/*"}, Operations: []string{"publish"}},
@@ -1311,8 +1288,8 @@ func TestHandleWrite_RejectsNonMarkdown(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+			b := newBackend(t)
+			h := newHandler(b, ts)
 
 			stream := newMockStream(tt.req)
 			h.HandleStream(stream)
@@ -1328,8 +1305,8 @@ func TestHandleWrite_RejectsNonMarkdown(t *testing.T) {
 	}
 
 	t.Run("valid markdown still publishes", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		h := newHandler(b, ts)
 		stream := newMockStream("PUBLISH /ok.md\n" + authMeta + "# Good\n")
 		h.HandleStream(stream)
 		resp, err := protocol.ParseResponse(&stream.output)
@@ -1342,7 +1319,9 @@ func TestHandleWrite_RejectsNonMarkdown(t *testing.T) {
 	})
 }
 
-func TestHandlePublishAuth(t *testing.T) {
+func TestHandlePublishAuth(t *testing.T) { forEachBackend(t, testHandlePublishAuth) }
+
+func testHandlePublishAuth(t *testing.T, newBackend backendFactory) {
 	// Raw secrets used in requests. Store keys are their hashes.
 	const (
 		writerSecret   = "writer-secret"
@@ -1361,8 +1340,8 @@ func TestHandlePublishAuth(t *testing.T) {
 	})
 
 	t.Run("no token store denies publishing", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger}
+		b := newBackend(t)
+		h := newHandler(b, nil)
 
 		stream := newMockStream("PUBLISH /doc.md\n# Hello\n")
 		h.HandleStream(stream)
@@ -1377,8 +1356,8 @@ func TestHandlePublishAuth(t *testing.T) {
 	})
 
 	t.Run("missing token returns unauthorized", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /docs/test.md\n# Hello\n")
 		h.HandleStream(stream)
@@ -1393,8 +1372,8 @@ func TestHandlePublishAuth(t *testing.T) {
 	})
 
 	t.Run("invalid token returns unauthorized", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: wrong-secret\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1409,8 +1388,8 @@ func TestHandlePublishAuth(t *testing.T) {
 	})
 
 	t.Run("valid token wrong path returns not-permitted", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /private/secret.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1425,8 +1404,8 @@ func TestHandlePublishAuth(t *testing.T) {
 	})
 
 	t.Run("valid token wrong operation returns not-permitted", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + readonlySecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1441,8 +1420,8 @@ func TestHandlePublishAuth(t *testing.T) {
 	})
 
 	t.Run("valid token correct path succeeds", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1507,7 +1486,9 @@ func TestIsHashPath(t *testing.T) {
 	}
 }
 
-func TestHandleArchive(t *testing.T) {
+func TestHandleArchive(t *testing.T) { forEachBackend(t, testHandleArchive) }
+
+func testHandleArchive(t *testing.T, newBackend backendFactory) {
 	writerSecret := "test-secret-key"
 	ts := auth.NewTokenStore(map[string]auth.Token{
 		protocol.HashToken(writerSecret): {
@@ -1517,8 +1498,8 @@ func TestHandleArchive(t *testing.T) {
 	})
 
 	t.Run("archive not found", func(t *testing.T) {
-		dir, s := setupVersionedDir(t, map[string]string{})
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		h := newHandler(b, ts)
 
 		stream := newMockStream("ARCHIVE /missing.md\n---\nauth: " + writerSecret + "\n---\n")
 		h.HandleStream(stream)
@@ -1533,8 +1514,9 @@ func TestHandleArchive(t *testing.T) {
 	})
 
 	t.Run("archive requires auth", func(t *testing.T) {
-		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+		h := newHandler(b, ts)
 
 		stream := newMockStream("ARCHIVE /doc.md\n")
 		h.HandleStream(stream)
@@ -1549,8 +1531,9 @@ func TestHandleArchive(t *testing.T) {
 	})
 
 	t.Run("archive with valid token succeeds", func(t *testing.T) {
-		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+		h := newHandler(b, ts)
 
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
 		h.HandleStream(stream)
@@ -1568,8 +1551,9 @@ func TestHandleArchive(t *testing.T) {
 	})
 
 	t.Run("fetch archived document returns archived status", func(t *testing.T) {
-		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+		h := newHandler(b, ts)
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
@@ -1589,8 +1573,9 @@ func TestHandleArchive(t *testing.T) {
 	})
 
 	t.Run("publish with body to archived document fails", func(t *testing.T) {
-		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+		h := newHandler(b, ts)
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
@@ -1610,8 +1595,9 @@ func TestHandleArchive(t *testing.T) {
 	})
 
 	t.Run("publish with empty body unarchives document", func(t *testing.T) {
-		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+		h := newHandler(b, ts)
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
@@ -1643,8 +1629,9 @@ func TestHandleArchive(t *testing.T) {
 	})
 
 	t.Run("fetch specific version of archived document succeeds", func(t *testing.T) {
-		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+		h := newHandler(b, ts)
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
@@ -1664,8 +1651,9 @@ func TestHandleArchive(t *testing.T) {
 	})
 
 	t.Run("publish with body to active document still works", func(t *testing.T) {
-		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n# New Content\n")
 		h.HandleStream(stream)
@@ -1683,8 +1671,9 @@ func TestHandleArchive(t *testing.T) {
 	})
 
 	t.Run("publish with empty body to active document is no-op", func(t *testing.T) {
-		dir, s := setupVersionedDir(t, map[string]string{"doc.md": "# Content\n"})
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return ts }}
+		b := newBackend(t)
+		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n")
 		h.HandleStream(stream)
@@ -1702,7 +1691,9 @@ func TestHandleArchive(t *testing.T) {
 	})
 }
 
-func TestHandleAppend(t *testing.T) {
+func TestHandleAppend(t *testing.T) { forEachBackend(t, testHandleAppend) }
+
+func testHandleAppend(t *testing.T, newBackend backendFactory) {
 	const testSecret = "test-append-secret"
 	appendTokenStore := auth.NewTokenStore(map[string]auth.Token{
 		protocol.HashToken(testSecret): {
@@ -1713,12 +1704,9 @@ func TestHandleAppend(t *testing.T) {
 	authMetaV1 := "---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n"
 
 	t.Run("appends to existing document", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Start"), nil); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# Start"), nil)
+		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + "More text.")
 		h.HandleStream(stream)
@@ -1736,8 +1724,8 @@ func TestHandleAppend(t *testing.T) {
 	})
 
 	t.Run("not found when document does not exist", func(t *testing.T) {
-		dir := t.TempDir()
-		h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /missing.md\n" + authMetaV1 + "content")
 		h.HandleStream(stream)
@@ -1752,12 +1740,9 @@ func TestHandleAppend(t *testing.T) {
 	})
 
 	t.Run("rejects empty body", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Existing"), nil); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# Existing"), nil)
+		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n")
 		h.HandleStream(stream)
@@ -1772,12 +1757,9 @@ func TestHandleAppend(t *testing.T) {
 	})
 
 	t.Run("requires expected-version", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Existing"), nil); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# Existing"), nil)
+		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\n---\nMore text.")
 		h.HandleStream(stream)
@@ -1792,12 +1774,9 @@ func TestHandleAppend(t *testing.T) {
 	})
 
 	t.Run("auth required", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Existing"), nil); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# Existing"), nil)
+		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nexpected-version: \"1\"\n---\nMore text.")
 		h.HandleStream(stream)
@@ -1812,15 +1791,10 @@ func TestHandleAppend(t *testing.T) {
 	})
 
 	t.Run("conflict on stale expected-version", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# V1"), nil); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.Write("/doc.md", []byte("# V2"), nil); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# V1"), nil)
+		mustWrite(t, b, "/doc.md", []byte("# V2"), nil)
+		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\nLate append.")
 		h.HandleStream(stream)
@@ -1835,15 +1809,12 @@ func TestHandleAppend(t *testing.T) {
 	})
 
 	t.Run("archived document rejected", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Content"), nil); err != nil {
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# Content"), nil)
+		if err := b.Store.Archive("/doc.md", true); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Archive("/doc.md", true); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + "More.")
 		h.HandleStream(stream)
@@ -1858,16 +1829,13 @@ func TestHandleAppend(t *testing.T) {
 	})
 
 	t.Run("combined content exceeds size limit", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
+		b := newBackend(t)
 		initial := make([]byte, protocol.MaxBodyLength-100)
 		for i := range initial {
 			initial[i] = 'x'
 		}
-		if _, err := s.Write("/doc.md", initial, nil); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return appendTokenStore }}
+		mustWrite(t, b, "/doc.md", initial, nil)
+		h := newHandler(b, appendTokenStore)
 
 		appendBody := strings.Repeat("y", 200)
 		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + appendBody)
@@ -1883,7 +1851,9 @@ func TestHandleAppend(t *testing.T) {
 	})
 }
 
-func TestPublisherMetadata(t *testing.T) {
+func TestPublisherMetadata(t *testing.T) { forEachBackend(t, testPublisherMetadata) }
+
+func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 	const testSecret = "test-meta-secret"
 	tokenStore := auth.NewTokenStore(map[string]auth.Token{
 		protocol.HashToken(testSecret): {
@@ -1893,9 +1863,8 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("publish with metadata and fetch it back", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, tokenStore)
 
 		// Publish with publisher metadata.
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\ntype: journal\nauthor: claude\n---\n# Hello\n")
@@ -1929,9 +1898,8 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("control keys not stored", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 0\ntype: note\n---\n# Hello\n")
 		h.HandleStream(stream)
@@ -1964,9 +1932,8 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("too many metadata keys", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, tokenStore)
 
 		// Build frontmatter with one more than MaxMetaKeys non-control keys,
 		// using short keys/values so the key-count limit trips before the
@@ -1991,9 +1958,8 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("reserved metadata keys rejected", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, tokenStore)
 
 		for _, key := range []string{"version", "modified", "etag", "current-version", "server-version", "matches"} {
 			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": evil\n---\n# Content\n")
@@ -2010,9 +1976,8 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("invalid metadata key characters rejected", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, tokenStore)
 
 		for _, key := range []string{"UPPER", "under_score", "dot.key", "slash/key"} {
 			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": val\n---\n# Content\n")
@@ -2029,12 +1994,9 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("append with metadata", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Start"), map[string]string{"type": "note"}); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# Start"), map[string]string{"type": "note"})
+		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\ntype: journal\n---\nMore content.\n")
 		h.HandleStream(stream)
@@ -2061,12 +2023,9 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("legacy document without metadata", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Hello\n"), nil); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# Hello\n"), nil)
+		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("FETCH /doc.md\n")
 		h.HandleStream(stream)
@@ -2094,9 +2053,8 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("okf type default applied when absent", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\ntitle: Untyped\n---\n# Content\n")
 		h.HandleStream(stream)
@@ -2113,9 +2071,8 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("okf type default not applied to reserved index.md", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("PUBLISH /index.md\n---\nauth: " + testSecret + "\n---\n# Hub\n")
 		h.HandleStream(stream)
@@ -2142,9 +2099,8 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("explicit type preserved", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\ntype: Metric\n---\n# Content\n")
 		h.HandleStream(stream)
@@ -2161,12 +2117,9 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("okf type default applied on append", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# Start\n"), nil); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# Start\n"), nil)
+		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\n---\nMore.\n")
 		h.HandleStream(stream)
@@ -2190,9 +2143,8 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("type default pushing over cap returns bad-request", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		h := newHandler(b, tokenStore)
 
 		// Exactly MaxMetaKeys publisher keys and no type: the default type push
 		// the count to MaxMetaKeys+1, which must be rejected as bad-request (not
@@ -2216,15 +2168,10 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 
 	t.Run("fetch version preserves metadata", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
-		if _, err := s.Write("/doc.md", []byte("# V1\n"), map[string]string{"type": "draft"}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.Write("/doc.md", []byte("# V2\n"), map[string]string{"type": "published"}); err != nil {
-			t.Fatal(err)
-		}
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		mustWrite(t, b, "/doc.md", []byte("# V1\n"), map[string]string{"type": "draft"})
+		mustWrite(t, b, "/doc.md", []byte("# V2\n"), map[string]string{"type": "published"})
+		h := newHandler(b, tokenStore)
 
 		// Fetch v1 — should have its own metadata.
 		stream := newMockStream("FETCH /doc.md/v1\n")
@@ -2243,7 +2190,9 @@ func TestPublisherMetadata(t *testing.T) {
 	})
 }
 
-func TestReadAuth(t *testing.T) {
+func TestReadAuth(t *testing.T) { forEachBackend(t, testReadAuth) }
+
+func testReadAuth(t *testing.T, newBackend backendFactory) {
 	const readSecret = "read-secret"
 
 	tokenStore := auth.NewTokenStore(map[string]auth.Token{
@@ -2254,19 +2203,18 @@ func TestReadAuth(t *testing.T) {
 		},
 	})
 
-	dir, s := setupVersionedDir(t, map[string]string{
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
 		"private/secret.md": "# Secret\n",
 		"public/open.md":    "# Open\n",
 	})
 
 	// Write the well-known manifest so we can test it's always accessible.
-	if _, err := s.Write("/.well-known/agent-manifest.md", []byte("# Manifest\n"), nil); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, "/.well-known/agent-manifest.md", []byte("# Manifest\n"), nil)
 
 	h := &Handler{
-		ContentDir:    dir,
-		Store:         s,
+		Store:         b.Store,
+		Catalog:       b.Catalog,
 		GetTokenStore: func() *auth.TokenStore { return tokenStore },
 		Logger:        discardLogger,
 	}
@@ -2349,7 +2297,7 @@ func TestReadAuth(t *testing.T) {
 	}
 
 	t.Run("no token store means all reads public", func(t *testing.T) {
-		noAuth := &Handler{ContentDir: dir, Store: s, Logger: discardLogger}
+		noAuth := newHandler(b, nil)
 		stream := newMockStream("FETCH /private/secret.md\n")
 		noAuth.HandleStream(stream)
 
@@ -2408,15 +2356,18 @@ func TestReadAuth(t *testing.T) {
 	})
 }
 
-func TestReadOnlyMode(t *testing.T) {
-	dir, s := setupVersionedDir(t, map[string]string{
+func TestReadOnlyMode(t *testing.T) { forEachBackend(t, testReadOnlyMode) }
+
+func testReadOnlyMode(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
 		"doc.md": "# Existing\n",
 	})
 	h := &Handler{
-		ContentDir: dir,
-		Store:      s,
-		Logger:     discardLogger,
-		ReadOnly:   true,
+		Store:    b.Store,
+		Catalog:  b.Catalog,
+		Logger:   discardLogger,
+		ReadOnly: true,
 		GetTokenStore: func() *auth.TokenStore {
 			return auth.NewTokenStore(map[string]auth.Token{
 				protocol.HashToken("secret"): {Paths: []string{"/*"}, Operations: []string{"publish", "append", "archive"}},
@@ -2483,7 +2434,9 @@ func TestReadOnlyMode(t *testing.T) {
 	})
 }
 
-func TestHandlePublish_Retention(t *testing.T) {
+func TestHandlePublish_Retention(t *testing.T) { forEachBackend(t, testHandlePublish_Retention) }
+
+func testHandlePublish_Retention(t *testing.T, newBackend backendFactory) {
 	const testSecret = "test-retention-secret"
 	tokenStore := auth.NewTokenStore(map[string]auth.Token{
 		protocol.HashToken(testSecret): {
@@ -2493,15 +2446,12 @@ func TestHandlePublish_Retention(t *testing.T) {
 	})
 
 	t.Run("prunes and audit-logs", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
+		b := newBackend(t)
 		for i := range 5 {
-			if _, err := s.Write("/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil); err != nil {
-				t.Fatalf("write %d: %v", i+1, err)
-			}
+			mustWrite(t, b, "/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil)
 		}
 		var logBuf bytes.Buffer
-		h := &Handler{ContentDir: dir, Store: s, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := &Handler{Store: b.Store, Catalog: b.Catalog, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nretention: 2\n---\n# Version 6\n")
 		h.HandleStream(stream)
@@ -2513,7 +2463,7 @@ func TestHandlePublish_Retention(t *testing.T) {
 		if resp.Status != protocol.StatusCreated {
 			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
-		versions, err := s.Versions("/doc.md")
+		versions, err := b.Store.Versions("/doc.md")
 		if err != nil {
 			t.Fatalf("Versions: %v", err)
 		}
@@ -2531,8 +2481,8 @@ func TestHandlePublish_Retention(t *testing.T) {
 	t.Run("invalid retention rejected", func(t *testing.T) {
 		for _, value := range []string{"zero", "0", "-1"} {
 			t.Run("retention="+value, func(t *testing.T) {
-				dir := t.TempDir()
-				h := &Handler{ContentDir: dir, Store: store.New(dir), Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+				b := newBackend(t)
+				h := newHandler(b, tokenStore)
 
 				stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nretention: " + value + "\n---\n# Hello\n")
 				h.HandleStream(stream)
@@ -2549,15 +2499,12 @@ func TestHandlePublish_Retention(t *testing.T) {
 	})
 
 	t.Run("no prune without retention", func(t *testing.T) {
-		dir := t.TempDir()
-		s := store.New(dir)
+		b := newBackend(t)
 		for i := range 3 {
-			if _, err := s.Write("/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil); err != nil {
-				t.Fatalf("write %d: %v", i+1, err)
-			}
+			mustWrite(t, b, "/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil)
 		}
 		var logBuf bytes.Buffer
-		h := &Handler{ContentDir: dir, Store: s, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := &Handler{Store: b.Store, Catalog: b.Catalog, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n---\n# Version 4\n")
 		h.HandleStream(stream)
@@ -2569,7 +2516,7 @@ func TestHandlePublish_Retention(t *testing.T) {
 		if resp.Status != protocol.StatusCreated {
 			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
-		versions, err := s.Versions("/doc.md")
+		versions, err := b.Store.Versions("/doc.md")
 		if err != nil {
 			t.Fatalf("Versions: %v", err)
 		}
@@ -2582,7 +2529,9 @@ func TestHandlePublish_Retention(t *testing.T) {
 	})
 }
 
-func TestHandleAppend_Retention(t *testing.T) {
+func TestHandleAppend_Retention(t *testing.T) { forEachBackend(t, testHandleAppend_Retention) }
+
+func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 	const testSecret = "test-append-retention-secret"
 	// APPEND authorizes under the "publish" operation (see handleAppend).
 	tokenStore := auth.NewTokenStore(map[string]auth.Token{
@@ -2592,22 +2541,18 @@ func TestHandleAppend_Retention(t *testing.T) {
 		},
 	})
 
-	seedDoc := func(t *testing.T, dir string, n int) *store.Store {
+	seedDoc := func(t *testing.T, b backend, n int) {
 		t.Helper()
-		s := store.New(dir)
 		for i := range n {
-			if _, err := s.Write("/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil); err != nil {
-				t.Fatalf("write %d: %v", i+1, err)
-			}
+			mustWrite(t, b, "/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil)
 		}
-		return s
 	}
 
 	t.Run("prunes and audit-logs", func(t *testing.T) {
-		dir := t.TempDir()
-		s := seedDoc(t, dir, 5)
+		b := newBackend(t)
+		seedDoc(t, b, 5)
 		var logBuf bytes.Buffer
-		h := &Handler{ContentDir: dir, Store: s, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := &Handler{Store: b.Store, Catalog: b.Catalog, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 5\nretention: 2\n---\nappended line\n")
 		h.HandleStream(stream)
@@ -2619,7 +2564,7 @@ func TestHandleAppend_Retention(t *testing.T) {
 		if resp.Status != protocol.StatusCreated {
 			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
-		versions, err := s.Versions("/doc.md")
+		versions, err := b.Store.Versions("/doc.md")
 		if err != nil {
 			t.Fatalf("Versions: %v", err)
 		}
@@ -2635,9 +2580,9 @@ func TestHandleAppend_Retention(t *testing.T) {
 	})
 
 	t.Run("invalid retention rejected", func(t *testing.T) {
-		dir := t.TempDir()
-		s := seedDoc(t, dir, 1)
-		h := &Handler{ContentDir: dir, Store: s, Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		b := newBackend(t)
+		seedDoc(t, b, 1)
+		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\nretention: 0\n---\nappended line\n")
 		h.HandleStream(stream)
@@ -2649,16 +2594,16 @@ func TestHandleAppend_Retention(t *testing.T) {
 		if resp.Status != protocol.StatusBadRequest {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusBadRequest)
 		}
-		if versions, err := s.Versions("/doc.md"); err != nil || len(versions) != 1 {
+		if versions, err := b.Store.Versions("/doc.md"); err != nil || len(versions) != 1 {
 			t.Errorf("versions = %d (err %v), want 1 untouched", len(versions), err)
 		}
 	})
 
 	t.Run("no prune without retention", func(t *testing.T) {
-		dir := t.TempDir()
-		s := seedDoc(t, dir, 3)
+		b := newBackend(t)
+		seedDoc(t, b, 3)
 		var logBuf bytes.Buffer
-		h := &Handler{ContentDir: dir, Store: s, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := &Handler{Store: b.Store, Catalog: b.Catalog, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 3\n---\nappended line\n")
 		h.HandleStream(stream)
@@ -2670,7 +2615,7 @@ func TestHandleAppend_Retention(t *testing.T) {
 		if resp.Status != protocol.StatusCreated {
 			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
-		if versions, err := s.Versions("/doc.md"); err != nil || len(versions) != 4 {
+		if versions, err := b.Store.Versions("/doc.md"); err != nil || len(versions) != 4 {
 			t.Errorf("versions = %d (err %v), want all 4", len(versions), err)
 		}
 		if strings.Contains(logBuf.String(), "msg=prune") {

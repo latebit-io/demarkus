@@ -29,3 +29,10 @@ func TestFileStoreDifferentialSelf(t *testing.T) {
 	factory := func(t *testing.T) LookupBackend { return FileBackend(t) }
 	RunDifferential(t, factory, factory, DifferentialConfig{Seeds: []int64{1, 2}, Ops: 80})
 }
+
+// TestFileStoreHandlerDifferentialSelf proves the handler-level harness is
+// deterministic with the file store on both sides.
+func TestFileStoreHandlerDifferentialSelf(t *testing.T) {
+	factory := func(t *testing.T) LookupBackend { return FileBackend(t) }
+	RunHandlerDifferential(t, factory, factory, DifferentialConfig{Seeds: []int64{1, 2}, Ops: 80})
+}

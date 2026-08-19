@@ -16,7 +16,7 @@ import (
 
 // DifferentialConfig tunes a differential run. Zero values take defaults.
 type DifferentialConfig struct {
-	Seeds []int64 // one subtest per seed; default 12 fixed seeds
+	Seeds []int64 // one subtest per seed; each suite has its own default list
 	Ops   int     // operations per seed; default 200
 }
 
@@ -27,44 +27,92 @@ const snapshotEvery = 10
 // a candidate backend, comparing every return and periodically the full state.
 // Conformance asserts what its author imagined; this catches the rest.
 func RunDifferential(t *testing.T, ref, cand LookupFactory, cfg DifferentialConfig) {
-	if len(cfg.Seeds) == 0 {
-		cfg.Seeds = []int64{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233}
-	}
-	for _, seed := range cfg.Seeds {
-		t.Run(fmt.Sprintf("seed=%d", seed), func(t *testing.T) {
-			RunDifferentialSeed(t, ref(t), cand(t), seed, cfg)
-		})
-	}
+	runSeeds(t, cfg, []int64{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233}, func(t *testing.T, seed int64) {
+		RunDifferentialSeed(t, ref(t), cand(t), seed, cfg)
+	})
 }
 
 // RunDifferentialSeed runs one seeded sequence against already-constructed
 // backends. Exposed so a fuzz target can feed arbitrary seeds.
 func RunDifferentialSeed(t *testing.T, ref, cand LookupBackend, seed int64, cfg DifferentialConfig) {
 	t.Helper()
-	if cfg.Ops <= 0 {
-		cfg.Ops = 200
+	d := &differential{diffRun: newDiffRun(t, seed), ref: ref, cand: cand}
+	d.run(cfg.Ops, d.apply, d.compareSnapshots)
+}
+
+// runSeeds runs fn once per configured seed as a subtest.
+func runSeeds(t *testing.T, cfg DifferentialConfig, defaults []int64, fn func(t *testing.T, seed int64)) {
+	seeds := cfg.Seeds
+	if len(seeds) == 0 {
+		seeds = defaults
 	}
-	d := &differential{t: t, ref: ref, cand: cand, rng: rand.New(rand.NewSource(seed)), seed: seed}
-	for i := range cfg.Ops {
-		op := d.nextOp()
-		d.history = append(d.history, op.String())
-		d.apply(op)
-		if !t.Failed() && ((i+1)%snapshotEvery == 0 || i == cfg.Ops-1) {
-			d.compareSnapshots()
+	for _, seed := range seeds {
+		t.Run(fmt.Sprintf("seed=%d", seed), func(t *testing.T) { fn(t, seed) })
+	}
+}
+
+type differential struct {
+	*diffRun
+	ref  LookupBackend
+	cand LookupBackend
+}
+
+// diffRun is the seeded op generator, op loop, and failure reporter shared by
+// the store-level and handler-level differentials.
+type diffRun struct {
+	t       *testing.T
+	rng     *rand.Rand
+	seed    int64
+	history []string
+}
+
+func newDiffRun(t *testing.T, seed int64) *diffRun {
+	return &diffRun{t: t, rng: rand.New(rand.NewSource(seed)), seed: seed}
+}
+
+// run draws ops ops, applying each and snapshotting every snapshotEvery,
+// stopping at the first failure.
+func (d *diffRun) run(ops int, apply func(op), snapshot func()) {
+	if ops <= 0 {
+		ops = 200
+	}
+	for i := range ops {
+		apply(d.nextOp())
+		if !d.t.Failed() && ((i+1)%snapshotEvery == 0 || i == ops-1) {
+			snapshot()
 		}
-		if t.Failed() {
+		if d.t.Failed() {
 			return
 		}
 	}
 }
 
-type differential struct {
-	t       *testing.T
-	ref     LookupBackend
-	cand    LookupBackend
-	rng     *rand.Rand
-	seed    int64
-	history []string
+// currentBoth returns the shared current version of path, failing when the
+// backends already disagree before an op is applied.
+func (d *diffRun) currentBoth(ref, cand LookupBackend, path string) (int, bool) {
+	refCur, candCur := ref.Store.CurrentVersion(path), cand.Store.CurrentVersion(path)
+	if refCur != candCur {
+		d.fail("CurrentVersion(%s) before op: ref=%d cand=%d", path, refCur, candCur)
+		return 0, false
+	}
+	return refCur, true
+}
+
+// compareLines reports the first differing snapshot line.
+func (d *diffRun) compareLines(ref, cand []string) {
+	for i := range ref {
+		if i >= len(cand) {
+			d.fail("snapshot: candidate shorter at line %d\nref: %s", i, ref[i])
+			return
+		}
+		if ref[i] != cand[i] {
+			d.fail("snapshot line %d differs\nref:  %s\ncand: %s", i, ref[i], cand[i])
+			return
+		}
+	}
+	if len(cand) > len(ref) {
+		d.fail("snapshot: candidate longer at line %d\ncand: %s", len(ref), cand[len(ref)])
+	}
 }
 
 // opKind enumerates the mutating operations the generator emits. Reads are
@@ -149,7 +197,8 @@ var (
 // emitted rarely since writing it to Postgres is comparatively slow.
 var oversizedBody = []byte(strings.Repeat("y", protocol.MaxBodyLength+1))
 
-func (d *differential) nextOp() op {
+// nextOp draws the next op and records it in the history for failure output.
+func (d *diffRun) nextOp() op {
 	r := d.rng
 	o := op{path: diffDocPaths[r.Intn(len(diffDocPaths))]}
 	switch n := r.Intn(100); {
@@ -184,6 +233,7 @@ func (d *differential) nextOp() op {
 			o.expMode = "far"
 		}
 	}
+	d.history = append(d.history, o.String())
 	return o
 }
 
@@ -209,14 +259,14 @@ func expectedFor(mode string, cur int) int {
 	}
 }
 
-func (d *differential) bodyFor(o op) []byte {
+func bodyFor(o op) []byte {
 	if o.body == len(diffBodies) {
 		return oversizedBody
 	}
 	return diffBodies[o.body]
 }
 
-func (d *differential) metaFor(o op) map[string]string {
+func metaFor(o op) map[string]string {
 	m := diffMetas[o.meta]
 	if o.okf {
 		return store.ApplyOKFTypeDefault(o.path, m)
@@ -227,14 +277,12 @@ func (d *differential) metaFor(o op) map[string]string {
 // apply runs one op against both backends, mirroring the handler's catalog
 // maintenance, and compares the results.
 func (d *differential) apply(o op) {
-	refCur := d.ref.Store.CurrentVersion(o.path)
-	candCur := d.cand.Store.CurrentVersion(o.path)
-	if refCur != candCur {
-		d.fail("CurrentVersion(%s) before op: ref=%d cand=%d", o.path, refCur, candCur)
+	cur, ok := d.currentBoth(d.ref, d.cand, o.path)
+	if !ok {
 		return
 	}
-	refRes := d.applyOne(d.ref, o, refCur)
-	candRes := d.applyOne(d.cand, o, candCur)
+	refRes := d.applyOne(d.ref, o, cur)
+	candRes := d.applyOne(d.cand, o, cur)
 	if refRes != candRes {
 		d.fail("op result differs\nref:  %s\ncand: %s", refRes, candRes)
 	}
@@ -243,10 +291,10 @@ func (d *differential) apply(o op) {
 func (d *differential) applyOne(b LookupBackend, o op, cur int) string {
 	switch o.kind {
 	case opWrite:
-		doc, err := publishInto(b, o.path, expectedFor(o.expMode, cur), d.bodyFor(o), d.metaFor(o))
+		doc, err := publishInto(b, o.path, expectedFor(o.expMode, cur), bodyFor(o), metaFor(o))
 		return errClass(err) + " " + describeDoc(doc)
 	case opAppend:
-		doc, err := appendInto(b, o.path, expectedFor(o.expMode, cur), d.bodyFor(o), d.metaFor(o))
+		doc, err := appendInto(b, o.path, expectedFor(o.expMode, cur), bodyFor(o), metaFor(o))
 		return errClass(err) + " " + describeDoc(doc)
 	case opArchive:
 		return errClass(archiveInto(b, o.path))
@@ -304,21 +352,7 @@ func describeMeta(m map[string]string) string {
 // compareSnapshots renders the full observable state of both backends over
 // the path, body, and query pools and reports the first differing line.
 func (d *differential) compareSnapshots() {
-	ref := snapshot(d.ref)
-	cand := snapshot(d.cand)
-	for i := range ref {
-		if i >= len(cand) {
-			d.fail("snapshot: candidate shorter at line %d\nref: %s", i, ref[i])
-			return
-		}
-		if ref[i] != cand[i] {
-			d.fail("snapshot line %d differs\nref:  %s\ncand: %s", i, ref[i], cand[i])
-			return
-		}
-	}
-	if len(cand) > len(ref) {
-		d.fail("snapshot: candidate longer at line %d\ncand: %s", len(ref), cand[len(ref)])
-	}
+	d.compareLines(snapshot(d.ref), snapshot(d.cand))
 }
 
 func snapshot(b LookupBackend) []string {
@@ -403,7 +437,7 @@ func describeResults(rs []catalog.Result) string {
 	return "[" + strings.Join(parts, " ") + "]"
 }
 
-func (d *differential) fail(format string, args ...any) {
+func (d *diffRun) fail(format string, args ...any) {
 	d.t.Helper()
 	n := len(d.history)
 	from := max(0, n-12)
