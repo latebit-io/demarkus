@@ -15,6 +15,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/auth"
+	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
@@ -157,30 +158,37 @@ func normalize(resp protocol.Response) string {
 	return sb.String()
 }
 
-// sortLookupTies sorts only runs of adjacent LOOKUP rows with equal
-// importance: after score and importance the tiebreak is wall-clock
-// modified, so only those neighbours may legitimately differ in order.
+var lookupQuery = regexp.MustCompile(`^\n# Lookup matches for "(.*)" in `)
+
+// sortLookupTies sorts only runs of adjacent LOOKUP rows tied on score and
+// importance: their remaining tiebreak is wall-clock modified. Score is not
+// in the table, so it is recomputed from each row with catalog.MatchScore.
 func sortLookupTies(body string) string {
+	var terms []string
+	if m := lookupQuery.FindStringSubmatch(body); m != nil {
+		terms = catalog.Tokenize(m[1])
+	}
 	lines := strings.Split(body, "\n")
-	importance := func(line string) (string, bool) {
+	rank := func(line string) (string, bool) {
 		if !strings.HasPrefix(line, "| /") {
 			return "", false
 		}
-		cells := strings.Split(line, " | ")
-		if len(cells) < 2 {
+		cells := strings.Split(strings.TrimSuffix(strings.TrimPrefix(line, "| "), " |"), " | ")
+		if len(cells) != 4 {
 			return "", false
 		}
-		return cells[1], true
+		e := &catalog.Entry{Title: cells[2], Tags: strings.Split(cells[3], ", ")}
+		return fmt.Sprintf("%d/%s", catalog.MatchScore(e, terms), cells[1]), true
 	}
 	for i := 0; i < len(lines); {
-		imp, ok := importance(lines[i])
+		key, ok := rank(lines[i])
 		if !ok {
 			i++
 			continue
 		}
 		j := i + 1
 		for j < len(lines) {
-			if next, ok := importance(lines[j]); !ok || next != imp {
+			if next, ok := rank(lines[j]); !ok || next != key {
 				break
 			}
 			j++

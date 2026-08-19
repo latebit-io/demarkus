@@ -6,14 +6,17 @@ package pgtest
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	// pgx database/sql driver for the schema bootstrap handle.
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -46,16 +49,36 @@ func SchemaDSN(t testing.TB, schema string) string {
 	t.Helper()
 	base := dsn(t)
 	ensureSchema(t, base, schema)
+	if strings.Contains(base, "search_path=") {
+		t.Fatalf("DEMARKUS_TEST_PG_DSN must not set search_path; pgtest assigns one schema per package")
+	}
 	// libpq keyword/value DSNs take a space-separated parameter; URL DSNs a
 	// query parameter.
 	if !strings.HasPrefix(base, "postgres://") && !strings.HasPrefix(base, "postgresql://") {
 		return base + " search_path=" + schema
 	}
-	sep := "?"
-	if strings.Contains(base, "?") {
-		sep = "&"
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse DEMARKUS_TEST_PG_DSN: %v", err)
 	}
-	return base + sep + "search_path=" + schema
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// RequireSerialFuzz fails a fuzz target started with more than one worker:
+// workers are separate processes sharing the package schema and would reset
+// each other's tables. Run with -parallel 1.
+func RequireSerialFuzz(f *testing.F) {
+	f.Helper()
+	fuzz, parallel := flag.Lookup("test.fuzz"), flag.Lookup("test.parallel")
+	if fuzz == nil || fuzz.Value.String() == "" || parallel == nil {
+		return
+	}
+	if parallel.Value.String() != "1" {
+		f.Fatalf("fuzzing against Postgres needs -parallel 1 (got %s): workers share one schema", parallel.Value.String())
+	}
 }
 
 var (
@@ -101,7 +124,9 @@ func ensureSchema(t testing.TB, dsn, schema string) {
 			t.Errorf("close bootstrap handle: %v", err)
 		}
 	}()
-	if _, err := db.ExecContext(context.Background(), fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS %q`, schema)); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS %q`, schema)); err != nil {
 		t.Fatalf("create schema %s: %v", schema, err)
 	}
 }

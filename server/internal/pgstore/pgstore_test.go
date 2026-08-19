@@ -215,6 +215,7 @@ func TestPostgresDifferential(t *testing.T) {
 // FuzzPostgresDifferential lets the fuzzer pick seeds for deeper runs. Fuzz
 // workers share one database, so: go test -run '^$' -fuzz FuzzPostgresDifferential -fuzztime 2m -parallel 1
 func FuzzPostgresDifferential(f *testing.F) {
+	pgtest.RequireSerialFuzz(f)
 	s := openStore(f)
 	f.Add(int64(99))
 	f.Fuzz(func(t *testing.T, seed int64) {
@@ -233,6 +234,7 @@ func TestPostgresHandlerDifferential(t *testing.T) {
 
 // FuzzPostgresHandlerDifferential: deeper handler-level runs; -parallel 1.
 func FuzzPostgresHandlerDifferential(f *testing.F) {
+	pgtest.RequireSerialFuzz(f)
 	s := openStore(f)
 	f.Add(int64(7))
 	f.Fuzz(func(t *testing.T, seed int64) {
