@@ -52,10 +52,11 @@ func New() *Catalog {
 // Set adds or replaces the entry for e.Path. The catalog takes ownership of e;
 // the caller must not mutate it afterward.
 func (c *Catalog) Set(e *Entry) {
-	e.Path = store.CanonicalPath(e.Path)
+	path := store.CanonicalPath(e.Path)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[e.Path] = e
+	e.Path = path
+	c.entries[path] = e
 }
 
 // Put derives an entry from a written document and records it; body has

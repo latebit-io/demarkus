@@ -21,11 +21,9 @@ type DifferentialConfig struct {
 	SnapshotEvery int     // full-state comparison cadence in ops; default 10
 }
 
-// RunDifferential drives the same seeded random operation sequence through a
-// reference backend and a candidate backend, comparing every return value and
-// periodically the full observable state. Conformance tests assert the
-// behaviors their author thought of; the differential catches the rest, so it
-// is the primary backend-parity gate: any divergence is a bug in one backend.
+// RunDifferential drives one seeded random op sequence through a reference and
+// a candidate backend, comparing every return and periodically the full state.
+// Conformance asserts what its author imagined; this catches the rest.
 func RunDifferential(t *testing.T, ref, cand LookupFactory, cfg DifferentialConfig) {
 	if len(cfg.Seeds) == 0 {
 		cfg.Seeds = []int64{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233}
@@ -106,10 +104,8 @@ func (o op) String() string {
 	}
 }
 
-// Pools. Paths deliberately include collisions (document over directory and
-// under document), hidden dot names, unicode, OKF-exempt basenames, a
-// non-.md name, and traversal and unnormalized spellings, so the generator
-// reaches every branch the handler can hand a store.
+// Pools. Paths deliberately include collisions both ways, dot names, unicode,
+// OKF-exempt basenames, a non-.md name, traversal, and unnormalized spellings.
 var (
 	diffDocPaths = []string{
 		"/a.md", "/b.md", "/d/x.md", "/d/y.md", "/d/e/z.md",
