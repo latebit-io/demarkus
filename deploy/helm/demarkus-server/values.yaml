@@ -2,12 +2,9 @@
 # Override with --values or --set on `helm install`.
 
 image:
-  # Bundles demarkus-server (ENTRYPOINT) and the demarkus CLI used by
-  # the StatefulSet's exec probes. Admin CLIs (demarkus-token,
-  # demarkus-publish) live outside the runtime image; see
-  # tools/.goreleaser.yml for their distribution.
-  # This image links no external database driver. The Postgres backend is a
-  # separate binary and a separate chart (demarkus-server-pg).
+  # The server (ENTRYPOINT) and the demarkus CLI the exec probes call; admin
+  # CLIs ship separately. Links no database driver: the Postgres backend is
+  # its own binary and chart (demarkus-server-pg).
   repository: ghcr.io/latebit-io/demarkus-server
   # tag defaults to .Chart.appVersion when empty
   tag: ""
@@ -94,18 +91,13 @@ tokens:
   # Required when the broker / federation agent manages this world. Default true.
   emitRawValues: true
 
-  # Token Secrets are runtime-owned (server reads tokens.toml; the broker appends
-  # its write-token entry at runtime). A one-time pre-install/pre-upgrade Job
-  # creates them out-of-band — atomically and consistently — then hands off; the
-  # chart never templates them, so no GitOps controller reconciles (and corrupts)
-  # their content. Disable only if tokens are provisioned by some other means.
+  # Token Secrets are runtime-owned (the broker appends to tokens.toml), so a
+  # pre-install Job creates them out-of-band and the chart never templates
+  # them. Disable only if tokens are provisioned some other way.
   bootstrap:
     enabled: true
-    # Needs kubectl + sh + coreutils (sha256sum, tr); alpine/k8s bundles all
-    # three. Pinned within ±1 minor of the cluster (GKE 1.35) per the kubectl
-    # version-skew policy; bump alongside cluster upgrades. Override with the
-    # org's approved image + tag. (bitnami/kubectl was dropped — its Docker Hub
-    # repo no longer publishes version tags.)
+    # Needs kubectl + sh + coreutils. Pinned within one minor of the cluster
+    # per the kubectl version-skew policy; bump with cluster upgrades.
     image: docker.io/alpine/k8s:1.35.5
     imagePullPolicy: IfNotPresent
 

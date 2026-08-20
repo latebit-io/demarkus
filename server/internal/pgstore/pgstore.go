@@ -54,11 +54,18 @@ CREATE TABLE IF NOT EXISTS versions (
 CREATE INDEX IF NOT EXISTS versions_body_hash_idx ON versions (body_hash);
 -- Deferred: write() inserts the version row before the documents row, so
 -- the invariant holds at commit, not statement by statement.
-DO $$ BEGIN
-	ALTER TABLE versions ADD CONSTRAINT versions_path_fkey
-		FOREIGN KEY (path) REFERENCES documents (path)
-		DEFERRABLE INITIALLY DEFERRED;
-EXCEPTION WHEN duplicate_object THEN NULL;
+DO $$
+DECLARE want text := 'FOREIGN KEY (path) REFERENCES documents(path) DEFERRABLE INITIALLY DEFERRED';
+	got text;
+BEGIN
+	SELECT pg_get_constraintdef(oid) INTO got FROM pg_constraint
+	WHERE conname = 'versions_path_fkey' AND conrelid = 'versions'::regclass;
+	IF got IS NULL THEN
+		EXECUTE 'ALTER TABLE versions ADD CONSTRAINT versions_path_fkey ' || want;
+	ELSIF got <> want THEN
+		-- Same name, different contract: fail loudly instead of assuming it.
+		RAISE EXCEPTION 'versions_path_fkey exists but is %, want %', got, want;
+	END IF;
 END $$;
 CREATE TABLE IF NOT EXISTS catalog (
 	path        text COLLATE "C" PRIMARY KEY,
@@ -173,6 +180,7 @@ func (s *Store) applySchema(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
+	// No-op (ErrTxDone) after a successful Commit; the net for early returns.
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, schemaLockID); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
@@ -482,6 +490,7 @@ func (s *Store) VerifyChain(reqPath string) error {
 	if err != nil {
 		return fmt.Errorf("list versions: %w", err)
 	}
+	// Close error is redundant: rows.Err() below reports iteration failures.
 	defer func() { _ = rows.Close() }()
 	var seen bool
 	var prevHash string

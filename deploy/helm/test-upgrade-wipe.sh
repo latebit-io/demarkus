@@ -47,10 +47,9 @@ trap cleanup EXIT
 
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-# Charts that vendor a library chart need their dependency built first.
-if grep -q "^dependencies:" "$CHART/Chart.yaml" 2>/dev/null; then
-  helm dependency update "$CHART" >/dev/null
-fi
+# No-op for a chart without dependencies; keep its output, it names the
+# subchart that failed to resolve.
+helm dependency update "$CHART"
 
 echo "--- helm install"
 helm install "$RELEASE" "$CHART" --namespace "$NAMESPACE" --wait=false "${HELM_ARGS[@]}"

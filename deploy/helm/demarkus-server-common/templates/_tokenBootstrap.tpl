@@ -1,27 +1,8 @@
 {{- define "demarkus-server.tokenBootstrap" -}}
 {{- if .Values.tokens.bootstrap.enabled }}
-{{- /*
-Token bootstrap — correct ownership model.
-
-The world's token Secrets (<release>-tokens, holding tokens.toml the server
-mounts; <release>-token-values, holding the raw admin token for the broker +
-federation agent) are RUNTIME-OWNED state, not GitOps desired-state: the broker
-appends its write-token entry to tokens.toml at runtime, and the admin hash
-must always match the raw value. Templating them as chart Secrets made a
-GitOps controller (ArgoCD server-side-apply) reconcile their content — which
-strips the broker's entry and desyncs the admin hash from the raw value
-(see demarkus-library debugging.md, 2026-06-14).
-
-So the chart does NOT template the Secrets. A one-time pre-install/pre-upgrade
-Job creates them out-of-band, atomically and consistently (hash + raw from a
-single generated token), then hands off forever: if the tokens Secret already
-exists the Job is a no-op, leaving the broker as the sole writer. ArgoCD/helm
-never see the Secrets, so nothing reconciles them.
-
-Hook ordering: SA/Role/RoleBinding at weight -10, the Job at -5 (helm runs
-ascending). argocd.argoproj.io/hook + sync-wave mirror it so the same ordering
-holds under ArgoCD PreSync.
-*/}}
+{{- /* The token Secrets are runtime-owned, not desired-state: the broker
+       appends to tokens.toml and the admin hash must match the raw value, so
+       a reconciler must never template them. See the chart README. */}}
 {{- $sa := printf "%s-token-bootstrap" (include "demarkus-server.fullname" .) -}}
 apiVersion: v1
 kind: ServiceAccount

@@ -62,6 +62,9 @@ Names for the two token Secrets.
 TLS Secret name. Either user-provided or chart-generated via cert-manager.
 */}}
 {{- define "demarkus-server.tlsSecretName" -}}
+{{- if and .Values.tls.existingSecret .Values.tls.certManager.enabled -}}
+{{- fail "tls.existingSecret and tls.certManager.enabled are mutually exclusive: cert-manager would overwrite the Secret you supplied" -}}
+{{- end -}}
 {{- if .Values.tls.existingSecret -}}
 {{- .Values.tls.existingSecret -}}
 {{- else if .Values.tls.certManager.enabled -}}

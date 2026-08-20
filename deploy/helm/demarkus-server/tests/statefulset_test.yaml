@@ -234,3 +234,16 @@ tests:
           value:
             app.kubernetes.io/name: demarkus-server
             app.kubernetes.io/instance: RELEASE-NAME
+
+  - it: emptied storage overrides still render a valid claim
+    template: statefulset.yaml
+    set:
+      storage.accessMode: ""
+      storage.size: ""
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.accessModes[0]
+          value: ReadWriteOnce
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.resources.requests.storage
+          value: 5Gi

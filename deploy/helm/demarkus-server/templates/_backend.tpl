@@ -1,7 +1,4 @@
-{{/*
-File-store backend. These five templates are the contract the shared
-library expects from a backend chart; demarkus-server-pg defines its own.
-*/}}
+{{/* The five backend templates the shared library expects. */}}
 
 {{- define "demarkus-server.backendArgs" -}}
 - -root
@@ -25,13 +22,13 @@ library expects from a backend chart; demarkus-server-pg defines its own.
       {{- include "demarkus-server.selectorLabels" . | nindent 6 }}
   spec:
     accessModes:
-      - {{ .Values.storage.accessMode }}
-    # Explicit, and defaulted so an empty override cannot blank it: k8s
-    # would re-default server-side and the drift wedges SSA re-applies.
+      - {{ .Values.storage.accessMode | default "ReadWriteOnce" }}
+    # All three defaulted: the VCT is immutable, so a blank field would be
+    # re-defaulted server-side and the drift wedges SSA re-applies.
     volumeMode: {{ .Values.storage.volumeMode | default "Filesystem" }}
     resources:
       requests:
-        storage: {{ .Values.storage.size }}
+        storage: {{ .Values.storage.size | default "5Gi" }}
     {{- if .Values.storage.className }}
     storageClassName: {{ .Values.storage.className | quote }}
     {{- end }}

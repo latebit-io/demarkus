@@ -79,6 +79,8 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.server == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # Backend parity is a core invariant, so pgstore tests must run here, not
     # skip: DEMARKUS_TEST_PG_REQUIRED turns a missing DSN into a failure.
     services:
@@ -99,6 +101,9 @@ jobs:
       DEMARKUS_TEST_PG_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
+        # This job runs PR-controlled code; do not leave a token in .git/config.
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
@@ -272,10 +277,9 @@ jobs:
         run: helm lint deploy/helm/demarkus-broker
       - name: Lint demarkus-agent chart
         run: helm lint deploy/helm/demarkus-agent
-      # The library chart shares templates but Helm never merges a library's
-      # values, so the two backend charts must carry the same defaults. This
-      # is what stops a probe or token change landing in only one of them;
-      # a deliberate divergence gets added to the del() list.
+      # Helm never merges a library chart's values, so the two backend
+      # charts must carry the same defaults; add deliberate divergences to
+      # the del() list.
       - name: Assert the two server charts share their non-backend defaults
         run: |
           diff \

@@ -84,10 +84,8 @@ spec:
           env:
             - name: HOME
               value: /home/demarkus
-            # JSON-by-default in k8s deployments so log shippers (Datadog,
-            # OTel Collector, Vector, Fluent Bit, Grafana Alloy) can parse
-            # structured fields without grok patterns. Operators who want
-            # human-readable text on a debug pod can override to "text".
+            # JSON by default so log shippers parse fields without grok;
+            # override to "text" on a debug pod.
             - name: DEMARKUS_LOG_FORMAT
               value: {{ .Values.server.logFormat | default "json" | quote }}
             {{- with include "demarkus-server.backendEnv" . }}

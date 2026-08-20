@@ -20,15 +20,20 @@ without unpicking the server, since it is still experimental.
 
 One codebase, two binaries and two charts, split at a single seam in each.
 
-- `demarkus-server` (default build) links no database driver. `go tool nm`
-  reports zero `jackc/pgx` symbols and the binary is 11MB against 16MB.
+- `demarkus-server` (default build) links no database driver: `go tool nm`
+  reports zero `jackc/pgx` symbols, which is what CI asserts. The binary is
+  also materially smaller, though only the symbol check is enforced.
 - `demarkus-server-pg` (`-tags pg`) links pgstore. `demarkus-migrate` is
   inherently Postgres and ships alongside it.
-- The seam is `openPostgresStore` in `cmd/demarkus-server`, defined twice:
-  `store_pg.go` (`//go:build pg`) opens pgstore, `store_nopg.go`
-  (`//go:build !pg`) returns an error naming the other binary. A
-  `pgSupported` constant lets `main` reject `-store postgres` before it binds
-  a port.
+- The seam is a backend registry in `cmd/demarkus-server/store.go`: backends
+  register an opener keyed by the `-store` value, and `main` just asks for
+  the configured one. The file store registers unconditionally; `store_pg.go`
+  (`//go:build pg`) registers Postgres from an `init()`. Nothing in the
+  default build names Postgres at all, and the registry supplies both the
+  `-store` help text and the "not available in this build (have: file)"
+  error, so neither can claim a backend that was not compiled in. Store
+  construction happens before the listener binds, so every backend fails
+  before a port is taken, not after.
 - Images follow the binaries: `server/Dockerfile.pg` produces
   `demarkus-server-pg`, bundling `/demarkus-migrate` so the backend flip
   procedure can run in cluster.
@@ -69,20 +74,20 @@ binary purity, not module purity.
 The seam exists so this is a deletion, not a refactor:
 
 1. `rm -r server/internal/pgstore server/cmd/demarkus-migrate`
-2. `rm server/cmd/demarkus-server/store_pg.go server/Dockerfile.pg`
+2. `rm server/cmd/demarkus-server/store_pg.go server/Dockerfile.pg` — the
+   registry needs no edit; one fewer backend simply registers.
 3. `rm -r deploy/helm/demarkus-server-pg`, and fold the library chart back
    into `demarkus-server` if a single backend no longer justifies it.
-4. Delete the `postgres` case in `main.go` and `store_nopg.go`, plus the
-   `pgSupported` guard.
-5. Drop `StoreBackend`/`PostgresDSN` from `internal/config`.
-6. Delete the pg entries from `server/.goreleaser.yml`, the `server-pg` and
+4. Drop `PostgresDSN` and the postgres branch from `internal/config`, and the
+   `-pg-dsn` flag from `main.go`.
+5. Delete the pg entries from `server/.goreleaser.yml`, the `server-pg` and
    `image-server-pg` Make targets, and the postgres steps in CI and the
    release workflow.
-7. Delete the Postgres halves of the test suites: `pgstore/`, `pgtest/`,
+6. Delete the Postgres halves of the test suites: `pgstore/`, `pgtest/`,
    `postgresBackend` in `handler/backend_test.go`, and the pg factories in
    `storetest`. The suites themselves stay; they are the file store's
    contract too.
-8. `cd server && go mod tidy`
+7. `cd server && go mod tidy`
 
 ## Consequences
 
@@ -98,6 +103,8 @@ The seam exists so this is a deletion, not a refactor:
   than flipping a value. The resource names change with the chart name, so
   it is an uninstall and reinstall, which is what a backend change already
   required.
-- The parity test suites run unconditionally, untouched by the tag. They live
-  in the module, not behind the build tag, so `go test ./...` still proves
-  both backends on every run.
+- The parity test suites live in the module, not behind the build tag, so
+  they keep proving both backends. That holds wherever a Postgres DSN is
+  configured: `DEMARKUS_TEST_PG_DSN` selects the database and CI sets
+  `DEMARKUS_TEST_PG_REQUIRED=1` so a missing DSN fails the run instead of
+  skipping the Postgres half.

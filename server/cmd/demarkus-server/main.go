@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -27,22 +28,14 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// pgBackend is what a Postgres store must satisfy: it serves documents, is
-// its own LOOKUP index, and owns a connection pool to close.
-type pgBackend interface {
-	handler.DocumentStore
-	handler.LookupCatalog
-	io.Closer
-}
-
 // currentWalker is the slice of a document store the catalog build needs.
 type currentWalker interface {
 	WalkCurrent(fn func(store.CurrentDoc) error) error
 }
 
 // buildCatalog builds the in-memory LOOKUP catalog by walking current
-// documents. File-backend only: postgres serves LOOKUP from its catalog
-// table. A failed walk leaves an empty catalog rather than aborting startup.
+// documents, for backends that have no catalog of their own. A failed walk
+// leaves an empty catalog rather than aborting startup.
 func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
 	cat := catalog.New()
 	err := s.WalkCurrent(func(d store.CurrentDoc) error {
@@ -123,7 +116,8 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
 	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
-	storeBackend := flag.String("store", "", "document store backend: file or postgres (overrides DEMARKUS_STORE)")
+	storeBackend := flag.String("store", "",
+		fmt.Sprintf("document store backend: %s (overrides DEMARKUS_STORE)", strings.Join(storeNames(), " or ")))
 	pgDSN := flag.String("pg-dsn", "", "Postgres connection string for the postgres backend (overrides DEMARKUS_PG_DSN)")
 	readOnly := flag.Bool("read-only", false, "reject all write operations (also enabled via DEMARKUS_READ_ONLY)")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -168,46 +162,20 @@ func main() {
 		logger.Error("configuration invalid", "error", err)
 		os.Exit(1)
 	}
-	var docStore handler.DocumentStore
-	var cat handler.LookupCatalog
-	switch cfg.StoreBackend {
-	case "postgres":
-		ps, err := openPostgresStore(cfg.PostgresDSN, logger)
-		if err != nil {
-			logger.Error("postgres store unavailable", "error", err)
-			os.Exit(1)
-		}
-		defer func() {
-			if err := ps.Close(); err != nil {
-				logger.Warn("postgres store close failed", "error", err)
-			}
-		}()
-		logger.Info("store: postgres backend ready")
-		// LOOKUP is DB-backed; a per-process index would diverge across pods.
-		docStore, cat = ps, ps
-	case "file":
-		// Open migrates any legacy-layout version files; serving an
-		// unmigrated root would hide every legacy document, so failure is fatal.
-		s, err := store.Open(cfg.ContentDir)
-		if err != nil {
-			logger.Error("store open failed", "error", err)
-			os.Exit(1)
-		}
-		// A broken walk is fatal (an empty index would fail every hash FETCH);
-		// a walk that merely skipped entries is logged per entry and served.
-		if err := s.BuildHashIndex(); err != nil && !logPartialWalk(logger, "hash index", err) {
-			logger.Error("hash index build failed", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("content hash index built", "entries", s.HashIndexSize())
-		docStore, cat = s, buildCatalog(s, logger)
-	default:
-		// Unreachable: ValidateStoreBackend rejected unknown values above.
-		// Kept explicit so a backend added there but not here fails loudly
-		// instead of silently running on the wrong store.
-		logger.Error("unknown store backend reached store init", "store", cfg.StoreBackend)
+	b, err := openStore(cfg, logger)
+	if err != nil {
+		logger.Error("store unavailable", "store", cfg.StoreBackend, "error", err)
 		os.Exit(1)
 	}
+	if b.Close != nil {
+		defer func() {
+			if err := b.Close(); err != nil {
+				logger.Warn("store close failed", "error", err)
+			}
+		}()
+	}
+	logger.Info("store ready", "backend", cfg.StoreBackend)
+	docStore, cat := b.Store, b.Catalog
 
 	tlsConfig, prodMode, err := loadTLS(cfg, logger)
 	if err != nil {

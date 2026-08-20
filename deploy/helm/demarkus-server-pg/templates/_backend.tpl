@@ -1,9 +1,5 @@
-{{/*
-Postgres backend. These five templates are the contract the shared library
-expects from a backend chart; demarkus-server defines the file-store ones.
-No content volume exists: every document, version and catalog row is in
-Postgres.
-*/}}
+{{/* The five backend templates the shared library expects. No content
+     volume: documents, versions and catalog rows all live in Postgres. */}}
 
 {{- define "demarkus-server.backendArgs" -}}
 - -store

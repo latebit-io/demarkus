@@ -1,7 +1,5 @@
-# Only what differs from the file-store chart. Everything else (probes, TLS,
-# security contexts, service, certificate, token bootstrap) comes from the
-# shared library chart and is covered by the demarkus-server suite; testing
-# it twice would assert the same bytes.
+# Only what differs from the file-store chart; the shared library templates
+# are covered once, by the demarkus-server suite.
 suite: statefulset (postgres backend)
 templates:
   - statefulset.yaml
