@@ -7,6 +7,7 @@
 package registry
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -53,5 +54,8 @@ func atomicWritePerm(path string, data []byte, perm os.FileMode) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return errors.Join(err, os.Remove(tmp))
+	}
+	return nil
 }

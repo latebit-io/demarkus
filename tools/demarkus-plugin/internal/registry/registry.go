@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -174,30 +175,29 @@ func IsCatalogSoul(slug string) (bool, error) {
 // ProjectBindSet records that DIR writes to catalog soul SLUG by default. Locked
 // + atomic; validates SLUG is a joined soul first.
 func ProjectBindSet(dir, slug string) error {
-	ok, err := IsCatalogSoul(slug)
+	soulsPath, err := config.StatePath("souls")
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return fmt.Errorf("'%s' is not a joined soul; run /soul-join first (see /soul-default --list)", slug)
-	}
-	p, err := config.StatePath("project-souls")
+	bindingsPath, err := config.StatePath("project-souls")
 	if err != nil {
 		return err
 	}
-	return withLock(p, func() error {
-		rows, err := readRecords("project-souls")
-		if err != nil {
-			return err
-		}
-		var kept []string
-		for _, r := range rows {
-			if strings.SplitN(r, "\t", 2)[0] != dir {
-				kept = append(kept, r)
+	return withLock(soulsPath, func() error {
+		return withLock(bindingsPath, func() error {
+			ok, err := IsCatalogSoul(slug)
+			if err != nil {
+				return err
 			}
-		}
-		kept = append(kept, dir+"\t"+slug)
-		return atomicWrite(p, []byte(strings.Join(kept, "\n")+"\n"))
+			if !ok {
+				return fmt.Errorf("'%s' is not a joined soul; run /soul-join first (see /soul-default --list)", slug)
+			}
+			mutation, err := prepareProjectBindingMutation(dir, slug, bindingsPath)
+			if err != nil {
+				return err
+			}
+			return atomicWritePerm(mutation.before.path, mutation.data, mutation.mode)
+		})
 	})
 }
 
@@ -554,7 +554,48 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 		return nil, fmt.Errorf("slug '%s' is reserved for the local managed soul; join a host with a different first label", config.LocalSoulID)
 	}
 	host := "mark://" + h
+	soulsPath, err := config.StatePath("souls")
+	if err != nil {
+		return nil, err
+	}
+	bindingsPath := ""
+	if bindDir != "" {
+		bindingsPath, err = config.StatePath("project-souls")
+		if err != nil {
+			return nil, err
+		}
+	}
 
+	tokenFile := "-"
+	if token != "" {
+		tokenFile, err = config.StatePath("soul-" + slug + ".token")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := commitSoulJoin(slug, host, token, tokenFile, bindDir, soulsPath, bindingsPath, insecure); err != nil {
+		return nil, err
+	}
+	return &SoulJoinResult{Slug: slug, Host: host, Insecure: insecure, TokenFile: tokenFile}, nil
+}
+
+func commitSoulJoin(slug, host, token, tokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) error {
+	mutate := func() error {
+		mutations, err := prepareSoulJoinMutations(slug, host, token, tokenFile, bindDir, soulsPath, bindingsPath, insecure)
+		if err != nil {
+			return err
+		}
+		return applyStateMutations(mutations)
+	}
+	return withLock(soulsPath, func() error {
+		if bindingsPath == "" {
+			return mutate()
+		}
+		return withLock(bindingsPath, mutate)
+	})
+}
+
+func prepareSoulJoinMutations(slug, host, token, tokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) ([]stateMutation, error) {
 	existingHost, err := remoteSoulHost(slug)
 	if err != nil {
 		return nil, err
@@ -562,29 +603,125 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 	if existingHost != "" && existingHost != host {
 		return nil, fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existingHost, host)
 	}
+	rows, err := readRecords("souls")
+	if err != nil {
+		return nil, err
+	}
+	kept := make([]string, 0, len(rows)+1)
+	for _, row := range rows {
+		if strings.SplitN(row, "\t", 2)[0] != slug {
+			kept = append(kept, row)
+		}
+	}
+	ins := "0"
+	if insecure {
+		ins = "1"
+	}
+	kept = append(kept, strings.Join([]string{slug, host, ins, tokenFile}, "\t"))
 
-	tokenFile := "-"
+	mutations := make([]stateMutation, 0, 3)
 	if token != "" {
-		tf, err := config.StatePath("soul-" + slug + ".token")
+		mutation, err := prepareStateMutation(tokenFile, []byte(token), 0o600)
 		if err != nil {
 			return nil, err
 		}
-		if err := atomicWrite0600(tf, []byte(token)); err != nil {
-			return nil, err
-		}
-		tokenFile = tf
+		mutations = append(mutations, mutation)
 	}
-	if err := SoulRegister(slug, host, insecure, tokenFile); err != nil {
+	catalog, err := prepareStateMutation(soulsPath, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
+	if err != nil {
 		return nil, err
 	}
+	mutations = append(mutations, catalog)
 	if bindDir != "" {
-		if err := ProjectBindSet(bindDir, slug); err != nil {
+		binding, err := prepareProjectBindingMutation(bindDir, slug, bindingsPath)
+		if err != nil {
 			return nil, err
 		}
+		mutations = append(mutations, binding)
 	}
-	return &SoulJoinResult{Slug: slug, Host: host, Insecure: insecure, TokenFile: tokenFile}, nil
+	return mutations, nil
 }
 
-func atomicWrite0600(path string, data []byte) error {
-	return atomicWritePerm(path, data, 0o600)
+func prepareProjectBindingMutation(dir, slug, path string) (stateMutation, error) {
+	bindings, err := readRecords("project-souls")
+	if err != nil {
+		return stateMutation{}, err
+	}
+	bound := make([]string, 0, len(bindings)+1)
+	for _, row := range bindings {
+		if strings.SplitN(row, "\t", 2)[0] != dir {
+			bound = append(bound, row)
+		}
+	}
+	bound = append(bound, dir+"\t"+slug)
+	return prepareStateMutation(path, []byte(strings.Join(bound, "\n")+"\n"), 0o644)
+}
+
+type fileSnapshot struct {
+	path   string
+	data   []byte
+	mode   os.FileMode
+	exists bool
+}
+
+type stateMutation struct {
+	before fileSnapshot
+	data   []byte
+	mode   os.FileMode
+}
+
+var writeStateFile = atomicWritePerm
+
+func prepareStateMutation(path string, data []byte, mode os.FileMode) (stateMutation, error) {
+	snapshot, err := snapshotFile(path)
+	if err != nil {
+		return stateMutation{}, err
+	}
+	return stateMutation{before: snapshot, data: data, mode: mode}, nil
+}
+
+func snapshotFile(path string) (fileSnapshot, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fileSnapshot{path: path}, nil
+	}
+	if err != nil {
+		return fileSnapshot{}, fmt.Errorf("snapshot %s: %w", path, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileSnapshot{}, fmt.Errorf("stat snapshot %s: %w", path, err)
+	}
+	return fileSnapshot{path: path, data: data, mode: info.Mode().Perm(), exists: true}, nil
+}
+
+func applyStateMutations(mutations []stateMutation) error {
+	for i := range mutations {
+		mutation := &mutations[i]
+		if err := writeStateFile(mutation.before.path, mutation.data, mutation.mode); err != nil {
+			rollbackErr := rollbackStateMutations(mutations[:i+1])
+			return errors.Join(fmt.Errorf("write %s: %w", mutation.before.path, err), rollbackErr)
+		}
+	}
+	return nil
+}
+
+func rollbackStateMutations(mutations []stateMutation) error {
+	var rollbackErr error
+	for i := len(mutations) - 1; i >= 0; i-- {
+		snapshot := &mutations[i].before
+		var err error
+		if snapshot.exists {
+			err = atomicWritePerm(snapshot.path, snapshot.data, snapshot.mode)
+		} else {
+			err = os.Remove(snapshot.path)
+			if errors.Is(err, os.ErrNotExist) {
+				err = nil
+			}
+		}
+		if err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback %s: %w", snapshot.path, err))
+		}
+	}
+	return rollbackErr
 }

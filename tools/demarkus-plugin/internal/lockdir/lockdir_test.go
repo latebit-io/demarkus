@@ -141,7 +141,11 @@ func TestWithLock(t *testing.T) {
 		if err := syscall.Flock(int(guard.Fd()), syscall.LOCK_EX); err != nil {
 			t.Fatal(err)
 		}
+		guardClosed := false
 		defer func() {
+			if guardClosed {
+				return
+			}
 			if err := syscall.Flock(int(guard.Fd()), syscall.LOCK_UN); err != nil {
 				t.Errorf("unlock guard: %v", err)
 			}
@@ -150,12 +154,66 @@ func TestWithLock(t *testing.T) {
 			}
 		}()
 
-		err = WithLock(lock, 3, time.Millisecond, func() error {
-			t.Error("fn must not run while transition guard is held")
-			return nil
-		})
-		if err == nil {
+		startSeq := nameSeq.Load()
+		result := make(chan error, 1)
+		go func() {
+			result <- WithLock(lock, 3, time.Millisecond, func() error {
+				t.Error("fn must not run while transition guard is held")
+				return nil
+			})
+		}()
+
+		var contenderErr error
+		deadline := time.After(time.Second)
+	wait:
+		for {
+			select {
+			case contenderErr = <-result:
+				break wait
+			case <-deadline:
+				t.Fatal("contender did not reach guard timeout")
+			default:
+				if nameSeq.Load() > startSeq {
+					break wait
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}
+
+		if err := os.Mkdir(lock, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		wantPID := strconv.Itoa(os.Getpid())
+		if err := os.WriteFile(filepath.Join(lock, "pid"), []byte(wantPID), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Flock(int(guard.Fd()), syscall.LOCK_UN); err != nil {
+			t.Fatal(err)
+		}
+		if err := guard.Close(); err != nil {
+			t.Fatal(err)
+		}
+		guardClosed = true
+		if contenderErr == nil {
+			contenderErr = <-result
+		}
+		if contenderErr == nil {
 			t.Fatal("expected transition guard timeout")
+		}
+		pid, err := os.ReadFile(filepath.Join(lock, "pid"))
+		if err != nil || string(pid) != wantPID {
+			t.Fatalf("live holder was disturbed: pid=%q err=%v", pid, err)
+		}
+		stages, err := filepath.Glob(lock + ".stage-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(stages) != 0 {
+			t.Fatalf("contender leaked stages: %v", stages)
+		}
+		ran := false
+		if err := WithLock(lock, 1, time.Millisecond, func() error { ran = true; return nil }); err == nil || ran {
+			t.Fatalf("live holder was not preserved: err=%v ran=%v", err, ran)
 		}
 	})
 }

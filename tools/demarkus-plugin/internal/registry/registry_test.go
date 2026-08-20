@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +103,77 @@ func TestSoulJoinAndCollision(t *testing.T) {
 	// reserved slug rejected
 	if _, err := SoulJoin("demarkus-memory.example.com", "", false, ""); err == nil {
 		t.Error("expected reserved-slug rejection")
+	}
+}
+
+func TestSoulJoinRollsBackBindingFailure(t *testing.T) {
+	home := setupHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalWriter := writeStateFile
+	t.Cleanup(func() { writeStateFile = originalWriter })
+	writeStateFile = func(path string, data []byte, mode os.FileMode) error {
+		if filepath.Base(path) == "project-souls" {
+			return errors.New("injected binding failure")
+		}
+		return atomicWritePerm(path, data, mode)
+	}
+
+	if _, err := SoulJoin("soul.demarkus.io", "secret", false, repo); err == nil {
+		t.Fatal("SoulJoin succeeded despite binding failure")
+	}
+	for _, name := range []string{"souls", "project-souls", "soul-soul.token"} {
+		path := filepath.Join(home, ".demarkus", name)
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("partial state remains at %s: %v", path, err)
+		}
+	}
+}
+
+func TestSoulJoinRestoresExistingStateOnBindingFailure(t *testing.T) {
+	home := setupHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, repo); err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{
+		filepath.Join(home, ".demarkus", "souls"),
+		filepath.Join(home, ".demarkus", "project-souls"),
+		filepath.Join(home, ".demarkus", "soul-soul.token"),
+	}
+	before := make(map[string]string, len(paths))
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[path] = string(body)
+	}
+
+	originalWriter := writeStateFile
+	t.Cleanup(func() { writeStateFile = originalWriter })
+	writeStateFile = func(path string, data []byte, mode os.FileMode) error {
+		if filepath.Base(path) == "project-souls" {
+			return errors.New("injected binding failure")
+		}
+		return atomicWritePerm(path, data, mode)
+	}
+	if _, err := SoulJoin("soul.demarkus.io", "new-token", true, repo); err == nil {
+		t.Fatal("SoulJoin succeeded despite binding failure")
+	}
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != before[path] {
+			t.Errorf("state changed at %s: got %q, want %q", path, body, before[path])
+		}
 	}
 }
 

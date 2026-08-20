@@ -9,7 +9,7 @@ Append the following entry to today's journal file for the current project. One 
 
 ## Steps
 
-1. **Resolve the project slug.** Use the basename of the current project directory. Lowercase it and replace spaces with hyphens. If the project directory is unavailable, ask the user which project.
+1. **Resolve and validate the project slug.** Use the absolute current project directory; use its basename, lowercased with spaces replaced by hyphens, as the candidate. If the project directory is unavailable, ask the user which project. Before writing, check whether that candidate subtree already exists in the selected soul. If it does and this session has not established that it belongs to this exact absolute project path, ask the user to confirm or choose a unique slug; never assume equal basenames mean the same project. Use the final confirmed slug consistently for the journal path and root-index link.
 
 2. **Compute the target path.** Use today's date in UTC as `YYYY-MM-DD`. Target: `/<project>/journal/<YYYY-MM-DD>.md`.
 
@@ -40,10 +40,10 @@ Append the following entry to today's journal file for the current project. One 
 
      Leave `expected_version` unset so the tool auto-resolves it. Always prefix the entry body with a leading blank line so it separates visually from the previous entry.
 
-     `mark_append` carries the doc's catalog metadata forward (`retention` excepted), so today's creation-time `tags`/`importance`/`type` stand. If this new entry introduces a materially new subject worth finding later, fetch the file with `force: true`, reject an outline-only response, and re-publish the full current body with the correct `expected_version` and `on_conflict: "fail"`, resending the complete metadata map with extended `tags`; `mark_publish` replaces the map, so a tags-only publish would drop `importance`, `title`, and `type`. Skip this for routine same-topic appends — don't republish gratuitously.
+     `mark_append` carries the doc's catalog metadata forward (`retention` excepted), so today's creation-time `tags`/`importance`/`type` stand. If this new entry introduces a materially new subject worth finding later, fetch the file with `force: true`, reject an outline-only response, and re-publish the full current body with the correct `expected_version` and `on_conflict: "fail"`, resending the complete metadata map with extended `tags`; `mark_publish` replaces the map, so a tags-only publish would drop `importance`, `title`, and `type`. If that force-fetch or metadata publish fails, report the journal append as committed and the metadata enrichment as incomplete, surface the exact error, and stop without repeating `mark_append`. Skip enrichment for routine same-topic appends — don't republish gratuitously.
 
    - For unauthorized, transport, server, malformed-response, or other fetch failures: surface the exact error and stop without writing or claiming success.
 
-4. **Confirm only after success.** Check every `mark_publish` and `mark_append` result. On failure or conflict, surface the exact result, stop dependent writes, and do not claim the journal or index was updated. After successful journal creation/append, tell the user the full path; report a later index-update failure separately without hiding the successful journal write.
+4. **Report operation-specific results.** Check every `mark_publish` and `mark_append` result. On a journal write failure, surface the exact result and do not claim it was written. After successful creation/append, report that write as committed and never repeat it because a dependent index or metadata update failed. Report each later failure separately as partial success: journal committed, dependent update incomplete.
 
 Entry: $ARGUMENTS

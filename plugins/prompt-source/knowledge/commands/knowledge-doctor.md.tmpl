@@ -27,7 +27,7 @@ Resolve the audit scope from `$ARGUMENTS`:
 
 For explicit world scope, call `mark_worlds` through every joined system's own MCP server and collect `(system slug, world)` matches. Every directory call must succeed before deciding uniqueness or absence; on any failure, surface it and stop with scope resolution incomplete. Audit only after exactly one match is selected. If multiple systems expose the same world name, ask the user which system; if no complete directory contains it, report unavailable scope and stop.
 
-For blank or system-slug scope, call `mark_worlds` for each resolved system to enumerate the worlds your identity may read (note the `writable` flag — a fix suggestion is only actionable on a world the user can publish to) and audit each readable world. For explicit world scope, audit only the selected `(system slug, world)` pair; do not expand back to every readable world. Anchor each audited world on its `mark://<world>/index.md` hub. Key all graph, inventory, and report state by both system slug and world name; never merge same-named worlds from different systems.
+For blank or system-slug scope, call `mark_worlds` for each resolved system to enumerate the worlds your identity may read (note the `writable` flag — a fix suggestion is only actionable on a world the user can publish to) and audit each readable world. If enumeration fails or is malformed, surface the error, mark that system incomplete, suppress full-coverage conclusions for it, and continue only with unrelated systems whose enumeration succeeded. For explicit world scope, audit only the selected `(system slug, world)` pair; do not expand back to every readable world. Anchor each audited world on its `mark://<world>/index.md` hub. Key all graph, inventory, and report state by both system slug and world name; never merge same-named worlds from different systems.
 
 > **Read-auth caveat.** `mark_lookup` is filtered to what your token may read, and `mark_worlds` lists only readable worlds. Your audit covers *your* visibility, not the whole system. Say so in the report — never imply full coverage of a world or system you can't fully see.
 
@@ -49,7 +49,7 @@ Before the first broker call, set a command-wide deadline five minutes in the fu
 
 - **Broken links** — an edge whose `mark://` target does not exist. **Read the crawl-node status; it tells you what's already confirmed:**
   - A target **present in Nodes as `[not-found]`** is *already confirmed broken* — the crawler fetched it and the broker said not-found. Report it directly; **do not re-fetch** (re-confirming N dead links is N wasted calls).
-  - A target **absent from Nodes entirely** may just have sat beyond crawl depth — *that* is the case a complete inventory (`mark_list`) settles. For a **same-world** target check the world's inventory; for a **cross-world** `mark://<other>/…` target check that world's complete inventory. If the target world is unreadable or either inventory is incomplete, classify the reference as unresolved, not broken.
+  - A target **absent from Nodes entirely** may just have sat beyond crawl depth — *that* is the case a complete in-scope inventory (`mark_list`) settles. For a **same-world** target check the world's inventory; for a **cross-world** `mark://<other>/…` target check that world's complete inventory only when it is included in the selected audit scope. If the target world is out of scope, unreadable, or either inventory is incomplete, classify the reference as unresolved, not broken.
   - A target present as **`[error]`** is not a missing doc — see the next check.
 - **Unroutable / cross-system references** — an `[error]` node on a `mark://` link means the broker couldn't route the host. `mark_worlds` lists only worlds the current identity may read, so absence from that list does **not** prove the host is external. If the host is readable, retry once and report a persistent dispatch failure. Otherwise classify it as unresolved (possibly unreadable, cross-system, or stale) and do not claim absence or externality without independent evidence.
 - **Orphans** — an inventory document that is never the target of any `mark://` edge after complete root and supplemental crawls and isn't the world's root hub. Report successful crawl coverage. Cross-world inbound links count only from fully crawled worlds in the same resolved system and audit scope; other systems cannot prove or disprove orphan status.
@@ -104,7 +104,7 @@ Render plainly, grouped by world then by check, most actionable first. Lead with
 - mark://<world>/index.md → mark://unknown/index.md  ([error], non-member or unreadable host) — unresolved; verify system membership/read access before deciding whether it is stale or external
 
 #### Orphans (<n>)
-- mark://<world>/<doc>.md — exists but no hub links to it; add it to index.md
+- mark://<world>/<doc>.md — no inbound `mark://` edge after complete in-scope crawling; add an appropriate inbound catalog link
 
 #### In-body frontmatter (<n>)        [deep check — scanned <k>/<N> docs]
 - mark://<world>/index.md — body opens with a `---` block (version: 47, stored version 1); strip it, re-publish with out-of-band metadata

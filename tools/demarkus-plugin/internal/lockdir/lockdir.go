@@ -102,17 +102,23 @@ func tryAcquire(lockDir string) (bool, error) {
 		return false, errors.Join(fmt.Errorf("stamp lock pid: %w", err), os.RemoveAll(stage))
 	}
 	var renameErr error
+	renamed := false
 	guardErr := withGuard(lockDir, func() error {
 		renameErr = os.Rename(stage, lockDir)
+		renamed = renameErr == nil
 		return nil
 	})
 	if guardErr != nil {
-		if renameErr == nil {
+		if renamed {
 			return false, errors.Join(guardErr, release(lockDir))
 		}
-		return false, errors.Join(guardErr, os.RemoveAll(stage))
+		var acquireErr error
+		if renameErr != nil {
+			acquireErr = fmt.Errorf("acquire lock: %w", renameErr)
+		}
+		return false, errors.Join(guardErr, acquireErr, os.RemoveAll(stage))
 	}
-	if renameErr == nil {
+	if renamed {
 		return true, nil
 	}
 	cleanupErr := os.RemoveAll(stage)
