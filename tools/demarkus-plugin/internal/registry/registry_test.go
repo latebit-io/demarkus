@@ -273,6 +273,28 @@ func TestSoulJoinWithoutTokenRemovesOrphanManagedToken(t *testing.T) {
 	}
 }
 
+func TestSoulJoinWithoutTokenPreservesExternalTokenReference(t *testing.T) {
+	home := setupHome(t)
+	tokenPath := filepath.Join(home, "external.token")
+	if err := os.WriteFile(tokenPath, []byte("external-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SoulRegister("soul", "mark://soul.demarkus.io", false, tokenPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SoulJoin("soul.demarkus.io", "", false, ""); err == nil || !strings.Contains(err.Error(), "externally managed token file") {
+		t.Fatalf("tokenless rejoin error = %v", err)
+	}
+	row, ok, err := RemoteSoulRow("soul")
+	if err != nil || !ok || row.TokenFile != tokenPath {
+		t.Fatalf("external token row = %+v, ok=%v, err=%v", row, ok, err)
+	}
+	body, err := os.ReadFile(tokenPath)
+	if err != nil || string(body) != "external-token" {
+		t.Fatalf("external token changed: body=%q err=%v", body, err)
+	}
+}
+
 func TestSoulJoinRestoresDeletedTokenOnLaterFailure(t *testing.T) {
 	home := setupHome(t)
 	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, ""); err != nil {

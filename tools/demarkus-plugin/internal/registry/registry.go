@@ -590,6 +590,9 @@ func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bi
 	if exists && existing.Host != host {
 		return nil, fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existing.Host, host)
 	}
+	if token == "" && exists && existing.TokenFile != "" && existing.TokenFile != "-" && existing.TokenFile != managedTokenFile {
+		return nil, fmt.Errorf("soul '%s' uses externally managed token file %q; refusing to remove its catalog reference during tokenless rejoin; resolve that credential explicitly first", slug, existing.TokenFile)
+	}
 	rows, err := readRecords("souls")
 	if err != nil {
 		return nil, err
