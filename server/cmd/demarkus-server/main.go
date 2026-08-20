@@ -22,11 +22,18 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/logging"
-	"github.com/latebit-io/demarkus/server/internal/pgstore"
 	"github.com/latebit-io/demarkus/server/internal/ratelimit"
 	servertls "github.com/latebit-io/demarkus/server/internal/tls"
 	"github.com/quic-go/quic-go"
 )
+
+// pgBackend is what a Postgres store must satisfy: it serves documents, is
+// its own LOOKUP index, and owns a connection pool to close.
+type pgBackend interface {
+	handler.DocumentStore
+	handler.LookupCatalog
+	io.Closer
+}
 
 // currentWalker is the slice of a document store the catalog build needs.
 type currentWalker interface {
@@ -161,34 +168,13 @@ func main() {
 		logger.Error("configuration invalid", "error", err)
 		os.Exit(1)
 	}
-
-	tlsConfig, prodMode, err := loadTLS(cfg, logger)
-	if err != nil {
-		logger.Error("tls setup failed", "error", err)
-		os.Exit(1)
-	}
-
-	quicConfig := &quic.Config{
-		MaxIncomingStreams:    int64(cfg.MaxStreams),
-		MaxIncomingUniStreams: 0,
-		MaxIdleTimeout:        cfg.IdleTimeout,
-	}
-
-	addr := fmt.Sprintf(":%d", cfg.Port)
-	listener, err := quic.ListenAddr(addr, tlsConfig, quicConfig)
-	if err != nil {
-		logger.Error("listen failed", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	defer func() { _ = listener.Close() }()
-
 	var docStore handler.DocumentStore
 	var cat handler.LookupCatalog
 	switch cfg.StoreBackend {
 	case "postgres":
-		ps, err := pgstore.Open(cfg.PostgresDSN, logger)
+		ps, err := openPostgresStore(cfg.PostgresDSN, logger)
 		if err != nil {
-			logger.Error("postgres store setup failed", "error", err)
+			logger.Error("postgres store unavailable", "error", err)
 			os.Exit(1)
 		}
 		defer func() {
@@ -222,6 +208,26 @@ func main() {
 		logger.Error("unknown store backend reached store init", "store", cfg.StoreBackend)
 		os.Exit(1)
 	}
+
+	tlsConfig, prodMode, err := loadTLS(cfg, logger)
+	if err != nil {
+		logger.Error("tls setup failed", "error", err)
+		os.Exit(1)
+	}
+
+	quicConfig := &quic.Config{
+		MaxIncomingStreams:    int64(cfg.MaxStreams),
+		MaxIncomingUniStreams: 0,
+		MaxIdleTimeout:        cfg.IdleTimeout,
+	}
+
+	addr := fmt.Sprintf(":%d", cfg.Port)
+	listener, err := quic.ListenAddr(addr, tlsConfig, quicConfig)
+	if err != nil {
+		logger.Error("listen failed", "addr", addr, "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = listener.Close() }()
 
 	if cfg.TokensFile != "" {
 		if err := loadTokenStore(cfg.TokensFile); err != nil {

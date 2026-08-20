@@ -110,8 +110,22 @@ jobs:
         run: cd server && go test ./...
       - name: Vet
         run: cd server && go vet ./...
+      # Both flavors must keep building, and the default one must link no
+      # database driver: the nm check is what keeps the -tags pg seam honest.
       - name: Build
-        run: cd server && go build -o /dev/null ./cmd/demarkus-server
+        run: |
+          cd server
+          go build -o /tmp/demarkus-server ./cmd/demarkus-server
+          if go tool nm /tmp/demarkus-server | grep -q "jackc/pgx"; then
+            echo "default demarkus-server links pgx; the -tags pg seam leaked" >&2
+            exit 1
+          fi
+      - name: Build (postgres flavor)
+        run: |
+          cd server
+          go vet -tags pg ./cmd/demarkus-server
+          go build -tags pg -o /dev/null ./cmd/demarkus-server
+          go build -o /dev/null ./cmd/demarkus-migrate
 
   test-client:
     needs: detect-changes
@@ -244,14 +258,34 @@ jobs:
           mkdir -p "$HELM_PLUGINS/helm-unittest"
           curl -fsSL https://github.com/helm-unittest/helm-unittest/releases/download/v0.6.2/helm-unittest-linux-amd64-0.6.2.tgz \
             | tar -xz -C "$HELM_PLUGINS/helm-unittest"
+      # Both server charts vendor deploy/helm/demarkus-server-common (a
+      # library chart) so their shared templates cannot drift.
+      - name: Build chart dependencies
+        run: |
+          helm dependency update deploy/helm/demarkus-server
+          helm dependency update deploy/helm/demarkus-server-pg
       - name: Lint demarkus-server chart
         run: helm lint deploy/helm/demarkus-server
+      - name: Lint demarkus-server-pg chart
+        run: helm lint deploy/helm/demarkus-server-pg --set server.postgres.dsnSecret.name=pg-app
       - name: Lint demarkus-broker chart
         run: helm lint deploy/helm/demarkus-broker
       - name: Lint demarkus-agent chart
         run: helm lint deploy/helm/demarkus-agent
+      # The library chart shares templates but Helm never merges a library's
+      # values, so the two backend charts must carry the same defaults. This
+      # is what stops a probe or token change landing in only one of them;
+      # a deliberate divergence gets added to the del() list.
+      - name: Assert the two server charts share their non-backend defaults
+        run: |
+          diff \
+            <(yq -o=json 'del(.image, .storage, .server.postgres)' deploy/helm/demarkus-server/values.yaml) \
+            <(yq -o=json 'del(.image, .storage, .server.postgres)' deploy/helm/demarkus-server-pg/values.yaml) \
+            || { echo "demarkus-server and demarkus-server-pg values drifted" >&2; exit 1; }
       - name: Unit test demarkus-server chart
         run: helm unittest deploy/helm/demarkus-server
+      - name: Unit test demarkus-server-pg chart
+        run: helm unittest deploy/helm/demarkus-server-pg
       - name: Unit test demarkus-broker chart
         run: helm unittest deploy/helm/demarkus-broker
 

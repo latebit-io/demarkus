@@ -1,12 +1,17 @@
-# Chart overrides for a Postgres-backed server in the kind harness.
-# Used by scripts/e2e-backend-parity.sh alongside values-kind.yaml (file
-# backend); the pair must differ only in the store backend.
+# Overrides for the demarkus-server-pg chart in the kind harness. Used by
+# scripts/e2e-backend-parity.sh alongside values-kind.yaml (the file-store
+# chart); the pair must differ only in the storage backend.
+
+# Pinned to the pre-split image: the chart defaults to demarkus-server-pg,
+# which has no published tag yet. Drop this override once a release
+# publishes that image.
+image:
+  repository: ghcr.io/latebit-io/demarkus-server
 
 service:
   type: ClusterIP
 
 server:
-  store: postgres
   postgres:
     dsnSecret:
       # CloudNativePG publishes app credentials in <cluster>-app; its "uri"

@@ -2,6 +2,8 @@
 
 Deploys one [demarkus](https://github.com/latebit-io/demarkus) world on Kubernetes — a Mark Protocol server serving versioned markdown over QUIC, with capability-based auth and TLS. One Helm release = one world.
 
+Content lives in a versioned file store on a PersistentVolume, and the image links no external database driver. For the Postgres backend — shared state across replicas, no content PVC — use the [demarkus-server-pg](../demarkus-server-pg) chart instead; the two are the same server and share their templates through the `demarkus-server-common` library chart.
+
 ## Quick start
 
 ```bash
@@ -97,7 +99,7 @@ On `helm upgrade`, the chart uses `lookup` to read the existing `-token-values` 
 
 Startup, liveness, and readiness all exec `demarkus -insecure -no-cache mark://localhost:<port>/.well-known/agent-manifest.md`. The manifest is always public per `/architecture.md`. Probe disabled root-fs writes via `-no-cache`. The image must include the `demarkus` CLI binary.
 
-The startup probe (default 30 × 10s, `probes.startup`) holds liveness off until the server answers its first request. The server serves nothing until store init completes — file mode walks the world for its hash index and catalog, postgres mode may backfill the LOOKUP catalog on first boot — so without the startup probe a slow first boot would eat into the liveness failure threshold and could be restart-looped.
+The startup probe (default 30 × 10s, `probes.startup`) holds liveness off until the server answers its first request. The server serves nothing until store init completes — it walks the world to build its hash index and catalog — so without the startup probe a slow first boot would eat into the liveness failure threshold and could be restart-looped.
 
 ### Security defaults
 

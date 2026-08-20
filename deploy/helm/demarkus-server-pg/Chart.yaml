@@ -1,10 +1,10 @@
 apiVersion: v2
-name: demarkus-server
+name: demarkus-server-pg
 description: |
-  Mark Protocol server, file-store backend. Serves markdown over QUIC, with
-  capability-based auth, versioned content store, and TLS. One Helm release =
-  one world. The server image links no external database driver; for the
-  Postgres backend use the demarkus-server-pg chart.
+  Mark Protocol server, Postgres backend. Same server as the demarkus-server
+  chart, built with the pgstore backend linked in: all state lives in
+  Postgres, so no content PVC is created and replicas share one world. Use
+  the demarkus-server chart for the dependency-free file store.
 type: application
 version: 0.1.0
 dependencies:
@@ -17,6 +17,7 @@ keywords:
   - mark-protocol
   - markdown
   - quic
+  - postgres
 home: https://demarkus.io
 sources:
   - https://github.com/latebit-io/demarkus

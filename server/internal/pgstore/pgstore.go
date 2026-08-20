@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS versions (
 	PRIMARY KEY (path, version)
 );
 CREATE INDEX IF NOT EXISTS versions_body_hash_idx ON versions (body_hash);
+-- Deferred: write() inserts the version row before the documents row, so
+-- the invariant holds at commit, not statement by statement.
+DO $$ BEGIN
+	ALTER TABLE versions ADD CONSTRAINT versions_path_fkey
+		FOREIGN KEY (path) REFERENCES documents (path)
+		DEFERRABLE INITIALLY DEFERRED;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 CREATE TABLE IF NOT EXISTS catalog (
 	path        text COLLATE "C" PRIMARY KEY,
 	tags        jsonb NOT NULL,
@@ -63,6 +71,8 @@ CREATE TABLE IF NOT EXISTS catalog (
 	modified    timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS catalog_tags_lower_idx ON catalog USING GIN (tags_lower);
+-- The trigram index roughly doubles a catalog upsert (measured ~10us), far
+-- below the versions insert and commit it rides along with.
 CREATE INDEX IF NOT EXISTS catalog_title_trgm_idx ON catalog USING GIN (title_lower public.gin_trgm_ops);
 `
 
@@ -79,12 +89,12 @@ const queryTimeout = 10 * time.Second
 // catalog on first boot, which must not crash-loop under the query budget.
 const initTimeout = 60 * time.Second
 
-// Pool bounds: QUIC fan-in is unbounded but Postgres max_connections is
-// not (CNPG default 100), so excess requests queue on the pool; lifetime
-// rotates connections through load balancers and failovers.
+// Pool bounds: QUIC fan-in is unbounded, Postgres max_connections is not
+// (CNPG default 100), so excess requests queue here. Idle matches open
+// because database/sql closes returned connections above the idle cap.
 const (
 	maxOpenConns    = 16
-	maxIdleConns    = 8
+	maxIdleConns    = maxOpenConns
 	connMaxLifetime = 30 * time.Minute
 )
 
@@ -146,17 +156,37 @@ func (s *Store) Init(ctx context.Context) error {
 	if err := s.db.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
-	// WITH SCHEMA public keeps the trigram opclass findable regardless of
-	// the connection's search_path (tests isolate via per-package schemas).
-	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(
-		`SELECT pg_advisory_xact_lock(%d); CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public`,
-		schemaLockID)); err != nil {
-		return fmt.Errorf("create pg_trgm: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("apply schema: %w", err)
+	// All startup DDL runs in one transaction under an advisory lock:
+	// CREATE EXTENSION / INDEX / CONSTRAINT all race with themselves when
+	// replicas boot together, and this backend is built for several.
+	if err := s.applySchema(ctx); err != nil {
+		return err
 	}
 	return s.backfillCatalog(ctx)
+}
+
+// applySchema serializes the idempotent DDL against concurrent startups.
+// WITH SCHEMA public keeps the trigram opclass findable regardless of the
+// connection's search_path (tests isolate via per-package schemas).
+func (s *Store) applySchema(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("apply schema: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, schemaLockID); err != nil {
+		return fmt.Errorf("apply schema: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public`); err != nil {
+		return fmt.Errorf("create pg_trgm: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, schema); err != nil {
+		return fmt.Errorf("apply schema: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("apply schema: %w", err)
+	}
+	return nil
 }
 
 // Close releases the connection pool.
@@ -226,8 +256,9 @@ func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]store.DirEn
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
-	// Root ("" prefix) legitimately spans the whole table; any other prefix
-	// is an index range scan over the C-collated path key.
+	// Root ("" prefix) spans the whole table; any other prefix is an index
+	// range scan over the C-collated path key. Aggregating children in SQL
+	// measured 5x slower at 50k documents, so the fold stays here.
 	query := `SELECT path, archived FROM documents`
 	args := []any{}
 	if prefix != "" {
@@ -440,44 +471,46 @@ func (s *Store) VerifyChain(reqPath string) error {
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
+	// Hash server-side (sha256() reproduces store.ContentHash) and ship only
+	// the frontmatter head: verification reads the real bytes, not bodies.
+	// The newest version is skipped, nothing links back to it.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT version, stored FROM versions WHERE path = $1 ORDER BY version ASC`, p)
+		SELECT version, substring(stored from 1 for $2),
+			CASE WHEN lead(version) OVER (ORDER BY version) IS NULL THEN NULL
+			     ELSE 'sha256-' || encode(sha256(stored), 'hex') END
+		FROM versions WHERE path = $1 ORDER BY version ASC`, p, store.MaxStoreFrontmatter)
 	if err != nil {
 		return fmt.Errorf("list versions: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	type ver struct {
-		n      int
-		stored []byte
-	}
-	var versions []ver
+	var seen bool
+	var prevHash string
 	for rows.Next() {
-		var v ver
-		if err := rows.Scan(&v.n, &v.stored); err != nil {
+		var n int
+		var head []byte
+		var storedHash sql.NullString
+		if err := rows.Scan(&n, &head, &storedHash); err != nil {
 			return fmt.Errorf("list versions: %w", err)
 		}
-		versions = append(versions, v)
+		if seen {
+			// head always covers the store frontmatter (capped at
+			// MaxStoreFrontmatter), so this reads what the full bytes would.
+			recorded := store.ExtractPreviousHash(head)
+			if recorded == "" {
+				return fmt.Errorf("v%d missing previous-hash", n)
+			}
+			if recorded != prevHash {
+				return fmt.Errorf("v%d chain broken: previous-hash mismatch (want %s, got %s)",
+					n, prevHash, recorded)
+			}
+		}
+		seen, prevHash = true, storedHash.String
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("list versions: %w", err)
 	}
-	if len(versions) == 0 {
+	if !seen {
 		return fmt.Errorf("list versions: %w", os.ErrNotExist)
-	}
-	if len(versions) < 2 {
-		return nil
-	}
-	for i, curr := range versions[1:] {
-		prev := versions[i]
-		expected := store.ContentHash(prev.stored)
-		recorded := store.ExtractPreviousHash(curr.stored)
-		if recorded == "" {
-			return fmt.Errorf("v%d missing previous-hash", curr.n)
-		}
-		if recorded != expected {
-			return fmt.Errorf("v%d chain broken: previous-hash mismatch (want %s, got %s)",
-				curr.n, expected, recorded)
-		}
 	}
 	return nil
 }

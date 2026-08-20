@@ -1,0 +1,23 @@
+# demarkus-server-pg image: the Postgres flavor of the server. Bundles:
+#   /demarkus-server-pg — the QUIC world server, -tags pg (ENTRYPOINT)
+#   /demarkus           — CLI; the helm chart's exec probes invoke it
+#   /demarkus-migrate   — file <-> postgres migration, for the chart's
+#                         backend-flip procedure
+#
+# Deployed by the demarkus-server-pg chart, which pins this repository. The
+# default demarkus-server image links no database driver at all; see
+# server/cmd/demarkus-server/store_nopg.go.
+#
+# Build context = repo root; COPY-only, like server/Dockerfile. Staged paths:
+#   dist/docker/<arch>/{demarkus-server-pg,demarkus,demarkus-migrate}
+
+FROM scratch
+ARG TARGETARCH
+ARG TARGETVARIANT
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus-server-pg /demarkus-server-pg
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus           /demarkus
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus-migrate    /demarkus-migrate
+# Match the chart's podSecurityContext.runAsUser, as the default image does.
+USER 65532:65532
+EXPOSE 6309/udp
+ENTRYPOINT ["/demarkus-server-pg"]

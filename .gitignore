@@ -70,3 +70,8 @@ node_modules/
 # Obsidian plugin settings (contains tokens)
 plugins/obsidian/data.json
 .project/
+
+# Vendored helm library dependency: `helm dependency update` rebuilds it from
+# deploy/helm/demarkus-server-common, so the tarball and lock are artifacts.
+deploy/helm/*/charts/
+deploy/helm/*/Chart.lock

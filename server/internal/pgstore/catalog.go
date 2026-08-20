@@ -13,9 +13,8 @@ import (
 )
 
 // Postgres LookupCatalog: rows ride the document write tx, so every
-// replica's LOOKUP is as current as the store. Lowercasing happens in Go at
-// write time (Postgres lower() diverges on unicode); filters reuse shared
-// catalog code so they cannot diverge.
+// replica's LOOKUP is as current as the store. Lowercasing stays in Go
+// (lower() follows the server's collation and ICU version), as do filters.
 
 // upsertCatalogRow writes a document tip's catalog row inside the caller's
 // write transaction. Archived state is not stored: Lookup joins
@@ -189,12 +188,12 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 	} else if len(terms) == 0 {
 		return nil, nil
 	}
-	termsJSON, err := jsonArray(terms)
-	if err != nil {
-		return nil, fmt.Errorf("lookup terms: %w", err)
+	// $1 carries the terms once, as the text[] both the score subquery and
+	// the tags prefilter read.
+	if terms == nil {
+		terms = []string{}
 	}
-
-	args := []any{termsJSON}
+	args := []any{terms}
 	// arg appends a query parameter and returns its placeholder.
 	arg := func(v any) string {
 		args = append(args, v)
@@ -204,7 +203,7 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 	sel := `
 		SELECT c.path, c.tags, c.importance, c.title, c.meta, c.modified,
 			(SELECT count(*)
-			 FROM jsonb_array_elements_text($1::jsonb) AS q(term)
+			 FROM unnest($1::text[]) AS q(term)
 			 WHERE c.tags_lower ? q.term
 			   OR (c.title_lower <> '' AND strpos(c.title_lower, q.term) > 0)
 			)::int AS score
@@ -215,7 +214,7 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 		// Index-backed candidate prefilter, the same predicate as score > 0:
 		// the tags GIN serves ?|, the trigram GIN serves LIKE, so scoring
 		// runs on candidates instead of the whole catalog.
-		conds := []string{`c.tags_lower ?| ` + arg(terms) + `::text[]`}
+		conds := []string{`c.tags_lower ?| $1::text[]`}
 		for _, term := range terms {
 			conds = append(conds, `c.title_lower LIKE `+arg(likePattern(term)))
 		}
@@ -229,7 +228,9 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 		sel += ` AND (c.path = ` + arg(key) +
 			` OR (c.path >= ` + arg(prefix) + ` AND c.path < ` + arg(prefixUpperBound(prefix)) + `))`
 	}
-	q := `SELECT * FROM (` + sel + `) m`
+	// OFFSET 0 blocks subquery pull-up: without it the planner evaluates the
+	// score subplan twice per row, once for output and once for the filter.
+	q := `SELECT * FROM (` + sel + ` OFFSET 0) m`
 	if !matchAll {
 		q += ` WHERE m.score > 0`
 	}

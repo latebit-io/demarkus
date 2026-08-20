@@ -591,7 +591,7 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request) {
 		return
 	}
 	// Bounded here, not per backend, so both reject the same queries.
-	if n := len(catalog.Tokenize(query)); n > maxLookupTerms {
+	if n := catalog.CountTerms(query, maxLookupTerms); n > maxLookupTerms {
 		h.writeError(w, protocol.StatusBadRequest,
 			fmt.Sprintf("query has too many terms: %d > %d", n, maxLookupTerms))
 		return
