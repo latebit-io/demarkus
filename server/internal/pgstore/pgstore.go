@@ -62,7 +62,13 @@ CREATE TABLE IF NOT EXISTS catalog (
 	meta        jsonb NOT NULL,
 	modified    timestamptz NOT NULL
 );
+CREATE INDEX IF NOT EXISTS catalog_tags_lower_idx ON catalog USING GIN (tags_lower);
+CREATE INDEX IF NOT EXISTS catalog_title_trgm_idx ON catalog USING GIN (title_lower public.gin_trgm_ops);
 `
+
+// schemaLockID keys the advisory lock serializing extension DDL: CREATE
+// EXTENSION IF NOT EXISTS races with itself across concurrent startups.
+const schemaLockID = 0x64656d61726b7573 // "demarkus"
 
 // queryTimeout bounds every store call. The DocumentStore interface carries
 // no context, so the deadline is applied here: a stalled Postgres fails the
@@ -72,6 +78,15 @@ const queryTimeout = 10 * time.Second
 // initTimeout bounds Open's startup work; Init may backfill the whole LOOKUP
 // catalog on first boot, which must not crash-loop under the query budget.
 const initTimeout = 60 * time.Second
+
+// Pool bounds: QUIC fan-in is unbounded but Postgres max_connections is
+// not (CNPG default 100), so excess requests queue on the pool; lifetime
+// rotates connections through load balancers and failovers.
+const (
+	maxOpenConns    = 16
+	maxIdleConns    = 8
+	connMaxLifetime = 30 * time.Minute
+)
 
 // Store implements the handler's DocumentStore contract against Postgres.
 type Store struct {
@@ -87,6 +102,9 @@ func Open(dsn string, logger *slog.Logger) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxIdleConns)
+	db.SetConnMaxLifetime(connMaxLifetime)
 	s := NewWithDB(db, logger)
 	// Bound startup so a stalled ping, DDL, or backfill fails fast.
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
@@ -127,6 +145,13 @@ func prefixUpperBound(prefix string) string {
 func (s *Store) Init(ctx context.Context) error {
 	if err := s.db.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
+	}
+	// WITH SCHEMA public keeps the trigram opclass findable regardless of
+	// the connection's search_path (tests isolate via per-package schemas).
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(
+		`SELECT pg_advisory_xact_lock(%d); CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public`,
+		schemaLockID)); err != nil {
+		return fmt.Errorf("create pg_trgm: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("apply schema: %w", err)

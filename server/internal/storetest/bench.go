@@ -32,8 +32,13 @@ func RunHandlerBenchmarks(b *testing.B, factory func(testing.TB) LookupBackend) 
 		{"fetch", protocol.StatusOK, func(int) protocol.Request { return request(protocol.VerbFetch, "/d01/doc-0001.md", nil, "") }},
 		{"list-root", protocol.StatusOK, func(int) protocol.Request { return request(protocol.VerbList, "/", nil, "") }},
 		{"list-dir", protocol.StatusOK, func(int) protocol.Request { return request(protocol.VerbList, "/d05", nil, "") }},
+		// lookup is the worst case: "common" tags every doc, so every row is
+		// scored. lookup-selective matches 1/50th and can use the tag index.
 		{"lookup", protocol.StatusOK, func(int) protocol.Request {
 			return request(protocol.VerbLookup, "/", map[string]string{"query": "t7 common"}, "")
+		}},
+		{"lookup-selective", protocol.StatusOK, func(int) protocol.Request {
+			return request(protocol.VerbLookup, "/", map[string]string{"query": "t7"}, "")
 		}},
 		{"versions", protocol.StatusOK, func(int) protocol.Request { return request(protocol.VerbVersions, "/d02/doc-0002.md", nil, "") }},
 	}

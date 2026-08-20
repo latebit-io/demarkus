@@ -194,26 +194,40 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 		return nil, fmt.Errorf("lookup terms: %w", err)
 	}
 
+	args := []any{termsJSON}
+	// arg appends a query parameter and returns its placeholder.
+	arg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+
 	sel := `
 		SELECT c.path, c.tags, c.importance, c.title, c.meta, c.modified,
 			(SELECT count(*)
 			 FROM jsonb_array_elements_text($1::jsonb) AS q(term)
-			 WHERE EXISTS (
-				SELECT 1 FROM jsonb_array_elements_text(c.tags_lower) AS tg(tag)
-				WHERE tg.tag = q.term)
+			 WHERE c.tags_lower ? q.term
 			   OR (c.title_lower <> '' AND strpos(c.title_lower, q.term) > 0)
 			)::int AS score
 		FROM catalog c
 		JOIN documents d ON d.path = c.path
 		WHERE NOT d.archived`
-	args := []any{termsJSON}
+	if !matchAll {
+		// Index-backed candidate prefilter, the same predicate as score > 0:
+		// the tags GIN serves ?|, the trigram GIN serves LIKE, so scoring
+		// runs on candidates instead of the whole catalog.
+		conds := []string{`c.tags_lower ?| ` + arg(terms) + `::text[]`}
+		for _, term := range terms {
+			conds = append(conds, `c.title_lower LIKE `+arg(likePattern(term)))
+		}
+		sel += ` AND (` + strings.Join(conds, ` OR `) + `)`
+	}
 	// Same scope normalization as the in-memory catalog, minus the leading
 	// slash stored paths lack; an uncleaned scope matches nothing on both.
 	if scope := catalog.NormalizeScope(opts.Scope); scope != "/" {
 		key := strings.TrimPrefix(scope, "/")
 		prefix := key + "/"
-		sel += ` AND (c.path = $2 OR (c.path >= $3 AND c.path < $4))`
-		args = append(args, key, prefix, prefixUpperBound(prefix))
+		sel += ` AND (c.path = ` + arg(key) +
+			` OR (c.path >= ` + arg(prefix) + ` AND c.path < ` + arg(prefixUpperBound(prefix)) + `))`
 	}
 	q := `SELECT * FROM (` + sel + `) m`
 	if !matchAll {
@@ -223,8 +237,7 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 	q += ` ORDER BY m.score DESC, m.importance DESC, m.modified DESC, m.path ASC`
 	// Filters run in Go, so SQL may truncate only when none are present.
 	if len(opts.Filter) == 0 && opts.Max > 0 {
-		args = append(args, opts.Max)
-		q += fmt.Sprintf(` LIMIT $%d`, len(args))
+		q += ` LIMIT ` + arg(opts.Max)
 	}
 
 	ctx, cancel := opCtx()
@@ -253,6 +266,14 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 		return nil, fmt.Errorf("lookup: %w", err)
 	}
 	return results, nil
+}
+
+// likeEscaper keeps LIKE literal so the prefilter equals strpos semantics.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// likePattern wraps a term for a literal-substring LIKE match.
+func likePattern(term string) string {
+	return "%" + likeEscaper.Replace(term) + "%"
 }
 
 // scanLookupRow decodes one lookup result row into the catalog result shape.

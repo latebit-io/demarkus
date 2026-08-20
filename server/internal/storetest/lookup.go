@@ -32,6 +32,7 @@ func RunLookupConformance(t *testing.T, factory LookupFactory) {
 		{"Ranking", testLookupRanking},
 		{"Tiebreaks", testLookupTiebreaks},
 		{"TitleFallback", testLookupTitleFallback},
+		{"WildcardLiteralTerms", testLookupWildcardLiteralTerms},
 		{"MatchAll", testLookupMatchAll},
 		{"Scope", testLookupScope},
 		{"Filters", testLookupFilters},
@@ -115,6 +116,22 @@ func testLookupTitleFallback(t *testing.T, b LookupBackend) {
 	assertLookup(t, b, "ignored", catalog.Options{})
 	assertLookup(t, b, "heading", catalog.Options{}, "/heading.md")
 	assertLookup(t, b, "basename.md", catalog.Options{}, "/basename.md")
+}
+
+// testLookupWildcardLiteralTerms pins SQL-wildcard characters as literal
+// substrings: an unescaped LIKE prefilter would match every title on "%"
+// and "_", and nothing on "\".
+func testLookupWildcardLiteralTerms(t *testing.T, b LookupBackend) {
+	catalogPublish(t, b, "/pct.md", "x", map[string]string{"title": "Coverage 100% done", "importance": "0.6"})
+	catalogPublish(t, b, "/und.md", "x", map[string]string{"title": "snake_case naming", "importance": "0.5"})
+	catalogPublish(t, b, "/bsl.md", "x", map[string]string{"title": `back\slash path`, "importance": "0.4"})
+	catalogPublish(t, b, "/plain.md", "x", map[string]string{"title": "nothing special", "importance": "0.3"})
+
+	assertLookup(t, b, "%", catalog.Options{}, "/pct.md")
+	assertLookup(t, b, "100%", catalog.Options{}, "/pct.md")
+	assertLookup(t, b, "_", catalog.Options{}, "/und.md")
+	assertLookup(t, b, `\`, catalog.Options{}, "/bsl.md")
+	assertLookup(t, b, `back\slash`, catalog.Options{}, "/bsl.md")
 }
 
 func testLookupMatchAll(t *testing.T, b LookupBackend) {
