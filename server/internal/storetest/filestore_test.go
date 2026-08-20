@@ -37,6 +37,15 @@ func TestFileStoreHandlerDifferentialSelf(t *testing.T) {
 	RunHandlerDifferential(t, factory, factory, DifferentialConfig{Seeds: []int64{1, 2}, Ops: 80})
 }
 
+// TestFileStoreMigrationRoundTrip runs the shared migration gate with the
+// file store as the backend under test (file -> file -> file).
+func TestFileStoreMigrationRoundTrip(t *testing.T) {
+	RunMigrationRoundTrip(t, func(t *testing.T) MigrationBackend {
+		s := store.New(t.TempDir())
+		return MigrationBackend{Migrator: s, Store: s}
+	})
+}
+
 func BenchmarkFileHandler(b *testing.B) {
 	RunHandlerBenchmarks(b, FileBackend)
 }
