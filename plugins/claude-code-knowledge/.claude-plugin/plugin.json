@@ -1,6 +1,6 @@
 {
   "name": "demarkus-knowledge",
-  "version": "0.5.50",
+  "version": "0.5.51",
   "description": "Join an organizational demarkus knowledge system (a broker-fronted, shared, versioned markdown catalog) from Claude Code. Validates and registers the broker as an MCP server, steers sessions to consult the shared catalog first, makes it easy to navigate, and enforces a publish tag-gate so shared documents stay findable. No local server, no binaries — pure broker + OAuth.",
   "author": {
     "name": "latebit",
