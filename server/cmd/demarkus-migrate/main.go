@@ -10,6 +10,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,7 +31,8 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: demarkus-migrate -from file|postgres -to file|postgres [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Copy a world's full version history between store backends, byte-for-byte.\n")
-		fmt.Fprintf(os.Stderr, "The destination must be empty. Stop the server before migrating.\n\n")
+		fmt.Fprintf(os.Stderr, "The destination must be empty. Stop the server before migrating.\n")
+		fmt.Fprintf(os.Stderr, "A failed run leaves partial state; wipe the destination before retrying.\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -76,29 +78,33 @@ func run(from, to, root, pgDSN string, verify bool, logger *slog.Logger) error {
 	backends := map[string]store.Migrator{"file": fs, "postgres": pg}
 	src, dst := backends[from], backends[to]
 
-	if err := requireEmpty(dst, to); err != nil {
+	// The tool owns the cancellation policy: a bulk migration runs
+	// unbounded, interruptible only by the operator.
+	ctx := context.Background()
+	if err := requireEmpty(ctx, dst, to); err != nil {
 		return err
 	}
 
 	logger.Info("copying", "from", from, "to", to)
 	// Per-version summaries recorded during the copy: the verify pass then
-	// reads only the destination, and memory stays ~50 bytes per version.
+	// reads only the destination, holding ~120 bytes per version instead of
+	// the stored bytes.
 	want := map[string][]versionSummary{}
 	var docs, versions int
-	if err := src.ExportDocs(func(p string, vs []store.StoredVersion) error {
+	if err := src.ExportDocs(ctx, func(p string, vs []store.StoredVersion) error {
 		docs++
 		versions += len(vs)
 		if verify {
 			want[p] = summarize(vs)
 		}
-		return dst.ImportDoc(p, vs)
+		return dst.ImportDoc(ctx, p, vs)
 	}); err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}
 	logger.Info("copied", "documents", docs, "versions", versions)
 
 	if verify {
-		if err := verifyDst(dst, want); err != nil {
+		if err := verifyDst(ctx, dst, want); err != nil {
 			return fmt.Errorf("verify: %w", err)
 		}
 		logger.Info("verified", "documents", docs, "versions", versions)
@@ -111,8 +117,8 @@ func validBackend(b string) bool { return b == "file" || b == "postgres" }
 // errNonEmpty aborts the emptiness probe on the first exported document.
 var errNonEmpty = fmt.Errorf("destination is not empty; migrate into a fresh root/database")
 
-func requireEmpty(dst store.Migrator, name string) error {
-	err := dst.ExportDocs(func(string, []store.StoredVersion) error { return errNonEmpty })
+func requireEmpty(ctx context.Context, dst store.Migrator, name string) error {
+	err := dst.ExportDocs(ctx, func(string, []store.StoredVersion) error { return errNonEmpty })
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -137,8 +143,8 @@ func summarize(vs []store.StoredVersion) []versionSummary {
 // verifyDst re-exports the destination and compares every stored version's
 // hash and modified time (to the second, the protocol's precision) against
 // the summaries recorded from the source during the copy.
-func verifyDst(dst store.Migrator, want map[string][]versionSummary) error {
-	if err := dst.ExportDocs(func(p string, vs []store.StoredVersion) error {
+func verifyDst(ctx context.Context, dst store.Migrator, want map[string][]versionSummary) error {
+	if err := dst.ExportDocs(ctx, func(p string, vs []store.StoredVersion) error {
 		wv, ok := want[p]
 		if !ok {
 			return fmt.Errorf("%s: not in source", p)

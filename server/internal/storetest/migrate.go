@@ -2,11 +2,13 @@ package storetest
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
@@ -26,6 +28,7 @@ func RunMigrationRoundTrip(t *testing.T, newBackend func(t *testing.T) Migration
 	paths := seedMigrationDocs(t, src)
 	srcExport := exportDocs(t, src)
 
+	ctx := context.Background()
 	b := newBackend(t)
 	copyDocs(t, "src->backend", src, b.Migrator)
 	if err := store.DiffExports(srcExport, exportDocs(t, b.Migrator)); err != nil {
@@ -69,7 +72,7 @@ func RunMigrationRoundTrip(t *testing.T, newBackend func(t *testing.T) Migration
 	}
 
 	// Re-importing an existing document must refuse, not overwrite.
-	if err := b.Migrator.ImportDoc("/a.md", srcExport["/a.md"]); !errors.Is(err, os.ErrExist) {
+	if err := b.Migrator.ImportDoc(ctx, "/a.md", srcExport["/a.md"]); !errors.Is(err, os.ErrExist) {
 		t.Errorf("double import: err = %v, want ErrExist", err)
 	}
 	// Invalid imports must refuse on every backend.
@@ -77,11 +80,16 @@ func RunMigrationRoundTrip(t *testing.T, newBackend func(t *testing.T) Migration
 		path     string
 		versions []store.StoredVersion
 	}{
-		"no versions":    {"/new.md", nil},
-		"not ascending":  {"/new.md", []store.StoredVersion{srcExport["/a.md"][1], srcExport["/a.md"][0]}},
-		"directory path": {"/dir/", srcExport["/a.md"]},
+		// Distinct paths: a wrongly accepted case must not mask the next
+		// one behind ErrExist (map order is random).
+		"no versions":    {"/inv-empty.md", nil},
+		"not ascending":  {"/inv-order.md", []store.StoredVersion{srcExport["/a.md"][1], srcExport["/a.md"][0]}},
+		"directory path": {"/inv-dir/", srcExport["/a.md"]},
+		"oversized": {"/inv-big.md", []store.StoredVersion{{
+			Version: 1, Stored: make([]byte, protocol.MaxBodyLength+store.MaxStoreFrontmatter+1),
+		}}},
 	} {
-		if err := b.Migrator.ImportDoc(bad.path, bad.versions); err == nil {
+		if err := b.Migrator.ImportDoc(ctx, bad.path, bad.versions); err == nil {
 			t.Errorf("import %s: expected error", name)
 		}
 	}
@@ -118,7 +126,7 @@ func seedMigrationDocs(t *testing.T, s *store.Store) []string {
 func exportDocs(t *testing.T, m store.Migrator) map[string][]store.StoredVersion {
 	t.Helper()
 	out := map[string][]store.StoredVersion{}
-	if err := m.ExportDocs(func(p string, vs []store.StoredVersion) error {
+	if err := m.ExportDocs(context.Background(), func(p string, vs []store.StoredVersion) error {
 		out[p] = vs
 		return nil
 	}); err != nil {
@@ -130,8 +138,9 @@ func exportDocs(t *testing.T, m store.Migrator) map[string][]store.StoredVersion
 // copyDocs migrates every document from src to dst.
 func copyDocs(t *testing.T, label string, src, dst store.Migrator) {
 	t.Helper()
-	if err := src.ExportDocs(func(p string, vs []store.StoredVersion) error {
-		return dst.ImportDoc(p, vs)
+	ctx := context.Background()
+	if err := src.ExportDocs(ctx, func(p string, vs []store.StoredVersion) error {
+		return dst.ImportDoc(ctx, p, vs)
 	}); err != nil {
 		t.Fatalf("%s: %v", label, err)
 	}

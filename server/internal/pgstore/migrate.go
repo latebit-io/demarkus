@@ -16,17 +16,16 @@ import (
 )
 
 // ExportDocs visits every document, archived included, in path order with
-// its full version history oldest-first and stored bytes verbatim. reqPath
-// is the request spelling ("/dir/doc.md"), matching the file store's export.
-func (s *Store) ExportDocs(fn func(reqPath string, versions []store.StoredVersion) error) error {
-	// No queryTimeout: streaming a whole world legitimately outlives the
-	// per-op budget, and migration is an operator-driven bulk read.
-	rows, err := s.db.QueryContext(context.Background(), `
+// its history oldest-first and stored bytes verbatim, bounded by the
+// caller's ctx. reqPath is the request spelling, matching the file store.
+func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, versions []store.StoredVersion) error) error {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT path, version, stored, modified FROM versions
 		ORDER BY path, version`)
 	if err != nil {
 		return fmt.Errorf("export versions: %w", err)
 	}
+	// Close error is redundant: rows.Err() below reports iteration failures.
 	defer func() { _ = rows.Close() }()
 
 	var curPath string
@@ -36,6 +35,8 @@ func (s *Store) ExportDocs(fn func(reqPath string, versions []store.StoredVersio
 			return nil
 		}
 		err := fn("/"+curPath, cur)
+		// The callback may retain the slice (Migrator contract); start a
+		// fresh backing array for the next document.
 		cur = nil
 		return err
 	}
@@ -59,21 +60,21 @@ func (s *Store) ExportDocs(fn func(reqPath string, versions []store.StoredVersio
 	return flush()
 }
 
-// ImportDoc inserts a document's rows byte-for-byte in one transaction:
-// versions verbatim, the documents row derived (current = newest, archived
-// from the tip), and the catalog row from the tip, as a live write would.
-func (s *Store) ImportDoc(reqPath string, versions []store.StoredVersion) error {
+// ImportDoc inserts a document's rows byte-for-byte in one transaction,
+// bounded by the caller's ctx: versions verbatim, the documents row and the
+// catalog row derived from the tip, as a live write would.
+func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []store.StoredVersion) error {
 	p, err := store.ValidateImport(reqPath, versions)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := opCtx()
-	defer cancel()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin import: %w", err)
 	}
+	// No-op (ErrTxDone) after a successful Commit; the safety net for every
+	// early return below.
 	defer func() { _ = tx.Rollback() }()
 
 	newest := versions[len(versions)-1]
@@ -95,6 +96,7 @@ func (s *Store) ImportDoc(reqPath string, versions []store.StoredVersion) error 
 	if err != nil {
 		return fmt.Errorf("import %s: %w", reqPath, err)
 	}
+	// Statement lives on the tx; Rollback/Commit releases it either way.
 	defer func() { _ = stmt.Close() }()
 	for _, v := range versions {
 		if _, err := stmt.ExecContext(ctx, p, v.Version, v.Stored,
