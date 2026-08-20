@@ -141,6 +141,21 @@ jobs:
           go vet -tags pg ./cmd/demarkus-server
           go build -tags pg -o /dev/null ./cmd/demarkus-server
           go build -o /dev/null ./cmd/demarkus-migrate
+      # The release builds 32-bit arm, where an untyped 64-bit constant is a
+      # compile error the amd64 build never sees (it shipped one: #338).
+      - name: Cross-compile the release targets
+        run: |
+          set -euo pipefail
+          cd server
+          for target in linux/amd64 linux/arm64 linux/arm/7 darwin/amd64 darwin/arm64; do
+            export GOOS="${target%%/*}" GOARM=""
+            rest="${target#*/}"
+            case "$rest" in */*) export GOARCH="${rest%%/*}" GOARM="${rest#*/}" ;; *) export GOARCH="$rest" ;; esac
+            CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-server
+            CGO_ENABLED=0 go build -tags pg -o /dev/null ./cmd/demarkus-server
+            CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-migrate
+            echo "ok $GOOS/$GOARCH${GOARM:+v$GOARM}"
+          done
 
   test-client:
     needs: detect-changes

@@ -83,9 +83,10 @@ CREATE INDEX IF NOT EXISTS catalog_tags_lower_idx ON catalog USING GIN (tags_low
 CREATE INDEX IF NOT EXISTS catalog_title_trgm_idx ON catalog USING GIN (title_lower public.gin_trgm_ops);
 `
 
-// schemaLockID keys the advisory lock serializing extension DDL: CREATE
-// EXTENSION IF NOT EXISTS races with itself across concurrent startups.
-const schemaLockID = 0x64656d61726b7573 // "demarkus"
+// schemaLockID keys the advisory lock serializing startup DDL against
+// concurrent replica boots. Typed int64: pg_advisory_xact_lock takes bigint,
+// and an untyped constant this size overflows int on 32-bit targets.
+const schemaLockID int64 = 0x64656d61726b7573 // "demarkus"
 
 // queryTimeout bounds every store call. The DocumentStore interface carries
 // no context, so the deadline is applied here: a stalled Postgres fails the
