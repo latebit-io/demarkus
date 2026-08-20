@@ -34,6 +34,26 @@ func failWritesTo(t *testing.T, name string) {
 	}
 }
 
+func captureStderr(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	stderr, err := os.CreateTemp(t.TempDir(), "stderr-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStderr := os.Stderr
+	os.Stderr = stderr
+	callErr := fn()
+	os.Stderr = originalStderr
+	if err := stderr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	warning, err := os.ReadFile(stderr.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(warning), callErr
+}
+
 func TestAtomicWritePermConcurrent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state")
 	const writers = 32
@@ -292,6 +312,56 @@ func TestSoulJoinWithoutTokenPreservesExternalTokenReference(t *testing.T) {
 	body, err := os.ReadFile(tokenPath)
 	if err != nil || string(body) != "external-token" {
 		t.Fatalf("external token changed: body=%q err=%v", body, err)
+	}
+}
+
+func TestSoulJoinWithTokenReportsReplacedExternalTokenReference(t *testing.T) {
+	home := setupHome(t)
+	externalPath := filepath.Join(home, "external.token")
+	if err := os.WriteFile(externalPath, []byte("external-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SoulRegister("soul", "mark://soul.demarkus.io", false, externalPath); err != nil {
+		t.Fatal(err)
+	}
+	warning, joinErr := captureStderr(t, func() error {
+		_, err := SoulJoin("soul.demarkus.io", "managed-token", false, "")
+		return err
+	})
+	if joinErr != nil {
+		t.Fatal(joinErr)
+	}
+	if !strings.Contains(warning, externalPath) || !strings.Contains(warning, "old external token file still exists") {
+		t.Fatalf("warning = %q", warning)
+	}
+	if body, err := os.ReadFile(externalPath); err != nil || string(body) != "external-token" {
+		t.Fatalf("external token changed: body=%q err=%v", body, err)
+	}
+}
+
+func TestSoulJoinDoesNotReportExternalTokenReplacementAfterRollback(t *testing.T) {
+	home := setupHome(t)
+	externalPath := filepath.Join(home, "external.token")
+	if err := os.WriteFile(externalPath, []byte("external-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SoulRegister("soul", "mark://soul.demarkus.io", false, externalPath); err != nil {
+		t.Fatal(err)
+	}
+	failWritesTo(t, "project-souls")
+	warning, joinErr := captureStderr(t, func() error {
+		_, err := SoulJoin("soul.demarkus.io", "managed-token", false, filepath.Join(home, "repo"))
+		return err
+	})
+	if joinErr == nil {
+		t.Fatal("SoulJoin succeeded despite binding failure")
+	}
+	if warning != "" {
+		t.Fatalf("warning after rollback = %q", warning)
+	}
+	row, ok, err := RemoteSoulRow("soul")
+	if err != nil || !ok || row.TokenFile != externalPath {
+		t.Fatalf("external token row after rollback = %+v, ok=%v, err=%v", row, ok, err)
 	}
 }
 

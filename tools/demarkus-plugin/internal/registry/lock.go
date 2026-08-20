@@ -41,6 +41,9 @@ func atomicWritePerm(path string, data []byte, perm os.FileMode) error {
 	if _, err := f.Write(data); err != nil {
 		return errors.Join(err, f.Close(), os.Remove(tmp))
 	}
+	if err := f.Sync(); err != nil {
+		return errors.Join(err, f.Close(), os.Remove(tmp))
+	}
 	if err := f.Close(); err != nil {
 		return errors.Join(err, os.Remove(tmp))
 	}

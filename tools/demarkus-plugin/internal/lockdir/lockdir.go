@@ -122,7 +122,7 @@ func tryAcquire(lockDir string) (bool, error) {
 			acquireErr = fmt.Errorf("acquire lock: %w", renameErr)
 		}
 		cleanupErr := os.RemoveAll(stage)
-		if guardErr == errGuardTimeout {
+		if errors.Is(guardErr, errGuardTimeout) {
 			return false, cleanupErr
 		}
 		return false, errors.Join(guardErr, acquireErr, cleanupErr)
@@ -171,7 +171,7 @@ func reclaimStale(lockDir string) error {
 		if moved {
 			return errors.Join(guardErr, os.RemoveAll(aside))
 		}
-		if guardErr == errGuardTimeout {
+		if errors.Is(guardErr, errGuardTimeout) {
 			return nil
 		}
 		return guardErr

@@ -568,11 +568,19 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 // Every multi-file registry path locks souls before project-souls; never reverse.
 func commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) error {
 	mutate := func() error {
-		mutations, err := prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath, insecure)
+		mutations, replacedExternal, err := prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath, insecure)
 		if err != nil {
 			return err
 		}
-		return applyStateMutations(mutations)
+		if err := applyStateMutations(mutations); err != nil {
+			return err
+		}
+		if replacedExternal != "" {
+			if _, err := fmt.Fprintf(os.Stderr, "soul %s: catalog reference moved from %s to %s; the old external token file still exists\n", slug, replacedExternal, managedTokenFile); err != nil {
+				return fmt.Errorf("soul join committed but reporting replaced external token reference failed: %w", err)
+			}
+		}
+		return nil
 	}
 	return withLock(soulsPath, func() error {
 		if bindingsPath == "" {
@@ -582,20 +590,21 @@ func commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, sou
 	})
 }
 
-func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) ([]stateMutation, error) {
+func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) ([]stateMutation, string, error) {
 	existing, exists, err := RemoteSoulRow(slug)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if exists && existing.Host != host {
-		return nil, fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existing.Host, host)
+		return nil, "", fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existing.Host, host)
 	}
-	if token == "" && exists && existing.TokenFile != "" && existing.TokenFile != "-" && existing.TokenFile != managedTokenFile {
-		return nil, fmt.Errorf("soul '%s' uses externally managed token file %q; refusing to remove its catalog reference during tokenless rejoin; resolve that credential explicitly first", slug, existing.TokenFile)
+	replacedExternal, err := replacedExternalToken(slug, token, managedTokenFile, existing, exists)
+	if err != nil {
+		return nil, "", err
 	}
 	rows, err := readRecords("souls")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	kept := make([]string, 0, len(rows)+1)
 	for _, row := range rows {
@@ -614,19 +623,19 @@ func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bi
 	if token != "" {
 		mutation, err := prepareStateMutation(tokenFile, []byte(token), 0o600)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		mutations = append(mutations, mutation)
 	} else {
 		mutation, err := prepareDeleteStateMutation(managedTokenFile)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		tokenDelete = &mutation
 	}
 	catalog, err := prepareStateMutation(soulsPath, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	mutations = append(mutations, catalog)
 	// Publish the tokenless catalog row before removing the old token so readers
@@ -637,11 +646,21 @@ func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bi
 	if bindDir != "" {
 		binding, err := prepareProjectBindingMutation(bindDir, slug, bindingsPath)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		mutations = append(mutations, binding)
 	}
-	return mutations, nil
+	return mutations, replacedExternal, nil
+}
+
+func replacedExternalToken(slug, token, managedTokenFile string, existing SoulRow, exists bool) (string, error) {
+	if !exists || existing.TokenFile == "" || existing.TokenFile == "-" || existing.TokenFile == managedTokenFile {
+		return "", nil
+	}
+	if token == "" {
+		return "", fmt.Errorf("soul '%s' uses externally managed token file %q; refusing to remove its catalog reference during tokenless rejoin; resolve that credential explicitly first", slug, existing.TokenFile)
+	}
+	return existing.TokenFile, nil
 }
 
 func prepareProjectBindingMutation(dir, slug, path string) (stateMutation, error) {
