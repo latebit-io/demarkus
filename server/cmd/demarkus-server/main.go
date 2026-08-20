@@ -111,6 +111,14 @@ func applyFlagOverrides(cfg *config.Config, o *flagOverrides) {
 }
 
 func main() {
+	// Cleanup lives in run's defers; os.Exit here is the only exit after
+	// they have run.
+	if err := run(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	root := flag.String("root", "", "content directory to serve (overrides DEMARKUS_ROOT)")
 	port := flag.Int("port", 0, "port to listen on (overrides DEMARKUS_PORT)")
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
@@ -131,7 +139,7 @@ func main() {
 
 	if *showVersion {
 		fmt.Println(version)
-		return
+		return nil
 	}
 
 	cfg, err := config.NewConfig()
@@ -144,7 +152,7 @@ func main() {
 	// refusing to start.
 	if err != nil {
 		logger.Error("config invalid", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	applyFlagOverrides(cfg, &flagOverrides{
@@ -160,12 +168,12 @@ func main() {
 	// Semantic validation runs once, on the final post-override values.
 	if err := cfg.Validate(); err != nil {
 		logger.Error("configuration invalid", "error", err)
-		os.Exit(1)
+		return err
 	}
 	b, err := openStore(cfg, logger)
 	if err != nil {
 		logger.Error("store unavailable", "store", cfg.StoreBackend, "error", err)
-		os.Exit(1)
+		return err
 	}
 	if b.Close != nil {
 		defer func() {
@@ -180,7 +188,7 @@ func main() {
 	tlsConfig, prodMode, err := loadTLS(cfg, logger)
 	if err != nil {
 		logger.Error("tls setup failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	quicConfig := &quic.Config{
@@ -193,13 +201,16 @@ func main() {
 	listener, err := quic.ListenAddr(addr, tlsConfig, quicConfig)
 	if err != nil {
 		logger.Error("listen failed", "addr", addr, "error", err)
-		os.Exit(1)
+		return err
 	}
+	// Covers the early returns below; the graceful shutdown closes first and
+	// a second Close is a no-op.
+	defer func() { _ = listener.Close() }()
 
 	if cfg.TokensFile != "" {
 		if err := loadTokenStore(cfg.TokensFile); err != nil {
 			logger.Error("token loading failed", "error", err)
-			os.Exit(1)
+			return err
 		}
 		logger.Info("auth: loaded tokens", "path", cfg.TokensFile)
 		startTokenFileWatcher(cfg.TokensFile, logger)
@@ -288,6 +299,7 @@ func main() {
 	}
 
 	logger.Info("server stopped")
+	return nil
 }
 
 // writeRateLimited sends a rate-limited status response on the stream. Unlike a

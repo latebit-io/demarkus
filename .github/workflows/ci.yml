@@ -314,9 +314,15 @@ jobs:
       # the del() list.
       - name: Assert the two server charts share their non-backend defaults
         run: |
-          diff \
-            <(yq -o=json 'del(.image, .storage, .server.postgres)' deploy/helm/demarkus-server/values.yaml) \
-            <(yq -o=json 'del(.image, .storage, .server.postgres)' deploy/helm/demarkus-server-pg/values.yaml) \
+          set -euo pipefail
+          # Real files, not process substitution: bash drops the exit status
+          # of a substituted command, so two failed yq runs would leave diff
+          # comparing empty inputs and passing.
+          strip() { yq -o=json 'del(.image, .storage, .server.postgres)' "$1" > "$2"; }
+          strip deploy/helm/demarkus-server/values.yaml /tmp/file-values.json
+          strip deploy/helm/demarkus-server-pg/values.yaml /tmp/pg-values.json
+          test -s /tmp/file-values.json && test -s /tmp/pg-values.json
+          diff /tmp/file-values.json /tmp/pg-values.json \
             || { echo "demarkus-server and demarkus-server-pg values drifted" >&2; exit 1; }
       - name: Unit test demarkus-server chart
         run: helm unittest deploy/helm/demarkus-server
