@@ -27,18 +27,18 @@ If either gather call fails, is unauthorized, or returns partial output, surface
 
 ## Core checks (from the graph + inventory — no per-doc fetching)
 
-- **Broken links** — an edge whose `mark://` target does not exist. The inventory (`mark_list`) is the source of truth for existence — **not** the crawl: a target can be absent from the graph's Nodes simply because it sat beyond the crawl depth, which is *not* a broken link. So flag a target only when it's missing from the inventory, and confirm each suspect with a single `mark_fetch` (`not-found`) before reporting `source → missing-target`.
+- **Broken links** — an edge whose `mark://` target does not exist. The inventory (`mark_list`) is the source of truth for existence — **not** the crawl: a target can be absent from the graph's Nodes simply because it sat beyond the crawl depth, which is *not* a broken link. So flag a target only when it's missing from the inventory, and confirm each suspect with a single `mark_fetch`. Report it only on explicit `not-found`; unauthorized, transport, server, or other errors make that target inconclusive and must be surfaced.
 - **Orphans** — an inventory document that is never the target of any `mark://` edge (no inbound links) and isn't the scope's root hub. It's unreachable except by knowing its path.
 - **Stale index entries** — broken links whose source is a hub/index doc (an index pointing at something gone).
 - **Missing hub** — a `/<project>/` subtree with documents but no `index.md`.
 - **Untitled docs** — **`ok`** nodes shown as `(no title)` (no H1 / declared title). A `(no title)` on a `not-found` node is the broken-link finding above, not an untitled doc — don't double-report it.
-- **ADR sequence** — for each `adr/` directory, list it and flag duplicate or gapped `NNNN` prefixes.
+- **ADR sequence** — for each `adr/` directory, list it and flag duplicate or gapped `NNNN` prefixes. A list failure makes that directory's sequence check inconclusive: surface the error and exclude it from sequence findings.
 
 ## Deep checks (per-doc `mark_fetch` — run on a small scope, or when asked)
 
 These cost one fetch per document, so only run them for a single project or when the user asks for a thorough audit. Fetch at most **100** documents per audit, preferring hub-linked and recently modified docs when sampling. If you cap or sample, report exact coverage and skipped count; do not imply a full audit.
 
-- **Untagged docs** — fetch and check the `tags` metadata is non-empty. An untagged doc is invisible to `mark_lookup`. (This is what the publish gate now prevents going forward; this finds pre-existing ones.)
+- **Untagged docs** — fetch and check the `tags` metadata is non-empty. An untagged doc cannot be found by subject tags, only by title or explicit path. (This is what the publish gate now prevents going forward; this finds pre-existing ones.)
 - **Metadata lost across versions** *(legacy servers)* — an untagged doc that **used to** carry tags. Servers before the APPEND metadata merge wrote each appended version with only `{agent: …}`, dropping the doc's `tags`, `importance`, `title`, and `type` and knocking it out of `mark_lookup`; journals, appended every session, are the usual victims. Retire the check once the corpus is clean. Run it only on docs the untagged check already flagged that have more than one version:
   1. `mark_versions`. If `chain-valid` is false, report the `chain-error` and mark the doc **inconclusive**: metadata read out of a broken chain is not evidence.
   2. Fetch versions newest-first below the current one (`mark_fetch /<path>/v<N>`) until one carries `tags`. Spend at most 10 fetches per doc and 100 calls total for this check, `mark_versions` included; stop when the budget is gone, list the docs you skipped or truncated, and treat a hit found after truncating as low-confidence.
@@ -66,7 +66,7 @@ These cost one fetch per document, so only run them for a single project or when
 
 Render plainly, grouped by check, most actionable first. For each finding give the path and a one-line suggested fix. Lead with a one-line summary (`N docs, X findings`). Shape:
 
-```
+```text
 ## <scope> — hygiene report  (<N> docs)
 
 ### Broken links (<n>)

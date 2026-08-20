@@ -21,6 +21,7 @@ Reads and one-off writes to a *different* joined soul are unaffected: call
 
    - `EMPTY` → no souls joined. Tell the user to run `/soul-join` (or `/soul-init`
      for the local managed soul) and stop.
+   - Non-zero exit or malformed output → surface the exact registry failure and stop; do not report an empty catalog.
    - `CATALOG` header → each following line is
      `<id>\t<tier>\t<host>\t<insecure>\t<current>`. `tier` is `local` (the
      plugin-managed soul, id `demarkus-memory`) or `remote`. `current` is `*` for
@@ -29,17 +30,16 @@ Reads and one-off writes to a *different* joined soul are unaffected: call
 {{if eq .Harness "claude"}}2. **Ask which soul to make the default** via one `AskUserQuestion`, one option per catalog row (label = id, description = tier + host). Mark the current default in its description. Do not invent souls not in the list.
 {{else}}2. **Ask which soul to make the default** in one plain question listing the catalog rows as numbered options (id, tier, host). Mark the current default. Do not invent souls not in the list; wait for the user's answer.
 {{end}}
-
 3. **Save it.** With the chosen `<slug>`:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --set <slug> --bind {{if eq .Harness "claude"}}"${CLAUDE_PROJECT_DIR}"{{else}}'<absolute-project-dir>'{{end}}
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --set '<slug>' --bind {{if eq .Harness "claude"}}"${CLAUDE_PROJECT_DIR}"{{else}}'<absolute-project-dir>'{{end}}
    ```
 
-   - On `OK <slug>`, confirm: "This project now writes to soul **<slug>** by
+   - On `OK <slug>`, confirm: "This project now writes to soul **`<slug>`** by
      default." If a server was joined mid-session, note that its MCP tools appear
      only after a restart, but the binding itself is live immediately.
-   - On `FAIL: <message>`, show it verbatim (e.g. an unjoined slug → run
+   - On non-zero exit or `FAIL: <message>`, show it verbatim (e.g. an unjoined slug → run
      `/soul-join` first).
 
 ## Don't

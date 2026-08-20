@@ -58,6 +58,7 @@ jobs:
               - 'scripts/test-install-stack-tokens.sh'
               - 'scripts/test-install-update-stack.sh'
             agent_plugins:
+              - '.claude-plugin/**'
               - 'plugins/prompt-source/**'
               - 'plugins/claude-code/**'
               - 'plugins/claude-code-knowledge/**'
@@ -66,6 +67,7 @@ jobs:
               - 'plugins/opencode-memory/**'
               - 'plugins/opencode-knowledge/**'
               - 'tools/plugin-prompts/**'
+              - 'tools/demarkus-plugin/**'
               - 'tools/go.mod'
               - 'tools/go.sum'
 
@@ -262,21 +264,21 @@ jobs:
       - name: Check generated prompts
         run: |
           cd tools
-          go test ./plugin-prompts
+          go test ./plugin-prompts ./demarkus-plugin/...
           go run ./plugin-prompts check
       - name: Install plugin development dependencies
         run: |
-          npm install --prefix plugins/pi-memory
-          npm install --prefix plugins/pi-knowledge
-          npm install --prefix plugins/opencode-memory
-          npm install --prefix plugins/opencode-knowledge
-      - name: Typecheck adapters
+          npm ci --prefix plugins/pi-memory
+          npm ci --prefix plugins/pi-knowledge
+          npm ci --prefix plugins/opencode-memory
+          npm ci --prefix plugins/opencode-knowledge
+      - name: Typecheck adapters (Pi is typecheck-only)
         run: |
           npm run typecheck --prefix plugins/pi-memory
           npm run typecheck --prefix plugins/pi-knowledge
           npm run typecheck --prefix plugins/opencode-memory
           npm run typecheck --prefix plugins/opencode-knowledge
-      - name: Test adapters and installers
+      - name: Test OpenCode adapters and installers
         run: |
           npm test --prefix plugins/opencode-memory
           npm test --prefix plugins/opencode-knowledge

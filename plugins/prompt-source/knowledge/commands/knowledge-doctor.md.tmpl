@@ -9,17 +9,19 @@ The substrate is identical to the soul's: the broker exposes the same `mark_*` t
 
 1. **Multi-world.** A system is many worlds; URLs are `mark://<world>/<path>`, not bare paths. Enumerate with `mark_worlds` and audit per world.
 2. **The broker graph store is ephemeral** (per-pod lifetime; resets on broker restart). `mark_backlinks` only returns what *this* session has crawled — so you **must** `mark_graph` to populate it before any backlink/orphan reasoning, every run.
-3. **Cross-world references are existence-checkable** here (they aren't in a single-world soul audit): `mark_worlds` + per-world `mark_lookup` can resolve `mark://<other-world>/<path>`. This un-defers the bare-`mark://` reference check (see Deep checks).
+3. **Cross-world references are existence-checkable** here (they aren't in a single-world soul audit): `mark_worlds` + complete per-world inventories can resolve `mark://<other-world>/<path>`. This un-defers the bare-`mark://` reference check (see Deep checks).
 
 ## Scope
 
 Resolve the audit scope from `$ARGUMENTS`:
 
-- **blank** → every joined system, all worlds. Read the registry for the joined systems:
+- **blank** → every joined system, all worlds. Read the validated registry for the joined systems:
+
   ```bash
-  cat ~/.demarkus/knowledge-systems 2>/dev/null
+  "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list
   ```
-  Each line is a system's MCP server slug; reach it through {{.ToolForm}}. If the file is missing/empty, tell the user no knowledge system is joined (suggest `/knowledge-join <broker-url>`) and stop.
+
+  Each line is a system's MCP server slug; reach it through {{.ToolForm}}. A successful empty result means no knowledge system is joined (suggest `/knowledge-join <broker-url>`) and stop. Non-zero exit or malformed output is a registry failure: surface it and stop.
 - **a slug** (e.g. `acme`) → that one system, all its worlds.
 - **a `mark://<world>/` URL** → just that world.
 
@@ -34,9 +36,9 @@ Before the first broker call, set a command-wide deadline five minutes in the fu
 1. **Crawl the link graph.** `mark_graph` on `mark://<world>/index.md` with `depth: 5`. This also **populates the broker's ephemeral graph store** for this session — required before `mark_backlinks` returns anything. Parse:
    - **Nodes:** `[status] <url> "title" N links` — note any status that isn't `ok`, and `(no title)`.
    - **Edges:** `<from> -> <to>` — `mark://` targets are internal (possibly cross-world); `http(s)` are external.
-2. **Inventory.** `mark_list mark://<world>/` (recurse into subdirectories) for the full set of documents that actually exist in the world.
+2. **Inventory.** Build a directory queue starting with `mark_list mark://<world>/`. For every returned subdirectory, call `mark_list` on that directory until the queue is empty; one root listing is not recursive. Track visited directory URLs to prevent loops. Bound inventory to 1,000 list calls or 20,000 documents per world.
 
-   Any failure, truncation, partial-result marker, or unavailable subtree makes the inventory incomplete. Preserve returned entries, list missing scope, and suppress definitive orphan conclusions.
+   Any failure, truncation, limit hit, partial-result marker, or unavailable subtree makes the inventory incomplete. Preserve returned entries, list missing scope and exact coverage, and suppress definitive orphan, missing-hub, broken-link, and dangling-reference conclusions that depend on omitted paths.
 3. **Crawl disconnected documents.** For every inventory document absent from the root crawl's successful nodes, including `[error]` nodes, call `mark_graph` on that document with depth 1. This captures outbound edges from orphaned, failed, and beyond-depth documents.
 4. **Bound supplemental crawling.** Spend at most 100 supplemental `mark_graph` calls across the command, including retries, and stay within the command deadline. Report skipped documents and mark affected worlds incomplete when either limit is reached.
 5. **Retry once.** Retry each unsuccessful source once while budget remains. A final source failure makes orphan analysis for that world incomplete.
@@ -45,9 +47,9 @@ Before the first broker call, set a command-wide deadline five minutes in the fu
 
 - **Broken links** — an edge whose `mark://` target does not exist. **Read the crawl-node status; it tells you what's already confirmed:**
   - A target **present in Nodes as `[not-found]`** is *already confirmed broken* — the crawler fetched it and the broker said not-found. Report it directly; **do not re-fetch** (re-confirming N dead links is N wasted calls).
-  - A target **absent from Nodes entirely** may just have sat beyond crawl depth — *that* is the case the inventory (`mark_list`) settles. For a **same-world** target check the world's inventory; for a **cross-world** `mark://<other>/…` target check that world's inventory (or one `mark_lookup`/`mark_fetch`). Confirm before reporting.
+  - A target **absent from Nodes entirely** may just have sat beyond crawl depth — *that* is the case a complete inventory (`mark_list`) settles. For a **same-world** target check the world's inventory; for a **cross-world** `mark://<other>/…` target check that world's complete inventory. If the target world is unreadable or either inventory is incomplete, classify the reference as unresolved, not broken.
   - A target present as **`[error]`** is not a missing doc — see the next check.
-- **Unroutable / cross-system references** — an `[error]` node on a `mark://` link means the broker couldn't route the host. Classify by **`mark_worlds` membership**: if the host is **not a member world** (e.g. `mark://soul.demarkus.io/…` when the system is root+world-a), it's an **external/cross-system pointer** — report separately (intentional outbound link, or a stale reference to remove), not as a broken in-system doc. If the host **is** a member world, it's a **transient dispatch failure** — re-fetch once; only report if it still fails (don't flag a flake).
+- **Unroutable / cross-system references** — an `[error]` node on a `mark://` link means the broker couldn't route the host. `mark_worlds` lists only worlds the current identity may read, so absence from that list does **not** prove the host is external. If the host is readable, retry once and report a persistent dispatch failure. Otherwise classify it as unresolved (possibly unreadable, cross-system, or stale) and do not claim absence or externality without independent evidence.
 - **Orphans** — an inventory document that is never the target of any `mark://` edge after root and supplemental crawls and isn't the world's root hub. Report successful crawl coverage. Cross-world inbound links count.
 - **Stale index entries** — broken links whose source is a hub/index doc (`index.md`).
 - **Missing hub** — a subtree with documents but no `index.md`.
@@ -58,7 +60,7 @@ Before the first broker call, set a command-wide deadline five minutes in the fu
 
 One fetch per document, so only run these for a single world (or when the user asks for a thorough audit). Fetch at most 100 documents. If you cap or sample, report exact coverage and skipped count; do not imply full coverage.
 
-- **Untagged docs** — fetch and check `tags` is non-empty. An untagged doc is invisible to `mark_lookup`. (The publish gate prevents this going forward; this finds pre-existing ones.)
+- **Untagged docs** — fetch and check `tags` is non-empty. An untagged doc cannot be found by subject tags, only by title or explicit path. (The publish gate prevents this going forward; this finds pre-existing ones.)
 - **Metadata lost across versions** *(legacy servers)* — an untagged doc that **used to** carry tags. Brokers before the APPEND metadata merge passed only `{agent: …}` on append, dropping the doc's `tags`, `importance`, `title`, and `type`, and with them the **policy tag axes** it satisfied at publish time: a compliant doc turns noncompliant with no write ever rejected. Retire the check once the catalog is clean. Run it only on docs the untagged or policy-axis check already flagged that have more than one version:
   1. `mark_versions`. If `chain-valid` is false, report the `chain-error` and mark the doc **inconclusive**: metadata read out of a broken chain is not evidence.
   2. Fetch versions newest-first below the current one (`mark_fetch mark://<world>/<path>/v<N>`) until one carries `tags` **and** satisfies the policy's required axes and `require_fields`; a version that was itself noncompliant is not a repair, so keep walking and say so if none qualifies. Spend at most 10 fetches per doc and 100 calls total for this check, `mark_versions` included; stop when the budget is gone, list the docs you skipped or truncated, and treat a hit found after truncating as low-confidence.
@@ -69,13 +71,13 @@ One fetch per document, so only run these for a single world (or when the user a
   Repair, as a separate write step since this command never writes: `mark_fetch` with **`force=true`** (a plain fetch returns an outline for bodies of 8KB or more, and publishing an outline destroys the doc). If its version differs from the one you audited, another writer moved the doc: re-run the check instead. Then `mark_publish` that body with the current metadata map **plus** the recovered fields (publish replaces the map, so an omission deletes opaque keys), re-checked against the policy's current axes and `require_fields`, `retention` only if the user asks, `expected_version` at the current version, and `on_conflict: "fail"`. On any error or conflict, report it exactly, stop, and say the doc is unchanged.
 - **Policy-axis noncompliance** *(knowledge-only — no soul equivalent)* — fetch `mark://root/.well-known/demarkus/policy.md` once and read the **required tag axes** (e.g. `category:`) and any **`require_fields:`** (e.g. `type`). Then for each fetched doc, flag any that doesn't satisfy every required `axis:value` tag or required field. These docs were likely published before the axis/field was required, or via a `warn`-severity gate. Report with the missing axis/field and the policy's strictness (`warn`/`block`/`ask`).
 - **Untyped docs (OKF `type`)** — fetch and read the `type` metadata; flag docs whose `type` is **missing or `Document`** (the generic default — un-kinded), so they can be typed to a real kind (`Reference`/`Decision`/`Architecture`/`Plan`/`Journal`/`Guide`/…). **Exempt `index.md` and `log.md`** — the server never defaults their type (`applyOKFTypeDefault` in `server/internal/handler/handler.go`), so a hub with no type is *correct*, not a finding; don't flag them. If the policy lists `type` under `require_fields:`, an untyped non-exempt doc is **noncompliance** (report with strictness, folds into the check above); otherwise it's an advisory **backfill candidate** — the bulk of any pre-OKF corpus, since the server types only docs published after the 0.18.0 upgrade. Fix: re-publish with an explicit `type` key in the `metadata` object.
-- **In-body frontmatter block** *(demarkus-specific)* — a body whose **first non-blank line is `---`** and whose block carries reserved/operational keys (`version`, `previous-hash`, `archived`, `meta.*`) is almost always an **exported demarkus doc pasted back into a new publish**. The server stores frontmatter out-of-band and treats a body-leading `---` as literal content, so it renders as a stray horizontal rule + garbled headings, and the block's `version:` is stale (it won't match the doc's real fetched `version`). A real find from the world-a dry-run: `nib/index.md` opened with `version: 47` in-body while its stored version was 1. Flag it; fix is strip the block and re-publish with metadata passed as request metadata.
+- **In-body frontmatter block** *(demarkus-specific)* — a body whose **first non-blank line is `---`** and whose block carries reserved/operational keys (`version`, `previous-hash`, `archived`, `meta.*`) is almost always an **exported demarkus doc pasted back into a new publish**. The server stores frontmatter out-of-band and treats a body-leading `---` as literal content, so it renders as a stray horizontal rule + garbled headings, and the block's `version:` is stale (it won't match the doc's real fetched `version`). Flag it; fix is strip the block and re-publish with metadata passed as request metadata.
 - **Style-guide violations** (`mark://root/.well-known/demarkus/style.md`) — for each fetched body, flag: **em dashes** anywhere in the body (the guide bans them; report a count per doc), and **duplicate headings** within one document (headings are `#section` anchors; a duplicate takes a `-1` suffix that shifts when sections move, silently breaking inbound anchor links; exclude `#` lines inside fenced code blocks). Fix: re-publish with unique headings and the em dashes replaced by a comma, colon, semicolon, or parentheses. The plugin's style gate (default `warn`, `DEMARKUS_STYLE_STRICTNESS` to adjust) catches these at write time going forward; this check finds the pre-existing corpus.
 - **Duplicate content** — compare `content-hash` across fetched docs; identical hashes under different paths (even in different worlds) are duplicates.
 - **Dangling & unlinked references** — a relationship written in *prose* (or inline code) that the link graph never captured, because only `[text](url)` becomes an edge. A mention like "supersedes ADR 0005" is invisible to every graph-based check above. For each fetched body, scan for high-confidence reference patterns and resolve each against the **inventory** (existence) and the **doc's own parsed links** (already-linked?) — no extra fetches beyond the bodies this tier already pulls:
   - **Patterns** (keep the set tight — false positives in prose are worse than a missed edge):
     - ADR references — `ADR[ -]?#?\d{3,4}` (case-insensitive). Canonical target: an inventory path matching `<world>/adr/NNNN-*.md`.
-    - Bare/inline `mark://<world>/<path>` URLs **not** inside a `[text](…)` link — an intended reference that lost its link syntax. **Viable here** (unlike the soul audit): resolve the host against `mark_worlds`, then check that world's inventory/`mark_lookup` for the path. Still **exclude** inline-code placeholders (`` `mark://host/...` `` with ellipses) and fenced code blocks.
+    - Bare/inline `mark://<world>/<path>` URLs **not** inside a `[text](…)` link — an intended reference that lost its link syntax. **Viable here** (unlike the soul audit): resolve readable hosts against `mark_worlds`, then check that world's complete inventory for the path. If the host is not readable or its inventory is incomplete, classify the reference as unresolved rather than dangling. Still **exclude** inline-code placeholders (`` `mark://host/...` `` with ellipses) and fenced code blocks.
   - **Exclude**: the doc's *own* ADR number (self-reference), and any mention inside a fenced (```` ``` ````/`~~~`) code block — a `# ADR 0005` in a code sample is not a real reference (same fence-skip rule the catalog's `firstH1` uses).
   - **Resolve "already-linked?" against the citing body's OWN markdown links — NOT the crawl's edge store.** The crawl seeds from the hub, so an **orphan** doc is never visited and its outbound links never enter the (ephemeral) edge store; keying off edges would falsely flag an orphan's real `[…](…)` link as unlinked. This matters *more* on the broker, where the edge store is per-session. You already hold every body in this tier — parse each for its own `[text](url)` links and check whether one resolves to the mention's target.
   - **Classify** each surviving mention:
@@ -88,7 +90,7 @@ One fetch per document, so only run these for a single world (or when the user a
 
 Render plainly, grouped by world then by check, most actionable first. Lead with a one-line summary per system (`<system>: <W> worlds, <N> docs, <X> findings`). Shape:
 
-```
+```text
 ## <system> — hygiene report
 
 ### mark://<world>/  (<N> docs, writable: yes/no)   [coverage: your read scope]
@@ -112,7 +114,7 @@ Render plainly, grouped by world then by check, most actionable first. Lead with
 - mark://<world>/<doc>.md — missing required axis `category:` (policy strictness: block); re-publish with the axis tag
 
 #### Dangling & unlinked references (<n>)        [deep check — scanned <k>/<N> docs]
-- mark://<world>/adr/0006-….md → "ADR 0005" — dangling: no such doc in any in-scope world (lookup → no match); restore or drop the reference
+- mark://<world>/adr/0006-….md → "ADR 0005" — dangling: no such doc in any complete in-scope world inventory; restore or drop the reference
 - mark://<world>/architecture.md → "ADR 0006" — unlinked: target exists but no in-body link; convert the prose mention to a [link](mark://…)
 
 #### Metadata lost across versions (<n>)        [deep check — scanned <k>/<N> docs]

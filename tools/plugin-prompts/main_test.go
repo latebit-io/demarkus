@@ -8,7 +8,7 @@ import (
 
 func TestAddMarkerPreservesFrontmatter(t *testing.T) {
 	got := string(addMarker([]byte("---\nname: demo\ndescription: test\n---\n\n# Demo\n")))
-	want := "---\nname: demo\ndescription: test\n---\n" + generatedMarker + "\n\n# Demo\n"
+	want := "---\nname: demo\ndescription: test\n---\n" + markdownlintDirective + "\n" + generatedMarker + "\n\n# Demo\n"
 	if got != want {
 		t.Fatalf("addMarker() = %q, want %q", got, want)
 	}
@@ -51,6 +51,60 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if len(artifacts) != 54 {
 		t.Fatalf("renderAll() produced %d artifacts, want 54", len(artifacts))
 	}
+}
+
+func TestDecodeManifestRejectsUnknownField(t *testing.T) {
+	_, err := decodeManifest([]byte(`{"targets": [], "unexpected": true}`))
+	if err == nil {
+		t.Fatal("decodeManifest() accepted an unknown field")
+	}
+}
+
+func TestValidateManifestRejectsIncompleteTarget(t *testing.T) {
+	spec := validManifest()
+	spec.Targets[0].ToolForm = ""
+	if err := validateManifest(&spec); err == nil {
+		t.Fatal("validateManifest() accepted an empty tool_form")
+	}
+}
+
+func TestValidateManifestRejectsDuplicatePair(t *testing.T) {
+	spec := validManifest()
+	spec.Targets[1].Surface = spec.Targets[0].Surface
+	spec.Targets[1].Harness = spec.Targets[0].Harness
+	if err := validateManifest(&spec); err == nil {
+		t.Fatal("validateManifest() accepted a duplicate surface/harness pair")
+	}
+}
+
+func TestValidateManifestRejectsDuplicateOutput(t *testing.T) {
+	spec := validManifest()
+	spec.Targets[1].Output = spec.Targets[0].Output
+	if err := validateManifest(&spec); err == nil {
+		t.Fatal("validateManifest() accepted a duplicate output")
+	}
+}
+
+func validManifest() manifest {
+	harnesses := []string{"claude", "pi", "opencode"}
+	surfaces := []string{"memory", "knowledge"}
+	spec := manifest{}
+	for _, surface := range surfaces {
+		for _, harness := range harnesses {
+			name := surface + "-" + harness
+			spec.Targets = append(spec.Targets, target{
+				Name:             name,
+				Surface:          surface,
+				Harness:          harness,
+				Agent:            harness,
+				Output:           "plugins/" + name,
+				ProjectDir:       "project",
+				RepoInstructions: "instructions",
+				ToolForm:         "tools",
+			})
+		}
+	}
+	return spec
 }
 
 func contains(values []string, want string) bool {

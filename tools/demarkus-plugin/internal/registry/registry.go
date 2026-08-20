@@ -540,7 +540,7 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 	}
 	if j.Token != "" {
 		if token != "" && token != j.Token {
-			return nil, fmt.Errorf("both --token and a join-URL token were given; pass one")
+			return nil, fmt.Errorf("both explicit token input and a join-URL token were given; pass one")
 		}
 		token = j.Token
 	}

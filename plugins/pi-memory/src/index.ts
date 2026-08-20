@@ -238,8 +238,11 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
         let body: string;
         try {
           body = commandBody(name, args);
-        } catch {
-          ctx.ui.notify(`demarkus-memory: command '${name}' not found`, "error");
+        } catch (error) {
+          const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+          const message = missing ? `command '${name}' not found` : `command '${name}' failed to load: ${error}`;
+          console.error(`[demarkus-memory] ${message}`);
+          ctx.ui.notify(`demarkus-memory: ${message}`, "error");
           return;
         }
         // triggerTurn: the command injects the skill body and must start a turn

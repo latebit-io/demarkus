@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -237,15 +238,11 @@ func registryMcp(args []string) {
 }
 
 func registrySoulJoin(args []string) {
-	fs := flag.NewFlagSet("soul-join", flag.ExitOnError)
-	token := fs.String("token", "", "capability token (omit for a public/read-only soul)")
-	insecure := fs.Bool("insecure", false, "skip TLS verification")
-	bind := fs.String("bind", "", "bind this project directory to the soul")
-	_ = fs.Parse(args)
-	if fs.NArg() != 1 {
-		fail("soul-join: usage: registry soul-join <host> [--token T] [--insecure] [--bind DIR]")
+	opts, err := parseSoulJoinArgs(args, os.Stdin)
+	if err != nil {
+		fail(err.Error())
 	}
-	res, err := registry.SoulJoin(fs.Arg(0), *token, *insecure, *bind)
+	res, err := registry.SoulJoin(opts.host, opts.token, opts.insecure, opts.bind)
 	if err != nil {
 		fail(err.Error())
 	}
@@ -258,6 +255,111 @@ func registrySoulJoin(args []string) {
 	fmt.Println("host=" + res.Host)
 	fmt.Println("insecure=" + ins)
 	fmt.Println("token-file=" + res.TokenFile)
+}
+
+type soulJoinOptions struct {
+	host     string
+	token    string
+	insecure bool
+	bind     string
+}
+
+func parseSoulJoinArgs(args []string, stdin io.Reader) (soulJoinOptions, error) {
+	var opts soulJoinOptions
+	tokenStdin := false
+	positionalOnly := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if positionalOnly {
+			if opts.host != "" {
+				return soulJoinOptions{}, fmt.Errorf("soul-join: unexpected extra argument %q", arg)
+			}
+			opts.host = arg
+			continue
+		}
+		if arg == "--" {
+			positionalOnly = true
+			continue
+		}
+		handled, err := parseSoulJoinFlag(args, &i, &opts, &tokenStdin)
+		if err != nil {
+			return soulJoinOptions{}, err
+		}
+		if handled {
+			continue
+		}
+		if opts.host == "" {
+			opts.host = arg
+		} else {
+			return soulJoinOptions{}, fmt.Errorf("soul-join: unexpected extra argument %q", arg)
+		}
+	}
+	if opts.host == "" {
+		return soulJoinOptions{}, errors.New("soul-join: usage: registry soul-join <host> [--token T|--token-stdin] [--insecure] [--bind DIR]")
+	}
+	if tokenStdin && opts.token != "" {
+		return soulJoinOptions{}, errors.New("soul-join: --token and --token-stdin are mutually exclusive")
+	}
+	if tokenStdin {
+		body, err := io.ReadAll(stdin)
+		if err != nil {
+			return soulJoinOptions{}, fmt.Errorf("soul-join: read token from stdin: %w", err)
+		}
+		opts.token = strings.TrimSpace(string(body))
+		if opts.token == "" {
+			return soulJoinOptions{}, errors.New("soul-join: token from stdin is empty")
+		}
+	}
+	return opts, nil
+}
+
+func parseSoulJoinFlag(args []string, i *int, opts *soulJoinOptions, tokenStdin *bool) (bool, error) {
+	arg := args[*i]
+	if arg == "-" || !strings.HasPrefix(arg, "-") {
+		return false, nil
+	}
+	flagArg := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+	name, inline, hasInline := strings.Cut(flagArg, "=")
+	switch name {
+	case "token-stdin", "insecure":
+		value := true
+		if hasInline {
+			parsed, err := strconv.ParseBool(inline)
+			if err != nil {
+				return true, fmt.Errorf("soul-join: --%s wants a boolean, got %q", name, inline)
+			}
+			value = parsed
+		}
+		if name == "token-stdin" {
+			*tokenStdin = value
+		} else {
+			opts.insecure = value
+		}
+	case "token", "bind":
+		value, err := soulJoinFlagValue(args, i, name, inline, hasInline)
+		if err != nil {
+			return true, err
+		}
+		if name == "token" {
+			opts.token = value
+		} else {
+			opts.bind = value
+		}
+	default:
+		return true, fmt.Errorf("soul-join: unknown flag %q", arg)
+	}
+	return true, nil
+}
+
+func soulJoinFlagValue(args []string, i *int, name, inline string, hasInline bool) (string, error) {
+	if hasInline {
+		return inline, nil
+	}
+	*i++
+	if *i >= len(args) {
+		return "", fmt.Errorf("soul-join: --%s requires a value", name)
+	}
+	return args[*i], nil
 }
 
 func registrySoulDefault(args []string) {
