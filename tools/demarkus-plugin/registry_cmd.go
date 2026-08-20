@@ -442,10 +442,11 @@ func registryPromoteTarget(args []string) {
 			fail("promote-target add: usage: registry promote-target add <slug> <path> [label]")
 		}
 		label := strings.Join(args[3:], " ")
-		if err := registry.PromoteTargetAdd(args[1], args[2], label); err != nil {
+		path, err := registry.PromoteTargetAdd(args[1], args[2], label)
+		if err != nil {
 			fail(err.Error())
 		}
-		fmt.Println("OK: registered promote target " + args[1] + " " + args[2])
+		fmt.Println("OK: registered promote target " + args[1] + " " + path)
 	default:
 		fail("promote-target: unknown subcommand '" + args[0] + "'")
 	}

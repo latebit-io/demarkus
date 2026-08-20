@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -65,5 +66,27 @@ func TestParseSoulJoinArgsRejectsEmptyTokenFlag(t *testing.T) {
 		if _, err := parseSoulJoinArgs(args, strings.NewReader("")); err == nil {
 			t.Fatalf("parseSoulJoinArgs(%q) accepted an empty token", args)
 		}
+	}
+}
+
+func TestRegistryPromoteTargetReportsCanonicalPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stdout, err := os.CreateTemp(t.TempDir(), "stdout-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStdout := os.Stdout
+	os.Stdout = stdout
+	registryPromoteTarget([]string{"add", "acme", "/shared//nested/", "Nested"})
+	os.Stdout = originalStdout
+	if err := stdout.Close(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(stdout.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(body), "OK: registered promote target acme /shared/nested\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }

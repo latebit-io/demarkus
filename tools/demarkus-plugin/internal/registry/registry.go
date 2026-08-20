@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	pathpkg "path"
 	"regexp"
 	"slices"
 	"strings"
@@ -342,33 +343,45 @@ func policyField(body, key string) string {
 // --- promote targets ----------------------------------------------------------
 
 // PromoteTargetAdd registers a plain remote promote target "<slug> <path> [label]".
-func PromoteTargetAdd(slug, path, label string) error {
+// It returns the canonical stored path.
+func PromoteTargetAdd(slug, path, label string) (string, error) {
 	if slug == "" {
-		return fmt.Errorf("add: missing <slug>")
+		return "", fmt.Errorf("add: missing <slug>")
 	}
-	if !strings.HasPrefix(path, "/") {
-		return fmt.Errorf("add: <path> must start with / (got '%s')", path)
+	canonicalPath, err := canonicalPromotePath(path)
+	if err != nil {
+		return "", err
 	}
-	if strings.ContainsAny(path, " \t") {
-		return fmt.Errorf("add: <path> must not contain whitespace")
-	}
+	path = canonicalPath
 	if !slugSafe.MatchString(slug) {
-		return fmt.Errorf("add: <slug> '%s' has unexpected characters", slug)
+		return "", fmt.Errorf("add: <slug> '%s' has unexpected characters", slug)
 	}
 	p, err := config.StatePath("promote-targets")
 	if err != nil {
-		return err
+		return "", err
 	}
-	return withLock(p, func() error {
+	err = withLock(p, func() error {
 		rows, err := readRecords("promote-targets")
 		if err != nil {
 			return err
 		}
-		for _, r := range rows {
-			f := strings.Fields(r)
-			if len(f) >= 2 && f[0] == slug && f[1] == path {
-				return nil // idempotent on slug+path
+		for i, row := range rows {
+			fields := strings.SplitN(row, " ", 3)
+			if len(fields) < 2 || fields[0] != slug {
+				continue
 			}
+			existingPath, pathErr := canonicalPromotePath(fields[1])
+			if pathErr != nil || existingPath != path {
+				continue
+			}
+			if fields[1] == path {
+				return nil // idempotent on slug+canonical path
+			}
+			rows[i] = slug + " " + path
+			if len(fields) == 3 {
+				rows[i] += " " + fields[2]
+			}
+			return atomicWrite(p, []byte(strings.Join(rows, "\n")+"\n"))
 		}
 		line := slug + " " + path
 		if label != "" {
@@ -377,6 +390,22 @@ func PromoteTargetAdd(slug, path, label string) error {
 		rows = append(rows, line)
 		return atomicWrite(p, []byte(strings.Join(rows, "\n")+"\n"))
 	})
+	return path, err
+}
+
+func canonicalPromotePath(raw string) (string, error) {
+	if !strings.HasPrefix(raw, "/") {
+		return "", fmt.Errorf("add: <path> must start with / (got '%s')", raw)
+	}
+	if strings.ContainsAny(raw, " \t\\\x00") {
+		return "", fmt.Errorf("add: <path> must not contain whitespace, backslashes, or NUL")
+	}
+	for segment := range strings.SplitSeq(raw, "/") {
+		if segment == "." || segment == ".." {
+			return "", fmt.Errorf("add: <path> must not contain traversal segments")
+		}
+	}
+	return pathpkg.Clean(raw), nil
 }
 
 // PromoteTargetList returns the registered plain remote promote targets.

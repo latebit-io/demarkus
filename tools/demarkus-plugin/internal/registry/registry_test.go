@@ -459,15 +459,45 @@ func TestKnowledgeRegisterUnregister(t *testing.T) {
 }
 
 func TestPromoteTargetAdd(t *testing.T) {
-	setupHome(t)
-	if err := PromoteTargetAdd("acme", "/shared", "Acme shared"); err != nil {
+	home := setupHome(t)
+	if _, err := PromoteTargetAdd("acme", "/shared", "Acme shared"); err != nil {
 		t.Fatal(err)
 	}
-	if err := PromoteTargetAdd("acme", "bad", ""); err == nil {
+	if _, err := PromoteTargetAdd("acme", "bad", ""); err == nil {
 		t.Error("path not starting with / should error")
 	}
-	rows, _ := PromoteTargetList()
-	if len(rows) != 1 || rows[0] != "acme /shared Acme shared" {
+	for _, unsafe := range []string{"/docs/../secret", "/docs/./internal", `/docs\secret`} {
+		if _, err := PromoteTargetAdd("acme", unsafe, ""); err == nil {
+			t.Errorf("unsafe path %q should error", unsafe)
+		}
+	}
+	canonical, err := PromoteTargetAdd("acme", "/shared//nested/", "Nested")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical != "/shared/nested" {
+		t.Fatalf("canonical path = %q", canonical)
+	}
+	rows, err := PromoteTargetList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0] != "acme /shared Acme shared" || rows[1] != "acme /shared/nested Nested" {
+		t.Fatalf("promote target rows = %v", rows)
+	}
+	registryPath := filepath.Join(home, ".demarkus", "promote-targets")
+	legacyRows := strings.Join(append(rows, "legacy /legacy//nested/ Legacy label"), "\n") + "\n"
+	if err := os.WriteFile(registryPath, []byte(legacyRows), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PromoteTargetAdd("legacy", "/legacy/nested", "Ignored replacement"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = PromoteTargetList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || rows[2] != "legacy /legacy/nested Legacy label" {
 		t.Fatalf("promote target row wrong: %v", rows)
 	}
 }
