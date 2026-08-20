@@ -715,6 +715,9 @@ func prepareProjectBindingMutation(dir, slug, path string) (stateMutation, error
 }
 
 func validateRecordField(name, value string) error {
+	if value != strings.TrimSpace(value) {
+		return fmt.Errorf("%s must not start or end with whitespace", name)
+	}
 	if strings.ContainsAny(value, "\t\r\n\x00") {
 		return fmt.Errorf("%s must not contain tab, line break, or NUL delimiters", name)
 	}

@@ -107,7 +107,7 @@ func TestProjectBindSetRejectsRecordDelimiters(t *testing.T) {
 	if err := SoulRegister("remote", "mark://remote.example", false, "-"); err != nil {
 		t.Fatal(err)
 	}
-	for _, dir := range []string{"/repo\tother", "/repo\rnext", "/repo\nnext", "/repo\x00next"} {
+	for _, dir := range []string{"/repo\tother", "/repo\rnext", "/repo\nnext", "/repo\x00next", " relative", "relative "} {
 		if err := ProjectBindSet(dir, "remote"); err == nil {
 			t.Errorf("binding directory %q should error", dir)
 		}
@@ -490,7 +490,7 @@ func TestPromoteTargetAdd(t *testing.T) {
 			t.Errorf("unsafe path %q should error", unsafe)
 		}
 	}
-	for _, label := range []string{"bad\tlabel", "bad\rlabel", "bad\nlabel", "bad\x00label"} {
+	for _, label := range []string{"bad\tlabel", "bad\rlabel", "bad\nlabel", "bad\x00label", " leading", "trailing "} {
 		if _, err := PromoteTargetAdd("acme", "/labeled", label); err == nil {
 			t.Errorf("unsafe label %q should error", label)
 		}
