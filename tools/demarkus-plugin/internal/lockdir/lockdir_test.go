@@ -141,6 +141,12 @@ func TestWithLock(t *testing.T) {
 		if err := syscall.Flock(int(guard.Fd()), syscall.LOCK_EX); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Mkdir(lock, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lock, "pid"), []byte("0"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		guardClosed := false
 		defer func() {
 			if guardClosed {
@@ -154,32 +160,18 @@ func TestWithLock(t *testing.T) {
 			}
 		}()
 
-		startSeq := nameSeq.Load()
 		result := make(chan error, 1)
 		go func() {
-			result <- WithLock(lock, 3, time.Millisecond, func() error {
+			result <- WithLock(lock, 100, time.Millisecond, func() error {
 				t.Error("fn must not run while transition guard is held")
 				return nil
 			})
 		}()
 
-		var contenderErr error
-		deadline := time.After(time.Second)
-	wait:
-		for {
-			select {
-			case contenderErr = <-result:
-				break wait
-			case <-deadline:
-				t.Fatal("contender did not reach guard timeout")
-			default:
-				if nameSeq.Load() > startSeq {
-					break wait
-				}
-				time.Sleep(time.Millisecond)
-			}
+		time.Sleep(5 * time.Millisecond)
+		if err := os.RemoveAll(lock); err != nil {
+			t.Fatal(err)
 		}
-
 		if err := os.Mkdir(lock, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -194,8 +186,11 @@ func TestWithLock(t *testing.T) {
 			t.Fatal(err)
 		}
 		guardClosed = true
-		if contenderErr == nil {
-			contenderErr = <-result
+		var contenderErr error
+		select {
+		case contenderErr = <-result:
+		case <-time.After(time.Second):
+			t.Fatal("contender did not exhaust retries")
 		}
 		if contenderErr == nil {
 			t.Fatal("expected transition guard timeout")

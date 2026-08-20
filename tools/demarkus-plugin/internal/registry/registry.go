@@ -111,21 +111,6 @@ type SoulRow struct {
 	TokenFile string
 }
 
-// remoteSoulHost returns the host registered for slug, or "" when not registered.
-func remoteSoulHost(slug string) (string, error) {
-	rows, err := readRecords("souls")
-	if err != nil {
-		return "", err
-	}
-	for _, r := range rows {
-		f := strings.Split(r, "\t")
-		if f[0] == slug && len(f) >= 2 {
-			return f[1], nil
-		}
-	}
-	return "", nil
-}
-
 // SoulCatalog emits one row per bindable soul: "<id>\t<tier>\t<host>\t<insecure>".
 func SoulCatalog() ([]string, error) {
 	var out []string
@@ -196,7 +181,7 @@ func ProjectBindSet(dir, slug string) error {
 			if err != nil {
 				return err
 			}
-			return atomicWritePerm(mutation.before.path, mutation.data, mutation.mode)
+			return applyStateMutations([]stateMutation{mutation})
 		})
 	})
 }
@@ -566,22 +551,24 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 		}
 	}
 
+	managedTokenFile, err := config.StatePath("soul-" + slug + ".token")
+	if err != nil {
+		return nil, err
+	}
 	tokenFile := "-"
 	if token != "" {
-		tokenFile, err = config.StatePath("soul-" + slug + ".token")
-		if err != nil {
-			return nil, err
-		}
+		tokenFile = managedTokenFile
 	}
-	if err := commitSoulJoin(slug, host, token, tokenFile, bindDir, soulsPath, bindingsPath, insecure); err != nil {
+	if err := commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath, insecure); err != nil {
 		return nil, err
 	}
 	return &SoulJoinResult{Slug: slug, Host: host, Insecure: insecure, TokenFile: tokenFile}, nil
 }
 
-func commitSoulJoin(slug, host, token, tokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) error {
+// Every multi-file registry path locks souls before project-souls; never reverse.
+func commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) error {
 	mutate := func() error {
-		mutations, err := prepareSoulJoinMutations(slug, host, token, tokenFile, bindDir, soulsPath, bindingsPath, insecure)
+		mutations, err := prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath, insecure)
 		if err != nil {
 			return err
 		}
@@ -595,13 +582,13 @@ func commitSoulJoin(slug, host, token, tokenFile, bindDir, soulsPath, bindingsPa
 	})
 }
 
-func prepareSoulJoinMutations(slug, host, token, tokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) ([]stateMutation, error) {
-	existingHost, err := remoteSoulHost(slug)
+func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) ([]stateMutation, error) {
+	existing, exists, err := RemoteSoulRow(slug)
 	if err != nil {
 		return nil, err
 	}
-	if existingHost != "" && existingHost != host {
-		return nil, fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existingHost, host)
+	if exists && existing.Host != host {
+		return nil, fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existing.Host, host)
 	}
 	rows, err := readRecords("souls")
 	if err != nil {
@@ -620,18 +607,30 @@ func prepareSoulJoinMutations(slug, host, token, tokenFile, bindDir, soulsPath, 
 	kept = append(kept, strings.Join([]string{slug, host, ins, tokenFile}, "\t"))
 
 	mutations := make([]stateMutation, 0, 3)
+	var tokenDelete *stateMutation
 	if token != "" {
 		mutation, err := prepareStateMutation(tokenFile, []byte(token), 0o600)
 		if err != nil {
 			return nil, err
 		}
 		mutations = append(mutations, mutation)
+	} else {
+		mutation, err := prepareDeleteStateMutation(managedTokenFile)
+		if err != nil {
+			return nil, err
+		}
+		tokenDelete = &mutation
 	}
 	catalog, err := prepareStateMutation(soulsPath, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
 	if err != nil {
 		return nil, err
 	}
 	mutations = append(mutations, catalog)
+	// Publish the tokenless catalog row before removing the old token so readers
+	// never observe a token-backed row whose credential file is already gone.
+	if tokenDelete != nil {
+		mutations = append(mutations, *tokenDelete)
+	}
 	if bindDir != "" {
 		binding, err := prepareProjectBindingMutation(bindDir, slug, bindingsPath)
 		if err != nil {
@@ -668,6 +667,7 @@ type stateMutation struct {
 	before fileSnapshot
 	data   []byte
 	mode   os.FileMode
+	delete bool
 }
 
 var writeStateFile = atomicWritePerm
@@ -678,6 +678,14 @@ func prepareStateMutation(path string, data []byte, mode os.FileMode) (stateMuta
 		return stateMutation{}, err
 	}
 	return stateMutation{before: snapshot, data: data, mode: mode}, nil
+}
+
+func prepareDeleteStateMutation(path string) (stateMutation, error) {
+	snapshot, err := snapshotFile(path)
+	if err != nil {
+		return stateMutation{}, err
+	}
+	return stateMutation{before: snapshot, delete: true}, nil
 }
 
 func snapshotFile(path string) (fileSnapshot, error) {
@@ -698,9 +706,18 @@ func snapshotFile(path string) (fileSnapshot, error) {
 func applyStateMutations(mutations []stateMutation) error {
 	for i := range mutations {
 		mutation := &mutations[i]
-		if err := writeStateFile(mutation.before.path, mutation.data, mutation.mode); err != nil {
+		var err error
+		if mutation.delete {
+			err = os.Remove(mutation.before.path)
+			if errors.Is(err, os.ErrNotExist) {
+				err = nil
+			}
+		} else {
+			err = writeStateFile(mutation.before.path, mutation.data, mutation.mode)
+		}
+		if err != nil {
 			rollbackErr := rollbackStateMutations(mutations[:i+1])
-			return errors.Join(fmt.Errorf("write %s: %w", mutation.before.path, err), rollbackErr)
+			return errors.Join(fmt.Errorf("mutate %s: %w", mutation.before.path, err), rollbackErr)
 		}
 	}
 	return nil

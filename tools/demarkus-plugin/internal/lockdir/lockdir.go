@@ -24,6 +24,8 @@ import (
 // the PID alone is not enough when several writers race in-process.
 var nameSeq atomic.Uint64
 
+var errGuardTimeout = errors.New("lock transition guard timed out")
+
 const (
 	guardAttempts = 100
 	guardSleep    = time.Millisecond
@@ -59,12 +61,14 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 				if err := reclaimStale(lockDir); err != nil {
 					return err
 				}
+				time.Sleep(sleep)
 				continue
 			}
 			if !PidAlive(pid) {
 				if err := reclaimStale(lockDir); err != nil {
 					return err
 				}
+				time.Sleep(sleep)
 				continue
 			}
 		case errors.Is(readErr, os.ErrNotExist):
@@ -76,6 +80,7 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 				if err := reclaimStale(lockDir); err != nil {
 					return err
 				}
+				time.Sleep(sleep)
 				continue
 			}
 		default:
@@ -103,7 +108,7 @@ func tryAcquire(lockDir string) (bool, error) {
 	}
 	var renameErr error
 	renamed := false
-	guardErr := withGuard(lockDir, func() error {
+	guardErr := withGuard(lockDir, 1, func() error {
 		renameErr = os.Rename(stage, lockDir)
 		renamed = renameErr == nil
 		return nil
@@ -116,7 +121,11 @@ func tryAcquire(lockDir string) (bool, error) {
 		if renameErr != nil {
 			acquireErr = fmt.Errorf("acquire lock: %w", renameErr)
 		}
-		return false, errors.Join(guardErr, acquireErr, os.RemoveAll(stage))
+		cleanupErr := os.RemoveAll(stage)
+		if guardErr == errGuardTimeout {
+			return false, cleanupErr
+		}
+		return false, errors.Join(guardErr, acquireErr, cleanupErr)
 	}
 	if renamed {
 		return true, nil
@@ -139,7 +148,7 @@ func isContention(err error) bool {
 func reclaimStale(lockDir string) error {
 	aside := fmt.Sprintf("%s.stale.%d-%d", lockDir, os.Getpid(), nameSeq.Add(1))
 	moved := false
-	guardErr := withGuard(lockDir, func() error {
+	guardErr := withGuard(lockDir, 1, func() error {
 		b, readErr := os.ReadFile(filepath.Join(lockDir, "pid"))
 		if readErr == nil {
 			pid, convErr := strconv.Atoi(strings.TrimSpace(string(b)))
@@ -161,6 +170,9 @@ func reclaimStale(lockDir string) error {
 	if guardErr != nil {
 		if moved {
 			return errors.Join(guardErr, os.RemoveAll(aside))
+		}
+		if guardErr == errGuardTimeout {
+			return nil
 		}
 		return guardErr
 	}
@@ -198,7 +210,7 @@ func runLocked(lockDir string, fn func() error) (err error) {
 func release(lockDir string) error {
 	aside := fmt.Sprintf("%s.release.%d-%d", lockDir, os.Getpid(), nameSeq.Add(1))
 	moved := false
-	guardErr := withGuard(lockDir, func() error {
+	guardErr := withGuard(lockDir, guardAttempts, func() error {
 		if err := os.Rename(lockDir, aside); err != nil {
 			return err
 		}
@@ -217,13 +229,14 @@ func release(lockDir string) error {
 	return nil
 }
 
-func withGuard(lockDir string, fn func() error) (err error) {
+func withGuard(lockDir string, attempts int, fn func() error) (err error) {
+	// This file is permanent: unlinking it can split flock users across inodes.
 	guard, err := os.OpenFile(lockDir+".guard", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("open lock transition guard: %w", err)
 	}
 	locked := false
-	for range guardAttempts {
+	for attempt := range attempts {
 		lockErr := syscall.Flock(int(guard.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if lockErr == nil {
 			locked = true
@@ -232,10 +245,15 @@ func withGuard(lockDir string, fn func() error) (err error) {
 		if !errors.Is(lockErr, syscall.EWOULDBLOCK) && !errors.Is(lockErr, syscall.EAGAIN) {
 			return errors.Join(fmt.Errorf("lock transition guard: %w", lockErr), guard.Close())
 		}
-		time.Sleep(guardSleep)
+		if attempt+1 < attempts {
+			time.Sleep(guardSleep)
+		}
 	}
 	if !locked {
-		return errors.Join(fmt.Errorf("lock transition guard timed out after %s", guardAttempts*guardSleep), guard.Close())
+		if closeErr := guard.Close(); closeErr != nil {
+			return errors.Join(fmt.Errorf("%w after %s", errGuardTimeout, time.Duration(attempts)*guardSleep), closeErr)
+		}
+		return errGuardTimeout
 	}
 	defer func() {
 		unlockErr := syscall.Flock(int(guard.Fd()), syscall.LOCK_UN)

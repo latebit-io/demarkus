@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -18,6 +20,66 @@ func setupHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return home
+}
+
+func failWritesTo(t *testing.T, name string) {
+	t.Helper()
+	originalWriter := writeStateFile
+	t.Cleanup(func() { writeStateFile = originalWriter })
+	writeStateFile = func(path string, data []byte, mode os.FileMode) error {
+		if filepath.Base(path) == name {
+			return errors.New("injected write failure")
+		}
+		return atomicWritePerm(path, data, mode)
+	}
+}
+
+func TestAtomicWritePermConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+	const writers = 32
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			<-start
+			errs <- atomicWritePerm(path, []byte("writer-"+strconv.Itoa(i)), 0o600)
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || !strings.HasPrefix(string(body), "writer-") {
+		t.Fatalf("final state: body=%q err=%v", body, err)
+	}
+	temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".state.*.tmp"))
+	if err != nil || len(temps) != 0 {
+		t.Fatalf("temporary files: %v err=%v", temps, err)
+	}
+}
+
+func TestProjectBindSetUsesTransactionWriter(t *testing.T) {
+	home := setupHome(t)
+	if err := SoulRegister("remote", "mark://remote.example", false, "-"); err != nil {
+		t.Fatal(err)
+	}
+	failWritesTo(t, "project-souls")
+	if err := ProjectBindSet(filepath.Join(home, "repo"), "remote"); err == nil {
+		t.Fatal("ProjectBindSet succeeded despite injected write failure")
+	}
+	path, err := config.StatePath("project-souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("binding file exists after failed write: %v", err)
+	}
 }
 
 func TestDeriveSlug(t *testing.T) {
@@ -112,14 +174,7 @@ func TestSoulJoinRollsBackBindingFailure(t *testing.T) {
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	originalWriter := writeStateFile
-	t.Cleanup(func() { writeStateFile = originalWriter })
-	writeStateFile = func(path string, data []byte, mode os.FileMode) error {
-		if filepath.Base(path) == "project-souls" {
-			return errors.New("injected binding failure")
-		}
-		return atomicWritePerm(path, data, mode)
-	}
+	failWritesTo(t, "project-souls")
 
 	if _, err := SoulJoin("soul.demarkus.io", "secret", false, repo); err == nil {
 		t.Fatal("SoulJoin succeeded despite binding failure")
@@ -147,22 +202,21 @@ func TestSoulJoinRestoresExistingStateOnBindingFailure(t *testing.T) {
 		filepath.Join(home, ".demarkus", "soul-soul.token"),
 	}
 	before := make(map[string]string, len(paths))
+	beforeMode := make(map[string]os.FileMode, len(paths))
 	for _, path := range paths {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		before[path] = string(body)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeMode[path] = info.Mode().Perm()
 	}
 
-	originalWriter := writeStateFile
-	t.Cleanup(func() { writeStateFile = originalWriter })
-	writeStateFile = func(path string, data []byte, mode os.FileMode) error {
-		if filepath.Base(path) == "project-souls" {
-			return errors.New("injected binding failure")
-		}
-		return atomicWritePerm(path, data, mode)
-	}
+	failWritesTo(t, "project-souls")
 	if _, err := SoulJoin("soul.demarkus.io", "new-token", true, repo); err == nil {
 		t.Fatal("SoulJoin succeeded despite binding failure")
 	}
@@ -174,6 +228,68 @@ func TestSoulJoinRestoresExistingStateOnBindingFailure(t *testing.T) {
 		if string(body) != before[path] {
 			t.Errorf("state changed at %s: got %q, want %q", path, body, before[path])
 		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != beforeMode[path] {
+			t.Errorf("mode changed at %s: got %o, want %o", path, info.Mode().Perm(), beforeMode[path])
+		}
+	}
+}
+
+func TestSoulJoinWithoutTokenRemovesManagedToken(t *testing.T) {
+	home := setupHome(t)
+	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(home, ".demarkus", "soul-soul.token")
+	if _, err := SoulJoin("soul.demarkus.io", "", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tokenPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed token remains after tokenless rejoin: %v", err)
+	}
+	row, ok, err := RemoteSoulRow("soul")
+	if err != nil || !ok || row.TokenFile != "-" {
+		t.Fatalf("tokenless row = %+v, ok=%v, err=%v", row, ok, err)
+	}
+}
+
+func TestSoulJoinWithoutTokenRemovesOrphanManagedToken(t *testing.T) {
+	home := setupHome(t)
+	tokenPath := filepath.Join(home, ".demarkus", "soul-soul.token")
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("orphan-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SoulJoin("soul.demarkus.io", "", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tokenPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphan managed token remains after tokenless join: %v", err)
+	}
+}
+
+func TestSoulJoinRestoresDeletedTokenOnLaterFailure(t *testing.T) {
+	home := setupHome(t)
+	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(home, ".demarkus", "soul-soul.token")
+	failWritesTo(t, "project-souls")
+	if _, err := SoulJoin("soul.demarkus.io", "", false, filepath.Join(home, "repo")); err == nil {
+		t.Fatal("SoulJoin succeeded despite binding failure")
+	}
+	body, err := os.ReadFile(tokenPath)
+	if err != nil || string(body) != "old-token" {
+		t.Fatalf("token rollback: body=%q err=%v", body, err)
+	}
+	info, err := os.Stat(tokenPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("token rollback mode: info=%v err=%v", info, err)
 	}
 }
 

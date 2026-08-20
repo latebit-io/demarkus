@@ -12,7 +12,7 @@ Set a command-wide deadline three minutes in the future before the first tool ca
 
 1. **Detection gate.** Run `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote` via Bash. Non-zero exit or malformed output is a registry failure: surface it and stop. `NONE` from a successful call means there is nowhere to promote to, so say so and stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`) — candidates can be promoted to any of them via `/promote`.
 
-2. **Gather the already-promoted set (to exclude).** `mark_lookup` the soul with `filter=tag=promoted`, `limit=1000` (optionally scoped to `/<slug>/`). If the call fails, stop rather than treating the exclusion set as empty. `mark_lookup` has no cursor: if it returns exactly 1000 rows, the exclusion set may be truncated, so report the scan as partial and stop before claiming any candidates. These already live in the catalog — never re-list them as candidates. Their soul docs also carry a `promoted: mark://…@v<N>` marker; `/soul-refresh` keeps them current, not this command.
+2. **Gather the already-promoted set (to exclude).** `mark_lookup` the soul with `filter=tag=promoted`, `limit=1000` (optionally scoped to `/<slug>/`). If the call fails, stop rather than treating the exclusion set as empty. `mark_lookup` has no cursor: if it returns exactly 1000 rows, the exclusion set may be truncated, so report the scan as partial and stop before claiming any candidates. These already live in the catalog — never re-list them as candidates. Their soul docs also carry `promoted-via:` and `promoted: <target>@v<N>` markers; `/soul-refresh` keeps them current, not this command.
 
 3. **Find high-signal candidates.** Within scope, surface documents whose *type* makes them likely shared-team knowledge, skipping anything in the already-promoted set. Bound the sweep to 200 listed paths and 40 `mark_fetch` calls with `force: true`, prioritizing ADRs, architecture, guidelines, patterns, high importance, and explicit sharing tags. Rank only successful full-body responses; reject outline-only or otherwise incomplete content, list that path as unassessed, and mark the scan partial. Surface every candidate `mark_lookup`/`mark_list`/`mark_fetch` failure and stop or mark the affected scope partial; never convert an inventory failure into an empty shortlist. If the inventory exceeds either budget, report that the scan is partial and give the applied limits; never imply exhaustive coverage.
    - **ADRs** (`/<slug>/adr/*.md`) — decisions, the highest-signal type. List via `mark_lookup`/`mark_list`.
@@ -33,7 +33,7 @@ Set a command-wide deadline three minutes in the future before the first tool ca
    Already promoted (excluded): N docs.   Run /promote <path> on any of the above.
    ```
 
-   If nothing qualifies, say so plainly — an empty sweep is a normal, healthy result, not a failure.
+   If nothing qualifies **and coverage was complete**, say so plainly — an empty sweep is a normal, healthy result. If any inventory/fetch failed, a budget/deadline truncated coverage, or a path remained unassessed, report a partial scan instead; never turn incomplete coverage into a healthy empty result.
 
 ## Don't
 
