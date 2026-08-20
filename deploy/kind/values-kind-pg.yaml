@@ -1,0 +1,18 @@
+# Chart overrides for a Postgres-backed server in the kind harness.
+# Used by scripts/e2e-backend-parity.sh alongside values-kind.yaml (file
+# backend); the pair must differ only in the store backend.
+
+service:
+  type: ClusterIP
+
+server:
+  store: postgres
+  postgres:
+    dsnSecret:
+      # CloudNativePG publishes app credentials in <cluster>-app; its "uri"
+      # key is a full DSN pointing at the <cluster>-rw Service.
+      name: demarkus-pg-app
+      key: uri
+
+# tls block intentionally left at chart defaults — the server self-signs a
+# dev cert at startup; clients verify with `demarkus -insecure`.

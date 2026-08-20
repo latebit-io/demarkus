@@ -1,4 +1,21 @@
 {{- $tlsSecret := include "demarkus-server.tlsSecretName" . -}}
+{{- $store := default "file" .Values.server.store -}}
+{{- if not (has $store (list "file" "postgres")) -}}
+{{- fail (printf "server.store must be \"file\" or \"postgres\" (got %q)" $store) -}}
+{{- end -}}
+{{- $pg := eq $store "postgres" -}}
+{{- if and $pg (not .Values.server.postgres.dsnSecret.name) -}}
+{{- fail "server.store=postgres requires server.postgres.dsnSecret.name" -}}
+{{- end -}}
+{{- /* Backend flips change the immutable volumeClaimTemplates and migrate no
+       data; fail the upgrade explicitly instead of a k8s forbidden error. */}}
+{{- $existing := lookup "apps/v1" "StatefulSet" .Release.Namespace (include "demarkus-server.fullname" .) -}}
+{{- if $existing -}}
+{{- $wasFile := gt (len ($existing.spec.volumeClaimTemplates | default list)) 0 -}}
+{{- if ne $wasFile (not $pg) -}}
+{{- fail "changing server.store on an existing release is not supported: migrate the content first, then uninstall, delete the retained content PVC, and reinstall" -}}
+{{- end -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -43,8 +60,13 @@ spec:
           args:
             - -port
             - {{ .Values.server.udpPort | quote }}
+            {{- if $pg }}
+            - -store
+            - postgres
+            {{- else }}
             - -root
             - /var/lib/demarkus/content
+            {{- end }}
             - -tokens
             - /etc/demarkus/tokens/tokens.toml
             {{- if $tlsSecret }}
@@ -68,6 +90,14 @@ spec:
             # human-readable text on a debug pod can override to "text".
             - name: DEMARKUS_LOG_FORMAT
               value: {{ .Values.server.logFormat | default "json" | quote }}
+            {{- if $pg }}
+            # DSN via Secret so credentials never appear in the pod spec.
+            - name: DEMARKUS_PG_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.server.postgres.dsnSecret.name | quote }}
+                  key: {{ .Values.server.postgres.dsnSecret.key | default "uri" | quote }}
+            {{- end }}
           ports:
             - name: mark
               protocol: UDP
@@ -109,8 +139,10 @@ spec:
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
           {{- end }}
           volumeMounts:
+            {{- if not $pg }}
             - name: content
               mountPath: /var/lib/demarkus/content
+            {{- end }}
             - name: tokens
               mountPath: /etc/demarkus/tokens
               readOnly: true
@@ -150,6 +182,7 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{- if not $pg }}
   volumeClaimTemplates:
     - metadata:
         name: content
@@ -184,3 +217,4 @@ spec:
         {{- if .Values.storage.className }}
         storageClassName: {{ .Values.storage.className | quote }}
         {{- end }}
+  {{- end }}
