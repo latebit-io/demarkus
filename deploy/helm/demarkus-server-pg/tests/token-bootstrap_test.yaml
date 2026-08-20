@@ -1,7 +1,5 @@
-# The bootstrap logic itself is a library define, covered by the
-# demarkus-server suite. What is chart-specific is the naming: the Job must
-# target this chart's Secrets, or an upgrade would mint a second admin token
-# and silently rotate the first.
+# Naming only: the Job must target this chart's Secrets, or an upgrade mints
+# a second admin token and silently rotates the first.
 suite: token-bootstrap (postgres chart naming)
 templates:
   - token-bootstrap.yaml

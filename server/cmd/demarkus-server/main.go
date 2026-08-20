@@ -195,9 +195,6 @@ func main() {
 		logger.Error("listen failed", "addr", addr, "error", err)
 		os.Exit(1)
 	}
-	// Backstop for the early-exit paths below; the graceful shutdown closes
-	// and logs explicitly, and a second Close is a harmless no-op.
-	defer func() { _ = listener.Close() }()
 
 	if cfg.TokensFile != "" {
 		if err := loadTokenStore(cfg.TokensFile); err != nil {

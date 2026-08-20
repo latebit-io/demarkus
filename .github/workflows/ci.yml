@@ -24,6 +24,7 @@ jobs:
       client: ${{ steps.filter.outputs.client }}
       broker: ${{ steps.filter.outputs.broker }}
       charts: ${{ steps.filter.outputs.charts }}
+      release_contract: ${{ steps.filter.outputs.release_contract }}
       install: ${{ steps.filter.outputs.install }}
       opencode_plugins: ${{ steps.filter.outputs.opencode_plugins }}
     steps:
@@ -47,6 +48,9 @@ jobs:
               - 'protocol/**'
             charts:
               - 'deploy/helm/**'
+            release_contract:
+              - '.github/workflows/release.yml'
+              - 'server/.goreleaser.yml'
             install:
               - 'install.sh'
               - 'install-stack.sh'
@@ -137,15 +141,6 @@ jobs:
           go vet -tags pg ./cmd/demarkus-server
           go build -tags pg -o /dev/null ./cmd/demarkus-server
           go build -o /dev/null ./cmd/demarkus-migrate
-      # release.yml stages these build ids into the image; a rename here
-      # would only surface at release time.
-      - name: Assert the release config builds what the images stage
-        run: |
-          set -euo pipefail
-          for id in demarkus-server demarkus-server-pg demarkus-migrate; do
-            yq -e ".builds[] | select(.id == \"$id\")" server/.goreleaser.yml >/dev/null \
-              || { echo "server/.goreleaser.yml has no build id $id" >&2; exit 1; }
-          done
 
   test-client:
     needs: detect-changes
@@ -256,6 +251,28 @@ jobs:
           bash -n plugins/opencode-knowledge/scripts/bootstrap.sh
           shellcheck -S warning plugins/opencode-memory/install.sh plugins/opencode-memory/scripts/bootstrap.sh
           shellcheck -S warning plugins/opencode-knowledge/install.sh plugins/opencode-knowledge/scripts/bootstrap.sh
+
+  # release.yml stages goreleaser build output by id; a rename on either side
+  # would otherwise only surface at release time.
+  test-release-contract:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.release_contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assert the release config builds what the images stage
+        run: |
+          set -euo pipefail
+          staged="$(sed -n 's/.*for bin in \(.*\); do/\1/p' .github/workflows/release.yml)"
+          test -n "$staged"
+          for id in $staged; do
+            yq -e ".builds[] | select(.id == \"$id\")" server/.goreleaser.yml >/dev/null \
+              || { echo "release.yml stages $id but server/.goreleaser.yml has no such build id" >&2; exit 1; }
+          done
 
   test-charts:
     needs: detect-changes
