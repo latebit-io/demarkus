@@ -54,3 +54,11 @@ tests:
       - equal:
           path: spec.issuerRef.name
           value: corp-ca
+
+  - it: refuses both TLS modes at once
+    set:
+      tls.existingSecret: my-corp-tls
+      tls.certManager.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "tls.existingSecret and tls.certManager.enabled are mutually exclusive: cert-manager would overwrite the Secret you supplied"

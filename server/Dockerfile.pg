@@ -1,0 +1,17 @@
+# demarkus-server-pg image: the Postgres flavor, deployed by the
+# demarkus-server-pg chart, which pins this repository. It carries
+# demarkus-migrate so a backend flip can run in cluster. The default
+# demarkus-server image links no database driver at all.
+#
+# Build context = repo root; COPY-only, like server/Dockerfile.
+
+FROM scratch
+ARG TARGETARCH
+ARG TARGETVARIANT
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus-server-pg /demarkus-server-pg
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus           /demarkus
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus-migrate    /demarkus-migrate
+# Match the chart's podSecurityContext.runAsUser, as the default image does.
+USER 65532:65532
+EXPOSE 6309/udp
+ENTRYPOINT ["/demarkus-server-pg"]

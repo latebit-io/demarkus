@@ -1,0 +1,15 @@
+apiVersion: v2
+name: demarkus-server-common
+description: |
+  Shared templates for the demarkus-server charts. Everything that does not
+  depend on the storage backend lives here, so the file-store and Postgres
+  charts cannot drift. Backend-specific pieces are supplied by the consuming
+  chart through the demarkus-server.backend* templates.
+type: library
+version: 0.1.0
+home: https://demarkus.io
+sources:
+  - https://github.com/latebit-io/demarkus
+maintainers:
+  - name: latebit-io
+    url: https://github.com/latebit-io

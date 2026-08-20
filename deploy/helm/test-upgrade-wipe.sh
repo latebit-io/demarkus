@@ -47,6 +47,10 @@ trap cleanup EXIT
 
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
+# No-op for a chart without dependencies; keep its output, it names the
+# subchart that failed to resolve.
+helm dependency update "$CHART"
+
 echo "--- helm install"
 helm install "$RELEASE" "$CHART" --namespace "$NAMESPACE" --wait=false "${HELM_ARGS[@]}"
 

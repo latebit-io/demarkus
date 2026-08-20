@@ -70,6 +70,7 @@ func RunConformance(t *testing.T, factory Factory, tamper Tamper) {
 		{"BodySizeLimit", testBodySizeLimit},
 		{"InvalidMetadata", testInvalidMetadata},
 		{"VerifyChainTampered", func(t *testing.T, s handler.DocumentStore) { testVerifyChainTampered(t, s, tamper) }},
+		{"VerifyChainTamperedTip", func(t *testing.T, s handler.DocumentStore) { testVerifyChainTamperedTip(t, s, tamper) }},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) {
@@ -648,6 +649,18 @@ func testInvalidMetadata(t *testing.T, s handler.DocumentStore) {
 		if _, err := s.WriteVersion("/ok.md", -1, []byte(v), map[string]string{"retention": v}); err != nil {
 			t.Errorf("retention %q rejected: %v", v, err)
 		}
+	}
+}
+
+// testVerifyChainTamperedTip corrupts the newest version itself. Its stored
+// bytes carry the previous-hash link, so a backend that trusted a recorded
+// hash instead of the bytes would miss this.
+func testVerifyChainTamperedTip(t *testing.T, s handler.DocumentStore, tamper Tamper) {
+	writeN(t, s, "/dir/tip.md", 2, nil)
+	tamper(t, s, "/dir/tip.md", 2, []byte("# TAMPERED\n"))
+	err := s.VerifyChain("/dir/tip.md")
+	if err == nil || !strings.Contains(err.Error(), "missing previous-hash") {
+		t.Errorf("VerifyChain after tip tamper: err = %v, want missing previous-hash", err)
 	}
 }
 

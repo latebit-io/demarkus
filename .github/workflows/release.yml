@@ -30,6 +30,8 @@ jobs:
               - 'protocol/**'
               - 'client/**'
               - 'deploy/helm/demarkus-server/**'
+              - 'deploy/helm/demarkus-server-pg/**'
+              - 'deploy/helm/demarkus-server-common/**'
             client:
               - 'client/**'
               - 'protocol/**'
@@ -146,7 +148,7 @@ jobs:
           # bump too. protocol/ is compiled in via replace directives, and
           # the image bundles the client CLI for chart exec probes: a fix
           # in either that skips this gate silently never ships (#295).
-          change_path: "server/ protocol/ client/ deploy/helm/demarkus-server/"
+          change_path: "server/ protocol/ client/ deploy/helm/demarkus-server/ deploy/helm/demarkus-server-pg/ deploy/helm/demarkus-server-common/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -319,9 +321,13 @@ jobs:
           ls dist/
           mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
 
-          cp dist/demarkus-server_linux_amd64*/demarkus-server dist/docker/amd64/
-          cp dist/demarkus-server_linux_arm64*/demarkus-server dist/docker/arm64/
-          cp dist/demarkus-server_linux_arm_7*/demarkus-server dist/docker/armv7/
+          # demarkus-server-pg is the -tags pg flavor and demarkus-migrate
+          # ships beside it; both feed server/Dockerfile.pg below.
+          for bin in demarkus-server demarkus-server-pg demarkus-migrate; do
+            for arch in amd64:amd64 arm64:arm64 arm_7:armv7; do
+              cp dist/${bin}_linux_${arch%%:*}*/"$bin" "dist/docker/${arch##*:}/"
+            done
+          done
 
           VER="${{ needs.semver-server.outputs.new_version }}"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
@@ -348,6 +354,19 @@ jobs:
             ghcr.io/latebit-io/demarkus-server:${{ needs.semver-server.outputs.new_version }}
             ghcr.io/latebit-io/demarkus-server:latest
 
+      # The Postgres flavor, its own image so the default one keeps no
+      # database driver. Deleting the backend means deleting this step.
+      - name: Build + push demarkus-server-pg image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile.pg
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: |
+            ghcr.io/latebit-io/demarkus-server-pg:${{ needs.semver-server.outputs.new_version }}
+            ghcr.io/latebit-io/demarkus-server-pg:latest
+
       # Chart version + appVersion are pinned 1:1 to the server module
       # version so `helm install ghcr.io/.../charts/demarkus-server --version
       # X` resolves the image at the same tag. Helm 3.13+ reads ~/.docker/
@@ -356,11 +375,16 @@ jobs:
         with:
           version: v3.13.2
 
-      - name: Package + push demarkus-server chart
+      # Both charts vendor the shared library chart into their package, so
+      # consumers never need it separately; it is not pushed on its own.
+      - name: Package + push server charts
         run: |
           VER="${{ needs.semver-server.outputs.new_version }}"
-          helm package deploy/helm/demarkus-server --version "$VER" --app-version "$VER" --destination /tmp/charts
-          helm push "/tmp/charts/demarkus-server-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+          for chart in demarkus-server demarkus-server-pg; do
+            helm dependency update "deploy/helm/$chart"
+            helm package "deploy/helm/$chart" --version "$VER" --app-version "$VER" --destination /tmp/charts
+            helm push "/tmp/charts/${chart}-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+          done
 
   release-client:
     needs: semver-client

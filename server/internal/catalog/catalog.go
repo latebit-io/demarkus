@@ -148,6 +148,21 @@ func Tokenize(s string) []string {
 	return out
 }
 
+// CountTerms counts distinct terms in a query, stopping once the count
+// exceeds limit so an oversized query never builds the whole set.
+func CountTerms(s string, limit int) int {
+	seen := make(map[string]bool)
+	for f := range strings.FieldsSeq(strings.ToLower(s)) {
+		if !seen[f] {
+			seen[f] = true
+			if len(seen) > limit {
+				break
+			}
+		}
+	}
+	return len(seen)
+}
+
 // MatchScore counts how many distinct query terms appear in the entry's tags
 // (exact, case-insensitive) or title (substring, case-insensitive). Terms are
 // normalized here; Lookup normalizes once via Tokenize and uses matchScore.

@@ -1,0 +1,35 @@
+# Naming only: the Job must target this chart's Secrets, or an upgrade mints
+# a second admin token and silently rotates the first.
+suite: token-bootstrap (postgres chart naming)
+templates:
+  - token-bootstrap.yaml
+  - statefulset.yaml
+set:
+  server.postgres.dsnSecret.name: pg-app
+tests:
+  - it: renders the same four objects as the file chart
+    template: token-bootstrap.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: Job targets this chart's token Secrets
+    template: token-bootstrap.yaml
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="TOKENS_SECRET")].value
+          value: RELEASE-NAME-demarkus-server-pg-tokens
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="VALUES_SECRET")].value
+          value: RELEASE-NAME-demarkus-server-pg-token-values
+
+  - it: the server mounts the Secret the Job writes
+    template: statefulset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tokens
+            secret:
+              secretName: RELEASE-NAME-demarkus-server-pg-tokens

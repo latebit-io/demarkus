@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -22,7 +23,6 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/logging"
-	"github.com/latebit-io/demarkus/server/internal/pgstore"
 	"github.com/latebit-io/demarkus/server/internal/ratelimit"
 	servertls "github.com/latebit-io/demarkus/server/internal/tls"
 	"github.com/quic-go/quic-go"
@@ -34,8 +34,8 @@ type currentWalker interface {
 }
 
 // buildCatalog builds the in-memory LOOKUP catalog by walking current
-// documents. File-backend only: postgres serves LOOKUP from its catalog
-// table. A failed walk leaves an empty catalog rather than aborting startup.
+// documents, for backends that have no catalog of their own. A failed walk
+// leaves an empty catalog rather than aborting startup.
 func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
 	cat := catalog.New()
 	err := s.WalkCurrent(func(d store.CurrentDoc) error {
@@ -111,12 +111,21 @@ func applyFlagOverrides(cfg *config.Config, o *flagOverrides) {
 }
 
 func main() {
+	// Cleanup lives in run's defers; os.Exit here is the only exit after
+	// they have run.
+	if err := run(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	root := flag.String("root", "", "content directory to serve (overrides DEMARKUS_ROOT)")
 	port := flag.Int("port", 0, "port to listen on (overrides DEMARKUS_PORT)")
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
 	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
-	storeBackend := flag.String("store", "", "document store backend: file or postgres (overrides DEMARKUS_STORE)")
+	storeBackend := flag.String("store", "",
+		fmt.Sprintf("document store backend: %s (overrides DEMARKUS_STORE)", strings.Join(storeNames(), " or ")))
 	pgDSN := flag.String("pg-dsn", "", "Postgres connection string for the postgres backend (overrides DEMARKUS_PG_DSN)")
 	readOnly := flag.Bool("read-only", false, "reject all write operations (also enabled via DEMARKUS_READ_ONLY)")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -130,7 +139,7 @@ func main() {
 
 	if *showVersion {
 		fmt.Println(version)
-		return
+		return nil
 	}
 
 	cfg, err := config.NewConfig()
@@ -143,7 +152,7 @@ func main() {
 	// refusing to start.
 	if err != nil {
 		logger.Error("config invalid", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	applyFlagOverrides(cfg, &flagOverrides{
@@ -159,13 +168,27 @@ func main() {
 	// Semantic validation runs once, on the final post-override values.
 	if err := cfg.Validate(); err != nil {
 		logger.Error("configuration invalid", "error", err)
-		os.Exit(1)
+		return err
 	}
+	b, err := openStore(cfg, logger)
+	if err != nil {
+		logger.Error("store unavailable", "store", cfg.StoreBackend, "error", err)
+		return err
+	}
+	if b.Close != nil {
+		defer func() {
+			if err := b.Close(); err != nil {
+				logger.Warn("store close failed", "error", err)
+			}
+		}()
+	}
+	logger.Info("store ready", "backend", cfg.StoreBackend)
+	docStore, cat := b.Store, b.Catalog
 
 	tlsConfig, prodMode, err := loadTLS(cfg, logger)
 	if err != nil {
 		logger.Error("tls setup failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	quicConfig := &quic.Config{
@@ -178,55 +201,16 @@ func main() {
 	listener, err := quic.ListenAddr(addr, tlsConfig, quicConfig)
 	if err != nil {
 		logger.Error("listen failed", "addr", addr, "error", err)
-		os.Exit(1)
+		return err
 	}
+	// Covers the early returns below; the graceful shutdown closes first and
+	// a second Close is a no-op.
 	defer func() { _ = listener.Close() }()
-
-	var docStore handler.DocumentStore
-	var cat handler.LookupCatalog
-	switch cfg.StoreBackend {
-	case "postgres":
-		ps, err := pgstore.Open(cfg.PostgresDSN, logger)
-		if err != nil {
-			logger.Error("postgres store setup failed", "error", err)
-			os.Exit(1)
-		}
-		defer func() {
-			if err := ps.Close(); err != nil {
-				logger.Warn("postgres store close failed", "error", err)
-			}
-		}()
-		logger.Info("store: postgres backend ready")
-		// LOOKUP is DB-backed; a per-process index would diverge across pods.
-		docStore, cat = ps, ps
-	case "file":
-		// Open migrates any legacy-layout version files; serving an
-		// unmigrated root would hide every legacy document, so failure is fatal.
-		s, err := store.Open(cfg.ContentDir)
-		if err != nil {
-			logger.Error("store open failed", "error", err)
-			os.Exit(1)
-		}
-		// A broken walk is fatal (an empty index would fail every hash FETCH);
-		// a walk that merely skipped entries is logged per entry and served.
-		if err := s.BuildHashIndex(); err != nil && !logPartialWalk(logger, "hash index", err) {
-			logger.Error("hash index build failed", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("content hash index built", "entries", s.HashIndexSize())
-		docStore, cat = s, buildCatalog(s, logger)
-	default:
-		// Unreachable: ValidateStoreBackend rejected unknown values above.
-		// Kept explicit so a backend added there but not here fails loudly
-		// instead of silently running on the wrong store.
-		logger.Error("unknown store backend reached store init", "store", cfg.StoreBackend)
-		os.Exit(1)
-	}
 
 	if cfg.TokensFile != "" {
 		if err := loadTokenStore(cfg.TokensFile); err != nil {
 			logger.Error("token loading failed", "error", err)
-			os.Exit(1)
+			return err
 		}
 		logger.Info("auth: loaded tokens", "path", cfg.TokensFile)
 		startTokenFileWatcher(cfg.TokensFile, logger)
@@ -294,8 +278,11 @@ func main() {
 		logger.Error("listener error", "error", err)
 	}
 
-	// Close the listener to stop accepting new connections
-	_ = listener.Close()
+	// Close the listener to stop accepting new connections. A failure here
+	// cannot be recovered from, but it must not pass unnoticed.
+	if err := listener.Close(); err != nil {
+		logger.Warn("listener close failed", "error", err)
+	}
 
 	// Wait for in-flight connections to drain with a timeout
 	done := make(chan struct{})
@@ -312,6 +299,7 @@ func main() {
 	}
 
 	logger.Info("server stopped")
+	return nil
 }
 
 // writeRateLimited sends a rate-limited status response on the stream. Unlike a

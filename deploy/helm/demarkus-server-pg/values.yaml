@@ -1,18 +1,19 @@
-# Default values for demarkus-server.
+# Default values for demarkus-server-pg.
 # Override with --values or --set on `helm install`.
 
 image:
-  # The server (ENTRYPOINT) and the demarkus CLI the exec probes call; admin
-  # CLIs ship separately. Links no database driver: the Postgres backend is
-  # its own binary and chart (demarkus-server-pg).
-  repository: ghcr.io/latebit-io/demarkus-server
+  # The Postgres flavor of the server (built with -tags pg), the demarkus
+  # CLI the exec probes call, and demarkus-migrate for moving a world
+  # between backends.
+  repository: ghcr.io/latebit-io/demarkus-server-pg
   # tag defaults to .Chart.appVersion when empty
   tag: ""
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
 
-# Pod count. Multi-replica with shared content is a Phase 7 concern; keep at 1.
+# Pod count. Postgres holds all state and serializes writes, so replicas
+# share one world safely.
 replicaCount: 1
 
 server:
@@ -33,6 +34,14 @@ server:
   # Extra args appended to the server command line.
   extraArgs: []
 
+  # Postgres connection. The DSN is read from a Secret (e.g. a CloudNativePG
+  # cluster's <cluster>-app Secret, key "uri") so credentials never land in
+  # values files. Required: the chart refuses to render without it.
+  postgres:
+    dsnSecret:
+      name: ""
+      key: uri
+
 # Service exposing the server. LoadBalancer with protocol UDP is the standard
 # path on managed Kubernetes (GKE, EKS); use ClusterIP/NodePort for local dev.
 service:
@@ -43,16 +52,8 @@ service:
   annotations: {}
   #   service.beta.kubernetes.io/aws-load-balancer-type: nlb
 
-# Persistent storage for the versioned content store.
-storage:
-  className: ""        # cluster-default if empty
-  size: 5Gi
-  accessMode: ReadWriteOnce
-  # Match the value Kubernetes defaults onto the PVC so the rendered
-  # volumeClaimTemplates equals the live one — avoids immutable-field drift
-  # that wedges GitOps re-applies (e.g. ArgoCD on an image bump). Override to
-  # Block only for raw-block volumes.
-  volumeMode: Filesystem
+# No storage block: Postgres holds every document, version and catalog row,
+# so this chart creates no PersistentVolumeClaim.
 
 # TLS — server speaks QUIC, so TLS is mandatory. Three modes:
 #   1. existingSecret: reference a pre-existing tls Secret (cert-manager, etc.)
@@ -111,7 +112,7 @@ resources:
 
 # Probes exec the demarkus CLI against /.well-known/agent-manifest.md (always
 # public; -no-cache spares the read-only root fs). The startup probe covers
-# world walks and catalog backfill so a slow first boot is not restart-looped.
+# the LOOKUP catalog backfill so a slow first boot is not restart-looped.
 probes:
   enabled: true
   startup:

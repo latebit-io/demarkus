@@ -14,7 +14,8 @@ NAMESPACE="${NAMESPACE:-parity}"
 SERVER_IMAGE_TAG="${SERVER_IMAGE_TAG:-0.22.13}"
 CNPG_CHART_VERSION="${CNPG_CHART_VERSION:-0.28.3}"
 
-CHART="$REPO_ROOT/deploy/helm/demarkus-server"
+FILE_CHART="$REPO_ROOT/deploy/helm/demarkus-server"
+PG_CHART="$REPO_ROOT/deploy/helm/demarkus-server-pg"
 KIND_CONFIG="$REPO_ROOT/deploy/kind/kind-config.yaml"
 FILE_VALUES="$REPO_ROOT/deploy/kind/values-kind.yaml"
 PG_VALUES="$REPO_ROOT/deploy/kind/values-kind-pg.yaml"
@@ -68,26 +69,31 @@ EOF
 kubectl -n "$NAMESPACE" wait --for=condition=Ready "cluster/$PG_CLUSTER" --timeout=300s
 
 echo "--- installing $FILE_RELEASE (file backend) and $PG_RELEASE (postgres backend)"
-helm upgrade --install "$FILE_RELEASE" "$CHART" \
+# Both charts vendor the shared library chart; build it before rendering.
+helm dependency update "$FILE_CHART" >/dev/null
+helm dependency update "$PG_CHART" >/dev/null
+helm upgrade --install "$FILE_RELEASE" "$FILE_CHART" \
   --namespace "$NAMESPACE" \
   --values "$FILE_VALUES" \
   --set image.tag="$SERVER_IMAGE_TAG" \
   --wait --timeout 5m
-helm upgrade --install "$PG_RELEASE" "$CHART" \
+helm upgrade --install "$PG_RELEASE" "$PG_CHART" \
   --namespace "$NAMESPACE" \
   --values "$PG_VALUES" \
   --set image.tag="$SERVER_IMAGE_TAG" \
   --wait --timeout 5m
 
 FILE_POD="${FILE_RELEASE}-demarkus-server-0"
-PG_POD="${PG_RELEASE}-demarkus-server-0"
+PG_POD="${PG_RELEASE}-demarkus-server-pg-0"
 
+# The two charts name their resources after themselves, so the Secret name
+# carries the chart name as well as the release.
 admin_token() {
-  kubectl -n "$NAMESPACE" get secret "$1-demarkus-server-token-values" \
+  kubectl -n "$NAMESPACE" get secret "$1-token-values" \
     -o jsonpath='{.data.admin}' | base64 -d
 }
-FILE_TOKEN="$(admin_token "$FILE_RELEASE")"
-PG_TOKEN="$(admin_token "$PG_RELEASE")"
+FILE_TOKEN="$(admin_token "${FILE_RELEASE}-demarkus-server")"
+PG_TOKEN="$(admin_token "${PG_RELEASE}-demarkus-server-pg")"
 
 # cli <pod> <args...> — the request CLI against the pod's own listener.
 cli() {

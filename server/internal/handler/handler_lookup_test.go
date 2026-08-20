@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -82,12 +83,23 @@ func TestHandleLookupValidation(t *testing.T) { forEachBackend(t, testHandleLook
 func testHandleLookupValidation(t *testing.T, newBackend backendFactory) {
 	h := lookupHandler(t, newBackend(t), seedDoc{"/a.md", map[string]string{"tags": "go"}})
 
+	// 33 distinct terms: one past maxLookupTerms. Repeats collapse in
+	// Tokenize, so the terms must differ.
+	tooMany := make([]string, 33)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("term%d", i)
+	}
+	atCap := strings.Join(tooMany[:32], " ")
+
 	tests := []struct {
 		name   string
 		req    string
 		status string
 	}{
 		{"missing query", "LOOKUP /\n", protocol.StatusBadRequest},
+		{"too many terms", lookupReq("/", "query: "+strings.Join(tooMany, " ")), protocol.StatusBadRequest},
+		{"terms at cap", lookupReq("/", "query: "+atCap), protocol.StatusOK},
+		{"repeats collapse under cap", lookupReq("/", "query: "+atCap+" "+atCap), protocol.StatusOK},
 		{"empty query", lookupReq("/", "query: "), protocol.StatusBadRequest},
 		{"one char query", lookupReq("/", "query: a"), protocol.StatusBadRequest},
 		{"invalid limit", lookupReq("/", "query: go", "limit: zero"), protocol.StatusBadRequest},

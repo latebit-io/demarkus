@@ -24,6 +24,7 @@ jobs:
       client: ${{ steps.filter.outputs.client }}
       broker: ${{ steps.filter.outputs.broker }}
       charts: ${{ steps.filter.outputs.charts }}
+      release_contract: ${{ steps.filter.outputs.release_contract }}
       install: ${{ steps.filter.outputs.install }}
       opencode_plugins: ${{ steps.filter.outputs.opencode_plugins }}
     steps:
@@ -47,6 +48,9 @@ jobs:
               - 'protocol/**'
             charts:
               - 'deploy/helm/**'
+            release_contract:
+              - '.github/workflows/release.yml'
+              - 'server/.goreleaser.yml'
             install:
               - 'install.sh'
               - 'install-stack.sh'
@@ -79,6 +83,8 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.server == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # Backend parity is a core invariant, so pgstore tests must run here, not
     # skip: DEMARKUS_TEST_PG_REQUIRED turns a missing DSN into a failure.
     services:
@@ -99,6 +105,9 @@ jobs:
       DEMARKUS_TEST_PG_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
+        # This job runs PR-controlled code; do not leave a token in .git/config.
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
@@ -110,8 +119,28 @@ jobs:
         run: cd server && go test ./...
       - name: Vet
         run: cd server && go vet ./...
+      # Both flavors must keep building, and the default one must link no
+      # database driver: the nm check is what keeps the -tags pg seam honest.
       - name: Build
-        run: cd server && go build -o /dev/null ./cmd/demarkus-server
+        run: |
+          set -euo pipefail
+          cd server
+          go build -o /tmp/demarkus-server ./cmd/demarkus-server
+          syms="$(go tool nm /tmp/demarkus-server)"
+          # Without this, a failed nm would leave grep with empty input and
+          # the check would "pass" while proving nothing.
+          test -n "$syms"
+          if grep -q "jackc/pgx" <<<"$syms"; then
+            echo "default demarkus-server links pgx; the -tags pg seam leaked" >&2
+            exit 1
+          fi
+      - name: Build (postgres flavor)
+        run: |
+          set -euo pipefail
+          cd server
+          go vet -tags pg ./cmd/demarkus-server
+          go build -tags pg -o /dev/null ./cmd/demarkus-server
+          go build -o /dev/null ./cmd/demarkus-migrate
 
   test-client:
     needs: detect-changes
@@ -223,6 +252,28 @@ jobs:
           shellcheck -S warning plugins/opencode-memory/install.sh plugins/opencode-memory/scripts/bootstrap.sh
           shellcheck -S warning plugins/opencode-knowledge/install.sh plugins/opencode-knowledge/scripts/bootstrap.sh
 
+  # release.yml stages goreleaser build output by id; a rename on either side
+  # would otherwise only surface at release time.
+  test-release-contract:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.release_contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assert the release config builds what the images stage
+        run: |
+          set -euo pipefail
+          staged="$(sed -n 's/.*for bin in \(.*\); do/\1/p' .github/workflows/release.yml)"
+          test -n "$staged"
+          for id in $staged; do
+            yq -e ".builds[] | select(.id == \"$id\")" server/.goreleaser.yml >/dev/null \
+              || { echo "release.yml stages $id but server/.goreleaser.yml has no such build id" >&2; exit 1; }
+          done
+
   test-charts:
     needs: detect-changes
     if: needs.detect-changes.outputs.charts == 'true'
@@ -244,14 +295,39 @@ jobs:
           mkdir -p "$HELM_PLUGINS/helm-unittest"
           curl -fsSL https://github.com/helm-unittest/helm-unittest/releases/download/v0.6.2/helm-unittest-linux-amd64-0.6.2.tgz \
             | tar -xz -C "$HELM_PLUGINS/helm-unittest"
+      # Both server charts vendor deploy/helm/demarkus-server-common (a
+      # library chart) so their shared templates cannot drift.
+      - name: Build chart dependencies
+        run: |
+          helm dependency update deploy/helm/demarkus-server
+          helm dependency update deploy/helm/demarkus-server-pg
       - name: Lint demarkus-server chart
         run: helm lint deploy/helm/demarkus-server
+      - name: Lint demarkus-server-pg chart
+        run: helm lint deploy/helm/demarkus-server-pg --set server.postgres.dsnSecret.name=pg-app
       - name: Lint demarkus-broker chart
         run: helm lint deploy/helm/demarkus-broker
       - name: Lint demarkus-agent chart
         run: helm lint deploy/helm/demarkus-agent
+      # Helm never merges a library chart's values, so the two backend
+      # charts must carry the same defaults; add deliberate divergences to
+      # the del() list.
+      - name: Assert the two server charts share their non-backend defaults
+        run: |
+          set -euo pipefail
+          # Real files, not process substitution: bash drops the exit status
+          # of a substituted command, so two failed yq runs would leave diff
+          # comparing empty inputs and passing.
+          strip() { yq -o=json 'del(.image, .storage, .server.postgres)' "$1" > "$2"; }
+          strip deploy/helm/demarkus-server/values.yaml /tmp/file-values.json
+          strip deploy/helm/demarkus-server-pg/values.yaml /tmp/pg-values.json
+          test -s /tmp/file-values.json && test -s /tmp/pg-values.json
+          diff /tmp/file-values.json /tmp/pg-values.json \
+            || { echo "demarkus-server and demarkus-server-pg values drifted" >&2; exit 1; }
       - name: Unit test demarkus-server chart
         run: helm unittest deploy/helm/demarkus-server
+      - name: Unit test demarkus-server-pg chart
+        run: helm unittest deploy/helm/demarkus-server-pg
       - name: Unit test demarkus-broker chart
         run: helm unittest deploy/helm/demarkus-broker
 
