@@ -13,7 +13,7 @@
 {{- if $existing -}}
 {{- $wasFile := gt (len ($existing.spec.volumeClaimTemplates | default list)) 0 -}}
 {{- if ne $wasFile (not $pg) -}}
-{{- fail "changing server.store on an existing release is not supported: migrate the content first, then reinstall the release" -}}
+{{- fail "changing server.store on an existing release is not supported: migrate the content first, then uninstall, delete the retained content PVC, and reinstall" -}}
 {{- end -}}
 {{- end -}}
 apiVersion: apps/v1
