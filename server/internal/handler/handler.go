@@ -31,6 +31,10 @@ const (
 	defaultLookupLimit = 10
 	// maxLookupResults is the hard cap on LOOKUP results regardless of limit.
 	maxLookupResults = 1000
+	// maxLookupTerms bounds distinct query terms: each one costs a scored
+	// pass in memory and an OR'd predicate plus bind parameter in Postgres,
+	// and 64KB of frontmatter would otherwise buy tens of thousands.
+	maxLookupTerms = 32
 )
 
 // controlKeys are request metadata keys consumed by the handler and never stored.
@@ -584,6 +588,12 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request) {
 	// order); anything else needs at least 2 characters of subject.
 	if query != "*" && len([]rune(query)) < 2 {
 		h.writeError(w, protocol.StatusBadRequest, "query must be at least 2 characters")
+		return
+	}
+	// Bounded here, not per backend, so both reject the same queries.
+	if n := len(catalog.Tokenize(query)); n > maxLookupTerms {
+		h.writeError(w, protocol.StatusBadRequest,
+			fmt.Sprintf("query has too many terms: %d > %d", n, maxLookupTerms))
 		return
 	}
 
