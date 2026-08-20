@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.42
+
+- Generate all runtime prompts from the shared `plugins/prompt-source` corpus.
+- Share hardened metadata, join, doctor, and status guidance with every harness.
+- Add real generated-command tests and foreign-harness leakage checks.
+
 ## 0.13.29
 
 - Register as the shared OpenCode gate owner so the memory and knowledge plugins can coexist without duplicate policy decisions or warnings.

@@ -61,6 +61,8 @@ Uninstall leaves shared registrations and OAuth state intact. Before removing a 
 
 ## Development
 
+Runtime prompt files under `commands/`, `context/`, and `skills/` are generated from `plugins/prompt-source/`. Edit the canonical templates, then run `cd tools && go run ./plugin-prompts write`; CI rejects manual drift.
+
 ```bash
 cd plugins/opencode-knowledge
 npm install

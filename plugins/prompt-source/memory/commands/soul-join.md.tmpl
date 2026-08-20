@@ -1,0 +1,56 @@
+---
+description: Join a remote demarkus soul, store its token in a 0600 file, register its MCP server, and bind it to this project.
+---
+
+Connect this {{.Agent}} installation to a remote direct-QUIC demarkus soul. `/soul-init` manages a local soul; `/knowledge-join` joins an HTTPS broker.
+
+## Secret Boundary
+
+{{if eq .Harness "claude"}}A join URL's `#token=` fragment and `--token` value are secrets. Claude Code accepts either as the slash-command argument and passes it directly to the helper. Never read or echo the token, and never repeat a pasted join URL's fragment in output.
+{{else}}A join URL's `#token=` fragment and `--token` value are secrets. Never ask the user to paste either into chat, echo one, or place one in a model-visible tool call. For a tokened soul, print the exact command with the secret represented as `<TOKEN>` and have the user run it in their own terminal. Ask them to return only non-secret `key=value` output. A public read-only soul has no token and may be joined directly.
+{{end}}
+
+If no host was supplied, ask for it. If token requirements are unclear, ask before proceeding. Accept a `mark://host[:port]` URL or bare host; reject HTTPS and route it to `/knowledge-join`. `--insecure` is explicit and only for self-signed endpoints.
+
+## Join
+
+{{if eq .Harness "claude"}}1. Check for hand-wired souls to adopt:
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/detect-manual-souls.sh"
+   ```
+
+   If it reports `MANUAL` rows, show them and offer adoption. Re-join the selected host through this command, then remove the old entry with `claude mcp remove <name>` only after successful managed registration. If the user declines or it reports `NONE`, continue.
+
+2.{{else}}1.{{end}} Validate, store credentials, add the soul catalog row, and bind the absolute current project directory:
+
+   ```bash
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join '<host-or-join-url>' [--token <TOKEN>] [--insecure] --bind {{if eq .Harness "claude"}}"${CLAUDE_PROJECT_DIR}"{{else}}'<absolute-project-dir>'{{end}}
+   ```
+
+   Quote every substituted value; a join URL fragment is shell-significant. {{if eq .Harness "claude"}}Use `CLAUDE_PROJECT_DIR`, which identifies the active project reliably.{{else}}Use the literal absolute project directory rather than a shell variable that a separate terminal may expand from the wrong cwd.{{end}}
+
+   Continue only on `OK` with one valid `slug=`, `host=`, `insecure=`, and optional `token-file=` value. On `FAIL`, surface the message and stop. Reachability is checked by the first MCP call; do not treat the absence of an HTTP probe as success.
+
+{{if eq .Harness "claude"}}3.{{else}}2.{{end}} Register the MCP server without putting the token in config.
+
+{{if eq .Harness "claude"}}   ```bash
+   claude mcp add <slug> --scope project -- "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --soul <slug>
+   ```
+{{else if eq .Harness "pi"}}   ```bash
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add <slug> "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --soul <slug>
+   ```
+
+   Reconnect MCP servers through the harness or restart {{.Agent}}.
+{{else}}   MCP registration is automatic from `~/.demarkus/souls` at startup. Restart {{.Agent}} so the new server loads. Do not run `registry mcp add`; this harness does not read that config.
+{{end}}
+{{if eq .Harness "claude"}}4.{{else}}3.{{end}} Confirm the slug, host, project binding, and whether a token file is used. State that the token is injected by `demarkus-plugin mcp-serve`, not stored in MCP config.
+
+{{if eq .Harness "claude"}}5.{{else}}4.{{end}} Explain removal without performing it unasked. Remove the soul catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`. A stale binding makes the destination gate block writes to remaining souls.
+
+## Don't
+
+- Do not register an MCP server after failed join output.
+- Do not read, echo, log, or store the token yourself.
+- Do not use this command for an HTTPS broker.
+- Do not conflate local souls, remote souls, and organizational knowledge systems.

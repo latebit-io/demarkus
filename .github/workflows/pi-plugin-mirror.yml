@@ -49,6 +49,13 @@ jobs:
           # GITHUB_TOKEN persisted in git config for the later git commands.
           persist-credentials: false
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Verify generated prompts are current
+        run: cd tools && go run ./plugin-prompts check
+
       - name: Verify git subtree is available
         run: git subtree --help >/dev/null 2>&1 || git subtree split -h >/dev/null 2>&1 || { echo "git subtree not available on runner"; exit 1; }
 

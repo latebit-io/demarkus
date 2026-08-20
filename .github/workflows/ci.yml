@@ -26,7 +26,7 @@ jobs:
       charts: ${{ steps.filter.outputs.charts }}
       release_contract: ${{ steps.filter.outputs.release_contract }}
       install: ${{ steps.filter.outputs.install }}
-      opencode_plugins: ${{ steps.filter.outputs.opencode_plugins }}
+      agent_plugins: ${{ steps.filter.outputs.agent_plugins }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -57,9 +57,17 @@ jobs:
               - 'scripts/test-install-renewal.sh'
               - 'scripts/test-install-stack-tokens.sh'
               - 'scripts/test-install-update-stack.sh'
-            opencode_plugins:
+            agent_plugins:
+              - 'plugins/prompt-source/**'
+              - 'plugins/claude-code/**'
+              - 'plugins/claude-code-knowledge/**'
+              - 'plugins/pi-memory/**'
+              - 'plugins/pi-knowledge/**'
               - 'plugins/opencode-memory/**'
               - 'plugins/opencode-knowledge/**'
+              - 'tools/plugin-prompts/**'
+              - 'tools/go.mod'
+              - 'tools/go.sum'
 
   test-protocol:
     needs: detect-changes
@@ -234,9 +242,9 @@ jobs:
       - name: Test stack component updates
         run: bash scripts/test-install-update-stack.sh
 
-  test-opencode-plugins:
+  test-agent-plugins:
     needs: detect-changes
-    if: needs.detect-changes.outputs.opencode_plugins == 'true'
+    if: needs.detect-changes.outputs.agent_plugins == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -248,16 +256,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Check generated prompts
+        run: |
+          cd tools
+          go test ./plugin-prompts
+          go run ./plugin-prompts check
       - name: Install plugin development dependencies
         run: |
+          npm install --prefix plugins/pi-memory
+          npm install --prefix plugins/pi-knowledge
           npm install --prefix plugins/opencode-memory
           npm install --prefix plugins/opencode-knowledge
       - name: Typecheck adapters
         run: |
+          npm run typecheck --prefix plugins/pi-memory
+          npm run typecheck --prefix plugins/pi-knowledge
           npm run typecheck --prefix plugins/opencode-memory
           npm run typecheck --prefix plugins/opencode-knowledge
-      - name: Test knowledge adapter
-        run: npm test --prefix plugins/opencode-knowledge
+      - name: Test adapters and installers
+        run: |
+          npm test --prefix plugins/opencode-memory
+          npm test --prefix plugins/opencode-knowledge
       - name: Check installers
         run: |
           bash -n plugins/opencode-memory/install.sh

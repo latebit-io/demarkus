@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.55
+
+- Replace the shortened local prompt copies with generated shared guidance and the full promotion cascade.
+- Share hardened join and bounded multi-world doctor workflows across harnesses.
+- Add real generated-command and installer coverage.
+
 ## 0.5.44
 
 - Initial OpenCode port of the Claude Code knowledge plugin.

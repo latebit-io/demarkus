@@ -52,8 +52,7 @@ On plugin init the adapter reads its version from the `package.json` that `insta
 
 - `src/demarkus-memory.ts` — the whole adapter, one self-contained file (OpenCode's plugin dir loads flat files). All gate/nudge/guidance/update-check logic lives in the shared `demarkus-plugin` binary; the adapter hands it normalized JSON and applies the result. Fails open when the binary is absent.
 - `scripts/bootstrap.sh` — pinned binary installer, reused verbatim from the Claude Code plugin (single source of truth for provisioning).
-- `commands/*.md` — slash-command prompt bodies, registered via the `config` hook.
-- `skills/soul-memory/` — the on-demand memory-routing skill, installed into OpenCode's native skills directory.
+- `commands/*.md`, `context/`, and `skills/` — generated distribution artifacts from `plugins/prompt-source/`; run `cd tools && go run ./plugin-prompts write` after editing canonical prompts.
 
 ### Behavior mapping (Claude Code → OpenCode)
 

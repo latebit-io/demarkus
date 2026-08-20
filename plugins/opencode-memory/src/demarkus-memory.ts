@@ -162,8 +162,8 @@ async function checkForUpdate(): Promise<string> {
 
 // Load a command markdown: parse the frontmatter description, strip the fence,
 // resolve ${DEMARKUS_SCRIPTS} to the installed scripts dir.
-function loadCommand(file: string): { description: string; template: string } {
-  const raw = readFileSync(join(COMMANDS_DIR, file), "utf8");
+export function loadCommand(file: string, commandsDir = COMMANDS_DIR): { description: string; template: string } {
+  const raw = readFileSync(join(commandsDir, file), "utf8");
   const fm = raw.match(/^---\n([\s\S]*?)\n---\n/);
   const description = fm?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? "";
   const body = (fm ? raw.slice(fm[0].length) : raw).replace(/\$\{DEMARKUS_SCRIPTS\}/g, SCRIPTS_DIR).trim();

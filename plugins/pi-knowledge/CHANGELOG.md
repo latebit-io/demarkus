@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.55
+
+- Generate session guidance, the promotion skill, and slash-command prompts from the shared `plugins/prompt-source` corpus.
+- Adopt the hardened join and bounded doctor workflows across harnesses.
+- Load command descriptions from generated frontmatter and substitute arguments exactly once.
+
 ## 0.5.10
 
 - Documentation style gate in the shared binary (tools release with the style

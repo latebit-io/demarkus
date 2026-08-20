@@ -1,9 +1,8 @@
 // Package guidance assembles the session-start context for every demarkus plugin
 // — the dynamic pieces (managed-server health warning, the one-time "make
 // demarkus your only memory" offer, the joined-knowledge-systems list, the
-// one-time join hint, the soul↔system note) wrapped around the plugin's bundled
-// static guidance markdown. The static prose stays per-plugin (passed in via
-// guidanceFile); only the LOGIC lives here, shared across harnesses.
+// one-time join hint, the soul↔system note) wrapped around generated static
+// guidance. Plugins bundle rendered copies; plugins/prompt-source owns the prose.
 package guidance
 
 import (
