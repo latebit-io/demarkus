@@ -11,12 +11,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -128,15 +129,16 @@ func requireEmpty(ctx context.Context, dst store.Migrator, name string) error {
 	return nil
 }
 
-// docDigest folds a document's history into one hash: version numbers,
-// stored-bytes hashes, and modified times to the second (the protocol's
-// precision). Version order within a document is ascending on every backend.
+// docDigest folds a document's history into one hash, streamed record by
+// record: version numbers, stored-bytes hashes, and modified times to the
+// second. Version order within a document is ascending on every backend.
 func docDigest(vs []store.StoredVersion) string {
-	var sb strings.Builder
+	h := sha256.New()
 	for _, v := range vs {
-		fmt.Fprintf(&sb, "%d|%s|%d\n", v.Version, store.ContentHash(v.Stored), v.Modified.UTC().Truncate(time.Second).Unix())
+		// hash.Hash.Write never returns an error.
+		_, _ = fmt.Fprintf(h, "%d|%s|%d\n", v.Version, store.ContentHash(v.Stored), v.Modified.UTC().Truncate(time.Second).Unix())
 	}
-	return store.ContentHash([]byte(sb.String()))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // verifyDst re-exports the destination and compares each document's digest
