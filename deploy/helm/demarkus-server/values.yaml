@@ -34,6 +34,18 @@ server:
   # Extra args appended to the server command line.
   extraArgs: []
 
+  # Document store backend: "file" (versioned files on the PVC) or
+  # "postgres" (all state in Postgres; no content PVC is created).
+  store: file
+
+  # Postgres backend wiring; required when store=postgres. The DSN is read
+  # from a Secret (e.g. a CloudNativePG cluster's <cluster>-app Secret,
+  # key "uri") so credentials never land in values files.
+  postgres:
+    dsnSecret:
+      name: ""
+      key: uri
+
 # Service exposing the server. LoadBalancer with protocol UDP is the standard
 # path on managed Kubernetes (GKE, EKS); use ClusterIP/NodePort for local dev.
 service:
