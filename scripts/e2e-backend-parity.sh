@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# e2e backend parity harness (store-parity plan, step 5).
-#
-# Brings up two demarkus-server releases on kind — one file-backed, one
-# Postgres-backed (CloudNativePG) — seeds the identical document set into
-# both through the bundled CLI, then runs the same FETCH / VERSIONS / LIST /
-# LOOKUP sweep against each and diffs the normalized output. Any divergence
-# fails the script with a unified diff.
-#
-# Reuses the kind cluster from deploy/kind/up.sh when present; creates it
-# otherwise. Installs the LOCAL chart (deploy/helm/demarkus-server) because
-# the published chart predates the store-backend values.
-#
-# env overrides:
-#   CLUSTER, NAMESPACE, SERVER_IMAGE_TAG, CNPG_CHART_VERSION
+# e2e backend parity: seed a file-backed and a CloudNativePG-backed server on
+# kind identically, diff the normalized read sweep (store-parity plan, step 5).
+# env overrides: CLUSTER, NAMESPACE, SERVER_IMAGE_TAG, CNPG_CHART_VERSION.
 
 set -euo pipefail
 
@@ -59,7 +48,8 @@ helm upgrade --install cnpg cnpg/cloudnative-pg \
 # reruns against leftover state would conflict instead of proving parity.
 if kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
   echo "--- deleting previous $NAMESPACE namespace"
-  helm -n "$NAMESPACE" uninstall "$FILE_RELEASE" "$PG_RELEASE" --ignore-not-found >/dev/null 2>&1 || true
+  helm -n "$NAMESPACE" uninstall "$FILE_RELEASE" "$PG_RELEASE" --ignore-not-found >/dev/null \
+    || echo "warning: helm uninstall failed; relying on namespace deletion" >&2
   kubectl delete namespace "$NAMESPACE" --timeout=180s
 fi
 kubectl create namespace "$NAMESPACE"
@@ -167,12 +157,14 @@ normalize() {
 }
 
 # record <outfile> <label> <cmd...> — run one check, append its normalized
-# output; failures (archived doc, missing version) are compared output too.
+# output. The exit status is part of the compared output, so an error path
+# (archived doc, missing version) must fail identically on both backends.
 record() {
-  local out="$1" label="$2"; shift 2
+  local out="$1" label="$2" status; shift 2
   {
     echo "=== $label"
-    "$@" 2>&1 || true
+    if "$@" 2>&1; then status=0; else status=$?; fi
+    echo "exit_status=$status"
     echo
   } | normalize >> "$out"
 }

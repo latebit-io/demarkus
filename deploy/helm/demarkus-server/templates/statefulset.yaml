@@ -1,7 +1,20 @@
 {{- $tlsSecret := include "demarkus-server.tlsSecretName" . -}}
-{{- $pg := eq (default "file" .Values.server.store) "postgres" -}}
+{{- $store := default "file" .Values.server.store -}}
+{{- if not (has $store (list "file" "postgres")) -}}
+{{- fail (printf "server.store must be \"file\" or \"postgres\" (got %q)" $store) -}}
+{{- end -}}
+{{- $pg := eq $store "postgres" -}}
 {{- if and $pg (not .Values.server.postgres.dsnSecret.name) -}}
 {{- fail "server.store=postgres requires server.postgres.dsnSecret.name" -}}
+{{- end -}}
+{{- /* Backend flips change the immutable volumeClaimTemplates and migrate no
+       data; fail the upgrade explicitly instead of a k8s forbidden error. */}}
+{{- $existing := lookup "apps/v1" "StatefulSet" .Release.Namespace (include "demarkus-server.fullname" .) -}}
+{{- if $existing -}}
+{{- $wasFile := gt (len ($existing.spec.volumeClaimTemplates | default list)) 0 -}}
+{{- if ne $wasFile (not $pg) -}}
+{{- fail "changing server.store on an existing release is not supported: migrate the content first, then reinstall the release" -}}
+{{- end -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: StatefulSet
