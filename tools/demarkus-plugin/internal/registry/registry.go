@@ -357,6 +357,9 @@ func PromoteTargetAdd(slug, path, label string) (string, error) {
 	if !slugSafe.MatchString(slug) {
 		return "", fmt.Errorf("add: <slug> '%s' has unexpected characters", slug)
 	}
+	if err := validateRecordField("promote label", label); err != nil {
+		return "", err
+	}
 	p, err := config.StatePath("promote-targets")
 	if err != nil {
 		return "", err
@@ -694,6 +697,9 @@ func replacedExternalToken(slug, token, managedTokenFile string, existing SoulRo
 }
 
 func prepareProjectBindingMutation(dir, slug, path string) (stateMutation, error) {
+	if err := validateRecordField("project binding directory", dir); err != nil {
+		return stateMutation{}, err
+	}
 	bindings, err := readRecords("project-souls")
 	if err != nil {
 		return stateMutation{}, err
@@ -706,6 +712,13 @@ func prepareProjectBindingMutation(dir, slug, path string) (stateMutation, error
 	}
 	bound = append(bound, dir+"\t"+slug)
 	return prepareStateMutation(path, []byte(strings.Join(bound, "\n")+"\n"), 0o644)
+}
+
+func validateRecordField(name, value string) error {
+	if strings.ContainsAny(value, "\t\r\n\x00") {
+		return fmt.Errorf("%s must not contain tab, line break, or NUL delimiters", name)
+	}
+	return nil
 }
 
 type fileSnapshot struct {

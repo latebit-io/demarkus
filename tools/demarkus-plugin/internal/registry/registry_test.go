@@ -102,6 +102,25 @@ func TestProjectBindSetUsesTransactionWriter(t *testing.T) {
 	}
 }
 
+func TestProjectBindSetRejectsRecordDelimiters(t *testing.T) {
+	setupHome(t)
+	if err := SoulRegister("remote", "mark://remote.example", false, "-"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"/repo\tother", "/repo\rnext", "/repo\nnext", "/repo\x00next"} {
+		if err := ProjectBindSet(dir, "remote"); err == nil {
+			t.Errorf("binding directory %q should error", dir)
+		}
+	}
+	path, err := config.StatePath("project-souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("binding file exists after rejected inputs: %v", err)
+	}
+}
+
 func TestDeriveSlug(t *testing.T) {
 	cases := map[string]string{
 		"mcp.broker.acme.com": "acme",
@@ -469,6 +488,11 @@ func TestPromoteTargetAdd(t *testing.T) {
 	for _, unsafe := range []string{"/docs/../secret", "/docs/./internal", `/docs\secret`, "/safe\nother", "/safe\rother"} {
 		if _, err := PromoteTargetAdd("acme", unsafe, ""); err == nil {
 			t.Errorf("unsafe path %q should error", unsafe)
+		}
+	}
+	for _, label := range []string{"bad\tlabel", "bad\rlabel", "bad\nlabel", "bad\x00label"} {
+		if _, err := PromoteTargetAdd("acme", "/labeled", label); err == nil {
+			t.Errorf("unsafe label %q should error", label)
 		}
 	}
 	canonical, err := PromoteTargetAdd("acme", "/shared//nested/", "Nested")
