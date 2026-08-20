@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -80,8 +82,52 @@ func TestValidateManifestRejectsDuplicatePair(t *testing.T) {
 func TestValidateManifestRejectsDuplicateOutput(t *testing.T) {
 	spec := validManifest()
 	spec.Targets[1].Output = spec.Targets[0].Output
-	if err := validateManifest(&spec); err == nil {
-		t.Fatal("validateManifest() accepted a duplicate output")
+	if err := validateManifest(&spec); err == nil || !strings.Contains(err.Error(), "duplicate output") {
+		t.Fatalf("validateManifest() error = %v, want duplicate output rejection", err)
+	}
+}
+
+func TestValidateManifestRejectsInvalidOutput(t *testing.T) {
+	for name, output := range map[string]string{
+		"noncanonical": "plugins/pi-memory-typo",
+		"absolute":     "/tmp/pi-memory",
+		"traversal":    "plugins/../pi-memory",
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := validManifest()
+			spec.Targets[1].Output = output
+			if err := validateManifest(&spec); err == nil {
+				t.Fatalf("validateManifest() accepted output %q", output)
+			}
+		})
+	}
+}
+
+func TestCheckAllReturnsArtifactReadError(t *testing.T) {
+	root := t.TempDir()
+	artifactPath := filepath.Join(root, "artifact.md")
+	if err := os.Mkdir(artifactPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := checkAll(root, []artifact{{Path: artifactPath, Content: []byte("body")}})
+	if err == nil || !strings.Contains(err.Error(), "read generated artifact") {
+		t.Fatalf("checkAll() error = %v, want artifact read error", err)
+	}
+}
+
+func TestCheckAllReportsMissingArtifactAsDrift(t *testing.T) {
+	root := t.TempDir()
+	output := "plugins/test"
+	for _, subtree := range []string{"commands", "context", "skills"} {
+		if err := os.MkdirAll(filepath.Join(root, output, subtree), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := &target{Output: output}
+	artifactPath := filepath.Join(root, output, "commands", "missing.md")
+	err := checkAll(root, []artifact{{Path: artifactPath, Content: []byte("body"), Target: target}})
+	if err == nil || !strings.Contains(err.Error(), "generated plugin prompts are stale") {
+		t.Fatalf("checkAll() error = %v, want stale artifact error", err)
 	}
 }
 
@@ -92,12 +138,13 @@ func validManifest() manifest {
 	for _, surface := range surfaces {
 		for _, harness := range harnesses {
 			name := surface + "-" + harness
+			pair := surface + "/" + harness
 			spec.Targets = append(spec.Targets, target{
 				Name:             name,
 				Surface:          surface,
 				Harness:          harness,
 				Agent:            harness,
-				Output:           "plugins/" + name,
+				Output:           canonicalOutputs[pair],
 				ProjectDir:       "project",
 				RepoInstructions: "instructions",
 				ToolForm:         "tools",

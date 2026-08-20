@@ -59,7 +59,7 @@ On session start, after provisioning, the extension hands `demarkus-plugin updat
 
 ## Architecture
 
-Pi adapter CI is typecheck-only; harness runtime behavior is exercised through generated prompt checks and the shared helper tests.
+Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper behavior are checked separately.
 
 - `src/*.ts` — the Pi adapter: event mapping, MCP wiring, and calls into the shared `demarkus-plugin` helper (loaded directly by Pi via `tsx`, no build step).
 - `scripts/*.sh` — the demarkus binary/server lifecycle, reused verbatim from the Claude Code plugin (single source of truth for provisioning); `provision.sh` is the per-session entrypoint and `mcp-config.mjs` registers remote-soul MCP servers.

@@ -25,9 +25,11 @@ Resolve the audit scope from `$ARGUMENTS`:
 
   Each line is a system's MCP server slug; reach it through `mcp__<slug>__mark_*`. A successful empty result means no knowledge system is joined (suggest `/knowledge-join <broker-url>`) and stop. Non-zero exit or malformed output is a registry failure: surface it and stop.
 - **a slug** (e.g. `acme`) → that one system, all its worlds.
-- **a `mark://<world>/` URL** → just that world.
+- **a `mark://<world>/` URL** → resolve that world to exactly one joined system before auditing.
 
-For each system in scope, call `mark_worlds` to enumerate the worlds your identity may read (note the `writable` flag — a fix suggestion is only actionable on a world the user can publish to). Audit each readable world; anchor each on its `mark://<world>/index.md` hub.
+For explicit world scope, call `mark_worlds` through every joined system's own MCP server and collect `(system slug, world)` matches. Every directory call must succeed before deciding uniqueness or absence; on any failure, surface it and stop with scope resolution incomplete. Audit only after exactly one match is selected. If multiple systems expose the same world name, ask the user which system; if no complete directory contains it, report unavailable scope and stop.
+
+For blank or system-slug scope, call `mark_worlds` for each resolved system to enumerate the worlds your identity may read (note the `writable` flag — a fix suggestion is only actionable on a world the user can publish to) and audit each readable world. For explicit world scope, audit only the selected `(system slug, world)` pair; do not expand back to every readable world. Anchor each audited world on its `mark://<world>/index.md` hub. Key all graph, inventory, and report state by both system slug and world name; never merge same-named worlds from different systems.
 
 > **Read-auth caveat.** `mark_lookup` is filtered to what your token may read, and `mark_worlds` lists only readable worlds. Your audit covers *your* visibility, not the whole system. Say so in the report — never imply full coverage of a world or system you can't fully see.
 
@@ -40,7 +42,7 @@ Before the first broker call, set a command-wide deadline five minutes in the fu
    - **Edges:** `<from> -> <to>` — `mark://` targets are internal (possibly cross-world); `http(s)` are external.
 2. **Inventory.** Build a directory queue starting with `mark_list mark://<world>/`. For every returned subdirectory, call `mark_list` on that directory until the queue is empty; one root listing is not recursive. Track visited directory URLs to prevent loops. Bound inventory to 1,000 list calls or 20,000 documents per world.
 
-   Any failure, truncation, limit hit, partial-result marker, or unavailable subtree makes the inventory incomplete. Preserve returned entries, list missing scope and exact coverage, and suppress definitive orphan, missing-hub, broken-link, and dangling-reference conclusions that depend on omitted paths.
+   Any failure, truncation, limit hit, partial-result marker, or unavailable subtree makes the inventory incomplete. Preserve returned entries, list missing scope and exact coverage, and suppress definitive orphan, missing-hub, broken-link, and dangling-reference conclusions that depend on omitted paths. Cross-world conclusions use only complete inventories and crawls from worlds in the same resolved system and audit scope.
 3. **Crawl disconnected documents.** For every inventory document absent from the root crawl's successful nodes, including `[error]` nodes, call `mark_graph` on that document with depth 1. This captures outbound edges from orphaned, failed, and beyond-depth documents.
 4. **Bound supplemental crawling.** Spend at most 100 supplemental `mark_graph` calls across the command, including retries, and stay within the command deadline. Report skipped documents and mark affected worlds incomplete when either limit is reached.
 5. **Retry once.** Retry each unsuccessful source once while budget remains. A final source failure makes orphan analysis for that world incomplete.
@@ -52,7 +54,7 @@ Before the first broker call, set a command-wide deadline five minutes in the fu
   - A target **absent from Nodes entirely** may just have sat beyond crawl depth — *that* is the case a complete inventory (`mark_list`) settles. For a **same-world** target check the world's inventory; for a **cross-world** `mark://<other>/…` target check that world's complete inventory. If the target world is unreadable or either inventory is incomplete, classify the reference as unresolved, not broken.
   - A target present as **`[error]`** is not a missing doc — see the next check.
 - **Unroutable / cross-system references** — an `[error]` node on a `mark://` link means the broker couldn't route the host. `mark_worlds` lists only worlds the current identity may read, so absence from that list does **not** prove the host is external. If the host is readable, retry once and report a persistent dispatch failure. Otherwise classify it as unresolved (possibly unreadable, cross-system, or stale) and do not claim absence or externality without independent evidence.
-- **Orphans** — an inventory document that is never the target of any `mark://` edge after root and supplemental crawls and isn't the world's root hub. Report successful crawl coverage. Cross-world inbound links count.
+- **Orphans** — an inventory document that is never the target of any `mark://` edge after complete root and supplemental crawls and isn't the world's root hub. Report successful crawl coverage. Cross-world inbound links count only from fully crawled worlds in the same resolved system and audit scope; other systems cannot prove or disprove orphan status.
 - **Stale index entries** — broken links whose source is a hub/index doc (`index.md`).
 - **Missing hub** — a subtree with documents but no `index.md`.
 - **Untitled docs** — **`[ok]`** nodes shown as `(no title)` (no H1 / declared title). A `(no title)` on a `not-found`/`error` node is the broken-link/cross-system finding above, **not** an untitled doc — don't double-report it here.
@@ -79,12 +81,12 @@ One fetch per document, so only run these for a single world (or when the user a
 - **Dangling & unlinked references** — a relationship written in *prose* (or inline code) that the link graph never captured, because only `[text](url)` becomes an edge. A mention like "supersedes ADR 0005" is invisible to every graph-based check above. For each fetched body, scan for high-confidence reference patterns and resolve each against the **inventory** (existence) and the **doc's own parsed links** (already-linked?) — no extra fetches beyond the bodies this tier already pulls:
   - **Patterns** (keep the set tight — false positives in prose are worse than a missed edge):
     - ADR references — `ADR[ -]?#?\d{3,4}` (case-insensitive). Canonical target: an inventory path matching `<world>/adr/NNNN-*.md`.
-    - Bare/inline `mark://<world>/<path>` URLs **not** inside a `[text](…)` link — an intended reference that lost its link syntax. **Viable here** (unlike the soul audit): resolve readable hosts against `mark_worlds`, then check that world's complete inventory for the path. If the host is not readable or its inventory is incomplete, classify the reference as unresolved rather than dangling. Still **exclude** inline-code placeholders (`` `mark://host/...` `` with ellipses) and fenced code blocks.
+    - Bare/inline `mark://<world>/<path>` URLs **not** inside a `[text](…)` link — an intended reference that lost its link syntax. **Viable here** (unlike the soul audit): resolve readable hosts against the selected system's `mark_worlds`, then check that world's complete in-scope inventory for the path. If the host belongs only to another system, is unreadable, is out of scope, or its inventory is incomplete, classify the reference as unresolved rather than dangling. Still **exclude** inline-code placeholders (`` `mark://host/...` `` with ellipses) and fenced code blocks.
   - **Exclude**: the doc's *own* ADR number (self-reference), and any mention inside a fenced (```` ``` ````/`~~~`) code block — a `# ADR 0005` in a code sample is not a real reference (same fence-skip rule the catalog's `firstH1` uses).
   - **Resolve "already-linked?" against the citing body's OWN markdown links — NOT the crawl's edge store.** The crawl seeds from the hub, so an **orphan** doc is never visited and its outbound links never enter the (ephemeral) edge store; keying off edges would falsely flag an orphan's real `[…](…)` link as unlinked. This matters *more* on the broker, where the edge store is per-session. You already hold every body in this tier — parse each for its own `[text](url)` links and check whether one resolves to the mention's target.
   - **Classify** each surviving mention:
     - **Unlinked reference** — the target *exists* (same- or cross-world) but the citing body has **no markdown link** to it. Real and reachable, not traversable. Fix: convert the prose mention to `[ADR 0005](mark://<world>/adr/0005-…md)`.
-    - **Dangling reference** — the mention resolves to **no doc** in any in-scope world. Referenced but absent. Confirm against the world inventories, not `mark_lookup`, which can miss untagged documents. Fix: restore the doc, or correct/remove the reference. If the citing doc itself annotates the absence ("no md file exists"), report it as **known** rather than actionable.
+    - **Dangling reference** — the mention resolves to **no doc** in any complete in-scope world inventory from the same resolved system. Referenced but absent. Confirm against those inventories, not `mark_lookup`, which can miss untagged documents. Fix: restore the doc, or correct/remove the reference. If the citing doc itself annotates the absence ("no md file exists"), report it as **known** rather than actionable.
 
   This is distinct from **Broken links** above: that follows an *edge* to a missing target; this finds references that were never edges in the first place.
 
@@ -100,8 +102,8 @@ Render plainly, grouped by world then by check, most actionable first. Lead with
 #### Broken links (<n>)
 - mark://<world>/<doc>.md → mark://<world>/<missing>.md  ([not-found] node — confirmed) — fix the link or restore the target
 
-#### Cross-system / unroutable references (<n>)
-- mark://<world>/index.md → mark://soul.demarkus.io/index.md  ([error], non-member host) — external pointer; remove or confirm intentional
+#### Unresolved / unroutable references (<n>)
+- mark://<world>/index.md → mark://unknown/index.md  ([error], non-member or unreadable host) — unresolved; verify system membership/read access before deciding whether it is stale or external
 
 #### Orphans (<n>)
 - mark://<world>/<doc>.md — exists but no hub links to it; add it to index.md

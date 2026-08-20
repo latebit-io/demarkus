@@ -41,3 +41,29 @@ func TestParseSoulJoinArgsPreservesFlagPackageForms(t *testing.T) {
 		t.Fatalf("unexpected options: %+v", opts)
 	}
 }
+
+func TestParseSoulJoinArgsBoundsTokenStdin(t *testing.T) {
+	token := strings.Repeat("x", maxSoulJoinTokenInput)
+	opts, err := parseSoulJoinArgs([]string{"--token-stdin", "mark://example.com"}, strings.NewReader(token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.token != token {
+		t.Fatalf("token length = %d, want %d", len(opts.token), len(token))
+	}
+	_, err = parseSoulJoinArgs([]string{"--token-stdin", "mark://example.com"}, strings.NewReader(token+"x"))
+	if err == nil {
+		t.Fatal("parseSoulJoinArgs accepted token input over the limit")
+	}
+}
+
+func TestParseSoulJoinArgsRejectsEmptyTokenFlag(t *testing.T) {
+	for _, args := range [][]string{
+		{"--token=", "mark://example.com"},
+		{"--token", "", "mark://example.com"},
+	} {
+		if _, err := parseSoulJoinArgs(args, strings.NewReader("")); err == nil {
+			t.Fatalf("parseSoulJoinArgs(%q) accepted an empty token", args)
+		}
+	}
+}

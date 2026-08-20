@@ -46,7 +46,7 @@ Run `/mcp` to connect (and `/mcp-auth <slug>` if prompted) to complete OAuth. `/
 
 ## Architecture
 
-Pi adapter CI is typecheck-only; harness runtime behavior is exercised through generated prompt checks and the shared helper tests.
+Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper behavior are checked separately.
 
 - `src/*.ts` — the Pi adapter that maps events and MCP registration onto the shared helper's gate, nudge, and guidance decisions.
 - `scripts/*.sh` — broker URL validation (`knowledge-join.sh`), registry write (`register-knowledge.sh`), and deterministic policy mirroring (`mirror-policy.sh`), reused verbatim from the Claude Code plugin; `mcp-config.mjs` registers the broker as an HTTP/OAuth MCP server.

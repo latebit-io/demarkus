@@ -86,7 +86,7 @@ function commandBody(name: string, args: string): string {
     .replace(/\$\{DEMARKUS_SCRIPTS\}/g, SCRIPTS_DIR)
     .trim();
   const value = args.trim();
-  if (body.includes("$ARGUMENTS")) return body.replaceAll("$ARGUMENTS", value);
+  if (body.includes("$ARGUMENTS")) return body.replaceAll("$ARGUMENTS", () => value);
   return value ? `${body}\n\nUser arguments: ${value}` : body;
 }
 

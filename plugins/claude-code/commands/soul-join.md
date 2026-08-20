@@ -25,7 +25,7 @@ If no host was supplied, ask for it. If token requirements are unclear, ask befo
 2. Validate, store credentials, add the soul catalog row, and bind the absolute current project directory:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join '<host>' [--insecure] --bind "${CLAUDE_PROJECT_DIR}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join <shell-escaped-host> --bind "${CLAUDE_PROJECT_DIR}"
    ```
 
    For a tokened soul, have the user run this variant in their terminal so the token never appears in argv:
@@ -36,14 +36,15 @@ If no host was supplied, ask for it. If token requirements are unclear, ask befo
    trap 'stty echo; unset DEMARKUS_TOKEN' EXIT HUP INT TERM
    stty -echo || exit
    IFS= read -r DEMARKUS_TOKEN; read_status=$?
-   stty echo; trap - EXIT HUP INT TERM; printf '\n' >&2
+   if ! stty echo; then printf '\nFailed to restore terminal echo; retrying on exit. Run `stty echo` manually if needed.\n' >&2; exit 1; fi
+   trap - EXIT HUP INT TERM; printf '\n' >&2
    [ "$read_status" -eq 0 ] || { unset DEMARKUS_TOKEN; exit "$read_status"; }
-   printf '%s' "$DEMARKUS_TOKEN" | "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join '<host>' --token-stdin --bind '<absolute-project-dir>'
+   printf '%s' "$DEMARKUS_TOKEN" | "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join <shell-escaped-host> --token-stdin --bind <shell-escaped-absolute-project-dir>
    join_status=$?; unset DEMARKUS_TOKEN; exit "$join_status"
    )
    ```
 
-   Add `--insecure` before `--bind` only when the user explicitly selected it. Quote every substituted value. Use `CLAUDE_PROJECT_DIR` for a public soul executed through Bash; for the user-terminal token command, substitute its current absolute value rather than relying on that variable outside Claude Code.
+   Add `--insecure` before `--bind` only when the user explicitly selected it. Replace every `shell-escaped-*` placeholder with exactly one shell word using POSIX-safe escaping (including embedded apostrophes); never wrap a raw value in literal single quotes. Use `CLAUDE_PROJECT_DIR` for a public soul executed through Bash; for the user-terminal token command, shell-escape its current absolute value rather than relying on that variable outside Claude Code.
 
    Continue only on `OK` with one valid `slug=`, `host=`, `insecure=`, and optional `token-file=` value. On `FAIL`, surface the message and stop. Reachability is checked by the first MCP call; do not treat the absence of an HTTP probe as success.
 

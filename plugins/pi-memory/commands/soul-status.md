@@ -13,20 +13,23 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
 2. **Inspect the binaries.** Run:
 
    ```bash
-   if ! ls -la "$HOME/.demarkus/bin/"; then echo "(binary directory inspection failed)"; fi
-   for b in demarkus-server demarkus-mcp demarkus-token; do
-      printf '%s ' "$b"
-      if [ ! -e ~/.demarkus/bin/$b ]; then echo "(not installed)"
-      elif [ ! -x ~/.demarkus/bin/$b ]; then echo "(present but not executable)"
-      else
-         output=$("$HOME/.demarkus/bin/$b" --version 2>&1); status=$?
-         if [ "$status" -eq 0 ]; then printf '%s\n' "$output"; else printf '(version check failed, exit %s) %s\n' "$status" "$output"; fi
-      fi
-   done
+   if ls -la "$HOME/.demarkus/bin/"; then
+      for b in demarkus-server demarkus-mcp demarkus-token; do
+         printf '%s ' "$b"
+         if [ ! -e "$HOME/.demarkus/bin/$b" ]; then echo "(not installed)"
+         elif [ ! -x "$HOME/.demarkus/bin/$b" ]; then echo "(present but not executable)"
+         else
+            output=$("$HOME/.demarkus/bin/$b" --version 2>&1); status=$?
+            if [ "$status" -eq 0 ]; then printf '%s\n' "$output"; else printf '(version check failed, exit %s) %s\n' "$status" "$output"; fi
+         fi
+      done
+   else
+      echo "(binary directory inspection failed; binary states unknown)"
+   fi
    ```
 
    Keep missing, non-executable, old, and broken binaries distinct. Report the
-   actual error instead of collapsing different causes into one status.
+   actual error instead of collapsing different causes into one status. If the directory listing fails, skip the per-binary loop and report all binary states as unknown.
 
 3. **Check the server process.** Run:
 
@@ -48,7 +51,7 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
    - **Soul:** <SOUL_DIR>
    - **Port:** <PORT>
    - **Server:** running (pid <N>) | not running | reused (user-managed)
-   - **Binaries:** demarkus-server <ver>, demarkus-mcp <ver>, demarkus-token <ver>  (or "too old for --version — upgrades next session")
+   - **Binaries:** demarkus-server <ver>, demarkus-mcp <ver>, demarkus-token <ver> | unknown (directory inspection failed)
    - **Connectivity:** ok | not-found (empty soul) | unauthorized (token mismatch) | unreachable
 
    <If anything is degraded, suggest the specific fix:>

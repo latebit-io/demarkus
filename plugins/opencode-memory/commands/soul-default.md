@@ -18,8 +18,10 @@ the destination server's `mark_*` tools directly. This command only moves the de
 1. **List the catalog.** Run:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --list --bind '<absolute-project-dir>'
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --list --bind <shell-escaped-absolute-project-dir>
    ```
+
+   When the command contains `<shell-escaped-absolute-project-dir>`, replace it with exactly one POSIX-shell-safe word, including correct escaping for embedded apostrophes; never wrap the raw path in literal single quotes.
 
    - `EMPTY` → no souls joined. Tell the user to run `/soul-join` (or `/soul-init`
      for the local managed soul) and stop.
@@ -34,14 +36,13 @@ the destination server's `mark_*` tools directly. This command only moves the de
 3. **Save it.** With the chosen `<slug>`:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --set '<slug>' --bind '<absolute-project-dir>'
+   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --set '<slug>' --bind <shell-escaped-absolute-project-dir>
    ```
 
-   - On `OK <slug>`, confirm: "This project now writes to soul **`<slug>`** by
+   - Only on exact `OK <chosen-slug>`, with the returned slug matching the selection, confirm: "This project now writes to soul **`<slug>`** by
      default." If a server was joined mid-session, note that its MCP tools appear
      only after a restart, but the binding itself is live immediately.
-   - On non-zero exit or `FAIL: <message>`, show it verbatim (e.g. an unjoined slug → run
-     `/soul-join` first).
+   - On any other result, including non-zero exit, `FAIL: <message>`, mismatched slug, or malformed zero-exit output, show it verbatim and stop without confirming the binding.
 
 ## Don't
 

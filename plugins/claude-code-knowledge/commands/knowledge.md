@@ -1,5 +1,5 @@
 ---
-description: List the joined demarkus knowledge systems and show each one's root hub index — the entry point for navigating the shared catalog.
+description: List the joined demarkus knowledge systems and show each available root hub index — an entry point for navigating the shared catalog.
 argument-hint: "[slug | mark://<world>/ | blank = list everything joined]"
 ---
 <!-- markdownlint-disable MD041 -->
@@ -9,7 +9,7 @@ Orient in the organizational demarkus knowledge system(s) this installation has 
 
 ## Scope
 
-- **blank** → list every joined system and show each one's `root` hub index.
+- **blank** → list every joined system and show its `root` hub index when present.
 - **a slug** (the joined MCP server name, e.g. `acme`) → focus that one system.
 - **a `mark://<world>/` URL** → show that specific world's `index.md` hub.
 
@@ -23,15 +23,15 @@ Orient in the organizational demarkus knowledge system(s) this installation has 
 
    Each line is a joined system's MCP server slug. A successful command with no rows means no knowledge system is joined; suggest `/knowledge-join <broker-url>` and stop. Non-zero exit or malformed output is a registry failure: surface it and stop rather than reporting an empty registry.
 
-   If `$ARGUMENTS` is a `mark://<world>/` URL, call `mark_worlds` through each in-scope system's own MCP server to locate that readable world. Surface per-system failures. If no successful directory contains it, report it as unavailable to the current identity; if more than one system contains the same world name, ask which system to use.
+   If `$ARGUMENTS` is a `mark://<world>/` URL, call `mark_worlds` through each in-scope system's own MCP server to locate that readable world. Every directory call must succeed before deciding uniqueness or absence; on any failure, surface it and stop with scope resolution incomplete. If no complete directory contains the world, report it as unavailable to the current identity; if more than one system contains the same world name, ask which system to use.
 
 2. **Show each system's entry points.** For each slug in scope, invoke that slug's own MCP tools through `mcp__<slug>__mark_*`; `mark://root/...` resolves inside the selected broker, so never reuse one system's tool for another system's root. Then:
 
-   - For blank/slug scope, fetch `mark://root/index.md` (the `root` hub) and render it — this is the system's global hub. For explicit world scope, fetch and render `mark://<world>/index.md` instead.
+   - For blank/slug scope, fetch `mark://root/index.md` with `force: true`; when present, this is the system's global hub. For explicit world scope, fetch `mark://<world>/index.md` with `force: true` instead. Render only a successful full-body response; an outline-mode response is incomplete and must be surfaced rather than displayed as the document.
    - Fetch `mark://root/.well-known/demarkus/policy.md` with `force: true` if present, and surface the system's write policy (strictness + required tag axes) in one line so the user knows the bar for publishing.
    - If the system exposes more than one world and lists them on the `root` hub, show that list so the user can see where to go next.
 
-   If a fetch returns `not-found`, say so plainly (e.g. the system hasn't published a `root` index or policy yet) rather than inventing content. Surface transport, authorization, dispatch, and tool errors separately; they do not mean the document is absent.
+   If a fetch returns `not-found`, say so plainly (e.g. the system hasn't published a `root` index or policy yet) rather than inventing content. Surface outline-only, transport, authorization, dispatch, and tool errors separately; they do not mean the document is absent.
 
 3. **Point the way.** Briefly remind the user how to go deeper:
    - `mark_lookup` against the system for a subject (the card catalog).

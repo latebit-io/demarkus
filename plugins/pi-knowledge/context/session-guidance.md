@@ -16,11 +16,11 @@ Use the joined system's tools through the destination server's `mark_*` tools an
 
 A knowledge system composes one or more **worlds** (demarkus servers). URLs take the form `mark://<worldName>/<path>`.
 
-- Every system has a guaranteed **`root` hub** that tracks things globally. Org-wide conventions live there under a well-known prefix:
+- Every system uses **`root` as its conventional system namespace**. `mark://root/index.md` is a global hub when published, but it may be absent. Org-wide conventions live under the root well-known prefix:
   - `mark://root/.well-known/demarkus/policy.md` — write policy (strictness + required tag axes). Fetch with `force: true` before publishing.
   - `mark://root/.well-known/demarkus/template.md` — the canonical per-world layout. Fetch with `force: true` and follow it when you create or extend a world.
 - Anchor on a world's `mark://<world>/index.md` hub to find your way around it.
-- The `/knowledge` slash command lists the systems you've joined and shows each one's `root` hub index — use it to orient quickly.
+- The `/knowledge` slash command lists the systems you've joined and shows each available `root` hub index — use it to orient quickly.
 
 ## Record to the shared catalog (proactively)
 

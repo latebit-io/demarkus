@@ -264,6 +264,8 @@ type soulJoinOptions struct {
 	bind     string
 }
 
+const maxSoulJoinTokenInput = 4096
+
 func parseSoulJoinArgs(args []string, stdin io.Reader) (soulJoinOptions, error) {
 	var opts soulJoinOptions
 	tokenStdin := false
@@ -301,9 +303,12 @@ func parseSoulJoinArgs(args []string, stdin io.Reader) (soulJoinOptions, error) 
 		return soulJoinOptions{}, errors.New("soul-join: --token and --token-stdin are mutually exclusive")
 	}
 	if tokenStdin {
-		body, err := io.ReadAll(stdin)
+		body, err := io.ReadAll(io.LimitReader(stdin, maxSoulJoinTokenInput+1))
 		if err != nil {
 			return soulJoinOptions{}, fmt.Errorf("soul-join: read token from stdin: %w", err)
+		}
+		if len(body) > maxSoulJoinTokenInput {
+			return soulJoinOptions{}, fmt.Errorf("soul-join: token from stdin exceeds %d bytes", maxSoulJoinTokenInput)
 		}
 		opts.token = strings.TrimSpace(string(body))
 		if opts.token == "" {
@@ -341,6 +346,9 @@ func parseSoulJoinFlag(args []string, i *int, opts *soulJoinOptions, tokenStdin 
 			return true, err
 		}
 		if name == "token" {
+			if value == "" {
+				return true, errors.New("soul-join: token is empty")
+			}
 			opts.token = value
 		} else {
 			opts.bind = value

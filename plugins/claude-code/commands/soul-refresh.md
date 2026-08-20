@@ -12,7 +12,7 @@ Keep promoted soul documents fresh as their published copies evolve. This is the
 
 1. **Detection gate.** Run `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote` via Bash. Non-zero exit or malformed output is a registry failure: surface it and stop. `NONE` from a successful call means no promote destination is currently configured, so there is nothing to refresh against (any earlier promotions would need their destination re-added first); say so and stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`). A promoted soul doc records its own `mark://` target in its marker, so refresh works against whichever destination it was promoted to.
 
-2. **Find promoted docs.** If `$ARGUMENTS` names a path, use just that one. Otherwise `mark_lookup` the soul with `filter=tag=promoted`, `limit=1000` to list every promoted document (the `/promote` back-stamp adds that tag). If lookup fails, stop. For each, `mark_fetch` it with `force: true`, retaining its current version and complete metadata map, and parse its marker line:
+2. **Find promoted docs.** If `$ARGUMENTS` names a path, use just that one. Otherwise `mark_lookup` the soul with `filter=tag=promoted`, `limit=1000` to list promoted documents (the `/promote` back-stamp adds that tag). If lookup fails, stop. Because lookup has no cursor, exactly 1000 rows means the scan may be truncated: process returned rows only if useful, but mark the refresh incomplete and never claim exhaustive or no-stale results. For each row, `mark_fetch` it with `force: true`, retaining its current version and complete metadata map, and parse its marker line. Surface each fetch failure, skip that document, and mark the refresh incomplete.
 
    ```text
    promoted: mark://<dest>/<path>@v<N>
@@ -20,20 +20,21 @@ Keep promoted soul documents fresh as their published copies evolve. This is the
 
    `<dest>` is the world slug for a brokered system, or the endpoint slug for a plain remote target; `<N>` is the destination version this soul copy was last synced to. A doc with the `promoted` tag but no parseable marker is malformed — report it and skip (do not guess a destination).
 
-3. **Check each against the live copy.** Through `mcp__<slug>__mark_*`, call `mark_fetch` and `mark_versions` to read the current version of `mark://<dest>/<path>` — call it `<M>`.
+3. **Check each against the live copy.** Through `mcp__<slug>__mark_*`, call `mark_fetch` with `force: true` and `mark_versions` to read the complete current document and version of `mark://<dest>/<path>` — call it `<M>`. Reject outline-only responses before any summary or pull-down write.
    - if either destination call fails (transport, auth, dispatch, server, malformed response), `<M>` is unknown. Surface the exact error, suggest reconnecting/restarting the destination MCP server or re-adding its registry entry, and skip this document. Do not classify it as missing or continue to refresh/re-promote logic.
    - `<M> == <N>` → in sync. Skip silently.
-   - the destination doc is `not-found` (archived or moved) → surface it; the link is dangling. Do not delete the soul doc — tell the user and let them decide. Skip the auto-refresh.
+   - the destination doc is `archived` → surface that the authoritative copy is archived and skip refresh. Do not treat an archived response as a body, in-sync result, or version to pull.
+   - the destination doc is `not-found` (deleted or moved) → surface it; the link is dangling. Do not delete the soul doc — tell the user and let them decide. Skip the auto-refresh.
    - `<M> > <N>` → the authoritative copy moved on. Refresh, per the doc's mode (step 4).
 
 4. **Refresh a stale doc — directionally.** Determine the mode from the doc's shape:
-   - **Stub (body is just title + marker + summary, no rival content).** Safe to refresh automatically: `mark_fetch` the live authoritative body for the summary, then `mark_publish` the soul stub with the marker bumped to `@v<M>` (and a refreshed one-line summary). The authoritative copy (knowledge system or remote endpoint) wins; there was no local content to lose.
+   - **Stub (body is just title + marker + summary, no rival content).** Safe to refresh automatically: use the complete authoritative body from step 3 for the summary, then `mark_publish` the soul stub with the marker bumped to `@v<M>` (and a refreshed one-line summary). The authoritative copy (knowledge system or remote endpoint) wins; there was no local content to lose.
    - **Marker-only (the soul kept a full body).** The local body may have diverged, so do **not** overwrite it silently. Surface the move (`<dest>/<path>` went `v<N>` → `v<M>`) and offer the user two directional choices:
      - **Pull down (authoritative wins):** replace the soul body with the live destination body and bump the marker to `@v<M>`. Use when the soul copy has no local edits worth keeping.
      - **Re-promote (soul proposes upward):** if the soul body has local refinements, those go *up* as a gated update — run `/promote` on this doc (its step 3 already-promoted path routes the edit through the cascade as an update to the existing knowledge doc). Never fold local edits into the authoritative copy without the gate.
-   Always confirm before writing. The marker bump is a `mark_publish` on the soul at its current version with `on_conflict: "fail"`. Resend the complete metadata map fetched in step 2 so catalog fields and opaque keys survive, but omit `retention` unless the user explicitly requests it for this write. On conflict, refetch the soul document and return it to the mode/divergence decision; never overwrite or blindly merge concurrent local edits.
+   Always confirm before writing. The marker bump is a `mark_publish` on the soul at its current version with `on_conflict: "fail"`. Resend the complete metadata map fetched in step 2 so catalog fields and opaque keys survive, but omit `retention` unless the user explicitly requests it for this write. On the first conflict, refetch the soul document with `force: true`, reject outline-only output, and return the current complete body to the mode/divergence decision. After renewed confirmation, retry once; if that retry conflicts, surface it and stop. Never overwrite or blindly merge concurrent local edits.
 
-5. **Report.** Per doc: in-sync / refreshed (stub) / surfaced-for-decision (marker-only) / dangling. Reference paths in full. If nothing was stale, say so plainly.
+5. **Report.** Per doc: in-sync / refreshed (stub) / surfaced-for-decision (marker-only) / dangling / skipped-error. Reference paths in full. Say nothing was stale only when lookup was not capped and every promoted document was fetched and checked successfully; otherwise report incomplete coverage and skipped rows.
 
 ## Don't
 
