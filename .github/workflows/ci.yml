@@ -119,18 +119,33 @@ jobs:
       # database driver: the nm check is what keeps the -tags pg seam honest.
       - name: Build
         run: |
+          set -euo pipefail
           cd server
           go build -o /tmp/demarkus-server ./cmd/demarkus-server
-          if go tool nm /tmp/demarkus-server | grep -q "jackc/pgx"; then
+          syms="$(go tool nm /tmp/demarkus-server)"
+          # Without this, a failed nm would leave grep with empty input and
+          # the check would "pass" while proving nothing.
+          test -n "$syms"
+          if grep -q "jackc/pgx" <<<"$syms"; then
             echo "default demarkus-server links pgx; the -tags pg seam leaked" >&2
             exit 1
           fi
       - name: Build (postgres flavor)
         run: |
+          set -euo pipefail
           cd server
           go vet -tags pg ./cmd/demarkus-server
           go build -tags pg -o /dev/null ./cmd/demarkus-server
           go build -o /dev/null ./cmd/demarkus-migrate
+      # release.yml stages these build ids into the image; a rename here
+      # would only surface at release time.
+      - name: Assert the release config builds what the images stage
+        run: |
+          set -euo pipefail
+          for id in demarkus-server demarkus-server-pg demarkus-migrate; do
+            yq -e ".builds[] | select(.id == \"$id\")" server/.goreleaser.yml >/dev/null \
+              || { echo "server/.goreleaser.yml has no build id $id" >&2; exit 1; }
+          done
 
   test-client:
     needs: detect-changes

@@ -195,6 +195,8 @@ func main() {
 		logger.Error("listen failed", "addr", addr, "error", err)
 		os.Exit(1)
 	}
+	// Backstop for the early-exit paths below; the graceful shutdown closes
+	// and logs explicitly, and a second Close is a harmless no-op.
 	defer func() { _ = listener.Close() }()
 
 	if cfg.TokensFile != "" {
@@ -268,8 +270,11 @@ func main() {
 		logger.Error("listener error", "error", err)
 	}
 
-	// Close the listener to stop accepting new connections
-	_ = listener.Close()
+	// Close the listener to stop accepting new connections. A failure here
+	// cannot be recovered from, but it must not pass unnoticed.
+	if err := listener.Close(); err != nil {
+		logger.Warn("listener close failed", "error", err)
+	}
 
 	// Wait for in-flight connections to drain with a timeout
 	done := make(chan struct{})
