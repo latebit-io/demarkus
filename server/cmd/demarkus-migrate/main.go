@@ -15,6 +15,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/store"
@@ -38,13 +41,16 @@ func main() {
 	flag.Parse()
 
 	logger := logging.New(os.Getenv("DEMARKUS_LOG_FORMAT"), os.Getenv("DEMARKUS_LOG_LEVEL"), nil)
-	if err := run(*from, *to, *root, *pgDSN, *verify, logger); err != nil {
+	// Interrupt/terminate cancels the migration between documents.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, *from, *to, *root, *pgDSN, *verify, logger); err != nil {
 		logger.Error("migration failed", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(from, to, root, pgDSN string, verify bool, logger *slog.Logger) error {
+func run(ctx context.Context, from, to, root, pgDSN string, verify bool, logger *slog.Logger) error {
 	if from == to || !validBackend(from) || !validBackend(to) {
 		return fmt.Errorf("need -from and -to as file|postgres and different (got %q -> %q)", from, to)
 	}
@@ -78,24 +84,21 @@ func run(from, to, root, pgDSN string, verify bool, logger *slog.Logger) error {
 	backends := map[string]store.Migrator{"file": fs, "postgres": pg}
 	src, dst := backends[from], backends[to]
 
-	// The tool owns the cancellation policy: a bulk migration runs
-	// unbounded, interruptible only by the operator.
-	ctx := context.Background()
 	if err := requireEmpty(ctx, dst, to); err != nil {
 		return err
 	}
 
 	logger.Info("copying", "from", from, "to", to)
-	// Per-version summaries recorded during the copy: the verify pass then
-	// reads only the destination, holding ~120 bytes per version instead of
-	// the stored bytes.
-	want := map[string][]versionSummary{}
+	// One digest per document recorded during the copy: the verify pass then
+	// reads only the destination, and memory grows with documents, not
+	// versions or stored bytes.
+	want := map[string]string{}
 	var docs, versions int
 	if err := src.ExportDocs(ctx, func(p string, vs []store.StoredVersion) error {
 		docs++
 		versions += len(vs)
 		if verify {
-			want[p] = summarize(vs)
+			want[p] = docDigest(vs)
 		}
 		return dst.ImportDoc(ctx, p, vs)
 	}); err != nil {
@@ -125,39 +128,28 @@ func requireEmpty(ctx context.Context, dst store.Migrator, name string) error {
 	return nil
 }
 
-// versionSummary is what verify holds per version instead of raw bytes.
-type versionSummary struct {
-	version  int
-	hash     string
-	modified time.Time
-}
-
-func summarize(vs []store.StoredVersion) []versionSummary {
-	out := make([]versionSummary, len(vs))
-	for i, v := range vs {
-		out[i] = versionSummary{v.Version, store.ContentHash(v.Stored), v.Modified.UTC().Truncate(time.Second)}
+// docDigest folds a document's history into one hash: version numbers,
+// stored-bytes hashes, and modified times to the second (the protocol's
+// precision). Version order within a document is ascending on every backend.
+func docDigest(vs []store.StoredVersion) string {
+	var sb strings.Builder
+	for _, v := range vs {
+		fmt.Fprintf(&sb, "%d|%s|%d\n", v.Version, store.ContentHash(v.Stored), v.Modified.UTC().Truncate(time.Second).Unix())
 	}
-	return out
+	return store.ContentHash([]byte(sb.String()))
 }
 
-// verifyDst re-exports the destination and compares every stored version's
-// hash and modified time (to the second, the protocol's precision) against
-// the summaries recorded from the source during the copy.
-func verifyDst(ctx context.Context, dst store.Migrator, want map[string][]versionSummary) error {
+// verifyDst re-exports the destination and compares each document's digest
+// against the one recorded from the source during the copy.
+func verifyDst(ctx context.Context, dst store.Migrator, want map[string]string) error {
 	if err := dst.ExportDocs(ctx, func(p string, vs []store.StoredVersion) error {
-		wv, ok := want[p]
+		wd, ok := want[p]
 		if !ok {
 			return fmt.Errorf("%s: not in source", p)
 		}
 		delete(want, p)
-		got := summarize(vs)
-		if len(got) != len(wv) {
-			return fmt.Errorf("%s: %d versions, want %d", p, len(got), len(wv))
-		}
-		for i := range wv {
-			if got[i] != wv[i] {
-				return fmt.Errorf("%s v%d: stored bytes or modified differ", p, wv[i].version)
-			}
+		if docDigest(vs) != wd {
+			return fmt.Errorf("%s: version history differs from source", p)
 		}
 		return nil
 	}); err != nil {

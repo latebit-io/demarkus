@@ -166,20 +166,21 @@ func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []Stored
 		return fmt.Errorf("import %s: %w", reqPath, err)
 	}
 
-	// The per-doc versions dir must not pre-exist either (orphaned tree):
-	// version files are permanent and the failure cleanup below must never
-	// widen into files this call did not write.
+	// Mkdir (not MkdirAll) claims the per-doc versions dir atomically: a
+	// pre-existing dir (orphaned tree, concurrent import) refuses, so the
+	// failure cleanup below can never widen into files this call did not write.
 	firstFile, err := s.VersionFilePath(reqPath, versions[0].Version)
 	if err != nil {
 		return err
 	}
 	docDir := filepath.Dir(firstFile)
-	if _, err := os.Lstat(docDir); err == nil {
-		return fmt.Errorf("import %s: version directory already exists: %w", reqPath, os.ErrExist)
-	} else if !os.IsNotExist(err) {
+	if err := os.MkdirAll(filepath.Dir(docDir), 0o755); err != nil {
 		return fmt.Errorf("import %s: %w", reqPath, err)
 	}
-	if err := s.importVersionFiles(reqPath, docDir, versions); err != nil {
+	if err := os.Mkdir(docDir, 0o755); err != nil {
+		return fmt.Errorf("import %s: version directory: %w", reqPath, err)
+	}
+	if err := s.importVersionFiles(ctx, reqPath, versions); err != nil {
 		// Guarded above: the dir is exclusively this call's work. Removal is
 		// best-effort; the import error is what the caller must see.
 		_ = os.RemoveAll(docDir)
@@ -187,6 +188,10 @@ func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []Stored
 	}
 	newest := versions[len(versions)-1]
 	base := filepath.Base(rel)
+	if err := ctx.Err(); err != nil {
+		_ = os.RemoveAll(docDir)
+		return err
+	}
 	if err := os.Symlink(newVersionSymlinkTarget(base, newest.Version), currentFile); err != nil {
 		// Same guarantee as above: remove only what this call created.
 		_ = os.RemoveAll(docDir)
@@ -201,12 +206,12 @@ func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []Stored
 }
 
 // importVersionFiles writes the version files byte-for-byte with their
-// original modified times.
-func (s *Store) importVersionFiles(reqPath, docDir string, versions []StoredVersion) error {
-	if err := os.MkdirAll(docDir, 0o755); err != nil {
-		return fmt.Errorf("import %s: %w", reqPath, err)
-	}
+// original modified times, honoring cancellation between files.
+func (s *Store) importVersionFiles(ctx context.Context, reqPath string, versions []StoredVersion) error {
 	for _, v := range versions {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		vFile, err := s.VersionFilePath(reqPath, v.Version)
 		if err != nil {
 			return err
