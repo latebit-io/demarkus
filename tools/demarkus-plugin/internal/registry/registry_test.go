@@ -466,7 +466,7 @@ func TestPromoteTargetAdd(t *testing.T) {
 	if _, err := PromoteTargetAdd("acme", "bad", ""); err == nil {
 		t.Error("path not starting with / should error")
 	}
-	for _, unsafe := range []string{"/docs/../secret", "/docs/./internal", `/docs\secret`} {
+	for _, unsafe := range []string{"/docs/../secret", "/docs/./internal", `/docs\secret`, "/safe\nother", "/safe\rother"} {
 		if _, err := PromoteTargetAdd("acme", unsafe, ""); err == nil {
 			t.Errorf("unsafe path %q should error", unsafe)
 		}

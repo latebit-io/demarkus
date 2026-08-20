@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/latebit-io/demarkus/client/joinurl"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -397,7 +398,7 @@ func canonicalPromotePath(raw string) (string, error) {
 	if !strings.HasPrefix(raw, "/") {
 		return "", fmt.Errorf("add: <path> must start with / (got '%s')", raw)
 	}
-	if strings.ContainsAny(raw, " \t\\\x00") {
+	if strings.ContainsAny(raw, "\\\x00") || strings.ContainsFunc(raw, unicode.IsSpace) {
 		return "", fmt.Errorf("add: <path> must not contain whitespace, backslashes, or NUL")
 	}
 	for segment := range strings.SplitSeq(raw, "/") {
