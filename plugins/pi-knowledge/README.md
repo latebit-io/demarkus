@@ -1,6 +1,6 @@
 # demarkus-pi-knowledge
 
-Join an organizational [demarkus](https://github.com/latebit-io/demarkus) **knowledge system** — a broker-fronted, shared, versioned markdown catalog — from the [pi](https://pi.dev) coding agent. The pi port of the Claude Code `demarkus-knowledge` plugin. It owns no server and no binaries: a knowledge system is reached over HTTPS via [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter)'s OAuth. It shares `~/.demarkus` state (the registry + per-system policy mirrors) with the rest of the demarkus tooling, so it composes with `demarkus-pi-memory`.
+Join an organizational [demarkus](https://github.com/latebit-io/demarkus) **knowledge system** from the [Pi](https://pi.dev) coding agent. It runs no local server; the small shared `demarkus-plugin` helper provides gates, guidance, and registry behavior while the MCP adapter owns broker OAuth.
 
 ## What it does
 
@@ -46,10 +46,11 @@ Run `/mcp` to connect (and `/mcp-auth <slug>` if prompted) to complete OAuth. `/
 
 ## Architecture
 
-- `src/*.ts` — native TypeScript: registry + per-slug policy readers, the publish gate (tags / importance / required axes / required fields), the recall nudge, and session-start guidance (loaded directly by pi via `tsx`).
+Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper behavior are checked separately.
+
+- `src/*.ts` — the Pi adapter that maps events and MCP registration onto the shared helper's gate, nudge, and guidance decisions.
 - `scripts/*.sh` — broker URL validation (`knowledge-join.sh`), registry write (`register-knowledge.sh`), and deterministic policy mirroring (`mirror-policy.sh`), reused verbatim from the Claude Code plugin; `mcp-config.mjs` registers the broker as an HTTP/OAuth MCP server.
-- `commands/*.md` — slash-command prompt bodies, injected by the extension.
-- `skills/knowledge-promote/` — the soul → knowledge promotion cascade.
+- `commands/*.md`, `context/`, and `skills/` — generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
 
 ### Behavior mapping (Claude Code → pi)
 

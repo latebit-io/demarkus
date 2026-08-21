@@ -7,14 +7,12 @@
 //   - before_agent_start → inject standing guidance (once) + recall nudge
 //   - tool_call          → publish tag-gate + destination gate + promote nudge
 //   - session_shutdown   → journal nudge
-//   - registerCommand    → the /soul-* and /promote slash commands (each runs
-//                          the bundled skill of the same name)
+//   - registerCommand    → generated /soul-* and /promote prompts
 //
-// All gate/nudge/guidance LOGIC is native TypeScript (src/*.ts). Server
-// provisioning + registry mutation reuse the bundled bash (scripts/*.sh), which
-// shares ~/.demarkus state with the claude-code plugin.
+// The shared demarkus-plugin binary owns gate, nudge, and guidance decisions.
+// This adapter maps Pi events and shares ~/.demarkus state with other harnesses.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionActivity } from "./nudges.js";
@@ -76,30 +74,35 @@ const MANIFEST_URL = "https://raw.githubusercontent.com/latebit-io/demarkus/main
 const UPDATE_COMMAND = "pi update git:github.com/latebit-io/demarkus-pi-memory (or re-run pi install from an updated checkout)";
 const CUSTOM = "demarkus-memory";
 
-// Slash commands → bundled skills. Each command injects its skill's body so the
-// instructions live in exactly one place (the SKILL.md).
-const COMMANDS: Array<{ name: string; description: string }> = [
-  { name: "soul", description: "Show the local demarkus soul index" },
-  { name: "soul-context", description: "Restore session context from the current project's soul" },
-  { name: "soul-journal", description: "Append an entry to today's journal for the current project" },
-  { name: "soul-init", description: "Detect and configure the demarkus-memory soul" },
-  { name: "soul-join", description: "Join a remote demarkus soul and bind it to this project" },
-  { name: "soul-default", description: "Set this project's default demarkus write target" },
-  { name: "soul-status", description: "Show the demarkus-memory connection state and verify it's healthy" },
-  { name: "soul-doctor", description: "Audit the soul for catalog hygiene (read-only)" },
-  { name: "soul-refresh", description: "Refresh promoted soul documents from the knowledge system" },
-  { name: "promote", description: "Promote a soul document up to a shared knowledge system" },
-  { name: "promote-scan", description: "Sweep the soul for promotion candidates" },
-];
+interface Command {
+  name: string;
+  description: string;
+}
 
-// Load a command prompt body: strip its YAML frontmatter and resolve the
-// ${DEMARKUS_SCRIPTS} token to the bundled scripts directory's absolute path.
-function commandBody(name: string): string {
+function commands(): Command[] {
+  return readdirSync(COMMANDS_DIR)
+    .filter((file) => file.endsWith(".md"))
+    .sort()
+    .map((file) => {
+      const raw = readFileSync(join(COMMANDS_DIR, file), "utf8");
+      const frontmatter = raw.match(/^---\n([\s\S]*?)\n---\n/);
+      const description = frontmatter?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
+      if (!description) throw new Error(`command '${file}' has no frontmatter description`);
+      return { name: file.replace(/\.md$/, ""), description };
+    });
+}
+
+// Resolve the command template once, substituting arguments instead of
+// appending a second copy when the source already contains $ARGUMENTS.
+function commandBody(name: string, args: string): string {
   const raw = readFileSync(join(COMMANDS_DIR, `${name}.md`), "utf8");
-  return raw
+  const body = raw
     .replace(/^---\n[\s\S]*?\n---\n/, "")
     .replace(/\$\{DEMARKUS_SCRIPTS\}/g, SCRIPTS_DIR)
     .trim();
+  const value = args.trim();
+  if (body.includes("$ARGUMENTS")) return body.replaceAll("$ARGUMENTS", () => value);
+  return value ? `${body}\n\nUser arguments: ${value}` : body;
 }
 
 // pi-mcp-adapter routes MCP calls through a proxy tool named "mcp":
@@ -228,22 +231,24 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     if (nudge) ctx.ui.notify(nudge, "info");
   });
 
-  for (const { name, description } of COMMANDS) {
+  for (const { name, description } of commands()) {
     pi.registerCommand(name, {
       description,
       handler: (args, ctx) => {
         let body: string;
         try {
-          body = commandBody(name);
-        } catch {
-          ctx.ui.notify(`demarkus-memory: command '${name}' not found`, "error");
+          body = commandBody(name, args);
+        } catch (error) {
+          const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+          const message = missing ? `command '${name}' not found` : `command '${name}' failed to load: ${error}`;
+          console.error(`[demarkus-memory] ${message}`);
+          ctx.ui.notify(`demarkus-memory: ${message}`, "error");
           return;
         }
-        const content = args && args.trim() ? `${body}\n\n---\nUser arguments: ${args.trim()}` : body;
         // triggerTurn: the command injects the skill body and must start a turn
         // so the agent acts on it. Without it, an idle session just appends the
         // message to history and never runs (the command appears to do nothing).
-        pi.sendMessage({ customType: `${CUSTOM}-${name}`, content, display: false }, { triggerTurn: true });
+        pi.sendMessage({ customType: `${CUSTOM}-${name}`, content: body, display: false }, { triggerTurn: true });
       },
     });
   }

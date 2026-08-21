@@ -13,9 +13,9 @@ This is the broker-fronted, multi-writer counterpart to [`demarkus-memory`](../c
 - **Publish tag-gate (Pre/PostToolUse)** — enforces `tags` (and any required tag axes the system's policy declares) on writes to a joined system, at the severity the system chooses (warn / block / ask), so shared documents stay findable via `mark_lookup`. It gates **only** registered knowledge systems; the local soul and unrelated demarkus servers are left untouched.
 - **Recall nudge (UserPromptSubmit)** — on a recall-style question about shared/org knowledge, a discreet reminder to check the catalog first. Silent unless a system is joined.
 
-## No local footprint beyond `~/.demarkus/`
+## Local Helper
 
-This plugin downloads no binaries and runs no server. It writes only a small registry and per-system policy mirror under `~/.demarkus/`:
+This plugin runs no local demarkus server. It bootstraps the shared `demarkus-plugin` helper for gates, guidance, and registry behavior, and writes a small registry and per-system policy mirror under `~/.demarkus/`:
 
 - `~/.demarkus/knowledge-systems` — one joined MCP server slug per line.
 - `~/.demarkus/plugin-knowledge.strictness.<slug>` — mirrored per-system gate severity.
@@ -23,6 +23,8 @@ This plugin downloads no binaries and runs no server. It writes only a small reg
 - `~/.demarkus/plugin-knowledge.require-fields.<slug>` — mirrored required OKF metadata fields (e.g. `type`).
 
 It owns this `plugin-knowledge.*` namespace entirely and never **writes** the demarkus-memory plugin's files — so it stands alone. Its only touch of that state is **read-only**: it checks whether `~/.demarkus/plugin-memory.conf` exists, to tell whether a local soul is configured, so the soul↔system guidance only appears when it's relevant (and is simply omitted when it isn't).
+
+Runtime prompt files under `commands/`, `context/`, and `skills/` are generated from `plugins/prompt-source/`. Edit the canonical templates and run `cd tools && go run ./plugin-prompts write`; generated files are distribution artifacts.
 
 ## Admin: publishing conventions
 

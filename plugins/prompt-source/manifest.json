@@ -1,0 +1,64 @@
+{
+  "targets": [
+    {
+      "name": "claude-memory",
+      "surface": "memory",
+      "harness": "claude",
+      "agent": "Claude Code",
+      "output": "plugins/claude-code",
+      "project_dir": "`CLAUDE_PROJECT_DIR`",
+      "repo_instructions": "CLAUDE.md",
+      "tool_form": "`mcp__<slug>__mark_*`"
+    },
+    {
+      "name": "pi-memory",
+      "surface": "memory",
+      "harness": "pi",
+      "agent": "Pi",
+      "output": "plugins/pi-memory",
+      "project_dir": "the current project directory",
+      "repo_instructions": "repo instructions",
+      "tool_form": "the destination server's `mark_*` tools"
+    },
+    {
+      "name": "opencode-memory",
+      "surface": "memory",
+      "harness": "opencode",
+      "agent": "OpenCode",
+      "output": "plugins/opencode-memory",
+      "project_dir": "the current project directory",
+      "repo_instructions": "repo instructions",
+      "tool_form": "the destination server's `mark_*` tools"
+    },
+    {
+      "name": "claude-knowledge",
+      "surface": "knowledge",
+      "harness": "claude",
+      "agent": "Claude Code",
+      "output": "plugins/claude-code-knowledge",
+      "project_dir": "`CLAUDE_PROJECT_DIR`",
+      "repo_instructions": "CLAUDE.md",
+      "tool_form": "`mcp__<slug>__mark_*`"
+    },
+    {
+      "name": "pi-knowledge",
+      "surface": "knowledge",
+      "harness": "pi",
+      "agent": "Pi",
+      "output": "plugins/pi-knowledge",
+      "project_dir": "the current project directory",
+      "repo_instructions": "repo instructions",
+      "tool_form": "the destination server's `mark_*` tools"
+    },
+    {
+      "name": "opencode-knowledge",
+      "surface": "knowledge",
+      "harness": "opencode",
+      "agent": "OpenCode",
+      "output": "plugins/opencode-knowledge",
+      "project_dir": "the current project directory",
+      "repo_instructions": "repo instructions",
+      "tool_form": "the destination server's `mark_*` tools"
+    }
+  ]
+}

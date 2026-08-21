@@ -2,16 +2,16 @@
 //
 // The pi port of the claude-code demarkus-knowledge plugin. A knowledge system
 // is an organizational, broker-fronted demarkus catalog reached over HTTPS via
-// pi-mcp-adapter's OAuth — this extension owns no server and no binaries. It:
+// the MCP adapter's OAuth. It owns no server; the shared helper supplies policy. It:
 //   - before_agent_start → injects standing guidance (once) + a recall nudge
 //   - tool_call          → publish tag-gate (tags + importance + required axes /
 //                          fields) on writes to a joined knowledge system
 //   - registerCommand    → /knowledge, /knowledge-join, /knowledge-doctor
 //
-// All gate/nudge/guidance LOGIC is native TypeScript; URL validation, registry,
-// and policy mirroring reuse the bundled bash (scripts/*.sh).
+// The shared demarkus-plugin binary owns gate, nudge, and guidance decisions.
+// This adapter maps Pi events and registration onto that shared behavior.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { callGate, callGuidance, callNudge } from "./plugin.js";
@@ -61,18 +61,33 @@ const SCRIPTS_DIR = join(HERE, "..", "scripts");
 const GUIDANCE_FILE = join(HERE, "..", "context", "session-guidance.md");
 const CUSTOM = "demarkus-knowledge";
 
-const COMMANDS: Array<{ name: string; description: string }> = [
-  { name: "knowledge", description: "List joined knowledge systems and show each one's root hub index" },
-  { name: "knowledge-join", description: "Join an organizational demarkus knowledge system (broker + OAuth)" },
-  { name: "knowledge-doctor", description: "Audit a joined knowledge system for catalog hygiene (read-only)" },
-];
+interface Command {
+  name: string;
+  description: string;
+}
 
-function commandBody(name: string): string {
+function commands(): Command[] {
+  return readdirSync(COMMANDS_DIR)
+    .filter((file) => file.endsWith(".md"))
+    .sort()
+    .map((file) => {
+      const raw = readFileSync(join(COMMANDS_DIR, file), "utf8");
+      const frontmatter = raw.match(/^---\n([\s\S]*?)\n---\n/);
+      const description = frontmatter?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
+      if (!description) throw new Error(`command '${file}' has no frontmatter description`);
+      return { name: file.replace(/\.md$/, ""), description };
+    });
+}
+
+function commandBody(name: string, args: string): string {
   const raw = readFileSync(join(COMMANDS_DIR, `${name}.md`), "utf8");
-  return raw
+  const body = raw
     .replace(/^---\n[\s\S]*?\n---\n/, "")
     .replace(/\$\{DEMARKUS_SCRIPTS\}/g, SCRIPTS_DIR)
     .trim();
+  const value = args.trim();
+  if (body.includes("$ARGUMENTS")) return body.replaceAll("$ARGUMENTS", () => value);
+  return value ? `${body}\n\nUser arguments: ${value}` : body;
 }
 
 // pi-mcp-adapter routes MCP calls through a proxy tool named "mcp":
@@ -142,22 +157,24 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
     return undefined;
   });
 
-  for (const { name, description } of COMMANDS) {
+  for (const { name, description } of commands()) {
     pi.registerCommand(name, {
       description,
       handler: (args, ctx) => {
         let body: string;
         try {
-          body = commandBody(name);
-        } catch {
-          ctx.ui.notify(`demarkus-knowledge: command '${name}' not found`, "error");
+          body = commandBody(name, args);
+        } catch (error) {
+          const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+          const message = missing ? `command '${name}' not found` : `command '${name}' failed to load: ${error}`;
+          console.error(`[demarkus-knowledge] ${message}`);
+          ctx.ui.notify(`demarkus-knowledge: ${message}`, "error");
           return;
         }
-        const content = args && args.trim() ? `${body}\n\n---\nUser arguments: ${args.trim()}` : body;
         // triggerTurn: the command injects the skill body and must start a turn
         // so the agent acts on it. Without it, an idle session just appends the
         // message to history and never runs (the command appears to do nothing).
-        pi.sendMessage({ customType: `${CUSTOM}-${name}`, content, display: false }, { triggerTurn: true });
+        pi.sendMessage({ customType: `${CUSTOM}-${name}`, content: body, display: false }, { triggerTurn: true });
       },
     });
   }

@@ -19,4 +19,7 @@ done
 echo "Checking comment length on changed code..."
 bash scripts/check-comment-length.sh
 
+echo "Checking generated plugin prompts..."
+(cd tools && go run ./plugin-prompts check)
+
 echo "✓ All checks passed"

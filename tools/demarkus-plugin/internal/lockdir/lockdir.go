@@ -1,7 +1,7 @@
 // Package lockdir provides an atomic mkdir mutex with PID-stamped stale-lock
 // recovery, shared by registry (state writes) and provision (session startup).
-// mkdir (not flock like protocol/token) is deliberate: it keeps the existing
-// on-disk lock layout and needs no held fd across the exec'd critical section.
+// The directory remains the held-lock marker, so no fd spans the critical
+// section. A short-lived flock serializes acquire/reclaim/release transitions.
 // Assumption: mixed-version writers never overlap. Legacy (pre-staging) locks
 // are reclaimed as stale when unstamped or corrupt; a live legacy writer
 // caught mid-stamp could be stolen from, but the plugin binary is replaced
@@ -23,6 +23,13 @@ import (
 // nameSeq makes reclaim aside-names unique across goroutines in one process;
 // the PID alone is not enough when several writers race in-process.
 var nameSeq atomic.Uint64
+
+var errGuardTimeout = errors.New("lock transition guard timed out")
+
+const (
+	guardAttempts = 100
+	guardSleep    = time.Millisecond
+)
 
 // WithLock runs fn while holding the mutex at lockDir. Acquisition stages a
 // pre-stamped dir and renames it into place, so a lock dir is never visible
@@ -54,12 +61,14 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 				if err := reclaimStale(lockDir); err != nil {
 					return err
 				}
+				time.Sleep(sleep)
 				continue
 			}
 			if !PidAlive(pid) {
 				if err := reclaimStale(lockDir); err != nil {
 					return err
 				}
+				time.Sleep(sleep)
 				continue
 			}
 		case errors.Is(readErr, os.ErrNotExist):
@@ -71,6 +80,7 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 				if err := reclaimStale(lockDir); err != nil {
 					return err
 				}
+				time.Sleep(sleep)
 				continue
 			}
 		default:
@@ -96,8 +106,28 @@ func tryAcquire(lockDir string) (bool, error) {
 	if err := os.WriteFile(filepath.Join(stage, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
 		return false, errors.Join(fmt.Errorf("stamp lock pid: %w", err), os.RemoveAll(stage))
 	}
-	renameErr := os.Rename(stage, lockDir)
-	if renameErr == nil {
+	var renameErr error
+	renamed := false
+	guardErr := withGuard(lockDir, 1, func() error {
+		renameErr = os.Rename(stage, lockDir)
+		renamed = renameErr == nil
+		return nil
+	})
+	if guardErr != nil {
+		if renamed {
+			return false, errors.Join(guardErr, release(lockDir))
+		}
+		var acquireErr error
+		if renameErr != nil {
+			acquireErr = fmt.Errorf("acquire lock: %w", renameErr)
+		}
+		cleanupErr := os.RemoveAll(stage)
+		if errors.Is(guardErr, errGuardTimeout) {
+			return false, cleanupErr
+		}
+		return false, errors.Join(guardErr, acquireErr, cleanupErr)
+	}
+	if renamed {
 		return true, nil
 	}
 	cleanupErr := os.RemoveAll(stage)
@@ -113,32 +143,43 @@ func isContention(err error) bool {
 	return errors.Is(err, os.ErrExist) || errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST)
 }
 
-// reclaimStale removes a dead holder's lock, ownership-safe: rename aside
-// (one racer wins), re-read the moved pid, confirm still dead, delete.
-// Losing the initial rename is contention, not an error; later failures surface.
+// reclaimStale revalidates ownership under the transition guard, then renames a
+// dead or legacy lock aside. The live lock path is never moved speculatively.
 func reclaimStale(lockDir string) error {
 	aside := fmt.Sprintf("%s.stale.%d-%d", lockDir, os.Getpid(), nameSeq.Add(1))
-	if os.Rename(lockDir, aside) != nil {
-		return nil // a racer reclaimed (or the holder released) first
-	}
-	b, readErr := os.ReadFile(filepath.Join(aside, "pid"))
-	if readErr == nil {
-		if pid, convErr := strconv.Atoi(strings.TrimSpace(string(b))); convErr == nil && PidAlive(pid) {
-			// Moved a freshly-acquired live lock — put it back.
-			if err := os.Rename(aside, lockDir); err != nil {
-				return fmt.Errorf("restore live lock %s: %w", lockDir, err)
+	moved := false
+	guardErr := withGuard(lockDir, 1, func() error {
+		b, readErr := os.ReadFile(filepath.Join(lockDir, "pid"))
+		if readErr == nil {
+			pid, convErr := strconv.Atoi(strings.TrimSpace(string(b)))
+			if convErr == nil && PidAlive(pid) {
+				return nil
 			}
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			return fmt.Errorf("read lock pid before reclaim: %w", readErr)
+		}
+		if err := os.Rename(lockDir, aside); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("rename stale lock aside: %w", err)
+		}
+		moved = true
+		return nil
+	})
+	if guardErr != nil {
+		if moved {
+			return errors.Join(guardErr, os.RemoveAll(aside))
+		}
+		if errors.Is(guardErr, errGuardTimeout) {
 			return nil
 		}
-	} else if !errors.Is(readErr, os.ErrNotExist) {
-		// Can't prove the holder dead; put the lock back, don't delete it.
-		if err := os.Rename(aside, lockDir); err != nil {
-			return fmt.Errorf("restore unverified lock %s: %w", lockDir, err)
-		}
-		return fmt.Errorf("read aside pid: %w", readErr)
+		return guardErr
 	}
-	if err := os.RemoveAll(aside); err != nil {
-		return fmt.Errorf("remove stale lock %s: %w", aside, err)
+	if moved {
+		if err := os.RemoveAll(aside); err != nil {
+			return fmt.Errorf("remove stale lock %s: %w", aside, err)
+		}
 	}
 	return nil
 }
@@ -149,7 +190,7 @@ func reclaimStale(lockDir string) error {
 func runLocked(lockDir string, fn func() error) (err error) {
 	completed := false
 	defer func() {
-		rmErr := os.RemoveAll(lockDir)
+		rmErr := release(lockDir)
 		if rmErr == nil {
 			return
 		}
@@ -162,6 +203,70 @@ func runLocked(lockDir string, fn func() error) (err error) {
 	err = fn()
 	completed = true
 	return err
+}
+
+// release vacates the lock path atomically before recursive cleanup. Removing
+// in place exposes a pid-less dir that another waiter can mistake for stale.
+func release(lockDir string) error {
+	aside := fmt.Sprintf("%s.release.%d-%d", lockDir, os.Getpid(), nameSeq.Add(1))
+	moved := false
+	guardErr := withGuard(lockDir, guardAttempts, func() error {
+		if err := os.Rename(lockDir, aside); err != nil {
+			return err
+		}
+		moved = true
+		return nil
+	})
+	if guardErr != nil {
+		if moved {
+			return errors.Join(fmt.Errorf("rename lock aside: %w", guardErr), os.RemoveAll(aside))
+		}
+		return fmt.Errorf("rename lock aside: %w", guardErr)
+	}
+	if err := os.RemoveAll(aside); err != nil {
+		return fmt.Errorf("remove released lock %s: %w", aside, err)
+	}
+	return nil
+}
+
+func withGuard(lockDir string, attempts int, fn func() error) (err error) {
+	// This file is permanent: unlinking it can split flock users across inodes.
+	guard, err := os.OpenFile(lockDir+".guard", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open lock transition guard: %w", err)
+	}
+	locked := false
+	for attempt := range attempts {
+		lockErr := syscall.Flock(int(guard.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if lockErr == nil {
+			locked = true
+			break
+		}
+		if !errors.Is(lockErr, syscall.EWOULDBLOCK) && !errors.Is(lockErr, syscall.EAGAIN) {
+			return errors.Join(fmt.Errorf("lock transition guard: %w", lockErr), guard.Close())
+		}
+		if attempt+1 < attempts {
+			time.Sleep(guardSleep)
+		}
+	}
+	if !locked {
+		if closeErr := guard.Close(); closeErr != nil {
+			return errors.Join(fmt.Errorf("%w after %s", errGuardTimeout, time.Duration(attempts)*guardSleep), closeErr)
+		}
+		return errGuardTimeout
+	}
+	defer func() {
+		unlockErr := syscall.Flock(int(guard.Fd()), syscall.LOCK_UN)
+		closeErr := guard.Close()
+		if unlockErr != nil {
+			unlockErr = fmt.Errorf("unlock transition guard: %w", unlockErr)
+		}
+		if closeErr != nil {
+			closeErr = fmt.Errorf("close transition guard: %w", closeErr)
+		}
+		err = errors.Join(err, unlockErr, closeErr)
+	}()
+	return fn()
 }
 
 // dirExists distinguishes "not there" from a failing Stat; unexpected

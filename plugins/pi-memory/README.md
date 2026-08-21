@@ -59,10 +59,11 @@ On session start, after provisioning, the extension hands `demarkus-plugin updat
 
 ## Architecture
 
-- `src/*.ts` — native TypeScript: config/registry readers, the publish + destination gates, nudges, session-start guidance, the update check, and MCP wiring (loaded directly by pi via `tsx`, no build step).
+Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper behavior are checked separately.
+
+- `src/*.ts` — the Pi adapter: event mapping, MCP wiring, and calls into the shared `demarkus-plugin` helper (loaded directly by Pi via `tsx`, no build step).
 - `scripts/*.sh` — the demarkus binary/server lifecycle, reused verbatim from the Claude Code plugin (single source of truth for provisioning); `provision.sh` is the per-session entrypoint and `mcp-config.mjs` registers remote-soul MCP servers.
-- `commands/*.md` — slash-command prompt bodies, injected by the extension.
-- `skills/soul-memory/` — the on-demand memory-routing skill.
+- `commands/*.md`, `context/`, and `skills/` — generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
 
 ### Behavior mapping (Claude Code → pi)
 

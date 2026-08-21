@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.41
+
+- Generate session guidance, the memory skill, and all slash-command prompts from the shared `plugins/prompt-source` corpus.
+- Load command descriptions from generated frontmatter and substitute arguments exactly once.
+- Reject stale generated prompts and foreign-harness terms in CI.
+
 ## 0.13.27
 
 - Update check on session start: `demarkus-plugin update-check` compares the shipped `package.json` version against the manifest on the monorepo's `main`, and the extension notifies when a newer release exists (notify-only, never self-installing). Throttled to once per 24h by the binary, silent when offline, turned off with `DEMARKUS_UPDATE_CHECK=0` or `~/.demarkus/plugin.update-check`. Requires a tools release carrying `update-check`; until the pin moves, the check is a no-op.

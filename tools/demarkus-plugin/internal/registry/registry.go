@@ -1,13 +1,16 @@
 package registry
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	pathpkg "path"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/latebit-io/demarkus/client/joinurl"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -110,21 +113,6 @@ type SoulRow struct {
 	TokenFile string
 }
 
-// remoteSoulHost returns the host registered for slug, or "" when not registered.
-func remoteSoulHost(slug string) (string, error) {
-	rows, err := readRecords("souls")
-	if err != nil {
-		return "", err
-	}
-	for _, r := range rows {
-		f := strings.Split(r, "\t")
-		if f[0] == slug && len(f) >= 2 {
-			return f[1], nil
-		}
-	}
-	return "", nil
-}
-
 // SoulCatalog emits one row per bindable soul: "<id>\t<tier>\t<host>\t<insecure>".
 func SoulCatalog() ([]string, error) {
 	var out []string
@@ -174,30 +162,29 @@ func IsCatalogSoul(slug string) (bool, error) {
 // ProjectBindSet records that DIR writes to catalog soul SLUG by default. Locked
 // + atomic; validates SLUG is a joined soul first.
 func ProjectBindSet(dir, slug string) error {
-	ok, err := IsCatalogSoul(slug)
+	soulsPath, err := config.StatePath("souls")
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return fmt.Errorf("'%s' is not a joined soul; run /soul-join first (see /soul-default --list)", slug)
-	}
-	p, err := config.StatePath("project-souls")
+	bindingsPath, err := config.StatePath("project-souls")
 	if err != nil {
 		return err
 	}
-	return withLock(p, func() error {
-		rows, err := readRecords("project-souls")
-		if err != nil {
-			return err
-		}
-		var kept []string
-		for _, r := range rows {
-			if strings.SplitN(r, "\t", 2)[0] != dir {
-				kept = append(kept, r)
+	return withLock(soulsPath, func() error {
+		return withLock(bindingsPath, func() error {
+			ok, err := IsCatalogSoul(slug)
+			if err != nil {
+				return err
 			}
-		}
-		kept = append(kept, dir+"\t"+slug)
-		return atomicWrite(p, []byte(strings.Join(kept, "\n")+"\n"))
+			if !ok {
+				return fmt.Errorf("'%s' is not a joined soul; run /soul-join first (see /soul-default --list)", slug)
+			}
+			mutation, err := prepareProjectBindingMutation(dir, slug, bindingsPath)
+			if err != nil {
+				return err
+			}
+			return applyStateMutations([]stateMutation{mutation})
+		})
 	})
 }
 
@@ -357,33 +344,48 @@ func policyField(body, key string) string {
 // --- promote targets ----------------------------------------------------------
 
 // PromoteTargetAdd registers a plain remote promote target "<slug> <path> [label]".
-func PromoteTargetAdd(slug, path, label string) error {
+// It returns the canonical stored path.
+func PromoteTargetAdd(slug, path, label string) (string, error) {
 	if slug == "" {
-		return fmt.Errorf("add: missing <slug>")
+		return "", fmt.Errorf("add: missing <slug>")
 	}
-	if !strings.HasPrefix(path, "/") {
-		return fmt.Errorf("add: <path> must start with / (got '%s')", path)
+	canonicalPath, err := canonicalPromotePath(path)
+	if err != nil {
+		return "", err
 	}
-	if strings.ContainsAny(path, " \t") {
-		return fmt.Errorf("add: <path> must not contain whitespace")
-	}
+	path = canonicalPath
 	if !slugSafe.MatchString(slug) {
-		return fmt.Errorf("add: <slug> '%s' has unexpected characters", slug)
+		return "", fmt.Errorf("add: <slug> '%s' has unexpected characters", slug)
+	}
+	if err := validateRecordField("promote label", label); err != nil {
+		return "", err
 	}
 	p, err := config.StatePath("promote-targets")
 	if err != nil {
-		return err
+		return "", err
 	}
-	return withLock(p, func() error {
+	err = withLock(p, func() error {
 		rows, err := readRecords("promote-targets")
 		if err != nil {
 			return err
 		}
-		for _, r := range rows {
-			f := strings.Fields(r)
-			if len(f) >= 2 && f[0] == slug && f[1] == path {
-				return nil // idempotent on slug+path
+		for i, row := range rows {
+			fields := strings.SplitN(row, " ", 3)
+			if len(fields) < 2 || fields[0] != slug {
+				continue
 			}
+			existingPath, pathErr := canonicalPromotePath(fields[1])
+			if pathErr != nil || existingPath != path {
+				continue
+			}
+			if fields[1] == path {
+				return nil // idempotent on slug+canonical path
+			}
+			rows[i] = slug + " " + path
+			if len(fields) == 3 {
+				rows[i] += " " + fields[2]
+			}
+			return atomicWrite(p, []byte(strings.Join(rows, "\n")+"\n"))
 		}
 		line := slug + " " + path
 		if label != "" {
@@ -392,6 +394,22 @@ func PromoteTargetAdd(slug, path, label string) error {
 		rows = append(rows, line)
 		return atomicWrite(p, []byte(strings.Join(rows, "\n")+"\n"))
 	})
+	return path, err
+}
+
+func canonicalPromotePath(raw string) (string, error) {
+	if !strings.HasPrefix(raw, "/") {
+		return "", fmt.Errorf("add: <path> must start with / (got '%s')", raw)
+	}
+	if strings.ContainsAny(raw, "\\\x00") || strings.ContainsFunc(raw, unicode.IsSpace) {
+		return "", fmt.Errorf("add: <path> must not contain whitespace, backslashes, or NUL")
+	}
+	for segment := range strings.SplitSeq(raw, "/") {
+		if segment == "." || segment == ".." {
+			return "", fmt.Errorf("add: <path> must not contain traversal segments")
+		}
+	}
+	return pathpkg.Clean(raw), nil
 }
 
 // PromoteTargetList returns the registered plain remote promote targets.
@@ -540,7 +558,7 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 	}
 	if j.Token != "" {
 		if token != "" && token != j.Token {
-			return nil, fmt.Errorf("both --token and a join-URL token were given; pass one")
+			return nil, fmt.Errorf("both explicit token input and a join-URL token were given; pass one")
 		}
 		token = j.Token
 	}
@@ -554,37 +572,241 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 		return nil, fmt.Errorf("slug '%s' is reserved for the local managed soul; join a host with a different first label", config.LocalSoulID)
 	}
 	host := "mark://" + h
-
-	existingHost, err := remoteSoulHost(slug)
+	soulsPath, err := config.StatePath("souls")
 	if err != nil {
 		return nil, err
 	}
-	if existingHost != "" && existingHost != host {
-		return nil, fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existingHost, host)
-	}
-
-	tokenFile := "-"
-	if token != "" {
-		tf, err := config.StatePath("soul-" + slug + ".token")
+	bindingsPath := ""
+	if bindDir != "" {
+		bindingsPath, err = config.StatePath("project-souls")
 		if err != nil {
 			return nil, err
 		}
-		if err := atomicWrite0600(tf, []byte(token)); err != nil {
-			return nil, err
-		}
-		tokenFile = tf
 	}
-	if err := SoulRegister(slug, host, insecure, tokenFile); err != nil {
+
+	managedTokenFile, err := config.StatePath("soul-" + slug + ".token")
+	if err != nil {
 		return nil, err
 	}
-	if bindDir != "" {
-		if err := ProjectBindSet(bindDir, slug); err != nil {
-			return nil, err
-		}
+	tokenFile := "-"
+	if token != "" {
+		tokenFile = managedTokenFile
+	}
+	if err := commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath, insecure); err != nil {
+		return nil, err
 	}
 	return &SoulJoinResult{Slug: slug, Host: host, Insecure: insecure, TokenFile: tokenFile}, nil
 }
 
-func atomicWrite0600(path string, data []byte) error {
-	return atomicWritePerm(path, data, 0o600)
+// Every multi-file registry path locks souls before project-souls; never reverse.
+func commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) error {
+	mutate := func() error {
+		mutations, replacedExternal, err := prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath, insecure)
+		if err != nil {
+			return err
+		}
+		if err := applyStateMutations(mutations); err != nil {
+			return err
+		}
+		if replacedExternal != "" {
+			if _, err := fmt.Fprintf(os.Stderr, "soul %s: catalog reference moved from %s to %s; the old external token file still exists\n", slug, replacedExternal, managedTokenFile); err != nil {
+				return fmt.Errorf("soul join committed but reporting replaced external token reference failed: %w", err)
+			}
+		}
+		return nil
+	}
+	return withLock(soulsPath, func() error {
+		if bindingsPath == "" {
+			return mutate()
+		}
+		return withLock(bindingsPath, mutate)
+	})
+}
+
+func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) ([]stateMutation, string, error) {
+	existing, exists, err := RemoteSoulRow(slug)
+	if err != nil {
+		return nil, "", err
+	}
+	if exists && existing.Host != host {
+		return nil, "", fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existing.Host, host)
+	}
+	replacedExternal, err := replacedExternalToken(slug, token, managedTokenFile, existing, exists)
+	if err != nil {
+		return nil, "", err
+	}
+	rows, err := readRecords("souls")
+	if err != nil {
+		return nil, "", err
+	}
+	kept := make([]string, 0, len(rows)+1)
+	for _, row := range rows {
+		if strings.SplitN(row, "\t", 2)[0] != slug {
+			kept = append(kept, row)
+		}
+	}
+	ins := "0"
+	if insecure {
+		ins = "1"
+	}
+	kept = append(kept, strings.Join([]string{slug, host, ins, tokenFile}, "\t"))
+
+	mutations := make([]stateMutation, 0, 3)
+	var tokenDelete *stateMutation
+	if token != "" {
+		mutation, err := prepareStateMutation(tokenFile, []byte(token), 0o600)
+		if err != nil {
+			return nil, "", err
+		}
+		mutations = append(mutations, mutation)
+	} else {
+		mutation, err := prepareDeleteStateMutation(managedTokenFile)
+		if err != nil {
+			return nil, "", err
+		}
+		tokenDelete = &mutation
+	}
+	catalog, err := prepareStateMutation(soulsPath, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
+	if err != nil {
+		return nil, "", err
+	}
+	mutations = append(mutations, catalog)
+	// Publish the tokenless catalog row before removing the old token so readers
+	// never observe a token-backed row whose credential file is already gone.
+	if tokenDelete != nil {
+		mutations = append(mutations, *tokenDelete)
+	}
+	if bindDir != "" {
+		binding, err := prepareProjectBindingMutation(bindDir, slug, bindingsPath)
+		if err != nil {
+			return nil, "", err
+		}
+		mutations = append(mutations, binding)
+	}
+	return mutations, replacedExternal, nil
+}
+
+func replacedExternalToken(slug, token, managedTokenFile string, existing SoulRow, exists bool) (string, error) {
+	if !exists || existing.TokenFile == "" || existing.TokenFile == "-" || existing.TokenFile == managedTokenFile {
+		return "", nil
+	}
+	if token == "" {
+		return "", fmt.Errorf("soul '%s' uses externally managed token file %q; refusing to remove its catalog reference during tokenless rejoin; resolve that credential explicitly first", slug, existing.TokenFile)
+	}
+	return existing.TokenFile, nil
+}
+
+func prepareProjectBindingMutation(dir, slug, path string) (stateMutation, error) {
+	if err := validateRecordField("project binding directory", dir); err != nil {
+		return stateMutation{}, err
+	}
+	bindings, err := readRecords("project-souls")
+	if err != nil {
+		return stateMutation{}, err
+	}
+	bound := make([]string, 0, len(bindings)+1)
+	for _, row := range bindings {
+		if strings.SplitN(row, "\t", 2)[0] != dir {
+			bound = append(bound, row)
+		}
+	}
+	bound = append(bound, dir+"\t"+slug)
+	return prepareStateMutation(path, []byte(strings.Join(bound, "\n")+"\n"), 0o644)
+}
+
+func validateRecordField(name, value string) error {
+	if value != strings.TrimSpace(value) {
+		return fmt.Errorf("%s must not start or end with whitespace", name)
+	}
+	if strings.ContainsAny(value, "\t\r\n\x00") {
+		return fmt.Errorf("%s must not contain tab, line break, or NUL delimiters", name)
+	}
+	return nil
+}
+
+type fileSnapshot struct {
+	path   string
+	data   []byte
+	mode   os.FileMode
+	exists bool
+}
+
+type stateMutation struct {
+	before fileSnapshot
+	data   []byte
+	mode   os.FileMode
+	delete bool
+}
+
+var writeStateFile = atomicWritePerm
+
+func prepareStateMutation(path string, data []byte, mode os.FileMode) (stateMutation, error) {
+	snapshot, err := snapshotFile(path)
+	if err != nil {
+		return stateMutation{}, err
+	}
+	return stateMutation{before: snapshot, data: data, mode: mode}, nil
+}
+
+func prepareDeleteStateMutation(path string) (stateMutation, error) {
+	snapshot, err := snapshotFile(path)
+	if err != nil {
+		return stateMutation{}, err
+	}
+	return stateMutation{before: snapshot, delete: true}, nil
+}
+
+func snapshotFile(path string) (fileSnapshot, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fileSnapshot{path: path}, nil
+	}
+	if err != nil {
+		return fileSnapshot{}, fmt.Errorf("snapshot %s: %w", path, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileSnapshot{}, fmt.Errorf("stat snapshot %s: %w", path, err)
+	}
+	return fileSnapshot{path: path, data: data, mode: info.Mode().Perm(), exists: true}, nil
+}
+
+func applyStateMutations(mutations []stateMutation) error {
+	for i := range mutations {
+		mutation := &mutations[i]
+		var err error
+		if mutation.delete {
+			err = os.Remove(mutation.before.path)
+			if errors.Is(err, os.ErrNotExist) {
+				err = nil
+			}
+		} else {
+			err = writeStateFile(mutation.before.path, mutation.data, mutation.mode)
+		}
+		if err != nil {
+			rollbackErr := rollbackStateMutations(mutations[:i+1])
+			return errors.Join(fmt.Errorf("mutate %s: %w", mutation.before.path, err), rollbackErr)
+		}
+	}
+	return nil
+}
+
+func rollbackStateMutations(mutations []stateMutation) error {
+	var rollbackErr error
+	for i := len(mutations) - 1; i >= 0; i-- {
+		snapshot := &mutations[i].before
+		var err error
+		if snapshot.exists {
+			err = atomicWritePerm(snapshot.path, snapshot.data, snapshot.mode)
+		} else {
+			err = os.Remove(snapshot.path)
+			if errors.Is(err, os.ErrNotExist) {
+				err = nil
+			}
+		}
+		if err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback %s: %w", snapshot.path, err))
+		}
+	}
+	return rollbackErr
 }

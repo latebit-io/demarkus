@@ -1,7 +1,7 @@
 {
   "name": "demarkus-knowledge",
-  "version": "0.5.53",
-  "description": "Join an organizational demarkus knowledge system (a broker-fronted, shared, versioned markdown catalog) from Claude Code. Validates and registers the broker as an MCP server, steers sessions to consult the shared catalog first, makes it easy to navigate, and enforces a publish tag-gate so shared documents stay findable. No local server, no binaries — pure broker + OAuth.",
+  "version": "0.5.54",
+  "description": "Join an organizational demarkus knowledge system from Claude Code. Registers the broker as an OAuth MCP server, steers sessions to the shared catalog, and enforces publishing policy. Runs no local server; a shared helper binary provides gates and guidance.",
   "author": {
     "name": "latebit",
     "url": "https://github.com/latebit-io"

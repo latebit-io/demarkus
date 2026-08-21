@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -128,6 +129,86 @@ func TestWithLock(t *testing.T) {
 		})
 		if err == nil {
 			t.Fatal("expected acquisition timeout")
+		}
+	})
+
+	t.Run("times out on stuck transition guard", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "state.lock")
+		guard, err := os.OpenFile(lock+".guard", os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Flock(int(guard.Fd()), syscall.LOCK_EX); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(lock, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lock, "pid"), []byte("0"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		guardClosed := false
+		defer func() {
+			if guardClosed {
+				return
+			}
+			if err := syscall.Flock(int(guard.Fd()), syscall.LOCK_UN); err != nil {
+				t.Errorf("unlock guard: %v", err)
+			}
+			if err := guard.Close(); err != nil {
+				t.Errorf("close guard: %v", err)
+			}
+		}()
+
+		result := make(chan error, 1)
+		go func() {
+			result <- WithLock(lock, 100, time.Millisecond, func() error {
+				t.Error("fn must not run while transition guard is held")
+				return nil
+			})
+		}()
+
+		time.Sleep(5 * time.Millisecond)
+		if err := os.RemoveAll(lock); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(lock, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		wantPID := strconv.Itoa(os.Getpid())
+		if err := os.WriteFile(filepath.Join(lock, "pid"), []byte(wantPID), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Flock(int(guard.Fd()), syscall.LOCK_UN); err != nil {
+			t.Fatal(err)
+		}
+		if err := guard.Close(); err != nil {
+			t.Fatal(err)
+		}
+		guardClosed = true
+		var contenderErr error
+		select {
+		case contenderErr = <-result:
+		case <-time.After(time.Second):
+			t.Fatal("contender did not exhaust retries")
+		}
+		if contenderErr == nil {
+			t.Fatal("expected transition guard timeout")
+		}
+		pid, err := os.ReadFile(filepath.Join(lock, "pid"))
+		if err != nil || string(pid) != wantPID {
+			t.Fatalf("live holder was disturbed: pid=%q err=%v", pid, err)
+		}
+		stages, err := filepath.Glob(lock + ".stage-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(stages) != 0 {
+			t.Fatalf("contender leaked stages: %v", stages)
+		}
+		ran := false
+		if err := WithLock(lock, 1, time.Millisecond, func() error { ran = true; return nil }); err == nil || ran {
+			t.Fatalf("live holder was not preserved: err=%v ran=%v", err, ran)
 		}
 	})
 }

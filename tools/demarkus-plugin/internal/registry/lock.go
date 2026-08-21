@@ -7,9 +7,9 @@
 package registry
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
@@ -27,31 +27,32 @@ func withLock(path string, fn func() error) error {
 // atomicWrite writes data to path via a temp file + rename (no torn writes).
 func atomicWrite(path string, data []byte) error { return atomicWritePerm(path, data, 0o644) }
 
-// atomicWritePerm is atomicWrite with an explicit mode. The temp file is created
-// WITH that mode (via O_CREATE perm) so a secret (e.g. a 0600 token) is never
-// briefly world-readable before a later chmod.
+// atomicWritePerm is atomicWrite with an explicit mode. CreateTemp starts at
+// 0600, so secrets are never briefly world-readable before the exact chmod.
 func atomicWritePerm(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
+		return errors.Join(err, f.Close(), os.Remove(tmp))
+	}
+	if err := f.Sync(); err != nil {
+		return errors.Join(err, f.Close(), os.Remove(tmp))
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
+		return errors.Join(err, os.Remove(tmp))
 	}
 	// O_CREATE perm is masked by umask; enforce the exact mode for secrets.
 	if err := os.Chmod(tmp, perm); err != nil {
-		_ = os.Remove(tmp)
-		return err
+		return errors.Join(err, os.Remove(tmp))
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return errors.Join(err, os.Remove(tmp))
+	}
+	return nil
 }

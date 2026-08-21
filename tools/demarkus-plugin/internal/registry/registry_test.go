@@ -1,9 +1,12 @@
 package registry
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -17,6 +20,105 @@ func setupHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return home
+}
+
+func failWritesTo(t *testing.T, name string) {
+	t.Helper()
+	originalWriter := writeStateFile
+	t.Cleanup(func() { writeStateFile = originalWriter })
+	writeStateFile = func(path string, data []byte, mode os.FileMode) error {
+		if filepath.Base(path) == name {
+			return errors.New("injected write failure")
+		}
+		return atomicWritePerm(path, data, mode)
+	}
+}
+
+func captureStderr(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	stderr, err := os.CreateTemp(t.TempDir(), "stderr-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStderr := os.Stderr
+	os.Stderr = stderr
+	callErr := fn()
+	os.Stderr = originalStderr
+	if err := stderr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	warning, err := os.ReadFile(stderr.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(warning), callErr
+}
+
+func TestAtomicWritePermConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+	const writers = 32
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			<-start
+			errs <- atomicWritePerm(path, []byte("writer-"+strconv.Itoa(i)), 0o600)
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || !strings.HasPrefix(string(body), "writer-") {
+		t.Fatalf("final state: body=%q err=%v", body, err)
+	}
+	temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".state.*.tmp"))
+	if err != nil || len(temps) != 0 {
+		t.Fatalf("temporary files: %v err=%v", temps, err)
+	}
+}
+
+func TestProjectBindSetUsesTransactionWriter(t *testing.T) {
+	home := setupHome(t)
+	if err := SoulRegister("remote", "mark://remote.example", false, "-"); err != nil {
+		t.Fatal(err)
+	}
+	failWritesTo(t, "project-souls")
+	if err := ProjectBindSet(filepath.Join(home, "repo"), "remote"); err == nil {
+		t.Fatal("ProjectBindSet succeeded despite injected write failure")
+	}
+	path, err := config.StatePath("project-souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("binding file exists after failed write: %v", err)
+	}
+}
+
+func TestProjectBindSetRejectsRecordDelimiters(t *testing.T) {
+	setupHome(t)
+	if err := SoulRegister("remote", "mark://remote.example", false, "-"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"/repo\tother", "/repo\rnext", "/repo\nnext", "/repo\x00next", " relative", "relative "} {
+		if err := ProjectBindSet(dir, "remote"); err == nil {
+			t.Errorf("binding directory %q should error", dir)
+		}
+	}
+	path, err := config.StatePath("project-souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("binding file exists after rejected inputs: %v", err)
+	}
 }
 
 func TestDeriveSlug(t *testing.T) {
@@ -105,6 +207,203 @@ func TestSoulJoinAndCollision(t *testing.T) {
 	}
 }
 
+func TestSoulJoinRollsBackBindingFailure(t *testing.T) {
+	home := setupHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	failWritesTo(t, "project-souls")
+
+	if _, err := SoulJoin("soul.demarkus.io", "secret", false, repo); err == nil {
+		t.Fatal("SoulJoin succeeded despite binding failure")
+	}
+	for _, name := range []string{"souls", "project-souls", "soul-soul.token"} {
+		path := filepath.Join(home, ".demarkus", name)
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("partial state remains at %s: %v", path, err)
+		}
+	}
+}
+
+func TestSoulJoinRestoresExistingStateOnBindingFailure(t *testing.T) {
+	home := setupHome(t)
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, repo); err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{
+		filepath.Join(home, ".demarkus", "souls"),
+		filepath.Join(home, ".demarkus", "project-souls"),
+		filepath.Join(home, ".demarkus", "soul-soul.token"),
+	}
+	before := make(map[string]string, len(paths))
+	beforeMode := make(map[string]os.FileMode, len(paths))
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[path] = string(body)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeMode[path] = info.Mode().Perm()
+	}
+
+	failWritesTo(t, "project-souls")
+	if _, err := SoulJoin("soul.demarkus.io", "new-token", true, repo); err == nil {
+		t.Fatal("SoulJoin succeeded despite binding failure")
+	}
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != before[path] {
+			t.Errorf("state changed at %s: got %q, want %q", path, body, before[path])
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != beforeMode[path] {
+			t.Errorf("mode changed at %s: got %o, want %o", path, info.Mode().Perm(), beforeMode[path])
+		}
+	}
+}
+
+func TestSoulJoinWithoutTokenRemovesManagedToken(t *testing.T) {
+	home := setupHome(t)
+	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(home, ".demarkus", "soul-soul.token")
+	if _, err := SoulJoin("soul.demarkus.io", "", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tokenPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed token remains after tokenless rejoin: %v", err)
+	}
+	row, ok, err := RemoteSoulRow("soul")
+	if err != nil || !ok || row.TokenFile != "-" {
+		t.Fatalf("tokenless row = %+v, ok=%v, err=%v", row, ok, err)
+	}
+}
+
+func TestSoulJoinWithoutTokenRemovesOrphanManagedToken(t *testing.T) {
+	home := setupHome(t)
+	tokenPath := filepath.Join(home, ".demarkus", "soul-soul.token")
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("orphan-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SoulJoin("soul.demarkus.io", "", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tokenPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphan managed token remains after tokenless join: %v", err)
+	}
+}
+
+func TestSoulJoinWithoutTokenPreservesExternalTokenReference(t *testing.T) {
+	home := setupHome(t)
+	tokenPath := filepath.Join(home, "external.token")
+	if err := os.WriteFile(tokenPath, []byte("external-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SoulRegister("soul", "mark://soul.demarkus.io", false, tokenPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SoulJoin("soul.demarkus.io", "", false, ""); err == nil || !strings.Contains(err.Error(), "externally managed token file") {
+		t.Fatalf("tokenless rejoin error = %v", err)
+	}
+	row, ok, err := RemoteSoulRow("soul")
+	if err != nil || !ok || row.TokenFile != tokenPath {
+		t.Fatalf("external token row = %+v, ok=%v, err=%v", row, ok, err)
+	}
+	body, err := os.ReadFile(tokenPath)
+	if err != nil || string(body) != "external-token" {
+		t.Fatalf("external token changed: body=%q err=%v", body, err)
+	}
+}
+
+func TestSoulJoinWithTokenReportsReplacedExternalTokenReference(t *testing.T) {
+	home := setupHome(t)
+	externalPath := filepath.Join(home, "external.token")
+	if err := os.WriteFile(externalPath, []byte("external-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SoulRegister("soul", "mark://soul.demarkus.io", false, externalPath); err != nil {
+		t.Fatal(err)
+	}
+	warning, joinErr := captureStderr(t, func() error {
+		_, err := SoulJoin("soul.demarkus.io", "managed-token", false, "")
+		return err
+	})
+	if joinErr != nil {
+		t.Fatal(joinErr)
+	}
+	if !strings.Contains(warning, externalPath) || !strings.Contains(warning, "old external token file still exists") {
+		t.Fatalf("warning = %q", warning)
+	}
+	if body, err := os.ReadFile(externalPath); err != nil || string(body) != "external-token" {
+		t.Fatalf("external token changed: body=%q err=%v", body, err)
+	}
+}
+
+func TestSoulJoinDoesNotReportExternalTokenReplacementAfterRollback(t *testing.T) {
+	home := setupHome(t)
+	externalPath := filepath.Join(home, "external.token")
+	if err := os.WriteFile(externalPath, []byte("external-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SoulRegister("soul", "mark://soul.demarkus.io", false, externalPath); err != nil {
+		t.Fatal(err)
+	}
+	failWritesTo(t, "project-souls")
+	warning, joinErr := captureStderr(t, func() error {
+		_, err := SoulJoin("soul.demarkus.io", "managed-token", false, filepath.Join(home, "repo"))
+		return err
+	})
+	if joinErr == nil {
+		t.Fatal("SoulJoin succeeded despite binding failure")
+	}
+	if warning != "" {
+		t.Fatalf("warning after rollback = %q", warning)
+	}
+	row, ok, err := RemoteSoulRow("soul")
+	if err != nil || !ok || row.TokenFile != externalPath {
+		t.Fatalf("external token row after rollback = %+v, ok=%v, err=%v", row, ok, err)
+	}
+}
+
+func TestSoulJoinRestoresDeletedTokenOnLaterFailure(t *testing.T) {
+	home := setupHome(t)
+	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(home, ".demarkus", "soul-soul.token")
+	failWritesTo(t, "project-souls")
+	if _, err := SoulJoin("soul.demarkus.io", "", false, filepath.Join(home, "repo")); err == nil {
+		t.Fatal("SoulJoin succeeded despite binding failure")
+	}
+	body, err := os.ReadFile(tokenPath)
+	if err != nil || string(body) != "old-token" {
+		t.Fatalf("token rollback: body=%q err=%v", body, err)
+	}
+	info, err := os.Stat(tokenPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("token rollback mode: info=%v err=%v", info, err)
+	}
+}
+
 func TestPolicyMirror(t *testing.T) {
 	home := setupHome(t)
 	// PolicyMirror only writes for a registered slug, so register first.
@@ -179,15 +478,50 @@ func TestKnowledgeRegisterUnregister(t *testing.T) {
 }
 
 func TestPromoteTargetAdd(t *testing.T) {
-	setupHome(t)
-	if err := PromoteTargetAdd("acme", "/shared", "Acme shared"); err != nil {
+	home := setupHome(t)
+	if _, err := PromoteTargetAdd("acme", "/shared", "Acme shared"); err != nil {
 		t.Fatal(err)
 	}
-	if err := PromoteTargetAdd("acme", "bad", ""); err == nil {
+	if _, err := PromoteTargetAdd("acme", "bad", ""); err == nil {
 		t.Error("path not starting with / should error")
 	}
-	rows, _ := PromoteTargetList()
-	if len(rows) != 1 || rows[0] != "acme /shared Acme shared" {
+	for _, unsafe := range []string{"/docs/../secret", "/docs/./internal", `/docs\secret`, "/safe\nother", "/safe\rother"} {
+		if _, err := PromoteTargetAdd("acme", unsafe, ""); err == nil {
+			t.Errorf("unsafe path %q should error", unsafe)
+		}
+	}
+	for _, label := range []string{"bad\tlabel", "bad\rlabel", "bad\nlabel", "bad\x00label", " leading", "trailing "} {
+		if _, err := PromoteTargetAdd("acme", "/labeled", label); err == nil {
+			t.Errorf("unsafe label %q should error", label)
+		}
+	}
+	canonical, err := PromoteTargetAdd("acme", "/shared//nested/", "Nested")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical != "/shared/nested" {
+		t.Fatalf("canonical path = %q", canonical)
+	}
+	rows, err := PromoteTargetList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0] != "acme /shared Acme shared" || rows[1] != "acme /shared/nested Nested" {
+		t.Fatalf("promote target rows = %v", rows)
+	}
+	registryPath := filepath.Join(home, ".demarkus", "promote-targets")
+	legacyRows := strings.Join(append(rows, "legacy /legacy//nested/ Legacy label"), "\n") + "\n"
+	if err := os.WriteFile(registryPath, []byte(legacyRows), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PromoteTargetAdd("legacy", "/legacy/nested", "Ignored replacement"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = PromoteTargetList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || rows[2] != "legacy /legacy/nested Legacy label" {
 		t.Fatalf("promote target row wrong: %v", rows)
 	}
 }
