@@ -62,9 +62,30 @@ Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/
 - Slash commands: `/knowledge-join <broker-url>`, `/knowledge`, `/knowledge-doctor` (catalog hygiene audit)
 - Skill: `knowledge-promote`, the curation cascade that distills, dedups, tags, routes, and gates a document before it lands in the shared catalog
 
+### OpenCode
+
+The OpenCode ports provide the same memory and knowledge-system workflows and
+share `~/.demarkus` state with the Claude Code and pi plugins.
+
+**`demarkus-opencode-memory`** installs local soul support:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+```
+
+**`demarkus-opencode-knowledge`** joins an organizational knowledge system:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash
+```
+
+- Source: [plugins/opencode-memory](https://github.com/latebit-io/demarkus/tree/main/plugins/opencode-memory) · [plugins/opencode-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/opencode-knowledge)
+- Commands: the same `/soul*`, `/promote*`, and `/knowledge*` command sets described above
+- Restart OpenCode after installation; restart once more after memory's first session or after joining a knowledge system so the new MCP entry connects
+
 ### pi
 
-The same two plugins, ported to the [pi](https://pi.dev) coding agent and mapped onto its extension API. They share `~/.demarkus` state with the Claude Code plugins (one soul, one token, one set of registries), so both agents can run on the same machine.
+The same two plugins, ported to the [pi](https://pi.dev) coding agent and mapped onto its extension API. They share `~/.demarkus` state with the Claude Code and OpenCode plugins (one soul, one token, one set of registries), so all three agents can run on the same machine.
 
 Both need the MCP adapter first:
 

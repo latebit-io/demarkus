@@ -14,6 +14,12 @@ Give your agent memory. There is nothing to configure: the plugin spawns a local
 /plugin install demarkus-memory@demarkus
 ```
 
+In **[OpenCode](https://opencode.ai)**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+```
+
 In **[pi](https://pi.dev)**:
 
 ```bash
@@ -21,7 +27,7 @@ pi install npm:pi-mcp-adapter
 pi install ./demarkus/plugins/pi-memory
 ```
 
-Both share the same `~/.demarkus` state, so they coexist on one machine. [Agent memory →](/scenarios/agent-memory/)
+All three share the same `~/.demarkus` state, so they coexist on one machine. [Agent memory →](/scenarios/agent-memory/)
 
 Ready to share it? One command turns a fresh Linux host into a whole knowledge system: world server, broker, [reading room](/library/), self-hosted login, HTTPS, and the indexing agent.
 

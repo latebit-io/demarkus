@@ -6,7 +6,7 @@ permalink: /scenarios/agent-memory/
 
 # Agent Memory (Soul Pattern)
 
-Give Claude Code (or any MCP-compatible LLM agent) persistent memory across sessions: architecture notes, debugging lessons, roadmap, journal.
+Give Claude Code, OpenCode, pi, or any MCP-compatible LLM agent persistent memory across sessions: architecture notes, debugging lessons, roadmap, journal.
 
 This is the pattern used by the Demarkus project itself. You can browse the live example at `mark://soul.demarkus.io`.
 
@@ -20,9 +20,10 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 
 ## Quick start: the plugins
 
-Claude Code and [pi](https://pi.dev) both have a plugin, with the same behavior
-mapped onto each agent's extension API. They share `~/.demarkus` state, so one
-machine running both has one soul, one token, one registry.
+Claude Code, [OpenCode](https://opencode.ai), and [pi](https://pi.dev) each have
+a plugin, with the same behavior mapped onto each agent's extension API. They
+share `~/.demarkus` state, so one machine running all three has one soul, one
+token, one registry.
 
 ### Claude Code
 
@@ -38,6 +39,18 @@ On the first session it spawns a local `demarkus-server`, auto-generates a publi
 Hooks keep the catalog honest: a publish without tags is caught at write time, an end-of-session nudge asks for a journal entry when files changed but nothing was recorded, and a "did we decide X" question nudges a recall before you answer from context.
 
 Memory is organized **per project**: each one lives under `/<project>/` (the slug is the basename of your project directory) following the canonical layout the plugin seeds as `/project-template.md`. The agent maintains the per-project `index.md` hub itself as it adds documents.
+
+### OpenCode
+
+Install `demarkus-opencode-memory` with the standalone installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+```
+
+Restart OpenCode. The first session provisions the soul; restart once more so
+OpenCode connects the newly registered MCP server. `/soul-status` diagnoses and
+`/soul-init` reconfigures the installation.
 
 ### pi
 
@@ -60,7 +73,7 @@ The soul provisions on the next session. Run `/mcp` once (or restart pi) to
 connect the newly registered server; `/soul-status` diagnoses, `/soul-init`
 reconfigures.
 
-That is the whole setup for either agent. The manual steps below are for other MCP agents, a custom port, or a remote soul server.
+That is the whole setup for any of the three agents. The manual steps below are for other MCP agents, a custom port, or a remote soul server.
 
 ## Manual setup (any MCP agent)
 
