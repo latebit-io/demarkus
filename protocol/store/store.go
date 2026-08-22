@@ -832,7 +832,7 @@ func hasHiddenSegment(rel string) bool {
 func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) (bool, error) {
 	entries, err := os.ReadDir(dirAbs)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("read directory: %w", err)
 	}
 	// Files first: a qualifying file at this level answers with at most one
 	// candidate load, before any subtree recursion is paid.
@@ -874,26 +874,32 @@ func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) (bo
 }
 
 // entryArchived safely resolves a current document and overlays sidecar state.
-// Guarded non-document states remain visible; archive-state errors propagate.
+// Confirmed non-symlinks and non-regular targets remain visible.
 func entryArchived(childPath, absRoot string) (bool, error) {
 	fi, err := os.Lstat(childPath)
-	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+	if err != nil {
+		return false, fmt.Errorf("lstat document: %w", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
 		return false, nil
 	}
 	resolved, err := filepath.EvalSymlinks(childPath)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("resolve document: %w", err)
 	}
 	if !isContained(resolved, absRoot) {
-		return false, nil
+		return false, errSymlinkEscapes
 	}
 	info, err := os.Stat(resolved)
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil {
+		return false, fmt.Errorf("stat document: %w", err)
+	}
+	if !info.Mode().IsRegular() {
 		return false, nil
 	}
 	f, err := os.Open(resolved)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("open document: %w", err)
 	}
 	// maxStoreFrontmatter bounds the frontmatter block, so this prefix is
 	// guaranteed to contain the closing fence; the slack covers the fences.

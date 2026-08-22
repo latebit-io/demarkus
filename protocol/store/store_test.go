@@ -329,6 +329,59 @@ func TestListDirRejectsInvalidArchiveState(t *testing.T) {
 	}
 }
 
+func TestListInspectionErrors(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("resolve root: %v", err)
+	}
+
+	if _, err := s.dirHasDocument(filepath.Join(root, "missing"), root, false); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dirHasDocument error = %v, want ErrNotExist", err)
+	}
+
+	broken := filepath.Join(root, "broken.md")
+	if err := os.Symlink("missing-target", broken); err != nil {
+		t.Fatalf("create broken symlink: %v", err)
+	}
+	if _, err := entryArchived(broken, resolvedRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("entryArchived broken link error = %v, want ErrNotExist", err)
+	}
+
+	nonSymlink := filepath.Join(root, "plain.md")
+	if err := os.WriteFile(nonSymlink, []byte("plain"), 0o644); err != nil {
+		t.Fatalf("write plain file: %v", err)
+	}
+	if archived, err := entryArchived(nonSymlink, resolvedRoot); err != nil || archived {
+		t.Fatalf("entryArchived plain file = (%t, %v), want false, nil", archived, err)
+	}
+
+	directory := filepath.Join(root, "directory")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatalf("create directory: %v", err)
+	}
+	directoryLink := filepath.Join(root, "directory.md")
+	if err := os.Symlink("directory", directoryLink); err != nil {
+		t.Fatalf("link directory: %v", err)
+	}
+	if archived, err := entryArchived(directoryLink, resolvedRoot); err != nil || archived {
+		t.Fatalf("entryArchived directory = (%t, %v), want false, nil", archived, err)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	escaping := filepath.Join(root, "escaping.md")
+	if err := os.Symlink(outside, escaping); err != nil {
+		t.Fatalf("link outside file: %v", err)
+	}
+	if _, err := entryArchived(escaping, resolvedRoot); !errors.Is(err, errSymlinkEscapes) {
+		t.Fatalf("entryArchived escape error = %v, want errSymlinkEscapes", err)
+	}
+}
+
 func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
