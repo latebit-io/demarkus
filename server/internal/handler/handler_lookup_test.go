@@ -146,10 +146,18 @@ func testHandleLookupScopeNotFound(t *testing.T, newBackend backendFactory) {
 }
 
 func TestHandleLookupNotConfigured(t *testing.T) {
-	h := &Handler{Store: fileBackend(t).Store, Logger: discardLogger}
-	resp := sendLookup(t, h, lookupReq("/", "query: go"))
-	if resp.Status != protocol.StatusServerError {
-		t.Errorf("status = %q, want server-error", resp.Status)
+	b := fileBackend(t)
+	for _, views := range []bool{false, true} {
+		t.Run(fmt.Sprintf("views=%t", views), func(t *testing.T) {
+			h := &Handler{Store: b.Store, Logger: discardLogger}
+			if views {
+				h.Views = b.Views
+			}
+			resp := sendLookup(t, h, lookupReq("/", "query: go"))
+			if resp.Status != protocol.StatusServerError {
+				t.Errorf("status = %q, want server-error", resp.Status)
+			}
+		})
 	}
 }
 
@@ -209,6 +217,39 @@ func testHandleLookupReadAuthFiltering(t *testing.T, newBackend backendFactory) 
 			t.Errorf("authorized requester should see protected doc:\n%s", resp.Body)
 		}
 	})
+}
+
+func TestHandleLookupPinsTokenSnapshot(t *testing.T) {
+	forEachBackend(t, testHandleLookupPinsTokenSnapshot)
+}
+
+func testHandleLookupPinsTokenSnapshot(t *testing.T, newBackend backendFactory) {
+	protected := auth.NewTokenStore(map[string]auth.Token{
+		protocol.HashToken("reader"): {
+			Paths:      []string{"/private/**"},
+			Operations: []string{"read"},
+		},
+	})
+	h := lookupHandler(t, newBackend(t),
+		seedDoc{"/public/doc.md", map[string]string{"tags": "auth", "title": "Public"}},
+		seedDoc{"/private/secret.md", map[string]string{"tags": "auth", "title": "Secret"}},
+	)
+	calls := 0
+	h.GetTokenStore = func() *auth.TokenStore {
+		calls++
+		if calls == 1 {
+			return protected
+		}
+		return nil
+	}
+
+	resp := sendLookup(t, h, lookupReq("/", "query: auth"))
+	if calls != 1 {
+		t.Errorf("token store callback calls = %d, want 1 per request", calls)
+	}
+	if resp.Metadata["matches"] != "1" || strings.Contains(resp.Body, "/private/secret.md") {
+		t.Errorf("request mixed token snapshots: matches=%q body=%s", resp.Metadata["matches"], resp.Body)
+	}
 }
 
 // mustStatus parses a handler response, failing the test on a malformed one so

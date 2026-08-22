@@ -1,0 +1,64 @@
+package store
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+)
+
+func TestStoredVersionNumber(t *testing.T) {
+	tests := []struct {
+		name    string
+		stored  string
+		want    int
+		wantErr bool
+	}{
+		{name: "canonical", stored: "---\nversion: 12\narchived: false\nprevious-hash: sha256-" + strings.Repeat("a", 64) + "\n---\nbody", want: 12},
+		{name: "no frontmatter", stored: "body", wantErr: true},
+		{name: "unterminated", stored: "---\nversion: 1\n", wantErr: true},
+		{name: "missing", stored: "---\narchived: false\n---\n", wantErr: true},
+		{name: "empty", stored: "---\nversion: \narchived: false\n---\n", wantErr: true},
+		{name: "zero", stored: "---\nversion: 0\narchived: false\n---\n", wantErr: true},
+		{name: "negative", stored: "---\nversion: -1\narchived: false\n---\n", wantErr: true},
+		{name: "plus", stored: "---\nversion: +1\narchived: false\n---\n", wantErr: true},
+		{name: "leading zero", stored: "---\nversion: 01\narchived: false\n---\n", wantErr: true},
+		{name: "trailing space", stored: "---\nversion: 1 \narchived: false\n---\n", wantErr: true},
+		{name: "float", stored: "---\nversion: 1.0\narchived: false\n---\n", wantErr: true},
+		{name: "overflow", stored: "---\nversion: 999999999999999999999999\narchived: false\n---\n", wantErr: true},
+		{name: "duplicate", stored: "---\nversion: 1\nversion: 1\narchived: false\n---\n", wantErr: true},
+		{name: "malformed duplicate", stored: "---\nversion: 1\nversion:2\narchived: false\n---\n", wantErr: true},
+		{name: "missing separator", stored: "---\nversion:1\narchived: false\n---\n", wantErr: true},
+		{name: "spaced key", stored: "---\nversion : 1\narchived: false\n---\n", wantErr: true},
+		{name: "missing archived", stored: "---\nversion: 1\n---\n", wantErr: true},
+		{name: "duplicate archived", stored: "---\nversion: 1\narchived: false\narchived: false\n---\n", wantErr: true},
+		{name: "v1 previous hash", stored: "---\nversion: 1\narchived: false\nprevious-hash: sha256-" + strings.Repeat("a", 64) + "\n---\n", wantErr: true},
+		{name: "v2 missing previous hash", stored: "---\nversion: 2\narchived: false\n---\n", wantErr: true},
+		{name: "bad previous hash", stored: "---\nversion: 2\narchived: false\nprevious-hash: sha256-nope\n---\n", wantErr: true},
+		{name: "unknown bare field", stored: "---\nversion: 1\narchived: false\nevil: value\n---\n", wantErr: true},
+		{name: "unsorted metadata", stored: "---\nversion: 1\narchived: false\nmeta.z: value\nmeta.a: value\n---\n", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := StoredVersionNumber([]byte(test.stored))
+			if (err != nil) != test.wantErr || got != test.want {
+				t.Errorf("StoredVersionNumber() = (%d, %v), want (%d, error=%v)", got, err, test.want, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestSerializeVersionRange(t *testing.T) {
+	for _, version := range []int{-1, 0} {
+		if _, err := SerializeVersion(version, nil, nil, nil); err == nil {
+			t.Errorf("SerializeVersion(%d) succeeded", version)
+		}
+	}
+	if _, err := SerializeVersion(MaxVersionNumber, []byte("previous"), nil, nil); err != nil {
+		t.Errorf("SerializeVersion(max): %v", err)
+	}
+	if strconv.IntSize > 32 {
+		if _, err := SerializeVersion(MaxVersionNumber+1, []byte("previous"), nil, nil); err == nil {
+			t.Error("SerializeVersion(max+1) succeeded")
+		}
+	}
+}

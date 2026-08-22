@@ -59,7 +59,7 @@ func pgBackend(t testing.TB, s *pgstore.Store) storetest.LookupBackend {
 	if err := s.Reset(context.Background()); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
-	return storetest.LookupBackend{Store: s, Catalog: s}
+	return storetest.LookupBackend{Store: s, Catalog: s, Views: s}
 }
 
 // TestPostgresLookupMultiReplica: two handler+catalog instances over one
@@ -79,8 +79,8 @@ func TestPostgresLookupMultiReplica(t *testing.T) {
 		}
 	})
 	secret := storetest.HandlerToken
-	replicaA := storetest.NewHandler(storetest.LookupBackend{Store: storeA, Catalog: storeA})
-	replicaB := storetest.NewHandler(storetest.LookupBackend{Store: storeB, Catalog: storeB})
+	replicaA := storetest.NewHandler(storetest.LookupBackend{Store: storeA, Catalog: storeA, Views: storeA})
+	replicaB := storetest.NewHandler(storetest.LookupBackend{Store: storeB, Catalog: storeB, Views: storeB})
 
 	pub := storetest.SendRaw(t, replicaA, "PUBLISH /notes/auth.md\n---\nauth: "+secret+"\ntags: middleware,go\n---\n# Auth Middleware\n")
 	if pub.Status != protocol.StatusCreated {
@@ -118,7 +118,7 @@ func TestPostgresCatalogBackfill(t *testing.T) {
 	if _, err := s.WriteVersion("/gone.md", 0, []byte("# Gone\n"), map[string]string{"tags": "go"}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if err := s.Archive("/gone.md", true); err != nil {
+	if _, _, err := s.Archive("/gone.md", true); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 
@@ -134,7 +134,7 @@ func TestPostgresCatalogBackfill(t *testing.T) {
 
 	// The archived document's row was backfilled too: unarchive restores it
 	// without any write.
-	if err := s.Archive("/gone.md", false); err != nil {
+	if _, _, err := s.Archive("/gone.md", false); err != nil {
 		t.Fatalf("unarchive: %v", err)
 	}
 	assertLookupCount(t, s, "go", 2)

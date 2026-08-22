@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/latebit-io/demarkus/client/joinurl"
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
@@ -263,6 +264,7 @@ var policyKeys = []string{"strictness", "require_tags", "require_fields"}
 
 func policyFileFor(slug string) map[string]string {
 	return map[string]string{
+		"policy":         "plugin-knowledge.policy." + slug,
 		"strictness":     "plugin-knowledge.strictness." + slug,
 		"require_tags":   "plugin-knowledge.require-tags." + slug,
 		"require_fields": "plugin-knowledge.require-fields." + slug,
@@ -284,10 +286,8 @@ func clearPolicyMirror(slug string) error {
 	return nil
 }
 
-// PolicyMirror parses a knowledge system's policy.md body and mirrors its
-// enforced core to the per-slug files the gate reads. A knob absent from the
-// policy clears its file (relaxing de-enforces). Idempotent. Serialized against
-// KnowledgeUnregister via the shared knowledge-systems lock.
+// PolicyMirror mirrors a knowledge system's enforceable policy to per-slug files.
+// Missing directives clear their files. The registry lock serializes unregisters.
 func PolicyMirror(slug, body string) error {
 	if !slugSafe.MatchString(slug) {
 		return fmt.Errorf("invalid slug '%s': only [A-Za-z0-9._-] allowed", slug)
@@ -308,37 +308,63 @@ func PolicyMirror(slug, body string) error {
 		if !registered {
 			return clearPolicyMirror(slug)
 		}
+		policy := publishpolicy.Parse(body)
+		if err := policy.Validate(); err != nil {
+			return err
+		}
+		values := map[string]string{
+			"strictness":     string(policy.Strictness),
+			"require_tags":   strings.Join(policy.RequiredTagAxes, " "),
+			"require_fields": strings.Join(policy.RequiredFields, " "),
+		}
 		fileFor := policyFileFor(slug)
+		snapshotPath, err := config.StatePath(fileFor["policy"])
+		if err != nil {
+			return err
+		}
+		snapshot, err := prepareStateMutation(snapshotPath, policySnapshot(policy, values), 0o644)
+		if err != nil {
+			return err
+		}
+		var mutations []stateMutation
 		for _, key := range policyKeys {
-			val := policyField(body, key)
+			val := values[key]
 			p, err := config.StatePath(fileFor[key])
 			if err != nil {
 				return err
 			}
+			var mutation stateMutation
 			if val == "" {
-				if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				mutation, err = prepareDeleteStateMutation(p)
+				if err != nil {
 					return err
 				}
-				continue
+			} else {
+				mutation, err = prepareStateMutation(p, []byte(val+"\n"), 0o644)
+				if err != nil {
+					return err
+				}
 			}
-			if err := atomicWrite(p, []byte(val+"\n")); err != nil {
-				return err
-			}
+			mutations = append(mutations, mutation)
 		}
-		return nil
+		mutations = append(mutations, snapshot)
+		return applyStateMutations(mutations)
 	})
 }
 
-// policyField returns the value of the first body line "KEY: value" where KEY is
-// the line's first token (so a prose mention can't match). "" when absent.
-func policyField(body, key string) string {
-	for ln := range strings.SplitSeq(body, "\n") {
-		t := strings.TrimLeft(ln, " \t")
-		if strings.HasPrefix(t, key+":") {
-			return strings.TrimSpace(t[len(key)+1:])
-		}
+func policySnapshot(policy publishpolicy.Policy, values map[string]string) []byte {
+	var body strings.Builder
+	body.WriteString("# Atomic mirrored publish policy.\n")
+	if policy.Strictness != "" {
+		fmt.Fprintf(&body, "strictness: %s\n", values["strictness"])
 	}
-	return ""
+	if len(policy.RequiredTagAxes) > 0 {
+		fmt.Fprintf(&body, "require_tags: %s\n", values["require_tags"])
+	}
+	if len(policy.RequiredFields) > 0 {
+		fmt.Fprintf(&body, "require_fields: %s\n", values["require_fields"])
+	}
+	return []byte(body.String())
 }
 
 // --- promote targets ----------------------------------------------------------

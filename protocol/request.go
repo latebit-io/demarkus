@@ -21,6 +21,9 @@ type Request struct {
 // MaxRequestLineLength is the maximum allowed length for a request line.
 const MaxRequestLineLength = 4096
 
+// MaxRequestPathLength keeps one path addressable by every protocol verb.
+const MaxRequestPathLength = MaxRequestLineLength - len(VerbVersions) - 1
+
 // MaxRequestFrontmatterLength is the maximum allowed size for request metadata.
 const MaxRequestFrontmatterLength = 65536 // 64KB
 
@@ -111,14 +114,25 @@ func parseRequestLine(br *bufio.Reader) (verb, path string, err error) {
 		return "", "", fmt.Errorf("unknown verb: %q", verb)
 	}
 
-	if path == "" || !strings.HasPrefix(path, "/") {
-		return "", "", fmt.Errorf("invalid path: %q", path)
-	}
-	if containsControlChars(path) {
-		return "", "", fmt.Errorf("invalid path: contains control characters")
+	if err := ValidateRequestPath(path); err != nil {
+		return "", "", err
 	}
 
 	return verb, path, nil
+}
+
+// ValidateRequestPath checks the path syntax shared by wire and storage layers.
+func ValidateRequestPath(path string) error {
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("invalid path: %q", path)
+	}
+	if len(path) > MaxRequestPathLength {
+		return fmt.Errorf("invalid path: exceeds %d bytes", MaxRequestPathLength)
+	}
+	if containsControlChars(path) {
+		return fmt.Errorf("invalid path: contains control characters")
+	}
+	return nil
 }
 
 // readBoundedPayload reads everything after the request line, rejecting payloads

@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/store"
+	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/config"
+	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
@@ -16,6 +18,7 @@ import (
 type backend struct {
 	Store   handler.DocumentStore
 	Catalog handler.LookupCatalog
+	Views   storagebackend.ViewProvider
 	Close   func() error
 }
 
@@ -66,5 +69,6 @@ func openFileStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
 		return backend{}, fmt.Errorf("hash index build failed: %w", err)
 	}
 	logger.Info("content hash index built", "entries", s.HashIndexSize())
-	return backend{Store: s, Catalog: buildCatalog(s, logger)}, nil
+	wrapped := filestore.New(s, buildCatalog(s, logger))
+	return backend{Store: wrapped, Catalog: wrapped, Views: wrapped}, nil
 }

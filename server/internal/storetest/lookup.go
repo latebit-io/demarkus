@@ -1,12 +1,13 @@
 package storetest
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/store"
+	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
@@ -15,6 +16,7 @@ import (
 type LookupBackend struct {
 	Store   handler.DocumentStore
 	Catalog handler.LookupCatalog
+	Views   storagebackend.ViewProvider
 }
 
 // LookupFactory returns a fresh, empty backend for one conformance subtest.
@@ -224,7 +226,9 @@ func testLookupMaxCap(t *testing.T, b LookupBackend) {
 // FileBackend is the file store paired with the in-memory catalog: the
 // reference backend every other one is compared against.
 func FileBackend(t testing.TB) LookupBackend {
-	return LookupBackend{Store: store.New(t.TempDir()), Catalog: catalog.New()}
+	documents := store.New(t.TempDir())
+	wrapped := filestore.New(documents, catalog.New())
+	return LookupBackend{Store: wrapped, Catalog: wrapped, Views: wrapped}
 }
 
 // The *Into helpers drive a backend exactly as the handler's write paths do
@@ -248,7 +252,7 @@ func appendInto(b LookupBackend, path string, expected int, body []byte, meta ma
 }
 
 func archiveInto(b LookupBackend, path string) error {
-	if err := b.Store.Archive(path, true); err != nil {
+	if _, _, err := b.Store.Archive(path, true); err != nil {
 		return err
 	}
 	b.Catalog.Remove(path)
@@ -257,12 +261,9 @@ func archiveInto(b LookupBackend, path string) error {
 
 // unarchiveInto mirrors the handler's empty-body PUBLISH path.
 func unarchiveInto(b LookupBackend, path string) error {
-	if err := b.Store.Archive(path, false); err != nil {
-		return err
-	}
-	doc, err := b.Store.Get(path, 0)
+	doc, _, err := b.Store.Archive(path, false)
 	if err != nil {
-		return fmt.Errorf("get after unarchive: %w", err)
+		return err
 	}
 	b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
 	return nil

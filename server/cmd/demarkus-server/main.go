@@ -221,6 +221,7 @@ func run() error {
 	h := &handler.Handler{
 		Store:    docStore,
 		Catalog:  cat,
+		Views:    b.Views,
 		Logger:   logger,
 		ReadOnly: cfg.ReadOnly,
 		GetTokenStore: func() *auth.TokenStore {

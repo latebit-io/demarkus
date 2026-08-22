@@ -193,10 +193,10 @@ func TestListDir_HidesArchived(t *testing.T) {
 			t.Fatalf("Write %s: %v", p, err)
 		}
 	}
-	if err := s.Archive("/gone.md", true); err != nil {
+	if _, _, err := s.Archive("/gone.md", true); err != nil {
 		t.Fatalf("Archive /gone.md: %v", err)
 	}
-	if err := s.Archive("/attic/old.md", true); err != nil {
+	if _, _, err := s.Archive("/attic/old.md", true); err != nil {
 		t.Fatalf("Archive /attic/old.md: %v", err)
 	}
 	// A directory holding only a versionless flat file: not a document
@@ -813,24 +813,24 @@ func TestArchive(t *testing.T) {
 
 	t.Run("archive document", func(t *testing.T) {
 		s, _ := setup(t)
-		if err := s.Archive("/doc.md", true); err != nil {
+		if _, _, err := s.Archive("/doc.md", true); err != nil {
 			t.Fatalf("Archive: %v", err)
 		}
-		doc, err := s.Get("/doc.md", 0)
+		got, err := s.Get("/doc.md", 0)
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		if !doc.Archived {
+		if !got.Archived {
 			t.Error("expected doc to be archived")
 		}
 	})
 
 	t.Run("unarchive document", func(t *testing.T) {
 		s, _ := setup(t)
-		if err := s.Archive("/doc.md", true); err != nil {
+		if _, _, err := s.Archive("/doc.md", true); err != nil {
 			t.Fatalf("Archive: %v", err)
 		}
-		if err := s.Archive("/doc.md", false); err != nil {
+		if _, _, err := s.Archive("/doc.md", false); err != nil {
 			t.Fatalf("Unarchive: %v", err)
 		}
 		doc, err := s.Get("/doc.md", 0)
@@ -844,11 +844,16 @@ func TestArchive(t *testing.T) {
 
 	t.Run("archive already archived", func(t *testing.T) {
 		s, _ := setup(t)
-		if err := s.Archive("/doc.md", true); err != nil {
+		first, changed, err := s.Archive("/doc.md", true)
+		if err != nil || !changed {
 			t.Fatalf("Archive first: %v", err)
 		}
-		if err := s.Archive("/doc.md", true); err != nil {
+		second, changed, err := s.Archive("/doc.md", true)
+		if err != nil {
 			t.Fatalf("Archive second: %v", err)
+		}
+		if changed || second.ETag != first.ETag || !second.Modified.Equal(first.Modified) {
+			t.Errorf("second archive = (%+v, changed=%v), want no-op matching first", second, changed)
 		}
 		doc, err := s.Get("/doc.md", 0)
 		if err != nil {
@@ -861,21 +866,25 @@ func TestArchive(t *testing.T) {
 
 	t.Run("unarchive already active", func(t *testing.T) {
 		s, _ := setup(t)
-		if err := s.Archive("/doc.md", false); err != nil {
+		doc, changed, err := s.Archive("/doc.md", false)
+		if err != nil {
 			t.Fatalf("Unarchive: %v", err)
 		}
-		doc, err := s.Get("/doc.md", 0)
+		if changed || doc == nil || doc.Archived {
+			t.Errorf("active unarchive = (%+v, changed=%v), want active no-op", doc, changed)
+		}
+		got, err := s.Get("/doc.md", 0)
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		if doc.Archived {
+		if got.Archived {
 			t.Error("expected doc to remain active")
 		}
 	})
 
 	t.Run("not found", func(t *testing.T) {
 		s, _ := setup(t)
-		err := s.Archive("/missing.md", true)
+		_, _, err := s.Archive("/missing.md", true)
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("expected not-exist error, got: %v", err)
 		}
@@ -883,7 +892,7 @@ func TestArchive(t *testing.T) {
 
 	t.Run("path traversal", func(t *testing.T) {
 		s, _ := setup(t)
-		err := s.Archive("/../etc/passwd", true)
+		_, _, err := s.Archive("/../etc/passwd", true)
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("expected not-exist error for traversal, got: %v", err)
 		}
@@ -891,7 +900,7 @@ func TestArchive(t *testing.T) {
 
 	t.Run("version pinning ignores archive flag", func(t *testing.T) {
 		s, _ := setup(t)
-		if err := s.Archive("/doc.md", true); err != nil {
+		if _, _, err := s.Archive("/doc.md", true); err != nil {
 			t.Fatalf("Archive: %v", err)
 		}
 		doc, err := s.Get("/doc.md", 1)
@@ -911,12 +920,12 @@ func TestArchive(t *testing.T) {
 		if _, err := s.Write("/doc.md", []byte("# V2\n"), nil); err != nil {
 			t.Fatalf("Write v2: %v", err)
 		}
-		if err := s.Archive("/doc.md", true); err != nil {
+		if _, _, err := s.Archive("/doc.md", true); err != nil {
 			t.Fatalf("Archive: %v", err)
 		}
 		// Unarchive and write v3 — the chain should still verify because
 		// v3's previous-hash covers v2's on-disk bytes (including archived flag).
-		if err := s.Archive("/doc.md", false); err != nil {
+		if _, _, err := s.Archive("/doc.md", false); err != nil {
 			t.Fatalf("Unarchive: %v", err)
 		}
 		if _, err := s.Write("/doc.md", []byte("# V3\n"), nil); err != nil {
@@ -929,7 +938,7 @@ func TestArchive(t *testing.T) {
 
 	t.Run("write rejected on archived document", func(t *testing.T) {
 		s, _ := setup(t)
-		if err := s.Archive("/doc.md", true); err != nil {
+		if _, _, err := s.Archive("/doc.md", true); err != nil {
 			t.Fatalf("Archive: %v", err)
 		}
 		_, err := s.Write("/doc.md", []byte("# New content\n"), nil)
@@ -1527,7 +1536,7 @@ func TestAppend_Archived(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Archive("/doc.md", true); err != nil {
+	if _, _, err := s.Archive("/doc.md", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1793,13 +1802,13 @@ func TestHashIndex(t *testing.T) {
 			t.Fatalf("index size: got %d, want 2", s.HashIndexSize())
 		}
 
-		path, ok := s.LookupHash(wantHash("alpha"))
-		if !ok || path != "/a.md" {
-			t.Errorf("lookup alpha: got %q, %v", path, ok)
+		path, err := s.LookupHash(wantHash("alpha"))
+		if err != nil || path != "/a.md" {
+			t.Errorf("lookup alpha: got %q, %v", path, err)
 		}
-		path, ok = s.LookupHash(wantHash("beta"))
-		if !ok || path != "/b.md" {
-			t.Errorf("lookup beta: got %q, %v", path, ok)
+		path, err = s.LookupHash(wantHash("beta"))
+		if err != nil || path != "/b.md" {
+			t.Errorf("lookup beta: got %q, %v", path, err)
 		}
 	})
 
@@ -1813,7 +1822,7 @@ func TestHashIndex(t *testing.T) {
 		if _, err := s.Write("/dead.md", []byte("dead"), nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Archive("/dead.md", true); err != nil {
+		if _, _, err := s.Archive("/dead.md", true); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1823,8 +1832,8 @@ func TestHashIndex(t *testing.T) {
 		if s.HashIndexSize() != 1 {
 			t.Fatalf("index size: got %d, want 1", s.HashIndexSize())
 		}
-		if _, ok := s.LookupHash(wantHash("dead")); ok {
-			t.Error("archived doc should not be in index")
+		if _, err := s.LookupHash(wantHash("dead")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("archived doc lookup: err = %v, want ErrNotExist", err)
 		}
 	})
 
@@ -1833,17 +1842,17 @@ func TestHashIndex(t *testing.T) {
 		s := New(root)
 
 		s.UpdateHashIndex("/doc.md", []byte("old"))
-		if _, ok := s.LookupHash(wantHash("old")); !ok {
-			t.Fatal("expected old hash to exist")
+		if _, err := s.LookupHash(wantHash("old")); err != nil {
+			t.Fatalf("expected old hash to exist: %v", err)
 		}
 
 		s.UpdateHashIndex("/doc.md", []byte("new"))
-		if _, ok := s.LookupHash(wantHash("old")); ok {
-			t.Error("old hash should be removed after update")
+		if _, err := s.LookupHash(wantHash("old")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("old hash lookup: err = %v, want ErrNotExist", err)
 		}
-		path, ok := s.LookupHash(wantHash("new"))
-		if !ok || path != "/doc.md" {
-			t.Errorf("lookup new: got %q, %v", path, ok)
+		path, err := s.LookupHash(wantHash("new"))
+		if err != nil || path != "/doc.md" {
+			t.Errorf("lookup new: got %q, %v", path, err)
 		}
 	})
 
@@ -1853,8 +1862,8 @@ func TestHashIndex(t *testing.T) {
 
 		s.UpdateHashIndex("/doc.md", []byte("content"))
 		s.RemoveHashEntry("/doc.md")
-		if _, ok := s.LookupHash(wantHash("content")); ok {
-			t.Error("entry should be removed")
+		if _, err := s.LookupHash(wantHash("content")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("removed entry lookup: err = %v, want ErrNotExist", err)
 		}
 		if s.HashIndexSize() != 0 {
 			t.Errorf("index size: got %d, want 0", s.HashIndexSize())
@@ -1865,8 +1874,8 @@ func TestHashIndex(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		if _, ok := s.LookupHash("sha256-0000000000000000000000000000000000000000000000000000000000000000"); ok {
-			t.Error("expected not found for unknown hash")
+		if _, err := s.LookupHash("sha256-0000000000000000000000000000000000000000000000000000000000000000"); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("unknown hash lookup: err = %v, want ErrNotExist", err)
 		}
 	})
 
@@ -1877,19 +1886,19 @@ func TestHashIndex(t *testing.T) {
 		if _, err := s.Write("/doc.md", []byte("v1 content"), nil); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := s.LookupHash(wantHash("v1 content")); !ok {
-			t.Error("write should add entry to hash index")
+		if _, err := s.LookupHash(wantHash("v1 content")); err != nil {
+			t.Errorf("write should add entry to hash index: %v", err)
 		}
 
 		// Second write replaces the old hash
 		if _, err := s.Write("/doc.md", []byte("v2 content"), nil); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := s.LookupHash(wantHash("v1 content")); ok {
-			t.Error("old hash should be removed after new write")
+		if _, err := s.LookupHash(wantHash("v1 content")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("old hash lookup after new write: err = %v, want ErrNotExist", err)
 		}
-		if _, ok := s.LookupHash(wantHash("v2 content")); !ok {
-			t.Error("new hash should be in index")
+		if _, err := s.LookupHash(wantHash("v2 content")); err != nil {
+			t.Errorf("new hash should be in index: %v", err)
 		}
 	})
 
@@ -1900,15 +1909,15 @@ func TestHashIndex(t *testing.T) {
 		if _, err := s.Write("/doc.md", []byte("content"), nil); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := s.LookupHash(wantHash("content")); !ok {
-			t.Fatal("expected entry before archive")
+		if _, err := s.LookupHash(wantHash("content")); err != nil {
+			t.Fatalf("expected entry before archive: %v", err)
 		}
 
-		if err := s.Archive("/doc.md", true); err != nil {
+		if _, _, err := s.Archive("/doc.md", true); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := s.LookupHash(wantHash("content")); ok {
-			t.Error("archived doc should be removed from index")
+		if _, err := s.LookupHash(wantHash("content")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("archived doc lookup: err = %v, want ErrNotExist", err)
 		}
 	})
 
@@ -1919,15 +1928,15 @@ func TestHashIndex(t *testing.T) {
 		if _, err := s.Write("/doc.md", []byte("content"), nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Archive("/doc.md", true); err != nil {
+		if _, _, err := s.Archive("/doc.md", true); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Archive("/doc.md", false); err != nil {
+		if _, _, err := s.Archive("/doc.md", false); err != nil {
 			t.Fatal(err)
 		}
 
-		if _, ok := s.LookupHash(wantHash("content")); !ok {
-			t.Error("unarchived doc should be back in index")
+		if _, err := s.LookupHash(wantHash("content")); err != nil {
+			t.Errorf("unarchived doc should be back in index: %v", err)
 		}
 	})
 }

@@ -21,5 +21,5 @@ func openPostgresStore(cfg *config.Config, logger *slog.Logger) (backend, error)
 		return backend{}, fmt.Errorf("postgres store setup failed: %w", err)
 	}
 	// LOOKUP is DB-backed; a per-process index would diverge across pods.
-	return backend{Store: ps, Catalog: ps, Close: ps.Close}, nil
+	return backend{Store: ps, Catalog: ps, Views: ps, Close: ps.Close}, nil
 }

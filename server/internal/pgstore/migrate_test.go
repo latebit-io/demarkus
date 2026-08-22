@@ -20,14 +20,14 @@ func TestPostgresMigrationRoundTrip(t *testing.T) {
 
 	// LOOKUP works straight off the import: catalog rows rode the import tx.
 	assertLookupCount(t, s, "unicode", 1)
-	if _, ok := s.LookupHash(store.ContentHash([]byte("# Deep\n"))); !ok {
-		t.Error("LookupHash: imported body not found")
+	if _, err := s.LookupHash(store.ContentHash([]byte("# Deep\n"))); err != nil {
+		t.Errorf("LookupHash imported body: %v", err)
 	}
 
 	// The refused duplicate import (run inside the shared suite) was
 	// transactional: no partial version rows behind it.
-	if got := s.CurrentVersion("/a.md"); got != 3 {
-		t.Errorf("after refused import: current = %d, want 3", got)
+	if got, err := s.CurrentVersion("/a.md"); err != nil || got != 3 {
+		t.Errorf("after refused import: current = %d (err %v), want 3", got, err)
 	}
 	if vs, err := s.Versions("/a.md"); err != nil || len(vs) != 3 {
 		t.Errorf("after refused import: %d versions (err %v), want 3", len(vs), err)
@@ -35,7 +35,7 @@ func TestPostgresMigrationRoundTrip(t *testing.T) {
 
 	// The archived document's catalog row was imported too: unarchive
 	// restores it to LOOKUP without a write.
-	if err := s.Archive("/arch.md", false); err != nil {
+	if _, _, err := s.Archive("/arch.md", false); err != nil {
 		t.Fatalf("unarchive: %v", err)
 	}
 	rs, err := s.Lookup("archived", catalog.Options{})

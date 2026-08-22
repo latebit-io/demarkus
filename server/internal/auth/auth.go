@@ -122,7 +122,10 @@ func collectReadPaths(tokens map[string]Token) []string {
 // If true, the caller must authorize the request with a valid read token.
 // If false, the path is public.
 func (ts *TokenStore) RequiresReadAuth(reqPath string) bool {
-	return matchesAnyPath(ts.readPaths, reqPath)
+	if matchesAnyPath(ts.readPaths, reqPath) {
+		return true
+	}
+	return !strings.HasSuffix(reqPath, "/") && matchesAnyPath(ts.readPaths, reqPath+"/")
 }
 
 // Authorize checks whether the given raw token is allowed to perform the given

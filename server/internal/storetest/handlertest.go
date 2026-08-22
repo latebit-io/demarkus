@@ -31,6 +31,7 @@ func NewHandler(b LookupBackend) *handler.Handler {
 	return &handler.Handler{
 		Store:         b.Store,
 		Catalog:       b.Catalog,
+		Views:         b.Views,
 		GetTokenStore: func() *auth.TokenStore { return ts },
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -214,7 +215,10 @@ func handlerSnapshot(t *testing.T, h *handler.Handler, b LookupBackend) []string
 		add("versions "+p, request(protocol.VerbVersions, p, nil, ""))
 		// Old versions are immutable and were compared when they were the tip;
 		// the first version, the tip, and the miss past it carry the signal.
-		cur := b.Store.CurrentVersion(p)
+		cur, err := b.Store.CurrentVersion(p)
+		if err != nil {
+			t.Fatalf("CurrentVersion(%s): %v", p, err)
+		}
 		for _, v := range slices.Compact([]int{1, max(cur, 1), cur + 1}) {
 			add(fmt.Sprintf("fetch %s/v%d", p, v), request(protocol.VerbFetch, fmt.Sprintf("%s/v%d", p, v), nil, ""))
 		}

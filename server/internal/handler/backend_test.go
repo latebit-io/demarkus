@@ -6,7 +6,9 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/auth"
+	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/pgstore/pgtest"
 )
 
@@ -16,6 +18,7 @@ import (
 type backend struct {
 	Store   DocumentStore
 	Catalog LookupCatalog
+	Views   storagebackend.ViewProvider
 	Tamper  func(t testing.TB, path string, version int, stored []byte)
 }
 
@@ -38,7 +41,8 @@ func fileBackendAt(dir string) backend {
 			t.Fatalf("tamper %s v%d: %v", path, version, err)
 		}
 	}
-	return backend{Store: s, Catalog: catalog.New(), Tamper: tamper}
+	wrapped := filestore.New(s, catalog.New())
+	return backend{Store: wrapped, Catalog: wrapped, Views: wrapped, Tamper: tamper}
 }
 
 // postgresBackend returns the package's shared pgstore (own schema, reset)
@@ -51,7 +55,7 @@ func postgresBackend(t testing.TB) backend {
 	tamper := func(t testing.TB, path string, version int, stored []byte) {
 		pgtest.TamperVersion(t, schema, path, version, stored)
 	}
-	return backend{Store: s, Catalog: s, Tamper: tamper}
+	return backend{Store: s, Catalog: s, Views: s, Tamper: tamper}
 }
 
 // forEachBackend runs fn once per backend so every handler test proves the
@@ -80,7 +84,7 @@ func mustWrite(t testing.TB, b backend, path string, body []byte, meta map[strin
 // newHandler wires a backend into a Handler as main.go does; ts may be nil
 // for read-only tests.
 func newHandler(b backend, ts *auth.TokenStore) *Handler {
-	h := &Handler{Store: b.Store, Catalog: b.Catalog, Logger: discardLogger}
+	h := &Handler{Store: b.Store, Catalog: b.Catalog, Views: b.Views, Logger: discardLogger}
 	if ts != nil {
 		h.GetTokenStore = func() *auth.TokenStore { return ts }
 	}

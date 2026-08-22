@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -220,9 +221,10 @@ func testHealthCheck(t *testing.T, newBackend backendFactory) {
 func TestEtagInResponse(t *testing.T) { forEachBackend(t, testEtagInResponse) }
 
 func testEtagInResponse(t *testing.T, newBackend backendFactory) {
+	body := []byte("# Hello World\n")
 	b := newBackend(t)
 	seedBackend(t, b, map[string]string{
-		"hello.md": "# Hello World\n",
+		"hello.md": string(body),
 	})
 	h := newHandler(b, nil)
 
@@ -233,11 +235,13 @@ func testEtagInResponse(t *testing.T, newBackend backendFactory) {
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
 	}
-	if resp.Metadata["etag"] == "" {
-		t.Error("expected etag in response metadata")
+	stored, err := store.SerializeVersion(1, nil, body, nil)
+	if err != nil {
+		t.Fatalf("serialize expected stored bytes: %v", err)
 	}
-	if len(resp.Metadata["etag"]) != 64 {
-		t.Errorf("etag should be 64-char hex SHA-256, got %q", resp.Metadata["etag"])
+	want := store.StoredETag(stored)
+	if resp.Metadata["etag"] != want {
+		t.Errorf("etag = %q, want stored-byte hash %q", resp.Metadata["etag"], want)
 	}
 }
 
@@ -322,6 +326,41 @@ func testConditionalFetch(t *testing.T, newBackend backendFactory) {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
 		}
 	})
+}
+
+func TestConditionalFetchMetadataChange(t *testing.T) {
+	forEachBackend(t, testConditionalFetchMetadataChange)
+}
+
+func testConditionalFetchMetadataChange(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	body := []byte("# Same Body\n")
+	first, err := b.Store.WriteVersion("/doc.md", 0, body, map[string]string{"tags": "first"})
+	if err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+	second, err := b.Store.WriteVersion("/doc.md", 1, body, map[string]string{"tags": "second"})
+	if err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+	if first.ETag == second.ETag {
+		t.Fatal("metadata-only update did not rotate stored-byte ETag")
+	}
+
+	h := newHandler(b, nil)
+	stream := newMockStream("FETCH /doc.md\n---\nif-none-match: " + first.ETag + "\n---\n")
+	h.HandleStream(stream)
+	resp, err := protocol.ParseResponse(&stream.output)
+	if err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if resp.Status != protocol.StatusOK || resp.Metadata["etag"] != second.ETag || resp.Metadata["version"] != "2" {
+		t.Errorf("metadata update response status=%q etag=%q version=%q, want ok/%q/2",
+			resp.Status, resp.Metadata["etag"], resp.Metadata["version"], second.ETag)
+	}
+	if resp.Metadata["content-hash"] != store.ContentHash(body) {
+		t.Errorf("content hash = %q, want unchanged %q", resp.Metadata["content-hash"], store.ContentHash(body))
+	}
 }
 
 func TestSymlinkEscape(t *testing.T) {
@@ -523,7 +562,7 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 	})
 
 	t.Run("directory with archived index.md falls back to listing", func(t *testing.T) {
-		if err := b.Store.Archive("/docs/index.md", true); err != nil {
+		if _, _, err := b.Store.Archive("/docs/index.md", true); err != nil {
 			t.Fatalf("archive index.md: %v", err)
 		}
 		stream := newMockStream("FETCH /docs/\n")
@@ -558,7 +597,7 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 			t.Errorf("doc status: got %q, want %q", docResp.Status, protocol.StatusArchived)
 		}
 		// Unarchive to avoid affecting subsequent tests
-		if err := b.Store.Archive("/docs/index.md", false); err != nil {
+		if _, _, err := b.Store.Archive("/docs/index.md", false); err != nil {
 			t.Fatalf("unarchive index.md: %v", err)
 		}
 	})
@@ -977,6 +1016,10 @@ func testFetchVersion(t *testing.T, newBackend backendFactory) {
 	mustWrite(t, b, "/doc.md", []byte("# Version Two\n"), nil)
 
 	h := newHandler(b, nil)
+	first, err := b.Store.Get("/doc.md", 1)
+	if err != nil {
+		t.Fatalf("get v1: %v", err)
+	}
 
 	t.Run("fetch specific version", func(t *testing.T) {
 		stream := newMockStream("FETCH /doc.md/v1\n")
@@ -997,6 +1040,21 @@ func testFetchVersion(t *testing.T, newBackend backendFactory) {
 		}
 		if resp.Metadata["current-version"] != "2" {
 			t.Errorf("current-version: got %q, want %q", resp.Metadata["current-version"], "2")
+		}
+		if resp.Metadata["etag"] != first.ETag {
+			t.Errorf("etag: got %q, want %q", resp.Metadata["etag"], first.ETag)
+		}
+	})
+
+	t.Run("conditional fetch specific version", func(t *testing.T) {
+		stream := newMockStream("FETCH /doc.md/v1\n---\nif-none-match: " + first.ETag + "\n---\n")
+		h.HandleStream(stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotModified || resp.Body != "" {
+			t.Errorf("conditional historical fetch = status %q body %q, want not-modified empty", resp.Status, resp.Body)
 		}
 	})
 
@@ -1028,6 +1086,30 @@ func testFetchVersion(t *testing.T, newBackend backendFactory) {
 }
 
 func TestVersionsChainValid(t *testing.T) { forEachBackend(t, testVersionsChainValid) }
+
+func TestVersionsChainOperationalFailure(t *testing.T) {
+	b := fileBackend(t)
+	seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+	b.Store = &verifyErrorStore{DocumentStore: b.Store, err: errors.New("backend unavailable")}
+	b.Views = nil
+	h := newHandler(b, nil)
+	stream := newMockStream("VERSIONS /doc.md\n")
+	h.HandleStream(stream)
+	response, err := protocol.ParseResponse(&stream.output)
+	if err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if response.Status != protocol.StatusServerError {
+		t.Errorf("status = %q, want %q", response.Status, protocol.StatusServerError)
+	}
+}
+
+type verifyErrorStore struct {
+	DocumentStore
+	err error
+}
+
+func (backend *verifyErrorStore) VerifyChain(string) error { return backend.err }
 
 func testVersionsChainValid(t *testing.T, newBackend backendFactory) {
 	b := newBackend(t)
@@ -1484,6 +1566,51 @@ func TestIsHashPath(t *testing.T) {
 
 func TestHandleArchive(t *testing.T) { forEachBackend(t, testHandleArchive) }
 
+func TestArchiveUsesCommittedResult(t *testing.T) {
+	const secret = "archive-result-secret"
+	b := fileBackend(t)
+	spy := &archiveResultStore{
+		DocumentStore: b.Store,
+		document:      &store.Document{Version: 2, Archived: true},
+		changed:       true,
+	}
+	b.Store = spy
+	h := newHandler(b, auth.NewTokenStore(map[string]auth.Token{
+		protocol.HashToken(secret): {Paths: []string{"/*"}, Operations: []string{"publish"}},
+	}))
+	stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + secret + "\n---\n")
+	h.HandleStream(stream)
+	response, err := protocol.ParseResponse(&stream.output)
+	if err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if response.Status != protocol.StatusOK || response.Metadata["version"] != "2" {
+		t.Errorf("archive response = status %q version %q", response.Status, response.Metadata["version"])
+	}
+	if spy.getCalls != 0 || spy.archiveCalls != 1 {
+		t.Errorf("store calls = Get %d Archive %d, want 0/1", spy.getCalls, spy.archiveCalls)
+	}
+}
+
+type archiveResultStore struct {
+	DocumentStore
+	document     *store.Document
+	changed      bool
+	err          error
+	getCalls     int
+	archiveCalls int
+}
+
+func (spy *archiveResultStore) Get(path string, version int) (*store.Document, error) {
+	spy.getCalls++
+	return spy.DocumentStore.Get(path, version)
+}
+
+func (spy *archiveResultStore) Archive(string, bool) (*store.Document, bool, error) {
+	spy.archiveCalls++
+	return spy.document, spy.changed, spy.err
+}
+
 func testHandleArchive(t *testing.T, newBackend backendFactory) {
 	writerSecret := "test-secret-key"
 	ts := auth.NewTokenStore(map[string]auth.Token{
@@ -1807,7 +1934,7 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 	t.Run("archived document rejected", func(t *testing.T) {
 		b := newBackend(t)
 		mustWrite(t, b, "/doc.md", []byte("# Content"), nil)
-		if err := b.Store.Archive("/doc.md", true); err != nil {
+		if _, _, err := b.Store.Archive("/doc.md", true); err != nil {
 			t.Fatal(err)
 		}
 		h := newHandler(b, appendTokenStore)
@@ -2236,6 +2363,16 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 			protocol.StatusUnauthorized,
 		},
 		{
+			"FETCH protected path with duplicate slash alias",
+			"FETCH //private/secret.md\n",
+			protocol.StatusUnauthorized,
+		},
+		{
+			"FETCH protected path with dot alias",
+			"FETCH /private/./secret.md\n",
+			protocol.StatusUnauthorized,
+		},
+		{
 			"FETCH public path without token",
 			"FETCH /public/open.md\n",
 			protocol.StatusOK,
@@ -2350,6 +2487,132 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
 		}
 	})
+}
+
+func TestDirectoryReadAuthFiltering(t *testing.T) {
+	forEachBackend(t, testDirectoryReadAuthFiltering)
+}
+
+func testDirectoryReadAuthFiltering(t *testing.T, newBackend backendFactory) {
+	const readSecret = "directory-read-secret"
+	tokenStore := auth.NewTokenStore(map[string]auth.Token{
+		protocol.HashToken(readSecret): {
+			Paths:      []string{"/mixed/secret.md", "/docs/index.md"},
+			Operations: []string{"read"},
+		},
+	})
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
+		"mixed/public.md": "# Public\n",
+		"mixed/secret.md": "# Secret\n",
+		"docs/index.md":   "# Protected Index\n",
+	})
+	h := newHandler(b, tokenStore)
+
+	tests := []struct {
+		name        string
+		request     string
+		wantStatus  string
+		wantEntries string
+		wantBody    string
+		hideBody    string
+	}{
+		{"LIST filters protected child", "LIST /mixed/\n", protocol.StatusOK, "1", "public.md", "secret.md"},
+		{"LIST token reveals protected child", "LIST /mixed/\n---\nauth: " + readSecret + "\n---\n", protocol.StatusOK, "2", "secret.md", ""},
+		{"generated index filters protected child", "FETCH /mixed/\n", protocol.StatusOK, "1", "public.md", "secret.md"},
+		{"generated index token reveals protected child", "FETCH /mixed/\n---\nauth: " + readSecret + "\n---\n", protocol.StatusOK, "2", "secret.md", ""},
+		{"explicit index requires its own auth", "FETCH /docs/\n", protocol.StatusUnauthorized, "", "", "Protected Index"},
+		{"explicit index accepts token", "FETCH /docs/\n---\nauth: " + readSecret + "\n---\n", protocol.StatusOK, "", "Protected Index", ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stream := newMockStream(test.request)
+			h.HandleStream(stream)
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status != test.wantStatus {
+				t.Fatalf("status = %q, want %q", resp.Status, test.wantStatus)
+			}
+			if test.wantEntries != "" && resp.Metadata["entries"] != test.wantEntries {
+				t.Errorf("entries = %q, want %q", resp.Metadata["entries"], test.wantEntries)
+			}
+			if strings.HasPrefix(test.request, "FETCH /mixed/") && resp.Status == protocol.StatusOK {
+				if resp.Metadata["etag"] == "" || resp.Metadata["content-hash"] == "" {
+					t.Errorf("generated index lacks cache metadata: %v", resp.Metadata)
+				}
+			}
+			if test.wantBody != "" && !strings.Contains(resp.Body, test.wantBody) {
+				t.Errorf("body missing %q: %s", test.wantBody, resp.Body)
+			}
+			if test.hideBody != "" && strings.Contains(resp.Body, test.hideBody) {
+				t.Errorf("body leaked %q: %s", test.hideBody, resp.Body)
+			}
+		})
+	}
+
+	t.Run("generated index supports conditional fetch", func(t *testing.T) {
+		stream := newMockStream("FETCH /mixed/\n")
+		h.HandleStream(stream)
+		first, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse initial response: %v", err)
+		}
+		stream = newMockStream("FETCH /mixed/\n---\nif-none-match: " + first.Metadata["etag"] + "\n---\n")
+		h.HandleStream(stream)
+		conditional, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse conditional response: %v", err)
+		}
+		if conditional.Status != protocol.StatusNotModified || conditional.Body != "" {
+			t.Errorf("conditional generated index = status %q body %q", conditional.Status, conditional.Body)
+		}
+	})
+}
+
+type hashResultStore struct {
+	DocumentStore
+	path string
+	err  error
+}
+
+func (s *hashResultStore) LookupHash(string) (string, error) {
+	return s.path, s.err
+}
+
+func TestFetchHashLookupFailure(t *testing.T) {
+	forEachBackend(t, testFetchHashLookupFailure)
+}
+
+func testFetchHashLookupFailure(t *testing.T, newBackend backendFactory) {
+	hashPath := "/sha256-0000000000000000000000000000000000000000000000000000000000000000"
+	tests := []struct {
+		name string
+		path string
+		err  error
+		want string
+	}{
+		{"backend error", "", errors.New("storage unavailable"), protocol.StatusServerError},
+		{"resolved path disappeared", "/missing.md", nil, protocol.StatusServerError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			b := newBackend(t)
+			h := newHandler(b, nil)
+			h.Store = &hashResultStore{DocumentStore: b.Store, path: test.path, err: test.err}
+			h.Views = nil
+			stream := newMockStream("FETCH " + hashPath + "\n")
+			h.HandleStream(stream)
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status != test.want {
+				t.Errorf("status = %q, want %q", resp.Status, test.want)
+			}
+		})
+	}
 }
 
 func TestReadOnlyMode(t *testing.T) { forEachBackend(t, testReadOnlyMode) }

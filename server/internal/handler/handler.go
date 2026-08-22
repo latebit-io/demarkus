@@ -2,12 +2,11 @@
 package handler
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/url"
 	"os"
 	"path"
@@ -19,6 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/auth"
+	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
@@ -67,40 +67,19 @@ var reservedKeys = map[string]bool{
 // DocumentStore is the handler's view of a content store. The file-backed
 // implementation is protocol/store.Store; alternative backends implement the
 // same contract, including the per-method error contracts below.
-type DocumentStore interface {
-	// A missing document or directory returns an error satisfying
-	// errors.Is(err, os.ErrNotExist). Applies to every addressing method.
-	Get(reqPath string, version int) (*store.Document, error)
-	ListEntries(reqPath string, includeArchived bool) ([]store.DirEntry, error)
-	IsDir(reqPath string) (bool, error)
-	Versions(reqPath string) ([]store.VersionInfo, error)
-	CurrentVersion(reqPath string) int
-	// LookupHash resolves a live document by body hash; when several share
-	// the body, the smallest path wins.
-	LookupHash(hash string) (string, bool)
-	VerifyChain(reqPath string) error
-	// Writes surface the sentinels the handlers map to protocol statuses:
-	// ErrConflict, ErrArchived, ErrNotModified, ErrSizeLimit, ErrInvalidMeta.
-	// The file store's ErrVersionExists is folded into ErrConflict here.
-	WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*store.Document, error)
-	Append(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*store.Document, error)
-	Archive(reqPath string, archived bool) error
-}
+type DocumentStore = storagebackend.Store
 
 // LookupCatalog is the LOOKUP-index seam beside DocumentStore. Backends that
 // maintain the catalog in the write transaction (pgstore) no-op Put/Remove;
 // the storetest LOOKUP conformance suite is the contract for Lookup parity.
-type LookupCatalog interface {
-	Lookup(query string, opts catalog.Options) ([]catalog.Result, error)
-	Put(docPath string, meta map[string]string, body []byte, modified time.Time)
-	Remove(docPath string)
-}
+type LookupCatalog = storagebackend.Catalog
 
 // Handler serves the Mark protocol over a DocumentStore.
 type Handler struct {
 	Store         DocumentStore
-	Catalog       LookupCatalog           // LOOKUP index; nil disables LOOKUP and catalog updates
-	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
+	Catalog       LookupCatalog               // LOOKUP index; nil disables LOOKUP and catalog updates
+	Views         storagebackend.ViewProvider // nil uses Store and Catalog directly
+	GetTokenStore func() *auth.TokenStore     // nil callback or nil return means writes are denied
 	Logger        *slog.Logger
 	ReadOnly      bool // reject all write operations
 }
@@ -128,8 +107,6 @@ func (h *Handler) HandleStream(stream Stream) {
 		return
 	}
 
-	h.logger().Info("request", "verb", sanitize(req.Verb), "path", sanitize(req.Path))
-
 	// Reject path traversal attempts before any handler logic (including auth)
 	// to prevent scope bypass via paths like /allowed/../secret.md.
 	if store.ContainsDotDot(req.Path) {
@@ -137,6 +114,17 @@ func (h *Handler) HandleStream(stream Stream) {
 		h.writeError(stream, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
+	req.Path = store.CanonicalPath(req.Path)
+
+	// Token reloads take effect between requests, never midway through one.
+	pinned := *h
+	if h.GetTokenStore != nil {
+		tokenStore := h.GetTokenStore()
+		pinned.GetTokenStore = func() *auth.TokenStore { return tokenStore }
+	}
+	h = &pinned
+
+	h.logger().Info("request", "verb", sanitize(req.Verb), "path", sanitize(req.Path))
 
 	// Health check endpoint: responds to FETCH /health with OK
 	if req.Path == "/health" && req.Verb == protocol.VerbFetch {
@@ -144,15 +132,38 @@ func (h *Handler) HandleStream(stream Stream) {
 		return
 	}
 
+	reader := storagebackend.Reader(h.Store)
+	var lookup storagebackend.CatalogReader
+	if h.Catalog != nil {
+		lookup = h.Catalog
+	}
+	if isReadVerb(req.Verb) && h.Views != nil {
+		view, err := h.Views.OpenReadView()
+		if err != nil {
+			h.logger().Error("open read view failed", "verb", req.Verb, "path", sanitize(req.Path), "error", err)
+			h.writeError(stream, protocol.StatusServerError, "internal error")
+			return
+		}
+		defer func() {
+			if err := view.Close(); err != nil {
+				h.logger().Error("close read view failed", "verb", req.Verb, "path", sanitize(req.Path), "error", err)
+			}
+		}()
+		reader = view
+		if h.Catalog != nil {
+			lookup = view
+		}
+	}
+
 	switch req.Verb {
 	case protocol.VerbFetch:
-		h.handleFetch(stream, req)
+		h.handleFetch(stream, req, reader)
 	case protocol.VerbList:
-		h.handleList(stream, req)
+		h.handleList(stream, req, reader)
 	case protocol.VerbVersions:
-		h.handleVersions(stream, req)
+		h.handleVersions(stream, req, reader)
 	case protocol.VerbLookup:
-		h.handleLookup(stream, req)
+		h.handleLookup(stream, req, reader, lookup)
 	case protocol.VerbPublish, protocol.VerbArchive, protocol.VerbAppend:
 		if h.ReadOnly {
 			h.writeError(stream, protocol.StatusNotPermitted, "server is read-only")
@@ -169,6 +180,11 @@ func (h *Handler) HandleStream(stream Stream) {
 	default:
 		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
 	}
+}
+
+func isReadVerb(verb string) bool {
+	return verb == protocol.VerbFetch || verb == protocol.VerbList ||
+		verb == protocol.VerbVersions || verb == protocol.VerbLookup
 }
 
 // parseVersionPath checks if a path ends with /vN (e.g., /doc.md/v3).
@@ -190,11 +206,16 @@ func parseVersionPath(reqPath string) (basePath string, version int) {
 	return base, num
 }
 
-func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash string) {
-	docPath, ok := h.Store.LookupHash(hash)
-	if !ok {
+func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash string, reader storagebackend.Reader) {
+	docPath, err := reader.LookupHash(hash)
+	if errors.Is(err, os.ErrNotExist) {
 		h.logger().Info("hash not found", "hash", hash)
 		h.writeError(w, protocol.StatusNotFound, "content not found for hash "+hash)
+		return
+	}
+	if err != nil {
+		h.logger().Error("hash lookup failed", "hash", hash, "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
 
@@ -205,13 +226,8 @@ func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash stri
 		return
 	}
 
-	doc, err := h.Store.Get(docPath, 0)
+	doc, err := reader.Get(docPath, 0)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			h.logger().Info("hash index stale", "hash", hash, "path", sanitize(docPath))
-			h.writeError(w, protocol.StatusNotFound, "content not found for hash "+hash)
-			return
-		}
 		h.logger().Error("fetch by hash failed", "hash", hash, "path", sanitize(docPath), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
@@ -246,6 +262,11 @@ func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
 // that surface errors can distinguish unauthorized from not-permitted; callers
 // that only filter (e.g. LOOKUP) can ignore err.
 func (h *Handler) checkReadAuth(reqPath, token string) (bool, error) {
+	directoryPath := strings.HasSuffix(reqPath, "/")
+	reqPath = store.CanonicalPath(reqPath)
+	if directoryPath && reqPath != "/" {
+		reqPath += "/"
+	}
 	var ts *auth.TokenStore
 	if h.GetTokenStore != nil {
 		ts = h.GetTokenStore()
@@ -260,16 +281,21 @@ func (h *Handler) checkReadAuth(reqPath, token string) (bool, error) {
 		return true, nil
 	}
 	if _, err := ts.Authorize(token, reqPath, "read"); err != nil {
+		if errors.Is(err, auth.ErrNotPermitted) && !strings.HasSuffix(reqPath, "/") {
+			if _, directoryErr := ts.Authorize(token, reqPath+"/", "read"); directoryErr == nil {
+				return true, nil
+			}
+		}
 		return false, err
 	}
 	return true, nil
 }
 
-func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
+func (h *Handler) handleFetch(w io.Writer, req protocol.Request, reader storagebackend.Reader) {
 	// Check for content-addressed hash: FETCH /sha256-<64hex>
 	// Read auth for hash paths is checked after resolving to a real path.
 	if hash, ok := protocol.IsHashPath(req.Path); ok {
-		h.handleFetchByHash(w, req, hash)
+		h.handleFetchByHash(w, req, hash, reader)
 		return
 	}
 
@@ -281,7 +307,7 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		if !h.authorizeRead(w, authReq) {
 			return
 		}
-		h.handleFetchVersion(w, req, basePath, version)
+		h.handleFetchVersion(w, req, basePath, version, reader)
 		return
 	}
 
@@ -289,18 +315,18 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	doc, err := h.Store.Get(req.Path, 0)
+	doc, err := reader.Get(req.Path, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Check if the path is a directory — serve index.md or auto-generate listing.
-			isDir, dirErr := h.Store.IsDir(req.Path)
+			isDir, dirErr := reader.IsDir(req.Path)
 			if dirErr != nil && !errors.Is(dirErr, os.ErrNotExist) {
 				h.logger().Error("isdir check failed", "path", sanitize(req.Path), "error", dirErr)
 				h.writeError(w, protocol.StatusServerError, "internal error")
 				return
 			}
 			if isDir {
-				h.handleFetchDirectory(w, req)
+				h.handleFetchDirectory(w, req, reader)
 				return
 			}
 			h.logger().Info("not found", "path", sanitize(req.Path))
@@ -325,9 +351,17 @@ func (h *Handler) serveDocument(w io.Writer, req protocol.Request, doc *store.Do
 		return
 	}
 
-	etag := computeEtag(doc.Content)
+	h.serveStoredDocument(w, req, doc, logPath, nil)
+}
 
-	if ifNoneMatch, ok := req.Metadata["if-none-match"]; ok && ifNoneMatch == etag {
+func (h *Handler) serveStoredDocument(w io.Writer, req protocol.Request, doc *store.Document, logPath string, extra map[string]string) {
+	if doc.ETag == "" {
+		h.logger().Error("stored document missing etag", "path", sanitize(logPath), "version", doc.Version)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+
+	if ifNoneMatch, ok := req.Metadata["if-none-match"]; ok && ifNoneMatch == doc.ETag {
 		h.writeNotModified(w)
 		return
 	}
@@ -340,15 +374,15 @@ func (h *Handler) serveDocument(w io.Writer, req protocol.Request, doc *store.Do
 		}
 	}
 
-	body := string(doc.Content)
 	// Copy publisher metadata first, then set server-owned keys so they can't be overwritten.
 	meta := make(map[string]string)
 	copyPublisherMeta(meta, doc.Metadata)
 	meta["modified"] = doc.Modified.Format(time.RFC3339)
-	meta["etag"] = etag
+	meta["etag"] = doc.ETag
 	meta["version"] = strconv.Itoa(doc.Version)
-	meta["content-hash"] = computeContentHash(body)
-	h.writeResponse(w, protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: body})
+	meta["content-hash"] = store.ContentHash(doc.Content)
+	maps.Copy(meta, extra)
+	h.writeResponse(w, protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: string(doc.Content)})
 }
 
 func (h *Handler) writeNotModified(w io.Writer) {
@@ -359,17 +393,7 @@ func (h *Handler) writeNotModified(w io.Writer) {
 	h.writeResponse(w, resp)
 }
 
-func computeEtag(data []byte) string {
-	hash := sha256.Sum256(data)
-	return hex.EncodeToString(hash[:])
-}
-
-func computeContentHash(body string) string {
-	hash := sha256.Sum256([]byte(body))
-	return "sha256-" + hex.EncodeToString(hash[:])
-}
-
-func (h *Handler) handleList(w io.Writer, req protocol.Request) {
+func (h *Handler) handleList(w io.Writer, req protocol.Request, reader storagebackend.Reader) {
 	if !h.authorizeRead(w, req) {
 		return
 	}
@@ -379,7 +403,7 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request) {
 		return
 	}
 	includeArchived := req.Metadata["include-archived"] == "true"
-	entries, err := h.Store.ListEntries(reqPath, includeArchived)
+	entries, err := reader.ListEntries(reqPath, includeArchived)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(reqPath))
@@ -390,6 +414,7 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
+	entries = h.filterReadableEntries(reqPath, entries, req.Metadata["auth"])
 
 	body, entryCount := buildDirectoryIndex(reqPath, entries)
 
@@ -403,11 +428,29 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request) {
 	h.writeResponse(w, resp)
 }
 
+func (h *Handler) filterReadableEntries(reqPath string, entries []store.DirEntry, token string) []store.DirEntry {
+	visible := make([]store.DirEntry, 0, len(entries))
+	for _, entry := range entries {
+		entryPath := path.Join(reqPath, entry.Name)
+		if entry.IsDir {
+			entryPath += "/"
+		}
+		if ok, _ := h.checkReadAuth(entryPath, token); ok {
+			visible = append(visible, entry)
+		}
+	}
+	return visible
+}
+
 // buildDirectoryIndex renders a markdown listing from directory entries.
 // Returns the markdown body and the number of entries included.
 func buildDirectoryIndex(reqPath string, entries []store.DirEntry) (body string, entryCount int) {
 	var sb strings.Builder
-	sb.WriteString("\n# Index of " + escapeMD(reqPath) + "\n\n")
+	displayPath := reqPath
+	if displayPath != "/" && !strings.HasSuffix(displayPath, "/") {
+		displayPath += "/"
+	}
+	sb.WriteString("\n# Index of " + escapeMD(displayPath) + "\n\n")
 
 	for _, entry := range entries {
 		if entryCount >= MaxDirectoryEntries {
@@ -444,7 +487,7 @@ func buildLookupResults(query, scope string, rows []catalog.Result) string {
 	return sb.String()
 }
 
-func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
+func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request, reader storagebackend.Reader) {
 	includeArchived := req.Metadata["include-archived"] == "true"
 
 	// Try index.md first — if the directory has an explicit index, serve it as
@@ -453,19 +496,23 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 	// LIST still shows the directory's live entries. Fetching the archived
 	// index.md itself (by its own path) still returns the tombstone.
 	indexPath := path.Join(req.Path, "index.md")
-	doc, err := h.Store.Get(indexPath, 0)
+	doc, err := reader.Get(indexPath, 0)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		h.logger().Error("fetch index failed", "path", sanitize(indexPath), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
 	if err == nil && !doc.Archived {
-		h.serveDocument(w, req, doc, req.Path)
+		authReq := req
+		authReq.Path = indexPath
+		if !h.authorizeRead(w, authReq) {
+			return
+		}
+		h.serveDocument(w, req, doc, indexPath)
 		return
 	}
-
 	// No (visible) index.md — generate a directory listing.
-	entries, err := h.Store.ListEntries(req.Path, includeArchived)
+	entries, err := reader.ListEntries(req.Path, includeArchived)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(req.Path))
@@ -476,20 +523,30 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request) {
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
-
-	body, entryCount := buildDirectoryIndex(req.Path, entries)
-	resp := protocol.Response{
-		Status: protocol.StatusOK,
-		Metadata: map[string]string{
-			"entries": fmt.Sprintf("%d", entryCount),
-		},
-		Body: body,
-	}
-	h.writeResponse(w, resp)
+	entries = h.filterReadableEntries(req.Path, entries, req.Metadata["auth"])
+	h.serveGeneratedDirectory(w, req, entries)
 }
 
-func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath string, version int) {
-	doc, err := h.Store.Get(basePath, version)
+func (h *Handler) serveGeneratedDirectory(w io.Writer, req protocol.Request, entries []store.DirEntry) {
+	body, entryCount := buildDirectoryIndex(req.Path, entries)
+	etag := store.StoredETag([]byte(body))
+	if ifNoneMatch, ok := req.Metadata["if-none-match"]; ok && ifNoneMatch == etag {
+		h.writeNotModified(w)
+		return
+	}
+	h.writeResponse(w, protocol.Response{
+		Status: protocol.StatusOK,
+		Metadata: map[string]string{
+			"entries":      strconv.Itoa(entryCount),
+			"etag":         etag,
+			"content-hash": store.ContentHash([]byte(body)),
+		},
+		Body: body,
+	})
+}
+
+func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath string, version int, reader storagebackend.Reader) {
+	doc, err := reader.Get(basePath, version)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(basePath), "version", version)
@@ -501,27 +558,20 @@ func (h *Handler) handleFetchVersion(w io.Writer, req protocol.Request, basePath
 		return
 	}
 
-	body := string(doc.Content)
-
-	// Copy publisher metadata first, then set server-owned keys so they can't be overwritten.
-	meta := make(map[string]string)
-	copyPublisherMeta(meta, doc.Metadata)
-	meta["modified"] = doc.Modified.Format(time.RFC3339)
-	meta["version"] = strconv.Itoa(doc.Version)
-	meta["content-hash"] = computeContentHash(body)
 	// Indicate current version so client knows if this is historical.
-	current := h.Store.CurrentVersion(basePath)
-	meta["current-version"] = strconv.Itoa(current)
-
-	resp := protocol.Response{
-		Status:   protocol.StatusOK,
-		Metadata: meta,
-		Body:     body,
+	versions, err := reader.Versions(basePath)
+	if err != nil || len(versions) == 0 {
+		h.logger().Error("read current version failed", "path", sanitize(basePath), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
 	}
-	h.writeResponse(w, resp)
+	current := versions[0].Version
+	h.serveStoredDocument(w, req, doc, basePath, map[string]string{
+		"current-version": strconv.Itoa(current),
+	})
 }
 
-func (h *Handler) handleVersions(w io.Writer, req protocol.Request) {
+func (h *Handler) handleVersions(w io.Writer, req protocol.Request, reader storagebackend.Reader) {
 	if !h.authorizeRead(w, req) {
 		return
 	}
@@ -535,7 +585,7 @@ func (h *Handler) handleVersions(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	versions, err := h.Store.Versions(reqPath)
+	versions, err := reader.Versions(reqPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("not found", "path", sanitize(reqPath))
@@ -561,7 +611,12 @@ func (h *Handler) handleVersions(w io.Writer, req protocol.Request) {
 	}
 
 	// Verify hash chain integrity and report result.
-	if err := h.Store.VerifyChain(reqPath); err != nil {
+	if err := reader.VerifyChain(reqPath); err != nil {
+		if !errors.Is(err, store.ErrIntegrity) {
+			h.logger().Error("chain verification failed", "path", sanitize(reqPath), "error", err)
+			h.writeError(w, protocol.StatusServerError, "internal error")
+			return
+		}
 		h.logger().Warn("chain verification failed", "path", sanitize(reqPath), "error", err)
 		meta["chain-valid"] = "false"
 		meta["chain-error"] = "chain integrity check failed"
@@ -577,8 +632,8 @@ func (h *Handler) handleVersions(w io.Writer, req protocol.Request) {
 	h.writeResponse(w, resp)
 }
 
-func (h *Handler) handleLookup(w io.Writer, req protocol.Request) {
-	if h.Catalog == nil {
+func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storagebackend.Reader, lookup storagebackend.CatalogReader) {
+	if lookup == nil {
 		h.writeError(w, protocol.StatusServerError, "lookup not configured")
 		return
 	}
@@ -618,7 +673,7 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request) {
 
 	// Scope must be the whole-server root or an existing directory.
 	if req.Path != "/" {
-		isDir, derr := h.Store.IsDir(req.Path)
+		isDir, derr := reader.IsDir(req.Path)
 		if derr != nil && !errors.Is(derr, os.ErrNotExist) {
 			h.logger().Error("lookup isdir check failed", "path", sanitize(req.Path), "error", derr)
 			h.writeError(w, protocol.StatusServerError, "internal error")
@@ -631,7 +686,7 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request) {
 		}
 	}
 
-	results, err := h.Catalog.Lookup(query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults})
+	results, err := lookup.Lookup(query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults})
 	if err != nil {
 		h.logger().Error("lookup failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
@@ -713,21 +768,9 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	doc, err := h.Store.Get(req.Path, 0)
+	doc, changed, err := h.Store.Archive(req.Path, true)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			h.logger().Info("not found", "path", sanitize(req.Path))
-			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
-			return
-		}
-		h.logger().Error("archive failed", "path", sanitize(req.Path), "error", err)
-		h.writeError(w, protocol.StatusServerError, "internal error")
-		return
-	}
-
-	if err := h.Store.Archive(req.Path, true); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// Deleted between the Get pre-check and the archive.
 			h.logger().Info("archive failed", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "not found")
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
@@ -738,7 +781,9 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 	}
 
 	h.logger().Info("archive", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
-	h.catalogRemove(req.Path)
+	if changed {
+		h.catalogRemove(req.Path)
+	}
 	resp := protocol.Response{
 		Status: protocol.StatusOK,
 		Metadata: map[string]string{
@@ -797,7 +842,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 
 	// Handle empty body case: unarchive if archived, no-op if active
 	if req.Body == "" {
-		doc, err := h.Store.Get(req.Path, 0)
+		doc, changed, err := h.Store.Archive(req.Path, false)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				h.logger().Info("not found", "path", sanitize(req.Path))
@@ -809,18 +854,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 			return
 		}
 
-		if doc.Archived {
-			if err := h.Store.Archive(req.Path, false); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					// Deleted between the Get pre-check and the unarchive.
-					h.logger().Info("unarchive failed", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "not found")
-					h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
-					return
-				}
-				h.logger().Error("unarchive failed", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
-				h.writeError(w, protocol.StatusServerError, "internal error")
-				return
-			}
+		if changed {
 			h.logger().Info("unarchive", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
 			h.catalogPut(req.Path, doc.Content, doc.Metadata, doc.Modified)
 		}
@@ -999,42 +1033,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 	doc, err := h.Store.Append(req.Path, expectedVersion, []byte(req.Body), pubMeta)
 	h.logPrune("APPEND", req.Path, tokenLabel, doc)
 	if err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
-			body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nFetch the latest version and verify whether your append was applied before retrying.\n", expectedVersion, doc.Version)
-			resp := protocol.Response{
-				Status: protocol.StatusConflict,
-				Metadata: map[string]string{
-					"your-version":   strconv.Itoa(expectedVersion),
-					"server-version": strconv.Itoa(doc.Version),
-				},
-				Body: body,
-			}
-			h.writeResponse(w, resp)
-			return
-		}
-		if errors.Is(err, store.ErrArchived) {
-			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
-			h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
-			return
-		}
-		if errors.Is(err, os.ErrNotExist) {
-			h.logger().Info("not found", "path", sanitize(req.Path))
-			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
-			return
-		}
-		if errors.Is(err, store.ErrSizeLimit) {
-			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
-			h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
-			return
-		}
-		if errors.Is(err, store.ErrInvalidMeta) {
-			h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "merged metadata invalid")
-			h.writeError(w, protocol.StatusBadRequest, err.Error())
-			return
-		}
-		h.logger().Error("append failed", "path", sanitize(req.Path), "error", err)
-		h.writeError(w, protocol.StatusServerError, "internal error")
+		h.writeAppendError(w, req, expectedVersion, doc, err, tokenLabel)
 		return
 	}
 
@@ -1048,6 +1047,37 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 		},
 	}
 	h.writeResponse(w, resp)
+}
+
+func (h *Handler) writeAppendError(w io.Writer, req protocol.Request, expectedVersion int, doc *store.Document, err error, tokenLabel string) {
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
+		body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nFetch the latest version and verify whether your append was applied before retrying.\n", expectedVersion, doc.Version)
+		h.writeResponse(w, protocol.Response{
+			Status: protocol.StatusConflict,
+			Metadata: map[string]string{
+				"your-version":   strconv.Itoa(expectedVersion),
+				"server-version": strconv.Itoa(doc.Version),
+			},
+			Body: body,
+		})
+	case errors.Is(err, store.ErrArchived):
+		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
+		h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
+	case errors.Is(err, os.ErrNotExist):
+		h.logger().Info("not found", "path", sanitize(req.Path))
+		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+	case errors.Is(err, store.ErrSizeLimit):
+		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
+		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
+	case errors.Is(err, store.ErrInvalidMeta):
+		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "merged metadata invalid")
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+	default:
+		h.logger().Error("append failed", "path", sanitize(req.Path), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+	}
 }
 
 func (h *Handler) handleHealth(w io.Writer) {

@@ -180,6 +180,12 @@ func (s *Store) backfillBatch(ctx context.Context) (int, error) {
 // storetest LOOKUP conformance suite is the contract. Filters and the Max
 // cap run in Go via shared catalog code.
 func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, error) {
+	ctx, cancel := opCtx()
+	defer cancel()
+	return lookup(ctx, s.db, query, opts)
+}
+
+func lookup(ctx context.Context, queries sqlQueryer, query string, opts catalog.Options) ([]catalog.Result, error) {
 	matchAll := strings.TrimSpace(query) == "*"
 	terms := catalog.Tokenize(query)
 	if matchAll {
@@ -241,9 +247,7 @@ func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, er
 		q += ` LIMIT ` + arg(opts.Max)
 	}
 
-	ctx, cancel := opCtx()
-	defer cancel()
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := queries.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("lookup: %w", err)
 	}

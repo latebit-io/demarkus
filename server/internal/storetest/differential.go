@@ -90,7 +90,12 @@ func (d *diffRun) run(ops int, apply func(op), snapshot func()) {
 // currentBoth returns the shared current version of path, failing when the
 // backends already disagree before an op is applied.
 func (d *diffRun) currentBoth(ref, cand LookupBackend, path string) (int, bool) {
-	refCur, candCur := ref.Store.CurrentVersion(path), cand.Store.CurrentVersion(path)
+	refCur, refErr := ref.Store.CurrentVersion(path)
+	candCur, candErr := cand.Store.CurrentVersion(path)
+	if refErr != nil || candErr != nil {
+		d.fail("CurrentVersion(%s) errors: ref=%v cand=%v", path, refErr, candErr)
+		return 0, false
+	}
 	if refCur != candCur {
 		d.fail("CurrentVersion(%s) before op: ref=%d cand=%d", path, refCur, candCur)
 		return 0, false
@@ -360,8 +365,8 @@ func snapshot(b LookupBackend) []string {
 	add := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
 
 	for _, p := range diffDocPaths {
-		cur := b.Store.CurrentVersion(p)
-		add("current %s = %d", p, cur)
+		cur, curErr := b.Store.CurrentVersion(p)
+		add("current %s = %d %s", p, cur, errClass(curErr))
 		doc, err := b.Store.Get(p, 0)
 		add("get %s = %s %s", p, errClass(err), describeDoc(doc))
 		vs, err := b.Store.Versions(p)
@@ -387,8 +392,8 @@ func snapshot(b LookupBackend) []string {
 		}
 	}
 	for i, body := range diffBodies {
-		p, ok := b.Store.LookupHash(store.ContentHash(body))
-		add("hash body=%d = %q %v", i, p, ok)
+		p, err := b.Store.LookupHash(store.ContentHash(body))
+		add("hash body=%d = %q %s", i, p, errClass(err))
 	}
 	// Queries x scopes unfiltered, then filters on the match-all query: the
 	// full cross product is mostly redundant and dominates snapshot cost.

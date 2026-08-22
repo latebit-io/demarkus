@@ -129,19 +129,24 @@ jobs:
         run: cd server && go test ./...
       - name: Vet
         run: cd server && go vet ./...
-      # Both flavors must keep building, and the default one must link no
-      # database driver: the nm check is what keeps the -tags pg seam honest.
+      # Optional storage SDKs must not leak into the default server binary.
       - name: Build
         run: |
           set -euo pipefail
           cd server
+          deps="$(go list -deps ./cmd/demarkus-server)"
+          test -n "$deps"
+          if grep -Eq '/internal/knowledge|cloud\.google\.com/go/storage' <<<"$deps"; then
+            echo "default demarkus-server depends on knowledge storage code" >&2
+            exit 1
+          fi
           go build -o /tmp/demarkus-server ./cmd/demarkus-server
           syms="$(go tool nm /tmp/demarkus-server)"
           # Without this, a failed nm would leave grep with empty input and
           # the check would "pass" while proving nothing.
           test -n "$syms"
-          if grep -q "jackc/pgx" <<<"$syms"; then
-            echo "default demarkus-server links pgx; the -tags pg seam leaked" >&2
+          if grep -Eq "jackc/pgx|cloud\.google\.com/go/storage" <<<"$syms"; then
+            echo "default demarkus-server links an optional storage SDK" >&2
             exit 1
           fi
       - name: Build (postgres flavor)
