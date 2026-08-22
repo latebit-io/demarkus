@@ -69,10 +69,9 @@ func SerializeVersion(version int, prevRaw, content []byte, meta map[string]stri
 	return append([]byte(sb.String()), content...), nil
 }
 
-// SetArchived rewrites the archived flag in a stored version's frontmatter,
-// returning the new bytes. The input must be a well-formed version file.
-// Only the flag changes; content and every other frontmatter field are
-// preserved, so this is the in-place archive toggle both backends share.
+// SetArchived rewrites the legacy archived flag in stored bytes. It remains
+// for compatibility and fixtures; production archive transitions use separate
+// operational state so stored versions stay immutable.
 func SetArchived(data []byte, archived bool) ([]byte, error) {
 	content := string(data)
 	if !strings.HasPrefix(content, "---\n") {
@@ -194,6 +193,9 @@ func InspectStoredVersion(stored []byte) (StoredVersionHeader, error) {
 		case okfKeys[key]:
 		case strings.HasPrefix(key, metaPrefix):
 			logicalKey = strings.TrimPrefix(key, metaPrefix)
+			if reservedMetaKeys[logicalKey] {
+				return header, fmt.Errorf("stored version: field %q aliases canonical field %q", key, logicalKey)
+			}
 		default:
 			return header, fmt.Errorf("stored version: unknown field %q", key)
 		}

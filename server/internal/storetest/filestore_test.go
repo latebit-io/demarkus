@@ -77,7 +77,9 @@ func TestFileStoreImportRefusesOrphanedVersionDir(t *testing.T) {
 		t.Fatalf("orphan: %v", err)
 	}
 
-	err = s.ImportDoc(context.Background(), "/x.md", []store.StoredVersion{{Version: 1, Stored: []byte("# other\n"), Modified: time.Now()}})
+	err = s.ImportDoc(context.Background(), "/x.md", store.StoredDocument{Versions: []store.StoredVersion{{
+		Version: 1, Stored: []byte("# other\n"), Modified: time.Now(),
+	}}})
 	if !errors.Is(err, os.ErrExist) {
 		t.Fatalf("import onto orphaned tree: err = %v, want ErrExist", err)
 	}

@@ -78,18 +78,20 @@ func RunMigrationRoundTrip(t *testing.T, newBackend func(t *testing.T) Migration
 	// Invalid imports must refuse on every backend.
 	for name, bad := range map[string]struct {
 		path     string
-		versions []store.StoredVersion
+		document store.StoredDocument
 	}{
 		// Distinct paths: a wrongly accepted case must not mask the next
 		// one behind ErrExist (map order is random).
-		"no versions":    {"/inv-empty.md", nil},
-		"not ascending":  {"/inv-order.md", []store.StoredVersion{srcExport["/a.md"][1], srcExport["/a.md"][0]}},
-		"directory path": {"/inv-dir/", srcExport["/a.md"]},
-		"oversized": {"/inv-big.md", []store.StoredVersion{{
-			Version: 1, Stored: make([]byte, protocol.MaxBodyLength+store.MaxStoreFrontmatter+1),
+		"no versions": {"/inv-empty.md", store.StoredDocument{}},
+		"not ascending": {"/inv-order.md", store.StoredDocument{Versions: []store.StoredVersion{
+			srcExport["/a.md"].Versions[1], srcExport["/a.md"].Versions[0],
 		}}},
+		"directory path": {"/inv-dir/", srcExport["/a.md"]},
+		"oversized": {"/inv-big.md", store.StoredDocument{Versions: []store.StoredVersion{{
+			Version: 1, Stored: make([]byte, protocol.MaxBodyLength+store.MaxStoreFrontmatter+1),
+		}}}},
 	} {
-		if err := b.Migrator.ImportDoc(ctx, bad.path, bad.versions); err == nil {
+		if err := b.Migrator.ImportDoc(ctx, bad.path, bad.document); err == nil {
 			t.Errorf("import %s: expected error", name)
 		}
 	}
@@ -123,11 +125,11 @@ func seedMigrationDocs(t *testing.T, s *store.Store) []string {
 }
 
 // exportDocs collects a migrator's full export keyed by path.
-func exportDocs(t *testing.T, m store.Migrator) map[string][]store.StoredVersion {
+func exportDocs(t *testing.T, m store.Migrator) map[string]store.StoredDocument {
 	t.Helper()
-	out := map[string][]store.StoredVersion{}
-	if err := m.ExportDocs(context.Background(), func(p string, vs []store.StoredVersion) error {
-		out[p] = vs
+	out := map[string]store.StoredDocument{}
+	if err := m.ExportDocs(context.Background(), func(p string, document store.StoredDocument) error {
+		out[p] = document
 		return nil
 	}); err != nil {
 		t.Fatalf("export: %v", err)
@@ -139,8 +141,8 @@ func exportDocs(t *testing.T, m store.Migrator) map[string][]store.StoredVersion
 func copyDocs(t *testing.T, label string, src, dst store.Migrator) {
 	t.Helper()
 	ctx := context.Background()
-	if err := src.ExportDocs(ctx, func(p string, vs []store.StoredVersion) error {
-		return dst.ImportDoc(ctx, p, vs)
+	if err := src.ExportDocs(ctx, func(p string, document store.StoredDocument) error {
+		return dst.ImportDoc(ctx, p, document)
 	}); err != nil {
 		t.Fatalf("%s: %v", label, err)
 	}

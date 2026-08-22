@@ -24,6 +24,21 @@ func TestWalkCurrent(t *testing.T) {
 	if _, _, err := s.Archive("/archived.md", true); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.Write("/legacy.md", []byte("# Legacy"), nil); err != nil {
+		t.Fatal(err)
+	}
+	legacyFile := filepath.Join(dir, "versions", "legacy.md", "v1")
+	legacyStored, err := os.ReadFile(legacyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyStored, err = SetArchived(legacyStored, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyFile, legacyStored, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	got := make(map[string]CurrentDoc)
 	if err := s.WalkCurrent(func(d CurrentDoc) error {
@@ -35,6 +50,9 @@ func TestWalkCurrent(t *testing.T) {
 
 	if _, ok := got["/archived.md"]; ok {
 		t.Error("archived document should be excluded from WalkCurrent")
+	}
+	if _, ok := got["/legacy.md"]; ok {
+		t.Error("legacy archived tip should be excluded from WalkCurrent")
 	}
 	if len(got) != 2 {
 		t.Fatalf("walked %d documents, want 2: %v", len(got), keysOf(got))
@@ -52,6 +70,20 @@ func TestWalkCurrent(t *testing.T) {
 	}
 	if got["/a.md"].Modified.IsZero() {
 		t.Error("/a.md modified time not set")
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "versions", "legacy.md", archiveStateName), []byte("false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got = make(map[string]CurrentDoc)
+	if err := s.WalkCurrent(func(d CurrentDoc) error {
+		got[d.Path] = d
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkCurrent after explicit false: %v", err)
+	}
+	if _, ok := got["/legacy.md"]; !ok || len(got) != 3 {
+		t.Errorf("explicit false walk = %v, want legacy.md and three documents", keysOf(got))
 	}
 }
 

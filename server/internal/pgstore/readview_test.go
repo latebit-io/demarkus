@@ -192,6 +192,50 @@ func TestPostgresReadViewSnapshot(t *testing.T) {
 			chainValid:    false,
 		})
 	})
+
+	t.Run("pins authoritative archive state", func(t *testing.T) {
+		s := openStore(t)
+		if _, err := s.WriteVersion("/archive.md", 0, []byte("body"), nil); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		view, err := s.OpenReadView()
+		if err != nil {
+			t.Fatalf("open original view: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := view.Close(); err != nil {
+				t.Errorf("close original archive view: %v", err)
+			}
+		})
+		if doc, err := view.Get("/archive.md", 0); err != nil || doc.Archived {
+			t.Fatalf("establish original snapshot = (%+v, %v), want live", doc, err)
+		}
+		if _, _, err := s.Archive("/archive.md", true); err != nil {
+			t.Fatalf("archive: %v", err)
+		}
+		if doc, err := view.Get("/archive.md", 0); err != nil || doc.Archived {
+			t.Errorf("original snapshot after archive = (%+v, %v), want live", doc, err)
+		}
+		if err := view.Close(); err != nil {
+			t.Fatalf("close original view: %v", err)
+		}
+
+		fresh, err := s.OpenReadView()
+		if err != nil {
+			t.Fatalf("open fresh view: %v", err)
+		}
+		defer func() {
+			if err := fresh.Close(); err != nil {
+				t.Errorf("close fresh view: %v", err)
+			}
+		}()
+		if doc, err := fresh.Get("/archive.md", 0); err != nil || !doc.Archived {
+			t.Errorf("fresh snapshot = (%+v, %v), want archived", doc, err)
+		}
+		if doc, err := fresh.Get("/archive.md", 1); err != nil || doc.Archived {
+			t.Errorf("fresh pinned read = (%+v, %v), want Archived false", doc, err)
+		}
+	})
 }
 
 type readViewWant struct {

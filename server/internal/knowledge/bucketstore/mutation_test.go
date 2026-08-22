@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -210,14 +211,25 @@ func TestArchiveRebaseReturnsCommittedVersion(t *testing.T) {
 		result <- archiveOutcome{document: document, changed: changed, err: err}
 	}()
 	waitForTestSignal(t, blocking.blocked, "blocked archive CAS")
-	if _, err := writer.WriteVersion("/doc", 1, []byte("v2"), nil); err != nil {
+	written, err := writer.WriteVersion("/doc", 1, []byte("v2"), nil)
+	if err != nil {
 		t.Fatalf("write concurrent v2: %v", err)
 	}
+	before := currentRetainedHistory(t, writer, "/doc")
+	beforeTip := before.versions[len(before.versions)-1].entry.Blob
 	close(blocking.release)
 	select {
 	case outcome := <-result:
-		if outcome.err != nil || !outcome.changed || outcome.document == nil || outcome.document.Version != 2 || !outcome.document.Archived {
+		if outcome.err != nil || !outcome.changed || outcome.document == nil || outcome.document.Version != 2 || !outcome.document.Archived || outcome.document.ETag != written.ETag {
 			t.Fatalf("archive outcome = (%+v, changed=%v, err=%v), want archived v2", outcome.document, outcome.changed, outcome.err)
+		}
+		after := currentRetainedHistory(t, archiver, "/doc")
+		afterTip := after.versions[len(after.versions)-1].entry.Blob
+		if !slices.Equal(after.manifest.History, before.manifest.History) || afterTip != beforeTip {
+			t.Errorf("archive rebase changed history refs or tip blob: before=%+v/%+v after=%+v/%+v", before.manifest.History, beforeTip, after.manifest.History, afterTip)
+		}
+		if err := archiver.VerifyChain("/doc"); err != nil {
+			t.Errorf("VerifyChain after archive rebase: %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for archive rebase")
@@ -226,14 +238,29 @@ func TestArchiveRebaseReturnsCommittedVersion(t *testing.T) {
 
 func TestArchiveNoOpDoesNotCommit(t *testing.T) {
 	store, memory := newWritableStore(t)
-	if _, err := store.WriteVersion("/doc", 0, []byte("body"), nil); err != nil {
+	written, err := store.WriteVersion("/doc", 0, []byte("body"), nil)
+	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	originalHistory := currentRetainedHistory(t, store, "/doc")
+	originalTip := originalHistory.versions[len(originalHistory.versions)-1].entry.Blob
+	originalCounts := countModelObjects(t, memory)
 	archived, changed, err := store.Archive("/doc", true)
-	if err != nil || !changed {
+	if err != nil || !changed || !archived.Archived || archived.ETag != written.ETag || !archived.Modified.Equal(written.Modified) {
 		t.Fatalf("archive = (%+v, %v, %v)", archived, changed, err)
 	}
+	archivedHistory := currentRetainedHistory(t, store, "/doc")
+	archivedTip := archivedHistory.versions[len(archivedHistory.versions)-1].entry.Blob
+	archivedCounts := countModelObjects(t, memory)
+	assertArchiveImmutables(t, &originalHistory, originalTip, originalCounts, &archivedHistory, archivedTip, archivedCounts)
+	if archivedCounts.immutable != originalCounts.immutable+3 {
+		t.Errorf("archive immutable object count = %d, want %d", archivedCounts.immutable, originalCounts.immutable+3)
+	}
+	if err := store.VerifyChain("/doc"); err != nil {
+		t.Fatalf("VerifyChain after archive: %v", err)
+	}
 	before := currentHead(t, memory)
+	beforeCounts := countModelObjects(t, memory)
 	unchanged, changed, err := store.Archive("/doc", true)
 	if err != nil || changed || unchanged.ETag != archived.ETag || !unchanged.Modified.Equal(archived.Modified) {
 		t.Fatalf("archive no-op = (%+v, %v, %v)", unchanged, changed, err)
@@ -241,6 +268,23 @@ func TestArchiveNoOpDoesNotCommit(t *testing.T) {
 	after := currentHead(t, memory)
 	if after.Sequence != before.Sequence || len(after.Receipts) != len(before.Receipts) {
 		t.Errorf("no-op changed head from sequence %d/%d receipts to %d/%d", before.Sequence, len(before.Receipts), after.Sequence, len(after.Receipts))
+	}
+	if afterCounts := countModelObjects(t, memory); afterCounts != beforeCounts {
+		t.Errorf("no-op changed object counts from %+v to %+v", beforeCounts, afterCounts)
+	}
+	unarchived, changed, err := store.Archive("/doc", false)
+	if err != nil || !changed || unarchived.Archived || unarchived.ETag != written.ETag || !unarchived.Modified.Equal(written.Modified) {
+		t.Fatalf("unarchive = (%+v, %v, %v)", unarchived, changed, err)
+	}
+	unarchivedHistory := currentRetainedHistory(t, store, "/doc")
+	unarchivedTip := unarchivedHistory.versions[len(unarchivedHistory.versions)-1].entry.Blob
+	unarchivedCounts := countModelObjects(t, memory)
+	assertArchiveImmutables(t, &archivedHistory, archivedTip, archivedCounts, &unarchivedHistory, unarchivedTip, unarchivedCounts)
+	if unarchivedCounts.immutable != archivedCounts.immutable {
+		t.Errorf("unarchive immutable object count = %d, want reused graph count %d", unarchivedCounts.immutable, archivedCounts.immutable)
+	}
+	if err := store.VerifyChain("/doc"); err != nil {
+		t.Fatalf("VerifyChain after unarchive: %v", err)
 	}
 }
 
@@ -548,6 +592,11 @@ func policyMetadata() map[string]string {
 
 func currentManifest(t *testing.T, store *Store, path string) manifestObject {
 	t.Helper()
+	return currentRetainedHistory(t, store, path).manifest
+}
+
+func currentRetainedHistory(t *testing.T, store *Store, path string) retainedHistory {
+	t.Helper()
 	loaded := store.snapshot.Load()
 	entry, exists := loaded.Paths[path]
 	if !exists {
@@ -558,7 +607,59 @@ func currentManifest(t *testing.T, store *Store, path string) manifestObject {
 	if err != nil {
 		t.Fatalf("load manifest %s: %v", path, err)
 	}
-	return history.manifest
+	return history
+}
+
+type modelObjectCounts struct {
+	immutable int
+	blobs     int
+	history   int
+}
+
+func countModelObjects(t *testing.T, store blob.Store) modelObjectCounts {
+	t.Helper()
+	var counts modelObjectCounts
+	cursor := ""
+	for {
+		listed, err := store.List(context.Background(), "", cursor)
+		if err != nil {
+			t.Fatalf("list model objects: %v", err)
+		}
+		for _, attributes := range listed.Objects {
+			if attributes.Key == headObjectKey {
+				continue
+			}
+			counts.immutable++
+			if strings.HasPrefix(attributes.Key, objectPrefix+"blobs/") {
+				counts.blobs++
+			}
+			if strings.HasPrefix(attributes.Key, objectPrefix+"history/") {
+				counts.history++
+			}
+		}
+		if listed.NextCursor == "" {
+			return counts
+		}
+		cursor = listed.NextCursor
+	}
+}
+
+func assertArchiveImmutables(
+	t *testing.T,
+	before *retainedHistory,
+	beforeTip objectRef,
+	beforeCounts modelObjectCounts,
+	after *retainedHistory,
+	afterTip objectRef,
+	afterCounts modelObjectCounts,
+) {
+	t.Helper()
+	if !slices.Equal(after.manifest.History, before.manifest.History) || afterTip != beforeTip {
+		t.Errorf("archive state changed history refs or tip blob: before=%+v/%+v after=%+v/%+v", before.manifest.History, beforeTip, after.manifest.History, afterTip)
+	}
+	if afterCounts.blobs != beforeCounts.blobs || afterCounts.history != beforeCounts.history {
+		t.Errorf("archive state changed blob/history counts: before=%+v after=%+v", beforeCounts, afterCounts)
+	}
 }
 
 func currentHead(t *testing.T, store blob.Store) headObject {

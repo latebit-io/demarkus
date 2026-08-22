@@ -153,7 +153,6 @@ type retainedHistory struct {
 type storedDocument struct {
 	body     []byte
 	metadata map[string]string
-	archived bool
 }
 
 func (view *readView) Get(reqPath string, version int) (*protocolstore.Document, error) {
@@ -173,6 +172,7 @@ func (view *readView) get(reqPath string, version int) (*protocolstore.Document,
 	if err != nil {
 		return nil, err
 	}
+	current := version == 0
 	requested := version
 	if requested == 0 {
 		requested = history.manifest.Current
@@ -185,7 +185,7 @@ func (view *readView) get(reqPath string, version int) (*protocolstore.Document,
 	if err != nil {
 		return nil, fmt.Errorf("load v%d: %w", retained.entry.Version, err)
 	}
-	stored, err := validateStoredDocument(raw, &retained, &entry, requested == history.manifest.Current)
+	stored, err := validateStoredDocument(raw, &retained)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func (view *readView) get(reqPath string, version int) (*protocolstore.Document,
 		Content:  bytes.Clone(stored.body),
 		Modified: retained.modified,
 		Version:  retained.entry.Version,
-		Archived: stored.archived,
+		Archived: current && entry.Archived,
 		Metadata: maps.Clone(stored.metadata),
 		ETag:     protocolstore.StoredETag(raw),
 	}, nil
@@ -318,7 +318,7 @@ func (view *readView) verifyChain(reqPath string) error {
 			return fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
 				blob.ErrIntegrity, current.entry.Version, expected, recorded)
 		}
-		if _, err := validateStoredDocument(previousRaw, &previous, &entry, false); err != nil {
+		if _, err := validateStoredDocument(previousRaw, &previous); err != nil {
 			return fmt.Errorf("validate v%d: %w", previous.entry.Version, err)
 		}
 		if err := verifyBlobHash(previous.entry.Blob, previousRaw); err != nil {
@@ -327,7 +327,7 @@ func (view *readView) verifyChain(reqPath string) error {
 		previous = current
 		previousRaw = currentRaw
 	}
-	if _, err := validateStoredDocument(previousRaw, &previous, &entry, true); err != nil {
+	if _, err := validateStoredDocument(previousRaw, &previous); err != nil {
 		return fmt.Errorf("validate v%d: %w", previous.entry.Version, err)
 	}
 	if err := verifyBlobHash(previous.entry.Blob, previousRaw); err != nil {
@@ -483,7 +483,7 @@ func retainedAt(versions []retainedVersion, version int) (retainedVersion, bool)
 	return versions[index], true
 }
 
-func validateStoredDocument(raw []byte, retained *retainedVersion, entry *snapshotEntry, tip bool) (storedDocument, error) {
+func validateStoredDocument(raw []byte, retained *retainedVersion) (storedDocument, error) {
 	header, err := protocolstore.InspectStoredVersion(raw)
 	if err != nil {
 		return storedDocument{}, fmt.Errorf("%w: v%d stored version: %v", blob.ErrIntegrity, retained.entry.Version, err)
@@ -500,12 +500,5 @@ func validateStoredDocument(raw []byte, retained *retainedVersion, entry *snapsh
 	if err := protocolstore.ValidateWrite(body, metadata); err != nil {
 		return storedDocument{}, fmt.Errorf("%w: v%d stored data: %v", blob.ErrIntegrity, version, err)
 	}
-	archived := header.Archived
-	if tip && archived != entry.Archived {
-		return storedDocument{}, fmt.Errorf("%w: v%d archive state does not match manifest", blob.ErrIntegrity, version)
-	}
-	if !tip && archived {
-		return storedDocument{}, fmt.Errorf("%w: non-tip v%d is archived", blob.ErrIntegrity, version)
-	}
-	return storedDocument{body: body, metadata: metadata, archived: archived}, nil
+	return storedDocument{body: body, metadata: metadata}, nil
 }

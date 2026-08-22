@@ -1,6 +1,7 @@
 package pgstore_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/pgstore"
@@ -55,6 +58,110 @@ func TestPostgresCurrentVersionRejectsTraversal(t *testing.T) {
 			t.Errorf("CurrentVersion traversal = (%d, %v), want (0, ErrNotExist)", version, err)
 		}
 	})
+}
+
+func TestPostgresArchiveStateIsVersionImmutable(t *testing.T) {
+	s := openStore(t)
+	created, err := s.WriteVersion("/immutable.md", 0, []byte("v1"), map[string]string{"tags": "archive"})
+	if err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+
+	type versionRow struct {
+		stored   []byte
+		modified time.Time
+	}
+	readRow := func(version int) versionRow {
+		t.Helper()
+		var row versionRow
+		err := pgtest.DB(t, pgSchema).QueryRow(
+			`SELECT stored, modified FROM versions WHERE path = 'immutable.md' AND version = $1`, version,
+		).Scan(&row.stored, &row.modified)
+		if err != nil {
+			t.Fatalf("read v%d row: %v", version, err)
+		}
+		return row
+	}
+	assertIdentity := func(label string, got *store.Document, want versionRow) {
+		t.Helper()
+		if got.ETag != store.StoredETag(want.stored) || !got.Modified.Equal(want.modified.UTC().Truncate(time.Second)) {
+			t.Errorf("%s identity = (etag %q, modified %v), want (%q, %v)",
+				label, got.ETag, got.Modified, store.StoredETag(want.stored), want.modified.UTC().Truncate(time.Second))
+		}
+	}
+	initial := readRow(1)
+	assertIdentity("created", created, initial)
+
+	archived, changed, err := s.Archive("/immutable.md", true)
+	if err != nil || !changed || !archived.Archived {
+		t.Fatalf("archive = (%+v, %v, %v), want archived transition", archived, changed, err)
+	}
+	assertIdentity("archive", archived, initial)
+	afterArchive := readRow(1)
+	if !bytes.Equal(afterArchive.stored, initial.stored) || !afterArchive.modified.Equal(initial.modified) {
+		t.Errorf("archive changed version row: stored equal=%v, modified %v -> %v",
+			bytes.Equal(afterArchive.stored, initial.stored), initial.modified, afterArchive.modified)
+	}
+	current, err := s.Get("/immutable.md", 0)
+	if err != nil || !current.Archived {
+		t.Fatalf("current after archive = (%+v, %v), want archived", current, err)
+	}
+	pinned, err := s.Get("/immutable.md", 1)
+	if err != nil || pinned.Archived {
+		t.Fatalf("pinned after archive = (%+v, %v), want unarchived history", pinned, err)
+	}
+	assertIdentity("pinned after archive", pinned, initial)
+
+	unarchived, changed, err := s.Archive("/immutable.md", false)
+	if err != nil || !changed || unarchived.Archived {
+		t.Fatalf("unarchive = (%+v, %v, %v), want unarchived transition", unarchived, changed, err)
+	}
+	assertIdentity("unarchive", unarchived, initial)
+	afterUnarchive := readRow(1)
+	if !bytes.Equal(afterUnarchive.stored, initial.stored) || !afterUnarchive.modified.Equal(initial.modified) {
+		t.Errorf("unarchive changed version row: stored equal=%v, modified %v -> %v",
+			bytes.Equal(afterUnarchive.stored, initial.stored), initial.modified, afterUnarchive.modified)
+	}
+
+	legacyArchived, err := store.SetArchived(initial.stored, true)
+	if err != nil {
+		t.Fatalf("make legacy archived bytes: %v", err)
+	}
+	pgtest.TamperVersion(t, pgSchema, "/immutable.md", 1, legacyArchived)
+	current, err = s.Get("/immutable.md", 0)
+	if err != nil || current.Archived || current.ETag != store.StoredETag(legacyArchived) {
+		t.Fatalf("current with contradictory header = (%+v, %v), want live row state and stored ETag", current, err)
+	}
+	if _, err := s.WriteVersion("/immutable.md", 1, []byte("v2"), nil); err != nil {
+		t.Fatalf("write after legacy archived header: %v", err)
+	}
+	if err := s.VerifyChain("/immutable.md"); err != nil {
+		t.Errorf("verify chain with historical archived bytes: %v", err)
+	}
+
+	tip := readRow(2)
+	contradictoryTip, err := store.SetArchived(tip.stored, true)
+	if err != nil {
+		t.Fatalf("make contradictory tip: %v", err)
+	}
+	pgtest.TamperVersion(t, pgSchema, "/immutable.md", 2, contradictoryTip)
+	current, err = s.Get("/immutable.md", 0)
+	if err != nil || current.Archived {
+		t.Fatalf("current with contradictory tip = (%+v, %v), want live row state", current, err)
+	}
+	archived, changed, err = s.Archive("/immutable.md", true)
+	if err != nil || !changed || !archived.Archived {
+		t.Fatalf("archive contradictory tip = (%+v, %v, %v), want row transition", archived, changed, err)
+	}
+	contradictoryRow := readRow(2)
+	if !bytes.Equal(contradictoryRow.stored, contradictoryTip) || !contradictoryRow.modified.Equal(tip.modified) {
+		t.Error("archive rewrote contradictory tip row")
+	}
+	assertIdentity("archive contradictory tip", archived, contradictoryRow)
+	pinned, err = s.Get("/immutable.md", 2)
+	if err != nil || pinned.Archived {
+		t.Fatalf("pinned contradictory tip = (%+v, %v), want Archived false", pinned, err)
+	}
 }
 
 // TestPostgresLookupConformance runs the LOOKUP conformance suite; the store

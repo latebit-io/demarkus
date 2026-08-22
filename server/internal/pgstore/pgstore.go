@@ -305,12 +305,13 @@ func get(ctx context.Context, queries sqlQueryer, reqPath string, version int) (
 	var stored []byte
 	var modified time.Time
 	var ver int
+	var archived bool
 	err = queries.QueryRowContext(ctx, `
-		SELECT v.stored, v.modified, v.version
+		SELECT v.stored, v.modified, v.version, d.archived
 		FROM documents d
 		JOIN versions v ON v.path = d.path
 		AND v.version = CASE WHEN $2 = 0 THEN d.current_version ELSE $2 END
-		WHERE d.path = $1`, p, version).Scan(&stored, &modified, &ver)
+		WHERE d.path = $1`, p, version).Scan(&stored, &modified, &ver, &archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, os.ErrNotExist
 	}
@@ -321,7 +322,7 @@ func get(ctx context.Context, queries sqlQueryer, reqPath string, version int) (
 		Content:  store.ExtractBody(stored),
 		Modified: modified.UTC().Truncate(time.Second),
 		Version:  ver,
-		Archived: store.IsArchived(stored),
+		Archived: version == 0 && archived,
 		Metadata: store.ExtractMetadata(stored),
 		ETag:     store.StoredETag(stored),
 	}, nil
@@ -600,7 +601,7 @@ func verifyChain(ctx context.Context, queries sqlQueryer, reqPath string) error 
 				return fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
 					store.ErrIntegrity, n, prevHash, recorded)
 			}
-			if err := validateStoredHead(prevVersion, prevHead, false); err != nil {
+			if err := validateStoredHead(prevVersion, prevHead); err != nil {
 				return err
 			}
 		}
@@ -612,19 +613,16 @@ func verifyChain(ctx context.Context, queries sqlQueryer, reqPath string) error 
 	if !seen {
 		return fmt.Errorf("list versions: %w", os.ErrNotExist)
 	}
-	return validateStoredHead(prevVersion, prevHead, true)
+	return validateStoredHead(prevVersion, prevHead)
 }
 
-func validateStoredHead(version int, head []byte, tip bool) error {
+func validateStoredHead(version int, head []byte) error {
 	header, err := store.InspectStoredVersion(head)
 	if err != nil {
 		return fmt.Errorf("%w: v%d: %v", store.ErrIntegrity, version, err)
 	}
 	if header.Version != version {
 		return fmt.Errorf("%w: v%d stored version is %d", store.ErrIntegrity, version, header.Version)
-	}
-	if !tip && header.Archived {
-		return fmt.Errorf("%w: non-tip v%d is archived", store.ErrIntegrity, version)
 	}
 	return nil
 }
@@ -937,17 +935,8 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	return s.WriteVersion(reqPath, expectedVersion, combined, store.PrepareAppendMeta(reqPath, baseDoc.Metadata, meta))
 }
 
-// Archive toggles the archived flag: the documents row column and the tip
-// version's stored frontmatter, in one transaction.
-//
-// Modifying the tip in place is a deliberate parity decision, not an
-// immutability violation: the file store's Archive documents that "the
-// archived flag is operational metadata, not content", and creating a new
-// version would pollute history with identical content. Both backends must
-// produce identical stored bytes for the conformance suite and for
-// migration, so this backend mirrors that design exactly. The hash chain
-// stays valid because only successors hash their predecessor and the tip
-// has no successor yet.
+// Archive changes only the authoritative documents row. Version bytes and
+// their ETags remain immutable.
 func (s *Store) Archive(reqPath string, archived bool) (*store.Document, bool, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
@@ -965,14 +954,16 @@ func (s *Store) Archive(reqPath string, archived bool) (*store.Document, bool, e
 	defer func() { _ = tx.Rollback() }()
 
 	var cur int
+	var currentArchived bool
 	err = tx.QueryRowContext(ctx, `
-		SELECT current_version FROM documents WHERE path = $1 FOR UPDATE`, p).Scan(&cur)
+		SELECT current_version, archived FROM documents WHERE path = $1 FOR UPDATE`, p).Scan(&cur, &currentArchived)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, os.ErrNotExist
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("lock %s: %w", reqPath, err)
 	}
+	changed := currentArchived != archived
 
 	var tipStored []byte
 	var modified time.Time
@@ -980,19 +971,11 @@ func (s *Store) Archive(reqPath string, archived bool) (*store.Document, bool, e
 		SELECT stored, modified FROM versions WHERE path = $1 AND version = $2`, p, cur).Scan(&tipStored, &modified); err != nil {
 		return nil, false, fmt.Errorf("read tip %s v%d: %w", reqPath, cur, err)
 	}
-	if store.IsArchived(tipStored) == archived {
+	if !changed {
 		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 			return nil, false, fmt.Errorf("rollback archive no-op %s: %w", reqPath, err)
 		}
-		return archivedDocument(tipStored, modified, cur), false, nil
-	}
-	newStored, err := store.SetArchived(tipStored, archived)
-	if err != nil {
-		return nil, false, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE versions SET stored = $3 WHERE path = $1 AND version = $2`, p, cur, newStored); err != nil {
-		return nil, false, fmt.Errorf("update tip %s v%d: %w", reqPath, cur, err)
+		return archivedDocument(tipStored, modified, cur, archived), false, nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE documents SET archived = $2 WHERE path = $1`, p, archived); err != nil {
@@ -1001,15 +984,15 @@ func (s *Store) Archive(reqPath string, archived bool) (*store.Document, bool, e
 	if err := tx.Commit(); err != nil {
 		return nil, false, fmt.Errorf("commit archive %s: %w", reqPath, err)
 	}
-	return archivedDocument(newStored, modified, cur), true, nil
+	return archivedDocument(tipStored, modified, cur, archived), true, nil
 }
 
-func archivedDocument(stored []byte, modified time.Time, version int) *store.Document {
+func archivedDocument(stored []byte, modified time.Time, version int, archived bool) *store.Document {
 	return &store.Document{
 		Content:  store.ExtractBody(stored),
 		Modified: modified.UTC().Truncate(time.Second),
 		Version:  version,
-		Archived: store.IsArchived(stored),
+		Archived: archived,
 		Metadata: store.ExtractMetadata(stored),
 		ETag:     store.StoredETag(stored),
 	}

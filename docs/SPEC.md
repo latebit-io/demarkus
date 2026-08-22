@@ -428,10 +428,10 @@ status: ok
 
 **Behaviour**:
 
-- ARCHIVE sets the `archived` flag on the current version file. It does NOT create a new version.
+- ARCHIVE changes archive state stored separately from document versions. It MUST NOT create a version or alter any version's stored bytes, ETag, or modified time.
 - FETCH on an archived document MUST return `status: archived` with no body.
-- Version-pinned FETCH (e.g., `/doc.md/v3`) MUST still return the content regardless of archive status.
-- To unarchive a document, PUBLISH with an empty body (see section 6.4).
+- Version-pinned FETCH (e.g., `/doc.md/v3`) MUST still return the same content, ETag, and modified time regardless of current archive state.
+- To unarchive a document, PUBLISH with an empty body (see section 6.4). Unarchiving changes only the separate archive state and has the same version, stored-byte, ETag, and modified-time invariants as ARCHIVE.
 
 **Authentication errors**:
 
@@ -624,13 +624,13 @@ Beyond the interpreted fields above, a PUBLISH request MAY carry additional publ
 
 ### 9.1. Version Model
 
-The Mark Protocol uses an append-only version model. Every write to a document creates a new version. Published versions are permanent and MUST NOT be modified or deleted, with one exception: a publisher-declared retention policy prunes the oldest versions of a document (§9.9). Version history is otherwise an append-only log.
+The Mark Protocol uses an append-only version model. Every document-content write creates a new version; archive and unarchive change separate operational state. Published versions are permanent and MUST NOT be modified or deleted, with one exception: a publisher-declared retention policy prunes the oldest versions of a document (§9.9). Version history is otherwise an append-only log.
 
 Version numbers are positive integers starting at 1, monotonically increasing by 1 for each write. Retention pruning never affects version numbering.
 
 The version model is defined over observable protocol behavior, not a storage medium. A server MAY persist versions in any store (the reference implementation ships a filesystem store and a PostgreSQL store) provided the stored version bytes (§9.4), version numbering, hash chain (§9.5), and verb semantics are preserved regardless of the persistence layer.
 
-Immutability covers document content and history, not store-owned operational state: the `archived` field (§9.4) of the current version MAY be updated in place by archive and unarchive operations rather than by creating a new version, since the flag is operational metadata, not content. The hash chain is unaffected because only a successor version hashes its predecessor, and the current version has no successor at the time its flag changes.
+Archive state is store-owned operational state separate from immutable document versions. Archive and unarchive operations change that state without creating a version or modifying stored version bytes. They therefore leave version numbers, modified times, ETags, and the hash chain unchanged.
 
 ### 9.2. Path-Based Version Access
 
@@ -658,9 +658,10 @@ root/
       v1
       v2
       v<N>
+      archive-state     ← current operational state: `true\n` or `false\n`
 ```
 
-The current file (`doc.md`) SHOULD be a symbolic link to the latest version file. Each document's version files reside in their own subdirectory of `versions/`, at the same level as the document, named `v<N>` where N is the version number.
+The current file (`doc.md`) SHOULD be a symbolic link to the latest version file. Each document's version files reside in their own subdirectory of `versions/`, at the same level as the document, named `v<N>` where N is the version number. The `archive-state` sidecar records current archive state separately from immutable version bytes. When absent, implementations MUST fall back to the latest version's legacy `archived` field; an explicit `false` sidecar overrides a legacy `archived: true` value.
 
 An older layout named version files `versions/<filename>.v<N>` directly in the `versions/` directory. Servers encountering it MUST migrate those files into the per-document layout before serving the store (§9.8).
 
@@ -689,7 +690,7 @@ previous-hash: sha256-<64-char lowercase hex>
 <original document content>
 ```
 
-`version`, `archived`, and `previous-hash` (omitted for version 1) are reserved operational fields owned by the store. Publishers MUST NOT set them, and a server MUST reject a PUBLISH whose metadata declares a reserved key.
+`version`, `archived`, and `previous-hash` (omitted for version 1) are reserved operational fields owned by the store. Publishers MUST NOT set them, and a server MUST reject a PUBLISH whose metadata declares a reserved key. The `archived` field is retained in stored bytes for legacy-format fallback; newly written versions MUST set it to `false`. A server MUST derive current archive state from a legacy current version whose field is `true` when no separate operational archive state exists, but archive and unarchive operations MUST NOT rewrite the field.
 
 Publisher-declared metadata is written into the same block. The field names defined by the Open Knowledge Format (`type`, `title`, `description`, `resource`, `tags`, and `timestamp`) are written as **bare** frontmatter fields so the document's persisted metadata matches the OKF spec for the fields it covers; `tags` is serialized as a YAML flow list. Every other publisher key is written under a `meta.` prefix so it cannot collide with a reserved or OKF-recognized field. For example:
 
@@ -771,7 +772,7 @@ Because pruning is the store's only destructive operation, deletion targets MUST
 
 ### 10.1. ETag
 
-The server MUST compute an ETag for every successful FETCH response. For a stored document, the ETag is the SHA-256 hash of the selected version's raw stored bytes (§9.4, before any frontmatter stripping), formatted as 64 lowercase hexadecimal characters. Because every storage backend persists identical stored version bytes, a document version's ETag is the same regardless of the backend serving it. For an automatically generated directory index with no stored version, the ETag is the SHA-256 hash of the exact response body bytes.
+The server MUST compute an ETag for every successful FETCH response. For a stored document, the ETag is the SHA-256 hash of the selected version's exact raw stored bytes (§9.4, before any frontmatter stripping), formatted as 64 lowercase hexadecimal characters. Because every storage backend persists identical stored version bytes, a document version's ETag is the same regardless of the backend serving it and remains stable through archive and unarchive operations. For an automatically generated directory index with no stored version, the ETag is the SHA-256 hash of the exact response body bytes.
 
 ### 10.2. Conditional Requests
 

@@ -105,15 +105,15 @@ func (s *Store) Archive(path string, archived bool) (*protocolstore.Document, bo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	document, changed, err := s.documents.Archive(path, archived)
-	if err != nil || !changed {
+	if !changed {
 		return document, changed, err
 	}
 	if archived {
 		s.catalog.Remove(path)
-		return document, true, nil
+		return document, true, err
 	}
 	s.catalog.Put(path, document.Metadata, document.Content, document.Modified)
-	return document, true, nil
+	return document, true, err
 }
 
 // Put is a no-op because mutation methods update the catalog atomically.

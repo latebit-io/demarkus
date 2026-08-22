@@ -60,6 +60,46 @@ func TestInspectStoredVersionHeader(t *testing.T) {
 	}
 }
 
+func TestInspectStoredVersionRejectsPrefixedReservedAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "reserved version", key: "version"},
+		{name: "reserved previous hash", key: "previous-hash"},
+		{name: "reserved archived", key: "archived"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stored := []byte("---\nversion: 1\narchived: false\nmeta." + test.key + ": value\n---\nbody")
+			if _, err := InspectStoredVersion(stored); err == nil {
+				t.Fatalf("InspectStoredVersion accepted meta.%s", test.key)
+			}
+		})
+	}
+}
+
+func TestInspectStoredVersionAcceptsLegacyPrefixedOKFFields(t *testing.T) {
+	stored := []byte("---\nversion: 1\narchived: false\nmeta.tags: alpha,beta\nmeta.type: knowledge\n---\nbody")
+	if _, err := InspectStoredVersion(stored); err != nil {
+		t.Fatalf("InspectStoredVersion rejected legacy OKF metadata: %v", err)
+	}
+}
+
+func TestInspectStoredVersionRejectsMixedOKFAliases(t *testing.T) {
+	stored := []byte("---\nversion: 1\narchived: false\ntags: [alpha, beta]\nmeta.tags: alpha,beta\n---\nbody")
+	if _, err := InspectStoredVersion(stored); err == nil {
+		t.Fatal("InspectStoredVersion accepted canonical and legacy tags together")
+	}
+}
+
+func TestInspectStoredVersionAcceptsCustomMetadata(t *testing.T) {
+	stored := []byte("---\nversion: 1\narchived: false\nmeta.custom: value\n---\nbody")
+	if _, err := InspectStoredVersion(stored); err != nil {
+		t.Fatalf("InspectStoredVersion: %v", err)
+	}
+}
+
 func TestNormalizeMetadata(t *testing.T) {
 	meta := map[string]string{"tags": " alpha, beta ", "title": "Kept"}
 	normalized := NormalizeMetadata(meta)

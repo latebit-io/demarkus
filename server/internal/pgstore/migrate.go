@@ -18,10 +18,12 @@ import (
 // ExportDocs visits every document, archived included, in path order with
 // its history oldest-first and stored bytes verbatim, bounded by the
 // caller's ctx. reqPath is the request spelling, matching the file store.
-func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, versions []store.StoredVersion) error) error {
+func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, document store.StoredDocument) error) error {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT path, version, stored, modified FROM versions
-		ORDER BY path, version`)
+		SELECT d.path, d.archived, v.version, v.stored, v.modified
+		FROM documents d
+		JOIN versions v ON v.path = d.path
+		ORDER BY d.path, v.version`)
 	if err != nil {
 		return fmt.Errorf("export versions: %w", err)
 	}
@@ -29,12 +31,13 @@ func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, versions
 	defer func() { _ = rows.Close() }()
 
 	var curPath string
+	var curArchived bool
 	var cur []store.StoredVersion
 	flush := func() error {
 		if len(cur) == 0 {
 			return nil
 		}
-		err := fn("/"+curPath, cur)
+		err := fn("/"+curPath, store.StoredDocument{Versions: cur, Archived: curArchived})
 		// The callback may retain the slice (Migrator contract); start a
 		// fresh backing array for the next document.
 		cur = nil
@@ -43,7 +46,8 @@ func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, versions
 	for rows.Next() {
 		var v store.StoredVersion
 		var p string
-		if err := rows.Scan(&p, &v.Version, &v.Stored, &v.Modified); err != nil {
+		var archived bool
+		if err := rows.Scan(&p, &archived, &v.Version, &v.Stored, &v.Modified); err != nil {
 			return fmt.Errorf("export scan: %w", err)
 		}
 		if p != curPath {
@@ -51,6 +55,7 @@ func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, versions
 				return err
 			}
 			curPath = p
+			curArchived = archived
 		}
 		cur = append(cur, v)
 	}
@@ -63,8 +68,8 @@ func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, versions
 // ImportDoc inserts a document's rows byte-for-byte in one transaction,
 // bounded by the caller's ctx: versions verbatim, the documents row and the
 // catalog row derived from the tip, as a live write would.
-func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []store.StoredVersion) error {
-	p, err := store.ValidateImport(reqPath, versions)
+func (s *Store) ImportDoc(ctx context.Context, reqPath string, document store.StoredDocument) error {
+	p, err := store.ValidateImport(reqPath, document)
 	if err != nil {
 		return err
 	}
@@ -77,12 +82,12 @@ func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []store.
 	// early return below.
 	defer func() { _ = tx.Rollback() }()
 
-	newest := versions[len(versions)-1]
+	newest := document.Versions[len(document.Versions)-1]
 	// The documents PK doubles as the exists check: a duplicate import
 	// surfaces as a unique violation, folded into ErrExist.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO documents (path, current_version, archived) VALUES ($1, $2, $3)`,
-		p, newest.Version, store.IsArchived(newest.Stored)); err != nil {
+		p, newest.Version, document.Archived); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
 			return fmt.Errorf("import %s: %w", reqPath, os.ErrExist)
@@ -98,7 +103,7 @@ func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []store.
 	}
 	// Statement lives on the tx; Rollback/Commit releases it either way.
 	defer func() { _ = stmt.Close() }()
-	for _, v := range versions {
+	for _, v := range document.Versions {
 		if _, err := stmt.ExecContext(ctx, p, v.Version, v.Stored,
 			store.ContentHash(store.ExtractBody(v.Stored)), v.Modified); err != nil {
 			return fmt.Errorf("import %s v%d: %w", reqPath, v.Version, err)

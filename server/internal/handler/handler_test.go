@@ -1755,6 +1755,10 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		b := newBackend(t)
 		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
 		h := newHandler(b, ts)
+		first, err := b.Store.Get("/doc.md", 1)
+		if err != nil {
+			t.Fatalf("get v1: %v", err)
+		}
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
@@ -1770,6 +1774,19 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		}
 		if resp.Status != protocol.StatusOK {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
+		}
+		if resp.Metadata["etag"] != first.ETag || resp.Body != "# Content\n" {
+			t.Errorf("archived pinned fetch = etag %q body %q, want %q and original body", resp.Metadata["etag"], resp.Body, first.ETag)
+		}
+
+		stream = newMockStream("FETCH /doc.md/v1\n---\nif-none-match: " + first.ETag + "\n---\n")
+		h.HandleStream(stream)
+		resp, err = protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse conditional response: %v", err)
+		}
+		if resp.Status != protocol.StatusNotModified || resp.Body != "" {
+			t.Errorf("archived conditional pinned fetch = status %q body %q, want not-modified empty", resp.Status, resp.Body)
 		}
 	})
 

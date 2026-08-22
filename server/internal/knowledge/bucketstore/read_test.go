@@ -401,6 +401,10 @@ func TestReadSemantics(t *testing.T) {
 		if err != nil || !archivedDocument.Archived || archivedDocument.Version != 1 {
 			t.Errorf("archived Get = (%+v, %v)", archivedDocument, err)
 		}
+		pinnedArchived, err := view.Get(archived.Path, 1)
+		if err != nil || pinnedArchived.Archived || pinnedArchived.ETag != archivedDocument.ETag {
+			t.Errorf("pinned archived Get = (%+v, %v), current ETag %q", pinnedArchived, err, archivedDocument.ETag)
+		}
 	})
 
 	t.Run("logical misses", func(t *testing.T) {
@@ -643,29 +647,6 @@ func TestReferencedObjectIntegrity(t *testing.T) {
 			},
 		},
 		{
-			name:    "archived non-tip",
-			version: 1,
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				document := commit.documents["/docs/a.md"]
-				raw, err := protocolstore.SetArchived(document.versions[1].raw, true)
-				if err != nil {
-					t.Fatalf("archive raw: %v", err)
-				}
-				installRawMutation(t, memory, document, 1, raw)
-			},
-		},
-		{
-			name: "tip archive mismatch",
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				document := commit.documents["/docs/a.md"]
-				raw, err := protocolstore.SetArchived(document.versions[2].raw, true)
-				if err != nil {
-					t.Fatalf("archive raw: %v", err)
-				}
-				installRawMutation(t, memory, document, 2, raw)
-			},
-		},
-		{
 			name: "tip body hash mismatch",
 			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
 				document := commit.documents["/docs/a.md"]
@@ -707,6 +688,36 @@ func TestReferencedObjectIntegrity(t *testing.T) {
 				t.Errorf("Get error = %v, want provider cause %v", err, test.wantCause)
 			}
 		})
+	}
+}
+
+func TestStoredArchiveHeaderIsLegacyOnly(t *testing.T) {
+	memory := initializedMemory(t)
+	document := newReadDocument("/docs/a.md", "one", "two")
+	document.StoredArchived = map[int]bool{1: true, 2: true}
+	commit := commitReadDocuments(t, memory, []readDocumentSpec{document})
+	view := openTestReadView(t, memory)
+	defer closeTestReadView(t, view)
+
+	for _, version := range []int{0, 1, 2} {
+		stored, err := view.Get(document.Path, version)
+		if err != nil {
+			t.Fatalf("Get(v%d): %v", version, err)
+		}
+		if stored.Archived {
+			t.Errorf("Get(v%d) archived = true, want model state false", version)
+		}
+		resolved := version
+		if resolved == 0 {
+			resolved = 2
+		}
+		wantETag := protocolstore.StoredETag(commit.documents[document.Path].versions[resolved].raw)
+		if stored.ETag != wantETag {
+			t.Errorf("Get(v%d) ETag = %q, want %q", version, stored.ETag, wantETag)
+		}
+	}
+	if err := view.VerifyChain(document.Path); err != nil {
+		t.Fatalf("VerifyChain with legacy archive headers: %v", err)
 	}
 }
 
@@ -846,11 +857,12 @@ func TestReadViewTimeout(t *testing.T) {
 }
 
 type readDocumentSpec struct {
-	Path       string
-	Bodies     [][]byte
-	Metadata   []map[string]string
-	Archived   bool
-	RetainFrom int
+	Path           string
+	Bodies         [][]byte
+	Metadata       []map[string]string
+	Archived       bool
+	StoredArchived map[int]bool
+	RetainFrom     int
 }
 
 type committedReadVersion struct {
@@ -974,7 +986,7 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 		if err != nil {
 			t.Fatalf("serialize %s v%d: %v", spec.Path, version, err)
 		}
-		if spec.Archived && version == len(spec.Bodies) {
+		if spec.StoredArchived[version] {
 			raw, err = protocolstore.SetArchived(raw, true)
 			if err != nil {
 				t.Fatalf("archive %s v%d: %v", spec.Path, version, err)

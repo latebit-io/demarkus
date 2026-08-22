@@ -266,26 +266,20 @@ func testNotModifiedDedup(t *testing.T, s handler.DocumentStore) {
 }
 
 func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
-	mustWrite(t, s, "/arch.md", 0, "content")
+	initial := mustWrite(t, s, "/arch.md", 0, "content")
 	hash := store.ContentHash([]byte("content"))
 
 	if p, err := s.LookupHash(hash); err != nil || p != "/arch.md" {
 		t.Errorf("LookupHash before archive = (%q, %v), want (/arch.md, nil)", p, err)
 	}
 	archivedDoc := mustArchiveTransition(t, s, "/arch.md", true)
-	if archivedDoc.Version != 1 {
-		t.Errorf("archived version = %d, want 1", archivedDoc.Version)
+	if archivedDoc.Version != 1 || archivedDoc.ETag != initial.ETag || !archivedDoc.Modified.Equal(initial.Modified) {
+		t.Errorf("archive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", archivedDoc, initial.ETag, initial.Modified)
 	}
+	assertArchiveState(t, s, "/arch.md", initial, true)
 	unchangedDoc, changed, err := s.Archive("/arch.md", true)
 	if err != nil || changed || unchangedDoc == nil || unchangedDoc.ETag != archivedDoc.ETag || !unchangedDoc.Modified.Equal(archivedDoc.Modified) {
 		t.Errorf("archive no-op = (%+v, changed=%v, err=%v), want unchanged committed document", unchangedDoc, changed, err)
-	}
-	got, err := s.Get("/arch.md", 0)
-	if err != nil {
-		t.Fatalf("get archived: %v", err)
-	}
-	if !got.Archived {
-		t.Error("archived flag not set on Get")
 	}
 	if _, err := s.LookupHash(hash); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("LookupHash after archive: err = %v, want ErrNotExist", err)
@@ -293,18 +287,50 @@ func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
 	if _, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); !errors.Is(err, store.ErrArchived) {
 		t.Errorf("write to archived: err = %v, want ErrArchived", err)
 	}
-	unarchivedDoc := mustArchiveTransition(t, s, "/arch.md", false)
-	if unarchivedDoc.Version != 1 {
-		t.Errorf("unarchived version = %d, want 1", unarchivedDoc.Version)
+	if err := s.VerifyChain("/arch.md"); err != nil {
+		t.Errorf("VerifyChain while archived: %v", err)
 	}
+	unarchivedDoc := mustArchiveTransition(t, s, "/arch.md", false)
+	if unarchivedDoc.Version != 1 || unarchivedDoc.ETag != initial.ETag || !unarchivedDoc.Modified.Equal(initial.Modified) {
+		t.Errorf("unarchive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", unarchivedDoc, initial.ETag, initial.Modified)
+	}
+	assertArchiveState(t, s, "/arch.md", initial, false)
 	if p, err := s.LookupHash(hash); err != nil || p != "/arch.md" {
 		t.Errorf("LookupHash after unarchive = (%q, %v), want (/arch.md, nil)", p, err)
 	}
 	if doc, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); err != nil || doc.Version != 2 {
 		t.Errorf("write after unarchive = (%+v, %v), want v2", doc, err)
 	}
+	if err := s.VerifyChain("/arch.md"); err != nil {
+		t.Errorf("VerifyChain after v2 write: %v", err)
+	}
 	if _, _, err := s.Archive("/missing.md", true); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("archive missing: err = %v, want ErrNotExist", err)
+	}
+}
+
+func assertArchiveState(t *testing.T, s handler.DocumentStore, path string, initial *store.Document, archived bool) {
+	t.Helper()
+	current, err := s.Get(path, 0)
+	if err != nil {
+		t.Fatalf("get current: %v", err)
+	}
+	if current.Version != 1 || current.Archived != archived || current.ETag != initial.ETag || !current.Modified.Equal(initial.Modified) {
+		t.Errorf("current after archived=%v: got %+v, want v1 etag=%q modified=%v", archived, current, initial.ETag, initial.Modified)
+	}
+	pinned, err := s.Get(path, 1)
+	if err != nil {
+		t.Fatalf("get pinned v1: %v", err)
+	}
+	if pinned.Version != 1 || pinned.Archived || pinned.ETag != initial.ETag || !pinned.Modified.Equal(initial.Modified) || !bytes.Equal(pinned.Content, initial.Content) {
+		t.Errorf("pinned v1 after archived=%v: got %+v, want unchanged active version", archived, pinned)
+	}
+	versions, err := s.Versions(path)
+	if err != nil {
+		t.Fatalf("versions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].Version != 1 || !versions[0].Modified.Equal(initial.Modified) {
+		t.Errorf("versions after archived=%v: got %+v, want one unchanged v1", archived, versions)
 	}
 }
 

@@ -183,12 +183,12 @@ func (store *Store) buildWriteCandidate(
 		if err != nil {
 			return nil, MutationResult{}, err
 		}
-		storedTip, err := validateStoredDocument(previousRaw, &tip, &entry, true)
+		storedTip, err := validateStoredDocument(previousRaw, &tip)
 		if err != nil {
 			return nil, MutationResult{}, err
 		}
 		if bytes.Equal(storedTip.body, body) && protocolstore.MetaEqual(storedTip.metadata, protocolstore.NormalizeMetadata(metadata)) {
-			document := documentFromRetained(previousRaw, &tip, &storedTip)
+			document := documentFromRetained(previousRaw, &tip, &storedTip, false)
 			return nil, MutationResult{Document: document}, protocolstore.ErrNotModified
 		}
 	}
@@ -277,38 +277,21 @@ func (store *Store) buildArchiveCandidate(
 	if err != nil {
 		return nil, MutationResult{}, err
 	}
-	tipIndex := len(history.versions) - 1
-	tip := history.versions[tipIndex]
+	tip := history.versions[len(history.versions)-1]
 	raw, err := view.loadBlob(tip.entry.Blob)
 	if err != nil {
 		return nil, MutationResult{}, err
 	}
-	storedTip, err := validateStoredDocument(raw, &tip, &entry, true)
+	storedTip, err := validateStoredDocument(raw, &tip)
 	if err != nil {
 		return nil, MutationResult{}, err
 	}
-	if storedTip.archived == archived {
-		document := documentFromRetained(raw, &tip, &storedTip)
+	if entry.Archived == archived {
+		document := documentFromRetained(raw, &tip, &storedTip, archived)
 		return nil, MutationResult{Document: document, Changed: false}, nil
 	}
-	updated, err := protocolstore.SetArchived(raw, archived)
-	if err != nil {
-		return nil, MutationResult{}, err
-	}
-	updatedHash := hashHex(updated)
-	history.versions = slices.Clone(history.versions)
-	history.versions[tipIndex].entry.Blob = objectRef{Key: blobKey(updatedHash), Hash: updatedHash}
-	historyRefs, historyObjects, err := buildHistoryBlocks(entry.PathHash, history.versions, history.manifest.History, map[int]bool{entry.Current: true})
-	if err != nil {
-		return nil, MutationResult{}, err
-	}
-	manifest := manifestObject{
-		Schema:   schemaVersion,
-		PathHash: entry.PathHash,
-		Current:  entry.Current,
-		Archived: archived,
-		History:  historyRefs,
-	}
+	manifest := history.manifest
+	manifest.Archived = archived
 	manifestModel, manifestRef, err := buildManifestModel(manifest)
 	if err != nil {
 		return nil, MutationResult{}, err
@@ -319,18 +302,8 @@ func (store *Store) buildArchiveCandidate(
 	}
 	oldEntry.Manifest = manifestRef
 	oldEntry.Archived = archived
-	objects := make([]modelObject, 0, len(historyObjects)+4)
-	objects = append(objects, modelObject{Key: blobKey(updatedHash), Data: bytes.Clone(updated)})
-	objects = append(objects, historyObjects...)
-	objects = append(objects, manifestModel)
-	document := &protocolstore.Document{
-		Content:  bytes.Clone(storedTip.body),
-		Modified: tip.modified,
-		Version:  tip.entry.Version,
-		Archived: archived,
-		Metadata: maps.Clone(storedTip.metadata),
-		ETag:     updatedHash,
-	}
+	objects := []modelObject{manifestModel}
+	document := documentFromRetained(raw, &tip, &storedTip, archived)
 	result := MutationResult{Document: document, Changed: true}
 	return buildNamespaceCandidate(view.snapshot, operationID, &oldEntry, false, objects, result)
 }
@@ -569,12 +542,12 @@ func nextHead(current *headObject, root objectRef, operationID string) headObjec
 	}
 }
 
-func documentFromRetained(raw []byte, retained *retainedVersion, stored *storedDocument) *protocolstore.Document {
+func documentFromRetained(raw []byte, retained *retainedVersion, stored *storedDocument, archived bool) *protocolstore.Document {
 	return &protocolstore.Document{
 		Content:  bytes.Clone(stored.body),
 		Modified: retained.modified,
 		Version:  retained.entry.Version,
-		Archived: stored.archived,
+		Archived: archived,
 		Metadata: maps.Clone(stored.metadata),
 		ETag:     protocolstore.StoredETag(raw),
 	}

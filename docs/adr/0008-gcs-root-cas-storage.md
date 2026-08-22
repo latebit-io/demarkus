@@ -69,6 +69,11 @@ same raw stored-byte SHA-256 rendered without the `sha256-` prefix. GCS
 generation, MD5, CRC32C, root hashes, manifest hashes, and body hashes are never
 used as protocol ETags.
 
+Archive and unarchive commits reuse the document's exact blob and history
+objects. They create only a manifest, changed shard, and root that record the
+new operational archive state; version bytes, history entries, ETags, and
+modified times remain unchanged.
+
 ### Every request uses one validated snapshot
 
 Each protocol request performs a strong read or conditional validation of

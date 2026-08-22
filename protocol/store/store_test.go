@@ -834,16 +834,60 @@ func TestArchive(t *testing.T) {
 	}
 
 	t.Run("archive document", func(t *testing.T) {
-		s, _ := setup(t)
-		if _, _, err := s.Archive("/doc.md", true); err != nil {
+		s, root := setup(t)
+		before, err := s.Get("/doc.md", 0)
+		if err != nil {
+			t.Fatalf("Get before archive: %v", err)
+		}
+		versionFile := filepath.Join(root, "versions", "doc.md", "v1")
+		storedBefore, err := os.ReadFile(versionFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		infoBefore, err := os.Stat(versionFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		archivedDoc, changed, err := s.Archive("/doc.md", true)
+		if err != nil {
 			t.Fatalf("Archive: %v", err)
+		}
+		if !changed || !archivedDoc.Archived {
+			t.Fatalf("Archive = (%+v, changed=%v), want archived transition", archivedDoc, changed)
+		}
+		state, err := os.ReadFile(filepath.Join(root, "versions", "doc.md", archiveStateName))
+		if err != nil || string(state) != "true\n" {
+			t.Fatalf("archive state = %q (err %v), want true\\n", state, err)
+		}
+		storedAfter, err := os.ReadFile(versionFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		infoAfter, err := os.Stat(versionFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(storedAfter, storedBefore) || !infoAfter.ModTime().Equal(infoBefore.ModTime()) {
+			t.Error("archive changed stored version bytes or modified time")
 		}
 		got, err := s.Get("/doc.md", 0)
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		if !got.Archived {
-			t.Error("expected doc to be archived")
+		if !got.Archived || got.ETag != before.ETag || !got.Modified.Equal(before.Modified) {
+			t.Errorf("current after archive = %+v, want archived with stable ETag/Modified", got)
+		}
+		pinned, err := s.Get("/doc.md", 1)
+		if err != nil {
+			t.Fatalf("Get pinned: %v", err)
+		}
+		if pinned.Archived || pinned.ETag != before.ETag || !pinned.Modified.Equal(before.Modified) {
+			t.Errorf("pinned after archive = %+v, want active with stable ETag/Modified", pinned)
+		}
+		versions, err := s.Versions("/doc.md")
+		if err != nil || len(versions) != 1 {
+			t.Errorf("Versions after archive = %v (err %v), want one version", versions, err)
 		}
 	})
 
@@ -854,6 +898,10 @@ func TestArchive(t *testing.T) {
 		}
 		if _, _, err := s.Archive("/doc.md", false); err != nil {
 			t.Fatalf("Unarchive: %v", err)
+		}
+		state, err := os.ReadFile(filepath.Join(s.root, "versions", "doc.md", archiveStateName))
+		if err != nil || string(state) != "false\n" {
+			t.Fatalf("archive state = %q (err %v), want false\\n", state, err)
 		}
 		doc, err := s.Get("/doc.md", 0)
 		if err != nil {
@@ -935,6 +983,9 @@ func TestArchive(t *testing.T) {
 		if !strings.Contains(string(doc.Content), "# Hello") {
 			t.Errorf("expected content to contain '# Hello', got: %q", doc.Content)
 		}
+		if doc.Archived {
+			t.Error("pinned version reported operational archive state")
+		}
 	})
 
 	t.Run("hash chain valid after archive", func(t *testing.T) {
@@ -945,8 +996,7 @@ func TestArchive(t *testing.T) {
 		if _, _, err := s.Archive("/doc.md", true); err != nil {
 			t.Fatalf("Archive: %v", err)
 		}
-		// Unarchive and write v3 — the chain should still verify because
-		// v3's previous-hash covers v2's on-disk bytes (including archived flag).
+		// Unarchive and write v3; archive transitions leave chain bytes alone.
 		if _, _, err := s.Archive("/doc.md", false); err != nil {
 			t.Fatalf("Unarchive: %v", err)
 		}
@@ -955,6 +1005,70 @@ func TestArchive(t *testing.T) {
 		}
 		if err := s.VerifyChain("/doc.md"); err != nil {
 			t.Errorf("chain verification failed after archive cycle: %v", err)
+		}
+	})
+
+	t.Run("legacy tip flag fallback and explicit false override", func(t *testing.T) {
+		s, root := setup(t)
+		versionFile := filepath.Join(root, "versions", "doc.md", "v1")
+		stored, err := os.ReadFile(versionFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacyArchived, err := SetArchived(stored, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(versionFile, legacyArchived, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		current, err := s.Get("/doc.md", 0)
+		if err != nil || !current.Archived {
+			t.Fatalf("legacy current = %+v (err %v), want archived", current, err)
+		}
+		if err := s.BuildHashIndex(); err != nil {
+			t.Fatalf("BuildHashIndex: %v", err)
+		}
+		if _, err := s.LookupHash(ContentHash([]byte("# Hello\n"))); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("legacy archived hash lookup err = %v, want ErrNotExist", err)
+		}
+		entries, err := s.ListDir("/", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.ContainsFunc(entries, func(entry os.DirEntry) bool { return entry.Name() == "doc.md" }) {
+			t.Error("legacy archived document listed")
+		}
+		pinned, err := s.Get("/doc.md", 1)
+		if err != nil || pinned.Archived {
+			t.Fatalf("legacy pinned = %+v (err %v), want unarchived", pinned, err)
+		}
+
+		before := slices.Clone(legacyArchived)
+		if _, changed, err := s.Archive("/doc.md", false); err != nil || !changed {
+			t.Fatalf("Unarchive legacy = changed %v, err %v", changed, err)
+		}
+		state, err := os.ReadFile(filepath.Join(root, "versions", "doc.md", archiveStateName))
+		if err != nil || string(state) != "false\n" {
+			t.Fatalf("archive state = %q (err %v), want false\\n", state, err)
+		}
+		after, err := os.ReadFile(versionFile)
+		if err != nil || !bytes.Equal(after, before) {
+			t.Errorf("legacy bytes changed: equal=%v, err=%v", bytes.Equal(after, before), err)
+		}
+		current, err = s.Get("/doc.md", 0)
+		if err != nil || current.Archived {
+			t.Fatalf("overridden current = %+v (err %v), want active", current, err)
+		}
+		if path, err := s.LookupHash(ContentHash([]byte("# Hello\n"))); err != nil || path != "/doc.md" {
+			t.Errorf("unarchived hash lookup = (%q, %v), want /doc.md", path, err)
+		}
+		entries, err = s.ListDir("/", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(entries, func(entry os.DirEntry) bool { return entry.Name() == "doc.md" }) {
+			t.Error("explicit-false document not listed")
 		}
 	})
 
@@ -968,6 +1082,70 @@ func TestArchive(t *testing.T) {
 			t.Errorf("expected ErrArchived, got: %v", err)
 		}
 	})
+}
+
+func TestVerifyChainAcceptsLegacyArchivedNonTip(t *testing.T) {
+	root := t.TempDir()
+	docDir := filepath.Join(root, "versions", "doc.md")
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1, err := SerializeVersion(1, nil, []byte("# V1\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1, err = SetArchived(v1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := SerializeVersion(2, v1, []byte("# V2\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for version, stored := range map[int][]byte{1: v1, 2: v2} {
+		if err := os.WriteFile(filepath.Join(docDir, fmt.Sprintf("v%d", version)), stored, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("versions", "doc.md", "v2"), filepath.Join(root, "doc.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := New(root).VerifyChain("/doc.md"); err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+}
+
+func TestArchiveStateFormat(t *testing.T) {
+	tests := []struct {
+		name       string
+		stored     string
+		writeState bool
+		archived   bool
+		exists     bool
+		wantErr    bool
+	}{
+		{name: "missing falls back", writeState: false},
+		{name: "true", stored: "true\n", writeState: true, archived: true, exists: true},
+		{name: "false", stored: "false\n", writeState: true, exists: true},
+		{name: "missing newline", stored: "true", writeState: true, wantErr: true},
+		{name: "CRLF", stored: "false\r\n", writeState: true, wantErr: true},
+		{name: "other", stored: "1\n", writeState: true, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			docDir := t.TempDir()
+			if test.writeState {
+				if err := os.WriteFile(filepath.Join(docDir, archiveStateName), []byte(test.stored), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			archived, exists, err := readArchiveState(docDir)
+			if (err != nil) != test.wantErr || archived != test.archived || exists != test.exists {
+				t.Errorf("readArchiveState = (%v, %v, %v), want (%v, %v, error=%v)", archived, exists, err, test.archived, test.exists, test.wantErr)
+			}
+		})
+	}
 }
 
 // TestVersionFilePath pins the layout accessor against what Get reads: a
