@@ -3,7 +3,6 @@ package bucketstore
 import (
 	"errors"
 	"fmt"
-	"maps"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
@@ -86,7 +85,7 @@ func evaluateMutationPolicy(
 		return "", publishpolicy.Result{}, err
 	}
 	values := make(map[string]any, len(metadata))
-	for key, value := range maps.Clone(metadata) {
+	for key, value := range metadata {
 		values[key] = value
 	}
 	result := publishpolicy.Evaluate(policy, path, values)

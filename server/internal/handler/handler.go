@@ -435,6 +435,7 @@ func (h *Handler) filterReadableEntries(reqPath string, entries []store.DirEntry
 		if entry.IsDir {
 			entryPath += "/"
 		}
+		// Fail closed: an auth error makes the LIST entry inaccessible.
 		if ok, _ := h.checkReadAuth(entryPath, token); ok {
 			visible = append(visible, entry)
 		}

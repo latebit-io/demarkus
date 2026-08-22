@@ -89,6 +89,28 @@ func TestGet_PathTraversal(t *testing.T) {
 	}
 }
 
+func TestTraversalReturnsNotExist(t *testing.T) {
+	s := New(t.TempDir())
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"CurrentVersion", func() error { _, err := s.CurrentVersion("/../outside.md"); return err }},
+		{"Get", func() error { _, err := s.Get("/../outside.md", 0); return err }},
+		{"Archive", func() error { _, _, err := s.Archive("/../outside.md", true); return err }},
+		{"write", func() error { _, err := s.write("/../outside.md", []byte("body"), nil); return err }},
+		{"WriteVersion", func() error { _, err := s.WriteVersion("/../outside.md", 0, []byte("body"), nil); return err }},
+		{"Append", func() error { _, err := s.Append("/../outside.md", 1, []byte("body"), nil); return err }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("error = %v, want os.ErrNotExist", err)
+			}
+		})
+	}
+}
+
 func TestGet_Directory(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "subdir"), 0o755); err != nil {

@@ -90,10 +90,12 @@ CREATE INDEX IF NOT EXISTS catalog_title_trgm_idx ON catalog USING GIN (title_lo
 // and an untyped constant this size overflows int on 32-bit targets.
 const schemaLockID int64 = 0x64656d61726b7573 // "demarkus"
 
-// queryTimeout bounds every store call. The DocumentStore interface carries
-// no context, so the deadline is applied here: a stalled Postgres fails the
-// request instead of holding its goroutine indefinitely.
+// queryTimeout bounds individual store calls. The DocumentStore interface
+// carries no context, so a stalled Postgres cannot hold a goroutine forever.
 const queryTimeout = 10 * time.Second
+
+// readViewTimeout bounds one request's shared Postgres snapshot.
+const readViewTimeout = 10 * time.Second
 
 // initTimeout bounds Open's startup work; Init may backfill the whole LOOKUP
 // catalog on first boot, which must not crash-loop under the query budget.
@@ -212,7 +214,7 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // OpenReadView pins request reads to one bounded Postgres snapshot.
 func (s *Store) OpenReadView() (backend.ReadView, error) {
-	ctx, cancel := opCtx()
+	ctx, cancel := context.WithTimeout(context.Background(), readViewTimeout)
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,
@@ -507,11 +509,12 @@ func versions(ctx context.Context, queries sqlQueryer, reqPath string) ([]store.
 	return out, nil
 }
 
-// CurrentVersion returns the current version number, or 0 when none exists.
+// CurrentVersion returns the current version number, or 0 when the path does
+// not exist. Invalid paths return the RelPath error.
 func (s *Store) CurrentVersion(reqPath string) (int, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
-		return 0, nil
+		return 0, err
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
@@ -792,14 +795,15 @@ func readTipForWrite(ctx context.Context, tx *sql.Tx, p string, cur int, content
 	if err != nil {
 		return nil, nil, fmt.Errorf("read tip %s v%d: %w", p, cur, err)
 	}
+	storedMeta := store.ExtractMetadata(tipStored)
 	if bytes.Equal(store.ExtractBody(tipStored), content) &&
-		store.MetaEqual(store.ExtractMetadata(tipStored), meta) {
+		store.MetaEqual(storedMeta, store.NormalizeMetadata(meta)) {
 		return tipStored, &store.Document{
 			Content:  content,
 			Modified: tipModified.UTC().Truncate(time.Second),
 			Version:  cur,
 			Archived: false,
-			Metadata: meta,
+			Metadata: storedMeta,
 			ETag:     store.StoredETag(tipStored),
 		}, nil
 	}
@@ -907,8 +911,7 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	if err := store.ValidateMeta(meta); err != nil {
 		return nil, err
 	}
-	// Reject traversal explicitly, as the file store does, rather than relying
-	// on the CurrentVersion fallback below reading 0 for an invalid path.
+	// Reject traversal before entering the missing-version conflict fallback.
 	if _, err := store.RelPath(reqPath); err != nil {
 		return nil, err
 	}

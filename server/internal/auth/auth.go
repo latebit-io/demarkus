@@ -122,6 +122,8 @@ func collectReadPaths(tokens map[string]Token) []string {
 // If true, the caller must authorize the request with a valid read token.
 // If false, the path is public.
 func (ts *TokenStore) RequiresReadAuth(reqPath string) bool {
+	// This probe and handler.checkReadAuth's retry are coupled: removing this
+	// exposes /private; removing the retry denies authorized /private access.
 	if matchesAnyPath(ts.readPaths, reqPath) {
 		return true
 	}

@@ -45,7 +45,7 @@ func validWorldID(worldID string) bool {
 	if worldID[19] != '8' && worldID[19] != '9' && worldID[19] != 'a' && worldID[19] != 'b' {
 		return false
 	}
-	return strings.Trim(worldID, "0-") != ""
+	return true
 }
 
 func verifyRef(ref objectRef, expectedKey string) error {

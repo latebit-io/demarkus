@@ -213,15 +213,15 @@ func testConflictSemantics(t *testing.T, s handler.DocumentStore) {
 func testNotModifiedDedup(t *testing.T, s handler.DocumentStore) {
 	meta := map[string]string{"tags": "same"}
 	first, err := s.WriteVersion("/dup.md", 0, []byte("body"), meta)
-	if err != nil {
-		t.Fatalf("create: %v", err)
+	if err != nil || first == nil {
+		t.Fatalf("create = (%+v, %v), want document", first, err)
 	}
 	doc, err := s.WriteVersion("/dup.md", 1, []byte("body"), meta)
 	if !errors.Is(err, store.ErrNotModified) {
 		t.Fatalf("identical rewrite: err = %v, want ErrNotModified", err)
 	}
 	if doc == nil || doc.Version != 1 {
-		t.Errorf("not-modified doc = %+v, want Version 1", doc)
+		t.Fatalf("not-modified doc = %+v, want Version 1", doc)
 	}
 	if doc.ETag != first.ETag {
 		t.Errorf("not-modified ETag = %q, want %q", doc.ETag, first.ETag)
@@ -231,19 +231,37 @@ func testNotModifiedDedup(t *testing.T, s handler.DocumentStore) {
 	}
 	// Same body, different metadata is a real new version; so is dropping it.
 	doc, err = s.WriteVersion("/dup.md", 1, []byte("body"), map[string]string{"tags": "changed"})
-	if err != nil || doc.Version != 2 {
-		t.Errorf("meta change = (%+v, %v), want v2", doc, err)
+	if err != nil || doc == nil {
+		t.Fatalf("meta change = (%+v, %v), want document", doc, err)
+	}
+	if doc.Version != 2 {
+		t.Errorf("meta change version = %d, want 2", doc.Version)
 	}
 	if doc.ETag == first.ETag {
 		t.Error("metadata-only version reused prior stored-byte ETag")
 	}
 	secondETag := doc.ETag
 	doc, err = s.WriteVersion("/dup.md", 2, []byte("body"), nil)
-	if err != nil || doc.Version != 3 || doc.Metadata != nil {
-		t.Errorf("meta drop = (%+v, %v), want v3 with nil metadata", doc, err)
+	if err != nil || doc == nil {
+		t.Fatalf("meta drop = (%+v, %v), want document", doc, err)
+	}
+	if doc.Version != 3 || doc.Metadata != nil {
+		t.Errorf("meta drop = %+v, want v3 with nil metadata", doc)
 	}
 	if doc.ETag == secondETag {
 		t.Error("metadata drop reused prior stored-byte ETag")
+	}
+
+	normalized, err := s.WriteVersion("/normalized.md", 0, []byte("body"), map[string]string{"tags": "alpha, beta"})
+	if err != nil || normalized == nil {
+		t.Fatalf("normalized create = (%+v, %v), want document", normalized, err)
+	}
+	repeated, err := s.WriteVersion("/normalized.md", 1, []byte("body"), map[string]string{"tags": " alpha,beta "})
+	if !errors.Is(err, store.ErrNotModified) || repeated == nil {
+		t.Fatalf("normalized rewrite = (%+v, %v), want ErrNotModified", repeated, err)
+	}
+	if repeated.Version != 1 || repeated.ETag != normalized.ETag || repeated.Metadata["tags"] != "alpha,beta" {
+		t.Errorf("normalized rewrite = %+v, want unchanged canonical v1", repeated)
 	}
 }
 

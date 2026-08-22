@@ -87,14 +87,18 @@ func (d *diffRun) run(ops int, apply func(op), snapshot func()) {
 	}
 }
 
-// currentBoth returns the shared current version of path, failing when the
-// backends already disagree before an op is applied.
+// currentBoth returns the shared current version of path. Matching error
+// classes use version zero so invalid-path operations still reach both stores.
 func (d *diffRun) currentBoth(ref, cand LookupBackend, path string) (int, bool) {
 	refCur, refErr := ref.Store.CurrentVersion(path)
 	candCur, candErr := cand.Store.CurrentVersion(path)
-	if refErr != nil || candErr != nil {
-		d.fail("CurrentVersion(%s) errors: ref=%v cand=%v", path, refErr, candErr)
+	refClass, candClass := errClass(refErr), errClass(candErr)
+	if refClass != candClass {
+		d.fail("CurrentVersion(%s) error classes differ: ref=%s (%v) cand=%s (%v)", path, refClass, refErr, candClass, candErr)
 		return 0, false
+	}
+	if refErr != nil || candErr != nil {
+		return 0, true
 	}
 	if refCur != candCur {
 		d.fail("CurrentVersion(%s) before op: ref=%d cand=%d", path, refCur, candCur)

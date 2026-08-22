@@ -70,7 +70,7 @@ Servers SHOULD use certificates issued by a trusted certificate authority for pr
 
 ### 3.4. Authority and TLS server-name binding
 
-For a DNS authority, a client MUST send the authority hostname, without its port, as the TLS Server Name Indication (SNI) value and MUST verify the server certificate for that name. A client using an explicit dial-address override MUST still send and verify the logical server's configured TLS server name; the dial address does not replace the Mark authority in URLs or response interpretation.
+For a DNS authority, an explicitly configured `Endpoint.ServerName` takes precedence as the TLS server name; otherwise the client MUST use the authority hostname without its port. The client MUST send the selected TLS server name as the Server Name Indication (SNI) value and MUST verify the server certificate for that name. An explicit dial-address override affects connection dialing only; it MUST NOT replace the selected TLS server name, the Mark authority in URLs, or the authority used to interpret responses.
 
 A server that hosts multiple logical Mark servers on one listener MUST select exactly one server by SNI during the TLS handshake. It MUST reject an absent or unknown SNI value and MUST NOT route either value to a default server. The selected logical server MUST remain fixed for the lifetime of the QUIC connection, including every stream opened on that connection.
 

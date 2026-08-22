@@ -87,7 +87,13 @@ func cleanupObjects(t *testing.T, store blob.Store, prefix string) {
 					return
 				}
 				if errors.Is(err, blob.ErrAmbiguous) {
-					continue
+					select {
+					case <-ctx.Done():
+						t.Errorf("cleanup %q exceeded %s: %v", prefix, cleanupTimeout, ctx.Err())
+						return
+					case <-time.After(100 * time.Millisecond):
+						continue
+					}
 				}
 				t.Errorf("delete cleanup object %q generation %d: %v", attributes.Key, attributes.Generation, err)
 				return

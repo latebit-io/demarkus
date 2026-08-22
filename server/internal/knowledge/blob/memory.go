@@ -254,6 +254,7 @@ func (m *Memory) nextAttributes(key string, size int64) (Attributes, error) {
 		return Attributes{}, fmt.Errorf("%w: generation space exhausted", ErrUnavailable)
 	}
 	m.lastGeneration++
+	// Memory Modified is generation-derived logical time; its 1970 timestamp is synthetic.
 	return Attributes{
 		Key:        key,
 		Generation: m.lastGeneration,

@@ -60,7 +60,7 @@ func (s *Store) Get(ctx context.Context, key string) (blob.Object, error) {
 		return blob.Object{}, err
 	}
 
-	reader, err := s.object(key).NewReader(ctx)
+	reader, err := s.object(key).NewReader(ctx, storage.WithDisableReaderChecksum())
 	if err != nil {
 		return blob.Object{}, classifyProviderError(ctx, op, key, err)
 	}
@@ -319,7 +319,7 @@ func classifyProviderError(ctx context.Context, op, key string, cause error) err
 	if classification.category == nil && !classification.permanent && hasGRPCCode {
 		classification = classifyGRPCProviderError(op, grpcCode)
 	}
-	if classification.category == nil && isIntegrityFailure(cause) {
+	if classification.category == nil && isIntegrityFailure(op, cause) {
 		classification.category = blob.ErrIntegrity
 		classification.permanent = false
 	}
@@ -435,13 +435,15 @@ func notFoundCategory(op string) error {
 	}
 }
 
-func isIntegrityFailure(err error) bool {
+func isIntegrityFailure(op string, err error) bool {
 	if errors.Is(err, errObjectTooLarge) || errors.Is(err, io.ErrShortWrite) {
 		return true
 	}
+	if op != "create" && op != "replace" {
+		return false
+	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "bad crc on read") ||
-		strings.Contains(message, "checksum mismatch") ||
+	return strings.Contains(message, "storage: object checksum mismatch") ||
 		strings.Contains(message, "does not match the expected crc32c") ||
 		strings.Contains(message, "crc32c") && strings.Contains(message, "does not match")
 }

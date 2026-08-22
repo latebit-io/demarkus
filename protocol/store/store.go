@@ -877,7 +877,7 @@ func (s *Store) resolve(reqPath string) (string, error) {
 func (s *Store) CurrentVersion(reqPath string) (int, error) {
 	cleaned, err := RelPath(reqPath)
 	if err != nil {
-		return 0, nil
+		return 0, err
 	}
 	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
 	return highestPerDocVersion(versionsDir, filepath.Base(cleaned)), nil
@@ -1060,6 +1060,7 @@ func (s *Store) Archive(reqPath string, archived bool) (*Document, bool, error) 
 		return nil, false, fmt.Errorf("write temp version file: %w", err)
 	}
 	if err := os.Rename(tmp, versionFile); err != nil {
+		// Best-effort cleanup; the next archive write reuses any leftover temp file.
 		_ = os.Remove(tmp)
 		return nil, false, fmt.Errorf("rename version file: %w", err)
 	}
@@ -1358,7 +1359,8 @@ func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content [
 		// File doesn't exist — proceed with writing the new version.
 		return nil, nil
 	}
-	if bytes.Equal(extractBody(prevData), content) && metaEqual(extractMetadata(prevData), meta) {
+	storedMeta := extractMetadata(prevData)
+	if bytes.Equal(extractBody(prevData), content) && metaEqual(storedMeta, NormalizeMetadata(meta)) {
 		info, err := os.Stat(prevFile)
 		if err != nil {
 			return nil, fmt.Errorf("stat current version: %w", err)
@@ -1368,7 +1370,7 @@ func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content [
 			Modified: info.ModTime().UTC().Truncate(time.Second),
 			Version:  next - 1,
 			Archived: false,
-			Metadata: meta,
+			Metadata: storedMeta,
 			ETag:     StoredETag(prevData),
 		}, ErrNotModified
 	}
@@ -1505,39 +1507,41 @@ func (s *Store) VerifyChain(reqPath string) error {
 	dir := filepath.Dir(cleaned)
 	versionsDir := filepath.Join(s.root, dir, "versions")
 
-	stored := make([][]byte, len(versions))
+	var previousData []byte
+	// Delay chain errors until all files are read so missing files retain precedence.
+	var chainErr, formatErr error
 	for index, current := range versions {
 		currentFile := newVersionFilePath(versionsDir, base, current.Version)
 		currentData, err := os.ReadFile(currentFile)
 		if err != nil {
 			return fmt.Errorf("read v%d: %w", current.Version, err)
 		}
-		stored[index] = currentData
+		if index > 0 && chainErr == nil {
+			recorded := extractPreviousHash(currentData)
+			if recorded == "" {
+				chainErr = fmt.Errorf("%w: v%d missing previous-hash", ErrIntegrity, current.Version)
+			} else if expected := "sha256-" + StoredETag(previousData); recorded != expected {
+				chainErr = fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
+					ErrIntegrity, current.Version, expected, recorded)
+			}
+		}
+		if formatErr == nil {
+			header, inspectErr := InspectStoredVersion(currentData)
+			switch {
+			case inspectErr != nil:
+				formatErr = fmt.Errorf("%w: v%d: %v", ErrIntegrity, current.Version, inspectErr)
+			case header.Version != current.Version:
+				formatErr = fmt.Errorf("%w: v%d stored version is %d", ErrIntegrity, current.Version, header.Version)
+			case index < len(versions)-1 && header.Archived:
+				formatErr = fmt.Errorf("%w: non-tip v%d is archived", ErrIntegrity, current.Version)
+			}
+		}
+		previousData = currentData
 	}
-	for index := 1; index < len(versions); index++ {
-		recorded := extractPreviousHash(stored[index])
-		if recorded == "" {
-			return fmt.Errorf("%w: v%d missing previous-hash", ErrIntegrity, versions[index].Version)
-		}
-		expected := "sha256-" + StoredETag(stored[index-1])
-		if recorded != expected {
-			return fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
-				ErrIntegrity, versions[index].Version, expected, recorded)
-		}
+	if chainErr != nil {
+		return chainErr
 	}
-	for index, current := range versions {
-		header, err := InspectStoredVersion(stored[index])
-		if err != nil {
-			return fmt.Errorf("%w: v%d: %v", ErrIntegrity, current.Version, err)
-		}
-		if header.Version != current.Version {
-			return fmt.Errorf("%w: v%d stored version is %d", ErrIntegrity, current.Version, header.Version)
-		}
-		if index < len(versions)-1 && header.Archived {
-			return fmt.Errorf("%w: non-tip v%d is archived", ErrIntegrity, current.Version)
-		}
-	}
-	return nil
+	return formatErr
 }
 
 // resolveNonExistent resolves a path that doesn't exist yet by walking up

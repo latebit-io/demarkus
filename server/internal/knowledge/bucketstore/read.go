@@ -31,7 +31,7 @@ func (store *Store) openReadView() (*readView, error) {
 	loaded, err := store.refreshSnapshot(ctx)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("open read view: %w", err)
+		return nil, fmt.Errorf("open read view: %w", normalizeReadIntegrity(err))
 	}
 	return &readView{ctx: ctx, cancel: cancel, objects: store.objects, snapshot: loaded}, nil
 }
@@ -157,6 +157,11 @@ type storedDocument struct {
 }
 
 func (view *readView) Get(reqPath string, version int) (*protocolstore.Document, error) {
+	document, err := view.get(reqPath, version)
+	return document, normalizeReadIntegrity(err)
+}
+
+func (view *readView) get(reqPath string, version int) (*protocolstore.Document, error) {
 	entry, err := view.documentEntry(reqPath)
 	if err != nil {
 		return nil, err
@@ -237,6 +242,11 @@ func (view *readView) IsDir(reqPath string) (bool, error) {
 }
 
 func (view *readView) Versions(reqPath string) ([]protocolstore.VersionInfo, error) {
+	versions, err := view.versions(reqPath)
+	return versions, normalizeReadIntegrity(err)
+}
+
+func (view *readView) versions(reqPath string) ([]protocolstore.VersionInfo, error) {
 	entry, err := view.documentEntry(reqPath)
 	if err != nil {
 		return nil, err
@@ -270,8 +280,11 @@ func (view *readView) LookupHash(hash string) (string, error) {
 }
 
 func (view *readView) VerifyChain(reqPath string) error {
-	err := view.verifyChain(reqPath)
-	if errors.Is(err, blob.ErrIntegrity) {
+	return normalizeReadIntegrity(view.verifyChain(reqPath))
+}
+
+func normalizeReadIntegrity(err error) error {
+	if err != nil && errors.Is(err, blob.ErrIntegrity) && !errors.Is(err, protocolstore.ErrIntegrity) {
 		return errors.Join(protocolstore.ErrIntegrity, err)
 	}
 	return err
@@ -348,9 +361,6 @@ func (view *readView) Lookup(query string, options catalog.Options) ([]catalog.R
 func (view *readView) currentVersion(reqPath string) (int, error) {
 	logicalPath, err := view.logicalPath(reqPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
-		}
 		return 0, err
 	}
 	entry, exists := view.snapshot.Paths[logicalPath]

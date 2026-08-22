@@ -60,12 +60,100 @@ func TestConcurrentCASMutations(t *testing.T) {
 		if succeeded != 1 || failed != 1 {
 			t.Fatalf("topology outcomes success=%d failure=%d, want 1/1", succeeded, failed)
 		}
-		if leftVersion, _ := left.CurrentVersion("/a"); leftVersion > 0 {
+		leftVersion, err := left.CurrentVersion("/a")
+		if err != nil {
+			t.Fatalf("read /a current version: %v", err)
+		}
+		if leftVersion > 0 {
 			assertCurrentVersion(t, left, "/a/b", 0)
 		} else {
 			assertCurrentVersion(t, left, "/a/b", 1)
 		}
 	})
+}
+
+func TestDelayedHeadReplaceAllowsChangedGenerationRead(t *testing.T) {
+	_, memory := newWritableStore(t)
+	delayed := newDelayedHeadReplaceStore(memory)
+	defer delayed.releaseResponse()
+	writer, err := Open(context.Background(), delayed, Options{WorldID: testWorldID})
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	writer.commitInterval = 0
+
+	result := make(chan writeOutcome, 1)
+	go func() {
+		document, err := writer.WriteVersion("/candidate", 0, []byte("candidate"), nil)
+		result <- writeOutcome{document: document, err: err}
+	}()
+	waitForTestSignal(t, delayed.committed, "committed delayed CAS")
+	delayed.observeRoot.Store(true)
+	viewResult := make(chan readViewResult, 1)
+	go func() {
+		view, err := writer.openReadView()
+		viewResult <- readViewResult{view: view, err: err}
+	}()
+	waitForTestSignal(t, delayed.rootRead, "changed root read during delayed CAS")
+	view := receiveReadView(t, viewResult)
+	defer closeTestReadView(t, view)
+	document, err := view.Get("/candidate", 0)
+	if err != nil || document.Version != 1 {
+		t.Fatalf("changed-generation read = (%+v, %v), want v1", document, err)
+	}
+
+	delayed.releaseResponse()
+	outcome := receiveWriteOutcome(t, result)
+	if outcome.err != nil || outcome.document == nil || outcome.document.Version != 1 {
+		t.Fatalf("delayed write = (%+v, %v), want v1 success", outcome.document, outcome.err)
+	}
+}
+
+func TestDelayedHeadReplaceDoesNotOverwriteNewerSnapshot(t *testing.T) {
+	_, memory := newWritableStore(t)
+	delayed := newDelayedHeadReplaceStore(memory)
+	defer delayed.releaseResponse()
+	writer, err := Open(context.Background(), delayed, Options{WorldID: testWorldID})
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	writer.commitInterval = 0
+	peer, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+	if err != nil {
+		t.Fatalf("open peer: %v", err)
+	}
+	peer.commitInterval = 0
+
+	result := make(chan writeOutcome, 1)
+	go func() {
+		document, err := writer.WriteVersion("/candidate", 0, []byte("candidate"), nil)
+		result <- writeOutcome{document: document, err: err}
+	}()
+	waitForTestSignal(t, delayed.committed, "committed delayed CAS")
+	first, err := writer.openReadView()
+	if err != nil {
+		t.Fatalf("refresh candidate: %v", err)
+	}
+	closeTestReadView(t, first)
+	if _, err := peer.WriteVersion("/newer", 0, []byte("newer"), nil); err != nil {
+		t.Fatalf("commit newer snapshot: %v", err)
+	}
+	newer, err := writer.openReadView()
+	if err != nil {
+		t.Fatalf("refresh newer snapshot: %v", err)
+	}
+	closeTestReadView(t, newer)
+	wantGeneration := getObject(t, memory, headObjectKey).Attributes.Generation
+
+	delayed.releaseResponse()
+	outcome := receiveWriteOutcome(t, result)
+	if outcome.err != nil || outcome.document == nil || outcome.document.Version != 1 {
+		t.Fatalf("delayed write = (%+v, %v), want committed success", outcome.document, outcome.err)
+	}
+	installed := writer.snapshot.Load()
+	if installed.HeadGeneration != wantGeneration || installed.Paths["/newer"].Current != 1 {
+		t.Fatalf("installed snapshot generation=%d paths=%v, want newer generation %d", installed.HeadGeneration, installed.Paths, wantGeneration)
+	}
 }
 
 func TestProductionWritePinsOldReadView(t *testing.T) {
@@ -409,6 +497,17 @@ func collectWriteOutcomes(t *testing.T, results <-chan writeOutcome) []writeOutc
 	return outcomes
 }
 
+func receiveWriteOutcome(t *testing.T, results <-chan writeOutcome) writeOutcome {
+	t.Helper()
+	select {
+	case outcome := <-results:
+		return outcome
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for write")
+		return writeOutcome{}
+	}
+}
+
 func assertOneConflict(t *testing.T, outcomes []writeOutcome) {
 	t.Helper()
 	succeeded := 0
@@ -607,6 +706,51 @@ type blockingFirstHeadReplaceStore struct {
 	blocked chan struct{}
 	release chan struct{}
 	once    atomic.Bool
+}
+
+type delayedHeadReplaceStore struct {
+	blob.Store
+	committed   chan struct{}
+	release     chan struct{}
+	rootRead    chan struct{}
+	replaceOnce atomic.Bool
+	rootOnce    atomic.Bool
+	releaseOnce sync.Once
+	observeRoot atomic.Bool
+}
+
+func newDelayedHeadReplaceStore(store blob.Store) *delayedHeadReplaceStore {
+	return &delayedHeadReplaceStore{
+		Store:     store,
+		committed: make(chan struct{}),
+		release:   make(chan struct{}),
+		rootRead:  make(chan struct{}),
+	}
+}
+
+func (store *delayedHeadReplaceStore) Get(ctx context.Context, key string) (blob.Object, error) {
+	if store.observeRoot.Load() && strings.HasPrefix(key, objectPrefix+"roots/") && store.rootOnce.CompareAndSwap(false, true) {
+		close(store.rootRead)
+	}
+	return store.Store.Get(ctx, key)
+}
+
+func (store *delayedHeadReplaceStore) Replace(ctx context.Context, key string, generation blob.Generation, data []byte) (blob.Attributes, error) {
+	attributes, err := store.Store.Replace(ctx, key, generation, data)
+	if err != nil || key != headObjectKey || !store.replaceOnce.CompareAndSwap(false, true) {
+		return attributes, err
+	}
+	close(store.committed)
+	select {
+	case <-store.release:
+		return attributes, nil
+	case <-ctx.Done():
+		return attributes, &blob.OpError{Op: "replace", Key: key, Err: errors.Join(blob.ErrAmbiguous, ctx.Err())}
+	}
+}
+
+func (store *delayedHeadReplaceStore) releaseResponse() {
+	store.releaseOnce.Do(func() { close(store.release) })
 }
 
 func (store *blockingFirstHeadReplaceStore) Replace(ctx context.Context, key string, generation blob.Generation, data []byte) (blob.Attributes, error) {

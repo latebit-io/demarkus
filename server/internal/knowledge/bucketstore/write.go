@@ -128,6 +128,7 @@ func (*Store) Remove(string) {}
 
 func canonicalMutationPath(path string) (string, error) {
 	relative, err := protocolstore.RelPath(path)
+	// Invalid paths stay not-found to avoid exposing storage topology.
 	if err != nil || relative == "" {
 		return "", os.ErrNotExist
 	}
@@ -186,7 +187,7 @@ func (store *Store) buildWriteCandidate(
 		if err != nil {
 			return nil, MutationResult{}, err
 		}
-		if bytes.Equal(storedTip.body, body) && protocolstore.MetaEqual(storedTip.metadata, metadata) {
+		if bytes.Equal(storedTip.body, body) && protocolstore.MetaEqual(storedTip.metadata, protocolstore.NormalizeMetadata(metadata)) {
 			document := documentFromRetained(previousRaw, &tip, &storedTip)
 			return nil, MutationResult{Document: document}, protocolstore.ErrNotModified
 		}

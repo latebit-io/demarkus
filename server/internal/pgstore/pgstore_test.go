@@ -2,9 +2,11 @@ package pgstore_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -43,6 +45,16 @@ const pgSchema = "pgstore"
 func openStore(t testing.TB) *pgstore.Store {
 	t.Helper()
 	return pgtest.Open(t, pgSchema)
+}
+
+func TestPostgresCurrentVersionRejectsTraversal(t *testing.T) {
+	t.Run("returns RelPath error", func(t *testing.T) {
+		s := pgstore.NewWithDB(newReadViewDriverDB(t, &readViewDriverState{}), nil)
+		version, err := s.CurrentVersion("/../secret.md")
+		if version != 0 || !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("CurrentVersion traversal = (%d, %v), want (0, ErrNotExist)", version, err)
+		}
+	})
 }
 
 // TestPostgresLookupConformance runs the LOOKUP conformance suite; the store

@@ -76,8 +76,8 @@ func (store *Store) commitCandidate(ctx context.Context, candidate *candidateMut
 
 		store.refreshMu.Lock()
 		cached := store.snapshot.Load()
+		store.refreshMu.Unlock()
 		if cached == nil || cached.HeadGeneration != candidate.base.HeadGeneration {
-			store.refreshMu.Unlock()
 			return commitRebase, nil
 		}
 		attributes, replaceErr := store.objects.Replace(
@@ -87,11 +87,9 @@ func (store *Store) commitCandidate(ctx context.Context, candidate *candidateMut
 			candidate.headData,
 		)
 		if replaceErr == nil {
-			store.installCandidate(candidate, attributes)
-			store.refreshMu.Unlock()
+			store.installCandidateIfBase(candidate, attributes)
 			return commitSucceeded, nil
 		}
-		store.refreshMu.Unlock()
 
 		if errors.Is(replaceErr, blob.ErrPrecondition) {
 			return commitRebase, nil
@@ -106,9 +104,7 @@ func (store *Store) commitCandidate(ctx context.Context, candidate *candidateMut
 		}
 		if receiptCommitted(&latest, candidate.operationID) {
 			if latest.Sequence == candidate.head.Sequence && latest.Root == candidate.head.Root {
-				store.refreshMu.Lock()
-				store.installCandidate(candidate, latestAttributes)
-				store.refreshMu.Unlock()
+				store.installCandidateIfBase(candidate, latestAttributes)
 			}
 			return commitSucceeded, nil
 		}
@@ -147,7 +143,13 @@ func (store *Store) reconcileHead(ctx context.Context, operationID string) (head
 	return headObject{}, blob.Attributes{}, fmt.Errorf("reconcile operation %s: %w", operationID, lastErr)
 }
 
-func (store *Store) installCandidate(candidate *candidateMutation, attributes blob.Attributes) {
+func (store *Store) installCandidateIfBase(candidate *candidateMutation, attributes blob.Attributes) {
+	store.refreshMu.Lock()
+	defer store.refreshMu.Unlock()
+	cached := store.snapshot.Load()
+	if cached == nil || cached.HeadGeneration != candidate.base.HeadGeneration {
+		return
+	}
 	prepared := candidate.prepared
 	prepared.HeadAttributes = attributes
 	prepared.HeadGeneration = attributes.Generation

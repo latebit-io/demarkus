@@ -189,6 +189,7 @@ func loadHeadObject(ctx context.Context, objects blob.Store, worldID string) (he
 }
 
 func (store *Store) refreshSnapshot(ctx context.Context) (*snapshot, error) {
+	cached := store.snapshot.Load()
 	headAttributes, err := store.objects.Head(ctx, headObjectKey)
 	if err != nil {
 		return nil, fmt.Errorf("head snapshot: %w", err)
@@ -196,7 +197,6 @@ func (store *Store) refreshSnapshot(ctx context.Context) (*snapshot, error) {
 	if err := validateHeadOnly(headAttributes); err != nil {
 		return nil, err
 	}
-	cached := store.snapshot.Load()
 	if cached != nil && headAttributes.Generation == cached.HeadGeneration {
 		if err := validateCachedHead(cached, headAttributes); err != nil {
 			return nil, err
@@ -209,6 +209,13 @@ func (store *Store) refreshSnapshot(ctx context.Context) (*snapshot, error) {
 
 	store.refreshMu.Lock()
 	defer store.refreshMu.Unlock()
+	headAttributes, err = store.objects.Head(ctx, headObjectKey)
+	if err != nil {
+		return nil, fmt.Errorf("head snapshot: %w", err)
+	}
+	if err := validateHeadOnly(headAttributes); err != nil {
+		return nil, err
+	}
 	cached = store.snapshot.Load()
 	if cached != nil && headAttributes.Generation == cached.HeadGeneration {
 		if err := validateCachedHead(cached, headAttributes); err != nil {

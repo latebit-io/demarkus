@@ -36,8 +36,9 @@ func TestPostgresReadViewContract(t *testing.T) {
 			t.Error("transaction is not read-only")
 		}
 		deadline, ok := snapshot.beginCtx.Deadline()
-		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 15*time.Second {
-			t.Errorf("view context deadline = %v, want active bounded deadline", deadline)
+		remaining := time.Until(deadline)
+		if !ok || remaining <= 0 || remaining > 10*time.Second {
+			t.Errorf("view context deadline = %v, want active 10-second deadline", deadline)
 		}
 
 		if err := view.Close(); !errors.Is(err, rollbackErr) {
@@ -100,9 +101,11 @@ func TestPostgresReadViewContract(t *testing.T) {
 			}
 		})
 
-		if _, err := view.LookupHash("sha256-deadbeef"); !errors.Is(err, queryErr) {
+		_, err = view.LookupHash("sha256-deadbeef")
+		if !errors.Is(err, queryErr) {
 			t.Errorf("lookup hash error = %v, want %v", err, queryErr)
-		} else if errors.Is(err, os.ErrNotExist) {
+		}
+		if errors.Is(err, os.ErrNotExist) {
 			t.Errorf("lookup hash error = %v, must not report not-found", err)
 		}
 		snapshot := state.snapshot()

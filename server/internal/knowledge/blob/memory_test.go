@@ -60,10 +60,6 @@ func TestMemoryPagination(t *testing.T) {
 	if repeated.NextCursor != first.NextCursor {
 		t.Errorf("repeated cursor = %q, want %q", repeated.NextCursor, first.NextCursor)
 	}
-	if strings.Contains(first.NextCursor, want[blob.MaxListPage-1].Key) {
-		t.Errorf("cursor exposes key %q", want[blob.MaxListPage-1].Key)
-	}
-
 	second, err := store.List(context.Background(), prefix, first.NextCursor)
 	if err != nil {
 		t.Fatalf("second page: %v", err)

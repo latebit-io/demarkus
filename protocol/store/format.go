@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -112,6 +113,15 @@ func ExtractBody(data []byte) []byte { return extractBody(data) }
 // a bare-keyed map (or nil if none found).
 func ExtractMetadata(data []byte) map[string]string { return extractMetadata(data) }
 
+// NormalizeMetadata returns metadata as persisted by SerializeVersion.
+func NormalizeMetadata(meta map[string]string) map[string]string {
+	normalized := maps.Clone(meta)
+	if tags, exists := normalized["tags"]; exists {
+		normalized["tags"] = parseTagsList(formatTagsList(tags))
+	}
+	return normalized
+}
+
 // IsArchived reports whether stored version bytes are marked archived in
 // their frontmatter.
 func IsArchived(data []byte) bool { return isArchived(data) }
@@ -173,7 +183,6 @@ func InspectStoredVersion(stored []byte) (StoredVersionHeader, error) {
 		metadataStart++
 	}
 
-	seen := make(map[string]struct{}, len(lines)-metadataStart)
 	previousKey := ""
 	for _, line := range lines[metadataStart:] {
 		key, _, ok := strings.Cut(line, ": ")
@@ -191,10 +200,6 @@ func InspectStoredVersion(stored []byte) (StoredVersionHeader, error) {
 		if logicalKey <= previousKey {
 			return header, fmt.Errorf("stored version: publisher fields are not strictly sorted")
 		}
-		if _, exists := seen[logicalKey]; exists {
-			return header, fmt.Errorf("stored version: duplicate publisher field %q", logicalKey)
-		}
-		seen[logicalKey] = struct{}{}
 		previousKey = logicalKey
 	}
 	if err := validateMeta(extractMetadata(stored)); err != nil {

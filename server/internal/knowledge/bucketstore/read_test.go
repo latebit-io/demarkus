@@ -105,7 +105,7 @@ func TestSnapshotRefresh(t *testing.T) {
 		}
 		counts := observed.counts()
 		changedShardKey := commit.root.Shards[changedIndex].Key
-		if counts.heads[headObjectKey] != 1 || counts.gets[headObjectKey] != 1 || counts.gets[commit.rootRef.Key] != 1 || counts.gets[changedShardKey] != 1 {
+		if counts.heads[headObjectKey] != 2 || counts.gets[headObjectKey] != 1 || counts.gets[commit.rootRef.Key] != 1 || counts.gets[changedShardKey] != 1 {
 			t.Errorf("refresh operations = heads %v gets %v", counts.heads, counts.gets)
 		}
 		if sumCounts(counts.gets) != 3 {
@@ -128,17 +128,69 @@ func TestSnapshotRefresh(t *testing.T) {
 		replaceObject(t, memory, headObjectKey, head.Attributes.Generation, []byte("{"))
 
 		view, err := store.OpenReadView()
-		if view != nil || !errors.Is(err, blob.ErrIntegrity) {
+		if view != nil || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, protocolstore.ErrIntegrity) {
 			t.Fatalf("OpenReadView() = (%v, %v), want integrity", view, err)
 		}
 		if store.snapshot.Load() != cached {
 			t.Error("failed refresh replaced cached snapshot")
 		}
-		if _, err := store.Get("/docs/a.md", 0); !errors.Is(err, blob.ErrIntegrity) {
+		if _, err := store.Get("/docs/a.md", 0); !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, protocolstore.ErrIntegrity) {
 			t.Errorf("direct Get error = %v, want integrity instead of stale data", err)
 		}
 		if got, err := store.CurrentVersion("/docs/a.md"); got != 0 || !errors.Is(err, blob.ErrIntegrity) {
 			t.Errorf("CurrentVersion during failed refresh = (%d, %v), want integrity", got, err)
+		}
+	})
+
+	t.Run("locked double-check uses fresh head", func(t *testing.T) {
+		memory := initializedMemory(t)
+		base := newReadDocument("/docs/a.md", "# A v1\n")
+		commitReadDocuments(t, memory, []readDocumentSpec{base})
+		delayed := newDelayedHeadStore(memory)
+		store, err := Open(context.Background(), delayed, Options{WorldID: testWorldID})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+
+		second := base
+		second.Bodies = append(second.Bodies, []byte("# A v2\n"))
+		second.Metadata = append(second.Metadata, defaultReadMetadata(second.Path))
+		secondCommit := commitReadDocuments(t, memory, []readDocumentSpec{second})
+		delayed.target = secondCommit.headGeneration
+		store.refreshMu.Lock()
+		locked := true
+		defer func() {
+			if locked {
+				store.refreshMu.Unlock()
+			}
+			delayed.releaseHead()
+		}()
+		result := make(chan readViewResult, 1)
+		go func() {
+			view, err := store.openReadView()
+			result <- readViewResult{view: view, err: err}
+		}()
+		waitForTestSignal(t, delayed.observed, "stale pre-lock head")
+		installedSecond, err := loadRootSnapshot(context.Background(), memory, testWorldID, defaultShardWorkers)
+		if err != nil {
+			t.Fatalf("load second snapshot: %v", err)
+		}
+		store.snapshot.Store(installedSecond)
+
+		third := second
+		third.Bodies = append(third.Bodies, []byte("# A v3\n"))
+		third.Metadata = append(third.Metadata, defaultReadMetadata(third.Path))
+		thirdCommit := commitReadDocuments(t, memory, []readDocumentSpec{third})
+		delayed.releaseHead()
+		waitForTestSignal(t, delayed.returning, "stale head return")
+		store.refreshMu.Unlock()
+		locked = false
+
+		view := receiveReadView(t, result)
+		defer closeTestReadView(t, view)
+		assertViewBody(t, view, "# A v3\n", 3)
+		if installed := store.snapshot.Load(); installed.HeadGeneration != thirdCommit.headGeneration {
+			t.Errorf("installed generation = %d, want %d", installed.HeadGeneration, thirdCommit.headGeneration)
 		}
 	})
 
@@ -153,7 +205,7 @@ func TestSnapshotRefresh(t *testing.T) {
 		head := getObject(t, memory, headObjectKey)
 		replaceObject(t, memory, headObjectKey, head.Attributes.Generation, head.Data)
 		view, err := store.OpenReadView()
-		if view != nil || !errors.Is(err, blob.ErrIntegrity) {
+		if view != nil || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, protocolstore.ErrIntegrity) {
 			t.Fatalf("OpenReadView() = (%v, %v), want sequence integrity", view, err)
 		}
 		if store.snapshot.Load() != cached {
@@ -648,13 +700,68 @@ func TestReferencedObjectIntegrity(t *testing.T) {
 			}
 			defer closeTestReadView(t, view)
 			_, err = view.Get("/docs/a.md", test.version)
-			if !errors.Is(err, blob.ErrIntegrity) {
+			if !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, protocolstore.ErrIntegrity) {
 				t.Fatalf("Get error = %v, want integrity", err)
 			}
 			if test.wantCause != nil && !errors.Is(err, test.wantCause) {
 				t.Errorf("Get error = %v, want provider cause %v", err, test.wantCause)
 			}
 		})
+	}
+}
+
+func TestReadIntegrityNormalization(t *testing.T) {
+	type readSurface interface {
+		Get(string, int) (*protocolstore.Document, error)
+		Versions(string) ([]protocolstore.VersionInfo, error)
+		VerifyChain(string) error
+	}
+	operations := []struct {
+		name string
+		read func(readSurface) error
+	}{
+		{name: "Get", read: func(surface readSurface) error {
+			_, err := surface.Get("/docs/a.md", 0)
+			return err
+		}},
+		{name: "Versions", read: func(surface readSurface) error {
+			_, err := surface.Versions("/docs/a.md")
+			return err
+		}},
+		{name: "VerifyChain", read: func(surface readSurface) error {
+			return surface.VerifyChain("/docs/a.md")
+		}},
+	}
+	for _, surfaceName := range []string{"direct", "request view"} {
+		for _, operation := range operations {
+			t.Run(surfaceName+" "+operation.name, func(t *testing.T) {
+				memory := initializedMemory(t)
+				commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
+				store, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+				if err != nil {
+					t.Fatalf("open: %v", err)
+				}
+				var surface readSurface = store
+				var view backend.ReadView
+				if surfaceName == "request view" {
+					view, err = store.OpenReadView()
+					if err != nil {
+						t.Fatalf("open request view: %v", err)
+					}
+					defer func() {
+						if err := view.Close(); err != nil {
+							t.Errorf("close request view: %v", err)
+						}
+					}()
+					surface = view
+				}
+				deleteObject(t, memory, commit.documents["/docs/a.md"].entry.Manifest.Key)
+				err = operation.read(surface)
+				if !errors.Is(err, protocolstore.ErrIntegrity) || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, blob.ErrNotFound) {
+					t.Fatalf("read error = %v, want protocol integrity with blob integrity and not-found causes", err)
+				}
+			})
+		}
 	}
 }
 
@@ -1408,6 +1515,44 @@ func waitForTestSignal(t *testing.T, signal <-chan struct{}, name string) {
 
 type blockingHeadStore struct {
 	blob.Store
+}
+
+type delayedHeadStore struct {
+	blob.Store
+	target      blob.Generation
+	observed    chan struct{}
+	release     chan struct{}
+	returning   chan struct{}
+	once        atomic.Bool
+	releaseOnce sync.Once
+}
+
+func newDelayedHeadStore(store blob.Store) *delayedHeadStore {
+	return &delayedHeadStore{
+		Store:     store,
+		observed:  make(chan struct{}),
+		release:   make(chan struct{}),
+		returning: make(chan struct{}),
+	}
+}
+
+func (store *delayedHeadStore) Head(ctx context.Context, key string) (blob.Attributes, error) {
+	attributes, err := store.Store.Head(ctx, key)
+	if err != nil || key != headObjectKey || attributes.Generation != store.target || !store.once.CompareAndSwap(false, true) {
+		return attributes, err
+	}
+	close(store.observed)
+	select {
+	case <-store.release:
+		close(store.returning)
+		return attributes, nil
+	case <-ctx.Done():
+		return blob.Attributes{}, &blob.OpError{Op: "head", Key: key, Err: ctx.Err()}
+	}
+}
+
+func (store *delayedHeadStore) releaseHead() {
+	store.releaseOnce.Do(func() { close(store.release) })
 }
 
 func (store *blockingHeadStore) Head(ctx context.Context, key string) (blob.Attributes, error) {

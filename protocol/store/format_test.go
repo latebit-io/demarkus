@@ -47,6 +47,30 @@ func TestStoredVersionNumber(t *testing.T) {
 	}
 }
 
+func TestInspectStoredVersionHeader(t *testing.T) {
+	previousHash := "sha256-" + strings.Repeat("b", 64)
+	stored := []byte("---\nversion: 2\narchived: true\nprevious-hash: " + previousHash + "\n---\nbody")
+
+	header, err := InspectStoredVersion(stored)
+	if err != nil {
+		t.Fatalf("InspectStoredVersion: %v", err)
+	}
+	if header.Version != 2 || !header.Archived || header.PreviousHash != previousHash {
+		t.Errorf("header = %+v, want version 2, archived, previous-hash %q", header, previousHash)
+	}
+}
+
+func TestNormalizeMetadata(t *testing.T) {
+	meta := map[string]string{"tags": " alpha, beta ", "title": "Kept"}
+	normalized := NormalizeMetadata(meta)
+	if normalized["tags"] != "alpha,beta" || normalized["title"] != "Kept" {
+		t.Errorf("normalized metadata = %v", normalized)
+	}
+	if meta["tags"] != " alpha, beta " {
+		t.Errorf("input metadata mutated: %v", meta)
+	}
+}
+
 func TestSerializeVersionRange(t *testing.T) {
 	for _, version := range []int{-1, 0} {
 		if _, err := SerializeVersion(version, nil, nil, nil); err == nil {
