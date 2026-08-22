@@ -184,7 +184,7 @@ func readArchiveState(docDir string) (archived, exists bool, err error) {
 		return false, false, fmt.Errorf("stat archive state: %w", err)
 	}
 	if !info.Mode().IsRegular() || (info.Size() != int64(len("true\n")) && info.Size() != int64(len("false\n"))) {
-		return false, false, fmt.Errorf("invalid archive state file")
+		return false, false, fmt.Errorf("%w: invalid archive state file", ErrIntegrity)
 	}
 	data, err := os.ReadFile(statePath)
 	if err != nil {
@@ -196,7 +196,7 @@ func readArchiveState(docDir string) (archived, exists bool, err error) {
 	case "false\n":
 		return false, true, nil
 	default:
-		return false, false, fmt.Errorf("invalid archive state %q", data)
+		return false, false, fmt.Errorf("%w: invalid archive state %q", ErrIntegrity, data)
 	}
 }
 
@@ -689,33 +689,43 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 			continue
 		}
 		if e.IsDir() {
+			var hasDocument bool
 			if includeArchived {
 				// Recovery/audit view: any document in the subtree, archived
 				// included, keeps the directory visible.
-				if !s.dirHasDocument(filepath.Join(dirPath, name), absRoot, true) {
-					continue
-				}
+				hasDocument, err = s.dirHasDocument(filepath.Join(dirPath, name), absRoot, true)
 			} else {
 				// Index fast path; on a miss, scan disk before pruning
 				// rather than hide content the listing would show.
-				if _, ok := live.dirs[name]; !ok && !s.dirHasDocument(filepath.Join(dirPath, name), absRoot, false) {
-					continue // subtree holds no listable documents
+				if _, ok := live.dirs[name]; ok {
+					hasDocument = true
+				} else {
+					hasDocument, err = s.dirHasDocument(filepath.Join(dirPath, name), absRoot, false)
 				}
+			}
+			if err != nil {
+				return nil, fmt.Errorf("inspect directory %q: %w", name, err)
+			}
+			if !hasDocument {
+				continue
 			}
 			filtered = append(filtered, e)
 			continue
 		}
-		// Index fast path: a live indexed doc is a document by construction;
-		// the include-archived view's nil map misses into the disk checks.
-		if _, ok := live.files[name]; ok {
-			filtered = append(filtered, e)
+		// The index proves document identity, but archive state remains a disk
+		// check so external sidecar corruption cannot fail open.
+		_, indexed := live.files[name]
+		if !indexed && !dc.isDocument(name) {
 			continue
 		}
-		if !dc.isDocument(name) {
-			continue
-		}
-		if !includeArchived && entryArchived(filepath.Join(dirPath, name), absRoot) {
-			continue
+		if !includeArchived {
+			archived, err := entryArchived(filepath.Join(dirPath, name), absRoot)
+			if err != nil {
+				return nil, fmt.Errorf("inspect document %q: %w", name, err)
+			}
+			if archived {
+				continue
+			}
 		}
 		filtered = append(filtered, e)
 	}
@@ -819,10 +829,10 @@ func hasHiddenSegment(rel string) bool {
 // dirHasDocument reports whether the subtree holds a document the listing
 // view would show (SPEC 11.9); liveChildren's slow-path complement, walked
 // only for unindexed children. Unreadable dirs prune rather than show empty.
-func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) bool {
+func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) (bool, error) {
 	entries, err := os.ReadDir(dirAbs)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	// Files first: a qualifying file at this level answers with at most one
 	// candidate load, before any subtree recursion is paid.
@@ -840,58 +850,63 @@ func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) boo
 		if !dc.isDocument(name) {
 			continue
 		}
-		if includeArchived || !entryArchived(filepath.Join(dirAbs, name), absRoot) {
-			return true
+		if includeArchived {
+			return true, nil
+		}
+		archived, err := entryArchived(filepath.Join(dirAbs, name), absRoot)
+		if err != nil {
+			return false, err
+		}
+		if !archived {
+			return true, nil
 		}
 	}
 	for _, name := range dirs {
-		if s.dirHasDocument(filepath.Join(dirAbs, name), absRoot, includeArchived) {
-			return true
+		hasDocument, err := s.dirHasDocument(filepath.Join(dirAbs, name), absRoot, includeArchived)
+		if err != nil {
+			return false, err
+		}
+		if hasDocument {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-// entryArchived reports whether a directory entry that is a current-version
-// document symlink points at an archived version. It applies the same guards
-// walkCurrentFiles uses for this resolve-and-read pattern: a target escaping
-// the content root is never opened (isContained), and a non-regular target
-// (FIFO, device — opening one can block forever) is never opened either. The
-// read itself is a bounded prefix: the store-managed frontmatter that carries
-// the archived flag is capped at maxStoreFrontmatter, so the document body is
-// never pulled in. A non-symlink entry, a broken link, an unreadable target,
-// or any guarded state is treated as not archived (shown) — the listing errs
-// toward visibility, never hiding something it could not positively classify.
-func entryArchived(childPath, absRoot string) bool {
+// entryArchived safely resolves a current document and overlays sidecar state.
+// Guarded non-document states remain visible; archive-state errors propagate.
+func entryArchived(childPath, absRoot string) (bool, error) {
 	fi, err := os.Lstat(childPath)
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		return false
+		return false, nil
 	}
 	resolved, err := filepath.EvalSymlinks(childPath)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	if !isContained(resolved, absRoot) {
-		return false
+		return false, nil
 	}
 	info, err := os.Stat(resolved)
 	if err != nil || !info.Mode().IsRegular() {
-		return false
+		return false, nil
 	}
 	f, err := os.Open(resolved)
 	if err != nil {
-		return false
+		return false, nil
 	}
-	defer func() { _ = f.Close() }()
 	// maxStoreFrontmatter bounds the frontmatter block, so this prefix is
 	// guaranteed to contain the closing fence; the slack covers the fences.
 	buf := make([]byte, maxStoreFrontmatter+256)
-	n, err := io.ReadFull(f, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return false
+	n, readErr := io.ReadFull(f, buf)
+	closeErr := f.Close()
+	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
+		return false, fmt.Errorf("read current version: %w", errors.Join(readErr, closeErr))
 	}
-	archived, err := effectiveArchived(filepath.Dir(resolved), buf[:n])
-	return err == nil && archived
+	if closeErr != nil {
+		return false, fmt.Errorf("close current version: %w", closeErr)
+	}
+	return effectiveArchived(filepath.Dir(resolved), buf[:n])
 }
 
 // IsDir reports whether the given path is a directory within the content root.
@@ -1885,7 +1900,7 @@ func validateMeta(meta map[string]string) error {
 			return fmt.Errorf("%w: key %q contains invalid characters", ErrInvalidMeta, k)
 		}
 		if !protocol.IsValidMetaValue(v) {
-			return fmt.Errorf("%w: value for key %q contains newlines", ErrInvalidMeta, k)
+			return fmt.Errorf("%w: value for key %q is not valid single-line UTF-8", ErrInvalidMeta, k)
 		}
 		if k == retentionKey {
 			if _, ok := ParseRetention(v); !ok {

@@ -319,7 +319,7 @@ func classifyProviderError(ctx context.Context, op, key string, cause error) err
 	if classification.category == nil && !classification.permanent && hasGRPCCode {
 		classification = classifyGRPCProviderError(op, grpcCode)
 	}
-	if classification.category == nil && isIntegrityFailure(op, cause) {
+	if classification.category == nil && isIntegrityFailure(cause) {
 		classification.category = blob.ErrIntegrity
 		classification.permanent = false
 	}
@@ -435,17 +435,8 @@ func notFoundCategory(op string) error {
 	}
 }
 
-func isIntegrityFailure(op string, err error) bool {
-	if errors.Is(err, errObjectTooLarge) || errors.Is(err, io.ErrShortWrite) {
-		return true
-	}
-	if op != "create" && op != "replace" {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "storage: object checksum mismatch") ||
-		strings.Contains(message, "does not match the expected crc32c") ||
-		strings.Contains(message, "crc32c") && strings.Contains(message, "does not match")
+func isIntegrityFailure(err error) bool {
+	return errors.Is(err, errObjectTooLarge) || errors.Is(err, io.ErrShortWrite)
 }
 
 func isMutation(op string) bool {
@@ -486,6 +477,7 @@ func crc32c(data []byte) uint32 {
 }
 
 func validateBucket(name string) error {
+	// Mirrors current GCS naming rules; recheck when provider rules change.
 	maximumLength := 63
 	if strings.Contains(name, ".") {
 		maximumLength = 222

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -124,5 +125,12 @@ func TestSerializeVersionRange(t *testing.T) {
 		if _, err := SerializeVersion(MaxVersionNumber+1, []byte("previous"), nil, nil); err == nil {
 			t.Error("SerializeVersion(max+1) succeeded")
 		}
+	}
+}
+
+func TestSerializeVersionRejectsInvalidUTF8Metadata(t *testing.T) {
+	invalid := string([]byte{'v', 0xff})
+	if _, err := SerializeVersion(1, nil, []byte("body"), map[string]string{"title": invalid}); !errors.Is(err, ErrInvalidMeta) {
+		t.Fatalf("SerializeVersion error = %v, want ErrInvalidMeta", err)
 	}
 }

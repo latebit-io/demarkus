@@ -105,12 +105,15 @@ conditions before rebasing; a target-document change returns the normal Mark
 conflict. Staged objects that lost a race remain unreachable until garbage
 collection.
 
-Each mutation has an operation UUID. Candidate heads retain a bounded receipt
-set containing operation UUIDs and results. After a timeout or lost response, a
-writer rereads the head: a receipt proves success, a newer head without the
-receipt proves the old generation cannot commit, and an unchanged head permits
-retry of the identical candidate. If reconciliation cannot read the head before
-the deadline, the server returns `server-error` and logs the operation UUID.
+Each mutation has an operation UUID. Candidate heads retain receipts for the
+last 16 committed mutations. This exceeds the full 10 second reconciliation
+window at the supported envelope of less than one committed mutation per second.
+After a timeout or lost response, a writer rereads the head: a receipt proves
+success, a newer head whose receipt window still covers the candidate sequence
+proves failure, and an unchanged head permits retry of the identical candidate.
+An evicted candidate sequence has an indeterminate outcome: the server returns
+`server-error`, logs the operation UUID, and MUST NOT replay the mutation. The
+same applies when reconciliation cannot read the head before the deadline.
 
 ### Migration, backup, and reclamation follow the root graph
 
@@ -119,11 +122,38 @@ rather than committing once per document. Verification compares exact stored
 bytes, versions, chains, archive state, catalog state, and namespace topology.
 
 Backups pin an immutable root under `_demarkus/v1/pins/` before copying or
-retaining reachable objects. Garbage collection marks from the current root,
-retained prior roots, active import roots, and backup pins. It sweeps only after
-confirming the head generation is unchanged. Logical retention takes effect in
-the committed manifest immediately; physical deletion occurs later and never
-changes protocol-visible history.
+retaining reachable objects. Garbage collection is an asynchronous two-pass
+job. It marks from the current root, retained prior roots, active import roots,
+and backup pins, then waits a grace period longer than the maximum mutation,
+import, and clock-skew window before marking again. Only objects unreachable in
+both passes and older than the grace cutoff are eligible for deletion, so a
+concurrent writer's staged objects cannot be swept.
+
+Before the second mark, the collector CAS-replaces the head with the same root
+and an active sweep epoch. This generation change invalidates every staged
+writer candidate. All writer head replacements require an inactive sweep epoch,
+so writers rebase only after the collector conditionally clears it. The head
+barrier therefore prevents a writer from committing an old unreachable object
+between the collector's final head check and deletion.
+
+A backup creator must observe an inactive sweep epoch, create its pin, then
+re-read the head before relying on that pin; if the epoch changed or became
+active, it retries after the sweep. The collector scans pins only after
+activating the barrier, revalidates the head generation before each delete
+batch, and aborts on any change. This handshake fences pin creation while the
+age rule protects objects staged before barrier activation. Logical retention
+takes effect in the committed manifest immediately; physical deletion occurs
+later and never changes protocol-visible history.
+
+The active epoch references an immutable deletion plan containing each object
+key and observed GCS generation. Every delete uses that generation as a
+precondition. A crashed collector is recovered by continuing the same plan
+while the head barrier remains active, then verifying every planned generation
+is absent before conditionally clearing the epoch. Recovery never clears or
+steals an epoch based only on elapsed time. A stale worker can therefore delete
+only a planned old generation; after the barrier clears, recreation of the same
+content-addressed key receives a new generation and is fenced from stale delete
+requests.
 
 ## Isolation boundary
 
@@ -145,8 +175,9 @@ one enterprise trust boundary, not hostile multi-tenancy.
 - One object name limits sustained commits to roughly one per second per world.
   The GCS implementation must reconcile ambiguous outcomes and apply bounded
   retry with jitter; deployments must remain inside the measured write envelope.
-- Failed writes may leave unreachable immutable objects, so safe garbage
-  collection is required.
+- Failed writes may leave unreachable immutable objects. Until the fenced
+  asynchronous collector is implemented, they intentionally accumulate;
+  retention remains logical and no request path performs physical deletion.
 - The default filesystem server remains free of the GCS SDK. The knowledge
   server is a separate binary and image, consistent with ADR 0006.
 

@@ -1,7 +1,10 @@
 // Package protocol implements the Mark Protocol specification for Demarkus.
 package protocol
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 const (
 	// DefaultPort is the default port for Mark Protocol servers.
@@ -71,7 +74,7 @@ func IsValidMetaKey(k string) bool {
 }
 
 // IsValidMetaValue checks that a metadata value is safe for frontmatter
-// serialization: no carriage returns or newlines.
+// serialization: valid UTF-8 without carriage returns or newlines.
 func IsValidMetaValue(v string) bool {
-	return !strings.ContainsAny(v, "\r\n")
+	return utf8.ValidString(v) && !strings.ContainsAny(v, "\r\n")
 }

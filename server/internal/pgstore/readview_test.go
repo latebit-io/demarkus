@@ -121,6 +121,9 @@ func TestPostgresReadViewContract(t *testing.T) {
 func TestPostgresReadViewSnapshot(t *testing.T) {
 	t.Run("pins document hash list versions lookup and chain", func(t *testing.T) {
 		s := openStore(t)
+		if err := s.Reset(context.Background()); err != nil {
+			t.Fatalf("reset: %v", err)
+		}
 		firstBody := []byte("# First\n")
 		beforeBody := []byte("# Before\n")
 		afterBody := []byte("# After\n")

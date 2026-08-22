@@ -290,6 +290,45 @@ func TestListDir_HidesArchived(t *testing.T) {
 	}
 }
 
+func TestListDirRejectsInvalidArchiveState(t *testing.T) {
+	for _, documentPath := range []string{"/doc.md", "/nested/doc.md"} {
+		for _, unarchive := range []bool{false, true} {
+			name := fmt.Sprintf("%s/unarchive=%t", documentPath, unarchive)
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				s := New(root)
+				if _, err := s.Write(documentPath, []byte("# Body\n"), nil); err != nil {
+					t.Fatalf("Write: %v", err)
+				}
+				if _, _, err := s.Archive(documentPath, true); err != nil {
+					t.Fatalf("Archive: %v", err)
+				}
+				if unarchive {
+					if _, _, err := s.Archive(documentPath, false); err != nil {
+						t.Fatalf("Unarchive: %v", err)
+					}
+				}
+
+				rel := strings.TrimPrefix(documentPath, "/")
+				statePath := filepath.Join(root, filepath.Dir(rel), "versions", filepath.Base(rel), archiveStateName)
+				if err := os.WriteFile(statePath, []byte("1\n"), 0o644); err != nil {
+					t.Fatalf("corrupt archive state: %v", err)
+				}
+				listPath := "/"
+				if unarchive && filepath.Dir(rel) != "." {
+					listPath = "/" + filepath.ToSlash(filepath.Dir(rel))
+				}
+				if _, err := s.ListDir(listPath, false); !errors.Is(err, ErrIntegrity) {
+					t.Fatalf("ListDir hidden error = %v, want ErrIntegrity", err)
+				}
+				if _, err := s.ListDir(listPath, true); err != nil {
+					t.Fatalf("ListDir audit view: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
