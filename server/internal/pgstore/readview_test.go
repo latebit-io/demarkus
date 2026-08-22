@@ -101,7 +101,7 @@ func TestPostgresReadViewContract(t *testing.T) {
 			}
 		})
 
-		_, err = view.LookupHash("sha256-deadbeef")
+		_, err = view.LookupHashResult("sha256-deadbeef")
 		if !errors.Is(err, queryErr) {
 			t.Errorf("lookup hash error = %v, want %v", err, queryErr)
 		}
@@ -213,7 +213,7 @@ func TestPostgresReadViewSnapshot(t *testing.T) {
 		if doc, err := view.Get("/archive.md", 0); err != nil || doc.Archived {
 			t.Fatalf("establish original snapshot = (%+v, %v), want live", doc, err)
 		}
-		if _, _, err := s.Archive("/archive.md", true); err != nil {
+		if _, _, err := s.ArchiveResult("/archive.md", true); err != nil {
 			t.Fatalf("archive: %v", err)
 		}
 		if doc, err := view.Get("/archive.md", 0); err != nil || doc.Archived {
@@ -282,10 +282,10 @@ func assertPostgresReadView(t *testing.T, view backend.ReadView, want *readViewW
 			t.Errorf("versions = %v, want %v", got, want.versions)
 		}
 	}
-	if path, err := view.LookupHash(want.hash); err != nil || path != "/docs/doc.md" {
+	if path, err := view.LookupHashResult(want.hash); err != nil || path != "/docs/doc.md" {
 		t.Errorf("lookup hash = %q, error %v; want /docs/doc.md", path, err)
 	}
-	if _, err := view.LookupHash(want.missingHash); !errors.Is(err, os.ErrNotExist) {
+	if _, err := view.LookupHashResult(want.missingHash); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("missing hash error = %v, want not-found", err)
 	}
 	results, err := view.Lookup(want.lookupQuery, catalog.Options{Scope: "/docs"})

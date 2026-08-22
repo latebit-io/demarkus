@@ -21,7 +21,7 @@ func TestWalkCurrent(t *testing.T) {
 	if _, err := s.Write("/archived.md", []byte("# Arch"), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Archive("/archived.md", true); err != nil {
+	if _, _, err := s.ArchiveResult("/archived.md", true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Write("/legacy.md", []byte("# Legacy"), nil); err != nil {
@@ -116,10 +116,10 @@ func TestBuildHashIndex_ReportsSkippedEntries(t *testing.T) {
 	if len(partial.Skipped) != 1 || filepath.Base(partial.Skipped[0].Path) != "dangling.md" {
 		t.Errorf("skipped = %+v, want the dangling symlink", partial.Skipped)
 	}
-	if p, err := s.LookupHash(ContentHash([]byte("good"))); err != nil || p != "/good.md" {
+	if p, err := s.LookupHashResult(ContentHash([]byte("good"))); err != nil || p != "/good.md" {
 		t.Errorf("LookupHash hit after partial walk = (%q, %v), want (/good.md, nil)", p, err)
 	}
-	_, err = s.LookupHash(ContentHash([]byte("missing")))
+	_, err = s.LookupHashResult(ContentHash([]byte("missing")))
 	var lookupPartial *PartialWalkError
 	if !errors.As(err, &lookupPartial) {
 		t.Errorf("LookupHash miss after partial walk err = %v, want *PartialWalkError", err)

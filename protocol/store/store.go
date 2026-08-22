@@ -519,9 +519,17 @@ func (s *Store) WalkCurrent(fn func(CurrentDoc) error) error {
 	})
 }
 
-// LookupHash returns the smallest live request path for a content hash.
+// LookupHash returns a live request path and whether one exists.
+//
+// Deprecated: use LookupHashResult to distinguish misses from index errors.
+func (s *Store) LookupHash(hash string) (string, bool) {
+	path, err := s.LookupHashResult(hash)
+	return path, err == nil
+}
+
+// LookupHashResult returns the smallest live request path for a content hash.
 // A confirmed miss is os.ErrNotExist; an incomplete index reports its cause.
-func (s *Store) LookupHash(hash string) (string, error) {
+func (s *Store) LookupHashResult(hash string) (string, error) {
 	s.hashMu.RLock()
 	defer s.hashMu.RUnlock()
 	if paths := s.hashIdx[hash]; len(paths) > 0 {
@@ -611,7 +619,7 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 		return nil, err
 	}
 
-	ver, err := s.CurrentVersion(reqPath)
+	ver, err := s.CurrentVersionResult(reqPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1017,7 +1025,15 @@ func (s *Store) resolve(reqPath string) (string, error) {
 }
 
 // CurrentVersion returns the latest version number, or 0 when none exists.
-func (s *Store) CurrentVersion(reqPath string) (int, error) {
+//
+// Deprecated: use CurrentVersionResult to surface invalid paths.
+func (s *Store) CurrentVersion(reqPath string) int {
+	version, _ := s.CurrentVersionResult(reqPath)
+	return version
+}
+
+// CurrentVersionResult returns the latest version number and path errors.
+func (s *Store) CurrentVersionResult(reqPath string) (int, error) {
 	cleaned, err := RelPath(reqPath)
 	if err != nil {
 		return 0, err
@@ -1135,7 +1151,15 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 }
 
 // Archive changes operational archive state without modifying version bytes.
-func (s *Store) Archive(reqPath string, archived bool) (*Document, bool, error) {
+//
+// Deprecated: use ArchiveResult to inspect the resulting document and change.
+func (s *Store) Archive(reqPath string, archived bool) error {
+	_, _, err := s.ArchiveResult(reqPath, archived)
+	return err
+}
+
+// ArchiveResult changes archive state and returns its committed result.
+func (s *Store) ArchiveResult(reqPath string, archived bool) (*Document, bool, error) {
 	if _, err := s.resolve(reqPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, false, os.ErrNotExist
@@ -1148,7 +1172,7 @@ func (s *Store) Archive(reqPath string, archived bool) (*Document, bool, error) 
 	base := filepath.Base(cleaned)
 	dir := filepath.Dir(cleaned)
 
-	currentVersion, err := s.CurrentVersion(reqPath)
+	currentVersion, err := s.CurrentVersionResult(reqPath)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1293,7 +1317,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 		// dangling version file behind.
 		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path", reqPath)
 	} else {
-		current, err := s.CurrentVersion(reqPath)
+		current, err := s.CurrentVersionResult(reqPath)
 		if err != nil {
 			return nil, err
 		}
@@ -1534,7 +1558,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		return s.write(reqPath, content, meta)
 	}
 
-	current, err := s.CurrentVersion(reqPath)
+	current, err := s.CurrentVersionResult(reqPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1547,7 +1571,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		if errors.Is(err, ErrVersionExists) {
 			// Lost the O_EXCL race: another writer created the expected
 			// next version between our check and the file create.
-			current, currentErr := s.CurrentVersion(reqPath)
+			current, currentErr := s.CurrentVersionResult(reqPath)
 			if currentErr != nil {
 				return nil, currentErr
 			}
@@ -1604,7 +1628,7 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	if err != nil {
 		// If the requested version doesn't exist, check whether the
 		// document simply moved past it (conflict) or doesn't exist at all.
-		current, currentErr := s.CurrentVersion(reqPath)
+		current, currentErr := s.CurrentVersionResult(reqPath)
 		if currentErr != nil {
 			return nil, currentErr
 		}

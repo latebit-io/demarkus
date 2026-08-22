@@ -91,13 +91,13 @@ func (store *Store) Versions(reqPath string) ([]protocolstore.VersionInfo, error
 	return versions, readResultError(readErr, view.Close())
 }
 
-// LookupHash resolves a live body hash in a freshly validated snapshot.
-func (store *Store) LookupHash(hash string) (string, error) {
+// LookupHashResult resolves a live body hash in a validated snapshot.
+func (store *Store) LookupHashResult(hash string) (string, error) {
 	view, err := store.openReadView()
 	if err != nil {
 		return "", err
 	}
-	path, readErr := view.LookupHash(hash)
+	path, readErr := view.LookupHashResult(hash)
 	return path, readResultError(readErr, view.Close())
 }
 
@@ -120,8 +120,8 @@ func (store *Store) Lookup(query string, options catalog.Options) ([]catalog.Res
 	return results, readResultError(readErr, view.Close())
 }
 
-// CurrentVersion returns the current version from a freshly validated snapshot.
-func (store *Store) CurrentVersion(reqPath string) (int, error) {
+// CurrentVersionResult returns the version from a validated snapshot.
+func (store *Store) CurrentVersionResult(reqPath string) (int, error) {
 	view, err := store.openReadView()
 	if err != nil {
 		return 0, err
@@ -268,7 +268,7 @@ func (view *readView) versions(reqPath string) ([]protocolstore.VersionInfo, err
 	return versions, nil
 }
 
-func (view *readView) LookupHash(hash string) (string, error) {
+func (view *readView) LookupHashResult(hash string) (string, error) {
 	if err := view.ctx.Err(); err != nil {
 		return "", err
 	}

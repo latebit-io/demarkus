@@ -115,7 +115,7 @@ func seedMigrationDocs(t *testing.T, s *store.Store) []string {
 	mustWrite("/dir/deep.md", 0, "# Deep\n", nil)
 	mustWrite("/uni.md", 0, "# Ünïcode ☃ 日本語\n", map[string]string{"tags": "unicode"})
 	mustWrite("/arch.md", 0, "# Archived\n", nil)
-	if _, _, err := s.Archive("/arch.md", true); err != nil {
+	if _, _, err := s.ArchiveResult("/arch.md", true); err != nil {
 		t.Fatalf("seed archive: %v", err)
 	}
 	for i := range 4 {

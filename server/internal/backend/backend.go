@@ -14,17 +14,17 @@ type Reader interface {
 	ListEntries(reqPath string, includeArchived bool) ([]protocolstore.DirEntry, error)
 	IsDir(reqPath string) (bool, error)
 	Versions(reqPath string) ([]protocolstore.VersionInfo, error)
-	LookupHash(hash string) (string, error)
+	LookupHashResult(hash string) (string, error)
 	VerifyChain(reqPath string) error
 }
 
 // Store is the mutable document-store contract.
 type Store interface {
 	Reader
-	CurrentVersion(reqPath string) (int, error)
+	CurrentVersionResult(reqPath string) (int, error)
 	WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*protocolstore.Document, error)
 	Append(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*protocolstore.Document, error)
-	Archive(reqPath string, archived bool) (*protocolstore.Document, bool, error)
+	ArchiveResult(reqPath string, archived bool) (*protocolstore.Document, bool, error)
 }
 
 // CatalogReader exposes LOOKUP against the same snapshot as Reader.

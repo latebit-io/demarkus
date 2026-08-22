@@ -68,7 +68,7 @@ func TestReadViewPinsFileAndCatalogState(t *testing.T) {
 
 func assertFileView(t *testing.T, view interface {
 	Get(string, int) (*protocolstore.Document, error)
-	LookupHash(string) (string, error)
+	LookupHashResult(string) (string, error)
 	Lookup(string, catalog.Options) ([]catalog.Result, error)
 }, body []byte, tag string) {
 	t.Helper()
@@ -79,7 +79,7 @@ func assertFileView(t *testing.T, view interface {
 	if !bytes.Equal(document.Content, body) {
 		t.Errorf("body = %q, want %q", document.Content, body)
 	}
-	if path, err := view.LookupHash(protocolstore.ContentHash(body)); err != nil || path != "/docs/doc.md" {
+	if path, err := view.LookupHashResult(protocolstore.ContentHash(body)); err != nil || path != "/docs/doc.md" {
 		t.Errorf("hash lookup = %q, %v", path, err)
 	}
 	results, err := view.Lookup(tag, catalog.Options{})
@@ -90,7 +90,7 @@ func assertFileView(t *testing.T, view interface {
 		t.Errorf("lookup results = %+v", results)
 	}
 	other := firstOrSecondBody(tag)
-	if _, err := view.LookupHash(protocolstore.ContentHash(other)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := view.LookupHashResult(protocolstore.ContentHash(other)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("other hash error = %v, want not-found", err)
 	}
 }

@@ -137,7 +137,7 @@ func TestSnapshotRefresh(t *testing.T) {
 		if _, err := store.Get("/docs/a.md", 0); !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, protocolstore.ErrIntegrity) {
 			t.Errorf("direct Get error = %v, want integrity instead of stale data", err)
 		}
-		if got, err := store.CurrentVersion("/docs/a.md"); got != 0 || !errors.Is(err, blob.ErrIntegrity) {
+		if got, err := store.CurrentVersionResult("/docs/a.md"); got != 0 || !errors.Is(err, blob.ErrIntegrity) {
 			t.Errorf("CurrentVersion during failed refresh = (%d, %v), want integrity", got, err)
 		}
 	})
@@ -510,11 +510,11 @@ func TestReadSemantics(t *testing.T) {
 
 	t.Run("hash and catalog", func(t *testing.T) {
 		sharedHash := protocolstore.ContentHash([]byte("same"))
-		path, err := view.LookupHash(sharedHash)
+		path, err := view.LookupHashResult(sharedHash)
 		if err != nil || path != sharedA.Path {
 			t.Errorf("LookupHash = (%q, %v), want %q", path, err, sharedA.Path)
 		}
-		if _, err := view.LookupHash(protocolstore.ContentHash([]byte("# Archived\n"))); !errors.Is(err, os.ErrNotExist) {
+		if _, err := view.LookupHashResult(protocolstore.ContentHash([]byte("# Archived\n"))); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("archived hash error = %v", err)
 		}
 		results, err := view.Lookup("after", catalog.Options{Scope: "/docs"})
@@ -534,11 +534,11 @@ func TestReadSemantics(t *testing.T) {
 	})
 
 	t.Run("current version", func(t *testing.T) {
-		version, err := store.CurrentVersion(live.Path)
+		version, err := store.CurrentVersionResult(live.Path)
 		if err != nil || version != 2 {
 			t.Errorf("CurrentVersion = (%d, %v)", version, err)
 		}
-		if got, err := store.CurrentVersion("/missing.md"); got != 0 || err != nil {
+		if got, err := store.CurrentVersionResult("/missing.md"); got != 0 || err != nil {
 			t.Errorf("missing CurrentVersion = (%d, %v), want (0, nil)", got, err)
 		}
 	})
@@ -1283,10 +1283,10 @@ func assertPinnedReadView(t *testing.T, view *readView, want *pinnedReadWant) {
 		}
 	}
 	hash := protocolstore.ContentHash([]byte(want.body))
-	if path, err := view.LookupHash(hash); err != nil || path != "/docs/a.md" {
+	if path, err := view.LookupHashResult(hash); err != nil || path != "/docs/a.md" {
 		t.Errorf("LookupHash = (%q, %v)", path, err)
 	}
-	if _, err := view.LookupHash(protocolstore.ContentHash([]byte(want.missingBody))); !errors.Is(err, os.ErrNotExist) {
+	if _, err := view.LookupHashResult(protocolstore.ContentHash([]byte(want.missingBody))); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("missing LookupHash error = %v", err)
 	}
 	results, err := view.Lookup(want.lookup, catalog.Options{Scope: "/docs"})

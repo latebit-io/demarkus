@@ -14,7 +14,7 @@ type currentVersionResultStore struct {
 	err     error
 }
 
-func (s *currentVersionResultStore) CurrentVersion(string) (int, error) {
+func (s *currentVersionResultStore) CurrentVersionResult(string) (int, error) {
 	return s.version, s.err
 }
 

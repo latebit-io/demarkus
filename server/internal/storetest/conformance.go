@@ -269,7 +269,7 @@ func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
 	initial := mustWrite(t, s, "/arch.md", 0, "content")
 	hash := store.ContentHash([]byte("content"))
 
-	if p, err := s.LookupHash(hash); err != nil || p != "/arch.md" {
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/arch.md" {
 		t.Errorf("LookupHash before archive = (%q, %v), want (/arch.md, nil)", p, err)
 	}
 	archivedDoc := mustArchiveTransition(t, s, "/arch.md", true)
@@ -277,11 +277,11 @@ func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
 		t.Errorf("archive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", archivedDoc, initial.ETag, initial.Modified)
 	}
 	assertArchiveState(t, s, "/arch.md", initial, true)
-	unchangedDoc, changed, err := s.Archive("/arch.md", true)
+	unchangedDoc, changed, err := s.ArchiveResult("/arch.md", true)
 	if err != nil || changed || unchangedDoc == nil || unchangedDoc.ETag != archivedDoc.ETag || !unchangedDoc.Modified.Equal(archivedDoc.Modified) {
 		t.Errorf("archive no-op = (%+v, changed=%v, err=%v), want unchanged committed document", unchangedDoc, changed, err)
 	}
-	if _, err := s.LookupHash(hash); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.LookupHashResult(hash); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("LookupHash after archive: err = %v, want ErrNotExist", err)
 	}
 	if _, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); !errors.Is(err, store.ErrArchived) {
@@ -295,7 +295,7 @@ func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
 		t.Errorf("unarchive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", unarchivedDoc, initial.ETag, initial.Modified)
 	}
 	assertArchiveState(t, s, "/arch.md", initial, false)
-	if p, err := s.LookupHash(hash); err != nil || p != "/arch.md" {
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/arch.md" {
 		t.Errorf("LookupHash after unarchive = (%q, %v), want (/arch.md, nil)", p, err)
 	}
 	if doc, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); err != nil || doc.Version != 2 {
@@ -304,7 +304,7 @@ func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
 	if err := s.VerifyChain("/arch.md"); err != nil {
 		t.Errorf("VerifyChain after v2 write: %v", err)
 	}
-	if _, _, err := s.Archive("/missing.md", true); !errors.Is(err, os.ErrNotExist) {
+	if _, _, err := s.ArchiveResult("/missing.md", true); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("archive missing: err = %v, want ErrNotExist", err)
 	}
 }
@@ -336,7 +336,7 @@ func assertArchiveState(t *testing.T, s handler.DocumentStore, path string, init
 
 func mustArchiveTransition(t *testing.T, s handler.DocumentStore, path string, archived bool) *store.Document {
 	t.Helper()
-	document, changed, err := s.Archive(path, archived)
+	document, changed, err := s.ArchiveResult(path, archived)
 	if err != nil {
 		t.Fatalf("Archive(%q, %v): %v", path, archived, err)
 	}
@@ -460,10 +460,10 @@ func testListDirSemantics(t *testing.T, s handler.DocumentStore) {
 	mustWrite(t, s, "/nested/a/b/keep.md", 0, "keep")
 	mustWrite(t, s, "/.hidden.md", 0, "hidden")
 	mustWrite(t, s, "/work/.scratch.md", 0, "scratch")
-	if _, _, err := s.Archive("/gone.md", true); err != nil {
+	if _, _, err := s.ArchiveResult("/gone.md", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Archive("/attic/old.md", true); err != nil {
+	if _, _, err := s.ArchiveResult("/attic/old.md", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -641,26 +641,26 @@ func testSharedBodyHash(t *testing.T, s handler.DocumentStore) {
 	mustWrite(t, s, "/b.md", 0, "same")
 	mustWrite(t, s, "/a.md", 0, "same")
 	mustWrite(t, s, "/c.md", 0, "same")
-	if p, err := s.LookupHash(hash); err != nil || p != "/a.md" {
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/a.md" {
 		t.Errorf("LookupHash shared = (%q, %v), want (/a.md, nil)", p, err)
 	}
-	if _, _, err := s.Archive("/a.md", true); err != nil {
+	if _, _, err := s.ArchiveResult("/a.md", true); err != nil {
 		t.Fatal(err)
 	}
-	if p, err := s.LookupHash(hash); err != nil || p != "/b.md" {
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/b.md" {
 		t.Errorf("LookupHash after archiving /a.md = (%q, %v), want (/b.md, nil)", p, err)
 	}
 	mustWrite(t, s, "/b.md", 1, "changed")
-	if p, err := s.LookupHash(hash); err != nil || p != "/c.md" {
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/c.md" {
 		t.Errorf("LookupHash after rewriting /b.md = (%q, %v), want (/c.md, nil)", p, err)
 	}
-	if p, err := s.LookupHash(store.ContentHash([]byte("changed"))); err != nil || p != "/b.md" {
+	if p, err := s.LookupHashResult(store.ContentHash([]byte("changed"))); err != nil || p != "/b.md" {
 		t.Errorf("LookupHash new body = (%q, %v), want (/b.md, nil)", p, err)
 	}
-	if _, _, err := s.Archive("/a.md", false); err != nil {
+	if _, _, err := s.ArchiveResult("/a.md", false); err != nil {
 		t.Fatal(err)
 	}
-	if p, err := s.LookupHash(hash); err != nil || p != "/a.md" {
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/a.md" {
 		t.Errorf("LookupHash after unarchiving /a.md = (%q, %v), want (/a.md, nil)", p, err)
 	}
 }
@@ -811,7 +811,7 @@ func mustWrite(t *testing.T, s handler.DocumentStore, path string, expected int,
 
 func currentVersion(t testing.TB, s handler.DocumentStore, path string) int {
 	t.Helper()
-	version, err := s.CurrentVersion(path)
+	version, err := s.CurrentVersionResult(path)
 	if err != nil {
 		t.Fatalf("CurrentVersion(%s): %v", path, err)
 	}

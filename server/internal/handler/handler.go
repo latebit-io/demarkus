@@ -207,7 +207,7 @@ func parseVersionPath(reqPath string) (basePath string, version int) {
 }
 
 func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash string, reader storagebackend.Reader) {
-	docPath, err := reader.LookupHash(hash)
+	docPath, err := reader.LookupHashResult(hash)
 	if errors.Is(err, os.ErrNotExist) {
 		h.logger().Info("hash not found", "hash", hash)
 		h.writeError(w, protocol.StatusNotFound, "content not found for hash "+hash)
@@ -769,7 +769,7 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 		return
 	}
 
-	doc, changed, err := h.Store.Archive(req.Path, true)
+	doc, changed, err := h.Store.ArchiveResult(req.Path, true)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			h.logger().Info("archive failed", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "not found")
@@ -843,7 +843,7 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 
 	// Handle empty body case: unarchive if archived, no-op if active
 	if req.Body == "" {
-		doc, changed, err := h.Store.Archive(req.Path, false)
+		doc, changed, err := h.Store.ArchiveResult(req.Path, false)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				h.logger().Info("not found", "path", sanitize(req.Path))

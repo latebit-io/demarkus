@@ -24,7 +24,7 @@ func TestMigrationPreservesArchiveStateSeparately(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := source.Archive("/doc.md", true); err != nil {
+		if _, _, err := source.ArchiveResult("/doc.md", true); err != nil {
 			t.Fatal(err)
 		}
 
@@ -57,7 +57,7 @@ func TestMigrationPreservesArchiveStateSeparately(t *testing.T) {
 		if err != nil || pinned.Archived {
 			t.Fatalf("pinned = %+v (err %v), want unarchived", pinned, err)
 		}
-		if _, err := destination.LookupHash(ContentHash([]byte("# Body\n"))); !errors.Is(err, os.ErrNotExist) {
+		if _, err := destination.LookupHashResult(ContentHash([]byte("# Body\n"))); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("archived imported hash lookup err = %v, want ErrNotExist", err)
 		}
 	})
@@ -96,7 +96,7 @@ func TestMigrationPreservesArchiveStateSeparately(t *testing.T) {
 		if err != nil || !bytes.Equal(imported, stored) {
 			t.Errorf("imported bytes equal = %v (err %v), want true", bytes.Equal(imported, stored), err)
 		}
-		if path, err := destination.LookupHash(ContentHash([]byte("# Legacy\n"))); err != nil || path != "/legacy.md" {
+		if path, err := destination.LookupHashResult(ContentHash([]byte("# Legacy\n"))); err != nil || path != "/legacy.md" {
 			t.Errorf("active imported hash lookup = (%q, %v), want /legacy.md", path, err)
 		}
 

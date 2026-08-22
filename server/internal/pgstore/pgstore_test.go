@@ -53,7 +53,7 @@ func openStore(t testing.TB) *pgstore.Store {
 func TestPostgresCurrentVersionRejectsTraversal(t *testing.T) {
 	t.Run("returns RelPath error", func(t *testing.T) {
 		s := pgstore.NewWithDB(newReadViewDriverDB(t, &readViewDriverState{}), nil)
-		version, err := s.CurrentVersion("/../secret.md")
+		version, err := s.CurrentVersionResult("/../secret.md")
 		if version != 0 || !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("CurrentVersion traversal = (%d, %v), want (0, ErrNotExist)", version, err)
 		}
@@ -92,7 +92,7 @@ func TestPostgresArchiveStateIsVersionImmutable(t *testing.T) {
 	initial := readRow(1)
 	assertIdentity("created", created, initial)
 
-	archived, changed, err := s.Archive("/immutable.md", true)
+	archived, changed, err := s.ArchiveResult("/immutable.md", true)
 	if err != nil || !changed || !archived.Archived {
 		t.Fatalf("archive = (%+v, %v, %v), want archived transition", archived, changed, err)
 	}
@@ -112,7 +112,7 @@ func TestPostgresArchiveStateIsVersionImmutable(t *testing.T) {
 	}
 	assertIdentity("pinned after archive", pinned, initial)
 
-	unarchived, changed, err := s.Archive("/immutable.md", false)
+	unarchived, changed, err := s.ArchiveResult("/immutable.md", false)
 	if err != nil || !changed || unarchived.Archived {
 		t.Fatalf("unarchive = (%+v, %v, %v), want unarchived transition", unarchived, changed, err)
 	}
@@ -149,7 +149,7 @@ func TestPostgresArchiveStateIsVersionImmutable(t *testing.T) {
 	if err != nil || current.Archived {
 		t.Fatalf("current with contradictory tip = (%+v, %v), want live row state", current, err)
 	}
-	archived, changed, err = s.Archive("/immutable.md", true)
+	archived, changed, err = s.ArchiveResult("/immutable.md", true)
 	if err != nil || !changed || !archived.Archived {
 		t.Fatalf("archive contradictory tip = (%+v, %v, %v), want row transition", archived, changed, err)
 	}
@@ -237,7 +237,7 @@ func TestPostgresCatalogBackfill(t *testing.T) {
 	if _, err := s.WriteVersion("/gone.md", 0, []byte("# Gone\n"), map[string]string{"tags": "go"}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, _, err := s.Archive("/gone.md", true); err != nil {
+	if _, _, err := s.ArchiveResult("/gone.md", true); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 
@@ -253,7 +253,7 @@ func TestPostgresCatalogBackfill(t *testing.T) {
 
 	// The archived document's row was backfilled too: unarchive restores it
 	// without any write.
-	if _, _, err := s.Archive("/gone.md", false); err != nil {
+	if _, _, err := s.ArchiveResult("/gone.md", false); err != nil {
 		t.Fatalf("unarchive: %v", err)
 	}
 	assertLookupCount(t, s, "go", 2)

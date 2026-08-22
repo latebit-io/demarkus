@@ -562,7 +562,7 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 	})
 
 	t.Run("directory with archived index.md falls back to listing", func(t *testing.T) {
-		if _, _, err := b.Store.Archive("/docs/index.md", true); err != nil {
+		if _, _, err := b.Store.ArchiveResult("/docs/index.md", true); err != nil {
 			t.Fatalf("archive index.md: %v", err)
 		}
 		stream := newMockStream("FETCH /docs/\n")
@@ -597,7 +597,7 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 			t.Errorf("doc status: got %q, want %q", docResp.Status, protocol.StatusArchived)
 		}
 		// Unarchive to avoid affecting subsequent tests
-		if _, _, err := b.Store.Archive("/docs/index.md", false); err != nil {
+		if _, _, err := b.Store.ArchiveResult("/docs/index.md", false); err != nil {
 			t.Fatalf("unarchive index.md: %v", err)
 		}
 	})
@@ -1606,7 +1606,7 @@ func (spy *archiveResultStore) Get(path string, version int) (*store.Document, e
 	return spy.DocumentStore.Get(path, version)
 }
 
-func (spy *archiveResultStore) Archive(string, bool) (*store.Document, bool, error) {
+func (spy *archiveResultStore) ArchiveResult(string, bool) (*store.Document, bool, error) {
 	spy.archiveCalls++
 	return spy.document, spy.changed, spy.err
 }
@@ -1951,7 +1951,7 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 	t.Run("archived document rejected", func(t *testing.T) {
 		b := newBackend(t)
 		mustWrite(t, b, "/doc.md", []byte("# Content"), nil)
-		if _, _, err := b.Store.Archive("/doc.md", true); err != nil {
+		if _, _, err := b.Store.ArchiveResult("/doc.md", true); err != nil {
 			t.Fatal(err)
 		}
 		h := newHandler(b, appendTokenStore)
@@ -2594,7 +2594,7 @@ type hashResultStore struct {
 	err  error
 }
 
-func (s *hashResultStore) LookupHash(string) (string, error) {
+func (s *hashResultStore) LookupHashResult(string) (string, error) {
 	return s.path, s.err
 }
 

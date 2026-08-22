@@ -252,7 +252,7 @@ func appendInto(b LookupBackend, path string, expected int, body []byte, meta ma
 }
 
 func archiveInto(b LookupBackend, path string) error {
-	if _, _, err := b.Store.Archive(path, true); err != nil {
+	if _, _, err := b.Store.ArchiveResult(path, true); err != nil {
 		return err
 	}
 	b.Catalog.Remove(path)
@@ -261,7 +261,7 @@ func archiveInto(b LookupBackend, path string) error {
 
 // unarchiveInto mirrors the handler's empty-body PUBLISH path.
 func unarchiveInto(b LookupBackend, path string) error {
-	doc, _, err := b.Store.Archive(path, false)
+	doc, _, err := b.Store.ArchiveResult(path, false)
 	if err != nil {
 		return err
 	}

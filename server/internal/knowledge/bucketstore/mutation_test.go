@@ -61,7 +61,7 @@ func TestConcurrentCASMutations(t *testing.T) {
 		if succeeded != 1 || failed != 1 {
 			t.Fatalf("topology outcomes success=%d failure=%d, want 1/1", succeeded, failed)
 		}
-		leftVersion, err := left.CurrentVersion("/a")
+		leftVersion, err := left.CurrentVersionResult("/a")
 		if err != nil {
 			t.Fatalf("read /a current version: %v", err)
 		}
@@ -207,7 +207,7 @@ func TestArchiveRebaseReturnsCommittedVersion(t *testing.T) {
 	}
 	result := make(chan archiveOutcome, 1)
 	go func() {
-		document, changed, err := archiver.Archive("/doc", true)
+		document, changed, err := archiver.ArchiveResult("/doc", true)
 		result <- archiveOutcome{document: document, changed: changed, err: err}
 	}()
 	waitForTestSignal(t, blocking.blocked, "blocked archive CAS")
@@ -245,7 +245,7 @@ func TestArchiveNoOpDoesNotCommit(t *testing.T) {
 	originalHistory := currentRetainedHistory(t, store, "/doc")
 	originalTip := originalHistory.versions[len(originalHistory.versions)-1].entry.Blob
 	originalCounts := countModelObjects(t, memory)
-	archived, changed, err := store.Archive("/doc", true)
+	archived, changed, err := store.ArchiveResult("/doc", true)
 	if err != nil || !changed || !archived.Archived || archived.ETag != written.ETag || !archived.Modified.Equal(written.Modified) {
 		t.Fatalf("archive = (%+v, %v, %v)", archived, changed, err)
 	}
@@ -261,7 +261,7 @@ func TestArchiveNoOpDoesNotCommit(t *testing.T) {
 	}
 	before := currentHead(t, memory)
 	beforeCounts := countModelObjects(t, memory)
-	unchanged, changed, err := store.Archive("/doc", true)
+	unchanged, changed, err := store.ArchiveResult("/doc", true)
 	if err != nil || changed || unchanged.ETag != archived.ETag || !unchanged.Modified.Equal(archived.Modified) {
 		t.Fatalf("archive no-op = (%+v, %v, %v)", unchanged, changed, err)
 	}
@@ -272,7 +272,7 @@ func TestArchiveNoOpDoesNotCommit(t *testing.T) {
 	if afterCounts := countModelObjects(t, memory); afterCounts != beforeCounts {
 		t.Errorf("no-op changed object counts from %+v to %+v", beforeCounts, afterCounts)
 	}
-	unarchived, changed, err := store.Archive("/doc", false)
+	unarchived, changed, err := store.ArchiveResult("/doc", false)
 	if err != nil || !changed || unarchived.Archived || unarchived.ETag != written.ETag || !unarchived.Modified.Equal(written.Modified) {
 		t.Fatalf("unarchive = (%+v, %v, %v)", unarchived, changed, err)
 	}
@@ -573,7 +573,7 @@ func assertOneConflict(t *testing.T, outcomes []writeOutcome) {
 
 func assertCurrentVersion(t *testing.T, store *Store, path string, want int) {
 	t.Helper()
-	got, err := store.CurrentVersion(path)
+	got, err := store.CurrentVersionResult(path)
 	if err != nil || got != want {
 		t.Fatalf("CurrentVersion(%s) = (%d, %v), want (%d, nil)", path, got, err, want)
 	}

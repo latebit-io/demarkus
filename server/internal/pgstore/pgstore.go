@@ -252,7 +252,7 @@ func (view *readView) Versions(reqPath string) ([]store.VersionInfo, error) {
 	return versions(view.ctx, view.tx, reqPath)
 }
 
-func (view *readView) LookupHash(hash string) (string, error) {
+func (view *readView) LookupHashResult(hash string) (string, error) {
 	return lookupHash(view.ctx, view.tx, hash)
 }
 
@@ -510,9 +510,9 @@ func versions(ctx context.Context, queries sqlQueryer, reqPath string) ([]store.
 	return out, nil
 }
 
-// CurrentVersion returns the current version number, or 0 when the path does
+// CurrentVersionResult returns the current version number, or 0 when the path does
 // not exist. Invalid paths return the RelPath error.
-func (s *Store) CurrentVersion(reqPath string) (int, error) {
+func (s *Store) CurrentVersionResult(reqPath string) (int, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return 0, err
@@ -531,9 +531,9 @@ func (s *Store) CurrentVersion(reqPath string) (int, error) {
 	return cur, nil
 }
 
-// LookupHash resolves a live body hash directly from the transactional index,
+// LookupHashResult resolves a live body hash from the transactional index,
 // avoiding stale replica-local state on multi-writer backends.
-func (s *Store) LookupHash(hash string) (string, error) {
+func (s *Store) LookupHashResult(hash string) (string, error) {
 	ctx, cancel := opCtx()
 	defer cancel()
 	return lookupHash(ctx, s.db, hash)
@@ -720,7 +720,7 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		// store's WriteVersion folds ErrVersionExists into ErrConflict.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
-			current, currentErr := s.CurrentVersion(reqPath)
+			current, currentErr := s.CurrentVersionResult(reqPath)
 			if currentErr != nil {
 				return nil, errors.Join(err, currentErr)
 			}
@@ -916,7 +916,7 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 
 	baseDoc, err := s.Get(reqPath, expectedVersion)
 	if err != nil {
-		current, currentErr := s.CurrentVersion(reqPath)
+		current, currentErr := s.CurrentVersionResult(reqPath)
 		if currentErr != nil {
 			return nil, currentErr
 		}
@@ -935,9 +935,9 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	return s.WriteVersion(reqPath, expectedVersion, combined, store.PrepareAppendMeta(reqPath, baseDoc.Metadata, meta))
 }
 
-// Archive changes only the authoritative documents row. Version bytes and
+// ArchiveResult changes only the authoritative documents row. Version bytes and
 // their ETags remain immutable.
-func (s *Store) Archive(reqPath string, archived bool) (*store.Document, bool, error) {
+func (s *Store) ArchiveResult(reqPath string, archived bool) (*store.Document, bool, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return nil, false, err

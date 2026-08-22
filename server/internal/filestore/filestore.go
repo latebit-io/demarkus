@@ -50,18 +50,18 @@ func (s *Store) Versions(path string) ([]protocolstore.VersionInfo, error) {
 	return s.documents.Versions(path)
 }
 
-// CurrentVersion reads the current version under a short-lived snapshot lock.
-func (s *Store) CurrentVersion(path string) (int, error) {
+// CurrentVersionResult reads the current version under a snapshot lock.
+func (s *Store) CurrentVersionResult(path string) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.documents.CurrentVersion(path)
+	return s.documents.CurrentVersionResult(path)
 }
 
-// LookupHash resolves a body hash under a short-lived snapshot lock.
-func (s *Store) LookupHash(hash string) (string, error) {
+// LookupHashResult resolves a body hash under a snapshot lock.
+func (s *Store) LookupHashResult(hash string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.documents.LookupHash(hash)
+	return s.documents.LookupHashResult(hash)
 }
 
 // VerifyChain checks retained history under a short-lived snapshot lock.
@@ -100,11 +100,11 @@ func (s *Store) Append(path string, expected int, body []byte, meta map[string]s
 	return document, err
 }
 
-// Archive commits archive and catalog state under one lock.
-func (s *Store) Archive(path string, archived bool) (*protocolstore.Document, bool, error) {
+// ArchiveResult commits archive and catalog state under one lock.
+func (s *Store) ArchiveResult(path string, archived bool) (*protocolstore.Document, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	document, changed, err := s.documents.Archive(path, archived)
+	document, changed, err := s.documents.ArchiveResult(path, archived)
 	if !changed {
 		return document, changed, err
 	}
@@ -149,8 +149,8 @@ func (view *readView) Versions(path string) ([]protocolstore.VersionInfo, error)
 	return view.store.documents.Versions(path)
 }
 
-func (view *readView) LookupHash(hash string) (string, error) {
-	return view.store.documents.LookupHash(hash)
+func (view *readView) LookupHashResult(hash string) (string, error) {
+	return view.store.documents.LookupHashResult(hash)
 }
 
 func (view *readView) VerifyChain(path string) error {

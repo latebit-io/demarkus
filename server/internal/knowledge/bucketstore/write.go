@@ -108,8 +108,8 @@ func (store *Store) AppendResult(path string, expected int, content []byte, meta
 	})
 }
 
-// Archive atomically toggles the current tip's operational archive state.
-func (store *Store) Archive(path string, archived bool) (*protocolstore.Document, bool, error) {
+// ArchiveResult atomically toggles operational archive state.
+func (store *Store) ArchiveResult(path string, archived bool) (*protocolstore.Document, bool, error) {
 	canonical, err := canonicalMutationPath(path)
 	if err != nil {
 		return nil, false, err
