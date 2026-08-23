@@ -1,6 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
 {{- /* Restricts ingress to the configured controller namespace and egress
-   to DNS, HTTPS, and Mark Protocol UDP 6309. See README for constraints. */ -}}
+   to DNS, HTTPS, and configured Mark Protocol UDP ports. */ -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -50,9 +50,17 @@ spec:
     - ports:
         - protocol: TCP
           port: 443
-    # Mark Protocol to world and knowledge-server endpoints. Destinations
-    # are unrestricted because worlds may span namespaces and clusters.
+    {{- $worldPorts := dict "6309" true }}
+    {{- range .Values.worlds }}
+      {{- $portSuffix := regexFind ":[0-9]+$" (default "" .internalAddress) }}
+      {{- if $portSuffix }}
+        {{- $_ := set $worldPorts (trimPrefix ":" $portSuffix) true }}
+      {{- end }}
+    {{- end }}
+    # World endpoints may span namespaces and clusters.
     - ports:
+        {{- range $port := keys $worldPorts | sortAlpha }}
         - protocol: UDP
-          port: 6309
+          port: {{ $port }}
+        {{- end }}
 {{- end }}
