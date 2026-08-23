@@ -37,7 +37,9 @@ func main() {
 	if err := run(ctx, os.Args[1:], os.Stdout, func(ctx context.Context) (*storage.Client, error) {
 		return storage.NewClient(ctx)
 	}); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if _, writeErr := fmt.Fprintln(os.Stderr, err); writeErr != nil {
+			os.Exit(1)
+		}
 		os.Exit(1)
 	}
 }
@@ -91,7 +93,7 @@ func loadConfig(arguments []string) (config, error) {
 		return config{}, fmt.Errorf("invalid -bucket: %w", err)
 	}
 	if !knowledgeconfig.ValidWorldID(*worldID) {
-		return config{}, fmt.Errorf("invalid -world-id: must be a canonical lowercase RFC 4122 UUID (got %q)", *worldID)
+		return config{}, fmt.Errorf("invalid -world-id: must be a canonical lowercase UUID with RFC 4122 variant (got %q)", *worldID)
 	}
 	if *policyFile == "" {
 		return config{}, errors.New("-policy-file is required")

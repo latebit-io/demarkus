@@ -158,6 +158,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail (printf "%s.bucket.url %q must contain valid GCS bucket components" $location $bucket.url) -}}
 {{- end -}}
 {{- end -}}
+{{- $bucketComponents := splitList "." $bucketName -}}
+{{- $dottedIPv4 := eq (len $bucketComponents) 4 -}}
+{{- if $dottedIPv4 -}}
+{{- range $component := $bucketComponents -}}
+{{- if or (not (regexMatch "^(0|[1-9][0-9]{0,2})$" $component)) (gt (atoi $component) 255) -}}
+{{- $dottedIPv4 = false -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $dottedIPv4 -}}
+{{- fail (printf "%s.bucket.url %q must not use an IPv4 address as a bucket name" $location $bucket.url) -}}
+{{- end -}}
 {{- if or (hasPrefix "goog" $bucketName) (contains "google" $bucketName) (contains "g00gle" $bucketName) (contains "go0gle" $bucketName) (contains "g0ogle" $bucketName) -}}
 {{- fail (printf "%s.bucket.url %q uses a reserved GCS bucket name" $location $bucket.url) -}}
 {{- end -}}
@@ -169,7 +181,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail (printf "%s.bucket.worldID is required" $location) -}}
 {{- end -}}
 {{- if not (regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" $bucket.worldID) -}}
-{{- fail (printf "%s.bucket.worldID %q must be a canonical lowercase RFC 4122 UUID" $location $bucket.worldID) -}}
+{{- fail (printf "%s.bucket.worldID %q must be a canonical lowercase UUID with RFC 4122 variant" $location $bucket.worldID) -}}
 {{- end -}}
 {{- if hasKey $worldIDs $bucket.worldID -}}
 {{- fail (printf "%s.bucket.worldID %q is duplicated" $location $bucket.worldID) -}}

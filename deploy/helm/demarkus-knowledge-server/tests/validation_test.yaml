@@ -211,6 +211,17 @@ tests:
       - isKind:
           of: ConfigMap
 
+  - it: rejects dotted-decimal IPv4 bucket names
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://192.168.5.4, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0].bucket.url "gs://192.168.5.4" must not use an IPv4 address as a bucket name'
+
   - it: rejects noncanonical world IDs
     set:
       worlds:
@@ -220,7 +231,7 @@ tests:
           tokenSecret: {name: team-a-tokens, key: tokens.toml}
     asserts:
       - failedTemplate:
-          errorMessage: 'worlds[0].bucket.worldID "52B471F7-8D38-4C89-B44A-6F4F8B1A4F48" must be a canonical lowercase RFC 4122 UUID'
+          errorMessage: 'worlds[0].bucket.worldID "52B471F7-8D38-4C89-B44A-6F4F8B1A4F48" must be a canonical lowercase UUID with RFC 4122 variant'
 
   - it: rejects UUIDs without the RFC 4122 variant
     set:
@@ -231,4 +242,4 @@ tests:
           tokenSecret: {name: team-a-tokens, key: tokens.toml}
     asserts:
       - failedTemplate:
-          errorMessage: 'worlds[0].bucket.worldID "52b471f7-8d38-4c89-744a-6f4f8b1a4f48" must be a canonical lowercase RFC 4122 UUID'
+          errorMessage: 'worlds[0].bucket.worldID "52b471f7-8d38-4c89-744a-6f4f8b1a4f48" must be a canonical lowercase UUID with RFC 4122 variant'

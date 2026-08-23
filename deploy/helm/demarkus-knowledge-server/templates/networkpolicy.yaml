@@ -41,7 +41,9 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # GCS uses rotating public addresses, so destination CIDRs cannot be pinned.
+    # Standard NetworkPolicy cannot target GCS FQDNs or rotating addresses.
+    # This permits any TCP/443 destination; use an egress proxy or CNI FQDN
+    # policy when destination-level restriction is required.
     - ports:
         - protocol: TCP
           port: 443

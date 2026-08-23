@@ -51,7 +51,7 @@ tests:
             protocol: TCP
             port: 53
 
-  - it: allows GCS HTTPS and both GKE metadata endpoints
+  - it: allows unrestricted HTTPS for GCS and both GKE metadata endpoints
     asserts:
       - notExists:
           path: spec.egress[1].to

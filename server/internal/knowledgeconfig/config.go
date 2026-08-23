@@ -97,7 +97,7 @@ func ParseBucketURL(value string) (string, error) {
 	return strings.TrimPrefix(value, "gs://"), nil
 }
 
-// ValidWorldID reports whether worldID is a canonical lowercase RFC 4122 UUID.
+// ValidWorldID reports whether worldID is canonical lowercase with an RFC 4122 variant.
 func ValidWorldID(worldID string) bool {
 	return validWorldID(worldID)
 }
@@ -303,7 +303,7 @@ func (config *Config) Validate() error {
 		}
 		bucketURLs[world.Bucket.URL] = worldIndex
 		if !validWorldID(world.Bucket.WorldID) {
-			return fmt.Errorf("%s.bucket.worldID must be a canonical lowercase UUID (got %q)", location, world.Bucket.WorldID)
+			return fmt.Errorf("%s.bucket.worldID must be a canonical lowercase UUID with RFC 4122 variant (got %q)", location, world.Bucket.WorldID)
 		}
 		if previous, exists := worldIDs[world.Bucket.WorldID]; exists {
 			return fmt.Errorf("%s.bucket.worldID %q duplicates worlds[%d].bucket.worldID", location, world.Bucket.WorldID, previous)
