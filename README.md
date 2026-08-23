@@ -1,10 +1,10 @@
 # Demarkus
 
-**A protocol for agents and humans, optimized for information**
+**Memory for agents, knowledge for teams**
 
-Demarkus implements the Mark Protocol: versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Read and write with capability tokens. Every change is traceable. Lightweight and installable anywhere.
+Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. The same store scales up to a personal knowledge base, a team's shared world, and an organizational **knowledge system**: a broker-fronted universe of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
 
-Run a single personal server, or compose many into an organizational **knowledge system**: a broker-fronted universe of servers behind one HTTPS endpoint with single sign-on. Humans and agents share the same versioned memory.
+Underneath sits the **Mark Protocol**: versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Capability tokens gate writes, every change is kept, and one static binary runs anywhere.
 
 ## Install
 
@@ -87,6 +87,7 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
 | `demarkus-agent` | Federation agent: crawls worlds, aggregates the link graph, publishes hub indexes |
 | `demarkus-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system |
+| `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
 
 ## Protocol at a Glance
 
