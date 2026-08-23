@@ -152,6 +152,16 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: `duplicate tokens Secret reference "team-a/team-a-tokens"`,
 		},
 		{
+			name:    "whitespace-only world namespace",
+			body:    strings.Replace(validConfig, "namespace: team-a", `namespace: "   "`, 1),
+			wantErr: "namespace is required",
+		},
+		{
+			name:    "whitespace-only world tokens Secret",
+			body:    strings.Replace(validConfig, "tokensSecret: team-a-tokens", `tokensSecret: "   "`, 1),
+			wantErr: "tokensSecret is required",
+		},
+		{
 			name: "same tokens Secret name in different namespace",
 			body: validConfig + "  - name: team-b\n    namespace: team-b\n    tokensSecret: team-a-tokens\n    defaultToken:\n      paths: [\"/x\"]\n",
 			validate: func(t *testing.T, c *Config) {

@@ -652,12 +652,9 @@ func (c *Config) validate() error {
 		}
 		seen[w.Name] = true
 		if !c.fileBackend() {
-			ref := [2]string{
-				strings.ToLower(strings.TrimSpace(w.Namespace)),
-				strings.ToLower(strings.TrimSpace(w.TokensSecret)),
-			}
+			ref := [2]string{w.Namespace, w.TokensSecret}
 			if other, ok := seenSecretRefs[ref]; ok {
-				return fmt.Errorf("worlds[%d] (%s): duplicate tokens Secret reference %q (also used by world %q)", i, w.Name, ref[0]+"/"+ref[1], other)
+				return fmt.Errorf("worlds[%d] (%s): duplicate tokens Secret reference %q (also used by world %q)", i, w.Name, fmt.Sprintf("%s/%s", ref[0], ref[1]), other)
 			}
 			seenSecretRefs[ref] = w.Name
 		}
@@ -938,6 +935,8 @@ func validateWorld(i int, w *WorldConfig, fileMode bool) error {
 			return fmt.Errorf("worlds[%d] (%s): internalAddress is required in file-backend mode", i, w.Name)
 		}
 	} else {
+		w.Namespace = strings.ToLower(strings.TrimSpace(w.Namespace))
+		w.TokensSecret = strings.ToLower(strings.TrimSpace(w.TokensSecret))
 		switch {
 		case w.Namespace == "":
 			return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)

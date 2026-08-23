@@ -1,16 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
-{{- /* Default-on NetworkPolicy. The broker accepts inbound traffic only
-   from the ingress controller's namespace and emits outbound traffic
-   only to DNS, TCP 443, and the Mark Protocol default UDP port 6309.
-
-   Relies on the automatic `kubernetes.io/metadata.name` namespace
-   label (Kubernetes 1.21+). Older clusters must label the
-   ingress-controller and kube-system namespaces explicitly, or set
-   `networkPolicy.enabled: false` and ship their own policy.
-
-   If your OIDC issuer is not on TCP 443 (e.g. a self-hosted Keycloak
-   on a non-standard port) or your kube-apiserver listens on 6443
-   instead of 443, disable this policy and supply your own. */ -}}
+{{- /* Restricts ingress to the configured controller namespace and egress
+   to DNS, HTTPS, and Mark Protocol UDP 6309. See README for constraints. */ -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
