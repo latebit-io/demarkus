@@ -187,3 +187,76 @@ func TestGatewayAuthValidBearerStashesClaimsOnContext(t *testing.T) {
 		t.Errorf("claims.Subject = %q, want %q", seen.Subject, wantSubject)
 	}
 }
+
+func TestBearerAuthEnforcesAllowDomains(t *testing.T) {
+	tests := []struct {
+		name         string
+		wrap         func(*Server, http.Handler) http.Handler
+		mcpChallenge bool
+		brokerSigned bool
+		hd           string
+		wantStatus   int
+	}{
+		{"requireAuth accepts direct IdP bearer", (*Server).requireAuth, false, false, "latebit.io", http.StatusNoContent},
+		{"requireAuth rejects direct IdP bearer", (*Server).requireAuth, false, false, "outside.example", http.StatusUnauthorized},
+		{"requireAuth accepts refreshed bearer", (*Server).requireAuth, false, true, "latebit.io", http.StatusNoContent},
+		{"requireAuth rejects refreshed bearer", (*Server).requireAuth, false, true, "outside.example", http.StatusUnauthorized},
+		{"gatewayAuth accepts direct IdP bearer", (*Server).gatewayAuth, true, false, "latebit.io", http.StatusNoContent},
+		{"gatewayAuth rejects direct IdP bearer", (*Server).gatewayAuth, true, false, "outside.example", http.StatusUnauthorized},
+		{"gatewayAuth accepts refreshed bearer", (*Server).gatewayAuth, true, true, "latebit.io", http.StatusNoContent},
+		{"gatewayAuth rejects refreshed bearer", (*Server).gatewayAuth, true, true, "outside.example", http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := mcpTestConfig()
+			cfg.OIDC.AllowDomains = []string{"latebit.io"}
+			idTokenSigner := newTestIDTokenSigner(t)
+			primary := &fakeVerifier{verifyFn: func(raw string) (Claims, error) {
+				if raw != "idp-token" {
+					return Claims{}, errors.New("unexpected IdP bearer")
+				}
+				return Claims{
+					Subject:       "google|alice",
+					Email:         "alice@latebit.io",
+					EmailVerified: true,
+					HD:            tt.hd,
+				}, nil
+			}}
+			srv := NewServer(cfg, newTestSigner(t), primary, NewK8sSecretStore(fake.NewSimpleClientset()), nil, idTokenSigner, nil)
+
+			raw := "idp-token"
+			if tt.brokerSigned {
+				var err error
+				raw, err = idTokenSigner.Sign(&Claims{
+					Subject:       "google|alice",
+					Email:         "alice@latebit.io",
+					EmailVerified: true,
+					HD:            tt.hd,
+				}, cfg.Server.PublicURL, time.Hour, time.Now())
+				if err != nil {
+					t.Fatalf("Sign: %v", err)
+				}
+			}
+
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+			req.Header.Set("Authorization", "Bearer "+raw)
+			rec := httptest.NewRecorder()
+			tt.wrap(srv, next).ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			challenge := rec.Header().Get("WWW-Authenticate")
+			if tt.wantStatus == http.StatusUnauthorized && tt.mcpChallenge {
+				if !strings.Contains(challenge, `error="invalid_token"`) {
+					t.Errorf("WWW-Authenticate = %q, want invalid_token challenge", challenge)
+				}
+			} else if challenge != "" {
+				t.Errorf("WWW-Authenticate = %q, want empty", challenge)
+			}
+		})
+	}
+}

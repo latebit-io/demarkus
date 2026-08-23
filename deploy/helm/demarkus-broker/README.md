@@ -16,7 +16,7 @@ Secrets.
   `create` + per-world `get/update` on the write-token Secrets the
   broker provisions on first write.
 - Default-on `NetworkPolicy` restricting ingress to the configured
-  Ingress controller namespace and egress to DNS + TCP 443.
+  Ingress controller namespace and egress to DNS, TCP 443, and UDP 6309.
 - Locked-down pod security context: nonroot UID, read-only root
   filesystem, all capabilities dropped, seccomp RuntimeDefault.
 - Optional `Ingress` (default `ingressClassName: nginx`) with optional

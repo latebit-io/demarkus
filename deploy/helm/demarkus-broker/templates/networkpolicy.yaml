@@ -1,8 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
 {{- /* Default-on NetworkPolicy. The broker accepts inbound traffic only
    from the ingress controller's namespace and emits outbound traffic
-   only to DNS + TCP 443 (kube-apiserver via the cluster Service + the
-   OIDC issuer's discovery / JWKS endpoints).
+   only to DNS, TCP 443, and the Mark Protocol default UDP port 6309.
 
    Relies on the automatic `kubernetes.io/metadata.name` namespace
    label (Kubernetes 1.21+). Older clusters must label the
@@ -61,4 +60,9 @@ spec:
     - ports:
         - protocol: TCP
           port: 443
+    # Mark Protocol to world and knowledge-server endpoints. Destinations
+    # are unrestricted because worlds may span namespaces and clusters.
+    - ports:
+        - protocol: UDP
+          port: 6309
 {{- end }}

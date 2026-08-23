@@ -70,6 +70,17 @@ tests:
           path: spec.egress[1].ports[0].port
           value: 443
 
+  - it: egress allows UDP 6309 unrestricted (world + knowledge-server endpoints)
+    asserts:
+      - notExists:
+          path: spec.egress[2].to
+      - equal:
+          path: spec.egress[2].ports[0].protocol
+          value: UDP
+      - equal:
+          path: spec.egress[2].ports[0].port
+          value: 6309
+
   - it: NetworkPolicy disabled when networkPolicy.enabled=false
     set:
       networkPolicy.enabled: false

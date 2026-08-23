@@ -5,13 +5,8 @@ import (
 	"strings"
 )
 
-// installResponse is the JSON shape returned by GET /me/install. The
-// endpoint confirms identity and lists worlds the caller is authorized
-// to use; no credentials are returned. Per-world demarkus tokens are
-// minted lazily inside the broker's MCP gateway on first dispatch and
-// are never exposed to clients on the knowledge-system flow (the world
-// is unreachable except via the broker, so the client has no use for
-// the raw token).
+// installResponse confirms identity and lists readable worlds without
+// returning credentials. Publish tokens remain broker-internal.
 type installResponse struct {
 	Email  string         `json:"email"`
 	Worlds []installWorld `json:"worlds"`
@@ -25,18 +20,8 @@ type installWorld struct {
 	PublicURL string `json:"publicURL"`
 }
 
-// meInstall handles GET /me/install. Authenticated via requireAuth
-// upstream; rate-limited per-subject by subjectRateLimit. The endpoint
-// returns the caller's identity and the worlds it is authorized for —
-// no Secret writes, no token material, idempotent across calls.
-//
-// Empty-worlds policy: an authenticated identity with zero authorized
-// worlds (or with all authorized worlds filtered out for lacking a
-// PublicURL) returns 200 + worlds: []. NOT 403. The identity IS
-// authenticated; the absence of installable worlds is an authz-config
-// emptiness story, not an auth-failure story. The plugin layer needs
-// to distinguish these so it can surface a "no worlds authorized for
-// your identity" message rather than retrying auth.
+// meInstall returns identity and readable, installable worlds without
+// writing Secrets. No installable PublicURL produces 200 with worlds: [].
 func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 	claims, ok := claimsFromCtx(r.Context())
 	if !ok {
@@ -69,7 +54,7 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 
 	out := []installWorld{}
 	if claims.Email != "" {
-		for _, world := range authorizedWorlds(s.cfg, claims) {
+		for _, world := range readableWorlds(s.cfg) {
 			// A world without a PublicURL is not installable: the
 			// plugin has no address to wire the client at. Skip it
 			// rather than report it and force the consumer to

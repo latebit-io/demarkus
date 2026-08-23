@@ -142,6 +142,25 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: `duplicate name "team-a"`,
 		},
 		{
+			name:    "duplicate world tokens Secret reference",
+			body:    validConfig + "  - name: team-b\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    defaultToken:\n      paths: [\"/x\"]\n",
+			wantErr: `duplicate tokens Secret reference "team-a/team-a-tokens"`,
+		},
+		{
+			name:    "normalized duplicate world tokens Secret reference",
+			body:    validConfig + "  - name: team-b\n    namespace: \" TEAM-A \"\n    tokensSecret: \" TEAM-A-TOKENS \"\n    defaultToken:\n      paths: [\"/x\"]\n",
+			wantErr: `duplicate tokens Secret reference "team-a/team-a-tokens"`,
+		},
+		{
+			name: "same tokens Secret name in different namespace",
+			body: validConfig + "  - name: team-b\n    namespace: team-b\n    tokensSecret: team-a-tokens\n    defaultToken:\n      paths: [\"/x\"]\n",
+			validate: func(t *testing.T, c *Config) {
+				if len(c.Worlds) != 2 {
+					t.Errorf("worlds = %+v", c.Worlds)
+				}
+			},
+		},
+		{
 			name:    "negative stateTTL rejected",
 			body:    strings.Replace(validConfig, `addr: ":8080"`, "addr: \":8080\"\n  stateTTL: -1m", 1),
 			wantErr: "server.stateTTL must be > 0",

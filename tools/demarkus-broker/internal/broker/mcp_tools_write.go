@@ -13,19 +13,8 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// mcp_tools_write.go ships the three write-verb handlers
-// (mark_publish, mark_append, mark_archive). All three reuse
-// dispatchWithAuth so the propagation-race retry +
-// cache-hit-401 invalidation built in Slice 2 apply to writes
-// too.
-//
-// Slice 3 shipped the write verbs with on_conflict="fail" only;
-// Slice 6 lands the merge-candidate flow (on_conflict="merge")
-// via the client/merge package and the brokerMergeAdapter
-// below. Default on_conflict is now "merge" — matches the local
-// demarkus-mcp's surface and prevents the silent-content-loss
-// footgun that "fail" leaves open when a naive caller retries
-// with a stale body.
+// Write handlers enforce world Allow and dispatch mutations through
+// publish-token retry handling. Publish conflicts merge by default.
 
 // agentMetaFromClaims builds the publisher-metadata map every
 // write request carries. Mirrors the local demarkus-mcp's
@@ -144,7 +133,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 		// `conflict` status when expectedVersion doesn't match,
 		// and we forward that verbatim. Same shape the
 		// pre-Slice-6 surface exposed.
-		result, perr := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
+		result, perr := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 			return g.dispatcher.Publish(worldName, path, body, token, expectedVersion, meta)
 		})
 		if perr != nil {
@@ -167,19 +156,8 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 	}
 }
 
-// brokerMergeAdapter satisfies merge.Client by routing each
-// underlying call through dispatchWithAuth, so the
-// FetchVersion / FetchCurrent / Publish sequence that
-// merge.Candidate orchestrates inherits the broker's session
-// cache + propagation-race retry built in Slice 2.
-//
-// ctx is captured in the struct because merge.Client's method
-// signatures don't carry context — the local demarkus-mcp's
-// equivalent adapter has the same shape against fetch.Client.
-// The adapter's lifetime is bounded by one handleMarkPublish
-// call, so capturing the handler's ctx is the load-bearing
-// alternative to leaking ctx.Done propagation across the
-// merge orchestration.
+// brokerMergeAdapter keeps merge reads public and applies a publish token
+// only to the final write. Each request owns one adapter and context.
 type brokerMergeAdapter struct {
 	g         *mcpGateway
 	ctx       context.Context
@@ -193,22 +171,16 @@ type brokerMergeAdapter struct {
 // brokered access.
 func (a *brokerMergeAdapter) FetchVersion(path string, version int) (merge.Doc, error) {
 	versionedPath := strings.TrimRight(path, "/") + "/v" + strconv.Itoa(version)
-	r, err := a.g.dispatchWithAuth(a.ctx, a.worldName, func(token string) (fetch.Result, error) {
-		return a.g.dispatcher.Fetch(a.worldName, versionedPath, token)
-	})
+	r, err := a.g.dispatcher.Fetch(a.worldName, versionedPath, "")
 	if err != nil {
 		return merge.Doc{}, err
 	}
 	return mergeDocFromResult(r)
 }
 
-// FetchCurrent fetches the head version of path. Single
-// dispatchWithAuth round trip; cache hit if the session already
-// fetched this path within idle window.
+// FetchCurrent fetches the public head version of path.
 func (a *brokerMergeAdapter) FetchCurrent(path string) (merge.Doc, error) {
-	r, err := a.g.dispatchWithAuth(a.ctx, a.worldName, func(token string) (fetch.Result, error) {
-		return a.g.dispatcher.Fetch(a.worldName, path, token)
-	})
+	r, err := a.g.dispatcher.Fetch(a.worldName, path, "")
 	if err != nil {
 		return merge.Doc{}, err
 	}
@@ -223,7 +195,7 @@ func (a *brokerMergeAdapter) FetchCurrent(path string) (merge.Doc, error) {
 // which echoes the published version/modified/server-version
 // keys).
 func (a *brokerMergeAdapter) Publish(path, body string, expectedVersion int, meta map[string]string) (merge.PublishResult, error) {
-	r, err := a.g.dispatchWithAuth(a.ctx, a.worldName, func(token string) (fetch.Result, error) {
+	r, err := a.g.dispatchWithWriteAuth(a.ctx, a.worldName, func(token string) (fetch.Result, error) {
 		return a.g.dispatcher.Publish(a.worldName, path, body, token, expectedVersion, meta)
 	})
 	if err != nil {
@@ -316,17 +288,8 @@ func formatMergeOutcome(o *merge.Outcome) string {
 	return ""
 }
 
-// handleMarkAppend implements the mark_append tool. expected_version
-// is optional: when omitted or 0, the broker auto-resolves by
-// calling VERSIONS first and using `current` as the expected
-// version for the APPEND. Matches the local demarkus-mcp's
-// behavior so agents see the same convenience either way.
-//
-// The auto-resolve path issues two dispatch calls (VERSIONS then
-// APPEND). Both go through dispatchWithAuth, which provisions the
-// world's write token from worldWriteTokens — its in-memory cache
-// means only the first call to a fresh world pays the provision
-// round trip; the VERSIONS + APPEND pair shares the cached token.
+// handleMarkAppend resolves an omitted expected_version through a public
+// VERSIONS read; only APPEND provisions a publish token.
 func (g *mcpGateway) handleMarkAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
@@ -352,13 +315,8 @@ func (g *mcpGateway) handleMarkAppend(ctx context.Context, req mcp.CallToolReque
 		return errRes, nil
 	}
 	if expectedVersion == 0 {
-		// Auto-resolve via VERSIONS. Same dispatch wrapper as
-		// the actual append so a propagation-race or stale-
-		// cache 401 here is absorbed by the retry loop and
-		// doesn't fail the whole append call.
-		vResult, vErr := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
-			return g.dispatcher.Versions(worldName, path, token)
-		})
+		// Version discovery is a public read and must not mint a publish token.
+		vResult, vErr := g.dispatcher.Versions(worldName, path, "")
 		if vErr != nil {
 			return g.toolErrorFor("append (auto-resolve)", worldName, vErr), nil
 		}
@@ -376,7 +334,7 @@ func (g *mcpGateway) handleMarkAppend(ctx context.Context, req mcp.CallToolReque
 		expectedVersion = resolved
 	}
 	meta := agentMetaFromClaims(claims)
-	result, err := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
+	result, err := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Append(worldName, path, body, token, expectedVersion, meta)
 	})
 	if err != nil {
@@ -406,7 +364,7 @@ func (g *mcpGateway) handleMarkArchive(ctx context.Context, req mcp.CallToolRequ
 	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
 		return errRes, nil
 	}
-	result, err := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
+	result, err := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Archive(worldName, path, token)
 	})
 	if err != nil {

@@ -362,6 +362,7 @@ func TestAuthCallbackSuccess(t *testing.T) {
 		claims:  Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|123"},
 	}
 	cfg := testConfig()
+	cfg.Worlds[0].Allow = AllowConfig{Domains: []string{"otherco.test"}}
 	// PublicURL is required for the callback to include the world in
 	// its response — see the parity-with-/me/install filter in
 	// server.go's authCallback. testConfig's default is "" so we set
@@ -381,9 +382,9 @@ func TestAuthCallbackSuccess(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
 	}
-	// The bare-code branch returns identity + authorized worlds — no
+	// The bare-code branch returns identity + readable worlds — no
 	// raw tokens. Per-world demarkus tokens are minted lazily inside
-	// the broker's MCP gateway on first dispatch.
+	// the broker's MCP gateway on first write.
 	var got installResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -460,8 +461,10 @@ func TestAuthCallbackExchangeFails(t *testing.T) {
 }
 
 func TestAuthCallbackUnauthorizedDomain(t *testing.T) {
-	verifier := &fakeVerifier{claims: Claims{Email: "mallory@evil.example", EmailVerified: true}}
-	srv, _ := newTestServer(t, testConfig(), verifier, fake.NewSimpleClientset())
+	verifier := &fakeVerifier{claims: Claims{Email: "mallory@evil.example", EmailVerified: true, HD: "evil.example"}}
+	cfg := testConfig()
+	cfg.OIDC.AllowDomains = []string{"example.com"}
+	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
 	client, nonce := loginAndExtract(t, srv)
 
 	req, _ := http.NewRequest(http.MethodGet,

@@ -76,6 +76,7 @@ type brokerIDTokenClaims struct {
 	Email         string   `json:"email,omitempty"`
 	EmailVerified bool     `json:"email_verified,omitempty"`
 	Groups        []string `json:"groups,omitempty"`
+	HD            string   `json:"hd,omitempty"`
 }
 
 // NewIDTokenSigner parses the PEM-encoded private key and prepares
@@ -165,6 +166,7 @@ func (s *IDTokenSigner) Sign(claims *Claims, brokerURL string, ttl time.Duration
 		Email:         claims.Email,
 		EmailVerified: claims.EmailVerified,
 		Groups:        claims.Groups,
+		HD:            claims.HD,
 	}
 	raw, err := jwt.Signed(s.signer).Claims(c).Serialize()
 	if err != nil {
@@ -219,6 +221,7 @@ func (s *IDTokenSigner) VerifyIDToken(raw, brokerURL string, now time.Time) (Cla
 		Email:         c.Email,
 		EmailVerified: c.EmailVerified,
 		Groups:        c.Groups,
+		HD:            c.HD,
 	}, nil
 }
 
