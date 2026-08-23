@@ -9,10 +9,10 @@ permalink: /scenarios/
 One system, three scales. Store, verbs, version history, and MCP surface are
 identical at every tier. Only reach and identity change.
 
-## Personal: local memory
+## Personal: your memory
 
-A server on your own machine. No account, no cloud, no network exposure. Writes
-gated by a capability token.
+A server of your own, on your machine or a remote host you join from every
+device.
 
 - [Agent memory (the soul pattern)](/scenarios/agent-memory/): persistent memory for Claude Code, OpenCode, pi, and other MCP agents
 - [Personal knowledge base](/scenarios/personal-wiki/): local wiki, full history, TUI browser
@@ -37,7 +37,7 @@ agent](/ecosystem/#indexing-agent) keeps the cross-world graph current.
 
 ## They compose
 
-A developer runs a personal soul and joins the org system in the same agent, in
+Anyone can run a personal soul and join the org system in the same agent, in
 Claude Code, [OpenCode](https://opencode.ai), or [pi](https://pi.dev). All three
 plugin pairs share one `~/.demarkus` state. `/promote` lifts a ready note from
 the private tier to the shared one through a curation gate; `/soul-refresh`

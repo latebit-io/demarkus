@@ -46,8 +46,8 @@ No DNS setup, no accounts. [The five-minute appliance →](/install/stack/)
 <div class="tiers">
   <div class="tier">
     <p class="tier-kicker">Personal</p>
-    <h3>Local memory</h3>
-    <p>A server on your own machine holding your agent's memory and your notes. No account, no cloud, no network exposure.</p>
+    <h3>Your memory</h3>
+    <p>Your agent's memory and your notes on a server of your own, local or remote, that you join from every device.</p>
     <p class="tier-links"><a href="/scenarios/agent-memory/">Agent memory</a> · <a href="/scenarios/personal-wiki/">Personal wiki</a></p>
   </div>
   <div class="tier">
@@ -67,7 +67,7 @@ No DNS setup, no accounts. [The five-minute appliance →](/install/stack/)
 
 Store, verbs, history, and MCP surface are identical at every tier. Only reach and identity change, so moving up is a deployment change rather than a migration. [Compare the tiers →](/scenarios/)
 
-The tiers compose: a developer runs a personal soul and joins the org system in the same agent. The agent captures to the soul as it works, and `/promote` lifts a ready note up through a curation gate; `/soul-refresh` pulls the authoritative copy back as it changes. [How knowledge flows →](/how-it-works/)
+The tiers compose: anyone runs a personal soul and joins the org system in the same agent. The agent captures to the soul as it works, and `/promote` lifts a ready note up through a curation gate; `/soul-refresh` pulls the authoritative copy back as it changes. [How knowledge flows →](/how-it-works/)
 
 ---
 

@@ -77,8 +77,9 @@ and the pattern it produced. At the system tier the [indexing
 agent](/ecosystem/#indexing-agent) aggregates the graph across worlds and
 publishes it to the hub, so a cold agent seeds its graph on the first call.
 
-This is the whole loop for a solo developer. The soul is fast, private, and yours;
-nothing leaves your machine.
+This is the whole loop for one person. The soul is fast, private, and
+yours: on your own machine, or on a [remote host](/scenarios/agent-memory/)
+you join from every device.
 
 ## Up to the knowledge system
 
