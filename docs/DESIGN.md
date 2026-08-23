@@ -1310,6 +1310,7 @@ Hubs are the entry points into the information graph:
 - Graph as content — `Store.Export()` renders the graph as publishable markdown with `mark://` links (six-column Edges table: `From | To | Rel | Label | Anchor | Count`); `ParseExport()` parses it back, accepting the legacy two-column shape too; CLI `demarkus graph export` and MCP `mark_graph_export` tool
 - Edge semantics — edges carry provenance (link label, source section anchor, occurrence count) and typed relations ingested from `rel-<predicate>` publisher metadata (ADR 0004)
 - Agent discovery — `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers
+- Federation crawler exception — `demarkus-agent` already LISTs every document on each discovered server, so it hash-indexes canonical `/graph.md` but does not reinterpret that generated projection as authored edges or discovery links; graph consumers import exports through `ParseExport()` instead
 
 ## Security Considerations
 

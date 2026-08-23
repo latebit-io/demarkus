@@ -26,6 +26,14 @@ data:
     hubs = []
     {{- end }}
 
+    {{- range $authority, $endpoint := .Values.config.endpoints }}
+    [endpoints.{{ $authority | quote }}]
+    dial_address = {{ $endpoint.dialAddress | quote }}
+    {{- if $endpoint.serverName }}
+    server_name = {{ $endpoint.serverName | quote }}
+    {{- end }}
+
+    {{- end }}
     [crawl]
     max_depth = {{ .Values.config.crawl.maxDepth }}
     max_servers = {{ .Values.config.crawl.maxServers }}

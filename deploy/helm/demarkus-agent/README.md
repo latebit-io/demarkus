@@ -25,6 +25,7 @@ For private seeds (read-auth enabled), add a token entry for that host as well.
 | `replicaCount` | int | `1` | Keep at 1 — multiple replicas re-do the same crawl |
 | `config.seeds` | list | `[]` | `mark://` URLs to crawl. **Required.** |
 | `config.hubs` | list | `[]` | `mark://` URLs to publish indexes to. Empty = crawl-only mode |
+| `config.endpoints` | map | `{}` | Logical authority to explicit `dialAddress` and optional `serverName` transport route |
 | `config.crawl.maxDepth` | int | `2` | Max link hops per server |
 | `config.crawl.maxServers` | int | `50` | Max servers to discover per run |
 | `config.crawl.maxDocuments` | int | `1000` | Max documents per crawl run |
@@ -46,6 +47,28 @@ For private seeds (read-auth enabled), add a token entry for that host as well.
 | `podSecurityContext` | object | non-root user 65532 | Pod-level security |
 | `securityContext` | object | read-only root FS, drop all caps | Container-level security |
 
+### Explicit endpoints
+
+Use endpoint overrides when document links use stable logical authorities but
+the agent must dial a private address or send different SNI:
+
+```yaml
+config:
+  seeds: [mark://team-a]
+  hubs: [mark://root]
+  endpoints:
+    team-a:
+      dialAddress: team-a-knowledge.namespace.svc.cluster.local:6309
+      serverName: team-a-knowledge.namespace.svc.cluster.local
+    root:
+      dialAddress: root-knowledge.namespace.svc.cluster.local:6309
+      serverName: root-knowledge.namespace.svc.cluster.local
+```
+
+Graph URLs, hash indexes, state, and token lookup remain keyed by `team-a:6309`
+and `root:6309`. Only socket destination and TLS server name are overridden.
+Token files must therefore use logical authority keys.
+
 ## How auth is wired
 
 The agent uses the protocol-client tokens convention. On startup it calls `tokens.LoadDefault()` which reads `~/.mark/tokens.toml`. The chart mounts the tokens Secret at `/home/demarkus/.mark/tokens.toml` and sets `HOME=/home/demarkus`, so the existing code path Just Works.
@@ -59,6 +82,15 @@ For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env v
 | `hubs: []` | Nothing. Crawl-only. State is updated. |
 | `hubs: [X]`, `perServer: false` | Single aggregated `/index.md` to each hub |
 | `hubs: [X]`, `perServer: true` | One `/index/<server>.md` per discovered seed, to each hub |
+
+Configured hubs are not followed from document links unless they also appear in
+`config.seeds`. This prevents an aggregation hub from recursively crawling and
+indexing its own generated graph and hash indexes.
+
+The canonical `/graph.md` export is fetched and included in hash indexes, but
+its generated table links are not recorded as authored edges or followed for
+server discovery. This prevents graph exports from recursively amplifying one
+another.
 
 Re-publishing is idempotent: the agent uses `expected_version=-1` (no check), and the server's no-op-on-duplicate-content prevents version churn when the computed index is unchanged.
 

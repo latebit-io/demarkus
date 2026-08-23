@@ -3,6 +3,7 @@ package fedcrawl
 import (
 	"context"
 	"maps"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -181,6 +182,91 @@ func TestCrawlerMultiServer(t *testing.T) {
 	}
 	if result.DocumentsCrawled != 2 {
 		t.Errorf("DocumentsCrawled = %d, want 2", result.DocumentsCrawled)
+	}
+}
+
+func TestCrawlerDoesNotDiscoverPublishOnlyHub(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://content"}
+	cfg.Hubs = []string{"mark://root"}
+
+	client := newMockClient()
+	client.addList("content:6309", "/", "- [index.md](index.md)\n")
+	client.addDoc("content:6309", "/index.md", "See [root](mark://root/index.md).", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	// A queued hub would be observable as another discovered server.
+	client.addList("root:6309", "/", "- [index.md](index.md)\n")
+	client.addDoc("root:6309", "/index.md", "# Root", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	result, err := crawler.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if result.ServersDiscovered != 1 || result.DocumentsCrawled != 1 {
+		t.Fatalf("result = %+v, want one crawled content server", result)
+	}
+	if graph := crawler.GraphExport(); !strings.Contains(graph, "mark://root/index.md") {
+		t.Errorf("graph lost publish-only hub edge:\n%s", graph)
+	}
+}
+
+func TestCrawlerCrawlsHubWhenExplicitlySeeded(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://content", "mark://root"}
+	cfg.Hubs = []string{"mark://root"}
+
+	client := newMockClient()
+	client.addList("content:6309", "/", "- [index.md](index.md)\n")
+	client.addDoc("content:6309", "/index.md", "# Content", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	client.addList("root:6309", "/", "- [index.md](index.md)\n")
+	client.addDoc("root:6309", "/index.md", "# Root", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	result, err := crawler.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if result.ServersDiscovered != 2 || result.DocumentsCrawled != 2 {
+		t.Fatalf("result = %+v, want both explicit seeds crawled", result)
+	}
+}
+
+func TestCrawlerRunRejectsInvalidConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://content/document.md"}
+
+	crawler := NewCrawler(cfg, newMockClient(), nil, nil)
+	result, err := crawler.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run() unexpectedly accepted invalid config")
+	}
+	if result != nil {
+		t.Errorf("Run() result = %+v, want nil on invalid config", result)
+	}
+}
+
+func TestCrawlerHashesGraphExportWithoutRecrawlingIt(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://content"}
+
+	client := newMockClient()
+	client.addList("content:6309", "/", "- [index.md](index.md)\n- [graph.md](graph.md)\n")
+	client.addDoc("content:6309", "/index.md", "# Content", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	client.addDoc("content:6309", "/graph.md", "# Document Graph\n\n[projected](mark://projected/index.md)", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	client.addList("projected:6309", "/", "- [index.md](index.md)\n")
+	client.addDoc("projected:6309", "/index.md", "# Projected", "sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	result, err := crawler.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if result.ServersDiscovered != 1 || result.DocumentsCrawled != 2 || result.HashesCollected != 2 {
+		t.Fatalf("result = %+v, want graph hashed without projected server crawl", result)
+	}
+	graph := crawler.GraphExport()
+	if strings.Contains(graph, "/graph.md") || strings.Contains(graph, "mark://projected") {
+		t.Errorf("generated graph export leaked into accumulated graph:\n%s", graph)
 	}
 }
 

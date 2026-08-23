@@ -59,6 +59,10 @@ func TestLoadValid(t *testing.T) {
 seeds = ["mark://hub.example.com", "mark://peer.example.com"]
 hubs = ["mark://hub.example.com"]
 
+[endpoints."hub.example.com"]
+dial_address = "hub.internal:7000"
+server_name = "hub.internal"
+
 [crawl]
 max_depth = 3
 max_servers = 100
@@ -86,6 +90,9 @@ per_server_concurrency = 3
 	}
 	if len(cfg.Hubs) != 1 {
 		t.Errorf("len(Hubs) = %d, want 1", len(cfg.Hubs))
+	}
+	if endpoint := cfg.Endpoints["hub.example.com"]; endpoint.DialAddress != "hub.internal:7000" || endpoint.ServerName != "hub.internal" {
+		t.Errorf("Endpoints[hub.example.com] = %+v", endpoint)
 	}
 	if cfg.Crawl.MaxDepth != 3 {
 		t.Errorf("MaxDepth = %d, want 3", cfg.Crawl.MaxDepth)
@@ -179,6 +186,30 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("normalizes seed and hub authorities", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://WORLD"}
+		cfg.Hubs = []string{"mark://ROOT/"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Seeds[0] != "mark://world:6309" || cfg.Hubs[0] != "mark://root:6309" {
+			t.Errorf("normalized servers = seeds %v hubs %v", cfg.Seeds, cfg.Hubs)
+		}
+	})
+
+	t.Run("rejects malformed server URLs", func(t *testing.T) {
+		for _, raw := range []string{"mark://world/docs", "mark://world?x=1", "mark://world#fragment", "mark://world:0"} {
+			t.Run(raw, func(t *testing.T) {
+				cfg := DefaultConfig()
+				cfg.Seeds = []string{raw}
+				if err := cfg.Validate(); err == nil {
+					t.Fatal("expected malformed seed error")
+				}
+			})
+		}
+	})
+
 	t.Run("invalid hub scheme", func(t *testing.T) {
 		cfg := DefaultConfig()
 		cfg.Seeds = []string{"mark://example.com"}
@@ -212,6 +243,66 @@ func TestValidate(t *testing.T) {
 		cfg.Politeness.RequestDelay = -1
 		if err := cfg.Validate(); err == nil {
 			t.Error("expected error for negative request delay")
+		}
+	})
+
+	t.Run("normalizes endpoints", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://world"}
+		cfg.Endpoints = map[string]EndpointConfig{
+			"WORLD": {DialAddress: "shared.internal", ServerName: "shared.internal"},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() error: %v", err)
+		}
+		endpoint, ok := cfg.Endpoints["world:6309"]
+		if !ok {
+			t.Fatalf("normalized endpoint missing: %v", cfg.Endpoints)
+		}
+		if endpoint.DialAddress != "shared.internal:6309" || endpoint.ServerName != "shared.internal" {
+			t.Errorf("normalized endpoint = %+v", endpoint)
+		}
+		clientEndpoint := cfg.ClientEndpoints()["world:6309"]
+		if clientEndpoint.DialAddress != endpoint.DialAddress || clientEndpoint.ServerName != endpoint.ServerName {
+			t.Errorf("client endpoint = %+v, config endpoint = %+v", clientEndpoint, endpoint)
+		}
+	})
+
+	t.Run("rejects invalid endpoints", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			authority string
+			endpoint  EndpointConfig
+		}{
+			{"scheme in authority", "mark://world", EndpointConfig{DialAddress: "shared.internal"}},
+			{"path in authority", "world/path", EndpointConfig{DialAddress: "shared.internal"}},
+			{"scheme in dial address", "world", EndpointConfig{DialAddress: "mark://shared.internal"}},
+			{"empty dial address", "world", EndpointConfig{}},
+			{"zero dial port", "world", EndpointConfig{DialAddress: "shared.internal:0"}},
+			{"out of range dial port", "world", EndpointConfig{DialAddress: "shared.internal:65536"}},
+			{"port in server name", "world", EndpointConfig{DialAddress: "shared.internal", ServerName: "shared.internal:6309"}},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				cfg := DefaultConfig()
+				cfg.Seeds = []string{"mark://world"}
+				cfg.Endpoints = map[string]EndpointConfig{tt.authority: tt.endpoint}
+				if err := cfg.Validate(); err == nil {
+					t.Fatal("expected endpoint validation error")
+				}
+			})
+		}
+	})
+
+	t.Run("rejects normalized endpoint duplicates", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://world"}
+		cfg.Endpoints = map[string]EndpointConfig{
+			"world":      {DialAddress: "shared.internal"},
+			"world:6309": {DialAddress: "shared.internal"},
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected duplicate endpoint error")
 		}
 	})
 }

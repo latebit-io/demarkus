@@ -70,9 +70,10 @@ type CrawlResult struct {
 // Run executes the federation crawl starting from configured seeds.
 // It discovers servers, collects content hashes, and returns results.
 func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
-	// Validate workers to prevent deadlock.
-	if c.cfg.Crawl.Workers <= 0 {
-		return nil, fmt.Errorf("crawl.workers must be > 0")
+	// Run is the package boundary, so enforce normalization even when callers
+	// construct a Crawler directly instead of using the agent command.
+	if err := c.cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid crawler config: %w", err)
 	}
 
 	// Reset crawl state for each invocation.
@@ -337,12 +338,13 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 			c.mu.Unlock()
 		}
 
-		// Record this document's outbound links into the graph (the durable
-		// topology map the hub publishes for the reading room's floor).
-		c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
-
-		// Discover cross-server links.
-		c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg)
+		// /graph.md is a generated projection of other documents' edges. Hash it
+		// like any document, but do not turn its table links into synthetic
+		// graph.md→node edges or use them to amplify the discovery frontier.
+		if fullPath != "/graph.md" {
+			c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
+			c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg)
+		}
 
 		s.count++
 	}
@@ -378,6 +380,11 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 		if host == currentHost {
 			continue
 		}
+		// A hub is an aggregation destination, not crawl input, unless the
+		// operator also listed it as a seed. Its edge remains in the graph.
+		if c.isPublishOnlyHub(host) {
+			continue
+		}
 
 		// Check if we should queue this host.
 		// Only hold mutex while checking/updating shared state.
@@ -398,6 +405,11 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 			queue <- host
 		}
 	}
+}
+
+func (c *Crawler) isPublishOnlyHub(host string) bool {
+	authority := "mark://" + host
+	return slices.Contains(c.cfg.Hubs, authority) && !slices.Contains(c.cfg.Seeds, authority)
 }
 
 // resolveToken returns the auth token for a host.

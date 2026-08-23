@@ -33,6 +33,14 @@ config:
   hubs: []
   #  - mark://hub.example.com:6309
 
+  # Optional logical-authority transport overrides. Keys match authorities in
+  # seeds, hubs, or discovered mark:// links. Identity and token lookup keep
+  # using the key; only socket dialing and TLS SNI use these endpoint fields.
+  endpoints: {}
+  #  team-a:
+  #    dialAddress: shared.internal:6309
+  #    serverName: team-a.internal
+
   crawl:
     maxDepth: 2
     maxServers: 50
