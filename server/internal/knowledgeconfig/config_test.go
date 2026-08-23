@@ -208,6 +208,15 @@ func TestBucketURLValidation(t *testing.T) {
 	}
 }
 
+func TestValidWorldIDIsVersionAgnostic(t *testing.T) {
+	if !ValidWorldID("52b471f7-8d38-0c89-b44a-6f4f8b1a4f48") {
+		t.Fatal("ValidWorldID rejected canonical version-agnostic world ID")
+	}
+	if ValidWorldID("52b471f7-8d38-4c89-f44a-6f4f8b1a4f48") {
+		t.Fatal("ValidWorldID accepted non-RFC variant")
+	}
+}
+
 func TestValidateDuplicateWorldIdentities(t *testing.T) {
 	tests := []struct {
 		name    string

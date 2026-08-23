@@ -51,6 +51,7 @@ jobs:
             release_contract:
               - '.github/workflows/release.yml'
               - 'server/.goreleaser.yml'
+              - 'server/Dockerfile.knowledge'
             install:
               - 'install.sh'
               - 'install-stack.sh'
@@ -149,6 +150,8 @@ jobs:
             echo "default demarkus-server links an optional storage SDK" >&2
             exit 1
           fi
+          go build -o /tmp/demarkus-knowledge-server ./cmd/demarkus-knowledge-server
+          go build -o /tmp/demarkus-knowledge-bootstrap ./cmd/demarkus-knowledge-bootstrap
       - name: Build (postgres flavor)
         run: |
           set -euo pipefail
@@ -169,6 +172,8 @@ jobs:
             CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-server
             CGO_ENABLED=0 go build -tags pg -o /dev/null ./cmd/demarkus-server
             CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-migrate
+            CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-knowledge-server
+            CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-knowledge-bootstrap
             echo "ok $GOOS/$GOARCH${GOARM:+v$GOARM}"
           done
 
@@ -317,6 +322,12 @@ jobs:
             yq -e ".builds[] | select(.id == \"$id\")" server/.goreleaser.yml >/dev/null \
               || { echo "release.yml stages $id but server/.goreleaser.yml has no such build id" >&2; exit 1; }
           done
+          test "$(yq -r '.jobs."release-server".steps[] | select(.name == "Build + push demarkus-knowledge-server image") | .with.file' .github/workflows/release.yml)" = "server/Dockerfile.knowledge"
+          yq -e '.jobs."release-server".steps[] | select(.name == "Build + push demarkus-knowledge-server image") | .with.tags | contains("ghcr.io/latebit-io/demarkus-knowledge-server")' .github/workflows/release.yml >/dev/null
+          yq -e '.jobs."release-server".steps[] | select(.name == "Build + push demarkus-knowledge-server image") | .with.tags | contains("needs.semver-server.outputs.new_version")' .github/workflows/release.yml >/dev/null
+          yq -e '.jobs.detect-changes.steps[] | select(.id == "filter") | .with.filters | contains("deploy/helm/demarkus-knowledge-server/**")' .github/workflows/release.yml >/dev/null
+          yq -e '.jobs."semver-server".steps[] | select(.id == "semver") | .with.change_path | contains("deploy/helm/demarkus-knowledge-server/")' .github/workflows/release.yml >/dev/null
+          yq -e '.jobs."release-server".steps[] | select(.name == "Package + push server charts") | .run | contains("demarkus-knowledge-server")' .github/workflows/release.yml >/dev/null
 
   test-charts:
     needs: detect-changes
@@ -353,6 +364,8 @@ jobs:
         run: helm lint deploy/helm/demarkus-broker
       - name: Lint demarkus-agent chart
         run: helm lint deploy/helm/demarkus-agent
+      - name: Lint demarkus-knowledge-server chart
+        run: helm lint deploy/helm/demarkus-knowledge-server -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml
       # Helm never merges a library chart's values, so the two backend
       # charts must carry the same defaults; add deliberate divergences to
       # the del() list.
@@ -374,6 +387,8 @@ jobs:
         run: helm unittest deploy/helm/demarkus-server-pg
       - name: Unit test demarkus-broker chart
         run: helm unittest deploy/helm/demarkus-broker
+      - name: Unit test demarkus-knowledge-server chart
+        run: helm unittest deploy/helm/demarkus-knowledge-server
 
   test-charts-kind:
     needs: detect-changes

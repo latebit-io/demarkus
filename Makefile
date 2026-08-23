@@ -1,4 +1,4 @@
-.PHONY: all protocol server server-pg client tools image image-server-pg image-server image-broker image-agent test clean install help lint fmt vet deps
+.PHONY: all protocol server server-pg knowledge-server client tools image image-server-pg image-server image-knowledge-server image-broker image-agent test clean install help lint fmt vet deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -8,14 +8,16 @@ all: protocol server client tools
 # Help target
 help:
 	@echo "Demarkus Build Targets:"
-	@echo "  all       - Build protocol, server, and client"
+	@echo "  all       - Build protocol, server, client, and tools"
 	@echo "  protocol  - Build protocol library"
 	@echo "  server    - Build demarkus-server (no external database deps)"
 	@echo "  server-pg - Build demarkus-server-pg + demarkus-migrate (Postgres backend)"
+	@echo "  knowledge-server - Build demarkus-knowledge-server (multi-world GCS backend)"
 	@echo "  client    - Build demarkus TUI client"
 	@echo "  tools     - Build broker, token, publish (tools/bin/)"
-	@echo "  image     - Build server + broker + agent container images (TAG overridable)"
+	@echo "  image     - Build runtime container images (TAG overridable)"
 	@echo "  image-server-pg - Build the Postgres-flavor server image"
+	@echo "  image-knowledge-server - Build the multi-world knowledge server image"
 	@echo "  test      - Run all tests"
 	@echo "  lint      - Run golangci-lint on all modules"
 	@echo "  clean     - Remove build artifacts"
@@ -48,6 +50,12 @@ server-pg: protocol
 	cd server && go build -o bin/demarkus-migrate ./cmd/demarkus-migrate
 	@echo "✓ Built: server/bin/demarkus-server-pg, server/bin/demarkus-migrate"
 
+knowledge-server: protocol
+	@echo "Building knowledge server tools..."
+	cd server && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-server ./cmd/demarkus-knowledge-server
+	cd server && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-bootstrap ./cmd/demarkus-knowledge-bootstrap
+	@echo "✓ Built: server/bin/demarkus-knowledge-{server,bootstrap}"
+
 # Build client
 client: protocol
 	@echo "Building demarkus client..."
@@ -78,7 +86,7 @@ IMAGE_REGISTRY ?= ghcr.io/latebit-io
 TAG            ?= dev
 HOST_ARCH      ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/;s/armv7l/arm/')
 
-image: image-server image-broker image-agent
+image: image-server image-knowledge-server image-broker image-agent
 
 image-server:
 	@echo "Building $(IMAGE_REGISTRY)/demarkus-server:$(TAG) for linux/$(HOST_ARCH)..."
@@ -98,6 +106,13 @@ image-server-pg:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C client -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus ./cmd/demarkus
 	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f server/Dockerfile.pg -t $(IMAGE_REGISTRY)/demarkus-server-pg:$(TAG) .
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-server-pg:$(TAG)"
+
+image-knowledge-server:
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-knowledge-server:$(TAG) for linux/$(HOST_ARCH)..."
+	@mkdir -p dist/docker/$(HOST_ARCH)
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C server -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-knowledge-server ./cmd/demarkus-knowledge-server
+	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f server/Dockerfile.knowledge -t $(IMAGE_REGISTRY)/demarkus-knowledge-server:$(TAG) .
+	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-knowledge-server:$(TAG)"
 
 image-broker:
 	@echo "Building $(IMAGE_REGISTRY)/demarkus-broker:$(TAG) for linux/$(HOST_ARCH)..."

@@ -1,0 +1,57 @@
+suite: strict configuration
+templates:
+  - configmap.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: renders one strict versioned config document
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-knowledge-server-config
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '^version: 1\nlisten:'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'health:\n  address: ":8081"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'certFile: /run/demarkus/tls/tls.crt\n  keyFile: /run/demarkus/tls/tls.key'
+
+  - it: normalizes authorities and renders fixed isolated token paths
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'tokensFile: "/run/demarkus/worlds/team-a/tokens.toml"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'tokensFile: "/run/demarkus/worlds/team-b/tokens.toml"'
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'tokenSecret'
+
+  - it: applies defaults and preserves per-world overrides
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "team-a"[\s\S]*readOnly: false[\s\S]*maxConcurrentRequests: 32[\s\S]*requestTimeout: "10s"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "team-b"[\s\S]*readOnly: true[\s\S]*maxConcurrentRequests: 16[\s\S]*requestTimeout: "5s"'
+
+  - it: propagates listener settings
+    set:
+      server.udpPort: 7443
+      server.healthPort: 9090
+      server.maxIncomingStreams: 256
+      server.idleTimeout: 45s
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'address: ":7443"\n  maxIncomingStreams: 256\n  idleTimeout: "45s"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'health:\n  address: ":9090"'

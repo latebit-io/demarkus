@@ -89,6 +89,19 @@ func (config BucketConfig) Name() string {
 	return strings.TrimPrefix(config.URL, "gs://")
 }
 
+// ParseBucketURL validates an exact gs://bucket URL and returns its bucket name.
+func ParseBucketURL(value string) (string, error) {
+	if err := validateBucketURL(value); err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(value, "gs://"), nil
+}
+
+// ValidWorldID reports whether worldID is canonical lowercase with an RFC 4122 variant.
+func ValidWorldID(worldID string) bool {
+	return validWorldID(worldID)
+}
+
 // AuthConfig identifies the world-local capability token file.
 type AuthConfig struct {
 	TokensFile string `yaml:"tokensFile"`
@@ -290,7 +303,7 @@ func (config *Config) Validate() error {
 		}
 		bucketURLs[world.Bucket.URL] = worldIndex
 		if !validWorldID(world.Bucket.WorldID) {
-			return fmt.Errorf("%s.bucket.worldID must be a canonical lowercase UUID (got %q)", location, world.Bucket.WorldID)
+			return fmt.Errorf("%s.bucket.worldID must be a canonical lowercase UUID with RFC 4122 variant (got %q)", location, world.Bucket.WorldID)
 		}
 		if previous, exists := worldIDs[world.Bucket.WorldID]; exists {
 			return fmt.Errorf("%s.bucket.worldID %q duplicates worlds[%d].bucket.worldID", location, world.Bucket.WorldID, previous)

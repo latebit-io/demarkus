@@ -1,0 +1,23 @@
+suite: pod disruption budget
+templates:
+  - poddisruptionbudget.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: preserves one replica by default
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: demarkus-knowledge-server
+
+  - it: supports an externally managed PDB
+    set:
+      podDisruptionBudget.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

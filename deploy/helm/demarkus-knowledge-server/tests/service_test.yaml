@@ -1,0 +1,53 @@
+suite: UDP service
+templates:
+  - service.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: exposes exactly one UDP port and no health port
+    asserts:
+      - isKind:
+          of: Service
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+      - equal:
+          path: spec.ports[0]
+          value:
+            name: mark
+            protocol: UDP
+            port: 6309
+            targetPort: mark
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: propagates service settings
+    set:
+      service.type: LoadBalancer
+      service.loadBalancerIP: 203.0.113.10
+      service.annotations:
+        cloud.google.com/l4-rbs: enabled
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: spec.externalTrafficPolicy
+          value: Local
+      - equal:
+          path: spec.loadBalancerIP
+          value: 203.0.113.10
+      - equal:
+          path: metadata.annotations["cloud.google.com/l4-rbs"]
+          value: enabled
+
+  - it: omits load balancer fields for ClusterIP
+    set:
+      service.type: ClusterIP
+      service.loadBalancerIP: ""
+    asserts:
+      - notExists:
+          path: spec.externalTrafficPolicy
+      - notExists:
+          path: spec.loadBalancerIP

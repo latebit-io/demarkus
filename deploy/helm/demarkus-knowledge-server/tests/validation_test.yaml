@@ -1,0 +1,252 @@
+suite: required values and uniqueness
+templates:
+  - configmap.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: rejects fewer than two replicas
+    set:
+      replicaCount: 1
+    asserts:
+      - failedTemplate:
+          errorMessage: replicaCount must be at least 2 for production availability
+
+  - it: rejects colliding public and health ports
+    set:
+      server.healthPort: 6309
+    asserts:
+      - failedTemplate:
+          errorMessage: server.healthPort must differ from server.udpPort
+
+  - it: requires broker ingress selectors when NetworkPolicy is enabled
+    set:
+      networkPolicy.broker.namespace: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: networkPolicy.broker.namespace and podLabels are required when NetworkPolicy is enabled
+
+  - it: requires explicit acceptance of unrestricted HTTPS egress
+    set:
+      networkPolicy.allowUnrestrictedHTTPS: false
+    asserts:
+      - failedTemplate:
+          errorMessage: networkPolicy.allowUnrestrictedHTTPS must be true when built-in NetworkPolicy is enabled; otherwise disable it and provide CNI or proxy egress controls
+
+  - it: preserves direct-client source addresses for CIDR filtering
+    set:
+      service.type: LoadBalancer
+      service.externalTrafficPolicy: Cluster
+      networkPolicy.externalCIDRs: [203.0.113.0/24]
+    asserts:
+      - failedTemplate:
+          errorMessage: service.externalTrafficPolicy must be Local when networkPolicy.externalCIDRs is set
+
+  - it: requires exactly one TLS mode
+    set:
+      tls.existingSecret: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: tls.existingSecret or tls.certManager.enabled is required
+
+  - it: rejects both TLS modes
+    set:
+      tls.certManager.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: tls.existingSecret and tls.certManager.enabled are mutually exclusive; set exactly one
+
+  - it: requires a cert-manager issuer
+    set:
+      tls.existingSecret: ""
+      tls.certManager.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: tls.certManager.issuerRef.name is required when cert-manager is enabled
+
+  - it: requires Workload Identity on a created service account
+    set:
+      serviceAccount.workloadIdentity.gsa: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: serviceAccount.workloadIdentity.gsa is required when serviceAccount.create is true
+
+  - it: requires the name of an existing service account
+    set:
+      serviceAccount.create: false
+      serviceAccount.name: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: serviceAccount.name is required when serviceAccount.create is false
+
+  - it: requires at least one world
+    set:
+      worlds: []
+    asserts:
+      - failedTemplate:
+          errorMessage: worlds must contain at least one world
+
+  - it: rejects duplicate world names
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+        - name: team-a
+          authorities: [team-b.example.com]
+          bucket: {url: gs://deployment-team-b, worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49}
+          tokenSecret: {name: team-b-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[1].name "team-a" is duplicated'
+
+  - it: rejects duplicate normalized authorities
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com, TEAM-A.EXAMPLE.COM]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0].authorities[1] "TEAM-A.EXAMPLE.COM" is duplicated after normalization'
+
+  - it: rejects duplicate buckets
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+        - name: team-b
+          authorities: [team-b.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49}
+          tokenSecret: {name: team-b-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[1].bucket.url "gs://deployment-team-a" is duplicated'
+
+  - it: rejects duplicate world IDs
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+        - name: team-b
+          authorities: [team-b.example.com]
+          bucket: {url: gs://deployment-team-b, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-b-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[1].bucket.worldID "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48" is duplicated'
+
+  - it: rejects duplicate token Secrets
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+        - name: team-b
+          authorities: [team-b.example.com]
+          bucket: {url: gs://deployment-team-b, worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[1].tokenSecret.name "team-a-tokens" is duplicated'
+
+  - it: requires each identity and token value
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: ""}
+    asserts:
+      - failedTemplate:
+          errorMessage: worlds[0].tokenSecret.key is required
+
+  - it: rejects world names unsafe for Kubernetes mount paths
+    set:
+      worlds[0].name: Team_A
+    asserts:
+      - failedTemplate:
+          errorMessage: worlds[0].name must be a valid lowercase DNS label
+
+  - it: rejects authority ports
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com:6309]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0].authorities[0] "team-a.example.com:6309" must be a DNS hostname without a port'
+
+  - it: rejects oversized authority labels
+    set:
+      worlds:
+        - name: team-a
+          authorities: [aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0].authorities[0] "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com" must contain valid DNS labels'
+
+  - it: rejects bucket paths
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a/prefix, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0].bucket.url "gs://deployment-team-a/prefix" must be an exact lowercase gs://bucket URL'
+
+  - it: accepts valid dotted bucket names over 63 bytes
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccc, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - isKind:
+          of: ConfigMap
+
+  - it: rejects dotted-decimal IPv4 bucket names
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://192.168.5.4, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0].bucket.url "gs://192.168.5.4" must not use an IPv4 address as a bucket name'
+
+  - it: rejects noncanonical world IDs
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52B471F7-8D38-4C89-B44A-6F4F8B1A4F48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0].bucket.worldID "52B471F7-8D38-4C89-B44A-6F4F8B1A4F48" must be a canonical lowercase UUID with RFC 4122 variant'
+
+  - it: rejects UUIDs without the RFC 4122 variant
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-744a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0].bucket.worldID "52b471f7-8d38-4c89-744a-6f4f8b1a4f48" must be a canonical lowercase UUID with RFC 4122 variant'

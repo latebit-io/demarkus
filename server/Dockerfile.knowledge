@@ -1,0 +1,10 @@
+# GCS access requires the CA bundle provided by distroless/static.
+# Build context is repo root; binaries are staged by release or Makefile.
+FROM gcr.io/distroless/static-debian12:nonroot
+ARG TARGETARCH
+ARG TARGETVARIANT
+COPY dist/docker/${TARGETARCH}${TARGETVARIANT}/demarkus-knowledge-server /demarkus-knowledge-server
+USER 65532:65532
+EXPOSE 6309/udp
+EXPOSE 8081/tcp
+ENTRYPOINT ["/demarkus-knowledge-server"]
