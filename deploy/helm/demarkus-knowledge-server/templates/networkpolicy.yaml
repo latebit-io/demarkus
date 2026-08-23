@@ -44,9 +44,11 @@ spec:
     # Standard NetworkPolicy cannot target GCS FQDNs or rotating addresses.
     # This permits any TCP/443 destination; use an egress proxy or CNI FQDN
     # policy when destination-level restriction is required.
+    {{- if .Values.networkPolicy.allowUnrestrictedHTTPS }}
     - ports:
         - protocol: TCP
           port: 443
+    {{- end }}
     - to:
         - ipBlock:
             cidr: 169.254.169.254/32

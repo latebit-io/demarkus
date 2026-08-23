@@ -76,6 +76,9 @@ podDisruptionBudget:
 
 networkPolicy:
   enabled: true
+  # Standard NetworkPolicy cannot restrict GCS by FQDN. Explicitly accept
+  # unrestricted TCP/443, or disable this policy and supply CNI/proxy controls.
+  allowUnrestrictedHTTPS: false
   broker:
     namespace: demarkus-broker
     podLabels:

@@ -25,6 +25,13 @@ tests:
       - failedTemplate:
           errorMessage: networkPolicy.broker.namespace and podLabels are required when NetworkPolicy is enabled
 
+  - it: requires explicit acceptance of unrestricted HTTPS egress
+    set:
+      networkPolicy.allowUnrestrictedHTTPS: false
+    asserts:
+      - failedTemplate:
+          errorMessage: networkPolicy.allowUnrestrictedHTTPS must be true when built-in NetworkPolicy is enabled; otherwise disable it and provide CNI or proxy egress controls
+
   - it: preserves direct-client source addresses for CIDR filtering
     set:
       service.type: LoadBalancer

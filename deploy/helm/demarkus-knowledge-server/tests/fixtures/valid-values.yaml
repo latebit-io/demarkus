@@ -3,6 +3,8 @@ tls:
 serviceAccount:
   workloadIdentity:
     gsa: knowledge@project.iam.gserviceaccount.com
+networkPolicy:
+  allowUnrestrictedHTTPS: true
 worlds:
   - name: team-a
     authorities:

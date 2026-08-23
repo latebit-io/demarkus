@@ -79,6 +79,17 @@ tests:
           path: spec.egress[3].ports[1].port
           value: 987
 
+  - it: omits unrestricted HTTPS unless explicitly allowed
+    set:
+      networkPolicy.allowUnrestrictedHTTPS: false
+    asserts:
+      - lengthEqual:
+          path: spec.egress
+          count: 3
+      - equal:
+          path: spec.egress[1].to[0].ipBlock.cidr
+          value: 169.254.169.254/32
+
   - it: admits configured direct-client CIDRs
     set:
       networkPolicy.externalCIDRs: [203.0.113.0/24]

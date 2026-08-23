@@ -94,6 +94,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if or (empty .Values.networkPolicy.agent.namespace) (empty .Values.networkPolicy.agent.podLabels) -}}
 {{- fail "networkPolicy.agent.namespace and podLabels are required when NetworkPolicy is enabled" -}}
 {{- end -}}
+{{- if not .Values.networkPolicy.allowUnrestrictedHTTPS -}}
+{{- fail "networkPolicy.allowUnrestrictedHTTPS must be true when built-in NetworkPolicy is enabled; otherwise disable it and provide CNI or proxy egress controls" -}}
+{{- end -}}
 {{- if and .Values.networkPolicy.externalCIDRs (ne .Values.service.externalTrafficPolicy "Local") -}}
 {{- fail "service.externalTrafficPolicy must be Local when networkPolicy.externalCIDRs is set" -}}
 {{- end -}}

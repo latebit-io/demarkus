@@ -30,6 +30,9 @@ serviceAccount:
   workloadIdentity:
     gsa: demarkus-knowledge@project.iam.gserviceaccount.com
 
+networkPolicy:
+  allowUnrestrictedHTTPS: true
+
 worlds:
   - name: team-a
     authorities:
@@ -68,8 +71,9 @@ blocked from direct clients until those CIDRs are set. Egress permits cluster
 DNS, TCP 443 for GCS, and GKE metadata-server endpoints.
 
 GCS egress cannot be restricted to stable CIDRs with standard Kubernetes
-NetworkPolicy. Use an egress proxy or CNI FQDN policy when destination-level
-restriction is required.
+NetworkPolicy. The built-in policy therefore requires explicit
+`allowUnrestrictedHTTPS: true`. Otherwise disable it and provide an egress proxy
+or CNI FQDN policy.
 
 Each world token Secret is projected read-only into a distinct path. TLS and
 configuration are also read-only. Pods run as UID/GID 65532 with a read-only
