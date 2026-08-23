@@ -438,6 +438,12 @@ func TestPublishIndex(t *testing.T) {
 			if call.Token != "tok" {
 				t.Errorf("Token = %q, want tok", call.Token)
 			}
+			if call.Meta["tags"] != "category:federation" {
+				t.Errorf("meta.tags = %q, want category:federation", call.Meta["tags"])
+			}
+			if call.Meta["type"] != "Reference" {
+				t.Errorf("meta.type = %q, want Reference", call.Meta["type"])
+			}
 		})
 	}
 }
@@ -706,6 +712,9 @@ func TestPublishRetentionMeta(t *testing.T) {
 			}
 			if call.Meta["agent"] != "demarkus-agent" {
 				t.Errorf("publish %s%s lost agent meta: %v", call.Host, call.Path, call.Meta)
+			}
+			if call.Meta["tags"] != "category:federation" || call.Meta["type"] != "Reference" {
+				t.Errorf("publish %s%s lacks policy metadata: %v", call.Host, call.Path, call.Meta)
 			}
 		}
 	})
