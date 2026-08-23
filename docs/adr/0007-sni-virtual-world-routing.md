@@ -1,7 +1,6 @@
 # ADR 0007 — SNI selects a virtual Mark server
 
-Status: proposed (2026-08-21). Acceptance depends on the multi-world knowledge
-server implementation and its routing tests.
+Status: accepted (2026-08-22).
 
 ## Context
 

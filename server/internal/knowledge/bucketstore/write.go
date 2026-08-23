@@ -21,17 +21,16 @@ import (
 )
 
 type candidateMutation struct {
-	base         *snapshot
-	head         headObject
-	headData     []byte
-	root         rootObject
-	shard        shardObject
-	shardIndex   int
-	objects      []modelObject
-	result       MutationResult
-	operationID  string
-	baseDocument int
-	prepared     *snapshot
+	base        *snapshot
+	head        headObject
+	headData    []byte
+	root        rootObject
+	shard       shardObject
+	shardIndex  int
+	objects     []modelObject
+	result      MutationResult
+	operationID string
+	prepared    *snapshot
 }
 
 type mutationBuilder func(context.Context, *readView, string) (*candidateMutation, MutationResult, error)
@@ -56,7 +55,19 @@ func (store *Store) WriteVersionResult(path string, expected int, content []byte
 	}
 	body := bytes.Clone(content)
 	meta := maps.Clone(metadata)
+	blindBase := -1
 	return store.runMutation(func(_ context.Context, view *readView, operationID string) (*candidateMutation, MutationResult, error) {
+		if expected < 0 {
+			current := 0
+			if entry, exists := view.snapshot.Paths[canonical]; exists {
+				current = entry.Current
+			}
+			if blindBase < 0 {
+				blindBase = current
+			} else if current != blindBase {
+				return nil, conflictResult(current), protocolstore.ErrConflict
+			}
+		}
 		return store.buildWriteCandidate(view, operationID, canonical, expected, body, meta)
 	})
 }
@@ -509,17 +520,16 @@ func buildNamespaceCandidate(
 		return nil, MutationResult{}, fmt.Errorf("prepare committed snapshot: %w", err)
 	}
 	return &candidateMutation{
-		base:         base,
-		head:         head,
-		headData:     headData,
-		root:         root,
-		shard:        shard,
-		shardIndex:   shardIndex,
-		objects:      objects,
-		result:       result,
-		operationID:  operationID,
-		baseDocument: entry.Current,
-		prepared:     prepared,
+		base:        base,
+		head:        head,
+		headData:    headData,
+		root:        root,
+		shard:       shard,
+		shardIndex:  shardIndex,
+		objects:     objects,
+		result:      result,
+		operationID: operationID,
+		prepared:    prepared,
 	}, result, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	pathpkg "path"
 	"slices"
 	"sort"
@@ -104,6 +105,67 @@ func TestInitializeGenesis(t *testing.T) {
 			t.Errorf("object count after reinitialize = %d", len(listed.Objects))
 		}
 	})
+}
+
+func TestOpenRequiresValidPolicy(t *testing.T) {
+	objects := initializedMemory(t)
+	if _, err := Open(context.Background(), objects, Options{WorldID: testWorldID, RequirePolicy: true}); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatalf("Open without policy error = %v, want ErrInvalidPolicy", err)
+	}
+
+	store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	seedPolicy(t, store, "strictness: block\n", 0)
+	if _, err := Open(context.Background(), objects, Options{WorldID: testWorldID, RequirePolicy: true}); err != nil {
+		t.Fatalf("Open with policy: %v", err)
+	}
+}
+
+func TestWorldIsolation(t *testing.T) {
+	const otherWorldID = "7d4f3f8a-87f0-4bf5-932a-e4d1db28d235"
+	open := func(worldID string) *Store {
+		objects := newTestMemory(t)
+		if err := Initialize(context.Background(), objects, worldID); err != nil {
+			t.Fatalf("initialize %s: %v", worldID, err)
+		}
+		store, err := Open(context.Background(), objects, Options{WorldID: worldID})
+		if err != nil {
+			t.Fatalf("open %s: %v", worldID, err)
+		}
+		store.commitInterval = 0
+		return store
+	}
+	left := open(testWorldID)
+	right := open(otherWorldID)
+	body := []byte("shared body")
+	for _, store := range []*Store{left, right} {
+		if _, err := store.WriteVersion("/same", 0, body, nil); err != nil {
+			t.Fatalf("write shared document: %v", err)
+		}
+	}
+	if _, err := left.WriteVersion("/same", 1, []byte("left v2"), nil); err != nil {
+		t.Fatalf("write left v2: %v", err)
+	}
+	if _, _, err := left.ArchiveResult("/same", true); err != nil {
+		t.Fatalf("archive left: %v", err)
+	}
+
+	leftDocument, err := left.Get("/same", 0)
+	if err != nil || leftDocument.Version != 2 || !leftDocument.Archived {
+		t.Fatalf("left document = (%+v, %v), want archived v2", leftDocument, err)
+	}
+	rightDocument, err := right.Get("/same", 0)
+	if err != nil || rightDocument.Version != 1 || rightDocument.Archived || !bytes.Equal(rightDocument.Content, body) {
+		t.Fatalf("right document = (%+v, %v), want active v1", rightDocument, err)
+	}
+	if _, err := left.LookupHashResult(protocolstore.ContentHash(body)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("left shared hash error = %v, want ErrNotExist", err)
+	}
+	if path, err := right.LookupHashResult(protocolstore.ContentHash(body)); err != nil || path != "/same" {
+		t.Fatalf("right shared hash = (%q, %v), want /same", path, err)
+	}
 }
 
 func TestInitializeReconciliation(t *testing.T) {

@@ -49,9 +49,9 @@ type Store struct {
 }
 
 var (
-	_ backend.Reader        = (*Store)(nil)
-	_ backend.CatalogReader = (*Store)(nil)
-	_ backend.ViewProvider  = (*Store)(nil)
+	_ backend.Store        = (*Store)(nil)
+	_ backend.Catalog      = (*Store)(nil)
+	_ backend.ViewProvider = (*Store)(nil)
 )
 
 type snapshotEntry struct {
@@ -132,6 +132,13 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	if err != nil {
 		store.refreshMu.Unlock()
 		return nil, fmt.Errorf("open bucket store: %w", err)
+	}
+	if store.requirePolicy {
+		view := &readView{ctx: requestCtx, objects: store.objects, snapshot: loaded}
+		if _, err := view.currentPolicy(true); err != nil {
+			store.refreshMu.Unlock()
+			return nil, fmt.Errorf("open bucket store: %w", err)
+		}
 	}
 	store.snapshot.Store(loaded)
 	store.refreshMu.Unlock()

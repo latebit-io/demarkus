@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +25,26 @@ func TestConcurrentCASMutations(t *testing.T) {
 		outcomes := collectWriteOutcomes(t, results)
 		assertOneConflict(t, outcomes)
 		assertCurrentVersion(t, left, "/same", 1)
+	})
+
+	t.Run("blind same path conflicts after rebase", func(t *testing.T) {
+		base, memory := newWritableStore(t)
+		if _, err := base.WriteVersion("/same", 0, []byte("base"), nil); err != nil {
+			t.Fatalf("seed base: %v", err)
+		}
+		left, right, barrier := concurrentStoresOn(t, memory)
+		results := make(chan writeOutcome, 2)
+		go func() {
+			document, err := left.WriteVersion("/same", -1, []byte("left"), nil)
+			results <- writeOutcome{document: document, err: err}
+		}()
+		go func() {
+			document, err := right.WriteVersion("/same", -1, []byte("right"), nil)
+			results <- writeOutcome{document: document, err: err}
+		}()
+		barrier.releaseBoth(t)
+		assertOneConflict(t, collectWriteOutcomes(t, results))
+		assertCurrentVersion(t, left, "/same", 2)
 	})
 
 	t.Run("unrelated paths rebase", func(t *testing.T) {
@@ -69,6 +90,44 @@ func TestConcurrentCASMutations(t *testing.T) {
 			assertCurrentVersion(t, left, "/a/b", 0)
 		} else {
 			assertCurrentVersion(t, left, "/a/b", 1)
+		}
+	})
+
+	t.Run("retention write race", func(t *testing.T) {
+		base, memory := newWritableStore(t)
+		if _, err := base.WriteVersion("/doc", 0, []byte("base"), nil); err != nil {
+			t.Fatalf("seed base: %v", err)
+		}
+		left, right, barrier := concurrentStoresOn(t, memory)
+		results := make(chan writeOutcome, 2)
+		go func() {
+			document, err := left.WriteVersion("/doc", 1, []byte("retained"), map[string]string{"retention": "1"})
+			results <- writeOutcome{document: document, err: err}
+		}()
+		go func() {
+			document, err := right.WriteVersion("/doc", 1, []byte("ordinary"), nil)
+			results <- writeOutcome{document: document, err: err}
+		}()
+		barrier.releaseBoth(t)
+		assertOneConflict(t, collectWriteOutcomes(t, results))
+
+		document, err := left.Get("/doc", 0)
+		if err != nil {
+			t.Fatalf("Get final document: %v", err)
+		}
+		versions, err := left.Versions("/doc")
+		if err != nil {
+			t.Fatalf("Versions: %v", err)
+		}
+		wantVersions := 2
+		if document.Metadata["retention"] == "1" {
+			wantVersions = 1
+		}
+		if document.Version != 2 || len(versions) != wantVersions {
+			t.Fatalf("final document v%d metadata=%v versions=%v, want v2 with %d retained", document.Version, document.Metadata, versions, wantVersions)
+		}
+		if err := left.VerifyChain("/doc"); err != nil {
+			t.Fatalf("VerifyChain: %v", err)
 		}
 	})
 }
@@ -437,8 +496,14 @@ func TestHeadOutcomeReconciliation(t *testing.T) {
 		{name: "throttled before commit", wrap: func(store blob.Store) blob.Store {
 			return &failFirstHeadReplaceStore{Store: store, category: errors.Join(blob.ErrThrottled, blob.ErrAmbiguous)}
 		}},
+		{name: "unavailable before commit", wrap: func(store blob.Store) blob.Store {
+			return &failFirstHeadReplaceStore{Store: store, category: errors.Join(blob.ErrUnavailable, blob.ErrAmbiguous)}
+		}},
 		{name: "ambiguous after commit", wrap: func(store blob.Store) blob.Store {
 			return &ambiguousCommittedHeadStore{Store: store}
+		}},
+		{name: "unavailable after commit", wrap: func(store blob.Store) blob.Store {
+			return &ambiguousCommittedHeadStore{Store: store, category: errors.Join(blob.ErrUnavailable, blob.ErrAmbiguous)}
 		}},
 		{name: "receipt evicted", wrap: func(store blob.Store) blob.Store {
 			return &evictingHeadStore{Store: store}
@@ -454,6 +519,9 @@ func TestHeadOutcomeReconciliation(t *testing.T) {
 					t.Fatalf("write = (%+v, %v), want v1", document, err)
 				}
 				assertCurrentVersion(t, store, "/doc", 1)
+				if _, err := store.Get("/missing", 0); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("missing read error = %v, want ErrNotExist", err)
+				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {
@@ -464,20 +532,35 @@ func TestHeadOutcomeReconciliation(t *testing.T) {
 }
 
 func TestMutationFailureAndPacing(t *testing.T) {
-	t.Run("immutable failure leaves head unchanged", func(t *testing.T) {
-		store, memory := newWritableStore(t)
-		before := currentHead(t, memory)
-		store.objects = &failFirstBlobCreateStore{Store: memory}
-		if _, err := store.WriteVersion("/doc", 0, []byte("body"), nil); err == nil {
-			t.Fatal("write succeeded through permanent blob failure")
-		}
-		after := currentHead(t, memory)
-		if after.Sequence != before.Sequence || after.Root != before.Root {
-			t.Errorf("head changed after staging failure: before=%+v after=%+v", before, after)
-		}
-		store.objects = memory
-		assertCurrentVersion(t, store, "/doc", 0)
-	})
+	stages := []struct {
+		name   string
+		prefix string
+	}{
+		{name: "blob", prefix: objectPrefix + "blobs/"},
+		{name: "history", prefix: objectPrefix + "history/"},
+		{name: "manifest", prefix: objectPrefix + "docs/"},
+		{name: "shard", prefix: objectPrefix + "index/"},
+		{name: "root", prefix: objectPrefix + "roots/"},
+	}
+	for _, stage := range stages {
+		t.Run(stage.name+" failure leaves head unchanged", func(t *testing.T) {
+			store, memory := newWritableStore(t)
+			before := currentHead(t, memory)
+			failing := &failFirstPrefixCreateStore{Store: memory, prefix: stage.prefix}
+			store.objects = failing
+			if _, err := store.WriteVersion("/doc", 0, []byte("body"), nil); err == nil {
+				t.Fatalf("write succeeded through permanent %s failure", stage.name)
+			}
+			if !failing.failed.Load() {
+				t.Fatalf("write never reached %s staging", stage.name)
+			}
+			after := currentHead(t, memory)
+			if after.Sequence != before.Sequence || after.Root != before.Root {
+				t.Errorf("head changed after %s staging failure: before=%+v after=%+v", stage.name, before, after)
+			}
+			assertCurrentVersion(t, store, "/doc", 0)
+		})
+	}
 
 	t.Run("request cancellation", func(t *testing.T) {
 		store, memory := newWritableStore(t)
@@ -686,6 +769,11 @@ type replaceBarrierStore struct {
 func concurrentStores(t *testing.T) (left, right *Store, barrier *replaceBarrierStore) {
 	t.Helper()
 	_, memory := newWritableStore(t)
+	return concurrentStoresOn(t, memory)
+}
+
+func concurrentStoresOn(t *testing.T, memory blob.Store) (left, right *Store, barrier *replaceBarrierStore) {
+	t.Helper()
 	barrier = &replaceBarrierStore{Store: memory, arrived: make(chan struct{}, 2), release: make(chan struct{})}
 	open := func() *Store {
 		store, err := Open(context.Background(), barrier, Options{WorldID: testWorldID})
@@ -739,7 +827,8 @@ func (store *failFirstHeadReplaceStore) Replace(ctx context.Context, key string,
 
 type ambiguousCommittedHeadStore struct {
 	blob.Store
-	failed atomic.Bool
+	failed   atomic.Bool
+	category error
 }
 
 func (store *ambiguousCommittedHeadStore) Replace(ctx context.Context, key string, generation blob.Generation, data []byte) (blob.Attributes, error) {
@@ -747,7 +836,11 @@ func (store *ambiguousCommittedHeadStore) Replace(ctx context.Context, key strin
 	if err != nil || key != headObjectKey || !store.failed.CompareAndSwap(false, true) {
 		return attributes, err
 	}
-	return attributes, &blob.OpError{Op: "replace", Key: key, Err: blob.ErrAmbiguous}
+	category := store.category
+	if category == nil {
+		category = blob.ErrAmbiguous
+	}
+	return attributes, &blob.OpError{Op: "replace", Key: key, Err: category}
 }
 
 type evictingHeadStore struct {
@@ -780,13 +873,14 @@ func (store *evictingHeadStore) Replace(ctx context.Context, key string, generat
 	return attributes, &blob.OpError{Op: "replace", Key: key, Err: blob.ErrAmbiguous}
 }
 
-type failFirstBlobCreateStore struct {
+type failFirstPrefixCreateStore struct {
 	blob.Store
 	failed atomic.Bool
+	prefix string
 }
 
-func (store *failFirstBlobCreateStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
-	if strings.HasPrefix(key, objectPrefix+"blobs/") && store.failed.CompareAndSwap(false, true) {
+func (store *failFirstPrefixCreateStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
+	if strings.HasPrefix(key, store.prefix) && store.failed.CompareAndSwap(false, true) {
 		return blob.Attributes{}, errors.New("injected permanent create failure")
 	}
 	return store.Store.Create(ctx, key, data)

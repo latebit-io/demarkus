@@ -105,6 +105,19 @@ func NewTokenStore(tokens map[string]Token) *TokenStore {
 	return &TokenStore{tokens: tokens, readPaths: collectReadPaths(tokens), now: time.Now}
 }
 
+// Hashes returns the token hashes in sorted order.
+func (ts *TokenStore) Hashes() []string {
+	if ts == nil {
+		return nil
+	}
+	hashes := make([]string, 0, len(ts.tokens))
+	for hash := range ts.tokens {
+		hashes = append(hashes, hash)
+	}
+	slices.Sort(hashes)
+	return hashes
+}
+
 // collectReadPaths extracts path patterns from all tokens that have "read"
 // in their operations. Called once at load time so RequiresReadAuth avoids
 // iterating tokens on every request.
