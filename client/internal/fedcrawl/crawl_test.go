@@ -189,6 +189,9 @@ func TestCrawlerDoesNotDiscoverPublishOnlyHub(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://content"}
 	cfg.Hubs = []string{"mark://root"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
 
 	client := newMockClient()
 	client.addList("content:6309", "/", "- [index.md](index.md)\n")
@@ -214,6 +217,9 @@ func TestCrawlerCrawlsHubWhenExplicitlySeeded(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://content", "mark://root"}
 	cfg.Hubs = []string{"mark://root"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
 
 	client := newMockClient()
 	client.addList("content:6309", "/", "- [index.md](index.md)\n")

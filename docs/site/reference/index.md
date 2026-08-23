@@ -58,7 +58,7 @@ interval = "6h"  # Time between crawl runs (daemon mode)
 |-------|---------|-------------|
 | `seeds` | *(required)* | Initial servers to crawl |
 | `hubs` | *(empty)* | Servers to publish hash indexes to |
-| `endpoints.<authority>.dial_address` | *(authority)* | Socket destination override |
+| `endpoints.<authority>.dial_address` | *(required per endpoint)* | Socket destination override |
 | `endpoints.<authority>.server_name` | *(authority host)* | TLS SNI and certificate name override |
 | `crawl.max_servers` | `50` | Maximum servers to discover per run |
 | `crawl.max_documents` | `1000` | Maximum documents to fetch per run |

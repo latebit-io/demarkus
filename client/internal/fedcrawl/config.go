@@ -128,16 +128,16 @@ func (c *Config) Validate() error {
 	if len(c.Seeds) == 0 {
 		return fmt.Errorf("at least one seed server is required")
 	}
-	for i, seed := range c.Seeds {
-		if !strings.HasPrefix(seed, "mark://") {
-			return fmt.Errorf("seed %d %q must be a mark:// URL", i, seed)
-		}
+	seeds, err := normalizeServerURLs("seed", c.Seeds)
+	if err != nil {
+		return err
 	}
-	for i, hub := range c.Hubs {
-		if !strings.HasPrefix(hub, "mark://") {
-			return fmt.Errorf("hub %d %q must be a mark:// URL", i, hub)
-		}
+	hubs, err := normalizeServerURLs("hub", c.Hubs)
+	if err != nil {
+		return err
 	}
+	c.Seeds = seeds
+	c.Hubs = hubs
 	if err := c.normalizeEndpoints(); err != nil {
 		return err
 	}
@@ -166,6 +166,25 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("publish.retention must be non-negative (0 keeps every version)")
 	}
 	return nil
+}
+
+func normalizeServerURLs(kind string, values []string) ([]string, error) {
+	normalized := make([]string, len(values))
+	for i, raw := range values {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "mark" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return nil, fmt.Errorf("%s %d %q must be a mark:// server URL", kind, i, raw)
+		}
+		host, path, err := fetch.ParseMarkURL(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s %d %q: %w", kind, i, raw, err)
+		}
+		if path != "/" {
+			return nil, fmt.Errorf("%s %d %q must not contain a document path", kind, i, raw)
+		}
+		normalized[i] = "mark://" + host
+	}
+	return normalized, nil
 }
 
 // ClientEndpoints converts validated crawler endpoints to fetch transport

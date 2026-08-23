@@ -407,19 +407,8 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 }
 
 func (c *Crawler) isPublishOnlyHub(host string) bool {
-	for _, seed := range c.cfg.Seeds {
-		seedHost, _, err := fetch.ParseMarkURL(seed + "/")
-		if err == nil && seedHost == host {
-			return false
-		}
-	}
-	for _, hub := range c.cfg.Hubs {
-		hubHost, _, err := fetch.ParseMarkURL(hub + "/")
-		if err == nil && hubHost == host {
-			return true
-		}
-	}
-	return false
+	authority := "mark://" + host
+	return slices.Contains(c.cfg.Hubs, authority) && !slices.Contains(c.cfg.Seeds, authority)
 }
 
 // resolveToken returns the auth token for a host.

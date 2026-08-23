@@ -41,9 +41,9 @@ tests:
     set:
       config.seeds:
         - mark://team-a
-      config.endpoints.team-a.dialAddress: shared.internal:6309
+      config.endpoints.team-a.dialAddress: shared-a.internal:6309
       config.endpoints.team-a.serverName: team-a.internal
-      config.endpoints.team-b.dialAddress: shared.internal:6309
+      config.endpoints.team-b.dialAddress: shared-b.internal:6309
       config.endpoints.team-b.serverName: team-b.internal
     asserts:
       - matchRegex:
@@ -51,10 +51,10 @@ tests:
           pattern: '\[endpoints\."team-a"\]'
       - matchRegex:
           path: data["agent.toml"]
-          pattern: 'dial_address = "shared.internal:6309"'
+          pattern: '(?s)\[endpoints\."team-a"\]\ndial_address = "shared-a.internal:6309"\nserver_name = "team-a.internal"'
       - matchRegex:
           path: data["agent.toml"]
-          pattern: 'server_name = "team-b.internal"'
+          pattern: '(?s)\[endpoints\."team-b"\]\ndial_address = "shared-b.internal:6309"\nserver_name = "team-b.internal"'
 
   - it: emits empty arrays when no seeds/hubs configured
     set:

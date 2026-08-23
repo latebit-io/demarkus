@@ -186,6 +186,30 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("normalizes seed and hub authorities", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://WORLD"}
+		cfg.Hubs = []string{"mark://ROOT/"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Seeds[0] != "mark://world:6309" || cfg.Hubs[0] != "mark://root:6309" {
+			t.Errorf("normalized servers = seeds %v hubs %v", cfg.Seeds, cfg.Hubs)
+		}
+	})
+
+	t.Run("rejects malformed server URLs", func(t *testing.T) {
+		for _, raw := range []string{"mark://world/docs", "mark://world?x=1", "mark://world#fragment", "mark://world:0"} {
+			t.Run(raw, func(t *testing.T) {
+				cfg := DefaultConfig()
+				cfg.Seeds = []string{raw}
+				if err := cfg.Validate(); err == nil {
+					t.Fatal("expected malformed seed error")
+				}
+			})
+		}
+	})
+
 	t.Run("invalid hub scheme", func(t *testing.T) {
 		cfg := DefaultConfig()
 		cfg.Seeds = []string{"mark://example.com"}
