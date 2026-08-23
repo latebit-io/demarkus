@@ -1,5 +1,5 @@
 title: Demarkus
-description: Persistent memory for AI agents and shared knowledge systems for teams. Versioned markdown, built on the Mark Protocol.
+description: Persistent memory for AI agents, shared knowledge for teams, and a second brain for you. Versioned markdown, built on the Mark Protocol.
 markdown: kramdown
 permalink: pretty
 kramdown:

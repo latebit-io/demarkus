@@ -3,7 +3,7 @@ layout: default
 title: Demarkus
 ---
 
-Your agent records decisions, lessons, and progress as it works, and recalls them in every later session. Your team shares one versioned catalog that humans and agents keep current. The [Mark Protocol](/about/) underneath keeps it all portable and self-hostable.
+Your agent records decisions, lessons, and progress as it works, and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. Your team shares one versioned catalog that humans and agents keep current. The [Mark Protocol](/about/) underneath keeps it all portable and self-hostable.
 
 ## Start here
 
