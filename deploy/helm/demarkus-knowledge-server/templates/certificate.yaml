@@ -1,0 +1,23 @@
+{{- if .Values.tls.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "demarkus-knowledge-server.tlsSecretName" . }}
+  labels:
+    {{- include "demarkus-knowledge-server.labels" . | nindent 4 }}
+  {{- with .Values.tls.certManager.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  secretName: {{ include "demarkus-knowledge-server.tlsSecretName" . }}
+  issuerRef:
+    kind: {{ .Values.tls.certManager.issuerRef.kind }}
+    name: {{ .Values.tls.certManager.issuerRef.name }}
+  dnsNames:
+    {{- range .Values.worlds }}
+    {{- range .authorities }}
+    - {{ lower . | quote }}
+    {{- end }}
+    {{- end }}
+{{- end }}

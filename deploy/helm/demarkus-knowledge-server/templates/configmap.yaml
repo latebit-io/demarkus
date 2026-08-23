@@ -1,0 +1,41 @@
+{{- include "demarkus-knowledge-server.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "demarkus-knowledge-server.configName" . }}
+  labels:
+    {{- include "demarkus-knowledge-server.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    version: 1
+    listen:
+      address: {{ printf ":%d" (int .Values.server.udpPort) | quote }}
+      maxIncomingStreams: {{ .Values.server.maxIncomingStreams }}
+      idleTimeout: {{ .Values.server.idleTimeout | quote }}
+    health:
+      address: {{ printf ":%d" (int .Values.server.healthPort) | quote }}
+    tls:
+      certFile: /run/demarkus/tls/tls.crt
+      keyFile: /run/demarkus/tls/tls.key
+    worlds:
+      {{- range $index, $configuredWorld := .Values.worlds }}
+      {{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy $configuredWorld) }}
+      - name: {{ $world.name | quote }}
+        authorities:
+          {{- range $world.authorities }}
+          - {{ lower . | quote }}
+          {{- end }}
+        bucket:
+          url: {{ $world.bucket.url | quote }}
+          worldID: {{ $world.bucket.worldID | quote }}
+        auth:
+          tokensFile: {{ printf "/run/demarkus/worlds/%s/tokens.toml" $world.name | quote }}
+        policy:
+          path: /.well-known/demarkus/policy.md
+        readOnly: {{ $world.readOnly }}
+        limits:
+          maxConcurrentRequests: {{ $world.limits.maxConcurrentRequests }}
+          requestTimeout: {{ $world.limits.requestTimeout | quote }}
+          requestsPerSecond: {{ $world.limits.requestsPerSecond }}
+          burst: {{ $world.limits.burst }}
+      {{- end }}

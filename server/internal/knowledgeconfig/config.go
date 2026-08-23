@@ -89,6 +89,19 @@ func (config BucketConfig) Name() string {
 	return strings.TrimPrefix(config.URL, "gs://")
 }
 
+// ParseBucketURL validates an exact gs://bucket URL and returns its bucket name.
+func ParseBucketURL(value string) (string, error) {
+	if err := validateBucketURL(value); err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(value, "gs://"), nil
+}
+
+// ValidWorldID reports whether worldID is a canonical lowercase RFC 4122 UUID.
+func ValidWorldID(worldID string) bool {
+	return validWorldID(worldID)
+}
+
 // AuthConfig identifies the world-local capability token file.
 type AuthConfig struct {
 	TokensFile string `yaml:"tokensFile"`

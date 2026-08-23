@@ -1,0 +1,159 @@
+suite: deployment
+templates:
+  - deployment.yaml
+  - configmap.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: deploys two replicas with zero-downtime rolling updates
+    template: deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+
+  - it: uses the knowledge image and strict config argument
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/latebit-io/demarkus-knowledge-server:0.25.0
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: ["-config", "/etc/demarkus/config.yaml"]
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/config"]
+          pattern: '^[0-9a-f]{64}$'
+
+  - it: keeps QUIC public and health private at the pod
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: mark
+            protocol: UDP
+            containerPort: 6309
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: health
+            protocol: TCP
+            containerPort: 8081
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /livez
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: health
+
+  - it: mounts existing TLS data read-only
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[1].secret.secretName
+          value: knowledge-tls
+      - equal:
+          path: spec.template.spec.volumes[1].secret.items
+          value:
+            - key: tls.crt
+              path: tls.crt
+            - key: tls.key
+              path: tls.key
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[1]
+          value:
+            name: tls
+            mountPath: /run/demarkus/tls
+            readOnly: true
+
+  - it: projects exactly one distinct token volume per world
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[2]
+          value:
+            name: world-token-0
+            secret:
+              secretName: team-a-tokens
+              items:
+                - key: tokens.toml
+                  path: tokens.toml
+      - equal:
+          path: spec.template.spec.volumes[3]
+          value:
+            name: world-token-1
+            secret:
+              secretName: team-b-tokens
+              items:
+                - key: tokens.toml
+                  path: tokens.toml
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[2].mountPath
+          value: /run/demarkus/worlds/team-a
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[3].mountPath
+          value: /run/demarkus/worlds/team-b
+
+  - it: applies pod and container security contexts
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: spreads replicas across nodes and zones
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].topologyKey
+          value: kubernetes.io/hostname
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[1].topologyKey
+          value: topology.kubernetes.io/zone
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  - it: uses the Workload Identity service account and graceful termination
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: RELEASE-NAME-demarkus-knowledge-server
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 30
+      - notExists:
+          path: spec.template.spec.volumes[5]
+      - notExists:
+          path: spec.volumeClaimTemplates

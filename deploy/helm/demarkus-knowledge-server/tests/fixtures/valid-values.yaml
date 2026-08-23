@@ -1,0 +1,31 @@
+tls:
+  existingSecret: knowledge-tls
+serviceAccount:
+  workloadIdentity:
+    gsa: knowledge@project.iam.gserviceaccount.com
+worlds:
+  - name: team-a
+    authorities:
+      - team-a.example.com
+      - team-a.knowledge.svc.cluster.local
+    bucket:
+      url: gs://deployment-team-a
+      worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+    tokenSecret:
+      name: team-a-tokens
+      key: tokens.toml
+  - name: team-b
+    authorities:
+      - team-b.example.com
+    bucket:
+      url: gs://deployment-team-b
+      worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
+    tokenSecret:
+      name: team-b-tokens
+      key: tokens.toml
+    readOnly: true
+    limits:
+      maxConcurrentRequests: 16
+      requestTimeout: 5s
+      requestsPerSecond: 20
+      burst: 40

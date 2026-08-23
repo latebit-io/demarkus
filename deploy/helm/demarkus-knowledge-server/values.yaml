@@ -1,0 +1,119 @@
+image:
+  repository: ghcr.io/latebit-io/demarkus-knowledge-server
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+replicaCount: 2
+
+server:
+  udpPort: 6309
+  healthPort: 8081
+  maxIncomingStreams: 128
+  idleTimeout: 30s
+
+# Supply at least one world. Buckets, policy documents, and token Secrets
+# must exist before installation; this chart does not provision them.
+worlds: []
+
+worldDefaults:
+  readOnly: false
+  limits:
+    maxConcurrentRequests: 32
+    requestTimeout: 10s
+    requestsPerSecond: 50
+    burst: 100
+
+tls:
+  # Set exactly one mode. Existing Secrets must contain tls.crt and tls.key.
+  existingSecret: ""
+  certManager:
+    enabled: false
+    issuerRef:
+      kind: ClusterIssuer
+      name: ""
+    annotations: {}
+
+service:
+  type: ClusterIP
+  annotations: {}
+  loadBalancerIP: ""
+  externalTrafficPolicy: Local
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  workloadIdentity:
+    # GSA with storage access to every configured world bucket.
+    gsa: ""
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1536Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+probes:
+  startup:
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 24
+  liveness:
+    periodSeconds: 30
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  broker:
+    namespace: demarkus-broker
+    podLabels:
+      app.kubernetes.io/name: demarkus-broker
+  agent:
+    namespace: demarkus-agent
+    podLabels:
+      app.kubernetes.io/name: demarkus-agent
+  # Required for direct clients when service.type is LoadBalancer.
+  externalCIDRs: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+
+terminationGracePeriodSeconds: 30
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+nameOverride: ""
+fullnameOverride: ""

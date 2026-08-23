@@ -1,0 +1,95 @@
+suite: network policy
+templates:
+  - networkpolicy.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: isolates ingress and egress by default
+    asserts:
+      - isKind:
+          of: NetworkPolicy
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress, Egress]
+      - lengthEqual:
+          path: spec.ingress
+          count: 1
+      - equal:
+          path: spec.ingress[0].ports[0]
+          value:
+            protocol: UDP
+            port: 6309
+
+  - it: admits only labeled broker and agent pods from configured namespaces
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: demarkus-broker
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
+          value: demarkus-broker
+      - equal:
+          path: spec.ingress[0].from[1].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: demarkus-agent
+      - equal:
+          path: spec.ingress[0].from[1].podSelector.matchLabels["app.kubernetes.io/name"]
+          value: demarkus-agent
+
+  - it: allows DNS over UDP and TCP only to kube-system
+    asserts:
+      - equal:
+          path: spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: kube-system
+      - contains:
+          path: spec.egress[0].ports
+          content:
+            protocol: UDP
+            port: 53
+      - contains:
+          path: spec.egress[0].ports
+          content:
+            protocol: TCP
+            port: 53
+
+  - it: allows GCS HTTPS and both GKE metadata endpoints
+    asserts:
+      - notExists:
+          path: spec.egress[1].to
+      - equal:
+          path: spec.egress[1].ports[0]
+          value:
+            protocol: TCP
+            port: 443
+      - equal:
+          path: spec.egress[2].to[0].ipBlock.cidr
+          value: 169.254.169.254/32
+      - equal:
+          path: spec.egress[2].ports[0].port
+          value: 80
+      - equal:
+          path: spec.egress[2].ports[1].port
+          value: 8080
+      - equal:
+          path: spec.egress[3].to[0].ipBlock.cidr
+          value: 169.254.169.252/32
+      - equal:
+          path: spec.egress[3].ports[0].port
+          value: 988
+      - equal:
+          path: spec.egress[3].ports[1].port
+          value: 987
+
+  - it: admits configured direct-client CIDRs
+    set:
+      networkPolicy.externalCIDRs: [203.0.113.0/24]
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[2].ipBlock.cidr
+          value: 203.0.113.0/24
+
+  - it: can be disabled for a CNI-managed policy
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

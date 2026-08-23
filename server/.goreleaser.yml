@@ -60,19 +60,56 @@ builds:
       - "7"
     ldflags:
       - -s -w -X main.version={{ .Version }}
+  - id: demarkus-knowledge-server
+    main: ./cmd/demarkus-knowledge-server
+    binary: demarkus-knowledge-server
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+  - id: demarkus-knowledge-bootstrap
+    main: ./cmd/demarkus-knowledge-bootstrap
+    binary: demarkus-knowledge-bootstrap
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
 
 archives:
   - id: demarkus-server
-    builds:
+    ids:
       - demarkus-server
     name_template: "demarkus-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
   # Shipped as its own archive so a file-store deployment never downloads
   # the Postgres flavor.
   - id: demarkus-server-pg
-    builds:
+    ids:
       - demarkus-server-pg
       - demarkus-migrate
     name_template: "demarkus-server-pg_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: demarkus-knowledge-server
+    ids:
+      - demarkus-knowledge-server
+      - demarkus-knowledge-bootstrap
+    name_template: "demarkus-knowledge-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "demarkus-server_checksums.txt"

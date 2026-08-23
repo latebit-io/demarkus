@@ -1,0 +1,49 @@
+suite: certificate
+templates:
+  - certificate.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: does not render when an existing TLS Secret is used
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: derives one multi-SAN certificate from all world authorities
+    set:
+      tls.existingSecret: ""
+      tls.certManager.enabled: true
+      tls.certManager.issuerRef.name: internal-ca
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.secretName
+          value: RELEASE-NAME-demarkus-knowledge-server-tls
+      - equal:
+          path: spec.issuerRef
+          value:
+            kind: ClusterIssuer
+            name: internal-ca
+      - equal:
+          path: spec.dnsNames
+          value:
+            - team-a.example.com
+            - team-a.knowledge.svc.cluster.local
+            - team-b.example.com
+
+  - it: propagates issuer kind and annotations
+    set:
+      tls.existingSecret: ""
+      tls.certManager.enabled: true
+      tls.certManager.issuerRef.kind: Issuer
+      tls.certManager.issuerRef.name: internal-ca
+      tls.certManager.annotations:
+        example.com/owner: platform
+    asserts:
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: metadata.annotations["example.com/owner"]
+          value: platform

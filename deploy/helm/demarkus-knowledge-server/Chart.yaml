@@ -1,0 +1,18 @@
+apiVersion: v2
+name: demarkus-knowledge-server
+description: Multi-world Demarkus knowledge server backed by Google Cloud Storage
+type: application
+version: 0.1.0
+appVersion: "0.25.0"
+keywords:
+  - demarkus
+  - mark-protocol
+  - knowledge-server
+  - gcs
+  - quic
+home: https://demarkus.io
+sources:
+  - https://github.com/latebit-io/demarkus
+maintainers:
+  - name: latebit-io
+    url: https://github.com/latebit-io
