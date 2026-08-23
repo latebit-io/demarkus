@@ -69,6 +69,14 @@ invisible to `mark_lookup`), an end-of-session nudge asks for a journal entry wh
 files changed but nothing was recorded, and a recall nudge fires on a "did we
 decide X" question. They are reminders, not gates.
 
+Links between documents accumulate into a persistent **knowledge graph**: each
+`mark_graph` crawl merges into a graph stored across sessions, and
+`mark_backlinks` answers "what links here?" without re-crawling. Recall is graph
+traversal, not just search; an ADR pulls in the debugging note that motivated it
+and the pattern it produced. At the system tier the [indexing
+agent](/ecosystem/#indexing-agent) aggregates the graph across worlds and
+publishes it to the hub, so a cold agent seeds its graph on the first call.
+
 This is the whole loop for a solo developer. The soul is fast, private, and yours;
 nothing leaves your machine.
 

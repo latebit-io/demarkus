@@ -5,6 +5,8 @@ title: Demarkus
 
 Your agent records decisions, lessons, and progress as it works, and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. Your team shares one versioned catalog that humans and agents keep current. The [Mark Protocol](/about/) underneath keeps it all portable and self-hostable.
 
+Every link between documents feeds a persistent **knowledge graph**. Agents query backlinks and related documents across sessions, the [TUI](/ecosystem/#demarkus-tui) and [library](/library/) render it, and the [indexing agent](/ecosystem/#indexing-agent) aggregates it across worlds. Memory here is connected knowledge you traverse, not a pile of files.
+
 ## Start here
 
 Give your agent memory. There is nothing to configure: the plugin spawns a local server, mints its own token, and wires up the tools. In **Claude Code**:
