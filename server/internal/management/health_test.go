@@ -27,11 +27,13 @@ func TestHealth(t *testing.T) {
 func TestHealthRejectsOtherRoutesAndMethods(t *testing.T) {
 	var health Health
 	handler := health.Handler()
-	request := httptest.NewRequest(http.MethodPost, "/livez", http.NoBody)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST /livez status = %d, want %d", response.Code, http.StatusMethodNotAllowed)
+	for _, method := range []string{http.MethodHead, http.MethodPost} {
+		request := httptest.NewRequest(method, "/livez", http.NoBody)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s /livez status = %d, want %d", method, response.Code, http.StatusMethodNotAllowed)
+		}
 	}
 	assertStatus(t, handler, "/unknown", http.StatusNotFound)
 }

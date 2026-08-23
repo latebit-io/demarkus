@@ -1,6 +1,9 @@
 package auth
 
-import "sync/atomic"
+import (
+	"errors"
+	"sync/atomic"
+)
 
 // Source atomically publishes token stores loaded from one file.
 type Source struct {
@@ -56,6 +59,10 @@ func (s *Source) Load() (*TokenStore, error) {
 }
 
 // Publish atomically replaces the current token store with a staged load.
-func (s *Source) Publish(store *TokenStore) {
+func (s *Source) Publish(store *TokenStore) error {
+	if store == nil {
+		return errors.New("token store is nil")
+	}
 	s.current.Store(store)
+	return nil
 }

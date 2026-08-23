@@ -52,12 +52,8 @@ func (source *Source) Reload() error {
 	if err != nil {
 		return fmt.Errorf("parse TLS leaf certificate: %w", err)
 	}
-	now := source.now()
-	if now.Before(leaf.NotBefore) {
-		return fmt.Errorf("TLS certificate is not valid before %s", leaf.NotBefore.Format(time.RFC3339))
-	}
-	if !now.Before(leaf.NotAfter) {
-		return fmt.Errorf("TLS certificate expired at %s", leaf.NotAfter.Format(time.RFC3339))
+	if err := validateTime(leaf, source.currentTime()); err != nil {
+		return err
 	}
 	for _, authority := range source.authorities {
 		if err := leaf.VerifyHostname(authority); err != nil {
@@ -75,7 +71,29 @@ func (source *Source) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 	if certificate == nil {
 		return nil, errors.New("no TLS certificate loaded")
 	}
+	if certificate.Leaf != nil {
+		if err := validateTime(certificate.Leaf, source.currentTime()); err != nil {
+			return nil, err
+		}
+	}
 	return certificate, nil
+}
+
+func (source *Source) currentTime() time.Time {
+	if source.now != nil {
+		return source.now()
+	}
+	return time.Now()
+}
+
+func validateTime(certificate *x509.Certificate, now time.Time) error {
+	if now.Before(certificate.NotBefore) {
+		return fmt.Errorf("TLS certificate is not valid before %s", certificate.NotBefore.Format(time.RFC3339))
+	}
+	if !now.Before(certificate.NotAfter) {
+		return fmt.Errorf("TLS certificate expired at %s", certificate.NotAfter.Format(time.RFC3339))
+	}
+	return nil
 }
 
 // TLSConfig returns a TLS 1.3 Mark Protocol configuration.

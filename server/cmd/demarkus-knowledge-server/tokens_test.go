@@ -57,7 +57,7 @@ func TestTokenCoordinatorRejectsDuplicates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newTokenCoordinator: %v", err)
 		}
-		if err := coordinator.Reload(); err == nil || !strings.Contains(err.Error(), "live token transfer") {
+		if err := coordinator.Reload(); err == nil || !strings.Contains(err.Error(), `from world "first" to world "second"`) {
 			t.Fatalf("Reload error = %v, want live transfer error", err)
 		}
 	})
@@ -78,18 +78,39 @@ func TestTokenCoordinatorLoadFailureKeepsCurrent(t *testing.T) {
 	}
 }
 
+func TestTokenCoordinatorNilLoadKeepsCurrent(t *testing.T) {
+	first := &fakeTokenRuntime{current: tokenStore("a"), next: tokenStore("c")}
+	second := &fakeTokenRuntime{current: tokenStore("b")}
+	coordinator, err := newTokenCoordinator([]tokenWorld{{name: "first", runtime: first}, {name: "second", runtime: second}})
+	if err != nil {
+		t.Fatalf("newTokenCoordinator: %v", err)
+	}
+	if err := coordinator.Reload(); err == nil || !strings.Contains(err.Error(), `world "second": token store is nil`) {
+		t.Fatalf("Reload error = %v, want nil-store error", err)
+	}
+	if first.publishCalls != 0 || second.publishCalls != 0 {
+		t.Fatalf("publish calls = %d, %d; want zero", first.publishCalls, second.publishCalls)
+	}
+	if !slices.Equal(first.current.Hashes(), []string{"a"}) || !slices.Equal(second.current.Hashes(), []string{"b"}) {
+		t.Fatal("nil load partially published candidates")
+	}
+}
+
 type fakeTokenRuntime struct {
-	current *auth.TokenStore
-	next    *auth.TokenStore
-	loadErr error
+	current      *auth.TokenStore
+	next         *auth.TokenStore
+	loadErr      error
+	publishCalls int
 }
 
 func (runtime *fakeTokenRuntime) Tokens() *auth.TokenStore { return runtime.current }
 func (runtime *fakeTokenRuntime) LoadTokens() (*auth.TokenStore, error) {
 	return runtime.next, runtime.loadErr
 }
-func (runtime *fakeTokenRuntime) PublishTokens(store *auth.TokenStore) {
+func (runtime *fakeTokenRuntime) PublishTokens(store *auth.TokenStore) error {
+	runtime.publishCalls++
 	runtime.current = store
+	return nil
 }
 
 func tokenStore(hashes ...string) *auth.TokenStore {

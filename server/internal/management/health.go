@@ -26,14 +26,17 @@ func (health *Health) SetReady(ready bool) {
 func (health *Health) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", probe(&health.live))
-	mux.HandleFunc("HEAD /livez", probe(&health.live))
 	mux.HandleFunc("GET /readyz", probe(&health.ready))
-	mux.HandleFunc("HEAD /readyz", probe(&health.ready))
 	return mux
 }
 
 func probe(state *atomic.Bool) http.HandlerFunc {
-	return func(response http.ResponseWriter, _ *http.Request) {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			response.Header().Set("Allow", http.MethodGet)
+			response.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		if !state.Load() {
 			http.Error(response, "unavailable", http.StatusServiceUnavailable)
 			return

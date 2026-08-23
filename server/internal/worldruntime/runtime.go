@@ -232,8 +232,8 @@ func (r *Runtime) LoadTokens() (*auth.TokenStore, error) {
 }
 
 // PublishTokens atomically installs a previously loaded token store.
-func (r *Runtime) PublishTokens(store *auth.TokenStore) {
-	r.tokens.Publish(store)
+func (r *Runtime) PublishTokens(store *auth.TokenStore) error {
+	return r.tokens.Publish(store)
 }
 
 // Tokens returns the current immutable token-store snapshot.

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 
@@ -11,7 +10,7 @@ import (
 type tokenRuntime interface {
 	Tokens() *auth.TokenStore
 	LoadTokens() (*auth.TokenStore, error)
-	PublishTokens(*auth.TokenStore)
+	PublishTokens(*auth.TokenStore) error
 }
 
 type tokenWorld struct {
@@ -58,7 +57,9 @@ func (coordinator *tokenCoordinator) Reload() error {
 		return err
 	}
 	for index, world := range coordinator.worlds {
-		world.runtime.PublishTokens(candidates[index])
+		if err := world.runtime.PublishTokens(candidates[index]); err != nil {
+			return fmt.Errorf("publish tokens for world %q: %w", world.name, err)
+		}
 	}
 	return nil
 }
@@ -90,7 +91,11 @@ func (coordinator *tokenCoordinator) validateTransition(candidates []*auth.Token
 		for _, hash := range store.Hashes() {
 			owner, exists := currentOwners[hash]
 			if exists && owner != worldIndex {
-				return errors.New("live token transfer between worlds is unsafe; restart with the new token assignment")
+				return fmt.Errorf(
+					"live token transfer from world %q to world %q is unsafe; restart with the new token assignment",
+					coordinator.worlds[owner].name,
+					coordinator.worlds[worldIndex].name,
+				)
 			}
 		}
 	}

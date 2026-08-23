@@ -121,6 +121,32 @@ func TestTLSConfig(t *testing.T) {
 	}
 }
 
+func TestGetCertificateRejectsExpiredCachedCertificate(t *testing.T) {
+	now := time.Now()
+	certificateFile, keyFile := writeKeyPair(t, []string{"world.example.com"}, now.Add(-time.Hour), now.Add(time.Hour))
+	source, err := Open(certificateFile, keyFile, []string{"world.example.com"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	source.now = func() time.Time { return now.Add(2 * time.Hour) }
+	if _, err := source.GetCertificate(nil); err == nil || !strings.Contains(err.Error(), "expired at") {
+		t.Fatalf("GetCertificate error = %v, want expiry error", err)
+	}
+}
+
+func TestReloadDefaultsNilClock(t *testing.T) {
+	now := time.Now()
+	certificateFile, keyFile := writeKeyPair(t, []string{"world.example.com"}, now.Add(-time.Hour), now.Add(time.Hour))
+	source, err := Open(certificateFile, keyFile, []string{"world.example.com"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	source.now = nil
+	if err := source.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+}
+
 func writeKeyPair(t *testing.T, dnsNames []string, notBefore, notAfter time.Time) (certificateFile, keyFile string) {
 	t.Helper()
 	certificate, key := generateKeyPair(t, dnsNames, notBefore, notAfter)

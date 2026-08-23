@@ -123,7 +123,7 @@ func TestOpenRequiresValidPolicy(t *testing.T) {
 	}
 }
 
-func TestWorldIsolation(t *testing.T) {
+func TestSeparateBucketsAreIndependent(t *testing.T) {
 	const otherWorldID = "7d4f3f8a-87f0-4bf5-932a-e4d1db28d235"
 	open := func(worldID string) *Store {
 		objects := newTestMemory(t)

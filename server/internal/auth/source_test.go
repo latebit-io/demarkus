@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -95,9 +96,17 @@ func TestSource(t *testing.T) {
 		if source.Current() != current {
 			t.Fatal("Load published staged tokens")
 		}
-		source.Publish(staged)
+		if err := source.Publish(staged); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
 		if source.Current() != staged {
 			t.Fatal("Publish did not install staged tokens")
+		}
+		if err := source.Publish(nil); err == nil {
+			t.Fatal("Publish accepted nil token store")
+		}
+		if source.Current() != staged {
+			t.Fatal("nil publish replaced current tokens")
 		}
 	})
 
@@ -200,6 +209,7 @@ func TestSourceConcurrentCurrentReload(t *testing.T) {
 							}
 							return
 						}
+						runtime.Gosched()
 					}
 				}
 			})

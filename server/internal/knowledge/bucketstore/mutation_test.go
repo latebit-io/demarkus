@@ -549,7 +549,7 @@ func TestMutationFailureAndPacing(t *testing.T) {
 			failing := &failFirstPrefixCreateStore{Store: memory, prefix: stage.prefix}
 			store.objects = failing
 			if _, err := store.WriteVersion("/doc", 0, []byte("body"), nil); err == nil {
-				t.Fatalf("write succeeded through permanent %s failure", stage.name)
+				t.Fatalf("write succeeded after one injected %s staging failure", stage.name)
 			}
 			if !failing.failed.Load() {
 				t.Fatalf("write never reached %s staging", stage.name)
@@ -840,7 +840,7 @@ func (store *ambiguousCommittedHeadStore) Replace(ctx context.Context, key strin
 	if category == nil {
 		category = blob.ErrAmbiguous
 	}
-	return attributes, &blob.OpError{Op: "replace", Key: key, Err: category}
+	return blob.Attributes{}, &blob.OpError{Op: "replace", Key: key, Err: category}
 }
 
 type evictingHeadStore struct {
@@ -881,7 +881,7 @@ type failFirstPrefixCreateStore struct {
 
 func (store *failFirstPrefixCreateStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
 	if strings.HasPrefix(key, store.prefix) && store.failed.CompareAndSwap(false, true) {
-		return blob.Attributes{}, errors.New("injected permanent create failure")
+		return blob.Attributes{}, errors.New("injected create failure")
 	}
 	return store.Store.Create(ctx, key, data)
 }

@@ -367,6 +367,7 @@ func (c *fakeConnection) CloseWithError(quic.ApplicationErrorCode, string) error
 		streams := append([]*fakeStream(nil), c.accepted...)
 		c.mu.Unlock()
 		for _, stream := range streams {
+			// fakeStream.Close only closes its done channel.
 			_ = stream.Close()
 		}
 	})
