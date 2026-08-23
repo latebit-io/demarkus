@@ -60,6 +60,43 @@ func TestValidateVerb(t *testing.T) {
 	}
 }
 
+func TestSuppressQUICBufferWarning(t *testing.T) {
+	t.Run("defaults to suppressed", func(t *testing.T) {
+		old, existed := os.LookupEnv(quicBufferWarningEnv)
+		if err := os.Unsetenv(quicBufferWarningEnv); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			var err error
+			if existed {
+				err = os.Setenv(quicBufferWarningEnv, old)
+			} else {
+				err = os.Unsetenv(quicBufferWarningEnv)
+			}
+			if err != nil {
+				t.Errorf("restore environment: %v", err)
+			}
+		})
+
+		if err := suppressQUICBufferWarning(); err != nil {
+			t.Fatal(err)
+		}
+		if got := os.Getenv(quicBufferWarningEnv); got != "true" {
+			t.Errorf("%s = %q, want true", quicBufferWarningEnv, got)
+		}
+	})
+
+	t.Run("preserves explicit setting", func(t *testing.T) {
+		t.Setenv(quicBufferWarningEnv, "false")
+		if err := suppressQUICBufferWarning(); err != nil {
+			t.Fatal(err)
+		}
+		if got := os.Getenv(quicBufferWarningEnv); got != "false" {
+			t.Errorf("%s = %q, want false", quicBufferWarningEnv, got)
+		}
+	})
+}
+
 func TestEditorCommand(t *testing.T) {
 	tests := []struct {
 		name     string

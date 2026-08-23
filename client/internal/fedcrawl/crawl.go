@@ -660,7 +660,11 @@ func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, 
 		return ctx.Err()
 	}
 
-	meta := map[string]string{"agent": "demarkus-agent"}
+	meta := map[string]string{
+		"agent": "demarkus-agent",
+		"tags":  "category:federation",
+		"type":  "Reference",
+	}
 	// Everything published here (hash indexes, /graph.md) is a generated
 	// artifact regenerated wholesale each run — retention keeps its version
 	// history bounded (the server prunes older versions on write, SPEC §9.9).

@@ -27,7 +27,12 @@ import (
 	"github.com/latebit-io/demarkus/protocol/store"
 )
 
+const quicBufferWarningEnv = "QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING"
+
 func main() {
+	if err := suppressQUICBufferWarning(); err != nil {
+		log.Fatal(err)
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "edit":
@@ -57,6 +62,18 @@ func main() {
 		}
 	}
 	requestMain()
+}
+
+// Short-lived CLI processes cannot tune host sysctls and would emit quic-go's
+// advisory on every command. An explicit environment setting still wins.
+func suppressQUICBufferWarning() error {
+	if _, explicit := os.LookupEnv(quicBufferWarningEnv); explicit {
+		return nil
+	}
+	if err := os.Setenv(quicBufferWarningEnv, "true"); err != nil {
+		return fmt.Errorf("set %s: %w", quicBufferWarningEnv, err)
+	}
+	return nil
 }
 
 func requestMain() {
