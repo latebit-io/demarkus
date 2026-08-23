@@ -48,6 +48,12 @@ func (s *Server) gatewayAuth(next http.Handler) http.Handler {
 			s.writeMCPAuthChallenge(w, "invalid_token", "invalid bearer token")
 			return
 		}
+		if !oidcDomainAllowed(s.cfg.OIDC.AllowDomains, claims.HD) {
+			s.log.InfoContext(r.Context(), "broker: mcp gateway bearer rejected by allowDomains",
+				"subject", hashSubject(claims.Subject), "hd", claims.HD)
+			s.writeMCPAuthChallenge(w, "invalid_token", "invalid bearer token")
+			return
+		}
 		if !claims.EmailVerified {
 			s.log.WarnContext(r.Context(), "broker: mcp gateway rejected unverified email",
 				"subject", hashSubject(claims.Subject))

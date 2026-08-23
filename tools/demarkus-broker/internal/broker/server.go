@@ -255,11 +255,8 @@ func (s *Server) Routes() http.Handler {
 	// the token IS the authz signal) under the IP limiter for
 	// defense-in-depth. Operates on refresh tokens only.
 	mux.Handle("POST /token/revoke", s.ipRateLimit(http.HandlerFunc(s.tokenRevoke)))
-	// /me/install: per-user install bundle. requireAuth (verifies
-	// bearer, stashes claims on ctx) → subjectRateLimit (keys on the
-	// subject hash) → handler. GET (not POST) matches the OAuth
-	// /me-style convention; the endpoint confirms identity and lists
-	// authorized worlds, no token material (see meInstall's doc).
+	// /me/install verifies the bearer, rate-limits by subject, and lists
+	// readable worlds without token material.
 	mux.Handle("GET /me/install", s.requireAuth(s.subjectRateLimit(http.HandlerFunc(s.meInstall))))
 	return mux
 }
@@ -402,22 +399,14 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
-	worlds := authorizedWorlds(s.cfg, &claims)
-	if claims.Email == "" || len(worlds) == 0 {
-		s.log.InfoContext(r.Context(), "broker: identity not authorized for any world", "subject", hashSubject(claims.Subject))
-		http.Error(w, "no authorized worlds", http.StatusForbidden)
+	if claims.Email == "" {
+		s.log.InfoContext(r.Context(), "broker: identity has no email", "subject", hashSubject(claims.Subject))
+		http.Error(w, "email claim missing", http.StatusForbidden)
 		return
 	}
-	// Identity-only response. Per-world demarkus tokens are minted
-	// lazily inside the broker's MCP gateway on first dispatch and are
-	// never returned to clients on the knowledge-system flow — the
-	// world is unreachable except through the broker, so the raw token
-	// has no consumer outside the broker process.
-	//
-	// PublicURL-less worlds are filtered out for parity with /me/install:
-	// the plugin has no address to wire them to, and exposing them here
-	// only to have them disappear from the install bundle is the kind
-	// of inconsistency that drifts into agent confusion.
+	worlds := readableWorlds(s.cfg)
+	// Publish tokens remain broker-internal. PublicURL-less worlds are
+	// omitted because clients cannot install them.
 	out := make([]installWorld, 0, len(worlds))
 	for _, world := range worlds {
 		if world.PublicURL == "" {

@@ -64,6 +64,7 @@ func TestIDTokenSignerSignVerifyRoundTrip(t *testing.T) {
 		Email:         "alice@example.com",
 		EmailVerified: true,
 		Groups:        []string{"eng", "ops"},
+		HD:            "example.com",
 	}
 	raw, err := s.Sign(&claims, brokerURL, 15*time.Minute, now)
 	if err != nil {
@@ -89,6 +90,9 @@ func TestIDTokenSignerSignVerifyRoundTrip(t *testing.T) {
 	}
 	if len(got.Groups) != 2 || got.Groups[0] != "eng" || got.Groups[1] != "ops" {
 		t.Errorf("Groups = %v", got.Groups)
+	}
+	if got.HD != claims.HD {
+		t.Errorf("HD = %q, want %q", got.HD, claims.HD)
 	}
 }
 

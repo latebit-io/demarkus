@@ -21,9 +21,9 @@ func TestParseTags(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseTags(tt.in)
+			got := ParseTags(tt.in)
 			if !slices.Equal(got, tt.want) {
-				t.Errorf("parseTags(%q) = %v, want %v", tt.in, got, tt.want)
+				t.Errorf("ParseTags(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -42,13 +42,15 @@ func TestParseImportance(t *testing.T) {
 		{"valid one", "1", 1},
 		{"trims", " 0.25 ", 0.25},
 		{"unparseable", "high", defaultImportance},
+		{"nan", "NaN", defaultImportance},
+		{"positive infinity", "+Inf", defaultImportance},
 		{"negative", "-0.1", defaultImportance},
 		{"above one", "1.5", defaultImportance},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := parseImportance(tt.in); got != tt.want {
-				t.Errorf("parseImportance(%q) = %v, want %v", tt.in, got, tt.want)
+			if got := ParseImportance(tt.in); got != tt.want {
+				t.Errorf("ParseImportance(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
 	}

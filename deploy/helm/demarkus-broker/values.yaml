@@ -399,6 +399,8 @@ rbac:
 # structure is stable.
 networkPolicy:
   enabled: true
+  # Mark Protocol egress ports are derived from worlds[].internalAddress;
+  # UDP 6309 remains allowed for worlds using default Service discovery.
   # Ingress controller namespace selector — broker accepts inbound HTTP
   # only from pods in this namespace. Override to match your controller
   # (defaults assume nginx-ingress in namespace `ingress-nginx`).

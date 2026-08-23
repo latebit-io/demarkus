@@ -118,7 +118,7 @@ func TestMeInstallHappyPathSingleWorld(t *testing.T) {
 }
 
 func TestMeInstallMultiWorldOrdering(t *testing.T) {
-	// cfg.Worlds is iterated in declaration order by authorizedWorlds,
+	// cfg.Worlds is iterated in declaration order by readableWorlds,
 	// and toInstallWorlds maps results in place. Pin the contract:
 	// response worlds order matches cfg.Worlds.
 	cfg := installTestConfigTwoWorlds()
@@ -200,33 +200,25 @@ func TestMeInstallBadBearerReturns401(t *testing.T) {
 	}
 }
 
-func TestMeInstallEmptyWorldsReturns200EmptySlice(t *testing.T) {
-	// alice is authenticated but mallory@evil.example is not authorized
-	// for any world — the empty-worlds policy: 200 + worlds:[], NOT 403.
-	// The plugin layer needs to distinguish "auth failed" from "authz
-	// emptiness" so it can surface the right error to the user.
-	verifier := &fakeVerifier{claims: Claims{Email: "mallory@evil.example", EmailVerified: true, Subject: "g|mallory"}}
-	srv, _ := newTestServer(t, installTestConfig(), verifier, fake.NewSimpleClientset())
+func TestMeInstallIncludesReadableWorldForNonWriter(t *testing.T) {
+	cfg := installTestConfig()
+	cfg.Worlds[0].Allow = AllowConfig{Domains: []string{"otherco.test"}}
+	verifier := &fakeVerifier{claims: aliceClaims()}
+	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
 
 	resp := installReq(t, srv, "id-token")
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200 (NOT 403). body=%s", resp.StatusCode, body)
+		t.Fatalf("status = %d, want 200. body=%s", resp.StatusCode, body)
 	}
 	got := decodeInstall(t, resp)
-	if got.Worlds == nil {
-		t.Errorf("Worlds = nil, want non-nil empty slice (JSON `[]`, not `null`)")
-	}
-	if len(got.Worlds) != 0 {
-		t.Errorf("Worlds = %+v, want []", got.Worlds)
+	if len(got.Worlds) != 1 || got.Worlds[0].Name != "team-a" {
+		t.Errorf("Worlds = %+v, want readable team-a", got.Worlds)
 	}
 }
 
 func TestMeInstallAllWorldsFilteredReturns200Empty(t *testing.T) {
-	// User IS authorized for team-a but team-a has no PublicURL. Same
-	// empty-worlds shape as the unauthorized case — the plugin can't
-	// tell auth-failed from authz-empty, and we don't want it to: both
-	// surface as "no installable worlds" in the UI.
+	// team-a has no PublicURL, so no world is installable.
 	cfg := installTestConfig()
 	cfg.Worlds[0].PublicURL = ""
 	verifier := &fakeVerifier{claims: aliceClaims()}

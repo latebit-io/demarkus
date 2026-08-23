@@ -1,8 +1,5 @@
-// Package config reads the shared ~/.demarkus plugin state — the single source
-// of truth that every demarkus plugin (Claude Code, pi, Codex, …) consults via
-// the demarkus-plugin binary. Readers fail open ONLY on "file absent" (ENOENT);
-// any other I/O error propagates so a present-but-unreadable config can't
-// silently disable a gate.
+// Package config reads shared plugin state from ~/.demarkus.
+// Only absent files are defaults; every other I/O error propagates.
 package config
 
 import (
@@ -11,6 +8,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
+
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
 )
 
 // Strictness is the enforcement level a gate applies to a violation.
@@ -221,18 +222,10 @@ func KnowledgeStrictness(slug string) (Strictness, error) {
 	return validStrictness(s, Warn), nil
 }
 
-// tokens splits a comma/whitespace/newline-separated list into clean tokens.
-func tokens(s string) []string {
-	fields := strings.FieldsFunc(s, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
-	})
-	var out []string
-	for _, f := range fields {
-		if f != "" {
-			out = append(out, f)
-		}
-	}
-	return out
+func policyLists(tags, fields string) publishpolicy.Policy {
+	return publishpolicy.Parse(
+		"require_tags: " + strings.ReplaceAll(tags, "\n", " ") + "\n" +
+			"require_fields: " + strings.ReplaceAll(fields, "\n", " "))
 }
 
 // KnowledgeRequireTags per-slug required tag axes (e.g. "category team").
@@ -248,7 +241,7 @@ func KnowledgeRequireTags(slug string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tokens(s), nil
+	return policyLists(s, "").RequiredTagAxes, nil
 }
 
 // KnowledgeRequireFields per-slug required OKF metadata fields (e.g. "type").
@@ -264,7 +257,72 @@ func KnowledgeRequireFields(slug string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tokens(s), nil
+	return policyLists("", s).RequiredFields, nil
+}
+
+// KnowledgePolicy returns the mirrored publish policy for slug.
+func KnowledgePolicy(slug string) (publishpolicy.Policy, error) {
+	if slug == "" {
+		return legacyKnowledgePolicy(slug)
+	}
+	if policy, found, err := knowledgePolicySnapshot(slug); found || err != nil {
+		return policy, err
+	}
+	registryPath, err := path("knowledge-systems")
+	if err != nil {
+		return publishpolicy.Policy{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(registryPath), 0o755); err != nil {
+		return publishpolicy.Policy{}, err
+	}
+	var policy publishpolicy.Policy
+	err = lockdir.WithLock(registryPath+".lock", 100, 20*time.Millisecond, func() error {
+		var found bool
+		policy, found, err = knowledgePolicySnapshot(slug)
+		if err != nil || found {
+			return err
+		}
+		policy, err = legacyKnowledgePolicy(slug)
+		return err
+	})
+	return policy, err
+}
+
+func knowledgePolicySnapshot(slug string) (publishpolicy.Policy, bool, error) {
+	p, err := path("plugin-knowledge.policy." + slug)
+	if err != nil {
+		return publishpolicy.Policy{}, false, err
+	}
+	body, err := readRaw(p)
+	if err != nil || body == "" {
+		return publishpolicy.Policy{}, false, err
+	}
+	policy := publishpolicy.Parse(body)
+	policy.Strictness = policy.EffectiveStrictness()
+	if override := os.Getenv("DEMARKUS_KNOWLEDGE_STRICTNESS"); override != "" {
+		policy.Strictness = publishpolicy.Strictness(validStrictness(override, Warn))
+	}
+	return policy, true, nil
+}
+
+func legacyKnowledgePolicy(slug string) (publishpolicy.Policy, error) {
+	strictness, err := KnowledgeStrictness(slug)
+	if err != nil {
+		return publishpolicy.Policy{}, err
+	}
+	tags, err := KnowledgeRequireTags(slug)
+	if err != nil {
+		return publishpolicy.Policy{}, err
+	}
+	fields, err := KnowledgeRequireFields(slug)
+	if err != nil {
+		return publishpolicy.Policy{}, err
+	}
+	return publishpolicy.Policy{
+		Strictness:      publishpolicy.Strictness(strictness),
+		RequiredTagAxes: tags,
+		RequiredFields:  fields,
+	}, nil
 }
 
 // --- registries ---------------------------------------------------------------
@@ -417,16 +475,6 @@ func KnowledgeScope(tool string) (string, error) {
 		}
 	}
 	return "", nil
-}
-
-// TagsHaveAxis the comma-separated TAGS list contains an "AXIS:value" token.
-func TagsHaveAxis(tags, axis string) bool {
-	for tok := range strings.SplitSeq(tags, ",") {
-		if strings.HasPrefix(strings.TrimSpace(tok), axis+":") {
-			return true
-		}
-	}
-	return false
 }
 
 // --- promote destinations + knowledge presence (for nudges) -------------------

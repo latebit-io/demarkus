@@ -24,6 +24,9 @@ Additional terms:
 - **Version**: An immutable snapshot of a document's content at a point in time.
 - **Current version**: The most recent version of a document.
 - **Hash chain**: A sequence of cryptographic hashes linking each version to its predecessor.
+- **Authority**: The URI component that identifies a logical Mark server and optionally includes a non-default port.
+- **Dial address**: The network endpoint to which a client opens a QUIC connection. It need not equal the authority.
+- **TLS server name**: The DNS name sent through TLS SNI and verified against the server certificate. It need not equal the dial address.
 
 ## 2. Protocol Overview
 
@@ -36,6 +39,8 @@ mark://host[:port]/path
 ```
 
 If the port is omitted, the default port 6309 is assumed.
+
+The authority identifies the logical Mark server. It MAY resolve directly to that server or route to a shared network endpoint hosting several logical servers. A Mark URI MUST NOT contain user information.
 
 ### 2.2. Transport
 
@@ -63,7 +68,17 @@ All Mark Protocol connections MUST use TLS 1.3 or later. Servers MUST NOT accept
 
 Servers SHOULD use certificates issued by a trusted certificate authority for production deployments. Servers MAY use self-signed certificates for development purposes.
 
-### 3.4. ALPN
+### 3.4. Authority and TLS server-name binding
+
+For a DNS authority, an explicitly configured `Endpoint.ServerName` takes precedence as the TLS server name; otherwise the client MUST use the authority hostname without its port. The client MUST send the selected TLS server name as the Server Name Indication (SNI) value and MUST verify the server certificate for that name. An explicit dial-address override affects connection dialing only; it MUST NOT replace the selected TLS server name, the Mark authority in URLs, or the authority used to interpret responses.
+
+A server that hosts multiple logical Mark servers on one listener MUST select exactly one server by SNI during the TLS handshake. It MUST reject an absent or unknown SNI value and MUST NOT route either value to a default server. The selected logical server MUST remain fixed for the lifetime of the QUIC connection, including every stream opened on that connection.
+
+Multiplexed servers MUST use canonical lowercase ASCII DNS names in their routing configuration. They MUST reject wildcard, trailing-dot, port-bearing, Unicode, and IP-literal routing names. Servers that do not use SNI for routing MAY continue to accept IP authorities and absent SNI for development or single-server deployments.
+
+TLS and QUIC load balancers in front of an SNI-routed Mark server MUST operate at layer 4 and preserve the client TLS handshake.
+
+### 3.5. ALPN
 
 The Application-Layer Protocol Negotiation (ALPN) identifier for the Mark Protocol is:
 
@@ -184,6 +199,8 @@ FETCH /path\n
 - `if-none-match`: An ETag value from a previous response.
 - `if-modified-since`: An RFC 3339 timestamp from a previous response.
 
+Conditional metadata applies to the version selected by the request path: the current version for `/doc.md`, or the requested immutable version for `/doc.md/vN`.
+
 **Success response** (`ok`):
 
 ```text
@@ -192,13 +209,14 @@ status: ok
 modified: <RFC 3339 timestamp>
 etag: <64-char hex SHA-256>
 version: <integer>
+content-hash: sha256-<64-char hex SHA-256>
 ---
 <markdown body>
 ```
 
 **Conditional response** (`not-modified`):
 
-If the request includes `if-none-match` and it matches the current ETag, or if the request includes `if-modified-since` and the document has not been modified after that time, the server MUST respond with:
+If the request includes `if-none-match` and it matches the selected version's ETag, or if the request includes `if-modified-since` and the selected version was not modified after that time, the server MUST respond with:
 
 ```text
 ---
@@ -220,6 +238,8 @@ status: ok
 modified: <RFC 3339 timestamp>
 version: <requested version>
 current-version: <highest version number>
+etag: <64-char hex SHA-256>
+content-hash: sha256-<64-char hex SHA-256>
 ---
 <markdown body>
 ```
@@ -408,10 +428,10 @@ status: ok
 
 **Behaviour**:
 
-- ARCHIVE sets the `archived` flag on the current version file. It does NOT create a new version.
+- ARCHIVE changes archive state stored separately from document versions. It MUST NOT create a version or alter any version's stored bytes, ETag, or modified time.
 - FETCH on an archived document MUST return `status: archived` with no body.
-- Version-pinned FETCH (e.g., `/doc.md/v3`) MUST still return the content regardless of archive status.
-- To unarchive a document, PUBLISH with an empty body (see section 6.4).
+- Version-pinned FETCH (e.g., `/doc.md/v3`) MUST still return the same content, ETag, and modified time regardless of current archive state.
+- To unarchive a document, PUBLISH with an empty body (see section 6.4). Unarchiving changes only the separate archive state and has the same version, stored-byte, ETag, and modified-time invariants as ARCHIVE.
 
 **Authentication errors**:
 
@@ -515,7 +535,7 @@ matches: <count>
 | /docs/gateway | 0.50 | Gateway overview | go |
 ```
 
-The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags. The `Path` is server-relative; clients compose the full `mark://host/path` URL from the host they connected to. The response MUST NOT include document body content; clients FETCH the documents they choose. `matches` is the number of rows returned.
+The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags. The `Path` is server-relative; clients compose the full `mark://authority/path` URL from the logical authority used for the request, never from an overridden dial address. The response MUST NOT include document body content; clients FETCH the documents they choose. `matches` is the number of rows returned.
 
 **Ranking**: results are ordered by (1) the number of distinct query terms matched, then (2) descending `importance`, then (3) descending modification time, then (4) ascending path. Importance influences ordering only among documents that already matched the query; it MUST NOT cause an unmatched document to appear in the results.
 
@@ -576,8 +596,8 @@ The following status values are reserved for future use:
 | `query` | LOOKUP | String | Subject text matched against each document's `tags` and title. REQUIRED; minimum 2 characters. |
 | `filter` | LOOKUP | Comma-separated `key=value` | Predicates applied before ranking. Exact match on declared metadata, plus built-ins `modified-after` / `modified-before`. |
 | `limit` | LOOKUP | Decimal integer | Maximum number of results. Default 10; server-capped (RECOMMENDED 1000). |
-| `tags` | PUBLISH | Comma-separated string | Subject labels for the document. Interpreted by the server: matched by LOOKUP `query` and `filter`. |
-| `importance` | PUBLISH | Decimal in [0,1] | Ranking weight used by LOOKUP. Interpreted by the server. Absent or invalid is treated as 0.5. |
+| `tags` | PUBLISH, APPEND | Comma-separated string | Subject labels for the document. Interpreted by the server: matched by LOOKUP `query` and `filter`. |
+| `importance` | PUBLISH, APPEND | Decimal in [0,1] | Ranking weight used by LOOKUP. Interpreted by the server. Absent or invalid is treated as 0.5. |
 | `title` | PUBLISH | String | One-line title shown in LOOKUP results and matched by `query`. Defaults to the first level-1 heading, then the path base name. |
 
 Beyond the interpreted fields above, a PUBLISH request MAY carry additional publisher metadata as arbitrary `key: value` frontmatter lines. The server stores these opaquely and exposes them to LOOKUP `filter` predicates. Reserved store fields (§9.4) MUST be rejected. §9.4 specifies how publisher metadata is persisted, including the Open Knowledge Format field names that are stored as bare frontmatter fields.
@@ -587,7 +607,7 @@ Beyond the interpreted fields above, a PUBLISH request MAY carry additional publ
 | Field | Applicable verbs | Format | Description |
 |---|---|---|---|
 | `modified` | FETCH, PUBLISH, APPEND | RFC 3339 timestamp | Document modification time (UTC, second precision). |
-| `etag` | FETCH | 64-char lowercase hex | SHA-256 hash of the raw file bytes. |
+| `etag` | FETCH | 64-char lowercase hex | SHA-256 hash of the selected raw stored version bytes (§9.4). |
 | `version` | FETCH, PUBLISH, APPEND | Decimal integer | Version number of the returned or created document. |
 | `your-version` | PUBLISH, APPEND (conflict) | Decimal integer | The `expected-version` the client sent. Present only in `conflict` responses. |
 | `server-version` | PUBLISH, APPEND (conflict) | Decimal integer | The current version on the server. Present only in `conflict` responses. |
@@ -604,13 +624,13 @@ Beyond the interpreted fields above, a PUBLISH request MAY carry additional publ
 
 ### 9.1. Version Model
 
-The Mark Protocol uses an append-only version model. Every write to a document creates a new version. Published versions are permanent and MUST NOT be modified or deleted, with one exception: a publisher-declared retention policy prunes the oldest versions of a document (§9.9). Version history is otherwise an append-only log.
+The Mark Protocol uses an append-only version model. Every document-content write creates a new version; archive and unarchive change separate operational state. Published versions are permanent and MUST NOT be modified or deleted, with one exception: a publisher-declared retention policy prunes the oldest versions of a document (§9.9). Version history is otherwise an append-only log.
 
 Version numbers are positive integers starting at 1, monotonically increasing by 1 for each write. Retention pruning never affects version numbering.
 
 The version model is defined over observable protocol behavior, not a storage medium. A server MAY persist versions in any store (the reference implementation ships a filesystem store and a PostgreSQL store) provided the stored version bytes (§9.4), version numbering, hash chain (§9.5), and verb semantics are preserved regardless of the persistence layer.
 
-Immutability covers document content and history, not store-owned operational state: the `archived` field (§9.4) of the current version MAY be updated in place by archive and unarchive operations rather than by creating a new version, since the flag is operational metadata, not content. The hash chain is unaffected because only a successor version hashes its predecessor, and the current version has no successor at the time its flag changes.
+Archive state is store-owned operational state separate from immutable document versions. Archive and unarchive operations change that state without creating a version or modifying stored version bytes. They therefore leave version numbers, modified times, ETags, and the hash chain unchanged.
 
 ### 9.2. Path-Based Version Access
 
@@ -638,9 +658,10 @@ root/
       v1
       v2
       v<N>
+      archive-state     ← current operational state: `true\n` or `false\n`
 ```
 
-The current file (`doc.md`) SHOULD be a symbolic link to the latest version file. Each document's version files reside in their own subdirectory of `versions/`, at the same level as the document, named `v<N>` where N is the version number.
+The current file (`doc.md`) SHOULD be a symbolic link to the latest version file. Each document's version files reside in their own subdirectory of `versions/`, at the same level as the document, named `v<N>` where N is the version number. The `archive-state` sidecar records current archive state separately from immutable version bytes. When absent, implementations MUST fall back to the latest version's legacy `archived` field; an explicit `false` sidecar overrides a legacy `archived: true` value.
 
 An older layout named version files `versions/<filename>.v<N>` directly in the `versions/` directory. Servers encountering it MUST migrate those files into the per-document layout before serving the store (§9.8).
 
@@ -669,7 +690,7 @@ previous-hash: sha256-<64-char lowercase hex>
 <original document content>
 ```
 
-`version`, `archived`, and `previous-hash` (omitted for version 1) are reserved operational fields owned by the store. Publishers MUST NOT set them, and a server MUST reject a PUBLISH whose metadata declares a reserved key.
+`version`, `archived`, and `previous-hash` (omitted for version 1) are reserved operational fields owned by the store. Publishers MUST NOT set them, and a server MUST reject a PUBLISH whose metadata declares a reserved key. The `archived` field is retained in stored bytes for legacy-format fallback; newly written versions MUST set it to `false`. A server MUST derive current archive state from a legacy current version whose field is `true` when no separate operational archive state exists, but archive and unarchive operations MUST NOT rewrite the field.
 
 Publisher-declared metadata is written into the same block. The field names defined by the Open Knowledge Format (`type`, `title`, `description`, `resource`, `tags`, and `timestamp`) are written as **bare** frontmatter fields so the document's persisted metadata matches the OKF spec for the fields it covers; `tags` is serialized as a YAML flow list. Every other publisher key is written under a `meta.` prefix so it cannot collide with a reserved or OKF-recognized field. For example:
 
@@ -751,14 +772,14 @@ Because pruning is the store's only destructive operation, deletion targets MUST
 
 ### 10.1. ETag
 
-The server MUST compute an ETag for every successful FETCH response. The ETag is the SHA-256 hash of the raw stored version bytes (§9.4, before any frontmatter stripping), formatted as 64 lowercase hexadecimal characters. Because every storage backend persists identical stored version bytes, a document's ETag is the same regardless of the backend serving it.
+The server MUST compute an ETag for every successful FETCH response. For a stored document, the ETag is the SHA-256 hash of the selected version's exact raw stored bytes (§9.4, before any frontmatter stripping), formatted as 64 lowercase hexadecimal characters. Because every storage backend persists identical stored version bytes, a document version's ETag is the same regardless of the backend serving it and remains stable through archive and unarchive operations. For an automatically generated directory index with no stored version, the ETag is the SHA-256 hash of the exact response body bytes.
 
 ### 10.2. Conditional Requests
 
 Clients MAY include `if-none-match` and/or `if-modified-since` metadata in FETCH requests.
 
-- `if-none-match`: If the value matches the current ETag, the server MUST respond with `not-modified`.
-- `if-modified-since`: If the document has not been modified after the given RFC 3339 timestamp, the server MUST respond with `not-modified`.
+- `if-none-match`: If the value matches the selected version's ETag, the server MUST respond with `not-modified`.
+- `if-modified-since`: If the selected version was not modified after the given RFC 3339 timestamp, the server MUST respond with `not-modified`.
 
 When both are present, `if-none-match` takes precedence. If it matches, `not-modified` is returned without evaluating `if-modified-since`.
 
@@ -953,6 +974,8 @@ These will be specified in future versions of this document.
 - RFC 2119: Key words for use in RFCs to Indicate Requirement Levels
 - RFC 9000: QUIC: A UDP-Based Multiplexed and Secure Transport
 - RFC 8446: The Transport Layer Security (TLS) Protocol Version 1.3
+- RFC 3986: Uniform Resource Identifier (URI): Generic Syntax
+- RFC 6066: Transport Layer Security (TLS) Extensions
 - RFC 3339: Date and Time on the Internet: Timestamps
 - CommonMark Specification: <https://spec.commonmark.org/>
 - YAML 1.2 Specification: <https://yaml.org/spec/1.2/>

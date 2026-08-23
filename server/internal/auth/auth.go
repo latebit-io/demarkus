@@ -105,6 +105,19 @@ func NewTokenStore(tokens map[string]Token) *TokenStore {
 	return &TokenStore{tokens: tokens, readPaths: collectReadPaths(tokens), now: time.Now}
 }
 
+// Hashes returns the token hashes in sorted order.
+func (ts *TokenStore) Hashes() []string {
+	if ts == nil {
+		return nil
+	}
+	hashes := make([]string, 0, len(ts.tokens))
+	for hash := range ts.tokens {
+		hashes = append(hashes, hash)
+	}
+	slices.Sort(hashes)
+	return hashes
+}
+
 // collectReadPaths extracts path patterns from all tokens that have "read"
 // in their operations. Called once at load time so RequiresReadAuth avoids
 // iterating tokens on every request.
@@ -122,7 +135,12 @@ func collectReadPaths(tokens map[string]Token) []string {
 // If true, the caller must authorize the request with a valid read token.
 // If false, the path is public.
 func (ts *TokenStore) RequiresReadAuth(reqPath string) bool {
-	return matchesAnyPath(ts.readPaths, reqPath)
+	// This probe and handler.checkReadAuth's retry are coupled: removing this
+	// exposes /private; removing the retry denies authorized /private access.
+	if matchesAnyPath(ts.readPaths, reqPath) {
+		return true
+	}
+	return !strings.HasSuffix(reqPath, "/") && matchesAnyPath(ts.readPaths, reqPath+"/")
 }
 
 // Authorize checks whether the given raw token is allowed to perform the given

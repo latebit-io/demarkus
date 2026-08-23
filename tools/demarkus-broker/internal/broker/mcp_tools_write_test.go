@@ -358,14 +358,7 @@ func TestHandleMarkPublishMergeCandidateWithMarkers(t *testing.T) {
 	}
 }
 
-// TestHandleMarkPublishMergeDispatchesEachStepThroughAuth: the
-// merge orchestration calls Publish (conflict) → FetchVersion
-// (base) → FetchCurrent (theirs). Each must dispatch through
-// dispatchWithAuth, so the world write token gets reused
-// across the three calls and a propagation-race retry on any
-// one of them works. Pinned by counting dispatches and
-// asserting they all carry the same provisioned token.
-func TestHandleMarkPublishMergeDispatchesEachStepThroughAuth(t *testing.T) {
+func TestHandleMarkPublishMergeUsesTokenOnlyForPublish(t *testing.T) {
 	cfg := mcpTestConfig()
 	var publishTokens, fetchTokens []string
 	var mu sync.Mutex
@@ -406,13 +399,12 @@ func TestHandleMarkPublishMergeDispatchesEachStepThroughAuth(t *testing.T) {
 	if len(fetchTokens) != 2 {
 		t.Errorf("fetch dispatched %d times, want 2 (base + current)", len(fetchTokens))
 	}
-	// All three dispatches share the same provisioned token —
-	// proves the world write token is honored across the merge
-	// orchestration's calls.
-	allTokens := append(append([]string{}, publishTokens...), fetchTokens...)
-	for i := 1; i < len(allTokens); i++ {
-		if allTokens[i] != allTokens[0] {
-			t.Errorf("merge step %d used token %q, want shared %q (world write token reuse)", i, allTokens[i], allTokens[0])
+	if len(publishTokens) == 1 && publishTokens[0] == "" {
+		t.Error("publish dispatched without a publish token")
+	}
+	for i, token := range fetchTokens {
+		if token != "" {
+			t.Errorf("merge fetch %d used token %q, want public read", i, token)
 		}
 	}
 }
@@ -740,8 +732,11 @@ func TestHandleMarkAppendAutoResolvesViaVersions(t *testing.T) {
 	cfg := mcpTestConfig()
 	var versionsHits, appendHits int32
 	d := &fakeDispatcher{
-		versionsFn: func(_, _, _ string) (fetch.Result, error) {
+		versionsFn: func(_, _, token string) (fetch.Result, error) {
 			atomic.AddInt32(&versionsHits, 1)
+			if token != "" {
+				t.Errorf("VERSIONS used token %q, want public read", token)
+			}
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Metadata: map[string]string{
@@ -750,8 +745,11 @@ func TestHandleMarkAppendAutoResolvesViaVersions(t *testing.T) {
 				},
 			}}, nil
 		},
-		appendFn: func(_, _, _, _ string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
+		appendFn: func(_, _, _, token string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
 			atomic.AddInt32(&appendHits, 1)
+			if token == "" {
+				t.Error("APPEND dispatched without a publish token")
+			}
 			if expectedVersion != 12 {
 				t.Errorf("append dispatched with expectedVersion=%d, want 12 (resolved from VERSIONS)", expectedVersion)
 			}
@@ -874,12 +872,34 @@ func TestHandleMarkArchiveUnknownWorldSurfacesAsToolError(t *testing.T) {
 	}
 }
 
-// TestWriteHandlersInheritPropagationRaceRetry uses an explicit
-// fresh-mint 401 → ok scenario against publish to prove the
-// retry logic carries through from dispatchWithAuth into writes.
-// This is the load-bearing reason for the Slice 3 refactor —
-// without dispatchWithAuth, writes would need their own retry
-// loop and could silently regress.
+func TestDispatchWithWriteAuthFailsClosed(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	contexts := map[string]context.Context{
+		"missing identity": context.Background(),
+		"non-writer": ctxWithClaims(context.Background(), &Claims{
+			Email:         "carol@otherco.test",
+			EmailVerified: true,
+		}),
+	}
+	for name, ctx := range contexts {
+		t.Run(name, func(t *testing.T) {
+			called := false
+			_, err := g.dispatchWithWriteAuth(ctx, "team-a", func(string) (fetch.Result, error) {
+				called = true
+				return fetch.Result{}, nil
+			})
+			if !errors.Is(err, ErrNotAuthorized) {
+				t.Fatalf("error = %v, want ErrNotAuthorized", err)
+			}
+			if called {
+				t.Error("write operation reached dispatcher despite failed authorization")
+			}
+		})
+	}
+}
+
+// TestWriteHandlersInheritPropagationRaceRetry pins publish-token
+// propagation retry with an explicit 401 followed by success.
 func TestWriteHandlersInheritPropagationRaceRetry(t *testing.T) {
 	cfg := mcpTestConfig()
 	// Tight retry knobs so the test runs fast.

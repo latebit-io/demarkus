@@ -11,7 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/config"
 )
 
-func startCertReloader(cfg *config.Config, prodMode bool, logger *slog.Logger) {
+func startCertReloader(cfg *config.Config, prodMode bool, tokens tokenReloader, logger *slog.Logger) {
 	sighupChan := make(chan os.Signal, 1)
 	signal.Notify(sighupChan, syscall.SIGHUP)
 	go func() {
@@ -24,7 +24,7 @@ func startCertReloader(cfg *config.Config, prodMode bool, logger *slog.Logger) {
 				}
 			}
 			if cfg.TokensFile != "" {
-				if err := loadTokenStore(cfg.TokensFile); err != nil {
+				if err := tokens.ReloadTokens(); err != nil {
 					logger.Error("auth: token reload failed", "error", err)
 				} else {
 					logger.Info("auth: tokens reloaded", "path", cfg.TokensFile)

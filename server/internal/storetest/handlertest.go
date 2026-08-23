@@ -31,6 +31,7 @@ func NewHandler(b LookupBackend) *handler.Handler {
 	return &handler.Handler{
 		Store:         b.Store,
 		Catalog:       b.Catalog,
+		Views:         b.Views,
 		GetTokenStore: func() *auth.TokenStore { return ts },
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -200,11 +201,19 @@ func sortLookupTies(body string) string {
 }
 
 func (d *handlerDifferential) compareSnapshots() {
-	d.compareLines(handlerSnapshot(d.t, d.refH, d.ref), handlerSnapshot(d.t, d.candH, d.cand))
+	currents := make(map[string]int, len(diffDocPaths))
+	for _, path := range diffDocPaths {
+		current, ok := d.currentBoth(d.ref, d.cand, path)
+		if !ok {
+			return
+		}
+		currents[path] = current
+	}
+	d.compareLines(handlerSnapshot(d.t, d.refH, currents), handlerSnapshot(d.t, d.candH, currents))
 }
 
 // handlerSnapshot sweeps every read verb over the pools through the handler.
-func handlerSnapshot(t *testing.T, h *handler.Handler, b LookupBackend) []string {
+func handlerSnapshot(t *testing.T, h *handler.Handler, currents map[string]int) []string {
 	var lines []string
 	add := func(label string, req protocol.Request) {
 		lines = append(lines, label+" = "+normalize(Send(t, h, req)))
@@ -214,7 +223,7 @@ func handlerSnapshot(t *testing.T, h *handler.Handler, b LookupBackend) []string
 		add("versions "+p, request(protocol.VerbVersions, p, nil, ""))
 		// Old versions are immutable and were compared when they were the tip;
 		// the first version, the tip, and the miss past it carry the signal.
-		cur := b.Store.CurrentVersion(p)
+		cur := currents[p]
 		for _, v := range slices.Compact([]int{1, max(cur, 1), cur + 1}) {
 			add(fmt.Sprintf("fetch %s/v%d", p, v), request(protocol.VerbFetch, fmt.Sprintf("%s/v%d", p, v), nil, ""))
 		}

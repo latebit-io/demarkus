@@ -33,15 +33,8 @@ type Claims struct {
 	HD            string
 }
 
-// ExchangeResult bundles everything the broker needs from a completed
-// OAuth2 code exchange. Claims is the verified subset of the ID token; the
-// browser code-flow callback consumes it to evaluate authorizedWorlds for
-// the identity/worlds response. RawIDToken
-// and AccessToken are the IdP-issued tokens verbatim, forwarded into the
-// RFC 8628 device-flow `/device/token` success response so a polling
-// client (the plugin's join binary) ends up with the same bearer it would
-// have gotten from the browser callback. Expiry is the IdP's stated
-// token expiry, copied so callers don't have to re-parse the ID token.
+// ExchangeResult carries verified claims and IdP tokens from a completed
+// OAuth2 code exchange into browser and device-flow responses.
 type ExchangeResult struct {
 	Claims      Claims
 	RawIDToken  string

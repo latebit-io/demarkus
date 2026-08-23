@@ -419,12 +419,15 @@ func TestHandleMarkGraphPublishMissingArgs(t *testing.T) {
 	}
 }
 
-func TestHandleMarkGraphPublishForwardsThroughDispatchWithAuth(t *testing.T) {
+func TestHandleMarkGraphPublishForwardsThroughWriteAuth(t *testing.T) {
 	cfg := mcpTestConfig()
 	var publishedBody string
 	d := &fakeDispatcher{
-		publishFn: func(_, _, body, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		publishFn: func(_, _, body, token string, _ int, _ map[string]string) (fetch.Result, error) {
 			publishedBody = body
+			if token == "" {
+				t.Error("graph publish dispatched without a publish token")
+			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1", "modified": "2026-05-22T10:00:00Z"},
@@ -470,7 +473,10 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 	})
 	var publishCalled atomic.Bool
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		fetchFn: func(_, path, token string) (fetch.Result, error) {
+			if token != "" {
+				t.Errorf("index helper fetch %q used token %q, want public read", path, token)
+			}
 			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
@@ -488,7 +494,10 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		listFn: func(_, path, _ string) (fetch.Result, error) {
+		listFn: func(_, path, token string) (fetch.Result, error) {
+			if token != "" {
+				t.Errorf("index helper list %q used token %q, want public read", path, token)
+			}
 			if path == "/" {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
@@ -497,8 +506,11 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		publishFn: func(_, _, _, token string, _ int, _ map[string]string) (fetch.Result, error) {
 			publishCalled.Store(true)
+			if token == "" {
+				t.Error("index publish dispatched without a publish token")
+			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1", "modified": "2026-05-22T11:00:00Z"},

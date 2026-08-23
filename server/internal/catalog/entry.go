@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"maps"
+	"math"
 	"path"
 	"strconv"
 	"strings"
@@ -22,16 +23,16 @@ func FromDocument(docPath string, metadata map[string]string, body []byte, modif
 	maps.Copy(meta, metadata)
 	return &Entry{
 		Path:       docPath,
-		Tags:       parseTags(meta["tags"]),
-		Importance: parseImportance(meta["importance"]),
+		Tags:       ParseTags(meta["tags"]),
+		Importance: ParseImportance(meta["importance"]),
 		Title:      resolveTitle(meta["title"], body, docPath),
 		Modified:   modified,
 		Metadata:   meta,
 	}
 }
 
-// parseTags splits a comma-separated tag string into trimmed, non-empty tags.
-func parseTags(s string) []string {
+// ParseTags splits a comma-separated tag string into trimmed, non-empty tags.
+func ParseTags(s string) []string {
 	if s == "" {
 		return nil
 	}
@@ -44,14 +45,14 @@ func parseTags(s string) []string {
 	return tags
 }
 
-// parseImportance parses a float in [0,1]. Absent, unparseable, or
+// ParseImportance parses a float in [0,1]. Absent, unparseable, or
 // out-of-range values fall back to defaultImportance.
-func parseImportance(s string) float64 {
+func ParseImportance(s string) float64 {
 	if strings.TrimSpace(s) == "" {
 		return defaultImportance
 	}
 	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil || v < 0 || v > 1 {
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
 		return defaultImportance
 	}
 	return v

@@ -16,7 +16,8 @@ Secrets.
   `create` + per-world `get/update` on the write-token Secrets the
   broker provisions on first write.
 - Default-on `NetworkPolicy` restricting ingress to the configured
-  Ingress controller namespace and egress to DNS + TCP 443.
+  Ingress controller namespace and egress to DNS, TCP 443, and each
+  configured world UDP port (6309 by default).
 - Locked-down pod security context: nonroot UID, read-only root
   filesystem, all capabilities dropped, seccomp RuntimeDefault.
 - Optional `Ingress` (default `ingressClassName: nginx`) with optional
@@ -404,7 +405,17 @@ termination is the Ingress controller's job. Two paths:
   `ingress.tls.certManager.issuerRef` for staging-issuers or
   internal CAs.
 
-### 4. Confirm the install-time RBAC works for your cluster
+### 4. Review the default NetworkPolicy constraints
+
+The default NetworkPolicy relies on the automatic
+`kubernetes.io/metadata.name` namespace label from Kubernetes 1.21+.
+Older clusters must label the ingress-controller and `kube-system`
+namespaces explicitly. OIDC and Kubernetes API egress is limited to
+TCP 443. Mark Protocol egress includes UDP 6309 and custom ports parsed
+from `worlds[].internalAddress`. Deployments using other OIDC or API ports must disable
+`networkPolicy.enabled` and supply an equivalent custom policy.
+
+### 5. Confirm the install-time RBAC works for your cluster
 
 With `rbac.create: true` (default) the chart creates per-world
 `Role` + `RoleBinding` in every world's namespace. The
@@ -419,7 +430,7 @@ management, set `rbac.create: false` and provision the per-world
 `get/update` on its `tokensSecret`, plus the broker-namespace `Role`
 covering `coordination.k8s.io/leases` + the refresh-tokens Secret.
 
-### 5. Set sensible resource limits and confirm the PDB
+### 6. Set sensible resource limits and confirm the PDB
 
 The chart's defaults (`100m`/`128Mi` request, `500m`/`256Mi` limit)
 are sized for the realistic ~10k-subjects worst-case in the

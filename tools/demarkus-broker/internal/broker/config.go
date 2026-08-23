@@ -641,6 +641,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("at least one world is required")
 	}
 	seen := make(map[string]bool, len(c.Worlds))
+	seenSecretRefs := make(map[[2]string]string, len(c.Worlds))
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
 		if err := validateWorld(i, w, c.fileBackend()); err != nil {
@@ -650,6 +651,13 @@ func (c *Config) validate() error {
 			return fmt.Errorf("worlds[%d]: duplicate name %q", i, w.Name)
 		}
 		seen[w.Name] = true
+		if !c.fileBackend() {
+			ref := [2]string{w.Namespace, w.TokensSecret}
+			if other, ok := seenSecretRefs[ref]; ok {
+				return fmt.Errorf("worlds[%d] (%s): duplicate tokens Secret reference %q (also used by world %q)", i, w.Name, fmt.Sprintf("%s/%s", ref[0], ref[1]), other)
+			}
+			seenSecretRefs[ref] = w.Name
+		}
 	}
 	if err := validateWebClients(c.WebClients); err != nil {
 		return err
@@ -927,6 +935,8 @@ func validateWorld(i int, w *WorldConfig, fileMode bool) error {
 			return fmt.Errorf("worlds[%d] (%s): internalAddress is required in file-backend mode", i, w.Name)
 		}
 	} else {
+		w.Namespace = strings.ToLower(strings.TrimSpace(w.Namespace))
+		w.TokensSecret = strings.ToLower(strings.TrimSpace(w.TokensSecret))
 		switch {
 		case w.Namespace == "":
 			return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)

@@ -205,6 +205,29 @@ func TestParseRequestLineExceedsLimit(t *testing.T) {
 	}
 }
 
+func TestValidateRequestPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{name: "root", path: "/"},
+		{name: "maximum", path: "/" + strings.Repeat("a", MaxRequestPathLength-1)},
+		{name: "empty", wantErr: true},
+		{name: "relative", path: "a.md", wantErr: true},
+		{name: "too long", path: "/" + strings.Repeat("a", MaxRequestPathLength), wantErr: true},
+		{name: "control", path: "/a\nb.md", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateRequestPath(test.path)
+			if (err != nil) != test.wantErr {
+				t.Errorf("ValidateRequestPath(%q) error = %v, wantErr %v", test.path, err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestParseRequestRejectsTouchingFenceEmptyFrontmatter(t *testing.T) {
 	// `---\n---\n` with zero bytes between the fences is intentionally rejected
 	// (the canonical empty form is `---\n\n---\n`). This matches response.go's

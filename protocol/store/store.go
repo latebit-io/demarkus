@@ -54,6 +54,7 @@ type Document struct {
 	Version  int
 	Archived bool
 	Metadata map[string]string
+	ETag     string
 	// Prune reports retention pruning performed by the write that produced
 	// this document, or nil when no pruning ran. Callers on the network path
 	// audit-log it so version deletions are always attributable.
@@ -109,6 +110,9 @@ var ErrInvalidContent = fmt.Errorf("document body must be valid UTF-8 text")
 // APPEND's merge (SPEC 6.6) can breach caps both sides satisfied alone.
 var ErrInvalidMeta = fmt.Errorf("invalid publisher metadata")
 
+// ErrIntegrity marks verified stored state whose bytes or hash chain are corrupt.
+var ErrIntegrity = fmt.Errorf("stored version integrity failure")
+
 // maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
 // adds to a version file (version, archived, previous-hash, publisher
 // metadata, and delimiters). It must cover MaxMetaBytes of publisher metadata
@@ -121,6 +125,8 @@ const maxStoreFrontmatter = 2048
 // written bare instead, so the store frontmatter matches the OKF spec for the
 // fields it defines.
 const metaPrefix = "meta."
+
+const archiveStateName = "archive-state"
 
 // okfKeys are the publisher metadata keys recognized by the Open Knowledge
 // Format (OKF) spec. They serialize as bare frontmatter fields (e.g. "tags:")
@@ -168,6 +174,117 @@ func newVersionFilePath(versionsDir, base string, version int) string {
 	return filepath.Join(versionsDir, base, fmt.Sprintf("v%d", version))
 }
 
+func readArchiveState(docDir string) (archived, exists bool, err error) {
+	statePath := filepath.Join(docDir, archiveStateName)
+	info, err := os.Lstat(statePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("stat archive state: %w", err)
+	}
+	if !info.Mode().IsRegular() || (info.Size() != int64(len("true\n")) && info.Size() != int64(len("false\n"))) {
+		return false, false, fmt.Errorf("%w: invalid archive state file", ErrIntegrity)
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return false, false, fmt.Errorf("read archive state: %w", err)
+	}
+	switch string(data) {
+	case "true\n":
+		return true, true, nil
+	case "false\n":
+		return false, true, nil
+	default:
+		return false, false, fmt.Errorf("%w: invalid archive state %q", ErrIntegrity, data)
+	}
+}
+
+func effectiveArchived(docDir string, tipStored []byte) (bool, error) {
+	archived, exists, err := readArchiveState(docDir)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return archived, nil
+	}
+	return isArchived(tipStored), nil
+}
+
+// writeArchiveState commits through a synced sibling temp file. committed is
+// true when rename succeeded, even if the following directory sync failed.
+func writeArchiveState(docDir string, archived bool) (committed bool, retErr error) {
+	f, err := os.CreateTemp(docDir, ".archive-state-*")
+	if err != nil {
+		return false, fmt.Errorf("create temp archive state: %w", err)
+	}
+	tmpPath := f.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			if closeErr := f.Close(); closeErr != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("close temp archive state: %w", closeErr))
+			}
+		}
+		if tmpPath != "" {
+			if removeErr := os.Remove(tmpPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				retErr = errors.Join(retErr, fmt.Errorf("remove temp archive state: %w", removeErr))
+			}
+		}
+	}()
+
+	if err := f.Chmod(0o644); err != nil {
+		return false, fmt.Errorf("chmod temp archive state: %w", err)
+	}
+	state := strconv.FormatBool(archived) + "\n"
+	if _, err := f.WriteString(state); err != nil {
+		return false, fmt.Errorf("write temp archive state: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return false, fmt.Errorf("sync temp archive state: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		closed = true
+		return false, fmt.Errorf("close temp archive state: %w", err)
+	}
+	closed = true
+
+	statePath := filepath.Join(docDir, archiveStateName)
+	if err := os.Rename(tmpPath, statePath); err != nil {
+		return false, fmt.Errorf("rename archive state: %w", err)
+	}
+	tmpPath = ""
+	committed = true
+
+	if err := syncArchiveStateDir(docDir); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func syncArchiveStateDir(docDir string) error {
+	dir, err := os.Open(docDir)
+	if err != nil {
+		return fmt.Errorf("open archive state directory: %w", err)
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	if syncErr != nil || closeErr != nil {
+		return errors.Join(
+			wrapError("sync archive state directory", syncErr),
+			wrapError("close archive state directory", closeErr),
+		)
+	}
+	return nil
+}
+
+func wrapError(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
 // versionRelPath is the root-relative location of one version of rel:
 // <dir>/versions/<base>/vN.
 func versionRelPath(rel string, version int) string {
@@ -192,6 +309,9 @@ type Store struct {
 	// membership as "current, non-archived doc" for ListDir filtering, so
 	// keep membership semantics exact; a miss only degrades to a disk scan.
 	pathIdx map[string]string
+	// hashErr records an incomplete index build. Hits remain valid, but misses
+	// cannot be reported as confirmed absence until a clean rebuild succeeds.
+	hashErr error
 }
 
 // New creates a store rooted at the given directory. For a pre-existing root
@@ -281,12 +401,16 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 		if err != nil {
 			return skip(path, err)
 		}
-		if isArchived(data) {
-			return nil
-		}
 		rel, err := filepath.Rel(absRoot, path)
 		if err != nil {
 			return skip(path, err)
+		}
+		archived, err := effectiveArchived(filepath.Dir(resolved), data)
+		if err != nil {
+			return skip(path, err)
+		}
+		if archived {
+			return nil
 		}
 		return fn("/"+filepath.ToSlash(rel), data, info.ModTime().UTC().Truncate(time.Second))
 	})
@@ -331,11 +455,14 @@ func (s *Store) BuildHashIndex() error {
 
 	s.hashIdx = make(map[string][]string)
 	s.pathIdx = make(map[string]string)
+	s.hashErr = nil
 
-	return s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
+	err := s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
 		s.indexLocked(reqPath, contentHash(extractBody(data)))
 		return nil
 	})
+	s.hashErr = err
+	return err
 }
 
 // indexLocked records reqPath (already canonical) under hash, dropping any
@@ -392,15 +519,26 @@ func (s *Store) WalkCurrent(fn func(CurrentDoc) error) error {
 	})
 }
 
-// LookupHash returns the request path for a content hash, or false if not
-// found. When several live documents share the body, the smallest path wins.
+// LookupHash returns a live request path and whether one exists.
+//
+// Deprecated: use LookupHashResult to distinguish misses from index errors.
 func (s *Store) LookupHash(hash string) (string, bool) {
+	path, err := s.LookupHashResult(hash)
+	return path, err == nil
+}
+
+// LookupHashResult returns the smallest live request path for a content hash.
+// A confirmed miss is os.ErrNotExist; an incomplete index reports its cause.
+func (s *Store) LookupHashResult(hash string) (string, error) {
 	s.hashMu.RLock()
 	defer s.hashMu.RUnlock()
 	if paths := s.hashIdx[hash]; len(paths) > 0 {
-		return paths[0], true
+		return paths[0], nil
 	}
-	return "", false
+	if s.hashErr != nil {
+		return "", fmt.Errorf("hash index incomplete: %w", s.hashErr)
+	}
+	return "", os.ErrNotExist
 }
 
 // UpdateHashIndex adds or updates the hash index entry for a document.
@@ -476,15 +614,23 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
+	archived, err := effectiveArchived(filepath.Dir(filePath), data)
+	if err != nil {
+		return nil, err
+	}
 
-	ver := s.CurrentVersion(reqPath)
+	ver, err := s.CurrentVersionResult(reqPath)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Document{
 		Content:  extractBody(data),
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  ver,
-		Archived: isArchived(data),
+		Archived: archived,
 		Metadata: extractMetadata(data),
+		ETag:     StoredETag(data),
 	}, nil
 }
 
@@ -551,33 +697,43 @@ func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 			continue
 		}
 		if e.IsDir() {
+			var hasDocument bool
 			if includeArchived {
 				// Recovery/audit view: any document in the subtree, archived
 				// included, keeps the directory visible.
-				if !s.dirHasDocument(filepath.Join(dirPath, name), absRoot, true) {
-					continue
-				}
+				hasDocument, err = s.dirHasDocument(filepath.Join(dirPath, name), absRoot, true)
 			} else {
 				// Index fast path; on a miss, scan disk before pruning
 				// rather than hide content the listing would show.
-				if _, ok := live.dirs[name]; !ok && !s.dirHasDocument(filepath.Join(dirPath, name), absRoot, false) {
-					continue // subtree holds no listable documents
+				if _, ok := live.dirs[name]; ok {
+					hasDocument = true
+				} else {
+					hasDocument, err = s.dirHasDocument(filepath.Join(dirPath, name), absRoot, false)
 				}
+			}
+			if err != nil {
+				return nil, fmt.Errorf("inspect directory %q: %w", name, err)
+			}
+			if !hasDocument {
+				continue
 			}
 			filtered = append(filtered, e)
 			continue
 		}
-		// Index fast path: a live indexed doc is a document by construction;
-		// the include-archived view's nil map misses into the disk checks.
-		if _, ok := live.files[name]; ok {
-			filtered = append(filtered, e)
+		// The index proves document identity, but archive state remains a disk
+		// check so external sidecar corruption cannot fail open.
+		_, indexed := live.files[name]
+		if !indexed && !dc.isDocument(name) {
 			continue
 		}
-		if !dc.isDocument(name) {
-			continue
-		}
-		if !includeArchived && entryArchived(filepath.Join(dirPath, name), absRoot) {
-			continue
+		if !includeArchived {
+			archived, err := entryArchived(filepath.Join(dirPath, name), absRoot)
+			if err != nil {
+				return nil, fmt.Errorf("inspect document %q: %w", name, err)
+			}
+			if archived {
+				continue
+			}
 		}
 		filtered = append(filtered, e)
 	}
@@ -681,10 +837,10 @@ func hasHiddenSegment(rel string) bool {
 // dirHasDocument reports whether the subtree holds a document the listing
 // view would show (SPEC 11.9); liveChildren's slow-path complement, walked
 // only for unindexed children. Unreadable dirs prune rather than show empty.
-func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) bool {
+func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) (bool, error) {
 	entries, err := os.ReadDir(dirAbs)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("read directory: %w", err)
 	}
 	// Files first: a qualifying file at this level answers with at most one
 	// candidate load, before any subtree recursion is paid.
@@ -702,57 +858,69 @@ func (s *Store) dirHasDocument(dirAbs, absRoot string, includeArchived bool) boo
 		if !dc.isDocument(name) {
 			continue
 		}
-		if includeArchived || !entryArchived(filepath.Join(dirAbs, name), absRoot) {
-			return true
+		if includeArchived {
+			return true, nil
+		}
+		archived, err := entryArchived(filepath.Join(dirAbs, name), absRoot)
+		if err != nil {
+			return false, err
+		}
+		if !archived {
+			return true, nil
 		}
 	}
 	for _, name := range dirs {
-		if s.dirHasDocument(filepath.Join(dirAbs, name), absRoot, includeArchived) {
-			return true
+		hasDocument, err := s.dirHasDocument(filepath.Join(dirAbs, name), absRoot, includeArchived)
+		if err != nil {
+			return false, err
+		}
+		if hasDocument {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-// entryArchived reports whether a directory entry that is a current-version
-// document symlink points at an archived version. It applies the same guards
-// walkCurrentFiles uses for this resolve-and-read pattern: a target escaping
-// the content root is never opened (isContained), and a non-regular target
-// (FIFO, device — opening one can block forever) is never opened either. The
-// read itself is a bounded prefix: the store-managed frontmatter that carries
-// the archived flag is capped at maxStoreFrontmatter, so the document body is
-// never pulled in. A non-symlink entry, a broken link, an unreadable target,
-// or any guarded state is treated as not archived (shown) — the listing errs
-// toward visibility, never hiding something it could not positively classify.
-func entryArchived(childPath, absRoot string) bool {
+// entryArchived safely resolves a current document and overlays sidecar state.
+// Confirmed non-symlinks and non-regular targets remain visible.
+func entryArchived(childPath, absRoot string) (bool, error) {
 	fi, err := os.Lstat(childPath)
-	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		return false
+	if err != nil {
+		return false, fmt.Errorf("lstat document: %w", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return false, nil
 	}
 	resolved, err := filepath.EvalSymlinks(childPath)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("resolve document: %w", err)
 	}
 	if !isContained(resolved, absRoot) {
-		return false
+		return false, errSymlinkEscapes
 	}
 	info, err := os.Stat(resolved)
-	if err != nil || !info.Mode().IsRegular() {
-		return false
+	if err != nil {
+		return false, fmt.Errorf("stat document: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, nil
 	}
 	f, err := os.Open(resolved)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("open document: %w", err)
 	}
-	defer func() { _ = f.Close() }()
 	// maxStoreFrontmatter bounds the frontmatter block, so this prefix is
 	// guaranteed to contain the closing fence; the slack covers the fences.
 	buf := make([]byte, maxStoreFrontmatter+256)
-	n, err := io.ReadFull(f, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return false
+	n, readErr := io.ReadFull(f, buf)
+	closeErr := f.Close()
+	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
+		return false, fmt.Errorf("read current version: %w", errors.Join(readErr, closeErr))
 	}
-	return isArchived(buf[:n])
+	if closeErr != nil {
+		return false, fmt.Errorf("close current version: %w", closeErr)
+	}
+	return effectiveArchived(filepath.Dir(resolved), buf[:n])
 }
 
 // IsDir reports whether the given path is a directory within the content root.
@@ -856,15 +1024,22 @@ func (s *Store) resolve(reqPath string) (string, error) {
 	return absPath, nil
 }
 
-// CurrentVersion returns the latest version number for a document.
-// Returns 0 if no version history exists.
+// CurrentVersion returns the latest version number, or 0 when none exists.
+//
+// Deprecated: use CurrentVersionResult to surface invalid paths.
 func (s *Store) CurrentVersion(reqPath string) int {
+	version, _ := s.CurrentVersionResult(reqPath)
+	return version
+}
+
+// CurrentVersionResult returns the latest version number and path errors.
+func (s *Store) CurrentVersionResult(reqPath string) (int, error) {
 	cleaned, err := RelPath(reqPath)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
-	return highestPerDocVersion(versionsDir, filepath.Base(cleaned))
+	return highestPerDocVersion(versionsDir, filepath.Base(cleaned)), nil
 }
 
 // highestPerDocVersion returns the highest version in base's per-doc dir,
@@ -969,26 +1144,27 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 		Content:  extractBody(data),
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  version,
-		Archived: isArchived(data),
+		Archived: false,
 		Metadata: extractMetadata(data),
+		ETag:     StoredETag(data),
 	}, nil
 }
 
-// Archive marks the current version of a document as archived by updating
-// the archived flag in its frontmatter. This prevents FETCH from serving
-// the document but preserves all version history.
+// Archive changes operational archive state without modifying version bytes.
 //
-// This intentionally modifies the current version file in-place rather than
-// creating a new version. The archived flag is operational metadata, not
-// content — creating a new version would pollute the history with identical
-// content. The hash chain remains valid because only subsequent versions
-// hash their predecessor, and the current version (tip) has no successor yet.
+// Deprecated: use ArchiveResult to inspect the resulting document and change.
 func (s *Store) Archive(reqPath string, archived bool) error {
+	_, _, err := s.ArchiveResult(reqPath, archived)
+	return err
+}
+
+// ArchiveResult changes archive state and returns its committed result.
+func (s *Store) ArchiveResult(reqPath string, archived bool) (*Document, bool, error) {
 	if _, err := s.resolve(reqPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return os.ErrNotExist
+			return nil, false, os.ErrNotExist
 		}
-		return fmt.Errorf("resolve path: %w", err)
+		return nil, false, fmt.Errorf("resolve path: %w", err)
 	}
 
 	cleaned := filepath.Clean(reqPath)
@@ -996,55 +1172,83 @@ func (s *Store) Archive(reqPath string, archived bool) error {
 	base := filepath.Base(cleaned)
 	dir := filepath.Dir(cleaned)
 
-	currentVersion := s.CurrentVersion(reqPath)
+	currentVersion, err := s.CurrentVersionResult(reqPath)
+	if err != nil {
+		return nil, false, err
+	}
 	if currentVersion == 0 {
-		return os.ErrNotExist
+		return nil, false, os.ErrNotExist
 	}
 
 	versionsDir := filepath.Join(s.root, dir, "versions")
 	resolvedFile := newVersionFilePath(versionsDir, base, currentVersion)
-	rel, _ := filepath.Rel(s.root, resolvedFile)
-	versionRelPath := "/" + rel
-	versionFile, err := s.resolve(versionRelPath)
+	rel, err := filepath.Rel(s.root, resolvedFile)
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve version path: %w", err)
+	}
+	versionFile, err := s.resolve("/" + filepath.ToSlash(rel))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return os.ErrNotExist
+			return nil, false, os.ErrNotExist
 		}
-		return fmt.Errorf("resolve version file: %w", err)
+		return nil, false, fmt.Errorf("resolve version file: %w", err)
 	}
 
-	// Read current version file
 	data, err := os.ReadFile(versionFile)
 	if err != nil {
-		return fmt.Errorf("read version file: %w", err)
+		return nil, false, fmt.Errorf("read version file: %w", err)
 	}
-
-	// Update the archived flag in-place via the shared frontmatter toggle;
-	// a full parse-modify-serialize round trip would add complexity with no
-	// benefit for this one operational field.
-	newContent, err := SetArchived(data, archived)
+	info, err := os.Stat(versionFile)
 	if err != nil {
-		return err
+		return nil, false, fmt.Errorf("stat version file: %w", err)
+	}
+	currentArchived, err := effectiveArchived(filepath.Dir(versionFile), data)
+	if err != nil {
+		return nil, false, fmt.Errorf("read current archive state: %w", err)
+	}
+	doc := documentFromStored(data, info.ModTime(), currentVersion, archived)
+	if currentArchived == archived {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(versionFile), archiveStateName)); err == nil {
+			if err := syncArchiveStateDir(filepath.Dir(versionFile)); err != nil {
+				return doc, false, err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return doc, false, fmt.Errorf("stat archive state: %w", err)
+		}
+		s.updateArchiveIndex(reqPath, data, archived)
+		return doc, false, nil
 	}
 
-	// Atomic write: temp file + rename to avoid partial reads on concurrent FETCH.
-	tmp := versionFile + ".tmp"
-	if err := os.WriteFile(tmp, newContent, 0o644); err != nil {
-		return fmt.Errorf("write temp version file: %w", err)
-	}
-	if err := os.Rename(tmp, versionFile); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename version file: %w", err)
+	committed, stateErr := writeArchiveState(filepath.Dir(versionFile), archived)
+	if !committed {
+		return nil, false, stateErr
 	}
 
+	s.updateArchiveIndex(reqPath, data, archived)
+
+	if stateErr != nil {
+		return doc, true, stateErr
+	}
+	return doc, true, nil
+}
+
+func (s *Store) updateArchiveIndex(reqPath string, stored []byte, archived bool) {
 	if archived {
 		s.RemoveHashEntry(reqPath)
-	} else {
-		body := extractBody(data)
-		s.UpdateHashIndex(reqPath, body)
+		return
 	}
+	s.UpdateHashIndex(reqPath, extractBody(stored))
+}
 
-	return nil
+func documentFromStored(data []byte, modified time.Time, version int, archived bool) *Document {
+	return &Document{
+		Content:  extractBody(data),
+		Modified: modified.UTC().Truncate(time.Second),
+		Version:  version,
+		Archived: archived,
+		Metadata: extractMetadata(data),
+		ETag:     StoredETag(data),
+	}
 }
 
 // Write creates a new version of a document. Every call produces a new
@@ -1113,7 +1317,11 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 		// dangling version file behind.
 		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path", reqPath)
 	} else {
-		next = s.CurrentVersion(reqPath) + 1
+		current, err := s.CurrentVersionResult(reqPath)
+		if err != nil {
+			return nil, err
+		}
+		next = current + 1
 	}
 
 	// For existing documents: reject writes to archived documents (closes
@@ -1193,6 +1401,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 		Version:  next,
 		Archived: false,
 		Metadata: extractMetadata(stored),
+		ETag:     StoredETag(stored),
 	}
 	if keep := retentionValue(meta); keep > 0 {
 		doc.Prune = s.pruneVersions(versionsDir, base, next, keep)
@@ -1311,7 +1520,8 @@ func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content [
 		// File doesn't exist — proceed with writing the new version.
 		return nil, nil
 	}
-	if bytes.Equal(extractBody(prevData), content) && metaEqual(extractMetadata(prevData), meta) {
+	storedMeta := extractMetadata(prevData)
+	if bytes.Equal(extractBody(prevData), content) && metaEqual(storedMeta, NormalizeMetadata(meta)) {
 		info, err := os.Stat(prevFile)
 		if err != nil {
 			return nil, fmt.Errorf("stat current version: %w", err)
@@ -1321,7 +1531,8 @@ func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content [
 			Modified: info.ModTime().UTC().Truncate(time.Second),
 			Version:  next - 1,
 			Archived: false,
-			Metadata: meta,
+			Metadata: storedMeta,
+			ETag:     StoredETag(prevData),
 		}, ErrNotModified
 	}
 	return nil, nil
@@ -1347,7 +1558,10 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		return s.write(reqPath, content, meta)
 	}
 
-	current := s.CurrentVersion(reqPath)
+	current, err := s.CurrentVersionResult(reqPath)
+	if err != nil {
+		return nil, err
+	}
 	if current != expectedVersion {
 		return &Document{Version: current}, ErrConflict
 	}
@@ -1357,7 +1571,10 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		if errors.Is(err, ErrVersionExists) {
 			// Lost the O_EXCL race: another writer created the expected
 			// next version between our check and the file create.
-			current = s.CurrentVersion(reqPath)
+			current, currentErr := s.CurrentVersionResult(reqPath)
+			if currentErr != nil {
+				return nil, currentErr
+			}
 			return &Document{Version: current}, ErrConflict
 		}
 		if errors.Is(err, ErrNotModified) && doc != nil {
@@ -1411,7 +1628,10 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	if err != nil {
 		// If the requested version doesn't exist, check whether the
 		// document simply moved past it (conflict) or doesn't exist at all.
-		current := s.CurrentVersion(reqPath)
+		current, currentErr := s.CurrentVersionResult(reqPath)
+		if currentErr != nil {
+			return nil, currentErr
+		}
 		if current > 0 && current != expectedVersion {
 			return &Document{Version: current}, ErrConflict
 		}
@@ -1437,10 +1657,6 @@ func (s *Store) VerifyChain(reqPath string) error {
 	if err != nil {
 		return fmt.Errorf("list versions: %w", err)
 	}
-	if len(versions) < 2 {
-		return nil // nothing to verify
-	}
-
 	// Sort oldest-first for sequential verification.
 	sort.Slice(versions, func(i, j int) bool {
 		return versions[i].Version < versions[j].Version
@@ -1452,33 +1668,39 @@ func (s *Store) VerifyChain(reqPath string) error {
 	dir := filepath.Dir(cleaned)
 	versionsDir := filepath.Join(s.root, dir, "versions")
 
-	for i, curr := range versions[1:] {
-		prev := versions[i]
-
-		prevFile := newVersionFilePath(versionsDir, base, prev.Version)
-		currFile := newVersionFilePath(versionsDir, base, curr.Version)
-
-		prevData, err := os.ReadFile(prevFile)
+	var previousData []byte
+	// Delay chain errors until all files are read so missing files retain precedence.
+	var chainErr, formatErr error
+	for index, current := range versions {
+		currentFile := newVersionFilePath(versionsDir, base, current.Version)
+		currentData, err := os.ReadFile(currentFile)
 		if err != nil {
-			return fmt.Errorf("read v%d: %w", prev.Version, err)
+			return fmt.Errorf("read v%d: %w", current.Version, err)
 		}
-		h := sha256.Sum256(prevData)
-		expected := fmt.Sprintf("sha256-%x", h)
-
-		currData, err := os.ReadFile(currFile)
-		if err != nil {
-			return fmt.Errorf("read v%d: %w", curr.Version, err)
+		if index > 0 && chainErr == nil {
+			recorded := extractPreviousHash(currentData)
+			if recorded == "" {
+				chainErr = fmt.Errorf("%w: v%d missing previous-hash", ErrIntegrity, current.Version)
+			} else if expected := "sha256-" + StoredETag(previousData); recorded != expected {
+				chainErr = fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
+					ErrIntegrity, current.Version, expected, recorded)
+			}
 		}
-		recorded := extractPreviousHash(currData)
-		if recorded == "" {
-			return fmt.Errorf("v%d missing previous-hash", curr.Version)
+		if formatErr == nil {
+			header, inspectErr := InspectStoredVersion(currentData)
+			switch {
+			case inspectErr != nil:
+				formatErr = fmt.Errorf("%w: v%d: %v", ErrIntegrity, current.Version, inspectErr)
+			case header.Version != current.Version:
+				formatErr = fmt.Errorf("%w: v%d stored version is %d", ErrIntegrity, current.Version, header.Version)
+			}
 		}
-		if recorded != expected {
-			return fmt.Errorf("v%d chain broken: previous-hash mismatch (want %s, got %s)",
-				curr.Version, expected, recorded)
-		}
+		previousData = currentData
 	}
-	return nil
+	if chainErr != nil {
+		return chainErr
+	}
+	return formatErr
 }
 
 // resolveNonExistent resolves a path that doesn't exist yet by walking up
@@ -1708,7 +1930,7 @@ func validateMeta(meta map[string]string) error {
 			return fmt.Errorf("%w: key %q contains invalid characters", ErrInvalidMeta, k)
 		}
 		if !protocol.IsValidMetaValue(v) {
-			return fmt.Errorf("%w: value for key %q contains newlines", ErrInvalidMeta, k)
+			return fmt.Errorf("%w: value for key %q is not valid single-line UTF-8", ErrInvalidMeta, k)
 		}
 		if k == retentionKey {
 			if _, ok := ParseRetention(v); !ok {
@@ -1997,7 +2219,7 @@ func (s *Store) migrateToPerDocDir(versionsDir, base, currentFile string, files 
 	return nil
 }
 
-// isCurrentArchived checks whether the given version file is archived.
+// isCurrentArchived checks separate state, falling back to the legacy tip flag.
 // Returns (false, nil) if the file doesn't exist (new document).
 // Returns an error for non-ErrNotExist read failures.
 func (s *Store) isCurrentArchived(versionsDir, base string, version int) (bool, error) {
@@ -2009,5 +2231,9 @@ func (s *Store) isCurrentArchived(versionsDir, base string, version int) (bool, 
 		}
 		return false, fmt.Errorf("read version file for archive check: %w", err)
 	}
-	return isArchived(data), nil
+	archived, err := effectiveArchived(filepath.Dir(path), data)
+	if err != nil {
+		return false, fmt.Errorf("read archive state: %w", err)
+	}
+	return archived, nil
 }

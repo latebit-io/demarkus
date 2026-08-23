@@ -328,7 +328,7 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	if retention > 0 {
 		meta["retention"] = strconv.Itoa(retention)
 	}
-	result, err := g.dispatchWithAuth(ctx, worldName, func(token string) (fetch.Result, error) {
+	result, err := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Publish(worldName, urlPath, body, token, expectedVersion, meta)
 	})
 	if err != nil {
@@ -397,7 +397,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 
 	// Manifest safeguards. Source warning is informational;
 	// target absence is a hard block unless force or dry_run.
-	warnings, block := g.checkIndexManifests(ctx, sourceWorld, targetWorld, dryRun, force)
+	warnings, block := g.checkIndexManifests(sourceWorld, targetWorld, dryRun, force)
 	if block != nil {
 		return block, nil
 	}
@@ -440,9 +440,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 
 	// Merge with existing index if updating an existing target.
 	if expectedVersion > 0 {
-		existing, fetchErr := g.dispatchWithAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
-			return g.dispatcher.Fetch(targetWorld, targetPath, token)
-		})
+		existing, fetchErr := g.dispatcher.Fetch(targetWorld, targetPath, "")
 		if fetchErr != nil {
 			return g.toolErrorFor("index (fetch existing)", targetWorld, fetchErr), nil
 		}
@@ -456,7 +454,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	}
 
 	meta := agentMetaFromClaims(claims)
-	result, err := g.dispatchWithAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
+	result, err := g.dispatchWithWriteAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
 		return g.dispatcher.Publish(targetWorld, targetPath, body, token, expectedVersion, meta)
 	})
 	if err != nil {
@@ -480,18 +478,14 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 // world that hasn't said "yes, accept index publications") —
 // force=true bypasses the block with a recorded warning so an
 // operator who intends the publish anyway can opt in.
-func (g *mcpGateway) checkIndexManifests(ctx context.Context, sourceWorld, targetWorld string, dryRun, force bool) ([]string, *mcp.CallToolResult) {
+func (g *mcpGateway) checkIndexManifests(sourceWorld, targetWorld string, dryRun, force bool) ([]string, *mcp.CallToolResult) {
 	var warnings []string
-	srcManifest, err := g.dispatchWithAuth(ctx, sourceWorld, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Fetch(sourceWorld, protocol.WellKnownManifestPath, token)
-	})
+	srcManifest, err := g.dispatcher.Fetch(sourceWorld, protocol.WellKnownManifestPath, "")
 	if err != nil || srcManifest.Response.Status != protocol.StatusOK {
 		warnings = append(warnings, "warning: source server has no agent manifest")
 	}
 	if !dryRun {
-		tgtManifest, terr := g.dispatchWithAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
-			return g.dispatcher.Fetch(targetWorld, protocol.WellKnownManifestPath, token)
-		})
+		tgtManifest, terr := g.dispatcher.Fetch(targetWorld, protocol.WellKnownManifestPath, "")
 		if terr != nil || tgtManifest.Response.Status != protocol.StatusOK {
 			if !force {
 				return warnings, mcp.NewToolResultError(

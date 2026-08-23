@@ -21,6 +21,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgerrcode"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
@@ -88,10 +90,12 @@ CREATE INDEX IF NOT EXISTS catalog_title_trgm_idx ON catalog USING GIN (title_lo
 // and an untyped constant this size overflows int on 32-bit targets.
 const schemaLockID int64 = 0x64656d61726b7573 // "demarkus"
 
-// queryTimeout bounds every store call. The DocumentStore interface carries
-// no context, so the deadline is applied here: a stalled Postgres fails the
-// request instead of holding its goroutine indefinitely.
+// queryTimeout bounds individual store calls. The DocumentStore interface
+// carries no context, so a stalled Postgres cannot hold a goroutine forever.
 const queryTimeout = 10 * time.Second
+
+// readViewTimeout bounds one request's shared Postgres snapshot.
+const readViewTimeout = 10 * time.Second
 
 // initTimeout bounds Open's startup work; Init may backfill the whole LOOKUP
 // catalog on first boot, which must not crash-loop under the query budget.
@@ -110,6 +114,13 @@ const (
 type Store struct {
 	db     *sql.DB
 	logger *slog.Logger
+}
+
+var _ backend.ViewProvider = (*Store)(nil)
+
+type sqlQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 // Open connects to Postgres with the given DSN, applies the schema, and
@@ -201,6 +212,69 @@ func (s *Store) applySchema(ctx context.Context) error {
 // Close releases the connection pool.
 func (s *Store) Close() error { return s.db.Close() }
 
+// OpenReadView pins request reads to one bounded Postgres snapshot.
+func (s *Store) OpenReadView() (backend.ReadView, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), readViewTimeout)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
+	})
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("open read view: %w", err)
+	}
+	return &readView{ctx: ctx, cancel: cancel, tx: tx}, nil
+}
+
+type readView struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	tx       *sql.Tx
+	close    sync.Once
+	closeErr error
+}
+
+var _ backend.ReadView = (*readView)(nil)
+
+func (view *readView) Get(reqPath string, version int) (*store.Document, error) {
+	return get(view.ctx, view.tx, reqPath, version)
+}
+
+func (view *readView) ListEntries(reqPath string, includeArchived bool) ([]store.DirEntry, error) {
+	return listEntries(view.ctx, view.tx, reqPath, includeArchived)
+}
+
+func (view *readView) IsDir(reqPath string) (bool, error) {
+	return isDir(view.ctx, view.tx, reqPath)
+}
+
+func (view *readView) Versions(reqPath string) ([]store.VersionInfo, error) {
+	return versions(view.ctx, view.tx, reqPath)
+}
+
+func (view *readView) LookupHashResult(hash string) (string, error) {
+	return lookupHash(view.ctx, view.tx, hash)
+}
+
+func (view *readView) VerifyChain(reqPath string) error {
+	return verifyChain(view.ctx, view.tx, reqPath)
+}
+
+func (view *readView) Lookup(query string, opts catalog.Options) ([]catalog.Result, error) {
+	return lookup(view.ctx, view.tx, query, opts)
+}
+
+func (view *readView) Close() error {
+	view.close.Do(func() {
+		err := view.tx.Rollback()
+		view.cancel()
+		if err != nil && !errors.Is(err, sql.ErrTxDone) {
+			view.closeErr = fmt.Errorf("close read view: %w", err)
+		}
+	})
+	return view.closeErr
+}
+
 // Reset destroys every document and version. It exists for the conformance
 // suite, which needs a fresh store per run; never call it on live data.
 func (s *Store) Reset(ctx context.Context) error {
@@ -218,21 +292,26 @@ func (s *Store) Reset(ctx context.Context) error {
 // Get retrieves a document. version 0 means current. Missing documents and
 // directory paths return os.ErrNotExist.
 func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
+	ctx, cancel := opCtx()
+	defer cancel()
+	return get(ctx, s.db, reqPath, version)
+}
+
+func get(ctx context.Context, queries sqlQueryer, reqPath string, version int) (*store.Document, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := opCtx()
-	defer cancel()
 	var stored []byte
 	var modified time.Time
 	var ver int
-	err = s.db.QueryRowContext(ctx, `
-		SELECT v.stored, v.modified, v.version
+	var archived bool
+	err = queries.QueryRowContext(ctx, `
+		SELECT v.stored, v.modified, v.version, d.archived
 		FROM documents d
 		JOIN versions v ON v.path = d.path
 		AND v.version = CASE WHEN $2 = 0 THEN d.current_version ELSE $2 END
-		WHERE d.path = $1`, p, version).Scan(&stored, &modified, &ver)
+		WHERE d.path = $1`, p, version).Scan(&stored, &modified, &ver, &archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, os.ErrNotExist
 	}
@@ -243,8 +322,9 @@ func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
 		Content:  store.ExtractBody(stored),
 		Modified: modified.UTC().Truncate(time.Second),
 		Version:  ver,
-		Archived: store.IsArchived(stored),
+		Archived: version == 0 && archived,
 		Metadata: store.ExtractMetadata(stored),
+		ETag:     store.StoredETag(stored),
 	}, nil
 }
 
@@ -255,6 +335,12 @@ func (s *Store) Get(reqPath string, version int) (*store.Document, error) {
 // beneath it (and that is not the root) returns os.ErrNotExist, as does a
 // document path.
 func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]store.DirEntry, error) {
+	ctx, cancel := opCtx()
+	defer cancel()
+	return listEntries(ctx, s.db, reqPath, includeArchived)
+}
+
+func listEntries(ctx context.Context, queries sqlQueryer, reqPath string, includeArchived bool) ([]store.DirEntry, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return nil, err
@@ -263,8 +349,6 @@ func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]store.DirEn
 	if p != "" {
 		prefix = p + "/"
 	}
-	ctx, cancel := opCtx()
-	defer cancel()
 	// Root ("" prefix) spans the whole table; any other prefix is an index
 	// range scan over the C-collated path key. Aggregating children in SQL
 	// measured 5x slower at 50k documents, so the fold stays here.
@@ -274,7 +358,7 @@ func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]store.DirEn
 		query += ` WHERE path >= $1 AND path < $2`
 		args = append(args, prefix, prefixUpperBound(prefix))
 	}
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := queries.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", reqPath, err)
 	}
@@ -353,6 +437,12 @@ func hiddenName(name string) bool {
 // other path is a directory when documents exist beneath it. A document
 // path reports false; a missing path returns os.ErrNotExist.
 func (s *Store) IsDir(reqPath string) (bool, error) {
+	ctx, cancel := opCtx()
+	defer cancel()
+	return isDir(ctx, s.db, reqPath)
+}
+
+func isDir(ctx context.Context, queries sqlQueryer, reqPath string) (bool, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return false, err
@@ -360,11 +450,9 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 	if p == "" {
 		return true, nil
 	}
-	ctx, cancel := opCtx()
-	defer cancel()
 	prefix := p + "/"
 	var hasChildren bool
-	err = s.db.QueryRowContext(ctx, `
+	err = queries.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM documents WHERE path >= $1 AND path < $2)`,
 		prefix, prefixUpperBound(prefix)).Scan(&hasChildren)
 	if err != nil {
@@ -374,7 +462,7 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 		return true, nil
 	}
 	var isDoc bool
-	err = s.db.QueryRowContext(ctx, `
+	err = queries.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM documents WHERE path = $1)`, p).Scan(&isDoc)
 	if err != nil {
 		return false, fmt.Errorf("isdir %s: %w", reqPath, err)
@@ -388,13 +476,17 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 // Versions returns the version history newest first, or os.ErrNotExist for
 // a document with no history.
 func (s *Store) Versions(reqPath string) ([]store.VersionInfo, error) {
+	ctx, cancel := opCtx()
+	defer cancel()
+	return versions(ctx, s.db, reqPath)
+}
+
+func versions(ctx context.Context, queries sqlQueryer, reqPath string) ([]store.VersionInfo, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := opCtx()
-	defer cancel()
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := queries.QueryContext(ctx, `
 		SELECT version, modified FROM versions WHERE path = $1 ORDER BY version DESC`, p)
 	if err != nil {
 		return nil, fmt.Errorf("versions %s: %w", reqPath, err)
@@ -418,72 +510,68 @@ func (s *Store) Versions(reqPath string) ([]store.VersionInfo, error) {
 	return out, nil
 }
 
-// CurrentVersion returns the current version number, or 0 when the document
-// does not exist. The signature cannot carry an error, so an unexpected
-// database failure is logged before reporting absence; otherwise an outage
-// would be indistinguishable from a missing document.
-func (s *Store) CurrentVersion(reqPath string) int {
+// CurrentVersionResult returns the current version number, or 0 when the path does
+// not exist. Invalid paths return the RelPath error.
+func (s *Store) CurrentVersionResult(reqPath string) (int, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
 	var cur int
 	err = s.db.QueryRowContext(ctx, `
 		SELECT current_version FROM documents WHERE path = $1`, p).Scan(&cur)
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.Warn("current version query failed", "path", reqPath, "error", err)
-		}
-		return 0
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
 	}
-	return cur
+	if err != nil {
+		return 0, fmt.Errorf("current version %s: %w", reqPath, err)
+	}
+	return cur, nil
 }
 
-// LookupHash resolves a body content hash ("sha256-<hex>") to the request
-// path of a current, non-archived document. As with CurrentVersion, an
-// unexpected database failure is logged before reporting a miss.
-//
-// This deliberately queries the indexed body_hash column instead of
-// mirroring the file store's in-RAM index. The file store's "in-memory,
-// rebuilt on startup" lifecycle is an implementation detail of a
-// single-process backend, not part of the DocumentStore contract; a
-// per-process index on a multi-writer backend would serve stale results
-// the moment another process wrote. The database index is the
-// transactionally consistent equivalent, updated by the same transaction
-// as the write it reflects.
-func (s *Store) LookupHash(hash string) (string, bool) {
+// LookupHashResult resolves a live body hash from the transactional index,
+// avoiding stale replica-local state on multi-writer backends.
+func (s *Store) LookupHashResult(hash string) (string, error) {
 	ctx, cancel := opCtx()
 	defer cancel()
+	return lookupHash(ctx, s.db, hash)
+}
+
+func lookupHash(ctx context.Context, queries sqlQueryer, hash string) (string, error) {
 	var p string
-	err := s.db.QueryRowContext(ctx, `
+	err := queries.QueryRowContext(ctx, `
 		SELECT d.path FROM documents d
 		JOIN versions v ON v.path = d.path AND v.version = d.current_version
 		WHERE v.body_hash = $1 AND NOT d.archived
 		ORDER BY d.path LIMIT 1`, hash).Scan(&p)
 	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.Warn("hash lookup query failed", "hash", hash, "error", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", os.ErrNotExist
 		}
-		return "", false
+		return "", fmt.Errorf("lookup hash %s: %w", hash, err)
 	}
-	return "/" + p, true
+	return "/" + p, nil
 }
 
 // VerifyChain checks previous-hash integrity across the retained versions,
 // oldest to newest, exactly as the file store does.
 func (s *Store) VerifyChain(reqPath string) error {
+	ctx, cancel := opCtx()
+	defer cancel()
+	return verifyChain(ctx, s.db, reqPath)
+}
+
+func verifyChain(ctx context.Context, queries sqlQueryer, reqPath string) error {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := opCtx()
-	defer cancel()
 	// Hash server-side (sha256() reproduces store.ContentHash) and ship only
 	// the frontmatter head: verification reads the real bytes, not bodies.
 	// The newest version is skipped, nothing links back to it.
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := queries.QueryContext(ctx, `
 		SELECT version, substring(stored from 1 for $2),
 			CASE WHEN lead(version) OVER (ORDER BY version) IS NULL THEN NULL
 			     ELSE 'sha256-' || encode(sha256(stored), 'hex') END
@@ -495,6 +583,8 @@ func (s *Store) VerifyChain(reqPath string) error {
 	defer func() { _ = rows.Close() }()
 	var seen bool
 	var prevHash string
+	var prevVersion int
+	var prevHead []byte
 	for rows.Next() {
 		var n int
 		var head []byte
@@ -503,24 +593,36 @@ func (s *Store) VerifyChain(reqPath string) error {
 			return fmt.Errorf("list versions: %w", err)
 		}
 		if seen {
-			// head always covers the store frontmatter (capped at
-			// MaxStoreFrontmatter), so this reads what the full bytes would.
 			recorded := store.ExtractPreviousHash(head)
 			if recorded == "" {
-				return fmt.Errorf("v%d missing previous-hash", n)
+				return fmt.Errorf("%w: v%d missing previous-hash", store.ErrIntegrity, n)
 			}
 			if recorded != prevHash {
-				return fmt.Errorf("v%d chain broken: previous-hash mismatch (want %s, got %s)",
-					n, prevHash, recorded)
+				return fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
+					store.ErrIntegrity, n, prevHash, recorded)
+			}
+			if err := validateStoredHead(prevVersion, prevHead); err != nil {
+				return err
 			}
 		}
-		seen, prevHash = true, storedHash.String
+		seen, prevHash, prevVersion, prevHead = true, storedHash.String, n, bytes.Clone(head)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("list versions: %w", err)
 	}
 	if !seen {
 		return fmt.Errorf("list versions: %w", os.ErrNotExist)
+	}
+	return validateStoredHead(prevVersion, prevHead)
+}
+
+func validateStoredHead(version int, head []byte) error {
+	header, err := store.InspectStoredVersion(head)
+	if err != nil {
+		return fmt.Errorf("%w: v%d: %v", store.ErrIntegrity, version, err)
+	}
+	if header.Version != version {
+		return fmt.Errorf("%w: v%d stored version is %d", store.ErrIntegrity, version, header.Version)
 	}
 	return nil
 }
@@ -618,7 +720,11 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		// store's WriteVersion folds ErrVersionExists into ErrConflict.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
-			return &store.Document{Version: s.CurrentVersion(reqPath)}, store.ErrConflict
+			current, currentErr := s.CurrentVersionResult(reqPath)
+			if currentErr != nil {
+				return nil, errors.Join(err, currentErr)
+			}
+			return &store.Document{Version: current}, store.ErrConflict
 		}
 		return nil, fmt.Errorf("insert v%d: %w", next, err)
 	}
@@ -643,6 +749,7 @@ func (s *Store) write(reqPath string, expectedVersion int, content []byte, meta 
 		Version:  next,
 		Archived: false,
 		Metadata: persisted,
+		ETag:     store.StoredETag(stored),
 	}
 
 	if err := s.applyRetention(ctx, tx, p, next, meta, doc); err != nil {
@@ -686,14 +793,16 @@ func readTipForWrite(ctx context.Context, tx *sql.Tx, p string, cur int, content
 	if err != nil {
 		return nil, nil, fmt.Errorf("read tip %s v%d: %w", p, cur, err)
 	}
+	storedMeta := store.ExtractMetadata(tipStored)
 	if bytes.Equal(store.ExtractBody(tipStored), content) &&
-		store.MetaEqual(store.ExtractMetadata(tipStored), meta) {
+		store.MetaEqual(storedMeta, store.NormalizeMetadata(meta)) {
 		return tipStored, &store.Document{
 			Content:  content,
 			Modified: tipModified.UTC().Truncate(time.Second),
 			Version:  cur,
 			Archived: false,
-			Metadata: meta,
+			Metadata: storedMeta,
+			ETag:     store.StoredETag(tipStored),
 		}, nil
 	}
 	return tipStored, nil, nil
@@ -800,15 +909,17 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	if err := store.ValidateMeta(meta); err != nil {
 		return nil, err
 	}
-	// Reject traversal explicitly, as the file store does, rather than relying
-	// on the CurrentVersion fallback below reading 0 for an invalid path.
+	// Reject traversal before entering the missing-version conflict fallback.
 	if _, err := store.RelPath(reqPath); err != nil {
 		return nil, err
 	}
 
 	baseDoc, err := s.Get(reqPath, expectedVersion)
 	if err != nil {
-		current := s.CurrentVersion(reqPath)
+		current, currentErr := s.CurrentVersionResult(reqPath)
+		if currentErr != nil {
+			return nil, currentErr
+		}
 		if current > 0 && current != expectedVersion {
 			return &store.Document{Version: current}, store.ErrConflict
 		}
@@ -824,64 +935,67 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 	return s.WriteVersion(reqPath, expectedVersion, combined, store.PrepareAppendMeta(reqPath, baseDoc.Metadata, meta))
 }
 
-// Archive toggles the archived flag: the documents row column and the tip
-// version's stored frontmatter, in one transaction.
-//
-// Modifying the tip in place is a deliberate parity decision, not an
-// immutability violation: the file store's Archive documents that "the
-// archived flag is operational metadata, not content", and creating a new
-// version would pollute history with identical content. Both backends must
-// produce identical stored bytes for the conformance suite and for
-// migration, so this backend mirrors that design exactly. The hash chain
-// stays valid because only successors hash their predecessor and the tip
-// has no successor yet.
-func (s *Store) Archive(reqPath string, archived bool) error {
+// ArchiveResult changes only the authoritative documents row. Version bytes and
+// their ETags remain immutable.
+func (s *Store) ArchiveResult(reqPath string, archived bool) (*store.Document, bool, error) {
 	p, err := store.RelPath(reqPath)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	if p == "" {
-		return os.ErrNotExist
+		return nil, false, os.ErrNotExist
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin archive: %w", err)
+		return nil, false, fmt.Errorf("begin archive: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	var cur int
+	var currentArchived bool
 	err = tx.QueryRowContext(ctx, `
-		SELECT current_version FROM documents WHERE path = $1 FOR UPDATE`, p).Scan(&cur)
+		SELECT current_version, archived FROM documents WHERE path = $1 FOR UPDATE`, p).Scan(&cur, &currentArchived)
 	if errors.Is(err, sql.ErrNoRows) {
-		return os.ErrNotExist
+		return nil, false, os.ErrNotExist
 	}
 	if err != nil {
-		return fmt.Errorf("lock %s: %w", reqPath, err)
+		return nil, false, fmt.Errorf("lock %s: %w", reqPath, err)
 	}
+	changed := currentArchived != archived
 
 	var tipStored []byte
+	var modified time.Time
 	if err := tx.QueryRowContext(ctx, `
-		SELECT stored FROM versions WHERE path = $1 AND version = $2`, p, cur).Scan(&tipStored); err != nil {
-		return fmt.Errorf("read tip %s v%d: %w", reqPath, cur, err)
+		SELECT stored, modified FROM versions WHERE path = $1 AND version = $2`, p, cur).Scan(&tipStored, &modified); err != nil {
+		return nil, false, fmt.Errorf("read tip %s v%d: %w", reqPath, cur, err)
 	}
-	newStored, err := store.SetArchived(tipStored, archived)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE versions SET stored = $3 WHERE path = $1 AND version = $2`, p, cur, newStored); err != nil {
-		return fmt.Errorf("update tip %s v%d: %w", reqPath, cur, err)
+	if !changed {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			return nil, false, fmt.Errorf("rollback archive no-op %s: %w", reqPath, err)
+		}
+		return archivedDocument(tipStored, modified, cur, archived), false, nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE documents SET archived = $2 WHERE path = $1`, p, archived); err != nil {
-		return fmt.Errorf("update archived %s: %w", reqPath, err)
+		return nil, false, fmt.Errorf("update archived %s: %w", reqPath, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit archive %s: %w", reqPath, err)
+		return nil, false, fmt.Errorf("commit archive %s: %w", reqPath, err)
 	}
-	return nil
+	return archivedDocument(tipStored, modified, cur, archived), true, nil
+}
+
+func archivedDocument(stored []byte, modified time.Time, version int, archived bool) *store.Document {
+	return &store.Document{
+		Content:  store.ExtractBody(stored),
+		Modified: modified.UTC().Truncate(time.Second),
+		Version:  version,
+		Archived: archived,
+		Metadata: store.ExtractMetadata(stored),
+		ETag:     store.StoredETag(stored),
+	}
 }
 
 // WalkCurrent visits every current, non-archived document, matching the

@@ -386,6 +386,14 @@ func TestRequiresReadAuth(t *testing.T) {
 			true,
 		},
 		{
+			"recursive read token protects directory prefix",
+			map[string]Token{
+				"sha256-read": {Paths: []string{"/private/**"}, Operations: []string{"read"}},
+			},
+			"/private",
+			true,
+		},
+		{
 			"path not covered by any read token",
 			map[string]Token{
 				"sha256-read": {Paths: []string{"/private/**"}, Operations: []string{"read"}},

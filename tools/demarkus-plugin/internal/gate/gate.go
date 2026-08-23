@@ -1,8 +1,5 @@
-// Package gate is the unified write-time gate shared by every demarkus plugin.
-// One implementation of the publish tag-gate, the destination (binding) gate,
-// and the knowledge required-axes/required-fields gate — so a fix lands once for
-// all harnesses. The decision (allow|warn|block|ask) is harness-agnostic; each
-// adapter maps it (e.g. pi has no native "ask", so it treats ask like block).
+// Package gate applies harness-independent write guards for every plugin.
+// Adapters map allow, warn, block, and ask decisions to native behavior.
 package gate
 
 import (
@@ -12,16 +9,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
-// Input is the tool call an adapter passes through. It accepts two shapes so the
-// bash adapters can pipe a harness payload verbatim with no JSON munging:
-//   - native:      {tool, input, cwd}                       (pi, generic)
-//   - Claude hook: {tool_name, tool_input, cwd, ...}        (Claude Code hooks)
-//
-// The pi-mcp-adapter "mcp" proxy shape is unwrapped downstream.
+// Input accepts native {tool,input,cwd} and Claude hook payloads.
+// The pi-mcp-adapter proxy shape is unwrapped downstream.
 type Input struct {
 	Tool  string         `json:"tool"`
 	Input map[string]any `json:"input"`
@@ -70,48 +64,8 @@ func navExempt(leaf string) bool {
 	return leaf == "index.md" || leaf == "log.md"
 }
 
-func tagsString(md map[string]any) string {
-	if md == nil {
-		return ""
-	}
-	if t, ok := md["tags"].(string); ok {
-		return t
-	}
-	return ""
-}
-
-// fieldPresent reports whether a required metadata field is satisfied. A string
-// must be non-blank; a number or bool counts as present; an array or object
-// must be NON-EMPTY (an empty `[]`/`{}` is treated as missing, same as a blank
-// string), so e.g. metadata.authors: ["ada"] is present but metadata.authors: []
-// is not.
-func fieldPresent(md map[string]any, key string) bool {
-	if md == nil {
-		return false
-	}
-	v, ok := md[key]
-	if !ok || v == nil {
-		return false
-	}
-	switch t := v.(type) {
-	case string:
-		return strings.TrimSpace(t) != ""
-	case []any:
-		return len(t) > 0
-	case map[string]any:
-		return len(t) > 0
-	default:
-		return true // numbers, bools, etc. count as present
-	}
-}
-
-// prunableRetention returns the normalized retention value when metadata
-// carries one the server will accept — a positive integer, the only form that
-// deletes versions (store.ParseRetention is the same predicate the server
-// enforces). Server-rejectable values (0, negative, fractional, non-numeric)
-// don't prompt: that write fails with bad-request and deletes nothing. JSON
-// numbers are accepted alongside strings because the gate sees the raw tool
-// input, before the MCP layer coerces metadata values to strings.
+// prunableRetention recognizes positive integers accepted by the server.
+// Rejected values cannot prune and must not trigger a destructive-write prompt.
 func prunableRetention(md map[string]any) (string, bool) {
 	if md == nil {
 		return "", false
@@ -175,42 +129,6 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 		return nil, err
 	}
 	return &Decision{Decision: string(s), Reason: reason}, nil
-}
-
-// importanceOK: absent is fine; otherwise a number or non-blank numeric string in
-// [0,1]. Blank string, array, object, bool are rejected (not coerced to 0).
-func importanceOK(md map[string]any) bool {
-	if md == nil {
-		return true
-	}
-	v, present := md["importance"]
-	if !present || v == nil {
-		return true
-	}
-	var n float64
-	switch x := v.(type) {
-	case float64:
-		n = x
-	case json.Number:
-		f, err := x.Float64()
-		if err != nil {
-			return false
-		}
-		n = f
-	case string:
-		s := strings.TrimSpace(x)
-		if s == "" {
-			return false
-		}
-		f, err := strconv.ParseFloat(s, 64)
-		if err != nil {
-			return false
-		}
-		n = f
-	default:
-		return false
-	}
-	return n >= 0 && n <= 1
 }
 
 // Evaluate applies the right gate(s) for the tool's target and returns the
@@ -294,25 +212,27 @@ func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, soulID
 		decisions = append(decisions, *sd)
 	}
 
-	// Publish tag-gate (publish only): missing tags or out-of-range importance.
-	if pt.Verb == "publish" {
+	// PUBLISH checks complete metadata; APPEND checks only explicit overrides.
+	if pt.Verb == "publish" || pt.Verb == "append" {
 		md := metadataOf(args)
-		tagsOK := strings.TrimSpace(tagsString(md)) != ""
-		impOK := importanceOK(md)
-		if !tagsOK || !impOK {
+		result := publishpolicy.Evaluate(publishpolicy.Policy{}, urlOf(args), md)
+		if pt.Verb == "append" {
+			result = publishpolicy.EvaluateOverrides(publishpolicy.Policy{}, urlOf(args), md)
+		}
+		if !result.Compliant() {
 			var problems []string
-			if !tagsOK {
+			if result.Has(publishpolicy.MissingTags) {
 				problems = append(problems, "no metadata.tags (it will be invisible to mark_lookup)")
 			}
-			if !impOK {
+			if result.Has(publishpolicy.InvalidImportance) {
 				problems = append(problems, "metadata.importance outside [0,1]")
 			}
 			target := urlOr(args, "the document")
 			reason := fmt.Sprintf(
-				"demarkus publish to %s has %s. Re-issue mark_publish with a metadata object: tags "+
+				"demarkus %s to %s has %s. Re-issue mark_%s with a metadata object: tags "+
 					"(comma-separated subjects derived from the content) and, if set, importance in [0,1]. "+
 					"Tags are what make this document findable via mark_lookup.",
-				target, strings.Join(problems, "; "))
+				pt.Verb, target, strings.Join(problems, "; "), pt.Verb)
 			s, err := config.MemoryTagStrictness()
 			if err != nil {
 				return Decision{}, err
@@ -348,8 +268,7 @@ func combine(ds []Decision) Decision {
 }
 
 func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Decision, error) {
-	// Retention and style guards apply on their own verbs; the tag/axis gate
-	// is publish-only. All are independent — combine to the most severe outcome.
+	// Each guard selects its own verbs; combine independent outcomes by severity.
 	var decisions []Decision
 	rd, err := retentionDecision(pt, args)
 	if err != nil {
@@ -365,8 +284,8 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	if sd != nil {
 		decisions = append(decisions, *sd)
 	}
-	if pt.Verb == "publish" {
-		td, err := knowledgeTagDecision(args, slug)
+	if pt.Verb == "publish" || pt.Verb == "append" {
+		td, err := knowledgeTagDecision(args, slug, pt.Verb)
 		if err != nil {
 			return Decision{}, err
 		}
@@ -377,58 +296,29 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	return combine(decisions), nil
 }
 
-// knowledgeTagDecision is the knowledge-system publish tag/axis/field gate:
-// tags present, importance in range, required tag axes and required OKF
-// metadata fields from the system's policy. Returns nil when compliant.
-func knowledgeTagDecision(args map[string]any, slug string) (*Decision, error) {
+// knowledgeTagDecision evaluates complete publishes or explicit append overrides.
+func knowledgeTagDecision(args map[string]any, slug, verb string) (*Decision, error) {
 	md := metadataOf(args)
-	tags := strings.TrimSpace(tagsString(md))
-	tagsOK := tags != ""
-	impOK := importanceOK(md)
 	url := urlOf(args)
-
-	var missingAxes []string
-	if tagsOK {
-		axes, err := config.KnowledgeRequireTags(slug)
-		if err != nil {
-			return nil, err
-		}
-		for _, axis := range axes {
-			if !config.TagsHaveAxis(tags, axis) {
-				missingAxes = append(missingAxes, axis)
-			}
-		}
-	}
-
-	var missingFields []string
-	fields, err := config.KnowledgeRequireFields(slug)
+	policy, err := config.KnowledgePolicy(slug)
 	if err != nil {
 		return nil, err
 	}
-	leaf := leafOf(url)
-	for _, f := range fields {
-		// index.md / log.md are server-exempt from the OKF `type` default only —
-		// a hub is intentionally untyped. Every other required field is checked
-		// generically: the binary has the full metadata, so any policy-declared
-		// field is satisfied by a non-empty metadata.<field> (unlike the old bash
-		// gate, which could only inspect `type` and silently skipped the rest).
-		if f == "type" && navExempt(leaf) {
-			continue
-		}
-		if !fieldPresent(md, f) {
-			missingFields = append(missingFields, f)
-		}
+	result := publishpolicy.Evaluate(policy, url, md)
+	if verb == "append" {
+		result = publishpolicy.EvaluateOverrides(policy, url, md)
 	}
-
-	if tagsOK && impOK && len(missingAxes) == 0 && len(missingFields) == 0 {
+	if result.Compliant() {
 		return nil, nil
 	}
 
+	missingAxes := result.Names(publishpolicy.MissingTagAxis)
+	missingFields := result.Names(publishpolicy.MissingField)
 	var problems []string
-	if !tagsOK {
+	if result.Has(publishpolicy.MissingTags) {
 		problems = append(problems, "no metadata.tags (it will be invisible to mark_lookup)")
 	}
-	if !impOK {
+	if result.Has(publishpolicy.InvalidImportance) {
 		problems = append(problems, "metadata.importance outside [0,1]")
 	}
 	if len(missingAxes) > 0 {
@@ -446,15 +336,11 @@ func knowledgeTagDecision(args map[string]any, slug string) (*Decision, error) {
 		target = "the document"
 	}
 	reason := fmt.Sprintf(
-		"demarkus publish to %s (knowledge system '%s') has %s. Re-issue mark_publish with a metadata object: "+
+		"demarkus %s to %s (knowledge system '%s') has %s. Re-issue mark_%s with a metadata object: "+
 			"tags (comma-separated subjects derived from the content) and, if set, importance in [0,1]. "+
 			"Tags are what make this document findable via mark_lookup across the shared catalog.",
-		target, slug, strings.Join(problems, "; "))
-	s, err := config.KnowledgeStrictness(slug)
-	if err != nil {
-		return nil, err
-	}
-	return &Decision{Decision: string(s), Reason: reason}, nil
+		verb, target, slug, strings.Join(problems, "; "), verb)
+	return &Decision{Decision: string(policy.EffectiveStrictness()), Reason: reason}, nil
 }
 
 func urlOr(args map[string]any, fallback string) string {

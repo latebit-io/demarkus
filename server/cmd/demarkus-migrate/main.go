@@ -1,7 +1,6 @@
-// demarkus-migrate copies a world's full version history between store
-// backends, byte-for-byte: file -> postgres or postgres -> file. The
-// destination must be empty; a verify pass re-exports the destination and
-// checks every stored version against hashes recorded during the copy.
+// demarkus-migrate copies a world's full version history and archive state
+// between store backends: file -> postgres or postgres -> file. The destination
+// must be empty; a verify pass re-exports and checks every document.
 //
 // Usage:
 //
@@ -31,10 +30,10 @@ func main() {
 	to := flag.String("to", "", "destination backend: file or postgres")
 	root := flag.String("root", "", "content directory for the file side (overrides DEMARKUS_ROOT)")
 	pgDSN := flag.String("pg-dsn", "", "Postgres connection string for the postgres side (overrides DEMARKUS_PG_DSN)")
-	verify := flag.Bool("verify", true, "after copying, re-export the destination and compare every stored version")
+	verify := flag.Bool("verify", true, "after copying, re-export and compare every stored version and archive state")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: demarkus-migrate -from file|postgres -to file|postgres [options]\n\n")
-		fmt.Fprintf(os.Stderr, "Copy a world's full version history between store backends, byte-for-byte.\n")
+		fmt.Fprintf(os.Stderr, "Copy a world's full version history and archive state between store backends.\n")
 		fmt.Fprintf(os.Stderr, "The destination must be empty. Stop the server before migrating.\n")
 		fmt.Fprintf(os.Stderr, "A failed run leaves partial state; wipe the destination before retrying.\n\n")
 		flag.PrintDefaults()
@@ -95,13 +94,13 @@ func run(ctx context.Context, from, to, root, pgDSN string, verify bool, logger 
 	// versions or stored bytes.
 	want := map[string]string{}
 	var docs, versions int
-	if err := src.ExportDocs(ctx, func(p string, vs []store.StoredVersion) error {
+	if err := src.ExportDocs(ctx, func(p string, document store.StoredDocument) error {
 		docs++
-		versions += len(vs)
+		versions += len(document.Versions)
 		if verify {
-			want[p] = docDigest(vs)
+			want[p] = docDigest(document)
 		}
-		return dst.ImportDoc(ctx, p, vs)
+		return dst.ImportDoc(ctx, p, document)
 	}); err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}
@@ -122,19 +121,19 @@ func validBackend(b string) bool { return b == "file" || b == "postgres" }
 var errNonEmpty = fmt.Errorf("destination is not empty; migrate into a fresh root/database")
 
 func requireEmpty(ctx context.Context, dst store.Migrator, name string) error {
-	err := dst.ExportDocs(ctx, func(string, []store.StoredVersion) error { return errNonEmpty })
+	err := dst.ExportDocs(ctx, func(string, store.StoredDocument) error { return errNonEmpty })
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
 }
 
-// docDigest folds a document's history into one hash, streamed record by
-// record: version numbers, stored-bytes hashes, and modified times to the
-// second. Version order within a document is ascending on every backend.
-func docDigest(vs []store.StoredVersion) string {
+// docDigest folds archive state and history into one hash. Version order
+// within a document is ascending on every backend.
+func docDigest(document store.StoredDocument) string {
 	h := sha256.New()
-	for _, v := range vs {
+	_, _ = fmt.Fprintf(h, "archived=%t\n", document.Archived)
+	for _, v := range document.Versions {
 		// hash.Hash.Write never returns an error.
 		_, _ = fmt.Fprintf(h, "%d|%s|%d\n", v.Version, store.ContentHash(v.Stored), v.Modified.UTC().Truncate(time.Second).Unix())
 	}
@@ -144,14 +143,14 @@ func docDigest(vs []store.StoredVersion) string {
 // verifyDst re-exports the destination and compares each document's digest
 // against the one recorded from the source during the copy.
 func verifyDst(ctx context.Context, dst store.Migrator, want map[string]string) error {
-	if err := dst.ExportDocs(ctx, func(p string, vs []store.StoredVersion) error {
+	if err := dst.ExportDocs(ctx, func(p string, document store.StoredDocument) error {
 		wd, ok := want[p]
 		if !ok {
 			return fmt.Errorf("%s: not in source", p)
 		}
 		delete(want, p)
-		if docDigest(vs) != wd {
-			return fmt.Errorf("%s: version history differs from source", p)
+		if docDigest(document) != wd {
+			return fmt.Errorf("%s: document differs from source", p)
 		}
 		return nil
 	}); err != nil {

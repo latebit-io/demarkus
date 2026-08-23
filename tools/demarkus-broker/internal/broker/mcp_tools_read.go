@@ -83,15 +83,19 @@ func parseToolURL(raw string) (worldName, path string, err error) {
 	return worldName, path, nil
 }
 
-// worldOp is the closure form of a dispatcher call: the handler captures the
-// per-verb args in its closure, keeping dispatchWithAuth verb-agnostic. Write
-// verbs only — every read dispatches unauthenticated with an empty bearer.
+// worldOp captures one publish operation for token-aware retry.
 type worldOp func(token string) (fetch.Result, error)
 
-// dispatchWithAuth resolves the per-world write token and invokes op with it,
-// retrying with backoff on `unauthorized`; writer authorization happens at
-// the handler boundary (mcp_tools_write.go) before dispatch.
-func (g *mcpGateway) dispatchWithAuth(ctx context.Context, worldName string, op worldOp) (fetch.Result, error) {
+// dispatchWithWriteAuth centrally enforces writer access, provisions a publish
+// token, and absorbs propagation lag. Handler gates provide precise errors.
+func (g *mcpGateway) dispatchWithWriteAuth(ctx context.Context, worldName string, op worldOp) (fetch.Result, error) {
+	claims, ok := claimsFromCtx(ctx)
+	if !ok {
+		return fetch.Result{}, ErrNotAuthorized
+	}
+	if _, denied := g.gateWrite(claims, worldName); denied != nil {
+		return fetch.Result{}, ErrNotAuthorized
+	}
 	mcpCfg := g.srv.cfg.Server.MCP
 	maxAttempts := mcpCfg.FirstMintMaxAttempts
 	if maxAttempts <= 0 {

@@ -92,6 +92,14 @@ func testWriteGetRoundtrip(t *testing.T, s handler.DocumentStore) {
 	if !bytes.Equal(doc.Content, []byte("# First\n")) {
 		t.Errorf("write-returned body = %q, want %q", doc.Content, "# First\n")
 	}
+	stored, err := store.SerializeVersion(1, nil, []byte("# First\n"), meta)
+	if err != nil {
+		t.Fatalf("serialize expected stored bytes: %v", err)
+	}
+	wantETag := store.StoredETag(stored)
+	if doc.ETag != wantETag {
+		t.Errorf("write ETag = %q, want raw stored-byte hash %q", doc.ETag, wantETag)
+	}
 	got, err := s.Get("/notes/first.md", 0)
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -102,6 +110,9 @@ func testWriteGetRoundtrip(t *testing.T, s handler.DocumentStore) {
 	}
 	if got.Version != 1 || got.Archived {
 		t.Errorf("got version=%d archived=%v, want 1 false", got.Version, got.Archived)
+	}
+	if got.ETag != wantETag {
+		t.Errorf("get ETag = %q, want raw stored-byte hash %q", got.ETag, wantETag)
 	}
 	// Contract: OKF fields (tags, type) and meta.-prefixed keys read back as
 	// one map, tags in bare comma-separated form.
@@ -141,11 +152,11 @@ func testDocumentOwnedFrontmatter(t *testing.T, s handler.DocumentStore) {
 }
 
 func testVersionHistory(t *testing.T, s handler.DocumentStore) {
-	mustWrite(t, s, "/doc.md", 0, "v1")
+	first := mustWrite(t, s, "/doc.md", 0, "v1")
 	mustWrite(t, s, "/doc.md", 1, "v2")
 	mustWrite(t, s, "/doc.md", 2, "v3")
 
-	if cur := s.CurrentVersion("/doc.md"); cur != 3 {
+	if cur := currentVersion(t, s, "/doc.md"); cur != 3 {
 		t.Errorf("CurrentVersion = %d, want 3", cur)
 	}
 	old, err := s.Get("/doc.md", 1)
@@ -154,6 +165,9 @@ func testVersionHistory(t *testing.T, s handler.DocumentStore) {
 	}
 	if string(old.Content) != "v1" {
 		t.Errorf("v1 body = %q", old.Content)
+	}
+	if old.ETag == "" || old.ETag != first.ETag {
+		t.Errorf("historical ETag = %q, want original %q", old.ETag, first.ETag)
 	}
 	vs, err := s.Versions("/doc.md")
 	if err != nil {
@@ -198,65 +212,138 @@ func testConflictSemantics(t *testing.T, s handler.DocumentStore) {
 
 func testNotModifiedDedup(t *testing.T, s handler.DocumentStore) {
 	meta := map[string]string{"tags": "same"}
-	if _, err := s.WriteVersion("/dup.md", 0, []byte("body"), meta); err != nil {
-		t.Fatalf("create: %v", err)
+	first, err := s.WriteVersion("/dup.md", 0, []byte("body"), meta)
+	if err != nil || first == nil {
+		t.Fatalf("create = (%+v, %v), want document", first, err)
 	}
 	doc, err := s.WriteVersion("/dup.md", 1, []byte("body"), meta)
 	if !errors.Is(err, store.ErrNotModified) {
 		t.Fatalf("identical rewrite: err = %v, want ErrNotModified", err)
 	}
 	if doc == nil || doc.Version != 1 {
-		t.Errorf("not-modified doc = %+v, want Version 1", doc)
+		t.Fatalf("not-modified doc = %+v, want Version 1", doc)
 	}
-	if cur := s.CurrentVersion("/dup.md"); cur != 1 {
+	if doc.ETag != first.ETag {
+		t.Errorf("not-modified ETag = %q, want %q", doc.ETag, first.ETag)
+	}
+	if cur := currentVersion(t, s, "/dup.md"); cur != 1 {
 		t.Errorf("CurrentVersion after dedup = %d, want 1", cur)
 	}
 	// Same body, different metadata is a real new version; so is dropping it.
 	doc, err = s.WriteVersion("/dup.md", 1, []byte("body"), map[string]string{"tags": "changed"})
-	if err != nil || doc.Version != 2 {
-		t.Errorf("meta change = (%+v, %v), want v2", doc, err)
+	if err != nil || doc == nil {
+		t.Fatalf("meta change = (%+v, %v), want document", doc, err)
 	}
+	if doc.Version != 2 {
+		t.Errorf("meta change version = %d, want 2", doc.Version)
+	}
+	if doc.ETag == first.ETag {
+		t.Error("metadata-only version reused prior stored-byte ETag")
+	}
+	secondETag := doc.ETag
 	doc, err = s.WriteVersion("/dup.md", 2, []byte("body"), nil)
-	if err != nil || doc.Version != 3 || doc.Metadata != nil {
-		t.Errorf("meta drop = (%+v, %v), want v3 with nil metadata", doc, err)
+	if err != nil || doc == nil {
+		t.Fatalf("meta drop = (%+v, %v), want document", doc, err)
+	}
+	if doc.Version != 3 || doc.Metadata != nil {
+		t.Errorf("meta drop = %+v, want v3 with nil metadata", doc)
+	}
+	if doc.ETag == secondETag {
+		t.Error("metadata drop reused prior stored-byte ETag")
+	}
+
+	normalized, err := s.WriteVersion("/normalized.md", 0, []byte("body"), map[string]string{"tags": "alpha, beta"})
+	if err != nil || normalized == nil {
+		t.Fatalf("normalized create = (%+v, %v), want document", normalized, err)
+	}
+	repeated, err := s.WriteVersion("/normalized.md", 1, []byte("body"), map[string]string{"tags": " alpha,beta "})
+	if !errors.Is(err, store.ErrNotModified) || repeated == nil {
+		t.Fatalf("normalized rewrite = (%+v, %v), want ErrNotModified", repeated, err)
+	}
+	if repeated.Version != 1 || repeated.ETag != normalized.ETag || repeated.Metadata["tags"] != "alpha,beta" {
+		t.Errorf("normalized rewrite = %+v, want unchanged canonical v1", repeated)
 	}
 }
 
 func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
-	mustWrite(t, s, "/arch.md", 0, "content")
+	initial := mustWrite(t, s, "/arch.md", 0, "content")
 	hash := store.ContentHash([]byte("content"))
 
-	if p, ok := s.LookupHash(hash); !ok || p != "/arch.md" {
-		t.Errorf("LookupHash before archive = (%q, %v), want /arch.md", p, ok)
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/arch.md" {
+		t.Errorf("LookupHash before archive = (%q, %v), want (/arch.md, nil)", p, err)
 	}
-	if err := s.Archive("/arch.md", true); err != nil {
-		t.Fatalf("archive: %v", err)
+	archivedDoc := mustArchiveTransition(t, s, "/arch.md", true)
+	if archivedDoc.Version != 1 || archivedDoc.ETag != initial.ETag || !archivedDoc.Modified.Equal(initial.Modified) {
+		t.Errorf("archive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", archivedDoc, initial.ETag, initial.Modified)
 	}
-	got, err := s.Get("/arch.md", 0)
-	if err != nil {
-		t.Fatalf("get archived: %v", err)
+	assertArchiveState(t, s, "/arch.md", initial, true)
+	unchangedDoc, changed, err := s.ArchiveResult("/arch.md", true)
+	if err != nil || changed || unchangedDoc == nil || unchangedDoc.ETag != archivedDoc.ETag || !unchangedDoc.Modified.Equal(archivedDoc.Modified) {
+		t.Errorf("archive no-op = (%+v, changed=%v, err=%v), want unchanged committed document", unchangedDoc, changed, err)
 	}
-	if !got.Archived {
-		t.Error("archived flag not set on Get")
-	}
-	if _, ok := s.LookupHash(hash); ok {
-		t.Error("archived doc still resolvable by hash")
+	if _, err := s.LookupHashResult(hash); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("LookupHash after archive: err = %v, want ErrNotExist", err)
 	}
 	if _, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); !errors.Is(err, store.ErrArchived) {
 		t.Errorf("write to archived: err = %v, want ErrArchived", err)
 	}
-	if err := s.Archive("/arch.md", false); err != nil {
-		t.Fatalf("unarchive: %v", err)
+	if err := s.VerifyChain("/arch.md"); err != nil {
+		t.Errorf("VerifyChain while archived: %v", err)
 	}
-	if p, ok := s.LookupHash(hash); !ok || p != "/arch.md" {
-		t.Errorf("LookupHash after unarchive = (%q, %v), want /arch.md", p, ok)
+	unarchivedDoc := mustArchiveTransition(t, s, "/arch.md", false)
+	if unarchivedDoc.Version != 1 || unarchivedDoc.ETag != initial.ETag || !unarchivedDoc.Modified.Equal(initial.Modified) {
+		t.Errorf("unarchive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", unarchivedDoc, initial.ETag, initial.Modified)
+	}
+	assertArchiveState(t, s, "/arch.md", initial, false)
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/arch.md" {
+		t.Errorf("LookupHash after unarchive = (%q, %v), want (/arch.md, nil)", p, err)
 	}
 	if doc, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); err != nil || doc.Version != 2 {
 		t.Errorf("write after unarchive = (%+v, %v), want v2", doc, err)
 	}
-	if err := s.Archive("/missing.md", true); !errors.Is(err, os.ErrNotExist) {
+	if err := s.VerifyChain("/arch.md"); err != nil {
+		t.Errorf("VerifyChain after v2 write: %v", err)
+	}
+	if _, _, err := s.ArchiveResult("/missing.md", true); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("archive missing: err = %v, want ErrNotExist", err)
 	}
+}
+
+func assertArchiveState(t *testing.T, s handler.DocumentStore, path string, initial *store.Document, archived bool) {
+	t.Helper()
+	current, err := s.Get(path, 0)
+	if err != nil {
+		t.Fatalf("get current: %v", err)
+	}
+	if current.Version != 1 || current.Archived != archived || current.ETag != initial.ETag || !current.Modified.Equal(initial.Modified) {
+		t.Errorf("current after archived=%v: got %+v, want v1 etag=%q modified=%v", archived, current, initial.ETag, initial.Modified)
+	}
+	pinned, err := s.Get(path, 1)
+	if err != nil {
+		t.Fatalf("get pinned v1: %v", err)
+	}
+	if pinned.Version != 1 || pinned.Archived || pinned.ETag != initial.ETag || !pinned.Modified.Equal(initial.Modified) || !bytes.Equal(pinned.Content, initial.Content) {
+		t.Errorf("pinned v1 after archived=%v: got %+v, want unchanged active version", archived, pinned)
+	}
+	versions, err := s.Versions(path)
+	if err != nil {
+		t.Fatalf("versions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].Version != 1 || !versions[0].Modified.Equal(initial.Modified) {
+		t.Errorf("versions after archived=%v: got %+v, want one unchanged v1", archived, versions)
+	}
+}
+
+func mustArchiveTransition(t *testing.T, s handler.DocumentStore, path string, archived bool) *store.Document {
+	t.Helper()
+	document, changed, err := s.ArchiveResult(path, archived)
+	if err != nil {
+		t.Fatalf("Archive(%q, %v): %v", path, archived, err)
+	}
+	if !changed || document == nil || document.Archived != archived {
+		t.Fatalf("Archive(%q, %v) = (%+v, changed=%v), want changed document", path, archived, document, changed)
+	}
+	return document
 }
 
 func testAppendSemantics(t *testing.T, s handler.DocumentStore) {
@@ -373,10 +460,10 @@ func testListDirSemantics(t *testing.T, s handler.DocumentStore) {
 	mustWrite(t, s, "/nested/a/b/keep.md", 0, "keep")
 	mustWrite(t, s, "/.hidden.md", 0, "hidden")
 	mustWrite(t, s, "/work/.scratch.md", 0, "scratch")
-	if err := s.Archive("/gone.md", true); err != nil {
+	if _, _, err := s.ArchiveResult("/gone.md", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Archive("/attic/old.md", true); err != nil {
+	if _, _, err := s.ArchiveResult("/attic/old.md", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -483,7 +570,7 @@ func testMissingDocument(t *testing.T, s handler.DocumentStore) {
 	if _, err := s.Versions("/none.md"); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("Versions missing: err = %v, want ErrNotExist", err)
 	}
-	if cur := s.CurrentVersion("/none.md"); cur != 0 {
+	if cur := currentVersion(t, s, "/none.md"); cur != 0 {
 		t.Errorf("CurrentVersion missing = %d, want 0", cur)
 	}
 	mustWrite(t, s, "/one.md", 0, "x")
@@ -504,7 +591,7 @@ func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 	if _, err := s.Get("/col", 0); err == nil {
 		t.Error("collision write left fetchable document at /col")
 	}
-	if cur := s.CurrentVersion("/col"); cur != 0 {
+	if cur := currentVersion(t, s, "/col"); cur != 0 {
 		t.Errorf("collision write left version state at /col (version %d)", cur)
 	}
 
@@ -515,7 +602,7 @@ func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 	if _, err := s.Get("/col/doc.md/child.md", 0); err == nil {
 		t.Error("collision write left fetchable document under /col/doc.md")
 	}
-	if cur := s.CurrentVersion("/col/doc.md/child.md"); cur != 0 {
+	if cur := currentVersion(t, s, "/col/doc.md/child.md"); cur != 0 {
 		t.Errorf("collision write left version state under /col/doc.md (version %d)", cur)
 	}
 }
@@ -531,7 +618,7 @@ func testRejectsBinaryBody(t *testing.T, s handler.DocumentStore) {
 	if _, err := s.Get("/bin.md", 0); err == nil {
 		t.Error("rejected binary write left a fetchable document at /bin.md")
 	}
-	if cur := s.CurrentVersion("/bin.md"); cur != 0 {
+	if cur := currentVersion(t, s, "/bin.md"); cur != 0 {
 		t.Errorf("rejected binary write left version state at /bin.md (version %d)", cur)
 	}
 
@@ -541,7 +628,7 @@ func testRejectsBinaryBody(t *testing.T, s handler.DocumentStore) {
 	if _, err := s.Append("/doc.md", 1, binary, nil); !errors.Is(err, store.ErrInvalidContent) {
 		t.Errorf("Append binary body: err = %v, want ErrInvalidContent", err)
 	}
-	if cur := s.CurrentVersion("/doc.md"); cur != 1 {
+	if cur := currentVersion(t, s, "/doc.md"); cur != 1 {
 		t.Errorf("rejected binary append advanced /doc.md to version %d, want 1", cur)
 	}
 }
@@ -554,27 +641,27 @@ func testSharedBodyHash(t *testing.T, s handler.DocumentStore) {
 	mustWrite(t, s, "/b.md", 0, "same")
 	mustWrite(t, s, "/a.md", 0, "same")
 	mustWrite(t, s, "/c.md", 0, "same")
-	if p, ok := s.LookupHash(hash); !ok || p != "/a.md" {
-		t.Errorf("LookupHash shared = (%q, %v), want smallest path /a.md", p, ok)
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/a.md" {
+		t.Errorf("LookupHash shared = (%q, %v), want (/a.md, nil)", p, err)
 	}
-	if err := s.Archive("/a.md", true); err != nil {
+	if _, _, err := s.ArchiveResult("/a.md", true); err != nil {
 		t.Fatal(err)
 	}
-	if p, ok := s.LookupHash(hash); !ok || p != "/b.md" {
-		t.Errorf("LookupHash after archiving /a.md = (%q, %v), want /b.md", p, ok)
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/b.md" {
+		t.Errorf("LookupHash after archiving /a.md = (%q, %v), want (/b.md, nil)", p, err)
 	}
 	mustWrite(t, s, "/b.md", 1, "changed")
-	if p, ok := s.LookupHash(hash); !ok || p != "/c.md" {
-		t.Errorf("LookupHash after rewriting /b.md = (%q, %v), want /c.md", p, ok)
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/c.md" {
+		t.Errorf("LookupHash after rewriting /b.md = (%q, %v), want (/c.md, nil)", p, err)
 	}
-	if p, ok := s.LookupHash(store.ContentHash([]byte("changed"))); !ok || p != "/b.md" {
-		t.Errorf("LookupHash new body = (%q, %v), want /b.md", p, ok)
+	if p, err := s.LookupHashResult(store.ContentHash([]byte("changed"))); err != nil || p != "/b.md" {
+		t.Errorf("LookupHash new body = (%q, %v), want (/b.md, nil)", p, err)
 	}
-	if err := s.Archive("/a.md", false); err != nil {
+	if _, _, err := s.ArchiveResult("/a.md", false); err != nil {
 		t.Fatal(err)
 	}
-	if p, ok := s.LookupHash(hash); !ok || p != "/a.md" {
-		t.Errorf("LookupHash after unarchiving /a.md = (%q, %v), want /a.md", p, ok)
+	if p, err := s.LookupHashResult(hash); err != nil || p != "/a.md" {
+		t.Errorf("LookupHash after unarchiving /a.md = (%q, %v), want (/a.md, nil)", p, err)
 	}
 }
 
@@ -589,13 +676,13 @@ func testBodySizeLimit(t *testing.T, s handler.DocumentStore) {
 	if _, err := s.WriteVersion("/over.md", 0, append(atLimit, 'x'), nil); !errors.Is(err, store.ErrSizeLimit) {
 		t.Errorf("write over limit: err = %v, want ErrSizeLimit", err)
 	}
-	if cur := s.CurrentVersion("/over.md"); cur != 0 {
+	if cur := currentVersion(t, s, "/over.md"); cur != 0 {
 		t.Errorf("over-limit write left version %d", cur)
 	}
 	if _, err := s.Append("/max.md", 1, []byte("y"), nil); !errors.Is(err, store.ErrSizeLimit) {
 		t.Errorf("append crossing limit: err = %v, want ErrSizeLimit", err)
 	}
-	if cur := s.CurrentVersion("/max.md"); cur != 1 {
+	if cur := currentVersion(t, s, "/max.md"); cur != 1 {
 		t.Errorf("rejected append advanced /max.md to version %d, want 1", cur)
 	}
 }
@@ -638,10 +725,10 @@ func testInvalidMetadata(t *testing.T, s handler.DocumentStore) {
 		})
 	}
 	// Nothing was stored by the rejected writes.
-	if cur := s.CurrentVersion("/inv.md"); cur != 0 {
+	if cur := currentVersion(t, s, "/inv.md"); cur != 0 {
 		t.Errorf("rejected writes left version %d", cur)
 	}
-	if cur := s.CurrentVersion("/base.md"); cur != 1 {
+	if cur := currentVersion(t, s, "/base.md"); cur != 1 {
 		t.Errorf("rejected appends advanced /base.md to version %d", cur)
 	}
 	// Valid retention values are accepted.
@@ -720,6 +807,15 @@ func mustWrite(t *testing.T, s handler.DocumentStore, path string, expected int,
 		t.Fatalf("write %s (expected %d): %v", path, expected, err)
 	}
 	return doc
+}
+
+func currentVersion(t testing.TB, s handler.DocumentStore, path string) int {
+	t.Helper()
+	version, err := s.CurrentVersionResult(path)
+	if err != nil {
+		t.Fatalf("CurrentVersion(%s): %v", path, err)
+	}
+	return version
 }
 
 func entryNames(t *testing.T, s handler.DocumentStore, path string, includeArchived bool) map[string]bool {

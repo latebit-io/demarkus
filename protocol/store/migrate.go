@@ -6,6 +6,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -16,27 +17,32 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// StoredVersion is one version's raw stored bytes plus its modified time,
-// the complete migration unit: current version and archived flag are both
-// derivable (newest version; archived flag lives in the tip's frontmatter).
+// StoredVersion is one version's raw stored bytes plus its modified time.
 type StoredVersion struct {
 	Version  int
 	Stored   []byte
 	Modified time.Time
 }
 
+// StoredDocument is one document's immutable history and operational archive
+// state. Archived is independent from the stored tip bytes.
+type StoredDocument struct {
+	Versions []StoredVersion
+	Archived bool
+}
+
 // Migrator is the backend-neutral migration contract; the caller owns the
 // cancellation policy via ctx. The ExportDocs callback may retain versions,
 // so implementations must hand each document a fresh backing array.
 type Migrator interface {
-	ExportDocs(ctx context.Context, fn func(reqPath string, versions []StoredVersion) error) error
-	ImportDoc(ctx context.Context, reqPath string, versions []StoredVersion) error
+	ExportDocs(ctx context.Context, fn func(reqPath string, document StoredDocument) error) error
+	ImportDoc(ctx context.Context, reqPath string, document StoredDocument) error
 }
 
 // ValidateImport checks the shared ImportDoc preconditions and returns the
 // storage-relative path: a document path, at least one version, versions
 // strictly ascending (a pruned history may start past 1), none oversized.
-func ValidateImport(reqPath string, versions []StoredVersion) (string, error) {
+func ValidateImport(reqPath string, document StoredDocument) (string, error) {
 	rel, err := RelPath(reqPath)
 	if err != nil {
 		return "", err
@@ -44,11 +50,11 @@ func ValidateImport(reqPath string, versions []StoredVersion) (string, error) {
 	if rel == "" || strings.HasSuffix(reqPath, "/") {
 		return "", fmt.Errorf("import %s: not a document path", reqPath)
 	}
-	if len(versions) == 0 {
+	if len(document.Versions) == 0 {
 		return "", fmt.Errorf("import %s: no versions", reqPath)
 	}
-	for i, v := range versions {
-		if i > 0 && v.Version <= versions[i-1].Version {
+	for i, v := range document.Versions {
+		if i > 0 && v.Version <= document.Versions[i-1].Version {
 			return "", fmt.Errorf("import %s: versions not strictly ascending", reqPath)
 		}
 		if int64(len(v.Stored)) > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
@@ -58,18 +64,23 @@ func ValidateImport(reqPath string, versions []StoredVersion) (string, error) {
 	return rel, nil
 }
 
-// DiffExports is the one definition of export equality: same documents and
-// version numbers, byte-identical stored files, modified equal to the second
-// (the precision the protocol exposes via RFC3339 in VERSIONS).
-func DiffExports(want, got map[string][]StoredVersion) error {
+// DiffExports is the one definition of export equality: same documents,
+// archive state, version numbers, stored bytes, and second-precision modified
+// times (the precision the protocol exposes via RFC3339 in VERSIONS).
+func DiffExports(want, got map[string]StoredDocument) error {
 	if len(got) != len(want) {
 		return fmt.Errorf("document count: got %d, want %d", len(got), len(want))
 	}
-	for path, wv := range want {
-		gv, ok := got[path]
+	for path, wantDocument := range want {
+		gotDocument, ok := got[path]
 		if !ok {
 			return fmt.Errorf("%s: missing", path)
 		}
+		if gotDocument.Archived != wantDocument.Archived {
+			return fmt.Errorf("%s: archived %v, want %v", path, gotDocument.Archived, wantDocument.Archived)
+		}
+		wv := wantDocument.Versions
+		gv := gotDocument.Versions
 		if len(gv) != len(wv) {
 			return fmt.Errorf("%s: %d versions, want %d", path, len(gv), len(wv))
 		}
@@ -92,7 +103,7 @@ func DiffExports(want, got map[string][]StoredVersion) error {
 // ExportDocs visits every document, archived included, with its history
 // oldest-first and stored bytes verbatim. Unreadable documents are hard
 // errors; only symlink entries outside versions dirs count as documents.
-func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, versions []StoredVersion) error) error {
+func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, document StoredDocument) error) error {
 	root, err := s.resolvedRoot()
 	if err != nil {
 		return err
@@ -122,8 +133,22 @@ func (s *Store) ExportDocs(ctx context.Context, fn func(reqPath string, versions
 		if err != nil {
 			return fmt.Errorf("export %s: %w", reqPath, err)
 		}
-		return fn(reqPath, versions)
+		newest := versions[len(versions)-1]
+		archived, err := s.exportArchived(reqPath, newest.Stored)
+		if err != nil {
+			return fmt.Errorf("export %s: %w", reqPath, err)
+		}
+		return fn(reqPath, StoredDocument{Versions: versions, Archived: archived})
 	})
+}
+
+func (s *Store) exportArchived(reqPath string, tipStored []byte) (bool, error) {
+	rel, err := RelPath(reqPath)
+	if err != nil {
+		return false, err
+	}
+	docDir := filepath.Join(s.root, filepath.Dir(rel), "versions", filepath.Base(rel))
+	return effectiveArchived(docDir, tipStored)
 }
 
 // exportVersions reads a document's version files oldest-first.
@@ -151,8 +176,8 @@ func (s *Store) exportVersions(reqPath string) ([]StoredVersion, error) {
 // ImportDoc writes a document's version files byte-for-byte, restores their
 // modified times, and points the current symlink at the newest version. The
 // document must not exist; versions must be non-empty, strictly ascending.
-func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []StoredVersion) error {
-	rel, err := ValidateImport(reqPath, versions)
+func (s *Store) ImportDoc(ctx context.Context, reqPath string, document StoredDocument) error {
+	rel, err := ValidateImport(reqPath, document)
 	if err != nil {
 		return err
 	}
@@ -169,7 +194,7 @@ func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []Stored
 	// Mkdir (not MkdirAll) claims the per-doc versions dir atomically: a
 	// pre-existing dir (orphaned tree, concurrent import) refuses, so the
 	// failure cleanup below can never widen into files this call did not write.
-	firstFile, err := s.VersionFilePath(reqPath, versions[0].Version)
+	firstFile, err := s.VersionFilePath(reqPath, document.Versions[0].Version)
 	if err != nil {
 		return err
 	}
@@ -180,24 +205,30 @@ func (s *Store) ImportDoc(ctx context.Context, reqPath string, versions []Stored
 	if err := os.Mkdir(docDir, 0o755); err != nil {
 		return fmt.Errorf("import %s: version directory: %w", reqPath, err)
 	}
-	if err := s.importVersionFiles(ctx, reqPath, versions); err != nil {
-		// Guarded above: the dir is exclusively this call's work. Removal is
-		// best-effort; the import error is what the caller must see.
-		_ = os.RemoveAll(docDir)
-		return err
+	cleanup := func(importErr error) error {
+		if cleanupErr := os.RemoveAll(docDir); cleanupErr != nil {
+			return errors.Join(importErr, fmt.Errorf("cleanup import %s: %w", reqPath, cleanupErr))
+		}
+		return importErr
 	}
-	newest := versions[len(versions)-1]
+	if err := s.importVersionFiles(ctx, reqPath, document.Versions); err != nil {
+		return cleanup(err)
+	}
+	newest := document.Versions[len(document.Versions)-1]
 	base := filepath.Base(rel)
 	if err := ctx.Err(); err != nil {
-		_ = os.RemoveAll(docDir)
-		return err
+		return cleanup(err)
+	}
+	if _, err := writeArchiveState(docDir, document.Archived); err != nil {
+		return cleanup(fmt.Errorf("import %s: archive state: %w", reqPath, err))
+	}
+	if err := ctx.Err(); err != nil {
+		return cleanup(err)
 	}
 	if err := os.Symlink(newVersionSymlinkTarget(base, newest.Version), currentFile); err != nil {
-		// Same guarantee as above: remove only what this call created.
-		_ = os.RemoveAll(docDir)
-		return fmt.Errorf("import %s: %w", reqPath, err)
+		return cleanup(fmt.Errorf("import %s: %w", reqPath, err))
 	}
-	if IsArchived(newest.Stored) {
+	if document.Archived {
 		s.RemoveHashEntry(reqPath)
 	} else {
 		s.UpdateHashIndex(reqPath, ExtractBody(newest.Stored))

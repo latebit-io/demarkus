@@ -174,6 +174,12 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return
 		}
+		if !oidcDomainAllowed(s.cfg.OIDC.AllowDomains, claims.HD) {
+			s.log.InfoContext(r.Context(), "broker: bearer rejected by allowDomains",
+				"subject", hashSubject(claims.Subject), "hd", claims.HD)
+			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(ctxWithClaims(r.Context(), &claims)))
 	})
 }
