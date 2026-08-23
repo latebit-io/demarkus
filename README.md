@@ -4,6 +4,8 @@
 
 Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. The same store scales up to a team's shared world and an organizational **knowledge system**: a broker-fronted universe of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
 
+Every link between documents feeds a persistent **knowledge graph**. Agents query backlinks and related documents across sessions, the TUI and the [reading room](https://github.com/latebit-io/demarkus-library) render it, and `demarkus-agent` aggregates it across worlds. Memory here is connected knowledge you traverse, not a pile of files.
+
 Underneath sits the **Mark Protocol**: versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Capability tokens gate writes, every change is kept, and one static binary runs anywhere.
 
 ## Install
