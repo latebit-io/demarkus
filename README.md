@@ -1,8 +1,8 @@
 # Demarkus
 
-**Memory for agents, knowledge for teams**
+**Memory for agents, knowledge for teams, a second brain for you**
 
-Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. The same store scales up to a personal knowledge base, a team's shared world, and an organizational **knowledge system**: a broker-fronted universe of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
+Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. The same store scales up to a team's shared world and an organizational **knowledge system**: a broker-fronted universe of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
 
 Underneath sits the **Mark Protocol**: versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Capability tokens gate writes, every change is kept, and one static binary runs anywhere.
 
