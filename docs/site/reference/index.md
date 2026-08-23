@@ -36,6 +36,10 @@ The federation crawler (`demarkus-agent`) uses a TOML configuration file:
 seeds = ["mark://server1:6309", "mark://server2:6309"]
 hubs = ["mark://hub.example:6309"]
 
+[endpoints."server1:6309"]
+dial_address = "server1.internal:6309"
+server_name = "server1.internal"
+
 [crawl]
 max_servers = 50      # Maximum servers to discover
 max_documents = 1000  # Maximum documents per crawl run
@@ -54,6 +58,8 @@ interval = "6h"  # Time between crawl runs (daemon mode)
 |-------|---------|-------------|
 | `seeds` | *(required)* | Initial servers to crawl |
 | `hubs` | *(empty)* | Servers to publish hash indexes to |
+| `endpoints.<authority>.dial_address` | *(authority)* | Socket destination override |
+| `endpoints.<authority>.server_name` | *(authority host)* | TLS SNI and certificate name override |
 | `crawl.max_servers` | `50` | Maximum servers to discover per run |
 | `crawl.max_documents` | `1000` | Maximum documents to fetch per run |
 | `crawl.workers` | `5` | Concurrent fetch goroutines |

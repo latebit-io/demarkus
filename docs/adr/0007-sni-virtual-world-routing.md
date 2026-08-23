@@ -88,6 +88,10 @@ authority. Brokers and agents may configure the three values separately where
 DNS aliases are unavailable. A broker world name remains a local routing label
 and is not substituted for the Mark authority.
 
+The federation agent implements this model through optional endpoint overrides.
+Its configured authority remains the crawl, graph, index, state, and token key;
+the override supplies `DialAddress` and `ServerName` to the shared QUIC client.
+
 ## Consequences
 
 - Existing Mark wire requests and all seven verbs remain unchanged.

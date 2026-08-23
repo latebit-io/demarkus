@@ -146,10 +146,10 @@ Amended 2026-08-17 after building this on `feat/node-identity-default-port`.
   Canonicalizing both sides fixed it, but `CanonicalURL` normalizes an empty
   path to `/`, which broke the bare-authority prefix match until the trailing
   slash was trimmed. The cross-module contract test caught both.
-- **Fedcrawl was deliberately left alone.** Its crawl state and hash-index
-  entries key on dial addresses by design, and its graph is normalized at the
-  `graphstore.Merge` boundary anyway. Forcing identity there would break
-  `state.GetURL` and the index contract for no gain.
+- **Fedcrawl initially remained dial-keyed.** Explicit transport endpoints later
+  gave it the ADR 0007 separation: crawl state, hash-index entries, and graph
+  nodes use logical authorities, while socket addresses and TLS server names
+  may differ. Default-port normalization still applies at the authority edge.
 
 ## Alternatives rejected
 

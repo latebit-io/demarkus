@@ -4,22 +4,35 @@ package fedcrawl
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/latebit-io/demarkus/client/fetch"
 )
 
 // Config holds the crawler configuration loaded from a TOML file.
 type Config struct {
 	Seeds []string `toml:"seeds"` // Initial servers to crawl (mark://host:port)
 	Hubs  []string `toml:"hubs"`  // Servers to publish indexes to
+	// Endpoints maps logical Mark authorities to transport routes. This lets
+	// broker-style world names remain graph/token identity while agents dial
+	// cluster-internal addresses with the SNI required by a shared listener.
+	Endpoints map[string]EndpointConfig `toml:"endpoints"`
 
 	Crawl      CrawlConfig      `toml:"crawl"`
 	Schedule   ScheduleConfig   `toml:"schedule"`
 	Politeness PolitenessConfig `toml:"politeness"`
 	Publish    PublishConfig    `toml:"publish"`
+}
+
+// EndpointConfig is the TOML representation of an explicit transport endpoint.
+type EndpointConfig struct {
+	DialAddress string `toml:"dial_address"`
+	ServerName  string `toml:"server_name"`
 }
 
 // CrawlConfig controls the scope and depth of crawling.
@@ -125,6 +138,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("hub %d %q must be a mark:// URL", i, hub)
 		}
 	}
+	if err := c.normalizeEndpoints(); err != nil {
+		return err
+	}
 	if c.Crawl.MaxDepth < 0 {
 		return fmt.Errorf("crawl.max_depth must be non-negative")
 	}
@@ -150,4 +166,97 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("publish.retention must be non-negative (0 keeps every version)")
 	}
 	return nil
+}
+
+// ClientEndpoints converts validated crawler endpoints to fetch transport
+// endpoints. Validate must run first so keys and dial addresses are canonical.
+func (c *Config) ClientEndpoints() map[string]fetch.Endpoint {
+	if len(c.Endpoints) == 0 {
+		return nil
+	}
+	endpoints := make(map[string]fetch.Endpoint, len(c.Endpoints))
+	for authority, endpoint := range c.Endpoints {
+		endpoints[authority] = fetch.Endpoint{
+			DialAddress: endpoint.DialAddress,
+			ServerName:  endpoint.ServerName,
+		}
+	}
+	return endpoints
+}
+
+func (c *Config) normalizeEndpoints() error {
+	if len(c.Endpoints) == 0 {
+		return nil
+	}
+	normalized := make(map[string]EndpointConfig, len(c.Endpoints))
+	for rawAuthority, endpoint := range c.Endpoints {
+		authority, err := normalizeAuthority(rawAuthority)
+		if err != nil {
+			return fmt.Errorf("endpoint authority %q: %w", rawAuthority, err)
+		}
+		if _, duplicate := normalized[authority]; duplicate {
+			return fmt.Errorf("endpoint authority %q duplicates normalized authority %q", rawAuthority, authority)
+		}
+		dialAddress, err := normalizeAuthority(endpoint.DialAddress)
+		if err != nil {
+			return fmt.Errorf("endpoint %q dial_address: %w", rawAuthority, err)
+		}
+		serverName := endpoint.ServerName
+		if serverName == "" {
+			serverName = authorityHostname(authority)
+		}
+		serverName, err = normalizeServerName(serverName)
+		if err != nil {
+			return fmt.Errorf("endpoint %q server_name: %w", rawAuthority, err)
+		}
+		normalized[authority] = EndpointConfig{DialAddress: dialAddress, ServerName: serverName}
+	}
+	c.Endpoints = normalized
+	return nil
+}
+
+func normalizeAuthority(raw string) (string, error) {
+	if raw == "" || raw != strings.TrimSpace(raw) {
+		return "", fmt.Errorf("must be a non-empty authority without surrounding whitespace")
+	}
+	if strings.Contains(raw, "://") {
+		return "", fmt.Errorf("must omit the URL scheme")
+	}
+	u, err := url.Parse("mark://" + raw)
+	if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("must contain only host and optional port")
+	}
+	host, _, err := fetch.ParseMarkURL(u.String())
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(host), nil
+}
+
+func authorityHostname(authority string) string {
+	if host, _, err := net.SplitHostPort(authority); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	return strings.Trim(authority, "[]")
+}
+
+func normalizeServerName(raw string) (string, error) {
+	name := strings.ToLower(strings.TrimSpace(raw))
+	if name == "" || name != raw {
+		return "", fmt.Errorf("must be a non-empty lowercase DNS name without surrounding whitespace")
+	}
+	if strings.HasSuffix(name, ".") || net.ParseIP(name) != nil {
+		return "", fmt.Errorf("must be a DNS name without a trailing dot")
+	}
+	for label := range strings.SplitSeq(name, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", fmt.Errorf("invalid DNS name %q", raw)
+		}
+		for _, r := range label {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+				return "", fmt.Errorf("invalid DNS name %q", raw)
+			}
+		}
+	}
+	return name, nil
 }

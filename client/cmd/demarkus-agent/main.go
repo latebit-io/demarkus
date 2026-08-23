@@ -121,7 +121,7 @@ func crawlMain(args []string) {
 	}
 
 	// Create client.
-	opts := fetch.Options{Insecure: *insecure}
+	opts := fetch.Options{Insecure: *insecure, Endpoints: cfg.ClientEndpoints()}
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
@@ -248,7 +248,7 @@ func daemonMain(args []string) {
 	}
 
 	// Create client.
-	opts := fetch.Options{Insecure: *insecure}
+	opts := fetch.Options{Insecure: *insecure, Endpoints: cfg.ClientEndpoints()}
 	client := fetch.NewClient(opts)
 	defer client.Close()
 

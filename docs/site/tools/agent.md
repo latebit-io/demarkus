@@ -44,6 +44,10 @@ Create `fedcrawl.toml`:
 seeds = ["mark://localhost:6309"]
 hubs = ["mark://hub.example:6309"]
 
+[endpoints."hub.example:6309"]
+dial_address = "hub.internal:6309"
+server_name = "hub.internal"
+
 [crawl]
 max_servers = 50
 max_documents = 1000
@@ -126,6 +130,26 @@ hubs = ["mark://hub.example:6309"]
 
 - `seeds` — Initial servers to crawl (required unless `-seeds` flag provided)
 - `hubs` — Servers to publish hash indexes to
+
+Hubs are publish-only unless also listed in `seeds`. Links to a publish-only hub
+remain graph edges but do not enqueue the hub's generated artifacts for crawling.
+The crawler hashes `/graph.md`, but does not ingest its generated table links as
+authored edges or discovery targets; graph exports are projections, not sources.
+
+### Explicit Transport Endpoints
+
+An endpoint override separates stable Mark identity from deployment routing:
+
+```toml
+[endpoints."team-a"]
+dial_address = "shared.internal:6309"
+server_name = "team-a.internal"
+```
+
+The table key remains the authority used by links, graph nodes, indexes, state,
+and token lookup. `dial_address` only opens the socket. `server_name` selects the
+virtual server through TLS SNI and certificate verification; when omitted it
+defaults to the logical authority hostname.
 
 ### `[crawl]` Section
 

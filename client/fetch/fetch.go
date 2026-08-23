@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -28,10 +29,19 @@ func ParseMarkURL(raw string) (host, path string, err error) {
 	if u.Scheme != "mark" {
 		return "", "", fmt.Errorf("unsupported scheme: %s (expected mark://)", u.Scheme)
 	}
-	host = u.Host
-	if u.Port() == "" {
-		host = fmt.Sprintf("%s:%d", u.Hostname(), protocol.DefaultPort)
+	hostname := strings.ToLower(u.Hostname())
+	if hostname == "" {
+		return "", "", fmt.Errorf("invalid URL: authority host is required")
 	}
+	port := u.Port()
+	if port == "" {
+		port = strconv.Itoa(protocol.DefaultPort)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", "", fmt.Errorf("invalid URL: port %q must be between 1 and 65535", port)
+	}
+	host = net.JoinHostPort(hostname, port)
 	path = u.Path
 	if path == "" {
 		path = "/"
@@ -45,12 +55,23 @@ type Result struct {
 	FromCache bool
 }
 
+// Endpoint separates a logical Mark authority from its network route.
+// DialAddress opens the socket; ServerName drives TLS SNI and verification.
+type Endpoint struct {
+	DialAddress string
+	ServerName  string
+}
+
 // Options configures client behavior.
 type Options struct {
 	Cache          *cache.Cache
 	Insecure       bool
 	DialTimeout    time.Duration
 	RequestTimeout time.Duration
+	// Endpoints optionally overrides transport routing by normalized logical
+	// authority (host:port). URLs, caches, tokens, and connection pooling remain
+	// keyed by that authority.
+	Endpoints map[string]Endpoint
 	// KeepAlivePeriod controls QUIC keep-alive PING cadence on pooled
 	// connections. Long-lived consumers (TUI, MCP servers, federation
 	// crawlers) keep one connection per host across many requests; if
@@ -89,6 +110,7 @@ type Client struct {
 // NewClient creates a new client with the given options.
 func NewClient(opts Options) *Client {
 	opts.applyDefaults()
+	opts.Endpoints = maps.Clone(opts.Endpoints)
 	qc := &quic.Config{}
 	// Negative KeepAlivePeriod disables; positive applies.
 	if opts.KeepAlivePeriod > 0 {
@@ -380,15 +402,25 @@ func (c *Client) getConn(host string) (*quic.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.opts.DialTimeout)
 	defer cancel()
 
-	// Clone TLS config and set ServerName for certificate validation.
-	tlsConf := c.tlsConf.Clone()
-	if hostname, _, ok := strings.Cut(host, ":"); ok {
-		tlsConf.ServerName = hostname
-	} else {
-		tlsConf.ServerName = host
+	endpoint := Endpoint{DialAddress: host}
+	if configured, ok := c.opts.Endpoints[host]; ok {
+		endpoint = configured
+		if endpoint.DialAddress == "" {
+			endpoint.DialAddress = host
+		}
 	}
-	conn, err := quic.DialAddr(ctx, host, tlsConf, c.quicConf)
+
+	// Clone TLS config and set ServerName for routing and certificate validation.
+	tlsConf := c.tlsConf.Clone()
+	tlsConf.ServerName = endpoint.ServerName
+	if tlsConf.ServerName == "" {
+		tlsConf.ServerName = authorityHostname(host)
+	}
+	conn, err := quic.DialAddr(ctx, endpoint.DialAddress, tlsConf, c.quicConf)
 	if err != nil {
+		if endpoint.DialAddress != host {
+			return nil, fmt.Errorf("dial %s via %s: %w", host, endpoint.DialAddress, err)
+		}
 		return nil, fmt.Errorf("dial %s: %w", host, err)
 	}
 
@@ -404,6 +436,13 @@ func (c *Client) getConn(host string) (*quic.Conn, error) {
 	c.mu.Unlock()
 
 	return conn, nil
+}
+
+func authorityHostname(authority string) string {
+	if host, _, err := net.SplitHostPort(authority); err == nil {
+		return host
+	}
+	return authority
 }
 
 func (c *Client) removeConn(host string) {

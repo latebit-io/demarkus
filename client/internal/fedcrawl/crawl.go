@@ -337,12 +337,13 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 			c.mu.Unlock()
 		}
 
-		// Record this document's outbound links into the graph (the durable
-		// topology map the hub publishes for the reading room's floor).
-		c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
-
-		// Discover cross-server links.
-		c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg)
+		// /graph.md is a generated projection of other documents' edges. Hash it
+		// like any document, but do not turn its table links into synthetic
+		// graph.md→node edges or use them to amplify the discovery frontier.
+		if fullPath != "/graph.md" {
+			c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
+			c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg)
+		}
 
 		s.count++
 	}
@@ -378,6 +379,11 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 		if host == currentHost {
 			continue
 		}
+		// A hub is an aggregation destination, not crawl input, unless the
+		// operator also listed it as a seed. Its edge remains in the graph.
+		if c.isPublishOnlyHub(host) {
+			continue
+		}
 
 		// Check if we should queue this host.
 		// Only hold mutex while checking/updating shared state.
@@ -398,6 +404,22 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 			queue <- host
 		}
 	}
+}
+
+func (c *Crawler) isPublishOnlyHub(host string) bool {
+	for _, seed := range c.cfg.Seeds {
+		seedHost, _, err := fetch.ParseMarkURL(seed + "/")
+		if err == nil && seedHost == host {
+			return false
+		}
+	}
+	for _, hub := range c.cfg.Hubs {
+		hubHost, _, err := fetch.ParseMarkURL(hub + "/")
+		if err == nil && hubHost == host {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveToken returns the auth token for a host.
