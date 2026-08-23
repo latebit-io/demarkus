@@ -189,9 +189,6 @@ func TestCrawlerDoesNotDiscoverPublishOnlyHub(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://content"}
 	cfg.Hubs = []string{"mark://root"}
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
 
 	client := newMockClient()
 	client.addList("content:6309", "/", "- [index.md](index.md)\n")
@@ -217,9 +214,6 @@ func TestCrawlerCrawlsHubWhenExplicitlySeeded(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://content", "mark://root"}
 	cfg.Hubs = []string{"mark://root"}
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
 
 	client := newMockClient()
 	client.addList("content:6309", "/", "- [index.md](index.md)\n")
@@ -234,6 +228,20 @@ func TestCrawlerCrawlsHubWhenExplicitlySeeded(t *testing.T) {
 	}
 	if result.ServersDiscovered != 2 || result.DocumentsCrawled != 2 {
 		t.Fatalf("result = %+v, want both explicit seeds crawled", result)
+	}
+}
+
+func TestCrawlerRunRejectsInvalidConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://content/document.md"}
+
+	crawler := NewCrawler(cfg, newMockClient(), nil, nil)
+	result, err := crawler.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run() unexpectedly accepted invalid config")
+	}
+	if result != nil {
+		t.Errorf("Run() result = %+v, want nil on invalid config", result)
 	}
 }
 

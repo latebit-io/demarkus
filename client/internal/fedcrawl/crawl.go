@@ -70,9 +70,10 @@ type CrawlResult struct {
 // Run executes the federation crawl starting from configured seeds.
 // It discovers servers, collects content hashes, and returns results.
 func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
-	// Validate workers to prevent deadlock.
-	if c.cfg.Crawl.Workers <= 0 {
-		return nil, fmt.Errorf("crawl.workers must be > 0")
+	// Run is the package boundary, so enforce normalization even when callers
+	// construct a Crawler directly instead of using the agent command.
+	if err := c.cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid crawler config: %w", err)
 	}
 
 	// Reset crawl state for each invocation.
