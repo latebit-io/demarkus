@@ -6,7 +6,9 @@ permalink: /about/
 
 # About the Mark Protocol
 
-The Mark Protocol is built on several core principles.
+The Mark Protocol is the foundation under Demarkus's [agent memory and
+knowledge systems](/how-it-works/): it keeps them versioned, portable, and
+self-hostable. It is built on several core principles.
 
 ## Privacy First
 

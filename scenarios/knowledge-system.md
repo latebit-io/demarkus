@@ -38,6 +38,8 @@ The broker is the only public surface. Worlds stay private; the broker authentic
 
 Worlds default to the file store. Point one at Postgres (`-store postgres -pg-dsn ...`) and it serves LOOKUP from the database catalog, so that world scales past a single replica.
 
+At production scale, `demarkus-knowledge-server` replaces per-world server processes: one deployment serves every world on one UDP listener, TLS SNI selects the world during the handshake, and each world keeps its own GCS bucket (with an immutable world ID), tokens, policy, and rate limits. A Helm chart ships in the repo (`deploy/helm/demarkus-knowledge-server`).
+
 For the design rationale behind worlds, hubs, and souls, see [Creating an automated knowledge universe](/blog/creating-an-automated-knowledge-universe/).
 
 ## Stand up the system

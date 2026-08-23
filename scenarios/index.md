@@ -6,7 +6,7 @@ permalink: /scenarios/
 
 # Scenarios
 
-One protocol at three scales. Store, verbs, version history, and MCP surface are
+One system, three scales. Store, verbs, version history, and MCP surface are
 identical at every tier. Only reach and identity change.
 
 ## Personal: local memory

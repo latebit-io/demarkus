@@ -3,7 +3,7 @@ layout: default
 title: Demarkus
 ---
 
-Demarkus is a protocol and toolkit for publishing markdown with version history, capability-based access, and QUIC transport. Humans and agents read and write the same store.
+Your agent records decisions, lessons, and progress as it works, and recalls them in every later session. Your team shares one versioned catalog that humans and agents keep current. The [Mark Protocol](/about/) underneath keeps it all portable and self-hostable.
 
 ## Start here
 
@@ -39,7 +39,7 @@ No DNS setup, no accounts. [The five-minute appliance →](/install/stack/)
 
 ---
 
-## One protocol, three scales
+## One system, three scales
 
 <div class="tiers">
   <div class="tier">
@@ -69,9 +69,9 @@ The tiers compose: a developer runs a personal soul and joins the org system in 
 
 ---
 
-## What Demarkus is
+## Built on the Mark Protocol
 
-Demarkus implements the **Mark Protocol**: versioned markdown served over QUIC. It is:
+The memory and knowledge tiers sit on one foundation: the **Mark Protocol**, versioned markdown served over QUIC. It is:
 
 - **Read-only by default**: no writes without explicit auth tokens
 - **Version-preserving**: every change is kept, nothing is deleted
@@ -85,6 +85,7 @@ Demarkus implements the **Mark Protocol**: versioned markdown served over QUIC. 
 | Tool | Purpose |
 |------|---------|
 | `demarkus-server` | Serve a directory of markdown files |
+| `demarkus-knowledge-server` | Production server hosting many worlds in one process |
 | `demarkus` | CLI: fetch, list, publish, edit, graph, lookup, okf |
 | `demarkus-tui` | Terminal browser with graph view |
 | `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |

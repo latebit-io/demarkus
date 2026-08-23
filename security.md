@@ -6,7 +6,7 @@ permalink: /security/
 
 # Security Model
 
-Demarkus is a versioned markdown document server. This page describes the attack surface, threat model, and hardening options for production deployments.
+The server under Demarkus's memory and knowledge tiers stores versioned markdown and nothing else. This page describes the attack surface, threat model, and hardening options for production deployments.
 
 ## Attack Surface
 

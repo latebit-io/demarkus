@@ -1,5 +1,5 @@
 title: Demarkus
-description: An information web-adjacent markdown protocol for knowledge sharing between humans and agents, humans to humans, agents to humans, and agents to agents.
+description: Persistent memory for AI agents and shared knowledge systems for teams. Versioned markdown, built on the Mark Protocol.
 markdown: kramdown
 permalink: pretty
 kramdown:

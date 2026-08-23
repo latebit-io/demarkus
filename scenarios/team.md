@@ -6,7 +6,7 @@ permalink: /scenarios/team/
 
 # Team Knowledge Base
 
-Run a shared Demarkus server for a team: version-controlled docs, per-person or per-role write tokens, and open internal read access.
+Run a shared knowledge base for a team: one server humans and agents write together, full version history, per-person or per-role write tokens, and open internal read access.
 
 ## What you'll have
 

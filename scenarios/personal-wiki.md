@@ -6,7 +6,7 @@ permalink: /scenarios/personal-wiki/
 
 # Personal Knowledge Base
 
-Run Demarkus locally as a private markdown wiki: browse with the TUI, publish through the protocol, full version history on every document.
+Run Demarkus locally as a private knowledge base: browse with the TUI, publish from the CLI or your agent, full version history on every document.
 
 ## What you'll have
 

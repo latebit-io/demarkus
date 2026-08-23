@@ -131,6 +131,7 @@ Published artifacts carry a version retention cap (newest 20 by default) so a ge
 | Tool | Purpose |
 |------|---------|
 | `demarkus-server` | Reference QUIC server |
+| `demarkus-knowledge-server` | Production server hosting many worlds in one process |
 | `demarkus` | CLI: fetch, list, publish, edit, graph, lookup, okf |
 | `demarkus-tui` | Terminal browser with graph view |
 | `demarkus-mcp` | MCP bridge for LLM agents |
