@@ -60,33 +60,55 @@ func TestGatewayOrientPrompt(t *testing.T) {
 	}
 }
 
-func TestGatewayRecallPromptSweepsWorlds(t *testing.T) {
+func TestGatewayRecallPromptLooksUpAllWorlds(t *testing.T) {
 	text := gatewayPromptText(t, recallPrompt, map[string]string{"subject": "escrow rules"})
-	for _, want := range []string{"mark_worlds", `"escrow rules"`, `mark://<world>/`, "never invent organizational memory"} {
+	for _, want := range []string{"mark_lookup_all", `"escrow rules"`, `mark://<world>/<path>`, "status: partial response is not that error case", "disclose failed worlds", "never invent organizational memory", "top-level error envelope", "aggregate, transport, authorization, or dispatch failure", "stop without claiming the catalog is empty"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("recall prompt missing %q in:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "mark_worlds") {
+		t.Error("recall prompt should use broker-side aggregation")
+	}
+	for _, want := range []string{"partial lookup with no matches is inconclusive", "successful non-partial empty broader retry"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("recall prompt missing empty-result guard %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "If no catalog has anything on the subject, say so plainly") {
+		t.Errorf("recall prompt contains unconditional empty-result conclusion:\n%s", text)
 	}
 }
 
 func TestGatewayWhatsNewPrompt(t *testing.T) {
 	t.Run("universe-wide default", func(t *testing.T) {
 		text := gatewayPromptText(t, whatsNewPrompt, nil)
-		for _, want := range []string{"7 days before today", "mark_worlds", `query "*"`, "modified-after="} {
+		for _, want := range []string{"7 days before today", "mark_lookup_all", `query "*"`, "modified-after=", "status: partial response is not that error case", "disclose failed worlds", "modified timestamp", "not exhaustive", "partial lookup with no matches is inconclusive", "top-level error envelope", "aggregate, transport, authorization, or dispatch failure", "stop without claiming nothing changed", `mark://<world>/<path>#<anchor>`} {
 			if !strings.Contains(text, want) {
 				t.Errorf("whats-new prompt missing %q in:\n%s", want, text)
 			}
 		}
+		exploreAt := strings.Index(text, "mark_explore")
+		fetchAt := strings.Index(text, "mark_fetch")
+		if exploreAt < 0 || fetchAt < 0 || exploreAt >= fetchAt {
+			t.Errorf("whats-new must explore before targeted fetch; explore=%d fetch=%d in:\n%s", exploreAt, fetchAt, text)
+		}
+		if strings.Contains(text, "If nothing changed, say so") {
+			t.Errorf("whats-new contains unconditional empty-result conclusion:\n%s", text)
+		}
 	})
 	t.Run("world-scoped with since", func(t *testing.T) {
 		text := gatewayPromptText(t, whatsNewPrompt, map[string]string{"since": "2026-07-01", "world": "servicing"})
-		for _, want := range []string{`"2026-07-01"`, `mark://servicing/`} {
+		for _, want := range []string{`"2026-07-01"`, `Call mark_lookup with url "mark://servicing/", query "*", and filter "modified-after=<that date>"`, "stop without claiming nothing changed"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("scoped whats-new missing %q in:\n%s", want, text)
 			}
 		}
-		if strings.Contains(text, "mark_worlds") {
-			t.Error("world-scoped whats-new should not sweep every world")
+		if strings.Contains(text, "mark_lookup_all") {
+			t.Error("world-scoped whats-new should use targeted lookup")
+		}
+		if !strings.Contains(text, "successful empty targeted lookup") {
+			t.Errorf("world-scoped whats-new missing empty-result guard in:\n%s", text)
 		}
 	})
 }
