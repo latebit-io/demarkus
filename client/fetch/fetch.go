@@ -346,7 +346,6 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 	if err != nil {
 		return Result{}, fmt.Errorf("open stream: %w", err)
 	}
-	defer func() { _ = stream.Close() }()
 	stopCancel := context.AfterFunc(ctx, func() {
 		stream.CancelRead(0)
 		stream.CancelWrite(0)
@@ -354,15 +353,24 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 	defer stopCancel()
 
 	if _, err := req.WriteTo(stream); err != nil {
+		stream.CancelWrite(0)
+		stream.CancelRead(0)
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
 		return Result{}, fmt.Errorf("send request: %w", err)
 	}
-	_ = stream.Close()
+	if err := stream.Close(); err != nil {
+		stream.CancelRead(0)
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
+		return Result{}, fmt.Errorf("close request stream: %w", err)
+	}
 
 	resp, err := protocol.ParseResponse(stream)
 	if err != nil {
+		stream.CancelRead(0)
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
