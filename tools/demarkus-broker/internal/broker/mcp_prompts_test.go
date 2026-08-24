@@ -70,15 +70,31 @@ func TestGatewayRecallPromptLooksUpAllWorlds(t *testing.T) {
 	if strings.Contains(text, "mark_worlds") {
 		t.Error("recall prompt should use broker-side aggregation")
 	}
+	for _, want := range []string{"partial lookup with no matches is inconclusive", "successful non-partial empty broader retry"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("recall prompt missing empty-result guard %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "If no catalog has anything on the subject, say so plainly") {
+		t.Errorf("recall prompt contains unconditional empty-result conclusion:\n%s", text)
+	}
 }
 
 func TestGatewayWhatsNewPrompt(t *testing.T) {
 	t.Run("universe-wide default", func(t *testing.T) {
 		text := gatewayPromptText(t, whatsNewPrompt, nil)
-		for _, want := range []string{"7 days before today", "mark_lookup_all", `query "*"`, "modified-after=", "status is partial", "modified timestamp", "not exhaustive"} {
+		for _, want := range []string{"7 days before today", "mark_lookup_all", `query "*"`, "modified-after=", "status is partial", "modified timestamp", "not exhaustive", "partial lookup with no matches is inconclusive"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("whats-new prompt missing %q in:\n%s", want, text)
 			}
+		}
+		exploreAt := strings.Index(text, "mark_explore")
+		fetchAt := strings.Index(text, "mark_fetch")
+		if exploreAt < 0 || fetchAt < 0 || exploreAt >= fetchAt {
+			t.Errorf("whats-new must explore before targeted fetch; explore=%d fetch=%d in:\n%s", exploreAt, fetchAt, text)
+		}
+		if strings.Contains(text, "If nothing changed, say so") {
+			t.Errorf("whats-new contains unconditional empty-result conclusion:\n%s", text)
 		}
 	})
 	t.Run("world-scoped with since", func(t *testing.T) {
@@ -90,6 +106,9 @@ func TestGatewayWhatsNewPrompt(t *testing.T) {
 		}
 		if strings.Contains(text, "mark_lookup_all") {
 			t.Error("world-scoped whats-new should use targeted lookup")
+		}
+		if !strings.Contains(text, "successful empty targeted lookup") {
+			t.Errorf("world-scoped whats-new missing empty-result guard in:\n%s", text)
 		}
 	})
 }

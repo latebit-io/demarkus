@@ -72,10 +72,10 @@ func recallPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptRe
 	}
 	text := fmt.Sprintf(`Recall what this knowledge system knows about: %s.
 
-1. Call mark_lookup_all with query %q; it returns one globally limited table with qualified mark://<world>/<path> results across every readable world. If the successful result is empty, retry once with a broader or synonymous query before concluding. If status is partial, use the successful matches but disclose the failed worlds.
+1. Call mark_lookup_all with query %q; it returns one globally limited table with qualified mark://<world>/<path> results across every readable world. Retry once with a broader or synonymous query only when status is ok and the table is empty. If status is partial, use successful matches but disclose failed worlds; a partial lookup with no matches is inconclusive, not proof that the catalog is empty.
 2. Call mark_explore on the best match to see its outline and neighborhood; explore a second candidate only if the first does not cover the subject.
 3. Call mark_fetch with the returned "mark://<world>/<path>#<anchor>" for sections that actually address the subject; avoid full bodies of large documents.
-4. Report what is known, citing every claim with its mark://<world>/<path> (and #anchor where applicable). If no catalog has anything on the subject, say so plainly; never invent organizational memory.`, subject, subject)
+4. Report what is known, citing every claim with its mark://<world>/<path> (and #anchor where applicable). Say no catalog has anything on the subject only after a successful non-partial empty broader retry; never invent organizational memory.`, subject, subject)
 	return mcp.NewGetPromptResult("Recall: "+subject, []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
 	}), nil
@@ -90,15 +90,17 @@ func whatsNewPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPrompt
 		sinceLine = fmt.Sprintf("Use the date %q.", since)
 	}
 	scopeLine := `Call mark_lookup_all with query "*" and filter "modified-after=<that date>". If status is partial, include successful results but disclose the failed worlds.`
+	conclusionLine := `Only a successful non-partial empty lookup proves nothing changed; a partial lookup with no matches is inconclusive and must disclose the failed worlds.`
 	if world != "" {
 		scopeLine = fmt.Sprintf(`Call mark_lookup with url "mark://%s/", query "*", and filter "modified-after=<that date>".`, world)
+		conclusionLine = `Only a successful empty targeted lookup proves nothing changed.`
 	}
 	text := fmt.Sprintf(`Summarize what changed in this knowledge system recently.
 
 1. %s
 2. %s The lookup returns catalogued documents modified since then, ordered by per-world relevance and importance.
-3. For the handful of most relevant changed documents, call mark_fetch with a #<anchor> section or rely on the outline, and capture each fetched document's modified timestamp; do not fetch full bodies of large documents.
-4. Report a short digest of the fetched candidates, newest first by modified timestamp: each entry is the document (as mark://<world>/<path>), what it covers, and why it likely changed. State that the limited lookup is not exhaustive. If nothing changed, say so.`, sinceLine, scopeLine)
+3. For each selected document, call mark_explore first to obtain its outline and modified timestamp. Use the outline when sufficient; otherwise call mark_fetch with a #<anchor> returned by mark_explore. Do not fetch full bodies of large documents.
+4. Report a short digest of the selected candidates, newest first by modified timestamp: each entry is the document (as mark://<world>/<path>), what it covers, and why it likely changed. State that the limited lookup is not exhaustive. %s`, sinceLine, scopeLine, conclusionLine)
 
 	title := "What's new"
 	if since != "" {
