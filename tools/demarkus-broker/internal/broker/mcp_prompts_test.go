@@ -62,7 +62,7 @@ func TestGatewayOrientPrompt(t *testing.T) {
 
 func TestGatewayRecallPromptLooksUpAllWorlds(t *testing.T) {
 	text := gatewayPromptText(t, recallPrompt, map[string]string{"subject": "escrow rules"})
-	for _, want := range []string{"mark_lookup_all", `"escrow rules"`, `mark://<world>/<path>`, "status is partial", "never invent organizational memory"} {
+	for _, want := range []string{"mark_lookup_all", `"escrow rules"`, `mark://<world>/<path>`, "status: partial response is not that error case", "never invent organizational memory", "top-level error envelope", "aggregate, transport, authorization, or dispatch failure", "stop without claiming the catalog is empty"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("recall prompt missing %q in:\n%s", want, text)
 		}
@@ -83,7 +83,7 @@ func TestGatewayRecallPromptLooksUpAllWorlds(t *testing.T) {
 func TestGatewayWhatsNewPrompt(t *testing.T) {
 	t.Run("universe-wide default", func(t *testing.T) {
 		text := gatewayPromptText(t, whatsNewPrompt, nil)
-		for _, want := range []string{"7 days before today", "mark_lookup_all", `query "*"`, "modified-after=", "status is partial", "modified timestamp", "not exhaustive", "partial lookup with no matches is inconclusive"} {
+		for _, want := range []string{"7 days before today", "mark_lookup_all", `query "*"`, "modified-after=", "status: partial response is not that error case", "modified timestamp", "not exhaustive", "partial lookup with no matches is inconclusive", "top-level error envelope", "aggregate, transport, authorization, or dispatch failure", "stop without claiming nothing changed", `mark://<world>/<path>#<anchor>`} {
 			if !strings.Contains(text, want) {
 				t.Errorf("whats-new prompt missing %q in:\n%s", want, text)
 			}
@@ -99,7 +99,7 @@ func TestGatewayWhatsNewPrompt(t *testing.T) {
 	})
 	t.Run("world-scoped with since", func(t *testing.T) {
 		text := gatewayPromptText(t, whatsNewPrompt, map[string]string{"since": "2026-07-01", "world": "servicing"})
-		for _, want := range []string{`"2026-07-01"`, `mark://servicing/`} {
+		for _, want := range []string{`"2026-07-01"`, `Call mark_lookup with url "mark://servicing/", query "*", and filter "modified-after=<that date>"`, "stop without claiming nothing changed"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("scoped whats-new missing %q in:\n%s", want, text)
 			}
