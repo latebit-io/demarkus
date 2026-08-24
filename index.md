@@ -101,8 +101,6 @@ The memory and knowledge tiers sit on one foundation: the **Mark Protocol**, ver
 
 - [Five-minute appliance](/install/stack/): the whole system on one host
 - [macOS](/install/macos/) · [Linux](/install/linux/) · [Windows (WSL2)](/install/windows/) · [Docker](/install/docker/)
-- [OpenClaw](/install/openclaw/): ClawHub skill for OpenClaw agents
-- [Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus): fetch and publish via BRAT
 
 ## Learn more
 

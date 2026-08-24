@@ -12,7 +12,7 @@ What you can rely on when authoring documents for Demarkus.
 
 Demarkus does not parse or validate the markdown you write. The server treats your document body as an opaque blob and defers all rendering to the client. (On disk, the server prepends its own YAML frontmatter for `version`, `previous-hash`, `archived`, and any publisher `meta.*` keys, but that's stripped before the body is returned to clients.) What you see in the TUI depends entirely on the renderer. `demarkus-tui` uses [Glamour](https://github.com/charmbracelet/glamour) (v2), which is built on [goldmark](https://github.com/yuin/goldmark) and enables **CommonMark + GitHub Flavored Markdown + definition lists** by default.
 
-Everything on this page is what Glamour renders. Other clients (plain CLI, MCP, Obsidian) hand back raw markdown unchanged, so the consumer of that markdown decides what features it understands.
+Everything on this page is what Glamour renders. Other clients (plain CLI, MCP) hand back raw markdown unchanged, so the consumer of that markdown decides what features it understands.
 
 ## CommonMark
 
@@ -117,7 +117,7 @@ The TUI renderer does **not** support these, even though you'll see them in othe
 - **Footnotes** (`[^1]`): not enabled in the default Glamour parser
 - **Math / LaTeX** (`$…$`, `$$…$$`): no MathJax or KaTeX equivalent
 - **Diagrams**: no Mermaid, PlantUML, or embedded SVG rendering
-- **Wiki-style links** (`[[foo]]`): Obsidian syntax; the Obsidian plugin writes them as standard `[text](url)` before publishing
+- **Wiki-style links** (`[[foo]]`): not supported; write standard `[text](url)` links
 - **Embeds / transclusion**: no `![[foo]]` or similar
 - **Custom containers** (`::: note`, `:::warning`): no admonitions
 - **Raw HTML**: CommonMark allows it; Glamour passes most tags through unstyled. Do not rely on it for rendering fidelity

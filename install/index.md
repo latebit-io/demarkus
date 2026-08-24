@@ -63,16 +63,6 @@ docker run -d \
 
 [Full Docker guide →](/install/docker/): TLS, docker-compose, environment config.
 
-## OpenClaw
-
-Skill on ClawHub that gives your OpenClaw agent persistent memory over the Mark Protocol.
-
-```bash
-clawhub install demarkus
-```
-
-[Full OpenClaw guide →](/install/openclaw/)
-
 ## Client only (no server)
 
 Skip the service setup and just install the CLI, TUI, and MCP binaries. Works on macOS, Linux, and WSL2:

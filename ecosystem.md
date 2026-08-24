@@ -35,13 +35,6 @@ The reference terminal browser, built on Bubble Tea and Glamour.
 
 ## Plugins
 
-### Obsidian
-
-Fetch, publish, and browse Demarkus documents directly from Obsidian.
-
-- Plugin repo: [latebit-io/obsidian-demarkus](https://github.com/latebit-io/obsidian-demarkus), installed via BRAT
-- Source: [plugins/obsidian](https://github.com/latebit-io/demarkus/tree/main/plugins/obsidian)
-
 ### Claude Code
 
 Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/demarkus`). They compose in one install and partition by server scope.
@@ -107,10 +100,6 @@ pi install ./demarkus/plugins/pi-knowledge
 ```
 
 ## Agent platforms
-
-### OpenClaw
-
-ClawHub skill for OpenClaw agents. See the [OpenClaw install guide](/install/openclaw/).
 
 ### Indexing agent
 
