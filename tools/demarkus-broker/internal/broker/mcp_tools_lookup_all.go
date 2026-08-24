@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -108,7 +109,7 @@ func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []*WorldConfig,
 					continue
 				default:
 				}
-				result, err := g.dispatcher.Lookup(world.Name, scope, query, "", opts)
+				result, err := g.dispatcher.LookupContext(ctx, world.Name, scope, query, "", opts)
 				if err == nil && result.Response.Status != protocol.StatusOK {
 					err = fmt.Errorf("status %s%s", result.Response.Status, lookupFailureDetail(result.Response.Body))
 				}
@@ -122,7 +123,20 @@ func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []*WorldConfig,
 	}
 	go func() {
 		for _, world := range worlds {
-			jobs <- world
+			if ctx.Err() != nil {
+				close(jobs)
+				wg.Wait()
+				close(results)
+				return
+			}
+			select {
+			case jobs <- world:
+			case <-ctx.Done():
+				close(jobs)
+				wg.Wait()
+				close(results)
+				return
+			}
 		}
 		close(jobs)
 		wg.Wait()
@@ -132,19 +146,29 @@ func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []*WorldConfig,
 	out := make([]lookupAllWorldResult, 0, len(worlds))
 	for len(out) < len(worlds) {
 		select {
-		case result := <-results:
+		case result, ok := <-results:
+			if !ok {
+				return completeCanceledLookupResults(out, worlds, ctx.Err())
+			}
 			out = append(out, result)
 		case <-ctx.Done():
-			seen := make(map[string]bool, len(out))
-			for _, result := range out {
-				seen[result.world] = true
-			}
-			for _, world := range worlds {
-				if !seen[world.Name] {
-					out = append(out, lookupAllWorldResult{world: world.Name, err: ctx.Err()})
-				}
-			}
-			return out
+			return completeCanceledLookupResults(out, worlds, ctx.Err())
+		}
+	}
+	return out
+}
+
+func completeCanceledLookupResults(out []lookupAllWorldResult, worlds []*WorldConfig, err error) []lookupAllWorldResult {
+	if err == nil {
+		err = errors.New("lookup workers stopped before all worlds returned")
+	}
+	seen := make(map[string]bool, len(out))
+	for _, result := range out {
+		seen[result.world] = true
+	}
+	for _, world := range worlds {
+		if !seen[world.Name] {
+			out = append(out, lookupAllWorldResult{world: world.Name, err: err})
 		}
 	}
 	return out

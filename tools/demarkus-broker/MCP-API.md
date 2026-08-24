@@ -78,7 +78,10 @@ mark://{worldName}/{path}
 resolves the name to a cluster-internal address using
 `worlds[].internalAddress` if set, otherwise the standard Service-DNS
 convention `<name>.<namespace>.svc.cluster.local:6309`. The agent
-never sees the internal address — it knows worlds only by name.
+addresses tools only by logical world name; internal addresses are not
+accepted as tool authorities. The broker-only `mark_worlds` discovery
+response deliberately exposes each internal topology address to authenticated
+identities so graph consumers can join host-keyed edges to logical worlds.
 
 Path traversal, query strings, and fragments are rejected by the
 gateway parser (strict shape, clear errors). The crawler used by

@@ -149,10 +149,14 @@ func TestHandleMarkLookupAllReturnsOnCancellation(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	d := &fakeDispatcher{
-		lookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		lookupCtxFn: func(ctx context.Context, _, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
 			close(started)
-			<-release
-			return lookupResult(), nil
+			select {
+			case <-release:
+				return lookupResult(), nil
+			case <-ctx.Done():
+				return fetch.Result{}, ctx.Err()
+			}
 		},
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)

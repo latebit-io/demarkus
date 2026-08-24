@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -26,6 +27,7 @@ type worldDispatcher interface {
 	List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	Versions(worldName, path, token string) (fetch.Result, error)
 	Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
+	LookupContext(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Archive(worldName, path, token string) (fetch.Result, error)
@@ -151,6 +153,14 @@ func (p *worldPool) Lookup(worldName, scope, query, token string, opts fetch.Loo
 		return fetch.Result{}, err
 	}
 	return c.Lookup(host, scope, query, token, opts)
+}
+
+func (p *worldPool) LookupContext(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
+	c, host, err := p.clientFor(worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+	return c.LookupContext(ctx, host, scope, query, token, opts)
 }
 
 // Publish dispatches a PUBLISH against worldName. Byte-for-byte

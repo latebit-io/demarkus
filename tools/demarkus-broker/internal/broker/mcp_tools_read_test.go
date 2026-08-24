@@ -29,6 +29,7 @@ type fakeDispatcher struct {
 	listFn      func(worldName, path, token string) (fetch.Result, error)
 	versionsFn  func(worldName, path, token string) (fetch.Result, error)
 	lookupFn    func(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
+	lookupCtxFn func(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	publishFn   func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	appendFn    func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	archiveFn   func(worldName, path, token string) (fetch.Result, error)
@@ -126,10 +127,22 @@ func (f *fakeDispatcher) Versions(worldName, path, token string) (fetch.Result, 
 }
 
 func (f *fakeDispatcher) Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
+	return f.lookup(context.Background(), worldName, scope, query, token, opts, false)
+}
+
+func (f *fakeDispatcher) LookupContext(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
+	return f.lookup(ctx, worldName, scope, query, token, opts, true)
+}
+
+func (f *fakeDispatcher) lookup(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions, contextAware bool) (fetch.Result, error) {
 	f.mu.Lock()
 	f.lookupCalls = append(f.lookupCalls, lookupCall{worldName, scope, query, token, opts})
 	fn := f.lookupFn
+	ctxFn := f.lookupCtxFn
 	f.mu.Unlock()
+	if contextAware && ctxFn != nil {
+		return ctxFn(ctx, worldName, scope, query, token, opts)
+	}
 	if fn == nil {
 		return fetch.Result{Response: protocol.Response{
 			Status:   protocol.StatusOK,
