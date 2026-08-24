@@ -8,13 +8,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// MCP prompts on the gateway: the knowledge-system workflows as
-// first-class commands (Claude Code surfaces them as
-// /mcp__<server>__<name> slash commands; Desktop shows a picker). These
-// are deliberately NOT copies of the local demarkus-mcp prompts — a
-// knowledge system spans worlds, so recall and whats-new start from
-// mark_worlds and sweep per-world catalogs, which a single-world client
-// never needs.
+// MCP prompts expose knowledge-system workflows. Unlike local prompts, recall
+// and default whats-new aggregate every readable world.
 
 // registerPrompts wires the three v1 prompts: orient, recall, whats-new.
 func (g *mcpGateway) registerPrompts() {
@@ -35,7 +30,7 @@ func (g *mcpGateway) registerPrompts() {
 	), recallPrompt)
 
 	g.mcpServer.AddPrompt(mcp.NewPrompt("whats-new",
-		mcp.WithPromptDescription("Digest of what changed across the knowledge system recently: per-world catalog lookups filtered by modified date, newest first."),
+		mcp.WithPromptDescription("Digest of what changed across the knowledge system recently: catalog lookup filtered by modified date and prioritized by relevance and importance."),
 		mcp.WithArgument("since",
 			mcp.ArgumentDescription("start date as YYYY-MM-DD (default: 7 days ago)"),
 		),
@@ -77,11 +72,10 @@ func recallPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptRe
 	}
 	text := fmt.Sprintf(`Recall what this knowledge system knows about: %s.
 
-1. Call mark_worlds to see the readable worlds.
-2. For each world, call mark_lookup with url "mark://<world>/" and query %q; the catalog returns an importance-ranked table of matching documents. If nothing matches anywhere, retry once with a broader or synonymous query before concluding.
-3. Call mark_explore on the best match to see its outline and neighborhood; explore a second candidate only if the first does not cover the subject.
-4. Call mark_fetch with url "mark://<world>/<path>#<anchor>" for the sections that actually address the subject; avoid full bodies of large documents.
-5. Report what is known, citing every claim with its mark://<world>/<path> (and #anchor where applicable). If no catalog has anything on the subject, say so plainly; never invent organizational memory.`, subject, subject)
+1. Call mark_lookup_all with query %q; it returns one globally limited table with qualified mark://<world>/<path> results across every readable world. If the successful result is empty, retry once with a broader or synonymous query before concluding. If status is partial, use the successful matches but disclose the failed worlds.
+2. Call mark_explore on the best match to see its outline and neighborhood; explore a second candidate only if the first does not cover the subject.
+3. Call mark_fetch with the returned "mark://<world>/<path>#<anchor>" for sections that actually address the subject; avoid full bodies of large documents.
+4. Report what is known, citing every claim with its mark://<world>/<path> (and #anchor where applicable). If no catalog has anything on the subject, say so plainly; never invent organizational memory.`, subject, subject)
 	return mcp.NewGetPromptResult("Recall: "+subject, []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
 	}), nil
@@ -95,16 +89,16 @@ func whatsNewPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPrompt
 	if since != "" {
 		sinceLine = fmt.Sprintf("Use the date %q.", since)
 	}
-	scopeLine := `Call mark_worlds, then for each readable world call mark_lookup with url "mark://<world>/", query "*", and filter "modified-after=<that date>".`
+	scopeLine := `Call mark_lookup_all with query "*" and filter "modified-after=<that date>". If status is partial, include successful results but disclose the failed worlds.`
 	if world != "" {
 		scopeLine = fmt.Sprintf(`Call mark_lookup with url "mark://%s/", query "*", and filter "modified-after=<that date>".`, world)
 	}
 	text := fmt.Sprintf(`Summarize what changed in this knowledge system recently.
 
 1. %s
-2. %s Each lookup returns the world's catalogued documents modified since then, importance-ranked.
-3. For the handful of most important changed documents, call mark_fetch with a #<anchor> section or rely on the outline; do not fetch full bodies of large documents.
-4. Report a short digest, newest and most important first: each entry is the document (as mark://<world>/<path>), what it covers, and why it likely changed. If nothing changed, say so.`, sinceLine, scopeLine)
+2. %s The lookup returns catalogued documents modified since then, ordered by per-world relevance and importance.
+3. For the handful of most relevant changed documents, call mark_fetch with a #<anchor> section or rely on the outline, and capture each fetched document's modified timestamp; do not fetch full bodies of large documents.
+4. Report a short digest of the fetched candidates, newest first by modified timestamp: each entry is the document (as mark://<world>/<path>), what it covers, and why it likely changed. State that the limited lookup is not exhaustive. If nothing changed, say so.`, sinceLine, scopeLine)
 
 	title := "What's new"
 	if since != "" {

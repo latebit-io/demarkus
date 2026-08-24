@@ -60,19 +60,22 @@ func TestGatewayOrientPrompt(t *testing.T) {
 	}
 }
 
-func TestGatewayRecallPromptSweepsWorlds(t *testing.T) {
+func TestGatewayRecallPromptLooksUpAllWorlds(t *testing.T) {
 	text := gatewayPromptText(t, recallPrompt, map[string]string{"subject": "escrow rules"})
-	for _, want := range []string{"mark_worlds", `"escrow rules"`, `mark://<world>/`, "never invent organizational memory"} {
+	for _, want := range []string{"mark_lookup_all", `"escrow rules"`, `mark://<world>/<path>`, "status is partial", "never invent organizational memory"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("recall prompt missing %q in:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "mark_worlds") {
+		t.Error("recall prompt should use broker-side aggregation")
 	}
 }
 
 func TestGatewayWhatsNewPrompt(t *testing.T) {
 	t.Run("universe-wide default", func(t *testing.T) {
 		text := gatewayPromptText(t, whatsNewPrompt, nil)
-		for _, want := range []string{"7 days before today", "mark_worlds", `query "*"`, "modified-after="} {
+		for _, want := range []string{"7 days before today", "mark_lookup_all", `query "*"`, "modified-after=", "status is partial", "modified timestamp", "not exhaustive"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("whats-new prompt missing %q in:\n%s", want, text)
 			}
@@ -85,8 +88,8 @@ func TestGatewayWhatsNewPrompt(t *testing.T) {
 				t.Errorf("scoped whats-new missing %q in:\n%s", want, text)
 			}
 		}
-		if strings.Contains(text, "mark_worlds") {
-			t.Error("world-scoped whats-new should not sweep every world")
+		if strings.Contains(text, "mark_lookup_all") {
+			t.Error("world-scoped whats-new should use targeted lookup")
 		}
 	})
 }

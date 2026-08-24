@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.66
+
+- Prefer broker-wide `mark_lookup_all` for shared catalog recall, with fallback for older brokers and plain endpoints.
+
 ## 0.5.55
 
 - Generate session guidance, the promotion skill, and slash-command prompts from the shared `plugins/prompt-source` corpus.

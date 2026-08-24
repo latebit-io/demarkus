@@ -8,7 +8,7 @@ For "what does the org know / what's the standard / did the team decide / where 
 
 Use the joined system's tools through the destination server's `mark_*` tools and select the joined system explicitly before calling them.
 
-- `mark_lookup` against the system (the broker MCP server) with a subject `query` is the **card catalog**: an importance-ranked table of matching docs (path, importance, title, tags), not bodies. Start there, then `mark_fetch` the rows worth reading. It only finds what was tagged or titled, so pair it with the world's `index.md` hub. Surface lookup/fetch transport, auth, dispatch, and server failures; only a successful empty result means nothing relevant was found.
+- `mark_lookup_all` on a brokered system with a subject `query` is the system-wide **card catalog**: one globally limited table of matching docs across every readable world, with qualified `mark://<world>/<path>` rows. If an older broker does not expose it, fall back to `mark_worlds` plus `mark_lookup` against each readable world; on a plain single-world endpoint, use `mark_lookup` directly. Start there, then `mark_fetch` the rows worth reading. Catalog lookup only finds what was tagged or titled, so pair it with world `index.md` hubs. Surface partial-world, transport, auth, dispatch, and server failures; only a successful empty result means nothing relevant was found.
 - `mark_backlinks` / `mark_graph` surface related documents across the link graph.
 - If nothing relevant comes back, say so plainly — never fabricate organizational memory.
 

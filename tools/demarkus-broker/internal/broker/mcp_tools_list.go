@@ -155,7 +155,8 @@ func markLookupTool() mcp.Tool {
 				"not document bodies; FETCH the ones you want. This is a catalog lookup, not "+
 				"full-text search: a subject that was never tagged or titled will not be found. "+
 				"Optionally narrow with a comma-separated key=value filter and cap results with limit. "+
-				"Start here when hunting a subject: lookup to find candidate documents, "+
+				"For a system-wide subject, prefer mark_lookup_all; use this tool when the target world is known. "+
+				"Lookup finds candidate documents, "+
 				"mark_explore the best match to orient, then mark_fetch url#<anchor> for the "+
 				"sections you actually need; full bodies of large documents are rarely necessary. "+
 				mcpURLHint,

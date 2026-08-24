@@ -34,7 +34,7 @@ Orient in the organizational demarkus knowledge system(s) this installation has 
    If a fetch returns `not-found`, say so plainly (e.g. the system hasn't published a `root` index or policy yet) rather than inventing content. Surface outline-only, transport, authorization, dispatch, and tool errors separately; they do not mean the document is absent.
 
 3. **Point the way.** Briefly remind the user how to go deeper:
-   - `mark_lookup` against the system for a subject (the card catalog).
+   - `mark_lookup_all` across a brokered system for a subject (the card catalog); on older brokers fall back to `mark_worlds` plus per-world `mark_lookup`, and use `mark_lookup` directly on a plain single-world endpoint.
    - `mark_fetch mark://<world>/index.md` to anchor on a specific world.
    - `/knowledge-join` to add another system; `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list` to see the gate's joined-system source of truth. Remove a system only through the same harness integration that joined it, and unregister the gate entry with `registry knowledge-unregister <slug>`.
 
