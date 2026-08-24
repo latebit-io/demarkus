@@ -242,6 +242,12 @@ type LookupOptions struct {
 // scope, returning an importance-ranked markdown table. query is required.
 // If token is non-empty it is sent so read-auth-gated documents are included.
 func (c *Client) Lookup(host, scope, query, token string, opts LookupOptions) (Result, error) {
+	return c.LookupContext(context.Background(), host, scope, query, token, opts)
+}
+
+// LookupContext is Lookup with caller cancellation propagated through dialing,
+// retries, and stream I/O.
+func (c *Client) LookupContext(ctx context.Context, host, scope, query, token string, opts LookupOptions) (Result, error) {
 	if query == "" {
 		return Result{}, fmt.Errorf("LOOKUP requires a non-empty query")
 	}
@@ -255,8 +261,8 @@ func (c *Client) Lookup(host, scope, query, token string, opts LookupOptions) (R
 	if token != "" {
 		req.Metadata["auth"] = token
 	}
-	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConn(conn, req)
+	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
+		return c.requestOnConnContext(ctx, conn, req)
 	})
 }
 
@@ -329,22 +335,45 @@ func (c *Client) cachedRequestMeta(host, path, token, verb string, extra map[str
 
 // requestOnConn opens a stream, sends a request, and reads the response.
 func (c *Client) requestOnConn(conn *quic.Conn, req protocol.Request) (Result, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.opts.RequestTimeout)
+	return c.requestOnConnContext(context.Background(), conn, req)
+}
+
+func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req protocol.Request) (Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.opts.RequestTimeout)
 	defer cancel()
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("open stream: %w", err)
 	}
-	defer func() { _ = stream.Close() }()
+	stopCancel := context.AfterFunc(ctx, func() {
+		stream.CancelRead(0)
+		stream.CancelWrite(0)
+	})
+	defer stopCancel()
 
 	if _, err := req.WriteTo(stream); err != nil {
+		stream.CancelWrite(0)
+		stream.CancelRead(0)
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
 		return Result{}, fmt.Errorf("send request: %w", err)
 	}
-	_ = stream.Close()
+	if err := stream.Close(); err != nil {
+		stream.CancelRead(0)
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
+		return Result{}, fmt.Errorf("close request stream: %w", err)
+	}
 
 	resp, err := protocol.ParseResponse(stream)
 	if err != nil {
+		stream.CancelRead(0)
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
 		return Result{}, fmt.Errorf("read response: %w", err)
 	}
 
@@ -353,15 +382,24 @@ func (c *Client) requestOnConn(conn *quic.Conn, req protocol.Request) (Result, e
 
 // doWithRetry retries transient failures up to 5 times with a fixed 100ms delay.
 func (c *Client) doWithRetry(host string, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
+	return c.doWithRetryContext(context.Background(), host, fn)
+}
+
+func (c *Client) doWithRetryContext(ctx context.Context, host string, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
 	const maxRetries = 5
 	const retryDelay = 100 * time.Millisecond
 
 	var lastErr error
 	for attempt := range maxRetries {
-		conn, err := c.getConn(host)
+		if err := ctx.Err(); err != nil {
+			return Result{}, err
+		}
+		conn, err := c.getConnContext(ctx, host)
 		if err != nil {
 			if attempt < maxRetries-1 && isTransientError(err) {
-				time.Sleep(retryDelay)
+				if err := waitForRetry(ctx, retryDelay); err != nil {
+					return Result{}, err
+				}
 				c.removeConn(host)
 				continue
 			}
@@ -372,10 +410,15 @@ func (c *Client) doWithRetry(host string, fn func(conn *quic.Conn) (Result, erro
 		if err == nil {
 			return result, nil
 		}
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
 
 		lastErr = err
 		if attempt < maxRetries-1 && isTransientError(err) {
-			time.Sleep(retryDelay)
+			if err := waitForRetry(ctx, retryDelay); err != nil {
+				return Result{}, err
+			}
 			c.removeConn(host)
 			continue
 		}
@@ -386,7 +429,16 @@ func (c *Client) doWithRetry(host string, fn func(conn *quic.Conn) (Result, erro
 	return Result{}, lastErr
 }
 
-func (c *Client) getConn(host string) (*quic.Conn, error) {
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	select {
+	case <-time.After(delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *Client) getConnContext(ctx context.Context, host string) (*quic.Conn, error) {
 	c.mu.Lock()
 	conn, ok := c.conns[host]
 	c.mu.Unlock()
@@ -399,7 +451,7 @@ func (c *Client) getConn(host string) (*quic.Conn, error) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.opts.DialTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.opts.DialTimeout)
 	defer cancel()
 
 	endpoint := Endpoint{DialAddress: host}
