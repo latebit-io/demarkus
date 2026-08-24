@@ -5,16 +5,16 @@ import (
 	"testing"
 )
 
-func TestMCPToolsExactly16(t *testing.T) {
+func TestMCPToolsExactly17(t *testing.T) {
 	tools := mcpTools()
 	if len(tools) != len(mcpToolNames) {
 		t.Fatalf("mcpTools() returned %d tools, mcpToolNames lists %d — names + builders out of sync", len(tools), len(mcpToolNames))
 	}
 	// 15 tools mirror client/cmd/demarkus-mcp for cross-transport parity;
-	// mark_worlds is the one deliberate broker-only addition (enumerating
-	// worlds is a knowledge-system concept with no single-world analogue).
-	if len(tools) != 16 {
-		t.Fatalf("expected 16 tools (demarkus-mcp parity surface + mark_worlds), got %d", len(tools))
+	// mark_worlds and mark_lookup_all are deliberate broker-only additions:
+	// both operate on the knowledge system rather than one world.
+	if len(tools) != 17 {
+		t.Fatalf("expected 17 tools (demarkus-mcp parity surface + 2 broker tools), got %d", len(tools))
 	}
 	for i, tool := range tools {
 		if tool.Name != mcpToolNames[i] {
@@ -52,6 +52,11 @@ func TestMCPToolsExposeRequiredArguments(t *testing.T) {
 			tool:         "mark_fetch",
 			wantRequired: []string{"url"},
 			wantOptional: []string{"force"},
+		},
+		{
+			tool:         "mark_lookup_all",
+			wantRequired: []string{"query"},
+			wantOptional: []string{"scope", "filter", "limit"},
 		},
 		{
 			tool:         "mark_explore",

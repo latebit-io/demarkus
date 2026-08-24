@@ -14,14 +14,8 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// mcpGateway is the broker's MCP-over-HTTPS gateway. It owns the mcp-go
-// MCPServer and its Streamable HTTP transport, sharing auth +
-// rate-limit machinery with the parent broker Server.
-//
-// All 16 tools have real handlers. Reads dispatch with an empty bearer
-// (the world's tokens.toml grants no read op, so the org SSO gate at
-// the broker is the only access control); writes provision a per-world
-// token through worldWriteTokens and dispatch through worldDispatcher.
+// mcpGateway serves 17 MCP-over-HTTPS tools. Reads use broker SSO;
+// writes also provision per-world tokens through worldWriteTokens.
 type mcpGateway struct {
 	srv        *Server
 	mcpServer  *mcpserver.MCPServer
@@ -51,22 +45,8 @@ type mcpGateway struct {
 	graphSeedChecked map[string]time.Time
 }
 
-// newMCPGateway constructs a gateway, registers the 16 tool
-// definitions (real handlers for Slice 2's read verbs, placeholders
-// for the rest), and wraps the mcp-go MCPServer in a Streamable HTTP
-// transport. The transport is an http.Handler — the caller mounts
-// it on whichever path/middleware chain it wants (Routes mounts it
-// at /mcp behind the gateway auth chain).
-//
-// version is plumbed through to the MCPServer constructor so the
-// initialize response surfaces the broker's build version to MCP
-// clients. mcp-go advertises tool/resource/prompt capabilities
-// automatically on registration; resources and prompts joined the
-// surface in the resources+prompts follow-up (mcp_resources.go /
-// mcp_prompts.go), superseding the gateway plan's original Out-of-Scope.
-//
-// dispatcher is the worldDispatcher backing the tool handlers.
-// Production wires *worldPool; tests inject a fake.
+// newMCPGateway registers the 17 tools and wraps them in Streamable HTTP.
+// Production supplies *worldPool; tests inject a dispatcher fake.
 func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGateway {
 	// Session-end eviction for the fetch dedup state. The store is
 	// constructed before the MCPServer because the hook closes over it.
@@ -105,11 +85,8 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGa
 	return g
 }
 
-// registerTools wires the 16 tool definitions onto the MCP server.
-// Tools absent from the toolHandlers map fall through to
-// notImplementedHandler. The per-tool handler map lives in
-// toolHandlers so adding new implementations is a one-line edit and
-// the placeholder fallback is impossible to forget.
+// registerTools wires all definitions to their handlers. Missing handlers use
+// notImplementedHandler so an incomplete registration fails visibly.
 func (g *mcpGateway) registerTools() {
 	handlers := g.toolHandlers()
 	tools := mcpTools()
@@ -122,20 +99,15 @@ func (g *mcpGateway) registerTools() {
 	}
 }
 
-// toolHandlers returns the per-tool handler map. Tools absent
-// from the map use notImplementedHandler. Method (rather than a
-// package-level var) so the handlers carry the gateway receiver
-// without indirection through a global.
-//
-// All 16 tools are real handlers — every entry below points at a
-// concrete implementation, and notImplementedHandler should never
-// run in production.
+// toolHandlers maps all 17 tools to concrete implementations. Keeping this a
+// method binds handlers to the gateway without global indirection.
 func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 	return map[string]mcpserver.ToolHandlerFunc{
 		"mark_fetch":         g.handleMarkFetch,
 		"mark_explore":       g.handleMarkExplore,
 		"mark_list":          g.handleMarkList,
 		"mark_lookup":        g.handleMarkLookup,
+		"mark_lookup_all":    g.handleMarkLookupAll,
 		"mark_versions":      g.handleMarkVersions,
 		"mark_publish":       g.handleMarkPublish,
 		"mark_append":        g.handleMarkAppend,

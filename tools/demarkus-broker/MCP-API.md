@@ -1,8 +1,9 @@
 # Broker MCP API
 
-Operator + developer reference for the 14-tool MCP surface exposed by
-the demarkus-broker's `/mcp` endpoint. Mirrors the local
-`client/cmd/demarkus-mcp` stdio server byte-for-byte: a document
+Operator + developer reference for the 17-tool MCP surface exposed by
+the demarkus-broker's `/mcp` endpoint. Fifteen tools mirror the local
+`client/cmd/demarkus-mcp` stdio server; `mark_worlds` and
+`mark_lookup_all` are broker-only system operations. A document
 fetched via the broker and the same document fetched direct-QUIC
 produce identical body bytes, version, modified timestamp, etag, and
 content-hash. The broker is a wire-shape adapter
@@ -45,7 +46,7 @@ the broker's `/me/install`, `AllowConfig`, and audit logs already use
 The broker does **not** mint per-user tokens. World access is gated as
 follows:
 
-- **Reads** (`mark_fetch`, `mark_list`, `mark_versions`, and the
+- **Reads** (`mark_fetch`, `mark_list`, `mark_versions`, catalog lookups, and the
   federation reads) dispatch with an empty bearer. The world's
   `tokens.toml` grants no `read` operation to any token, so reads are
   open to any SSO-authenticated identity.
@@ -66,7 +67,7 @@ write re-reads the broker Secret rather than re-minting.
 
 ## URL form
 
-Every tool that addresses a world uses the URL shape:
+Every tool that addresses one world uses the URL shape:
 
 ```text
 mark://{worldName}/{path}
@@ -88,7 +89,7 @@ for caller-supplied URLs.
 
 ## Tools
 
-All 14 tools below have semantic parity with the local
+Fifteen tools below have semantic parity with the local
 `client/cmd/demarkus-mcp` stdio server. The proxy-fidelity gate is a
 broker-side unit test that asserts the broker's `formatToolResult`
 matches the local server's `formatResult` byte-for-byte across
@@ -96,11 +97,27 @@ representative `fetch.Result` cases.
 
 ### Read
 
+#### `mark_worlds`
+
+List every world the authenticated identity may read, including each
+world's logical name, public URL, internal topology address, and
+whether the identity may also write it. This is broker-only and takes
+no parameters.
+
 #### `mark_fetch`
 
 Fetch a document. Returns `status` (`ok` | `not-found` | `archived` |
 `unauthorized`), `version`, `modified`, `etag`, `content-hash`, and
 the markdown `body`. Identical wire shape to direct-QUIC `FETCH`.
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `url` | string | yes | `mark://{worldName}/{path}` |
+
+#### `mark_explore`
+
+Orient around one document in one call: outline head, outbound links,
+recorded backlinks, and sibling documents, each capped at 10 entries.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -139,6 +156,23 @@ row count). Dispatched unauthenticated like the other reads.
 | `query` | string | yes | Subject; matched against tags and titles (min 2 chars). |
 | `filter` | string | no | Comma-separated `key=value`; built-ins `tag=`, `modified-after=`, `modified-before=`. |
 | `limit` | number | no | Max results (server default 10, cap 1000). |
+
+#### `mark_lookup_all`
+
+Look up a subject across every readable world. The broker performs
+bounded concurrent LOOKUP calls, qualifies each path as
+`mark://{worldName}/{path}`, and applies one global result limit.
+Results are ordered by per-world rank, then importance, world, and
+path. Successful matches remain available when some worlds fail;
+those failures are listed in a `status: partial` response. If every
+world fails, the tool returns an error.
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `query` | string | yes | Subject; matched against tags and titles (min 2 chars), or `*`. |
+| `scope` | string | no | Server-relative scope applied to every world (default `/`). |
+| `filter` | string | no | Comma-separated `key=value` predicates applied in every world. |
+| `limit` | number | no | Global max results (default 10, cap 1000). |
 
 ### Write
 
@@ -299,7 +333,9 @@ step. `mark_graph_export` + `mark_publish` combined.
 The broker returns errors via the MCP tool-error envelope (`isError:
 true` in the `CallToolResult`) for genuine tool failures: malformed
 URL, unknown world, transport failure to the world, exhausted
-first-mint retry budget. World-side `conflict`, `archived`, and
+first-mint retry budget, or failure of every world in `mark_lookup_all`.
+Partial `mark_lookup_all` failures return `status: partial` with the
+successful matches and an explicit failure table. World-side `conflict`, `archived`, and
 `not-permitted` responses are forwarded **verbatim** with `isError:
 false` — they are first-class outcomes the agent acts on (re-fetch
 and retry; ask the operator for more scope), not gateway errors.

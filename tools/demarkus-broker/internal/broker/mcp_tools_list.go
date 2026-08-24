@@ -28,6 +28,7 @@ var mcpToolNames = []string{
 	"mark_list",
 	"mark_versions",
 	"mark_lookup",
+	"mark_lookup_all",
 	"mark_publish",
 	"mark_append",
 	"mark_archive",
@@ -41,14 +42,8 @@ var mcpToolNames = []string{
 	"mark_worlds",
 }
 
-// mcpTools returns the 16 tool definitions exposed by the broker MCP
-// gateway. The first 15 mirror client/cmd/demarkus-mcp's tool surface
-// for parity (so the agent sees the same vocabulary regardless of
-// transport); only the URL-format description differs because the
-// broker addresses worlds by name rather than host:port. mark_worlds
-// is deliberately broker-only: enumerating worlds is a knowledge-system
-// concept — the local single-world MCP's universe IS its one world, so
-// there is nothing to enumerate there.
+// mcpTools returns 15 direct-MCP parity tools plus broker-only mark_worlds and
+// mark_lookup_all, which operate on the knowledge system rather than one world.
 func mcpTools() []mcp.Tool {
 	return []mcp.Tool{
 		markFetchTool(),
@@ -56,6 +51,7 @@ func mcpTools() []mcp.Tool {
 		markListTool(),
 		markVersionsTool(),
 		markLookupTool(),
+		markLookupAllTool(),
 		markPublishTool(),
 		markAppendTool(),
 		markArchiveTool(),
@@ -177,6 +173,32 @@ func markLookupTool() mcp.Tool {
 		),
 		mcp.WithNumber("limit",
 			mcp.Description("maximum number of results (server default 10, hard cap 1000)"),
+		),
+	)
+}
+
+func markLookupAllTool() mcp.Tool {
+	return mcp.NewTool("mark_lookup_all",
+		mcp.WithDescription(
+			"Look up documents by subject across every world your identity may read. "+
+				"Returns one globally limited markdown table whose paths are qualified as "+
+				"mark://{worldName}/{path}. Results retain each world's relevance rank and "+
+				"use importance and world identity for deterministic ordering. Partial world "+
+				"failures are reported alongside successful matches. This is a broker-wide "+
+				"catalog lookup, not full-text search.",
+		),
+		mcp.WithString("query",
+			mcp.Required(),
+			mcp.Description("subject to look up; matched against document tags and titles (minimum 2 characters), or '*' to match every catalogued document"),
+		),
+		mcp.WithString("scope",
+			mcp.Description("server-relative scope applied to every world, e.g. / or /docs/ (default /)"),
+		),
+		mcp.WithString("filter",
+			mcp.Description("comma-separated key=value predicates applied in every world; built-ins: tag=, modified-after=, modified-before="),
+		),
+		mcp.WithNumber("limit",
+			mcp.Description("global maximum number of results across all worlds (default 10, hard cap 1000)"),
 		),
 	)
 }
