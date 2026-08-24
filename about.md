@@ -30,13 +30,10 @@ Every reader is a potential mirror:
 
 1. Content is cached locally when you read it.
 2. You can re-host content from your cache.
-3. Censorship is difficult because content persists.
-4. Like Git for documents.
+3. Like Git for documents.
 
-## Anti-Commercialization
+## Open
 
-- No tracking hooks or analytics
-- No ad injection points
 - Public domain specification
 - Open source implementation
 - Anyone can run a server
