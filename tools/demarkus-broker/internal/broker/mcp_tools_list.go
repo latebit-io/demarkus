@@ -337,7 +337,8 @@ func markIndexTool() mcp.Tool {
 	return mcp.NewTool("mark_index",
 		mcp.WithDescription(
 			"Crawl a Mark Protocol server, collect content hashes from all documents, "+
-				"and publish a hash index document to a target server (typically a hub). "+
+				"and publish a sharded hash index to a target server (typically a hub). "+
+				"The target manifest and .shards subtree must be publicly readable; the world token needs publish access to both. "+
 				"The tool checks the target's agent manifest before publishing. "+
 				mcpURLHint,
 		),

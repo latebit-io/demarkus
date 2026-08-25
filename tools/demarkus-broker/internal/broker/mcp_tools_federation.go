@@ -58,9 +58,11 @@ func (g *mcpGateway) handleMarkResolve(_ context.Context, req mcp.CallToolReques
 	if err != nil {
 		return mcp.NewToolResultError("hash is required"), nil
 	}
-	if _, ok := protocol.IsHashPath(hash); !ok {
+	cleanHash, ok := protocol.IsHashPath(hash)
+	if !ok {
 		return mcp.NewToolResultError("invalid hash format: expected sha256-<64 lowercase hex characters>"), nil
 	}
+	hash = cleanHash
 	indexURL, err := req.RequireString("index")
 	if err != nil {
 		return mcp.NewToolResultError("index is required"), nil
@@ -79,13 +81,13 @@ func (g *mcpGateway) handleMarkResolve(_ context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError(fmt.Sprintf("index fetch returned: %s", indexResult.Response.Status)), nil
 	}
 
-	// 2. Parse and filter for matching hash entries.
-	entries := index.Parse(indexResult.Response.Body)
-	matches := make([]index.Entry, 0, len(entries))
-	for _, e := range entries {
-		if e.Hash == hash {
-			matches = append(matches, e)
-		}
+	// 2. V2 manifests fetch only matching prefix shards; legacy indexes stay inline.
+	matches, err := index.EntriesForHash(indexPath, indexResult.Response.Body, hash, func(shardPath string) (protocol.Response, error) {
+		result, err := g.dispatcher.Fetch(indexWorld, shardPath, "")
+		return result.Response, err
+	})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid index: %v", err)), nil
 	}
 	if len(matches) == 0 {
 		return mcp.NewToolResultError(fmt.Sprintf("hash %s not found in index", hash)), nil

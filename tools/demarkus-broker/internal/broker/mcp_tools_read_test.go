@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -36,6 +37,7 @@ type fakeDispatcher struct {
 	publishFn   func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	appendFn    func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	archiveFn   func(worldName, path, token string) (fetch.Result, error)
+	published   map[string]fetch.Result
 
 	fetchCalls     []dispatchCall
 	fetchCondCalls []condCall
@@ -87,8 +89,12 @@ type writeCall struct {
 func (f *fakeDispatcher) Fetch(worldName, path, token string) (fetch.Result, error) {
 	f.mu.Lock()
 	f.fetchCalls = append(f.fetchCalls, dispatchCall{worldName, path, token})
+	stored, ok := f.published[worldName+path]
 	fn := f.fetchFn
 	f.mu.Unlock()
+	if ok {
+		return stored, nil
+	}
 	if fn == nil {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
 	}
@@ -177,13 +183,35 @@ func (f *fakeDispatcher) Publish(worldName, path, body, token string, expectedVe
 	f.publishCalls = append(f.publishCalls, writeCall{worldName, path, body, token, expectedVersion, cloneMeta(meta)})
 	fn := f.publishFn
 	f.mu.Unlock()
+	var result fetch.Result
+	var err error
 	if fn == nil {
-		return fetch.Result{Response: protocol.Response{
+		result = fetch.Result{Response: protocol.Response{
 			Status:   protocol.StatusOK,
 			Metadata: map[string]string{"version": "1"},
-		}}, nil
+		}}
+	} else {
+		result, err = fn(worldName, path, body, token, expectedVersion, meta)
 	}
-	return fn(worldName, path, body, token, expectedVersion, meta)
+	if err != nil || (result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated) {
+		return result, err
+	}
+	version, versionErr := strconv.Atoi(result.Response.Metadata["version"])
+	if versionErr == nil && version > 0 {
+		metadata := map[string]string{
+			"version":      strconv.Itoa(version),
+			"content-hash": index.BodyHash(body),
+		}
+		stored := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: metadata}}
+		f.mu.Lock()
+		if f.published == nil {
+			f.published = make(map[string]fetch.Result)
+		}
+		f.published[worldName+path] = stored
+		f.published[worldName+index.VersionPath(path, version)] = stored
+		f.mu.Unlock()
+	}
+	return result, nil
 }
 
 func (f *fakeDispatcher) Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {

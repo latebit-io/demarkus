@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -70,7 +71,19 @@ func (m *mockClient) Publish(host, path, body, token string, expectedVersion int
 	if s, ok := m.publishStatuses[host+path]; ok {
 		status = s
 	}
-	return fetch.Result{Response: protocol.Response{Status: status}}, nil
+	if status != protocol.StatusOK && status != protocol.StatusCreated {
+		return fetch.Result{Response: protocol.Response{Status: status}}, nil
+	}
+	version := 1
+	if current, ok := m.pages[host+path]; ok {
+		version, _ = strconv.Atoi(current.metadata["version"])
+		version++
+	}
+	metadata := map[string]string{"version": strconv.Itoa(version), "content-hash": index.BodyHash(body)}
+	stored := mockPage{status: protocol.StatusOK, body: body, metadata: metadata}
+	m.pages[host+path] = stored
+	m.pages[host+index.VersionPath(path, version)] = stored
+	return fetch.Result{Response: protocol.Response{Status: status, Metadata: map[string]string{"version": strconv.Itoa(version)}}}, nil
 }
 
 func (m *mockClient) addDoc(host, path, body, hash string) {
@@ -808,11 +821,11 @@ func TestPublishToHubs(t *testing.T) {
 		if count != 1 {
 			t.Errorf("count = %d, want 1", count)
 		}
-		if len(client.publishes) != 1 {
-			t.Fatalf("expected 1 publish, got %d", len(client.publishes))
+		if len(client.publishes) != 2 {
+			t.Fatalf("expected shard + manifest publishes, got %d", len(client.publishes))
 		}
-		if client.publishes[0].Path != "/index.md" {
-			t.Errorf("publish path = %q, want /index.md", client.publishes[0].Path)
+		if client.publishes[1].Path != "/index.md" {
+			t.Errorf("last publish path = %q, want /index.md", client.publishes[1].Path)
 		}
 	})
 
@@ -838,12 +851,12 @@ func TestPublishToHubs(t *testing.T) {
 		if count != 2 {
 			t.Errorf("count = %d, want 2", count)
 		}
-		if len(client.publishes) != 2 {
-			t.Fatalf("expected 2 publishes, got %d", len(client.publishes))
+		if len(client.publishes) != 4 {
+			t.Fatalf("expected two shards + two manifests, got %d", len(client.publishes))
 		}
 		for i, call := range client.publishes {
-			if call.ExpectedVersion != -1 {
-				t.Errorf("publishes[%d].ExpectedVersion = %d, want -1 (no-check)", i, call.ExpectedVersion)
+			if call.ExpectedVersion != 0 {
+				t.Errorf("publishes[%d].ExpectedVersion = %d, want 0", i, call.ExpectedVersion)
 			}
 		}
 	})
@@ -1000,8 +1013,12 @@ func TestPublishRetentionMeta(t *testing.T) {
 			t.Fatal("expected publishes")
 		}
 		for _, call := range client.publishes {
-			if call.Meta["retention"] != "20" {
+			isShard := strings.Contains(call.Path, ".shards/")
+			if !isShard && call.Meta["retention"] != "20" {
 				t.Errorf("publish %s%s meta.retention = %q, want %q", call.Host, call.Path, call.Meta["retention"], "20")
+			}
+			if isShard && call.Meta["retention"] != "" {
+				t.Errorf("version-pinned shard %s%s must not prune history", call.Host, call.Path)
 			}
 			if call.Meta["agent"] != "demarkus-agent" {
 				t.Errorf("publish %s%s lost agent meta: %v", call.Host, call.Path, call.Meta)

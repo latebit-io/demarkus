@@ -3,13 +3,16 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -160,6 +163,60 @@ func TestHandleMarkResolveHappyPath(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("response missing %q\nfull:\n%s", want, text)
 		}
+	}
+}
+
+func TestHandleMarkResolveShardedManifest(t *testing.T) {
+	artifacts, err := index.BuildShards("/hub/index.md", index.SlotA, []index.Entry{
+		{Hash: testHashA, Server: "mark://team-a", Path: "/foo.md"},
+		{Hash: testHashB, Server: "mark://team-b", Path: "/bar.md"},
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]index.ShardRef, len(artifacts))
+	shards := make(map[string]fetch.Result)
+	for i, artifact := range artifacts {
+		version := i + 1
+		refs[i] = artifact.Ref(version)
+		shards[index.VersionPath(artifact.Path, version)] = fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK, Body: artifact.Body,
+			Metadata: map[string]string{"version": fmt.Sprint(version), "content-hash": artifact.ContentHash},
+		}}
+	}
+	manifest, err := index.BuildManifest("/hub/index.md", index.Manifest{
+		Source: "aggregated", Indexed: time.Now(), Complete: true,
+		Documents: 2, ActiveSlot: index.SlotA, Shards: refs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shardFetches atomic.Int32
+	d := &fakeDispatcher{fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		if path == "/hub/index.md" {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: manifest}}, nil
+		}
+		if shard, ok := shards[path]; ok {
+			shardFetches.Add(1)
+			return shard, nil
+		}
+		if path == "/"+testHashA {
+			return fetch.Result{Response: protocol.Response{
+				Status: protocol.StatusOK, Body: "# resolved content\n",
+				Metadata: map[string]string{"content-hash": testHashA, "version": "1"},
+			}}, nil
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkResolve(withAliceClaims(t.Context()), callToolReq("mark_resolve", map[string]any{
+		"hash": testHashA, "index": "mark://team-a/hub/index.md",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkResolve = (%+v, %v)", res, err)
+	}
+	if shardFetches.Load() != 1 {
+		t.Fatalf("shard fetches = %d, want 1", shardFetches.Load())
 	}
 }
 

@@ -287,7 +287,7 @@ func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths: []string{"/*"},
+			Paths: []string{"/**"},
 		},
 	})
 	var listCalls atomic.Int32
@@ -462,16 +462,19 @@ const indexManifestBody = "# Agent Manifest\n\nThis world accepts index publicat
 
 func TestHandleMarkIndexHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
+	cfg.Server.MCP.FirstMintMaxAttempts = 3
+	cfg.Server.MCP.FirstMintInitialBackoff = time.Nanosecond
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{
 		Name:         "hub",
 		Namespace:    "hub",
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths: []string{"/*"},
+			Paths: []string{"/**"},
 		},
 	})
 	var publishCalled atomic.Bool
+	var publishAttempts atomic.Int32
 	d := &fakeDispatcher{
 		fetchFn: func(_, path, token string) (fetch.Result, error) {
 			if token != "" {
@@ -524,6 +527,9 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 			if token == "" {
 				t.Error("index publish dispatched without a publish token")
 			}
+			if publishAttempts.Add(1) == 1 {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
+			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1", "modified": "2026-05-22T11:00:00Z"},
@@ -544,6 +550,20 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 	if !publishCalled.Load() {
 		t.Error("publish was not called; expected the index doc to be written to target")
 	}
+	d.mu.Lock()
+	publishCalls := append([]writeCall(nil), d.publishCalls...)
+	d.mu.Unlock()
+	if len(publishCalls) != 4 {
+		t.Fatalf("publish calls = %d, want rejected shard + two shards + manifest", len(publishCalls))
+	}
+	if publishCalls[3].path != "/index.md" {
+		t.Fatalf("last publish path = %q, want manifest /index.md", publishCalls[3].path)
+	}
+	for i, call := range publishCalls {
+		if call.expectedVersion != 0 {
+			t.Errorf("publish call %d expected_version = %d, want 0", i, call.expectedVersion)
+		}
+	}
 	text := toolResultText(t, res)
 	if !strings.Contains(text, "Indexed 2 documents") {
 		t.Errorf("expected indexed-count line, got:\n%s", text)
@@ -558,7 +578,7 @@ func TestHandleMarkIndexBlocksWhenTargetHasNoManifest(t *testing.T) {
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths: []string{"/*"},
+			Paths: []string{"/**"},
 		},
 	})
 	d := &fakeDispatcher{
@@ -595,7 +615,7 @@ func TestHandleMarkIndexForceOverridesManifestBlock(t *testing.T) {
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths: []string{"/*"},
+			Paths: []string{"/**"},
 		},
 	})
 	var publishCalled atomic.Bool
@@ -646,7 +666,7 @@ func TestHandleMarkIndexDryRunReturnsBodyWithoutPublishing(t *testing.T) {
 		TokensSecret: "hub-tokens",
 		Allow:        AllowConfig{Domains: []string{"example.com"}},
 		DefaultToken: TokenScope{
-			Paths: []string{"/*"},
+			Paths: []string{"/**"},
 		},
 	})
 	var publishCalled atomic.Bool

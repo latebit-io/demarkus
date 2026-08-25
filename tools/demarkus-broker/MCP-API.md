@@ -255,6 +255,14 @@ Crawl a source world, collect content hashes, and publish a hash
 index to a target world (typically a hub). Verifies the target has a
 hub manifest unless `force: true`.
 
+The target path stores a `demarkus-hash-index/v2` manifest. The broker
+stages version-pinned hash-prefix shards under the target's `.shards`
+directory and compare-and-swaps the manifest last. Updates verify and
+merge legacy or sharded target indexes before publication.
+The manifest and its sibling `.shards` subtree must be publicly readable;
+the target token requires publish access to both. Upgrade all readers and
+writers before publishing v2 at an existing legacy path.
+
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `source` | string | yes | Source world URL to crawl. |

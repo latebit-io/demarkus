@@ -474,32 +474,34 @@ func (c *Crawler) Hashes() map[string]index.Entry {
 
 // IndexForServer builds a hash index document for a specific server.
 func (c *Crawler) IndexForServer(host string, indexed time.Time) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	var entries []index.Entry
-	for _, entriesForHash := range c.hashes {
-		for _, e := range entriesForHash {
-			if e.Server == "mark://"+host {
-				entries = append(entries, e)
-			}
-		}
-	}
-
-	// Sort by path for deterministic output.
-	slices.SortFunc(entries, func(a, b index.Entry) int {
-		return strings.Compare(a.Path, b.Path)
-	})
-
-	return index.Build("mark://"+host, indexed, entries)
+	return index.Build("mark://"+host, indexed, c.entriesForServer(host))
 }
 
 // GlobalIndex builds a combined hash index document with entries from all servers.
 func (c *Crawler) GlobalIndex(indexed time.Time) string {
+	return index.Build("aggregated", indexed, c.globalEntries())
+}
+
+func (c *Crawler) entriesForServer(host string) []index.Entry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var entries []index.Entry
+	for _, entriesForHash := range c.hashes {
+		for _, entry := range entriesForHash {
+			if entry.Server == "mark://"+host {
+				entries = append(entries, entry)
+			}
+		}
+	}
+	slices.SortFunc(entries, func(a, b index.Entry) int {
+		return strings.Compare(a.Path, b.Path)
+	})
+	return entries
+}
 
-	// Count total entries for preallocation.
+func (c *Crawler) globalEntries() []index.Entry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	total := 0
 	for _, entriesForHash := range c.hashes {
 		total += len(entriesForHash)
@@ -518,8 +520,7 @@ func (c *Crawler) GlobalIndex(indexed time.Time) string {
 		return strings.Compare(a.Path, b.Path)
 	})
 
-	// Use empty source since this is aggregated.
-	return index.Build("aggregated", indexed, entries)
+	return entries
 }
 
 // PublishToHubs publishes indexes to all configured hubs.
@@ -547,10 +548,8 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 		if perServer {
 			// Publish an index for each discovered server
 			for serverHost := range c.servers {
-				idxBody := c.IndexForServer(serverHost, now)
 				idxPath := "/index/" + serverHost + ".md"
-
-				if err := c.publishIndex(ctx, client, host, idxPath, idxBody, token); err != nil {
+				if err := c.publishShardedIndex(ctx, client, host, idxPath, "mark://"+serverHost, c.entriesForServer(serverHost), now, token); err != nil {
 					publishErrs = append(publishErrs, fmt.Errorf("publish %s to hub %s: %w", idxPath, hub, err))
 					continue
 				}
@@ -558,10 +557,8 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 			}
 		} else {
 			// Publish a single aggregated index
-			idxBody := c.GlobalIndex(now)
 			idxPath := "/index.md"
-
-			if err := c.publishIndex(ctx, client, host, idxPath, idxBody, token); err != nil {
+			if err := c.publishShardedIndex(ctx, client, host, idxPath, "aggregated", c.globalEntries(), now, token); err != nil {
 				publishErrs = append(publishErrs, fmt.Errorf("publish %s to hub %s: %w", idxPath, hub, err))
 				continue
 			}
@@ -699,30 +696,48 @@ func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) 
 
 // PublishClient wraps the operations needed for publishing.
 type PublishClient interface {
+	Fetch(host, path, token string) (fetch.Result, error)
 	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 }
 
-// publishIndex publishes a single index document to a hub.
-// Hub indexes are regenerated whole-doc each crawl cycle, so we use
-// expected_version=-1 (no check) for idempotent re-publish. The server's
-// no-op-on-duplicate-content behavior prevents version churn when the
-// computed index is identical to the previous run.
-func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, docPath, body, token string) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
+func (c *Crawler) publishShardedIndex(ctx context.Context, client PublishClient, host, manifestPath, source string, entries []index.Entry, indexed time.Time, token string) error {
+	_, err := index.PublishGeneration(ctx, index.PublishOptions{
+		ManifestPath: manifestPath,
+		Source:       source,
+		Indexed:      indexed,
+		Entries:      entries,
+	}, func(docPath string) (protocol.Response, error) {
+		result, err := client.Fetch(host, docPath, token)
+		return result.Response, err
+	}, func(docPath, body string, expectedVersion int) (protocol.Response, error) {
+		meta := c.generatedArtifactMeta(docPath == manifestPath)
+		result, err := client.Publish(host, docPath, body, token, expectedVersion, meta)
+		return result.Response, err
+	})
+	return err
+}
 
+func (c *Crawler) generatedArtifactMeta(retain bool) map[string]string {
 	meta := map[string]string{
 		"agent": "demarkus-agent",
 		"tags":  "category:federation",
 		"type":  "Reference",
 	}
-	// Everything published here (hash indexes, /graph.md) is a generated
-	// artifact regenerated wholesale each run — retention keeps its version
-	// history bounded (the server prunes older versions on write, SPEC §9.9).
-	if c.cfg.Publish.Retention > 0 {
+	if retain && c.cfg.Publish.Retention > 0 {
 		meta["retention"] = strconv.Itoa(c.cfg.Publish.Retention)
 	}
+	return meta
+}
+
+// publishIndex publishes a generated whole document, currently /graph.md.
+// Duplicate bodies create no version, keeping unconditional writes idempotent.
+func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, docPath, body, token string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	meta := c.generatedArtifactMeta(true)
+	// Retention bounds generated whole-document history (SPEC §9.9).
 	result, err := client.Publish(host, docPath, body, token, -1, meta)
 	if err != nil {
 		return err

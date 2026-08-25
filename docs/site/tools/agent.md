@@ -201,7 +201,7 @@ When `-publish` is set, the crawler publishes hash indexes to configured hubs.
 
 ### Aggregated Index
 
-By default, publishes a single `/index.md` containing entries from all servers:
+By default, publishes one logical index at `/index.md` containing entries from all servers:
 
 ```bash
 demarkus-agent crawl -config fedcrawl.toml -publish -insecure
@@ -217,9 +217,13 @@ demarkus-agent crawl -config fedcrawl.toml -publish -per-server -insecure
 
 Indexes are published to `/index/<host>.md` on each hub.
 
+Each logical index path is a small manifest. Entries are stored in hash-prefix shards under a sibling `.shards/a/` or `.shards/b/` directory. The agent stages and verifies the inactive slot before publishing the manifest, so readers see either the old complete generation or the new complete generation. Existing single-document indexes are converted automatically on their next publication.
+
+The agent needs read access and publish access to the manifest and its `.shards` subtree; read access may be public. Upgrade index readers and writers together before enabling this publisher against an existing legacy index. Configured retention applies to graph documents and index manifests; version-pinned shard history remains unpruned so retained manifests cannot acquire dangling references.
+
 ### Content-Addressed Discovery
 
-Published indexes enable content-addressed fetching. A hub can resolve a content hash to servers hosting that content:
+Published indexes enable content-addressed fetching. Resolution reads only the shard matching the requested hash prefix:
 
 ```bash
 # Resolve content by hash (requires hub with index)

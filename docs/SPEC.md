@@ -933,9 +933,9 @@ Servers do not crawl or discover content from other servers. Agents fill this ro
 
 1. An agent fetches documents from one or more servers, collecting `content-hash` values from each response.
 2. The agent builds a mapping of content hashes to server locations.
-3. The agent publishes this mapping as a document to a hub server (e.g., a markdown table or structured list).
+3. The agent publishes this mapping as a sharded index generation to a hub server.
 
-**Example index document published to a hub:**
+Legacy indexes store all entries in one markdown table:
 
 ```markdown
 # Content Index
@@ -946,6 +946,16 @@ Servers do not crawl or discover content from other servers. Agents fill this ro
 | sha256-d4e5f6... | mark://notes.example.com | /readme.md |
 | sha256-d4e5f6... | mark://mirror.example.com | /copy.md |
 ```
+
+Current indexes use a `demarkus-hash-index/v2` manifest at the requested index path. The manifest records the source, index time, completeness, document count, active slot, and each shard's hash prefix, path, immutable version, content hash, row count, and byte count. Shards use `demarkus-hash-index-shard/v1` and retain the `Hash | Server | Path` table shape.
+
+Entries are partitioned by the first two lowercase hexadecimal characters after `sha256-`. A prefix may have multiple deterministic overflow parts. For a manifest at `/index.md`, shard paths have the form `/index.shards/{a|b}/<prefix>-<part>.md`. Other manifest paths use the same `.shards` suffix rule.
+
+Publishers stage a complete generation in the inactive `a` or `b` slot. They publish and verify every shard first, then compare-and-swap the manifest last. A failed manifest publish leaves the previous generation active. Readers fetch each shard through its immutable version path, such as `/index.shards/a/a1-000.md/v4`, and verify response version, byte count, content hash, shard identity, and row count against the manifest. Implementations MUST reject incomplete manifests, out-of-scope shard paths, missing overflow parts, and aggregate count mismatches.
+
+Hash resolution fetches only shards matching the requested hash prefix. Full-index updates fetch and verify every referenced shard before merging. Readers SHOULD continue accepting legacy single-document indexes so deployed indexes migrate on their next successful publication.
+
+Publishers require read access and publish access to both the manifest path and its `.shards` subtree; read access may be public. Deployments MUST upgrade all index readers and writers before enabling v2 publication at an existing legacy path; a legacy reader interprets a v2 manifest as an empty index and a legacy writer can overwrite it.
 
 **Resolution flow when content is missing:**
 
@@ -962,6 +972,8 @@ Servers do not crawl or discover content from other servers. Agents fill this ro
 - Hubs are just servers: the index is a regular published document, not a special protocol feature.
 - Multiple agents can maintain independent indexes on the same or different hubs.
 - No single point of failure: if a hub is unavailable, agents can query servers directly by hash.
+- Version-pinned shards are immutable inputs to a manifest generation. Publishers MUST NOT apply retention that can prune a shard version while a reachable manifest references it.
+- Manifest retention does not imply shard retention. Shards remain unpruned until a reference-aware collector can prove no retained manifest version names them.
 
 ## 13. Future Extensions
 
