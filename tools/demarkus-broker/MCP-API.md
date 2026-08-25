@@ -128,12 +128,15 @@ recorded backlinks, and sibling documents, each capped at 10 entries.
 
 #### `mark_list`
 
-List documents and subdirectories under a path. Returns a directory
-listing as markdown.
+List documents and subdirectories under a path. Returns one directory page as
+markdown plus `complete` and, when incomplete, `next-cursor` metadata.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `url` | string | yes | `mark://{worldName}/{path}` |
+| `include_archived` | boolean | no | Include archived entries; default false. |
+| `cursor` | string | no | Opaque `next-cursor` from the preceding page. |
+| `page_size` | number | no | Maximum entries in this page, 1-1000. |
 
 #### `mark_versions`
 

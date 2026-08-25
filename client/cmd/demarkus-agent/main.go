@@ -171,6 +171,9 @@ func crawlMain(args []string) {
 			result.HashesCollected,
 			len(result.Errors))
 	}
+	if len(result.Errors) > 0 && (*publish || *publishGraph) {
+		fatal("publish: skipped because crawl is incomplete", "errors", len(result.Errors))
+	}
 
 	// Publish indexes to hubs if requested.
 	if *publish && len(cfg.Hubs) > 0 {
@@ -311,6 +314,10 @@ func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, s
 
 	for _, e := range result.Errors {
 		logger.Warn("crawl: error", "detail", e)
+	}
+	if len(result.Errors) > 0 && (publish || publishGraph) {
+		logger.Error("publish: skipped because crawl is incomplete", "errors", len(result.Errors))
+		return
 	}
 
 	// Publish indexes to hubs if requested.

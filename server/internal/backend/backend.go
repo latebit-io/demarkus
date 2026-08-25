@@ -11,6 +11,7 @@ import (
 // Reader exposes one committed document-store snapshot.
 type Reader interface {
 	Get(reqPath string, version int) (*protocolstore.Document, error)
+	// ListEntries returns unique immediate children in strictly increasing Name order.
 	ListEntries(reqPath string, includeArchived bool) ([]protocolstore.DirEntry, error)
 	IsDir(reqPath string) (bool, error)
 	Versions(reqPath string) ([]protocolstore.VersionInfo, error)

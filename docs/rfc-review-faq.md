@@ -175,7 +175,7 @@ Fifteen `mark_*` MCP tools.
 | Tool | Description |
 |------|-------------|
 | `mark_fetch` | Fetch a document or `#section`; bodies of 8KB or more return an outline |
-| `mark_list` | List documents and subdirectories; archived hidden by default |
+| `mark_list` | List one directory page; follow `next-cursor` until `complete`; archived hidden by default |
 | `mark_explore` | One doc's outline, outbound links, backlinks, and siblings in one call |
 | `mark_lookup` | Catalog lookup: importance-ranked matches on tags and titles |
 | `mark_publish` | Create or update a document; metadata, optimistic concurrency, diff3 on conflict |

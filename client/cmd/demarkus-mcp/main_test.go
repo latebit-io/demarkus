@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -225,6 +227,35 @@ func TestHandlerMarkList_InvalidURL(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	assertIsToolError(t, result, "requires -host flag")
+}
+
+func TestHandlerMarkListForwardsPagination(t *testing.T) {
+	var got fetch.ListOptions
+	h := &handler{client: &stubClient{
+		listOptsFn: func(_, _, _ string, opts fetch.ListOptions) (fetch.Result, error) {
+			got = opts
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
+		},
+	}}
+	result, err := h.markList(t.Context(), newCallToolRequest(map[string]any{
+		"url":              "mark://example.com/",
+		"include_archived": true,
+		"cursor":           "next",
+		"page_size":        25,
+	}))
+	if err != nil || result.IsError {
+		t.Fatalf("markList = (%+v, %v)", result, err)
+	}
+	if got != (fetch.ListOptions{IncludeArchived: true, Cursor: "next", PageSize: 25}) {
+		t.Errorf("options = %+v", got)
+	}
+	result, err = h.markList(t.Context(), newCallToolRequest(map[string]any{
+		"url":       "mark://example.com/",
+		"page_size": 1.5,
+	}))
+	if err != nil || !result.IsError {
+		t.Fatalf("fractional page_size = (%+v, %v), want tool error", result, err)
+	}
 }
 
 func TestHandlerMarkPublish_NoToken(t *testing.T) {
@@ -485,6 +516,7 @@ type stubClient struct {
 	fetchFn     func(host, path, token string) (fetch.Result, error)
 	fetchCondFn func(host, path, token, etag string) (fetch.Result, error)
 	listFn      func(host, path, token string) (fetch.Result, error)
+	listOptsFn  func(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	versionsFn  func(host, path, token string) (fetch.Result, error)
 	publishFn   func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	appendFn    func(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
@@ -511,8 +543,20 @@ func (s *stubClient) List(host, path, token string) (fetch.Result, error) {
 	}
 	return fetch.Result{}, nil
 }
-func (s *stubClient) ListWithOptions(host, path, token string, _ fetch.ListOptions) (fetch.Result, error) {
-	return s.List(host, path, token)
+
+func (s *stubClient) ListWithOptions(host, path, token string, opts fetch.ListOptions) (fetch.Result, error) {
+	if s.listOptsFn != nil {
+		return s.listOptsFn(host, path, token, opts)
+	}
+	result, err := s.List(host, path, token)
+	if err == nil && result.Response.Status == protocol.StatusOK && result.Response.Metadata["complete"] == "" {
+		if result.Response.Metadata == nil {
+			result.Response.Metadata = make(map[string]string)
+		}
+		result.Response.Metadata["entries"] = strconv.Itoa(len(links.Extract(result.Response.Body)))
+		result.Response.Metadata["complete"] = "true"
+	}
+	return result, err
 }
 func (s *stubClient) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
 	if s.publishFn != nil {
@@ -1002,7 +1046,7 @@ func TestHandlerMarkIndex_ForceOverridesManifest(t *testing.T) {
 			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"content-hash": "sha256-aaaa"},
+				Metadata: map[string]string{"content-hash": "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 				Body:     "content",
 			}}, nil
 		},

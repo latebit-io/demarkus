@@ -2,13 +2,17 @@ package fedcrawl
 
 import (
 	"context"
+	"errors"
 	"maps"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -86,9 +90,23 @@ func (m *mockClient) addDocWithMeta(host, path, body, hash string, extra map[str
 }
 
 func (m *mockClient) addList(host, path, entries string) {
-	m.lists[host+path] = mockPage{
-		status: protocol.StatusOK,
-		body:   entries,
+	lines := strings.Split(strings.TrimSuffix(entries, "\n"), "\n")
+	sort.Strings(lines)
+	m.addListPage(host, path, "", strings.Join(lines, "\n")+"\n", true, "")
+}
+
+func (m *mockClient) addListPage(host, path, cursor, entries string, complete bool, next string) {
+	metadata := map[string]string{
+		"entries":  strconv.Itoa(len(links.Extract(entries))),
+		"complete": strconv.FormatBool(complete),
+	}
+	if next != "" {
+		metadata["next-cursor"] = next
+	}
+	m.lists[host+path+"\x00"+cursor] = mockPage{
+		status:   protocol.StatusOK,
+		body:     entries,
+		metadata: metadata,
 	}
 }
 
@@ -108,12 +126,12 @@ func (m *mockClient) Fetch(host, path, _ string) (fetch.Result, error) {
 	}}, nil
 }
 
-func (m *mockClient) List(host, path, _ string) (fetch.Result, error) {
+func (m *mockClient) ListWithOptions(host, path, _ string, opts fetch.ListOptions) (fetch.Result, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, "LIST "+host+path)
 	m.mu.Unlock()
 
-	p, ok := m.lists[host+path]
+	p, ok := m.lists[host+path+"\x00"+opts.Cursor]
 	if !ok {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 	}
@@ -156,6 +174,102 @@ func TestCrawlerSingleServer(t *testing.T) {
 	}
 }
 
+func TestCrawlerFollowsListPages(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://example.com"}
+	cfg.Crawl.MaxDocuments = 100
+
+	client := newMockClient()
+	client.addListPage("example.com:6309", "/", "", "- [a.md](a.md)\n- [b.md](b.md)\n", false, "next")
+	client.addListPage("example.com:6309", "/", "next", "- [c.md](c.md)\n", true, "")
+	for _, name := range []string{"a", "b", "c"} {
+		client.addDoc("example.com:6309", "/"+name+".md", "# "+name, "sha256-"+strings.Repeat(name, 64))
+	}
+
+	result, err := NewCrawler(cfg, client, nil, nil).Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.DocumentsCrawled != 3 || len(result.Errors) != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	listCalls := 0
+	for _, call := range client.calls {
+		if strings.HasPrefix(call, "LIST ") {
+			listCalls++
+		}
+	}
+	if listCalls != 2 {
+		t.Errorf("LIST calls = %d, want 2", listCalls)
+	}
+}
+
+func TestCrawlerRejectsListWithoutCompletenessProof(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://example.com"}
+	client := newMockClient()
+	client.lists["example.com:6309/\x00"] = mockPage{
+		status:   protocol.StatusOK,
+		body:     "- [a.md](a.md)\n",
+		metadata: map[string]string{"entries": "1"},
+	}
+
+	result, err := NewCrawler(cfg, client, nil, nil).Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.DocumentsCrawled != 0 || len(result.Errors) != 1 ||
+		!strings.Contains(result.Errors[0], fetch.ErrListCompletenessUnknown.Error()) {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestCrawlerMarksIncompleteResponses(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*mockClient)
+	}{
+		{
+			name: "LIST status",
+			setup: func(client *mockClient) {
+				client.lists["example.com:6309/\x00"] = mockPage{status: protocol.StatusNotFound}
+			},
+		},
+		{
+			name: "FETCH status",
+			setup: func(client *mockClient) {
+				client.addList("example.com:6309", "/", "- [a.md](a.md)\n")
+				client.pages["example.com:6309/a.md"] = mockPage{status: protocol.StatusNotFound}
+			},
+		},
+		{
+			name: "missing content hash",
+			setup: func(client *mockClient) {
+				client.addList("example.com:6309", "/", "- [a.md](a.md)\n")
+				client.addDoc("example.com:6309", "/a.md", "# A", "")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Seeds = []string{"mark://example.com"}
+			client := newMockClient()
+			tt.setup(client)
+
+			result, err := NewCrawler(cfg, client, nil, nil).Run(t.Context())
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(result.Errors) == 0 {
+				t.Fatalf("result = %+v, want incomplete crawl", result)
+			}
+		})
+	}
+}
+
 func TestCrawlerMultiServer(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://server1.com"}
@@ -169,7 +283,8 @@ func TestCrawlerMultiServer(t *testing.T) {
 
 	// Server 2.
 	client.addList("server2.com:6309", "/", "- [other.md](other.md)\n")
-	client.addDoc("server2.com:6309", "/other.md", "# Other\n\nContent.", "sha256-2222222222222222222222222222222222222222222222222222222222222222")
+	client.addDoc("server2.com:6309", "/other.md", "# Other\n\nBack to [home](mark://server1.com/index.md).", "sha256-2222222222222222222222222222222222222222222222222222222222222222")
+	cfg.Crawl.MaxServers = 2
 
 	crawler := NewCrawler(cfg, client, nil, nil)
 	result, err := crawler.Run(context.Background())
@@ -182,6 +297,9 @@ func TestCrawlerMultiServer(t *testing.T) {
 	}
 	if result.DocumentsCrawled != 2 {
 		t.Errorf("DocumentsCrawled = %d, want 2", result.DocumentsCrawled)
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("existing server at capacity must not mark crawl incomplete: %v", result.Errors)
 	}
 }
 
@@ -290,6 +408,9 @@ func TestCrawlerMaxDocuments(t *testing.T) {
 		if result.DocumentsCrawled > 1 {
 			t.Errorf("DocumentsCrawled = %d, should be capped at 1", result.DocumentsCrawled)
 		}
+		if len(result.Errors) == 0 {
+			t.Error("document cap must mark the crawl incomplete")
+		}
 	})
 
 	t.Run("cross_server", func(t *testing.T) {
@@ -312,6 +433,31 @@ func TestCrawlerMaxDocuments(t *testing.T) {
 
 		if result.DocumentsCrawled > 1 {
 			t.Errorf("DocumentsCrawled = %d, should be capped at 1 across servers", result.DocumentsCrawled)
+		}
+		if len(result.Errors) == 0 {
+			t.Error("cross-server document cap must mark the crawl incomplete")
+		}
+	})
+
+	t.Run("failed_attempts", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://example.com"}
+		cfg.Crawl.MaxDocuments = 2
+		client := newMockClient()
+		client.addList("example.com:6309", "/", "- [a.md](a.md)\n- [b.md](b.md)\n- [c.md](c.md)\n")
+
+		result, err := NewCrawler(cfg, client, nil, nil).Run(t.Context())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		fetches := 0
+		for _, call := range client.calls {
+			if strings.HasPrefix(call, "FETCH ") {
+				fetches++
+			}
+		}
+		if fetches != 2 || len(result.Errors) == 0 {
+			t.Fatalf("fetches = %d, result = %+v", fetches, result)
 		}
 	})
 }
@@ -337,6 +483,9 @@ func TestCrawlerMaxServers(t *testing.T) {
 		if result.ServersDiscovered > 1 {
 			t.Errorf("ServersDiscovered = %d, should be capped at 1", result.ServersDiscovered)
 		}
+		if len(result.Errors) == 0 {
+			t.Error("discovery cap must mark the crawl incomplete")
+		}
 	})
 
 	t.Run("seed_cap", func(t *testing.T) {
@@ -359,6 +508,26 @@ func TestCrawlerMaxServers(t *testing.T) {
 		if result.ServersDiscovered > 1 {
 			t.Errorf("ServersDiscovered = %d, should be capped at 1 even with multiple seeds", result.ServersDiscovered)
 		}
+		if len(result.Errors) == 0 {
+			t.Error("seed cap must mark the crawl incomplete")
+		}
+	})
+
+	t.Run("duplicate_seed_at_cap", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Seeds = []string{"mark://server1.com", "mark://server1.com"}
+		cfg.Crawl.MaxServers = 1
+		client := newMockClient()
+		client.addList("server1.com:6309", "/", "- [index.md](index.md)\n")
+		client.addDoc("server1.com:6309", "/index.md", "Content.", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+		result, err := NewCrawler(cfg, client, nil, nil).Run(t.Context())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.ServersDiscovered != 1 || len(result.Errors) != 0 {
+			t.Fatalf("result = %+v", result)
+		}
 	})
 }
 
@@ -376,13 +545,11 @@ func TestCrawlerCancellation(t *testing.T) {
 
 	crawler := NewCrawler(cfg, client, nil, nil)
 	result, err := crawler.Run(ctx)
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
 	}
-
-	// Should stop quickly with 0 or 1 docs.
-	if result.DocumentsCrawled > 1 {
-		t.Errorf("DocumentsCrawled = %d, should be 0 or 1 with cancelled context", result.DocumentsCrawled)
+	if result != nil {
+		t.Fatalf("result = %+v, want nil", result)
 	}
 }
 

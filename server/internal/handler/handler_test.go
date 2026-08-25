@@ -480,6 +480,54 @@ func testHandleList(t *testing.T, newBackend backendFactory) {
 		if resp.Metadata["entries"] != "2" {
 			t.Errorf("entries: got %q, want %q", resp.Metadata["entries"], "2")
 		}
+		if resp.Metadata["complete"] != "true" || resp.Metadata["next-cursor"] != "" {
+			t.Errorf("pagination metadata = %v, want complete terminal page", resp.Metadata)
+		}
+	})
+
+	t.Run("paginate authorized directory", func(t *testing.T) {
+		first := newMockStream("LIST /\n---\npage-size: 2\n---\n")
+		h.HandleStream(first)
+		firstResp, err := protocol.ParseResponse(&first.output)
+		if err != nil {
+			t.Fatalf("parse first response: %v", err)
+		}
+		cursor := firstResp.Metadata["next-cursor"]
+		if firstResp.Status != protocol.StatusOK || firstResp.Metadata["complete"] != "false" || cursor == "" {
+			t.Fatalf("first response = %+v", firstResp)
+		}
+		if firstResp.Metadata["entries"] != "2" || !strings.Contains(firstResp.Body, "truncated") {
+			t.Errorf("first page = %+v\n%s", firstResp.Metadata, firstResp.Body)
+		}
+
+		second := newMockStream("LIST /\n---\npage-size: 2\ncursor: " + cursor + "\n---\n")
+		h.HandleStream(second)
+		secondResp, err := protocol.ParseResponse(&second.output)
+		if err != nil {
+			t.Fatalf("parse second response: %v", err)
+		}
+		if secondResp.Status != protocol.StatusOK || secondResp.Metadata["complete"] != "true" ||
+			secondResp.Metadata["next-cursor"] != "" || secondResp.Metadata["entries"] != "1" {
+			t.Fatalf("second response = %+v", secondResp)
+		}
+	})
+
+	t.Run("reject invalid pagination", func(t *testing.T) {
+		for _, request := range []string{
+			"LIST /\n---\npage-size: 0\n---\n",
+			"LIST /\n---\ncursor: invalid!\n---\n",
+			"LIST /\n---\ninclude-archived: yes\n---\n",
+		} {
+			stream := newMockStream(request)
+			h.HandleStream(stream)
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status != protocol.StatusBadRequest {
+				t.Errorf("status = %q, want bad-request", resp.Status)
+			}
+		}
 	})
 
 	t.Run("list nonexistent directory", func(t *testing.T) {
@@ -2508,6 +2556,62 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 
 func TestDirectoryReadAuthFiltering(t *testing.T) {
 	forEachBackend(t, testDirectoryReadAuthFiltering)
+}
+
+func TestListPaginationFiltersBeforePageBoundary(t *testing.T) {
+	forEachBackend(t, testListPaginationFiltersBeforePageBoundary)
+}
+
+func testListPaginationFiltersBeforePageBoundary(t *testing.T, newBackend backendFactory) {
+	const readSecret = "page-read-secret"
+	tokenStore := auth.NewTokenStore(map[string]auth.Token{
+		protocol.HashToken(readSecret): {
+			Paths:      []string{"/docs/b.md"},
+			Operations: []string{"read"},
+		},
+	})
+	b := newBackend(t)
+	seedBackend(t, b, map[string]string{
+		"docs/a.md": "# A\n",
+		"docs/b.md": "# B\n",
+		"docs/c.md": "# C\n",
+	})
+	h := newHandler(b, tokenStore)
+
+	first := newMockStream("LIST /docs/\n---\npage-size: 1\n---\n")
+	h.HandleStream(first)
+	firstResp, err := protocol.ParseResponse(&first.output)
+	if err != nil {
+		t.Fatalf("parse first response: %v", err)
+	}
+	cursor := firstResp.Metadata["next-cursor"]
+	if !strings.Contains(firstResp.Body, "a.md") || strings.Contains(firstResp.Body, "b.md") || cursor == "" {
+		t.Fatalf("first page leaked or missed entry: %+v\n%s", firstResp.Metadata, firstResp.Body)
+	}
+	after, err := decodeListCursor(cursor, "/docs", false)
+	if err != nil || after != "a.md" {
+		t.Fatalf("cursor after = (%q, %v), want a.md", after, err)
+	}
+
+	second := newMockStream("LIST /docs/\n---\npage-size: 1\ncursor: " + cursor + "\n---\n")
+	h.HandleStream(second)
+	secondResp, err := protocol.ParseResponse(&second.output)
+	if err != nil {
+		t.Fatalf("parse second response: %v", err)
+	}
+	if secondResp.Metadata["complete"] != "true" || !strings.Contains(secondResp.Body, "c.md") || strings.Contains(secondResp.Body, "b.md") {
+		t.Fatalf("second page leaked or missed entry: %+v\n%s", secondResp.Metadata, secondResp.Body)
+	}
+
+	authed := newMockStream("LIST /docs/\n---\npage-size: 1\ncursor: " + cursor + "\nauth: " + readSecret + "\n---\n")
+	h.HandleStream(authed)
+	authedResp, err := protocol.ParseResponse(&authed.output)
+	if err != nil {
+		t.Fatalf("parse authed response: %v", err)
+	}
+	if !strings.Contains(authedResp.Body, "b.md") || authedResp.Metadata["complete"] != "false" {
+		t.Fatalf("authorized page = %+v\n%s", authedResp.Metadata, authedResp.Body)
+	}
 }
 
 func testDirectoryReadAuthFiltering(t *testing.T, newBackend backendFactory) {

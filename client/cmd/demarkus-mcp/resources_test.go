@@ -55,6 +55,16 @@ func TestReadResource_Section(t *testing.T) {
 	}
 }
 
+func TestReadResource_EscapedFilename(t *testing.T) {
+	client := &stubClient{fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		if path != "/what?#%.md" {
+			t.Fatalf("path = %q", path)
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# Special\n"}}, nil
+	}}
+	readResourceText(t, &handler{client: client}, "mark://example.com/what%3F%23%25.md")
+}
+
 func TestReadResource_LargeDocIsNotOutlined(t *testing.T) {
 	// Attaching is deliberate: resource reads never outline-gate and never
 	// hit the unchanged dedup, regardless of size or fetch history.
@@ -122,7 +132,7 @@ func TestReadResource_Errors(t *testing.T) {
 }
 
 func TestRegisterListedResources(t *testing.T) {
-	listing := "- [index.md](index.md)\n- [patterns.md](patterns.md)\n- [journal/](journal/)\n- [notes.md](notes.md)\n- [image.png](image.png)\n"
+	listing := "- [image.png](image.png)\n- [index.md](index.md)\n- [journal/](journal/)\n- [notes.md](notes.md)\n- [patterns.md](patterns.md)\n- [what?#%.md](what%3F%23%25.md)\n"
 	sc := &stubClient{
 		listFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: listing}}, nil
@@ -136,7 +146,7 @@ func TestRegisterListedResources(t *testing.T) {
 	// The registered resources are observable through a resources/list
 	// round-trip on the server.
 	got := listResourceURIs(t, s)
-	for _, want := range []string{"mark://example.com/patterns.md", "mark://example.com/notes.md"} {
+	for _, want := range []string{"mark://example.com/patterns.md", "mark://example.com/notes.md", "mark://example.com/what%3F%23%25.md"} {
 		if !got[want] {
 			t.Errorf("listing should register %s; got %v", want, got)
 		}

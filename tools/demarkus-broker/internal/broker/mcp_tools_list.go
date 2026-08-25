@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -119,6 +120,7 @@ func markListTool() mcp.Tool {
 				"listing with the outline, links, and backlinks. Archived documents are "+
 				"hidden by default, along with directories that contain only archived "+
 				"documents; set include_archived to true for a recovery/audit view. "+
+				"Results declare complete; when false, pass next-cursor back as cursor. "+
 				mcpURLHint,
 		),
 		mcp.WithString("url",
@@ -127,6 +129,13 @@ func markListTool() mcp.Tool {
 		),
 		mcp.WithBoolean("include_archived",
 			mcp.Description("Include archived documents (and all-archived directories) in the listing. Default false."),
+		),
+		mcp.WithString("cursor",
+			mcp.Description("opaque continuation cursor from a prior mark_list result"),
+		),
+		mcp.WithNumber("page_size",
+			mcp.Description("maximum entries in this page, 1-1000 (server default 1000)"),
+			mcp.Min(1), mcp.Max(protocol.MaxListPageSize), mcp.MultipleOf(1),
 		),
 	)
 }

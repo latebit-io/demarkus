@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -165,12 +166,43 @@ func (g *mcpGateway) handleMarkList(_ context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	opts := fetch.ListOptions{IncludeArchived: req.GetBool("include_archived", false)}
+	pageSize, err := brokerListPageSize(&req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	opts := fetch.ListOptions{
+		IncludeArchived: req.GetBool("include_archived", false),
+		Cursor:          req.GetString("cursor", ""),
+		PageSize:        pageSize,
+	}
 	result, err := g.dispatcher.List(worldName, path, "", opts)
 	if err != nil {
 		return g.toolErrorFor("list", worldName, err), nil
 	}
 	return mcp.NewToolResultText(formatToolResult(result, "modified")), nil
+}
+
+func brokerListPageSize(req *mcp.CallToolRequest) (int, error) {
+	raw, ok := req.GetArguments()["page_size"]
+	if !ok {
+		return 0, nil
+	}
+	var size int
+	switch value := raw.(type) {
+	case int:
+		size = value
+	case float64:
+		if value != math.Trunc(value) {
+			return 0, errors.New("page_size must be an integer")
+		}
+		size = int(value)
+	default:
+		return 0, errors.New("page_size must be an integer")
+	}
+	if size < 1 || size > protocol.MaxListPageSize {
+		return 0, fmt.Errorf("page_size must be between 1 and %d", protocol.MaxListPageSize)
+	}
+	return size, nil
 }
 
 // handleMarkVersions implements the mark_versions tool. Reads

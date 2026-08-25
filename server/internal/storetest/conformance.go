@@ -478,6 +478,15 @@ func testListDirSemantics(t *testing.T, s handler.DocumentStore) {
 			t.Errorf("hide view: want %s absent, got %v", absent, hidden)
 		}
 	}
+	ordered, err := s.ListEntries("/", false)
+	if err != nil {
+		t.Fatalf("ordered root list: %v", err)
+	}
+	for i := 1; i < len(ordered); i++ {
+		if ordered[i-1].Name >= ordered[i].Name {
+			t.Fatalf("LIST entries not strictly ordered: %+v", ordered)
+		}
+	}
 
 	shown := entryNames(t, s, "/", true)
 	for _, want := range []string{"live.md", "gone.md", "attic", "nested"} {

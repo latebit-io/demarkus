@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
+	listformat "github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -131,19 +133,32 @@ func (h *handler) writeSiblingsSection(b *strings.Builder, host, path, token str
 	self := path[strings.LastIndex(path, "/")+1:]
 
 	fmt.Fprintf(b, "\n## Siblings in %s", dir)
-	listing, err := h.client.List(host, dir, token)
-	if err != nil || listing.Response.Status != protocol.StatusOK {
+	result, err := h.client.ListWithOptions(host, dir, token, fetch.ListOptions{PageSize: exploreSectionCap + 1})
+	if err != nil || result.Response.Status != protocol.StatusOK {
+		b.WriteString("\n(listing unavailable)\n")
+		return
+	}
+	page, err := listformat.ParsePage(dir, result.Response, "")
+	if err != nil || len(page.Invalid) > 0 {
 		b.WriteString("\n(listing unavailable)\n")
 		return
 	}
 	var lines []string
-	for _, entry := range links.Extract(listing.Response.Body) {
-		if entry == self {
+	for _, entry := range page.Entries {
+		name := entry.Name
+		if entry.IsDir {
+			name += "/"
+		}
+		if name == self {
 			continue
 		}
-		lines = append(lines, "- "+entry)
+		lines = append(lines, "- "+name)
 	}
-	fmt.Fprintf(b, " (%d)\n", len(lines))
+	if page.Complete {
+		fmt.Fprintf(b, " (%d)\n", len(lines))
+	} else {
+		b.WriteString(" (first page)\n")
+	}
 	if len(lines) == 0 {
 		b.WriteString("(none)\n")
 		return

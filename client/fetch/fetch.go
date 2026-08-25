@@ -161,6 +161,54 @@ type ListOptions struct {
 	// directories that contain only archived documents) in the listing.
 	// Default false: archived entries are hidden.
 	IncludeArchived bool
+	// Cursor continues the same directory and archive-mode listing.
+	Cursor string
+	// PageSize caps entries returned; zero uses the server default.
+	PageSize int
+}
+
+// ErrListCompletenessUnknown means a LIST response predates machine-readable
+// pagination metadata. Callers cannot infer completeness from its body.
+var ErrListCompletenessUnknown = errors.New("LIST response completeness is unknown")
+
+// ListPageMetadata is the machine-readable state of one successful LIST page.
+type ListPageMetadata struct {
+	Entries    int
+	Complete   bool
+	NextCursor string
+}
+
+// ParseListPageMetadata validates a successful LIST response's pagination state.
+func ParseListPageMetadata(resp protocol.Response) (ListPageMetadata, error) {
+	if resp.Status != protocol.StatusOK {
+		return ListPageMetadata{}, fmt.Errorf("LIST returned status %q", resp.Status)
+	}
+	entries, err := strconv.Atoi(resp.Metadata["entries"])
+	if err != nil || entries < 0 || entries > protocol.MaxListPageSize {
+		return ListPageMetadata{}, errors.New("LIST response has invalid entries metadata")
+	}
+	if len(resp.Body) > protocol.MaxBodyLength {
+		return ListPageMetadata{}, errors.New("LIST response body exceeds limit")
+	}
+	rawComplete, ok := resp.Metadata["complete"]
+	if !ok {
+		return ListPageMetadata{}, ErrListCompletenessUnknown
+	}
+	complete, err := strconv.ParseBool(rawComplete)
+	if err != nil || (rawComplete != "true" && rawComplete != "false") {
+		return ListPageMetadata{}, errors.New("LIST response has invalid complete metadata")
+	}
+	next := resp.Metadata["next-cursor"]
+	if complete && next != "" {
+		return ListPageMetadata{}, errors.New("complete LIST response contains next-cursor")
+	}
+	if !complete && next == "" {
+		return ListPageMetadata{}, errors.New("incomplete LIST response is missing next-cursor")
+	}
+	if !complete && entries == 0 {
+		return ListPageMetadata{}, errors.New("incomplete LIST response made no progress")
+	}
+	return ListPageMetadata{Entries: entries, Complete: complete, NextCursor: next}, nil
 }
 
 // List retrieves a directory listing from a Mark Protocol server.
@@ -171,9 +219,21 @@ func (c *Client) List(host, path, token string) (Result, error) {
 
 // ListWithOptions is List with explicit LIST options (e.g. IncludeArchived).
 func (c *Client) ListWithOptions(host, path, token string, opts ListOptions) (Result, error) {
-	var extra map[string]string
+	if opts.PageSize < 0 || opts.PageSize > protocol.MaxListPageSize {
+		return Result{}, fmt.Errorf("LIST page size must be between 1 and %d, or 0 for the server default", protocol.MaxListPageSize)
+	}
+	extra := make(map[string]string)
 	if opts.IncludeArchived {
-		extra = map[string]string{"include-archived": "true"}
+		extra["include-archived"] = "true"
+	}
+	if opts.Cursor != "" {
+		extra["cursor"] = opts.Cursor
+	}
+	if opts.PageSize > 0 {
+		extra["page-size"] = strconv.Itoa(opts.PageSize)
+	}
+	if len(extra) == 0 {
+		extra = nil
 	}
 	return c.cachedRequestMeta(host, path, token, protocol.VerbList, extra)
 }

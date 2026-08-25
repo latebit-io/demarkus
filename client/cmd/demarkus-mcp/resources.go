@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -76,32 +78,58 @@ func registerListedResources(s *mcpserver.MCPServer, h *handler, defaultHost str
 		log.Printf("resource listing skipped (%v): picker shows well-known entries only", err)
 		return
 	}
-	listing, err := h.client.List(host, path, h.resolveToken(host))
-	if err != nil || listing.Response.Status != protocol.StatusOK {
-		log.Printf("resource listing skipped (host %s unavailable): picker shows well-known entries only", host)
-		return
-	}
-
 	var resources []mcpserver.ServerResource
-	for _, entry := range links.Extract(listing.Response.Body) {
-		if len(resources) == maxListedResources {
-			log.Printf("resource listing capped at %d entries", maxListedResources)
+	cursor, lastName := "", ""
+	seenCursors := make(map[string]struct{})
+	for len(resources) < maxListedResources {
+		result, err := h.client.ListWithOptions(host, path, h.resolveToken(host), fetch.ListOptions{
+			Cursor:   cursor,
+			PageSize: protocol.MaxListPageSize,
+		})
+		if err != nil || result.Response.Status != protocol.StatusOK {
+			log.Printf("resource listing stopped (host %s unavailable): picker may be incomplete", host)
 			break
 		}
-		// Top-level documents only; directories and the already-registered
-		// index stay out (re-registering index.md would clobber its entry).
-		if strings.HasSuffix(entry, "/") || !strings.HasSuffix(entry, ".md") || entry == "index.md" {
-			continue
+		page, err := listing.ParsePage(path, result.Response, lastName)
+		if err != nil {
+			log.Printf("resource listing stopped (host %s invalid response: %v): picker may be incomplete", host, err)
+			break
 		}
-		resources = append(resources, mcpserver.ServerResource{
-			Resource: mcp.NewResource(
-				defaultHost+"/"+entry,
-				entry,
-				mcp.WithResourceDescription("Document on "+defaultHost+"."),
-				mcp.WithMIMEType("text/markdown"),
-			),
-			Handler: h.readResource,
-		})
+		for _, invalid := range page.Invalid {
+			log.Printf("resource listing skipped invalid entry %q from host %s", invalid, host)
+		}
+		lastName = page.LastName
+		for _, entry := range page.Entries {
+			if len(resources) == maxListedResources {
+				break
+			}
+			// Top-level documents only; directories and the already-registered
+			// index stay out (re-registering index.md would clobber its entry).
+			if entry.IsDir || !strings.HasSuffix(entry.Name, ".md") || entry.Name == "index.md" {
+				continue
+			}
+			resources = append(resources, mcpserver.ServerResource{
+				Resource: mcp.NewResource(
+					defaultHost+"/"+url.PathEscape(entry.Name),
+					entry.Name,
+					mcp.WithResourceDescription("Document on "+defaultHost+"."),
+					mcp.WithMIMEType("text/markdown"),
+				),
+				Handler: h.readResource,
+			})
+		}
+		if page.Complete || len(resources) == maxListedResources {
+			break
+		}
+		if _, duplicate := seenCursors[page.NextCursor]; duplicate || page.NextCursor == cursor {
+			log.Printf("resource listing stopped (host %s cursor did not advance): picker may be incomplete", host)
+			break
+		}
+		seenCursors[page.NextCursor] = struct{}{}
+		cursor = page.NextCursor
+	}
+	if len(resources) == maxListedResources {
+		log.Printf("resource listing capped at %d entries", maxListedResources)
 	}
 	if len(resources) > 0 {
 		s.AddResources(resources...)

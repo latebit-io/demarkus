@@ -17,9 +17,9 @@ import (
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
-	"github.com/latebit-io/demarkus/client/internal/listwalk"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -27,7 +27,7 @@ import (
 // FetchClient wraps the operations needed for crawling.
 type FetchClient interface {
 	Fetch(host, path, token string) (fetch.Result, error)
-	List(host, path, token string) (fetch.Result, error)
+	ListWithOptions(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 }
 
 // Crawler orchestrates multi-server federation crawling.
@@ -75,6 +75,9 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	if err := c.cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid crawler config: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// Reset crawl state for each invocation.
 	c.mu.Lock()
@@ -91,6 +94,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	var wg sync.WaitGroup
 
 	var docCount atomic.Int32
+	var fetchCount atomic.Int32
 	var errorsMu sync.Mutex
 	var crawlErrors []string
 
@@ -101,7 +105,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 		errorsMu.Unlock()
 	}
 
-	run := &crawlRun{docCount: &docCount, queue: queue, wg: &wg, recordError: recordError}
+	run := &crawlRun{docCount: &docCount, fetchCount: &fetchCount, queue: queue, wg: &wg, recordError: recordError}
 
 	// Process servers from queue.
 	worker := func() {
@@ -110,7 +114,8 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 				defer wg.Done()
 
 				// Check context cancellation.
-				if ctx.Err() != nil {
+				if err := ctx.Err(); err != nil {
+					recordError("server %s: %v", host, err)
 					return
 				}
 
@@ -146,13 +151,14 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 		}
 
 		c.mu.Lock()
-		if len(c.servers) >= c.cfg.Crawl.MaxServers {
-			c.mu.Unlock()
-			break // Stop seeding once we hit the cap
-		}
 		if c.servers[host] {
 			c.mu.Unlock()
 			continue
+		}
+		if len(c.servers) >= c.cfg.Crawl.MaxServers {
+			c.mu.Unlock()
+			recordError("server limit reached while seeding %q, crawl incomplete", seed)
+			break // Stop seeding once we hit the cap
 		}
 		c.servers[host] = true // mark as queued
 		c.mu.Unlock()
@@ -187,6 +193,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 // Run invocation.
 type crawlRun struct {
 	docCount    *atomic.Int32
+	fetchCount  *atomic.Int32
 	queue       chan<- string
 	wg          *sync.WaitGroup
 	recordError func(string, ...any)
@@ -227,51 +234,22 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 	// MaxDepth is the cycle-safety bound: a self-referencing listing mints
 	// ever-deeper distinct paths the visited set cannot catch. The LIST
 	// budget bounds breadth (MaxDocuments caps FETCHes, not listings).
-	if int(s.run.docCount.Load()) >= c.cfg.Crawl.MaxDocuments {
-		return nil
-	}
 	if depth > c.cfg.Crawl.MaxDepth {
-		return nil
+		return errors.New("depth limit reached, crawl incomplete")
 	}
 	if s.visited[dirPath] {
 		return nil
 	}
 	s.visited[dirPath] = true
-	if s.lists >= max(c.cfg.Crawl.MaxDocuments, 100) {
-		s.run.recordError("server %s: list budget exhausted at %s, crawl incomplete", s.host, dirPath)
-		return nil
-	}
-	s.lists++
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
+	return s.walkDirectoryPages(ctx, dirPath, depth)
+}
 
-	// Apply politeness delay.
-	if c.cfg.Politeness.RequestDelay > 0 {
-		time.Sleep(c.cfg.Politeness.RequestDelay)
-	}
-
-	// List directory.
-	result, err := c.client.List(s.host, dirPath, s.token)
-	if err != nil {
-		return fmt.Errorf("list %s: %w", dirPath, err)
-	}
-	if result.Response.Status != protocol.StatusOK {
-		return nil // skip inaccessible directories
-	}
-
-	// Process each entry.
-	for _, dest := range links.Extract(result.Response.Body) {
+func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, depth int) error {
+	c := s.c
+	for _, entry := range entries {
 		// Check context cancellation.
 		if ctx.Err() != nil {
 			return ctx.Err()
-		}
-
-		entry, ok := listwalk.ResolveEntry(dirPath, dest)
-		if !ok {
-			// Absolute, escaping, or undecodable; never valid in a listing.
-			s.run.recordError("server %s: invalid listing entry %q in %s", s.host, dest, dirPath)
-			continue
 		}
 		fullPath := entry.Path
 
@@ -292,11 +270,11 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 		}
 		s.visited[fullPath] = true
 
-		// File — atomically reserve a slot before Fetch.
-		newCount := int(s.run.docCount.Add(1))
+		// Bound attempts, not successes: failed peers must not bypass the cap.
+		newCount := int(s.run.fetchCount.Add(1))
 		if newCount > c.cfg.Crawl.MaxDocuments {
-			s.run.docCount.Add(-1) // Roll back reservation
-			return nil
+			s.run.fetchCount.Add(-1)
+			return errors.New("document limit reached, crawl incomplete")
 		}
 
 		// Apply politeness delay.
@@ -306,7 +284,6 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 
 		doc, err := c.client.Fetch(s.host, fullPath, s.token)
 		if err != nil {
-			s.run.docCount.Add(-1) // Roll back reservation
 			s.run.recordError("fetch %s%s: %v", s.host, fullPath, err)
 			continue
 		}
@@ -321,7 +298,7 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 		}
 
 		if doc.Response.Status != protocol.StatusOK {
-			s.run.docCount.Add(-1) // Roll back reservation
+			s.run.recordError("fetch %s%s: status %s", s.host, fullPath, doc.Response.Status)
 			continue
 		}
 
@@ -336,6 +313,8 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 			c.mu.Lock()
 			c.hashes[contentHash] = append(c.hashes[contentHash], entry)
 			c.mu.Unlock()
+		} else {
+			s.run.recordError("fetch %s%s: missing or invalid content-hash", s.host, fullPath)
 		}
 
 		// /graph.md is a generated projection of other documents' edges. Hash it
@@ -343,17 +322,67 @@ func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) err
 		// graph.md→node edges or use them to amplify the discovery frontier.
 		if fullPath != "/graph.md" {
 			c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
-			c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg)
+			c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg, s.run.recordError)
 		}
 
+		s.run.docCount.Add(1)
 		s.count++
 	}
 
 	return nil
 }
 
+func (s *serverWalk) walkDirectoryPages(ctx context.Context, dirPath string, depth int) error {
+	limit := max(s.c.cfg.Crawl.MaxDocuments, 100)
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	lastName := ""
+	for {
+		if s.lists >= limit {
+			return fmt.Errorf("list budget exhausted at %s, crawl incomplete", dirPath)
+		}
+		s.lists++
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if s.c.cfg.Politeness.RequestDelay > 0 {
+			time.Sleep(s.c.cfg.Politeness.RequestDelay)
+		}
+
+		result, err := s.c.client.ListWithOptions(s.host, dirPath, s.token, fetch.ListOptions{
+			Cursor:   cursor,
+			PageSize: protocol.MaxListPageSize,
+		})
+		if err != nil {
+			return fmt.Errorf("list %s: %w", dirPath, err)
+		}
+		if result.Response.Status != protocol.StatusOK {
+			return fmt.Errorf("list %s: status %s, crawl incomplete", dirPath, result.Response.Status)
+		}
+		page, err := listing.ParsePage(dirPath, result.Response, lastName)
+		if err != nil {
+			return fmt.Errorf("list %s: %w", dirPath, err)
+		}
+		for _, dest := range page.Invalid {
+			s.run.recordError("server %s: invalid listing entry %q in %s", s.host, dest, dirPath)
+		}
+		lastName = page.LastName
+		if err := s.walkEntries(ctx, page.Entries, depth); err != nil {
+			return err
+		}
+		if page.Complete {
+			return nil
+		}
+		if _, duplicate := seenCursors[page.NextCursor]; duplicate || page.NextCursor == cursor {
+			return fmt.Errorf("list %s: continuation cursor did not advance", dirPath)
+		}
+		seenCursors[page.NextCursor] = struct{}{}
+		cursor = page.NextCursor
+	}
+}
+
 // discoverServers extracts mark:// links pointing to other servers and queues them.
-func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string, wg *sync.WaitGroup) {
+func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string, wg *sync.WaitGroup, recordError func(string, ...any)) {
 	for _, link := range links.Extract(body) {
 		// Resolve relative links.
 		resolved := links.Resolve("mark://"+currentHost, link)
@@ -389,11 +418,12 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 		// Check if we should queue this host.
 		// Only hold mutex while checking/updating shared state.
 		c.mu.Lock()
-		if len(c.servers) >= c.cfg.Crawl.MaxServers {
+		newHost := !c.servers[host]
+		if newHost && len(c.servers) >= c.cfg.Crawl.MaxServers {
 			c.mu.Unlock()
+			recordError("server limit reached at %s, crawl incomplete", host)
 			return // Stop discovering once we hit the limit
 		}
-		newHost := !c.servers[host]
 		if newHost {
 			c.servers[host] = true
 		}

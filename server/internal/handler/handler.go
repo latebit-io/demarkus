@@ -23,7 +23,7 @@ import (
 )
 
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
-const MaxDirectoryEntries = 1000
+const MaxDirectoryEntries = protocol.MaxListPageSize
 
 // LOOKUP result bounds.
 const (
@@ -402,7 +402,21 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request, reader storageba
 		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
 		return
 	}
-	includeArchived := req.Metadata["include-archived"] == "true"
+	includeArchived, err := parseListIncludeArchived(req.Metadata["include-archived"])
+	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+	pageSize, err := parseListPageSize(req.Metadata["page-size"])
+	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
+	after, err := decodeListCursor(req.Metadata["cursor"], reqPath, includeArchived)
+	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
 	entries, err := reader.ListEntries(reqPath, includeArchived)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -416,14 +430,30 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request, reader storageba
 	}
 	entries = h.filterReadableEntries(reqPath, entries, req.Metadata["auth"])
 
-	body, entryCount := buildDirectoryIndex(reqPath, entries)
+	page, err := buildDirectoryPage(reqPath, entries, after, pageSize)
+	if err != nil {
+		h.logger().Error("build list page failed", "path", sanitize(reqPath), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
+	metadata := map[string]string{
+		"entries":  strconv.Itoa(page.EntryCount),
+		"complete": strconv.FormatBool(page.Complete),
+	}
+	if !page.Complete {
+		nextCursor, err := encodeListCursor(reqPath, includeArchived, page.LastName)
+		if err != nil {
+			h.logger().Error("encode list cursor failed", "path", sanitize(reqPath), "error", err)
+			h.writeError(w, protocol.StatusServerError, "internal error")
+			return
+		}
+		metadata["next-cursor"] = nextCursor
+	}
 
 	resp := protocol.Response{
-		Status: protocol.StatusOK,
-		Metadata: map[string]string{
-			"entries": fmt.Sprintf("%d", entryCount),
-		},
-		Body: body,
+		Status:   protocol.StatusOK,
+		Metadata: metadata,
+		Body:     page.Body,
 	}
 	h.writeResponse(w, resp)
 }
@@ -443,32 +473,10 @@ func (h *Handler) filterReadableEntries(reqPath string, entries []store.DirEntry
 	return visible
 }
 
-// buildDirectoryIndex renders a markdown listing from directory entries.
-// Returns the markdown body and the number of entries included.
-func buildDirectoryIndex(reqPath string, entries []store.DirEntry) (body string, entryCount int) {
-	var sb strings.Builder
-	displayPath := reqPath
-	if displayPath != "/" && !strings.HasSuffix(displayPath, "/") {
-		displayPath += "/"
-	}
-	sb.WriteString("\n# Index of " + escapeMD(displayPath) + "\n\n")
-
-	for _, entry := range entries {
-		if entryCount >= MaxDirectoryEntries {
-			sb.WriteString("\n*...truncated, too many entries*\n")
-			break
-		}
-		entryCount++
-		display := escapeMD(entry.Name)
-		link := escapeURL(entry.Name)
-		if entry.IsDir {
-			sb.WriteString("- [" + display + "/](" + link + "/)\n")
-		} else {
-			sb.WriteString("- [" + display + "](" + link + ")\n")
-		}
-	}
-
-	return sb.String(), entryCount
+// buildDirectoryIndex renders the bounded first page used by directory FETCH.
+func buildDirectoryIndex(reqPath string, entries []store.DirEntry) (body string, entryCount int, err error) {
+	page, err := buildDirectoryPage(reqPath, entries, "", MaxDirectoryEntries)
+	return page.Body, page.EntryCount, err
 }
 
 // buildLookupResults renders LOOKUP matches as a markdown table. Cells are
@@ -529,7 +537,12 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request, reader
 }
 
 func (h *Handler) serveGeneratedDirectory(w io.Writer, req protocol.Request, entries []store.DirEntry) {
-	body, entryCount := buildDirectoryIndex(req.Path, entries)
+	body, entryCount, err := buildDirectoryIndex(req.Path, entries)
+	if err != nil {
+		h.logger().Error("build generated directory failed", "path", sanitize(req.Path), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
 	etag := store.StoredETag([]byte(body))
 	if ifNoneMatch, ok := req.Metadata["if-none-match"]; ok && ifNoneMatch == etag {
 		h.writeNotModified(w)

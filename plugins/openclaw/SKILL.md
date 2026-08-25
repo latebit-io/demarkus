@@ -87,7 +87,7 @@ mcporter call 'demarkus.mark_fetch(url: "/index.md")'
 - `demarkus.mark_fetch` — read a document
 - `demarkus.mark_publish` — write or update (fetch first, use returned version as expected_version)
 - `demarkus.mark_append` — append content, no fetch required
-- `demarkus.mark_list` — list documents and directories
+- `demarkus.mark_list` — list one page of documents/directories; follow `next-cursor` until `complete`
 - `demarkus.mark_versions` — full version history
 - `demarkus.mark_discover` — fetch the server's agent manifest
 - `demarkus.mark_graph` — crawl links and build a graph
@@ -101,6 +101,8 @@ mcporter call 'demarkus.mark_fetch(url: "/index.md")'
 
 # List documents
 mcporter call 'demarkus.mark_list(url: "/")'
+# Continue when complete is false
+mcporter call 'demarkus.mark_list(url: "/", cursor: "<next-cursor>")'
 
 # Append to journal
 mcporter call 'demarkus.mark_append(url: "/journal.md", body: "## 2026-03-10\nSession notes here.")'

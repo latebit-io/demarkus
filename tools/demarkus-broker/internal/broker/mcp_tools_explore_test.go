@@ -25,10 +25,10 @@ The hub links everything together.
 See [Alpha](/alpha.md) again (deduped).
 `
 
-const exploreTestListing = `- [hub.md](hub.md)
-- [alpha.md](alpha.md)
-- [notes.md](notes.md)
+const exploreTestListing = `- [alpha.md](alpha.md)
 - [docs/](docs/)
+- [hub.md](hub.md)
+- [notes.md](notes.md)
 `
 
 func exploreDispatcher() *fakeDispatcher {
