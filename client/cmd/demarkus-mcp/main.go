@@ -704,9 +704,11 @@ func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("list failed: %v", err)), nil
 	}
-	if opts.Cursor != "" && result.Response.Metadata["complete"] == "false" &&
-		result.Response.Metadata["next-cursor"] == opts.Cursor {
-		return mcp.NewToolResultError("list failed: continuation cursor did not advance"), nil
+	if result.Response.Metadata["complete"] == "false" {
+		next := result.Response.Metadata["next-cursor"]
+		if next == "" || next == opts.Cursor {
+			return mcp.NewToolResultError("list failed: continuation cursor is missing or did not advance"), nil
+		}
 	}
 
 	return mcp.NewToolResultText(formatResult(result, "modified")), nil

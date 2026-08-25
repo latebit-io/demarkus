@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -170,6 +171,32 @@ func TestRegisterListedResources_HostDownIsQuiet(t *testing.T) {
 	registerListedResources(s, h, "mark://example.com") // must not panic or register anything
 	if got := listResourceURIs(t, s); len(got) != 0 {
 		t.Errorf("down host should register nothing, got %v", got)
+	}
+}
+
+func TestRegisterListedResourcesBoundsListCalls(t *testing.T) {
+	calls := 0
+	sc := &stubClient{listOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+		calls++
+		name := fmt.Sprintf("dir-%03d/", calls)
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{
+				"entries": "1", "complete": "false", "next-cursor": strconv.Itoa(calls),
+			},
+			Body: fmt.Sprintf("- [%s](%s)\n", name, name),
+		}}, nil
+	}}
+	h := &handler{client: sc, defaultHost: "mark://example.com"}
+	s := mcpserver.NewMCPServer("test", "0", mcpserver.WithResourceCapabilities(false, true))
+
+	registerListedResources(s, h, "mark://example.com")
+
+	if calls != maxResourceListCalls {
+		t.Fatalf("LIST calls = %d, want %d", calls, maxResourceListCalls)
+	}
+	if got := listResourceURIs(t, s); len(got) != 0 {
+		t.Fatalf("directory-only listing registered resources: %v", got)
 	}
 }
 

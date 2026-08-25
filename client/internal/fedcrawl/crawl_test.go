@@ -18,10 +18,11 @@ import (
 
 // mockClient implements FetchClient and PublishClient for testing.
 type mockClient struct {
-	mu    sync.Mutex
-	pages map[string]mockPage // keyed by "host/path"
-	lists map[string]mockPage // keyed by "host/path" for LIST results
-	calls []string
+	mu     sync.Mutex
+	pages  map[string]mockPage // keyed by "host/path"
+	lists  map[string]mockPage // keyed by "host/path" for LIST results
+	calls  []string
+	onList func()
 
 	// publishStatuses overrides the default created-on-publish behavior.
 	// Keyed by host+path so multi-hub tests can model per-hub status differences
@@ -130,6 +131,9 @@ func (m *mockClient) ListWithOptions(host, path, _ string, opts fetch.ListOption
 	m.mu.Lock()
 	m.calls = append(m.calls, "LIST "+host+path)
 	m.mu.Unlock()
+	if m.onList != nil {
+		m.onList()
+	}
 
 	p, ok := m.lists[host+path+"\x00"+opts.Cursor]
 	if !ok {
@@ -565,6 +569,24 @@ func TestCrawlerCancellation(t *testing.T) {
 	result, err := crawler.Run(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %+v, want nil", result)
+	}
+}
+
+func TestCrawlerCancellationDuringRun(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://example.com"}
+	client := newMockClient()
+	client.addList("example.com:6309", "/", "- [index.md](index.md)\n")
+	client.addDoc("example.com:6309", "/index.md", "Content.", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	ctx, cancel := context.WithCancel(t.Context())
+	client.onList = cancel
+
+	result, err := NewCrawler(cfg, client, nil, nil).Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
 	}
 	if result != nil {
 		t.Fatalf("result = %+v, want nil", result)

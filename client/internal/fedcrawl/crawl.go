@@ -176,6 +176,9 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	// Wait for completion.
 	wg.Wait()
 	close(queue)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// Save state.
 	if c.state != nil {

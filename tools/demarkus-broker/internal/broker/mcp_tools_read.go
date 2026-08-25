@@ -179,9 +179,11 @@ func (g *mcpGateway) handleMarkList(_ context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		return g.toolErrorFor("list", worldName, err), nil
 	}
-	if opts.Cursor != "" && result.Response.Metadata["complete"] == "false" &&
-		result.Response.Metadata["next-cursor"] == opts.Cursor {
-		return mcp.NewToolResultError("list failed: continuation cursor did not advance"), nil
+	if result.Response.Metadata["complete"] == "false" {
+		next := result.Response.Metadata["next-cursor"]
+		if next == "" || next == opts.Cursor {
+			return mcp.NewToolResultError("list failed: continuation cursor is missing or did not advance"), nil
+		}
 	}
 	return mcp.NewToolResultText(formatToolResult(result, "modified")), nil
 }

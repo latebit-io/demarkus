@@ -27,7 +27,10 @@ import (
 
 // maxListedResources caps how many documents the startup listing
 // registers as concrete picker entries.
-const maxListedResources = 50
+const (
+	maxListedResources   = 50
+	maxResourceListCalls = 100
+)
 
 // registerResources wires the resources surface: a URI template covering
 // every document (with #anchor section support), plus the two well-known
@@ -81,7 +84,13 @@ func registerListedResources(s *mcpserver.MCPServer, h *handler, defaultHost str
 	var resources []mcpserver.ServerResource
 	cursor, lastName := "", ""
 	seenCursors := make(map[string]struct{})
+	listCalls := 0
 	for len(resources) < maxListedResources {
+		if listCalls >= maxResourceListCalls {
+			log.Printf("resource listing stopped after %d LIST calls: picker may be incomplete", maxResourceListCalls)
+			break
+		}
+		listCalls++
 		result, err := h.client.ListWithOptions(host, path, h.resolveToken(host), fetch.ListOptions{
 			Cursor:   cursor,
 			PageSize: protocol.MaxListPageSize,

@@ -276,6 +276,22 @@ func TestHandlerMarkListRejectsRepeatedCursor(t *testing.T) {
 	assertIsToolError(t, result, "did not advance")
 }
 
+func TestHandlerMarkListRejectsMissingContinuationCursor(t *testing.T) {
+	h := &handler{client: &stubClient{listOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{
+				"entries": "0", "complete": "false",
+			},
+		}}, nil
+	}}}
+	result, err := h.markList(t.Context(), newCallToolRequest(map[string]any{"url": "mark://example.com/"}))
+	if err != nil {
+		t.Fatalf("markList: %v", err)
+	}
+	assertIsToolError(t, result, "missing or did not advance")
+}
+
 func TestHandlerMarkPublish_NoToken(t *testing.T) {
 	h := &handler{} // no token
 	ctx := context.Background()
