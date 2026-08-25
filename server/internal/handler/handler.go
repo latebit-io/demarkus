@@ -428,7 +428,12 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request, reader storageba
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
-	entries = h.filterReadableEntries(reqPath, entries, req.Metadata["auth"])
+	entries, err = h.filterReadableEntries(reqPath, entries, req.Metadata["auth"])
+	if err != nil {
+		h.logger().Error("filter list authorization failed", "path", sanitize(reqPath), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
 
 	page, err := buildDirectoryPage(reqPath, entries, after, pageSize)
 	if err != nil {
@@ -458,19 +463,28 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request, reader storageba
 	h.writeResponse(w, resp)
 }
 
-func (h *Handler) filterReadableEntries(reqPath string, entries []store.DirEntry, token string) []store.DirEntry {
+func (h *Handler) filterReadableEntries(reqPath string, entries []store.DirEntry, token string) ([]store.DirEntry, error) {
 	visible := make([]store.DirEntry, 0, len(entries))
 	for _, entry := range entries {
 		entryPath := path.Join(reqPath, entry.Name)
 		if entry.IsDir {
 			entryPath += "/"
 		}
-		// Fail closed: an auth error makes the LIST entry inaccessible.
-		if ok, _ := h.checkReadAuth(entryPath, token); ok {
+		ok, err := h.checkReadAuth(entryPath, token)
+		if err != nil {
+			// Authorization errors are expected denials; future internal errors
+			// must fail the whole listing rather than hide inventory.
+			if errors.Is(err, auth.ErrNoToken) || errors.Is(err, auth.ErrInvalidToken) ||
+				errors.Is(err, auth.ErrNotPermitted) || errors.Is(err, auth.ErrTokenExpired) {
+				continue
+			}
+			return nil, err
+		}
+		if ok {
 			visible = append(visible, entry)
 		}
 	}
-	return visible
+	return visible, nil
 }
 
 // buildDirectoryIndex renders the bounded first page used by directory FETCH.
@@ -532,7 +546,12 @@ func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request, reader
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
-	entries = h.filterReadableEntries(req.Path, entries, req.Metadata["auth"])
+	entries, err = h.filterReadableEntries(req.Path, entries, req.Metadata["auth"])
+	if err != nil {
+		h.logger().Error("filter directory authorization failed", "path", sanitize(req.Path), "error", err)
+		h.writeError(w, protocol.StatusServerError, "internal error")
+		return
+	}
 	h.serveGeneratedDirectory(w, req, entries)
 }
 

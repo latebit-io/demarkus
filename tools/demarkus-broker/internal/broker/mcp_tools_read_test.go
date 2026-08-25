@@ -576,6 +576,27 @@ func TestHandleMarkListRejectsFractionalPageSize(t *testing.T) {
 	}
 }
 
+func TestHandleMarkListRejectsRepeatedCursor(t *testing.T) {
+	d := &fakeDispatcher{listOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{
+				"entries": "0", "complete": "false", "next-cursor": "stuck",
+			},
+		}}, nil
+	}}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkList(withAliceClaims(context.Background()), callToolReq("mark_list", map[string]any{
+		"url": "mark://team-a/", "cursor": "stuck",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkList: %v", err)
+	}
+	if !res.IsError || !strings.Contains(toolResultText(t, res), "did not advance") {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
 func TestHandleMarkVersionsHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{

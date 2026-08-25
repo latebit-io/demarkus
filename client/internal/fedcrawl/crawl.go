@@ -64,6 +64,7 @@ type CrawlResult struct {
 	ServersDiscovered int
 	DocumentsCrawled  int
 	HashesCollected   int
+	Incomplete        bool
 	Errors            []string
 }
 
@@ -95,6 +96,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 
 	var docCount atomic.Int32
 	var fetchCount atomic.Int32
+	var incomplete atomic.Bool
 	var errorsMu sync.Mutex
 	var crawlErrors []string
 
@@ -104,8 +106,12 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 		crawlErrors = append(crawlErrors, fmt.Sprintf(format, args...))
 		errorsMu.Unlock()
 	}
+	recordIncomplete := func(format string, args ...any) {
+		incomplete.Store(true)
+		recordError(format, args...)
+	}
 
-	run := &crawlRun{docCount: &docCount, fetchCount: &fetchCount, queue: queue, wg: &wg, recordError: recordError}
+	run := &crawlRun{docCount: &docCount, fetchCount: &fetchCount, queue: queue, wg: &wg, recordIncomplete: recordIncomplete}
 
 	// Process servers from queue.
 	worker := func() {
@@ -115,14 +121,14 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 
 				// Check context cancellation.
 				if err := ctx.Err(); err != nil {
-					recordError("server %s: %v", host, err)
+					recordIncomplete("server %s: %v", host, err)
 					return
 				}
 
 				// Crawl this server.
 				count, err := c.crawlServer(ctx, run, host)
 				if err != nil {
-					recordError("server %s: %v", host, err)
+					recordIncomplete("server %s: %v", host, err)
 					return
 				}
 
@@ -146,7 +152,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	for _, seed := range c.cfg.Seeds {
 		host, _, err := fetch.ParseMarkURL(seed + "/")
 		if err != nil {
-			recordError("invalid seed %q: %v", seed, err)
+			recordIncomplete("invalid seed %q: %v", seed, err)
 			continue
 		}
 
@@ -157,7 +163,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 		}
 		if len(c.servers) >= c.cfg.Crawl.MaxServers {
 			c.mu.Unlock()
-			recordError("server limit reached while seeding %q, crawl incomplete", seed)
+			recordIncomplete("server limit reached while seeding %q, crawl incomplete", seed)
 			break // Stop seeding once we hit the cap
 		}
 		c.servers[host] = true // mark as queued
@@ -183,6 +189,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	result.ServersDiscovered = len(c.servers)
 	result.DocumentsCrawled = int(docCount.Load())
 	result.HashesCollected = len(c.hashes)
+	result.Incomplete = incomplete.Load()
 	result.Errors = crawlErrors
 	c.mu.Unlock()
 
@@ -192,11 +199,11 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 // crawlRun bundles the run-wide state shared by every server walk in one
 // Run invocation.
 type crawlRun struct {
-	docCount    *atomic.Int32
-	fetchCount  *atomic.Int32
-	queue       chan<- string
-	wg          *sync.WaitGroup
-	recordError func(string, ...any)
+	docCount         *atomic.Int32
+	fetchCount       *atomic.Int32
+	queue            chan<- string
+	wg               *sync.WaitGroup
+	recordIncomplete func(string, ...any)
 }
 
 // crawlServer crawls a single server, collecting hashes and discovering new servers.
@@ -260,7 +267,7 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return err
 				}
-				s.run.recordError("dir %s%s: %v", s.host, fullPath, err)
+				s.run.recordIncomplete("dir %s%s: %v", s.host, fullPath, err)
 			}
 			continue
 		}
@@ -284,7 +291,7 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 
 		doc, err := c.client.Fetch(s.host, fullPath, s.token)
 		if err != nil {
-			s.run.recordError("fetch %s%s: %v", s.host, fullPath, err)
+			s.run.recordIncomplete("fetch %s%s: %v", s.host, fullPath, err)
 			continue
 		}
 
@@ -298,7 +305,7 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 		}
 
 		if doc.Response.Status != protocol.StatusOK {
-			s.run.recordError("fetch %s%s: status %s", s.host, fullPath, doc.Response.Status)
+			s.run.recordIncomplete("fetch %s%s: status %s", s.host, fullPath, doc.Response.Status)
 			continue
 		}
 
@@ -314,7 +321,7 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 			c.hashes[contentHash] = append(c.hashes[contentHash], entry)
 			c.mu.Unlock()
 		} else {
-			s.run.recordError("fetch %s%s: missing or invalid content-hash", s.host, fullPath)
+			s.run.recordIncomplete("fetch %s%s: missing or invalid content-hash", s.host, fullPath)
 		}
 
 		// /graph.md is a generated projection of other documents' edges. Hash it
@@ -322,7 +329,7 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 		// graph.md→node edges or use them to amplify the discovery frontier.
 		if fullPath != "/graph.md" {
 			c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
-			c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg, s.run.recordError)
+			c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg, s.run.recordIncomplete)
 		}
 
 		s.run.docCount.Add(1)
@@ -364,7 +371,7 @@ func (s *serverWalk) walkDirectoryPages(ctx context.Context, dirPath string, dep
 			return fmt.Errorf("list %s: %w", dirPath, err)
 		}
 		for _, dest := range page.Invalid {
-			s.run.recordError("server %s: invalid listing entry %q in %s", s.host, dest, dirPath)
+			s.run.recordIncomplete("server %s: invalid listing entry %q in %s", s.host, dest, dirPath)
 		}
 		lastName = page.LastName
 		if err := s.walkEntries(ctx, page.Entries, depth); err != nil {
@@ -382,7 +389,7 @@ func (s *serverWalk) walkDirectoryPages(ctx context.Context, dirPath string, dep
 }
 
 // discoverServers extracts mark:// links pointing to other servers and queues them.
-func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string, wg *sync.WaitGroup, recordError func(string, ...any)) {
+func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string, wg *sync.WaitGroup, recordIncomplete func(string, ...any)) {
 	for _, link := range links.Extract(body) {
 		// Resolve relative links.
 		resolved := links.Resolve("mark://"+currentHost, link)
@@ -421,7 +428,7 @@ func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string,
 		newHost := !c.servers[host]
 		if newHost && len(c.servers) >= c.cfg.Crawl.MaxServers {
 			c.mu.Unlock()
-			recordError("server limit reached at %s, crawl incomplete", host)
+			recordIncomplete("server limit reached at %s, crawl incomplete", host)
 			return // Stop discovering once we hit the limit
 		}
 		if newHost {

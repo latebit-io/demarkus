@@ -86,8 +86,12 @@ func registerListedResources(s *mcpserver.MCPServer, h *handler, defaultHost str
 			Cursor:   cursor,
 			PageSize: protocol.MaxListPageSize,
 		})
-		if err != nil || result.Response.Status != protocol.StatusOK {
-			log.Printf("resource listing stopped (host %s unavailable): picker may be incomplete", host)
+		if err != nil {
+			log.Printf("resource listing stopped (host %s: %v): picker may be incomplete", host, err)
+			break
+		}
+		if result.Response.Status != protocol.StatusOK {
+			log.Printf("resource listing stopped (host %s returned %s): picker may be incomplete", host, result.Response.Status)
 			break
 		}
 		page, err := listing.ParsePage(path, result.Response, lastName)

@@ -167,6 +167,9 @@ func TestCrawlerSingleServer(t *testing.T) {
 	if result.HashesCollected != 2 {
 		t.Errorf("HashesCollected = %d, want 2", result.HashesCollected)
 	}
+	if result.Incomplete {
+		t.Errorf("Incomplete = true, errors = %v", result.Errors)
+	}
 
 	hashes := crawler.Hashes()
 	if len(hashes) != 2 {
@@ -263,10 +266,25 @@ func TestCrawlerMarksIncompleteResponses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
-			if len(result.Errors) == 0 {
+			if len(result.Errors) == 0 || !result.Incomplete {
 				t.Fatalf("result = %+v, want incomplete crawl", result)
 			}
 		})
+	}
+}
+
+func TestCrawlerInvalidListEntryMarksInventoryIncomplete(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://example.com"}
+	client := newMockClient()
+	client.addList("example.com:6309", "/", "- [escape](../escape.md)\n")
+
+	result, err := NewCrawler(cfg, client, nil, nil).Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !result.Incomplete || len(result.Errors) == 0 {
+		t.Fatalf("result = %+v, want incomplete inventory", result)
 	}
 }
 
