@@ -18,12 +18,12 @@ Anchor on the scope's hub: `/index.md` or `/<slug>/index.md`.
 
 (Auditing an organizational knowledge-system world is `/knowledge-doctor`'s territory in the demarkus-knowledge plugin, not this command.)
 
-## Gather (cheap — two calls)
+## Gather (bounded graph crawl and recursive inventory)
 
 1. **Crawl the link graph.** `mark_graph` on the scope hub with `depth: 5`. Edge-based findings cover only this crawled subgraph; disclose that boundary. Parse:
    - **Nodes:** `[status] <url> "title" N links` — note any status that isn't `ok` (e.g. `archived`), and `(no title)`.
    - **Edges:** `<from> -> <to>` — `mark://` targets are internal; `http(s)` targets are external.
-2. **Inventory.** `mark_list` the scope (recurse into subdirectories) for the full set of documents that actually exist.
+2. **Inventory.** `mark_list` the scope with `include_archived: true`, following every `next-cursor` as `cursor` until `complete: true`, then recurse into returned subdirectories with `include_archived: true`. Track visited paths and directory/cursor pairs; require each incomplete page to return a non-empty, different, unseen cursor. Allow at most 500 total list calls, 200 directories, and 10,000 documents. A limit makes coverage incomplete only when another required call, directory, or document remains; a terminal complete page exactly at a limit with no queued directories is exhaustive. On truncation, report the exact boundary and stop before core checks rather than using partial inventory for conclusions.
 
 If either gather call fails, is unauthorized, or returns partial output, surface the exact failure and stop. Empty-soul handling applies only to successful empty responses; a partial gather cannot support broken-link or orphan conclusions.
 

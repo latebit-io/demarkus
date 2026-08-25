@@ -6,12 +6,9 @@ package listwalk
 import (
 	"errors"
 	"fmt"
-	"net/url"
-	"path"
-	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -25,9 +22,12 @@ const (
 // Walker.MaxLists allows; the results gathered so far are incomplete.
 var ErrListBudget = errors.New("listwalk: list budget exhausted")
 
+// ErrDepthBudget means a subtree exceeded MaxDepth and inventory is incomplete.
+var ErrDepthBudget = errors.New("listwalk: depth budget exhausted")
+
 // Lister is the subset of the protocol client the walk needs.
 type Lister interface {
-	List(host, path, token string) (fetch.Result, error)
+	ListWithOptions(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 }
 
 // Walker traverses a server's directory listings depth-first.
@@ -67,22 +67,11 @@ type Entry struct {
 // join, and reject anything that is not a relative child (absolute paths,
 // URLs, `..` escapes) — listings only ever contain relative children.
 func ResolveEntry(dir, dest string) (Entry, bool) {
-	// Listing links are URL-escaped by the server; walk decoded names.
-	name, err := url.PathUnescape(dest)
-	if err != nil {
+	entry, ok := listing.ResolveEntry(dir, dest)
+	if !ok {
 		return Entry{}, false
 	}
-	trimmed := strings.TrimSuffix(name, "/")
-	if trimmed == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "://") {
-		return Entry{}, false
-	}
-	joined := path.Join(dir, trimmed)
-	// path.Join cleans ".." segments; an entry that climbed out of dir no
-	// longer has it as a prefix (or collapsed to "/").
-	if joined == "/" || !strings.HasPrefix(joined, strings.TrimSuffix(dir, "/")+"/") {
-		return Entry{}, false
-	}
-	return Entry{Path: joined, IsDir: strings.HasSuffix(name, "/")}, true
+	return Entry{Path: entry.Path, IsDir: entry.IsDir}, true
 }
 
 // Walk calls visit with the decoded mark path of every file entry beneath
@@ -108,43 +97,64 @@ func (w *Walker) walk(dir string, depth int, visit func(string) error, seen map[
 		// Depth is the cycle-safety bound: a self-referencing listing mints
 		// ever-deeper distinct paths the seen set cannot catch.
 		w.skip(dir, "max depth reached")
-		return nil
-	}
-	if *lists >= w.MaxLists {
-		return ErrListBudget
-	}
-	*lists++
-
-	result, err := w.Client.List(w.Host, dir, w.Token)
-	if err != nil {
-		return fmt.Errorf("list %s: %w", dir, err)
-	}
-	if result.Response.Status != protocol.StatusOK {
 		if w.Strict {
-			return fmt.Errorf("list %s: server returned %q", dir, result.Response.Status)
+			return ErrDepthBudget
 		}
-		w.skip(dir, "listing returned "+result.Response.Status)
 		return nil
 	}
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	lastName := ""
+	for {
+		if *lists >= w.MaxLists {
+			return ErrListBudget
+		}
+		*lists++
 
-	for _, dest := range links.Extract(result.Response.Body) {
-		entry, ok := ResolveEntry(dir, dest)
-		if !ok {
+		result, err := w.Client.ListWithOptions(w.Host, dir, w.Token, fetch.ListOptions{
+			Cursor:   cursor,
+			PageSize: protocol.MaxListPageSize,
+		})
+		if err != nil {
+			return fmt.Errorf("list %s: %w", dir, err)
+		}
+		if result.Response.Status != protocol.StatusOK {
+			if w.Strict {
+				return fmt.Errorf("list %s: server returned %q", dir, result.Response.Status)
+			}
+			w.skip(dir, "listing returned "+result.Response.Status)
+			return nil
+		}
+
+		page, err := listing.ParsePage(dir, result.Response, lastName)
+		if err != nil {
+			return fmt.Errorf("list %s: %w", dir, err)
+		}
+		for _, dest := range page.Invalid {
 			if w.Strict {
 				return fmt.Errorf("list %s: invalid entry %q", dir, dest)
 			}
 			w.skip(dir, fmt.Sprintf("invalid entry %q", dest))
-			continue
 		}
-		if entry.IsDir {
-			if err := w.walk(entry.Path, depth+1, visit, seen, lists); err != nil {
+		lastName = page.LastName
+		for _, entry := range page.Entries {
+			if entry.IsDir {
+				if err := w.walk(entry.Path, depth+1, visit, seen, lists); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := visit(entry.Path); err != nil {
 				return err
 			}
-			continue
 		}
-		if err := visit(entry.Path); err != nil {
-			return err
+		if page.Complete {
+			return nil
 		}
+		if _, duplicate := seenCursors[page.NextCursor]; duplicate || page.NextCursor == cursor {
+			return fmt.Errorf("list %s: continuation cursor did not advance", dir)
+		}
+		seenCursors[page.NextCursor] = struct{}{}
+		cursor = page.NextCursor
 	}
-	return nil
 }

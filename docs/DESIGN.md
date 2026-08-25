@@ -110,9 +110,16 @@ On conflict, the client should fetch the latest version and reapply edits. The C
 **APPEND**: `expected-version` is **mandatory** for APPEND (must be >= 1). Since APPEND is non-idempotent — appending the same content twice produces a different result — the server cannot safely retry internally, and omitting the version check would risk silent duplication. The client must always fetch first to obtain the current version.
 
 **Directory Operations**:
-```
+```text
 LIST /docs/
+---
+page-size: 250
+cursor: <next-cursor from prior page>
+---
 ```
+
+LIST is a bounded authorized keyset scan. Follow `next-cursor` until the
+response declares `complete: true`; no single page is an inventory guarantee.
 
 **Version Access** (path-based):
 ```
@@ -154,7 +161,7 @@ Document-centric operations that align with markdown usage:
 - **PUBLISH**: Create or update a document (creates new version, supports optimistic concurrency via `expected-version`)
 - **APPEND**: Add content to end of document (journals, changelogs, notes)
 - **ARCHIVE**: Remove a document from active serving (preserves in version history)
-- **LIST**: Get directory contents or document index
+- **LIST**: Get one pageable directory listing
 - **VERSIONS**: Get version history for a document
 
 ### Path Structure & Parameters

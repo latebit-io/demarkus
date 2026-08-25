@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -274,6 +275,7 @@ func markListTool(host string) mcp.Tool {
 				"listing with the outline, links, and backlinks. Archived documents are "+
 				"hidden by default, along with directories that contain only archived "+
 				"documents; set include_archived to true for a recovery/audit view. "+
+				"Results declare complete; when false, pass next-cursor back as cursor. "+
 				urlHint(host),
 		),
 		mcp.WithString("url",
@@ -282,6 +284,13 @@ func markListTool(host string) mcp.Tool {
 		),
 		mcp.WithBoolean("include_archived",
 			mcp.Description("Include archived documents (and all-archived directories) in the listing. Default false."),
+		),
+		mcp.WithString("cursor",
+			mcp.Description("opaque continuation cursor from a prior mark_list result"),
+		),
+		mcp.WithNumber("page_size",
+			mcp.Description("maximum entries in this page, 1-1000 (server default 1000)"),
+			mcp.Min(1), mcp.Max(protocol.MaxListPageSize), mcp.MultipleOf(1),
 		),
 	)
 }
@@ -682,13 +691,50 @@ func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
 
-	opts := fetch.ListOptions{IncludeArchived: req.GetBool("include_archived", false)}
+	pageSize, err := mcpListPageSize(&req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	opts := fetch.ListOptions{
+		IncludeArchived: req.GetBool("include_archived", false),
+		Cursor:          req.GetString("cursor", ""),
+		PageSize:        pageSize,
+	}
 	result, err := h.client.ListWithOptions(host, path, h.resolveToken(host), opts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("list failed: %v", err)), nil
 	}
+	if result.Response.Metadata["complete"] == "false" {
+		next := result.Response.Metadata["next-cursor"]
+		if next == "" || next == opts.Cursor {
+			return mcp.NewToolResultError("list failed: continuation cursor is missing or did not advance"), nil
+		}
+	}
 
 	return mcp.NewToolResultText(formatResult(result, "modified")), nil
+}
+
+func mcpListPageSize(req *mcp.CallToolRequest) (int, error) {
+	raw, ok := req.GetArguments()["page_size"]
+	if !ok {
+		return 0, nil
+	}
+	var size int
+	switch value := raw.(type) {
+	case int:
+		size = value
+	case float64:
+		if value != math.Trunc(value) {
+			return 0, errors.New("page_size must be an integer")
+		}
+		size = int(value)
+	default:
+		return 0, errors.New("page_size must be an integer")
+	}
+	if size < 1 || size > protocol.MaxListPageSize {
+		return 0, fmt.Errorf("page_size must be between 1 and %d", protocol.MaxListPageSize)
+	}
+	return size, nil
 }
 
 func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -1154,7 +1200,7 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 	// Crawl source server.
 	sourceScheme := "mark://" + sourceHost
-	entries, crawlWarnings, err := h.collectEntries(sourceHost, sourcePath, h.resolveToken(sourceHost))
+	entries, crawlWarnings, err := h.collectEntries(ctx, sourceHost, sourcePath, h.resolveToken(sourceHost))
 	warnings = append(warnings, crawlWarnings...)
 	if err != nil && !errors.Is(err, errIndexTruncated) {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
@@ -1172,6 +1218,9 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, not published)\n\n", len(entries), sourceScheme)
 		b.WriteString(body)
 		return mcp.NewToolResultText(b.String()), nil
+	}
+	if errors.Is(err, errIndexTruncated) || len(crawlWarnings) > 0 {
+		return mcp.NewToolResultError("crawl incomplete; refusing to publish an authoritative index"), nil
 	}
 
 	token := h.resolveToken(targetHost)
@@ -1212,9 +1261,10 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 // collectEntries walks the listings and fetches each document, collecting
 // content-hash index entries. Skips come back as warnings (a partial index is
 // never a silent success); errIndexTruncated caps at maxIndexDocuments.
-func (h *handler) collectEntries(host, dirPath, token string) ([]index.Entry, []string, error) {
+func (h *handler) collectEntries(ctx context.Context, host, dirPath, token string) ([]index.Entry, []string, error) {
 	var entries []index.Entry
 	var warnings []string
+	attempts := 0
 	w := listwalk.Walker{
 		Client: h.client,
 		Host:   host,
@@ -1224,9 +1274,13 @@ func (h *handler) collectEntries(host, dirPath, token string) ([]index.Entry, []
 		},
 	}
 	err := w.Walk(dirPath, func(fullPath string) error {
-		if len(entries) >= maxIndexDocuments {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if attempts >= maxIndexDocuments {
 			return errIndexTruncated
 		}
+		attempts++
 
 		// Fetch and collect content-hash.
 		doc, err := h.client.Fetch(host, fullPath, token)
@@ -1240,6 +1294,7 @@ func (h *handler) collectEntries(host, dirPath, token string) ([]index.Entry, []
 		}
 		contentHash, ok := doc.Response.Metadata["content-hash"]
 		if _, valid := protocol.IsHashPath(contentHash); !ok || !valid {
+			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: missing or invalid content-hash", fullPath))
 			return nil
 		}
 		entries = append(entries, index.Entry{

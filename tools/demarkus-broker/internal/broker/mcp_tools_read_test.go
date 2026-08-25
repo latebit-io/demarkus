@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	"k8s.io/client-go/kubernetes/fake"
@@ -27,6 +29,7 @@ type fakeDispatcher struct {
 	fetchFn     func(worldName, path, token string) (fetch.Result, error)
 	fetchCondFn func(worldName, path, token, etag string) (fetch.Result, error)
 	listFn      func(worldName, path, token string) (fetch.Result, error)
+	listOptsFn  func(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	versionsFn  func(worldName, path, token string) (fetch.Result, error)
 	lookupFn    func(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	lookupCtxFn func(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
@@ -37,6 +40,7 @@ type fakeDispatcher struct {
 	fetchCalls     []dispatchCall
 	fetchCondCalls []condCall
 	listCalls      []dispatchCall
+	listOpts       []fetch.ListOptions
 	versionsCalls  []dispatchCall
 	lookupCalls    []lookupCall
 	publishCalls   []writeCall
@@ -104,15 +108,31 @@ func (f *fakeDispatcher) FetchConditional(worldName, path, token, etag string) (
 	return fn(worldName, path, token, etag)
 }
 
-func (f *fakeDispatcher) List(worldName, path, token string, _ fetch.ListOptions) (fetch.Result, error) {
+func (f *fakeDispatcher) List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error) {
 	f.mu.Lock()
 	f.listCalls = append(f.listCalls, dispatchCall{worldName, path, token})
+	f.listOpts = append(f.listOpts, opts)
 	fn := f.listFn
+	optsFn := f.listOptsFn
 	f.mu.Unlock()
-	if fn == nil {
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
+	if optsFn != nil {
+		return optsFn(worldName, path, token, opts)
 	}
-	return fn(worldName, path, token)
+	if fn == nil {
+		return fetch.Result{Response: protocol.Response{
+			Status:   protocol.StatusOK,
+			Metadata: map[string]string{"entries": "0", "complete": "true"},
+		}}, nil
+	}
+	result, err := fn(worldName, path, token)
+	if err == nil && result.Response.Status == protocol.StatusOK && result.Response.Metadata["complete"] == "" {
+		if result.Response.Metadata == nil {
+			result.Response.Metadata = make(map[string]string)
+		}
+		result.Response.Metadata["entries"] = strconv.Itoa(len(links.Extract(result.Response.Body)))
+		result.Response.Metadata["complete"] = "true"
+	}
+	return result, err
 }
 
 func (f *fakeDispatcher) Versions(worldName, path, token string) (fetch.Result, error) {
@@ -523,7 +543,10 @@ func TestHandleMarkListHappyPath(t *testing.T) {
 	}
 	g := newGatewayWithDispatcher(t, cfg, d)
 	res, err := g.handleMarkList(withAliceClaims(context.Background()), callToolReq("mark_list", map[string]any{
-		"url": "mark://team-a/",
+		"url":              "mark://team-a/",
+		"include_archived": true,
+		"cursor":           "next",
+		"page_size":        25,
 	}))
 	if err != nil {
 		t.Fatalf("handleMarkList: %v", err)
@@ -536,6 +559,62 @@ func TestHandleMarkListHappyPath(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("response missing %q\nfull:\n%s", want, text)
 		}
+	}
+	if len(d.listOpts) != 1 || d.listOpts[0] != (fetch.ListOptions{IncludeArchived: true, Cursor: "next", PageSize: 25}) {
+		t.Errorf("LIST options = %+v", d.listOpts)
+	}
+}
+
+func TestHandleMarkListRejectsFractionalPageSize(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	res, err := g.handleMarkList(withAliceClaims(context.Background()), callToolReq("mark_list", map[string]any{
+		"url":       "mark://team-a/",
+		"page_size": 1.5,
+	}))
+	if err != nil || !res.IsError {
+		t.Fatalf("fractional page_size = (%+v, %v), want tool error", res, err)
+	}
+}
+
+func TestHandleMarkListRejectsRepeatedCursor(t *testing.T) {
+	d := &fakeDispatcher{listOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{
+				"entries": "0", "complete": "false", "next-cursor": "stuck",
+			},
+		}}, nil
+	}}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkList(withAliceClaims(context.Background()), callToolReq("mark_list", map[string]any{
+		"url": "mark://team-a/", "cursor": "stuck",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkList: %v", err)
+	}
+	if !res.IsError || !strings.Contains(toolResultText(t, res), "did not advance") {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestHandleMarkListRejectsMissingContinuationCursor(t *testing.T) {
+	d := &fakeDispatcher{listOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{
+				"entries": "0", "complete": "false",
+			},
+		}}, nil
+	}}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkList(withAliceClaims(context.Background()), callToolReq("mark_list", map[string]any{
+		"url": "mark://team-a/",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkList: %v", err)
+	}
+	if !res.IsError || !strings.Contains(toolResultText(t, res), "missing or did not advance") {
+		t.Fatalf("result = %+v", res)
 	}
 }
 

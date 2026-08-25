@@ -258,8 +258,15 @@ Lists the contents of a directory.
 **Request**:
 
 ```text
-LIST /path/\n
+LIST /path/
+---
+page-size: 250
+cursor: <opaque continuation cursor>
+include-archived: "false"
+---
 ```
+
+All metadata fields are optional. `page-size` defaults to 1000 and MUST be between 1 and 1000. `cursor` MUST be copied unchanged from the preceding response for the same canonical directory and `include-archived` mode.
 
 **Success response** (`ok`):
 
@@ -267,9 +274,13 @@ LIST /path/\n
 ---
 status: ok
 entries: <count>
+complete: <true|false>
+next-cursor: <opaque continuation cursor>
 ---
 <markdown body with directory listing>
 ```
+
+`entries` is the number of entries in this page after archive and read-authorization filtering. `next-cursor` MUST be present exactly when `complete` is `false` and MUST be absent when `complete` is `true`.
 
 The body MUST be a markdown document containing a list of entries:
 
@@ -278,11 +289,16 @@ The body MUST be a markdown document containing a list of entries:
 
 Servers MUST exclude hidden files (names beginning with `.`) from directory listings. Servers MUST also exclude non-document files — content with no version history, which FETCH would refuse (§11.9) — so a listing never names an entry that cannot be fetched.
 
-Servers MUST impose a maximum entry count. The RECOMMENDED limit is **1000** entries. If the listing is truncated, the body SHOULD end with a note indicating truncation.
+Entries MUST be unique and ordered lexicographically by their decoded immediate child name. A client enumerates a stable authorized directory by starting without a cursor and following `next-cursor` until `complete: true`. Servers MUST apply directory folding, archive selection, and read authorization before selecting the page; a cursor MUST NOT reveal an unreadable entry.
+
+Servers MUST impose a maximum of **1000** entries and 1 MiB of generated body per page. If either bound truncates the page, the body SHOULD end with a note indicating truncation. An incomplete page MUST contain at least one entry so its cursor advances.
+
+A cursor is opaque, directory-scoped, and archive-mode-scoped. A malformed or mismatched cursor returns `bad-request`. Page size MAY change between requests. Pagination is a keyset scan, not a cross-request snapshot: exact-once enumeration assumes directory membership, archive state, and authorization remain stable for the duration of the scan.
 
 **Errors**:
 
 - `not-found`: The directory does not exist, or the path refers to a file.
+- `bad-request`: Invalid page size or malformed/mismatched cursor.
 - `server-error`: Internal error.
 
 ### 6.3. VERSIONS
@@ -596,6 +612,9 @@ The following status values are reserved for future use:
 | `query` | LOOKUP | String | Subject text matched against each document's `tags` and title. REQUIRED; minimum 2 characters. |
 | `filter` | LOOKUP | Comma-separated `key=value` | Predicates applied before ranking. Exact match on declared metadata, plus built-ins `modified-after` / `modified-before`. |
 | `limit` | LOOKUP | Decimal integer | Maximum number of results. Default 10; server-capped (RECOMMENDED 1000). |
+| `page-size` | LIST | Decimal integer | Maximum entries in this page. Default and hard maximum 1000. |
+| `cursor` | LIST | Opaque string | Continuation from the preceding page of the same directory and archive mode. |
+| `include-archived` | LIST | `true` or `false` | Include archived documents and directories containing only archived documents. Default false. |
 | `tags` | PUBLISH, APPEND | Comma-separated string | Subject labels for the document. Interpreted by the server: matched by LOOKUP `query` and `filter`. |
 | `importance` | PUBLISH, APPEND | Decimal in [0,1] | Ranking weight used by LOOKUP. Interpreted by the server. Absent or invalid is treated as 0.5. |
 | `title` | PUBLISH | String | One-line title shown in LOOKUP results and matched by `query`. Defaults to the first level-1 heading, then the path base name. |
@@ -612,7 +631,9 @@ Beyond the interpreted fields above, a PUBLISH request MAY carry additional publ
 | `your-version` | PUBLISH, APPEND (conflict) | Decimal integer | The `expected-version` the client sent. Present only in `conflict` responses. |
 | `server-version` | PUBLISH, APPEND (conflict) | Decimal integer | The current version on the server. Present only in `conflict` responses. |
 | `current-version` | FETCH (version access) | Decimal integer | Highest available version number. |
-| `entries` | LIST | Decimal integer | Number of entries in the directory listing. |
+| `entries` | LIST | Decimal integer | Number of entries in this directory page. |
+| `complete` | LIST | `true` or `false` | Whether this page exhausts the stable authorized directory view. |
+| `next-cursor` | LIST | Opaque string | Continuation cursor. Present exactly when `complete` is `false`. |
 | `total` | VERSIONS | Decimal integer | Total number of versions. |
 | `current` | VERSIONS | Decimal integer | Highest version number. |
 | `chain-valid` | VERSIONS | `true` or `false` | Whether the version hash chain is intact. |
@@ -812,7 +833,8 @@ Servers MUST enforce the following limits:
 | Request line | 4096 bytes |
 | Request metadata | 65536 bytes (64 KB) |
 | Document size (read and publish) | 1 MB (RECOMMENDED) |
-| Directory listing entries | 1000 (RECOMMENDED) |
+| Directory listing entries | 1000 per page |
+| Generated directory listing body | 1 MiB per page |
 
 ### 11.4. No Tracking
 

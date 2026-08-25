@@ -483,25 +483,38 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 					Body:   indexManifestBody,
 				}}, nil
 			}
-			if path == "/foo.md" {
+			if path == "/bar.md" || path == "/foo.md" {
+				hashChar := "a"
+				if path == "/bar.md" {
+					hashChar = "b"
+				}
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
 					Metadata: map[string]string{
-						"content-hash": "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+						"content-hash": "sha256-" + strings.Repeat(hashChar, 64),
 					},
 					Body: "doc body",
 				}}, nil
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		listFn: func(_, path, token string) (fetch.Result, error) {
+		listOptsFn: func(_, path, token string, opts fetch.ListOptions) (fetch.Result, error) {
 			if token != "" {
 				t.Errorf("index helper list %q used token %q, want public read", path, token)
 			}
 			if path == "/" {
+				body := "- [bar](bar.md)\n"
+				metadata := map[string]string{"entries": "1", "complete": "false", "next-cursor": "next"}
+				if opts.Cursor == "next" {
+					body = "- [foo](foo.md)\n"
+					metadata = map[string]string{"entries": "1", "complete": "true"}
+				} else if opts.Cursor != "" {
+					t.Fatalf("unexpected LIST cursor %q", opts.Cursor)
+				}
 				return fetch.Result{Response: protocol.Response{
-					Status: protocol.StatusOK,
-					Body:   "- [foo](foo.md)\n",
+					Status:   protocol.StatusOK,
+					Metadata: metadata,
+					Body:     body,
 				}}, nil
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
@@ -532,7 +545,7 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 		t.Error("publish was not called; expected the index doc to be written to target")
 	}
 	text := toolResultText(t, res)
-	if !strings.Contains(text, "Indexed 1 documents") {
+	if !strings.Contains(text, "Indexed 2 documents") {
 		t.Errorf("expected indexed-count line, got:\n%s", text)
 	}
 }

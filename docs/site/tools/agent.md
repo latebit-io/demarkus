@@ -247,6 +247,13 @@ The crawler automatically uses stored tokens for:
 - **Reads** (FETCH, LIST) on private servers being crawled
 - **Writes** (PUBLISH) to hubs when using `-publish`
 
+The agent follows LIST continuation cursors until `complete: true`. A server
+without completeness metadata, a cursor failure, or a traversal budget limit
+makes that crawl incomplete rather than silently publishing authoritative absence.
+Deploy LIST-pagination-capable world servers before upgrading the agent; the
+agent refuses index and graph publication while any crawled world lacks the
+completeness metadata.
+
 ### Token Requirements
 
 | Operation | Token Required | Capability |

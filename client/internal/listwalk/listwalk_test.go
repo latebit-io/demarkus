@@ -3,18 +3,24 @@ package listwalk
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
 type stubLister struct {
 	listings map[string]string // dir -> body
 	statuses map[string]string // dir -> non-OK status
+	pages    map[string]fetch.Result
 }
 
-func (s *stubLister) List(_, dir, _ string) (fetch.Result, error) {
+func (s *stubLister) ListWithOptions(_, dir, _ string, opts fetch.ListOptions) (fetch.Result, error) {
+	if page, ok := s.pages[dir+"\x00"+opts.Cursor]; ok {
+		return page, nil
+	}
 	if status, ok := s.statuses[dir]; ok {
 		return fetch.Result{Response: protocol.Response{Status: status}}, nil
 	}
@@ -22,7 +28,18 @@ func (s *stubLister) List(_, dir, _ string) (fetch.Result, error) {
 	if !ok {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 	}
-	return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body}}, nil
+	return listPage(body, true, ""), nil
+}
+
+func listPage(body string, complete bool, next string) fetch.Result {
+	meta := map[string]string{
+		"entries":  strconv.Itoa(len(links.Extract(body))),
+		"complete": strconv.FormatBool(complete),
+	}
+	if next != "" {
+		meta["next-cursor"] = next
+	}
+	return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: body}}
 }
 
 func TestWalk(t *testing.T) {
@@ -42,13 +59,63 @@ func TestWalk(t *testing.T) {
 		}
 	})
 
+	t.Run("collects every page before completing directory", func(t *testing.T) {
+		l := &stubLister{pages: map[string]fetch.Result{
+			"/\x00":     listPage("- [a.md](a.md)\n- [b.md](b.md)\n", false, "next"),
+			"/\x00next": listPage("- [c.md](c.md)\n", true, ""),
+		}}
+		var got []string
+		w := Walker{Client: l, Host: "h", Strict: true}
+		if err := w.Walk("/", func(p string) error { got = append(got, p); return nil }); err != nil {
+			t.Fatalf("Walk: %v", err)
+		}
+		want := []string{"/a.md", "/b.md", "/c.md"}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("missing completeness is inconclusive", func(t *testing.T) {
+		l := &stubLister{pages: map[string]fetch.Result{
+			"/\x00": {Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"entries": "1"},
+				Body:     "- [a.md](a.md)\n",
+			}},
+		}}
+		err := (&Walker{Client: l, Host: "h"}).Walk("/", func(string) error { return nil })
+		if !errors.Is(err, fetch.ErrListCompletenessUnknown) {
+			t.Fatalf("error = %v, want ErrListCompletenessUnknown", err)
+		}
+	})
+
+	t.Run("page budget counts continuations", func(t *testing.T) {
+		l := &stubLister{pages: map[string]fetch.Result{
+			"/\x00": listPage("- [a.md](a.md)\n", false, "next"),
+		}}
+		err := (&Walker{Client: l, Host: "h", MaxLists: 1}).Walk("/", func(string) error { return nil })
+		if !errors.Is(err, ErrListBudget) {
+			t.Fatalf("error = %v, want ErrListBudget", err)
+		}
+	})
+
+	t.Run("rejects cross-page ordering drift", func(t *testing.T) {
+		l := &stubLister{pages: map[string]fetch.Result{
+			"/\x00":     listPage("- [b.md](b.md)\n", false, "next"),
+			"/\x00next": listPage("- [a.md](a.md)\n", true, ""),
+		}}
+		if err := (&Walker{Client: l, Host: "h"}).Walk("/", func(string) error { return nil }); err == nil {
+			t.Fatal("ordering drift accepted")
+		}
+	})
+
 	t.Run("self-referencing listing terminates at MaxDepth", func(t *testing.T) {
 		// A hostile server serving a self-listing at every depth mints
 		// ever-deeper distinct paths; only MaxDepth stops it.
-		listings := map[string]string{"/": "- [loop/](loop/)\n- [a.md](a.md)\n"}
+		listings := map[string]string{"/": "- [a.md](a.md)\n- [loop/](loop/)\n"}
 		dir := "/loop"
 		for range 6 {
-			listings[dir] = "- [loop/](loop/)\n- [b.md](b.md)\n"
+			listings[dir] = "- [b.md](b.md)\n- [loop/](loop/)\n"
 			dir += "/loop"
 		}
 		l := &stubLister{listings: listings}
@@ -60,6 +127,18 @@ func TestWalk(t *testing.T) {
 		// a.md + b.md at depths 1..3.
 		if len(got) != 4 {
 			t.Errorf("got %d files, want 4 (%v)", len(got), got)
+		}
+	})
+
+	t.Run("strict walk reports depth truncation", func(t *testing.T) {
+		l := &stubLister{listings: map[string]string{
+			"/":         "- [sub/](sub/)\n",
+			"/sub":      "- [deep/](deep/)\n",
+			"/sub/deep": "- [x.md](x.md)\n",
+		}}
+		err := (&Walker{Client: l, Host: "h", Strict: true, MaxDepth: 1}).Walk("/", func(string) error { return nil })
+		if !errors.Is(err, ErrDepthBudget) {
+			t.Fatalf("error = %v, want ErrDepthBudget", err)
 		}
 	})
 
@@ -79,7 +158,7 @@ func TestWalk(t *testing.T) {
 
 	t.Run("OnSkip observes lenient skips", func(t *testing.T) {
 		l := &stubLister{
-			listings: map[string]string{"/": "- [sub/](sub/)\n- [bad](/etc/passwd)\n- [a.md](a.md)\n"},
+			listings: map[string]string{"/": "- [a.md](a.md)\n- [bad](/etc/passwd)\n- [sub/](sub/)\n"},
 			statuses: map[string]string{"/sub": protocol.StatusUnauthorized},
 		}
 		var skips []string
@@ -119,7 +198,7 @@ func TestWalk(t *testing.T) {
 
 	t.Run("lenient skips non-OK listing", func(t *testing.T) {
 		l := &stubLister{
-			listings: map[string]string{"/": "- [sub/](sub/)\n- [a.md](a.md)\n"},
+			listings: map[string]string{"/": "- [a.md](a.md)\n- [sub/](sub/)\n"},
 			statuses: map[string]string{"/sub": protocol.StatusUnauthorized},
 		}
 		var got []string

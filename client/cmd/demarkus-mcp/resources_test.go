@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -53,6 +54,16 @@ func TestReadResource_Section(t *testing.T) {
 	if strings.Contains(text, "Usage body.") {
 		t.Error("section resource should not include other sections")
 	}
+}
+
+func TestReadResource_EscapedFilename(t *testing.T) {
+	client := &stubClient{fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		if path != "/what?#%.md" {
+			t.Fatalf("path = %q", path)
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# Special\n"}}, nil
+	}}
+	readResourceText(t, &handler{client: client}, "mark://example.com/what%3F%23%25.md")
 }
 
 func TestReadResource_LargeDocIsNotOutlined(t *testing.T) {
@@ -122,7 +133,7 @@ func TestReadResource_Errors(t *testing.T) {
 }
 
 func TestRegisterListedResources(t *testing.T) {
-	listing := "- [index.md](index.md)\n- [patterns.md](patterns.md)\n- [journal/](journal/)\n- [notes.md](notes.md)\n- [image.png](image.png)\n"
+	listing := "- [image.png](image.png)\n- [index.md](index.md)\n- [journal/](journal/)\n- [notes.md](notes.md)\n- [patterns.md](patterns.md)\n- [what?#%.md](what%3F%23%25.md)\n"
 	sc := &stubClient{
 		listFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: listing}}, nil
@@ -136,7 +147,7 @@ func TestRegisterListedResources(t *testing.T) {
 	// The registered resources are observable through a resources/list
 	// round-trip on the server.
 	got := listResourceURIs(t, s)
-	for _, want := range []string{"mark://example.com/patterns.md", "mark://example.com/notes.md"} {
+	for _, want := range []string{"mark://example.com/patterns.md", "mark://example.com/notes.md", "mark://example.com/what%3F%23%25.md"} {
 		if !got[want] {
 			t.Errorf("listing should register %s; got %v", want, got)
 		}
@@ -160,6 +171,32 @@ func TestRegisterListedResources_HostDownIsQuiet(t *testing.T) {
 	registerListedResources(s, h, "mark://example.com") // must not panic or register anything
 	if got := listResourceURIs(t, s); len(got) != 0 {
 		t.Errorf("down host should register nothing, got %v", got)
+	}
+}
+
+func TestRegisterListedResourcesBoundsListCalls(t *testing.T) {
+	calls := 0
+	sc := &stubClient{listOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+		calls++
+		name := fmt.Sprintf("dir-%03d/", calls)
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{
+				"entries": "1", "complete": "false", "next-cursor": strconv.Itoa(calls),
+			},
+			Body: fmt.Sprintf("- [%s](%s)\n", name, name),
+		}}, nil
+	}}
+	h := &handler{client: sc, defaultHost: "mark://example.com"}
+	s := mcpserver.NewMCPServer("test", "0", mcpserver.WithResourceCapabilities(false, true))
+
+	registerListedResources(s, h, "mark://example.com")
+
+	if calls != maxResourceListCalls {
+		t.Fatalf("LIST calls = %d, want %d", calls, maxResourceListCalls)
+	}
+	if got := listResourceURIs(t, s); len(got) != 0 {
+		t.Fatalf("directory-only listing registered resources: %v", got)
 	}
 }
 

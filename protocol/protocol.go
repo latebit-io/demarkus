@@ -6,6 +6,9 @@ import (
 	"unicode/utf8"
 )
 
+// MaxListPageSize is the maximum number of entries in one LIST response.
+const MaxListPageSize = 1000
+
 const (
 	// DefaultPort is the default port for Mark Protocol servers.
 	DefaultPort = 6309

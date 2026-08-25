@@ -15,6 +15,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -340,12 +341,8 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	return mcp.NewToolResultText(out.String()), nil
 }
 
-// maxIndexDocuments caps mark_index's crawl to keep the index
-// document bounded — matches the local demarkus-mcp's limit. If
-// a world has more than this, the index document is truncated
-// with a warning. Operators wanting an exhaustive index for a
-// huge world can run mark_index multiple times against
-// disjoint subtrees and merge the results.
+// maxIndexDocuments caps FETCH attempts so failed peers cannot bypass the
+// work bound. Large worlds can index disjoint subtrees separately.
 const maxIndexDocuments = 1000
 
 // errIndexTruncated is sentinel-returned by walkDir to short-
@@ -425,6 +422,9 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	if errors.Is(walkErr, errIndexTruncated) {
 		warnings = append(warnings, "warning: crawl bounds reached, some content may not be indexed")
 	}
+	if len(iw.incomplete) > 0 {
+		warnings = append(warnings, fmt.Sprintf("warning: crawl skipped %d entries, index is incomplete", len(iw.incomplete)))
+	}
 
 	body := index.Build(sourceScheme, time.Now(), entries)
 
@@ -436,6 +436,9 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, not published)\n\n", len(entries), sourceScheme)
 		b.WriteString(body)
 		return mcp.NewToolResultText(b.String()), nil
+	}
+	if errors.Is(walkErr, errIndexTruncated) || len(iw.incomplete) > 0 {
+		return mcp.NewToolResultError("crawl incomplete; refusing to publish an authoritative index"), nil
 	}
 
 	// Merge with existing index if updating an existing target.
@@ -518,6 +521,8 @@ type indexWalk struct {
 	entries      []index.Entry
 	visited      map[string]struct{}
 	lists        int
+	fetches      int
+	incomplete   []string
 }
 
 // walk LISTs the tree and FETCHes each file for its content-hash. Bound
@@ -527,41 +532,70 @@ func (iw *indexWalk) walk(ctx context.Context, dirPath string, depth int) error 
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if len(iw.entries) >= maxIndexDocuments || iw.lists >= maxIndexLists {
+	if iw.fetches >= maxIndexDocuments || iw.lists >= maxIndexLists {
 		return errIndexTruncated
 	}
 	if depth > maxIndexDepth {
 		iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", dirPath, "reason", "max depth reached")
 		return errIndexTruncated
 	}
-	iw.lists++
-	listResult, err := iw.g.dispatcher.List(iw.worldName, dirPath, "", fetch.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("list %s: %w", dirPath, err)
-	}
-	if listResult.Response.Status != protocol.StatusOK {
-		// Skipped, not fatal: other subtrees still index.
-		iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", dirPath, "status", listResult.Response.Status)
-		return nil
-	}
-	for _, dest := range links.Extract(listResult.Response.Body) {
-		if len(iw.entries) >= maxIndexDocuments {
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	lastName := ""
+	for {
+		if iw.lists >= maxIndexLists {
 			return errIndexTruncated
 		}
-		fullPath := dirPath
-		if !strings.HasSuffix(fullPath, "/") {
-			fullPath += "/"
+		iw.lists++
+		listResult, err := iw.g.dispatcher.List(iw.worldName, dirPath, "", fetch.ListOptions{
+			Cursor:   cursor,
+			PageSize: protocol.MaxListPageSize,
+		})
+		if err != nil {
+			return fmt.Errorf("list %s: %w", dirPath, err)
 		}
-		fullPath += dest
-		// Canonicalize every destination; the index covers the subtree the
-		// user pointed at, not the world's whole filesystem.
-		canonical := path.Clean(fullPath)
-		if strings.HasSuffix(dest, "/") {
+		if listResult.Response.Status != protocol.StatusOK {
+			// Skipped, not fatal: other subtrees still index.
+			iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", dirPath, "status", listResult.Response.Status)
+			iw.incomplete = append(iw.incomplete, dirPath+": status "+listResult.Response.Status)
+			return nil
+		}
+		page, err := listing.ParsePage(dirPath, listResult.Response, lastName)
+		if err != nil {
+			return fmt.Errorf("list %s: %w", dirPath, err)
+		}
+		for _, dest := range page.Invalid {
+			iw.g.log.Warn("mark_index: entry skipped", "world", iw.worldName, "dir", dirPath, "entry", dest, "reason", "invalid listing entry")
+			iw.incomplete = append(iw.incomplete, dirPath+": invalid entry "+dest)
+		}
+		lastName = page.LastName
+		if err := iw.walkEntries(ctx, page.Entries, depth); err != nil {
+			return err
+		}
+		if page.Complete {
+			return nil
+		}
+		if _, duplicate := seenCursors[page.NextCursor]; duplicate || page.NextCursor == cursor {
+			return fmt.Errorf("list %s: continuation cursor did not advance", dirPath)
+		}
+		seenCursors[page.NextCursor] = struct{}{}
+		cursor = page.NextCursor
+	}
+}
+
+func (iw *indexWalk) walkEntries(ctx context.Context, entries []listing.Entry, depth int) error {
+	for _, listedEntry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		canonical := listedEntry.Path
+		if listedEntry.IsDir {
 			if !strings.HasSuffix(canonical, "/") {
 				canonical += "/"
 			}
 			if !strings.HasPrefix(canonical, iw.sourceRoot) {
 				iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", canonical, "reason", "escapes source root")
+				iw.incomplete = append(iw.incomplete, canonical+": escapes source root")
 				continue
 			}
 			if _, seen := iw.visited[canonical]; seen {
@@ -577,30 +611,41 @@ func (iw *indexWalk) walk(ctx context.Context, dirPath string, depth int) error 
 		}
 		if !strings.HasPrefix(canonical, iw.sourceRoot) {
 			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "reason", "escapes source root")
+			iw.incomplete = append(iw.incomplete, canonical+": escapes source root")
 			continue
 		}
-		// File — fetch and collect content-hash.
-		doc, ferr := iw.g.dispatcher.Fetch(iw.worldName, canonical, "")
-		if ferr != nil {
-			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "err", ferr)
-			continue
+		if iw.fetches >= maxIndexDocuments {
+			return errIndexTruncated
 		}
-		if doc.Response.Status != protocol.StatusOK {
-			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "status", doc.Response.Status)
-			continue
-		}
-		contentHash := doc.Response.Metadata["content-hash"]
-		if _, valid := protocol.IsHashPath(contentHash); !valid || contentHash == "" {
-			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "reason", "missing or invalid content-hash")
-			continue
-		}
-		iw.entries = append(iw.entries, index.Entry{
-			Hash:   contentHash,
-			Server: iw.sourceScheme,
-			Path:   canonical,
-		})
+		iw.fetches++
+		iw.addDocument(canonical)
 	}
 	return nil
+}
+
+func (iw *indexWalk) addDocument(canonical string) {
+	doc, err := iw.g.dispatcher.Fetch(iw.worldName, canonical, "")
+	if err != nil {
+		iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "err", err)
+		iw.incomplete = append(iw.incomplete, canonical+": "+err.Error())
+		return
+	}
+	if doc.Response.Status != protocol.StatusOK {
+		iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "status", doc.Response.Status)
+		iw.incomplete = append(iw.incomplete, canonical+": status "+doc.Response.Status)
+		return
+	}
+	contentHash := doc.Response.Metadata["content-hash"]
+	if _, valid := protocol.IsHashPath(contentHash); !valid || contentHash == "" {
+		iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "reason", "missing or invalid content-hash")
+		iw.incomplete = append(iw.incomplete, canonical+": missing or invalid content-hash")
+		return
+	}
+	iw.entries = append(iw.entries, index.Entry{
+		Hash:   contentHash,
+		Server: iw.sourceScheme,
+		Path:   canonical,
+	})
 }
 
 // Compile-time guards: every handler conforms to mcp-go's
