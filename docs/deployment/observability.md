@@ -1,16 +1,17 @@
 # Observability
 
-demarkus emits structured logs to stdout/stderr. Each runtime image (server, broker, agent) writes one JSON record per event when `DEMARKUS_LOG_FORMAT=json` (the chart default in production deployments). Operators ingest those JSON records with whatever log shipper their stack already runs — Datadog Agent, OpenTelemetry Collector, Vector, Fluent Bit, Grafana Alloy, or anything else that can parse JSON from container stdout. The field schema below tells your log shipper what to extract; the rest is your backend's existing JSON-log documentation.
+demarkus emits structured logs to stdout/stderr. Each runtime image (server, knowledge server, broker, agent) writes one JSON record per event when `DEMARKUS_LOG_FORMAT=json` (the chart default in production deployments). Operators ingest those JSON records with whatever log shipper their stack already runs — Datadog Agent, OpenTelemetry Collector, Vector, Fluent Bit, Grafana Alloy, or anything else that can parse JSON from container stdout. The field schema below tells your log shipper what to extract; the rest is your backend's existing JSON-log documentation.
 
 This document deliberately ships no pre-built collector configs. Every backend's config language drifts; an example `vector.yaml` written today is wrong six months later. The schema below stays stable because it's the actual code path, not a snapshot.
 
 ## Format and routing
 
-All three services write to stdout/stderr via Go's `log/slog`:
+All four services write to stdout/stderr via Go's `log/slog`:
 
 | Service | Default format | Override |
 |---|---|---|
 | `demarkus-server` | `json` (chart default) | `server.logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
+| `demarkus-knowledge-server` | `json` (hardcoded in binary) | not exposed; `server/cmd/demarkus-knowledge-server/main.go` |
 | `demarkus-broker` | `json` (hardcoded in binary) | not exposed; `tools/demarkus-broker/main.go` |
 | `demarkus-agent` | `json` (chart default) | `logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
 
@@ -58,6 +59,13 @@ Server logs cover protocol request handling, startup, and TLS/auth lifecycle. Th
 - 4xx-equivalent surface: `count where msg in (unauthorized, not permitted, body too large)`
 - Audit trail: `where audit=true`
 - Lifecycle: `where msg in (server started, server stopped, auth: tokens reloaded, tls: certificate reloaded)`
+
+## Knowledge server (`demarkus-knowledge-server`) — field schema
+
+The knowledge server shares the server's request-handling and logging code, so protocol events use the `demarkus-server` schema above. Two additions:
+
+- Every world-scoped record carries a `world` field (the world name), and per-connection records add `authority` (the SNI name the client dialed); scope dashboards by `world`.
+- Startup, world-open, TLS, and GCS lifecycle events have their own messages (`configuration invalid`, `TLS setup failed`, `GCS client unavailable`, `world startup failed`); all are ERROR-level and fatal at startup.
 
 ## Broker (`demarkus-broker`) — field schema
 

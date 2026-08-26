@@ -31,7 +31,7 @@ Writes are denied unless you provide a tokens file. Reads are public by default.
 #### 1) Generate a token
 
 ```bash
-./server/bin/demarkus-token generate -paths "/**" -ops publish -tokens /etc/demarkus/tokens.toml
+./tools/bin/demarkus-token generate -paths "/**" -ops publish -tokens /etc/demarkus/tokens.toml
 ```
 
 #### 2) Start the server with tokens
@@ -53,7 +53,7 @@ By default, all paths are public. To protect specific paths, create a token with
 #### Protect a subtree
 
 ```bash
-./server/bin/demarkus-token generate -paths "/internal/**" -ops read -tokens /etc/demarkus/tokens.toml
+./tools/bin/demarkus-token generate -paths "/internal/**" -ops read -tokens /etc/demarkus/tokens.toml
 ```
 
 Now `/internal/**` requires a read token. Everything else stays public.
@@ -61,7 +61,7 @@ Now `/internal/**` requires a read token. Everything else stays public.
 #### Full private server
 
 ```bash
-./server/bin/demarkus-token generate -paths "/**" -ops "read,publish" -tokens /etc/demarkus/tokens.toml
+./tools/bin/demarkus-token generate -paths "/**" -ops "read,publish" -tokens /etc/demarkus/tokens.toml
 ```
 
 This protects all paths. The well-known manifest (`/.well-known/agent-manifest.md`) is always public.
@@ -125,6 +125,42 @@ A healthy server returns:
 - Denies writes when no tokens file is set
 - Enforces path traversal protection
 - Limits file size to 1 MB
+
+## Multi-World Mode (`demarkus-knowledge-server`)
+
+`demarkus-knowledge-server` is the production server: one process hosts many logically isolated worlds on one UDP listener, with TLS SNI selecting the world during the QUIC handshake. Each world is backed by its own GCS bucket, and any number of stateless replicas can share the buckets.
+
+It takes one required flag, `-config`, pointing at a strict YAML file:
+
+```yaml
+version: 1
+listen:
+  address: ":6309"
+health:
+  address: ":8081"
+tls:
+  certFile: /run/demarkus/tls/tls.crt
+  keyFile: /run/demarkus/tls/tls.key
+worlds:
+  - name: acme
+    authorities: ["acme.knowledge.example.com"]
+    bucket:
+      url: gs://acme-world
+      worldID: <uuid>
+    auth:
+      tokensFile: /run/demarkus/worlds/acme/tokens.toml
+    policy:
+      path: /.well-known/demarkus/policy.md
+```
+
+Operational notes:
+
+- `/livez` and `/readyz` are served as plain HTTP on the health address.
+- `SIGHUP` reloads TLS certificates and token files; token files also hot-reload on change.
+- GCS credentials come from Application Default Credentials (Workload Identity on GKE); there are no credential flags or env vars.
+- Each world's bucket must be initialized with `demarkus-knowledge-bootstrap` before the server can open it.
+
+Deploy it with the Helm chart; see [Kubernetes & Helm](../deployment/kubernetes.md) and `deploy/helm/demarkus-knowledge-server/README.md`.
 
 ## Next Steps
 

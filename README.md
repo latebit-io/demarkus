@@ -56,7 +56,23 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
 ```
 
+Other install paths:
+
+```bash
+# Five-minute appliance: server + broker + library + OIDC + HTTPS on one host
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | sudo bash
+
+# Read-only chrooted server (Linux)
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | sudo bash -s -- --domain yourdomain.com
+```
+
+Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, Postgres server, broker, agent, knowledge server).
+
 See [full install docs](https://www.demarkus.io/install/) for platform-specific guides and other options.
+
+### Production knowledge system
+
+`demarkus-knowledge-server` hosts many isolated worlds in one process: TLS SNI selects the world, each world has its own GCS bucket, tokens, policy, and rate limits. It runs as two or more stateless replicas; writes race on a compare-and-swap head object in the bucket, so there is no leader election and no persistent volumes. Deploy with the [`deploy/helm/demarkus-knowledge-server`](deploy/helm/demarkus-knowledge-server/) chart; `demarkus-knowledge-bootstrap` initializes a world bucket and seeds its publish policy.
 
 ### See it in action
 
@@ -88,8 +104,10 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
 | `demarkus-agent` | Federation agent: crawls worlds, aggregates the link graph, publishes hub indexes |
-| `demarkus-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system |
+| `demarkus-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with universe-wide catalog lookup (`mark_lookup_all`) |
 | `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
+| `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its publish policy |
+| `demarkus-migrate` | Migrate a document store between backends (file, Postgres) with history intact |
 
 ## Protocol at a Glance
 
@@ -119,7 +137,7 @@ modified: 2026-01-15T10:30:00Z
 
 ## Use Cases
 
-**Agent Memory**: Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/) or install via [OpenClaw](https://www.demarkus.io/install/openclaw/).
+**Agent Memory**: Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/README.md) or install via [OpenClaw](https://www.demarkus.io/install/openclaw/).
 
 **Organizational Knowledge System**: Compose many servers ("worlds") into a broker-fronted universe reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command, `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/), and their agents share organizational memory over MCP, with no per-developer server or token setup. Humans browse the same universe in the [web reading room](https://github.com/latebit-io/demarkus-library). See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
 
@@ -134,7 +152,7 @@ modified: 2026-01-15T10:30:00Z
 - [demarkus-library](https://github.com/latebit-io/demarkus-library): web reading room; server-rendered front-end for browsing worlds through the broker (SSO) or direct QUIC
 - [Caztor](https://github.com/kevinboone/caztor): cross-platform Java GUI browser with preliminary Demarkus support
 - [Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus): publish and browse from Obsidian
-- [Claude Code memory plugin](plugins/claude-code/): zero-config local memory for Claude Code
+- [Claude Code memory plugin](plugins/claude-code/README.md): zero-config local memory for Claude Code
 - [Claude Code knowledge plugin](plugins/claude-code-knowledge/): join an organizational knowledge system (broker-fronted, MCP OAuth)
 - [OpenCode memory plugin](plugins/opencode-memory/): the same local memory for OpenCode (one shared soul across harnesses). Install:
 
@@ -159,7 +177,9 @@ See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full
 ```bash
 git clone https://github.com/latebit-io/demarkus.git
 cd demarkus
-make all   # or: make server / make client
+make all   # protocol, server, client, tools
+make knowledge-server   # demarkus-knowledge-server + demarkus-knowledge-bootstrap
+make server-pg          # Postgres-backed server (build tag pg)
 ```
 
 Requires Go 1.26+. Binaries land in `server/bin/`, `client/bin/`, and `tools/bin/`.

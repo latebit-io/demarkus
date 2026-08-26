@@ -24,12 +24,13 @@ Because the system is small and open, its easy to control.
 
 ## Start Here
 
-- [Documentation Site](https://latebit-io.github.io/demarkus/)
+- [Documentation Site](https://www.demarkus.io/)
 
 ## Protocol
 
 - [Protocol Specification](SPEC.md)
 - [Design Rationale](DESIGN.md)
+- [Architecture Decision Records](adr/index.md)
 
 ## Highlights
 
@@ -37,5 +38,7 @@ Because the system is small and open, its easy to control.
 - **QUIC transport**
 - **Immutable version history**
 - **Agent + human collaboration**
+- **Knowledge system**: multi-world, GCS-backed `demarkus-knowledge-server` behind an OIDC broker
+- **Knowledge graph**: persistent link graph with backlinks, exports, and federated snapshots
 
-If you're new, begin with the [Documentation Site](https://latebit-io.github.io/demarkus/).
+If you're new, begin with the [Documentation Site](https://www.demarkus.io/).

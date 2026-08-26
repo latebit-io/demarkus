@@ -4,13 +4,16 @@ This section covers how to install Demarkus from source or pre-built binaries. I
 
 ## Which install do I want?
 
-Demarkus has three install paths, distinguished by **where it runs and who reaches it**:
+Demarkus has four install paths, distinguished by **where it runs and who reaches it**:
 
 | Path | Runs where | Exposure | Use it for |
 |---|---|---|---|
 | **demarkus-memory plugin** (`/soul-init`) | your laptop | local only, no ports, no TLS | a personal soul for one agent; nothing to operate |
 | **`install.sh`** | any Linux (or macOS) host | local by default; public with `--domain` | one server: a LAN/dev world, or a public server with real TLS |
 | **`install-stack.sh`** (the appliance) | a **public** Linux VPS | public HTTPS on 80/443 **and the world on UDP 6309** | the full self-hosted knowledge system in one command, plus the world as your personal remote soul (see [the five-minute appliance](../deployment/appliance.md)) |
+| **Helm charts** (`deploy/helm/`) | a Kubernetes cluster | cluster-defined | multi-replica production deployments, including the multi-world knowledge server (see [Kubernetes & Helm](../deployment/kubernetes.md)) |
+
+The knowledge server (`demarkus-knowledge-server`) has no install-script path: it deploys via Helm only.
 
 The appliance is **not** a local tool: without `--domain` it serves `library.`, `broker.`, `auth.`, and `soul.<public-ip>.sslip.io` and provisions a Let's Encrypt certificate for each, all of which need a reachable public address. For a single server that also runs fine on a laptop or private network, use `install.sh` without `--domain`. For a personal, zero-exposure soul, use the plugin.
 
@@ -34,13 +37,23 @@ This produces the following binaries:
 | Binary | Location | Purpose |
 |--------|----------|---------|
 | `demarkus-server` | `server/bin/demarkus-server` | Serve documents |
-| `demarkus-token` | `server/bin/demarkus-token` | Generate auth tokens |
+| `demarkus-token` | `tools/bin/demarkus-token` | Generate auth tokens |
 | `demarkus` | `client/bin/demarkus` | CLI (fetch/list/publish) |
 | `demarkus-tui` | `client/bin/demarkus-tui` | TUI browser |
 | `demarkus-mcp` | `client/bin/demarkus-mcp` | MCP server |
-| `demarkus-publish` | `server/bin/demarkus-publish` | Local publish (bypasses server) |
+| `demarkus-agent` | `client/bin/demarkus-agent` | Federation crawler |
+| `demarkus-broker` | `tools/bin/demarkus-broker` | OIDC broker and MCP gateway |
+| `demarkus-publish` | `tools/bin/demarkus-publish` | Local publish (bypasses server) |
+| `demarkus-loadtest` | `tools/bin/demarkus-loadtest` | Load testing |
 
-> Build note: use `make server` / `make client` or `go build -o bin/<name> ./cmd/<name>/` to avoid dropping binaries in the working directory.
+Two server flavors are separate targets, not part of `make all`:
+
+| Target | Binaries | Purpose |
+|--------|----------|---------|
+| `make server-pg` | `server/bin/demarkus-server-pg`, `server/bin/demarkus-migrate` | Postgres-backed server and the store migration tool |
+| `make knowledge-server` | `server/bin/demarkus-knowledge-server`, `server/bin/demarkus-knowledge-bootstrap` | Multi-world GCS server and its bucket bootstrapper |
+
+> Build note: each module builds separately; use `make server` / `make client` / `make tools`, or from inside a module `cd server && go build -o bin/<name> ./cmd/<name>/` (same shape for `client/` and `tools/`).
 
 ## Pre-built Binaries
 

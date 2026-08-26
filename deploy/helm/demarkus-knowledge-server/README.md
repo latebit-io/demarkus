@@ -16,6 +16,11 @@ stores each world in its own pre-provisioned GCS bucket.
 The chart never creates buckets, PVCs, token Secrets, or TLS Secrets. The
 optional `Certificate` asks cert-manager to populate the referenced TLS Secret.
 
+Initialize each bucket with `demarkus-knowledge-bootstrap -bucket gs://<bucket>
+-world-id <uuid> -policy-file <policy.md>`, which writes the world skeleton and
+seeds the policy document. The tool is idempotent and ships in the
+`demarkus-knowledge-server` release archive, not the container image.
+
 ## Install
 
 ```yaml
@@ -61,6 +66,9 @@ authorities.
 
 After Secret rotation, send `SIGHUP` to each pod or restart the Deployment. The
 projected files update automatically, but certificate reload is signal-driven.
+Rotating token values within a world hot-reloads through the file watch or
+`SIGHUP`; moving a token hash from one world to another is rejected at reload
+and requires a restart with the new assignment.
 
 ## Security
 

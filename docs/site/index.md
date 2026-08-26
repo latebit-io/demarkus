@@ -14,6 +14,9 @@ Welcome to the Demarkus documentation site. This is the canonical table of conte
 ## Deployment
 
 - [TLS & Production Deployment](deployment/index.md)
+- [Single-Host Stack](deployment/single-host.md) — server + broker + library on one VPS
+- [The Five-Minute Appliance](deployment/appliance.md) — the whole stack in one command
+- [Kubernetes & Helm](deployment/kubernetes.md) — the charts, including the multi-world knowledge server (the production path)
 - [Security Model](security/index.md)
 
 ## Philosophy & Architecture

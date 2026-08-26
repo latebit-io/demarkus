@@ -1,6 +1,6 @@
 # Deployment & TLS
 
-This section covers production deployment of Demarkus with real TLS certificates, firewall configuration, and systemd service management.
+This section covers production deployment of Demarkus with real TLS certificates, firewall configuration, and systemd service management. For the Helm path (multi-replica servers, the broker, the multi-world knowledge server), see [Kubernetes & Helm](kubernetes.md).
 
 ## Overview
 
@@ -177,6 +177,8 @@ You should see a successful response with status `ok`.
 
 - [The Five-Minute Appliance](appliance.md) — the whole self-hosted stack (server + broker + library + Authelia + Caddy + agent) in one command, no domain required
 - [Single-Host Stack](single-host.md) — server + broker + library on one VPS, no Kubernetes
+- [Kubernetes & Helm](kubernetes.md) — the six charts, the multi-world knowledge server, HA defaults
+- [Observability](../../deployment/observability.md) — structured-log field schemas for every service
 - [Run a Server](../server/index.md)
 - [Security Model](../security/index.md) — read-only mode, chroot install, threat model
 - [Configuration Reference](../reference/index.md)
