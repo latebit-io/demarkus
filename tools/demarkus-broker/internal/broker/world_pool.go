@@ -25,6 +25,7 @@ type worldDispatcher interface {
 	Fetch(worldName, path, token string) (fetch.Result, error)
 	FetchContext(ctx context.Context, worldName, path, token string) (fetch.Result, error)
 	FetchConditional(worldName, path, token, etag string) (fetch.Result, error)
+	FetchConditionalContext(ctx context.Context, worldName, path, token, etag string) (fetch.Result, error)
 	List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	Versions(worldName, path, token string) (fetch.Result, error)
 	Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
@@ -120,6 +121,14 @@ func (p *worldPool) FetchContext(ctx context.Context, worldName, path, token str
 		return fetch.Result{}, err
 	}
 	return c.FetchContext(ctx, host, path, token)
+}
+
+func (p *worldPool) FetchConditionalContext(ctx context.Context, worldName, path, token, etag string) (fetch.Result, error) {
+	c, host, err := p.clientFor(worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+	return c.FetchConditionalContext(ctx, host, path, token, etag)
 }
 
 // FetchConditional dispatches a FETCH with an explicit if-none-match etag

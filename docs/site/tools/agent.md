@@ -133,8 +133,9 @@ hubs = ["mark://hub.example:6309"]
 
 Hubs are publish-only unless also listed in `seeds`. Links to a publish-only hub
 remain graph edges but do not enqueue the hub's generated artifacts for crawling.
-The crawler hashes `/graph.md`, but does not ingest its generated table links as
-authored edges or discovery targets; graph exports are projections, not sources.
+The crawler hashes `/graph.md` and the `/graph/` snapshot namespace, but does not
+ingest their generated links as authored edges or discovery targets. Graph
+exports are projections, not sources.
 
 ### Explicit Transport Endpoints
 
@@ -229,6 +230,12 @@ Published indexes enable content-addressed fetching. Resolution reads all shards
 # Resolve content by hash (requires hub with index)
 demarkus resolve sha256-abc123... mark://hub.example:6309/index.md
 ```
+
+## Atomic Graph Publishing
+
+With `-publish-graph`, the crawler publishes an atomic snapshot at `/graph/manifest.md` before updating the compatible `/graph.md` export. Snapshot shards live under `/graph/shards/a/` or `/graph/shards/b/`; the manifest pins each shard version and becomes visible only after every shard verifies successfully.
+
+Snapshot-aware clients and brokers prefer the manifest and fall back to `/graph.md` when it is absent. Retention applies to the manifest and legacy export only. Version-pinned shards remain unpruned until reference-aware garbage collection can prove they are unreachable.
 
 ## Authentication
 

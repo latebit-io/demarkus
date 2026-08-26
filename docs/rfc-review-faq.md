@@ -76,7 +76,7 @@ so a deep crawl usually stops on the node cap rather than the depth limit).
 
 - Edges carry provenance: link label, source section anchor, occurrence count.
 - Typed relations come from `rel-<predicate>` publisher metadata, e.g. `rel-supersedes`.
-- Crawls persist to a graph store that answers `mark_backlinks`; seeded from a published `/graph.md`, local crawls take precedence.
+- Crawls persist to a graph store that answers `mark_backlinks`; seeded from a verified `/graph/manifest.md` snapshot with `/graph.md` fallback, local crawls take precedence.
 - `mark_graph_publish` republishes the store as a crawlable `/graph.md` (generated doc, default retention 20).
 
 ## How is the graph built world to world?
@@ -84,10 +84,10 @@ so a deep crawl usually stops on the node cap rather than the depth limit).
 A scheduled agent builds it; the broker reads what that agent publishes.
 
 - The agent is configured with a seed URL per content world and crawls each one. The hub is not crawled; it is where results are published.
-- It merges every world's edges into one graph and publishes it as `/graph.md` on the hub, alongside the content-hash index. Graph publishing is off by default and switched on in this deployment.
+- It merges every world's edges into one graph, publishes an atomic `/graph/manifest.md` snapshot, then updates compatible `/graph.md` on the hub alongside the content-hash index. Graph publishing is off by default and switched on in this deployment.
 - Each run rebuilds from scratch, so a world that fails to answer is skipped and drops out of the published graph until the next successful crawl.
 - Cross-world links are ordinary `mark://{worldName}/{path}` links, so an edge from one world to another is just a link the crawl followed.
-- The broker's own graph store is in-memory and pod-scoped. It loads the hub's `/graph.md` on demand, so a fresh pod answers backlinks without crawling.
+- The broker's own graph store is in-memory and pod-scoped. It loads the hub's verified snapshot, or legacy `/graph.md`, on demand so a fresh pod answers backlinks without crawling.
 - A world with no published graph falls back to on-demand `mark_graph` crawls only.
 
 ## Is edge information there to guide agents to relevant information?

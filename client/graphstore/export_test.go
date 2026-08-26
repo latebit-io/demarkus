@@ -78,6 +78,17 @@ func TestExportEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildExportNormalizesEmptyStatus(t *testing.T) {
+	body := BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), []StoredNode{{URL: "mark://a/a.md"}}, nil)
+	nodes, _, err := ParseExportStrict(body)
+	if err != nil {
+		t.Fatalf("ParseExportStrict: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Status != "external" {
+		t.Fatalf("nodes = %+v", nodes)
+	}
+}
+
 func TestParseExport(t *testing.T) {
 	md := `# Document Graph
 
@@ -100,6 +111,9 @@ func TestParseExport(t *testing.T) {
 `
 
 	nodes, edges := ParseExport(md)
+	if _, _, err := ParseExportStrict(md); err != nil {
+		t.Fatalf("ParseExportStrict legacy export: %v", err)
+	}
 
 	if len(nodes) != 2 {
 		t.Fatalf("len(nodes) = %d, want 2", len(nodes))
@@ -125,6 +139,58 @@ func TestParseExport(t *testing.T) {
 	}
 	if edges[0].Count != 1 {
 		t.Errorf("legacy edge Count = %d, want 1", edges[0].Count)
+	}
+}
+
+func TestParseExportStrictAcceptsEmptyGeneration(t *testing.T) {
+	body := BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil, nil)
+	nodes, edges, err := ParseExportStrict(body)
+	if err != nil {
+		t.Fatalf("ParseExportStrict: %v", err)
+	}
+	if len(nodes) != 0 || len(edges) != 0 {
+		t.Fatalf("got %d nodes/%d edges, want empty", len(nodes), len(edges))
+	}
+}
+
+func TestParseExportStrictRejectsCountMismatch(t *testing.T) {
+	body := BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil, nil)
+	body = strings.Replace(body, "> Nodes: 0", "> Nodes: 1", 1)
+	if _, _, err := ParseExportStrict(body); err == nil {
+		t.Fatal("ParseExportStrict accepted count mismatch")
+	}
+}
+
+func TestParseExportStrictRejectsMalformedRow(t *testing.T) {
+	body := BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), []StoredNode{{URL: "mark://a/a.md", Status: "ok"}}, nil)
+	body = strings.Replace(body, "| [mark://a/a.md](mark://a/a.md) |  | ok | 0 |", "| malformed |", 1)
+	if _, _, err := ParseExportStrict(body); err == nil {
+		t.Fatal("ParseExportStrict accepted malformed row")
+	}
+}
+
+func TestParseExportStrictRejectsIncompleteEmptyTable(t *testing.T) {
+	body := "# Document Graph\n\n> Exported: 2026-01-01T00:00:00Z\n> Nodes: 0\n> Edges: 0\n\n## Nodes\n"
+	if _, _, err := ParseExportStrict(body); err == nil {
+		t.Fatal("ParseExportStrict accepted incomplete empty table")
+	}
+}
+
+func TestParseExportStrictRejectsCanonicalDuplicates(t *testing.T) {
+	body := BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), []StoredNode{
+		{URL: "mark://host/a.md", Status: "ok"},
+		{URL: "mark://host:6309/a.md", Status: "ok"},
+	}, nil)
+	if _, _, err := ParseExportStrict(body); err == nil || !strings.Contains(err.Error(), "duplicate graph node") {
+		t.Fatalf("canonical duplicate error = %v", err)
+	}
+}
+
+func TestParseExportStrictRejectsOverflowedRowCount(t *testing.T) {
+	body := BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), []StoredNode{{URL: "mark://a/a.md", Status: "ok"}}, nil)
+	body = strings.Replace(body, "| 0 |", "| 999999999999999999999999999999 |", 1)
+	if _, _, err := ParseExportStrict(body); err == nil || !strings.Contains(err.Error(), "link count") {
+		t.Fatalf("overflow error = %v", err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
@@ -438,9 +439,14 @@ func TestCrawlerHashesGraphExportWithoutRecrawlingIt(t *testing.T) {
 	cfg.Seeds = []string{"mark://content"}
 
 	client := newMockClient()
-	client.addList("content:6309", "/", "- [index.md](index.md)\n- [graph.md](graph.md)\n")
+	client.addListPage("content:6309", "/", "", "- [graph/](graph/)\n- [graph.md](graph.md)\n- [index.md](index.md)\n", true, "")
+	client.addList("content:6309", "/graph/", "- [manifest.md](manifest.md)\n- [shards/](shards/)\n")
+	client.addList("content:6309", "/graph/shards/", "- [a/](a/)\n")
+	client.addList("content:6309", "/graph/shards/a/", "- [nodes-000.md](nodes-000.md)\n")
 	client.addDoc("content:6309", "/index.md", "# Content", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	client.addDoc("content:6309", "/graph.md", "# Document Graph\n\n[projected](mark://projected/index.md)", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	client.addDoc("content:6309", "/graph/manifest.md", "# Graph Snapshot Manifest\n\n[projected](mark://projected/manifest.md)", "sha256-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	client.addDoc("content:6309", "/graph/shards/a/nodes-000.md", "# Graph Snapshot Shard\n\n[projected](mark://projected/shard.md)", "sha256-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 	client.addList("projected:6309", "/", "- [index.md](index.md)\n")
 	client.addDoc("projected:6309", "/index.md", "# Projected", "sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 
@@ -449,12 +455,23 @@ func TestCrawlerHashesGraphExportWithoutRecrawlingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
-	if result.ServersDiscovered != 1 || result.DocumentsCrawled != 2 || result.HashesCollected != 2 {
+	if result.ServersDiscovered != 1 || result.DocumentsCrawled != 4 || result.HashesCollected != 4 {
 		t.Fatalf("result = %+v, want graph hashed without projected server crawl", result)
 	}
 	graph := crawler.GraphExport()
-	if strings.Contains(graph, "/graph.md") || strings.Contains(graph, "mark://projected") {
+	if strings.Contains(graph, "/graph.md") || strings.Contains(graph, "/graph/") || strings.Contains(graph, "mark://projected") {
 		t.Errorf("generated graph export leaked into accumulated graph:\n%s", graph)
+	}
+}
+
+func TestGeneratedGraphPathScope(t *testing.T) {
+	for _, docPath := range []string{"/graph.md", "/graph/manifest.md", "/graph/shards/a/nodes-000.md"} {
+		if !isGeneratedGraphPath(docPath) {
+			t.Errorf("generated path %q was not recognized", docPath)
+		}
+	}
+	if isGeneratedGraphPath("/graph/authored.md") {
+		t.Fatal("authored /graph document was treated as generated")
 	}
 }
 
@@ -913,14 +930,67 @@ func TestCrawlerGraphExportAndPublish(t *testing.T) {
 	if n != 1 {
 		t.Errorf("published = %d, want 1", n)
 	}
-	var graphPublished bool
-	for _, call := range client.publishes {
+	manifestAt, legacyAt := -1, -1
+	for i, call := range client.publishes {
+		if call.Host == "hub.example.com:6309" && call.Path == graphstore.SnapshotManifestPath {
+			manifestAt = i
+		}
 		if call.Host == "hub.example.com:6309" && call.Path == "/graph.md" {
-			graphPublished = true
+			legacyAt = i
 		}
 	}
-	if !graphPublished {
-		t.Errorf("no /graph.md publish to the hub: %+v", client.publishes)
+	if manifestAt < 1 || legacyAt <= manifestAt {
+		t.Errorf("graph publish order manifest=%d legacy=%d calls=%+v", manifestAt, legacyAt, client.publishes)
+	}
+}
+
+func TestPublishGraphToHubsAttemptsSnapshotAndLegacyIndependently(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		failPath string
+		wantPath string
+	}{
+		{name: "snapshot failure still publishes legacy", failPath: graphstore.SnapshotManifestPath, wantPath: "/graph.md"},
+		{name: "legacy failure keeps snapshot", failPath: "/graph.md", wantPath: graphstore.SnapshotManifestPath},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Seeds = []string{"mark://content.example.com"}
+			cfg.Hubs = []string{"mark://hub.example.com"}
+			client := newMockClient()
+			client.addList("content.example.com:6309", "/", "")
+			client.publishStatuses["hub.example.com:6309"+test.failPath] = protocol.StatusServerError
+			crawler := NewCrawler(cfg, client, nil, nil)
+			if _, err := crawler.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			count, err := crawler.PublishGraphToHubs(context.Background(), client)
+			if err == nil || count != 1 {
+				t.Fatalf("count=%d err=%v, want one partial publication and error", count, err)
+			}
+			published := false
+			for _, call := range client.publishes {
+				if call.Path == test.wantPath {
+					published = true
+				}
+			}
+			if !published {
+				t.Fatalf("successful counterpart %s was not attempted", test.wantPath)
+			}
+		})
+	}
+}
+
+func TestPublishGraphToHubsRequiresCompleteGeneration(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Hubs = []string{"mark://hub.example.com"}
+	client := newMockClient()
+	crawler := NewCrawler(cfg, client, nil, nil)
+	if _, err := crawler.PublishGraphToHubs(t.Context(), client); err == nil {
+		t.Fatal("published graph before a complete crawl")
+	}
+	if len(client.publishes) != 0 {
+		t.Fatalf("publishes = %d before complete crawl", len(client.publishes))
 	}
 }
 
@@ -1020,7 +1090,7 @@ func TestPublishRetentionMeta(t *testing.T) {
 			t.Fatal("expected publishes")
 		}
 		for _, call := range client.publishes {
-			isShard := strings.Contains(call.Path, ".shards/")
+			isShard := strings.Contains(call.Path, ".shards/") || strings.Contains(call.Path, "/graph/shards/")
 			if !isShard && call.Meta["retention"] != "20" {
 				t.Errorf("publish %s%s meta.retention = %q, want %q", call.Host, call.Path, call.Meta["retention"], "20")
 			}

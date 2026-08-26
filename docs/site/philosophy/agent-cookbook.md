@@ -124,19 +124,19 @@ Maintains integrity and auditability.
 **Goal:** Share your crawled graph so other agents can discover the topology without recrawling.
 
 **Workflow:**
-1. Agent crawls a server or set of servers using `mark_graph` to build the local graph store.
-2. Agent publishes the graph using `mark_graph_publish` to a target server (e.g. `/graphs/my-graph.md`).
-3. Another agent fetches the published graph document with `mark_fetch`.
-4. The second agent runs `mark_graph` on the published graph document — the crawler follows all `mark://` links in the node table, reconstructing the topology without re-fetching every original document.
+1. The federation agent crawls its configured servers and publishes with `-publish-graph`.
+2. It commits an atomic `/graph/manifest.md` snapshot and then updates `/graph.md` for legacy readers.
+3. Another snapshot-aware MCP client or broker fetches and verifies the manifest's version-pinned shards.
+4. The client imports the complete generation into its graph store without re-fetching every original document.
 
 **Multi-agent variant:**
 - Agent A publishes its graph from crawling `mark://server-a.com`
 - Agent B publishes its graph from crawling `mark://server-b.com`
-- Agent C fetches both published graphs and crawls them — instantly inheriting both topologies
+- Agent C imports both verified snapshots, inheriting both topologies
 - Each agent's graph is versioned, so you can track how the network evolves
 
 **Why it works:**
-The exported graph is plain markdown with `mark://` links. The same link extraction the crawler already uses parses the graph document naturally. No special import format, no coordination protocol — just documents linking to documents.
+The manifest is an ordinary Mark document and each shard is immutable content pinned by version and hash. No server-side graph service is required; clients verify and import the snapshot using normal FETCH responses.
 
 ---
 

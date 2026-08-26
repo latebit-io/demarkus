@@ -61,7 +61,7 @@ Everything else is generated: the owner password, all Authelia secrets, the brok
 | Library | `demarkus-library` | loopback :8090 | reading room + cataloging desk (browser editing) |
 | Authelia | `demarkus-auth` | loopback :9091 | self-hosted OIDC provider |
 | Caddy | `caddy` | :80/:443 (public) | automatic HTTPS, routes the three subdomains |
-| Indexing agent | `demarkus-agent` | outbound | crawls the world, republishes `/graph.md` every 6h |
+| Indexing agent | `demarkus-agent` | outbound | crawls the world, publishes `/graph/manifest.md` snapshots and compatible `/graph.md` every 6h |
 | Soul cert sync | `demarkus-soul-certsync.timer` | — | copies Caddy's `soul.<host>` cert to the world every 12h (renewal) |
 
 Every service is a hardened systemd unit (`ProtectSystem=strict`, minimal `ReadWritePaths`, its own system user). No container runtime is installed; every component is a native binary.

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +26,39 @@ func hubGraphBody() string {
 	g.AddEdgeInfo(graph.Edge{From: "mark://host:6309/a.md", To: "mark://host:6309/b.md", Label: "B", Count: 1})
 	src.Merge(g, nil)
 	return src.Export()
+}
+
+func hubSnapshot(t *testing.T) (protocol.Response, map[string]protocol.Response) { //nolint:gocritic // fixture returns manifest and shard set
+	t.Helper()
+	exported := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	nodes := []graphstore.StoredNode{
+		{URL: "mark://host:6309/a.md", Title: "Page A", Status: "ok", LinkCount: 1},
+		{URL: "mark://host:6309/b.md", Title: "Page B", Status: "ok"},
+	}
+	edges := []graphstore.StoredEdge{{From: "mark://host:6309/a.md", To: "mark://host:6309/b.md", Label: "B", Count: 1}}
+	artifacts, err := graphstore.BuildSnapshotShards(graphstore.SnapshotManifestPath, graphstore.SnapshotSlotA, nodes, edges, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]graphstore.SnapshotShardRef, len(artifacts))
+	shards := make(map[string]protocol.Response, len(artifacts))
+	for i, artifact := range artifacts {
+		refs[i] = artifact.Ref(i + 1)
+		shards[graphstore.SnapshotVersionPath(artifact.Path, i+1)] = protocol.Response{
+			Status: protocol.StatusOK, Body: artifact.Body,
+			Metadata: map[string]string{"version": strconv.Itoa(i + 1), "content-hash": artifact.ContentHash},
+		}
+	}
+	manifest, err := graphstore.BuildSnapshotManifest(graphstore.SnapshotManifestPath, graphstore.SnapshotManifest{
+		Exported: exported, Complete: true, Nodes: len(nodes), Edges: len(edges),
+		ActiveSlot: graphstore.SnapshotSlotA, Shards: refs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return protocol.Response{Status: protocol.StatusOK, Body: manifest, Metadata: map[string]string{
+		"etag": "snapshot-etag-1", "content-hash": graphstore.SnapshotBodyHash(manifest),
+	}}, shards
 }
 
 func emptyGraphStore(t *testing.T) *graphstore.Store {
@@ -74,6 +109,81 @@ func TestSeedGraph_ColdStoreAnswersBacklinks(t *testing.T) {
 	}
 	if got := h.graphStore.SeedEtag("host:6309"); got != "hub-etag-1" {
 		t.Errorf("SeedEtag = %q, want hub-etag-1", got)
+	}
+}
+
+func TestSeedGraph_EmptyLegacyGenerationClearsSeed(t *testing.T) {
+	store := emptyGraphStore(t)
+	store.ReplaceSeed("host:6309",
+		[]graphstore.StoredNode{{URL: "mark://host/source.md", Status: "ok"}},
+		[]graphstore.StoredEdge{{From: "mark://host/source.md", To: "mark://host/old.md", Count: 1}},
+	)
+	sc := &stubClient{fetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK,
+			Body:   graphstore.BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil, nil),
+		}}, nil
+	}}
+	h := &handler{client: sc, graphStore: store}
+	h.seedGraph(t.Context(), "host:6309")
+	if got := store.Backlinks("mark://host/old.md"); len(got) != 0 {
+		t.Fatalf("stale backlink survived empty legacy generation: %v", got)
+	}
+	if node := store.GetNode("mark://host/source.md"); node != nil {
+		t.Fatalf("stale node survived empty legacy generation: %+v", node)
+	}
+}
+
+func TestSeedGraph_PrefersAtomicSnapshot(t *testing.T) {
+	manifest, shards := hubSnapshot(t)
+	sc := &stubClient{
+		snapshotFn: func(_, path, _, _ string) (fetch.Result, error) {
+			if path != graphstore.SnapshotManifestPath {
+				t.Fatalf("snapshot path = %q", path)
+			}
+			return fetch.Result{Response: manifest}, nil
+		},
+		fetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+			t.Fatal("legacy graph should not be fetched when snapshot exists")
+			return fetch.Result{}, nil
+		},
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			return fetch.Result{Response: shards[path]}, nil
+		},
+	}
+	h := &handler{client: sc, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
+	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
+	if err != nil || res.IsError {
+		t.Fatalf("markBacklinks err=%v result=%+v", err, res)
+	}
+	if text := resultText(t, res); !strings.Contains(text, "Page A") {
+		t.Fatalf("snapshot backlink missing: %s", text)
+	}
+	if got := h.graphStore.SeedEtag("host:6309"); got != "snapshot-etag-1" {
+		t.Fatalf("seed etag = %q", got)
+	}
+}
+
+func TestSeedGraph_SnapshotShardFetchHonorsCancellation(t *testing.T) {
+	manifest, shards := hubSnapshot(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	sc := &stubClient{
+		snapshotFn: func(_, _, _, _ string) (fetch.Result, error) {
+			cancel()
+			return fetch.Result{Response: manifest}, nil
+		},
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			return fetch.Result{Response: shards[path]}, nil
+		},
+	}
+	h := &handler{client: sc, graphStore: emptyGraphStore(t)}
+	h.seedGraph(ctx, "host:6309")
+	if got := h.graphStore.NodeCount(); got != 0 {
+		t.Fatalf("NodeCount = %d after canceled shard fetch", got)
+	}
+	h.seedGraph(t.Context(), "host:6309")
+	if got := h.graphStore.NodeCount(); got != 2 {
+		t.Fatalf("NodeCount = %d after retry, want 2", got)
 	}
 }
 
@@ -210,6 +320,42 @@ func TestSeedGraph_ThrottledWithinWindow(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("seed fetches = %d, want 1 (throttled)", calls)
 	}
+}
+
+func TestSeedGraph_RefreshIsSingleFlight(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	sc := &stubClient{fetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}}
+	h := &handler{client: sc, graphStore: emptyGraphStore(t)}
+	done := make(chan struct{})
+	go func() {
+		h.seedGraph(t.Context(), "host:6309")
+		close(done)
+	}()
+	<-started
+	follower := make(chan struct{})
+	go func() {
+		h.seedGraph(t.Context(), "host:6309")
+		close(follower)
+	}()
+	select {
+	case <-follower:
+		t.Fatal("follower returned before active refresh completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("concurrent seed fetches = %d, want 1", got)
+	}
+	close(release)
+	<-done
+	<-follower
 }
 
 func TestSeedGraph_EtagRoundTrip(t *testing.T) {

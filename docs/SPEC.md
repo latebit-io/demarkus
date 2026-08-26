@@ -975,6 +975,18 @@ Publishers require read access and publish access to both the manifest path and 
 - Version-pinned shards are immutable inputs to a manifest generation. Publishers MUST NOT apply retention that can prune a shard version while a reachable manifest references it.
 - Manifest retention does not imply shard retention. Shards remain unpruned until a reference-aware collector can prove no retained manifest version names them. A fixed shard window is unsafe because failed or concurrent staging can advance shard versions without advancing manifest history.
 
+### 12.2 Atomic Graph Snapshots
+
+Federation agents publish a strict graph snapshot at `/graph/manifest.md` alongside the legacy `/graph.md` export. The separate path keeps old graph consumers working during migration.
+
+The `demarkus-graph-snapshot/v1` manifest records export time, completeness, total node and edge counts, active slot, and immutable descriptors for `nodes` and `edges` shards. Shards use `demarkus-graph-snapshot-shard/v1`, contain a fenced JSON payload, and live under `/graph/shards/{a|b}/<kind>-<part>.md`.
+
+Publishers stage and verify the inactive slot before compare-and-swapping the manifest. Readers fetch every shard through its version path and verify version, byte count, content hash, kind, part, and aggregate counts before applying any rows. A failed fetch or integrity check leaves the previous local graph state and seed etag unchanged.
+
+Snapshot-aware readers prefer `/graph/manifest.md` and fall back to `/graph.md` only when the manifest is `not-found`. Federation agents publish the snapshot first and the legacy export second. Generated graph documents under `/graph/` are hash-indexed but MUST NOT be interpreted as authored discovery links.
+
+Manifest retention does not permit shard retention while a retained manifest can reference an older shard version. The same reference-aware collection requirement as hash-index shards applies.
+
 ## 13. Future Extensions
 
 The following features are planned but not part of this specification:

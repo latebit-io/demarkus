@@ -121,6 +121,13 @@ func (f *fakeDispatcher) FetchConditional(worldName, path, token, etag string) (
 	return fn(worldName, path, token, etag)
 }
 
+func (f *fakeDispatcher) FetchConditionalContext(ctx context.Context, worldName, path, token, etag string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return f.FetchConditional(worldName, path, token, etag)
+}
+
 func (f *fakeDispatcher) List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error) {
 	f.mu.Lock()
 	f.listCalls = append(f.listCalls, dispatchCall{worldName, path, token})
