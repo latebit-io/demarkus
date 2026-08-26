@@ -356,43 +356,75 @@ func buildSnapshotEdgeShards(manifestPath, slot string, edges []StoredEdge, targ
 }
 
 func largestSnapshotNodeShard(manifestPath, slot string, nodes []StoredNode, start, part, target int) (int, SnapshotArtifact, error) {
-	bestEnd := 0
-	var best SnapshotArtifact
-	for low, high := start+1, len(nodes); low <= high; {
+	bestEnd := start + 1
+	best, err := buildSnapshotArtifact(manifestPath, slot, snapshotShardKindNodes, part, nodes[start:bestEnd], nil)
+	if err != nil {
+		return 0, SnapshotArtifact{}, err
+	}
+	if best.Bytes > target {
+		return 0, SnapshotArtifact{}, fmt.Errorf("one graph node exceeds shard target %d", target)
+	}
+	high := bestEnd
+	for bestEnd < len(nodes) {
+		probeEnd := min(start+2*(bestEnd-start), len(nodes))
+		artifact, buildErr := buildSnapshotArtifact(manifestPath, slot, snapshotShardKindNodes, part, nodes[start:probeEnd], nil)
+		if buildErr != nil {
+			return 0, SnapshotArtifact{}, buildErr
+		}
+		if artifact.Bytes > target {
+			high = probeEnd - 1
+			break
+		}
+		bestEnd, best = probeEnd, artifact
+	}
+	for low := bestEnd + 1; low <= high; {
 		mid := low + (high-low)/2
-		artifact, err := buildSnapshotArtifact(manifestPath, slot, snapshotShardKindNodes, part, nodes[start:mid], nil)
-		if err != nil {
-			return 0, SnapshotArtifact{}, err
+		artifact, buildErr := buildSnapshotArtifact(manifestPath, slot, snapshotShardKindNodes, part, nodes[start:mid], nil)
+		if buildErr != nil {
+			return 0, SnapshotArtifact{}, buildErr
 		}
 		if artifact.Bytes <= target {
 			bestEnd, best, low = mid, artifact, mid+1
 		} else {
 			high = mid - 1
 		}
-	}
-	if bestEnd == 0 {
-		return 0, SnapshotArtifact{}, fmt.Errorf("one graph node exceeds shard target %d", target)
 	}
 	return bestEnd, best, nil
 }
 
 func largestSnapshotEdgeShard(manifestPath, slot string, edges []StoredEdge, start, part, target int) (int, SnapshotArtifact, error) {
-	bestEnd := 0
-	var best SnapshotArtifact
-	for low, high := start+1, len(edges); low <= high; {
+	bestEnd := start + 1
+	best, err := buildSnapshotArtifact(manifestPath, slot, snapshotShardKindEdges, part, nil, edges[start:bestEnd])
+	if err != nil {
+		return 0, SnapshotArtifact{}, err
+	}
+	if best.Bytes > target {
+		return 0, SnapshotArtifact{}, fmt.Errorf("one graph edge exceeds shard target %d", target)
+	}
+	high := bestEnd
+	for bestEnd < len(edges) {
+		probeEnd := min(start+2*(bestEnd-start), len(edges))
+		artifact, buildErr := buildSnapshotArtifact(manifestPath, slot, snapshotShardKindEdges, part, nil, edges[start:probeEnd])
+		if buildErr != nil {
+			return 0, SnapshotArtifact{}, buildErr
+		}
+		if artifact.Bytes > target {
+			high = probeEnd - 1
+			break
+		}
+		bestEnd, best = probeEnd, artifact
+	}
+	for low := bestEnd + 1; low <= high; {
 		mid := low + (high-low)/2
-		artifact, err := buildSnapshotArtifact(manifestPath, slot, snapshotShardKindEdges, part, nil, edges[start:mid])
-		if err != nil {
-			return 0, SnapshotArtifact{}, err
+		artifact, buildErr := buildSnapshotArtifact(manifestPath, slot, snapshotShardKindEdges, part, nil, edges[start:mid])
+		if buildErr != nil {
+			return 0, SnapshotArtifact{}, buildErr
 		}
 		if artifact.Bytes <= target {
 			bestEnd, best, low = mid, artifact, mid+1
 		} else {
 			high = mid - 1
 		}
-	}
-	if bestEnd == 0 {
-		return 0, SnapshotArtifact{}, fmt.Errorf("one graph edge exceeds shard target %d", target)
 	}
 	return bestEnd, best, nil
 }
@@ -436,7 +468,10 @@ func verifySnapshotShard(ref SnapshotShardRef, response protocol.Response) ([]St
 		return nil, nil, fmt.Errorf("graph shard %s returned %s", ref.Path, response.Status)
 	}
 	version, err := snapshotPositive("version", response.Metadata["version"])
-	if err != nil || version != ref.Version {
+	if err != nil {
+		return nil, nil, fmt.Errorf("graph shard %s: %w", ref.Path, err)
+	}
+	if version != ref.Version {
 		return nil, nil, fmt.Errorf("graph shard %s version mismatch", ref.Path)
 	}
 	if len(response.Body) != ref.Bytes || SnapshotBodyHash(response.Body) != ref.ContentHash || response.Metadata["content-hash"] != ref.ContentHash {
@@ -582,11 +617,16 @@ func snapshotVersionSuffix(docPath string) bool {
 }
 
 func snapshotShardPath(manifestPath, slot, kind string, part int) string {
+	return fmt.Sprintf("%s/%s/%s-%03d.md", SnapshotShardRoot(manifestPath), slot, kind, part)
+}
+
+// SnapshotShardRoot returns the generated shard directory for a manifest.
+func SnapshotShardRoot(manifestPath string) string {
 	root := strings.TrimSuffix(manifestPath, ".md") + ".shards"
 	if path.Base(manifestPath) == "manifest.md" {
 		root = path.Join(path.Dir(manifestPath), "shards")
 	}
-	return fmt.Sprintf("%s/%s/%s-%03d.md", root, slot, kind, part)
+	return root
 }
 
 func parseSnapshotDocument(body, title string) (metadata map[string]string, table string, err error) {

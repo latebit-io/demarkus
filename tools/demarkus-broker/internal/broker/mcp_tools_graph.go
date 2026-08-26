@@ -171,6 +171,7 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, worldName string) {
 		return
 	}
 	if result.Response.Status != protocol.StatusNotFound {
+		g.log.Warn("graph snapshot fetch returned unexpected status", "world", worldName, "status", result.Response.Status)
 		return
 	}
 
@@ -188,6 +189,7 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, worldName string) {
 		return
 	}
 	if result.Response.Status != protocol.StatusOK {
+		g.log.Warn("legacy graph seed fetch returned unexpected status", "world", worldName, "status", result.Response.Status)
 		return
 	}
 	nodes, edges, parseErr := graphstore.ParseExportStrict(result.Response.Body)

@@ -41,6 +41,7 @@ type StoredNode struct {
 	LinkCount int       `json:"link_count"`
 	Etag      string    `json:"etag,omitempty"`
 	CrawledAt time.Time `json:"crawled_at"`
+	Seeded    bool      `json:"seeded,omitempty"`
 }
 
 // StoredEdge is a directed link between two document URLs.
@@ -81,6 +82,7 @@ type seedGraphData struct {
 type Store struct {
 	path       string
 	mu         sync.RWMutex
+	saveMu     sync.Mutex
 	nodes      map[string]*StoredNode
 	edges      []StoredEdge
 	edgeIdx    map[edgeKey]int
@@ -150,6 +152,9 @@ func Load(path string) (*Store, error) {
 	for i := range doc.Nodes {
 		n := doc.Nodes[i]
 		n.URL = links.CanonicalURL(n.URL)
+		if n.CrawledAt.IsZero() {
+			n.Seeded = true
+		}
 		if prev := s.nodes[n.URL]; prev != nil && prev.CrawledAt.After(n.CrawledAt) {
 			continue
 		}
@@ -171,6 +176,7 @@ func Load(path string) (*Store, error) {
 			seeded.Nodes[i].URL = links.CanonicalURL(seeded.Nodes[i].URL)
 			seeded.Nodes[i].CrawledAt = time.Time{}
 			seeded.Nodes[i].Etag = ""
+			seeded.Nodes[i].Seeded = true
 		}
 		for i := range seeded.Edges {
 			seeded.Edges[i].From = links.CanonicalURL(seeded.Edges[i].From)
@@ -187,13 +193,8 @@ func Load(path string) (*Store, error) {
 	return s, nil
 }
 
-// Save writes the graph store to disk atomically (write tmp, rename).
-// When s.path is empty (in-memory store from New()) this is a
-// no-op so callers can treat persistence as transparent and rely
-// on the New()-constructed store for ephemeral use cases.
-// NOTE: holds RLock across marshal + disk I/O. Fine while Save is only called
-// from CrawlAndPersist (infrequent, user-triggered). If concurrent or periodic
-// saves are added, snapshot state under lock and write outside it.
+// Save atomically persists one store snapshot through a serialized temp path.
+// In-memory stores from New are a no-op.
 func (s *Store) Save() error {
 	if s.path == "" {
 		// In-memory store; nothing to persist. CrawlAndPersist
@@ -201,6 +202,8 @@ func (s *Store) Save() error {
 		// load-bearing part of the New() contract.
 		return nil
 	}
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -338,25 +341,18 @@ func observedStatus(status string) bool {
 	return status != "" && status != "external" && status != "error"
 }
 
-// authoritativeLocked reports whether the stored node for url reflects a real
-// local crawl: a genuinely fetched status and a non-zero CrawledAt. Seeded
-// nodes carry zero CrawledAt, the durable "not locally observed" marker.
-// Caller must hold s.mu.
+// authoritativeLocked reports whether url has a successfully fetched local row.
+// Seeded distinguishes seed overlays that retain a local encounter timestamp.
 func (s *Store) authoritativeLocked(url string) bool {
 	n := s.nodes[url]
 	if n == nil {
 		return false
 	}
-	return observedStatus(n.Status) && !n.CrawledAt.IsZero()
+	return !n.Seeded && observedStatus(n.Status) && !n.CrawledAt.IsZero()
 }
 
-// SeedFromExport merges a published /graph.md aggregate (as parsed by
-// ParseExport) into the store. Local wins: nodes and edges of a locally
-// authoritative source are never touched. Seeded nodes get zero CrawledAt so
-// a later local crawl flips them authoritative through Merge. For every
-// non-authoritative source in the seed, the stored outgoing edge set is
-// replaced, so stale rows from an earlier seed do not linger. Returns the
-// number of nodes seeded.
+// SeedFromExport replaces the default owner's graph while fetched local rows win.
+// A later successful local crawl supersedes seed provenance. Returns nodes seeded.
 func (s *Store) SeedFromExport(nodes []StoredNode, edges []StoredEdge) int {
 	return s.ReplaceSeed("", nodes, edges)
 }
@@ -375,6 +371,7 @@ func (s *Store) ReplaceSeed(owner string, nodes []StoredNode, edges []StoredEdge
 		seeded.Nodes[i].URL = links.CanonicalURL(seeded.Nodes[i].URL)
 		seeded.Nodes[i].CrawledAt = time.Time{}
 		seeded.Nodes[i].Etag = ""
+		seeded.Nodes[i].Seeded = true
 	}
 	for i := range seeded.Edges {
 		seeded.Edges[i].From = links.CanonicalURL(seeded.Edges[i].From)
@@ -435,8 +432,11 @@ func (s *Store) rebuildSeedsLocked() {
 		seeded := s.seedGraphs[owner]
 		for i := range seeded.Nodes {
 			node := seeded.Nodes[i]
-			if local := localNodes[node.URL]; local != nil && observedStatus(local.Status) {
-				continue
+			if local := localNodes[node.URL]; local != nil {
+				if !local.Seeded && observedStatus(local.Status) {
+					continue
+				}
+				node.CrawledAt = local.CrawledAt
 			}
 			nodeCopy := node
 			s.nodes[node.URL] = &nodeCopy

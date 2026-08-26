@@ -39,27 +39,15 @@ func (s *Store) Snapshot() ([]StoredNode, []StoredEdge) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Sort nodes by URL for stable output.
 	nodes := make([]StoredNode, 0, len(s.nodes))
 	for _, n := range s.nodes {
 		nodes = append(nodes, *n)
 	}
-	sort.Slice(nodes, func(i, j int) bool {
-		return nodes[i].URL < nodes[j].URL
-	})
+	sort.Slice(nodes, func(i, j int) bool { return lessStoredNode(&nodes[i], &nodes[j]) })
 
-	// Sort edges by From, then To.
 	edges := make([]StoredEdge, len(s.edges))
 	copy(edges, s.edges)
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].From != edges[j].From {
-			return edges[i].From < edges[j].From
-		}
-		if edges[i].To != edges[j].To {
-			return edges[i].To < edges[j].To
-		}
-		return edges[i].Rel < edges[j].Rel
-	})
+	sort.Slice(edges, func(i, j int) bool { return lessStoredEdge(&edges[i], &edges[j]) })
 	return nodes, edges
 }
 
@@ -67,16 +55,8 @@ func (s *Store) Snapshot() ([]StoredNode, []StoredEdge) {
 func BuildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) string {
 	nodes = append([]StoredNode(nil), nodes...)
 	edges = append([]StoredEdge(nil), edges...)
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].URL < nodes[j].URL })
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].From != edges[j].From {
-			return edges[i].From < edges[j].From
-		}
-		if edges[i].To != edges[j].To {
-			return edges[i].To < edges[j].To
-		}
-		return edges[i].Rel < edges[j].Rel
-	})
+	sort.Slice(nodes, func(i, j int) bool { return lessStoredNode(&nodes[i], &nodes[j]) })
+	sort.Slice(edges, func(i, j int) bool { return lessStoredEdge(&edges[i], &edges[j]) })
 	var b strings.Builder
 	b.WriteString("# Document Graph\n\n")
 	b.WriteString(fmt.Sprintf("> Exported: %s\n", exported.UTC().Format(time.RFC3339)))
@@ -103,6 +83,20 @@ func BuildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) str
 	}
 
 	return b.String()
+}
+
+func lessStoredNode(a, b *StoredNode) bool {
+	return a.URL < b.URL
+}
+
+func lessStoredEdge(a, b *StoredEdge) bool {
+	if a.From != b.From {
+		return a.From < b.From
+	}
+	if a.To != b.To {
+		return a.To < b.To
+	}
+	return a.Rel < b.Rel
 }
 
 // escapeCell escapes characters that would break markdown table formatting.
@@ -344,25 +338,29 @@ func validateExportTables(body string, requireEdges bool) error { //nolint:gocyc
 			}
 			continue
 		}
-		if section == "nodes" && nodeRowRe.FindStringSubmatch(trimmed) == nil {
-			return fmt.Errorf("invalid graph node row %q", trimmed)
-		}
 		if section == "nodes" {
 			match := nodeRowRe.FindStringSubmatch(trimmed)
+			if match == nil {
+				return fmt.Errorf("invalid graph node row %q", trimmed)
+			}
 			if _, err := strconv.Atoi(match[4]); err != nil {
 				return fmt.Errorf("invalid graph node link count %q", match[4])
 			}
+			continue
 		}
-		if section == "edges" && ((edgeColumns == 6 && edgeRowRe.FindStringSubmatch(trimmed) == nil) ||
-			(edgeColumns == 2 && legacyEdgeRowRe.FindStringSubmatch(trimmed) == nil)) {
+		if edgeColumns == 2 {
+			if legacyEdgeRowRe.FindStringSubmatch(trimmed) == nil {
+				return fmt.Errorf("invalid graph edge row %q", trimmed)
+			}
+			continue
+		}
+		match := edgeRowRe.FindStringSubmatch(trimmed)
+		if match == nil {
 			return fmt.Errorf("invalid graph edge row %q", trimmed)
 		}
-		if section == "edges" && edgeColumns == 6 {
-			match := edgeRowRe.FindStringSubmatch(trimmed)
-			count, err := strconv.Atoi(match[6])
-			if err != nil || count < 1 {
-				return fmt.Errorf("invalid graph edge count %q", match[6])
-			}
+		count, err := strconv.Atoi(match[6])
+		if err != nil || count < 1 {
+			return fmt.Errorf("invalid graph edge count %q", match[6])
 		}
 	}
 	if section != "" && rowIndex < 2 {

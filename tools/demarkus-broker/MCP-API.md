@@ -282,22 +282,24 @@ writers before publishing v2 at an existing legacy path.
 > persistence is parked for the post-broker design window.
 >
 > To make restarts cheap (not durable), the store is **seeded on
-> demand from the worlds' published `/graph.md`**: any
+> demand from the worlds' published graph**: any
 > `mark_backlinks` / `mark_graph` / `mark_explore` call checks every
-> configured world for a `/graph.md` aggregate (the hub is the one
-> that has it; conditional on the last seen etag, throttled to one
-> check per world per 5 minutes) and merges it into the store, so
-> cold pods answer backlinks without a crawl. Seed rows keyed by a configured world's internal dial address
+> configured world for `/graph/manifest.md`, loading its complete,
+> version-pinned shards when present and falling back to `/graph.md`
+> only when the manifest is `not-found`. Checks use the last seen etag,
+> run at most once per world per 5 minutes, and merge successful loads
+> into the store so cold pods answer backlinks without a crawl. Seed rows
+> keyed by a configured world's internal dial address
 > (the form the federation agent publishes) are translated to
 > `mark://{worldName}/...` so they answer world-name queries. Locally
 > crawled data always takes precedence over seeded rows, and a world
-> without `/graph.md` degrades to the unseeded behavior.
+> without either graph form degrades to the unseeded behavior.
 
 #### `mark_backlinks`
 
 Look up which documents link to a given URL, using the broker's
 graph store. Returns results from previous `mark_graph` runs and
-the world's published `/graph.md` seed; returns an empty hint if
+the world's published graph seed; returns an empty hint if
 neither has populated the relevant edges.
 Each backlink carries its provenance (link label, source section
 anchor, occurrence count) and typed relations like `[supersedes]`.

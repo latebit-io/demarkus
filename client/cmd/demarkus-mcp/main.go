@@ -226,6 +226,7 @@ func (h *handler) seedGraph(ctx context.Context, host string) { //nolint:gocyclo
 		return
 	}
 	if result.Response.Status != protocol.StatusNotFound {
+		log.Printf("warning: graph snapshot mark://%s%s returned %s", host, graphstore.SnapshotManifestPath, result.Response.Status)
 		return
 	}
 
@@ -244,6 +245,7 @@ func (h *handler) seedGraph(ctx context.Context, host string) { //nolint:gocyclo
 		return
 	}
 	if result.Response.Status != protocol.StatusOK {
+		log.Printf("warning: legacy graph seed mark://%s%s returned %s", host, legacyPath, result.Response.Status)
 		return
 	}
 	nodes, edges, parseErr := graphstore.ParseExportStrict(result.Response.Body)

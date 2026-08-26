@@ -838,8 +838,12 @@ func TestSeedFromExportOverwritesNonAuthoritative(t *testing.T) {
 	if n.Status != "ok" || n.Title != "A" {
 		t.Errorf("node = %+v, want seeded ok/A", n)
 	}
-	if !n.CrawledAt.IsZero() {
-		t.Error("seeded copy must carry zero CrawledAt")
+	if n.CrawledAt.IsZero() || !n.Seeded {
+		t.Fatalf("seeded copy lost local marker: %+v", n)
+	}
+	s.SeedFromExport(nil, nil)
+	if n := s.GetNode("mark://a/a.md"); n == nil || n.CrawledAt.IsZero() {
+		t.Fatalf("omitted seed erased locally observed node: %+v", n)
 	}
 }
 
@@ -856,6 +860,9 @@ func TestSeedThenCrawlFlipsAuthoritative(t *testing.T) {
 	g.AddNode(&graph.Node{URL: "mark://a/a.md", Title: "A", Status: "ok", LinkCount: 1})
 	g.AddEdgeInfo(graph.Edge{From: "mark://a/a.md", To: "mark://a/b.md"})
 	s.Merge(g, nil)
+	if node := s.GetNode("mark://a/a.md"); node == nil || node.Seeded {
+		t.Fatalf("local crawl retained seed provenance: %+v", node)
+	}
 
 	if bl := s.Backlinks("mark://a/hub-only.md"); len(bl) != 0 {
 		t.Errorf("stale seeded edge survived local crawl: %v", bl)
@@ -868,6 +875,39 @@ func TestSeedThenCrawlFlipsAuthoritative(t *testing.T) {
 	s.SeedFromExport(nodes, edges)
 	if bl := s.Backlinks("mark://a/hub-only.md"); len(bl) != 0 {
 		t.Errorf("re-seed overwrote authoritative source: %v", bl)
+	}
+}
+
+func TestSeedOverlayProvenanceRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := graph.New()
+	failed.AddNode(&graph.Node{URL: "mark://a/a.md", Status: "error"})
+	store.Merge(failed, nil)
+	store.SeedFromExport([]StoredNode{{URL: "mark://a/a.md", Title: "Seed", Status: "ok"}}, nil)
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node := store.GetNode("mark://a/a.md"); node == nil || !node.Seeded || node.CrawledAt.IsZero() {
+		t.Fatalf("loaded seed overlay = %+v", node)
+	}
+	store.SeedFromExport(nil, nil)
+	if node := store.GetNode("mark://a/a.md"); node == nil || !node.Seeded {
+		t.Fatalf("omitted overlay lost local marker: %+v", node)
+	}
+	fetched := graph.New()
+	fetched.AddNode(&graph.Node{URL: "mark://a/a.md", Title: "Local", Status: "ok"})
+	store.Merge(fetched, nil)
+	store.SeedFromExport([]StoredNode{{URL: "mark://a/a.md", Title: "New Seed", Status: "ok"}}, nil)
+	if node := store.GetNode("mark://a/a.md"); node == nil || node.Seeded || node.Title != "Local" {
+		t.Fatalf("seed replaced fetched local row: %+v", node)
 	}
 }
 
@@ -945,6 +985,31 @@ func TestSeedEtagsRoundTrip(t *testing.T) {
 	}
 	if got := s2.SeedEtag("other:6309"); got != "" {
 		t.Errorf("SeedEtag unknown host = %q, want empty", got)
+	}
+}
+
+func TestConcurrentSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SeedFromExport([]StoredNode{{URL: "mark://a/a.md", Status: "ok"}}, nil)
+	errCh := make(chan error, 20)
+	for range 20 {
+		go func() { errCh <- store.Save() }()
+	}
+	for range 20 {
+		if err := <-errCh; err != nil {
+			t.Errorf("Save: %v", err)
+		}
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node := loaded.GetNode("mark://a/a.md"); node == nil || !node.Seeded {
+		t.Fatalf("saved node = %+v", node)
 	}
 }
 

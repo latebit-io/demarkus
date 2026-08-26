@@ -358,7 +358,8 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 }
 
 func isGeneratedGraphPath(docPath string) bool {
-	return docPath == "/graph.md" || docPath == graphstore.SnapshotManifestPath || strings.HasPrefix(docPath, "/graph/shards/")
+	shardPrefix := graphstore.SnapshotShardRoot(graphstore.SnapshotManifestPath) + "/"
+	return docPath == "/graph.md" || docPath == graphstore.SnapshotManifestPath || strings.HasPrefix(docPath, shardPrefix)
 }
 
 func (s *serverWalk) walkDirectoryPages(ctx context.Context, dirPath string, depth int) error {

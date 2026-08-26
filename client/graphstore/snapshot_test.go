@@ -70,6 +70,12 @@ func TestGraphSnapshotRoundTripAndIntegrity(t *testing.T) {
 	}
 
 	corruptPath := SnapshotVersionPath(refs[0].Path, refs[0].Version)
+	missingVersion := responses[corruptPath]
+	missingVersion.Metadata = maps.Clone(missingVersion.Metadata)
+	delete(missingVersion.Metadata, "version")
+	if _, _, err := verifySnapshotShard(refs[0], missingVersion); err == nil || !strings.Contains(err.Error(), "invalid version") {
+		t.Fatalf("missing version error = %v", err)
+	}
 	corrupt := responses[corruptPath]
 	corrupt.Body += "x"
 	responses[corruptPath] = corrupt
@@ -103,6 +109,9 @@ func TestGraphSnapshotRejectsAliasesAndMalformedGeneratedContent(t *testing.T) {
 }
 
 func TestGraphSnapshotRejectsUnrepresentableManifestValues(t *testing.T) {
+	if got := SnapshotShardRoot(SnapshotManifestPath); got != "/graph/shards" {
+		t.Fatalf("SnapshotShardRoot = %q", got)
+	}
 	if _, err := BuildSnapshotManifest("/graph/man|ifest.md", SnapshotManifest{
 		Exported: time.Now(), Complete: true, ActiveSlot: SnapshotSlotA,
 	}); err == nil {
