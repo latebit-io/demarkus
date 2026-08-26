@@ -287,7 +287,10 @@ func EntriesForHash(manifestPath, body, hash string, fetchShard func(string) (pr
 	if !m.Complete {
 		return nil, errors.New("hash index manifest is incomplete")
 	}
-	prefix, _ := HashPrefix(hash)
+	prefix, err := HashPrefix(hash)
+	if err != nil {
+		return nil, err
+	}
 	var matches []Entry
 	for _, ref := range m.Shards {
 		if ref.Prefix != prefix {

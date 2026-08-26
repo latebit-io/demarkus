@@ -22,6 +22,9 @@ import (
 func TestHandleMarkPublishHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
+		published: map[string]fetch.Result{
+			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "3"}}},
+		},
 		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
@@ -193,6 +196,9 @@ func TestHandleMarkPublishNegativeExpectedVersion(t *testing.T) {
 func TestHandleMarkPublishMergeCleanOutcomeOK(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
+		published: map[string]fetch.Result{
+			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "4"}}},
+		},
 		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,

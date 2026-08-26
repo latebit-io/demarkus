@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -459,6 +461,30 @@ func TestHandleMarkGraphPublishForwardsThroughWriteAuth(t *testing.T) {
 // indexManifestBody builds a minimal agent manifest the dispatcher
 // can return when the test wants to satisfy the manifest check.
 const indexManifestBody = "# Agent Manifest\n\nThis world accepts index publications.\n"
+
+func TestIndexUnauthorizedReconcileDoesNotMaskLaterManifestFailure(t *testing.T) {
+	var shard protocol.Response
+	_, err := index.PublishGeneration(t.Context(), index.PublishOptions{
+		ManifestPath: "/index.md", Source: "mark://team-a", Indexed: time.Now(),
+		Entries: []index.Entry{{Hash: "sha256-" + strings.Repeat("a", 64), Server: "mark://team-a", Path: "/a.md"}},
+	}, func(_ context.Context, path string) (protocol.Response, error) {
+		if strings.Contains(path, ".shards/") && shard.Status != "" {
+			return shard, nil
+		}
+		return protocol.Response{Status: protocol.StatusNotFound}, nil
+	}, func(_ context.Context, path, body string, _ int) (protocol.Response, error) {
+		if strings.Contains(path, ".shards/") {
+			shard = protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: map[string]string{
+				"version": "1", "content-hash": index.BodyHash(body),
+			}}
+			return protocol.Response{Status: protocol.StatusUnauthorized}, errIndexPublishUnauthorized
+		}
+		return protocol.Response{Status: protocol.StatusConflict}, nil
+	})
+	if err == nil || errors.Is(err, errIndexPublishUnauthorized) {
+		t.Fatalf("manifest failure = %v, want non-auth error", err)
+	}
+}
 
 func TestHandleMarkIndexHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()

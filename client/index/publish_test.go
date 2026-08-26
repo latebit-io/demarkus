@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +27,7 @@ func newMemoryIndexRemote() *memoryIndexRemote {
 	return &memoryIndexRemote{docs: make(map[string]protocol.Response), history: make(map[string]map[int]protocol.Response)}
 }
 
-func (r *memoryIndexRemote) fetch(docPath string) (protocol.Response, error) {
+func (r *memoryIndexRemote) fetch(_ context.Context, docPath string) (protocol.Response, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if base, version, ok := splitTestVersionPath(docPath); ok {
@@ -41,7 +42,11 @@ func (r *memoryIndexRemote) fetch(docPath string) (protocol.Response, error) {
 	return protocol.Response{Status: protocol.StatusNotFound}, nil
 }
 
-func (r *memoryIndexRemote) publish(path, body string, expected int) (protocol.Response, error) {
+func (r *memoryIndexRemote) fetchPath(docPath string) (protocol.Response, error) {
+	return r.fetch(context.Background(), docPath)
+}
+
+func (r *memoryIndexRemote) publish(_ context.Context, path, body string, expected int) (protocol.Response, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.failManifest && path == "/index.md" {
@@ -60,14 +65,17 @@ func (r *memoryIndexRemote) publish(path, body string, expected int) (protocol.R
 	if !exists {
 		status = protocol.StatusCreated
 	}
-	r.docs[path] = protocol.Response{
+	stored := protocol.Response{
 		Status: protocol.StatusOK, Body: body,
 		Metadata: map[string]string{"version": strconv.Itoa(version), "content-hash": BodyHash(body)},
 	}
+	r.docs[path] = stored
 	if r.history[path] == nil {
 		r.history[path] = make(map[int]protocol.Response)
 	}
-	r.history[path][version] = r.docs[path]
+	historical := stored
+	historical.Metadata = maps.Clone(stored.Metadata)
+	r.history[path][version] = historical
 	r.publishes = append(r.publishes, path)
 	return protocol.Response{Status: status, Metadata: map[string]string{"version": strconv.Itoa(version)}}, nil
 }
@@ -99,7 +107,7 @@ func TestPublishGenerationCreatesAndVerifiesManifestLast(t *testing.T) {
 	if got := remote.publishes[len(remote.publishes)-1]; got != "/index.md" {
 		t.Fatalf("last publish = %q", got)
 	}
-	if _, err := EntriesForHash("/index.md", remote.docs["/index.md"].Body, testHashA, remote.fetch); err != nil {
+	if _, err := EntriesForHash("/index.md", remote.docs["/index.md"].Body, testHashA, remote.fetchPath); err != nil {
 		t.Fatalf("published generation is unreadable: %v", err)
 	}
 }
@@ -172,10 +180,10 @@ func TestCommittedManifestPinsImmutableShardVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := result.Manifest.Shards[0]
-	if _, err := remote.publish(ref.Path, replacement[0].Body, ref.Version); err != nil {
+	if _, err := remote.publish(t.Context(), ref.Path, replacement[0].Body, ref.Version); err != nil {
 		t.Fatal(err)
 	}
-	matches, err := EntriesForHash("/index.md", result.ManifestBody, testHashA, remote.fetch)
+	matches, err := EntriesForHash("/index.md", result.ManifestBody, testHashA, remote.fetchPath)
 	if err != nil {
 		t.Fatalf("EntriesForHash: %v", err)
 	}
@@ -205,12 +213,18 @@ func TestPublishGenerationHonorsManifestCAS(t *testing.T) {
 
 func TestPublishGenerationRejectsBadVerification(t *testing.T) {
 	remote := newMemoryIndexRemote()
-	publish := func(path, body string, expected int) (protocol.Response, error) {
-		resp, err := remote.publish(path, body, expected)
-		if path != "/index.md" {
-			doc := remote.docs[path]
+	publish := func(ctx context.Context, path, body string, expected int) (protocol.Response, error) {
+		resp, err := remote.publish(ctx, path, body, expected)
+		if err == nil && path != "/index.md" {
+			version, versionErr := strconv.Atoi(resp.Metadata["version"])
+			if versionErr != nil {
+				return protocol.Response{}, versionErr
+			}
+			remote.mu.Lock()
+			doc := remote.history[path][version]
 			doc.Metadata["content-hash"] = fmt.Sprintf("sha256-%064d", 0)
-			remote.docs[path] = doc
+			remote.history[path][version] = doc
+			remote.mu.Unlock()
 		}
 		return resp, err
 	}
@@ -255,11 +269,57 @@ func TestConcurrentPublishersCommitOneCompleteGeneration(t *testing.T) {
 		t.Fatalf("successful publishers = %d, want 1", successes.Load())
 	}
 	manifest := remote.docs["/index.md"]
-	matches, err := EntriesForHash("/index.md", manifest.Body, testHashA, remote.fetch)
+	matches, err := EntriesForHash("/index.md", manifest.Body, testHashA, remote.fetchPath)
 	if err != nil {
 		t.Fatalf("committed generation is unreadable: %v", err)
 	}
 	if len(matches) != 1 || (matches[0].Path != "/writer-a.md" && matches[0].Path != "/writer-b.md") {
 		t.Fatalf("committed matches = %+v", matches)
+	}
+}
+
+func TestPublishGenerationCancelsInFlightFetch(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := PublishGeneration(ctx, PublishOptions{
+			ManifestPath: "/index.md", Source: "aggregated", Indexed: time.Now(),
+		}, func(fetchCtx context.Context, _ string) (protocol.Response, error) {
+			close(started)
+			<-fetchCtx.Done()
+			return protocol.Response{}, fetchCtx.Err()
+		}, func(context.Context, string, string, int) (protocol.Response, error) {
+			return protocol.Response{}, errors.New("publish should not be called")
+		})
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("PublishGeneration error = %v, want context canceled", err)
+	}
+}
+
+func TestPublishGenerationPreservesPublishAndReconcileErrors(t *testing.T) {
+	publishFailure := errors.New("publish transport failed")
+	_, err := PublishGeneration(t.Context(), PublishOptions{
+		ManifestPath: "/index.md", Source: "aggregated", Indexed: time.Now(),
+		Entries: []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}},
+	}, func(_ context.Context, docPath string) (protocol.Response, error) {
+		if docPath == "/index.md" {
+			return protocol.Response{Status: protocol.StatusNotFound}, nil
+		}
+		if strings.Contains(docPath, ".shards/") {
+			return protocol.Response{Status: protocol.StatusOK, Body: "wrong", Metadata: map[string]string{
+				"version": "1", "content-hash": BodyHash("wrong"),
+			}}, nil
+		}
+		return protocol.Response{Status: protocol.StatusNotFound}, nil
+	}, func(context.Context, string, string, int) (protocol.Response, error) {
+		return protocol.Response{}, publishFailure
+	})
+	if !errors.Is(err, publishFailure) || !strings.Contains(err.Error(), "reconcile:") {
+		t.Fatalf("PublishGeneration error = %v", err)
 	}
 }

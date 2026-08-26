@@ -30,18 +30,15 @@ type PublishResult struct {
 }
 
 // FetchDocument fetches one generated index document by absolute path.
-type FetchDocument func(path string) (protocol.Response, error)
+type FetchDocument func(ctx context.Context, path string) (protocol.Response, error)
 
 // PublishDocument publishes one generated document with optimistic concurrency.
-type PublishDocument func(path, body string, expectedVersion int) (protocol.Response, error)
+type PublishDocument func(ctx context.Context, path, body string, expectedVersion int) (protocol.Response, error)
 
 // PublishGeneration stages an inactive shard slot, verifies every shard, then
 // commits the manifest last with CAS. A manifest failure leaves the old slot live.
 func PublishGeneration(ctx context.Context, opts PublishOptions, fetchDocument FetchDocument, publishDocument PublishDocument) (PublishResult, error) { //nolint:gocritic // options are copied so callers cannot mutate an active publication
-	if err := ctx.Err(); err != nil {
-		return PublishResult{}, err
-	}
-	currentVersion, activeSlot, err := fetchCurrentManifest(opts.ManifestPath, fetchDocument)
+	currentVersion, activeSlot, err := fetchCurrentManifest(ctx, opts.ManifestPath, fetchDocument)
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -56,10 +53,7 @@ func PublishGeneration(ctx context.Context, opts PublishOptions, fetchDocument F
 	refs := make([]ShardRef, 0, len(artifacts))
 	result := PublishResult{}
 	for _, artifact := range artifacts {
-		if err := ctx.Err(); err != nil {
-			return PublishResult{}, err
-		}
-		ref, published, err := stageShard(artifact, fetchDocument, publishDocument)
+		ref, published, err := stageShard(ctx, artifact, fetchDocument, publishDocument)
 		if err != nil {
 			return PublishResult{}, err
 		}
@@ -79,10 +73,7 @@ func PublishGeneration(ctx context.Context, opts PublishOptions, fetchDocument F
 	if err != nil {
 		return PublishResult{}, err
 	}
-	if err := ctx.Err(); err != nil {
-		return PublishResult{}, err
-	}
-	verified, manifestVersion, err := publishAndVerify(opts.ManifestPath, manifestBody, currentVersion, fetchDocument, publishDocument)
+	verified, manifestVersion, err := publishAndVerify(ctx, opts.ManifestPath, manifestBody, currentVersion, fetchDocument, publishDocument)
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -96,8 +87,8 @@ func PublishGeneration(ctx context.Context, opts PublishOptions, fetchDocument F
 	return result, nil
 }
 
-func fetchCurrentManifest(manifestPath string, fetchDocument FetchDocument) (version int, activeSlot string, err error) {
-	current, err := fetchDocument(manifestPath)
+func fetchCurrentManifest(ctx context.Context, manifestPath string, fetchDocument FetchDocument) (version int, activeSlot string, err error) {
+	current, err := fetchDocument(ctx, manifestPath)
 	if err != nil {
 		return 0, "", fmt.Errorf("fetch manifest %s: %w", manifestPath, err)
 	}
@@ -135,8 +126,8 @@ func fetchCurrentManifest(manifestPath string, fetchDocument FetchDocument) (ver
 	}
 }
 
-func stageShard(artifact ShardArtifact, fetchDocument FetchDocument, publishDocument PublishDocument) (ShardRef, bool, error) { //nolint:gocritic // immutable publication value
-	current, err := fetchDocument(artifact.Path)
+func stageShard(ctx context.Context, artifact ShardArtifact, fetchDocument FetchDocument, publishDocument PublishDocument) (ShardRef, bool, error) { //nolint:gocritic // immutable publication value
+	current, err := fetchDocument(ctx, artifact.Path)
 	if err != nil {
 		return ShardRef{}, false, fmt.Errorf("fetch shard %s: %w", artifact.Path, err)
 	}
@@ -157,7 +148,7 @@ func stageShard(artifact ShardArtifact, fetchDocument FetchDocument, publishDocu
 		return ShardRef{}, false, fmt.Errorf("fetch shard %s returned %s", artifact.Path, current.Status)
 	}
 
-	verified, version, err := publishAndVerify(artifact.Path, artifact.Body, expectedVersion, fetchDocument, publishDocument)
+	verified, version, err := publishAndVerify(ctx, artifact.Path, artifact.Body, expectedVersion, fetchDocument, publishDocument)
 	if err != nil {
 		return ShardRef{}, false, err
 	}
@@ -168,8 +159,8 @@ func stageShard(artifact ShardArtifact, fetchDocument FetchDocument, publishDocu
 	return ref, true, nil
 }
 
-func publishAndVerify(docPath, body string, expectedVersion int, fetchDocument FetchDocument, publishDocument PublishDocument) (protocol.Response, int, error) {
-	published, publishErr := publishDocument(docPath, body, expectedVersion)
+func publishAndVerify(ctx context.Context, docPath, body string, expectedVersion int, fetchDocument FetchDocument, publishDocument PublishDocument) (protocol.Response, int, error) {
+	published, publishErr := publishDocument(ctx, docPath, body, expectedVersion)
 	if publishErr == nil && published.Status != protocol.StatusOK && published.Status != protocol.StatusCreated {
 		publishErr = fmt.Errorf("publish returned %s", published.Status)
 	}
@@ -178,17 +169,17 @@ func publishAndVerify(docPath, body string, expectedVersion int, fetchDocument F
 		version, publishErr = responseVersion(docPath, published)
 	}
 	if publishErr != nil {
-		current, err := fetchDocument(docPath)
+		current, err := fetchDocument(ctx, docPath)
 		if err != nil {
 			return protocol.Response{}, 0, fmt.Errorf("publish %s: %v; reconcile: %w", docPath, publishErr, err)
 		}
 		version, err = verifyPublishedBody(docPath, body, current)
 		if err != nil {
-			return protocol.Response{}, 0, fmt.Errorf("publish %s: %v", docPath, publishErr)
+			return protocol.Response{}, 0, fmt.Errorf("publish %s: %w; reconcile: %w", docPath, publishErr, err)
 		}
 	}
 	versionedPath := VersionPath(docPath, version)
-	verified, err := fetchDocument(versionedPath)
+	verified, err := fetchDocument(ctx, versionedPath)
 	if err != nil {
 		return protocol.Response{}, 0, fmt.Errorf("verify %s: %w", versionedPath, err)
 	}

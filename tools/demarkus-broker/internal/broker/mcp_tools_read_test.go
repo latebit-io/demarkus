@@ -101,6 +101,13 @@ func (f *fakeDispatcher) Fetch(worldName, path, token string) (fetch.Result, err
 	return fn(worldName, path, token)
 }
 
+func (f *fakeDispatcher) FetchContext(ctx context.Context, worldName, path, token string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return f.Fetch(worldName, path, token)
+}
+
 func (f *fakeDispatcher) FetchConditional(worldName, path, token, etag string) (fetch.Result, error) {
 	f.mu.Lock()
 	f.fetchCondCalls = append(f.fetchCondCalls, condCall{worldName, path, token, etag})
@@ -204,6 +211,19 @@ func (f *fakeDispatcher) Publish(worldName, path, body, token string, expectedVe
 		}
 		stored := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: metadata}}
 		f.mu.Lock()
+		currentVersion := 0
+		current, exists := f.published[worldName+path]
+		if exists {
+			currentVersion, versionErr = strconv.Atoi(current.Response.Metadata["version"])
+			if versionErr != nil {
+				f.mu.Unlock()
+				return fetch.Result{}, fmt.Errorf("invalid fake version: %w", versionErr)
+			}
+		}
+		if expectedVersion >= 0 && expectedVersion != currentVersion {
+			f.mu.Unlock()
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict}}, nil
+		}
 		if f.published == nil {
 			f.published = make(map[string]fetch.Result)
 		}
@@ -212,6 +232,13 @@ func (f *fakeDispatcher) Publish(worldName, path, body, token string, expectedVe
 		f.mu.Unlock()
 	}
 	return result, nil
+}
+
+func (f *fakeDispatcher) PublishContext(ctx context.Context, worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return f.Publish(worldName, path, body, token, expectedVersion, meta)
 }
 
 func (f *fakeDispatcher) Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {

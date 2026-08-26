@@ -113,6 +113,55 @@ func TestEntriesForHashFetchesOnlyMatchingVerifiedShards(t *testing.T) {
 	}
 }
 
+func TestLoadEntriesReadsFullGenerationAndRejectsShortShard(t *testing.T) {
+	artifacts, err := BuildShards("/index.md", SlotA, []Entry{
+		{Hash: testHashA, Server: "mark://a", Path: "/a.md"},
+		{Hash: testHashB, Server: "mark://b", Path: "/b.md"},
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]ShardRef, len(artifacts))
+	responses := make(map[string]protocol.Response, len(artifacts))
+	for i, artifact := range artifacts {
+		refs[i] = artifact.Ref(i + 1)
+		responses[VersionPath(artifact.Path, i+1)] = protocol.Response{
+			Status: protocol.StatusOK, Body: artifact.Body,
+			Metadata: map[string]string{"version": strconvI(i + 1), "content-hash": artifact.ContentHash},
+		}
+	}
+	buildManifest := func(shardRefs []ShardRef) string {
+		body, buildErr := BuildManifest("/index.md", Manifest{
+			Source: "aggregated", Indexed: time.Now(), Complete: true,
+			Documents: 2, ActiveSlot: SlotA, Shards: shardRefs,
+		})
+		if buildErr != nil {
+			t.Fatal(buildErr)
+		}
+		return body
+	}
+	fetchShard := func(path string) (protocol.Response, error) { return responses[path], nil }
+
+	entries, err := LoadEntries("/index.md", buildManifest(refs), fetchShard)
+	if err != nil {
+		t.Fatalf("LoadEntries: %v", err)
+	}
+	if len(entries) != 2 || entries[0].Path != "/a.md" || entries[1].Path != "/b.md" {
+		t.Fatalf("entries = %+v", entries)
+	}
+
+	shortBody := strings.Replace(artifacts[0].Body, "| "+testHashA+" | mark://a | /a.md |\n", "", 1)
+	refs[0].Bytes = len(shortBody)
+	refs[0].ContentHash = BodyHash(shortBody)
+	responses[VersionPath(refs[0].Path, refs[0].Version)] = protocol.Response{
+		Status: protocol.StatusOK, Body: shortBody,
+		Metadata: map[string]string{"version": strconvI(refs[0].Version), "content-hash": refs[0].ContentHash},
+	}
+	if _, err := LoadEntries("/index.md", buildManifest(refs), fetchShard); err == nil || !strings.Contains(err.Error(), "declared 1 rows, body has 0") {
+		t.Fatalf("short shard error = %v", err)
+	}
+}
+
 func TestVerifyShardRejectsDrift(t *testing.T) {
 	artifacts, err := BuildShards("/index.md", SlotA, []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}}, 0)
 	if err != nil {

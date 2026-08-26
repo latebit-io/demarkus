@@ -348,6 +348,7 @@ const maxIndexDocuments = 1000
 // errIndexTruncated is sentinel-returned by walkDir to short-
 // circuit the recursion when maxIndexDocuments is reached.
 var errIndexTruncated = errors.New("document limit reached, index is truncated")
+var errIndexPublishUnauthorized = errors.New("index publish unauthorized")
 
 // handleMarkIndex crawls a source world, collects content
 // hashes, and either returns the index document (dry_run) or
@@ -434,7 +435,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 		for _, w := range warnings {
 			b.WriteString(w + "\n")
 		}
-		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, not published)\n\n", len(entries), sourceScheme)
+		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, logical entry preview only; publication writes a v2 manifest and shards)\n\n", len(entries), sourceScheme)
 		b.WriteString(body)
 		return mcp.NewToolResultText(b.String()), nil
 	}
@@ -466,25 +467,24 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 
 	meta := agentMetaFromClaims(claims)
 	result, err := g.dispatchWithWriteAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
-		unauthorized := false
 		published, publishErr := index.PublishGeneration(ctx, index.PublishOptions{
 			ManifestPath:            targetPath,
 			Source:                  manifestSource,
 			Indexed:                 indexedAt,
 			Entries:                 logicalEntries,
 			ExpectedManifestVersion: &expectedVersion,
-		}, func(docPath string) (protocol.Response, error) {
-			fetched, fetchErr := g.dispatcher.Fetch(targetWorld, docPath, "")
+		}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
+			fetched, fetchErr := g.dispatcher.FetchContext(ioCtx, targetWorld, docPath, "")
 			return fetched.Response, fetchErr
-		}, func(docPath, docBody string, expected int) (protocol.Response, error) {
-			publishedDoc, publishDocErr := g.dispatcher.Publish(targetWorld, docPath, docBody, token, expected, meta)
+		}, func(ioCtx context.Context, docPath, docBody string, expected int) (protocol.Response, error) {
+			publishedDoc, publishDocErr := g.dispatcher.PublishContext(ioCtx, targetWorld, docPath, docBody, token, expected, meta)
 			if publishDocErr == nil && publishedDoc.Response.Status == protocol.StatusUnauthorized {
-				unauthorized = true
+				return publishedDoc.Response, errIndexPublishUnauthorized
 			}
 			return publishedDoc.Response, publishDocErr
 		})
 		if publishErr != nil {
-			if unauthorized {
+			if errors.Is(publishErr, errIndexPublishUnauthorized) {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
 			}
 			return fetch.Result{}, publishErr

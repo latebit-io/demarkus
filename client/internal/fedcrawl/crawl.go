@@ -472,16 +472,6 @@ func (c *Crawler) Hashes() map[string]index.Entry {
 	return cp
 }
 
-// IndexForServer builds a hash index document for a specific server.
-func (c *Crawler) IndexForServer(host string, indexed time.Time) string {
-	return index.Build("mark://"+host, indexed, c.entriesForServer(host))
-}
-
-// GlobalIndex builds a combined hash index document with entries from all servers.
-func (c *Crawler) GlobalIndex(indexed time.Time) string {
-	return index.Build("aggregated", indexed, c.globalEntries())
-}
-
 func (c *Crawler) entriesForServer(host string) []index.Entry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -697,7 +687,9 @@ func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) 
 // PublishClient wraps the operations needed for publishing.
 type PublishClient interface {
 	Fetch(host, path, token string) (fetch.Result, error)
+	FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error)
 	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 }
 
 func (c *Crawler) publishShardedIndex(ctx context.Context, client PublishClient, host, manifestPath, source string, entries []index.Entry, indexed time.Time, token string) error {
@@ -706,12 +698,12 @@ func (c *Crawler) publishShardedIndex(ctx context.Context, client PublishClient,
 		Source:       source,
 		Indexed:      indexed,
 		Entries:      entries,
-	}, func(docPath string) (protocol.Response, error) {
-		result, err := client.Fetch(host, docPath, token)
+	}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
+		result, err := client.FetchContext(ioCtx, host, docPath, token)
 		return result.Response, err
-	}, func(docPath, body string, expectedVersion int) (protocol.Response, error) {
+	}, func(ioCtx context.Context, docPath, body string, expectedVersion int) (protocol.Response, error) {
 		meta := c.generatedArtifactMeta(docPath == manifestPath)
-		result, err := client.Publish(host, docPath, body, token, expectedVersion, meta)
+		result, err := client.PublishContext(ioCtx, host, docPath, body, token, expectedVersion, meta)
 		return result.Response, err
 	})
 	return err

@@ -140,7 +140,12 @@ func (c *Client) Close() {
 // Fetch retrieves a document from a Mark Protocol server.
 // If token is non-empty, it is sent as the auth metadata for read access to private paths.
 func (c *Client) Fetch(host, path, token string) (Result, error) {
-	return c.cachedRequest(host, path, token, protocol.VerbFetch)
+	return c.FetchContext(context.Background(), host, path, token)
+}
+
+// FetchContext is Fetch with caller cancellation propagated through network I/O.
+func (c *Client) FetchContext(ctx context.Context, host, path, token string) (Result, error) {
+	return c.cachedRequestMetaContext(ctx, host, path, token, protocol.VerbFetch, nil)
 }
 
 // FetchConditional is Fetch with an explicit if-none-match etag, for callers
@@ -257,6 +262,11 @@ func (c *Client) Versions(host, path, token string) (Result, error) {
 //   - 0: create-only (server rejects if document already exists)
 //   - > 0: update-only (server rejects if current version doesn't match)
 func (c *Client) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (Result, error) {
+	return c.PublishContext(context.Background(), host, path, body, token, expectedVersion, meta)
+}
+
+// PublishContext is Publish with caller cancellation propagated through network I/O.
+func (c *Client) PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (Result, error) {
 	req := protocol.Request{Verb: protocol.VerbPublish, Path: path, Metadata: make(map[string]string), Body: body}
 	maps.Copy(req.Metadata, meta)
 	if token != "" {
@@ -265,8 +275,8 @@ func (c *Client) Publish(host, path, body, token string, expectedVersion int, me
 	if expectedVersion >= 0 {
 		req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
 	}
-	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConn(conn, req)
+	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
+		return c.requestOnConnContext(ctx, conn, req)
 	})
 }
 
@@ -337,18 +347,14 @@ func (c *Client) Archive(host, path, token string) (Result, error) {
 	})
 }
 
-// cachedRequest handles FETCH and LIST with conditional caching.
-func (c *Client) cachedRequest(host, path, token, verb string) (Result, error) {
-	return c.cachedRequestMeta(host, path, token, verb, nil)
+// cachedRequestMeta handles cacheable reads with optional request metadata.
+// Extra metadata bypasses caching because cache keys do not include it.
+func (c *Client) cachedRequestMeta(host, path, token, verb string, extra map[string]string) (Result, error) {
+	return c.cachedRequestMetaContext(context.Background(), host, path, token, verb, extra)
 }
 
-// cachedRequestMeta is cachedRequest with extra request metadata (e.g. LIST
-// options). When extra is non-empty the response cache is bypassed: the cache
-// key is (host, path, verb) and does not encode the extra metadata, so a
-// cached option-free response must not satisfy an option-bearing request, nor
-// the reverse.
-func (c *Client) cachedRequestMeta(host, path, token, verb string, extra map[string]string) (Result, error) {
-	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
+func (c *Client) cachedRequestMetaContext(ctx context.Context, host, path, token, verb string, extra map[string]string) (Result, error) {
+	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
 		req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
 
 		if token != "" {
@@ -374,7 +380,7 @@ func (c *Client) cachedRequestMeta(host, path, token, verb string, extra map[str
 			}
 		}
 
-		result, err := c.requestOnConn(conn, req)
+		result, err := c.requestOnConnContext(ctx, conn, req)
 		if err != nil {
 			return Result{}, err
 		}

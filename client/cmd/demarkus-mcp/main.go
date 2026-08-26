@@ -100,12 +100,14 @@ func main() {
 // markClient defines the fetch operations used by MCP tool handlers.
 type markClient interface {
 	Fetch(host, path, token string) (fetch.Result, error)
+	FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error)
 	FetchConditional(host, path, token, etag string) (fetch.Result, error)
 	List(host, path, token string) (fetch.Result, error)
 	ListWithOptions(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	Versions(host, path, token string) (fetch.Result, error)
 	Lookup(host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Archive(host, path, token string) (fetch.Result, error)
 }
@@ -1211,14 +1213,15 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
 	}
 
-	body := index.Build(sourceScheme, timeNow(), entries)
+	indexedAt := timeNow()
+	body := index.Build(sourceScheme, indexedAt, entries)
 
 	if dryRun {
 		var b strings.Builder
 		for _, w := range warnings {
 			b.WriteString(w + "\n")
 		}
-		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, not published)\n\n", len(entries), sourceScheme)
+		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, logical entry preview only; publication writes a v2 manifest and shards)\n\n", len(entries), sourceScheme)
 		b.WriteString(body)
 		return mcp.NewToolResultText(b.String()), nil
 	}
@@ -1256,14 +1259,14 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	publishResult, err := index.PublishGeneration(ctx, index.PublishOptions{
 		ManifestPath:            targetPath,
 		Source:                  manifestSource,
-		Indexed:                 timeNow(),
+		Indexed:                 indexedAt,
 		Entries:                 logicalEntries,
 		ExpectedManifestVersion: &expectedVersion,
-	}, func(docPath string) (protocol.Response, error) {
-		result, err := h.client.Fetch(targetHost, docPath, h.resolveToken(targetHost))
+	}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
+		result, err := h.client.FetchContext(ioCtx, targetHost, docPath, h.resolveToken(targetHost))
 		return result.Response, err
-	}, func(docPath, body string, expected int) (protocol.Response, error) {
-		result, err := h.client.Publish(targetHost, docPath, body, token, expected, agentMeta(ctx))
+	}, func(ioCtx context.Context, docPath, body string, expected int) (protocol.Response, error) {
+		result, err := h.client.PublishContext(ioCtx, targetHost, docPath, body, token, expected, agentMeta(ctx))
 		return result.Response, err
 	})
 	if err != nil {

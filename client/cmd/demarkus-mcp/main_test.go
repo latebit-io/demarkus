@@ -575,6 +575,13 @@ func (s *stubClient) Fetch(host, path, token string) (fetch.Result, error) {
 	return fetch.Result{}, nil
 }
 
+func (s *stubClient) FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return s.Fetch(host, path, token)
+}
+
 func (s *stubClient) FetchConditional(host, path, token, etag string) (fetch.Result, error) {
 	if s.fetchCondFn != nil {
 		return s.fetchCondFn(host, path, token, etag)
@@ -617,6 +624,19 @@ func (s *stubClient) Publish(host, path, body, token string, expectedVersion int
 			}
 			stored := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: metadata}}
 			s.mu.Lock()
+			currentVersion := 0
+			current, exists := s.published[host+path]
+			if exists {
+				currentVersion, versionErr = strconv.Atoi(current.Response.Metadata["version"])
+				if versionErr != nil {
+					s.mu.Unlock()
+					return fetch.Result{}, fmt.Errorf("invalid stub version: %w", versionErr)
+				}
+			}
+			if expectedVersion >= 0 && expectedVersion != currentVersion {
+				s.mu.Unlock()
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict}}, nil
+			}
 			if s.published == nil {
 				s.published = make(map[string]fetch.Result)
 			}
@@ -627,6 +647,13 @@ func (s *stubClient) Publish(host, path, body, token string, expectedVersion int
 		return result, nil
 	}
 	return fetch.Result{}, nil
+}
+
+func (s *stubClient) PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return s.Publish(host, path, body, token, expectedVersion, meta)
 }
 func (s *stubClient) Archive(_, _, _ string) (fetch.Result, error) {
 	return fetch.Result{}, nil
@@ -1883,6 +1910,9 @@ func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess(t *testing.T) {
 	// When the initial publish succeeds, the merge path returns a plain
 	// success — no candidate, no markers, no diff3 invoked.
 	sc := &stubClient{
+		published: map[string]fetch.Result{
+			"example.com:6309/doc.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "5"}}},
+		},
 		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusCreated,
@@ -1918,6 +1948,9 @@ func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess_PreservesAllMetadata(
 	// metadata key the server returned should reach the agent, just like a
 	// plain mark_publish would do via formatResult.
 	sc := &stubClient{
+		published: map[string]fetch.Result{
+			"example.com:6309/doc.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "5"}}},
+		},
 		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusCreated,

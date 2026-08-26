@@ -223,7 +223,7 @@ The agent needs read access and publish access to the manifest and its `.shards`
 
 ### Content-Addressed Discovery
 
-Published indexes enable content-addressed fetching. Resolution reads only the shard matching the requested hash prefix:
+Published indexes enable content-addressed fetching. Resolution reads all shards matching the requested hash prefix, including every deterministic overflow part:
 
 ```bash
 # Resolve content by hash (requires hub with index)
