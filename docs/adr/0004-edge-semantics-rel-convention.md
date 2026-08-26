@@ -1,4 +1,4 @@
-# ADR 0004 — Edge semantics: provenance on every edge, typed relations via `rel-` metadata
+# ADR 0004: Edge semantics: provenance on every edge, typed relations via `rel-` metadata
 
 Status: accepted (2026-07-13)
 
@@ -12,14 +12,14 @@ link's label text and byte position and then threw them away; every edge
 builder used the lossy destination-only `Extract`.
 
 Two consequences. First, backlinks could not say *why* or *where* a document
-links — no label, no source section, no occurrence count. Second, every link
+links: no label, no source section, no occurrence count. Second, every link
 was an untyped "mentions": knowledge graphs live on predicates (supersedes,
 implements, depends-on), OKF types the nodes (ADR 0003), but nothing typed the
 edges. ADR 0002 superseding its v1 draft was expressible only as prose.
 
 This was gap 3 of the 2026-07-13 knowledge-layer analysis ("edges have no
 semantics"). The constraint from that analysis: the agent owns judgment, the
-server owns accumulation — so the enrichment must ride existing primitives
+server owns accumulation, so the enrichment must ride existing primitives
 with zero server, protocol, or store changes.
 
 ## Decision
@@ -60,7 +60,7 @@ rel-depends-on: /architecture.md, mark://other-world/spec.md
 - **Values are comma-separated refs**, resolved against the document's own
   URL (matching how body links resolve). Malformed refs (empty, internal
   whitespace), self-references, and an empty predicate (`rel-`) are skipped
-  silently — bad metadata must never fail a crawl.
+  silently; bad metadata must never fail a crawl.
 - Both crawlers ingest the convention as typed edges: the client graph crawl
   (`graph.RelEdges`, fed by the fetch callback's new `Metadata` field) and
   the federation crawler (which additionally applies its mark://-only,
@@ -76,7 +76,7 @@ rel-depends-on: /architecture.md, mark://other-world/spec.md
 - `~/.mark/graph.json` schema stays **v1**: the new fields are `omitempty`
   and old files load unchanged.
 - One shared annotation renderer (`graph.EdgeAnnotation`) formats the terse
-  display suffix — ` [supersedes]`, ` ("Getting started", #intro, x3)` — used
+  display suffix (`[supersedes]`, `("Getting started", #intro, x3)`, each prefixed with a space) used
   identically by the local MCP, the broker gateway, and both backlink lists;
   pinned-literal tests on both sides guard drift.
 

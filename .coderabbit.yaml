@@ -153,8 +153,8 @@ reviews:
         Title must follow Conventional Commits format:
         type(scope): description. Valid types: feat, fix, docs, style,
         refactor, perf, test, build, ci, chore, revert.
-        Valid scopes: protocol, server, client, tui, mcp, tools, obsidian,
-        install, publish.
+        The scope is optional. Valid scopes: protocol, server, client,
+        tui, mcp, tools, plugins, deploy, install, publish.
 
 chat:
   auto_reply: true

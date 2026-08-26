@@ -1,4 +1,4 @@
-# ADR 0006 — The Postgres backend is an optional build, not a dependency
+# ADR 0006: The Postgres backend is an optional build, not a dependency
 
 Status: accepted (2026-08-20). Implemented on the same branch as the step 8
 performance work.
@@ -74,7 +74,7 @@ binary purity, not module purity.
 The seam exists so this is a deletion, not a refactor:
 
 1. `rm -r server/internal/pgstore server/cmd/demarkus-migrate`
-2. `rm server/cmd/demarkus-server/store_pg.go server/Dockerfile.pg` — the
+2. `rm server/cmd/demarkus-server/store_pg.go server/Dockerfile.pg`: the
    registry needs no edit; one fewer backend simply registers.
 3. `rm -r deploy/helm/demarkus-server-pg`, and fold the library chart back
    into `demarkus-server` if a single backend no longer justifies it.

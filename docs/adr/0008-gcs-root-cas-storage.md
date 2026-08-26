@@ -1,4 +1,4 @@
-# ADR 0008 — GCS world state commits through one root CAS
+# ADR 0008: GCS world state commits through one root CAS
 
 Status: accepted (2026-08-22). Store conformance, independent-store CAS races,
 and real-GCS sizing at 100,000 documents in each of three worlds passed.

@@ -1,8 +1,8 @@
 # demarkus-server Helm chart
 
-Deploys one [demarkus](https://github.com/latebit-io/demarkus) world on Kubernetes — a Mark Protocol server serving versioned markdown over QUIC, with capability-based auth and TLS. One Helm release = one world.
+Deploys one [demarkus](https://github.com/latebit-io/demarkus) world on Kubernetes: a Mark Protocol server serving versioned markdown over QUIC, with capability-based auth and TLS. One Helm release = one world.
 
-Content lives in a versioned file store on a PersistentVolume, and the image links no external database driver. For the Postgres backend — shared state across replicas, no content PVC — use the [demarkus-server-pg](../demarkus-server-pg) chart instead; the two are the same server and share their templates through the `demarkus-server-common` library chart.
+Content lives in a versioned file store on a PersistentVolume, and the image links no external database driver. For the Postgres backend (shared state across replicas, no content PVC) use the [demarkus-server-pg](../demarkus-server-pg) chart instead; the two are the same server and share their templates through the `demarkus-server-common` library chart.
 
 ## Quick start
 
@@ -68,15 +68,15 @@ helm install team-a ./deploy/helm/demarkus-server \
 |---|---|---|
 | `storage.className` | `""` (cluster default) | Often `premium-rwo` (GKE), `gp3` (EKS), etc. |
 | `storage.size` | `5Gi` | |
-| `storage.accessMode` | `ReadWriteOnce` | Don't change — Phase 7 territory |
+| `storage.accessMode` | `ReadWriteOnce` | Don't change; Phase 7 territory |
 
 ### TLS
 
-Three modes — pick one:
+Three modes; pick one:
 
-1. **`tls.existingSecret`** — reference a pre-existing Secret with `tls.crt` and `tls.key` (made by cert-manager elsewhere, kustomize, or `kubectl create secret tls`).
-2. **`tls.certManager.enabled: true`** — chart provisions a cert-manager `Certificate` resource targeting the configured `issuerRef`. Use **DNS-01** for issuers like Let's Encrypt (HTTP-01 cannot validate a QUIC-only service).
-3. **Neither set** — the server auto-generates a self-signed dev cert at startup. Good for tests, not for production.
+1. **`tls.existingSecret`**: reference a pre-existing Secret with `tls.crt` and `tls.key` (made by cert-manager elsewhere, kustomize, or `kubectl create secret tls`).
+2. **`tls.certManager.enabled: true`**: chart provisions a cert-manager `Certificate` resource targeting the configured `issuerRef`. Use **DNS-01** for issuers like Let's Encrypt (HTTP-01 cannot validate a QUIC-only service).
+3. **Neither set**: the server auto-generates a self-signed dev cert at startup. Good for tests, not for production.
 
 ### Auth tokens
 
@@ -90,16 +90,16 @@ Three modes — pick one:
 
 **How it works.** The chart writes **two Secrets**:
 
-- `<release>-tokens` — TOML `tokens.toml` with the SHA-256 *hash* of the admin token. Mounted into the server pod. The server never sees the raw token.
-- `<release>-token-values` — the raw admin token, base64-encoded under key `<label>`. Annotated `demarkus.io/raw-tokens: "true"` so the future broker can discover and revoke. Server does not mount this Secret.
+- `<release>-tokens`: TOML `tokens.toml` with the SHA-256 *hash* of the admin token. Mounted into the server pod. The server never sees the raw token.
+- `<release>-token-values`: the raw admin token, base64-encoded under key `<label>`. Annotated `demarkus.io/raw-tokens: "true"` so the future broker can discover and revoke. Server does not mount this Secret.
 
-On `helm upgrade`, the chart uses `lookup` to read the existing `-token-values` and preserves the admin token — no churn, no surprise rotation.
+On `helm upgrade`, the chart uses `lookup` to read the existing `-token-values` and preserves the admin token: no churn, no surprise rotation.
 
 ### Probes
 
 Startup, liveness, and readiness all exec `demarkus -insecure -no-cache mark://localhost:<port>/.well-known/agent-manifest.md`. The manifest is always public per `/architecture.md`. Probe disabled root-fs writes via `-no-cache`. The image must include the `demarkus` CLI binary.
 
-The startup probe (default 30 × 10s, `probes.startup`) holds liveness off until the server answers its first request. The server serves nothing until store init completes — it walks the world to build its hash index and catalog — so without the startup probe a slow first boot would eat into the liveness failure threshold and could be restart-looped.
+The startup probe (default 30 × 10s, `probes.startup`) holds liveness off until the server answers its first request. The server serves nothing until store init completes (it walks the world to build its hash index and catalog), so without the startup probe a slow first boot would eat into the liveness failure threshold and could be restart-looped.
 
 ### Security defaults
 
@@ -124,7 +124,7 @@ demarkus -auth "$TOKEN" mark://team-a.library.example.com:6309/index.md
 
 For production, the recommended path is:
 
-1. Install the chart — get the bootstrap admin token from the Secret.
+1. Install the chart; get the bootstrap admin token from the Secret.
 2. Install the broker (Phase 6.3) pointing at this world.
 3. Use the broker to mint per-user tokens via OIDC.
 4. Once verified, the bootstrap admin token can be revoked or rotated.
@@ -150,6 +150,6 @@ helm unittest deploy/helm/demarkus-server/
 
 ## See also
 
-- `/plans/universe-deployment.md` — full Phase 6 plan
-- `/architecture.md` — Mark Protocol architecture (capability auth, versioned store, content-addressed fetch)
-- `deploy/helm/demarkus-agent/` — federation crawler chart (Phase 6.0)
+- `/plans/universe-deployment.md`: full Phase 6 plan
+- `/architecture.md`: Mark Protocol architecture (capability auth, versioned store, content-addressed fetch)
+- `deploy/helm/demarkus-agent/`: federation crawler chart (Phase 6.0)

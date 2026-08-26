@@ -29,7 +29,7 @@ For deployment instructions, TLS, and Ingress topology, see
   (`/.well-known/oauth-protected-resource`, bare and path-inserted
   `/mcp` forms, on the gateway listener) and RFC 8414
   (`/.well-known/oauth-authorization-server`, on the management
-  listener — §3.3 requires the issuer's own origin). An
+  listener; §3.3 requires the issuer's own origin). An
   unauthenticated request to `/mcp` receives `401 +
   WWW-Authenticate: Bearer
   resource_metadata="…oauth-protected-resource"` per RFC 6750 + RFC
@@ -40,8 +40,8 @@ For deployment instructions, TLS, and Ingress topology, see
 The broker derives identity from the **canonical verified email**
 extracted from the bearer (`email` claim, trimmed + lowercased,
 `email_verified=true` required). This is the same identity dimension
-the broker's `/me/install`, `AllowConfig`, and audit logs already use
-— one identity per broker, no cross-surface drift.
+the broker's `/me/install`, `AllowConfig`, and audit logs already use:
+one identity per broker, no cross-surface drift.
 
 The broker does **not** mint per-user tokens. World access is gated as
 follows:
@@ -152,7 +152,7 @@ validation status, and a list of versions with timestamps.
 Look up documents by subject against the world's catalog. Matches the
 query against each document's declared tags and title and returns an
 importance-ranked markdown table of matches (path, importance, title,
-tags) — not document bodies. A catalog lookup, not full-text search:
+tags), not document bodies. A catalog lookup, not full-text search:
 a subject never tagged or titled is not found. Returns `matches` (the
 row count). Dispatched unauthenticated like the other reads.
 
@@ -238,7 +238,7 @@ Returns `not-found` if no manifest is published.
 Resolve content by its SHA-256 hash using a hub index document.
 Looks the hash up in the index, finds candidate servers, and fetches
 by hash. Skips candidates the broker has no `worlds[]` entry for and
-candidates the identity is not authorized for (`ErrNotAuthorized`) —
+candidates the identity is not authorized for (`ErrNotAuthorized`);
 both collapse to "this broker can't reach this candidate for me; try
 the next."
 
@@ -274,11 +274,11 @@ writers before publishing v2 at an existing legacy path.
 ### Graph store (ephemeral)
 
 > **The broker's graph store is in-memory only and pod-scoped.**
-> Any event that recycles the broker pod — Helm rollout, OOMKill,
-> node drain or eviction, kubelet restart — drops every cached
+> Any event that recycles the broker pod (Helm rollout, OOMKill,
+> node drain or eviction, kubelet restart) drops every cached
 > graph. Re-run `mark_graph` against the relevant worlds to
 > re-populate. This is a deliberate trade-off documented under
-> "Ephemeral graph store" in the chart README — bucket-store-backed
+> "Ephemeral graph store" in the chart README; bucket-store-backed
 > persistence is parked for the post-broker design window.
 >
 > To make restarts cheap (not durable), the store is **seeded on
@@ -354,7 +354,7 @@ first-mint retry budget, or failure of every world in `mark_lookup_all`.
 Partial `mark_lookup_all` failures return `status: partial` with the
 successful matches and an explicit failure table. World-side `conflict`, `archived`, and
 `not-permitted` responses are forwarded **verbatim** with `isError:
-false` — they are first-class outcomes the agent acts on (re-fetch
+false`; they are first-class outcomes the agent acts on (re-fetch
 and retry; ask the operator for more scope), not gateway errors.
 
 A few non-obvious categories worth pinning:

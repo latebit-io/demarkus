@@ -4,9 +4,9 @@ This section covers the three Demarkus client tools: the CLI (`demarkus`), the T
 
 ## Overview
 
-- **CLI** (`demarkus`) — scripting, automation, and publishing
-- **TUI** (`demarkus-tui`) — interactive terminal browser with link navigation
-- **MCP** (`demarkus-mcp`) — exposes Mark Protocol as tools for LLM agents
+- **CLI** (`demarkus`): scripting, automation, and publishing
+- **TUI** (`demarkus-tui`): interactive terminal browser with link navigation
+- **MCP** (`demarkus-mcp`): exposes Mark Protocol as tools for LLM agents
 
 If you're new, start with the CLI and confirm you can fetch a document.
 
@@ -56,7 +56,7 @@ Graph results are persisted to `~/.mark/graph.json` and accumulate across sessio
 
 ### Open Knowledge Format codec
 
-`demarkus okf` interoperates with [Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog) bundles — directories of markdown files with YAML frontmatter. A demarkus document is content-compatible with OKF; the codec moves whole bundles in and out of a world.
+`demarkus okf` interoperates with [Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog) bundles: directories of markdown files with YAML frontmatter. A demarkus document is content-compatible with OKF; the codec moves whole bundles in and out of a world.
 
 ```bash
 # Validate a bundle for OKF v0.1 conformance
@@ -83,11 +83,11 @@ demarkus-tui --insecure mark://localhost:6309/index.md
 
 ### Keyboard highlights
 
-- `Tab` — cycle links
-- `Enter` — follow selected link
-- `[` / `]` — back / forward
-- `d` — document graph view (loads stored graph instantly, live crawl updates in background)
-- `?` — help
+- `Tab`: cycle links
+- `Enter`: follow selected link
+- `[` / `]`: back / forward
+- `d`: document graph view (loads stored graph instantly, live crawl updates in background)
+- `?`: help
 
 ### External links
 
@@ -102,11 +102,11 @@ demarkus-tui mark://localhost:6309/
 # only http and https
 demarkus-tui -external-links "http,https" mark://localhost:6309/
 
-# disable external launching entirely — non-mark links report an error
+# disable external launching entirely; non-mark links report an error
 demarkus-tui -external-links "" mark://localhost:6309/
 ```
 
-URLs are passed as argv arguments to the system handler — no shell is invoked. Schemes not in the allowlist (including `file:`, `javascript:`, `data:`) are rejected before any process is spawned. See [Security Model](../security/index.md#external-links-in-the-tui) for details.
+URLs are passed as argv arguments to the system handler; no shell is invoked. Schemes not in the allowlist (including `file:`, `javascript:`, `data:`) are rejected before any process is spawned. See [Security Model](../security/index.md#external-links-in-the-tui) for details.
 
 ## MCP (`demarkus-mcp`)
 
@@ -130,7 +130,7 @@ All three clients support read authentication for servers with protected paths. 
 demarkus token add mark://private.example:6309 <raw-token>
 ```
 
-After this, all clients automatically use the token when accessing that server — no extra flags needed.
+After this, all clients automatically use the token when accessing that server; no extra flags needed.
 
 ### CLI
 
@@ -166,7 +166,7 @@ The MCP server resolves tokens per-host: the `-token` flag takes precedence, the
 
 ## Related Tools
 
-- [Federation Crawler](../tools/agent.md) — discover servers and build hash indexes
+- [Federation Crawler](../tools/agent.md): discover servers and build hash indexes
 - [Token Tooling](../tools/index.md)
 
 ## Next Steps

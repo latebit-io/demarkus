@@ -20,12 +20,12 @@ All settings are via environment variables; flags override for dev use:
 | `DEMARKUS_PORT` | `-port` | `6309` | UDP port to listen on |
 | `DEMARKUS_TLS_CERT` | `-tls-cert` | *(dev cert)* | Path to TLS certificate PEM |
 | `DEMARKUS_TLS_KEY` | `-tls-key` | *(dev cert)* | Path to TLS private key PEM |
-| `DEMARKUS_TOKENS` | `-tokens` | *(none — writes disabled)* | Path to TOML tokens file |
+| `DEMARKUS_TOKENS` | `-tokens` | *(none; writes disabled)* | Path to TOML tokens file |
 | `DEMARKUS_READ_ONLY` | `-read-only` | *(disabled)* | Reject all write operations (`1`, `true`, or `yes`) |
-| `DEMARKUS_MAX_STREAMS` | — | `10` | Max concurrent streams per connection |
-| `DEMARKUS_IDLE_TIMEOUT` | — | `30s` | Idle connection timeout |
-| `DEMARKUS_REQUEST_TIMEOUT` | — | `10s` | Per-request deadline |
-| `DEMARKUS_LOG_FORMAT` | — | `text` | Log output format (`text` or `json`) |
+| `DEMARKUS_MAX_STREAMS` | - | `10` | Max concurrent streams per connection |
+| `DEMARKUS_IDLE_TIMEOUT` | - | `30s` | Idle connection timeout |
+| `DEMARKUS_REQUEST_TIMEOUT` | - | `10s` | Per-request deadline |
+| `DEMARKUS_LOG_FORMAT` | - | `text` | Log output format (`text` or `json`) |
 
 Notes:
 - `-tls-cert` and `-tls-key` must be provided together.
@@ -103,7 +103,7 @@ interval = "6h"  # Time between crawl runs (daemon mode)
 | `crawl.max_documents` | `1000` | Maximum documents to fetch per run |
 | `crawl.workers` | `5` | Concurrent fetch goroutines |
 | `politeness.request_delay` | `100ms` | Delay between requests to same server |
-| `schedule.interval` | — | Time between runs (daemon mode, required) |
+| `schedule.interval` | - | Time between runs (daemon mode, required) |
 
 #### CLI flags
 
@@ -131,13 +131,13 @@ For per-server tokens, use `demarkus token add mark://host:6309 <token>` before 
 
 ## Authoring
 
-- [Supported Markdown Features](markdown.md) — what the TUI renders and what the link graph tracks
-- [Open Knowledge Format compatibility](markdown.md#open-knowledge-format-okf-compatibility) — OKF field mapping, default `type`, and the `demarkus okf` validate/import/export codec
+- [Supported Markdown Features](markdown.md): what the TUI renders and what the link graph tracks
+- [Open Knowledge Format compatibility](markdown.md#open-knowledge-format-okf-compatibility): OKF field mapping, default `type`, and the `demarkus okf` validate/import/export codec
 
 ## Protocol
 
 - [Protocol Specification](../../SPEC.md)
-- [Agent Manifest](agent-manifest.md) — discovery convention for AI agents
+- [Agent Manifest](agent-manifest.md): discovery convention for AI agents
 
 ## Related
 

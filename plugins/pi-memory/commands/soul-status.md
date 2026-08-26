@@ -57,13 +57,13 @@ Diagnose the plugin's current setup: configured mode, soul path, port, server pr
    <If anything is degraded, suggest the specific fix:>
    - Server not running (managed mode) → "Run /soul-init to restart, or check that demarkus-server is in the bin directory."
    - Server not running (reuse mode) → "Restart it with its service manager or original launch command, or rerun /soul-init to switch modes."
-   - Connectivity unauthorized → "Token mismatch — rerun /soul-init."
-    - Managed binary missing or stale → "Remove only the affected managed binary, then restart Pi so provisioning reinstalls it; do not delete the shared bin directory."
-    - Reuse-mode server binary broken → "Repair or restart it with its own service manager; do not reinstall shared plugin binaries."
+   - Connectivity unauthorized → "Token mismatch; rerun /soul-init."
+   - Managed binary missing or stale → "Remove only the affected managed binary, then restart Pi so provisioning reinstalls it; do not delete the shared bin directory."
+   - Reuse-mode server binary broken → "Repair or restart it with its own service manager; do not reinstall shared plugin binaries."
    ```
 
 ## Don't
 
 - Don't write to the soul or modify config. This command is purely diagnostic.
-- Don't assume the server is broken just because connectivity is `not-found` — an empty soul is normal on a fresh install.
+- Don't assume the server is broken just because connectivity is `not-found`; an empty soul is normal on a fresh install.
 - Don't run `/soul-init` automatically. Recommend it and let the user decide.

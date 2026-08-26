@@ -28,11 +28,11 @@ See `tools/demarkus-broker/MCP-API.md` for the full tool contract and the Helm c
 
 The server is secure by default and **denies writes** unless you configure a tokens file. Tokens are capability-based: they grant operations on path patterns, not identities. The server stores **only the SHA-256 hash** of tokens, never the raw secret.
 
-### Labels — give every token a meaningful name
+### Labels: give every token a meaningful name
 
-Every token is identified by a **label** that you pick at generation time. Labels are the primary way to reason about tokens in Demarkus — they show up in audit logs on every write operation, they're how you revoke a token later (`demarkus-token revoke -label NAME`), and they live alongside the hashed token in `tokens.toml` as `[tokens.<label>]`.
+Every token is identified by a **label** that you pick at generation time. Labels are the primary way to reason about tokens in Demarkus: they show up in audit logs on every write operation, they're how you revoke a token later (`demarkus-token revoke -label NAME`), and they live alongside the hashed token in `tokens.toml` as `[tokens.<label>]`.
 
-Pick a label that tells you (or your future self) **who or what uses this token and where**. Good labels: `fritz-laptop`, `ci-deploy`, `agent-crawler`, `claude-code-plugin`, `obsidian-fritz-phone`. Bad labels: `token1`, `t`, `xxx`.
+Pick a label that tells you (or your future self) **who or what uses this token and where**. Good labels: `fritz-laptop`, `ci-deploy`, `agent-crawler`, `claude-code-plugin`. Bad labels: `token1`, `t`, `xxx`.
 
 A descriptive label is how you'll know which entry to revoke when a device is lost or a service is decommissioned.
 
@@ -85,10 +85,10 @@ The credential rides in the URL fragment, which never appears in any request; st
 By default all paths are public. To protect paths, create a token with the `read` operation:
 
 ```bash
-# Protect /internal/** — requires a read token for FETCH, LIST, VERSIONS
+# Protect /internal/**: requires a read token for FETCH, LIST, VERSIONS
 ./tools/bin/demarkus-token generate -label internal-reader -paths "/internal/**" -ops read -tokens tokens.toml
 
-# Full private server — protect everything
+# Full private server: protect everything
 ./tools/bin/demarkus-token generate -label team-member -paths "/**" -ops "read,publish" -tokens tokens.toml
 ```
 
@@ -124,7 +124,7 @@ demarkus --insecure mark://localhost:6309/internal/doc.md
 ```
 
 ```bash
-# Via stored token (see below) — no flags or env needed
+# Via stored token (see below): no flags or env needed
 demarkus --insecure mark://localhost:6309/internal/doc.md
 ```
 
@@ -157,27 +157,27 @@ Stored tokens are saved to `~/.mark/tokens.toml` (permissions `0600`).
 
 ## Best Practices
 
-- **Use descriptive labels.** `fritz-laptop`, `ci-deploy`, `claude-code-plugin` — never `token1`. Labels are what you'll look up when revoking and what shows up in audit logs.
+- **Use descriptive labels.** `fritz-laptop`, `ci-deploy`, `claude-code-plugin`, never `token1`. Labels are what you'll look up when revoking and what shows up in audit logs.
 - **One label per device, service, or agent.** Don't share a token across two machines; give each its own entry so a loss only revokes one.
 - **Store tokens securely** (password manager or encrypted secrets store).
 - **Scope tokens** to the minimum paths and operations required.
-- **Rotate tokens** regularly for long‑lived deployments — revoke the old label and generate a new one.
+- **Rotate tokens** regularly for long‑lived deployments: revoke the old label and generate a new one.
 - **Do not commit** `tokens.toml` to source control.
 
 ## Direct-to-Store Publish (`demarkus-publish`)
 
 `demarkus-publish` writes a document directly to a server's versioned content store on disk, bypassing the QUIC protocol. It is designed for two scenarios:
 
-1. **Read-only server installs** — when `demarkus-server` runs with `-read-only` (e.g. the chroot hardened deployment), the server cannot accept PUBLISH/APPEND/ARCHIVE. `demarkus-publish` runs as a separate process with filesystem write access and produces the same versioned store layout the server reads.
-2. **Local batch publishing** — scripting or migration scenarios where spinning up a server and sending QUIC requests is overkill.
+1. **Read-only server installs**: when `demarkus-server` runs with `-read-only` (e.g. the chroot hardened deployment), the server cannot accept PUBLISH/APPEND/ARCHIVE. `demarkus-publish` runs as a separate process with filesystem write access and produces the same versioned store layout the server reads.
+2. **Local batch publishing**: scripting or migration scenarios where spinning up a server and sending QUIC requests is overkill.
 
 Full versioning is preserved because `demarkus-publish` shares the store logic with the server (`server/internal/store`). Each write creates a new immutable version.
 
 ### Flags
 
-- `-root` — content directory (falls back to `DEMARKUS_ROOT` env var, required)
-- `-path` — document path starting with `/` (e.g. `/index.md`, required)
-- `-body` — document content (reads stdin if omitted)
+- `-root`: content directory (falls back to `DEMARKUS_ROOT` env var, required)
+- `-path`: document path starting with `/` (e.g. `/index.md`, required)
+- `-body`: document content (reads stdin if omitted)
 
 ### Publish inline
 
@@ -201,7 +201,7 @@ cat notes.md | demarkus-publish -root /srv/demarkus/content -path /notes/2026-04
 
 - On success: prints `published <path> v<N>` to stderr.
 - When the new content matches the current version: prints `unchanged (v<N>)` and exits 0 (no new version).
-- Archive and append operations are not supported by this tool — use the `demarkus` CLI against a writable server for those.
+- Archive and append operations are not supported by this tool; use the `demarkus` CLI against a writable server for those.
 
 See [Security Model → Read-Only Mode](../security/index.md#read-only-mode-maximum-lockdown) for the chroot deployment pattern that pairs with this tool.
 

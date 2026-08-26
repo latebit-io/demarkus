@@ -1,6 +1,6 @@
 # demarkus-pi-memory
 
-Local, versioned project memory (the "soul") for the [pi](https://pi.dev) coding agent, via [demarkus](https://github.com/latebit-io/demarkus). The pi port of the Claude Code `demarkus-memory` plugin — same behavior, mapped onto pi's extension API. It shares `~/.demarkus` state with the Claude Code plugin, so the two coexist on one machine: one soul, one token, one set of registries.
+Local, versioned project memory (the "soul") for the [pi](https://pi.dev) coding agent, via [demarkus](https://github.com/latebit-io/demarkus). The pi port of the Claude Code `demarkus-memory` plugin: same behavior, mapped onto pi's extension API. It shares `~/.demarkus` state with the Claude Code plugin, so the two coexist on one machine: one soul, one token, one set of registries.
 
 ## What it does
 
@@ -13,7 +13,7 @@ Local, versioned project memory (the "soul") for the [pi](https://pi.dev) coding
 
 ## Requirements
 
-- [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter) — surfaces the demarkus MCP tools. Install with `pi install npm:pi-mcp-adapter`.
+- [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter): surfaces the demarkus MCP tools. Install with `pi install npm:pi-mcp-adapter`.
 - `bash`, `curl`, `tar`, `node` on PATH (used by the bundled provisioning scripts).
 
 ## Install
@@ -24,7 +24,7 @@ First install the MCP adapter (provides the demarkus tools):
 pi install npm:pi-mcp-adapter
 ```
 
-This package lives in the demarkus monorepo under `plugins/pi-memory/`. pi's `git:` installer reads a repository's **root** `package.json`, so a monorepo subdirectory can't be git-installed directly — install it from a local checkout instead:
+This package lives in the demarkus monorepo under `plugins/pi-memory/`. pi's `git:` installer reads a repository's **root** `package.json`, so a monorepo subdirectory can't be git-installed directly; install it from a local checkout instead:
 
 ```bash
 git clone https://github.com/latebit-io/demarkus
@@ -61,9 +61,9 @@ On session start, after provisioning, the extension hands `demarkus-plugin updat
 
 Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper behavior are checked separately.
 
-- `src/*.ts` — the Pi adapter: event mapping, MCP wiring, and calls into the shared `demarkus-plugin` helper (loaded directly by Pi via `tsx`, no build step).
-- `scripts/*.sh` — the demarkus binary/server lifecycle, reused verbatim from the Claude Code plugin (single source of truth for provisioning); `provision.sh` is the per-session entrypoint and `mcp-config.mjs` registers remote-soul MCP servers.
-- `commands/*.md`, `context/`, and `skills/` — generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
+- `src/*.ts`: the Pi adapter: event mapping, MCP wiring, and calls into the shared `demarkus-plugin` helper (loaded directly by Pi via `tsx`, no build step).
+- `scripts/*.sh`: the demarkus binary/server lifecycle, reused verbatim from the Claude Code plugin (single source of truth for provisioning); `provision.sh` is the per-session entrypoint and `mcp-config.mjs` registers remote-soul MCP servers.
+- `commands/*.md`, `context/`, and `skills/`: generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
 
 ### Behavior mapping (Claude Code → pi)
 
@@ -91,4 +91,4 @@ plugins/setup-pi-repos.sh            # --dry-run to preview
 
 This is automated: the `.github/workflows/pi-plugin-mirror.yml` workflow runs on every push to `main` that touches `plugins/pi-memory/**` and mirrors it for you (it needs a `PI_MIRROR_TOKEN` repo secret with `contents:write` on the standalone repos). The `plugins/setup-pi-repos.sh` script is the manual fallback / bootstrap.
 
-Either way it runs `git subtree split --prefix=plugins/pi-memory` to recompute the subdirectory's history and force-pushes it to the standalone repo's default branch — so the standalone repo always matches the monorepo subtree. It only reads **committed** history, so the change must be merged to `main` first. Users then pick up the change with `pi update git:github.com/latebit-io/demarkus-pi-memory`.
+Either way it runs `git subtree split --prefix=plugins/pi-memory` to recompute the subdirectory's history and force-pushes it to the standalone repo's default branch, so the standalone repo always matches the monorepo subtree. It only reads **committed** history, so the change must be merged to `main` first. Users then pick up the change with `pi update git:github.com/latebit-io/demarkus-pi-memory`.

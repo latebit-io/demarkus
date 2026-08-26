@@ -104,7 +104,7 @@ Clients can then connect on port 443:
 demarkus mark://yourdomain.com:443/index.md
 ```
 
-This works alongside a TCP web server on port 443 — UDP and TCP don't conflict.
+This works alongside a TCP web server on port 443; UDP and TCP don't conflict.
 
 ## Auto-Renew Certificates
 
@@ -139,7 +139,7 @@ Environment=DEMARKUS_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
 Restart=on-failure
 RestartSec=5
 
-# Security hardening — sandbox the server process
+# Security hardening: sandbox the server process
 ProtectSystem=strict
 ReadWritePaths=/srv/site
 PrivateTmp=yes
@@ -155,7 +155,7 @@ RestrictSUIDSGID=yes
 WantedBy=multi-user.target
 ```
 
-These directives make the entire filesystem read-only except the content directory. The kernel enforces the restrictions — even a fully compromised server process cannot read `/home`, escalate privileges, or write outside `/srv/site`. See [Security Model](../security/index.md) for details.
+These directives make the entire filesystem read-only except the content directory. The kernel enforces the restrictions: even a fully compromised server process cannot read `/home`, escalate privileges, or write outside `/srv/site`. See [Security Model](../security/index.md) for details.
 
 Enable and start:
 
@@ -175,11 +175,11 @@ You should see a successful response with status `ok`.
 
 ## Related
 
-- [The Five-Minute Appliance](appliance.md) — the whole self-hosted stack (server + broker + library + Authelia + Caddy + agent) in one command, no domain required
-- [Single-Host Stack](single-host.md) — server + broker + library on one VPS, no Kubernetes
-- [Kubernetes & Helm](kubernetes.md) — the six charts, the multi-world knowledge server, HA defaults
-- [Observability](../../deployment/observability.md) — structured-log field schemas for every service
+- [The Five-Minute Appliance](appliance.md): the whole self-hosted stack (server + broker + library + Authelia + Caddy + agent) in one command, no domain required
+- [Single-Host Stack](single-host.md): server + broker + library on one VPS, no Kubernetes
+- [Kubernetes & Helm](kubernetes.md): the six charts, the multi-world knowledge server, HA defaults
+- [Observability](../../deployment/observability.md): structured-log field schemas for every service
 - [Run a Server](../server/index.md)
-- [Security Model](../security/index.md) — read-only mode, chroot install, threat model
+- [Security Model](../security/index.md): read-only mode, chroot install, threat model
 - [Configuration Reference](../reference/index.md)
 - [Install & Build](../install/index.md)

@@ -1,4 +1,4 @@
-# ADR 0003 — Default OKF `type` on publish
+# ADR 0003: Default OKF `type` on publish
 
 Status: accepted (2026-06-22)
 
@@ -12,26 +12,26 @@ one hard per-concept rule is a non-empty `type`. So arbitrary writes were not
 OKF concepts, and "writes conform to OKF" was false.
 
 We want OKF-typed documents to be a core, opinionated property of demarkus, not
-an export-time afterthought — while not breaking the existing ecosystem (the
+an export-time afterthought, while not breaking the existing ecosystem (the
 soul, the knowledge broker worlds, journals, ADRs, the docs site all publish
 markdown with no `type`).
 
 A hard gate that rejected typeless writes was rejected: it would break every
 current writer (including the memory/knowledge MCP `mark_publish` path), and it
 would make demarkus *more* opinionated than OKF itself, whose first design
-principle is "minimally opinionated — only requires `type`."
+principle is "minimally opinionated, only requires `type`."
 
 ## Decision
 
 Make it opinionated **by construction, not by rejection**. On a write, when a
 document declares no `type`, the server assigns the default `type` `Document`
 (`protocol.OKFDefaultType`). Implemented via `applyOKFTypeDefault` after
-`extractPublisherMeta`, in both `handlePublish` and `handleAppend` — APPEND sets
+`extractPublisherMeta`, in both `handlePublish` and `handleAppend`; APPEND sets
 the new version's metadata from the request (it does not merge with the prior
 version), so the default applies there too, keeping the type guarantee on every
 write path.
 
-- **Reserved OKF files** (`index.md`, `log.md`) are exempt — OKF defines them as
+- **Reserved OKF files** (`index.md`, `log.md`) are exempt; OKF defines them as
   navigation/history, not concepts, and they carry no frontmatter.
 - A document that **already declares a `type`** is stored unchanged.
 - The default is real publisher metadata, so it participates in content/metadata
@@ -46,13 +46,13 @@ documents written before this change or sourced outside demarkus.
 
 ## Consequences
 
-- **Every served demarkus document carries an OKF `type`** — the per-document
+- **Every served demarkus document carries an OKF `type`**: the per-document
   OKF concept rule now holds for the whole store by construction. This is the
   maximal per-document conformance achievable at write time.
 - **Non-breaking.** Existing writers keep working and simply gain a default
   type; the soul, journals, and ADRs stay valid and become export-ready.
 - **Still not a served bundle.** This does not make a server serve or ingest OKF
-  bundles — frontmatter is stripped on serve and the layout is `versions/`. Full
+  bundles; frontmatter is stripped on serve and the layout is `versions/`. Full
   bundle conformance remains an `export` concern (ADR 0002).
 - One-time version bump per legacy document on its first republish (the added
   type changes its metadata).

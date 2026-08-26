@@ -18,7 +18,7 @@ Trigger on phrases and intents like:
 - "add this to my notes", "put this in my soul"
 - "find anything about ...", "what have I saved about ..."
 
-Do NOT trigger for ephemeral context ("remember that in this conversation we're using Python 3.12") — that belongs in the current session, not the persistent store.
+Do NOT trigger for ephemeral context ("remember that in this conversation we're using Python 3.12"); that belongs in the current session, not the persistent store.
 
 ## Determining the current project
 
@@ -31,19 +31,19 @@ Before reading or writing, resolve the project slug:
 
 ## Per-project structure
 
-This skill carries the canonical layout. A `/project-template.md` published at the soul root overrides it — fetch it with `force: true` and follow it when it exists, even when the document exceeds the normal full-body threshold. Only `not-found` means no override; an outline-only response or any other fetch failure (transport, auth, server error) is a real error — surface it and stop instead of silently falling back to this layout. Each `/<project>/` subtree uses:
+This skill carries the canonical layout. A `/project-template.md` published at the soul root overrides it; fetch it with `force: true` and follow it when it exists, even when the document exceeds the normal full-body threshold. Only `not-found` means no override; an outline-only response or any other fetch failure (transport, auth, server error) is a real error; surface it and stop instead of silently falling back to this layout. Each `/<project>/` subtree uses:
 
-- `/<project>/index.md` — the project hub; links to every doc below and anchors discovery
-- `/<project>/architecture.md` — system design, module boundaries, key decisions
-- `/<project>/patterns.md` — code patterns, conventions, idioms
-- `/<project>/guidelines.md` — hard rules for code quality; read before writing code
-- `/<project>/debugging.md` — lessons from bugs and investigations
-- `/<project>/roadmap.md` — done, next, deliberately not prioritized
-- `/<project>/debt.md` — technical debt and improvement opportunities
-- `/<project>/thoughts.md` — open questions, reflections, ideas
-- `/<project>/adr/<NNNN>-<slug>.md` — Architecture Decision Records (one per decision, zero-padded 4-digit sequence)
-- `/<project>/plans/<name>.md` — plan documents (lifecycle carried in the text)
-- `/<project>/journal/<YYYY-MM-DD>.md` — dated session notes, one file per day
+- `/<project>/index.md`: the project hub; links to every doc below and anchors discovery
+- `/<project>/architecture.md`: system design, module boundaries, key decisions
+- `/<project>/patterns.md`: code patterns, conventions, idioms
+- `/<project>/guidelines.md`: hard rules for code quality; read before writing code
+- `/<project>/debugging.md`: lessons from bugs and investigations
+- `/<project>/roadmap.md`: done, next, deliberately not prioritized
+- `/<project>/debt.md`: technical debt and improvement opportunities
+- `/<project>/thoughts.md`: open questions, reflections, ideas
+- `/<project>/adr/<NNNN>-<slug>.md`: Architecture Decision Records (one per decision, zero-padded 4-digit sequence)
+- `/<project>/plans/<name>.md`: plan documents (lifecycle carried in the text)
+- `/<project>/journal/<YYYY-MM-DD>.md`: dated session notes, one file per day
 
 Map the layout to the OKF `type` on publish: `architecture.md` → `Architecture`, `adr/*` → `Decision`, `plans/*` and `roadmap.md` → `Plan`, `journal/*` → `Journal`, `patterns.md`/`guidelines.md`/`debugging.md` → `Guide`, standalone reference docs → `Reference`. `debt.md` and `thoughts.md` take the server default (`Document`); hubs (`index.md`) stay untyped.
 
@@ -51,20 +51,20 @@ Map the layout to the OKF `type` on publish: `architecture.md` → `Architecture
 
 Read intents → start with `mark_lookup` (the catalog), then `mark_fetch`:
 
-1. `mark_lookup` with `url=/<project>/` (or `/` to span every project) and a subject `query` — returns an importance-ranked markdown table of matching docs (path, importance, title, tags), not bodies. This is a catalog lookup, not full-text search: it finds only what was tagged or titled. Narrow with the optional `filter` arg (`tag=`, `modified-after=`, `modified-before=`) and cap with `limit`.
-2. `mark_fetch` the rows worth reading. Also `mark_fetch /index.md` / `/<project>/index.md` directly — lookup won't surface untagged docs, so the index hub still anchors discovery.
+1. `mark_lookup` with `url=/<project>/` (or `/` to span every project) and a subject `query`: returns an importance-ranked markdown table of matching docs (path, importance, title, tags), not bodies. This is a catalog lookup, not full-text search: it finds only what was tagged or titled. Narrow with the optional `filter` arg (`tag=`, `modified-after=`, `modified-before=`) and cap with `limit`.
+2. `mark_fetch` the rows worth reading. Also `mark_fetch /index.md` / `/<project>/index.md` directly; lookup won't surface untagged docs, so the index hub still anchors discovery.
 3. Use `mark_backlinks` or `mark_graph` to surface related documents across projects
 4. If lookup, fetch, or graph calls fail, surface the error and do not report an empty result. Only a successful search with no matches means nothing relevant was found.
 
-Write intents — route to the right file for the content type:
+Write intents: route to the right file for the content type:
 
 For `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `plans/*.md`, and `thoughts.md`, use one shared conflict-safe flow. Force-fetch the target first. On `not-found`, create it with `expected_version: 0`, `on_conflict: "fail"`, and suitable `type`/`tags`/`importance` metadata. On `ok`, require a complete body, apply the change, and publish at the fetched version with `on_conflict: "fail"` while preserving the complete metadata map except unrequested `retention`. On the first conflict in either path, force-fetch the complete current body and metadata, preserve concurrent edits, reapply the intended change once, and retry with the fresh version; surface another conflict or any fetch failure without overwriting. Use `mark_append` only for a purely additive change after a successful fetch confirms the document exists; pass its fetched version, and on conflict refetch, treat already-present content as success, or retry the append once before surfacing failure.
 
-- **Fleeting observation / daily note** → append to today's `/<project>/journal/<YYYY-MM-DD>.md`; prefer `/soul-journal`, which owns this flow. If handling it directly and the file is absent, create it with `mark_publish` (`expected_version: 0`, `on_conflict: "fail"`) and a header like `# <Project> journal — <YYYY-MM-DD>`. On a creation conflict, force-fetch the complete journal and metadata, append the entry once only if absent using its current version, and surface any retry failure rather than reporting success.
+- **Fleeting observation / daily note** → append to today's `/<project>/journal/<YYYY-MM-DD>.md`; prefer `/soul-journal`, which owns this flow. If handling it directly and the file is absent, create it with `mark_publish` (`expected_version: 0`, `on_conflict: "fail"`) and a header like `# <Project> journal: <YYYY-MM-DD>`. On a creation conflict, force-fetch the complete journal and metadata, append the entry once only if absent using its current version, and surface any retry failure rather than reporting success.
 - **Architecture decision** → recursively `mark_list /<project>/adr/` with `include_archived: true` through every returned subdirectory before choosing the next sequence number. Follow each listing's `next-cursor` as `cursor` until `complete: true`; pass `include_archived: true` on every page, track visited paths and directory/cursor pairs, require a non-empty, different, unseen continuation cursor, and allow at most 100 total list calls, 100 directories, and 10,000 documents. A bound makes coverage incomplete only when required work remains; a terminal complete page exactly at a bound with no queued directories is exhaustive and may proceed. Any listing error, truncating bound, cursor failure, or incomplete terminal state means incomplete coverage: surface it and do not assign a number. After a complete inventory, create `/<project>/adr/<NNNN>-<slug>.md` with `mark_publish` (`expected_version: 0`, `on_conflict: "fail"`). On conflict, repeat the complete inventory, choose the next unused sequence, retry once, and surface a second conflict. Standard ADR template: `# <NNNN>. <Title>`, `## Status`, `## Context`, `## Decision`, `## Consequences`.
 - **Pattern / convention learned** → `/<project>/patterns.md` via the shared flow. For a purely additive new section in an existing document, use the versioned `mark_append` exception above; update an existing section through the conflict-safe publish path.
 - **Hard rule for code quality** → `/<project>/guidelines.md`.
-- **Lesson from a bug / a gotcha** → `/<project>/debugging.md` (high recall value — capture the non-obvious why).
+- **Lesson from a bug / a gotcha** → `/<project>/debugging.md` (high recall value; capture the non-obvious why).
 - **Architecture change** → force-fetch `/<project>/architecture.md`. On `not-found`, create it with `expected_version: 0`, `on_conflict: "fail"`, and metadata `type: Architecture`, `tags: architecture,<project>`, and `importance: 0.9`; omit `retention` unless explicitly requested. On `ok`, reject an outline, update the relevant section, and publish with the fetched version, `on_conflict: "fail"`, and the complete fetched metadata map except unrequested `retention`. On the first conflict in either path, force-fetch again, reapply the intended change while preserving concurrent content, and retry once with the fresh complete metadata map except unrequested `retention`; surface another conflict without overwriting.
 - **What's next / done / not prioritized** → `/<project>/roadmap.md`.
 - **Technical debt** → `/<project>/debt.md`.
@@ -72,9 +72,9 @@ For `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `pl
 - **Open question / idea, not yet decided** → `/<project>/thoughts.md`.
 - **Cross-project or global note** → if it does not fit a project, ask the user where it belongs. Do not create ad-hoc top-level files (the soul root holds only `/index.md` and an optional `/project-template.md` override).
 
-**On every `mark_publish`, set `metadata`:** `tags` (comma-separated subjects — the primary match target for `mark_lookup`) and, sparingly, `importance` (0–1, default 0.5; reserve high values for genuinely central docs like index hubs and architecture). An untagged document can only be found by words in its title or an explicit path, so tagging on write is what makes later recall work. The server does not infer either field — you choose them. Reserved keys are rejected except for explicitly requested, write-gated `metadata.retention`; any other metadata key is stored opaquely and reachable through lookup's `filter` axis.
+**On every `mark_publish`, set `metadata`:** `tags` (comma-separated subjects, the primary match target for `mark_lookup`) and, sparingly, `importance` (0–1, default 0.5; reserve high values for genuinely central docs like index hubs and architecture). An untagged document can only be found by words in its title or an explicit path, so tagging on write is what makes later recall work. The server does not infer either field; you choose them. Reserved keys are rejected except for explicitly requested, write-gated `metadata.retention`; any other metadata key is stored opaquely and reachable through lookup's `filter` axis.
 
-**All metadata goes in the `metadata` object, never in the body.** The recognized keys are `title`, `tags`, `importance`, and the OKF `type` (the document's kind). Never hand-write a YAML frontmatter block at the top of a document body — a `---` … `---` fence, or `name:` / `description:` / `type:` keys. demarkus prepends its own version envelope and carries metadata out of band, so a body that opens with `---` is stored as literal content: it renders as garbled headings in a viewer and is invisible to `mark_lookup`. Express the intent through the real channel — the document's name is its `# H1` heading (or `metadata.title`), its **kind is the OKF `type` field** (a `type` key in the `metadata` object, e.g. `metadata: {"type": "Reference"}`), and a one-line summary is the first sentence under the H1.
+**All metadata goes in the `metadata` object, never in the body.** The recognized keys are `title`, `tags`, `importance`, and the OKF `type` (the document's kind). Never hand-write a YAML frontmatter block at the top of a document body: a `---` … `---` fence, or `name:` / `description:` / `type:` keys. demarkus prepends its own version envelope and carries metadata out of band, so a body that opens with `---` is stored as literal content: it renders as garbled headings in a viewer and is invisible to `mark_lookup`. Express the intent through the real channel: the document's name is its `# H1` heading (or `metadata.title`), its **kind is the OKF `type` field** (a `type` key in the `metadata` object, e.g. `metadata: {"type": "Reference"}`), and a one-line summary is the first sentence under the H1.
 
 `mark_append` preserves a doc's metadata: the server carries the current version's `tags`/`importance`/`title`/`type` onto the appended version (`retention` is never inherited), so appending never costs a doc its catalog entry. It cannot add to them, so when an append introduces a materially new subject, force-fetch the full body, reject an outline-only response, then re-publish it with the correct `expected_version`, `on_conflict: "fail"`, and complete current metadata plus extended `tags`. Surface any fetch or publish failure before reporting metadata success. `mark_publish` replaces the metadata map, so publishing tags alone discards `importance`, `title`, `type`, and any opaque keys.
 
@@ -91,8 +91,8 @@ When the user wants to start memory for a project that does not exist in `/index
 
 ## Don't
 
-- Don't fabricate memory. If `mark_fetch` returns `not-found`, the document does not exist — say so.
+- Don't fabricate memory. If `mark_fetch` returns `not-found`, the document does not exist; say so.
 - Don't invent expected_versions. Use 0 for new documents; fetch first when updating.
-- Don't bypass the MCP tools with shell commands — the soul is the source of truth.
+- Don't bypass the MCP tools with shell commands; the soul is the source of truth.
 - Don't create top-level files outside `/<project>/` subtrees except for `/index.md` and a `/project-template.md` layout override.
 - Don't save secrets, credentials, or anything the user has not explicitly authorized.

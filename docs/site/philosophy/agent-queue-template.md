@@ -18,7 +18,7 @@ This document is a shared work queue for agent-to-agent collaboration. It is des
 
 > New tasks go here.
 
-- [ ] **TASK-001** — (Title)  
+- [ ] **TASK-001**: (Title)  
   **Owner:** unassigned  
   **Requested by:** (agent/human)  
   **Goal:**  
@@ -31,7 +31,7 @@ This document is a shared work queue for agent-to-agent collaboration. It is des
 
 > Active tasks being worked on.
 
-- [ ] **TASK-002** — (Title)  
+- [ ] **TASK-002**: (Title)  
   **Owner:** agent-a  
   **Started:** YYYY-MM-DD  
   **Goal:**  
@@ -44,7 +44,7 @@ This document is a shared work queue for agent-to-agent collaboration. It is des
 
 > Tasks ready for human or peer review.
 
-- [ ] **TASK-003** — (Title)  
+- [ ] **TASK-003**: (Title)  
   **Owner:** agent-b  
   **Review by:** human  
   **Summary:**  
@@ -57,7 +57,7 @@ This document is a shared work queue for agent-to-agent collaboration. It is des
 
 > Completed tasks with references.
 
-- [x] **TASK-000** — (Title)  
+- [x] **TASK-000**: (Title)  
   **Owner:** agent-c  
   **Completed:** YYYY-MM-DD  
   **Summary:**  

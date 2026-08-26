@@ -1,6 +1,6 @@
 # The Five-Minute Appliance
 
-Stand up a complete, fully self-hosted knowledge system on one Linux VPS with a single command: world server, knowledge-system broker, web reading room with browser editing, a self-hosted identity provider (Authelia), automatic HTTPS (Caddy), and a background indexing agent. The same world doubles as your personal remote memory — a soul the demarkus-memory plugin joins over the mark protocol. No Kubernetes, no domain, no OAuth app registration, no config files.
+Stand up a complete, fully self-hosted knowledge system on one Linux VPS with a single command: world server, knowledge-system broker, web reading room with browser editing, a self-hosted identity provider (Authelia), automatic HTTPS (Caddy), and a background indexing agent. The same world doubles as your personal remote memory: a soul the demarkus-memory plugin joins over the mark protocol. No Kubernetes, no domain, no OAuth app registration, no config files.
 
 ## Quick start
 
@@ -31,7 +31,7 @@ Open the library URL, log in with the printed credentials, and you have a workin
 
 Without `--domain`, the installer derives the host from the droplet's public IP via [sslip.io](https://sslip.io) wildcard DNS: `library.<ip>.sslip.io`, `broker.<ip>.sslip.io`, `auth.<ip>.sslip.io` all resolve automatically. It is real DNS, so Caddy issues real Let's Encrypt certificates. You configure nothing.
 
-The sslip identity is tied to this machine's IP. When you are ready to move to a real domain, point a wildcard A record at the droplet and re-run with `--domain` — it migrates in place, keeping all your content and credentials:
+The sslip identity is tied to this machine's IP. When you are ready to move to a real domain, point a wildcard A record at the droplet and re-run with `--domain`; it migrates in place, keeping all your content and credentials:
 
 ```bash
 # One wildcard A record: *.kb.example.com -> this droplet's IP, then:
@@ -62,13 +62,13 @@ Everything else is generated: the owner password, all Authelia secrets, the brok
 | Authelia | `demarkus-auth` | loopback :9091 | self-hosted OIDC provider |
 | Caddy | `caddy` | :80/:443 (public) | automatic HTTPS, routes the three subdomains |
 | Indexing agent | `demarkus-agent` | outbound | crawls the world, publishes `/graph/manifest.md` snapshots and compatible `/graph.md` every 6h |
-| Soul cert sync | `demarkus-soul-certsync.timer` | — | copies Caddy's `soul.<host>` cert to the world every 12h (renewal) |
+| Soul cert sync | `demarkus-soul-certsync.timer` | - | copies Caddy's `soul.<host>` cert to the world every 12h (renewal) |
 
 Every service is a hardened systemd unit (`ProtectSystem=strict`, minimal `ReadWritePaths`, its own system user). No container runtime is installed; every component is a native binary.
 
 ## Identity: self-hosted, no Google
 
-The stack ships [Authelia](https://www.authelia.com/) as a native binary — no Google, GitHub, or any external identity provider. The owner account is created at install with a generated password; add teammates by editing `/etc/demarkus-auth/users.yml` (hash a password with `authelia crypto hash generate argon2`) and restarting `demarkus-auth`. Because the broker speaks standard OIDC, you can later point it at any other provider instead.
+The stack ships [Authelia](https://www.authelia.com/) as a native binary; no Google, GitHub, or any external identity provider. The owner account is created at install with a generated password; add teammates by editing `/etc/demarkus-auth/users.yml` (hash a password with `authelia crypto hash generate argon2`) and restarting `demarkus-auth`. Because the broker speaks standard OIDC, you can later point it at any other provider instead.
 
 ## After install
 
@@ -80,7 +80,7 @@ The stack ships [Authelia](https://www.authelia.com/) as a native binary — no 
 
 ## Personal memory: the world is also your soul
 
-The appliance's world server is exposed a second way — as `soul.<host>` on UDP 6309 — so the [demarkus-memory plugin](../tools/index.md) can use it as a remote soul. Run the printed `/soul-join` line and your agent's memory persists to the same versioned store the knowledge system and reading room already serve. One world, three doors: memory writes over the mark protocol with a capability token (no login), while the knowledge system and library sit behind broker SSO.
+The appliance's world server is exposed a second way, as `soul.<host>` on UDP 6309, so the [demarkus-memory plugin](../tools/index.md) can use it as a remote soul. Run the printed `/soul-join` line and your agent's memory persists to the same versioned store the knowledge system and reading room already serve. One world, three doors: memory writes over the mark protocol with a capability token (no login), while the knowledge system and library sit behind broker SSO.
 
 The `soul.<host>` subdomain gets its own real Let's Encrypt certificate (obtained by Caddy, synced into the world by a 12h timer), so remote clients connect and validate cleanly with no `--insecure`. On a brand-new droplet the certificate can take a few seconds to issue; if the card prints a "still provisioning" note, use `--insecure` until the renewal timer lands it, then drop the flag.
 

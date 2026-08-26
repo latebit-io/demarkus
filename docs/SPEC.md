@@ -287,7 +287,7 @@ The body MUST be a markdown document containing a list of entries:
 - Directories are listed as `- [name/](url-encoded-name/)`
 - Files are listed as `- [name](url-encoded-name)`
 
-Servers MUST exclude hidden files (names beginning with `.`) from directory listings. Servers MUST also exclude non-document files — content with no version history, which FETCH would refuse (§11.9) — so a listing never names an entry that cannot be fetched.
+Servers MUST exclude hidden files (names beginning with `.`) from directory listings. Servers MUST also exclude non-document files, content with no version history, which FETCH would refuse (§11.9), so a listing never names an entry that cannot be fetched.
 
 Entries MUST be unique and ordered lexicographically by their decoded immediate child name. A client enumerates a stable authorized directory by starting without a cursor and following `next-cursor` until `complete: true`. Servers MUST apply directory folding, archive selection, and read authorization before selecting the page; a cursor MUST NOT reveal an unreadable entry.
 
@@ -895,7 +895,7 @@ Servers MUST enforce read auth on FETCH, LIST, and VERSIONS operations. Content-
 
 ### 11.9. Versioned-Only Serving
 
-Servers MUST only serve documents that have been written through the protocol, i.e., documents with at least one stored version (in the filesystem layout, a `versions/` directory containing at least one version file). Content present in the storage medium without version history — such as flat files placed directly on the filesystem — MUST be treated as `not-found` and MUST be excluded from LIST responses (§6.2). A directory whose subtree contains no documents MUST likewise be excluded.
+Servers MUST only serve documents that have been written through the protocol, i.e., documents with at least one stored version (in the filesystem layout, a `versions/` directory containing at least one version file). Content present in the storage medium without version history (such as flat files placed directly on the filesystem) MUST be treated as `not-found` and MUST be excluded from LIST responses (§6.2). A directory whose subtree contains no documents MUST likewise be excluded.
 
 This ensures every served document has:
 

@@ -1,16 +1,16 @@
 # Federation Crawler (`demarkus-agent`)
 
-The federation crawler discovers Mark Protocol servers, collects content hashes, and publishes indexes to hubs. It's a Go binary that handles the mechanical work of crawling — no LLM required.
+The federation crawler discovers Mark Protocol servers, collects content hashes, and publishes indexes to hubs. It's a Go binary that handles the mechanical work of crawling; no LLM required.
 
 ## Overview
 
 The crawler implements the core federation loop:
 
-1. **Seed** — start from configured servers
-2. **Crawl** — follow `mark://` links, discover new servers
-3. **Hash** — collect content hashes from every document
-4. **Index** — publish hash indexes to configured hubs
-5. **Repeat** — on a configurable schedule
+1. **Seed**: start from configured servers
+2. **Crawl**: follow `mark://` links, discover new servers
+3. **Hash**: collect content hashes from every document
+4. **Index**: publish hash indexes to configured hubs
+5. **Repeat**: on a configurable schedule
 
 ## Installation
 
@@ -78,7 +78,7 @@ The daemon runs an initial crawl immediately, then repeats at the configured int
 
 ## CLI Reference
 
-### `crawl` — Single Crawl Run
+### `crawl`: Single Crawl Run
 
 ```bash
 demarkus-agent crawl [options]
@@ -86,15 +86,15 @@ demarkus-agent crawl [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-config` | — | Path to TOML config file |
-| `-seeds` | — | Comma-separated seed servers (overrides config) |
+| `-config` | - | Path to TOML config file |
+| `-seeds` | - | Comma-separated seed servers (overrides config) |
 | `-state` | `~/.mark/fedcrawl.json` | Path to state file |
 | `-insecure` | false | Skip TLS certificate verification |
 | `-publish` | false | Publish indexes to hubs after crawl |
 | `-per-server` | false | Publish per-server indexes (not aggregated) |
 | `-v` | false | Verbose output |
 
-### `daemon` — Scheduled Crawling
+### `daemon`: Scheduled Crawling
 
 ```bash
 demarkus-agent daemon -config <path> [options]
@@ -102,8 +102,8 @@ demarkus-agent daemon -config <path> [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-config` | — | Path to TOML config file (required) |
-| `-seeds` | — | Comma-separated seed servers (overrides config) |
+| `-config` | - | Path to TOML config file (required) |
+| `-seeds` | - | Comma-separated seed servers (overrides config) |
 | `-state` | `~/.mark/fedcrawl.json` | Path to state file |
 | `-insecure` | false | Skip TLS certificate verification |
 | `-publish` | false | Publish indexes to hubs after each crawl |
@@ -111,7 +111,7 @@ demarkus-agent daemon -config <path> [options]
 
 Daemon mode requires a config file with `schedule.interval` set.
 
-### `version` — Version Info
+### `version`: Version Info
 
 ```bash
 demarkus-agent version
@@ -128,8 +128,8 @@ seeds = ["mark://server1:6309", "mark://server2:6309"]
 hubs = ["mark://hub.example:6309"]
 ```
 
-- `seeds` — Initial servers to crawl (required unless `-seeds` flag provided)
-- `hubs` — Servers to publish hash indexes to
+- `seeds`: Initial servers to crawl (required unless `-seeds` flag provided)
+- `hubs`: Servers to publish hash indexes to
 
 Hubs are publish-only unless also listed in `seeds`. Links to a publish-only hub
 remain graph edges but do not enqueue the hub's generated artifacts for crawling.
@@ -182,8 +182,8 @@ per_server_concurrency = 2        # Max concurrent requests per server (future)
 
 The crawler maintains state in `~/.mark/fedcrawl.json`:
 
-- **Visited URLs** — etag, status, content hash for each document
-- **Known servers** — when discovered, last crawled, document count
+- **Visited URLs**: etag, status, content hash for each document
+- **Known servers**: when discovered, last crawled, document count
 
 State enables:
 - Conditional fetch (skip unchanged documents)
@@ -241,8 +241,8 @@ Snapshot-aware clients and brokers prefer the manifest and fall back to `/graph.
 
 The crawler uses the same token resolution as other clients:
 
-1. **`DEMARKUS_AUTH` env var** — fallback for all servers
-2. **Stored tokens** — `~/.mark/tokens.toml` per-host tokens
+1. **`DEMARKUS_AUTH` env var**: fallback for all servers
+2. **Stored tokens**: `~/.mark/tokens.toml` per-host tokens
 
 Store tokens before crawling:
 
@@ -269,7 +269,7 @@ completeness metadata.
 
 | Operation | Token Required | Capability |
 |-----------|----------------|------------|
-| Crawl public servers | No | — |
+| Crawl public servers | No | - |
 | Crawl private servers | Yes | `read` |
 | Publish to hub | Yes | `publish` |
 

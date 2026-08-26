@@ -15,16 +15,16 @@ Append the following entry to today's journal file for the current project. One 
 
 3. **Check existence and capture pre-write project state.** Before creating anything, call `mark_list /<project>/` and force-fetch `/index.md`; retain whether the project subtree and exact `- [<Project>](/<project>/)` root-hub link already exist, plus the full root-index body/version when present. Only `not-found` establishes absence. Surface other failures; the journal may still be written, but skip the dependent index update and report it as incomplete. Then call `mark_fetch` on the target path:
 
-   - If the result is `not-found`: the file does not exist yet. Create it with `mark_publish` (`expected_version: 0`, `on_conflict: "fail"`). If another writer creates it first, force-fetch that new journal and append this entry instead; do not overwrite or drop either entry. **Set a `metadata` object so the entry is findable via `mark_lookup`** — you are responsible for choosing these, the server does not infer them:
+   - If the result is `not-found`: the file does not exist yet. Create it with `mark_publish` (`expected_version: 0`, `on_conflict: "fail"`). If another writer creates it first, force-fetch that new journal and append this entry instead; do not overwrite or drop either entry. **Set a `metadata` object so the entry is findable via `mark_lookup`**: you are responsible for choosing these, the server does not infer them:
 
-     - `tags`: comma-separated subjects. Always include `journal` and the project slug, then add the concrete topics in the entry (e.g. `auth`, `release`, `bugfix`, `lookup`). Derive them from the entry text — don't stop at `journal`.
+     - `tags`: comma-separated subjects. Always include `journal` and the project slug, then add the concrete topics in the entry (e.g. `auth`, `release`, `bugfix`, `lookup`). Derive them from the entry text; don't stop at `journal`.
      - `importance`: a float 0–1 reflecting how much this entry matters for later recall. Routine daily notes ~0.3–0.5; a real decision or milestone higher. Use 0.4 when unsure.
      - `type`: `Journal`.
 
      Body:
 
      ```text
-     # <Project> journal — <YYYY-MM-DD>
+     # <Project> journal: <YYYY-MM-DD>
 
      <entry text>
      ```
@@ -40,7 +40,7 @@ Append the following entry to today's journal file for the current project. One 
 
      Leave `expected_version` unset so the tool auto-resolves it. Always prefix the entry body with a leading blank line so it separates visually from the previous entry.
 
-     `mark_append` carries the doc's catalog metadata forward (`retention` excepted), so today's creation-time `tags`/`importance`/`type` stand. If this new entry introduces a materially new subject worth finding later, fetch the file with `force: true`, reject an outline-only response, and re-publish the full current body with the correct `expected_version` and `on_conflict: "fail"`, resending the complete metadata map with extended `tags`; `mark_publish` replaces the map, so a tags-only publish would drop `importance`, `title`, and `type`. If that force-fetch or metadata publish fails, report the journal append as committed and the metadata enrichment as incomplete, surface the exact error, and stop without repeating `mark_append`. Skip enrichment for routine same-topic appends — don't republish gratuitously.
+     `mark_append` carries the doc's catalog metadata forward (`retention` excepted), so today's creation-time `tags`/`importance`/`type` stand. If this new entry introduces a materially new subject worth finding later, fetch the file with `force: true`, reject an outline-only response, and re-publish the full current body with the correct `expected_version` and `on_conflict: "fail"`, resending the complete metadata map with extended `tags`; `mark_publish` replaces the map, so a tags-only publish would drop `importance`, `title`, and `type`. If that force-fetch or metadata publish fails, report the journal append as committed and the metadata enrichment as incomplete, surface the exact error, and stop without repeating `mark_append`. Skip enrichment for routine same-topic appends; don't republish gratuitously.
 
    - For unauthorized, transport, server, malformed-response, or other fetch failures: surface the exact error and stop without writing or claiming success.
 

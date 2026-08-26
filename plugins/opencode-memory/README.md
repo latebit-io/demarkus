@@ -50,9 +50,9 @@ On plugin init the adapter reads its version from the `package.json` that `insta
 
 ## Architecture
 
-- `src/demarkus-memory.ts` — the whole adapter, one self-contained file (OpenCode's plugin dir loads flat files). All gate/nudge/guidance/update-check logic lives in the shared `demarkus-plugin` binary; the adapter hands it normalized JSON and applies the result. Fails open when the binary is absent.
-- `scripts/bootstrap.sh` — pinned binary installer, reused verbatim from the Claude Code plugin (single source of truth for provisioning).
-- `commands/*.md`, `context/`, and `skills/` — generated distribution artifacts from `plugins/prompt-source/`; run `cd tools && go run ./plugin-prompts write` after editing canonical prompts.
+- `src/demarkus-memory.ts`: the whole adapter, one self-contained file (OpenCode's plugin dir loads flat files). All gate/nudge/guidance/update-check logic lives in the shared `demarkus-plugin` binary; the adapter hands it normalized JSON and applies the result. Fails open when the binary is absent.
+- `scripts/bootstrap.sh`: pinned binary installer, reused verbatim from the Claude Code plugin (single source of truth for provisioning).
+- `commands/*.md`, `context/`, and `skills/`: generated distribution artifacts from `plugins/prompt-source/`; run `cd tools && go run ./plugin-prompts write` after editing canonical prompts.
 
 ### Behavior mapping (Claude Code → OpenCode)
 

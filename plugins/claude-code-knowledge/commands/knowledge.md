@@ -1,5 +1,5 @@
 ---
-description: List the joined demarkus knowledge systems and show each available root hub index — an entry point for navigating the shared catalog.
+description: List the joined demarkus knowledge systems and show each available root hub index, an entry point for navigating the shared catalog.
 argument-hint: "[slug | mark://<world>/ | blank = list everything joined]"
 ---
 <!-- markdownlint-disable MD041 -->
@@ -42,5 +42,5 @@ Orient in the organizational demarkus knowledge system(s) this installation has 
 
 ## Don't
 
-- Don't fabricate hub or policy content — if a document isn't there, report it as absent.
+- Don't fabricate hub or policy content; if a document isn't there, report it as absent.
 - Don't confuse this with `/soul`. `/soul` shows the personal, local soul; `/knowledge` shows the shared, broker-fronted knowledge system(s). They are different stores with different audiences.

@@ -1,6 +1,6 @@
 # Demarkus Documentation
 
-Welcome to the Demarkus documentation site. This is the canonical table of contents for deploying, operating, and using a Demarkus server and client tools — built for **AI agents and human collaboration** around durable, readable information. Each section links to focused guides, and every directory has an `index.md` to keep navigation fast and graph-friendly.
+Welcome to the Demarkus documentation site. This is the canonical table of contents for deploying, operating, and using a Demarkus server and client tools, built for **AI agents and human collaboration** around durable, readable information. Each section links to focused guides, and every directory has an `index.md` to keep navigation fast and graph-friendly.
 
 ## Start Here
 
@@ -14,9 +14,9 @@ Welcome to the Demarkus documentation site. This is the canonical table of conte
 ## Deployment
 
 - [TLS & Production Deployment](deployment/index.md)
-- [Single-Host Stack](deployment/single-host.md) — server + broker + library on one VPS
-- [The Five-Minute Appliance](deployment/appliance.md) — the whole stack in one command
-- [Kubernetes & Helm](deployment/kubernetes.md) — the charts, including the multi-world knowledge server (the production path)
+- [Single-Host Stack](deployment/single-host.md): server + broker + library on one VPS
+- [The Five-Minute Appliance](deployment/appliance.md): the whole stack in one command
+- [Kubernetes & Helm](deployment/kubernetes.md): the charts, including the multi-world knowledge server (the production path)
 - [Security Model](security/index.md)
 
 ## Philosophy & Architecture
@@ -26,7 +26,7 @@ Welcome to the Demarkus documentation site. This is the canonical table of conte
 
 ## Tools
 
-- [Federation Crawler](tools/agent.md) — discover servers and build hash indexes
+- [Federation Crawler](tools/agent.md): discover servers and build hash indexes
 - [Token Tooling](tools/index.md)
 
 ## Reference
