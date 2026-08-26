@@ -67,8 +67,12 @@ func BuildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) str
 	b.WriteString("| URL | Title | Status | Links |\n")
 	b.WriteString("|-----|-------|--------|-------|\n")
 	for _, n := range nodes {
+		status := strings.ReplaceAll(strings.Join(strings.Fields(n.Status), "-"), "|", "-")
+		if status == "" {
+			status = "external"
+		}
 		b.WriteString(fmt.Sprintf("| [%s](%s) | %s | %s | %d |\n",
-			n.URL, n.URL, escapeCell(n.Title), n.Status, n.LinkCount))
+			n.URL, n.URL, escapeCell(n.Title), status, n.LinkCount))
 	}
 
 	if len(edges) > 0 {

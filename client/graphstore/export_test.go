@@ -78,6 +78,17 @@ func TestExportEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildExportNormalizesEmptyStatus(t *testing.T) {
+	body := BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), []StoredNode{{URL: "mark://a/a.md"}}, nil)
+	nodes, _, err := ParseExportStrict(body)
+	if err != nil {
+		t.Fatalf("ParseExportStrict: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Status != "external" {
+		t.Fatalf("nodes = %+v", nodes)
+	}
+}
+
 func TestParseExport(t *testing.T) {
 	md := `# Document Graph
 

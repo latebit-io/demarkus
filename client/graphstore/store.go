@@ -197,9 +197,6 @@ func Load(path string) (*Store, error) {
 // In-memory stores from New are a no-op.
 func (s *Store) Save() error {
 	if s.path == "" {
-		// In-memory store; nothing to persist. CrawlAndPersist
-		// still calls us unconditionally, so this no-op is the
-		// load-bearing part of the New() contract.
 		return nil
 	}
 	s.saveMu.Lock()
