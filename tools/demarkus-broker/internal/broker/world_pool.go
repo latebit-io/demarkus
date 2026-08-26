@@ -23,12 +23,14 @@ import (
 // tools land in Slices 4–5.
 type worldDispatcher interface {
 	Fetch(worldName, path, token string) (fetch.Result, error)
+	FetchContext(ctx context.Context, worldName, path, token string) (fetch.Result, error)
 	FetchConditional(worldName, path, token, etag string) (fetch.Result, error)
 	List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	Versions(worldName, path, token string) (fetch.Result, error)
 	Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	LookupContext(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	PublishContext(ctx context.Context, worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Archive(worldName, path, token string) (fetch.Result, error)
 }
@@ -112,6 +114,14 @@ func (p *worldPool) Fetch(worldName, path, token string) (fetch.Result, error) {
 	return c.Fetch(host, path, token)
 }
 
+func (p *worldPool) FetchContext(ctx context.Context, worldName, path, token string) (fetch.Result, error) {
+	c, host, err := p.clientFor(worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+	return c.FetchContext(ctx, host, path, token)
+}
+
 // FetchConditional dispatches a FETCH with an explicit if-none-match etag
 // (the graph seeder tracks /graph.md freshness itself).
 func (p *worldPool) FetchConditional(worldName, path, token, etag string) (fetch.Result, error) {
@@ -174,6 +184,14 @@ func (p *worldPool) Publish(worldName, path, body, token string, expectedVersion
 		return fetch.Result{}, err
 	}
 	return c.Publish(host, path, body, token, expectedVersion, meta)
+}
+
+func (p *worldPool) PublishContext(ctx context.Context, worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	c, host, err := p.clientFor(worldName)
+	if err != nil {
+		return fetch.Result{}, err
+	}
+	return c.PublishContext(ctx, host, path, body, token, expectedVersion, meta)
 }
 
 // Append dispatches an APPEND against worldName. The world

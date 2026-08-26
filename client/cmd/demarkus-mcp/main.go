@@ -100,12 +100,14 @@ func main() {
 // markClient defines the fetch operations used by MCP tool handlers.
 type markClient interface {
 	Fetch(host, path, token string) (fetch.Result, error)
+	FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error)
 	FetchConditional(host, path, token, etag string) (fetch.Result, error)
 	List(host, path, token string) (fetch.Result, error)
 	ListWithOptions(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	Versions(host, path, token string) (fetch.Result, error)
 	Lookup(host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
 	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	Archive(host, path, token string) (fetch.Result, error)
 }
@@ -490,7 +492,8 @@ func markIndexTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_index",
 		mcp.WithDescription(
 			"Crawl a Mark Protocol server, collect content hashes from all documents, "+
-				"and publish a hash index document to a target server (typically a hub). "+
+				"and publish a sharded hash index to a target server (typically a hub). "+
+				"Publishing requires read access and publish access to the manifest and its sibling .shards subtree. "+
 				"The tool checks the target's agent manifest before publishing. "+
 				urlHint(host),
 		),
@@ -1070,9 +1073,11 @@ func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.
 	if err != nil {
 		return mcp.NewToolResultError("hash is required"), nil
 	}
-	if _, ok := protocol.IsHashPath(hash); !ok {
+	cleanHash, ok := protocol.IsHashPath(hash)
+	if !ok {
 		return mcp.NewToolResultError("invalid hash format: expected sha256-<64 lowercase hex characters>"), nil
 	}
+	hash = cleanHash
 
 	indexURL, err := req.RequireString("index")
 	if err != nil {
@@ -1093,13 +1098,13 @@ func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(fmt.Sprintf("index fetch returned: %s", indexResult.Response.Status)), nil
 	}
 
-	// Parse index and filter for matching hash.
-	entries := index.Parse(indexResult.Response.Body)
-	var matches []index.Entry
-	for _, e := range entries {
-		if e.Hash == hash {
-			matches = append(matches, e)
-		}
+	// V2 manifests fetch only matching prefix shards; legacy indexes stay inline.
+	matches, err := index.EntriesForHash(indexPath, indexResult.Response.Body, hash, func(shardPath string) (protocol.Response, error) {
+		result, err := h.client.Fetch(indexHost, shardPath, h.resolveToken(indexHost))
+		return result.Response, err
+	})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid index: %v", err)), nil
 	}
 	if len(matches) == 0 {
 		return mcp.NewToolResultError(fmt.Sprintf("hash %s not found in index", hash)), nil
@@ -1208,14 +1213,15 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
 	}
 
-	body := index.Build(sourceScheme, timeNow(), entries)
+	indexedAt := timeNow()
+	body := index.Build(sourceScheme, indexedAt, entries)
 
 	if dryRun {
 		var b strings.Builder
 		for _, w := range warnings {
 			b.WriteString(w + "\n")
 		}
-		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, not published)\n\n", len(entries), sourceScheme)
+		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, logical entry preview only; publication writes a v2 manifest and shards)\n\n", len(entries), sourceScheme)
 		b.WriteString(body)
 		return mcp.NewToolResultText(b.String()), nil
 	}
@@ -1228,23 +1234,41 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("publishing requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
 	}
 
-	// Merge with existing index if updating.
+	manifestSource := sourceScheme
+	logicalEntries := entries
+	// Merge with an existing legacy index or verified sharded generation.
 	if expectedVersion > 0 {
-		existing, err := h.client.Fetch(targetHost, targetPath, h.resolveToken(targetHost))
+		existing, err := h.client.FetchContext(ctx, targetHost, targetPath, h.resolveToken(targetHost))
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %v", err)), nil
 		}
 		if existing.Response.Status != protocol.StatusOK {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %s", existing.Response.Status)), nil
 		}
-		existingEntries := index.Parse(existing.Response.Body)
-		merged := index.Merge(existingEntries, sourceScheme, entries)
-		// Use the target as source header since this is now an aggregated index.
-		targetScheme := "mark://" + targetHost
-		body = index.Build(targetScheme, timeNow(), merged)
+		existingEntries, err := index.LoadEntries(targetPath, existing.Response.Body, func(shardPath string) (protocol.Response, error) {
+			result, err := h.client.FetchContext(ctx, targetHost, shardPath, h.resolveToken(targetHost))
+			return result.Response, err
+		})
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to read existing index: %v", err)), nil
+		}
+		logicalEntries = index.Merge(existingEntries, sourceScheme, entries)
+		manifestSource = "mark://" + targetHost
 	}
 
-	result, err := h.client.Publish(targetHost, targetPath, body, token, expectedVersion, agentMeta(ctx))
+	publishResult, err := index.PublishGeneration(ctx, index.PublishOptions{
+		ManifestPath:            targetPath,
+		Source:                  manifestSource,
+		Indexed:                 indexedAt,
+		Entries:                 logicalEntries,
+		ExpectedManifestVersion: &expectedVersion,
+	}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
+		result, err := h.client.FetchContext(ioCtx, targetHost, docPath, h.resolveToken(targetHost))
+		return result.Response, err
+	}, func(ioCtx context.Context, docPath, body string, expected int) (protocol.Response, error) {
+		result, err := h.client.PublishContext(ioCtx, targetHost, docPath, body, token, expected, agentMeta(ctx))
+		return result.Response, err
+	})
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}
@@ -1254,7 +1278,8 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		b.WriteString(w + "\n")
 	}
 	fmt.Fprintf(&b, "Indexed %d documents from %s\n", len(entries), sourceScheme)
-	b.WriteString(formatResult(result, "version", "modified"))
+	fmt.Fprintf(&b, "status: ok\nversion: %d\nshards-published: %d\nshards-reused: %d\n",
+		publishResult.ManifestVersion, publishResult.ShardsPublished, publishResult.ShardsReused)
 	return mcp.NewToolResultText(b.String()), nil
 }
 

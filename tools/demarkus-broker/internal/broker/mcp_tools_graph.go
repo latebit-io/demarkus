@@ -348,6 +348,7 @@ const maxIndexDocuments = 1000
 // errIndexTruncated is sentinel-returned by walkDir to short-
 // circuit the recursion when maxIndexDocuments is reached.
 var errIndexTruncated = errors.New("document limit reached, index is truncated")
+var errIndexPublishUnauthorized = errors.New("index publish unauthorized")
 
 // handleMarkIndex crawls a source world, collects content
 // hashes, and either returns the index document (dry_run) or
@@ -355,7 +356,7 @@ var errIndexTruncated = errors.New("document limit reached, index is truncated")
 // demarkus-mcp's mark_index behavior, including the manifest
 // safeguards: target world must have an agent manifest or
 // force=true must be passed to override.
-func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic,gocyclo // MCP signature; validation and publication stay one flow
 	sourceURL, err := req.RequireString("source")
 	if err != nil {
 		return mcp.NewToolResultError("source is required"), nil
@@ -426,14 +427,15 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 		warnings = append(warnings, fmt.Sprintf("warning: crawl skipped %d entries, index is incomplete", len(iw.incomplete)))
 	}
 
-	body := index.Build(sourceScheme, time.Now(), entries)
+	indexedAt := time.Now()
+	body := index.Build(sourceScheme, indexedAt, entries)
 
 	if dryRun {
 		var b strings.Builder
 		for _, w := range warnings {
 			b.WriteString(w + "\n")
 		}
-		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, not published)\n\n", len(entries), sourceScheme)
+		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, logical entry preview only; publication writes a v2 manifest and shards)\n\n", len(entries), sourceScheme)
 		b.WriteString(body)
 		return mcp.NewToolResultText(b.String()), nil
 	}
@@ -441,24 +443,60 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError("crawl incomplete; refusing to publish an authoritative index"), nil
 	}
 
-	// Merge with existing index if updating an existing target.
+	manifestSource := sourceScheme
+	logicalEntries := entries
+	// Merge with an existing legacy index or verified sharded generation.
 	if expectedVersion > 0 {
-		existing, fetchErr := g.dispatcher.Fetch(targetWorld, targetPath, "")
+		existing, fetchErr := g.dispatcher.FetchContext(ctx, targetWorld, targetPath, "")
 		if fetchErr != nil {
 			return g.toolErrorFor("index (fetch existing)", targetWorld, fetchErr), nil
 		}
 		if existing.Response.Status != protocol.StatusOK {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %s", existing.Response.Status)), nil
 		}
-		existingEntries := index.Parse(existing.Response.Body)
-		merged := index.Merge(existingEntries, sourceScheme, entries)
-		targetScheme := "mark://" + targetWorld
-		body = index.Build(targetScheme, time.Now(), merged)
+		existingEntries, loadErr := index.LoadEntries(targetPath, existing.Response.Body, func(shardPath string) (protocol.Response, error) {
+			shard, err := g.dispatcher.FetchContext(ctx, targetWorld, shardPath, "")
+			return shard.Response, err
+		})
+		if loadErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to read existing index: %v", loadErr)), nil
+		}
+		logicalEntries = index.Merge(existingEntries, sourceScheme, entries)
+		manifestSource = "mark://" + targetWorld
 	}
 
 	meta := agentMetaFromClaims(claims)
 	result, err := g.dispatchWithWriteAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Publish(targetWorld, targetPath, body, token, expectedVersion, meta)
+		published, publishErr := index.PublishGeneration(ctx, index.PublishOptions{
+			ManifestPath:            targetPath,
+			Source:                  manifestSource,
+			Indexed:                 indexedAt,
+			Entries:                 logicalEntries,
+			ExpectedManifestVersion: &expectedVersion,
+		}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
+			fetched, fetchErr := g.dispatcher.FetchContext(ioCtx, targetWorld, docPath, "")
+			return fetched.Response, fetchErr
+		}, func(ioCtx context.Context, docPath, docBody string, expected int) (protocol.Response, error) {
+			publishedDoc, publishDocErr := g.dispatcher.PublishContext(ioCtx, targetWorld, docPath, docBody, token, expected, meta)
+			if publishDocErr == nil && publishedDoc.Response.Status == protocol.StatusUnauthorized {
+				return publishedDoc.Response, errIndexPublishUnauthorized
+			}
+			return publishedDoc.Response, publishDocErr
+		})
+		if publishErr != nil {
+			if errors.Is(publishErr, errIndexPublishUnauthorized) {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
+			}
+			return fetch.Result{}, publishErr
+		}
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{
+				"version":          strconv.Itoa(published.ManifestVersion),
+				"shards-published": strconv.Itoa(published.ShardsPublished),
+				"shards-reused":    strconv.Itoa(published.ShardsReused),
+			},
+		}}, nil
 	})
 	if err != nil {
 		return g.toolErrorFor("index (publish)", targetWorld, err), nil
@@ -469,7 +507,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 		out.WriteString(w + "\n")
 	}
 	fmt.Fprintf(&out, "Indexed %d documents from %s\n", len(entries), sourceScheme)
-	out.WriteString(formatToolResult(result, "version", "modified"))
+	out.WriteString(formatToolResult(result, "version", "shards-published", "shards-reused"))
 	return mcp.NewToolResultText(out.String()), nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -36,6 +37,7 @@ type fakeDispatcher struct {
 	publishFn   func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	appendFn    func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 	archiveFn   func(worldName, path, token string) (fetch.Result, error)
+	published   map[string]fetch.Result
 
 	fetchCalls     []dispatchCall
 	fetchCondCalls []condCall
@@ -87,12 +89,23 @@ type writeCall struct {
 func (f *fakeDispatcher) Fetch(worldName, path, token string) (fetch.Result, error) {
 	f.mu.Lock()
 	f.fetchCalls = append(f.fetchCalls, dispatchCall{worldName, path, token})
+	stored, ok := f.published[worldName+path]
 	fn := f.fetchFn
 	f.mu.Unlock()
+	if ok {
+		return stored, nil
+	}
 	if fn == nil {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
 	}
 	return fn(worldName, path, token)
+}
+
+func (f *fakeDispatcher) FetchContext(ctx context.Context, worldName, path, token string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return f.Fetch(worldName, path, token)
 }
 
 func (f *fakeDispatcher) FetchConditional(worldName, path, token, etag string) (fetch.Result, error) {
@@ -177,13 +190,55 @@ func (f *fakeDispatcher) Publish(worldName, path, body, token string, expectedVe
 	f.publishCalls = append(f.publishCalls, writeCall{worldName, path, body, token, expectedVersion, cloneMeta(meta)})
 	fn := f.publishFn
 	f.mu.Unlock()
+	var result fetch.Result
+	var err error
 	if fn == nil {
-		return fetch.Result{Response: protocol.Response{
+		result = fetch.Result{Response: protocol.Response{
 			Status:   protocol.StatusOK,
 			Metadata: map[string]string{"version": "1"},
-		}}, nil
+		}}
+	} else {
+		result, err = fn(worldName, path, body, token, expectedVersion, meta)
 	}
-	return fn(worldName, path, body, token, expectedVersion, meta)
+	if err != nil || (result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated) {
+		return result, err
+	}
+	version, versionErr := strconv.Atoi(result.Response.Metadata["version"])
+	if versionErr == nil && version > 0 {
+		metadata := map[string]string{
+			"version":      strconv.Itoa(version),
+			"content-hash": index.BodyHash(body),
+		}
+		stored := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: metadata}}
+		f.mu.Lock()
+		currentVersion := 0
+		current, exists := f.published[worldName+path]
+		if exists {
+			currentVersion, versionErr = strconv.Atoi(current.Response.Metadata["version"])
+			if versionErr != nil {
+				f.mu.Unlock()
+				return fetch.Result{}, fmt.Errorf("invalid fake version: %w", versionErr)
+			}
+		}
+		if expectedVersion >= 0 && expectedVersion != currentVersion {
+			f.mu.Unlock()
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict}}, nil
+		}
+		if f.published == nil {
+			f.published = make(map[string]fetch.Result)
+		}
+		f.published[worldName+path] = stored
+		f.published[worldName+index.VersionPath(path, version)] = stored
+		f.mu.Unlock()
+	}
+	return result, nil
+}
+
+func (f *fakeDispatcher) PublishContext(ctx context.Context, worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return f.Publish(worldName, path, body, token, expectedVersion, meta)
 }
 
 func (f *fakeDispatcher) Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {

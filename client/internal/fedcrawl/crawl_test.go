@@ -3,15 +3,16 @@ package fedcrawl
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -54,6 +55,20 @@ func newMockClient() *mockClient {
 	}
 }
 
+func TestMockClientRejectsStaleManifestVersion(t *testing.T) {
+	client := newMockClient()
+	if result, err := client.Publish("hub:6309", "/index.md", "first", "", 0, nil); err != nil || result.Response.Status != protocol.StatusCreated {
+		t.Fatalf("initial publish = %+v, %v", result.Response, err)
+	}
+	result, err := client.Publish("hub:6309", "/index.md", "stale", "", 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Response.Status != protocol.StatusConflict || client.pages["hub:6309/index.md"].body != "first" {
+		t.Fatalf("stale publish = %+v, stored = %q", result.Response, client.pages["hub:6309/index.md"].body)
+	}
+}
+
 func (m *mockClient) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -70,7 +85,33 @@ func (m *mockClient) Publish(host, path, body, token string, expectedVersion int
 	if s, ok := m.publishStatuses[host+path]; ok {
 		status = s
 	}
-	return fetch.Result{Response: protocol.Response{Status: status}}, nil
+	if status != protocol.StatusOK && status != protocol.StatusCreated {
+		return fetch.Result{Response: protocol.Response{Status: status}}, nil
+	}
+	currentVersion := 0
+	if current, ok := m.pages[host+path]; ok {
+		var err error
+		currentVersion, err = strconv.Atoi(current.metadata["version"])
+		if err != nil {
+			return fetch.Result{}, fmt.Errorf("invalid mock version: %w", err)
+		}
+	}
+	if expectedVersion >= 0 && expectedVersion != currentVersion {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict}}, nil
+	}
+	version := currentVersion + 1
+	metadata := map[string]string{"version": strconv.Itoa(version), "content-hash": index.BodyHash(body)}
+	stored := mockPage{status: protocol.StatusOK, body: body, metadata: metadata}
+	m.pages[host+path] = stored
+	m.pages[host+index.VersionPath(path, version)] = stored
+	return fetch.Result{Response: protocol.Response{Status: status, Metadata: map[string]string{"version": strconv.Itoa(version)}}}, nil
+}
+
+func (m *mockClient) PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return m.Publish(host, path, body, token, expectedVersion, meta)
 }
 
 func (m *mockClient) addDoc(host, path, body, hash string) {
@@ -125,6 +166,13 @@ func (m *mockClient) Fetch(host, path, _ string) (fetch.Result, error) {
 		Body:     p.body,
 		Metadata: p.metadata,
 	}}, nil
+}
+
+func (m *mockClient) FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return m.Fetch(host, path, token)
 }
 
 func (m *mockClient) ListWithOptions(host, path, _ string, opts fetch.ListOptions) (fetch.Result, error) {
@@ -619,34 +667,6 @@ func TestCrawlerSubdirectories(t *testing.T) {
 	}
 }
 
-func TestCrawlerIndexForServer(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Seeds = []string{"mark://example.com"}
-	cfg.Crawl.MaxDocuments = 100
-
-	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [a.md](a.md)\n- [b.md](b.md)\n")
-	client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	client.addDoc("example.com:6309", "/b.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-
-	crawler := NewCrawler(cfg, client, nil, nil)
-	_, err := crawler.Run(context.Background())
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-
-	idx := crawler.IndexForServer("example.com:6309", time.Now())
-	if idx == "" {
-		t.Fatal("IndexForServer() returned empty string")
-	}
-	if !contains(idx, "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
-		t.Error("Index should contain sha256-aaa...")
-	}
-	if !contains(idx, "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
-		t.Error("Index should contain sha256-bbb...")
-	}
-}
-
 func TestCrawlerWithState(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://example.com"}
@@ -808,11 +828,11 @@ func TestPublishToHubs(t *testing.T) {
 		if count != 1 {
 			t.Errorf("count = %d, want 1", count)
 		}
-		if len(client.publishes) != 1 {
-			t.Fatalf("expected 1 publish, got %d", len(client.publishes))
+		if len(client.publishes) != 2 {
+			t.Fatalf("expected shard + manifest publishes, got %d", len(client.publishes))
 		}
-		if client.publishes[0].Path != "/index.md" {
-			t.Errorf("publish path = %q, want /index.md", client.publishes[0].Path)
+		if client.publishes[1].Path != "/index.md" {
+			t.Errorf("last publish path = %q, want /index.md", client.publishes[1].Path)
 		}
 	})
 
@@ -838,12 +858,12 @@ func TestPublishToHubs(t *testing.T) {
 		if count != 2 {
 			t.Errorf("count = %d, want 2", count)
 		}
-		if len(client.publishes) != 2 {
-			t.Fatalf("expected 2 publishes, got %d", len(client.publishes))
+		if len(client.publishes) != 4 {
+			t.Fatalf("expected two shards + two manifests, got %d", len(client.publishes))
 		}
 		for i, call := range client.publishes {
-			if call.ExpectedVersion != -1 {
-				t.Errorf("publishes[%d].ExpectedVersion = %d, want -1 (no-check)", i, call.ExpectedVersion)
+			if call.ExpectedVersion != 0 {
+				t.Errorf("publishes[%d].ExpectedVersion = %d, want 0", i, call.ExpectedVersion)
 			}
 		}
 	})
@@ -1000,8 +1020,12 @@ func TestPublishRetentionMeta(t *testing.T) {
 			t.Fatal("expected publishes")
 		}
 		for _, call := range client.publishes {
-			if call.Meta["retention"] != "20" {
+			isShard := strings.Contains(call.Path, ".shards/")
+			if !isShard && call.Meta["retention"] != "20" {
 				t.Errorf("publish %s%s meta.retention = %q, want %q", call.Host, call.Path, call.Meta["retention"], "20")
+			}
+			if isShard && call.Meta["retention"] != "" {
+				t.Errorf("version-pinned shard %s%s must not prune history", call.Host, call.Path)
 			}
 			if call.Meta["agent"] != "demarkus-agent" {
 				t.Errorf("publish %s%s lost agent meta: %v", call.Host, call.Path, call.Meta)

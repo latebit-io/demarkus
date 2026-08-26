@@ -56,11 +56,8 @@ type PolitenessConfig struct {
 
 // PublishConfig controls hub publications (hash indexes and /graph.md).
 type PublishConfig struct {
-	// Retention caps each published artifact's version history to its newest
-	// N versions — the server prunes older versions on write (retention
-	// publish metadata, SPEC §9.9). Everything the agent publishes is
-	// regenerated wholesale on every run, so old versions are pure growth
-	// (one live graph document reached 545 versions before this existed).
+	// Retention caps graph and index-manifest histories. Version-pinned index
+	// shards omit retention so reachable manifest versions stay readable.
 	// 0 keeps every version. (default: 20)
 	Retention int `toml:"retention"`
 }

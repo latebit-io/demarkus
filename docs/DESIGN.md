@@ -1313,7 +1313,7 @@ Hubs are the entry points into the information graph:
 - `CrawlAndPersist` — shared crawl path used by CLI (`demarkus graph`), TUI (`d` key), and MCP (`mark_graph`); merges new nodes/edges into the existing store
 - `mark_backlinks` MCP tool — queries the stored graph for reverse links
 - TUI loads the stored graph instantly on `d`, then runs a live crawl in the background to discover new links
-- Hub pattern with `mark_index` — federated content indexing and hash-based resolution across servers
+- Hub pattern with `mark_index` — federated content indexing through version-pinned prefix shards; inactive-slot staging and manifest-last CAS keep each published generation atomic
 - Graph as content — `Store.Export()` renders the graph as publishable markdown with `mark://` links (six-column Edges table: `From | To | Rel | Label | Anchor | Count`); `ParseExport()` parses it back, accepting the legacy two-column shape too; CLI `demarkus graph export` and MCP `mark_graph_export` tool
 - Edge semantics — edges carry provenance (link label, source section anchor, occurrence count) and typed relations ingested from `rel-<predicate>` publisher metadata (ADR 0004)
 - Agent discovery — `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers

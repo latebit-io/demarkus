@@ -6,13 +6,16 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"path/filepath"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -547,6 +550,8 @@ func TestHandlerMarkAppend_NoToken(t *testing.T) {
 
 // stubClient is a mock markClient for testing handler logic.
 type stubClient struct {
+	mu          sync.Mutex
+	published   map[string]fetch.Result
 	fetchFn     func(host, path, token string) (fetch.Result, error)
 	fetchCondFn func(host, path, token, etag string) (fetch.Result, error)
 	listFn      func(host, path, token string) (fetch.Result, error)
@@ -558,10 +563,23 @@ type stubClient struct {
 }
 
 func (s *stubClient) Fetch(host, path, token string) (fetch.Result, error) {
+	s.mu.Lock()
+	stored, ok := s.published[host+path]
+	s.mu.Unlock()
+	if ok {
+		return stored, nil
+	}
 	if s.fetchFn != nil {
 		return s.fetchFn(host, path, token)
 	}
 	return fetch.Result{}, nil
+}
+
+func (s *stubClient) FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return s.Fetch(host, path, token)
 }
 
 func (s *stubClient) FetchConditional(host, path, token, etag string) (fetch.Result, error) {
@@ -594,9 +612,48 @@ func (s *stubClient) ListWithOptions(host, path, token string, opts fetch.ListOp
 }
 func (s *stubClient) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
 	if s.publishFn != nil {
-		return s.publishFn(host, path, body, token, expectedVersion, meta)
+		result, err := s.publishFn(host, path, body, token, expectedVersion, meta)
+		if err != nil || (result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated) {
+			return result, err
+		}
+		version, versionErr := strconv.Atoi(result.Response.Metadata["version"])
+		if versionErr == nil && version > 0 {
+			metadata := map[string]string{
+				"version":      strconv.Itoa(version),
+				"content-hash": index.BodyHash(body),
+			}
+			stored := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: metadata}}
+			s.mu.Lock()
+			currentVersion := 0
+			current, exists := s.published[host+path]
+			if exists {
+				currentVersion, versionErr = strconv.Atoi(current.Response.Metadata["version"])
+				if versionErr != nil {
+					s.mu.Unlock()
+					return fetch.Result{}, fmt.Errorf("invalid stub version: %w", versionErr)
+				}
+			}
+			if expectedVersion >= 0 && expectedVersion != currentVersion {
+				s.mu.Unlock()
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict}}, nil
+			}
+			if s.published == nil {
+				s.published = make(map[string]fetch.Result)
+			}
+			s.published[host+path] = stored
+			s.published[host+index.VersionPath(path, version)] = stored
+			s.mu.Unlock()
+		}
+		return result, nil
 	}
 	return fetch.Result{}, nil
+}
+
+func (s *stubClient) PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return s.Publish(host, path, body, token, expectedVersion, meta)
 }
 func (s *stubClient) Archive(_, _, _ string) (fetch.Result, error) {
 	return fetch.Result{}, nil
@@ -864,6 +921,61 @@ func TestHandlerMarkResolve_Success(t *testing.T) {
 	}
 }
 
+func TestHandlerMarkResolve_SharedManifest(t *testing.T) {
+	hash := "sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	otherHash := "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	artifacts, err := index.BuildShards("/index.md", index.SlotA, []index.Entry{
+		{Hash: hash, Server: "mark://docs.example.com", Path: "/guide.md"},
+		{Hash: otherHash, Server: "mark://other.example.com", Path: "/other.md"},
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]index.ShardRef, len(artifacts))
+	shards := make(map[string]fetch.Result)
+	for i, artifact := range artifacts {
+		version := i + 1
+		refs[i] = artifact.Ref(version)
+		shards[index.VersionPath(artifact.Path, version)] = fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK, Body: artifact.Body,
+			Metadata: map[string]string{"version": strconv.Itoa(version), "content-hash": artifact.ContentHash},
+		}}
+	}
+	manifest, err := index.BuildManifest("/index.md", index.Manifest{
+		Source: "aggregated", Indexed: time.Now(), Complete: true,
+		Documents: 2, ActiveSlot: index.SlotA, Shards: refs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shardFetches := 0
+	h := &handler{client: &stubClient{fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		if path == "/index.md" {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: manifest}}, nil
+		}
+		if shard, ok := shards[path]; ok {
+			shardFetches++
+			return shard, nil
+		}
+		if path == "/"+hash {
+			return fetch.Result{Response: protocol.Response{
+				Status: protocol.StatusOK, Body: "# Guide",
+				Metadata: map[string]string{"content-hash": hash, "version": "1"},
+			}}, nil
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}}}
+	result, err := h.markResolve(t.Context(), newCallToolRequest(map[string]any{
+		"hash": hash, "index": "mark://hub.example.com/index.md",
+	}))
+	if err != nil || result.IsError {
+		t.Fatalf("markResolve = (%+v, %v)", result, err)
+	}
+	if shardFetches != 1 {
+		t.Fatalf("shard fetches = %d, want 1", shardFetches)
+	}
+}
+
 func TestHandlerMarkResolve_Fallback(t *testing.T) {
 	hash := "sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
 	indexBody := "| Hash | Server | Path |\n|------|--------|------|\n" +
@@ -944,15 +1056,19 @@ func TestHandlerMarkResolve_InvalidHash(t *testing.T) {
 
 func TestHandlerMarkIndex_Success(t *testing.T) {
 	hash := "sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
-	var publishedBody string
+	var publishedBodies []string
+	var publishedPaths []string
 
 	sc := &stubClient{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		fetchFn: func(host, path, _ string) (fetch.Result, error) {
 			if path == protocol.WellKnownManifestPath {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
 					Body:   "# Agent Manifest\nThis is a hub.",
 				}}, nil
+			}
+			if host == "hub.com:6309" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
@@ -969,8 +1085,12 @@ func TestHandlerMarkIndex_Success(t *testing.T) {
 			}
 			return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
 		},
-		publishFn: func(_, _, body, _ string, _ int, _ map[string]string) (fetch.Result, error) {
-			publishedBody = body
+		publishFn: func(_, path, body, _ string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
+			publishedBodies = append(publishedBodies, body)
+			publishedPaths = append(publishedPaths, path)
+			if expectedVersion != 0 {
+				t.Errorf("publish %s expected_version = %d, want 0", path, expectedVersion)
+			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   "created",
 				Metadata: map[string]string{"version": "1"},
@@ -990,11 +1110,15 @@ func TestHandlerMarkIndex_Success(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected tool error: %v", result.Content)
 	}
-	if !strings.Contains(publishedBody, hash) {
+	published := strings.Join(publishedBodies, "\n")
+	if !strings.Contains(published, hash) {
 		t.Error("published index should contain the content hash")
 	}
-	if !strings.Contains(publishedBody, "/doc.md") {
+	if !strings.Contains(published, "/doc.md") {
 		t.Error("published index should contain the document path")
+	}
+	if len(publishedPaths) != 2 || publishedPaths[1] != "/indexes/source.md" {
+		t.Errorf("publish paths = %v, want shard then manifest", publishedPaths)
 	}
 }
 
@@ -1049,9 +1173,12 @@ func TestHandlerMarkIndex_DryRun(t *testing.T) {
 
 func TestHandlerMarkIndex_BlocksWithoutManifest(t *testing.T) {
 	sc := &stubClient{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		fetchFn: func(host, path, _ string) (fetch.Result, error) {
 			if path == protocol.WellKnownManifestPath {
 				return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+			}
+			if host == "hub.com:6309" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
 		},
@@ -1074,9 +1201,12 @@ func TestHandlerMarkIndex_BlocksWithoutManifest(t *testing.T) {
 
 func TestHandlerMarkIndex_ForceOverridesManifest(t *testing.T) {
 	sc := &stubClient{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		fetchFn: func(host, path, _ string) (fetch.Result, error) {
 			if path == protocol.WellKnownManifestPath {
 				return fetch.Result{Response: protocol.Response{Status: "not-found"}}, nil
+			}
+			if host == "hub.com:6309" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
@@ -1127,6 +1257,9 @@ func TestHandlerMarkIndex_SourceNoManifestWarns(t *testing.T) {
 				}
 				// Target has manifest.
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# Hub"}}, nil
+			}
+			if host == "hub.com:6309" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
@@ -1777,6 +1910,9 @@ func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess(t *testing.T) {
 	// When the initial publish succeeds, the merge path returns a plain
 	// success — no candidate, no markers, no diff3 invoked.
 	sc := &stubClient{
+		published: map[string]fetch.Result{
+			"example.com:6309/doc.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "5"}}},
+		},
 		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusCreated,
@@ -1812,6 +1948,9 @@ func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess_PreservesAllMetadata(
 	// metadata key the server returned should reach the agent, just like a
 	// plain mark_publish would do via formatResult.
 	sc := &stubClient{
+		published: map[string]fetch.Result{
+			"example.com:6309/doc.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "5"}}},
+		},
 		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusCreated,
