@@ -973,7 +973,7 @@ Publishers require read access and publish access to both the manifest path and 
 - Multiple agents can maintain independent indexes on the same or different hubs.
 - No single point of failure: if a hub is unavailable, agents can query servers directly by hash.
 - Version-pinned shards are immutable inputs to a manifest generation. Publishers MUST NOT apply retention that can prune a shard version while a reachable manifest references it.
-- Manifest retention does not imply shard retention. Shards remain unpruned until a reference-aware collector can prove no retained manifest version names them.
+- Manifest retention does not imply shard retention. Shards remain unpruned until a reference-aware collector can prove no retained manifest version names them. A fixed shard window is unsafe because failed or concurrent staging can advance shard versions without advancing manifest history.
 
 ## 13. Future Extensions
 

@@ -447,7 +447,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	logicalEntries := entries
 	// Merge with an existing legacy index or verified sharded generation.
 	if expectedVersion > 0 {
-		existing, fetchErr := g.dispatcher.Fetch(targetWorld, targetPath, "")
+		existing, fetchErr := g.dispatcher.FetchContext(ctx, targetWorld, targetPath, "")
 		if fetchErr != nil {
 			return g.toolErrorFor("index (fetch existing)", targetWorld, fetchErr), nil
 		}
@@ -455,7 +455,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %s", existing.Response.Status)), nil
 		}
 		existingEntries, loadErr := index.LoadEntries(targetPath, existing.Response.Body, func(shardPath string) (protocol.Response, error) {
-			shard, err := g.dispatcher.Fetch(targetWorld, shardPath, "")
+			shard, err := g.dispatcher.FetchContext(ctx, targetWorld, shardPath, "")
 			return shard.Response, err
 		})
 		if loadErr != nil {

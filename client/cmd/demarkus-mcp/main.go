@@ -1238,7 +1238,7 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	logicalEntries := entries
 	// Merge with an existing legacy index or verified sharded generation.
 	if expectedVersion > 0 {
-		existing, err := h.client.Fetch(targetHost, targetPath, h.resolveToken(targetHost))
+		existing, err := h.client.FetchContext(ctx, targetHost, targetPath, h.resolveToken(targetHost))
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %v", err)), nil
 		}
@@ -1246,7 +1246,7 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %s", existing.Response.Status)), nil
 		}
 		existingEntries, err := index.LoadEntries(targetPath, existing.Response.Body, func(shardPath string) (protocol.Response, error) {
-			result, err := h.client.Fetch(targetHost, shardPath, h.resolveToken(targetHost))
+			result, err := h.client.FetchContext(ctx, targetHost, shardPath, h.resolveToken(targetHost))
 			return result.Response, err
 		})
 		if err != nil {
