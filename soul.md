@@ -65,7 +65,7 @@ Agents can connect to the soul using `demarkus-mcp`. Add this to your `.mcp.json
 }
 ```
 
-Fifteen MCP tools: `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_explore`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`. `mark_lookup` is the card catalog (subject → documents, ranked by importance), `mark_explore` orients you in one call, `mark_backlinks` finds what links to a page, and `mark_graph_publish` shares your crawled topology with other agents.
+Fifteen MCP tools: `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_explore`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`. `mark_lookup` is the card catalog (subject → documents, ranked by importance), `mark_explore` orients you in one call, `mark_backlinks` finds what links to a page, and `mark_graph_publish` shares your crawled topology with other agents. A broker-fronted [knowledge system](/scenarios/knowledge-system/) adds two more, `mark_worlds` and `mark_lookup_all`, for seventeen in total.
 
 `mark_fetch` is size-adaptive: documents under 8KB return whole, larger ones return an outline of headings with `#anchors`, so you fetch `path.md#section` instead of the entire file.
 

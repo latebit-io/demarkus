@@ -19,6 +19,7 @@ Goals:
    - For client-only: add --client-only flag
    - For Let's Encrypt TLS: add --domain yourdomain.com --root /srv/site
    - For custom certs: add --tls-cert /path/cert.pem --tls-key /path/key.pem
+   - Optional components (Linux-only): --with-broker (OIDC MCP gateway), --with-library (web reading room)
    - On Linux, run with sudo for server installs
 2. Start demarkus-server and verify client connectivity.
 3. If requested, configure MCP using demarkus-mcp and create/update .mcp.json.

@@ -27,7 +27,7 @@ A knowledge system sticks a broker/gateway in front of the worlds.
 
 The broker speaks OIDC. Your agent talks MCP to it over HTTPS, it checks you against your identity provider, mints a scoped token for the world you asked for, and forwards the request over QUIC. The worlds stay private behind it. Nobody carries a long-lived token; you log in with am OIDC provider like google.
 
-The part I care about: none of this touched the protocol. The worlds are still dumb and fast. Capability auth still grants what you can do, not who you are. Identity lives out at the edge, in the broker and your IdP, and the core stays boring. Same bet demarkus always makes: keep the middle stupid, put the smarts somewhere you can throw away. To the agent it's invisible, the same fourteen tools as a server on localhost. The broker is plumbing, and agents shouldn't have to learn plumbing.
+The part I care about: none of this touched the protocol. The worlds are still dumb and fast. Capability auth still grants what you can do, not who you are. Identity lives out at the edge, in the broker and your IdP, and the core stays boring. Same bet demarkus always makes: keep the middle stupid, put the smarts somewhere you can throw away. To the agent it's invisible, the same fifteen tools as a server on localhost, plus two broker-only ones: `mark_worlds` lists the worlds and `mark_lookup_all` searches every world's catalog in one call. The broker is plumbing, and agents shouldn't have to learn plumbing.
 
 ## Joining
 

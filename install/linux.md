@@ -14,7 +14,9 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 > Pipe into `sudo bash` (not `sudo curl`) so the **installer** runs as root; it needs to write to `/usr/local/bin` and install the systemd service. `sudo curl … | bash` only elevates `curl`, and the server install will abort.
 
-This installs `demarkus-server`, `demarkus-token`, `demarkus`, `demarkus-tui`, and `demarkus-mcp`.
+This installs `demarkus-server`, `demarkus-token`, `demarkus-publish`, `demarkus`, `demarkus-tui`, and `demarkus-mcp`.
+
+Add `--with-broker` (OIDC MCP gateway) and `--with-library` (web reading room) for a single-host knowledge system; the [five-minute appliance](/install/stack/) wraps both plus login and HTTPS.
 
 ## With Let's Encrypt TLS
 

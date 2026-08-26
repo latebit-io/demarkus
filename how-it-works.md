@@ -75,7 +75,9 @@ Links between documents accumulate into a persistent **knowledge graph**: each
 traversal, not just search; an ADR pulls in the debugging note that motivated it
 and the pattern it produced. At the system tier the [indexing
 agent](/ecosystem/#indexing-agent) aggregates the graph across worlds and
-publishes it to the hub, so a cold agent seeds its graph on the first call.
+publishes it to the hub as an atomic sharded snapshot under `/graph/manifest.md`,
+so a cold agent seeds its graph on the first call and never reads a half-written
+export.
 
 This is the whole loop for one person. The soul is fast, private, and
 yours: on your own machine, or on a [remote host](/scenarios/agent-memory/)
@@ -137,6 +139,8 @@ A typical session:
 
 For anything shared or organizational, the knowledge system is the first place to
 look and the source of truth; the soul is your scratch space and personal backstop.
+On a brokered system, `mark_lookup_all` runs that first lookup across every
+readable world in one call.
 Humans browse the same catalog in the [library](/library/); agents read it over
 MCP. Same store, same versions.
 

@@ -23,7 +23,7 @@ No flags, no DNS setup, nothing to sign up for.
 | `demarkus-server` | The world: versioned markdown over QUIC |
 | `demarkus-broker` | OIDC-fronted MCP gateway; agents join here |
 | `demarkus-library` | Reading room, plus the AI librarian if you supply a key |
-| `demarkus-agent` | Indexing agent; republishes `/graph.md` every 6 hours |
+| `demarkus-agent` | Indexing agent; republishes hub indexes and the link graph every 6 hours |
 | Authelia | Self-hosted identity provider |
 | Caddy | Automatic HTTPS via Let's Encrypt |
 

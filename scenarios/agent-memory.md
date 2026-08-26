@@ -13,7 +13,7 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 ## What you'll have
 
 - A Demarkus server holding structured markdown docs
-- The full MCP surface. Fifteen tools (`mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_explore`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`), plus documents as attachable resources and the `orient` / `recall` / `whats-new` prompts
+- The full MCP surface. Fifteen tools (`mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_explore`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`), plus documents as attachable resources and the `orient` / `recall` / `whats-new` prompts; a broker-fronted [knowledge system](/scenarios/knowledge-system/) adds `mark_worlds` and `mark_lookup_all` for seventeen
 - Version history of every memory update
 - Persistent document graph with backlink queries
 - The agent reads context at session start and writes updates at the end

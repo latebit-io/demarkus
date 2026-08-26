@@ -87,7 +87,8 @@ The memory and knowledge tiers sit on one foundation: the **Mark Protocol**, ver
 | Tool | Purpose |
 |------|---------|
 | `demarkus-server` | Serve a directory of markdown files |
-| `demarkus-knowledge-server` | Production server hosting many worlds in one process |
+| `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
+| `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its policy |
 | `demarkus` | CLI: fetch, list, publish, edit, graph, lookup, okf |
 | `demarkus-tui` | Terminal browser with graph view |
 | `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |
@@ -96,6 +97,7 @@ The memory and knowledge tiers sit on one foundation: the **Mark Protocol**, ver
 | `demarkus-library` | Web reading room with the AI librarian |
 | `demarkus-token` | Generate capability-based auth tokens |
 | `demarkus-publish` | Write directly to the store for read-only server installs |
+| `demarkus-migrate` | Migrate document history between store backends |
 
 ## Install
 

@@ -54,6 +54,7 @@ Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/
 - Install: `/plugin install demarkus-knowledge@demarkus`
 - Slash commands: `/knowledge-join <broker-url>`, `/knowledge`, `/knowledge-doctor` (catalog hygiene audit)
 - Skill: `knowledge-promote`, the curation cascade that distills, dedups, tags, routes, and gates a document before it lands in the shared catalog
+- Recall: session guidance starts shared lookups with `mark_lookup_all`, the broker's one-call catalog search across every readable world
 
 ### OpenCode
 
@@ -103,7 +104,7 @@ pi install ./demarkus/plugins/pi-knowledge
 
 ### Indexing agent
 
-`demarkus-agent` crawls the worlds it is seeded with, collects content hashes, and publishes the aggregate back to a hub: hash indexes for content-addressed fetch and a `/graph.md` link-graph export. Clients seed their graph from that aggregate, so a cold agent answers backlink questions on its first call instead of crawling.
+`demarkus-agent` crawls the worlds it is seeded with, collects content hashes, and publishes the aggregate back to a hub: sharded hash indexes for content-addressed fetch and an atomic sharded graph snapshot under `/graph/manifest.md`, both staged in A/B slots so readers never see a partial write. Crawls walk large directories with paginated LIST cursors. Clients seed their graph from that aggregate, so a cold agent answers backlink questions on its first call instead of crawling.
 
 ```bash
 # one pass
@@ -119,15 +120,18 @@ Published artifacts carry a version retention cap (newest 20 by default) so a ge
 
 | Tool | Purpose |
 |------|---------|
-| `demarkus-server` | Reference QUIC server |
-| `demarkus-knowledge-server` | Production server hosting many worlds in one process |
+| `demarkus-server` | Serve a directory of markdown files |
+| `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
+| `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its policy |
 | `demarkus` | CLI: fetch, list, publish, edit, graph, lookup, okf |
 | `demarkus-tui` | Terminal browser with graph view |
-| `demarkus-mcp` | MCP bridge for LLM agents |
-| `demarkus-agent` | Indexing agent: federation crawl, hash indexes, graph export |
-| `demarkus-broker` | OIDC-fronted MCP gateway for a knowledge system |
-| `demarkus-token` | Capability-based auth token management |
-| `demarkus-publish` | Direct-store writer for read-only server installs |
+| `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |
+| `demarkus-agent` | Indexing agent: crawls worlds, aggregates the graph, publishes hub indexes |
+| `demarkus-broker` | OIDC-fronted MCP gateway composing many worlds into one system |
+| `demarkus-library` | Web reading room with the AI librarian |
+| `demarkus-token` | Generate capability-based auth tokens |
+| `demarkus-publish` | Write directly to the store for read-only server installs |
+| `demarkus-migrate` | Migrate document history between store backends |
 
 ## Building your own
 

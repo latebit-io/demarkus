@@ -1,6 +1,0 @@
-dependencies:
-- name: demarkus-server-common
-  repository: file://../demarkus-server-common
-  version: 0.1.0
-digest: sha256:3615397178182b349f615881692096d39d9a2318efad3ebb4cc79c84ee45348e
-generated: "2026-08-20T09:33:08.740943-04:00"

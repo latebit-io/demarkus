@@ -41,8 +41,9 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 ## What gets updated
 
-- `demarkus-server`, `demarkus-token` (server releases)
+- `demarkus-server`, `demarkus-token`, `demarkus-publish` (server releases)
 - `demarkus`, `demarkus-tui`, `demarkus-mcp` (client releases)
+- `demarkus-broker` and `demarkus-library`, when installed via `--with-broker` / `--with-library`
 - `demarkus-install` (the update helper itself)
 
 ## What is preserved
@@ -54,8 +55,9 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 ## Check installed version
 
-The binaries don't expose a `--version` flag. The installer records the
-installed release in a version marker:
+`demarkus-server -version` prints its release; the client binaries do not
+expose a version flag. The installer records the installed release in a
+version marker:
 
 ```bash
 # Linux

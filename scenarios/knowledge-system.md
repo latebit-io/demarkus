@@ -34,11 +34,17 @@ This is the tier above the [team knowledge base](/scenarios/team/). A team scena
      souls          souls        agent           ← crawls worlds, publishes the graph
 ```
 
-The broker is the only public surface. Worlds stay private; the broker authenticates the caller against your IdP, mints a scoped token for the world being addressed, and proxies the request. The MCP tool surface the agent sees is byte-for-byte the same as talking to a local `demarkus-server`, federation, graph, and lookup tools included.
+The broker is the only public surface. Worlds stay private; the broker authenticates the caller against your IdP, mints a scoped token for the world being addressed, and proxies the request. The MCP tool surface the agent sees is byte-for-byte the same as talking to a local `demarkus-server`, federation, graph, and lookup tools included, plus two broker-only tools: `mark_worlds` lists the worlds and `mark_lookup_all` runs one catalog lookup across every readable world, globally limited, with a partial status when a world fails instead of a failed query.
 
 Worlds default to the file store. Point one at Postgres (`-store postgres -pg-dsn ...`) and it serves LOOKUP from the database catalog, so that world scales past a single replica.
 
 At production scale, `demarkus-knowledge-server` replaces per-world server processes: one deployment serves every world on one UDP listener, TLS SNI selects the world during the handshake, and each world keeps its own GCS bucket (with an immutable world ID), tokens, policy, and rate limits. A Helm chart ships in the repo (`deploy/helm/demarkus-knowledge-server`).
+
+### High availability
+
+The knowledge server is stateless: all durable state lives in the world's GCS bucket, so every replica derives the same view from one head object. Writes race on a compare-and-swap of that head object; there is no leader election. The chart refuses to render fewer than 2 replicas and ships a PodDisruptionBudget with `minAvailable: 1`.
+
+Before a world serves, `demarkus-knowledge-bootstrap` initializes its bucket and seeds its publish policy. Credentials come only from Workload Identity / Application Default Credentials; no keys are mounted. Egress to GCS requires the explicit `networkPolicy.allowUnrestrictedHTTPS` opt-in, because a NetworkPolicy cannot express GCS hostnames. Per-world tokens mount from Secrets and hot-reload on change or SIGHUP. The chart README covers all of it.
 
 For the design rationale behind worlds, hubs, and souls, see [Creating an automated knowledge universe](/blog/creating-an-automated-knowledge-universe/).
 
