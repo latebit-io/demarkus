@@ -76,7 +76,7 @@ rel-depends-on: /architecture.md, mark://other-world/spec.md
 - `~/.mark/graph.json` schema stays **v1**: the new fields are `omitempty`
   and old files load unchanged.
 - One shared annotation renderer (`graph.EdgeAnnotation`) formats the terse
-  display suffix (` [supersedes]`, ` ("Getting started", #intro, x3)`) used
+  display suffix (`[supersedes]`, `("Getting started", #intro, x3)`, each prefixed with a space) used
   identically by the local MCP, the broker gateway, and both backlink lists;
   pinned-literal tests on both sides guard drift.
 

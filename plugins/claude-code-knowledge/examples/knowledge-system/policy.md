@@ -6,7 +6,7 @@ owner: <team / contact, e.g. platform-eng (#knowledge-base)>
 strictness: warn
 require_tags: category
 
-The write policy for this demarkus knowledge system. Joined agents (via the demarkus-memory Claude Code plugin's `/knowledge-join`) fetch this from `mark://root/.well-known/demarkus/policy.md` and follow it. Edit it here on `root` to change the policy for everyone; it is versioned like any demarkus document and propagates to each member on their next session.
+The write policy for this demarkus knowledge system. Joined agents (via the demarkus-knowledge Claude Code plugin's `/knowledge-join`) fetch this from `mark://root/.well-known/demarkus/policy.md` and follow it. Edit it here on `root` to change the policy for everyone; it is versioned like any demarkus document and propagates to each member on their next session.
 
 The lines above are the **enforced core**: the agent mirrors them into the plugin's local gate (`strictness:` → severity, `require_tags:` → mandatory tag axes, and the optional `require_fields:` → mandatory OKF metadata fields such as `type`). `require_fields:` is omitted here so `type` stays advisory until the corpus is typed; add it (e.g. `require_fields: type`) to make it mandatory. Everything below is **convention** the agent follows; the `/knowledge-doctor` hygiene auditor can check it after the fact.
 

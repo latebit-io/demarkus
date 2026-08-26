@@ -27,7 +27,7 @@ It declares who owns the world, what subject domain it holds, its partition role
 
 `/knowledge-join` registers the system so the publish tag-gate enforces on its writes (the same tag check as the local soul; tags travel in the tool call, so no broker access is needed for that). For the rest:
 
-1. On first substantive work against a knowledge system, the agent fetches `mark://root/.well-known/demarkus/policy.md` and `template.md` and follows them; structure conventions are advisory by necessity (only the agent, via its MCP OAuth session, can reach the broker; a hook cannot).
+1. On first substantive work against a knowledge system, the agent fetches `mark://root/.well-known/demarkus/policy.md` and `mark://root/.well-known/demarkus/template.md` and follows them; structure conventions are advisory by necessity (only the agent, via its MCP OAuth session, can reach the broker; a hook cannot).
 2. The agent mirrors the policy's **enforced core** into local files the gate reads (`<slug>` is the MCP server name `/knowledge-join` registered, shown by `claude mcp list`):
 
    ```bash
