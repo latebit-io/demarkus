@@ -11,7 +11,7 @@ The Mark Protocol is an application-layer protocol for the transfer of markdown 
 
 ## Status of This Document
 
-This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here (including federation) are considered future extensions and are not part of this specification.
+This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here are considered future extensions and are not part of this specification. Federation document formats (hash indexes and graph snapshots) are specified in Section 12; server-to-server sync remains a future extension.
 
 ## 1. Terminology
 

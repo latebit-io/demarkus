@@ -11,6 +11,7 @@ This plugin complements [`demarkus-opencode-memory`](../opencode-memory/). Memor
 - `/knowledge-doctor` audits multi-world catalog health without writing.
 - `knowledge-promote` curates staged material into a writable destination.
 - Session guidance and recall nudges consult shared knowledge first.
+- Catalog recall prefers the broker-wide `mark_lookup_all`, one lookup across every readable world, with a per-world fallback for older brokers and plain endpoints.
 - Publish and append gates enforce mirrored system policy, retention confirmation, and style rules.
 - Co-installation with the memory plugin uses one gate owner, preventing duplicate blocks and warnings.
 

@@ -94,6 +94,8 @@ another.
 
 Re-publishing is idempotent: the agent uses `expected_version=-1` (no check), and the server's no-op-on-duplicate-content prevents version churn when the computed index is unchanged.
 
+Generated graph and index-manifest documents are published with `retention: 20` (the fedcrawl `[publish]` default); the chart exposes no knob for it. Version-pinned index shards omit retention so reachable manifest versions stay readable.
+
 ## Probes
 
 Intentionally omitted. The agent is an outbound scheduled job, not a service. Kubernetes restarts on process exit — the daemon loop logs and continues on transient crawl errors and exits only on configuration / unrecoverable failures. An exec probe would only verify the binary, not crawl health, so it's misleading.

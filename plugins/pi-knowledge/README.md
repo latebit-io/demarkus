@@ -5,7 +5,7 @@ Join an organizational [demarkus](https://github.com/latebit-io/demarkus) **know
 ## What it does
 
 - **Join over OAuth.** `/knowledge-join <broker-url>` validates the broker (RFC 9728 metadata), derives a slug, and registers it as an HTTP MCP server (`{url, auth: "oauth"}`) in `~/.config/mcp/mcp.json`. pi-mcp-adapter runs the OAuth flow on first use — no token stored locally.
-- **Consult-first guidance.** Names the joined systems and injects "check the shared catalog first, navigate via the `root` hub, record durable shared knowledge there" guidance, once per session.
+- **Consult-first guidance.** Names the joined systems and injects "check the shared catalog first, navigate via the `root` hub, record durable shared knowledge there" guidance, once per session. Catalog recall prefers the broker-wide `mark_lookup_all`, one lookup across every readable world, with a per-world fallback for older brokers and plain endpoints.
 - **Publish tag-gate.** Enforces `tags` + `importance` + the system's policy-declared **required tag axes** (`axis:value`) and **required OKF fields** (e.g. `type`) on writes to a joined system — `warn` by default, `block`/`ask` per the mirrored policy.
 - **Recall nudge.** On recall-shaped prompts about shared/org knowledge, reminds the agent to look in the system first.
 - **Slash commands.** `/knowledge`, `/knowledge-join`, `/knowledge-doctor`, plus the `knowledge-promote` cascade skill.

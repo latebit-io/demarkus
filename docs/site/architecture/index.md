@@ -4,12 +4,14 @@ This page describes the Demarkus system architecture, key design decisions, and 
 
 ## System Overview
 
-Demarkus is a markdown‑native document protocol built on QUIC. It is organized as four modules:
+Demarkus is a markdown‑native document protocol built on QUIC. The repository is organized as six modules:
 
 - **`protocol/`** — wire format and parsing/serialization only
-- **`server/`** — QUIC server serving versioned markdown files
-- **`client/`** — CLI, TUI, and MCP tools
-- **`tools/`** — development utilities (placeholder)
+- **`server/`** — QUIC servers: `demarkus-server` (filesystem), `demarkus-server-pg` (Postgres), `demarkus-knowledge-server` (multi-world, GCS)
+- **`client/`** — CLI, TUI, MCP server, and the federation agent
+- **`tools/`** — the OIDC broker/MCP gateway, token tooling, direct-to-store publish, load testing
+- **`plugins/`** — agent plugins for Claude Code, OpenCode, pi, and Obsidian
+- **`deploy/`** — Helm charts, Kubernetes examples, and the kind dev harness
 
 The architecture intentionally separates **protocol parsing** from **transport**, and **storage** from **network**, so that each layer can be tested independently.
 
@@ -37,17 +39,18 @@ The server:
 Core server pieces:
 
 - **Handler**: request parsing, verb routing, response formatting
-- **Store**: versioned document storage with hash‑chain integrity
+- **Store**: versioned document storage with hash‑chain integrity; backends are the filesystem (default), Postgres (`demarkus-server-pg`), and GCS (`demarkus-knowledge-server`)
 - **Auth**: capability‑based token verification (hashes only)
 - **TLS**: dev cert generation, prod cert loading, SIGHUP reload
 
 ### Clients
 
-The client module ships three tools:
+The client module ships four tools:
 
 - **`demarkus`** (CLI): fetch/list/publish/versions + graph crawl
 - **`demarkus-tui`** (TUI): interactive markdown browser
 - **`demarkus-mcp`** (MCP server): tools for LLM agents
+- **`demarkus-agent`** (federation crawler): scheduled crawl, hash indexes, graph snapshots
 
 All tools share the same Mark Protocol client layer with:
 
@@ -140,13 +143,11 @@ Bundle interoperability is therefore an out-of-band codec, not a wire feature. T
 
 ## Deployment Topology
 
-A typical deployment looks like this:
+Demarkus deploys at three scales.
 
-- **Clients** (CLI/TUI/MCP) connect over QUIC to a server.
-- **Server** terminates TLS, validates paths, and serves content from a local directory.
-- **Content store** is just the filesystem; versioned files live under `versions/`.
+### Single server
 
-Example topology:
+Clients connect over QUIC to one `demarkus-server`; the content store is the filesystem (versioned files under `versions/`) or Postgres (`demarkus-server-pg`).
 
 ```
 Clients (CLI/TUI/MCP)
@@ -155,10 +156,28 @@ Clients (CLI/TUI/MCP)
         |
   demarkus-server
         |
-   /srv/site (files + versions/)
+   /srv/site (files + versions/)   or   Postgres
 ```
 
-This design keeps infrastructure minimal: no database, no external dependencies, and no background workers.
+The filesystem form needs no database and no background services.
+
+### Brokered knowledge system
+
+`demarkus-broker` fronts one or more worlds: it terminates MCP over HTTPS with OIDC auth, mints per-world capability tokens, and speaks QUIC to the worlds behind it. The federation agent (`demarkus-agent`) crawls the worlds on a schedule and publishes hash indexes and graph snapshots to the hub.
+
+```
+Agents (MCP over HTTPS, OIDC)
+        |
+  demarkus-broker ── demarkus-agent (scheduled crawl)
+        |
+   QUIC/TLS (per-world tokens)
+        |
+  worlds (demarkus-server instances)
+```
+
+### Multi-world knowledge server
+
+At production scale, one `demarkus-knowledge-server` deployment replaces per-world server processes: TLS SNI selects the world during the QUIC handshake, each world has its own GCS bucket with an immutable world ID, and 2 or more stateless replicas share the buckets with no leader election (writes race on a compare-and-swap of one head object). See [Kubernetes & Helm](../deployment/kubernetes.md).
 
 ## Request Flow
 

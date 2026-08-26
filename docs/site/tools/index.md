@@ -1,6 +1,6 @@
 # Tools
 
-This section covers the supporting tools that ship with Demarkus: the **federation crawler** for discovering servers and building indexes, **token generation** for capability-based authentication, and **direct-to-store publishing** for read-only server installs.
+This section covers the supporting tools that ship with Demarkus: the **federation crawler** for discovering servers and building indexes, the **broker** that fronts a knowledge system, **token generation** for capability-based authentication, and **direct-to-store publishing** for read-only server installs.
 
 ## Federation Crawler (`demarkus-agent`)
 
@@ -18,6 +18,12 @@ demarkus-agent crawl -seeds "mark://localhost:6309" -insecure -v
 demarkus-agent daemon -config fedcrawl.toml -insecure
 ```
 
+## Broker (`demarkus-broker`)
+
+The broker is the front door of a knowledge system: it authenticates people and agents with OIDC, mints per-world capability tokens, and exposes every world through one MCP-over-HTTPS gateway that agents join with `/knowledge-join`. On top of the per-world tool surface it adds `mark_worlds` (the world directory, with per-world write access) and `mark_lookup_all` (universe-wide catalog lookup with a single merged, globally limited result).
+
+See `tools/demarkus-broker/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-broker/`) for deployment.
+
 ## Token Generation (`demarkus-token`)
 
 The server is secure by default and **denies writes** unless you configure a tokens file. Tokens are capability-based: they grant operations on path patterns, not identities. The server stores **only the SHA-256 hash** of tokens, never the raw secret.
@@ -33,7 +39,7 @@ A descriptive label is how you'll know which entry to revoke when a device is lo
 ### Generate a token (publish access)
 
 ```bash
-./server/bin/demarkus-token generate -label my-laptop -paths "/**" -ops publish -tokens tokens.toml
+./tools/bin/demarkus-token generate -label my-laptop -paths "/**" -ops publish -tokens tokens.toml
 ```
 
 - `-label` is required.
@@ -45,13 +51,13 @@ A descriptive label is how you'll know which entry to revoke when a device is lo
 
 ```bash
 # Publish-only to everything under /docs/
-./server/bin/demarkus-token generate -label docs-writer -paths "/docs/**" -ops publish -tokens tokens.toml
+./tools/bin/demarkus-token generate -label docs-writer -paths "/docs/**" -ops publish -tokens tokens.toml
 
 # Read + publish to everything
-./server/bin/demarkus-token generate -label admin -paths "/**" -ops "read,publish" -tokens tokens.toml
+./tools/bin/demarkus-token generate -label admin -paths "/**" -ops "read,publish" -tokens tokens.toml
 
 # Read-only access to private paths
-./server/bin/demarkus-token generate -label internal-reader -paths "/internal/**" -ops read -tokens tokens.toml
+./tools/bin/demarkus-token generate -label internal-reader -paths "/internal/**" -ops read -tokens tokens.toml
 ```
 
 ### Join URLs (`demarkus-token join`)
@@ -60,8 +66,8 @@ A join URL packs the host and token into one paste-able string, so onboarding a 
 
 ```bash
 # Compose with generate: mint a scoped token, wrap it in a join URL
-./server/bin/demarkus-token generate -label phone -paths "/**" -ops publish -tokens tokens.toml \
-  | ./server/bin/demarkus-token join -host kb.example.com
+./tools/bin/demarkus-token generate -label phone -paths "/**" -ops publish -tokens tokens.toml \
+  | ./tools/bin/demarkus-token join -host kb.example.com
 # -> mark://kb.example.com#token=...
 ```
 
@@ -80,10 +86,10 @@ By default all paths are public. To protect paths, create a token with the `read
 
 ```bash
 # Protect /internal/** — requires a read token for FETCH, LIST, VERSIONS
-./server/bin/demarkus-token generate -label internal-reader -paths "/internal/**" -ops read -tokens tokens.toml
+./tools/bin/demarkus-token generate -label internal-reader -paths "/internal/**" -ops read -tokens tokens.toml
 
 # Full private server — protect everything
-./server/bin/demarkus-token generate -label team-member -paths "/**" -ops "read,publish" -tokens tokens.toml
+./tools/bin/demarkus-token generate -label team-member -paths "/**" -ops "read,publish" -tokens tokens.toml
 ```
 
 Paths not covered by any read token remain public. The well-known manifest (`/.well-known/agent-manifest.md`) is always accessible.

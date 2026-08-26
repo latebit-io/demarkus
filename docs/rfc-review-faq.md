@@ -14,9 +14,9 @@ Two access paths: MCP over HTTPS for agents, web or CLI for humans.
 ## What are a world, a hub, root, and an index?
 
 - **World**: one demarkus server in a knowledge system, addressed by logical name. Own namespace, store, tokens, and release. It may describe itself in an optional `world.md`; a world without one still works.
-- **Hub**: an ordinary world that receives published aggregates, the content-hash indexes from `mark_index` and the `/graph.md` export. `mark_resolve` and backlink seeding read from it. Not a protocol or server concept: the server binary has no hub mode, and `hub: true` is a deploy-repo flag the crawler reads.
+- **Hub**: an ordinary world that receives published aggregates, the content-hash indexes from `mark_index` and the graph exports (`/graph/manifest.md` snapshots plus legacy `/graph.md`). `mark_resolve` and backlink seeding read from it. Not a protocol or server concept: the server binary has no hub mode, and `hub: true` is a deploy-repo flag the crawler reads.
 - **Root**: the conventional name for the hub world. Not guaranteed by the protocol. The deploy only checks that some world sets `hub: true`, but the name `root` is hardcoded in the secret store and library config, so in practice the hub must be called root.
-- **Index**: `index.md` is a curated entry-point document, the discovery backstop for what lookup can't surface. The crawler writes machine hash indexes to `/index/<host>.md` only when `perServer` is set, as it is here; with the chart default it writes `/index.md` and overwrites the curated one.
+- **Index**: `index.md` is a curated entry-point document, the discovery backstop for what lookup can't surface. The crawler writes machine hash indexes to `/index/<host>.md` only when `perServer` is set, as it is here; with the chart default it writes `/index.md` and overwrites the curated one. Large indexes publish as a sharded v2 manifest with shards under `<manifest>.shards/` in alternating a/b slots, manifest committed last so readers never see a partial index.
 
 ## What automated cues push agents to record memory?
 
@@ -77,7 +77,7 @@ so a deep crawl usually stops on the node cap rather than the depth limit).
 - Edges carry provenance: link label, source section anchor, occurrence count.
 - Typed relations come from `rel-<predicate>` publisher metadata, e.g. `rel-supersedes`.
 - Crawls persist to a graph store that answers `mark_backlinks`; seeded from a verified `/graph/manifest.md` snapshot with `/graph.md` fallback, local crawls take precedence.
-- `mark_graph_publish` republishes the store as a crawlable `/graph.md` (generated doc, default retention 20).
+- `mark_graph_publish` republishes the store as a crawlable `/graph.md` (the legacy single-document form; generated doc, default retention 20). Version-pinned sharded snapshots behind `/graph/manifest.md` are published by the federation agent.
 
 ## How is the graph built world to world?
 
@@ -112,12 +112,13 @@ Catalog and graph evidence before bodies.
 
 ## Why deploy a knowledge system on k8s?
 
-A knowledge system is distributed: many independent servers behind one broker.
+A knowledge system is distributed: many logically isolated worlds behind one broker.
 
-- Each world is its own server with its own namespace, store, tokens, and release.
-- A world is an independent failure domain for its own content. Other worlds keep serving and answering lookups.
+- At production scale, one multi-replica `demarkus-knowledge-server` Deployment hosts every world: TLS SNI selects the world per connection, and each world keeps its own GCS bucket (with an immutable world ID), tokens, policy, and rate limits. The earlier shape, one StatefulSet per world, is superseded by this.
+- A world is an independent failure domain for its own content: its bucket, tokens, and policy are its own, and other worlds keep serving and answering lookups.
 - A world being down degrades shared state: the next crawl silently omits its nodes and edges from the hub graph, so cross-world backlinks for it disappear until a later successful crawl. If the down world is the hub, cross-world discovery goes with it.
-- Adding a world is one entry in `deployment.yaml`. Upgrading is not per-world: all worlds share one chart revision and image tag, so one merge rolls every world, and StatefulSet changes to immutable fields need manual intervention per world.
+- Adding a world is one entry in the server's `worlds[]` config plus a bucket bootstrap; no new workload.
+- Replicas are stateless over shared GCS; writes race on a compare-and-swap of one head object per world, with no leader election. The chart refuses fewer than 2 replicas.
 - The world list and deployment identity are declared once and reconciled by ArgoCD. Versions, secrets, bootstrap, and the hub name are not.
 - Smaller needs: the reference deployment's README calls this overkill for teams and says one or two plain deploys would do.
 
@@ -185,7 +186,7 @@ Fifteen `mark_*` MCP tools.
 | `mark_graph` | Crawl outbound `mark://` links; persists edges to the graph store |
 | `mark_backlinks` | What links here, with edge provenance |
 | `mark_graph_export` | Export the graph store as publishable markdown |
-| `mark_graph_publish` | Export and publish the graph as `/graph.md` (retention default 20) |
+| `mark_graph_publish` | Export and publish the graph as legacy `/graph.md` (retention default 20); sharded snapshots are the agent's job |
 | `mark_discover` | Fetch a server's agent manifest |
 | `mark_resolve` | Resolve content by SHA-256 hash via a hub index |
 | `mark_index` | Crawl a server, publish its content-hash index to a hub |
@@ -199,12 +200,13 @@ of those:
 | Addition | Kind | Description |
 |----------|------|-------------|
 | `mark_worlds` | MCP tool | List the system's worlds: name, URL, address, and whether you can write to each. Broker-only, since the local MCP's universe is its one world |
+| `mark_lookup_all` | MCP tool | Universe-wide catalog lookup: one query fanned out to every readable world, merged into a single globally limited table with `partial` status on per-world failures. Broker-only |
 | `/knowledge-join` | command | Validate an org broker URL, register it as an MCP server, and copy its policy into the local gates as a snapshot. Claude Code itself runs the OAuth flow on the first tool call; the command handles no tokens |
 | `/knowledge` | command | List joined systems and show each `root` hub index |
 | `/knowledge-doctor` | command | Read-only hygiene audit: orphans, broken links, untagged and policy-noncompliant docs, ADR gaps, duplicates |
 | `knowledge-promote` | skill | The curation cascade that lands a staged document in the catalog; invoked by the memory plugin's `/promote` |
 
-Writes pass a per-world writer allowlist with one shared per-world token; SSO is the org gate.
+With the two broker-only tools the brokered surface is 17 MCP tools. Writes pass a per-world writer allowlist with one shared per-world token; SSO is the org gate.
 
 ## How is knowledge formatted and held to a standard?
 
@@ -252,7 +254,7 @@ of core is in DESIGN.md under "Why not search?".
 
 - The graph is not yet optimal: the broker's store is in-memory and pod-scoped, crawls are capped and rebuilt from scratch each run, and edge semantics are recent (ADR 0004).
 - Full-text or semantic search requires an added component; until then recall depends on tagging discipline.
-- Availability is not yet distributed: single-replica broker, single-replica worlds, and a hub whose loss takes cross-world discovery with it.
+- Availability is partly distributed: the broker defaults to 2 replicas with a PodDisruptionBudget, and the knowledge server requires 2 or more stateless replicas over shared GCS; the hub remains a single point for cross-world discovery, and the broker's graph store is still pod-scoped.
 - Writes inside a world share one token, so per-user attribution rests on the provenance recorded in documents, not on the credential.
 - Legacy servers replaced a document's metadata on append rather than merging it, so documents appended before the merge landed may still be missing tags.
 - Behavior at large scale is unproven: catalog size, crawl cost, and cross-world graph growth have not been tested at enterprise corpus sizes.

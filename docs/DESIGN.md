@@ -2,8 +2,8 @@
 
 **Project Name:** Demarkus  
 **Protocol Name:** Mark Protocol  
-**Version:** 0.1  
-**Date:** February 14, 2025  
+**Version:** 0.2  
+**Date:** August 26, 2026  
 **Status:** Draft
 
 ## Vision
@@ -163,6 +163,7 @@ Document-centric operations that align with markdown usage:
 - **ARCHIVE**: Remove a document from active serving (preserves in version history)
 - **LIST**: Get one pageable directory listing
 - **VERSIONS**: Get version history for a document
+- **LOOKUP**: Catalog lookup by subject over declared tags and titles, ranked by importance (SPEC §6.7)
 
 ### Path Structure & Parameters
 
@@ -1219,7 +1220,7 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 - Glamour (markdown rendering)
 - Lip Gloss (styling)
 
-### Phase 2: Publish Operations — IN PROGRESS
+### Phase 2: Publish Operations — COMPLETE (except structured audit logging)
 
 **Server**:
 - ~~PUBLISH support~~
@@ -1237,9 +1238,9 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 ### Phase 3: Advanced Features
 
 **Server**:
-- Directory indexes
-- Content addressing
-- Federation support
+- ~~Directory indexes~~ (LIST with pagination, LOOKUP catalog)
+- ~~Content addressing~~ (content-addressed fetch, SPEC §12)
+- ~~Federation support~~ (`demarkus-agent` crawler, hash indexes, graph snapshots)
 
 **Client**:
 - Offline mode
@@ -1291,7 +1292,7 @@ Hubs are the entry points into the information graph:
 - Search gives you matches; the graph gives you understanding of how information relates
 - The protocol already has all the primitives: FETCH reads content, LIST enumerates, links connect — no new verbs needed
 
-> **Update (2026-05-30):** LOOKUP was later added as a 7th verb (issue #113), but it does not contradict the above. LOOKUP is a per-world *card catalog* over author-declared `tags`/`importance` — not a centralized or full-text index. It never reads document bodies, ranks only by tag/title match plus declared importance, and complements graph traversal rather than replacing it. These arguments still stand against *full-text / semantic* search, which remains out of core (an opt-in sidecar that reads demarkus over LIST/FETCH). See SPEC.md §6.7.
+> **Note:** LOOKUP (the 7th verb, 2026-05-30, issue #113) does not contradict the above: it is a per-world catalog over author-declared `tags`/`importance`, never reads document bodies, and complements graph traversal. Full-text and semantic search remain out of core (an opt-in sidecar over LIST/FETCH). See SPEC.md §6.7.
 
 **Graph as content — export, publish, share**:
 - The crawled graph is itself a markdown document — nodes as list items, edges as `mark://` links
@@ -1319,6 +1320,14 @@ Hubs are the entry points into the information graph:
 - Agent discovery — `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers
 - Atomic graph snapshots — `demarkus-agent` publishes version-pinned node and edge shards under `/graph/`, commits `/graph/manifest.md` last, and then updates legacy `/graph.md`; seeders verify the complete snapshot before applying it
 - Federation crawler exception — generated `/graph.md` and `/graph/` documents are hash-indexed but never reinterpreted as authored edges or discovery links
+
+### Later architecture decisions
+
+Decisions made after this document's core design are recorded as ADRs in [docs/adr/](adr/index.md):
+
+- [ADR 0006](adr/0006-postgres-backend-is-an-optional-build.md): the Postgres backend is an optional build, not a dependency
+- [ADR 0007](adr/0007-sni-virtual-world-routing.md): TLS SNI selects a virtual Mark server, enabling one process to host many worlds
+- [ADR 0008](adr/0008-gcs-root-cas-storage.md): GCS world state commits through one root CAS, enabling stateless multi-replica serving
 
 ## Security Considerations
 

@@ -5,7 +5,10 @@ This section is a stable reference for configuration, environment variables, and
 ## Configuration
 
 - [Server configuration & env vars](#server-configuration)
+- [Knowledge server configuration](#knowledge-server-configuration)
 - [Federation crawler configuration](#federation-crawler)
+
+Broker configuration (OIDC, worlds, MCP gateway) is documented in `tools/demarkus-broker/` and its Helm chart README.
 
 ### Server configuration
 
@@ -22,11 +25,47 @@ All settings are via environment variables; flags override for dev use:
 | `DEMARKUS_MAX_STREAMS` | — | `10` | Max concurrent streams per connection |
 | `DEMARKUS_IDLE_TIMEOUT` | — | `30s` | Idle connection timeout |
 | `DEMARKUS_REQUEST_TIMEOUT` | — | `10s` | Per-request deadline |
+| `DEMARKUS_LOG_FORMAT` | — | `text` | Log output format (`text` or `json`) |
 
 Notes:
 - `-tls-cert` and `-tls-key` must be provided together.
 - When no tokens file is configured, the server rejects writes (no auth = no writes).
 - `-read-only` explicitly rejects all write operations regardless of tokens. Use this for public-facing servers where content is published locally with `demarkus-publish`.
+
+### Knowledge server configuration
+
+`demarkus-knowledge-server` reads no environment variables: all configuration is a strict YAML file passed with `-config`, and GCS credentials come from Application Default Credentials (Workload Identity on GKE). Unknown keys are rejected, and durations must be quoted strings.
+
+```yaml
+version: 1                      # required, only supported value
+listen:
+  address: ":6309"              # default
+  maxIncomingStreams: 128       # default
+  idleTimeout: "30s"            # default
+health:
+  address: ":8081"              # default; serves /livez and /readyz
+tls:
+  certFile: <path>              # required
+  keyFile: <path>               # required
+worlds:                         # one or more
+  - name: <dns-label>           # unique
+    authorities: [<dns-name>]   # one or more, globally unique
+    bucket:
+      url: gs://<bucket>        # exact form
+      worldID: <uuid>           # canonical lowercase RFC 4122, unique
+    auth:
+      tokensFile: <path>        # required, hot-reloaded
+    policy:
+      path: /.well-known/demarkus/policy.md   # only supported value
+    readOnly: false
+    limits:
+      maxConcurrentRequests: 32 # default
+      requestTimeout: "10s"     # default
+      requestsPerSecond: 50     # default
+      burst: 100                # default
+```
+
+See [Run a Server](../server/index.md#multi-world-mode-demarkus-knowledge-server) and `deploy/helm/demarkus-knowledge-server/README.md`.
 
 ### Federation crawler configuration
 
