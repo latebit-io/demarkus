@@ -149,7 +149,7 @@ Demarkus deploys at three scales.
 
 Clients connect over QUIC to one `demarkus-server`; the content store is the filesystem (versioned files under `versions/`) or Postgres (`demarkus-server-pg`).
 
-```
+```text
 Clients (CLI/TUI/MCP)
         |
      QUIC/TLS
@@ -165,7 +165,7 @@ The filesystem form needs no database and no background services.
 
 `demarkus-broker` fronts one or more worlds: it terminates MCP over HTTPS with OIDC auth, mints per-world capability tokens, and speaks QUIC to the worlds behind it. The federation agent (`demarkus-agent`) crawls the worlds on a schedule and publishes hash indexes and graph snapshots to the hub.
 
-```
+```text
 Agents (MCP over HTTPS, OIDC)
         |
   demarkus-broker ── demarkus-agent (scheduled crawl)

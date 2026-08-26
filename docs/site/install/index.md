@@ -53,7 +53,7 @@ Two server flavors are separate targets, not part of `make all`:
 | `make server-pg` | `server/bin/demarkus-server-pg`, `server/bin/demarkus-migrate` | Postgres-backed server and the store migration tool |
 | `make knowledge-server` | `server/bin/demarkus-knowledge-server`, `server/bin/demarkus-knowledge-bootstrap` | Multi-world GCS server and its bucket bootstrapper |
 
-> Build note: use `make server` / `make client` / `make tools` or `go build -o bin/<name> ./cmd/<name>/` to avoid dropping binaries in the working directory.
+> Build note: each module builds separately; use `make server` / `make client` / `make tools`, or from inside a module `cd server && go build -o bin/<name> ./cmd/<name>/` (same shape for `client/` and `tools/`).
 
 ## Pre-built Binaries
 

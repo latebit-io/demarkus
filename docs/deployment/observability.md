@@ -6,7 +6,7 @@ This document deliberately ships no pre-built collector configs. Every backend's
 
 ## Format and routing
 
-All three services write to stdout/stderr via Go's `log/slog`:
+All four services write to stdout/stderr via Go's `log/slog`:
 
 | Service | Default format | Override |
 |---|---|---|
@@ -65,7 +65,7 @@ Server logs cover protocol request handling, startup, and TLS/auth lifecycle. Th
 The knowledge server shares the server's request-handling and logging code, so protocol events use the `demarkus-server` schema above. Two additions:
 
 - Every world-scoped record carries a `world` field (the world name), and per-connection records add `authority` (the SNI name the client dialed); scope dashboards by `world`.
-- Startup, world-open, TLS, and GCS lifecycle events are its own (`configuration invalid`, `TLS setup failed`, `GCS client unavailable`, `world startup failed`); all are ERROR-level and fatal at startup.
+- Startup, world-open, TLS, and GCS lifecycle events have their own messages (`configuration invalid`, `TLS setup failed`, `GCS client unavailable`, `world startup failed`); all are ERROR-level and fatal at startup.
 
 ## Broker (`demarkus-broker`) — field schema
 
