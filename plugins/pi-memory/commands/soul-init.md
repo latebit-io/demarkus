@@ -20,7 +20,7 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run this
 
    - If the output is exactly `NO_SERVER`, no demarkus-server is running. Run:
      `"$HOME/.demarkus/bin/demarkus-plugin" provision init default`
-     Do not assume the install landed at `~/.demarkus/soul/` — `default` falls back to isolated mode on a different root and port when 6310 is taken. Use step 3 to report the actual mode, soul path, and port from the script's stderr or `~/.demarkus/plugin-memory.conf`.
+     Do not assume the install landed at `~/.demarkus/soul/`: `default` falls back to isolated mode on a different root and port when 6310 is taken. Use step 3 to report the actual mode, soul path, and port from the script's stderr or `~/.demarkus/plugin-memory.conf`.
 
    - If the output starts with `SERVERS`, one or more demarkus-server processes are running. Each following line is `PID PORT ROOT`. Show all of them to the user in a clean list, then ask:
 
@@ -39,6 +39,6 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run this
 
 ## Important
 
-- If multiple demarkus-servers are running and the user is ambiguous, ask which one by PID or path before proceeding — do not guess.
+- If multiple demarkus-servers are running and the user is ambiguous, ask which one by PID or path before proceeding; do not guess.
 - The config lives at `~/.demarkus/plugin-memory.conf`. Rerunning this command overwrites it.
-- In `reuse` mode, the plugin does not manage the server's lifecycle — if the user stops that server later, the plugin's memory will be unavailable until they restart it or rerun `/soul-init`.
+- In `reuse` mode, the plugin does not manage the server's lifecycle; if the user stops that server later, the plugin's memory will be unavailable until they restart it or rerun `/soul-init`.

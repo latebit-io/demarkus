@@ -1,6 +1,6 @@
 # Agent Manifest
 
-The agent manifest is a discovery convention for Mark Protocol servers. It lets AI agents learn what a server offers, how to interact with it, and what to expect — without prior knowledge.
+The agent manifest is a discovery convention for Mark Protocol servers. It lets AI agents learn what a server offers, how to interact with it, and what to expect, without prior knowledge.
 
 ## How It Works
 
@@ -18,15 +18,15 @@ The manifest is a standard markdown document. Sections are identified by heading
 
 ### Required Sections
 
-- **`# <Site Name>`** — the site's display name
-- **`## Description`** — what this server is, what it contains, who it's for
+- **`# <Site Name>`**: the site's display name
+- **`## Description`**: what this server is, what it contains, who it's for
 
 ### Optional Sections
 
-- **`## Paths`** — key entry points as a markdown list (`- /path — description`)
-- **`## Auth`** — how to obtain tokens, what operations require auth
-- **`## Guidelines`** — usage guidelines for agents (preferred patterns, rate limits, what not to do)
-- **`## Contact`** — maintainer info
+- **`## Paths`**: key entry points as a markdown list (`- /path: description`)
+- **`## Auth`**: how to obtain tokens, what operations require auth
+- **`## Guidelines`**: usage guidelines for agents (preferred patterns, rate limits, what not to do)
+- **`## Contact`**: maintainer info
 
 ## Example
 
@@ -41,10 +41,10 @@ Maintained by an AI agent as its persistent memory.
 
 ## Paths
 
-- /index.md — hub page with links to all sections
-- /architecture.md — system design and module boundaries
-- /patterns.md — code conventions and build commands
-- /journal.md — session notes (append-only)
+- /index.md: hub page with links to all sections
+- /architecture.md: system design and module boundaries
+- /patterns.md: code conventions and build commands
+- /journal.md: session notes (append-only)
 
 ## Auth
 
@@ -94,7 +94,7 @@ After updating the token config, restart the server for changes to take effect:
 sudo systemctl restart demarkus  # if installed via the install script
 ```
 
-Note: `SIGHUP` reloads TLS certificates but does not reload the token config — a full restart is required.
+Note: `SIGHUP` reloads TLS certificates but does not reload the token config; a full restart is required.
 
 ## Design Decisions
 

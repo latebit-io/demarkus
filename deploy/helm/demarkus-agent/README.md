@@ -22,7 +22,7 @@ For private seeds (read-auth enabled), add a token entry for that host as well.
 | `image.repository` | string | `ghcr.io/latebit-io/demarkus-agent` | Container image |
 | `image.tag` | string | `""` (uses `.Chart.AppVersion`) | Image tag |
 | `image.pullPolicy` | string | `IfNotPresent` | |
-| `replicaCount` | int | `1` | Keep at 1 — multiple replicas re-do the same crawl |
+| `replicaCount` | int | `1` | Keep at 1; multiple replicas re-do the same crawl |
 | `config.seeds` | list | `[]` | `mark://` URLs to crawl. **Required.** |
 | `config.hubs` | list | `[]` | `mark://` URLs to publish indexes to. Empty = crawl-only mode |
 | `config.endpoints` | map | `{}` | Logical authority to explicit `dialAddress` and optional `serverName` transport route |
@@ -73,7 +73,7 @@ Token files must therefore use logical authority keys.
 
 The agent uses the protocol-client tokens convention. On startup it calls `tokens.LoadDefault()` which reads `~/.mark/tokens.toml`. The chart mounts the tokens Secret at `/home/demarkus/.mark/tokens.toml` and sets `HOME=/home/demarkus`, so the existing code path Just Works.
 
-For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env var by patching the Deployment container `env` — but the file path is preferred for multi-host setups.
+For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env var by patching the Deployment container `env`: but the file path is preferred for multi-host setups.
 
 ## How publishing modes interact
 
@@ -98,11 +98,11 @@ Generated graph and index-manifest documents are published with `retention: 20` 
 
 ## Probes
 
-Intentionally omitted. The agent is an outbound scheduled job, not a service. Kubernetes restarts on process exit — the daemon loop logs and continues on transient crawl errors and exits only on configuration / unrecoverable failures. An exec probe would only verify the binary, not crawl health, so it's misleading.
+Intentionally omitted. The agent is an outbound scheduled job, not a service. Kubernetes restarts on process exit; the daemon loop logs and continues on transient crawl errors and exits only on configuration / unrecoverable failures. An exec probe would only verify the binary, not crawl health, so it's misleading.
 
 ## Persistence
 
-The agent's state file holds per-URL `etag` and last-seen timestamps for crawl politeness (conditional FETCH). It is not authoritative content — losing it just means a fresh crawl on the next tick, no data loss on hubs. Default is ephemeral (`emptyDir`). Set `state.persistent: true` only if you crawl very large universes where the etag cache is worth preserving across restarts.
+The agent's state file holds per-URL `etag` and last-seen timestamps for crawl politeness (conditional FETCH). It is not authoritative content; losing it just means a fresh crawl on the next tick, no data loss on hubs. Default is ephemeral (`emptyDir`). Set `state.persistent: true` only if you crawl very large universes where the etag cache is worth preserving across restarts.
 
 ## Image
 
@@ -123,7 +123,7 @@ helm unittest deploy/helm/demarkus-agent/
 
 ## See also
 
-- `/plans/universe-deployment.md` — full Phase 6 plan
-- `/architecture.md#agent-driven-hash-discovery` — federation pattern
-- `client/cmd/demarkus-agent/main.go` — agent CLI
-- `client/internal/fedcrawl/` — crawl + index + publish core
+- `/plans/universe-deployment.md`: full Phase 6 plan
+- `/architecture.md#agent-driven-hash-discovery`: federation pattern
+- `client/cmd/demarkus-agent/main.go`: agent CLI
+- `client/internal/fedcrawl/`: crawl + index + publish core

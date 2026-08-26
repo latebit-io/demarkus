@@ -41,7 +41,7 @@ the same Ingress controller through different hostnames:
 | MCP gateway | `:8081` (`server.mcp.addr`) | `ingress.mcp.host` (optional) | 14-tool demarkus surface over JSON-RPC/Streamable HTTP for plugin agents. See [MCP gateway](#mcp-gateway). |
 
 The two listeners share auth (`compositeVerifier`), rate-limit
-buckets (per-canonical-email), and the `Issuer` machinery — only the
+buckets (per-canonical-email), and the `Issuer` machinery; only the
 wire shape (JSON-RPC vs REST) differs.
 
 ## Management API endpoint surface
@@ -60,7 +60,7 @@ wire shape (JSON-RPC vs REST) differs.
 
 ### `/me/install`
 
-Returns the caller's identity and installable world metadata — one
+Returns the caller's identity and installable world metadata; one
 entry per world the verified identity is authorized for AND that has
 a non-empty `publicURL` configured. The endpoint mints no world
 tokens and returns no raw token material; world access is mediated
@@ -108,7 +108,7 @@ The MCP gateway is the broker's HTTPS-fronted JSON-RPC surface for
 plugin-style agents (Claude Code, IDE integrations, anything
 speaking the Model Context Protocol). One MCP server entry on the
 client connects the agent to every world the operator has
-configured under `worlds[]` — no per-world client setup. The
+configured under `worlds[]`: no per-world client setup. The
 gateway translates HTTPS/JSON-RPC at the org boundary into QUIC/Mark
 Protocol inside the cluster, so corporate networks that block UDP
 reach the universe over standard `:443`.
@@ -119,7 +119,7 @@ The gateway is part of the binary, not a feature flag. Every broker
 listens on `server.mcp.addr` (default `:8081`); the chart's Service
 exposes the port as `mcp`; the NetworkPolicy admits ingress on it.
 Existing deployments upgrading the chart pick up the listener
-silently — no `mcp.enabled` knob to set. To keep the listener
+silently; no `mcp.enabled` knob to set. To keep the listener
 cluster-internal, leave `ingress.mcp.host` blank; the port is still
 admitted from the ingress-controller namespace by the
 NetworkPolicy but no external rule routes traffic to it.
@@ -148,7 +148,7 @@ ingress:
 Splitting the hosts avoids `.well-known/*` path collisions: the
 management API (the issuer origin) serves
 `/.well-known/openid-configuration`,
-`/.well-known/oauth-authorization-server` (RFC 8414 — must live on
+`/.well-known/oauth-authorization-server` (RFC 8414; must live on
 the issuer's origin per §3.3, strict clients validate issuer ==
 fetch origin) and `/.well-known/jwks.json`, while the MCP gateway
 serves only `/.well-known/oauth-protected-resource` (RFC 9728,
@@ -197,18 +197,18 @@ spec](https://modelcontextprotocol.io/specification/2024-11-05/basic/authorizati
 using the broker's existing OIDC machinery:
 
 - `GET /.well-known/oauth-protected-resource` (RFC 9728, also the
-  path-inserted `/mcp` form) — declares the resource server
+  path-inserted `/mcp` form); declares the resource server
   (`resource` = gateway host `/mcp`) and points clients at the
   authorization server (`authorization_servers` = the management
   host, i.e. `server.publicURL`).
-- `GET /.well-known/oauth-authorization-server` (RFC 8414) — served
+- `GET /.well-known/oauth-authorization-server` (RFC 8414); served
   on the **management host**, aliasing the OIDC Discovery handler
   (`/.well-known/openid-configuration`): §3.3 requires the metadata
   on the issuer's own origin, so the gateway deliberately does not
   serve it. The actual IdP (Google, Okta, Entra) is one hop deeper,
   handled by the broker's existing PR3 device-flow + PR4
   refresh-grant code.
-- `POST /mcp` — single JSON-RPC endpoint. Unauthenticated requests
+- `POST /mcp`: single JSON-RPC endpoint. Unauthenticated requests
   receive `401 + WWW-Authenticate: Bearer
   resource_metadata="...oauth-protected-resource"` per RFC 6750 +
   RFC 9728, so a fresh client knows where to start the auth flow.
@@ -223,7 +223,7 @@ using the broker's existing OIDC machinery:
 
 The gateway's rate limiter is the same per-canonical-email bucket
 the management API's `/me/install` route uses. A single user calling
-both the MCP gateway and the management API shares one bucket — an
+both the MCP gateway and the management API shares one bucket; an
 abusive identity cannot multiply its effective rate by fanning out
 across surfaces. Defaults from `rateLimit.tokens`: 10/min per
 email, burst 5. The 401 + 429 envelope shape is the same on either
@@ -286,7 +286,7 @@ listener silently:
 - The rendered `config.yaml` carries the MCP block; existing
   deployments without operator overrides get the chart defaults.
 - No new RBAC to enable the gateway: the broker-namespace `Role`
-  already grants the write path everything it needs — `create` +
+  already grants the write path everything it needs: `create` +
   per-world `get/update` on the write-token Secrets (broker namespace)
   and `get/update` on each world's tokens Secret (per-world `Role`).
   See "What this chart ships" above; nothing extra to provision.
@@ -298,12 +298,12 @@ listener silently:
 
 ## Quick install (development)
 
-Put sensitive values in a values file rather than on the command line —
+Put sensitive values in a values file rather than on the command line;
 `--set` values leak into shell history and `ps` output. The values
 file also keeps the multi-line broker signing PEM readable:
 
 ```yaml
-# broker-secrets.values.yaml — do not commit
+# broker-secrets.values.yaml: do not commit
 oidc:
   clientSecret: "YOUR_CLIENT_SECRET"
   # ECDSA P-256 key for broker-signed id_tokens. Generate with:
@@ -328,7 +328,7 @@ helm install broker deploy/helm/demarkus-broker \
   --set-json 'worlds=[{"name":"team-a","namespace":"team-a","tokensSecret":"team-a-tokens","allow":{"domains":["example.com"]},"defaultToken":{"paths":["/team-a/*"],"operations":["read","publish"],"expiresAfter":"24h"}}]'
 ```
 
-World namespaces must already exist — chart does not create them.
+World namespaces must already exist; the chart does not create them.
 
 ## Production checklist
 
@@ -341,7 +341,7 @@ dev, but the value lives in helm release history (`helm get values`
 shows it; `helm history` retains every revision). Production should
 externalize the secret.
 
-Create the Secret out of band — via External Secrets Operator, Sealed
+Create the Secret out of band, via External Secrets Operator, Sealed
 Secrets, Vault, or `kubectl`:
 
 ```bash
@@ -354,7 +354,7 @@ Then point the chart at it:
 
 ```yaml
 oidc:
-  clientSecret: ""              # leave blank — the env var supplies it
+  clientSecret: ""              # leave blank; the env var supplies it
   existingSecretRef:
     name: broker-oidc
     key: clientSecret
@@ -378,7 +378,7 @@ and appends the real client IP.**
 | Controller     | Default behavior | Notes |
 |----------------|------------------|-------|
 | nginx-ingress  | Strips + appends | Default safe. `use-forwarded-headers` defaults to `false`, which makes the controller treat the inbound XFF as untrusted and overwrite it with the real client. |
-| Traefik        | Strips + appends | Default safe when used as the entrypoint. `forwardedHeaders.trustedIPs` controls when Traefik will trust an upstream's XFF — leave empty for direct-from-internet. |
+| Traefik        | Strips + appends | Default safe when used as the entrypoint. `forwardedHeaders.trustedIPs` controls when Traefik will trust an upstream's XFF; leave empty for direct-from-internet. |
 | HAProxy        | Configurable     | Set `option forwardfor` to append; older versions require `option http-pretend-keepalive` interactions to be checked. |
 | Cloud LB (ALB/GCLB) | Provider-dependent | Most cloud LBs append the source IP to XFF but do NOT strip what the client sent. Pair with a Pod-level controller (nginx-ingress in front of the broker pods) that does strip. |
 
@@ -391,14 +391,14 @@ install.
 
 ### 3. Use real TLS, not the in-binary self-signed fallback
 
-The broker binary speaks plain HTTP inside the cluster — TLS
+The broker binary speaks plain HTTP inside the cluster; TLS
 termination is the Ingress controller's job. Two paths:
 
-- `ingress.tls.existingSecret: <name>` — point at a pre-existing
+- `ingress.tls.existingSecret: <name>`: point at a pre-existing
   `kubernetes.io/tls` Secret (cert-manager-managed, externally
   provisioned, manually created from your CA, etc.). The chart only
   references the Secret; it does not create it.
-- `ingress.tls.certManager.enabled: true` — chart provisions a
+- `ingress.tls.certManager.enabled: true`: chart provisions a
   cert-manager `Certificate` resource. Requires cert-manager installed
   in the cluster and a working `Issuer` / `ClusterIssuer`. Default
   issuer is `ClusterIssuer letsencrypt-prod`; override
@@ -426,7 +426,7 @@ On managed Kubernetes that typically means cluster-admin, or a custom
 install-time `ClusterRoleBinding` granting RBAC create in the world
 namespaces. If your cluster restricts cross-namespace RBAC
 management, set `rbac.create: false` and provision the per-world
-`Role`s out of band — every world entry needs `secrets`
+`Role`s out of band; every world entry needs `secrets`
 `get/update` on its `tokensSecret`, plus the broker-namespace `Role`
 covering `coordination.k8s.io/leases` + the refresh-tokens Secret.
 

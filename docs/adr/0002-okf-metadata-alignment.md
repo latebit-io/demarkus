@@ -1,10 +1,10 @@
-# ADR 0002 — Align store frontmatter with the Open Knowledge Format
+# ADR 0002: Align store frontmatter with the Open Knowledge Format
 
 Status: accepted (2026-06-22)
 
 ## Context
 
-Google published the Open Knowledge Format (OKF) v0.1 on 2026-06-12 — a
+Google published the Open Knowledge Format (OKF) v0.1 on 2026-06-12, a
 vendor-neutral format for organizational knowledge. Its model is close to
 demarkus's own: directory bundles of markdown, a cross-link relationship graph,
 `index.md` hubs, and path-minus-`.md` as concept identity. Spec:
@@ -19,7 +19,7 @@ the catalog reads only the publisher keys. Syntactically both use a `---`
 block, but the data model differs.
 
 Before this change, every publisher key was namespaced under a `meta.` prefix
-on disk (`meta.tags`, `meta.type`). That prefix was not cosmetic — it was the
+on disk (`meta.tags`, `meta.type`). That prefix was not cosmetic; it was the
 integrity boundary that prevented a publisher from supplying `archived: true`
 or `version: 999` and forging store state, because `extractMetadata` read only
 `meta.*` keys.
@@ -36,14 +36,14 @@ boundary.
   `tags`, `timestamp`) are written **bare**. `tags` is serialized as a YAML
   flow list (`tags: [a, b]`) to match the spec exactly.
 - **Non-spec publisher keys** (e.g. `importance`, custom fields) keep the
-  `meta.` prefix — demarkus's own metadata lane, and the anti-forgery boundary
+  `meta.` prefix, demarkus's own metadata lane, and the anti-forgery boundary
   for the open-ended key set.
 - **Reserved store fields** (`version`, `previous-hash`, `archived`) stay bare
   and unchanged. The boundary the prefix used to enforce is now enforced by
   name: a `reservedMetaKeys` denylist that `validateMeta` rejects and
   `extractMetadata` never surfaces as publisher metadata.
 
-Implementation is contained to `protocol/store/store.go` —
+Implementation is contained to `protocol/store/store.go`:
 `buildVersionFile` (write), `extractMetadata` (read), `validateMeta` (reject
 reserved). The **in-memory metadata map stays bare-keyed**, so the catalog,
 handler, and filter layers are untouched; `tags` round-trips list↔csv, so the

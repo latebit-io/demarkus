@@ -4,9 +4,9 @@ Join an organizational [demarkus](https://github.com/latebit-io/demarkus) **know
 
 ## What it does
 
-- **Join over OAuth.** `/knowledge-join <broker-url>` validates the broker (RFC 9728 metadata), derives a slug, and registers it as an HTTP MCP server (`{url, auth: "oauth"}`) in `~/.config/mcp/mcp.json`. pi-mcp-adapter runs the OAuth flow on first use — no token stored locally.
+- **Join over OAuth.** `/knowledge-join <broker-url>` validates the broker (RFC 9728 metadata), derives a slug, and registers it as an HTTP MCP server (`{url, auth: "oauth"}`) in `~/.config/mcp/mcp.json`. pi-mcp-adapter runs the OAuth flow on first use; no token stored locally.
 - **Consult-first guidance.** Names the joined systems and injects "check the shared catalog first, navigate via the `root` hub, record durable shared knowledge there" guidance, once per session. Catalog recall prefers the broker-wide `mark_lookup_all`, one lookup across every readable world, with a per-world fallback for older brokers and plain endpoints.
-- **Publish tag-gate.** Enforces `tags` + `importance` + the system's policy-declared **required tag axes** (`axis:value`) and **required OKF fields** (e.g. `type`) on writes to a joined system — `warn` by default, `block`/`ask` per the mirrored policy.
+- **Publish tag-gate.** Enforces `tags` + `importance` + the system's policy-declared **required tag axes** (`axis:value`) and **required OKF fields** (e.g. `type`) on writes to a joined system: `warn` by default, `block`/`ask` per the mirrored policy.
 - **Recall nudge.** On recall-shaped prompts about shared/org knowledge, reminds the agent to look in the system first.
 - **Slash commands.** `/knowledge`, `/knowledge-join`, `/knowledge-doctor`, plus the `knowledge-promote` cascade skill.
 
@@ -23,7 +23,7 @@ First install the MCP adapter (provides the HTTP/OAuth transport):
 pi install npm:pi-mcp-adapter
 ```
 
-This package lives in the demarkus monorepo under `plugins/pi-knowledge/`. pi's `git:` installer reads a repository's **root** `package.json`, so a monorepo subdirectory can't be git-installed directly — install it from a local checkout instead:
+This package lives in the demarkus monorepo under `plugins/pi-knowledge/`. pi's `git:` installer reads a repository's **root** `package.json`, so a monorepo subdirectory can't be git-installed directly; install it from a local checkout instead:
 
 ```bash
 git clone https://github.com/latebit-io/demarkus
@@ -48,9 +48,9 @@ Run `/mcp` to connect (and `/mcp-auth <slug>` if prompted) to complete OAuth. `/
 
 Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper behavior are checked separately.
 
-- `src/*.ts` — the Pi adapter that maps events and MCP registration onto the shared helper's gate, nudge, and guidance decisions.
-- `scripts/*.sh` — broker URL validation (`knowledge-join.sh`), registry write (`register-knowledge.sh`), and deterministic policy mirroring (`mirror-policy.sh`), reused verbatim from the Claude Code plugin; `mcp-config.mjs` registers the broker as an HTTP/OAuth MCP server.
-- `commands/*.md`, `context/`, and `skills/` — generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
+- `src/*.ts`: the Pi adapter that maps events and MCP registration onto the shared helper's gate, nudge, and guidance decisions.
+- `scripts/*.sh`: broker URL validation (`knowledge-join.sh`), registry write (`register-knowledge.sh`), and deterministic policy mirroring (`mirror-policy.sh`), reused verbatim from the Claude Code plugin; `mcp-config.mjs` registers the broker as an HTTP/OAuth MCP server.
+- `commands/*.md`, `context/`, and `skills/`: generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
 
 ### Behavior mapping (Claude Code → pi)
 
@@ -77,4 +77,4 @@ plugins/setup-pi-repos.sh            # --dry-run to preview
 
 This is automated: the `.github/workflows/pi-plugin-mirror.yml` workflow runs on every push to `main` that touches `plugins/pi-knowledge/**` and mirrors it for you (it needs a `PI_MIRROR_TOKEN` repo secret with `contents:write` on the standalone repos). The `plugins/setup-pi-repos.sh` script is the manual fallback / bootstrap.
 
-Either way it runs `git subtree split --prefix=plugins/pi-knowledge` to recompute the subdirectory's history and force-pushes it to the standalone repo's default branch — so the standalone repo always matches the monorepo subtree. It only reads **committed** history, so the change must be merged to `main` first. Users then pick up the change with `pi update git:github.com/latebit-io/demarkus-pi-knowledge`.
+Either way it runs `git subtree split --prefix=plugins/pi-knowledge` to recompute the subdirectory's history and force-pushes it to the standalone repo's default branch, so the standalone repo always matches the monorepo subtree. It only reads **committed** history, so the change must be merged to `main` first. Users then pick up the change with `pi update git:github.com/latebit-io/demarkus-pi-knowledge`.

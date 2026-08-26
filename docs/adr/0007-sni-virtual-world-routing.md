@@ -1,4 +1,4 @@
-# ADR 0007 — SNI selects a virtual Mark server
+# ADR 0007: SNI selects a virtual Mark server
 
 Status: accepted (2026-08-22).
 

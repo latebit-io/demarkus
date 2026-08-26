@@ -12,7 +12,7 @@ Underneath sits the **Mark Protocol**: versioned markdown served over QUIC. No r
 
 ### Agent memory plugins (start here)
 
-The fastest way to try Demarkus: give your coding agent persistent, versioned memory. The plugins manage their own binaries no separate install needed.
+The fastest way to try Demarkus: give your coding agent persistent, versioned memory. The plugins manage their own binaries; no separate install needed.
 
 **Claude Code**
 
@@ -43,8 +43,6 @@ pi install git:github.com/latebit-io/demarkus-pi-memory
 ```
 
 Teams: [pi knowledge plugin](plugins/pi-knowledge/). Details: [pi memory plugin](plugins/pi-memory/).
-
-**Other agents**: [OpenClaw skill](https://www.demarkus.io/install/openclaw/)
 
 ### Binaries
 
@@ -133,11 +131,11 @@ modified: 2026-01-15T10:30:00Z
 
 **Verbs**: `FETCH` · `LIST` · `VERSIONS` · `LOOKUP` · `PUBLISH` · `APPEND` · `ARCHIVE`
 
-**Open Knowledge Format**: A demarkus document is content-compatible with [Google's Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog) — recognized OKF fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`) are stored as plain frontmatter, and the server types every document by default. At the system level demarkus is a superset, layering versioning, hash-chain integrity, QUIC transport, and capability auth around an OKF-compatible document. The `demarkus okf` subcommand validates, imports, and exports OKF bundles. See [SPEC §14](docs/SPEC.md).
+**Open Knowledge Format**: A demarkus document is content-compatible with [Google's Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog): recognized OKF fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`) are stored as plain frontmatter, and the server types every document by default. At the system level demarkus is a superset, layering versioning, hash-chain integrity, QUIC transport, and capability auth around an OKF-compatible document. The `demarkus okf` subcommand validates, imports, and exports OKF bundles. See [SPEC §14](docs/SPEC.md).
 
 ## Use Cases
 
-**Agent Memory**: Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/README.md) or install via [OpenClaw](https://www.demarkus.io/install/openclaw/).
+**Agent Memory**: Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/README.md).
 
 **Organizational Knowledge System**: Compose many servers ("worlds") into a broker-fronted universe reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command, `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/), and their agents share organizational memory over MCP, with no per-developer server or token setup. Humans browse the same universe in the [web reading room](https://github.com/latebit-io/demarkus-library). See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
 
@@ -151,7 +149,6 @@ modified: 2026-01-15T10:30:00Z
 
 - [demarkus-library](https://github.com/latebit-io/demarkus-library): web reading room; server-rendered front-end for browsing worlds through the broker (SSO) or direct QUIC
 - [Caztor](https://github.com/kevinboone/caztor): cross-platform Java GUI browser with preliminary Demarkus support
-- [Obsidian plugin](https://github.com/latebit-io/obsidian-demarkus): publish and browse from Obsidian
 - [Claude Code memory plugin](plugins/claude-code/README.md): zero-config local memory for Claude Code
 - [Claude Code knowledge plugin](plugins/claude-code-knowledge/): join an organizational knowledge system (broker-fronted, MCP OAuth)
 - [OpenCode memory plugin](plugins/opencode-memory/): the same local memory for OpenCode (one shared soul across harnesses). Install:
@@ -168,7 +165,6 @@ modified: 2026-01-15T10:30:00Z
 
 - [pi memory plugin](plugins/pi-memory/): the same local memory for the pi coding agent
 - [pi knowledge plugin](plugins/pi-knowledge/): join an organizational knowledge system from pi
-- [OpenClaw skill](https://clawhub.ai/ontehfritz/demarkus): ClawHub skill for OpenClaw agents (see [install guide](https://www.demarkus.io/install/openclaw/))
 
 See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full list.
 

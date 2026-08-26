@@ -1,6 +1,6 @@
 # Single-Host Stack (Server + Broker + Library)
 
-Run the full demarkus experience — world server, auth/issuance broker, and the web reading room — on one Linux VPS with systemd. No Kubernetes required: the broker runs in **file-backend mode**, writing token hashes directly to the `tokens.toml` the server already watches and hot-reloads.
+Run the full demarkus experience (world server, auth/issuance broker, and the web reading room) on one Linux VPS with systemd. No Kubernetes required: the broker runs in **file-backend mode**, writing token hashes directly to the `tokens.toml` the server already watches and hot-reloads.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 The secret rides a root-readable file, never argv or a shell command line (both leak via `ps` and history). Omit the OIDC flags to scaffold the broker config for later editing; the unit installs **disabled** and the summary prints the two files to complete plus the `systemctl enable --now` to run.
 
-Version pinning: `--version` pins the server; `--library-version` pins the reading room; the broker always installs from the same tools release as the other stack binaries. Client and tools otherwise resolve to their latest releases — the modules are versioned independently by design.
+Version pinning: `--version` pins the server; `--library-version` pins the reading room; the broker always installs from the same tools release as the other stack binaries. Client and tools otherwise resolve to their latest releases; the modules are versioned independently by design.
 
 ## What gets installed
 
@@ -32,9 +32,9 @@ Version pinning: `--version` pins the server; `--library-version` pins the readi
 | Broker | `demarkus-broker` | loopback TCP 8080 (OAuth/API), 8081 (MCP gateway) | `/etc/demarkus-broker/` |
 | Library | `demarkus-library` | TCP 443 (HTTPS, when TLS is configured) or TCP 8090 | `/etc/demarkus-library/` |
 
-The broker binds **loopback only** — its advertised `publicURL` is served by your TLS reverse proxy (see below). With a broker installed, `tokens.toml` moves to `/etc/demarkus/tokens/`, a subdirectory the broker owns, so its atomic writes never require access to the rest of `/etc/demarkus` (where the TLS keys live). This layout is sticky: later reinstalls keep it even without `--with-broker`.
+The broker binds **loopback only**; its advertised `publicURL` is served by your TLS reverse proxy (see below). With a broker installed, `tokens.toml` moves to `/etc/demarkus/tokens/`, a subdirectory the broker owns, so its atomic writes never require access to the rest of `/etc/demarkus` (where the TLS keys live). This layout is sticky: later reinstalls keep it even without `--with-broker`.
 
-**Removing the stack.** `demarkus-install uninstall` tears down every component (server, broker, library) — services, users, binaries, and the broker's config and state directories (which hold credential-bearing artifacts). It verifies each removal and exits non-zero if anything could not be removed, so a partial teardown is never reported as complete. To keep the server but revert to server-only token handling: `systemctl disable --now demarkus-broker`, move `/etc/demarkus/tokens/tokens.toml` back to `/etc/demarkus/tokens.toml` (restoring `root:demarkus` 640), and re-run the installer.
+**Removing the stack.** `demarkus-install uninstall` tears down every component (server, broker, library): services, users, binaries, and the broker's config and state directories (which hold credential-bearing artifacts). It verifies each removal and exits non-zero if anything could not be removed, so a partial teardown is never reported as complete. To keep the server but revert to server-only token handling: `systemctl disable --now demarkus-broker`, move `/etc/demarkus/tokens/tokens.toml` back to `/etc/demarkus/tokens.toml` (restoring `root:demarkus` 640), and re-run the installer.
 
 Each component runs as its own hardened system user (`ProtectSystem=strict`, minimal `ReadWritePaths`).
 
@@ -45,7 +45,7 @@ Demarkus onboarding splits by what you want to do, not by where you deploy. Pick
 | You want to... | Setup | IdP needed? |
 |---|---|---|
 | **Read** documents (browser or client) | library in quic mode, or any client (`demarkus`, TUI, MCP) | no |
-| **Write** from the CLI, an agent, or Obsidian | a capability token (`demarkus-token generate`), delivered as a [join URL](../tools/index.md) | no |
+| **Write** from the CLI or an agent | a capability token (`demarkus-token generate`), delivered as a [join URL](../tools/index.md) | no |
 | **Onboard people to a shared knowledge system** | broker + OIDC; users run `/knowledge-join <url>` and log in | yes |
 | **Edit in the browser** (the library cataloging desk) | library in **broker mode** + OIDC | yes |
 
@@ -67,9 +67,9 @@ The generated `/etc/demarkus-broker/config.yaml` registers the local world as `s
 
 ## OIDC application setup
 
-Register an OAuth app at your IdP — a commercial one (Google Cloud Console, GitHub Developer Settings, Okta) or a self-hosted one (Dex, Keycloak, Authentik):
+Register an OAuth app at your IdP, a commercial one (Google Cloud Console, GitHub Developer Settings, Okta) or a self-hosted one (Dex, Keycloak, Authentik):
 
-- **Redirect URI**: `<broker-public-url>/auth/callback` — must match `oidc.redirectURL` exactly.
+- **Redirect URI**: `<broker-public-url>/auth/callback`; must match `oidc.redirectURL` exactly.
 - The client secret never lives in `config.yaml`: it rides `OIDC_CLIENT_SECRET` in `/etc/demarkus-broker/env` (mode 640).
 - Restrict who may log in with `oidc.allowDomains` (hosted-domain allowlist) and per-world `allow` lists.
 
@@ -81,7 +81,7 @@ Agents join with `/knowledge-join <broker-public-url>` from the demarkus-knowled
 
 `--with-library` installs the reading room in **direct-QUIC (read-only) mode**: no login, serving your world's documents. This works with or without the broker.
 
-The port and scheme follow the install's TLS setup: with TLS configured (`--domain` or `--tls-cert`/`--tls-key`) the library serves **HTTPS on 443** using the world's certificate — same hostname, same identity, so `https://<domain>/` is the reading room. Without TLS it serves plain HTTP on 8090. `--library-port <n>` overrides either default; the installer refuses a port something else already listens on. On reinstalls an existing `/etc/demarkus-library/env` keeps its `PORT`, so upgrading an old 8090 install to 443 is an env edit (`PORT=443`, plus the `DEMARKUS_TLS_CERT`/`DEMARKUS_TLS_KEY` lines) followed by re-running the installer.
+The port and scheme follow the install's TLS setup: with TLS configured (`--domain` or `--tls-cert`/`--tls-key`) the library serves **HTTPS on 443** using the world's certificate: same hostname, same identity, so `https://<domain>/` is the reading room. Without TLS it serves plain HTTP on 8090. `--library-port <n>` overrides either default; the installer refuses a port something else already listens on. On reinstalls an existing `/etc/demarkus-library/env` keeps its `PORT`, so upgrading an old 8090 install to 443 is an env edit (`PORT=443`, plus the `DEMARKUS_TLS_CERT`/`DEMARKUS_TLS_KEY` lines) followed by re-running the installer.
 
 To put the library behind broker SSO (org login, per-reader identity):
 
@@ -97,7 +97,7 @@ To put the library behind broker SSO (org login, per-reader identity):
    ```
 
 3. Switch `/etc/demarkus-library/env` to the broker block (uncomment and fill the `DEMARKUS_TRANSPORT=broker` lines with the plaintext secret).
-4. Redirect URIs must be **absolute https URLs** — already satisfied on TLS installs, where the library serves HTTPS on 443 with the world's cert. Otherwise front it with TLS (its own `DEMARKUS_TLS_CERT`/`DEMARKUS_TLS_KEY`, or a reverse proxy such as Caddy/nginx).
+4. Redirect URIs must be **absolute https URLs**; already satisfied on TLS installs, where the library serves HTTPS on 443 with the world's cert. Otherwise front it with TLS (its own `DEMARKUS_TLS_CERT`/`DEMARKUS_TLS_KEY`, or a reverse proxy such as Caddy/nginx).
 5. `systemctl restart demarkus-broker demarkus-library`.
 
 ## TLS and the reverse proxy
@@ -113,7 +113,7 @@ To put the library behind broker SSO (org login, per-reader identity):
 
   Route the MCP gateway (`127.0.0.1:8081`) from the same or a second hostname as you prefer; `/knowledge-join` and the library talk to whatever `publicURL` resolves to.
 - With a Let's Encrypt domain the generated config dials the world at `<domain>:6309` with verification on (the certificate can never match `localhost`); with a self-signed cert it dials `localhost:6309` with `worldDialer.insecureSkipVerify: true`.
-- Dialing the public domain from the host itself requires hairpin NAT, which home routers often lack (external clients work, same-host components see the world as unreadable). The installer probes this after the world starts and, when the dial fails, pins the domain to loopback in `/etc/hosts` — the dial then bypasses NAT while the certificate name still matches. A failed probe with the pin already in place aborts the install with diagnostics instead.
+- Dialing the public domain from the host itself requires hairpin NAT, which home routers often lack (external clients work, same-host components see the world as unreadable). The installer probes this after the world starts and, when the dial fails, pins the domain to loopback in `/etc/hosts`; the dial then bypasses NAT while the certificate name still matches. A failed probe with the pin already in place aborts the install with diagnostics instead.
 
 ## Verify the stack
 

@@ -86,9 +86,9 @@ reason: "Outdated information"
 PUBLISH supports optimistic concurrency control via the `expected-version` metadata field. This prevents silent data loss from concurrent edits without requiring locks.
 
 **Semantics**:
-- **`expected-version: 0`** — Create-only. The publish succeeds only if the document does not yet exist. If another writer created it first, the server returns `conflict`.
-- **`expected-version: N`** (positive) — Update with version check. The publish succeeds only if the document's current version is exactly N. If the document has been modified since version N, the server returns `conflict` with the current `server-version`.
-- **Omitted** — No check. The write proceeds unconditionally (last-write-wins). This preserves backward compatibility for raw protocol usage.
+- **`expected-version: 0`**: Create-only. The publish succeeds only if the document does not yet exist. If another writer created it first, the server returns `conflict`.
+- **`expected-version: N`** (positive): Update with version check. The publish succeeds only if the document's current version is exactly N. If the document has been modified since version N, the server returns `conflict` with the current `server-version`.
+- **Omitted**: No check. The write proceeds unconditionally (last-write-wins). This preserves backward compatibility for raw protocol usage.
 
 **Workflow**:
 ```
@@ -107,7 +107,7 @@ PUBLISH supports optimistic concurrency control via the `expected-version` metad
 
 On conflict, the client should fetch the latest version and reapply edits. The CLI `edit` command handles this automatically by saving unsaved edits to a temp file so no work is lost.
 
-**APPEND**: `expected-version` is **mandatory** for APPEND (must be >= 1). Since APPEND is non-idempotent — appending the same content twice produces a different result — the server cannot safely retry internally, and omitting the version check would risk silent duplication. The client must always fetch first to obtain the current version.
+**APPEND**: `expected-version` is **mandatory** for APPEND (must be >= 1). Since APPEND is non-idempotent (appending the same content twice produces a different result) the server cannot safely retry internally, and omitting the version check would risk silent duplication. The client must always fetch first to obtain the current version.
 
 **Directory Operations**:
 ```text
@@ -486,7 +486,7 @@ Or via directory-level `.mark-acl` files:
 
 ### Versioning & Audit Trail
 
-**Every write creates a new version** (immutable history). Only documents written through the protocol are served — flat files without version history are not documents: FETCH treats them as non-existent, LIST omits them, and a PUBLISH to their path replaces them.
+**Every write creates a new version** (immutable history). Only documents written through the protocol are served; flat files without version history are not documents: FETCH treats them as non-existent, LIST omits them, and a PUBLISH to their path replaces them.
 
 ```
 content-root/
@@ -1014,7 +1014,7 @@ Server notifies subscriber when content changes.
 
 ## Agent-Native Protocol
 
-Markdown is the lingua franca of AI. Training data, prompts, responses, tool outputs, and documentation are all markdown-formatted. This makes Demarkus a natural protocol for AI agent communication — agents already "think" in markdown, so no translation layer is needed.
+Markdown is the lingua franca of AI. Training data, prompts, responses, tool outputs, and documentation are all markdown-formatted. This makes Demarkus a natural protocol for AI agent communication: agents already "think" in markdown, so no translation layer is needed.
 
 ### Why Markdown is the Agent Format
 
@@ -1026,7 +1026,7 @@ LLMs process markdown natively. Every major AI system uses markdown for:
 - Documentation and specifications
 - Generated content and reports
 
-When an agent fetches a document over HTTP, it must parse HTML, strip ads, remove tracking scripts, and extract content. Over Mark Protocol, the agent receives clean, structured markdown — the format it already works in.
+When an agent fetches a document over HTTP, it must parse HTML, strip ads, remove tracking scripts, and extract content. Over Mark Protocol, the agent receives clean, structured markdown, the format it already works in.
 
 ### Agent Interaction Model
 
@@ -1044,15 +1044,15 @@ Caches results in distributed markdown cache
 
 ### Advantages Over HTTP/HTML for Agents
 
-- **No parsing complexity** — Agents already think in markdown, no HTML-to-text conversion
-- **Token efficiency** — Markdown is more compact than HTML, reducing LLM context usage
-- **Semantic clarity** — Headers, lists, and code blocks map directly to reasoning structures
-- **Machine-readable metadata** — YAML frontmatter provides structured data alongside content
-- **Cacheable knowledge** — Distributed markdown cache acts as shared agent memory
-- **Privacy-first** — No cookies, no tracking, no JavaScript execution risks
-- **Version control** — Git-native format enables change tracking and verification
-- **Composability** — Agents can remix and recombine markdown documents
-- **Validation** — Easier to verify agent-generated outputs against markdown schemas
+- **No parsing complexity**: Agents already think in markdown, no HTML-to-text conversion
+- **Token efficiency**: Markdown is more compact than HTML, reducing LLM context usage
+- **Semantic clarity**: Headers, lists, and code blocks map directly to reasoning structures
+- **Machine-readable metadata**: YAML frontmatter provides structured data alongside content
+- **Cacheable knowledge**: Distributed markdown cache acts as shared agent memory
+- **Privacy-first**: No cookies, no tracking, no JavaScript execution risks
+- **Version control**: Git-native format enables change tracking and verification
+- **Composability**: Agents can remix and recombine markdown documents
+- **Validation**: Easier to verify agent-generated outputs against markdown schemas
 
 ### Use Cases
 
@@ -1090,7 +1090,7 @@ mark://tools.example.com/weather/SKILL.md
 ```
 mark://go-hub.example.com/index.md
 → Curated links to Go libraries, tutorials, and specs across many servers
-→ No original content — just organized mark:// links
+→ No original content, just organized mark:// links
 → Anyone can run a hub, no central registry
 → Versioned history of how the collection evolved
 → Agents use hubs as entry points to discover the network
@@ -1100,12 +1100,12 @@ mark://go-hub.example.com/index.md
 
 These features would make Demarkus a first-class protocol for agent ecosystems:
 
-- **Agent manifest discovery** — `.well-known/agent-manifest.md` describes available capabilities, rate limits, and authentication requirements
-- **Markdown-based function schemas** — Tool definitions as structured markdown with typed parameters
-- **Semantic versioning in frontmatter** — Agents can pin to specific API versions
-- **Agent authentication** — Capability tokens scoped to agent operations
-- **Rate limiting metadata** — Frontmatter communicates limits so agents self-throttle
-- **Agent-to-agent document collaboration** — Agents negotiate document content before committing to the permanent record. Rather than a DRAFT verb, this can be achieved with convention: agents collaborate on a scratch path (e.g. `/drafts/proposal.md`) using PUBLISH, with auth tokens scoped to collaborators. Once agreed, the final content is PUBLISHed to the real path. The draft path retains the full negotiation history (who proposed what), ARCHIVE cleans up when done, and no new verbs or states are needed. Revisit if real agent collaboration patterns reveal gaps in this approach.
+- **Agent manifest discovery**: `.well-known/agent-manifest.md` describes available capabilities, rate limits, and authentication requirements
+- **Markdown-based function schemas**: Tool definitions as structured markdown with typed parameters
+- **Semantic versioning in frontmatter**: Agents can pin to specific API versions
+- **Agent authentication**: Capability tokens scoped to agent operations
+- **Rate limiting metadata**: Frontmatter communicates limits so agents self-throttle
+- **Agent-to-agent document collaboration**: Agents negotiate document content before committing to the permanent record. Rather than a DRAFT verb, this can be achieved with convention: agents collaborate on a scratch path (e.g. `/drafts/proposal.md`) using PUBLISH, with auth tokens scoped to collaborators. Once agreed, the final content is PUBLISHed to the real path. The draft path retains the full negotiation history (who proposed what), ARCHIVE cleans up when done, and no new verbs or states are needed. Revisit if real agent collaboration patterns reveal gaps in this approach.
 
 **Example: Agent-Capable Endpoint**:
 
@@ -1141,55 +1141,55 @@ Cache Layer:        Distributed markdown cache
 Transport Layer:    QUIC (Go implementation)
 ```
 
-This positions Demarkus as the transport layer for AI-native communication — human-readable AND machine-readable, with no translation layer between what agents process and what the protocol delivers.
+This positions Demarkus as the transport layer for AI-native communication: human-readable AND machine-readable, with no translation layer between what agents process and what the protocol delivers.
 
-An information superhighway for both humans and agents: the same protocol, the same content format, the same caching infrastructure. Humans browse markdown documents in a TUI. Agents fetch markdown knowledge programmatically. Neither needs a different protocol or a translation step. The web bifurcated into human-facing HTML and machine-facing APIs — Demarkus unifies them.
+An information superhighway for both humans and agents: the same protocol, the same content format, the same caching infrastructure. Humans browse markdown documents in a TUI. Agents fetch markdown knowledge programmatically. Neither needs a different protocol or a translation step. The web bifurcated into human-facing HTML and machine-facing APIs; Demarkus unifies them.
 
 ### Versioning for Agents
 
 Immutable versioning is particularly powerful in agent workflows:
 
-**Knowledge Consistency** — An agent can pin to a specific version when reasoning. Fetching `mark://api.stripe.com/docs/payments/v12` guarantees the exact content it's working with. If the API docs change, the agent's cached reasoning doesn't silently break.
+**Knowledge Consistency**: An agent can pin to a specific version when reasoning. Fetching `mark://api.stripe.com/docs/payments/v12` guarantees the exact content it's working with. If the API docs change, the agent's cached reasoning doesn't silently break.
 
-**Change Detection** — An agent monitoring a knowledge source can use `VERSIONS /doc.md` to detect when content changes, then fetch only the new version. This is cheaper than re-reading entire documents and re-processing them.
+**Change Detection**: An agent monitoring a knowledge source can use `VERSIONS /doc.md` to detect when content changes, then fetch only the new version. This is cheaper than re-reading entire documents and re-processing them.
 
-**Audit Trail for Agent Actions** — When agents write content, every write creates an immutable version. You can trace exactly what an agent produced, when, and what it changed. If an agent edits a document, you can always diff v41 against v42 to see exactly what it did. This is critical for trust in autonomous systems.
+**Audit Trail for Agent Actions**: When agents write content, every write creates an immutable version. You can trace exactly what an agent produced, when, and what it changed. If an agent edits a document, you can always diff v41 against v42 to see exactly what it did. This is critical for trust in autonomous systems.
 
-**Reproducible Workflows** — An agent can reference specific versions in its outputs: "Based on [API spec v12](/docs/api.md/v12), here's the implementation." Another agent or a human can verify the source hasn't changed since the recommendation was made.
+**Reproducible Workflows**: An agent can reference specific versions in its outputs: "Based on [API spec v12](/docs/api.md/v12), here's the implementation." Another agent or a human can verify the source hasn't changed since the recommendation was made.
 
-**Rollback** — If an agent writes something incorrect, the previous version is always there. No data is lost. This maps directly to the protocol's core invariant: version immutability is vital.
+**Rollback**: If an agent writes something incorrect, the previous version is always there. No data is lost. This maps directly to the protocol's core invariant: version immutability is vital.
 
-**Distributed Verification** — Multiple agents reading the same versioned document from different mirrors can verify they're working with identical content. Same version number, same document. This enables trust in multi-agent networks without a central authority.
+**Distributed Verification**: Multiple agents reading the same versioned document from different mirrors can verify they're working with identical content. Same version number, same document. This enables trust in multi-agent networks without a central authority.
 
-Versions give agents the same guarantees that Git gives developers — you always know what you're looking at, you can always go back, and you can always prove what changed.
+Versions give agents the same guarantees that Git gives developers: you always know what you're looking at, you can always go back, and you can always prove what changed.
 
 ## Document Graph Navigation
 
-The web always had a graph — nobody ever let you see it. Browsers give you a viewport into one node at a time with a flat history list. Demarkus exposes the actual information space.
+The web always had a graph; nobody ever let you see it. Browsers give you a viewport into one node at a time with a flat history list. Demarkus exposes the actual information space.
 
 ### Core Concept
 
-When reading a document, the TUI can show a graph view with the current document as the center node and outbound links as edges to other documents. You navigate the graph directly — move to an adjacent node and jump to it — rather than browsing linearly. This flips the mental model from browsing pages to traversing knowledge.
+When reading a document, the TUI can show a graph view with the current document as the center node and outbound links as edges to other documents. You navigate the graph directly (move to an adjacent node and jump to it) rather than browsing linearly. This flips the mental model from browsing pages to traversing knowledge.
 
 ### How It Works
 
-The client crawls outbound `mark://` links from the current document (up to a configurable depth) and builds a directed graph of nodes (documents) and edges (links). Each node carries the document's title, fetch status, and link count. Each edge carries provenance — the link's label text, the source section anchor it appears under, and an occurrence count (duplicate links between the same pair aggregate into one counted edge). Publisher metadata keys with the `rel-` prefix (`rel-supersedes: /adr/0002.md`, comma-separated for multiple targets) are ingested as **typed edges**, so the graph can answer "what replaced this" rather than only "what mentions this". Edge identity is `{from, to, rel}`: a plain body link and a typed relation between the same pair are distinct edges. The crawl is concurrent and respects visited-URL tracking to avoid cycles.
+The client crawls outbound `mark://` links from the current document (up to a configurable depth) and builds a directed graph of nodes (documents) and edges (links). Each node carries the document's title, fetch status, and link count. Each edge carries provenance: the link's label text, the source section anchor it appears under, and an occurrence count (duplicate links between the same pair aggregate into one counted edge). Publisher metadata keys with the `rel-` prefix (`rel-supersedes: /adr/0002.md`, comma-separated for multiple targets) are ingested as **typed edges**, so the graph can answer "what replaced this" rather than only "what mentions this". Edge identity is `{from, to, rel}`: a plain body link and a typed relation between the same pair are distinct edges. The crawl is concurrent and respects visited-URL tracking to avoid cycles.
 
 ### Graph Enrichment (Future)
 
 Shipped so far: link label, source section anchor, occurrence count, and typed `rel-` edges (see above). Still open:
 
-- **Visit history** — nodes you've read are dimmed or marked
-- **Link density** — documents with many connections appear more prominent, like a PageRank signal
-- **Document type hints** — frontmatter metadata drives different node shapes or colors (data doc vs narrative doc)
+- **Visit history**: nodes you've read are dimmed or marked
+- **Link density**: documents with many connections appear more prominent, like a PageRank signal
+- **Document type hints**: frontmatter metadata drives different node shapes or colors (data doc vs narrative doc)
 
 ### Why This Matters
 
-This is what Tim Berners-Lee originally imagined — the web as a navigable information graph. Demarkus is a browser that shows you where you are in the information space, not just what page you're on.
+This is what Tim Berners-Lee originally imagined: the web as a navigable information graph. Demarkus is a browser that shows you where you are in the information space, not just what page you're on.
 
 ## Implementation Roadmap
 
-### Phase 1: MVP (Read-Only) — COMPLETE
+### Phase 1: MVP (Read-Only): COMPLETE
 
 **Server**:
 - ~~Serve markdown files from directory over QUIC~~
@@ -1203,7 +1203,7 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 - ~~Follow links~~
 - ~~Navigation history (back/forward)~~
 - ~~Basic caching~~
-- ~~Document graph — crawl outbound links and display as a navigable node graph~~
+- ~~Document graph: crawl outbound links and display as a navigable node graph~~
 
 **Bonus (not in original roadmap)**:
 - ~~LIST verb for directory browsing~~
@@ -1220,7 +1220,7 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 - Glamour (markdown rendering)
 - Lip Gloss (styling)
 
-### Phase 2: Publish Operations — COMPLETE (except structured audit logging)
+### Phase 2: Publish Operations: COMPLETE (except structured audit logging)
 
 **Server**:
 - ~~PUBLISH support~~
@@ -1249,19 +1249,19 @@ This is what Tim Berners-Lee originally imagined — the web as a navigable info
 
 ### Phase 4: The Information Graph
 
-Discovery through linking, not searching. Instead of indexing content and querying it, information becomes findable because it's connected. Servers link to each other through documents. Clients and agents traverse the graph to discover content organically — the way the web was supposed to work, but with the graph as a first-class citizen.
+Discovery through linking, not searching. Instead of indexing content and querying it, information becomes findable because it's connected. Servers link to each other through documents. Clients and agents traverse the graph to discover content organically, the way the web was supposed to work, but with the graph as a first-class citizen.
 
-**The idea**: Every markdown document is a node. Every `mark://` link is a directed edge. The graph already exists implicitly in the content — Phase 4 makes it explicit, persistent, and navigable across server boundaries.
+**The idea**: Every markdown document is a node. Every `mark://` link is a directed edge. The graph already exists implicitly in the content; Phase 4 makes it explicit, persistent, and navigable across server boundaries.
 
 **Cross-server graph crawling**:
 - The graph crawler already follows `mark://` links across servers
 - Expand this into a persistent, incrementally-built graph that grows as you browse
-- Client remembers the graph across sessions — your personal map of the mark:// universe
+- Client remembers the graph across sessions: your personal map of the mark:// universe
 - Agents can crawl the graph programmatically to discover and index content
 
 **The Demarkus Hub pattern**:
 
-A demarkus hub is a server whose sole purpose is linking to content on other demarkus servers. No original content — just curated collections of `mark://` links organized by topic. Think of it as a librarian, not a library.
+A demarkus hub is a server whose sole purpose is linking to content on other demarkus servers. No original content, just curated collections of `mark://` links organized by topic. Think of it as a librarian, not a library.
 
 Anyone can run a hub. A hub for Go documentation links to `mark://go-docs.example.com/...`. A hub for security research links to papers and advisories across dozens of servers. A community hub links to everything its members find valuable. Hubs can link to other hubs, creating a navigable hierarchy of curated knowledge.
 
@@ -1271,37 +1271,37 @@ Hubs are the entry points into the information graph:
 - A hub's `index.md` is a curated map of a topic or community
 - Agent manifests on hubs reference related hubs and servers → seeds for graph expansion
 - Directory listings are themselves navigable graph nodes
-- Hubs emerge naturally — no central registry, no approval process, just someone running a server and curating links
+- Hubs emerge naturally: no central registry, no approval process, just someone running a server and curating links
 
 **Backlinks**:
 - Knowing who links *to* you is as valuable as knowing what you link *to*
 - Client-side backlink index: built from crawled graph data, no server changes needed
 - "What links here?" becomes a navigation primitive alongside "What does this link to?"
-- Enables discovery in reverse — find related content by following inbound connections
+- Enables discovery in reverse: find related content by following inbound connections
 
 **Graph-aware navigation**:
 - TUI shows not just the tree from one document, but the broader topology you've explored
 - "Related documents" derived from graph proximity, not keyword matching
 - Shortest-path navigation between known documents
-- Visual indication of graph density — heavily linked documents are likely important
+- Visual indication of graph density: heavily linked documents are likely important
 
 **Why not search?**:
-- Search requires a centralized index or a server-side feature — both add complexity and control points
-- Graph traversal is decentralized by nature — every client builds its own view
+- Search requires a centralized index or a server-side feature; both add complexity and control points
+- Graph traversal is decentralized by nature; every client builds its own view
 - Linked information has context (the link text, the surrounding content, the linking document's purpose)
 - Search gives you matches; the graph gives you understanding of how information relates
-- The protocol already has all the primitives: FETCH reads content, LIST enumerates, links connect — no new verbs needed
+- The protocol already has all the primitives: FETCH reads content, LIST enumerates, links connect; no new verbs needed
 
 > **Note:** LOOKUP (the 7th verb, 2026-05-30, issue #113) does not contradict the above: it is a per-world catalog over author-declared `tags`/`importance`, never reads document bodies, and complements graph traversal. Full-text and semantic search remain out of core (an opt-in sidecar over LIST/FETCH). See SPEC.md §6.7.
 
-**Graph as content — export, publish, share**:
-- The crawled graph is itself a markdown document — nodes as list items, edges as `mark://` links
+**Graph as content (export, publish, share)**:
+- The crawled graph is itself a markdown document: nodes as list items, edges as `mark://` links
 - Export your graph and publish it to a demarkus server: `mark://my-server/graph/index.md`
-- Others fetch your graph document and import it — instant topology without recrawling
+- Others fetch your graph document and import it: instant topology without recrawling
 - Because it's versioned, you get a history of how the network evolved over time
 - Agents publish and merge graph fragments from multiple sources to build richer maps
 - The same link extraction the crawler already uses can parse a graph document to reconstruct the topology
-- No special format needed — it's just markdown with links, readable by humans and machines alike
+- No special format needed; it's just markdown with links, readable by humans and machines alike
 
 **Agent discovery**:
 - Agents crawl the graph to build knowledge maps of the mark:// network
@@ -1310,16 +1310,16 @@ Hubs are the entry points into the information graph:
 - An agent's graph becomes its understanding of what exists and how it's connected
 
 **Implementation status** (shipped):
-- `graphstore` package (`client/internal/graphstore/`) — persistent graph stored at `~/.mark/graph.json` with schema versioning and atomic saves
-- `CrawlAndPersist` — shared crawl path used by CLI (`demarkus graph`), TUI (`d` key), and MCP (`mark_graph`); merges new nodes/edges into the existing store
-- `mark_backlinks` MCP tool — queries the stored graph for reverse links
+- `graphstore` package (`client/internal/graphstore/`): persistent graph stored at `~/.mark/graph.json` with schema versioning and atomic saves
+- `CrawlAndPersist`: shared crawl path used by CLI (`demarkus graph`), TUI (`d` key), and MCP (`mark_graph`); merges new nodes/edges into the existing store
+- `mark_backlinks` MCP tool: queries the stored graph for reverse links
 - TUI loads the stored graph instantly on `d`, then runs a live crawl in the background to discover new links
-- Hub pattern with `mark_index` — federated content indexing through version-pinned prefix shards; inactive-slot staging and manifest-last CAS keep each published generation atomic
-- Graph as content — `Store.Export()` renders the graph as publishable markdown with `mark://` links (six-column Edges table: `From | To | Rel | Label | Anchor | Count`); `ParseExport()` parses it back, accepting the legacy two-column shape too; CLI `demarkus graph export` and MCP `mark_graph_export` tool
-- Edge semantics — edges carry provenance (link label, source section anchor, occurrence count) and typed relations ingested from `rel-<predicate>` publisher metadata (ADR 0004)
-- Agent discovery — `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers
-- Atomic graph snapshots — `demarkus-agent` publishes version-pinned node and edge shards under `/graph/`, commits `/graph/manifest.md` last, and then updates legacy `/graph.md`; seeders verify the complete snapshot before applying it
-- Federation crawler exception — generated `/graph.md` and `/graph/` documents are hash-indexed but never reinterpreted as authored edges or discovery links
+- Hub pattern with `mark_index`: federated content indexing through version-pinned prefix shards; inactive-slot staging and manifest-last CAS keep each published generation atomic
+- Graph as content: `Store.Export()` renders the graph as publishable markdown with `mark://` links (six-column Edges table: `From | To | Rel | Label | Anchor | Count`); `ParseExport()` parses it back, accepting the legacy two-column shape too; CLI `demarkus graph export` and MCP `mark_graph_export` tool
+- Edge semantics: edges carry provenance (link label, source section anchor, occurrence count) and typed relations ingested from `rel-<predicate>` publisher metadata (ADR 0004)
+- Agent discovery: `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers
+- Atomic graph snapshots: `demarkus-agent` publishes version-pinned node and edge shards under `/graph/`, commits `/graph/manifest.md` last, and then updates legacy `/graph.md`; seeders verify the complete snapshot before applying it
+- Federation crawler exception: generated `/graph.md` and `/graph/` documents are hash-indexed but never reinterpreted as authored edges or discovery links
 
 ### Later architecture decisions
 

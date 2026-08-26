@@ -24,7 +24,7 @@ The server applies its schema at startup, including the `pg_trgm` extension used
 | Extra values | `storage.*` | `server.postgres.dsnSecret.*` |
 | Replicas | one writer | safe with several |
 
-Everything else — service, TLS and cert-manager wiring, token bootstrap, probes, security contexts, resources — is identical and comes from the shared `demarkus-server-common` library chart. See the [demarkus-server README](../demarkus-server/README.md) for those settings.
+Everything else (service, TLS and cert-manager wiring, token bootstrap, probes, security contexts, resources) is identical and comes from the shared `demarkus-server-common` library chart. See the [demarkus-server README](../demarkus-server/README.md) for those settings.
 
 ## Moving an existing world onto Postgres
 

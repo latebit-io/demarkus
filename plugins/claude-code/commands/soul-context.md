@@ -19,7 +19,7 @@ Bring the current project's recent memory into the session so the agent and the 
 5. **Summarize for the user.** Render in this shape, plain text, no preamble:
 
    ```text
-   ## <Project> — recent context
+   ## <Project>: recent context
 
    ### What's in flight
    <one or two sentences pulled from roadmap.md, or "No roadmap yet">
@@ -29,7 +29,7 @@ Bring the current project's recent memory into the session so the agent and the 
    - <YYYY-MM-DD>: <...>
 
    ### Pick up where you left off
-   <one or two specific suggestions tied to the most recent journal entry — what was the user about to do next?>
+   <one or two specific suggestions tied to the most recent journal entry; what was the user about to do next?>
    ```
 
    Keep summaries tight (one line each). The goal is restoring context, not reading entries verbatim.
@@ -37,5 +37,5 @@ Bring the current project's recent memory into the session so the agent and the 
 ## Don't
 
 - Don't fabricate. If a section is empty (no roadmap, no recent journals), say so.
-- Don't pull every doc in the project — this is a session primer, not a dump.
+- Don't pull every doc in the project; this is a session primer, not a dump.
 - Don't write to the soul. This command is read-only.

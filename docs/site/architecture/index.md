@@ -6,12 +6,12 @@ This page describes the Demarkus system architecture, key design decisions, and 
 
 Demarkus is a markdown‑native document protocol built on QUIC. The repository is organized as six modules:
 
-- **`protocol/`** — wire format and parsing/serialization only
-- **`server/`** — QUIC servers: `demarkus-server` (filesystem), `demarkus-server-pg` (Postgres), `demarkus-knowledge-server` (multi-world, GCS)
-- **`client/`** — CLI, TUI, MCP server, and the federation agent
-- **`tools/`** — the OIDC broker/MCP gateway, token tooling, direct-to-store publish, load testing
-- **`plugins/`** — agent plugins for Claude Code, OpenCode, pi, and Obsidian
-- **`deploy/`** — Helm charts, Kubernetes examples, and the kind dev harness
+- **`protocol/`**: wire format and parsing/serialization only
+- **`server/`**: QUIC servers: `demarkus-server` (filesystem), `demarkus-server-pg` (Postgres), `demarkus-knowledge-server` (multi-world, GCS)
+- **`client/`**: CLI, TUI, MCP server, and the federation agent
+- **`tools/`**: the OIDC broker/MCP gateway, token tooling, direct-to-store publish, load testing
+- **`plugins/`**: agent plugins for Claude Code, OpenCode, and pi
+- **`deploy/`**: Helm charts, Kubernetes examples, and the kind dev harness
 
 The architecture intentionally separates **protocol parsing** from **transport**, and **storage** from **network**, so that each layer can be tested independently.
 
@@ -126,7 +126,7 @@ If no tokens file is configured, the server is **read‑only** (secure by defaul
 
 Markdown links form a natural **document graph**. The CLI, TUI, and MCP server include graph crawling features to visualize and verify link structure.
 
-The client-side `graphstore` package persists crawled graph data at `~/.mark/graph.json`. All three tools share this store — a graph built by the CLI is visible in the TUI and queryable via MCP. Each crawl merges new nodes and edges into the existing graph, so knowledge accumulates across sessions.
+The client-side `graphstore` package persists crawled graph data at `~/.mark/graph.json`. All three tools share this store: a graph built by the CLI is visible in the TUI and queryable via MCP. Each crawl merges new nodes and edges into the existing graph, so knowledge accumulates across sessions.
 
 Backlinks ("what documents link here?") are derived from the stored graph with no server-side changes needed. The MCP `mark_backlinks` tool exposes this as a query for agents. The store is seeded on demand from the world's atomic `/graph/manifest.md` snapshot, with `/graph.md` as a compatibility fallback, so a fresh client answers backlinks before its first crawl; local crawls take precedence over seeded rows.
 
@@ -136,10 +136,10 @@ The graph itself is exportable as a publishable markdown document. `mark_graph_e
 
 Demarkus aligns its document content model with [Google's Open Knowledge Format v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog). The compatibility is deliberately scoped to two layers:
 
-- **Document level — compatible.** A stored document's persisted metadata uses OKF field names for the recognized fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`), with non-spec keys namespaced under `meta.*` and store-operational fields (`version`, `previous-hash`, `archived`) reserved by name. The server assigns a default `type: Document` on PUBLISH and APPEND when none is declared, so every concept is OKF-typed by construction.
-- **System level — superset.** Demarkus layers immutable versioning, a SHA-256 hash chain, QUIC transport, capability-based auth, and LOOKUP discovery on top of an OKF-compatible document. It is *not* an OKF bundle server: frontmatter is stripped before serving and the `versions/` layout is not a bundle tree.
+- **Document level: compatible.** A stored document's persisted metadata uses OKF field names for the recognized fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`), with non-spec keys namespaced under `meta.*` and store-operational fields (`version`, `previous-hash`, `archived`) reserved by name. The server assigns a default `type: Document` on PUBLISH and APPEND when none is declared, so every concept is OKF-typed by construction.
+- **System level: superset.** Demarkus layers immutable versioning, a SHA-256 hash chain, QUIC transport, capability-based auth, and LOOKUP discovery on top of an OKF-compatible document. It is *not* an OKF bundle server: frontmatter is stripped before serving and the `versions/` layout is not a bundle tree.
 
-Bundle interoperability is therefore an out-of-band codec, not a wire feature. The `demarkus okf` subcommand (`client/internal/okf`) round-trips bundles — `validate` (v0.1 conformance), `import` (bundle → world), `export` (world subtree → conformant bundle) — with verified byte-identical body round-trips. See [SPEC §14](../../SPEC.md) and ADRs 0002 (metadata alignment) and 0003 (default type).
+Bundle interoperability is therefore an out-of-band codec, not a wire feature. The `demarkus okf` subcommand (`client/internal/okf`) round-trips bundles (`validate` for v0.1 conformance, `import` for bundle → world, `export` for world subtree → conformant bundle) with verified byte-identical body round-trips. See [SPEC §14](../../SPEC.md) and ADRs 0002 (metadata alignment) and 0003 (default type).
 
 ## Deployment Topology
 
