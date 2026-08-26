@@ -38,10 +38,15 @@ type Crawler struct {
 	tokens *tokens.Store
 
 	// Crawl results
-	mu      sync.Mutex
-	hashes  map[string][]index.Entry // content-hash -> all observed locations
-	servers map[string]bool          // discovered servers (host)
-	graph   *graph.Graph             // link graph accumulated during the walk (concurrency-safe itself)
+	runMu          sync.Mutex
+	mu             sync.Mutex
+	hashes         map[string][]index.Entry // content-hash -> all observed locations
+	servers        map[string]bool          // discovered servers (host)
+	graph          *graph.Graph             // link graph accumulated during the walk (concurrency-safe itself)
+	completedNodes []graphstore.StoredNode
+	completedEdges []graphstore.StoredEdge
+	publishable    bool
+	publishSem     chan struct{}
 }
 
 // NewCrawler creates a new federation crawler.
@@ -49,13 +54,14 @@ type Crawler struct {
 // Crawler methods guard access via c.state != nil and c.tokens != nil checks.
 func NewCrawler(cfg Config, client FetchClient, state *State, tokenStore *tokens.Store) *Crawler { //nolint:gocritic // hugeParam: Config by value is intentional for immutability
 	return &Crawler{
-		cfg:     cfg,
-		client:  client,
-		state:   state,
-		tokens:  tokenStore,
-		hashes:  make(map[string][]index.Entry),
-		servers: make(map[string]bool),
-		graph:   graph.New(),
+		cfg:        cfg,
+		client:     client,
+		state:      state,
+		tokens:     tokenStore,
+		hashes:     make(map[string][]index.Entry),
+		servers:    make(map[string]bool),
+		graph:      graph.New(),
+		publishSem: make(chan struct{}, 1),
 	}
 }
 
@@ -71,6 +77,9 @@ type CrawlResult struct {
 // Run executes the federation crawl starting from configured seeds.
 // It discovers servers, collects content hashes, and returns results.
 func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
+	c.runMu.Lock()
+	defer c.runMu.Unlock()
+
 	// Run is the package boundary, so enforce normalization even when callers
 	// construct a Crawler directly instead of using the agent command.
 	if err := c.cfg.Validate(); err != nil {
@@ -85,6 +94,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	c.hashes = make(map[string][]index.Entry)
 	c.servers = make(map[string]bool)
 	c.graph = graph.New()
+	c.publishable = false
 	c.mu.Unlock()
 
 	result := &CrawlResult{}
@@ -194,6 +204,13 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	result.HashesCollected = len(c.hashes)
 	result.Incomplete = incomplete.Load()
 	result.Errors = crawlErrors
+	g := c.graph
+	c.mu.Unlock()
+	nodes, edges := snapshotGraph(g)
+	c.mu.Lock()
+	c.completedNodes = nodes
+	c.completedEdges = edges
+	c.publishable = !result.Incomplete
 	c.mu.Unlock()
 
 	return result, nil
@@ -327,10 +344,8 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 			s.run.recordIncomplete("fetch %s%s: missing or invalid content-hash", s.host, fullPath)
 		}
 
-		// /graph.md is a generated projection of other documents' edges. Hash it
-		// like any document, but do not turn its table links into synthetic
-		// graph.md→node edges or use them to amplify the discovery frontier.
-		if fullPath != "/graph.md" {
+		// Generated graph exports are data, not authored discovery links.
+		if !isGeneratedGraphPath(fullPath) {
 			c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
 			c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg, s.run.recordIncomplete)
 		}
@@ -340,6 +355,10 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 	}
 
 	return nil
+}
+
+func isGeneratedGraphPath(docPath string) bool {
+	return docPath == "/graph.md" || docPath == graphstore.SnapshotManifestPath || strings.HasPrefix(docPath, "/graph/shards/")
 }
 
 func (s *serverWalk) walkDirectoryPages(ctx context.Context, dirPath string, depth int) error {
@@ -643,15 +662,23 @@ func isLoopbackHost(host string) bool {
 // format stays identical to mark_graph_export / mark_graph_publish — the same
 // document any agent or the library floor reads.
 func (c *Crawler) GraphExport() string {
-	// Snapshot the graph pointer under the lock: Run reassigns c.graph under
-	// c.mu, so an export racing a re-crawl must not read the field unguarded
-	// (the graph's own methods are synchronized; the field reassignment is not).
+	nodes, edges, _ := c.graphSnapshot()
+	return graphstore.BuildExport(time.Now(), nodes, edges)
+}
+
+func (c *Crawler) graphSnapshot() ([]graphstore.StoredNode, []graphstore.StoredEdge, bool) {
 	c.mu.Lock()
-	g := c.graph
+	nodes := append([]graphstore.StoredNode(nil), c.completedNodes...)
+	edges := append([]graphstore.StoredEdge(nil), c.completedEdges...)
+	publishable := c.publishable
 	c.mu.Unlock()
+	return nodes, edges, publishable
+}
+
+func snapshotGraph(g *graph.Graph) ([]graphstore.StoredNode, []graphstore.StoredEdge) {
 	store := graphstore.New()
 	store.Merge(g, nil)
-	return store.Export()
+	return store.Snapshot()
 }
 
 // PublishGraphToHubs publishes the link-graph export to each configured hub at
@@ -662,8 +689,19 @@ func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) 
 	if len(c.cfg.Hubs) == 0 {
 		return 0, nil
 	}
+	select {
+	case c.publishSem <- struct{}{}:
+		defer func() { <-c.publishSem }()
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
 
-	body := c.GraphExport()
+	nodes, edges, publishable := c.graphSnapshot()
+	if !publishable {
+		return 0, errors.New("no complete graph generation available")
+	}
+	exported := time.Now().UTC()
+	body := graphstore.BuildExport(exported, nodes, edges)
 	successCount := 0
 	var publishErrs []error
 
@@ -674,14 +712,40 @@ func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) 
 			continue
 		}
 		token := c.resolveToken(host)
+		published := false
+		if err := c.publishGraphSnapshot(ctx, client, host, nodes, edges, exported, token); err != nil {
+			publishErrs = append(publishErrs, fmt.Errorf("publish graph snapshot to hub %s: %w", hub, err))
+		} else {
+			published = true
+		}
 		if err := c.publishIndex(ctx, client, host, "/graph.md", body, token); err != nil {
 			publishErrs = append(publishErrs, fmt.Errorf("publish /graph.md to hub %s: %w", hub, err))
-			continue
+		} else {
+			published = true
 		}
-		successCount++
+		if published {
+			successCount++
+		}
 	}
 
 	return successCount, errors.Join(publishErrs...)
+}
+
+func (c *Crawler) publishGraphSnapshot(ctx context.Context, client PublishClient, host string, nodes []graphstore.StoredNode, edges []graphstore.StoredEdge, exported time.Time, token string) error {
+	_, err := graphstore.PublishSnapshot(ctx, graphstore.SnapshotPublishOptions{
+		ManifestPath: graphstore.SnapshotManifestPath,
+		Exported:     exported,
+		Nodes:        nodes,
+		Edges:        edges,
+	}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
+		result, err := client.FetchContext(ioCtx, host, docPath, token)
+		return result.Response, err
+	}, func(ioCtx context.Context, docPath, body string, expectedVersion int) (protocol.Response, error) {
+		meta := c.generatedArtifactMeta(docPath == graphstore.SnapshotManifestPath)
+		result, err := client.PublishContext(ioCtx, host, docPath, body, token, expectedVersion, meta)
+		return result.Response, err
+	})
+	return err
 }
 
 // PublishClient wraps the operations needed for publishing.
@@ -730,7 +794,7 @@ func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, 
 
 	meta := c.generatedArtifactMeta(true)
 	// Retention bounds generated whole-document history (SPEC §9.9).
-	result, err := client.Publish(host, docPath, body, token, -1, meta)
+	result, err := client.PublishContext(ctx, host, docPath, body, token, -1, meta)
 	if err != nil {
 		return err
 	}

@@ -154,10 +154,15 @@ func (c *Client) FetchContext(ctx context.Context, host, path, token string) (Re
 // never fires). A not-modified status returns with an empty body. An empty
 // etag degrades to a plain Fetch.
 func (c *Client) FetchConditional(host, path, token, etag string) (Result, error) {
+	return c.FetchConditionalContext(context.Background(), host, path, token, etag)
+}
+
+// FetchConditionalContext is FetchConditional with caller cancellation.
+func (c *Client) FetchConditionalContext(ctx context.Context, host, path, token, etag string) (Result, error) {
 	if etag == "" {
-		return c.Fetch(host, path, token)
+		return c.FetchContext(ctx, host, path, token)
 	}
-	return c.cachedRequestMeta(host, path, token, protocol.VerbFetch, map[string]string{"if-none-match": etag})
+	return c.cachedRequestMetaContext(ctx, host, path, token, protocol.VerbFetch, map[string]string{"if-none-match": etag})
 }
 
 // ListOptions carries optional parameters for a LIST request.

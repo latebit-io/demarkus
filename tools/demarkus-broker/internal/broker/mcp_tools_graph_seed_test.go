@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,69 @@ func seedingDispatcher(etag string) *fakeDispatcher {
 	}
 }
 
+func brokerSnapshot(t *testing.T) (protocol.Response, map[string]protocol.Response) { //nolint:gocritic // fixture returns manifest and shard set
+	t.Helper()
+	exported := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	const base = "mark://team-a.team-a.svc.cluster.local:6309"
+	nodes := []graphstore.StoredNode{
+		{URL: base + "/a.md", Title: "Page A", Status: "ok", LinkCount: 1},
+		{URL: base + "/b.md", Title: "Page B", Status: "ok"},
+	}
+	edges := []graphstore.StoredEdge{{From: base + "/a.md", To: base + "/b.md", Count: 1}}
+	artifacts, err := graphstore.BuildSnapshotShards(graphstore.SnapshotManifestPath, graphstore.SnapshotSlotA, nodes, edges, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]graphstore.SnapshotShardRef, len(artifacts))
+	shards := make(map[string]protocol.Response, len(artifacts))
+	for i, artifact := range artifacts {
+		refs[i] = artifact.Ref(i + 1)
+		shards[graphstore.SnapshotVersionPath(artifact.Path, i+1)] = protocol.Response{
+			Status: protocol.StatusOK, Body: artifact.Body,
+			Metadata: map[string]string{"version": strconv.Itoa(i + 1), "content-hash": artifact.ContentHash},
+		}
+	}
+	manifest, err := graphstore.BuildSnapshotManifest(graphstore.SnapshotManifestPath, graphstore.SnapshotManifest{
+		Exported: exported, Complete: true, Nodes: len(nodes), Edges: len(edges),
+		ActiveSlot: graphstore.SnapshotSlotA, Shards: refs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return protocol.Response{Status: protocol.StatusOK, Body: manifest, Metadata: map[string]string{
+		"etag": "snapshot-etag-1", "content-hash": graphstore.SnapshotBodyHash(manifest),
+	}}, shards
+}
+
+func TestSeedWorldGraphPrefersAtomicSnapshot(t *testing.T) {
+	manifest, shards := brokerSnapshot(t)
+	d := &fakeDispatcher{
+		fetchCondFn: func(_, path, _, _ string) (fetch.Result, error) {
+			if path == graphstore.SnapshotManifestPath {
+				return fetch.Result{Response: manifest}, nil
+			}
+			t.Fatalf("legacy path fetched despite snapshot: %s", path)
+			return fetch.Result{}, nil
+		},
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			return fetch.Result{Response: shards[path]}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
+		"url": "mark://team-a/b.md",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkBacklinks err=%v result=%+v", err, res)
+	}
+	if text := toolResultText(t, res); !strings.Contains(text, "mark://team-a/a.md") {
+		t.Fatalf("translated snapshot backlink missing: %s", text)
+	}
+	if got := g.graphStore.SeedEtag("team-a"); got != "snapshot-etag-1" {
+		t.Fatalf("seed etag = %q", got)
+	}
+}
+
 // agentContractGoldenPath is the real agent's in-cluster /graph.md, pinned
 // by fedcrawl's TestGraphExportContract; consuming it here is the other
 // half of the cross-module contract (producer drift regenerates it).
@@ -55,7 +119,7 @@ func agentContractGolden(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read agent export contract golden (regenerate with: go test ./internal/fedcrawl -run TestGraphExportContract -update, in client/): %v", err)
 	}
-	return string(body)
+	return strings.Replace(string(body), "> Exported: GOLDEN", "> Exported: 2026-01-01T00:00:00Z", 1)
 }
 
 // TestSeedConsumesAgentExportContract: the real agent's export (the golden)
@@ -179,13 +243,13 @@ func TestSeedFindsAggregateOnAnotherWorld(t *testing.T) {
 	defer d.mu.Unlock()
 	probed := map[string]int{}
 	for _, c := range d.fetchCondCalls {
-		if c.path != "/graph.md" {
-			t.Errorf("seed probed %q, want /graph.md", c.path)
+		if c.path != graphstore.SnapshotManifestPath && c.path != "/graph.md" {
+			t.Errorf("seed probed unexpected path %q", c.path)
 		}
 		probed[c.worldName]++
 	}
-	if probed["team-a"] != 1 || probed["hub"] != 1 || len(probed) != 2 {
-		t.Errorf("seed probes = %v, want each configured world exactly once", probed)
+	if probed["team-a"] != 2 || probed["hub"] != 2 || len(probed) != 2 {
+		t.Errorf("seed probes = %v, want snapshot and legacy checks per world", probed)
 	}
 }
 
@@ -214,8 +278,8 @@ func TestHandleMarkBacklinksColdPodSeedsFromWorldGraph(t *testing.T) {
 	if len(d.fetchCalls) != 0 {
 		t.Errorf("plain fetches = %d, want 0 (no crawl needed)", len(d.fetchCalls))
 	}
-	if len(d.fetchCondCalls) != 1 || d.fetchCondCalls[0].path != "/graph.md" || d.fetchCondCalls[0].worldName != "team-a" {
-		t.Errorf("fetchCondCalls = %+v, want one /graph.md check on team-a", d.fetchCondCalls)
+	if len(d.fetchCondCalls) != 2 || d.fetchCondCalls[0].path != graphstore.SnapshotManifestPath || d.fetchCondCalls[1].path != "/graph.md" {
+		t.Errorf("fetchCondCalls = %+v, want snapshot then legacy checks", d.fetchCondCalls)
 	}
 }
 
@@ -277,8 +341,8 @@ func TestSeedWorldGraphThrottledWithinWindow(t *testing.T) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.fetchCondCalls) != 1 {
-		t.Errorf("seed checks = %d, want 1 (throttled)", len(d.fetchCondCalls))
+	if len(d.fetchCondCalls) != 2 {
+		t.Errorf("seed checks = %d, want one snapshot/legacy pair (throttled)", len(d.fetchCondCalls))
 	}
 }
 
@@ -308,8 +372,8 @@ func TestSeedWorldGraphEtagRoundTrip(t *testing.T) {
 	d.mu.Lock()
 	calls := append([]condCall(nil), d.fetchCondCalls...)
 	d.mu.Unlock()
-	if len(calls) != 2 || calls[0].etag != "" || calls[1].etag != "hub-etag-1" {
-		t.Errorf("etags sent = %+v, want [\"\" hub-etag-1]", calls)
+	if len(calls) != 4 || calls[0].etag != "" || calls[1].etag != "" || calls[2].etag != "hub-etag-1" || calls[3].etag != "hub-etag-1" {
+		t.Errorf("etags sent = %+v, want empty then stored etag for each snapshot/legacy pair", calls)
 	}
 	// not-modified keeps the seeded rows.
 	if text := toolResultText(t, res); !strings.Contains(text, "Page A") {

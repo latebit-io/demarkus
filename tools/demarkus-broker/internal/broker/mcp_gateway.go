@@ -38,11 +38,10 @@ type mcpGateway struct {
 	// it is ephemeral per-pod state, consistent with the wire-shape-
 	// adapter framing.
 	fetchSeen *sessionSeen
-	// graphSeedMu guards graphSeedChecked: worldName → last /graph.md
-	// seed check, the per-pod throttle for seedWorldGraph. The seed
-	// etag itself lives in graphStore (SeedEtag), keyed by worldName.
-	graphSeedMu      sync.Mutex
-	graphSeedChecked map[string]time.Time
+	// graphSeedMu guards per-world refresh single-flight and successful checks.
+	graphSeedMu         sync.Mutex
+	graphSeedChecked    map[string]time.Time
+	graphSeedRefreshing map[string]chan struct{}
 }
 
 // newMCPGateway registers the 17 tools and wraps them in Streamable HTTP.

@@ -554,6 +554,7 @@ type stubClient struct {
 	published   map[string]fetch.Result
 	fetchFn     func(host, path, token string) (fetch.Result, error)
 	fetchCondFn func(host, path, token, etag string) (fetch.Result, error)
+	snapshotFn  func(host, path, token, etag string) (fetch.Result, error)
 	listFn      func(host, path, token string) (fetch.Result, error)
 	listOptsFn  func(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
 	versionsFn  func(host, path, token string) (fetch.Result, error)
@@ -583,11 +584,24 @@ func (s *stubClient) FetchContext(ctx context.Context, host, path, token string)
 }
 
 func (s *stubClient) FetchConditional(host, path, token, etag string) (fetch.Result, error) {
+	if path == graphstore.SnapshotManifestPath {
+		if s.snapshotFn != nil {
+			return s.snapshotFn(host, path, token, etag)
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}
 	if s.fetchCondFn != nil {
 		return s.fetchCondFn(host, path, token, etag)
 	}
 	// Seed fetches against a stub with no graph.md behave like a missing doc.
 	return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+}
+
+func (s *stubClient) FetchConditionalContext(ctx context.Context, host, path, token, etag string) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	return s.FetchConditional(host, path, token, etag)
 }
 func (s *stubClient) List(host, path, token string) (fetch.Result, error) {
 	if s.listFn != nil {

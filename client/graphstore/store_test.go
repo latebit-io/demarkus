@@ -296,7 +296,7 @@ func TestLoadLegacyEdgesDefaultsCount(t *testing.T) {
 
 func TestLoadRejectsSchemaVersionMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
-	if err := os.WriteFile(path, []byte(`{"version":3,"nodes":[],"edges":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, fmt.Appendf(nil, `{"version":%d,"nodes":[],"edges":[]}`, schemaVersion+1), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -945,6 +945,73 @@ func TestSeedEtagsRoundTrip(t *testing.T) {
 	}
 	if got := s2.SeedEtag("other:6309"); got != "" {
 		t.Errorf("SeedEtag unknown host = %q, want empty", got)
+	}
+}
+
+func TestLoadClearsPreOwnershipSeedEtags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	body := `{"version":2,"nodes":[],"edges":[],"seed_etags":{"hub":"stale"}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	store, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := store.SeedEtag("hub"); got != "" {
+		t.Fatalf("SeedEtag = %q, want refresh", got)
+	}
+}
+
+func TestReplaceSeedRemovesSourcesMissingFromCompleteGeneration(t *testing.T) {
+	store := New()
+	store.ReplaceSeed("hub", []StoredNode{
+		{URL: "mark://a/source.md", Status: "ok"},
+		{URL: "mark://a/target.md", Status: "ok"},
+	}, []StoredEdge{{From: "mark://a/source.md", To: "mark://a/target.md", Count: 1}})
+	if got := store.Backlinks("mark://a/target.md"); len(got) != 1 {
+		t.Fatalf("initial backlinks = %v", got)
+	}
+	store.ReplaceSeed("hub", nil, nil)
+	if got := store.Backlinks("mark://a/target.md"); len(got) != 0 {
+		t.Fatalf("backlinks after empty generation = %v", got)
+	}
+	if node := store.GetNode("mark://a/source.md"); node != nil {
+		t.Fatalf("omitted seeded node survived: %+v", node)
+	}
+}
+
+func TestReplaceSeedPreservesOverlappingOwnerGraph(t *testing.T) {
+	store := New()
+	store.ReplaceSeed("a", nil, []StoredEdge{{From: "mark://w/source.md", To: "mark://w/a.md", Count: 1}})
+	store.ReplaceSeed("b", nil, []StoredEdge{{From: "mark://w/source.md", To: "mark://w/b.md", Count: 1}})
+	store.ReplaceSeed("a", nil, nil)
+	if got := store.Backlinks("mark://w/a.md"); len(got) != 0 {
+		t.Fatalf("removed owner's edge survived: %v", got)
+	}
+	if got := store.Backlinks("mark://w/b.md"); len(got) != 1 {
+		t.Fatalf("overlapping owner's edge was erased: %v", got)
+	}
+}
+
+func TestReplaceSeedOwnershipPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.ReplaceSeed("a", nil, []StoredEdge{{From: "mark://w/source.md", To: "mark://w/a.md", Count: 1}})
+	store.ReplaceSeed("b", nil, []StoredEdge{{From: "mark://w/source.md", To: "mark://w/b.md", Count: 1}})
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.ReplaceSeed("a", nil, nil)
+	if got := store.Backlinks("mark://w/b.md"); len(got) != 1 {
+		t.Fatalf("persisted owner edge was erased: %v", got)
 	}
 }
 

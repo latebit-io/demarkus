@@ -125,9 +125,9 @@ Markdown links form a natural **document graph**. The CLI, TUI, and MCP server i
 
 The client-side `graphstore` package persists crawled graph data at `~/.mark/graph.json`. All three tools share this store — a graph built by the CLI is visible in the TUI and queryable via MCP. Each crawl merges new nodes and edges into the existing graph, so knowledge accumulates across sessions.
 
-Backlinks ("what documents link here?") are derived from the stored graph with no server-side changes needed. The MCP `mark_backlinks` tool exposes this as a query for agents. The store is seeded on demand from the world's published `/graph.md` aggregate, so a fresh client answers backlinks before its first crawl; local crawls take precedence over seeded rows.
+Backlinks ("what documents link here?") are derived from the stored graph with no server-side changes needed. The MCP `mark_backlinks` tool exposes this as a query for agents. The store is seeded on demand from the world's atomic `/graph/manifest.md` snapshot, with `/graph.md` as a compatibility fallback, so a fresh client answers backlinks before its first crawl; local crawls take precedence over seeded rows.
 
-The graph itself is exportable as a publishable markdown document containing `mark://` links. `mark_graph_export` renders the graph; `mark_graph_publish` exports and publishes in one step. Other agents can crawl the published graph document to discover the topology without recrawling the original servers — enabling multi-agent discovery where agents share and merge knowledge maps.
+The graph itself is exportable as a publishable markdown document. `mark_graph_export` renders the graph; `mark_graph_publish` exports and publishes the legacy single-document form in one step. The federation agent additionally publishes version-pinned node and edge shards behind a manifest-last CAS, allowing clients to import a complete generation without recrawling original documents.
 
 ## Open Knowledge Format (OKF) Compatibility
 

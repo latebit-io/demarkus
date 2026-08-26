@@ -323,19 +323,19 @@ subsequent `mark_backlinks` / `mark_graph_export` /
 
 #### `mark_graph_export`
 
-Export the broker's graph store as a publishable markdown document
-containing `mark://` links. The Edges table carries six columns
+Export the broker's graph store as a publishable legacy markdown document.
+The Edges table carries six columns
 (`From | To | Rel | Label | Anchor | Count`); parsers also accept the
-legacy two-column `From | To` shape. Crawling the exported document
-naturally re-discovers the topology. Returns an empty hint if the
-store is empty.
+legacy two-column `From | To` shape. Returns an empty hint if the store is empty.
 
 (No parameters.)
 
 #### `mark_graph_publish`
 
 Export the broker's graph store and publish it to a world in one
-step. `mark_graph_export` + `mark_publish` combined.
+step. `mark_graph_export` + `mark_publish` combined. This manual tool keeps the
+legacy single-document contract; federation-agent snapshots are loaded
+automatically from `/graph/manifest.md` when present.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |

@@ -37,7 +37,7 @@ func markExploreTool(host string) mcp.Tool {
 	)
 }
 
-func (h *handler) markExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -87,7 +87,7 @@ func (h *handler) markExplore(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		mdoutline.CappedList(&b, out, exploreSectionCap, "links")
 	}
 
-	h.seedGraph(host)
+	h.seedGraph(ctx, host)
 	h.writeBacklinksSection(&b, links.NodeURL(host, path))
 	h.writeSiblingsSection(&b, host, path, token)
 

@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -26,9 +27,8 @@ import (
 )
 
 // schemaVersion is the on-disk format version. Increment on breaking changes.
-// v2 keys nodes by canonical identity, the authority without the default
-// port (ADR 0005); v1 files are migrated on load.
-const schemaVersion = 2
+// v2 canonicalizes node identities. v3 persists complete seed graphs by owner.
+const schemaVersion = 3
 
 // minSchemaVersion is the oldest on-disk format still readable.
 const minSchemaVersion = 1
@@ -65,20 +65,27 @@ func (e *StoredEdge) key() edgeKey {
 // document is the on-disk JSON envelope. SeedEtags is additive (omitted when
 // empty) so pre-seed graph.json files round-trip unchanged; schema stays v1.
 type document struct {
-	Version   int               `json:"version"`
-	Nodes     []StoredNode      `json:"nodes"`
-	Edges     []StoredEdge      `json:"edges"`
-	SeedEtags map[string]string `json:"seed_etags,omitempty"`
+	Version    int                      `json:"version"`
+	Nodes      []StoredNode             `json:"nodes"`
+	Edges      []StoredEdge             `json:"edges"`
+	SeedEtags  map[string]string        `json:"seed_etags,omitempty"`
+	SeedGraphs map[string]seedGraphData `json:"seed_graphs,omitempty"`
+}
+
+type seedGraphData struct {
+	Nodes []StoredNode `json:"nodes"`
+	Edges []StoredEdge `json:"edges"`
 }
 
 // Store is the persistent graph state.
 type Store struct {
-	path      string
-	mu        sync.RWMutex
-	nodes     map[string]*StoredNode
-	edges     []StoredEdge
-	edgeIdx   map[edgeKey]int
-	seedEtags map[string]string // host -> last seen /graph.md etag
+	path       string
+	mu         sync.RWMutex
+	nodes      map[string]*StoredNode
+	edges      []StoredEdge
+	edgeIdx    map[edgeKey]int
+	seedEtags  map[string]string        // host -> last seen published graph etag
+	seedGraphs map[string]seedGraphData // owner -> latest complete non-authoritative graph
 }
 
 // DefaultPath returns the default graph store location (~/.mark/graph.json).
@@ -98,9 +105,10 @@ func DefaultPath() string {
 // wants the disk-backing.
 func New() *Store {
 	return &Store{
-		nodes:     make(map[string]*StoredNode),
-		edgeIdx:   make(map[edgeKey]int),
-		seedEtags: make(map[string]string),
+		nodes:      make(map[string]*StoredNode),
+		edgeIdx:    make(map[edgeKey]int),
+		seedEtags:  make(map[string]string),
+		seedGraphs: make(map[string]seedGraphData),
 	}
 }
 
@@ -113,10 +121,11 @@ func Load(path string) (*Store, error) {
 	}
 
 	s := &Store{
-		path:      path,
-		nodes:     make(map[string]*StoredNode),
-		edgeIdx:   make(map[edgeKey]int),
-		seedEtags: make(map[string]string),
+		path:       path,
+		nodes:      make(map[string]*StoredNode),
+		edgeIdx:    make(map[edgeKey]int),
+		seedEtags:  make(map[string]string),
+		seedGraphs: make(map[string]seedGraphData),
 	}
 
 	data, err := os.ReadFile(path)
@@ -157,6 +166,23 @@ func Load(path string) (*Store, error) {
 		}
 	}
 	maps.Copy(s.seedEtags, doc.SeedEtags)
+	for owner, seeded := range doc.SeedGraphs {
+		for i := range seeded.Nodes {
+			seeded.Nodes[i].URL = links.CanonicalURL(seeded.Nodes[i].URL)
+			seeded.Nodes[i].CrawledAt = time.Time{}
+			seeded.Nodes[i].Etag = ""
+		}
+		for i := range seeded.Edges {
+			seeded.Edges[i].From = links.CanonicalURL(seeded.Edges[i].From)
+			seeded.Edges[i].To = links.CanonicalURL(seeded.Edges[i].To)
+			seeded.Edges[i].Count = max(seeded.Edges[i].Count, 1)
+		}
+		s.seedGraphs[owner] = seeded
+	}
+	if doc.Version < 3 && len(s.seedEtags) > 0 {
+		// Pre-snapshot stores lack owner provenance; force one full refresh.
+		clear(s.seedEtags)
+	}
 
 	return s, nil
 }
@@ -190,6 +216,9 @@ func (s *Store) Save() error {
 	}
 	if len(s.seedEtags) > 0 {
 		doc.SeedEtags = s.seedEtags
+	}
+	if len(s.seedGraphs) > 0 {
+		doc.SeedGraphs = s.seedGraphs
 	}
 
 	data, err := json.MarshalIndent(doc, "", "  ")
@@ -227,14 +256,14 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	refreshed := make(map[string]bool)
 
 	for _, n := range g.AllNodes() {
-		n.URL = links.CanonicalURL(n.URL)
+		nodeURL := links.CanonicalURL(n.URL)
 		if !observedStatus(n.Status) {
 			// Failed fetch: we learned nothing about this node. Keep the
 			// stored copy untouched (its CrawledAt keeps it authoritative
 			// against seeds); only record nodes we have never seen.
-			if s.nodes[n.URL] == nil {
-				s.nodes[n.URL] = &StoredNode{
-					URL:       n.URL,
+			if s.nodes[nodeURL] == nil {
+				s.nodes[nodeURL] = &StoredNode{
+					URL:       nodeURL,
 					Title:     n.Title,
 					Status:    n.Status,
 					LinkCount: n.LinkCount,
@@ -245,18 +274,18 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 			continue
 		}
 		sn := &StoredNode{
-			URL:       n.URL,
+			URL:       nodeURL,
 			Title:     n.Title,
 			Status:    n.Status,
 			LinkCount: n.LinkCount,
 			CrawledAt: now,
 		}
 		if etags != nil {
-			sn.Etag = etags[n.URL]
+			sn.Etag = etags[nodeURL]
 		}
-		s.nodes[n.URL] = sn
+		s.nodes[nodeURL] = sn
 		count++
-		refreshed[n.URL] = true
+		refreshed[nodeURL] = true
 	}
 
 	s.dropEdgesFromLocked(refreshed)
@@ -329,54 +358,99 @@ func (s *Store) authoritativeLocked(url string) bool {
 // replaced, so stale rows from an earlier seed do not linger. Returns the
 // number of nodes seeded.
 func (s *Store) SeedFromExport(nodes []StoredNode, edges []StoredEdge) int {
+	return s.ReplaceSeed("", nodes, edges)
+}
+
+// ReplaceSeed atomically replaces one owner's complete seeded graph.
+// Locally crawled sources remain authoritative.
+func (s *Store) ReplaceSeed(owner string, nodes []StoredNode, edges []StoredEdge) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	seeded := seedGraphData{
+		Nodes: append([]StoredNode(nil), nodes...),
+		Edges: append([]StoredEdge(nil), edges...),
+	}
+	for i := range seeded.Nodes {
+		seeded.Nodes[i].URL = links.CanonicalURL(seeded.Nodes[i].URL)
+		seeded.Nodes[i].CrawledAt = time.Time{}
+		seeded.Nodes[i].Etag = ""
+	}
+	for i := range seeded.Edges {
+		seeded.Edges[i].From = links.CanonicalURL(seeded.Edges[i].From)
+		seeded.Edges[i].To = links.CanonicalURL(seeded.Edges[i].To)
+		seeded.Edges[i].Count = max(seeded.Edges[i].Count, 1)
+	}
+	if previous, ok := s.seedGraphs[owner]; ok {
+		latestSources := make(map[string]bool, len(seeded.Edges))
+		for _, edge := range seeded.Edges {
+			latestSources[edge.From] = true
+		}
+		unobserved := make(map[string]bool)
+		for _, node := range seeded.Nodes {
+			if !observedStatus(node.Status) && !latestSources[node.URL] {
+				unobserved[node.URL] = true
+			}
+		}
+		for _, edge := range previous.Edges {
+			if unobserved[edge.From] {
+				seeded.Edges = append(seeded.Edges, edge)
+			}
+		}
+	}
 	added := 0
-	for _, n := range nodes {
-		// Another producer's export may predate ADR 0005 or address its worlds
-		// differently; normalize before it reaches a stored key.
-		n.URL = links.CanonicalURL(n.URL)
-		if s.authoritativeLocked(n.URL) {
-			continue
-		}
-		sn := n
-		sn.CrawledAt = time.Time{}
-		sn.Etag = "" // the hub export carries no per-node etags
-		s.nodes[sn.URL] = &sn
-		added++
-	}
-
-	// Sources whose outgoing edge set this seed replaces: every source the
-	// aggregate actually observed (real status) plus every seed-edge From,
-	// excluding locally authoritative ones. Node-based inclusion matters
-	// when a source's outgoing set went to zero: no edge rows remain, yet
-	// its stale seeded edges must still drop (Merge's refreshed criterion,
-	// applied to the seed's view).
-	seeded := make(map[string]bool)
-	for _, n := range nodes {
-		if observedStatus(n.Status) && !s.authoritativeLocked(n.URL) {
-			seeded[n.URL] = true
+	for _, node := range seeded.Nodes {
+		if !s.authoritativeLocked(node.URL) {
+			added++
 		}
 	}
-	for i := range edges {
-		edges[i].From = links.CanonicalURL(edges[i].From)
-		edges[i].To = links.CanonicalURL(edges[i].To)
-		if !s.authoritativeLocked(edges[i].From) {
-			seeded[edges[i].From] = true
-		}
-	}
-	s.dropEdgesFromLocked(seeded)
-
-	for _, e := range edges {
-		if !seeded[e.From] {
-			continue
-		}
-		e.Count = max(e.Count, 1)
-		s.upsertEdgeLocked(&e)
-	}
-
+	s.seedGraphs[owner] = seeded
+	s.rebuildSeedsLocked()
 	return added
+}
+
+func (s *Store) rebuildSeedsLocked() {
+	localNodes := make(map[string]*StoredNode)
+	for nodeURL, node := range s.nodes {
+		if !node.CrawledAt.IsZero() {
+			nodeCopy := *node
+			localNodes[nodeURL] = &nodeCopy
+		}
+	}
+	var localEdges []StoredEdge
+	for _, edge := range s.edges {
+		if s.authoritativeLocked(edge.From) {
+			localEdges = append(localEdges, edge)
+		}
+	}
+	s.nodes = localNodes
+	s.edges = nil
+	s.edgeIdx = make(map[edgeKey]int)
+	for i := range localEdges {
+		s.upsertEdgeLocked(&localEdges[i])
+	}
+
+	owners := slices.Sorted(maps.Keys(s.seedGraphs))
+	for _, owner := range owners {
+		seeded := s.seedGraphs[owner]
+		for i := range seeded.Nodes {
+			node := seeded.Nodes[i]
+			if local := localNodes[node.URL]; local != nil && observedStatus(local.Status) {
+				continue
+			}
+			nodeCopy := node
+			s.nodes[node.URL] = &nodeCopy
+		}
+	}
+	for _, owner := range owners {
+		for i := range s.seedGraphs[owner].Edges {
+			edge := s.seedGraphs[owner].Edges[i]
+			if s.authoritativeLocked(edge.From) {
+				continue
+			}
+			s.upsertEdgeLocked(&edge)
+		}
+	}
 }
 
 // SeedEtag returns the last recorded /graph.md etag for host ("" if none).
