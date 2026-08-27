@@ -28,27 +28,24 @@ func cmdProvision(args []string) {
 		}
 		return
 	}
+	// printLine reports a one-line result, failing the command on error.
+	printLine := func(s string, err error) {
+		if err != nil {
+			fail(err.Error())
+		}
+		if s != "" {
+			fmt.Println(s)
+		}
+	}
 	switch args[0] {
 	case "status":
-		s, err := provision.Status()
-		if err != nil {
-			fail(err.Error())
-		}
-		fmt.Println(s)
+		printLine(provision.Status())
 	case "health":
-		w, err := provision.HealthWarning()
-		if err != nil {
-			fail(err.Error())
-		}
-		if w != "" {
-			fmt.Println(w)
-		}
+		printLine(provision.HealthWarning())
 	case "detect":
-		s, err := provision.DetectServers()
-		if err != nil {
-			fail(err.Error())
-		}
-		fmt.Println(s)
+		printLine(provision.DetectServers())
+	case "verify-auth":
+		printLine(provision.VerifyAuth())
 	case "init":
 		// Parse flags and the positional mode in ANY order. Go's flag package
 		// stops at the first non-flag token, so it can't handle
@@ -102,7 +99,7 @@ func cmdProvision(args []string) {
 		}
 		fmt.Println("OK: provisioned (mode=" + mode + ")")
 	default:
-		fail("provision: unknown subcommand '" + args[0] + "' (use: status|health|detect|init)")
+		fail("provision: unknown subcommand '" + args[0] + "' (use: status|health|detect|verify-auth|init)")
 	}
 }
 

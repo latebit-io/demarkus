@@ -36,6 +36,16 @@ If either gather call fails, is unauthorized, or returns partial output, surface
 - **Untitled docs**: **`ok`** nodes shown as `(no title)` (no H1 / declared title). A `(no title)` on a `not-found` node is the broken-link finding above, not an untitled doc; don't double-report it.
 - **ADR sequence**: for each `adr/` directory, list it and flag duplicate or gapped `NNNN` prefixes. A list failure makes that directory's sequence check inconclusive: surface the error and exclude it from sequence findings.
 
+## Write-auth drift check (whole-local-soul audits only)
+
+The plugin's token and the token registry the server actually reads can diverge silently (an adopted server's `-tokens`/`DEMARKUS_TOKENS` may point anywhere, and a token rotation may write elsewhere); every write then fails `unauthorized` while reads stay healthy. The binary owns the check:
+
+```bash
+"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth
+```
+
+Render its one-line verdict as a finding: `write auth healthy` → healthy; `token drift` → report the registry path it names, that writes will fail `unauthorized`, and the fix it suggests (re-run `/soul-init`, which verifies auth end-to-end, or update the registry hash); `cannot verify` (server down or probe failed) → inconclusive, say so. If the binary is missing or predates the subcommand (unknown command error), skip the check and say so; any other non-zero exit is also inconclusive — report the command's error verbatim rather than a verdict. Never edit the tokens registry from this command; it is read-only like everything else here.
+
 ## Deep checks (per-doc `mark_fetch`; run on a small scope, or when asked)
 
 These cost one fetch per document, so only run them for a single project or when the user asks for a thorough audit. Fetch at most **100** documents per audit, preferring hub-linked and recently modified docs when sampling. If you cap or sample, report exact coverage and skipped count; do not imply a full audit.
@@ -86,6 +96,9 @@ Render plainly, grouped by check, most actionable first. For each finding give t
 ### Dangling & unlinked references (<n>)        [deep check, scanned <k>/<N> docs]
 - /adr/0006-navigation-rework.md → "ADR 0005", dangling: no such doc in scope (mark_list → no match); restore it or drop the reference
 - /roadmap.md → "ADR 0006", unlinked: target exists but the citing body has no Markdown link; link the prose mention to the canonical target
+
+### Token drift        [whole-soul audit]
+- provision verify-auth: token drift (server pid 775, token registry /Users/x/.demarkus/tokens.toml); writes will fail unauthorized; re-run /soul-init or update the registry hash
 
 ### ADR / index / titles / duplicates …
 ```

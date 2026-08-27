@@ -302,7 +302,7 @@ func loadConfig() (*config.PluginConfig, error) {
 // saveConfig atomically writes plugin-memory.conf. Values are backslash-escaped
 // (shellQuote), equivalent to bash printf '%q' for the simple path/word values we
 // store, and reversed by config.unquoteShell on load.
-func saveConfig(soul string, port int, mode string) error {
+func saveConfig(soul string, port int, mode, tokensTOML string) error {
 	h, err := config.Home()
 	if err != nil {
 		return err
@@ -318,6 +318,11 @@ func saveConfig(soul string, port int, mode string) error {
 		"# demarkus-memory plugin config: managed by demarkus-plugin provision\nSOUL_DIR=%s\nPORT=%d\nMODE=%s\n",
 		shellQuote(soul), port, shellQuote(mode),
 	)
+	// Persisted so a later run (or VerifyAuth) with the server down still
+	// targets the registry resolved at setup, not a conventional guess.
+	if tokensTOML != "" {
+		content += fmt.Sprintf("TOKENS=%s\n", shellQuote(tokensTOML))
+	}
 	tmp := cfg + ".tmp"
 	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
 		return err
@@ -826,10 +831,61 @@ func findFreePortFrom(start int) (int, error) {
 
 // --- process scan (lib.sh pid_of_server_at_root / _pid_is_server_at_root / find_running_demarkus) ---
 
+// Anchored at an argument boundary so a path merely containing "-root=" or
+// "-tokens=" is never parsed as a server flag.
 var (
-	rootFlagRe = regexp.MustCompile(`-root[= ]+([^ ]+)`)
-	portFlagRe = regexp.MustCompile(`-port[= ]+(\d+)`)
+	rootFlagRe   = regexp.MustCompile(`(?:^|\s)--?root[= ]+(\S+)`)
+	portFlagRe   = regexp.MustCompile(`(?:^|\s)--?port[= ]+(\d+)`)
+	tokensFlagRe = regexp.MustCompile(`(?:^|\s)--?tokens[= ]+(\S+)`)
 )
+
+// flagValue extracts a flag's value from a ps args string, "" when absent.
+func flagValue(args string, re *regexp.Regexp) string {
+	if m := re.FindStringSubmatch(args); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// tokensPathOfServer returns the tokens.toml the server actually reads
+// (-tokens flag, else DEMARKUS_TOKENS env), or "" when undiscoverable. Exact
+// /proc argv wins over the flattened ps string, which truncates on whitespace.
+func tokensPathOfServer(args string, pid int) string {
+	if p := tokensFromArgv(procArgv(pid)); p != "" {
+		return p
+	}
+	if p := flagValue(args, tokensFlagRe); p != "" {
+		return p
+	}
+	return procEnv(pid, "DEMARKUS_TOKENS")
+}
+
+// procArgv returns the process's exact argument vector from /proc, nil where
+// /proc is unavailable (darwin) or unreadable.
+func procArgv(pid int) []string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil || len(b) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
+}
+
+func tokensFromArgv(argv []string) string {
+	for i, a := range argv {
+		if a == "-tokens" || a == "--tokens" {
+			if i+1 < len(argv) {
+				return argv[i+1]
+			}
+			return ""
+		}
+		for _, prefix := range []string{"-tokens=", "--tokens="} {
+			if v, ok := strings.CutPrefix(a, prefix); ok {
+				return v
+			}
+		}
+	}
+	return ""
+}
 
 // pidOfServerAtRoot returns the PID of a demarkus-server whose -root flag (or
 // DEMARKUS_ROOT env) equals root (literal match), or 0 when none match.
@@ -871,7 +927,7 @@ func pidIsServerAtRoot(pid int, root string) bool {
 // "-root=TARGET" at a word boundary, handling paths with regex metacharacters or
 // spaces safely (literal compare, not regex).
 func argsRootMatches(args, target string) bool {
-	for _, form := range []string{" -root " + target, " -root=" + target} {
+	for _, form := range []string{" -root " + target, " -root=" + target, " --root " + target, " --root=" + target} {
 		if strings.Contains(args, form+" ") || strings.HasSuffix(args, form) {
 			return true
 		}
@@ -889,20 +945,8 @@ func findRunningDemarkus() string {
 		if args == "" {
 			continue
 		}
-		port := ""
-		if m := portFlagRe.FindStringSubmatch(args); m != nil {
-			port = m[1]
-		}
-		if port == "" {
-			port = procEnv(pid, "DEMARKUS_PORT")
-		}
-		if port == "" {
-			port = strconv.Itoa(demarkusProtocolPort)
-		}
-		root := ""
-		if m := rootFlagRe.FindStringSubmatch(args); m != nil {
-			root = m[1]
-		}
+		port := portOfServer(args, pid)
+		root := flagValue(args, rootFlagRe)
 		if root == "" {
 			root = procEnv(pid, "DEMARKUS_ROOT")
 		}
@@ -914,16 +958,16 @@ func findRunningDemarkus() string {
 	return strings.Join(lines, "\n")
 }
 
-// portOfRunningServer returns the port reported by findRunningDemarkus for pid,
-// or "" if not found. Used by reuse to validate the adopted server's actual port.
-func portOfRunningServer(pid int) string {
-	for ln := range strings.SplitSeq(findRunningDemarkus(), "\n") {
-		fields := strings.Fields(ln)
-		if len(fields) >= 2 && fields[0] == strconv.Itoa(pid) {
-			return fields[1]
-		}
+// portOfServer returns the port the server listens on (-port flag in args,
+// else DEMARKUS_PORT env, else the protocol default).
+func portOfServer(args string, pid int) string {
+	if p := flagValue(args, portFlagRe); p != "" {
+		return p
 	}
-	return ""
+	if p := procEnv(pid, "DEMARKUS_PORT"); p != "" {
+		return p
+	}
+	return strconv.Itoa(demarkusProtocolPort)
 }
 
 // --- managed server (lib.sh managed_server_current / ensure_managed_server) --
@@ -1138,27 +1182,38 @@ type seedClient interface {
 	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 }
 
+// readPluginToken loads and trims the plugin's raw token.
+func readPluginToken() (string, error) {
+	tokenFile, err := pluginToken()
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return "", fmt.Errorf("read plugin token: %w", err)
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
+// localClient builds the client for localhost session-start calls. Tight
+// timeouts: the client retries transient errors 5x, so a down server still
+// costs ~5s of dial timeouts (vs ~50s on the defaults); a wedged one ~25s/op.
+func localClient() *fetch.Client {
+	return fetch.NewClient(fetch.Options{Insecure: true, DialTimeout: time.Second, RequestTimeout: 5 * time.Second})
+}
+
 // seedSoulDocs seeds index.md via PUBLISH so it gets version history; a
 // flat file on disk is not FETCHable (issue #288). Best-effort: failures
 // warn and provision continues.
 func seedSoulDocs(port int) {
-	tokenFile, err := pluginToken()
-	if err != nil {
-		warnf("could not locate plugin token; skipping doc seeding: %v", err)
-		return
-	}
-	raw, err := os.ReadFile(tokenFile)
+	tok, err := readPluginToken()
 	if err != nil {
 		warnf("could not read plugin token; skipping doc seeding: %v", err)
 		return
 	}
-	// Tight localhost timeouts for this best-effort session-start path. The
-	// client retries transient errors 5x, so a down server still costs ~5s of
-	// dial timeouts here (vs ~50s on the defaults); a wedged one ~25s per op.
-	cl := fetch.NewClient(fetch.Options{Insecure: true, DialTimeout: time.Second, RequestTimeout: 5 * time.Second})
+	cl := localClient()
 	defer cl.Close()
-	host := "localhost:" + strconv.Itoa(port)
-	seedDoc(cl, host, strings.TrimSpace(string(raw)), "index.md", map[string]string{
+	seedDoc(cl, "localhost:"+strconv.Itoa(port), tok, "index.md", map[string]string{
 		"tags":       "index,hub,projects,navigation",
 		"importance": "0.9",
 		// no OKF type: hubs stay untyped
@@ -1365,7 +1420,12 @@ func doDefault() error {
 	if err := ensureManagedServer(soul, defaultPort); err != nil {
 		return err
 	}
-	if err := saveConfig(soul, defaultPort, "default"); err != nil {
+	// Same end-to-end auth guarantee as reuse mode: setup success must mean
+	// writes work, not just that local files were written.
+	if err := verifyPluginToken(defaultPort); err != nil {
+		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /soul-init", err)
+	}
+	if err := saveConfig(soul, defaultPort, "default", ""); err != nil {
 		return err
 	}
 	logf("default setup complete (soul=%s, port=%d)", soul, defaultPort)
@@ -1390,7 +1450,10 @@ func doIsolated() error {
 	if err := ensureManagedServer(soul, port); err != nil {
 		return err
 	}
-	if err := saveConfig(soul, port, "isolated"); err != nil {
+	if err := verifyPluginToken(port); err != nil {
+		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /soul-init", err)
+	}
+	if err := saveConfig(soul, port, "isolated", ""); err != nil {
 		return err
 	}
 	logf("isolated setup complete (soul=%s, port=%d)", soul, port)
@@ -1404,38 +1467,169 @@ func doReuse(port int, root string) error {
 	if _, err := ensureBinaries(); err != nil {
 		return err
 	}
-	// Adopted external server: its -tokens flag conventionally points at
-	// <root>/tokens.toml; that file is not ours to relocate.
-	if err := ensureTokenEntry(root, filepath.Join(root, "tokens.toml")); err != nil {
+	// Adopted external server: prefer the tokens.toml it actually reads over the
+	// <root>/tokens.toml convention (divergence broke every write, 2026-08-27),
+	// and validate everything BEFORE ensureTokenEntry mutates any registry.
+	tokensTOML := filepath.Join(root, "tokens.toml")
+	prior, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load plugin config: %w", err)
+	}
+	if prior != nil && prior.Mode == "reuse" && prior.SoulDir == root && prior.TokensTOML != "" {
+		// A prior adoption resolved a custom registry; keep it when the server
+		// is down rather than falling back to the convention.
+		tokensTOML = prior.TokensTOML
+	}
+	targetPID := pidOfServerAtRoot(root)
+	if targetPID > 0 {
+		targetArgs := psArgs(targetPID)
+		if targetArgs != "" {
+			// Compare parsed values, not text: "06309" and "6309" are the same port.
+			raw := portOfServer(targetArgs, targetPID)
+			if actual, err := strconv.Atoi(raw); err != nil || actual != port {
+				return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, raw, port, raw)
+			}
+		}
+		if discovered := tokensPathOfServer(targetArgs, targetPID); discovered != "" && discovered != tokensTOML {
+			// An explicit path that does not resolve is a hard stop: writing the
+			// conventional file instead would mutate a registry the server never
+			// reads (a flattened ps string can truncate paths with whitespace).
+			if !fileExists(discovered) {
+				return fmt.Errorf("the adopted server (pid %d) reads tokens from %s, but no such file exists; check its -tokens flag or DEMARKUS_TOKENS and re-run /soul-init", targetPID, discovered)
+			}
+			logf("adopted server (pid %d) reads tokens from %s, not the conventional %s; using it", targetPID, discovered, tokensTOML)
+			tokensTOML = discovered
+		}
+	}
+	if err := ensureTokenEntry(root, tokensTOML); err != nil {
 		return err
 	}
 
-	// Ask the adopted server to reload tokens. It may not be ours, but SIGHUP is
-	// the documented mechanism and has no effect on other signal handlers.
-	targetPID := pidOfServerAtRoot(root)
 	if targetPID > 0 {
-		// Validate the adopted server is actually listening on --port. Every MCP
-		// call dials mark://localhost:PORT from the saved config, so a mistyped or
-		// stale --port would leave the plugin "configured" while every call hits
-		// the wrong endpoint. Refuse a mismatch.
-		actualPort := portOfRunningServer(targetPID)
-		if actualPort != "" && actualPort != strconv.Itoa(port) {
-			return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, actualPort, port, actualPort)
-		}
-		// Warn-only here: the adopted server may not be ours, and with no remint
-		// implied the loaded token table is usually already current.
+		// Ask the adopted server to reload tokens. It may not be ours, but SIGHUP
+		// is the documented mechanism and has no effect on other signal handlers.
 		if err := signalReload(targetPID); err != nil {
 			warnf("%v; tokens may not be active until the server restarts", err)
+		}
+		// Prove the token authenticates end to end. A hash written to a file the
+		// server never reads passes every local check and fails only at first
+		// write; refuse to report success on that state.
+		if err := verifyPluginToken(port); err != nil {
+			return fmt.Errorf("plugin token does not authenticate against the adopted server (tokens file: %s): %w; check the server's -tokens flag or DEMARKUS_TOKENS and re-run /soul-init", tokensTOML, err)
 		}
 	} else {
 		warnf("no running server found with -root %s; proceeding with config, but /soul-init may need a rerun once it's up", root)
 	}
 
-	if err := saveConfig(root, port, "reuse"); err != nil {
+	if err := saveConfig(root, port, "reuse", tokensTOML); err != nil {
 		return err
 	}
 	logf("reuse setup complete (soul=%s, port=%d)", root, port)
 	return nil
+}
+
+// authProbeClient is the one-verb surface the auth probe needs;
+// *fetch.Client satisfies it.
+type authProbeClient interface {
+	Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+}
+
+// probeExpectedVersion can never match a real document, so the probe APPEND
+// always ends in not-found or a version conflict, never a write.
+const probeExpectedVersion = 1 << 30
+
+// verifyPluginToken probes auth with an APPEND that cannot mutate anything
+// (auth is checked before the store is touched). Unauthorized retries briefly:
+// the server reloads tokens asynchronously after SIGHUP, so a remint can race.
+func verifyPluginToken(port int) error {
+	tok, err := readPluginToken()
+	if err != nil {
+		return err
+	}
+	cl := localClient()
+	defer cl.Close()
+	host := "localhost:" + strconv.Itoa(port)
+	for attempt := 0; ; attempt++ {
+		err = verifyTokenWith(cl, host, tok)
+		if !errors.Is(err, errUnauthorized) || attempt >= 3 {
+			return err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// errUnauthorized distinguishes a definitive auth rejection from transport
+// failures, which callers must not report as token drift.
+var errUnauthorized = errors.New("auth probe returned unauthorized")
+
+func verifyTokenWith(cl authProbeClient, host, tok string) error {
+	res, err := cl.Append(host, "/.demarkus-plugin-auth-probe.md", "probe", tok, probeExpectedVersion, nil)
+	if err != nil {
+		return fmt.Errorf("auth probe: %w", err)
+	}
+	if res.Response.Status == protocol.StatusUnauthorized {
+		return errUnauthorized
+	}
+	return nil
+}
+
+// VerifyAuth reports whether the plugin token authenticates against the
+// configured local server, naming the token registry the server actually reads.
+// Read-only apart from the non-mutating ARCHIVE probe. (soul-doctor drift check.)
+func VerifyAuth() (string, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	if cfg == nil {
+		return "no demarkus-memory soul configured (run /soul-init)", nil
+	}
+	port, err := strconv.Atoi(cfg.Port)
+	if err != nil {
+		return "", fmt.Errorf("invalid PORT %q in plugin-memory.conf", cfg.Port)
+	}
+	// Name the registry for the report: the running server's own -tokens or
+	// DEMARKUS_TOKENS wins; otherwise the path provisioning would use.
+	tokensTOML := ""
+	pid := pidOfServerAtRoot(cfg.SoulDir)
+	serverPort := ""
+	if pid > 0 {
+		args := psArgs(pid)
+		tokensTOML = tokensPathOfServer(args, pid)
+		serverPort = portOfServer(args, pid)
+	}
+	if tokensTOML == "" {
+		tokensTOML = cfg.TokensTOML // registry resolved at setup, if recorded
+	}
+	if tokensTOML == "" {
+		if cfg.Mode == "reuse" {
+			tokensTOML = filepath.Join(cfg.SoulDir, "tokens.toml")
+		} else {
+			p, err := tokensPathFor(cfg.SoulDir)
+			if err != nil {
+				return "", fmt.Errorf("resolve token registry for %s: %w", cfg.SoulDir, err)
+			}
+			tokensTOML = p
+		}
+	}
+	if pid <= 0 {
+		return fmt.Sprintf("cannot verify: no running demarkus-server for %s (expected token registry: %s)", cfg.SoulDir, tokensTOML), nil
+	}
+	// A port mismatch means the probe would hit some other process, so any
+	// verdict from it would describe the wrong server. Parsed comparison:
+	// "06309" and "6309" are the same port.
+	if sp, err := strconv.Atoi(serverPort); err != nil || sp != port {
+		return fmt.Sprintf("cannot verify: server pid %d listens on port %s but the config says %s; re-run /soul-init", pid, serverPort, cfg.Port), nil
+	}
+	if err := verifyPluginToken(port); err != nil {
+		// Only a definitive unauthorized is drift; a transport failure means the
+		// probe never reached a server and proves nothing about the token.
+		if !errors.Is(err, errUnauthorized) {
+			return fmt.Sprintf("cannot verify: %v (server pid %d, port %s)", err, pid, cfg.Port), nil
+		}
+		return fmt.Sprintf("token drift: plugin token does not authenticate (server pid %d, token registry %s); re-run /soul-init or update the registry hash", pid, tokensTOML), nil
+	}
+	return fmt.Sprintf("write auth healthy (server pid %d, token registry %s)", pid, tokensTOML), nil
 }
 
 // Status returns a human-readable one-line status of the configured server, or a

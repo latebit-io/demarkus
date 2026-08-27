@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -45,7 +46,7 @@ func TestConfigRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	soul := filepath.Join(t.TempDir(), "soul dir") // a space to exercise quoting
-	if err := saveConfig(soul, 16312, "isolated"); err != nil {
+	if err := saveConfig(soul, 16312, "isolated", ""); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
 	cfg, err := loadConfig()
@@ -69,7 +70,7 @@ func TestConfigRoundTrip(t *testing.T) {
 func TestConfigPlainPathRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	soul := "/Users/x/.demarkus/soul"
-	if err := saveConfig(soul, 6310, "default"); err != nil {
+	if err := saveConfig(soul, 6310, "default", ""); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
 	cfg, err := loadConfig()
@@ -150,6 +151,8 @@ func TestArgsRootMatches(t *testing.T) {
 		{" demarkus-server -port 6310 -root=/home/x/soul", "/home/x/soul", true},   // at end, = form
 		{" demarkus-server -root /home/x/soul2 -port 6310", "/home/x/soul", false}, // prefix only
 		{" demarkus-server -root /other -port 6310", "/home/x/soul", false},
+		{" demarkus-server --root /home/x/soul -port 6310", "/home/x/soul", true}, // long form
+		{" demarkus-server --root=/home/x/soul", "/home/x/soul", true},            // long form, = at end
 	}
 	for _, c := range cases {
 		if got := argsRootMatches(c.args, c.target); got != c.want {
@@ -236,7 +239,7 @@ func TestShellQuoteRoundTrip(t *testing.T) {
 		"/path with space",
 		"/path/with'quote",
 	} {
-		if err := saveConfig(soul, 6310, "default"); err != nil {
+		if err := saveConfig(soul, 6310, "default", ""); err != nil {
 			t.Fatalf("saveConfig(%q): %v", soul, err)
 		}
 		cfg, err := loadConfig()
@@ -749,6 +752,95 @@ func TestSignalReload(t *testing.T) {
 	for _, bad := range []int{0, -1} {
 		if err := signalReload(bad); err == nil {
 			t.Errorf("signalReload(%d) = nil, want error", bad)
+		}
+	}
+}
+
+func TestFlagValue(t *testing.T) {
+	cases := []struct {
+		args string
+		re   *regexp.Regexp
+		want string
+	}{
+		{" demarkus-server -root /x -tokens /home/x/tokens.toml", tokensFlagRe, "/home/x/tokens.toml"},
+		{" demarkus-server -tokens=/etc/demarkus/tokens.toml -root /x", tokensFlagRe, "/etc/demarkus/tokens.toml"},
+		{" demarkus-server -root /x -port 6310", tokensFlagRe, ""},
+		{" demarkus-server -root /x -port 6310", portFlagRe, "6310"},
+		{" demarkus-server -root=/x -port 6310", rootFlagRe, "/x"},
+	}
+	for _, c := range cases {
+		if got := flagValue(c.args, c.re); got != c.want {
+			t.Errorf("flagValue(%q, %v) = %q, want %q", c.args, c.re, got, c.want)
+		}
+	}
+}
+
+// mockAppendClient cans the APPEND probe response for verifyTokenWith.
+type mockAppendClient struct {
+	status          string
+	err             error
+	path            string
+	expectedVersion int
+}
+
+func (m *mockAppendClient) Append(_, path, _, _ string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
+	m.path = path
+	m.expectedVersion = expectedVersion
+	if m.err != nil {
+		return fetch.Result{}, m.err
+	}
+	return fetch.Result{Response: protocol.Response{Status: m.status}}, nil
+}
+
+func TestVerifyTokenWith(t *testing.T) {
+	cases := []struct {
+		name    string
+		mock    *mockAppendClient
+		wantErr bool
+	}{
+		{"unauthorized fails", &mockAppendClient{status: protocol.StatusUnauthorized}, true},
+		{"not-found passes", &mockAppendClient{status: protocol.StatusNotFound}, false},
+		{"version conflict passes", &mockAppendClient{status: protocol.StatusConflict}, false},
+		{"transport error surfaces", &mockAppendClient{err: errors.New("dial refused")}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := verifyTokenWith(c.mock, "localhost:6309", "tok")
+			if (err != nil) != c.wantErr {
+				t.Errorf("verifyTokenWith error = %v, wantErr %v", err, c.wantErr)
+			}
+			// Drift classification hangs on this: only a real unauthorized may
+			// match the sentinel, transport errors must not.
+			if gotUnauth := errors.Is(err, errUnauthorized); gotUnauth != (c.mock.status == protocol.StatusUnauthorized) {
+				t.Errorf("errors.Is(err, errUnauthorized) = %v for status %q", gotUnauth, c.mock.status)
+			}
+			if c.mock.path != "/.demarkus-plugin-auth-probe.md" {
+				t.Errorf("probe path = %q", c.mock.path)
+			}
+			// The probe must be non-mutating by construction: an expected
+			// version no real document can hold.
+			if c.mock.expectedVersion != probeExpectedVersion {
+				t.Errorf("probe expected-version = %d, want %d", c.mock.expectedVersion, probeExpectedVersion)
+			}
+		})
+	}
+}
+
+func TestTokensFromArgv(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{"separate value", []string{"demarkus-server", "-tokens", "/a/tokens.toml"}, "/a/tokens.toml"},
+		{"equals form", []string{"demarkus-server", "--tokens=/b/tokens.toml"}, "/b/tokens.toml"},
+		{"whitespace preserved", []string{"demarkus-server", "-tokens", "/My Tokens/tokens.toml"}, "/My Tokens/tokens.toml"},
+		{"absent", []string{"demarkus-server", "-root", "/x"}, ""},
+		{"trailing flag without value", []string{"demarkus-server", "-tokens"}, ""},
+	}
+	for _, c := range cases {
+		if got := tokensFromArgv(c.argv); got != c.want {
+			t.Errorf("%s: tokensFromArgv(%v) = %q, want %q", c.name, c.argv, got, c.want)
 		}
 	}
 }
