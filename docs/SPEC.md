@@ -649,7 +649,7 @@ The Mark Protocol uses an append-only version model. Every document-content writ
 
 Version numbers are positive integers starting at 1, monotonically increasing by 1 for each write. Retention pruning never affects version numbering.
 
-The version model is defined over observable protocol behavior, not a storage medium. A server MAY persist versions in any store (the reference implementation ships a filesystem store and a PostgreSQL store) provided the stored version bytes (§9.4), version numbering, hash chain (§9.5), and verb semantics are preserved regardless of the persistence layer.
+The version model is defined over observable protocol behavior, not a storage medium. A server MAY persist versions in any store (the reference implementation ships a filesystem store and a GCS store) provided the stored version bytes (§9.4), version numbering, hash chain (§9.5), and verb semantics are preserved regardless of the persistence layer.
 
 Archive state is store-owned operational state separate from immutable document versions. Archive and unarchive operations change that state without creating a version or modifying stored version bytes. They therefore leave version numbers, modified times, ETags, and the hash chain unchanged.
 

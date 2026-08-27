@@ -1325,9 +1325,10 @@ Hubs are the entry points into the information graph:
 
 Decisions made after this document's core design are recorded as ADRs in [docs/adr/](adr/index.md):
 
-- [ADR 0006](adr/0006-postgres-backend-is-an-optional-build.md): the Postgres backend is an optional build, not a dependency
+- [ADR 0006](adr/0006-postgres-backend-is-an-optional-build.md): the Postgres backend is an optional build, not a dependency (superseded by ADR 0010)
 - [ADR 0007](adr/0007-sni-virtual-world-routing.md): TLS SNI selects a virtual Mark server, enabling one process to host many worlds
 - [ADR 0008](adr/0008-gcs-root-cas-storage.md): GCS world state commits through one root CAS, enabling stateless multi-replica serving
+- [ADR 0010](adr/0010-remove-postgres-backend.md): the Postgres backend is removed; the knowledge server owns shared multi-writer state
 
 ## Security Considerations
 

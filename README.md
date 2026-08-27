@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-st
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | sudo bash -s -- --domain yourdomain.com
 ```
 
-Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, Postgres server, broker, agent, knowledge server).
+Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, broker, agent, knowledge server).
 
 See [full install docs](https://www.demarkus.io/install/) for platform-specific guides and other options.
 
@@ -105,7 +105,6 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with universe-wide catalog lookup (`mark_lookup_all`) |
 | `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
 | `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its publish policy |
-| `demarkus-migrate` | Migrate a document store between backends (file, Postgres) with history intact |
 
 ## Protocol at a Glance
 
@@ -175,7 +174,6 @@ git clone https://github.com/latebit-io/demarkus.git
 cd demarkus
 make all   # protocol, server, client, tools
 make knowledge-server   # demarkus-knowledge-server + demarkus-knowledge-bootstrap
-make server-pg          # Postgres-backed server (build tag pg)
 ```
 
 Requires Go 1.26+. Binaries land in `server/bin/`, `client/bin/`, and `tools/bin/`.

@@ -46,12 +46,7 @@ This produces the following binaries:
 | `demarkus-publish` | `tools/bin/demarkus-publish` | Local publish (bypasses server) |
 | `demarkus-loadtest` | `tools/bin/demarkus-loadtest` | Load testing |
 
-Two server flavors are separate targets, not part of `make all`:
-
-| Target | Binaries | Purpose |
-|--------|----------|---------|
-| `make server-pg` | `server/bin/demarkus-server-pg`, `server/bin/demarkus-migrate` | Postgres-backed server and the store migration tool |
-| `make knowledge-server` | `server/bin/demarkus-knowledge-server`, `server/bin/demarkus-knowledge-bootstrap` | Multi-world GCS server and its bucket bootstrapper |
+`make knowledge-server` builds the multi-world GCS server and its bucket bootstrapper (`server/bin/demarkus-knowledge-server`, `server/bin/demarkus-knowledge-bootstrap`); it is not part of `make all`.
 
 > Build note: each module builds separately; use `make server` / `make client` / `make tools`, or from inside a module `cd server && go build -o bin/<name> ./cmd/<name>/` (same shape for `client/` and `tools/`).
 

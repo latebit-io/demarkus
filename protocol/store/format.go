@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// MaxVersionNumber is portable across PostgreSQL integer and Go architectures.
+// MaxVersionNumber fits int32 so any backend's integer column and every Go architecture agree.
 const MaxVersionNumber = 1<<31 - 1
 
 // StoredVersionHeader is the validated operational part of stored frontmatter.

@@ -1,4 +1,4 @@
-.PHONY: all protocol server server-pg knowledge-server client tools image image-server-pg image-server image-knowledge-server image-broker image-agent test clean install help lint fmt vet deps
+.PHONY: all protocol server knowledge-server client tools image image-server image-knowledge-server image-broker image-agent test clean install help lint fmt vet deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -11,12 +11,10 @@ help:
 	@echo "  all       - Build protocol, server, client, and tools"
 	@echo "  protocol  - Build protocol library"
 	@echo "  server    - Build demarkus-server (no external database deps)"
-	@echo "  server-pg - Build demarkus-server-pg + demarkus-migrate (Postgres backend)"
 	@echo "  knowledge-server - Build demarkus-knowledge-server (multi-world GCS backend)"
 	@echo "  client    - Build demarkus TUI client"
 	@echo "  tools     - Build broker, token, publish (tools/bin/)"
 	@echo "  image     - Build runtime container images (TAG overridable)"
-	@echo "  image-server-pg - Build the Postgres-flavor server image"
 	@echo "  image-knowledge-server - Build the multi-world knowledge server image"
 	@echo "  test      - Run all tests"
 	@echo "  lint      - Run golangci-lint on all modules"
@@ -40,15 +38,6 @@ server: protocol
 	@echo "Building demarkus-server..."
 	cd server && go build -o bin/demarkus-server ./cmd/demarkus-server
 	@echo "✓ Server built: server/bin/demarkus-server"
-
-# Build the Postgres flavor. The default server links no database driver;
-# -tags pg swaps in the pgstore backend, and demarkus-migrate only exists
-# for it. Drop this target with the backend.
-server-pg: protocol
-	@echo "Building demarkus-server-pg..."
-	cd server && go build -tags pg -o bin/demarkus-server-pg ./cmd/demarkus-server
-	cd server && go build -o bin/demarkus-migrate ./cmd/demarkus-migrate
-	@echo "✓ Built: server/bin/demarkus-server-pg, server/bin/demarkus-migrate"
 
 knowledge-server: protocol
 	@echo "Building knowledge server tools..."
@@ -95,17 +84,6 @@ image-server:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C client -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus ./cmd/demarkus
 	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f server/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-server:$(TAG) .
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-server:$(TAG)"
-
-# The Postgres flavor, published as its own image so the default one keeps
-# no database driver. Drop this target with the backend.
-image-server-pg:
-	@echo "Building $(IMAGE_REGISTRY)/demarkus-server-pg:$(TAG) for linux/$(HOST_ARCH)..."
-	@mkdir -p dist/docker/$(HOST_ARCH)
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C server -tags pg -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-server-pg ./cmd/demarkus-server
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C server -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-migrate ./cmd/demarkus-migrate
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C client -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus ./cmd/demarkus
-	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f server/Dockerfile.pg -t $(IMAGE_REGISTRY)/demarkus-server-pg:$(TAG) .
-	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-server-pg:$(TAG)"
 
 image-knowledge-server:
 	@echo "Building $(IMAGE_REGISTRY)/demarkus-knowledge-server:$(TAG) for linux/$(HOST_ARCH)..."

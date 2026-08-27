@@ -302,8 +302,8 @@ type Store struct {
 	root   string
 	hashMu sync.RWMutex
 	// hashIdx: content hash → sorted canonical request paths whose current
-	// body has that hash. LookupHash answers the smallest, as pgstore's ORDER
-	// BY path does, so backends and a rebuilt index agree on shared bodies.
+	// body has that hash. LookupHash answers the smallest so any backend and
+	// a rebuilt index agree on shared bodies.
 	hashIdx map[string][]string
 	// pathIdx: canonical request path → content hash. liveChildren also reads
 	// membership as "current, non-archived doc" for ListDir filtering, so
@@ -1286,8 +1286,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 	// Validate path stays within the store root (resolve handles traversal + symlinks).
 	if _, err := s.resolve(reqPath); err != nil {
 		if errors.Is(err, errUnderDocument) {
-			// Topology collision, same class as writing over a directory
-			// (pgstore.checkPathTopology agrees).
+			// Topology collision, same class as writing over a directory.
 			return nil, fmt.Errorf("cannot publish %s: a document exists at an ancestor", reqPath)
 		}
 		if errors.Is(err, os.ErrNotExist) {
@@ -1547,7 +1546,7 @@ func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content [
 // Returns ErrConflict if the expectation is violated.
 func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*Document, error) {
 	// Request-shaped checks come before any state read so an invalid write
-	// never masquerades as a conflict; pgstore orders its checks the same way.
+	// never masquerades as a conflict; every backend must order checks this way.
 	if err := validateWrite(content, meta); err != nil {
 		return nil, err
 	}
@@ -1741,8 +1740,8 @@ func resolveNonExistent(path string) (string, error) {
 var errUnderDocument = fmt.Errorf("%w: path is beneath a document", os.ErrNotExist)
 
 // CanonicalPath is the one spelling of a request path shared by every index
-// keyed on paths (hash index, catalog, pgstore rows): slash-cleaned, single
-// leading slash, root is "/". Callers reject traversal via ContainsDotDot.
+// keyed on paths (hash index, catalog): slash-cleaned, single leading
+// slash, root is "/". Callers reject traversal via ContainsDotDot.
 func CanonicalPath(reqPath string) string {
 	return slashpath.Clean("/" + reqPath)
 }

@@ -27,8 +27,7 @@ type Config struct {
 	LogFormat      string        // Log format: "text" (default) or "json"
 	LogLevel       string        // Log level: "debug", "info" (default), "warn", "error"
 	ReadOnly       bool          // Reject all write operations (PUBLISH, APPEND, ARCHIVE)
-	StoreBackend   string        // Document store backend: "file" (default) or "postgres"
-	PostgresDSN    string        // Postgres connection string (required for the postgres backend)
+	StoreBackend   string        // Document store backend; the registry in cmd/demarkus-server owns the set
 }
 
 // NewConfig loads DEMARKUS_-prefixed environment configuration. Unparseable
@@ -52,7 +51,6 @@ func NewConfig() (*Config, error) {
 	config.LogLevel = getEnv("DEMARKUS_LOG_LEVEL", "info")
 	config.ReadOnly = getEnvAsBool("DEMARKUS_READ_ONLY", false, &errs)
 	config.StoreBackend = getEnv("DEMARKUS_STORE", "file")
-	config.PostgresDSN = getEnv("DEMARKUS_PG_DSN", "")
 
 	return config, errors.Join(errs...)
 }
@@ -88,29 +86,26 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-// ValidateStoreBackend checks the store-backend selection and its required
-// settings on the final (post-override) values.
+// ValidateStoreBackend checks a backend's required settings on the final
+// (post-override) values. Unknown names pass: the cmd/demarkus-server store
+// registry owns the compiled-in set and rejects them in openStore.
 func (c *Config) ValidateStoreBackend() error {
-	switch c.StoreBackend {
-	case "", "file":
+	if c.StoreBackend == "" {
 		c.StoreBackend = "file"
-		if c.ContentDir == "" {
-			return errors.New("content directory is required (set DEMARKUS_ROOT or use -root)")
-		}
-		// Validate content directory exists and is readable.
-		info, err := os.Stat(c.ContentDir)
-		if err != nil {
-			return fmt.Errorf("content directory %q: %w", c.ContentDir, err)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("content directory %q is not a directory", c.ContentDir)
-		}
-	case "postgres":
-		if c.PostgresDSN == "" {
-			return errors.New("postgres store requires a DSN (set DEMARKUS_PG_DSN or use -pg-dsn)")
-		}
-	default:
-		return fmt.Errorf("store backend must be \"file\" or \"postgres\" (got %q)", c.StoreBackend)
+	}
+	if c.StoreBackend != "file" {
+		return nil
+	}
+	if c.ContentDir == "" {
+		return errors.New("content directory is required (set DEMARKUS_ROOT or use -root)")
+	}
+	// Validate content directory exists and is readable.
+	info, err := os.Stat(c.ContentDir)
+	if err != nil {
+		return fmt.Errorf("content directory %q: %w", c.ContentDir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("content directory %q is not a directory", c.ContentDir)
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ This page describes the Demarkus system architecture, key design decisions, and 
 Demarkus is a markdown‑native document protocol built on QUIC. The repository is organized as six modules:
 
 - **`protocol/`**: wire format and parsing/serialization only
-- **`server/`**: QUIC servers: `demarkus-server` (filesystem), `demarkus-server-pg` (Postgres), `demarkus-knowledge-server` (multi-world, GCS)
+- **`server/`**: QUIC servers: `demarkus-server` (filesystem), `demarkus-knowledge-server` (multi-world, GCS)
 - **`client/`**: CLI, TUI, MCP server, and the federation agent
 - **`tools/`**: the OIDC broker/MCP gateway, token tooling, direct-to-store publish, load testing
 - **`plugins/`**: agent plugins for Claude Code, OpenCode, and pi
@@ -39,7 +39,7 @@ The server:
 Core server pieces:
 
 - **Handler**: request parsing, verb routing, response formatting
-- **Store**: versioned document storage with hash‑chain integrity; backends are the filesystem (default), Postgres (`demarkus-server-pg`), and GCS (`demarkus-knowledge-server`)
+- **Store**: versioned document storage with hash‑chain integrity; backends are the filesystem (`demarkus-server`) and GCS (`demarkus-knowledge-server`)
 - **Auth**: capability‑based token verification (hashes only)
 - **TLS**: dev cert generation, prod cert loading, SIGHUP reload
 
@@ -147,7 +147,7 @@ Demarkus deploys at three scales.
 
 ### Single server
 
-Clients connect over QUIC to one `demarkus-server`; the content store is the filesystem (versioned files under `versions/`) or Postgres (`demarkus-server-pg`).
+Clients connect over QUIC to one `demarkus-server`; the content store is the filesystem (versioned files under `versions/`).
 
 ```text
 Clients (CLI/TUI/MCP)
@@ -156,7 +156,7 @@ Clients (CLI/TUI/MCP)
         |
   demarkus-server
         |
-   /srv/site (files + versions/)   or   Postgres
+   /srv/site (files + versions/)
 ```
 
 The filesystem form needs no database and no background services.

@@ -9,17 +9,6 @@
 {{- define "demarkus-server.statefulset" -}}
 {{- $tlsSecret := include "demarkus-server.tlsSecretName" . -}}
 {{- include "demarkus-server.backendGuard" . -}}
-{{- /* A backend swap under a live release would need an immutable
-       volumeClaimTemplates change and would move no data; refuse it here so
-       every backend inherits the check. */ -}}
-{{- $wantClaims := ne (trim (include "demarkus-server.backendVolumeClaims" .)) "" -}}
-{{- $existing := lookup "apps/v1" "StatefulSet" .Release.Namespace (include "demarkus-server.fullname" .) -}}
-{{- if $existing -}}
-{{- $hasClaims := gt (len ($existing.spec.volumeClaimTemplates | default list)) 0 -}}
-{{- if ne $hasClaims $wantClaims -}}
-{{- fail "this release runs a different storage backend: migrate the content with demarkus-migrate, then uninstall, delete any retained content PVC, and install this chart" -}}
-{{- end -}}
-{{- end -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

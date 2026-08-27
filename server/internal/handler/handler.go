@@ -32,8 +32,8 @@ const (
 	// maxLookupResults is the hard cap on LOOKUP results regardless of limit.
 	maxLookupResults = 1000
 	// maxLookupTerms bounds distinct query terms: each one costs a scored
-	// pass in memory and an OR'd predicate plus bind parameter in Postgres,
-	// and 64KB of frontmatter would otherwise buy tens of thousands.
+	// pass per document, and 64KB of frontmatter would otherwise buy tens
+	// of thousands.
 	maxLookupTerms = 32
 )
 
@@ -69,9 +69,9 @@ var reservedKeys = map[string]bool{
 // same contract, including the per-method error contracts below.
 type DocumentStore = storagebackend.Store
 
-// LookupCatalog is the LOOKUP-index seam beside DocumentStore. Backends that
-// maintain the catalog in the write transaction (pgstore) no-op Put/Remove;
-// the storetest LOOKUP conformance suite is the contract for Lookup parity.
+// LookupCatalog is the LOOKUP-index seam beside DocumentStore. A backend
+// that maintains the catalog inside its own writes no-ops Put/Remove; the
+// storetest LOOKUP conformance suite is the contract for Lookup parity.
 type LookupCatalog = storagebackend.Catalog
 
 // Handler serves the Mark protocol over a DocumentStore.

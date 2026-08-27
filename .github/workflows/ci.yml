@@ -96,24 +96,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # Backend parity is a core invariant, so pgstore tests must run here, not
-    # skip: DEMARKUS_TEST_PG_REQUIRED turns a missing DSN into a failure.
-    services:
-      postgres:
-        image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: demarkus_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DEMARKUS_TEST_PG_DSN: postgres://postgres:postgres@localhost:5432/demarkus_test
-      DEMARKUS_TEST_PG_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
         # This job runs PR-controlled code; do not leave a token in .git/config.
@@ -142,23 +124,8 @@ jobs:
             exit 1
           fi
           go build -o /tmp/demarkus-server ./cmd/demarkus-server
-          syms="$(go tool nm /tmp/demarkus-server)"
-          # Without this, a failed nm would leave grep with empty input and
-          # the check would "pass" while proving nothing.
-          test -n "$syms"
-          if grep -Eq "jackc/pgx|cloud\.google\.com/go/storage" <<<"$syms"; then
-            echo "default demarkus-server links an optional storage SDK" >&2
-            exit 1
-          fi
           go build -o /tmp/demarkus-knowledge-server ./cmd/demarkus-knowledge-server
           go build -o /tmp/demarkus-knowledge-bootstrap ./cmd/demarkus-knowledge-bootstrap
-      - name: Build (postgres flavor)
-        run: |
-          set -euo pipefail
-          cd server
-          go vet -tags pg ./cmd/demarkus-server
-          go build -tags pg -o /dev/null ./cmd/demarkus-server
-          go build -o /dev/null ./cmd/demarkus-migrate
       # The release builds 32-bit arm, where an untyped 64-bit constant is a
       # compile error the amd64 build never sees (it shipped one: #338).
       - name: Cross-compile the release targets
@@ -170,8 +137,6 @@ jobs:
             rest="${target#*/}"
             case "$rest" in */*) export GOARCH="${rest%%/*}" GOARM="${rest#*/}" ;; *) export GOARCH="$rest" ;; esac
             CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-server
-            CGO_ENABLED=0 go build -tags pg -o /dev/null ./cmd/demarkus-server
-            CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-migrate
             CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-knowledge-server
             CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-knowledge-bootstrap
             echo "ok $GOOS/$GOARCH${GOARM:+v$GOARM}"
@@ -350,41 +315,20 @@ jobs:
           mkdir -p "$HELM_PLUGINS/helm-unittest"
           curl -fsSL https://github.com/helm-unittest/helm-unittest/releases/download/v0.6.2/helm-unittest-linux-amd64-0.6.2.tgz \
             | tar -xz -C "$HELM_PLUGINS/helm-unittest"
-      # Both server charts vendor deploy/helm/demarkus-server-common (a
-      # library chart) so their shared templates cannot drift.
+      # demarkus-server vendors the demarkus-server-common library chart.
       - name: Build chart dependencies
         run: |
           helm dependency update deploy/helm/demarkus-server
-          helm dependency update deploy/helm/demarkus-server-pg
       - name: Lint demarkus-server chart
         run: helm lint deploy/helm/demarkus-server
-      - name: Lint demarkus-server-pg chart
-        run: helm lint deploy/helm/demarkus-server-pg --set server.postgres.dsnSecret.name=pg-app
       - name: Lint demarkus-broker chart
         run: helm lint deploy/helm/demarkus-broker
       - name: Lint demarkus-agent chart
         run: helm lint deploy/helm/demarkus-agent
       - name: Lint demarkus-knowledge-server chart
         run: helm lint deploy/helm/demarkus-knowledge-server -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml
-      # Helm never merges a library chart's values, so the two backend
-      # charts must carry the same defaults; add deliberate divergences to
-      # the del() list.
-      - name: Assert the two server charts share their non-backend defaults
-        run: |
-          set -euo pipefail
-          # Real files, not process substitution: bash drops the exit status
-          # of a substituted command, so two failed yq runs would leave diff
-          # comparing empty inputs and passing.
-          strip() { yq -o=json 'del(.image, .storage, .server.postgres)' "$1" > "$2"; }
-          strip deploy/helm/demarkus-server/values.yaml /tmp/file-values.json
-          strip deploy/helm/demarkus-server-pg/values.yaml /tmp/pg-values.json
-          test -s /tmp/file-values.json && test -s /tmp/pg-values.json
-          diff /tmp/file-values.json /tmp/pg-values.json \
-            || { echo "demarkus-server and demarkus-server-pg values drifted" >&2; exit 1; }
       - name: Unit test demarkus-server chart
         run: helm unittest deploy/helm/demarkus-server
-      - name: Unit test demarkus-server-pg chart
-        run: helm unittest deploy/helm/demarkus-server-pg
       - name: Unit test demarkus-broker chart
         run: helm unittest deploy/helm/demarkus-broker
       - name: Unit test demarkus-knowledge-server chart

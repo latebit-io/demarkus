@@ -77,7 +77,6 @@ type flagOverrides struct {
 	tlsKey       string
 	tokens       string
 	storeBackend string
-	pgDSN        string
 	port         int
 	readOnly     bool
 }
@@ -103,9 +102,6 @@ func applyFlagOverrides(cfg *config.Config, o *flagOverrides) {
 	if o.storeBackend != "" {
 		cfg.StoreBackend = o.storeBackend
 	}
-	if o.pgDSN != "" {
-		cfg.PostgresDSN = o.pgDSN
-	}
 	if o.readOnly {
 		cfg.ReadOnly = true
 	}
@@ -127,7 +123,6 @@ func run() error {
 	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
 	storeBackend := flag.String("store", "",
 		fmt.Sprintf("document store backend: %s (overrides DEMARKUS_STORE)", strings.Join(storeNames(), " or ")))
-	pgDSN := flag.String("pg-dsn", "", "Postgres connection string for the postgres backend (overrides DEMARKUS_PG_DSN)")
 	readOnly := flag.Bool("read-only", false, "reject all write operations (also enabled via DEMARKUS_READ_ONLY)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
@@ -163,7 +158,6 @@ func run() error {
 		tlsKey:       *tlsKey,
 		tokens:       *tokens,
 		storeBackend: *storeBackend,
-		pgDSN:        *pgDSN,
 		readOnly:     *readOnly,
 	})
 	// Semantic validation runs once, on the final post-override values.

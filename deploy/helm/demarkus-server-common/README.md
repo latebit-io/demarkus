@@ -1,6 +1,6 @@
 # demarkus-server-common library chart
 
-Shared templates for the [demarkus-server](../demarkus-server) and [demarkus-server-pg](../demarkus-server-pg) charts. It renders nothing on its own (`type: library`); the two backend charts vendor it through a `file://` dependency so a fix to a probe, a security context, or the token bootstrap Job cannot land in one chart and miss the other.
+Shared templates for the [demarkus-server](../demarkus-server) chart. It renders nothing on its own (`type: library`); a backend chart vendors it through a `file://` dependency so a fix to a probe, a security context, or the token bootstrap Job lands in every backend chart at once.
 
 ## What lives here
 
@@ -18,7 +18,7 @@ The StatefulSet skeleton includes five templates that each backend chart defines
 | `demarkus-server.backendVolumeClaims` | `volumeClaimTemplates` entries | yes |
 | `demarkus-server.backendGuard` | required-value checks and the refusal to upgrade across backends; renders nothing | yes |
 
-Keeping the postgres specifics out of this chart is deliberate: deleting the Postgres backend means deleting the `demarkus-server-pg` directory, with nothing to unpick here.
+Keeping backend specifics out of this chart is deliberate: adding or deleting a backend is adding or deleting its chart directory, with nothing to unpick here.
 
 ## Development
 
@@ -26,7 +26,6 @@ The dependency is vendored into each consuming chart at package time:
 
 ```bash
 helm dependency update deploy/helm/demarkus-server
-helm dependency update deploy/helm/demarkus-server-pg
 ```
 
 `deploy/helm/*/charts/` and `Chart.lock` are build artifacts and are gitignored; CI and the release workflow run the command above before lint, unittest, and package.

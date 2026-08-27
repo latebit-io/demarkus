@@ -3,8 +3,7 @@ name: demarkus-server
 description: |
   Mark Protocol server, file-store backend. Serves markdown over QUIC, with
   capability-based auth, versioned content store, and TLS. One Helm release =
-  one world. The server image links no external database driver; for the
-  Postgres backend use the demarkus-server-pg chart.
+  one world. The server image links no external database driver.
 type: application
 version: 0.1.0
 dependencies:

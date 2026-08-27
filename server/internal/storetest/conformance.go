@@ -1,8 +1,6 @@
 // Package storetest is the DocumentStore conformance suite. Every backend
-// (the file store, pgstore, any future one) must pass it unchanged:
-// behavior divergence between backends is a protocol bug, not a backend
-// detail. The file store runs it unconditionally; database-backed stores
-// run it gated on their test DSN.
+// (the file store, any future one) must pass it unchanged: behavior
+// divergence between backends is a protocol bug, not a backend detail.
 package storetest
 
 import (

@@ -24,42 +24,6 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
-  # Postgres flavor: same command, built with -tags pg so the default
-  # binary above keeps zero external database dependencies.
-  - id: demarkus-server-pg
-    main: ./cmd/demarkus-server
-    binary: demarkus-server-pg
-    flags:
-      - -tags=pg
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-      - arm
-    goarm:
-      - "7"
-    ldflags:
-      - -s -w -X main.version={{ .Version }}
-  - id: demarkus-migrate
-    main: ./cmd/demarkus-migrate
-    binary: demarkus-migrate
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-      - arm
-    goarm:
-      - "7"
-    ldflags:
-      - -s -w -X main.version={{ .Version }}
   - id: demarkus-knowledge-server
     main: ./cmd/demarkus-knowledge-server
     binary: demarkus-knowledge-server
@@ -98,13 +62,6 @@ archives:
     ids:
       - demarkus-server
     name_template: "demarkus-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  # Shipped as its own archive so a file-store deployment never downloads
-  # the Postgres flavor.
-  - id: demarkus-server-pg
-    ids:
-      - demarkus-server-pg
-      - demarkus-migrate
-    name_template: "demarkus-server-pg_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
   - id: demarkus-knowledge-server
     ids:
       - demarkus-knowledge-server

@@ -202,8 +202,7 @@ var (
 	diffFilters = []string{"", "tag=alpha", "type=Plan", "modified-after=2000-01-01", "modified-before=2000-01-01", "tag=alpha,importance=0.9"}
 )
 
-// oversizedBody is shared so the 1 MiB+1 allocation happens once; it is
-// emitted rarely since writing it to Postgres is comparatively slow.
+// oversizedBody is shared so the 1 MiB+1 allocation happens once.
 var oversizedBody = []byte(strings.Repeat("y", protocol.MaxBodyLength+1))
 
 // nextOp draws the next op and records it in the history for failure output.
@@ -223,7 +222,7 @@ func (d *diffRun) nextOp() op {
 	if o.kind == opWrite || o.kind == opAppend {
 		o.body = r.Intn(len(diffBodies))
 		if r.Intn(100) == 0 {
-			o.body = len(diffBodies) // the oversized body, kept rare: 1 MiB per write
+			o.body = len(diffBodies) // the oversized body; rare, 1 MiB per write
 		}
 		o.meta = r.Intn(len(diffMetas))
 		o.okf = r.Intn(2) == 0
