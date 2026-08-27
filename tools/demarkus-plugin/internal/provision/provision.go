@@ -1450,10 +1450,9 @@ func doReuse(port int, root string) error {
 	// Ask the adopted server to reload tokens. It may not be ours, but SIGHUP is
 	// the documented mechanism and has no effect on other signal handlers.
 	if targetPID > 0 {
-		// Validate the adopted server is actually listening on --port. Every MCP
-		// call dials mark://localhost:PORT from the saved config, so a mistyped or
-		// stale --port would leave the plugin "configured" while every call hits
-		// the wrong endpoint. Refuse a mismatch.
+		// Every MCP call dials mark://localhost:PORT from the saved config, so a
+		// mistyped or stale --port would leave the plugin "configured" while every
+		// call hits the wrong endpoint. Refuse a mismatch.
 		if targetArgs != "" {
 			if actualPort := portOfServer(targetArgs, targetPID); actualPort != strconv.Itoa(port) {
 				return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, actualPort, port, actualPort)
@@ -1500,13 +1499,17 @@ func verifyPluginToken(port int) error {
 	return verifyTokenWith(cl, "localhost:"+strconv.Itoa(port), tok)
 }
 
+// errUnauthorized distinguishes a definitive auth rejection from transport
+// failures, which callers must not report as token drift.
+var errUnauthorized = errors.New("auth probe returned unauthorized")
+
 func verifyTokenWith(cl authProbeClient, host, tok string) error {
 	res, err := cl.Archive(host, "/.demarkus-plugin-auth-probe.md", tok)
 	if err != nil {
 		return fmt.Errorf("auth probe: %w", err)
 	}
 	if res.Response.Status == protocol.StatusUnauthorized {
-		return errors.New("auth probe returned unauthorized")
+		return errUnauthorized
 	}
 	return nil
 }
@@ -1536,7 +1539,11 @@ func VerifyAuth() (string, error) {
 	if tokensTOML == "" {
 		if cfg.Mode == "reuse" {
 			tokensTOML = filepath.Join(cfg.SoulDir, "tokens.toml")
-		} else if p, err := tokensPathFor(cfg.SoulDir); err == nil {
+		} else {
+			p, err := tokensPathFor(cfg.SoulDir)
+			if err != nil {
+				return "", fmt.Errorf("resolve token registry for %s: %w", cfg.SoulDir, err)
+			}
 			tokensTOML = p
 		}
 	}
@@ -1544,7 +1551,12 @@ func VerifyAuth() (string, error) {
 		return fmt.Sprintf("cannot verify: no running demarkus-server for %s (expected token registry: %s)", cfg.SoulDir, tokensTOML), nil
 	}
 	if err := verifyPluginToken(port); err != nil {
-		return fmt.Sprintf("token drift: plugin token does not authenticate (server pid %d, token registry %s): %v; re-run /soul-init or update the registry hash", pid, tokensTOML, err), nil
+		// Only a definitive unauthorized is drift; a transport failure means the
+		// probe never reached a server and proves nothing about the token.
+		if !errors.Is(err, errUnauthorized) {
+			return fmt.Sprintf("cannot verify: %v (server pid %d, port %s)", err, pid, cfg.Port), nil
+		}
+		return fmt.Sprintf("token drift: plugin token does not authenticate (server pid %d, token registry %s); re-run /soul-init or update the registry hash", pid, tokensTOML), nil
 	}
 	return fmt.Sprintf("write auth healthy (server pid %d, token registry %s)", pid, tokensTOML), nil
 }

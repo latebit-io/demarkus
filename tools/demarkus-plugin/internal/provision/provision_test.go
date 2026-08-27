@@ -804,6 +804,11 @@ func TestVerifyTokenWith(t *testing.T) {
 			if (err != nil) != c.wantErr {
 				t.Errorf("verifyTokenWith error = %v, wantErr %v", err, c.wantErr)
 			}
+			// Drift classification hangs on this: only a real unauthorized may
+			// match the sentinel, transport errors must not.
+			if gotUnauth := errors.Is(err, errUnauthorized); gotUnauth != (c.mock.status == protocol.StatusUnauthorized) {
+				t.Errorf("errors.Is(err, errUnauthorized) = %v for status %q", gotUnauth, c.mock.status)
+			}
 			if c.mock.path != "/.demarkus-plugin-auth-probe.md" {
 				t.Errorf("probe path = %q", c.mock.path)
 			}
