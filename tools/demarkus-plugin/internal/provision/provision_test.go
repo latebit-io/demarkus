@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -750,5 +751,62 @@ func TestSignalReload(t *testing.T) {
 		if err := signalReload(bad); err == nil {
 			t.Errorf("signalReload(%d) = nil, want error", bad)
 		}
+	}
+}
+
+func TestFlagValue(t *testing.T) {
+	cases := []struct {
+		args string
+		re   *regexp.Regexp
+		want string
+	}{
+		{" demarkus-server -root /x -tokens /home/x/tokens.toml", tokensFlagRe, "/home/x/tokens.toml"},
+		{" demarkus-server -tokens=/etc/demarkus/tokens.toml -root /x", tokensFlagRe, "/etc/demarkus/tokens.toml"},
+		{" demarkus-server -root /x -port 6310", tokensFlagRe, ""},
+		{" demarkus-server -root /x -port 6310", portFlagRe, "6310"},
+		{" demarkus-server -root=/x -port 6310", rootFlagRe, "/x"},
+	}
+	for _, c := range cases {
+		if got := flagValue(c.args, c.re); got != c.want {
+			t.Errorf("flagValue(%q, %v) = %q, want %q", c.args, c.re, got, c.want)
+		}
+	}
+}
+
+// mockArchiveClient cans the ARCHIVE probe response for verifyTokenWith.
+type mockArchiveClient struct {
+	status string
+	err    error
+	path   string
+}
+
+func (m *mockArchiveClient) Archive(_, path, _ string) (fetch.Result, error) {
+	m.path = path
+	if m.err != nil {
+		return fetch.Result{}, m.err
+	}
+	return fetch.Result{Response: protocol.Response{Status: m.status}}, nil
+}
+
+func TestVerifyTokenWith(t *testing.T) {
+	cases := []struct {
+		name    string
+		mock    *mockArchiveClient
+		wantErr bool
+	}{
+		{"unauthorized fails", &mockArchiveClient{status: protocol.StatusUnauthorized}, true},
+		{"not-found passes", &mockArchiveClient{status: protocol.StatusNotFound}, false},
+		{"transport error surfaces", &mockArchiveClient{err: errors.New("dial refused")}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := verifyTokenWith(c.mock, "localhost:6309", "tok")
+			if (err != nil) != c.wantErr {
+				t.Errorf("verifyTokenWith error = %v, wantErr %v", err, c.wantErr)
+			}
+			if c.mock.path != "/.demarkus-plugin-auth-probe.md" {
+				t.Errorf("probe path = %q", c.mock.path)
+			}
+		})
 	}
 }
