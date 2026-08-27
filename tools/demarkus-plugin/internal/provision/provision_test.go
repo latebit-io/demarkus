@@ -151,6 +151,8 @@ func TestArgsRootMatches(t *testing.T) {
 		{" demarkus-server -port 6310 -root=/home/x/soul", "/home/x/soul", true},   // at end, = form
 		{" demarkus-server -root /home/x/soul2 -port 6310", "/home/x/soul", false}, // prefix only
 		{" demarkus-server -root /other -port 6310", "/home/x/soul", false},
+		{" demarkus-server --root /home/x/soul -port 6310", "/home/x/soul", true}, // long form
+		{" demarkus-server --root=/home/x/soul", "/home/x/soul", true},            // long form, = at end
 	}
 	for _, c := range cases {
 		if got := argsRootMatches(c.args, c.target); got != c.want {

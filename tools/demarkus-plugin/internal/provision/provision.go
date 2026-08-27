@@ -927,7 +927,7 @@ func pidIsServerAtRoot(pid int, root string) bool {
 // "-root=TARGET" at a word boundary, handling paths with regex metacharacters or
 // spaces safely (literal compare, not regex).
 func argsRootMatches(args, target string) bool {
-	for _, form := range []string{" -root " + target, " -root=" + target} {
+	for _, form := range []string{" -root " + target, " -root=" + target, " --root " + target, " --root=" + target} {
 		if strings.Contains(args, form+" ") || strings.HasSuffix(args, form) {
 			return true
 		}
@@ -1471,10 +1471,14 @@ func doReuse(port int, root string) error {
 	// <root>/tokens.toml convention (divergence broke every write, 2026-08-27),
 	// and validate everything BEFORE ensureTokenEntry mutates any registry.
 	tokensTOML := filepath.Join(root, "tokens.toml")
-	if cfg, err := loadConfig(); err == nil && cfg != nil && cfg.Mode == "reuse" && cfg.SoulDir == root && cfg.TokensTOML != "" {
+	prior, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load plugin config: %w", err)
+	}
+	if prior != nil && prior.Mode == "reuse" && prior.SoulDir == root && prior.TokensTOML != "" {
 		// A prior adoption resolved a custom registry; keep it when the server
 		// is down rather than falling back to the convention.
-		tokensTOML = cfg.TokensTOML
+		tokensTOML = prior.TokensTOML
 	}
 	targetPID := pidOfServerAtRoot(root)
 	if targetPID > 0 {
