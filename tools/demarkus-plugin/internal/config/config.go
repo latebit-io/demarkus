@@ -518,10 +518,13 @@ func PublishGateScopeLocal(tool string) (bool, error) {
 // --- managed-server config (plugin-memory.conf) -------------------------------
 
 // PluginConfig holds the SOUL_DIR/PORT/MODE the local managed server runs under.
+// TokensTOML records the token registry resolved at setup (reuse mode may adopt
+// a server whose -tokens points outside the root); empty on older configs.
 type PluginConfig struct {
-	SoulDir string
-	Port    string
-	Mode    string
+	SoulDir    string
+	Port       string
+	Mode       string
+	TokensTOML string
 }
 
 // LoadConfig parses the shell-style plugin-memory.conf (KEY=value lines, possibly
@@ -537,7 +540,7 @@ func LoadConfig() (*PluginConfig, error) {
 	}
 	out := map[string]string{}
 	for ln := range strings.SplitSeq(raw, "\n") {
-		for _, key := range []string{"SOUL_DIR", "PORT", "MODE"} {
+		for _, key := range []string{"SOUL_DIR", "PORT", "MODE", "TOKENS"} {
 			if after, ok := strings.CutPrefix(ln, key+"="); ok {
 				v := strings.TrimSpace(after)
 				v = unquoteShell(v)
@@ -548,7 +551,7 @@ func LoadConfig() (*PluginConfig, error) {
 	if out["SOUL_DIR"] == "" || out["PORT"] == "" || out["MODE"] == "" {
 		return nil, nil
 	}
-	return &PluginConfig{SoulDir: out["SOUL_DIR"], Port: out["PORT"], Mode: out["MODE"]}, nil
+	return &PluginConfig{SoulDir: out["SOUL_DIR"], Port: out["PORT"], Mode: out["MODE"], TokensTOML: out["TOKENS"]}, nil
 }
 
 // unquoteShell undoes a printf %q quoting for the simple values we store

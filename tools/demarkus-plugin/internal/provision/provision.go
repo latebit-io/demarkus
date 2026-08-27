@@ -302,7 +302,7 @@ func loadConfig() (*config.PluginConfig, error) {
 // saveConfig atomically writes plugin-memory.conf. Values are backslash-escaped
 // (shellQuote), equivalent to bash printf '%q' for the simple path/word values we
 // store, and reversed by config.unquoteShell on load.
-func saveConfig(soul string, port int, mode string) error {
+func saveConfig(soul string, port int, mode, tokensTOML string) error {
 	h, err := config.Home()
 	if err != nil {
 		return err
@@ -318,6 +318,11 @@ func saveConfig(soul string, port int, mode string) error {
 		"# demarkus-memory plugin config: managed by demarkus-plugin provision\nSOUL_DIR=%s\nPORT=%d\nMODE=%s\n",
 		shellQuote(soul), port, shellQuote(mode),
 	)
+	// Persisted so a later run (or VerifyAuth) with the server down still
+	// targets the registry resolved at setup, not a conventional guess.
+	if tokensTOML != "" {
+		content += fmt.Sprintf("TOKENS=%s\n", shellQuote(tokensTOML))
+	}
 	tmp := cfg + ".tmp"
 	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
 		return err
@@ -826,10 +831,12 @@ func findFreePortFrom(start int) (int, error) {
 
 // --- process scan (lib.sh pid_of_server_at_root / _pid_is_server_at_root / find_running_demarkus) ---
 
+// Anchored at an argument boundary so a path merely containing "-root=" or
+// "-tokens=" is never parsed as a server flag.
 var (
-	rootFlagRe   = regexp.MustCompile(`-root[= ]+([^ ]+)`)
-	portFlagRe   = regexp.MustCompile(`-port[= ]+(\d+)`)
-	tokensFlagRe = regexp.MustCompile(`-tokens[= ]+([^ ]+)`)
+	rootFlagRe   = regexp.MustCompile(`(?:^|\s)--?root[= ]+(\S+)`)
+	portFlagRe   = regexp.MustCompile(`(?:^|\s)--?port[= ]+(\d+)`)
+	tokensFlagRe = regexp.MustCompile(`(?:^|\s)--?tokens[= ]+(\S+)`)
 )
 
 // flagValue extracts a flag's value from a ps args string, "" when absent.
@@ -1418,7 +1425,7 @@ func doDefault() error {
 	if err := verifyPluginToken(defaultPort); err != nil {
 		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /soul-init", err)
 	}
-	if err := saveConfig(soul, defaultPort, "default"); err != nil {
+	if err := saveConfig(soul, defaultPort, "default", ""); err != nil {
 		return err
 	}
 	logf("default setup complete (soul=%s, port=%d)", soul, defaultPort)
@@ -1446,7 +1453,7 @@ func doIsolated() error {
 	if err := verifyPluginToken(port); err != nil {
 		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /soul-init", err)
 	}
-	if err := saveConfig(soul, port, "isolated"); err != nil {
+	if err := saveConfig(soul, port, "isolated", ""); err != nil {
 		return err
 	}
 	logf("isolated setup complete (soul=%s, port=%d)", soul, port)
@@ -1461,34 +1468,17 @@ func doReuse(port int, root string) error {
 		return err
 	}
 	// Adopted external server: prefer the tokens.toml it actually reads over the
-	// <root>/tokens.toml convention; divergence broke every write (2026-08-27).
-	// One psArgs scan serves the tokens-path and port checks below.
-	targetPID := pidOfServerAtRoot(root)
-	targetArgs := ""
+	// <root>/tokens.toml convention (divergence broke every write, 2026-08-27),
+	// and validate everything BEFORE ensureTokenEntry mutates any registry.
 	tokensTOML := filepath.Join(root, "tokens.toml")
-	if targetPID > 0 {
-		targetArgs = psArgs(targetPID)
-		if discovered := tokensPathOfServer(targetArgs, targetPID); discovered != "" && discovered != tokensTOML {
-			// Flattened ps output can truncate a path containing whitespace;
-			// never generate a token into a guessed file that does not exist.
-			if fileExists(discovered) {
-				logf("adopted server (pid %d) reads tokens from %s, not the conventional %s; using it", targetPID, discovered, tokensTOML)
-				tokensTOML = discovered
-			} else {
-				warnf("adopted server (pid %d) appears to read tokens from %s, but no such file exists; keeping %s (the auth check below will catch a mismatch)", targetPID, discovered, tokensTOML)
-			}
-		}
+	if cfg, err := loadConfig(); err == nil && cfg != nil && cfg.Mode == "reuse" && cfg.SoulDir == root && cfg.TokensTOML != "" {
+		// A prior adoption resolved a custom registry; keep it when the server
+		// is down rather than falling back to the convention.
+		tokensTOML = cfg.TokensTOML
 	}
-	if err := ensureTokenEntry(root, tokensTOML); err != nil {
-		return err
-	}
-
-	// Ask the adopted server to reload tokens. It may not be ours, but SIGHUP is
-	// the documented mechanism and has no effect on other signal handlers.
+	targetPID := pidOfServerAtRoot(root)
 	if targetPID > 0 {
-		// Every MCP call dials mark://localhost:PORT from the saved config, so a
-		// mistyped or stale --port would leave the plugin "configured" while every
-		// call hits the wrong endpoint. Refuse a mismatch.
+		targetArgs := psArgs(targetPID)
 		if targetArgs != "" {
 			// Compare parsed values, not text: "06309" and "6309" are the same port.
 			raw := portOfServer(targetArgs, targetPID)
@@ -1496,8 +1486,24 @@ func doReuse(port int, root string) error {
 				return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, raw, port, raw)
 			}
 		}
-		// Warn-only here: the adopted server may not be ours, and with no remint
-		// implied the loaded token table is usually already current.
+		if discovered := tokensPathOfServer(targetArgs, targetPID); discovered != "" && discovered != tokensTOML {
+			// An explicit path that does not resolve is a hard stop: writing the
+			// conventional file instead would mutate a registry the server never
+			// reads (a flattened ps string can truncate paths with whitespace).
+			if !fileExists(discovered) {
+				return fmt.Errorf("the adopted server (pid %d) reads tokens from %s, but no such file exists; check its -tokens flag or DEMARKUS_TOKENS and re-run /soul-init", targetPID, discovered)
+			}
+			logf("adopted server (pid %d) reads tokens from %s, not the conventional %s; using it", targetPID, discovered, tokensTOML)
+			tokensTOML = discovered
+		}
+	}
+	if err := ensureTokenEntry(root, tokensTOML); err != nil {
+		return err
+	}
+
+	if targetPID > 0 {
+		// Ask the adopted server to reload tokens. It may not be ours, but SIGHUP
+		// is the documented mechanism and has no effect on other signal handlers.
 		if err := signalReload(targetPID); err != nil {
 			warnf("%v; tokens may not be active until the server restarts", err)
 		}
@@ -1511,7 +1517,7 @@ func doReuse(port int, root string) error {
 		warnf("no running server found with -root %s; proceeding with config, but /soul-init may need a rerun once it's up", root)
 	}
 
-	if err := saveConfig(root, port, "reuse"); err != nil {
+	if err := saveConfig(root, port, "reuse", tokensTOML); err != nil {
 		return err
 	}
 	logf("reuse setup complete (soul=%s, port=%d)", root, port)
@@ -1528,9 +1534,9 @@ type authProbeClient interface {
 // always ends in not-found or a version conflict, never a write.
 const probeExpectedVersion = 1 << 30
 
-// verifyPluginToken probes auth with an APPEND that cannot mutate anything:
-// the server checks the token before touching the store, so unauthorized means
-// the token table lacks our token; any other status proves it was accepted.
+// verifyPluginToken probes auth with an APPEND that cannot mutate anything
+// (auth is checked before the store is touched). Unauthorized retries briefly:
+// the server reloads tokens asynchronously after SIGHUP, so a remint can race.
 func verifyPluginToken(port int) error {
 	tok, err := readPluginToken()
 	if err != nil {
@@ -1538,7 +1544,14 @@ func verifyPluginToken(port int) error {
 	}
 	cl := localClient()
 	defer cl.Close()
-	return verifyTokenWith(cl, "localhost:"+strconv.Itoa(port), tok)
+	host := "localhost:" + strconv.Itoa(port)
+	for attempt := 0; ; attempt++ {
+		err = verifyTokenWith(cl, host, tok)
+		if !errors.Is(err, errUnauthorized) || attempt >= 3 {
+			return err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // errUnauthorized distinguishes a definitive auth rejection from transport
@@ -1580,6 +1593,9 @@ func VerifyAuth() (string, error) {
 		args := psArgs(pid)
 		tokensTOML = tokensPathOfServer(args, pid)
 		serverPort = portOfServer(args, pid)
+	}
+	if tokensTOML == "" {
+		tokensTOML = cfg.TokensTOML // registry resolved at setup, if recorded
 	}
 	if tokensTOML == "" {
 		if cfg.Mode == "reuse" {

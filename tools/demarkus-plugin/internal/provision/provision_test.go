@@ -46,7 +46,7 @@ func TestConfigRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	soul := filepath.Join(t.TempDir(), "soul dir") // a space to exercise quoting
-	if err := saveConfig(soul, 16312, "isolated"); err != nil {
+	if err := saveConfig(soul, 16312, "isolated", ""); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
 	cfg, err := loadConfig()
@@ -70,7 +70,7 @@ func TestConfigRoundTrip(t *testing.T) {
 func TestConfigPlainPathRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	soul := "/Users/x/.demarkus/soul"
-	if err := saveConfig(soul, 6310, "default"); err != nil {
+	if err := saveConfig(soul, 6310, "default", ""); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
 	cfg, err := loadConfig()
@@ -237,7 +237,7 @@ func TestShellQuoteRoundTrip(t *testing.T) {
 		"/path with space",
 		"/path/with'quote",
 	} {
-		if err := saveConfig(soul, 6310, "default"); err != nil {
+		if err := saveConfig(soul, 6310, "default", ""); err != nil {
 			t.Fatalf("saveConfig(%q): %v", soul, err)
 		}
 		cfg, err := loadConfig()
