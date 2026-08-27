@@ -841,13 +841,43 @@ func flagValue(args string, re *regexp.Regexp) string {
 }
 
 // tokensPathOfServer returns the tokens.toml the server actually reads
-// (-tokens flag in args, else DEMARKUS_TOKENS env), or "" when undiscoverable;
-// writing our hash to a file the server never reads breaks every write (2026-08-27).
+// (-tokens flag, else DEMARKUS_TOKENS env), or "" when undiscoverable. Exact
+// /proc argv wins over the flattened ps string, which truncates on whitespace.
 func tokensPathOfServer(args string, pid int) string {
+	if p := tokensFromArgv(procArgv(pid)); p != "" {
+		return p
+	}
 	if p := flagValue(args, tokensFlagRe); p != "" {
 		return p
 	}
 	return procEnv(pid, "DEMARKUS_TOKENS")
+}
+
+// procArgv returns the process's exact argument vector from /proc, nil where
+// /proc is unavailable (darwin) or unreadable.
+func procArgv(pid int) []string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil || len(b) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
+}
+
+func tokensFromArgv(argv []string) string {
+	for i, a := range argv {
+		if a == "-tokens" || a == "--tokens" {
+			if i+1 < len(argv) {
+				return argv[i+1]
+			}
+			return ""
+		}
+		for _, prefix := range []string{"-tokens=", "--tokens="} {
+			if v, ok := strings.CutPrefix(a, prefix); ok {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 // pidOfServerAtRoot returns the PID of a demarkus-server whose -root flag (or
@@ -1439,8 +1469,14 @@ func doReuse(port int, root string) error {
 	if targetPID > 0 {
 		targetArgs = psArgs(targetPID)
 		if discovered := tokensPathOfServer(targetArgs, targetPID); discovered != "" && discovered != tokensTOML {
-			logf("adopted server (pid %d) reads tokens from %s, not the conventional %s; using it", targetPID, discovered, tokensTOML)
-			tokensTOML = discovered
+			// Flattened ps output can truncate a path containing whitespace;
+			// never generate a token into a guessed file that does not exist.
+			if fileExists(discovered) {
+				logf("adopted server (pid %d) reads tokens from %s, not the conventional %s; using it", targetPID, discovered, tokensTOML)
+				tokensTOML = discovered
+			} else {
+				warnf("adopted server (pid %d) appears to read tokens from %s, but no such file exists; keeping %s (the auth check below will catch a mismatch)", targetPID, discovered, tokensTOML)
+			}
 		}
 	}
 	if err := ensureTokenEntry(root, tokensTOML); err != nil {
@@ -1483,12 +1519,16 @@ func doReuse(port int, root string) error {
 // authProbeClient is the one-verb surface the auth probe needs;
 // *fetch.Client satisfies it.
 type authProbeClient interface {
-	Archive(host, path, token string) (fetch.Result, error)
+	Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
 }
 
-// verifyPluginToken probes auth with an ARCHIVE on a path that cannot exist:
-// unauthorized means the token table lacks our token; any other status
-// (normally not-found) proves the token was accepted without mutating anything.
+// probeExpectedVersion can never match a real document, so the probe APPEND
+// always ends in not-found or a version conflict, never a write.
+const probeExpectedVersion = 1 << 30
+
+// verifyPluginToken probes auth with an APPEND that cannot mutate anything:
+// the server checks the token before touching the store, so unauthorized means
+// the token table lacks our token; any other status proves it was accepted.
 func verifyPluginToken(port int) error {
 	tok, err := readPluginToken()
 	if err != nil {
@@ -1504,7 +1544,7 @@ func verifyPluginToken(port int) error {
 var errUnauthorized = errors.New("auth probe returned unauthorized")
 
 func verifyTokenWith(cl authProbeClient, host, tok string) error {
-	res, err := cl.Archive(host, "/.demarkus-plugin-auth-probe.md", tok)
+	res, err := cl.Append(host, "/.demarkus-plugin-auth-probe.md", "probe", tok, probeExpectedVersion, nil)
 	if err != nil {
 		return fmt.Errorf("auth probe: %w", err)
 	}
@@ -1533,8 +1573,11 @@ func VerifyAuth() (string, error) {
 	// DEMARKUS_TOKENS wins; otherwise the path provisioning would use.
 	tokensTOML := ""
 	pid := pidOfServerAtRoot(cfg.SoulDir)
+	serverPort := ""
 	if pid > 0 {
-		tokensTOML = tokensPathOfServer(psArgs(pid), pid)
+		args := psArgs(pid)
+		tokensTOML = tokensPathOfServer(args, pid)
+		serverPort = portOfServer(args, pid)
 	}
 	if tokensTOML == "" {
 		if cfg.Mode == "reuse" {
@@ -1549,6 +1592,11 @@ func VerifyAuth() (string, error) {
 	}
 	if pid <= 0 {
 		return fmt.Sprintf("cannot verify: no running demarkus-server for %s (expected token registry: %s)", cfg.SoulDir, tokensTOML), nil
+	}
+	// A port mismatch means the probe would hit some other process, so any
+	// verdict from it would describe the wrong server.
+	if serverPort != cfg.Port {
+		return fmt.Sprintf("cannot verify: server pid %d listens on port %s but the config says %s; re-run /soul-init", pid, serverPort, cfg.Port), nil
 	}
 	if err := verifyPluginToken(port); err != nil {
 		// Only a definitive unauthorized is drift; a transport failure means the

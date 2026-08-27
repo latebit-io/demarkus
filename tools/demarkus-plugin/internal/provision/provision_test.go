@@ -773,15 +773,17 @@ func TestFlagValue(t *testing.T) {
 	}
 }
 
-// mockArchiveClient cans the ARCHIVE probe response for verifyTokenWith.
-type mockArchiveClient struct {
-	status string
-	err    error
-	path   string
+// mockAppendClient cans the APPEND probe response for verifyTokenWith.
+type mockAppendClient struct {
+	status          string
+	err             error
+	path            string
+	expectedVersion int
 }
 
-func (m *mockArchiveClient) Archive(_, path, _ string) (fetch.Result, error) {
+func (m *mockAppendClient) Append(_, path, _, _ string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
 	m.path = path
+	m.expectedVersion = expectedVersion
 	if m.err != nil {
 		return fetch.Result{}, m.err
 	}
@@ -791,12 +793,13 @@ func (m *mockArchiveClient) Archive(_, path, _ string) (fetch.Result, error) {
 func TestVerifyTokenWith(t *testing.T) {
 	cases := []struct {
 		name    string
-		mock    *mockArchiveClient
+		mock    *mockAppendClient
 		wantErr bool
 	}{
-		{"unauthorized fails", &mockArchiveClient{status: protocol.StatusUnauthorized}, true},
-		{"not-found passes", &mockArchiveClient{status: protocol.StatusNotFound}, false},
-		{"transport error surfaces", &mockArchiveClient{err: errors.New("dial refused")}, true},
+		{"unauthorized fails", &mockAppendClient{status: protocol.StatusUnauthorized}, true},
+		{"not-found passes", &mockAppendClient{status: protocol.StatusNotFound}, false},
+		{"version conflict passes", &mockAppendClient{status: protocol.StatusConflict}, false},
+		{"transport error surfaces", &mockAppendClient{err: errors.New("dial refused")}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -812,6 +815,30 @@ func TestVerifyTokenWith(t *testing.T) {
 			if c.mock.path != "/.demarkus-plugin-auth-probe.md" {
 				t.Errorf("probe path = %q", c.mock.path)
 			}
+			// The probe must be non-mutating by construction: an expected
+			// version no real document can hold.
+			if c.mock.expectedVersion != probeExpectedVersion {
+				t.Errorf("probe expected-version = %d, want %d", c.mock.expectedVersion, probeExpectedVersion)
+			}
 		})
+	}
+}
+
+func TestTokensFromArgv(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{"separate value", []string{"demarkus-server", "-tokens", "/a/tokens.toml"}, "/a/tokens.toml"},
+		{"equals form", []string{"demarkus-server", "--tokens=/b/tokens.toml"}, "/b/tokens.toml"},
+		{"whitespace preserved", []string{"demarkus-server", "-tokens", "/My Tokens/tokens.toml"}, "/My Tokens/tokens.toml"},
+		{"absent", []string{"demarkus-server", "-root", "/x"}, ""},
+		{"trailing flag without value", []string{"demarkus-server", "-tokens"}, ""},
+	}
+	for _, c := range cases {
+		if got := tokensFromArgv(c.argv); got != c.want {
+			t.Errorf("%s: tokensFromArgv(%v) = %q, want %q", c.name, c.argv, got, c.want)
+		}
 	}
 }
