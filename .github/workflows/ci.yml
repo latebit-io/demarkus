@@ -298,6 +298,8 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.charts == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -338,6 +340,8 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.charts == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
