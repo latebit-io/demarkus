@@ -12,3 +12,4 @@ Decision records binding the protocol, spec, and repo; git is canonical, and eac
 | [0006](0006-postgres-backend-is-an-optional-build.md) | The Postgres backend is an optional build, not a dependency | accepted 2026-08-20 |
 | [0007](0007-sni-virtual-world-routing.md) | SNI selects a virtual Mark server | accepted 2026-08-22 |
 | [0008](0008-gcs-root-cas-storage.md) | GCS world state commits through one root CAS | accepted 2026-08-22 |
+| [0009](0009-license-split-core-agpl-plugins-mit.md) | AGPL for the core, MIT for plugins and satellites | accepted 2026-08-27 |
