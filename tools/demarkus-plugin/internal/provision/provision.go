@@ -1490,8 +1490,10 @@ func doReuse(port int, root string) error {
 		// mistyped or stale --port would leave the plugin "configured" while every
 		// call hits the wrong endpoint. Refuse a mismatch.
 		if targetArgs != "" {
-			if actualPort := portOfServer(targetArgs, targetPID); actualPort != strconv.Itoa(port) {
-				return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, actualPort, port, actualPort)
+			// Compare parsed values, not text: "06309" and "6309" are the same port.
+			raw := portOfServer(targetArgs, targetPID)
+			if actual, err := strconv.Atoi(raw); err != nil || actual != port {
+				return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, raw, port, raw)
 			}
 		}
 		// Warn-only here: the adopted server may not be ours, and with no remint
@@ -1594,8 +1596,9 @@ func VerifyAuth() (string, error) {
 		return fmt.Sprintf("cannot verify: no running demarkus-server for %s (expected token registry: %s)", cfg.SoulDir, tokensTOML), nil
 	}
 	// A port mismatch means the probe would hit some other process, so any
-	// verdict from it would describe the wrong server.
-	if serverPort != cfg.Port {
+	// verdict from it would describe the wrong server. Parsed comparison:
+	// "06309" and "6309" are the same port.
+	if sp, err := strconv.Atoi(serverPort); err != nil || sp != port {
 		return fmt.Sprintf("cannot verify: server pid %d listens on port %s but the config says %s; re-run /soul-init", pid, serverPort, cfg.Port), nil
 	}
 	if err := verifyPluginToken(port); err != nil {
