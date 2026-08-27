@@ -5,11 +5,20 @@ Implementation Code
 -------------------
 SPDX-License-Identifier: AGPL-3.0-only
 
-All implementation code in this repository is licensed under the
-GNU Affero General Public License, version 3 only (AGPL-3.0-only).
+All implementation code in this repository, except the `plugins/` directory,
+is licensed under the GNU Affero General Public License, version 3 only
+(AGPL-3.0-only). This covers the core: protocol, server, knowledge server,
+client, and tools.
 
 Canonical license text:
 https://www.gnu.org/licenses/agpl-3.0.txt
+
+Plugins
+-------
+SPDX-License-Identifier: MIT
+
+Everything under `plugins/` is licensed under the MIT License; see
+`plugins/LICENSE`.
 
 Protocol Specification and Related Docs
 ---------------------------------------
