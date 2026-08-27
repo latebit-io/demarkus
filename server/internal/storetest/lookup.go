@@ -11,8 +11,8 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
-// LookupBackend pairs a DocumentStore with the LookupCatalog observing it:
-// file store + in-memory catalog, or pgstore as both.
+// LookupBackend pairs a DocumentStore with the LookupCatalog observing it,
+// e.g. file store + in-memory catalog.
 type LookupBackend struct {
 	Store   handler.DocumentStore
 	Catalog handler.LookupCatalog

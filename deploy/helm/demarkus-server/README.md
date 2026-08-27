@@ -2,7 +2,7 @@
 
 Deploys one [demarkus](https://github.com/latebit-io/demarkus) world on Kubernetes: a Mark Protocol server serving versioned markdown over QUIC, with capability-based auth and TLS. One Helm release = one world.
 
-Content lives in a versioned file store on a PersistentVolume, and the image links no external database driver. For the Postgres backend (shared state across replicas, no content PVC) use the [demarkus-server-pg](../demarkus-server-pg) chart instead; the two are the same server and share their templates through the `demarkus-server-common` library chart.
+Content lives in a versioned file store on a PersistentVolume, and the image links no external database driver. Backend-neutral templates live in the `demarkus-server-common` library chart.
 
 ## Quick start
 

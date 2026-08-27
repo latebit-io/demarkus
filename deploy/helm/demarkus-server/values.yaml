@@ -3,8 +3,7 @@
 
 image:
   # The server (ENTRYPOINT) and the demarkus CLI the exec probes call; admin
-  # CLIs ship separately. Links no database driver: the Postgres backend is
-  # its own binary and chart (demarkus-server-pg).
+  # CLIs ship separately. The file-store image has no database driver.
   repository: ghcr.io/latebit-io/demarkus-server
   # tag defaults to .Chart.appVersion when empty
   tag: ""

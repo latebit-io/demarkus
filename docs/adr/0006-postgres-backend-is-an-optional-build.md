@@ -1,6 +1,7 @@
 # ADR 0006: The Postgres backend is an optional build, not a dependency
 
-Status: accepted (2026-08-20). Implemented on the same branch as the step 8
+Status: superseded by [ADR 0010](0010-remove-postgres-backend.md) (2026-08-27).
+Originally accepted 2026-08-20, implemented on the same branch as the step 8
 performance work.
 
 ## Context

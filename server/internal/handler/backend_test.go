@@ -9,7 +9,6 @@ import (
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
-	"github.com/latebit-io/demarkus/server/internal/pgstore/pgtest"
 )
 
 // backend is one DocumentStore plus its LookupCatalog, wired as main.go does.
@@ -45,24 +44,10 @@ func fileBackendAt(dir string) backend {
 	return backend{Store: wrapped, Catalog: wrapped, Views: wrapped, Tamper: tamper}
 }
 
-// postgresBackend returns the package's shared pgstore (own schema, reset)
-// as both halves: catalog rows ride its write transactions. Skips without
-// DEMARKUS_TEST_PG_DSN unless DEMARKUS_TEST_PG_REQUIRED is set.
-func postgresBackend(t testing.TB) backend {
-	t.Helper()
-	const schema = "handler"
-	s := pgtest.Open(t, schema)
-	tamper := func(t testing.TB, path string, version int, stored []byte) {
-		pgtest.TamperVersion(t, schema, path, version, stored)
-	}
-	return backend{Store: s, Catalog: s, Views: s, Tamper: tamper}
-}
-
-// forEachBackend runs fn once per backend so every handler test proves the
-// same protocol behavior over both stores.
+// forEachBackend runs fn per backend; only the file store remains, and the
+// fan-out is kept as the seam for a future backend (ADR 0010).
 func forEachBackend(t *testing.T, fn func(t *testing.T, newBackend backendFactory)) {
 	t.Run("file", func(t *testing.T) { fn(t, fileBackend) })
-	t.Run("postgres", func(t *testing.T) { fn(t, postgresBackend) })
 }
 
 // seedBackend writes files (name → body, no leading slash) as version 1.

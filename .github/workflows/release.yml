@@ -30,7 +30,6 @@ jobs:
               - 'protocol/**'
               - 'client/**'
               - 'deploy/helm/demarkus-server/**'
-              - 'deploy/helm/demarkus-server-pg/**'
               - 'deploy/helm/demarkus-server-common/**'
               - 'deploy/helm/demarkus-knowledge-server/**'
             client:
@@ -151,7 +150,7 @@ jobs:
           # bump too. protocol/ is compiled in via replace directives, and
           # the image bundles the client CLI for chart exec probes: a fix
           # in either that skips this gate silently never ships (#295).
-          change_path: "server/ protocol/ client/ deploy/helm/demarkus-server/ deploy/helm/demarkus-server-pg/ deploy/helm/demarkus-server-common/ deploy/helm/demarkus-knowledge-server/"
+          change_path: "server/ protocol/ client/ deploy/helm/demarkus-server/ deploy/helm/demarkus-server-common/ deploy/helm/demarkus-knowledge-server/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -324,9 +323,7 @@ jobs:
           ls dist/
           mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
 
-          # demarkus-server-pg is the -tags pg flavor and demarkus-migrate
-          # ships beside it; both feed server/Dockerfile.pg below.
-          for bin in demarkus-server demarkus-server-pg demarkus-migrate demarkus-knowledge-server; do
+          for bin in demarkus-server demarkus-knowledge-server; do
             for arch in amd64:amd64 arm64:arm64 arm_7:armv7; do
               cp dist/${bin}_linux_${arch%%:*}*/"$bin" "dist/docker/${arch##*:}/"
             done
@@ -357,19 +354,6 @@ jobs:
             ghcr.io/latebit-io/demarkus-server:${{ needs.semver-server.outputs.new_version }}
             ghcr.io/latebit-io/demarkus-server:latest
 
-      # The Postgres flavor, its own image so the default one keeps no
-      # database driver. Deleting the backend means deleting this step.
-      - name: Build + push demarkus-server-pg image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: server/Dockerfile.pg
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          push: true
-          tags: |
-            ghcr.io/latebit-io/demarkus-server-pg:${{ needs.semver-server.outputs.new_version }}
-            ghcr.io/latebit-io/demarkus-server-pg:latest
-
       - name: Build + push demarkus-knowledge-server image
         uses: docker/build-push-action@v6
         with:
@@ -393,7 +377,7 @@ jobs:
       - name: Package + push server charts
         run: |
           VER="${{ needs.semver-server.outputs.new_version }}"
-          for chart in demarkus-server demarkus-server-pg demarkus-knowledge-server; do
+          for chart in demarkus-server demarkus-knowledge-server; do
             helm dependency update "deploy/helm/$chart"
             helm package "deploy/helm/$chart" --version "$VER" --app-version "$VER" --destination /tmp/charts
             helm push "/tmp/charts/${chart}-${VER}.tgz" oci://ghcr.io/latebit-io/charts

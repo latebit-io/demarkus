@@ -7,8 +7,7 @@ This page covers deploying Demarkus on Kubernetes with the Helm charts in `deplo
 | Chart | Kind | Purpose |
 |---|---|---|
 | `demarkus-server` | StatefulSet | Single world over the filesystem store (PVC) |
-| `demarkus-server-pg` | StatefulSet | Single world over the Postgres store |
-| `demarkus-server-common` | library | Shared templates for the two server charts |
+| `demarkus-server-common` | library | Shared backend-neutral server templates |
 | `demarkus-broker` | Deployment | OIDC broker and MCP-over-HTTPS gateway (defaults to 2 replicas + PDB) |
 | `demarkus-agent` | Deployment | Federation crawler: scheduled crawl, hash indexes, graph snapshots |
 | `demarkus-knowledge-server` | Deployment | Multi-world production server, GCS-backed |
