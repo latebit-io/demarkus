@@ -1,0 +1,182 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "demarkus-memory-broker.fullname" . }}
+  labels:
+    {{- include "demarkus-memory-broker.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "demarkus-memory-broker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "demarkus-memory-broker.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/secret-config.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "demarkus-memory-broker.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: broker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - -config
+            - /etc/demarkus-memory-broker/config.yaml
+          env:
+            # POD_NAME is the holder identity stamped onto the
+            # leader-election Lease (see brokerIdentity in main.go). Without
+            # this, multiple replicas would race with the same hostname-
+            # derived identity and the lease handoff log would be unreadable.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- /* Production OIDC client secret path. When the operator
+                   points oidc.existingSecretRef at an externally-managed
+                   Secret, the chart leaves clientSecret blank in the
+                   config Secret and mounts OIDC_CLIENT_SECRET here.
+                   broker.LoadConfig applies the env var as an override
+                   before validate(). Cleartext-via-values mode skips
+                   this block entirely. */}}
+            {{- with .Values.oidc.existingSecretRef.name }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $.Values.oidc.existingSecretRef.key | quote }}
+            {{- end }}
+            {{- /* PR4 broker signing key. Same env-var-override pattern
+                   as OIDC_CLIENT_SECRET. The chart's mutual-exclusion
+                   guard in secret-config.yaml means existingSigningKeyRef
+                   is set iff the in-config brokerSigningKey is blank;
+                   broker.applyEnvOverrides reads BROKER_SIGNING_KEY
+                   before validate(). The PEM travels through the env
+                   var as a multi-line string — kubelet preserves
+                   newlines under secretKeyRef. */}}
+            {{- with .Values.oidc.existingSigningKeyRef.name }}
+            - name: BROKER_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $.Values.oidc.existingSigningKeyRef.key | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              protocol: TCP
+              containerPort: {{ .Values.server.port }}
+            {{- /* MCP gateway listener (memory service surface; plan:
+                   Broker MCP Gateway). Always rendered — the listener
+                   is part of the binary, not a feature flag. The port
+                   is extracted from server.mcp.addr so a single knob
+                   keeps containerPort, Service, NetworkPolicy, and
+                   the rendered config in sync. */}}
+            - name: mcp
+              protocol: TCP
+              containerPort: {{ include "demarkus-memory-broker.mcpPort" . }}
+          {{- if .Values.probes.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/demarkus-memory-broker
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- /* MCP TLS Secret mount. Only present when the
+                   operator pinned an existingSecretRef — the chart's
+                   only TLS mode for the MCP listener (cleartext PEMs
+                   in helm release history are out of scope). Mount
+                   path is chart-managed so secret-config.yaml can
+                   render the absolute certFile/keyFile values into
+                   the broker's config.yaml without a separate knob. */}}
+            {{- if .Values.server.mcp.tls.existingSecretRef.name }}
+            - name: mcp-tls
+              mountPath: {{ include "demarkus-memory-broker.mcpTLSMountPath" . | quote }}
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "demarkus-memory-broker.configSecretName" . }}
+            items:
+              - key: config.yaml
+                path: config.yaml
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.server.mcp.tls.existingSecretRef.name }}
+        - name: mcp-tls
+          secret:
+            secretName: {{ .Values.server.mcp.tls.existingSecretRef.name | quote }}
+            {{- /* kubernetes.io/tls Secrets always carry tls.crt +
+                   tls.key data keys. The chart projects those two
+                   keys explicitly so a misconfigured Secret (e.g. a
+                   generic Opaque Secret with the wrong data keys)
+                   fails pod startup with a clear "missing key"
+                   error rather than mounting an empty directory. */}}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range $constraint := . }}
+        - maxSkew: {{ $constraint.maxSkew }}
+          topologyKey: {{ $constraint.topologyKey }}
+          whenUnsatisfiable: {{ $constraint.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "demarkus-memory-broker.selectorLabels" $ | nindent 14 }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

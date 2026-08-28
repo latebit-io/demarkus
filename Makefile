@@ -1,4 +1,4 @@
-.PHONY: all protocol server knowledge-server client tools image image-server image-knowledge-server image-broker image-agent test clean install help lint fmt vet deps
+.PHONY: all protocol server knowledge-server client tools image image-server image-knowledge-server image-broker image-memory-broker image-agent test clean install help lint fmt vet deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -58,10 +58,11 @@ client: protocol
 tools: protocol
 	@echo "Building tools..."
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-broker  ./demarkus-knowledge-broker
+	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-memory-broker ./demarkus-memory-broker
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-token   ./demarkus-token
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-publish ./demarkus-publish
 	cd tools && go build -o bin/demarkus-loadtest ./demarkus-loadtest
-	@echo "✓ Tools built: tools/bin/{demarkus-knowledge-broker, demarkus-token, demarkus-publish, demarkus-loadtest}"
+	@echo "✓ Tools built: tools/bin/{demarkus-knowledge-broker, demarkus-memory-broker, demarkus-token, demarkus-publish, demarkus-loadtest}"
 
 # Build container images. One image per deployable service so each pod
 # carries only the binaries it needs at runtime. Admin CLIs are NOT
@@ -75,7 +76,7 @@ IMAGE_REGISTRY ?= ghcr.io/latebit-io
 TAG            ?= dev
 HOST_ARCH      ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/;s/armv7l/arm/')
 
-image: image-server image-knowledge-server image-broker image-agent
+image: image-server image-knowledge-server image-broker image-memory-broker image-agent
 
 image-server:
 	@echo "Building $(IMAGE_REGISTRY)/demarkus-server:$(TAG) for linux/$(HOST_ARCH)..."
@@ -98,6 +99,13 @@ image-broker:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C tools -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-knowledge-broker ./demarkus-knowledge-broker
 	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f tools/demarkus-knowledge-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-knowledge-broker:$(TAG) .
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-knowledge-broker:$(TAG)"
+
+image-memory-broker:
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-memory-broker:$(TAG) for linux/$(HOST_ARCH)..."
+	@mkdir -p dist/docker/$(HOST_ARCH)
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C tools -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-memory-broker ./demarkus-memory-broker
+	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f tools/demarkus-memory-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-memory-broker:$(TAG) .
+	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-memory-broker:$(TAG)"
 
 image-agent:
 	@echo "Building $(IMAGE_REGISTRY)/demarkus-agent:$(TAG) for linux/$(HOST_ARCH)..."

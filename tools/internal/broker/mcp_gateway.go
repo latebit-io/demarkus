@@ -22,6 +22,9 @@ type mcpGateway struct {
 	transport  *mcpserver.StreamableHTTPServer
 	log        *slog.Logger
 	dispatcher worldDispatcher
+	// profile selects the product surface (knowledge vs memory):
+	// tool set, instructions, tenant scoping, soul seeding.
+	profile *GatewayProfile
 	// graphStore is an ephemeral in-process graph store backing
 	// mark_backlinks / mark_graph / mark_graph_export /
 	// mark_graph_publish. Lifetime = broker pod lifetime: any
@@ -42,11 +45,13 @@ type mcpGateway struct {
 	graphSeedMu         sync.Mutex
 	graphSeedChecked    map[string]time.Time
 	graphSeedRefreshing map[string]chan struct{}
+	// soulSeed tracks per-world soul-template seeding (memory profile).
+	soulSeed soulSeeder
 }
 
-// newMCPGateway registers the 17 tools and wraps them in Streamable HTTP.
-// Production supplies *worldPool; tests inject a dispatcher fake.
-func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGateway {
+// newMCPGateway registers the profile's tools and wraps them in Streamable
+// HTTP. Production supplies *worldPool; tests inject a dispatcher fake.
+func newMCPGateway(s *Server, version string, dispatcher worldDispatcher, profile *GatewayProfile) *mcpGateway {
 	// Session-end eviction for the fetch dedup state. The store is
 	// constructed before the MCPServer because the hook closes over it.
 	fetchSeen := newSessionSeen(s.log, s.clock)
@@ -56,39 +61,46 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher) *mcpGa
 			fetchSeen.drop(session.SessionID())
 		}
 	})
-	mcpSrv := mcpserver.NewMCPServer(
-		"demarkus-knowledge-broker",
-		version,
-		// listChanged=false: the tool set is static across a session
-		// (no hot-add at runtime). Suppresses the
-		// notifications/tools/list_changed advertisement the client
-		// would otherwise expect us to wire up — we never send one.
-		mcpserver.WithToolCapabilities(false),
-		mcpserver.WithHooks(hooks),
-	)
 	g := &mcpGateway{
 		srv:        s,
-		mcpServer:  mcpSrv,
 		log:        s.log,
 		dispatcher: dispatcher,
+		profile:    profile,
 		// Ephemeral graph store — empty on each gateway
 		// construction, dies with the broker pod. See the
 		// graphStore field doc for the design framing.
 		graphStore: graphstore.New(),
 		fetchSeen:  fetchSeen,
 	}
+	opts := []mcpserver.ServerOption{
+		// listChanged=false: the tool set is static across a session,
+		// so we never send notifications/tools/list_changed.
+		mcpserver.WithToolCapabilities(false),
+		mcpserver.WithHooks(hooks),
+	}
+	if profile.Instructions != "" {
+		opts = append(opts, mcpserver.WithInstructions(profile.Instructions))
+	}
+	if profile.TenantScoped {
+		// Every tool call passes the tenant gate BEFORE its handler:
+		// identity resolves to exactly one world and every
+		// world-bearing argument must address it.
+		opts = append(opts, mcpserver.WithToolHandlerMiddleware(g.tenantGate))
+	}
+	g.mcpServer = mcpserver.NewMCPServer(profile.ServerName, version, opts...)
 	g.registerTools()
 	g.registerResources()
 	g.registerPrompts()
-	g.transport = mcpserver.NewStreamableHTTPServer(mcpSrv)
+	g.transport = mcpserver.NewStreamableHTTPServer(g.mcpServer)
 	return g
 }
 
-// registerTools wires all definitions to their handlers. Missing handlers use
-// notImplementedHandler so an incomplete registration fails visibly.
+// registerTools wires the profile's definitions to their handlers. Missing
+// handlers use notImplementedHandler so an incomplete registration fails
+// visibly.
 func (g *mcpGateway) registerTools() {
 	handlers := g.toolHandlers()
-	tools := mcpTools()
+	tools := g.profile.Tools
 	for i := range tools {
 		h, ok := handlers[tools[i].Name]
 		if !ok {
@@ -98,9 +110,19 @@ func (g *mcpGateway) registerTools() {
 	}
 }
 
-// toolHandlers maps all 17 tools to concrete implementations. Keeping this a
-// method binds handlers to the gateway without global indirection.
+// toolHandlers maps tools to implementations; registerTools wires only
+// the profile's tool list. The tenant-scoped profile swaps mark_worlds
+// for the self-only variant.
 func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
+	if g.profile.TenantScoped {
+		h := g.knowledgeToolHandlers()
+		h["mark_worlds"] = g.handleMarkWorldsSelf
+		return h
+	}
+	return g.knowledgeToolHandlers()
+}
+
+func (g *mcpGateway) knowledgeToolHandlers() map[string]mcpserver.ToolHandlerFunc {
 	return map[string]mcpserver.ToolHandlerFunc{
 		"mark_fetch":         g.handleMarkFetch,
 		"mark_explore":       g.handleMarkExplore,
@@ -177,7 +199,17 @@ func (s *Server) MCPGateway(version string) http.Handler {
 		Insecure: s.cfg.WorldDialer.InsecureSkipVerify,
 	})
 	s.mcpPool = pool
-	return newMCPGateway(s, version, pool).Routes()
+	return newMCPGateway(s, version, pool, KnowledgeGatewayProfile()).Routes()
+}
+
+// MemoryMCPGateway is MCPGateway's memory-broker sibling: same worldPool
+// wiring, tenant-scoped profile (identity = world, soul seeding).
+func (s *Server) MemoryMCPGateway(version string) http.Handler {
+	pool := newWorldPool(s.cfg, fetch.Options{
+		Insecure: s.cfg.WorldDialer.InsecureSkipVerify,
+	})
+	s.mcpPool = pool
+	return newMCPGateway(s, version, pool, MemoryGatewayProfile()).Routes()
 }
 
 // MCPGatewayWith returns the MCP gateway's http.Handler using the
@@ -186,7 +218,12 @@ func (s *Server) MCPGateway(version string) http.Handler {
 // production path always goes through MCPGateway, which owns the
 // worldPool lifecycle.
 func (s *Server) MCPGatewayWith(version string, dispatcher worldDispatcher) http.Handler {
-	return newMCPGateway(s, version, dispatcher).Routes()
+	return newMCPGateway(s, version, dispatcher, KnowledgeGatewayProfile()).Routes()
+}
+
+// MemoryMCPGatewayWith is MCPGatewayWith's memory-profile sibling.
+func (s *Server) MemoryMCPGatewayWith(version string, dispatcher worldDispatcher) http.Handler {
+	return newMCPGateway(s, version, dispatcher, MemoryGatewayProfile()).Routes()
 }
 
 // CloseMCPGateway closes the production worldPool wired by

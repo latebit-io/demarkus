@@ -443,7 +443,7 @@ func newGatewayWithDispatcher(t *testing.T, cfg *Config, d worldDispatcher) *mcp
 	k8s := fake.NewSimpleClientset()
 	srv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
 	srv.clock = func() time.Time { return time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC) }
-	return newMCPGateway(srv, "test", d)
+	return newMCPGateway(srv, "test", d, KnowledgeGatewayProfile())
 }
 
 // callToolReq builds a mcp.CallToolRequest with the given

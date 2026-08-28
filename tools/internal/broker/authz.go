@@ -2,6 +2,7 @@ package broker
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -77,6 +78,40 @@ func readableWorlds(cfg *Config) []*WorldConfig {
 		out = append(out, &cfg.Worlds[j])
 	}
 	return out
+}
+
+// tenantWorldFor resolves the single world a memory-broker identity owns
+// (identity = world): zero matches is ErrNotAuthorized, two or more is a
+// provisioning error and denies closed rather than guessing.
+func tenantWorldFor(cfg *Config, claims *Claims) (*WorldConfig, error) {
+	var match *WorldConfig
+	for j := range cfg.Worlds {
+		w := &cfg.Worlds[j]
+		if !worldAllows(&w.Allow, claims) {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("identity maps to more than one world (%q and %q); memory-broker worlds must be provisioned one per identity", match.Name, w.Name)
+		}
+		match = w
+	}
+	if match == nil {
+		return nil, ErrNotAuthorized
+	}
+	return match, nil
+}
+
+// ValidateTenantWorlds (memory broker, called after LoadConfig) requires
+// every world to name its tenant: an empty Allow admits every identity,
+// which in identity-=-world mode makes tenant resolution ambiguous.
+func (c *Config) ValidateTenantWorlds() error {
+	for i := range c.Worlds {
+		a := &c.Worlds[i].Allow
+		if len(a.Domains) == 0 && len(a.Groups) == 0 && len(a.Emails) == 0 {
+			return fmt.Errorf("worlds[%d] (%s): allow must not be empty in a memory broker; each world is provisioned for one identity", i, c.Worlds[i].Name)
+		}
+	}
+	return nil
 }
 
 // lookupWorld returns the configured world with the given name, or nil

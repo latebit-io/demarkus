@@ -1,0 +1,56 @@
+{{- if and .Values.ingress.enabled .Values.ingress.tls.certManager.enabled }}
+{{- if not .Values.ingress.host }}
+{{- fail "ingress.host is required when ingress.tls.certManager.enabled is true" }}
+{{- end }}
+{{- /* cert-manager Certificate that targets the TLS Secret the Ingress
+       references. cert-manager watches Certificate resources, talks to
+       the configured issuer (default: ClusterIssuer letsencrypt-prod),
+       and writes the resulting kubernetes.io/tls Secret. The Ingress
+       picks the Secret up by name.
+
+       Out-of-scope: DNS01 vs HTTP01 challenge selection lives on the
+       issuer, not here. ACME failure modes (rate limits, DNS
+       propagation) are documented in cert-manager's own docs. */ -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "demarkus-memory-broker.fullname" . }}-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "demarkus-memory-broker.labels" . | nindent 4 }}
+  {{- with .Values.ingress.tls.certManager.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  secretName: {{ include "demarkus-memory-broker.fullname" . }}-tls
+  dnsNames:
+    - {{ .Values.ingress.host | quote }}
+  issuerRef:
+    kind: {{ .Values.ingress.tls.certManager.issuerRef.kind }}
+    name: {{ .Values.ingress.tls.certManager.issuerRef.name }}
+{{- end }}
+{{- if and .Values.ingress.enabled .Values.ingress.mcp.host .Values.ingress.mcp.tls.certManager.enabled }}
+---
+{{- /* Parallel Certificate for the MCP host. Independent secretName,
+       independent issuerRef — two surfaces, two certs, rotation on
+       either side cannot disturb the other. */ -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "demarkus-memory-broker.fullname" . }}-mcp-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "demarkus-memory-broker.labels" . | nindent 4 }}
+  {{- with .Values.ingress.mcp.tls.certManager.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  secretName: {{ include "demarkus-memory-broker.fullname" . }}-mcp-tls
+  dnsNames:
+    - {{ .Values.ingress.mcp.host | quote }}
+  issuerRef:
+    kind: {{ .Values.ingress.mcp.tls.certManager.issuerRef.kind }}
+    name: {{ .Values.ingress.mcp.tls.certManager.issuerRef.name }}
+{{- end }}

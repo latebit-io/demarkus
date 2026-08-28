@@ -1,0 +1,37 @@
+version: 2
+
+project_name: demarkus-memory-broker
+
+monorepo:
+  tag_prefix: memory-broker/
+  dir: tools
+
+builds:
+  - id: demarkus-memory-broker
+    main: ./demarkus-memory-broker
+    binary: demarkus-memory-broker
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: demarkus-memory-broker
+    builds:
+      - demarkus-memory-broker
+    name_template: "demarkus-memory-broker_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "demarkus-memory-broker_checksums.txt"
+
+changelog:
+  use: github-native

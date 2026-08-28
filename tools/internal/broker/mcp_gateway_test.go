@@ -240,7 +240,7 @@ func TestMCPGatewayEveryAdvertisedToolHasAHandler(t *testing.T) {
 	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
 	k8s := fake.NewSimpleClientset()
 	srv := NewServer(mcpTestConfig(), signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	gw := newMCPGateway(srv, "test", &fakeDispatcher{})
+	gw := newMCPGateway(srv, "test", &fakeDispatcher{}, KnowledgeGatewayProfile())
 
 	handlers := gw.toolHandlers()
 	for _, name := range mcpToolNames {

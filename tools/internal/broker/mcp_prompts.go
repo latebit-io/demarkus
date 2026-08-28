@@ -11,8 +11,14 @@ import (
 // MCP prompts expose knowledge-system workflows. Unlike local prompts, recall
 // and default whats-new aggregate every readable world.
 
-// registerPrompts wires the three v1 prompts: orient, recall, whats-new.
+// registerPrompts wires the profile's prompt surface: orient, recall,
+// whats-new for the knowledge broker; soul-context, soul-journal for the
+// tenant-scoped memory broker (mcp_prompts_memory.go).
 func (g *mcpGateway) registerPrompts() {
+	if g.profile.TenantScoped {
+		g.registerMemoryPrompts()
+		return
+	}
 	g.mcpServer.AddPrompt(mcp.NewPrompt("orient",
 		mcp.WithPromptDescription("Orient around a knowledge-system document: explore its neighborhood in one call, then read just the sections that matter."),
 		mcp.WithArgument("url",

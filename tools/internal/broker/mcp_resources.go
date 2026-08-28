@@ -31,6 +31,18 @@ import (
 // per pod (worlds[] changes roll the broker), so construction-time
 // registration is complete — no dynamic listing needed.
 func (g *mcpGateway) registerResources() {
+	if g.profile.TenantScoped {
+		// Per-world hub resources would leak every tenant's world name
+		// into every session's picker; the template plus the
+		// readResource tenant gate is the whole surface.
+		g.mcpServer.AddResourceTemplate(mcp.NewResourceTemplate(
+			"mark://{world}/{+path}",
+			"soul document",
+			mcp.WithTemplateDescription("Any document in your soul, by world name and path; append #<anchor> to attach a single section (anchors are GitHub-style heading slugs). Your world name comes from the mark_worlds tool."),
+			mcp.WithTemplateMIMEType("text/markdown"),
+		), g.readResource)
+		return
+	}
 	g.mcpServer.AddResourceTemplate(mcp.NewResourceTemplate(
 		"mark://{world}/{+path}",
 		"knowledge-system document",
@@ -50,7 +62,7 @@ func (g *mcpGateway) registerResources() {
 
 // readResource serves every resource read: whole documents and #anchor
 // sections, for both the concrete per-world hubs and the URI template.
-func (g *mcpGateway) readResource(_ context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+func (g *mcpGateway) readResource(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 	raw := req.Params.URI
 	// The fragment is the section selector, cut before URL validation —
 	// parseToolURL rejects fragments because elsewhere they would be
@@ -60,6 +72,17 @@ func (g *mcpGateway) readResource(_ context.Context, req mcp.ReadResourceRequest
 	worldName, path, err := parseToolURL(docURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid resource URI %q: %w", raw, err)
+	}
+	// Resource reads bypass the tool middleware, so tenant mode gates
+	// here too: same identity = world rule as tenantGate.
+	if g.profile.TenantScoped {
+		w, terr := g.tenantWorld(ctx)
+		if terr != nil {
+			return nil, fmt.Errorf("not authorized: %w", terr)
+		}
+		if worldName != w.Name {
+			return nil, fmt.Errorf("access denied: this memory service serves only your world %q", w.Name)
+		}
 	}
 	result, err := g.dispatcher.Fetch(worldName, path, "")
 	if err != nil {

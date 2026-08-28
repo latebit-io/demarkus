@@ -251,6 +251,10 @@ type ServerConfig struct {
 	// itself stretches the effective session lifetime via fresh
 	// id_tokens minted on each poll.
 	IDTokenTTL time.Duration `yaml:"idTokenTTL"`
+	// Realm names the broker product in the MCP gateway's RFC 6750
+	// WWW-Authenticate challenge; each binary defaults its own name
+	// before NewServer (knowledge vs memory broker).
+	Realm string `yaml:"realm"`
 	// MCP is the broker's MCP-gateway-specific config. The gateway
 	// is opt-in: an operator runs the broker without MCP by leaving
 	// `mcp.enabled` unset, in which case the existing management

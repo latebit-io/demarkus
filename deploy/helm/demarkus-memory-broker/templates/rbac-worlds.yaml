@@ -1,0 +1,50 @@
+{{- if .Values.rbac.create }}
+{{- /* Per-world RBAC: one Role + RoleBinding per worlds[] entry, each
+   scoped to a single Secret in that world's namespace. The world's
+   tokens Secret must already exist (created by the demarkus-server
+   chart's bootstrap Job in §6.1) — the broker only needs get/update,
+   never create. If the Secret is missing at first mint the broker
+   returns a clear "Secret not found" error rather than silently
+   bootstrapping into a namespace it shouldn't own.
+
+   The chart's install-time ServiceAccount must already have permission
+   to create Roles + RoleBindings in each world's namespace. Operators
+   that manage RBAC out of band (Argo CD AppProject, OPA, etc.) should
+   set `rbac.create: false` and provision these Roles separately. */ -}}
+{{- $fullname := include "demarkus-memory-broker.fullname" . -}}
+{{- $saName := include "demarkus-memory-broker.serviceAccountName" . -}}
+{{- $saNamespace := .Release.Namespace -}}
+{{- $labels := include "demarkus-memory-broker.labels" . -}}
+{{- range .Values.worlds }}
+{{- $name := printf "%s-world-%s" $fullname .name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ .tokensSecret | quote }}]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ $saNamespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+{{- end }}
+{{- end }}
