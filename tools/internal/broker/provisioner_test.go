@@ -398,6 +398,70 @@ func (f *fakeBuckets) DeleteBucket(_ context.Context, bucket string) error {
 	return nil
 }
 
+// TestDeprovisionPreservesRacingFragmentEntry: a world a sibling
+// provisioned after this pod's registry snapshot must survive the
+// deprovision fragment rewrite; only the target slug leaves.
+func TestDeprovisionPreservesRacingFragmentEntry(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	store := newProvisionerStore()
+	p := newTestProvisioner(cfg, store, &fakeBuckets{})
+	eveWorld, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A sibling provisions frank via its own store view; p's next
+	// deprovision must not drop him even though frank postdates any
+	// snapshot p could have taken.
+	sibling := newTestProvisioner(provisioningTestConfig(ProvisionOpen), store, &fakeBuckets{})
+	frank := &Claims{Subject: "google|frank", Email: "frank@example.com", EmailVerified: true}
+	frankWorld, err := sibling.EnsureTenant(context.Background(), frank)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.DeprovisionTenant(context.Background(), eveWorld.Name, false); err != nil {
+		t.Fatalf("DeprovisionTenant: %v", err)
+	}
+	fragment := string(store.get(cfg.worldsFragmentRef()))
+	if strings.Contains(fragment, "name: "+eveWorld.Name) {
+		t.Errorf("deprovisioned world survived the fragment rewrite:\n%s", fragment)
+	}
+	if !strings.Contains(fragment, "name: "+frankWorld.Name) {
+		t.Errorf("racing sibling world dropped by deprovision:\n%s", fragment)
+	}
+}
+
+// TestSyncRegistryConvergesFragment: the sync loop repairs a fragment
+// that lost a registry-held world to a stale rewrite.
+func TestSyncRegistryConvergesFragment(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	store := newProvisionerStore()
+	p := newTestProvisioner(cfg, store, &fakeBuckets{})
+	world, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the stale drop: empty the fragment while the registry
+	// still holds the tenant.
+	if err := p.store.Mutate(context.Background(), cfg.worldsFragmentRef(), func([]byte) ([]byte, error) {
+		return []byte("worlds: []\n"), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sibling := provisioningTestConfig(ProvisionOpen)
+	q := newTestProvisioner(sibling, store, &fakeBuckets{})
+	if err := q.SyncRegistry(context.Background()); err != nil {
+		t.Fatalf("SyncRegistry: %v", err)
+	}
+	fragment := string(store.get(cfg.worldsFragmentRef()))
+	if !strings.Contains(fragment, "name: "+world.Name) {
+		t.Errorf("sync did not restore the dropped world:\n%s", fragment)
+	}
+}
+
 func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 	cfg := provisioningTestConfig(ProvisionOpen)
 	store := newProvisionerStore()

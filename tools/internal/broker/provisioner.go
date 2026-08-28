@@ -103,9 +103,9 @@ func (s *Server) EnableProvisioning(buckets BucketCreator) *Provisioner {
 	return p
 }
 
-// DeprovisionTenant removes slug: registry entry, authoritative fragment
-// rewrite (the ONE flow allowed to drop worlds), tokens key, write-token
-// record, and optionally the bucket. Idempotent; operator-invoked only.
+// DeprovisionTenant removes slug: registry entry, fragment entry (the
+// ONE flow allowed to drop a world), tokens key, write-token record,
+// and optionally the bucket. Idempotent; operator-invoked only.
 func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, deleteBucket bool) (found bool, err error) {
 	// Resolve the deleter BEFORE any destructive round trip: failing
 	// after the registry rewrite would leave a half-removed tenant.
@@ -138,11 +138,11 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 		return false, err
 	}
 
-	// Authoritative rewrite (nil existing = no union) so the world leaves
-	// the server; a racing pre-removal union can resurrect it, rerun to
-	// converge.
-	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func([]byte) ([]byte, error) {
-		return p.renderWorldsFragmentUnion(&snapshot, nil)
+	// Union minus the target: only slug leaves the fragment, so tenants
+	// provisioned concurrently by other pods survive. A same-slug
+	// re-provision racing this is repaired by the sync loop's converge.
+	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func(existing []byte) ([]byte, error) {
+		return p.renderWorldsFragmentUnion(&snapshot, existing, slug)
 	}); err != nil {
 		return found, fmt.Errorf("rewrite worlds fragment: %w", err)
 	}
@@ -400,7 +400,7 @@ type fragmentWorld struct {
 // renderWorldsFragmentUnion renders the union of the existing fragment
 // and the registry snapshot (snapshot wins per slug), sorted by slug:
 // a stale snapshot can never drop a sibling's tenant.
-func (p *Provisioner) renderWorldsFragmentUnion(registry *tenantRegistry, existing []byte) ([]byte, error) {
+func (p *Provisioner) renderWorldsFragmentUnion(registry *tenantRegistry, existing []byte, exclude ...string) ([]byte, error) {
 	worlds := map[string]fragmentWorld{}
 	if len(existing) > 0 {
 		var current worldsFragmentDoc
@@ -424,6 +424,11 @@ func (p *Provisioner) renderWorldsFragmentUnion(registry *tenantRegistry, existi
 			world.Limits = &fragmentLimits{MaxDocuments: quota}
 		}
 		worlds[slug] = world
+	}
+	// exclude wins over both sources: deprovision's target must not
+	// survive via the snapshot or a racing fragment entry.
+	for _, slug := range exclude {
+		delete(worlds, slug)
 	}
 	doc := worldsFragmentDoc{Worlds: make([]fragmentWorld, 0, len(worlds))}
 	for _, name := range slices.Sorted(maps.Keys(worlds)) {
@@ -471,8 +476,17 @@ func (p *Provisioner) SyncRegistry(ctx context.Context) error {
 	if payload == p.lastSync {
 		return nil
 	}
-	p.lastSync = payload
 	p.applySnapshot(&snapshot)
+	// Converge the fragment toward the registry: a union re-adds any
+	// world a stale deprovision rewrite dropped (Mutate skips the write
+	// when nothing changed, so steady state costs one read).
+	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func(existing []byte) ([]byte, error) {
+		return p.renderWorldsFragmentUnion(&snapshot, existing)
+	}); err != nil {
+		// lastSync stays behind so the next tick retries the converge.
+		return fmt.Errorf("converge worlds fragment: %w", err)
+	}
+	p.lastSync = payload
 	return nil
 }
 
