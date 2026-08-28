@@ -170,7 +170,7 @@ func (c *GCSBucketCreator) purgeAndDelete(ctx context.Context, bucket string) er
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(16)
 	var listErr error
-	for {
+	for groupCtx.Err() == nil { // stop paging once a delete has failed
 		object, err := it.Next()
 		if errors.Is(err, iterator.Done) {
 			break
@@ -191,11 +191,8 @@ func (c *GCSBucketCreator) purgeAndDelete(ctx context.Context, bucket string) er
 			return nil
 		})
 	}
-	if err := group.Wait(); err != nil {
-		return errors.Join(listErr, err)
-	}
-	if listErr != nil {
-		return listErr
+	if err := errors.Join(listErr, group.Wait()); err != nil {
+		return err
 	}
 	if err := handle.Delete(ctx); err != nil && !errors.Is(err, storage.ErrBucketNotExist) {
 		return fmt.Errorf("delete bucket %q: %w", bucket, err)

@@ -687,7 +687,9 @@ func TestValidateBrokerEndpointRejectsUserinfo(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
+	requests := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
@@ -695,6 +697,11 @@ func TestValidateBrokerEndpointRejectsUserinfo(t *testing.T) {
 	withUser := strings.Replace(ts.URL, "http://", "http://user:password@", 1)
 	if _, err := SoulJoin(withUser, "", false, ""); err == nil || !strings.Contains(err.Error(), "userinfo") {
 		t.Fatalf("userinfo URL err = %v, want userinfo rejection", err)
+	}
+	// The rejection must happen before any request: credentials in the
+	// URL must never reach the wire as a Basic Authorization header.
+	if requests != 0 {
+		t.Fatalf("userinfo URL produced %d requests, want 0", requests)
 	}
 	// No catalog row may exist for the bogus "user" slug.
 	if _, ok, err := RemoteSoulRow("user"); err != nil || ok {

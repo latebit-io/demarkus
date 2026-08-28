@@ -417,7 +417,7 @@ func registryKnowledgeJoin(args []string) {
 	if len(args) != 1 {
 		fail("knowledge-join: usage: registry knowledge-join <broker-url>")
 	}
-	res, err := registry.KnowledgeJoin(args[0])
+	res, err := registry.ValidateBrokerEndpoint(args[0])
 	if err != nil {
 		fail(err.Error())
 	}

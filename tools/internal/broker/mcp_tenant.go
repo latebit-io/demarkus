@@ -51,6 +51,9 @@ func (g *mcpGateway) tenantWorld(ctx context.Context) (WorldConfig, error) {
 	}
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
+		// Auth middleware attaches claims before any handler; absence is
+		// an internal invariant break worth its own trace.
+		g.log.Warn("tenant world requested without identity on context")
 		return WorldConfig{}, ErrNotAuthorized
 	}
 	w, err := tenantWorldFor(g.srv.cfg, claims)

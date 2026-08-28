@@ -115,11 +115,16 @@ type SoulRow struct {
 	TokenFile string
 }
 
-// IsBroker reports whether the row is an HTTPS memory-broker soul
-// (OAuth in the MCP client; never served by mcp-serve).
-func (r SoulRow) IsBroker() bool {
-	low := strings.ToLower(r.Host)
+// isBrokerHost reports whether a soul host is an HTTPS memory-broker
+// endpoint (OAuth in the MCP client; never served by mcp-serve).
+func isBrokerHost(host string) bool {
+	low := strings.ToLower(host)
 	return strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://")
+}
+
+// IsBroker reports whether the row is an HTTPS memory-broker soul.
+func (r SoulRow) IsBroker() bool {
+	return isBrokerHost(r.Host)
 }
 
 // SoulCatalog emits one row per bindable soul: "<id>\t<tier>\t<host>\t<insecure>".
@@ -148,7 +153,7 @@ func SoulCatalog() ([]string, error) {
 		// Broker souls register via HTTP MCP, not mcp-serve; the tier
 		// column is how pickers show that difference.
 		tier := "remote"
-		if (SoulRow{Host: host}).IsBroker() {
+		if isBrokerHost(host) {
 			tier = "broker"
 		}
 		out = append(out, fmt.Sprintf("%s\t%s\t%s\t%s", f[0], tier, host, ins))
@@ -521,35 +526,36 @@ type BrokerEndpoint struct {
 	McpURL string
 }
 
-// KnowledgeJoinResult aliases BrokerEndpoint for the /knowledge-join
-// command layer's naming.
-type KnowledgeJoinResult = BrokerEndpoint
-
-// KnowledgeJoin is ValidateBrokerEndpoint under /knowledge-join's name.
-func KnowledgeJoin(rawURL string) (*KnowledgeJoinResult, error) {
-	return ValidateBrokerEndpoint(rawURL)
-}
-
 // ValidateBrokerEndpoint validates a broker URL (https + RFC 9728
 // metadata) and derives a slug; shared by /knowledge-join and the
 // /soul-join broker path. Errors are user-presentable verbatim.
 func ValidateBrokerEndpoint(rawURL string) (*BrokerEndpoint, error) {
-	u := strings.TrimSpace(rawURL)
-	low := strings.ToLower(u)
-	allowHTTP := os.Getenv("DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP") == "1"
-	switch {
-	case strings.HasPrefix(low, "https://"):
-	case strings.HasPrefix(low, "http://"):
-		if !allowHTTP {
-			return nil, fmt.Errorf("broker URL must use https:// (got: %s)", u)
+	// Parse BEFORE any request: userinfo must never reach the wire (Go
+	// turns it into a Basic Authorization header) or an error message.
+	raw := strings.TrimRight(strings.TrimSpace(rawURL), "/")
+	parsed, err := neturl.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("broker URL does not parse: %s", raw)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	switch parsed.Scheme {
+	case "https":
+	case "http":
+		if os.Getenv("DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP") != "1" {
+			return nil, fmt.Errorf("broker URL must use https:// (got: %s)", raw)
 		}
 	default:
-		return nil, fmt.Errorf("broker URL must start with https:// (got: %s)", u)
+		return nil, fmt.Errorf("broker URL must start with https:// (got: %s)", raw)
 	}
-	u = strings.TrimRight(u, "/")
-	// normalize scheme to lowercase
-	if i := strings.Index(u, "://"); i > 0 {
-		u = strings.ToLower(u[:i]) + u[i:]
+	// Userinfo has no meaning here (OAuth owns auth) and would leak into
+	// the world-readable catalog and derive a bogus slug.
+	if parsed.User != nil {
+		return nil, fmt.Errorf("broker URL must not carry userinfo (user:password@); authentication is OAuth in the MCP client")
+	}
+	u := parsed.String()
+	slug := deriveSlug(parsed.Hostname())
+	if slug == "" {
+		return nil, fmt.Errorf("could not derive a usable MCP server slug from %s (host: %s)", u, parsed.Hostname())
 	}
 
 	meta := u + "/.well-known/oauth-protected-resource"
@@ -569,19 +575,6 @@ func ValidateBrokerEndpoint(rawURL string) (*BrokerEndpoint, error) {
 		return nil, fmt.Errorf("broker metadata fetch returned HTTP %d (expected 200)", resp.StatusCode)
 	}
 
-	parsed, err := neturl.Parse(u)
-	if err != nil {
-		return nil, fmt.Errorf("broker URL does not parse: %s", u)
-	}
-	// Userinfo has no meaning here (OAuth owns auth) and would leak into
-	// the world-readable catalog and derive a bogus slug.
-	if parsed.User != nil {
-		return nil, fmt.Errorf("broker URL must not carry userinfo (user:password@); authentication is OAuth in the MCP client")
-	}
-	slug := deriveSlug(parsed.Hostname())
-	if slug == "" {
-		return nil, fmt.Errorf("could not derive a usable MCP server slug from %s (host: %s)", u, parsed.Hostname())
-	}
 	return &BrokerEndpoint{URL: u, Slug: slug, McpURL: u + "/mcp"}, nil
 }
 
@@ -607,8 +600,7 @@ type SoulJoinResult struct {
 // install.sh or demarkus-token join; its fragment supplies the token.
 func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinResult, error) {
 	h := strings.TrimSpace(rawHost)
-	low := strings.ToLower(h)
-	if strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://") {
+	if isBrokerHost(h) {
 		return soulJoinBroker(h, token, insecure, bindDir)
 	}
 	// Every host form goes through joinurl.Parse so malformed input (paths,

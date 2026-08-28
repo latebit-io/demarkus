@@ -25,11 +25,7 @@ type tokenCoordinator struct {
 
 func newTokenCoordinator(worlds []tokenWorld) (*tokenCoordinator, error) {
 	coordinator := &tokenCoordinator{worlds: append([]tokenWorld(nil), worlds...)}
-	stores := make([]*auth.TokenStore, len(worlds))
-	for index := range worlds {
-		stores[index] = worlds[index].runtime.Tokens()
-	}
-	if err := validateUniqueTokens(coordinator.worlds, stores); err != nil {
+	if err := coordinator.ValidateWorlds(coordinator.worlds); err != nil {
 		return nil, err
 	}
 	return coordinator, nil
@@ -42,11 +38,7 @@ func (coordinator *tokenCoordinator) SetWorlds(worlds []tokenWorld) error {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	replacement := append([]tokenWorld(nil), worlds...)
-	stores := make([]*auth.TokenStore, len(replacement))
-	for index := range replacement {
-		stores[index] = replacement[index].runtime.Tokens()
-	}
-	if err := validateUniqueTokens(replacement, stores); err != nil {
+	if err := coordinator.ValidateWorlds(replacement); err != nil {
 		return err
 	}
 	coordinator.worlds = replacement

@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -139,11 +138,11 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 		return false, err
 	}
 
-	// Fragment: authoritative rewrite (no union) so the world actually
-	// leaves the knowledge server. A racing EnsureTenant union from a
-	// pre-removal snapshot can resurrect the entry; rerun to converge.
+	// Authoritative rewrite (nil existing = no union) so the world leaves
+	// the server; a racing pre-removal union can resurrect it, rerun to
+	// converge.
 	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func([]byte) ([]byte, error) {
-		return p.renderWorldsFragmentAuthoritative(&snapshot)
+		return p.renderWorldsFragmentUnion(&snapshot, nil)
 	}); err != nil {
 		return found, fmt.Errorf("rewrite worlds fragment: %w", err)
 	}
@@ -262,8 +261,7 @@ func (p *Provisioner) admits(claims *Claims) error {
 // EnsureTenant provisions (or converges) the caller's world and returns
 // its broker-side WorldConfig. Every step is idempotent and keyed by
 // the identity-derived slug; any replica can re-run it safely.
-func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (world WorldConfig, err error) {
-	created := false
+func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldConfig, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	// The lock queue can outlive the request; do no remote work for a
@@ -280,7 +278,8 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (world W
 	// Step 1: registry entry (the create decision lives here, under the
 	// Secret's optimistic concurrency).
 	var snapshot tenantRegistry
-	err = p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
+	created := false
+	err := p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
 		registry, decodeErr := decodeRegistry(existing)
 		if decodeErr != nil {
 			return nil, decodeErr
@@ -324,7 +323,7 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (world W
 
 	// Step 3: tokens key, BEFORE the fragment: the server opens the
 	// world only once its tokens file exists in the shared mount.
-	world = p.cfg.Provisioning.tenantWorld(slug, email)
+	world := p.cfg.Provisioning.tenantWorld(slug, email)
 	if err := p.ensureTokensKey(ctx, &world, slug); err != nil {
 		return WorldConfig{}, err
 	}
@@ -398,12 +397,6 @@ type fragmentWorld struct {
 	Bootstrap bool            `yaml:"bootstrap"`
 }
 
-// renderWorldsFragmentAuthoritative renders exactly the registry's
-// worlds: the ONE mode allowed to drop a world (deprovision).
-func (p *Provisioner) renderWorldsFragmentAuthoritative(registry *tenantRegistry) ([]byte, error) {
-	return p.renderWorldsFragmentUnion(registry, nil)
-}
-
 // renderWorldsFragmentUnion renders the union of the existing fragment
 // and the registry snapshot (snapshot wins per slug), sorted by slug:
 // a stale snapshot can never drop a sibling's tenant.
@@ -452,12 +445,7 @@ func (p *Provisioner) worldsFromRegistry(registry *tenantRegistry) []WorldConfig
 // sortedSlugs is the one ordering rule for registry projections (the
 // fragment golden fixture depends on it).
 func sortedSlugs(registry *tenantRegistry) []string {
-	slugs := make([]string, 0, len(registry.Tenants))
-	for slug := range registry.Tenants {
-		slugs = append(slugs, slug)
-	}
-	sort.Strings(slugs)
-	return slugs
+	return slices.Sorted(maps.Keys(registry.Tenants))
 }
 
 // SyncRegistry reads the registry and republishes the dynamic world
