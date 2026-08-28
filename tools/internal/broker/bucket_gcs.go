@@ -70,14 +70,13 @@ func (c *GCSBucketCreator) EnsureBucket(ctx context.Context, bucket string) erro
 // verifyBucketLockdown must assert every security-relevant field set
 // here, or adopted pre-existing buckets dodge the new requirement.
 func tenantBucketAttrs(location string) *storage.BucketAttrs {
+	// Deliberately no object versioning: it would keep retention-pruned
+	// blobs recoverable (breaking permanent deletion) and block
+	// -delete-bucket; GCS soft delete covers accidental deletion.
 	return &storage.BucketAttrs{
 		Location:                 location,
 		UniformBucketLevelAccess: storage.UniformBucketLevelAccess{Enabled: true},
 		PublicAccessPrevention:   storage.PublicAccessPreventionEnforced,
-		// Backup posture, not security: object versioning shields the
-		// mutable head.json from accidental overwrite or deletion, so
-		// the verifier does not gate on it.
-		VersioningEnabled: true,
 	}
 }
 
@@ -93,12 +92,23 @@ func verifyBucketLockdown(bucket string, attrs *storage.BucketAttrs) error {
 	return nil
 }
 
-// DeleteBucket permanently removes a tenant bucket and every object in
-// it. Only the explicit deprovision flow calls this; absent is success
-// so reruns converge.
+// DeleteBucket permanently removes a tenant bucket and every object
+// generation in it. Only the explicit deprovision flow calls this;
+// absent is success so reruns converge.
 func (c *GCSBucketCreator) DeleteBucket(ctx context.Context, bucket string) error {
 	handle := c.client.Bucket(bucket)
-	it := handle.Objects(ctx, nil)
+	// Disable soft delete first so object deletions purge instead of
+	// lingering and blocking the bucket delete; also covers adopted
+	// buckets that were created with versioning on.
+	if _, err := handle.Update(ctx, storage.BucketAttrsToUpdate{
+		SoftDeletePolicy: &storage.SoftDeletePolicy{RetentionDuration: 0},
+	}); err != nil {
+		if errors.Is(err, storage.ErrBucketNotExist) {
+			return nil
+		}
+		return fmt.Errorf("disable soft delete on bucket %q: %w", bucket, err)
+	}
+	it := handle.Objects(ctx, &storage.Query{Versions: true})
 	for {
 		object, err := it.Next()
 		if errors.Is(err, iterator.Done) {
@@ -107,8 +117,12 @@ func (c *GCSBucketCreator) DeleteBucket(ctx context.Context, bucket string) erro
 		if err != nil {
 			return fmt.Errorf("list bucket %q: %w", bucket, err)
 		}
-		if err := handle.Object(object.Name).Delete(ctx); err != nil && !errors.Is(err, storage.ErrObjectNotExist) {
-			return fmt.Errorf("delete object %s/%s: %w", bucket, object.Name, err)
+		obj := handle.Object(object.Name)
+		if object.Generation != 0 {
+			obj = obj.Generation(object.Generation)
+		}
+		if err := obj.Delete(ctx); err != nil && !errors.Is(err, storage.ErrObjectNotExist) {
+			return fmt.Errorf("delete object %s/%s (gen %d): %w", bucket, object.Name, object.Generation, err)
 		}
 	}
 	if err := handle.Delete(ctx); err != nil && !errors.Is(err, storage.ErrBucketNotExist) {

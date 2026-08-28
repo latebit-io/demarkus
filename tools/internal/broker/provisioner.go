@@ -85,6 +85,9 @@ type Provisioner struct {
 	// lastSync is the registry payload hash of the last applied sync,
 	// so the 10s poll skips rebuilding an unchanged world set.
 	lastSync [32]byte
+	// knownSlugs is the dynamic set of the last sync, used to prune
+	// per-tenant metric series when a tenant leaves the registry.
+	knownSlugs map[string]bool
 }
 
 // NewProvisioner builds a standalone Provisioner (deprovision CLI, or
@@ -496,7 +499,26 @@ func (p *Provisioner) SyncRegistry(ctx context.Context) error {
 	}
 	p.cfg.SetDynamicWorlds(p.worldsFromRegistry(&snapshot))
 	metricTenants.Set(float64(len(snapshot.Tenants)))
+	p.pruneTenantMetrics(&snapshot)
 	return nil
+}
+
+// pruneTenantMetrics drops per-tenant series for slugs that left the
+// registry (bounds cardinality across deprovisions); an in-flight racer
+// may recreate one series until the next sync diff, bounded and harmless.
+func (p *Provisioner) pruneTenantMetrics(registry *tenantRegistry) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for slug := range p.knownSlugs {
+		if _, ok := registry.Tenants[slug]; !ok {
+			metricTenantActivity.DeleteLabelValues(slug)
+		}
+	}
+	known := make(map[string]bool, len(registry.Tenants))
+	for slug := range registry.Tenants {
+		known[slug] = true
+	}
+	p.knownSlugs = known
 }
 
 // RunRegistrySync polls the registry so every replica converges on

@@ -213,9 +213,6 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
-	// Prometheus metrics: cluster-internal management listener only
-	// (the Ingress never routes /metrics).
-	mux.Handle("GET /metrics", metricsHandler())
 	// /.well-known/openid-configuration: public, unauthenticated, no
 	// rate limit. Polling-friendly: device-flow clients fetch it once
 	// per /soul-join and never again; intermediaries cache via the

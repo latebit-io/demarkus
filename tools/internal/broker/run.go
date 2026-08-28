@@ -141,6 +141,34 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 		mcpErrs <- filterServerClosed(mcpSrv.ListenAndServe())
 	}()
 
+	// Metrics on their own listener: the management port is fronted by
+	// the Ingress, and tenant-labelled series must never be public.
+	metricsAddr := cfg.Server.MetricsAddr
+	if metricsAddr == "" {
+		metricsAddr = ":9090"
+	}
+	metricsSrv := &http.Server{
+		Addr:              metricsAddr,
+		Handler:           metricsHandler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	go func() {
+		log.Info(opts.LogName+": metrics listening", "addr", metricsAddr)
+		if err := filterServerClosed(metricsSrv.ListenAndServe()); err != nil {
+			// Metrics are observability, not availability: log, keep serving.
+			log.Error(opts.LogName+": metrics listener failed", "err", err)
+		}
+	}()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+			log.Warn(opts.LogName+": metrics shutdown error", "err", err)
+		}
+	}()
+
 	// Sweeper runs leader-elected across replicas (single-host file mode
 	// skips the election); the device janitor is per-replica state. One
 	// cancel tears down every background task before HTTP shutdown.

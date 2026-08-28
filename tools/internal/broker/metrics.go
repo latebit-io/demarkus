@@ -8,10 +8,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Prometheus metrics for the Phase 5 observability slice. Registered on
-// the default registry; Routes serves them at /metrics on the
-// management listener. Per-tenant label cardinality is bounded by
-// provisioning.maxTenants.
+// Prometheus metrics (Phase 5 observability), served on the dedicated
+// metrics listener; per-tenant cardinality bounded by maxTenants.
 var (
 	metricTenants = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "demarkus_broker_tenants",

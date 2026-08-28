@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -40,7 +41,12 @@ func main() {
 	slog.SetDefault(log)
 
 	if *deprovision != "" {
-		if err := runDeprovision(*configPath, *kubeconfig, *deprovision, *deleteBucket, log); err != nil {
+		err := runDeprovision(*configPath, *kubeconfig, *deprovision, *deleteBucket, log)
+		switch {
+		case errors.Is(err, broker.ErrTenantNotFound):
+			// The documented rerun-to-converge path: cleanup completed.
+			log.Warn("tenant absent from registry; cleanup converged", "world", *deprovision)
+		case err != nil:
 			log.Error("deprovision failed", "world", *deprovision, "err", err)
 			os.Exit(1)
 		}
@@ -118,18 +124,22 @@ func runDeprovision(configPath, kubeconfigPath, slug string, deleteBucket bool, 
 	if err != nil {
 		return err
 	}
-	gcsClient, err := storage.NewClient(context.Background())
-	if err != nil {
-		return fmt.Errorf("GCS client unavailable: %w", err)
-	}
-	defer func() {
-		if closeErr := gcsClient.Close(); closeErr != nil {
-			log.Warn("GCS client close failed", "err", closeErr)
+	// Secret-only cleanup must not depend on GCS reachability.
+	var buckets broker.BucketCreator
+	if deleteBucket {
+		gcsClient, clientErr := storage.NewClient(context.Background())
+		if clientErr != nil {
+			return fmt.Errorf("GCS client unavailable: %w", clientErr)
 		}
-	}()
-	buckets, err := broker.NewGCSBucketCreator(gcsClient, cfg.Provisioning.BucketProject, cfg.Provisioning.BucketLocation, log)
-	if err != nil {
-		return err
+		defer func() {
+			if closeErr := gcsClient.Close(); closeErr != nil {
+				log.Warn("GCS client close failed", "err", closeErr)
+			}
+		}()
+		buckets, err = broker.NewGCSBucketCreator(gcsClient, cfg.Provisioning.BucketProject, cfg.Provisioning.BucketLocation, log)
+		if err != nil {
+			return err
+		}
 	}
 	return broker.NewProvisioner(cfg, store, buckets, log).DeprovisionTenant(context.Background(), slug, deleteBucket)
 }

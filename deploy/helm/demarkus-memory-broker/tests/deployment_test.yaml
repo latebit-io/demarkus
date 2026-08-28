@@ -193,3 +193,16 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: /etc/demarkus-memory-broker/config.yaml
+
+  - it: metrics port is a pod port with scrape annotations, absent from the Service
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+            protocol: TCP
+            containerPort: 9090
+      - equal:
+          path: spec.template.metadata.annotations["prometheus.io/port"]
+          value: "9090"

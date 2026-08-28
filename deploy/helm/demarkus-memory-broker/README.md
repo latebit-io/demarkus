@@ -535,10 +535,13 @@ the tenant's GCS bucket and data. Idempotent; rerun to converge after a
 partial failure or a raced provisioning union. In-cluster, exec into a
 broker pod or run a one-off Job with the broker image and ServiceAccount.
 
-Backups: tenant buckets are created with object versioning enabled, so
-the mutable `head.json` survives accidental overwrite or deletion;
-bucket-level disaster recovery is standard GCS practice (soft delete,
-Storage Transfer). Back up the registry Secret
+Backups: demarkus documents are versioned by the protocol itself, and
+GCS soft delete (on by default, 7 days) covers storage-layer accidents
+including the mutable `head.json`. Object versioning is deliberately NOT
+enabled on tenant buckets: it would keep retention-pruned blobs
+recoverable, breaking the permanent-deletion contract, and block
+`-delete-bucket`. Bucket-level disaster recovery beyond that is standard
+GCS practice (Storage Transfer). Back up the registry Secret
 (`provisioning.registrySecret`) with your normal Secret backup flow; it
 holds the identity-to-world binding that is not reconstructible from
 bucket contents alone.

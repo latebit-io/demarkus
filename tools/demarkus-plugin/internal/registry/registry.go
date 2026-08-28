@@ -578,7 +578,7 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 	h := strings.TrimSpace(rawHost)
 	low := strings.ToLower(h)
 	if strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://") {
-		return soulJoinBroker(h, token, bindDir)
+		return soulJoinBroker(h, token, insecure, bindDir)
 	}
 	// Every host form goes through joinurl.Parse so malformed input (paths,
 	// userinfo, query, IPv6 literals) is rejected instead of half-parsed
@@ -632,9 +632,12 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 // soulJoinBroker joins an HTTPS memory-broker soul: /knowledge-join's
 // metadata validation, but the row lands in the SOULS catalog (gate +
 // binding apply), no token file; OAuth happens in the MCP client.
-func soulJoinBroker(rawURL, token, bindDir string) (*SoulJoinResult, error) {
+func soulJoinBroker(rawURL, token string, insecure bool, bindDir string) (*SoulJoinResult, error) {
 	if token != "" {
 		return nil, fmt.Errorf("a memory-broker soul authenticates via OAuth in the MCP client; do not pass a token")
+	}
+	if insecure {
+		return nil, fmt.Errorf("--insecure applies only to self-signed QUIC souls; a memory broker is joined over verified TLS")
 	}
 	validated, err := KnowledgeJoin(rawURL)
 	if err != nil {

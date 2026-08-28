@@ -23,6 +23,9 @@ spec:
         {{- end }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/secret-config.yaml") . | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.server.metricsPort | quote }}
+        prometheus.io/path: /metrics
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -94,6 +97,11 @@ spec:
             - name: mcp
               protocol: TCP
               containerPort: {{ include "demarkus-memory-broker.mcpPort" . }}
+            {{- /* Pod port only: metrics carry tenant labels and stay
+                   off the Service and Ingress. */}}
+            - name: metrics
+              protocol: TCP
+              containerPort: {{ int .Values.server.metricsPort }}
           {{- if .Values.probes.enabled }}
           livenessProbe:
             httpGet:
