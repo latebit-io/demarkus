@@ -87,6 +87,7 @@ tests:
         - name: custom
           namespace: custom
           tokensSecret: custom-tokens
+          allow: {emails: ["tenant@example.com"]}
           internalAddress: "custom.internal:7443"
           defaultToken:
             paths: ["/**"]

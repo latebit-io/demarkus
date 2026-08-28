@@ -78,11 +78,22 @@ func TestTenantWorldFor(t *testing.T) {
 		t.Errorf("tenantWorldFor(stranger) err = %v, want ErrNotAuthorized", err)
 	}
 
-	// Two worlds admitting one identity is a provisioning error and
-	// must deny closed, not pick one.
+	// Ambiguity denies closed; error text stays opaque (world names
+	// identify tenants) while names ride the typed error for the log.
 	cfg.Worlds[1].Allow.Emails = []string{"alice@example.com"}
-	if _, err := tenantWorldFor(cfg, alice); err == nil || errors.Is(err, ErrNotAuthorized) {
-		t.Errorf("tenantWorldFor(ambiguous) err = %v, want a distinct ambiguity error", err)
+	_, err = tenantWorldFor(cfg, alice)
+	if err == nil || errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("tenantWorldFor(ambiguous) err = %v, want a distinct ambiguity error", err)
+	}
+	var ambiguous errAmbiguousTenant
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("ambiguity err = %T, want errAmbiguousTenant", err)
+	}
+	if strings.Contains(err.Error(), "alice-w") || strings.Contains(err.Error(), "bob-w") {
+		t.Errorf("ambiguity error leaks world names: %q", err.Error())
+	}
+	if ambiguous.First != "alice-w" || ambiguous.Second != "bob-w" {
+		t.Errorf("ambiguity fields = %q/%q, want alice-w/bob-w", ambiguous.First, ambiguous.Second)
 	}
 }
 

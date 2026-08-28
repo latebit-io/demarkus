@@ -80,6 +80,17 @@ func readableWorlds(cfg *Config) []*WorldConfig {
 	return out
 }
 
+// errAmbiguousTenant is the deny-closed provisioning error for an identity
+// matching several worlds. World names identify tenants, so Error() stays
+// opaque for clients; the resolution site logs First/Second for the operator.
+type errAmbiguousTenant struct {
+	First, Second string
+}
+
+func (errAmbiguousTenant) Error() string {
+	return "broker: identity maps to more than one world; contact the operator"
+}
+
 // tenantWorldFor resolves the single world a memory-broker identity owns
 // (identity = world): zero matches is ErrNotAuthorized, two or more is a
 // provisioning error and denies closed rather than guessing.
@@ -91,7 +102,7 @@ func tenantWorldFor(cfg *Config, claims *Claims) (*WorldConfig, error) {
 			continue
 		}
 		if match != nil {
-			return nil, fmt.Errorf("identity maps to more than one world (%q and %q); memory-broker worlds must be provisioned one per identity", match.Name, w.Name)
+			return nil, errAmbiguousTenant{First: match.Name, Second: w.Name}
 		}
 		match = w
 	}

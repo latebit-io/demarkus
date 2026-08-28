@@ -198,6 +198,7 @@ tests:
         - name: team-a
           namespace: team-a
           tokensSecret: team-a-tokens
+          allow: {emails: ["tenant@example.com"]}
           defaultToken:
             paths: ["/team-a/*"]
             operations: ["read"]
@@ -214,6 +215,7 @@ tests:
         - name: team-a
           namespace: team-a
           tokensSecret: team-a-tokens
+          allow: {emails: ["tenant@example.com"]}
           internalAddress: "team-a-mark.team-a:6309"
           defaultToken:
             paths: ["/team-a/*"]

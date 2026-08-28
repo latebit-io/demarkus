@@ -46,7 +46,7 @@ the same Ingress controller through different hostnames:
 | Listener | Default port | Default Ingress host | Purpose |
 | --- | --- | --- | --- |
 | Management API | `:8080` (`server.port`) | `ingress.host` | OIDC login + device flow + token management + `/me/install` (see table below). |
-| MCP gateway | `:8081` (`server.mcp.addr`) | `ingress.mcp.host` (optional) | 14-tool demarkus surface over JSON-RPC/Streamable HTTP for plugin agents. See [MCP gateway](#mcp-gateway). |
+| MCP gateway | `:8081` (`server.mcp.addr`) | `ingress.mcp.host` (optional) | 12-tool tenant-scoped soul surface over JSON-RPC/Streamable HTTP. See [MCP gateway](#mcp-gateway). |
 
 The two listeners share auth (`compositeVerifier`), rate-limit
 buckets (per-canonical-email), and the `Issuer` machinery; only the
@@ -175,6 +175,14 @@ Two supported modes. **Pick one per surface.**
 | **Ingress-terminated** (recommended) | Configure `ingress.mcp.tls.{existingSecret,certManager}` as above. Leave `server.mcp.tls.existingSecretRef.name` blank. | At the Ingress controller. Broker speaks plain HTTP inside the cluster. Matches the management API's posture. |
 | **Broker-terminated** | Provision a `kubernetes.io/tls` Secret in the broker's namespace and set `server.mcp.tls.existingSecretRef.name=<secret>`. | At the broker pod. Chart mounts the Secret read-only at `/etc/demarkus-memory-broker/tls/mcp/` and points `MCPConfig.TLS.{CertFile,KeyFile}` at the projected `tls.crt` / `tls.key`. Use when the topology bypasses the Ingress or requires mTLS broker→Ingress. |
 
+> **Broker-terminated TLS + `ingress.mcp.host` do not combine by
+> default.** The shared Ingress speaks plain HTTP to backends, so an
+> nginx-class Ingress in front of a TLS-terminating MCP listener
+> fails the handshake. Broker-terminated mode is for topologies that
+> bypass the Ingress (direct Service/LoadBalancer exposure); if you
+> must front it with nginx, add the backend-protocol annotation on a
+> separate Ingress you manage yourself.
+
 There is intentionally no in-line PEM mode (`brokerSigningKey`-style
 cleartext) for the MCP listener: a TLS private key in helm release
 history is never acceptable, even for dev. Use `existingSecretRef`
@@ -195,7 +203,7 @@ the hostname, and runs `claude mcp add --transport http {slug}
 {url}/mcp`. The Claude Code OAuth device flow handles the first-time
 identity exchange against the broker's existing
 `/device/authorize` + `/device/token` endpoints (universe-onboarding
-PR3+PR4). After that the plugin sees all 13 demarkus tools as one
+PR3+PR4). After that the host sees all 12 memory-broker tools as one
 MCP server.
 
 ### OAuth flow shape
@@ -239,16 +247,19 @@ listener.
 
 ### Ephemeral graph store
 
-**The broker's graph store (used by `mark_backlinks`, `mark_graph`,
-`mark_graph_export`, `mark_graph_publish`) lives in process memory
-and does NOT survive broker pod restarts.** A rolling chart upgrade,
-node drain, or pod eviction drops every cached graph. The first
-user to call a graph-store tool after restart triggers a fresh
-crawl via `mark_graph` (or whatever federation tool needs the
-data); the broker re-populates and continues. Operators planning
-maintenance windows should expect a few seconds of cold-start
-latency on the first graph-tool call after a bounce, and document
-the re-crawl as expected behavior for end users.
+**The broker's graph store (used by `mark_backlinks` and
+`mark_graph`) lives in process memory, per pod, and does NOT
+survive broker pod restarts.** With the default two replicas each
+pod holds its own store, and there is no session affinity: a
+`mark_graph` crawl on one pod is not visible to a `mark_backlinks`
+served by the other. Both tools tolerate this because every
+graph-store read first re-seeds from the tenant world's published
+`/graph.md` (when present) and `mark_backlinks` hints to run
+`mark_graph` when the store is cold; the memory broker deliberately
+does not ship `mark_graph_export` / `mark_graph_publish`, whose
+whole-store reads would both leak cross-tenant edges and depend on
+pod-local crawl state. Expect a cold-start re-crawl after any
+rolling upgrade, node drain, or eviction.
 
 This is a deliberate trade-off: a stateless broker pod is restart-
 resilient, multi-replica-safe, and matches the gateway's framing as
@@ -276,10 +287,16 @@ fresh-provision 401 is propagation lag, not a real denial. Defaults
 sit well under the typical kubelet sync period; tune up only for
 slow-kubelet clusters.
 
-### Operator reference: 14-tool surface
+### Operator reference: 12-tool surface
 
-See `tools/demarkus-memory-broker/MCP-API.md` in the repo for the full
-tool reference (names, JSON schemas, semantics).
+See `tools/demarkus-memory-broker/MCP-API.md` in the repo for the
+tool reference. The surface is the direct-MCP parity set scoped to
+the caller's own world (`mark_fetch`, `mark_explore`, `mark_list`,
+`mark_versions`, `mark_lookup`, `mark_publish`, `mark_append`,
+`mark_archive`, `mark_discover`, `mark_backlinks`, `mark_graph`)
+plus a self-only `mark_worlds`; federation and multi-world tools
+(`mark_lookup_all`, `mark_index`, `mark_resolve`) and the
+whole-store graph exports are deliberately absent.
 
 ### Upgrade notes
 
@@ -374,6 +391,14 @@ The broker's `LoadConfig` applies the env-var override before
 validating the config. Setting both `clientSecret` and
 `existingSecretRef.name` fails template render with a clear error so
 the precedence is never ambiguous.
+
+Rotation caveat: the secret is read once at startup, and the
+Deployment's `checksum/config` annotation hashes only the
+chart-managed config, so editing the external Secret does not roll
+the pods. After rotating it, run
+`kubectl rollout restart deployment/<release>-demarkus-memory-broker`
+(or use a restart controller such as Reloader) so running pods pick
+up the new value.
 
 ### 2. Verify the X-Forwarded-For invariant for your Ingress controller
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"sync"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
@@ -57,6 +58,10 @@ func soulSeedDocs() []soulSeedDoc {
 	}
 }
 
+// soulSeedRetryInterval throttles re-attempts after a failed seed, so an
+// unhealthy world does not add seed round trips to every tool call.
+const soulSeedRetryInterval = time.Minute
+
 // soulSeeder tracks per-world seeding state for one gateway pod.
 // Single-flight so concurrent first calls seed once; waiters block until
 // the seeding attempt finishes so their own reads see the seeded world.
@@ -64,6 +69,7 @@ type soulSeeder struct {
 	mu       sync.Mutex
 	seeded   map[string]bool
 	inflight map[string]chan struct{}
+	failedAt map[string]time.Time
 }
 
 // ensureSoulSeed makes sure w carries the soul template, seeding it when
@@ -84,11 +90,20 @@ func (g *mcpGateway) ensureSoulSeed(ctx context.Context, w *WorldConfig) {
 		}
 		return
 	}
+	// Failure throttle: don't re-attempt against an unhealthy world on
+	// every tool call (same shape as seedCheckInterval for graph seeds).
+	if last, failed := s.failedAt[w.Name]; failed && time.Since(last) < soulSeedRetryInterval {
+		s.mu.Unlock()
+		return
+	}
 	if s.seeded == nil {
 		s.seeded = make(map[string]bool)
 	}
 	if s.inflight == nil {
 		s.inflight = make(map[string]chan struct{})
+	}
+	if s.failedAt == nil {
+		s.failedAt = make(map[string]time.Time)
 	}
 	done := make(chan struct{})
 	s.inflight[w.Name] = done
@@ -99,6 +114,9 @@ func (g *mcpGateway) ensureSoulSeed(ctx context.Context, w *WorldConfig) {
 	s.mu.Lock()
 	if ok {
 		s.seeded[w.Name] = true
+		delete(s.failedAt, w.Name)
+	} else {
+		s.failedAt[w.Name] = time.Now()
 	}
 	close(done)
 	delete(s.inflight, w.Name)

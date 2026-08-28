@@ -217,12 +217,14 @@ func run(configPath, kubeconfigPath string, log *slog.Logger) error {
 			sweepWG.Wait()
 			return err
 		}
+		log.Warn("memory broker: management listener stopped, shutting down")
 	case err := <-mcpErrs:
 		if err != nil {
 			cancelSweep()
 			sweepWG.Wait()
 			return err
 		}
+		log.Warn("memory broker: mcp gateway listener stopped, shutting down")
 	}
 
 	cancelSweep()

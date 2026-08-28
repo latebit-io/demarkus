@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
@@ -105,7 +106,8 @@ func TestTenantGateSeedsOnFirstCall(t *testing.T) {
 }
 
 // TestEnsureSoulSeedRetriesAfterFailure: a failed seed leaves the world
-// unseeded so the next call retries.
+// unseeded, throttles immediate re-attempts, and retries once the
+// throttle interval elapses.
 func TestEnsureSoulSeedRetriesAfterFailure(t *testing.T) {
 	fail := true
 	d := &fakeDispatcher{
@@ -130,7 +132,23 @@ func TestEnsureSoulSeedRetriesAfterFailure(t *testing.T) {
 		t.Fatal("world marked seeded after a failed publish")
 	}
 
+	// Within the throttle window a re-attempt is skipped entirely.
 	fail = false
+	d.mu.Lock()
+	before := len(d.fetchCalls)
+	d.mu.Unlock()
+	g.ensureSoulSeed(withAliceClaims(context.Background()), w)
+	d.mu.Lock()
+	after := len(d.fetchCalls)
+	d.mu.Unlock()
+	if after != before {
+		t.Fatalf("throttled window re-attempted seeding (%d new fetches)", after-before)
+	}
+
+	// Past the window the retry runs and seeds.
+	g.soulSeed.mu.Lock()
+	g.soulSeed.failedAt[w.Name] = time.Now().Add(-2 * soulSeedRetryInterval)
+	g.soulSeed.mu.Unlock()
 	g.ensureSoulSeed(withAliceClaims(context.Background()), w)
 	g.soulSeed.mu.Lock()
 	seeded = g.soulSeed.seeded[w.Name]

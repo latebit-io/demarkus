@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -31,15 +32,26 @@ var tenantWorldArgs = map[string][]string{
 	"mark_worlds":    {},
 }
 
-// tenantWorld resolves the caller's single world from the claims on the
-// tool-call context. Shared by the middleware, the self-only
-// mark_worlds handler, resource reads, and the graph seed/crawl scoping.
+// tenantWorld resolves the caller's single world; shared by every
+// tenant-gated surface. Failures log here, once per resolution, and the
+// client only sees opaque error text (world names identify tenants).
 func (g *mcpGateway) tenantWorld(ctx context.Context) (*WorldConfig, error) {
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
 		return nil, ErrNotAuthorized
 	}
-	return tenantWorldFor(g.srv.cfg, claims)
+	w, err := tenantWorldFor(g.srv.cfg, claims)
+	if err != nil {
+		var ambiguous errAmbiguousTenant
+		if errors.As(err, &ambiguous) {
+			g.log.Warn("tenant resolution ambiguous; denying closed",
+				"subject", hashSubject(claims.Subject), "first", ambiguous.First, "second", ambiguous.Second)
+		} else {
+			g.log.Warn("tenant resolution failed", "subject", hashSubject(claims.Subject), "err", err)
+		}
+		return nil, err
+	}
+	return w, nil
 }
 
 // tenantGate (tenant-scoped profiles only) resolves the caller's world,

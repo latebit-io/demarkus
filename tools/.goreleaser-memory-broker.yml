@@ -21,6 +21,10 @@ builds:
       - arm
     goarm:
       - "7"
+    # darwin/arm is not a Go target; only linux gets the armv7 build.
+    ignore:
+      - goos: darwin
+        goarch: arm
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
