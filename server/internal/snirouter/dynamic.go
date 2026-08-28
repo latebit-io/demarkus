@@ -3,6 +3,7 @@ package snirouter
 import (
 	"crypto/tls"
 	"errors"
+	"sync"
 	"sync/atomic"
 
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
@@ -13,6 +14,9 @@ import (
 // selector and handshake hook for life while the world set changes
 // underneath. Swap validates before publishing, so routing never breaks.
 type Dynamic struct {
+	// swapMu serializes publications: the rollback in SwapWith is only
+	// safe when one writer owns the load-store-commit sequence.
+	swapMu  sync.Mutex
 	current atomic.Pointer[Router]
 }
 
@@ -28,12 +32,7 @@ func NewDynamic(mappings []Mapping) (*Dynamic, error) {
 // Swap atomically replaces the mapping set. On error the previous set
 // stays live.
 func (d *Dynamic) Swap(mappings []Mapping) error {
-	router, err := New(mappings)
-	if err != nil {
-		return err
-	}
-	d.current.Store(router)
-	return nil
+	return d.SwapWith(mappings, func() error { return nil })
 }
 
 // SwapWith validates and publishes the mapping set, then runs commit,
@@ -44,6 +43,8 @@ func (d *Dynamic) SwapWith(mappings []Mapping, commit func() error) error {
 	if err != nil {
 		return err
 	}
+	d.swapMu.Lock()
+	defer d.swapMu.Unlock()
 	previous := d.current.Load()
 	d.current.Store(router)
 	if err := commit(); err != nil {

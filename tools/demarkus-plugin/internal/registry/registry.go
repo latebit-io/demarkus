@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"os"
 	pathpkg "path"
 	"regexp"
@@ -568,12 +569,18 @@ func ValidateBrokerEndpoint(rawURL string) (*BrokerEndpoint, error) {
 		return nil, fmt.Errorf("broker metadata fetch returned HTTP %d (expected 200)", resp.StatusCode)
 	}
 
-	host := u[strings.Index(u, "://")+3:]
-	host = strings.SplitN(host, "/", 2)[0]
-	host = strings.SplitN(host, ":", 2)[0]
-	slug := deriveSlug(host)
+	parsed, err := neturl.Parse(u)
+	if err != nil {
+		return nil, fmt.Errorf("broker URL does not parse: %s", u)
+	}
+	// Userinfo has no meaning here (OAuth owns auth) and would leak into
+	// the world-readable catalog and derive a bogus slug.
+	if parsed.User != nil {
+		return nil, fmt.Errorf("broker URL must not carry userinfo (user:password@); authentication is OAuth in the MCP client")
+	}
+	slug := deriveSlug(parsed.Hostname())
 	if slug == "" {
-		return nil, fmt.Errorf("could not derive a usable MCP server slug from %s (host: %s)", u, host)
+		return nil, fmt.Errorf("could not derive a usable MCP server slug from %s (host: %s)", u, parsed.Hostname())
 	}
 	return &BrokerEndpoint{URL: u, Slug: slug, McpURL: u + "/mcp"}, nil
 }

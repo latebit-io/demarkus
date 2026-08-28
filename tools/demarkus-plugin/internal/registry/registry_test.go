@@ -681,3 +681,23 @@ func TestSoulJoinBroker(t *testing.T) {
 		t.Error("broker join accepted a token")
 	}
 }
+
+func TestValidateBrokerEndpointRejectsUserinfo(t *testing.T) {
+	t.Setenv("DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP", "1")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	withUser := strings.Replace(ts.URL, "http://", "http://user:password@", 1)
+	if _, err := SoulJoin(withUser, "", false, ""); err == nil || !strings.Contains(err.Error(), "userinfo") {
+		t.Fatalf("userinfo URL err = %v, want userinfo rejection", err)
+	}
+	// No catalog row may exist for the bogus "user" slug.
+	if _, ok, err := RemoteSoulRow("user"); err != nil || ok {
+		t.Fatalf("catalog row after rejected join: ok=%v err=%v", ok, err)
+	}
+}

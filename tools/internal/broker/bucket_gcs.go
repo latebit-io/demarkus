@@ -131,9 +131,14 @@ func (c *GCSBucketCreator) DeleteBucket(ctx context.Context, bucket string) erro
 		}
 		return fmt.Errorf("disable soft delete on bucket %q: %w", bucket, err)
 	}
+	// Soft-delete disable enforces within ~30s; a bounded few minutes of
+	// retries covers propagation without hanging the operator command on
+	// a permanent failure (permissions, retention policy).
+	deadlineCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 	backoff := 5 * time.Second
 	for {
-		err := c.purgeAndDelete(ctx, bucket)
+		err := c.purgeAndDelete(deadlineCtx, bucket)
 		if err == nil {
 			return nil
 		}
@@ -141,8 +146,8 @@ func (c *GCSBucketCreator) DeleteBucket(ctx context.Context, bucket string) erro
 		// the bucket non-empty until they purge; wait and re-run.
 		c.log.Warn("bucket delete not yet convergent; retrying", "bucket", bucket, "backoff", backoff, "err", err)
 		select {
-		case <-ctx.Done():
-			return fmt.Errorf("delete bucket %q: %w (last: %v)", bucket, ctx.Err(), err)
+		case <-deadlineCtx.Done():
+			return fmt.Errorf("delete bucket %q: %w (last: %v)", bucket, deadlineCtx.Err(), err)
 		case <-time.After(backoff):
 		}
 		if backoff < 40*time.Second {
@@ -164,13 +169,17 @@ func (c *GCSBucketCreator) purgeAndDelete(ctx context.Context, bucket string) er
 	// and strictly sequential round trips take minutes.
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(16)
+	var listErr error
 	for {
 		object, err := it.Next()
 		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("list bucket %q: %w", bucket, err)
+			// Join the in-flight deletes before returning: their errors
+			// must not vanish and their work must not overlap a retry.
+			listErr = fmt.Errorf("list bucket %q: %w", bucket, err)
+			break
 		}
 		name, generation := object.Name, object.Generation
 		group.Go(func() error {
@@ -183,7 +192,10 @@ func (c *GCSBucketCreator) purgeAndDelete(ctx context.Context, bucket string) er
 		})
 	}
 	if err := group.Wait(); err != nil {
-		return err
+		return errors.Join(listErr, err)
+	}
+	if listErr != nil {
+		return listErr
 	}
 	if err := handle.Delete(ctx); err != nil && !errors.Is(err, storage.ErrBucketNotExist) {
 		return fmt.Errorf("delete bucket %q: %w", bucket, err)
