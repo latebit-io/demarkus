@@ -33,8 +33,17 @@ fetch_library_binary() { echo "fetch_library $*" >> "$CALLS"; _LIBRARY_VERSION="
 download_and_verify_asset() { echo "download $1 $2 $3" >> "$CALLS"; }
 download_asset_file() { echo "download_file $1 $2" >> "$CALLS"; }
 install_binary_atomic() { echo "install $(basename "$2")" >> "$CALLS"; }
-# Stub systemctl so a restart is recorded, never executed.
-systemctl() { echo "systemctl $*" >> "$CALLS"; }
+# Stub systemctl so a restart is recorded, never executed. State probes
+# print a state because the migration parses stdout, not the exit code.
+systemctl() {
+  echo "systemctl $*" >> "$CALLS"
+  case "$1" in
+    is-enabled) echo enabled ;;
+    is-active)  echo active ;;
+  esac
+}
+# No new-name group pre-exists in the fake environment.
+getent() { return 1; }
 
 eval "$(awk '/^stack_component_installed\(\)/,/^\}$/' "$SRC")"
 eval "$(awk '/^update_stack_components\(\)/,/^\}$/' "$SRC")"
@@ -111,7 +120,13 @@ _STACK_RESTART_FAILED=0
 systemctl() { echo "systemctl $*" >> "$CALLS"; return 1; }
 update_stack_component "demarkus-library" "demarkus-library" "" "$TMP"
 [ "${_STACK_RESTART_FAILED:-0}" = "1" ] || fail "a failed restart must be recorded"
-systemctl() { echo "systemctl $*" >> "$CALLS"; }
+systemctl() {
+  echo "systemctl $*" >> "$CALLS"
+  case "$1" in
+    is-enabled) echo enabled ;;
+    is-active)  echo active ;;
+  esac
+}
 _STACK_RESTART_FAILED=0
 rm -f "$INSTALL_DIR/demarkus-library"
 
@@ -191,5 +206,14 @@ migrate_broker_single_host
 [ ! -s "$CALLS" ] || fail "migration reran on a migrated install: $(cat "$CALLS")"
 grep -q "demarkus-knowledge-knowledge" "$BROKER_CONFIG_DIR/config.yaml" && fail "config double-replaced on rerun"
 rm -f "$INSTALL_DIR/demarkus-knowledge-broker"
+
+# 15. Legacy and new-name artifacts coexisting is ambiguous: abort, touch nothing.
+touch "$SYSTEMD_DIR/demarkus-broker.service"
+mkdir -p "$BROKER_LEGACY_CONFIG_DIR"
+( migrate_broker_single_host ) 2>/dev/null && fail "collision (both config dirs) did not abort"
+[ -f "$SYSTEMD_DIR/demarkus-broker.service" ] || fail "collision abort removed the legacy unit"
+rm -rf "$BROKER_LEGACY_CONFIG_DIR"
+( migrate_broker_single_host ) 2>/dev/null && fail "collision (both units) did not abort"
+rm -f "$SYSTEMD_DIR/demarkus-broker.service"
 
 echo "PASS: update_stack_component"

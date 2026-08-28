@@ -1132,9 +1132,42 @@ migrate_broker_single_host() {
     return 0
   fi
   log_step "Migrating single-host broker to the ${BROKER_SERVICE} name"
-  local was_enabled=false was_active=false
-  $SUDO systemctl is-enabled --quiet "$BROKER_LEGACY_SERVICE" 2>/dev/null && was_enabled=true
-  $SUDO systemctl is-active --quiet "$BROKER_LEGACY_SERVICE" 2>/dev/null && was_active=true
+
+  # A legacy artifact coexisting with its new-name counterpart is not a
+  # partial migration (a prior run would have removed the legacy copy);
+  # it is an independent new-name install. Ambiguous: never merge, abort.
+  local legacy new
+  for legacy in "$BROKER_LEGACY_CONFIG_DIR" "$BROKER_LEGACY_STATE_DIR" "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}"; do
+    case "$legacy" in
+      "$BROKER_LEGACY_CONFIG_DIR") new="$BROKER_CONFIG_DIR" ;;
+      "$BROKER_LEGACY_STATE_DIR")  new="$BROKER_STATE_DIR" ;;
+      *)                           new="${INSTALL_DIR}/${BROKER_SERVICE}" ;;
+    esac
+    if $SUDO test -e "$legacy" && $SUDO test -e "$new"; then
+      log_error "Both ${legacy} and ${new} exist; resolve manually before migrating"
+      exit 1
+    fi
+  done
+  if $SUDO test -f "${SYSTEMD_DIR}/${BROKER_SERVICE}.service"; then
+    log_error "Both ${BROKER_LEGACY_SERVICE}.service and ${BROKER_SERVICE}.service exist; resolve manually before migrating"
+    exit 1
+  fi
+
+  # is-enabled/is-active exit nonzero for both expected states and probe
+  # errors; only the printed state distinguishes them.
+  local was_enabled=false was_active=false state
+  state=$($SUDO systemctl is-enabled "$BROKER_LEGACY_SERVICE" 2>/dev/null) || true
+  case "$state" in
+    enabled|enabled-runtime) was_enabled=true ;;
+    disabled|static|masked|indirect|linked|alias) : ;;
+    *) log_error "Could not probe ${BROKER_LEGACY_SERVICE} enablement (got '${state}')"; exit 1 ;;
+  esac
+  state=$($SUDO systemctl is-active "$BROKER_LEGACY_SERVICE" 2>/dev/null) || true
+  case "$state" in
+    active|activating) was_active=true ;;
+    inactive|failed|deactivating) : ;;
+    *) log_error "Could not probe ${BROKER_LEGACY_SERVICE} activity (got '${state}')"; exit 1 ;;
+  esac
   if [ "$was_active" = true ] && ! $SUDO systemctl stop "$BROKER_LEGACY_SERVICE"; then
     log_error "Could not stop ${BROKER_LEGACY_SERVICE} for migration"
     exit 1
@@ -1143,14 +1176,19 @@ migrate_broker_single_host() {
     log_error "Could not disable ${BROKER_LEGACY_SERVICE} for migration"
     exit 1
   fi
-  if $SUDO test -d "$BROKER_LEGACY_CONFIG_DIR" && ! $SUDO test -e "$BROKER_CONFIG_DIR"; then
+  if $SUDO test -d "$BROKER_LEGACY_CONFIG_DIR"; then
     $SUDO mv "$BROKER_LEGACY_CONFIG_DIR" "$BROKER_CONFIG_DIR" || { log_error "Could not move ${BROKER_LEGACY_CONFIG_DIR} to ${BROKER_CONFIG_DIR}"; exit 1; }
   fi
-  if $SUDO test -d "$BROKER_LEGACY_STATE_DIR" && ! $SUDO test -e "$BROKER_STATE_DIR"; then
+  if $SUDO test -d "$BROKER_LEGACY_STATE_DIR"; then
     $SUDO mv "$BROKER_LEGACY_STATE_DIR" "$BROKER_STATE_DIR" || { log_error "Could not move ${BROKER_LEGACY_STATE_DIR} to ${BROKER_STATE_DIR}"; exit 1; }
   fi
-  # Rename the user and group before any chown to the new name.
+  # Rename the user and group before any chown to the new name. A
+  # pre-existing new-name group would leave groupmod half-applied: abort.
   if id "$BROKER_LEGACY_SERVICE" >/dev/null 2>&1 && ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
+    if getent group "$BROKER_SERVICE" >/dev/null 2>&1; then
+      log_error "Group ${BROKER_SERVICE} already exists; resolve manually before migrating"
+      exit 1
+    fi
     if ! $SUDO usermod -l "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE" || ! $SUDO groupmod -n "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE"; then
       log_error "Could not rename the ${BROKER_LEGACY_SERVICE} system user"
       exit 1
@@ -1176,10 +1214,13 @@ migrate_broker_single_host() {
     log_error "Could not migrate the ${BROKER_LEGACY_SERVICE} systemd unit"
     exit 1
   fi
-  if $SUDO test -f "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}" && ! $SUDO test -e "${INSTALL_DIR}/${BROKER_SERVICE}"; then
+  if $SUDO test -f "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}"; then
     $SUDO mv "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}" "${INSTALL_DIR}/${BROKER_SERVICE}" || { log_error "Could not rename the broker binary"; exit 1; }
   fi
-  $SUDO systemctl daemon-reload
+  if ! $SUDO systemctl daemon-reload; then
+    log_error "systemd daemon-reload failed after migrating the broker unit"
+    exit 1
+  fi
   if [ "$was_enabled" = true ] && ! $SUDO systemctl enable "$BROKER_SERVICE"; then
     log_error "Could not re-enable ${BROKER_SERVICE} after migration"
     exit 1
