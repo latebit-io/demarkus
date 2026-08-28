@@ -57,7 +57,7 @@ Everything else is generated: the owner password, all Authelia secrets, the brok
 | Component | Service | Bind | Role |
 |---|---|---|---|
 | World server | `demarkus` | UDP 6309 (public) | versioned markdown store |
-| Broker | `demarkus-broker` | loopback :8080/:8081 | knowledge-system gateway + OIDC client |
+| Broker | `demarkus-knowledge-broker` | loopback :8080/:8081 | knowledge-system gateway + OIDC client |
 | Library | `demarkus-library` | loopback :8090 | reading room + cataloging desk (browser editing) |
 | Authelia | `demarkus-auth` | loopback :9091 | self-hosted OIDC provider |
 | Caddy | `caddy` | :80/:443 (public) | automatic HTTPS, routes the three subdomains |

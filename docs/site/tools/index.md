@@ -18,11 +18,11 @@ demarkus-agent crawl -seeds "mark://localhost:6309" -insecure -v
 demarkus-agent daemon -config fedcrawl.toml -insecure
 ```
 
-## Broker (`demarkus-broker`)
+## Broker (`demarkus-knowledge-broker`)
 
 The broker is the front door of a knowledge system: it authenticates people and agents with OIDC, mints per-world capability tokens, and exposes every world through one MCP-over-HTTPS gateway that agents join with `/knowledge-join`. On top of the per-world tool surface it adds `mark_worlds` (the world directory, with per-world write access) and `mark_lookup_all` (universe-wide catalog lookup with a single merged, globally limited result).
 
-See `tools/demarkus-broker/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-broker/`) for deployment.
+See `tools/demarkus-knowledge-broker/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-knowledge-broker/`) for deployment.
 
 ## Token Generation (`demarkus-token`)
 

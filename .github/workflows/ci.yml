@@ -42,9 +42,7 @@ jobs:
               - 'client/**'
               - 'protocol/**'
             broker:
-              - 'tools/demarkus-broker/**'
-              - 'tools/go.mod'
-              - 'tools/go.sum'
+              - 'tools/**'
               - 'protocol/**'
             charts:
               - 'deploy/helm/**'
@@ -176,16 +174,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+      # The whole tools module is the CI unit: shared packages under
+      # tools/internal serve every binary here, so a curated package list
+      # would silently skip consumers.
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.9.0
-          working-directory: tools/demarkus-broker
+          working-directory: tools
       - name: Test
-        run: cd tools && go test ./demarkus-broker/...
+        run: cd tools && go test ./...
       - name: Vet
-        run: cd tools && go vet ./demarkus-broker/...
+        run: cd tools && go vet ./...
       - name: Build
-        run: cd tools && go build -o /dev/null ./demarkus-broker
+        run: cd tools && go build -o /dev/null ./demarkus-knowledge-broker
 
   test-install:
     needs: detect-changes
@@ -323,16 +324,16 @@ jobs:
           helm dependency update deploy/helm/demarkus-server
       - name: Lint demarkus-server chart
         run: helm lint deploy/helm/demarkus-server
-      - name: Lint demarkus-broker chart
-        run: helm lint deploy/helm/demarkus-broker
+      - name: Lint demarkus-knowledge-broker chart
+        run: helm lint deploy/helm/demarkus-knowledge-broker
       - name: Lint demarkus-agent chart
         run: helm lint deploy/helm/demarkus-agent
       - name: Lint demarkus-knowledge-server chart
         run: helm lint deploy/helm/demarkus-knowledge-server -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml
       - name: Unit test demarkus-server chart
         run: helm unittest deploy/helm/demarkus-server
-      - name: Unit test demarkus-broker chart
-        run: helm unittest deploy/helm/demarkus-broker
+      - name: Unit test demarkus-knowledge-broker chart
+        run: helm unittest deploy/helm/demarkus-knowledge-broker
       - name: Unit test demarkus-knowledge-server chart
         run: helm unittest deploy/helm/demarkus-knowledge-server
 
@@ -366,7 +367,7 @@ jobs:
             demarkus-server-tokens \
             broker-minted-test \
             ZmFrZS10b2tlbi1oYXNo
-      - name: Upgrade-wipe regression — demarkus-broker
+      - name: Upgrade-wipe regression — demarkus-knowledge-broker
         run: |
           # Broker requires a parseable ECDSA P-256 PEM for
           # oidc.brokerSigningKey — OIDCConfig.validate now parses
@@ -382,10 +383,10 @@ jobs:
           trap 'rm -f "$SIGNING_KEY_FILE"' EXIT
           openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$SIGNING_KEY_FILE"
           bash deploy/helm/test-upgrade-wipe.sh \
-            deploy/helm/demarkus-broker \
-            demarkus-broker \
+            deploy/helm/demarkus-knowledge-broker \
+            demarkus-knowledge-broker \
             test-broker \
-            demarkus-broker-refresh-tokens \
+            demarkus-knowledge-broker-refresh-tokens \
             broker-seeded-test \
             ZmFrZS10b2tlbg== \
             --set oidc.issuer=https://accounts.google.com \

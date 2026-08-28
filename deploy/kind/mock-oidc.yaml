@@ -1,6 +1,6 @@
 # Mock OIDC issuer for kind-based broker testing.
 #
-# The demarkus-broker performs OIDC discovery at startup (broker/oidc.go:67)
+# The demarkus-knowledge-broker performs OIDC discovery at startup (broker/oidc.go:67)
 # and exits if the issuer is unreachable, so a kind harness that exercises
 # the broker needs a real OIDC endpoint inside the cluster. mock-oauth2-server
 # (navikt) serves the discovery document, JWKS, /authorize, /token, and

@@ -1,6 +1,6 @@
 # demarkus-knowledge
 
-Connect Claude Code to an **organizational demarkus knowledge system**: a shared, versioned markdown catalog fronted by a demarkus-broker over HTTPS.
+Connect Claude Code to an **organizational demarkus knowledge system**: a shared, versioned markdown catalog fronted by a demarkus-knowledge-broker over HTTPS.
 
 This is the broker-fronted, multi-writer counterpart to [`demarkus-memory`](../claude-code), which gives you a personal, local soul. The two are independent plugins and compose cleanly: install both and your soul becomes your private scratch space while the knowledge system is the shared, authoritative source of truth. Install just this one to work against your org's catalog without running a local server at all.
 

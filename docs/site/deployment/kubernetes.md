@@ -8,7 +8,7 @@ This page covers deploying Demarkus on Kubernetes with the Helm charts in `deplo
 |---|---|---|
 | `demarkus-server` | StatefulSet | Single world over the filesystem store (PVC) |
 | `demarkus-server-common` | library | Shared backend-neutral server templates |
-| `demarkus-broker` | Deployment | OIDC broker and MCP-over-HTTPS gateway (defaults to 2 replicas + PDB) |
+| `demarkus-knowledge-broker` | Deployment | OIDC broker and MCP-over-HTTPS gateway (defaults to 2 replicas + PDB) |
 | `demarkus-agent` | Deployment | Federation crawler: scheduled crawl, hash indexes, graph snapshots |
 | `demarkus-knowledge-server` | Deployment | Multi-world production server, GCS-backed |
 
@@ -64,7 +64,7 @@ See `deploy/helm/demarkus-knowledge-server/README.md` for the full surface (limi
 
 ## Broker and agent
 
-- `demarkus-broker`: OIDC issuer config, per-world routing, and the MCP gateway that agents join with `/knowledge-join`; defaults to 2 replicas with a Lease-based leader election for the token sweeper only.
+- `demarkus-knowledge-broker`: OIDC issuer config, per-world routing, and the MCP gateway that agents join with `/knowledge-join`; defaults to 2 replicas with a Lease-based leader election for the token sweeper only.
 - `demarkus-agent`: crawl seeds, hubs, schedule, and per-authority endpoint overrides (`config.endpoints`).
 
 ## Dev harness (kind)

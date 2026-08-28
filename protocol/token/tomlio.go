@@ -108,16 +108,9 @@ func ParseBytes(existing []byte) (File, error) {
 	return f, nil
 }
 
-// AppendBytes is the in-memory analogue of AppendEntry: given existing
-// tokens.toml bytes (possibly empty), it returns the bytes with a new
-// labeled entry appended. Used by the demarkus-broker, which writes to a
-// Kubernetes Secret rather than a file and so has no use for the flock +
-// atomic-publish machinery AppendEntry layers on top.
-//
-// Returns ErrLabelExists if the label is already present in existing,
-// ErrNilEntry if entry is nil. The result is byte-equivalent to
-// existing + FormatEntry(label, entry) — comments and prior ordering in
-// existing are preserved.
+// AppendBytes is AppendEntry without the flock/atomic-publish layer, for
+// Secret-writing callers like the knowledge broker. Result is byte-equal to
+// existing + FormatEntry (comments and ordering preserved); ErrLabelExists / ErrNilEntry.
 func AppendBytes(existing []byte, label string, entry *Entry) ([]byte, error) {
 	if entry == nil {
 		return nil, ErrNilEntry

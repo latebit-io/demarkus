@@ -2,7 +2,7 @@
 # kind harness for demarkus development.
 #
 # Stage 1 (default):                          kind cluster + demarkus-server chart.
-# Stage 2 (--with-broker):                    + mock-oauth2-server + demarkus-broker.
+# Stage 2 (--with-broker):                    + mock-oauth2-server + demarkus-knowledge-broker.
 # Stage 3 (--with-argo):                      + Argo CD + ApplicationSet templating two worlds.
 # Stage 4 (--with-argo --with-broker):         + broker against the Argo worlds, then
 #                                              drive a full OIDC mint flow via curl and
@@ -38,11 +38,11 @@ set -euo pipefail
 CLUSTER="${CLUSTER:-knowledge-system}"
 NAMESPACE="${NAMESPACE:-demarkus}"
 RELEASE="${RELEASE:-world-default}"
-SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.18.0}"
+SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.30.3}"
 SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
 BROKER_RELEASE="${BROKER_RELEASE:-broker}"
-BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.1.15}"
-BROKER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-broker"
+BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.24.7}"
+BROKER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-knowledge-broker"
 # Ephemeral curl pod image used by the Stage 4 mint smoke test. Pinned so
 # behavior is reproducible across hosts; busybox sh + curl is all we need.
 MINT_CURL_IMAGE="${MINT_CURL_IMAGE:-curlimages/curl:8.11.1}"
@@ -80,12 +80,12 @@ for arg in "$@"; do
       cat <<EOF
 usage: up.sh [--with-broker] [--with-argo] [--with-mcp-smoke]
 
-  --with-broker     install mock-oauth2-server + demarkus-broker chart
+  --with-broker     install mock-oauth2-server + demarkus-knowledge-broker chart
   --with-argo       install Argo CD + ApplicationSet templating two worlds
                     (replaces the Stage 1 server install)
   --with-mcp-smoke  rebuild the broker image from this checkout,
                     sideload it into kind, install the LOCAL broker
-                    chart (deploy/helm/demarkus-broker) with that image,
+                    chart (deploy/helm/demarkus-knowledge-broker) with that image,
                     run smoke checks against the MCP gateway listener
                     (\${BROKER_RELEASE}-...:8081), then drive the RFC 6749
                     authorization_code + PKCE flow end-to-end against the
@@ -258,7 +258,7 @@ if [[ "$WITH_ARGO" == "true" ]]; then
 
     ensure_broker_signing_key "$NAMESPACE"
 
-    echo "--- installing demarkus-broker chart $BROKER_CHART_VERSION (multi-world wiring)"
+    echo "--- installing demarkus-knowledge-broker chart $BROKER_CHART_VERSION (multi-world wiring)"
     # helm --wait blocks on /readyz, which only flips green after OIDC
     # discovery succeeds. RBAC fan-out across world-a + world-b namespaces
     # also runs at install time — a failure here means the cross-namespace
@@ -269,10 +269,10 @@ if [[ "$WITH_ARGO" == "true" ]]; then
       --values "$BROKER_ARGO_VALUES_FILE" \
       --wait --timeout 5m
 
-    BROKER_POD_SELECTOR="app.kubernetes.io/instance=$BROKER_RELEASE,app.kubernetes.io/name=demarkus-broker"
+    BROKER_POD_SELECTOR="app.kubernetes.io/instance=$BROKER_RELEASE,app.kubernetes.io/name=demarkus-knowledge-broker"
     BROKER_POD=$(kubectl -n "$NAMESPACE" get pods -l "$BROKER_POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
     if [[ -z "$BROKER_POD" ]]; then
-      echo "no demarkus-broker pod found for selector: $BROKER_POD_SELECTOR" >&2
+      echo "no demarkus-knowledge-broker pod found for selector: $BROKER_POD_SELECTOR" >&2
       exit 1
     fi
 
@@ -288,7 +288,7 @@ if [[ "$WITH_ARGO" == "true" ]]; then
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
 
-BROKER=http://'"$BROKER_RELEASE"'-demarkus-broker.'"$NAMESPACE"'.svc.cluster.local:8080
+BROKER=http://'"$BROKER_RELEASE"'-demarkus-knowledge-broker.'"$NAMESPACE"'.svc.cluster.local:8080
 
 # Hard timeouts so a DNS or TCP stall fails the smoke test in seconds
 # instead of pinning the kubectl-run pod open until cluster cleanup.
@@ -362,7 +362,7 @@ inspect minted tokens in each world (decoded TOML):
 
 re-run the mint flow (handy for poking at logs):
   kubectl run -n $NAMESPACE mint-replay --rm -i --restart=Never \\
-    --image=$MINT_CURL_IMAGE -- curl -sS http://$BROKER_RELEASE-demarkus-broker:8080/healthz
+    --image=$MINT_CURL_IMAGE -- curl -sS http://$BROKER_RELEASE-demarkus-knowledge-broker:8080/healthz
 
 tear down:
   $SCRIPT_DIR/down.sh
@@ -444,13 +444,13 @@ if [[ "$WITH_BROKER" == "true" ]]; then
     # the current checkout.
     MCP_SMOKE_IMAGE_REGISTRY=demarkus-mcp-smoke
     MCP_SMOKE_IMAGE_TAG="local-$(date +%s)"
-    echo "--- building demarkus-broker image $MCP_SMOKE_IMAGE_REGISTRY/demarkus-broker:$MCP_SMOKE_IMAGE_TAG"
+    echo "--- building demarkus-knowledge-broker image $MCP_SMOKE_IMAGE_REGISTRY/demarkus-knowledge-broker:$MCP_SMOKE_IMAGE_TAG"
     ( cd "$REPO_ROOT" && \
         make image-broker "IMAGE_REGISTRY=$MCP_SMOKE_IMAGE_REGISTRY" "TAG=$MCP_SMOKE_IMAGE_TAG" )
     echo "--- sideloading image into kind cluster $CLUSTER"
-    kind load docker-image "$MCP_SMOKE_IMAGE_REGISTRY/demarkus-broker:$MCP_SMOKE_IMAGE_TAG" --name "$CLUSTER"
+    kind load docker-image "$MCP_SMOKE_IMAGE_REGISTRY/demarkus-knowledge-broker:$MCP_SMOKE_IMAGE_TAG" --name "$CLUSTER"
 
-    echo "--- installing LOCAL demarkus-broker chart from $REPO_ROOT/deploy/helm/demarkus-broker"
+    echo "--- installing LOCAL demarkus-knowledge-broker chart from $REPO_ROOT/deploy/helm/demarkus-knowledge-broker"
     # Confidential web client for the web-SSO smoke below. The secret is
     # generated per run and only its sha256 enters the rendered config —
     # same posture as a real deployment. The redirect host is .invalid
@@ -468,11 +468,11 @@ if [[ "$WITH_BROKER" == "true" ]]; then
     # would not replay on the callback leg and the flow would fail at state
     # validation. The plain Stage 2 install (values-broker.yaml) stays
     # untouched because it never drives a login flow.
-    helm upgrade --install "$BROKER_RELEASE" "$REPO_ROOT/deploy/helm/demarkus-broker" \
+    helm upgrade --install "$BROKER_RELEASE" "$REPO_ROOT/deploy/helm/demarkus-knowledge-broker" \
       --namespace "$NAMESPACE" --create-namespace \
       --values "$BROKER_VALUES_FILE" \
       --set "server.insecureCookies=true" \
-      --set "image.repository=$MCP_SMOKE_IMAGE_REGISTRY/demarkus-broker" \
+      --set "image.repository=$MCP_SMOKE_IMAGE_REGISTRY/demarkus-knowledge-broker" \
       --set "image.tag=$MCP_SMOKE_IMAGE_TAG" \
       --set "image.pullPolicy=IfNotPresent" \
       --set "webClients[0].clientID=$WEBCLIENT_ID" \
@@ -481,7 +481,7 @@ if [[ "$WITH_BROKER" == "true" ]]; then
       --set "webClients[0].name=Web SSO smoke client" \
       --wait --timeout 5m
   else
-    echo "--- installing demarkus-broker chart $BROKER_CHART_VERSION"
+    echo "--- installing demarkus-knowledge-broker chart $BROKER_CHART_VERSION"
     # helm install --wait blocks on the broker's readiness probe, which hits
     # /readyz. /readyz only flips green after OIDC discovery + JWKS fetch
     # against the mock issuer have completed, so a successful install here
@@ -493,10 +493,10 @@ if [[ "$WITH_BROKER" == "true" ]]; then
       --wait --timeout 5m
   fi
 
-  BROKER_POD_SELECTOR="app.kubernetes.io/instance=$BROKER_RELEASE,app.kubernetes.io/name=demarkus-broker"
+  BROKER_POD_SELECTOR="app.kubernetes.io/instance=$BROKER_RELEASE,app.kubernetes.io/name=demarkus-knowledge-broker"
   BROKER_POD=$(kubectl -n "$NAMESPACE" get pods -l "$BROKER_POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
   if [[ -z "$BROKER_POD" ]]; then
-    echo "no demarkus-broker pod found for selector: $BROKER_POD_SELECTOR" >&2
+    echo "no demarkus-knowledge-broker pod found for selector: $BROKER_POD_SELECTOR" >&2
     exit 1
   fi
 
@@ -510,8 +510,8 @@ if [[ "$WITH_BROKER" == "true" ]]; then
     # end-to-end against the broker's :8080 OAuth surface in a second pod
     # below (broker-auth-code-grant plan, PR3).
     echo "--- driving MCP gateway smoke checks from an ephemeral curl pod"
-    BROKER_MCP_URL="http://$BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8081"
-    BROKER_MGMT_URL="http://$BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8080"
+    BROKER_MCP_URL="http://$BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8081"
+    BROKER_MGMT_URL="http://$BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8080"
     kubectl run -n "$NAMESPACE" mcp-smoke --rm -i --restart=Never \
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
@@ -579,7 +579,7 @@ echo "OK: POST /mcp 401 + WWW-Authenticate"
       | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
 
     echo "--- driving auth-code + PKCE flow from an ephemeral curl pod"
-    BROKER_OAUTH_URL="http://$BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8080"
+    BROKER_OAUTH_URL="http://$BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8080"
     kubectl run -n "$NAMESPACE" authcode-smoke --rm -i --restart=Never \
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
@@ -824,17 +824,17 @@ server release: $RELEASE
 broker release: $BROKER_RELEASE
 broker pod:     $BROKER_POD
 server svc:     $RELEASE-demarkus-server.$NAMESPACE.svc.cluster.local:6309 (UDP)
-broker svc:     $BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8080 (HTTP)
-broker MCP svc: $BROKER_RELEASE-demarkus-broker.$NAMESPACE.svc.cluster.local:8081 (HTTP)
+broker svc:     $BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8080 (HTTP)
+broker MCP svc: $BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8081 (HTTP)
 mock OIDC:      mock-oauth2-server.$NAMESPACE.svc.cluster.local:8080/default
 
 probe the broker (from another shell):
-  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE-demarkus-broker 8080:8080
+  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE-demarkus-knowledge-broker 8080:8080
   curl http://localhost:8080/healthz
   curl http://localhost:8080/readyz
 
 probe the MCP gateway:
-  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE-demarkus-broker 8081:8081
+  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE-demarkus-knowledge-broker 8081:8081
   curl http://localhost:8081/.well-known/oauth-protected-resource
   # RFC 8414 auth-server metadata is on the management listener (:8080), not here
 

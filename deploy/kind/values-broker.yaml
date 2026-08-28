@@ -21,7 +21,7 @@ server:
 # login flow is driven, which we don't do at this stage.
 oidc:
   issuer: http://mock-oauth2-server.demarkus.svc.cluster.local:8080/default
-  clientID: demarkus-broker-kind
+  clientID: demarkus-knowledge-broker-kind
   clientSecret: dev-secret
   redirectURL: http://localhost:8080/auth/callback
   # Broker-signed id_token key: kept out of the repo. up.sh

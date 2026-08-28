@@ -39,7 +39,7 @@ PROXY_CONFIG_DIR="/etc/caddy"
 PROXY_STATE_DIR="/var/lib/caddy"
 CADDY_REPO="caddyserver/caddy"
 
-BROKER_CONFIG_DIR="/etc/demarkus-broker"
+BROKER_CONFIG_DIR="/etc/demarkus-knowledge-broker"
 LIBRARY_CONFIG_DIR="/etc/demarkus-library"
 LIBRARY_SERVICE="demarkus-library"
 SERVER_TOKENS="/etc/demarkus/tokens/tokens.toml"
@@ -398,7 +398,7 @@ install_auth() {
       printf '    claims_policies:\n      demarkus:\n'
       printf "        id_token: ['email', 'email_verified', 'groups', 'name']\n"
       printf '    clients:\n'
-      printf '      - client_id: demarkus-broker\n'
+      printf '      - client_id: demarkus-knowledge-broker\n'
       printf '        client_name: demarkus broker\n'
       printf '        client_secret: "%s"\n' "$broker_client_digest"
       printf '        public: false\n'
@@ -470,7 +470,7 @@ configure_broker() {
   sed -i \
     -e "s|https://EDIT-ME.example.com|https://broker.${host}|g" \
     -e "s|issuer: https://accounts.google.com|issuer: https://auth.${host}|" \
-    -e "s|clientID: EDIT-ME-client-id|clientID: demarkus-broker|" \
+    -e "s|clientID: EDIT-ME-client-id|clientID: demarkus-knowledge-broker|" \
     "$cfg"
   sed -i "s|^OIDC_CLIENT_SECRET=EDIT-ME$|OIDC_CLIENT_SECRET=${broker_client_secret}|" "$env"
   if grep -q "EDIT-ME" "$cfg" "$env"; then
@@ -487,8 +487,8 @@ configure_broker() {
       printf '    name: reading room\n'
     } >> "$cfg"
   fi
-  systemctl enable demarkus-broker
-  systemctl restart demarkus-broker
+  systemctl enable demarkus-knowledge-broker
+  systemctl restart demarkus-knowledge-broker
   log_info "Broker running against https://auth.${host}, library client registered"
 }
 

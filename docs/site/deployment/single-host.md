@@ -29,12 +29,12 @@ Version pinning: `--version` pins the server; `--library-version` pins the readi
 | Component | Service | Ports | Config |
 |---|---|---|---|
 | World server | `demarkus` | UDP 6309 (public) | `/etc/demarkus/` |
-| Broker | `demarkus-broker` | loopback TCP 8080 (OAuth/API), 8081 (MCP gateway) | `/etc/demarkus-broker/` |
+| Broker | `demarkus-knowledge-broker` | loopback TCP 8080 (OAuth/API), 8081 (MCP gateway) | `/etc/demarkus-knowledge-broker/` |
 | Library | `demarkus-library` | TCP 443 (HTTPS, when TLS is configured) or TCP 8090 | `/etc/demarkus-library/` |
 
 The broker binds **loopback only**; its advertised `publicURL` is served by your TLS reverse proxy (see below). With a broker installed, `tokens.toml` moves to `/etc/demarkus/tokens/`, a subdirectory the broker owns, so its atomic writes never require access to the rest of `/etc/demarkus` (where the TLS keys live). This layout is sticky: later reinstalls keep it even without `--with-broker`.
 
-**Removing the stack.** `demarkus-install uninstall` tears down every component (server, broker, library): services, users, binaries, and the broker's config and state directories (which hold credential-bearing artifacts). It verifies each removal and exits non-zero if anything could not be removed, so a partial teardown is never reported as complete. To keep the server but revert to server-only token handling: `systemctl disable --now demarkus-broker`, move `/etc/demarkus/tokens/tokens.toml` back to `/etc/demarkus/tokens.toml` (restoring `root:demarkus` 640), and re-run the installer.
+**Removing the stack.** `demarkus-install uninstall` tears down every component (server, broker, library): services, users, binaries, and the broker's config and state directories (which hold credential-bearing artifacts). It verifies each removal and exits non-zero if anything could not be removed, so a partial teardown is never reported as complete. To keep the server but revert to server-only token handling: `systemctl disable --now demarkus-knowledge-broker`, move `/etc/demarkus/tokens/tokens.toml` back to `/etc/demarkus/tokens.toml` (restoring `root:demarkus` 640), and re-run the installer.
 
 Each component runs as its own hardened system user (`ProtectSystem=strict`, minimal `ReadWritePaths`).
 
@@ -60,17 +60,17 @@ The broker speaks standard OIDC, so **any** provider works, including a self-hos
 The broker's `storage.backend: file` replaces its Kubernetes Secret storage:
 
 - **World tokens**: the broker provisions one write token per world and appends its hash to that world's `tokensFile` (the server's `tokens.toml`). The server's file watcher picks the change up immediately; no signal, no restart.
-- **Broker state** (refresh tokens, write-token records) lives under `/var/lib/demarkus-broker/`, so logins survive broker restarts.
+- **Broker state** (refresh tokens, write-token records) lives under `/var/lib/demarkus-knowledge-broker/`, so logins survive broker restarts.
 - **Ownership**: the broker owns `tokens.toml` (group `demarkus`, mode 640) so its atomic replacement writes need no privilege while the server keeps group-read. The installer sets this up.
 
-The generated `/etc/demarkus-broker/config.yaml` registers the local world as `soul` with `internalAddress: localhost:6309`. Add more worlds (more servers on other ports or hosts) as additional entries.
+The generated `/etc/demarkus-knowledge-broker/config.yaml` registers the local world as `soul` with `internalAddress: localhost:6309`. Add more worlds (more servers on other ports or hosts) as additional entries.
 
 ## OIDC application setup
 
 Register an OAuth app at your IdP, a commercial one (Google Cloud Console, GitHub Developer Settings, Okta) or a self-hosted one (Dex, Keycloak, Authentik):
 
 - **Redirect URI**: `<broker-public-url>/auth/callback`; must match `oidc.redirectURL` exactly.
-- The client secret never lives in `config.yaml`: it rides `OIDC_CLIENT_SECRET` in `/etc/demarkus-broker/env` (mode 640).
+- The client secret never lives in `config.yaml`: it rides `OIDC_CLIENT_SECRET` in `/etc/demarkus-knowledge-broker/env` (mode 640).
 - Restrict who may log in with `oidc.allowDomains` (hosted-domain allowlist) and per-world `allow` lists.
 
 For a fully self-hosted stack, run Dex alongside the broker (it needs only a static config and a listen port), register the broker as a Dex client, and set `oidc.issuer` to the Dex URL. Everything else on this page is unchanged.
@@ -86,7 +86,7 @@ The port and scheme follow the install's TLS setup: with TLS configured (`--doma
 To put the library behind broker SSO (org login, per-reader identity):
 
 1. Generate a client secret: `openssl rand -hex 32`, and its hash: `printf '%s' "<secret>" | sha256sum`.
-2. Register the library in `/etc/demarkus-broker/config.yaml`:
+2. Register the library in `/etc/demarkus-knowledge-broker/config.yaml`:
 
    ```yaml
    webClients:
@@ -98,7 +98,7 @@ To put the library behind broker SSO (org login, per-reader identity):
 
 3. Switch `/etc/demarkus-library/env` to the broker block (uncomment and fill the `DEMARKUS_TRANSPORT=broker` lines with the plaintext secret).
 4. Redirect URIs must be **absolute https URLs**; already satisfied on TLS installs, where the library serves HTTPS on 443 with the world's cert. Otherwise front it with TLS (its own `DEMARKUS_TLS_CERT`/`DEMARKUS_TLS_KEY`, or a reverse proxy such as Caddy/nginx).
-5. `systemctl restart demarkus-broker demarkus-library`.
+5. `systemctl restart demarkus-knowledge-broker demarkus-library`.
 
 ## TLS and the reverse proxy
 
@@ -118,7 +118,7 @@ To put the library behind broker SSO (org login, per-reader identity):
 ## Verify the stack
 
 ```bash
-systemctl status demarkus demarkus-broker demarkus-library
+systemctl status demarkus demarkus-knowledge-broker demarkus-library
 curl -s http://localhost:8080/healthz     # broker
 curl -s -o /dev/null -w "%{http_code}\n" https://<domain>/        # library on TLS installs (302 to the reading room)
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/   # library on no-TLS installs
