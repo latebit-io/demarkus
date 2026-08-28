@@ -1221,7 +1221,13 @@ install_broker() {
     "${tmpdir}/demarkus-broker_checksums.txt" 2>/dev/null \
     || log_warn "Could not download broker checksums; verification will be skipped"
   download_and_verify_asset "$BROKER_SERVICE" "$broker_version" "broker" "$tmpdir"
-  install_binaries "$tmpdir" "$BROKER_SERVICE"
+  # Atomic replace: after a migration the broker may already be running,
+  # and cp onto a live executable fails with ETXTBSY.
+  if ! install_binary_atomic "${tmpdir}/${BROKER_SERVICE}" "${INSTALL_DIR}/${BROKER_SERVICE}"; then
+    log_error "Could not install ${INSTALL_DIR}/${BROKER_SERVICE}"
+    exit 1
+  fi
+  log_info "Installed ${INSTALL_DIR}/${BROKER_SERVICE}"
 
   if ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /usr/sbin/nologin "$BROKER_SERVICE"
