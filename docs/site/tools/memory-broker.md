@@ -20,11 +20,13 @@ Requires a Business, Enterprise, or Edu workspace with Developer mode authorized
 
 ### Claude Code
 
+With the demarkus-memory plugin, `/soul-join https://memory.example.com` validates the endpoint, registers the catalog row, binds the project (the destination gate then routes soul writes here), and registers the HTTP MCP server. Without the plugin:
+
 ```bash
 claude mcp add --transport http soul https://memory.example.com/mcp
 ```
 
-The OAuth device flow runs on first use. If you also run the demarkus-memory plugin with a local soul, keep one write target per project; the plugin's destination gate binds writes to the bound soul.
+The OAuth flow runs in the client on first use; no token files.
 
 ### Cursor / Windsurf
 

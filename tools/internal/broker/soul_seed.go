@@ -127,6 +127,7 @@ func (g *mcpGateway) ensureSoulSeed(ctx context.Context, w *WorldConfig) {
 	if ok {
 		state.failedAt = time.Time{}
 	} else {
+		metricSoulSeedFailures.Inc()
 		state.failedAt = time.Now()
 	}
 	state.inflight = nil

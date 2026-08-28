@@ -46,6 +46,15 @@ type BucketCreator interface {
 	EnsureBucket(ctx context.Context, bucket string) error
 }
 
+// BucketDeleter is the optional destructive sibling used only by the
+// explicit deprovision flow.
+type BucketDeleter interface {
+	DeleteBucket(ctx context.Context, bucket string) error
+}
+
+// ErrTenantNotFound reports a deprovision target absent from the registry.
+var ErrTenantNotFound = errors.New("broker: tenant not found in registry")
+
 // tenantRecord is one provisioned tenant in the registry.
 type tenantRecord struct {
 	Email   string `json:"email"`
@@ -78,18 +87,85 @@ type Provisioner struct {
 	lastSync [32]byte
 }
 
+// NewProvisioner builds a standalone Provisioner (deprovision CLI, or
+// any flow without a Server).
+func NewProvisioner(cfg *Config, store SecretStore, buckets BucketCreator, log *slog.Logger) *Provisioner {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Provisioner{cfg: cfg, store: store, buckets: buckets, log: log, clock: time.Now}
+}
+
 // EnableProvisioning wires a Provisioner onto the Server. Called by the
 // memory-broker binary when cfg.Provisioning is enabled.
 func (s *Server) EnableProvisioning(buckets BucketCreator) *Provisioner {
-	p := &Provisioner{
-		cfg:     s.cfg,
-		store:   s.worldWriteTokens.store,
-		buckets: buckets,
-		log:     s.log,
-		clock:   s.clock,
-	}
+	p := NewProvisioner(s.cfg, s.worldWriteTokens.store, buckets, s.log)
+	p.clock = s.clock
 	s.provisioner = p
 	return p
+}
+
+// DeprovisionTenant removes slug: registry entry, authoritative fragment
+// rewrite (the ONE flow allowed to drop worlds), tokens key, write-token
+// record, and optionally the bucket. Idempotent; operator-invoked only.
+func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, deleteBucket bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var snapshot tenantRegistry
+	found := false
+	err := p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
+		registry, decodeErr := decodeRegistry(existing)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		_, found = registry.Tenants[slug]
+		delete(registry.Tenants, slug)
+		snapshot = registry
+		encoded, encErr := json.Marshal(&registry)
+		if encErr != nil {
+			return nil, fmt.Errorf("encode tenant registry: %w", encErr)
+		}
+		return encoded, nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// Fragment: authoritative rewrite (no union) so the world actually
+	// leaves the knowledge server. A racing EnsureTenant union from a
+	// pre-removal snapshot can resurrect the entry; rerun to converge.
+	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func([]byte) ([]byte, error) {
+		return p.renderWorldsFragment(&snapshot, nil)
+	}); err != nil {
+		return fmt.Errorf("rewrite worlds fragment: %w", err)
+	}
+
+	world := p.cfg.Provisioning.tenantWorld(slug, "")
+	if err := p.store.Delete(ctx, p.cfg.worldTokensRef(&world)); err != nil {
+		return fmt.Errorf("delete tokens key for %q: %w", slug, err)
+	}
+	if err := p.store.Delete(ctx, p.cfg.worldWriteTokenRef(slug)); err != nil {
+		return fmt.Errorf("delete write-token record for %q: %w", slug, err)
+	}
+
+	if deleteBucket {
+		deleter, ok := p.buckets.(BucketDeleter)
+		if !ok {
+			return errors.New("broker: bucket deletion requested but the bucket backend cannot delete")
+		}
+		if err := deleter.DeleteBucket(ctx, p.bucketName(slug)); err != nil {
+			return err
+		}
+	}
+
+	p.cfg.SetDynamicWorlds(p.worldsFromRegistry(&snapshot))
+	metricTenants.Set(float64(len(snapshot.Tenants)))
+	if !found {
+		return fmt.Errorf("%w: %q (cleanup converged anyway)", ErrTenantNotFound, slug)
+	}
+	p.log.Info("tenant deprovisioned", "world", slug, "bucketDeleted", deleteBucket)
+	return nil
 }
 
 func (c *Config) registryRef() SecretRef {
@@ -228,8 +304,17 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 		return encoded, nil
 	})
 	if err != nil {
+		switch {
+		case errors.Is(err, ErrProvisioningDenied):
+			metricProvisioning.WithLabelValues("denied").Inc()
+		case errors.Is(err, ErrTenantCapacity):
+			metricProvisioning.WithLabelValues("capacity").Inc()
+		default:
+			metricProvisioning.WithLabelValues("error").Inc()
+		}
 		return WorldConfig{}, err
 	}
+	metricTenants.Set(float64(len(snapshot.Tenants)))
 
 	// No already-provisioned fast path here: the registry sync can
 	// publish a world whose bucket/fragment ensure crashed mid-way, so
@@ -237,6 +322,7 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 
 	// Step 2: backend storage. EnsureBucket is idempotent.
 	if err := p.buckets.EnsureBucket(ctx, p.bucketName(slug)); err != nil {
+		metricProvisioning.WithLabelValues("error").Inc()
 		return WorldConfig{}, fmt.Errorf("ensure bucket for %q: %w", slug, err)
 	}
 
@@ -244,6 +330,7 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 	// world only once its tokens file exists in the shared mount.
 	world := p.cfg.Provisioning.tenantWorld(slug, email)
 	if err := p.ensureTokensKey(ctx, &world, slug); err != nil {
+		metricProvisioning.WithLabelValues("error").Inc()
 		return WorldConfig{}, err
 	}
 
@@ -253,6 +340,7 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func(existing []byte) ([]byte, error) {
 		return p.renderWorldsFragment(&snapshot, existing)
 	}); err != nil {
+		metricProvisioning.WithLabelValues("error").Inc()
 		return WorldConfig{}, fmt.Errorf("write worlds fragment: %w", err)
 	}
 
@@ -260,7 +348,10 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 	// replicas converge via the registry sync loop.
 	p.cfg.SetDynamicWorlds(p.worldsFromRegistry(&snapshot))
 	if created {
+		metricProvisioning.WithLabelValues("created").Inc()
 		p.log.Info("tenant provisioned", "world", slug, "subject", hashSubject(claims.Subject))
+	} else {
+		metricProvisioning.WithLabelValues("converged").Inc()
 	}
 	return world, nil
 }
@@ -404,6 +495,7 @@ func (p *Provisioner) SyncRegistry(ctx context.Context) error {
 		return nil
 	}
 	p.cfg.SetDynamicWorlds(p.worldsFromRegistry(&snapshot))
+	metricTenants.Set(float64(len(snapshot.Tenants)))
 	return nil
 }
 

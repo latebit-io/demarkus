@@ -517,6 +517,41 @@ quota into every tenant world (enforced server-side at write time);
 request rate is the existing per-subject limiter; body size is capped
 by the protocol's 4MB object limit.
 
+## Tenant lifecycle, backups, observability
+
+Deprovisioning is explicit and operator-run (on a user's deletion
+request); nothing expires automatically. Run the broker binary with the
+serving config:
+
+```bash
+demarkus-memory-broker -config /etc/demarkus-memory-broker/config.yaml \
+  -deprovision-tenant <world> [-delete-bucket]
+```
+
+It removes the registry entry, rewrites the worlds fragment (the
+knowledge server drops the world live), deletes the shared tokens key
+and the broker's write-token record, and with `-delete-bucket` destroys
+the tenant's GCS bucket and data. Idempotent; rerun to converge after a
+partial failure or a raced provisioning union. In-cluster, exec into a
+broker pod or run a one-off Job with the broker image and ServiceAccount.
+
+Backups: tenant buckets are created with object versioning enabled, so
+the mutable `head.json` survives accidental overwrite or deletion;
+bucket-level disaster recovery is standard GCS practice (soft delete,
+Storage Transfer). Back up the registry Secret
+(`provisioning.registrySecret`) with your normal Secret backup flow; it
+holds the identity-to-world binding that is not reconstructible from
+bucket contents alone.
+
+Observability: the management listener serves Prometheus metrics at
+`/metrics` (cluster-internal; the Ingress never routes it):
+`demarkus_broker_tenants`, `demarkus_broker_provisioning_total{result}`,
+`demarkus_broker_tenant_denials_total{reason}`,
+`demarkus_broker_soul_seed_failures_total`, and
+`demarkus_broker_tenant_last_activity_seconds{world}` - the dormancy
+signal for the explicit lifecycle policy. Alert on
+`rate(demarkus_broker_provisioning_total{result="error"}[15m]) > 0`.
+
 ## Cookie key preservation
 
 The signed-state-cookie HMAC key is generated on first install and

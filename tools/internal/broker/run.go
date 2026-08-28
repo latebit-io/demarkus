@@ -273,17 +273,12 @@ func buildServer(cfg *Config, opts *RunOptions, log *slog.Logger) (*Server, kube
 
 	// Storage backend: kubernetes needs a client; file mode (single-host)
 	// runs with no cluster at all.
-	var store SecretStore
-	var k8s kubernetes.Interface
+	store, k8s, err := newSecretStore(cfg, opts.KubeconfigPath)
+	if err != nil {
+		return nil, nil, err
+	}
 	if cfg.FileBackend() {
-		store = NewFileSecretStore()
 		log.Info(opts.LogName+": file storage backend", "dir", cfg.Storage.Dir)
-	} else {
-		k8s, err = newKubeClient(opts.KubeconfigPath)
-		if err != nil {
-			return nil, nil, err
-		}
-		store = NewK8sSecretStore(k8s)
 	}
 
 	// Same eager-failure posture as NewVerifier; 5-minute TTL bounds
@@ -306,4 +301,24 @@ func buildServer(cfg *Config, opts *RunOptions, log *slog.Logger) (*Server, kube
 	log.Info(opts.LogName+": id_token signer ready", "kid", idTokenSigner.KeyID())
 
 	return NewServer(cfg, signer, verifier, store, discovery, idTokenSigner, log), k8s, nil
+}
+
+// newSecretStore selects the credential backend from config: file mode
+// for single-host, otherwise Secrets via a kubernetes client.
+func newSecretStore(cfg *Config, kubeconfigPath string) (SecretStore, kubernetes.Interface, error) {
+	if cfg.FileBackend() {
+		return NewFileSecretStore(), nil, nil
+	}
+	k8s, err := newKubeClient(kubeconfigPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return NewK8sSecretStore(k8s), k8s, nil
+}
+
+// NewSecretStoreFor is the exported wiring for out-of-server flows
+// (the deprovision CLI) that need the same backend selection Run uses.
+func NewSecretStoreFor(cfg *Config, kubeconfigPath string) (SecretStore, error) {
+	store, _, err := newSecretStore(cfg, kubeconfigPath)
+	return store, err
 }

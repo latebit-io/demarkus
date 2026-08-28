@@ -2,6 +2,8 @@ package registry
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -638,5 +640,44 @@ func TestSoulJoinURLWithFragment(t *testing.T) {
 		if _, err := SoulJoin(bad, "t", false, ""); err == nil {
 			t.Errorf("expected error for malformed host %q", bad)
 		}
+	}
+}
+
+func TestSoulJoinBroker(t *testing.T) {
+	t.Setenv("DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP", "1")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/oauth-protected-resource" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	res, err := SoulJoin(ts.URL, "", false, "")
+	if err != nil {
+		t.Fatalf("SoulJoin(broker): %v", err)
+	}
+	if !res.Broker || res.McpURL != res.Host+"/mcp" {
+		t.Errorf("broker result = %+v", res)
+	}
+	if res.TokenFile != "-" {
+		t.Errorf("broker soul must not reference a token file, got %q", res.TokenFile)
+	}
+	// Catalog row lands in SOULS (destination gate + binding apply).
+	row, ok, err := RemoteSoulRow(res.Slug)
+	if err != nil || !ok {
+		t.Fatalf("catalog row missing after broker join: ok=%v err=%v", ok, err)
+	}
+	if row.Host != res.Host {
+		t.Errorf("catalog host = %q, want %q", row.Host, res.Host)
+	}
+
+	// A token alongside an HTTPS broker URL is rejected: OAuth owns auth.
+	if _, err := SoulJoin(ts.URL, "sekret", false, ""); err == nil {
+		t.Error("broker join accepted a token")
 	}
 }

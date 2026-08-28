@@ -560,6 +560,11 @@ type SoulJoinResult struct {
 	Host      string
 	Insecure  bool
 	TokenFile string
+	// Broker marks an HTTPS memory-broker soul (OAuth at the endpoint,
+	// registered with the harness's HTTP MCP transport, never mcp-serve);
+	// McpURL is then the endpoint to register.
+	Broker bool
+	McpURL string
 }
 
 // SoulJoin normalizes a remote-soul host, derives a slug, writes the token to a
@@ -573,7 +578,7 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 	h := strings.TrimSpace(rawHost)
 	low := strings.ToLower(h)
 	if strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://") {
-		return nil, fmt.Errorf("'%s' is an HTTPS URL; use /knowledge-join for broker-fronted knowledge systems", h)
+		return soulJoinBroker(h, token, bindDir)
 	}
 	// Every host form goes through joinurl.Parse so malformed input (paths,
 	// userinfo, query, IPv6 literals) is rejected instead of half-parsed
@@ -622,6 +627,42 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 		return nil, err
 	}
 	return &SoulJoinResult{Slug: slug, Host: host, Insecure: insecure, TokenFile: tokenFile}, nil
+}
+
+// soulJoinBroker joins an HTTPS memory-broker soul: /knowledge-join's
+// metadata validation, but the row lands in the SOULS catalog (gate +
+// binding apply), no token file; OAuth happens in the MCP client.
+func soulJoinBroker(rawURL, token, bindDir string) (*SoulJoinResult, error) {
+	if token != "" {
+		return nil, fmt.Errorf("a memory-broker soul authenticates via OAuth in the MCP client; do not pass a token")
+	}
+	validated, err := KnowledgeJoin(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	slug := validated.Slug
+	if slug == config.LocalSoulID {
+		return nil, fmt.Errorf("slug '%s' is reserved for the local managed soul; front the broker at a host with a different first label", config.LocalSoulID)
+	}
+	soulsPath, err := config.StatePath("souls")
+	if err != nil {
+		return nil, err
+	}
+	bindingsPath := ""
+	if bindDir != "" {
+		bindingsPath, err = config.StatePath("project-souls")
+		if err != nil {
+			return nil, err
+		}
+	}
+	managedTokenFile, err := config.StatePath("soul-" + slug + ".token")
+	if err != nil {
+		return nil, err
+	}
+	if err := commitSoulJoin(slug, validated.URL, "", "-", managedTokenFile, bindDir, soulsPath, bindingsPath, false); err != nil {
+		return nil, err
+	}
+	return &SoulJoinResult{Slug: slug, Host: validated.URL, TokenFile: "-", Broker: true, McpURL: validated.McpURL}, nil
 }
 
 // Every multi-file registry path locks souls before project-souls; never reverse.

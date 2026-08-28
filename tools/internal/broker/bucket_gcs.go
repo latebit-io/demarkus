@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/iterator"
 )
 
 // GCSBucketCreator provisions per-tenant GCS buckets idempotently
@@ -73,6 +74,10 @@ func tenantBucketAttrs(location string) *storage.BucketAttrs {
 		Location:                 location,
 		UniformBucketLevelAccess: storage.UniformBucketLevelAccess{Enabled: true},
 		PublicAccessPrevention:   storage.PublicAccessPreventionEnforced,
+		// Backup posture, not security: object versioning shields the
+		// mutable head.json from accidental overwrite or deletion, so
+		// the verifier does not gate on it.
+		VersioningEnabled: true,
 	}
 }
 
@@ -84,6 +89,30 @@ func verifyBucketLockdown(bucket string, attrs *storage.BucketAttrs) error {
 	}
 	if attrs.PublicAccessPrevention != storage.PublicAccessPreventionEnforced {
 		return fmt.Errorf("bucket %q does not enforce public-access prevention; refusing to adopt it for tenant data", bucket)
+	}
+	return nil
+}
+
+// DeleteBucket permanently removes a tenant bucket and every object in
+// it. Only the explicit deprovision flow calls this; absent is success
+// so reruns converge.
+func (c *GCSBucketCreator) DeleteBucket(ctx context.Context, bucket string) error {
+	handle := c.client.Bucket(bucket)
+	it := handle.Objects(ctx, nil)
+	for {
+		object, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("list bucket %q: %w", bucket, err)
+		}
+		if err := handle.Object(object.Name).Delete(ctx); err != nil && !errors.Is(err, storage.ErrObjectNotExist) {
+			return fmt.Errorf("delete object %s/%s: %w", bucket, object.Name, err)
+		}
+	}
+	if err := handle.Delete(ctx); err != nil && !errors.Is(err, storage.ErrBucketNotExist) {
+		return fmt.Errorf("delete bucket %q: %w", bucket, err)
 	}
 	return nil
 }

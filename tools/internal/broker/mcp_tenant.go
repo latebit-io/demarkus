@@ -111,12 +111,14 @@ func (g *mcpGateway) tenantGate(next mcpserver.ToolHandlerFunc) mcpserver.ToolHa
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		w, errRes := g.resolveOrProvision(ctx)
 		if errRes != nil {
+			metricTenantDenials.WithLabelValues("unresolved").Inc()
 			return errRes, nil
 		}
 		args, known := tenantWorldArgs[req.Params.Name]
 		if !known {
 			// Deny closed: an unclassified tool must never dispatch in
 			// tenant mode.
+			metricTenantDenials.WithLabelValues("unclassified_tool").Inc()
 			return mcp.NewToolResultError(fmt.Sprintf("tool %q is not available on this memory broker", req.Params.Name)), nil
 		}
 		for _, name := range args {
@@ -129,9 +131,11 @@ func (g *mcpGateway) tenantGate(next mcpserver.ToolHandlerFunc) mcpserver.ToolHa
 				continue // the handler's own URL validation reports it
 			}
 			if worldName != w.Name {
+				metricTenantDenials.WithLabelValues("cross_tenant").Inc()
 				return mcp.NewToolResultError(fmt.Sprintf("access denied: this memory service serves only your world %q", w.Name)), nil
 			}
 		}
+		metricTenantActivity.WithLabelValues(w.Name).SetToCurrentTime()
 		ctx = ctxWithTenantWorld(ctx, &w)
 		if g.profile.SeedSoul {
 			g.ensureSoulSeed(ctx, &w)

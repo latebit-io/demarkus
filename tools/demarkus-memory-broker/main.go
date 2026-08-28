@@ -27,6 +27,8 @@ func main() {
 	configPath := flag.String("config", "/etc/demarkus-memory-broker/config.yaml", "path to broker YAML config")
 	kubeconfig := flag.String("kubeconfig", "", "path to kubeconfig (default: in-cluster config)")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	deprovision := flag.String("deprovision-tenant", "", "deprovision the named tenant world and exit (operator flow, run on a user's deletion request)")
+	deleteBucket := flag.Bool("delete-bucket", false, "with -deprovision-tenant: also permanently delete the tenant's GCS bucket and data")
 	flag.Parse()
 
 	if *showVersion {
@@ -36,6 +38,18 @@ func main() {
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
+
+	if *deprovision != "" {
+		if err := runDeprovision(*configPath, *kubeconfig, *deprovision, *deleteBucket, log); err != nil {
+			log.Error("deprovision failed", "world", *deprovision, "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *deleteBucket {
+		log.Error("-delete-bucket requires -deprovision-tenant")
+		os.Exit(1)
+	}
 
 	err := broker.Run(*configPath, &broker.RunOptions{
 		LogName: "memory broker",
@@ -85,4 +99,37 @@ func setupProvisioning(cfg *broker.Config, srv *broker.Server, log *slog.Logger)
 		"maxTenants", cfg.Provisioning.MaxTenants,
 		"authorityDomain", cfg.Provisioning.AuthorityDomain)
 	return []func(context.Context){provisioner.RunRegistrySync}, closeClient, nil
+}
+
+// runDeprovision is the operator flow: load config, wire the same
+// stores and bucket backend the serving path uses, remove the tenant.
+func runDeprovision(configPath, kubeconfigPath, slug string, deleteBucket bool, log *slog.Logger) error {
+	cfg, err := broker.LoadConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProvisioning(); err != nil {
+		return err
+	}
+	if !cfg.Provisioning.Enabled() {
+		return fmt.Errorf("deprovisioning requires provisioning enabled (mode %q)", cfg.Provisioning.Mode)
+	}
+	store, err := broker.NewSecretStoreFor(cfg, kubeconfigPath)
+	if err != nil {
+		return err
+	}
+	gcsClient, err := storage.NewClient(context.Background())
+	if err != nil {
+		return fmt.Errorf("GCS client unavailable: %w", err)
+	}
+	defer func() {
+		if closeErr := gcsClient.Close(); closeErr != nil {
+			log.Warn("GCS client close failed", "err", closeErr)
+		}
+	}()
+	buckets, err := broker.NewGCSBucketCreator(gcsClient, cfg.Provisioning.BucketProject, cfg.Provisioning.BucketLocation, log)
+	if err != nil {
+		return err
+	}
+	return broker.NewProvisioner(cfg, store, buckets, log).DeprovisionTenant(context.Background(), slug, deleteBucket)
 }

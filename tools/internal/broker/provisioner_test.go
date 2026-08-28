@@ -44,6 +44,7 @@ func (s *provisionerStore) get(ref SecretRef) []byte {
 type fakeBuckets struct {
 	mu      sync.Mutex
 	created []string
+	deleted []string
 	fail    bool
 }
 
@@ -389,5 +390,68 @@ func TestFragmentUnionSurvivesStaleSnapshot(t *testing.T) {
 	sort.Strings(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("union fragment worlds = %v, want %v", got, want)
+	}
+}
+
+func (f *fakeBuckets) DeleteBucket(_ context.Context, bucket string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, bucket)
+	return nil
+}
+
+func TestDeprovisionTenantRemovesEverything(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	store := newProvisionerStore()
+	buckets := &fakeBuckets{}
+	p := newTestProvisioner(cfg, store, buckets)
+
+	world, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frank := &Claims{Subject: "google|frank", Email: "frank@example.com", EmailVerified: true}
+	frankWorld, err := p.EnsureTenant(context.Background(), frank)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.DeprovisionTenant(context.Background(), world.Name, true); err != nil {
+		t.Fatalf("DeprovisionTenant: %v", err)
+	}
+
+	// Registry no longer holds eve; frank survives.
+	registry := string(store.get(cfg.registryRef()))
+	if strings.Contains(registry, world.Name) || !strings.Contains(registry, frankWorld.Name) {
+		t.Errorf("registry after deprovision:\n%s", registry)
+	}
+	// Fragment rewrite dropped eve's world (the one flow allowed to).
+	fragment := string(store.get(cfg.worldsFragmentRef()))
+	if strings.Contains(fragment, "name: "+world.Name) || !strings.Contains(fragment, "name: "+frankWorld.Name) {
+		t.Errorf("fragment after deprovision:\n%s", fragment)
+	}
+	// Tokens key and write-token record deleted.
+	if got := store.get(cfg.worldTokensRef(&world)); len(got) != 0 {
+		t.Errorf("tokens key survived deprovision: %q", got)
+	}
+	if got := store.get(cfg.worldWriteTokenRef(world.Name)); len(got) != 0 {
+		t.Errorf("write-token record survived deprovision: %q", got)
+	}
+	// Bucket deleted on request.
+	buckets.mu.Lock()
+	deleted := append([]string(nil), buckets.deleted...)
+	buckets.mu.Unlock()
+	if len(deleted) != 1 || deleted[0] != "memory-"+world.Name {
+		t.Errorf("deleted buckets = %v", deleted)
+	}
+	// Dynamic world set no longer resolves eve.
+	if _, ok := cfg.FindWorld(world.Name); ok {
+		t.Error("deprovisioned world still resolvable")
+	}
+
+	// Rerun converges: reports not-found but leaves state clean.
+	err = p.DeprovisionTenant(context.Background(), world.Name, false)
+	if !errors.Is(err, ErrTenantNotFound) {
+		t.Errorf("rerun err = %v, want ErrTenantNotFound", err)
 	}
 }

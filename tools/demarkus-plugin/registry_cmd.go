@@ -252,6 +252,10 @@ func registrySoulJoin(args []string) {
 	fmt.Println("host=" + res.Host)
 	fmt.Println("insecure=" + ins)
 	fmt.Println("token-file=" + res.TokenFile)
+	if res.Broker {
+		fmt.Println("broker=1")
+		fmt.Println("mcp-url=" + res.McpURL)
+	}
 }
 
 type soulJoinOptions struct {
@@ -491,6 +495,10 @@ func cmdMcpServe(args []string) {
 			os.Exit(1)
 		}
 		host, insecure, tokenFile = row.Host, row.Insecure, row.TokenFile
+		if strings.HasPrefix(strings.ToLower(host), "https://") || strings.HasPrefix(strings.ToLower(host), "http://") {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: soul '"+*soul+"' is a broker soul served over HTTP MCP; register it with `claude mcp add --transport http` instead of mcp-serve")
+			os.Exit(1)
+		}
 	}
 
 	env := os.Environ()
