@@ -181,7 +181,10 @@ Two supported modes. **Pick one per surface.**
 > fails the handshake. Broker-terminated mode is for topologies that
 > bypass the Ingress (direct Service/LoadBalancer exposure); if you
 > must front it with nginx, add the backend-protocol annotation on a
-> separate Ingress you manage yourself.
+> separate Ingress you manage yourself. Direct exposure also requires
+> opening the default NetworkPolicy: it admits ingress only from
+> `networkPolicy.ingressFromNamespace` (`ingress-nginx`), so disable
+> or replace it before pointing external traffic at the Service.
 
 There is intentionally no in-line PEM mode (`brokerSigningKey`-style
 cleartext) for the MCP listener: a TLS private key in helm release
