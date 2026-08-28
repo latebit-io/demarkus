@@ -128,7 +128,8 @@ func NewFileSecretStore() SecretStore {
 }
 
 // Delete removes ref.Key from the Secret, deleting the Secret itself
-// when no keys remain. Absent Secret or key is success.
+// when no keys remain: per-tenant Secrets (write-token records) would
+// otherwise accumulate as empty husks across deprovisions.
 func (s *k8sSecretStore) Delete(ctx context.Context, ref SecretRef) error {
 	for range maxConflictRetries {
 		secret, getErr := s.client.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})

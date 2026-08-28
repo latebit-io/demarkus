@@ -36,12 +36,22 @@ func (d *Dynamic) Swap(mappings []Mapping) error {
 	return nil
 }
 
-// Load returns the currently published router (nil before first Swap).
-// Paired with Store for prevalidate-then-commit transitions.
-func (d *Dynamic) Load() *Router { return d.current.Load() }
-
-// Store publishes an already-validated router (from New).
-func (d *Dynamic) Store(r *Router) { d.current.Store(r) }
+// SwapWith validates and publishes the mapping set, then runs commit,
+// restoring the previous router on commit failure so paired views never
+// diverge from routing; the rollback discipline lives here, not in callers.
+func (d *Dynamic) SwapWith(mappings []Mapping, commit func() error) error {
+	router, err := New(mappings)
+	if err != nil {
+		return err
+	}
+	previous := d.current.Load()
+	d.current.Store(router)
+	if err := commit(); err != nil {
+		d.current.Store(previous)
+		return err
+	}
+	return nil
+}
 
 // Selector returns a stable quicserve selector backed by the current set.
 func (d *Dynamic) Selector() quicserve.Selector {

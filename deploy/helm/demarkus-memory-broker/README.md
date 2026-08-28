@@ -546,14 +546,9 @@ GCS practice (Storage Transfer). Back up the registry Secret
 holds the identity-to-world binding that is not reconstructible from
 bucket contents alone.
 
-Observability: the management listener serves Prometheus metrics at
-`/metrics` (cluster-internal; the Ingress never routes it):
-`demarkus_broker_tenants`, `demarkus_broker_provisioning_total{result}`,
-`demarkus_broker_tenant_denials_total{reason}`,
-`demarkus_broker_soul_seed_failures_total`, and
-`demarkus_broker_tenant_last_activity_seconds{world}` - the dormancy
-signal for the explicit lifecycle policy. Alert on
-`rate(demarkus_broker_provisioning_total{result="error"}[15m]) > 0`.
+Observability: structured JSON logs only for now (provisioning,
+denials, and seeding all log with hashed subjects); a metrics endpoint
+is deliberately deferred to keep the surface small.
 
 ## Cookie key preservation
 

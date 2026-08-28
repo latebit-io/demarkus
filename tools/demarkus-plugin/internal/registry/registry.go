@@ -114,6 +114,13 @@ type SoulRow struct {
 	TokenFile string
 }
 
+// IsBroker reports whether the row is an HTTPS memory-broker soul
+// (OAuth in the MCP client; never served by mcp-serve).
+func (r SoulRow) IsBroker() bool {
+	low := strings.ToLower(r.Host)
+	return strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://")
+}
+
 // SoulCatalog emits one row per bindable soul: "<id>\t<tier>\t<host>\t<insecure>".
 func SoulCatalog() ([]string, error) {
 	var out []string
@@ -137,7 +144,13 @@ func SoulCatalog() ([]string, error) {
 		if len(f) >= 3 {
 			ins = f[2]
 		}
-		out = append(out, fmt.Sprintf("%s\tremote\t%s\t%s", f[0], host, ins))
+		// Broker souls register via HTTP MCP, not mcp-serve; the tier
+		// column is how pickers show that difference.
+		tier := "remote"
+		if (SoulRow{Host: host}).IsBroker() {
+			tier = "broker"
+		}
+		out = append(out, fmt.Sprintf("%s\t%s\t%s\t%s", f[0], tier, host, ins))
 	}
 	return out, nil
 }
@@ -499,16 +512,27 @@ func collapseDash(s string) string {
 	return s
 }
 
-// KnowledgeJoinResult is the validated broker info for /knowledge-join.
-type KnowledgeJoinResult struct {
+// BrokerEndpoint is a validated demarkus broker MCP endpoint (knowledge
+// or memory; the validation is product-agnostic).
+type BrokerEndpoint struct {
 	URL    string
 	Slug   string
 	McpURL string
 }
 
-// KnowledgeJoin validates a broker URL (https + RFC 9728 metadata) and derives a
-// slug. Returns an error message suitable to show the user verbatim on failure.
+// KnowledgeJoinResult aliases BrokerEndpoint for the /knowledge-join
+// command layer's naming.
+type KnowledgeJoinResult = BrokerEndpoint
+
+// KnowledgeJoin is ValidateBrokerEndpoint under /knowledge-join's name.
 func KnowledgeJoin(rawURL string) (*KnowledgeJoinResult, error) {
+	return ValidateBrokerEndpoint(rawURL)
+}
+
+// ValidateBrokerEndpoint validates a broker URL (https + RFC 9728
+// metadata) and derives a slug; shared by /knowledge-join and the
+// /soul-join broker path. Errors are user-presentable verbatim.
+func ValidateBrokerEndpoint(rawURL string) (*BrokerEndpoint, error) {
 	u := strings.TrimSpace(rawURL)
 	low := strings.ToLower(u)
 	allowHTTP := os.Getenv("DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP") == "1"
@@ -551,7 +575,7 @@ func KnowledgeJoin(rawURL string) (*KnowledgeJoinResult, error) {
 	if slug == "" {
 		return nil, fmt.Errorf("could not derive a usable MCP server slug from %s (host: %s)", u, host)
 	}
-	return &KnowledgeJoinResult{URL: u, Slug: slug, McpURL: u + "/mcp"}, nil
+	return &BrokerEndpoint{URL: u, Slug: slug, McpURL: u + "/mcp"}, nil
 }
 
 // SoulJoinResult is the outcome of a successful /soul-join.
@@ -599,23 +623,8 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 	if slug == "" {
 		return nil, fmt.Errorf("could not derive a slug from host '%s'", rawHost)
 	}
-	if slug == config.LocalSoulID {
-		return nil, fmt.Errorf("slug '%s' is reserved for the local managed soul; join a host with a different first label", config.LocalSoulID)
-	}
 	host := "mark://" + h
-	soulsPath, err := config.StatePath("souls")
-	if err != nil {
-		return nil, err
-	}
-	bindingsPath := ""
-	if bindDir != "" {
-		bindingsPath, err = config.StatePath("project-souls")
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	managedTokenFile, err := config.StatePath("soul-" + slug + ".token")
+	soulsPath, bindingsPath, managedTokenFile, err := soulJoinPaths(slug, bindDir)
 	if err != nil {
 		return nil, err
 	}
@@ -639,26 +648,12 @@ func soulJoinBroker(rawURL, token string, insecure bool, bindDir string) (*SoulJ
 	if insecure {
 		return nil, fmt.Errorf("--insecure applies only to self-signed QUIC souls; a memory broker is joined over verified TLS")
 	}
-	validated, err := KnowledgeJoin(rawURL)
+	validated, err := ValidateBrokerEndpoint(rawURL)
 	if err != nil {
 		return nil, err
 	}
 	slug := validated.Slug
-	if slug == config.LocalSoulID {
-		return nil, fmt.Errorf("slug '%s' is reserved for the local managed soul; front the broker at a host with a different first label", config.LocalSoulID)
-	}
-	soulsPath, err := config.StatePath("souls")
-	if err != nil {
-		return nil, err
-	}
-	bindingsPath := ""
-	if bindDir != "" {
-		bindingsPath, err = config.StatePath("project-souls")
-		if err != nil {
-			return nil, err
-		}
-	}
-	managedTokenFile, err := config.StatePath("soul-" + slug + ".token")
+	soulsPath, bindingsPath, managedTokenFile, err := soulJoinPaths(slug, bindDir)
 	if err != nil {
 		return nil, err
 	}
@@ -666,6 +661,29 @@ func soulJoinBroker(rawURL, token string, insecure bool, bindDir string) (*SoulJ
 		return nil, err
 	}
 	return &SoulJoinResult{Slug: slug, Host: validated.URL, TokenFile: "-", Broker: true, McpURL: validated.McpURL}, nil
+}
+
+// soulJoinPaths resolves the state files every soul join touches and
+// rejects the reserved local slug; shared by the QUIC and broker paths.
+func soulJoinPaths(slug, bindDir string) (soulsPath, bindingsPath, managedTokenFile string, err error) {
+	if slug == config.LocalSoulID {
+		return "", "", "", fmt.Errorf("slug '%s' is reserved for the local managed soul; join a host with a different first label", config.LocalSoulID)
+	}
+	soulsPath, err = config.StatePath("souls")
+	if err != nil {
+		return "", "", "", err
+	}
+	if bindDir != "" {
+		bindingsPath, err = config.StatePath("project-souls")
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	managedTokenFile, err = config.StatePath("soul-" + slug + ".token")
+	if err != nil {
+		return "", "", "", err
+	}
+	return soulsPath, bindingsPath, managedTokenFile, nil
 }
 
 // Every multi-file registry path locks souls before project-souls; never reverse.

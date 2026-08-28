@@ -305,10 +305,6 @@ type ServerConfig struct {
 	// itself stretches the effective session lifetime via fresh
 	// id_tokens minted on each poll.
 	IDTokenTTL time.Duration `yaml:"idTokenTTL"`
-	// MetricsAddr is the dedicated Prometheus listener (default :9090);
-	// its own listener because the management port is Ingress-routed and
-	// tenant-labelled metrics must never be public (pod port only).
-	MetricsAddr string `yaml:"metricsAddr"`
 	// Realm names the broker product in the MCP gateway's RFC 6750
 	// WWW-Authenticate challenge; each binary defaults its own name
 	// before NewServer (knowledge vs memory broker).

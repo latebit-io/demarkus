@@ -53,6 +53,16 @@ func (coordinator *tokenCoordinator) SetWorlds(worlds []tokenWorld) error {
 	return nil
 }
 
+// ValidateWorlds checks a candidate world set against the cross-world
+// token-uniqueness invariant without publishing it (prevalidation seam).
+func (coordinator *tokenCoordinator) ValidateWorlds(worlds []tokenWorld) error {
+	stores := make([]*auth.TokenStore, len(worlds))
+	for index := range worlds {
+		stores[index] = worlds[index].runtime.Tokens()
+	}
+	return validateUniqueTokens(worlds, stores)
+}
+
 func (coordinator *tokenCoordinator) Reload() error {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()

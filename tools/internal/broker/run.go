@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -102,15 +103,7 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
-	httpSrv := &http.Server{
-		Addr:              cfg.Server.Addr,
-		Handler:           srv.Routes(),
-		ReadHeaderTimeout: 10 * time.Second,
-		// Bound whole-request reads too: header timeout alone lets a
-		// client hold the connection open mid-body.
-		ReadTimeout: 60 * time.Second,
-		IdleTimeout: 120 * time.Second,
-	}
+	httpSrv := newHardenedServer(cfg.Server.Addr, srv.Routes())
 	errs := make(chan error, 1)
 	go func() {
 		log.Info(opts.LogName+": listening", "addr", cfg.Server.Addr)
@@ -118,17 +111,9 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 	}()
 
 	// MCP gateway on its own listener; distinct Addr lets the chart
-	// route the two surfaces through different Ingress hosts or paths.
-	mcpSrv := &http.Server{
-		Addr:              cfg.Server.MCP.Addr,
-		Handler:           srv.MCPGateway(opts.Version, opts.Profile),
-		ReadHeaderTimeout: 10 * time.Second,
-		// Caps reading one whole POST body (mcp-go slurps it before
-		// dispatch); SSE GET responses are write-side and unaffected.
-		// IdleTimeout keeps keep-alive idling off ReadTimeout.
-		ReadTimeout: 60 * time.Second,
-		IdleTimeout: 120 * time.Second,
-	}
+	// route the two surfaces through different Ingress hosts or paths
+	// (SSE responses are write-side, untouched by the read timeouts).
+	mcpSrv := newHardenedServer(cfg.Server.MCP.Addr, srv.MCPGateway(opts.Version, opts.Profile))
 	mcpErrs := make(chan error, 1)
 	mcpTLS := cfg.Server.MCP.TLS
 	go func() {
@@ -139,34 +124,6 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 			return
 		}
 		mcpErrs <- filterServerClosed(mcpSrv.ListenAndServe())
-	}()
-
-	// Metrics on their own listener: the management port is fronted by
-	// the Ingress, and tenant-labelled series must never be public.
-	metricsAddr := cfg.Server.MetricsAddr
-	if metricsAddr == "" {
-		metricsAddr = ":9090"
-	}
-	metricsSrv := &http.Server{
-		Addr:              metricsAddr,
-		Handler:           metricsHandler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-	go func() {
-		log.Info(opts.LogName+": metrics listening", "addr", metricsAddr)
-		if err := filterServerClosed(metricsSrv.ListenAndServe()); err != nil {
-			// Metrics are observability, not availability: log, keep serving.
-			log.Error(opts.LogName+": metrics listener failed", "err", err)
-		}
-	}()
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
-			log.Warn(opts.LogName+": metrics shutdown error", "err", err)
-		}
 	}()
 
 	// Sweeper runs leader-elected across replicas (single-host file mode
@@ -243,6 +200,18 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 	mgmtShutdownCtx, cancelMgmtShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelMgmtShutdown()
 	return httpSrv.Shutdown(mgmtShutdownCtx)
+}
+
+// newHardenedServer is the one timeout policy for every broker listener:
+// header 10s, whole-request read 60s, keep-alive idle 120s.
+func newHardenedServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 // filterServerClosed maps the graceful-shutdown sentinel to nil so the
@@ -344,9 +313,35 @@ func newSecretStore(cfg *Config, kubeconfigPath string) (SecretStore, kubernetes
 	return NewK8sSecretStore(k8s), k8s, nil
 }
 
-// NewSecretStoreFor is the exported wiring for out-of-server flows
-// (the deprovision CLI) that need the same backend selection Run uses.
-func NewSecretStoreFor(cfg *Config, kubeconfigPath string) (SecretStore, error) {
+// RunDeprovision is the operator deprovision flow, owned here so its
+// wiring (validators, store, buckets) can never drift from Run's.
+func RunDeprovision(configPath, kubeconfigPath, slug string, deleteBucket bool, log *slog.Logger) (found bool, err error) {
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		return false, err
+	}
+	if err := cfg.ValidateTenantWorlds(); err != nil {
+		return false, err
+	}
+	if err := cfg.ValidateProvisioning(); err != nil {
+		return false, err
+	}
+	if !cfg.Provisioning.Enabled() {
+		return false, fmt.Errorf("deprovisioning requires provisioning enabled (mode %q)", cfg.Provisioning.Mode)
+	}
 	store, _, err := newSecretStore(cfg, kubeconfigPath)
-	return store, err
+	if err != nil {
+		return false, err
+	}
+	// Secret-only cleanup must not depend on GCS reachability.
+	var buckets BucketCreator
+	if deleteBucket {
+		gcsBuckets, cleanup, bucketsErr := NewGCSBuckets(cfg, log)
+		if bucketsErr != nil {
+			return false, bucketsErr
+		}
+		defer cleanup()
+		buckets = gcsBuckets
+	}
+	return newProvisioner(cfg, store, buckets, log).DeprovisionTenant(context.Background(), slug, deleteBucket)
 }

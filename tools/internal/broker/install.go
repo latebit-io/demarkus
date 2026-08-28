@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"net/http"
 	"strings"
 )
@@ -54,14 +55,7 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 
 	out := []installWorld{}
 	if claims.Email != "" {
-		var listErr error
-		out, listErr = installableWorlds(s.cfg, claims, s.tenantScopedInstall())
-		if listErr != nil {
-			// Fail closed with an empty listing, but never silently:
-			// an ambiguous tenant mapping is an operator problem.
-			s.log.WarnContext(r.Context(), "broker: install world listing denied",
-				"subject", hashSubject(claims.Subject), "err", listErr)
-		}
+		out = s.listInstallableWorlds(r.Context(), claims)
 	}
 	s.log.InfoContext(r.Context(), "broker: /me/install succeeded",
 		"subject", hashSubject(claims.Subject), "worlds", len(out))
@@ -75,6 +69,19 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 // tenant-scoped, from the same profile that scopes the gateway.
 func (s *Server) tenantScopedInstall() bool {
 	return s.profile != nil && s.profile.TenantScoped
+}
+
+// listInstallableWorlds is the one fail-closed policy site for the
+// management API: resolution errors log (redacted) and yield an empty
+// listing, never a leak.
+func (s *Server) listInstallableWorlds(ctx context.Context, claims *Claims) []installWorld {
+	out, err := installableWorlds(s.cfg, claims, s.tenantScopedInstall())
+	if err != nil {
+		s.log.WarnContext(ctx, "broker: world listing denied",
+			"subject", hashSubject(claims.Subject), "err", err)
+		return []installWorld{}
+	}
+	return out
 }
 
 // installableWorlds lists the worlds a client can be wired at (no

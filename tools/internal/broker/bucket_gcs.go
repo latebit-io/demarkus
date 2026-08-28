@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"cloud.google.com/go/storage"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/iterator"
 )
 
@@ -20,9 +22,30 @@ type GCSBucketCreator struct {
 	log      *slog.Logger
 }
 
-// NewGCSBucketCreator wires the production bucket creator. project is
+// NewGCSBuckets opens a GCS client and wires the bucket creator from
+// provisioning config; the returned cleanup closes the client. The one
+// wiring site for serving setup and the deprovision flow.
+func NewGCSBuckets(cfg *Config, log *slog.Logger) (BucketCreator, func(), error) {
+	gcsClient, err := storage.NewClient(context.Background())
+	if err != nil {
+		return nil, nil, fmt.Errorf("GCS client unavailable: %w", err)
+	}
+	cleanup := func() {
+		if closeErr := gcsClient.Close(); closeErr != nil {
+			log.Warn("GCS client close failed", "err", closeErr)
+		}
+	}
+	buckets, err := newGCSBucketCreator(gcsClient, cfg.Provisioning.BucketProject, cfg.Provisioning.BucketLocation, log)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	return buckets, cleanup, nil
+}
+
+// newGCSBucketCreator wires the production bucket creator. project is
 // required; location may be empty (GCS default).
-func NewGCSBucketCreator(client *storage.Client, project, location string, log *slog.Logger) (*GCSBucketCreator, error) {
+func newGCSBucketCreator(client *storage.Client, project, location string, log *slog.Logger) (*GCSBucketCreator, error) {
 	if client == nil {
 		return nil, errors.New("broker: gcs bucket creator requires a storage client")
 	}
@@ -93,8 +116,8 @@ func verifyBucketLockdown(bucket string, attrs *storage.BucketAttrs) error {
 }
 
 // DeleteBucket permanently removes a tenant bucket and every object
-// generation in it. Only the explicit deprovision flow calls this;
-// absent is success so reruns converge.
+// generation (deprovision only; absent = success). Soft-delete disable
+// enforces within ~30s, so purge-and-delete retries until convergent.
 func (c *GCSBucketCreator) DeleteBucket(ctx context.Context, bucket string) error {
 	handle := c.client.Bucket(bucket)
 	// Disable soft delete first so object deletions purge instead of
@@ -108,7 +131,39 @@ func (c *GCSBucketCreator) DeleteBucket(ctx context.Context, bucket string) erro
 		}
 		return fmt.Errorf("disable soft delete on bucket %q: %w", bucket, err)
 	}
-	it := handle.Objects(ctx, &storage.Query{Versions: true})
+	backoff := 5 * time.Second
+	for {
+		err := c.purgeAndDelete(ctx, bucket)
+		if err == nil {
+			return nil
+		}
+		// Objects soft-deleted before the policy change enforced keep
+		// the bucket non-empty until they purge; wait and re-run.
+		c.log.Warn("bucket delete not yet convergent; retrying", "bucket", bucket, "backoff", backoff, "err", err)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("delete bucket %q: %w (last: %v)", bucket, ctx.Err(), err)
+		case <-time.After(backoff):
+		}
+		if backoff < 40*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+// purgeAndDelete removes every listable generation then the bucket.
+func (c *GCSBucketCreator) purgeAndDelete(ctx context.Context, bucket string) error {
+	handle := c.client.Bucket(bucket)
+	query := &storage.Query{Versions: true}
+	// Names + generations only: the deletes need nothing else.
+	if err := query.SetAttrSelection([]string{"Name", "Generation"}); err != nil {
+		return fmt.Errorf("bucket %q attr selection: %w", bucket, err)
+	}
+	it := handle.Objects(ctx, query)
+	// Bounded-parallel deletes: a soul holds thousands of generations
+	// and strictly sequential round trips take minutes.
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(16)
 	for {
 		object, err := it.Next()
 		if errors.Is(err, iterator.Done) {
@@ -117,13 +172,18 @@ func (c *GCSBucketCreator) DeleteBucket(ctx context.Context, bucket string) erro
 		if err != nil {
 			return fmt.Errorf("list bucket %q: %w", bucket, err)
 		}
-		obj := handle.Object(object.Name)
-		if object.Generation != 0 {
-			obj = obj.Generation(object.Generation)
-		}
-		if err := obj.Delete(ctx); err != nil && !errors.Is(err, storage.ErrObjectNotExist) {
-			return fmt.Errorf("delete object %s/%s (gen %d): %w", bucket, object.Name, object.Generation, err)
-		}
+		name, generation := object.Name, object.Generation
+		group.Go(func() error {
+			// Versions:true listings always carry a generation.
+			obj := handle.Object(name).Generation(generation)
+			if err := obj.Delete(groupCtx); err != nil && !errors.Is(err, storage.ErrObjectNotExist) {
+				return fmt.Errorf("delete object %s/%s (gen %d): %w", bucket, name, generation, err)
+			}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return err
 	}
 	if err := handle.Delete(ctx); err != nil && !errors.Is(err, storage.ErrBucketNotExist) {
 		return fmt.Errorf("delete bucket %q: %w", bucket, err)

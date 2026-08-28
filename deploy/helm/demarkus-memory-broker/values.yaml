@@ -20,10 +20,6 @@ imagePullSecrets: []
 replicaCount: 2
 
 server:
-  # Dedicated Prometheus listener; pod port only, never on the Service
-  # or Ingress (tenant-labelled series must not be public). Scrape via
-  # the pod annotations the chart sets.
-  metricsPort: 9090
   # HTTP listen port inside the pod. The broker speaks plain HTTP — the
   # Ingress (shipped in the Ingress slice) terminates TLS. The pod listens
   # on this port; the Service forwards to it; the deployment renders

@@ -11,13 +11,10 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
-
-	"cloud.google.com/go/storage"
 
 	"github.com/latebit-io/demarkus/tools/internal/broker"
 )
@@ -41,14 +38,14 @@ func main() {
 	slog.SetDefault(log)
 
 	if *deprovision != "" {
-		err := runDeprovision(*configPath, *kubeconfig, *deprovision, *deleteBucket, log)
-		switch {
-		case errors.Is(err, broker.ErrTenantNotFound):
-			// The documented rerun-to-converge path: cleanup completed.
-			log.Warn("tenant absent from registry; cleanup converged", "world", *deprovision)
-		case err != nil:
+		found, err := broker.RunDeprovision(*configPath, *kubeconfig, *deprovision, *deleteBucket, log)
+		if err != nil {
 			log.Error("deprovision failed", "world", *deprovision, "err", err)
 			os.Exit(1)
+		}
+		if !found {
+			// The documented rerun-to-converge path: cleanup completed.
+			log.Warn("tenant absent from registry; cleanup converged", "world", *deprovision)
 		}
 		return
 	}
@@ -85,19 +82,9 @@ func setupProvisioning(cfg *broker.Config, srv *broker.Server, log *slog.Logger)
 	if !cfg.Provisioning.Enabled() {
 		return nil, func() {}, nil
 	}
-	gcsClient, err := storage.NewClient(context.Background())
+	buckets, closeClient, err := broker.NewGCSBuckets(cfg, log)
 	if err != nil {
-		return nil, nil, fmt.Errorf("provisioning enabled but GCS client unavailable: %w", err)
-	}
-	closeClient := func() {
-		if closeErr := gcsClient.Close(); closeErr != nil {
-			log.Warn("memory broker: GCS client close failed", "err", closeErr)
-		}
-	}
-	buckets, err := broker.NewGCSBucketCreator(gcsClient, cfg.Provisioning.BucketProject, cfg.Provisioning.BucketLocation, log)
-	if err != nil {
-		closeClient()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("provisioning enabled: %w", err)
 	}
 	provisioner := srv.EnableProvisioning(buckets)
 	log.Info("memory broker: provisioning enabled",
@@ -105,41 +92,4 @@ func setupProvisioning(cfg *broker.Config, srv *broker.Server, log *slog.Logger)
 		"maxTenants", cfg.Provisioning.MaxTenants,
 		"authorityDomain", cfg.Provisioning.AuthorityDomain)
 	return []func(context.Context){provisioner.RunRegistrySync}, closeClient, nil
-}
-
-// runDeprovision is the operator flow: load config, wire the same
-// stores and bucket backend the serving path uses, remove the tenant.
-func runDeprovision(configPath, kubeconfigPath, slug string, deleteBucket bool, log *slog.Logger) error {
-	cfg, err := broker.LoadConfig(configPath)
-	if err != nil {
-		return err
-	}
-	if err := cfg.ValidateProvisioning(); err != nil {
-		return err
-	}
-	if !cfg.Provisioning.Enabled() {
-		return fmt.Errorf("deprovisioning requires provisioning enabled (mode %q)", cfg.Provisioning.Mode)
-	}
-	store, err := broker.NewSecretStoreFor(cfg, kubeconfigPath)
-	if err != nil {
-		return err
-	}
-	// Secret-only cleanup must not depend on GCS reachability.
-	var buckets broker.BucketCreator
-	if deleteBucket {
-		gcsClient, clientErr := storage.NewClient(context.Background())
-		if clientErr != nil {
-			return fmt.Errorf("GCS client unavailable: %w", clientErr)
-		}
-		defer func() {
-			if closeErr := gcsClient.Close(); closeErr != nil {
-				log.Warn("GCS client close failed", "err", closeErr)
-			}
-		}()
-		buckets, err = broker.NewGCSBucketCreator(gcsClient, cfg.Provisioning.BucketProject, cfg.Provisioning.BucketLocation, log)
-		if err != nil {
-			return err
-		}
-	}
-	return broker.NewProvisioner(cfg, store, buckets, log).DeprovisionTenant(context.Background(), slug, deleteBucket)
 }

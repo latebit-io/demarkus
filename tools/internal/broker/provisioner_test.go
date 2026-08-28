@@ -370,13 +370,11 @@ func TestFragmentUnionSurvivesStaleSnapshot(t *testing.T) {
 	stale := &tenantRegistry{Tenants: map[string]tenantRecord{
 		eveWorld.Name: {Email: "eve.adams@example.com", WorldID: tenantWorldID(cfg.OIDC.Issuer, "google|eve-123")},
 	}}
-	merged, err := p.renderWorldsFragment(stale, store.get(cfg.worldsFragmentRef()))
+	merged, err := p.renderWorldsFragmentUnion(stale, store.get(cfg.worldsFragmentRef()))
 	if err != nil {
 		t.Fatalf("union render: %v", err)
 	}
-	var doc struct {
-		Worlds []fragmentWorld `yaml:"worlds"`
-	}
+	var doc worldsFragmentDoc
 	if err := yaml.Unmarshal(merged, &doc); err != nil {
 		t.Fatalf("parse union fragment: %v", err)
 	}
@@ -416,8 +414,12 @@ func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.DeprovisionTenant(context.Background(), world.Name, true); err != nil {
+	found, err := p.DeprovisionTenant(context.Background(), world.Name, true)
+	if err != nil {
 		t.Fatalf("DeprovisionTenant: %v", err)
+	}
+	if !found {
+		t.Fatal("DeprovisionTenant reported the live tenant as absent")
 	}
 
 	// Registry no longer holds eve; frank survives.
@@ -449,9 +451,12 @@ func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 		t.Error("deprovisioned world still resolvable")
 	}
 
-	// Rerun converges: reports not-found but leaves state clean.
-	err = p.DeprovisionTenant(context.Background(), world.Name, false)
-	if !errors.Is(err, ErrTenantNotFound) {
-		t.Errorf("rerun err = %v, want ErrTenantNotFound", err)
+	// Rerun converges: no error, reports the tenant as already absent.
+	found, err = p.DeprovisionTenant(context.Background(), world.Name, false)
+	if err != nil {
+		t.Errorf("rerun err = %v, want nil (convergence)", err)
+	}
+	if found {
+		t.Error("rerun reported the deprovisioned tenant as found")
 	}
 }
