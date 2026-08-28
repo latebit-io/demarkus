@@ -1,0 +1,42 @@
+suite: poddisruptionbudget
+templates:
+  - poddisruptionbudget.yaml
+set:
+  oidc.issuer: https://accounts.example.com
+  oidc.clientID: broker-app
+  oidc.clientSecret: shh
+  oidc.redirectURL: https://broker.example.com/auth/callback
+tests:
+  - it: PDB renders by default with minAvailable=1
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-demarkus-knowledge-broker
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: demarkus-knowledge-broker
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  - it: minAvailable override propagates
+    set:
+      podDisruptionBudget.minAvailable: 2
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 2
+
+  - it: PDB skipped when podDisruptionBudget.enabled=false
+    set:
+      podDisruptionBudget.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

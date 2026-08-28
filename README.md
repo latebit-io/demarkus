@@ -102,7 +102,7 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
 | `demarkus-agent` | Federation agent: crawls worlds, aggregates the link graph, publishes hub indexes |
-| `demarkus-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with universe-wide catalog lookup (`mark_lookup_all`) |
+| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with universe-wide catalog lookup (`mark_lookup_all`) |
 | `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
 | `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its publish policy |
 

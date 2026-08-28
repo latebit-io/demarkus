@@ -40,7 +40,7 @@ jobs:
               - 'tools/**'
               - 'protocol/**'
               - 'client/**'
-              - 'deploy/helm/demarkus-broker/**'
+              - 'deploy/helm/demarkus-knowledge-broker/**'
 
   test-protocol:
     needs: detect-changes
@@ -93,7 +93,7 @@ jobs:
           go-version: "1.26"
       - run: cd tools && go test ./...
       - run: cd tools && go vet ./...
-      - run: cd tools && go build -o /dev/null ./demarkus-broker
+      - run: cd tools && go build -o /dev/null ./demarkus-knowledge-broker
       - run: cd tools && go build -o /dev/null ./demarkus-token
       - run: cd tools && go build -o /dev/null ./demarkus-publish
       - run: cd tools && go build -o /dev/null ./demarkus-plugin
@@ -216,7 +216,7 @@ jobs:
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           # See server's change_path note: chart-only commits must
           # bump the version so the chart actually publishes.
-          change_path: "tools/ protocol/ client/ deploy/helm/demarkus-broker/"
+          change_path: "tools/ protocol/ client/ deploy/helm/demarkus-knowledge-broker/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -526,24 +526,24 @@ jobs:
           set -euxo pipefail
           ls dist/
           mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
-          cp dist/demarkus-broker_linux_amd64*/demarkus-broker dist/docker/amd64/
-          cp dist/demarkus-broker_linux_arm64*/demarkus-broker dist/docker/arm64/
-          cp dist/demarkus-broker_linux_arm_7*/demarkus-broker dist/docker/armv7/
+          cp dist/demarkus-knowledge-broker_linux_amd64*/demarkus-knowledge-broker dist/docker/amd64/
+          cp dist/demarkus-knowledge-broker_linux_arm64*/demarkus-knowledge-broker dist/docker/arm64/
+          cp dist/demarkus-knowledge-broker_linux_arm_7*/demarkus-knowledge-broker dist/docker/armv7/
 
-      # demarkus-broker is the only runtime image in tools/. Admin CLIs
+      # demarkus-knowledge-broker is the only runtime image in tools/. Admin CLIs
       # (demarkus-token, demarkus-publish) ship as standalone binary archives
       # via goreleaser above and are not bundled into any image — see §6.7.A
       # decisions on minimal pod blast radius. Dockerfile is COPY-only.
-      - name: Build + push demarkus-broker image
+      - name: Build + push demarkus-knowledge-broker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: tools/demarkus-broker/Dockerfile
+          file: tools/demarkus-knowledge-broker/Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: |
-            ghcr.io/latebit-io/demarkus-broker:${{ needs.semver-tools.outputs.new_version }}
-            ghcr.io/latebit-io/demarkus-broker:latest
+            ghcr.io/latebit-io/demarkus-knowledge-broker:${{ needs.semver-tools.outputs.new_version }}
+            ghcr.io/latebit-io/demarkus-knowledge-broker:latest
 
       # Chart version + appVersion pinned 1:1 to the tools module version so
       # the broker chart and the broker image released in the same bump
@@ -552,11 +552,11 @@ jobs:
         with:
           version: v3.13.2
 
-      - name: Package + push demarkus-broker chart
+      - name: Package + push demarkus-knowledge-broker chart
         run: |
           VER="${{ needs.semver-tools.outputs.new_version }}"
-          helm package deploy/helm/demarkus-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
-          helm push "/tmp/charts/demarkus-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+          helm package deploy/helm/demarkus-knowledge-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
+          helm push "/tmp/charts/demarkus-knowledge-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
 
   # Dispatch the pin-bump workflow after any binary release. The bump
   # workflow's own release trigger never fires: GoReleaser publishes with

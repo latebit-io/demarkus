@@ -10,50 +10,54 @@ if ! base=$(git merge-base main HEAD 2>/dev/null); then
   exit 1
 fi
 
-files=$(git diff --name-only "$base" -- '*.go' | sort -u)
-status=0
-
-for file in $files; do
-  [ -f "$file" ] || continue
-  # Touched lines in the new file: added lines, plus the line at (and after)
-  # each deletion-only hunk so shrunk-but-still-long blocks are checked too.
-  touched=$(git diff -U0 "$base" -- "$file" | awk '
-    /^@@/ {
-      if (match($0, /\+[0-9]+(,[0-9]+)?/)) {
-        split(substr($0, RSTART + 1, RLENGTH - 1), a, ",")
-        len = (a[2] == "" ? 1 : a[2])
-        if (len == 0) { printf "%d %d ", (a[1] < 1 ? 1 : a[1]), a[1] + 1 }
-        for (i = 0; i < len; i++) printf "%d ", a[1] + i
-      }
-    }')
-  [ -n "${touched// /}" ] || continue
-
-  out=$(awk -v touched="$touched" '
-    BEGIN { n = split(touched, arr, " "); for (i = 1; i <= n; i++) hit[arr[i]] = 1 }
-    # A block directly above a package clause is the package doc comment;
-    # godoc convention allows length there.
-    function flush(cur) {
-      if (run > 3 && marked && cur !~ /^package /)
-        print FILENAME ":" startln ": comment block of " run " lines (max 3; move deep rationale to a doc)"
-      run = 0; marked = 0
+# One tree-wide diff so rename detection pairs moved files; a pure rename
+# has no hunks and stays untouched, per tighten-on-touch. The first awk
+# emits "file line" pairs; the second reads them (NR==FNR) then scans each
+# touched file once, so the whole check is two processes.
+files_and_lines=$(git diff -U0 -M "$base" -- '*.go' | awk '
+  /^\+\+\+ b\// { file = substr($0, 7); next }
+  /^@@/ {
+    if (file != "" && match($0, /\+[0-9]+(,[0-9]+)?/)) {
+      split(substr($0, RSTART + 1, RLENGTH - 1), a, ",")
+      len = (a[2] == "" ? 1 : a[2])
+      # Deletion-only hunk: mark the line at and after it so
+      # shrunk-but-still-long blocks are checked too.
+      if (len == 0) { printf "%s %d\n%s %d\n", file, (a[1] < 1 ? 1 : a[1]), file, a[1] + 1 }
+      for (i = 0; i < len; i++) printf "%s %d\n", file, a[1] + i
     }
-    {
-      t = $0; sub(/^[ \t]+/, "", t)
-      if (t ~ /^\/\// && t !~ /^\/\/go:/ && t !~ /^\/\/nolint/) {
-        if (run == 0) startln = NR
-        run++
-        if (hit[NR]) marked = 1
-        next
-      }
-      flush(t)
+  }')
+[ -n "$files_and_lines" ] || exit 0
+
+files=()
+while IFS= read -r f; do
+  [ -f "$f" ] && files+=("$f")
+done < <(printf '%s\n' "$files_and_lines" | cut -d' ' -f1 | sort -u)
+[ "${#files[@]}" -gt 0 ] || exit 0
+
+out=$(printf '%s\n' "$files_and_lines" | awk '
+  NR == FNR { hit[$1, $2] = 1; next }
+  # A block directly above a package clause is the package doc comment;
+  # godoc convention allows length there.
+  function flush(cur) {
+    if (run > 3 && marked && cur !~ /^package /)
+      print fname ":" startln ": comment block of " run " lines (max 3; move deep rationale to a doc)"
+    run = 0; marked = 0
+  }
+  FNR == 1 { flush(""); fname = FILENAME }
+  {
+    t = $0; sub(/^[ \t]+/, "", t)
+    if (t ~ /^\/\// && t !~ /^\/\/go:/ && t !~ /^\/\/nolint/) {
+      if (run == 0) startln = FNR
+      run++
+      if (hit[FILENAME, FNR]) marked = 1
+      next
     }
-    END { flush("") }
-  ' "$file")
+    flush(t)
+  }
+  END { flush("") }
+' - "${files[@]}")
 
-  if [ -n "$out" ]; then
-    echo "$out"
-    status=1
-  fi
-done
-
-exit $status
+if [ -n "$out" ]; then
+  echo "$out"
+  exit 1
+fi

@@ -38,6 +38,21 @@ systemctl() { echo "systemctl $*" >> "$CALLS"; }
 eval "$(awk '/^stack_component_installed\(\)/,/^\}$/' "$SRC")"
 eval "$(awk '/^update_stack_components\(\)/,/^\}$/' "$SRC")"
 eval "$(awk '/^update_stack_component\(\)/,/^\}$/' "$SRC")"
+eval "$(awk '/^migrate_broker_single_host\(\)/,/^\}$/' "$SRC")"
+
+# Migration env: fake dirs, recorded user/ownership mutations. `id` reports
+# only the legacy user so the rename branch runs.
+BROKER_SERVICE="demarkus-knowledge-broker"
+# shellcheck disable=SC2034  # read by the function sourced from install.sh
+BROKER_LEGACY_SERVICE="demarkus-broker"
+BROKER_CONFIG_DIR="$TMP/etc/demarkus-knowledge-broker"
+BROKER_LEGACY_CONFIG_DIR="$TMP/etc/demarkus-broker"
+BROKER_STATE_DIR="$TMP/lib/demarkus-knowledge-broker"
+BROKER_LEGACY_STATE_DIR="$TMP/lib/demarkus-broker"
+id() { [ "$1" = "demarkus-broker" ]; }
+usermod() { echo "usermod $*" >> "$CALLS"; }
+groupmod() { echo "groupmod $*" >> "$CALLS"; }
+chown() { echo "chown $*" >> "$CALLS"; }
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
@@ -62,15 +77,15 @@ grep -q "^fetch_library " "$CALLS" || fail "unit-only install was not refreshed"
 
 # 4. Broker takes its binary from the tools release.
 : > "$CALLS"
-touch "$INSTALL_DIR/demarkus-broker"; chmod +x "$INSTALL_DIR/demarkus-broker"
-update_stack_component "demarkus-broker" "demarkus-broker" "0.15.3" "$TMP"
-grep -q "^download demarkus-broker 0.15.3" "$CALLS" || fail "broker not downloaded from tools"
-grep -q "^install demarkus-broker" "$CALLS" || fail "broker binary not installed"
-grep -q "try-restart demarkus-broker" "$CALLS" || fail "broker was not restarted"
+touch "$INSTALL_DIR/demarkus-knowledge-broker"; chmod +x "$INSTALL_DIR/demarkus-knowledge-broker"
+update_stack_component "demarkus-knowledge-broker" "demarkus-knowledge-broker" "0.15.3" "$TMP"
+grep -q "^download demarkus-knowledge-broker 0.15.3" "$CALLS" || fail "broker not downloaded from tools"
+grep -q "^install demarkus-knowledge-broker" "$CALLS" || fail "broker binary not installed"
+grep -q "try-restart demarkus-knowledge-broker" "$CALLS" || fail "broker was not restarted"
 
 # 5. Broker with no resolved tools release: skipped, not half-updated.
 : > "$CALLS"
-update_stack_component "demarkus-broker" "demarkus-broker" "" "$TMP"
+update_stack_component "demarkus-knowledge-broker" "demarkus-knowledge-broker" "" "$TMP"
 grep -q "^download" "$CALLS" && fail "broker updated without a tools version"
 grep -q "try-restart" "$CALLS" && fail "broker restarted without being updated"
 
@@ -108,25 +123,25 @@ PLATFORM="linux"
 # 10. An unresolvable tools release must fail loudly when a broker is installed,
 # not log a skip and report success.
 # shellcheck disable=SC2034  # consumed by the functions sourced from install.sh
-BROKER_SERVICE="demarkus-broker"
+BROKER_SERVICE="demarkus-knowledge-broker"
 # shellcheck disable=SC2034  # consumed by the functions sourced from install.sh
 LIBRARY_SERVICE="demarkus-library"
-touch "$INSTALL_DIR/demarkus-broker"; chmod +x "$INSTALL_DIR/demarkus-broker"
+touch "$INSTALL_DIR/demarkus-knowledge-broker"; chmod +x "$INSTALL_DIR/demarkus-knowledge-broker"
 if ( update_stack_components "" "" "$TMP" ) 2>/dev/null; then
   fail "an installed broker with no tools release must not report success"
 fi
-rm -f "$INSTALL_DIR/demarkus-broker"
+rm -f "$INSTALL_DIR/demarkus-knowledge-broker"
 # With no broker installed the same call is a no-op, not a failure.
 ( update_stack_components "" "" "$TMP" ) 2>/dev/null || fail "absent broker must not fail the update"
 
 # 11. A non-linux host skips the whole refresh, even with a stray binary and no
 # resolvable tools release: the platform check must precede the broker guard.
 PLATFORM="darwin"
-touch "$INSTALL_DIR/demarkus-broker"; chmod +x "$INSTALL_DIR/demarkus-broker"
+touch "$INSTALL_DIR/demarkus-knowledge-broker"; chmod +x "$INSTALL_DIR/demarkus-knowledge-broker"
 : > "$CALLS"
 ( update_stack_components "" "" "$TMP" ) 2>/dev/null || fail "non-linux refresh must not fail the update"
 [ ! -s "$CALLS" ] || fail "non-linux host attempted a component refresh: $(cat "$CALLS")"
-rm -f "$INSTALL_DIR/demarkus-broker"
+rm -f "$INSTALL_DIR/demarkus-knowledge-broker"
 # shellcheck disable=SC2034  # read by the functions sourced from install.sh
 PLATFORM="linux"
 
@@ -145,5 +160,34 @@ AFTER=$(inode_of "$DEST")
 grep -q "^new$" "$DEST" || fail "new content not in place"
 [ -x "$DEST" ] || fail "replacement is not executable"
 [ -z "$(find "$TMP/bin" -name 'demarkus-fake.new.*' 2>/dev/null)" ] || fail "staging file left behind"
+
+# 13. Pre-rename broker install migrates in place: unit, config, state,
+# binary, user all renamed, references rewritten, service re-enabled.
+: > "$CALLS"
+mkdir -p "$BROKER_LEGACY_CONFIG_DIR" "$BROKER_LEGACY_STATE_DIR"
+printf 'storage:\n  backend: file\n  dir: %s\n' "/var/lib/demarkus-broker" > "$BROKER_LEGACY_CONFIG_DIR/config.yaml"
+printf 'refresh\n' > "$BROKER_LEGACY_STATE_DIR/refresh_tokens.json"
+printf '[Service]\nUser=demarkus-broker\nExecStart=%s/demarkus-broker -config /etc/demarkus-broker/config.yaml\n' "$INSTALL_DIR" > "$SYSTEMD_DIR/demarkus-broker.service"
+printf 'oldbin\n' > "$INSTALL_DIR/demarkus-broker"; chmod +x "$INSTALL_DIR/demarkus-broker"
+migrate_broker_single_host
+[ -f "$SYSTEMD_DIR/demarkus-knowledge-broker.service" ] || fail "unit not renamed"
+[ ! -e "$SYSTEMD_DIR/demarkus-broker.service" ] || fail "legacy unit left behind"
+grep -q "User=demarkus-knowledge-broker" "$SYSTEMD_DIR/demarkus-knowledge-broker.service" || fail "unit User not rewritten"
+grep -q "demarkus-knowledge-knowledge" "$SYSTEMD_DIR/demarkus-knowledge-broker.service" && fail "unit rewrite double-replaced"
+[ -f "$BROKER_CONFIG_DIR/config.yaml" ] || fail "config dir not moved"
+grep -q "dir: /var/lib/demarkus-knowledge-broker" "$BROKER_CONFIG_DIR/config.yaml" || fail "config storage.dir not rewritten"
+[ -f "$BROKER_STATE_DIR/refresh_tokens.json" ] || fail "state dir not moved"
+[ -x "$INSTALL_DIR/demarkus-knowledge-broker" ] || fail "binary not renamed"
+[ ! -e "$INSTALL_DIR/demarkus-broker" ] || fail "legacy binary left behind"
+grep -q "^usermod -l demarkus-knowledge-broker demarkus-broker" "$CALLS" || fail "user not renamed"
+grep -q "systemctl enable demarkus-knowledge-broker" "$CALLS" || fail "migrated service not re-enabled"
+grep -q "systemctl restart demarkus-knowledge-broker" "$CALLS" || fail "migrated service not restarted"
+
+# 14. Migration is one-shot: a second run must be a silent no-op.
+: > "$CALLS"
+migrate_broker_single_host
+[ ! -s "$CALLS" ] || fail "migration reran on a migrated install: $(cat "$CALLS")"
+grep -q "demarkus-knowledge-knowledge" "$BROKER_CONFIG_DIR/config.yaml" && fail "config double-replaced on rerun"
+rm -f "$INSTALL_DIR/demarkus-knowledge-broker"
 
 echo "PASS: update_stack_component"

@@ -1,0 +1,66 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /* Restricts ingress to the configured controller namespace and egress
+   to DNS, HTTPS, and configured Mark Protocol UDP ports. */ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "demarkus-knowledge-broker.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "demarkus-knowledge-broker.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "demarkus-knowledge-broker.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressFromNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.server.port }}
+        {{- /* MCP gateway port admitted from the same ingress-
+               controller namespace. Same trust topology as the
+               management API — the gateway is fronted by the same
+               Ingress controller (different hostname, different
+               Service port) so it does not warrant a separate
+               from-block. */}}
+        - protocol: TCP
+          port: {{ include "demarkus-knowledge-broker.mcpPort" . }}
+  egress:
+    # DNS — UDP + TCP to kube-system (CoreDNS / kube-dns).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # TCP 443 to anywhere — kube-apiserver via the cluster Service and
+    # the OIDC issuer's discovery + JWKS endpoints. Intentionally not
+    # restricted to specific destinations: pinning the apiserver IP/CIDR
+    # breaks across managed-k8s providers, and pinning the OIDC issuer
+    # CIDR breaks every time the IdP rotates its frontends.
+    - ports:
+        - protocol: TCP
+          port: 443
+    {{- $worldPorts := dict "6309" true }}
+    {{- range .Values.worlds }}
+      {{- $portSuffix := regexFind ":[0-9]+$" (default "" .internalAddress) }}
+      {{- if $portSuffix }}
+        {{- $_ := set $worldPorts (trimPrefix ":" $portSuffix) true }}
+      {{- end }}
+    {{- end }}
+    # World endpoints may span namespaces and clusters.
+    - ports:
+        {{- range $port := keys $worldPorts | sortAlpha }}
+        - protocol: UDP
+          port: {{ $port }}
+        {{- end }}
+{{- end }}

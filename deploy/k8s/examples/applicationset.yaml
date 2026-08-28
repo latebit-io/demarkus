@@ -57,7 +57,7 @@ spec:
       # operationally and prevents Argo from looping on a sync it can never
       # converge.
       #
-      # The world's tokens Secret holds runtime state — the demarkus-broker
+      # The world's tokens Secret holds runtime state — the demarkus-knowledge-broker
       # appends per-mint hash entries to data.tokens.toml. Without ignoring
       # /data, Argo's selfHeal would revert every mint immediately back to
       # the chart-rendered admin-only contents (resourceVersion churns, but

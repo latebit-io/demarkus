@@ -1,0 +1,56 @@
+demarkus-knowledge-broker installed as release {{ .Release.Name | quote }} in namespace {{ .Release.Namespace | quote }}.
+
+== Broker URL ==
+{{- if .Values.ingress.enabled }}
+  Public:   https://{{ .Values.ingress.host }}/
+  Login:    https://{{ .Values.ingress.host }}/auth/login
+  Callback: https://{{ .Values.ingress.host }}/auth/callback
+  Routed through IngressClass {{ .Values.ingress.className | quote }}.
+  {{- if .Values.ingress.tls.certManager.enabled }}
+  TLS via cert-manager Certificate {{ include "demarkus-knowledge-broker.fullname" . }}-tls (issuer: {{ .Values.ingress.tls.certManager.issuerRef.kind }}/{{ .Values.ingress.tls.certManager.issuerRef.name }}).
+  {{- else if .Values.ingress.tls.existingSecret }}
+  TLS via pre-existing Secret {{ .Values.ingress.tls.existingSecret | quote }}.
+  {{- else }}
+  TLS: not configured on the Ingress — controller-side TLS termination assumed.
+  {{- end }}
+{{- else }}
+  In-cluster: http://{{ include "demarkus-knowledge-broker.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.port }}/
+  Ingress is disabled. Expose via port-forward for dev:
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "demarkus-knowledge-broker.fullname" . }} {{ .Values.server.port }}:{{ .Values.server.port }}
+{{- end }}
+
+== Configured worlds ({{ len .Values.worlds }}) ==
+{{- range .Values.worlds }}
+  - {{ .name }} → secret {{ .namespace }}/{{ .tokensSecret }}
+{{- end }}
+
+== Prerequisites the chart does NOT enforce ==
+- Each world's namespace listed above must already exist; chart does not create them.
+- Each world's tokens Secret must already exist; demarkus-server chart's bootstrap Job creates it.
+{{- if .Values.rbac.create }}
+- The install-time ServiceAccount needs Role/RoleBinding create rights in every world's namespace (the chart created them per-world).
+{{- else }}
+- rbac.create=false: per-world Role + RoleBinding must be provisioned out of band.
+{{- end }}
+
+== Security invariants to verify ==
+{{- if and .Values.ingress.enabled .Values.rateLimit.trustForwardedFor }}
+- rateLimit.trustForwardedFor=true is in effect. This is only safe when the
+  Ingress controller {{ .Values.ingress.className | quote }} strips spoofed
+  X-Forwarded-For from inbound requests and appends the real client IP.
+  nginx-ingress and Traefik do this by default; verify the behavior for any
+  other controller before exposing /auth/login publicly.
+{{- else if .Values.rateLimit.trustForwardedFor }}
+- rateLimit.trustForwardedFor=true but no Ingress is configured. If the broker
+  is reachable from untrusted clients (e.g. NodePort/LoadBalancer Service), an
+  attacker can spoof X-Forwarded-For to bypass the per-IP rate limit on
+  /auth/login. Either deploy behind an XFF-stripping Ingress or set
+  rateLimit.trustForwardedFor=false.
+{{- end }}
+{{- if .Values.oidc.clientSecret }}
+- OIDC clientSecret is set in values (cleartext). The value lives in helm
+  release history. For production, switch to oidc.existingSecretRef pointing at
+  an externally-managed Secret (External Secrets / Sealed Secrets / Vault).
+{{- end }}
+
+Configure your OIDC IdP to allow the redirect URI {{ .Values.oidc.redirectURL | quote }}.

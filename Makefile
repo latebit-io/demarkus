@@ -57,11 +57,11 @@ client: protocol
 # Build tools
 tools: protocol
 	@echo "Building tools..."
-	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-broker  ./demarkus-broker
+	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-broker  ./demarkus-knowledge-broker
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-token   ./demarkus-token
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-publish ./demarkus-publish
 	cd tools && go build -o bin/demarkus-loadtest ./demarkus-loadtest
-	@echo "✓ Tools built: tools/bin/{demarkus-broker, demarkus-token, demarkus-publish, demarkus-loadtest}"
+	@echo "✓ Tools built: tools/bin/{demarkus-knowledge-broker, demarkus-token, demarkus-publish, demarkus-loadtest}"
 
 # Build container images. One image per deployable service so each pod
 # carries only the binaries it needs at runtime. Admin CLIs are NOT
@@ -93,11 +93,11 @@ image-knowledge-server:
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-knowledge-server:$(TAG)"
 
 image-broker:
-	@echo "Building $(IMAGE_REGISTRY)/demarkus-broker:$(TAG) for linux/$(HOST_ARCH)..."
+	@echo "Building $(IMAGE_REGISTRY)/demarkus-knowledge-broker:$(TAG) for linux/$(HOST_ARCH)..."
 	@mkdir -p dist/docker/$(HOST_ARCH)
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C tools -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-broker ./demarkus-broker
-	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f tools/demarkus-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-broker:$(TAG) .
-	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-broker:$(TAG)"
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C tools -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-knowledge-broker ./demarkus-knowledge-broker
+	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f tools/demarkus-knowledge-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-knowledge-broker:$(TAG) .
+	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-knowledge-broker:$(TAG)"
 
 image-agent:
 	@echo "Building $(IMAGE_REGISTRY)/demarkus-agent:$(TAG) for linux/$(HOST_ARCH)..."

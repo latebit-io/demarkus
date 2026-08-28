@@ -80,9 +80,9 @@ networkPolicy:
   # unrestricted TCP/443, or disable this policy and supply CNI/proxy controls.
   allowUnrestrictedHTTPS: false
   broker:
-    namespace: demarkus-broker
+    namespace: demarkus-knowledge-broker
     podLabels:
-      app.kubernetes.io/name: demarkus-broker
+      app.kubernetes.io/name: demarkus-knowledge-broker
   agent:
     namespace: demarkus-agent
     podLabels:

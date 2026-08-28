@@ -24,10 +24,10 @@ tests:
     asserts:
       - equal:
           path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
-          value: demarkus-broker
+          value: demarkus-knowledge-broker
       - equal:
           path: spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
-          value: demarkus-broker
+          value: demarkus-knowledge-broker
       - equal:
           path: spec.ingress[0].from[1].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
           value: demarkus-agent

@@ -42,7 +42,7 @@ This produces the following binaries:
 | `demarkus-tui` | `client/bin/demarkus-tui` | TUI browser |
 | `demarkus-mcp` | `client/bin/demarkus-mcp` | MCP server |
 | `demarkus-agent` | `client/bin/demarkus-agent` | Federation crawler |
-| `demarkus-broker` | `tools/bin/demarkus-broker` | OIDC broker and MCP gateway |
+| `demarkus-knowledge-broker` | `tools/bin/demarkus-knowledge-broker` | OIDC broker and MCP gateway |
 | `demarkus-publish` | `tools/bin/demarkus-publish` | Local publish (bypasses server) |
 | `demarkus-loadtest` | `tools/bin/demarkus-loadtest` | Load testing |
 

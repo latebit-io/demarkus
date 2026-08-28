@@ -8,7 +8,7 @@ This section is a stable reference for configuration, environment variables, and
 - [Knowledge server configuration](#knowledge-server-configuration)
 - [Federation crawler configuration](#federation-crawler-configuration)
 
-Broker configuration (OIDC, worlds, MCP gateway) is documented in `tools/demarkus-broker/` and its Helm chart README.
+Broker configuration (OIDC, worlds, MCP gateway) is documented in `tools/demarkus-knowledge-broker/` and its Helm chart README.
 
 ### Server configuration
 

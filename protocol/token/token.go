@@ -1,5 +1,5 @@
 // Package token provides the shared mint primitives used by demarkus-token
-// (CLI) and demarkus-broker (OIDC token issuer). Behavior is split so callers
+// (CLI) and demarkus-knowledge-broker (OIDC token issuer). Behavior is split so callers
 // can compose freely:
 //
 //   - Generate is pure: it mints a fresh raw token, hashes it, and returns

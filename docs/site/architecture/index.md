@@ -163,12 +163,12 @@ The filesystem form needs no database and no background services.
 
 ### Brokered knowledge system
 
-`demarkus-broker` fronts one or more worlds: it terminates MCP over HTTPS with OIDC auth, mints per-world capability tokens, and speaks QUIC to the worlds behind it. The federation agent (`demarkus-agent`) crawls the worlds on a schedule; with the publish flags set and at least one hub configured it publishes hash indexes and graph snapshots to the hub, skipping publication when a crawl is incomplete.
+`demarkus-knowledge-broker` fronts one or more worlds: it terminates MCP over HTTPS with OIDC auth, mints per-world capability tokens, and speaks QUIC to the worlds behind it. The federation agent (`demarkus-agent`) crawls the worlds on a schedule; with the publish flags set and at least one hub configured it publishes hash indexes and graph snapshots to the hub, skipping publication when a crawl is incomplete.
 
 ```text
 Agents (MCP over HTTPS, OIDC)
         |
-  demarkus-broker ── demarkus-agent (scheduled crawl)
+  demarkus-knowledge-broker ── demarkus-agent (scheduled crawl)
         |
    QUIC/TLS (per-world tokens)
         |

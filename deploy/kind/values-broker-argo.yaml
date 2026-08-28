@@ -33,7 +33,7 @@ server:
 # broker's authorizedWorlds predicate (allow.emails below) matches.
 oidc:
   issuer: http://mock-oauth2-server.demarkus.svc.cluster.local:8080/default
-  clientID: demarkus-broker-kind
+  clientID: demarkus-knowledge-broker-kind
   clientSecret: dev-secret
   # redirectURL is what the broker tells the IdP to redirect the user
   # back to. For the kind smoke test the curl client hits the broker's

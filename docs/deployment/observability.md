@@ -12,7 +12,7 @@ All four services write to stdout/stderr via Go's `log/slog`:
 |---|---|---|
 | `demarkus-server` | `json` (chart default) | `server.logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
 | `demarkus-knowledge-server` | `json` (hardcoded in binary) | not exposed; `server/cmd/demarkus-knowledge-server/main.go` |
-| `demarkus-broker` | `json` (hardcoded in binary) | not exposed; `tools/demarkus-broker/main.go` |
+| `demarkus-knowledge-broker` | `json` (hardcoded in binary) | not exposed; `tools/demarkus-knowledge-broker/main.go` |
 | `demarkus-agent` | `json` (chart default) | `logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
 
 The binary's standalone default outside the chart is `text` for server and agent (human-readable for local dev). The Helm charts override to `json` so production deployments are machine-parseable without operator intervention.
@@ -67,7 +67,7 @@ The knowledge server shares the server's request-handling and logging code, so p
 - Every world-scoped record carries a `world` field (the world name), and per-connection records add `authority` (the SNI name the client dialed); scope dashboards by `world`.
 - Startup, world-open, TLS, and GCS lifecycle events have their own messages (`configuration invalid`, `TLS setup failed`, `GCS client unavailable`, `world startup failed`); all are ERROR-level and fatal at startup.
 
-## Broker (`demarkus-broker`): field schema
+## Broker (`demarkus-knowledge-broker`): field schema
 
 Broker logs cover OIDC mint/revoke/rotate, sweeper drift+expiry handling, and rate-limit decisions. All messages share the `broker:` prefix on `msg` so a single filter scopes a backend dashboard.
 

@@ -1111,14 +1111,84 @@ migrate() {
 
 # --- single-host stack: broker + library beside the server ------------------
 
-BROKER_SERVICE="demarkus-broker"
-BROKER_CONFIG_DIR="/etc/demarkus-broker"
-BROKER_STATE_DIR="/var/lib/demarkus-broker"
+BROKER_SERVICE="demarkus-knowledge-broker"
+BROKER_CONFIG_DIR="/etc/demarkus-knowledge-broker"
+BROKER_STATE_DIR="/var/lib/demarkus-knowledge-broker"
+# Pre-rename identity, consumed only by migrate_broker_single_host.
+BROKER_LEGACY_SERVICE="demarkus-broker"
+BROKER_LEGACY_CONFIG_DIR="/etc/demarkus-broker"
+BROKER_LEGACY_STATE_DIR="/var/lib/demarkus-broker"
 LIBRARY_SERVICE="demarkus-library"
 LIBRARY_CONFIG_DIR="/etc/demarkus-library"
 LIBRARY_REPO="latebit-io/demarkus-library"
 
-# install_broker deploys demarkus-broker in file-backend (single-host) mode:
+# migrate_broker_single_host renames a pre-rename broker install in place
+# (unit, user, dirs, binary, and every name reference inside the kept config
+# and unit). One-shot; no-op unless the legacy unit exists. Fails closed.
+migrate_broker_single_host() {
+  if [ "$PLATFORM" != "linux" ] || ! $SUDO test -f "${SYSTEMD_DIR}/${BROKER_LEGACY_SERVICE}.service"; then
+    return 0
+  fi
+  log_step "Migrating single-host broker to the ${BROKER_SERVICE} name"
+  local was_enabled=false was_active=false
+  $SUDO systemctl is-enabled --quiet "$BROKER_LEGACY_SERVICE" 2>/dev/null && was_enabled=true
+  $SUDO systemctl is-active --quiet "$BROKER_LEGACY_SERVICE" 2>/dev/null && was_active=true
+  if [ "$was_active" = true ] && ! $SUDO systemctl stop "$BROKER_LEGACY_SERVICE"; then
+    log_error "Could not stop ${BROKER_LEGACY_SERVICE} for migration"
+    exit 1
+  fi
+  if [ "$was_enabled" = true ] && ! $SUDO systemctl disable "$BROKER_LEGACY_SERVICE"; then
+    log_error "Could not disable ${BROKER_LEGACY_SERVICE} for migration"
+    exit 1
+  fi
+  if $SUDO test -d "$BROKER_LEGACY_CONFIG_DIR" && ! $SUDO test -e "$BROKER_CONFIG_DIR"; then
+    $SUDO mv "$BROKER_LEGACY_CONFIG_DIR" "$BROKER_CONFIG_DIR" || { log_error "Could not move ${BROKER_LEGACY_CONFIG_DIR} to ${BROKER_CONFIG_DIR}"; exit 1; }
+  fi
+  if $SUDO test -d "$BROKER_LEGACY_STATE_DIR" && ! $SUDO test -e "$BROKER_STATE_DIR"; then
+    $SUDO mv "$BROKER_LEGACY_STATE_DIR" "$BROKER_STATE_DIR" || { log_error "Could not move ${BROKER_LEGACY_STATE_DIR} to ${BROKER_STATE_DIR}"; exit 1; }
+  fi
+  # The kept config still points storage.dir (and comments) at old paths.
+  # Normalize-then-replace keeps the rewrite idempotent across a rerun;
+  # temp+mv instead of sed -i so ownership is restored explicitly.
+  local rename_expr='s|demarkus-knowledge-broker|demarkus-broker|g; s|demarkus-broker|demarkus-knowledge-broker|g'
+  local cfg="${BROKER_CONFIG_DIR}/config.yaml"
+  if $SUDO test -f "$cfg"; then
+    if ! $SUDO sh -c "sed '$rename_expr' '$cfg' > '${cfg}.tmp'" || ! $SUDO mv "${cfg}.tmp" "$cfg" \
+      || ! $SUDO chown root:"$BROKER_SERVICE" "$cfg" 2>/dev/null || ! $SUDO chmod 640 "$cfg"; then
+      $SUDO rm -f "${cfg}.tmp"
+      log_error "Could not rewrite ${cfg} for the new broker name"
+      exit 1
+    fi
+  fi
+  # Rename the unit and every reference inside it (User, ExecStart, paths).
+  local unit="${SYSTEMD_DIR}/${BROKER_SERVICE}.service"
+  if ! $SUDO sh -c "sed '$rename_expr' '${SYSTEMD_DIR}/${BROKER_LEGACY_SERVICE}.service' > '$unit'" \
+    || ! $SUDO rm "${SYSTEMD_DIR}/${BROKER_LEGACY_SERVICE}.service"; then
+    log_error "Could not migrate the ${BROKER_LEGACY_SERVICE} systemd unit"
+    exit 1
+  fi
+  if $SUDO test -f "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}" && ! $SUDO test -e "${INSTALL_DIR}/${BROKER_SERVICE}"; then
+    $SUDO mv "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}" "${INSTALL_DIR}/${BROKER_SERVICE}" || { log_error "Could not rename the broker binary"; exit 1; }
+  fi
+  if id "$BROKER_LEGACY_SERVICE" >/dev/null 2>&1 && ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
+    if ! $SUDO usermod -l "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE" || ! $SUDO groupmod -n "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE"; then
+      log_error "Could not rename the ${BROKER_LEGACY_SERVICE} system user"
+      exit 1
+    fi
+  fi
+  $SUDO systemctl daemon-reload
+  if [ "$was_enabled" = true ] && ! $SUDO systemctl enable "$BROKER_SERVICE"; then
+    log_error "Could not re-enable ${BROKER_SERVICE} after migration"
+    exit 1
+  fi
+  if [ "$was_active" = true ] && ! $SUDO systemctl restart "$BROKER_SERVICE"; then
+    log_error "Could not restart ${BROKER_SERVICE} after migration"
+    exit 1
+  fi
+  log_info "Broker migrated: unit, user, config, state, and binary now ${BROKER_SERVICE}"
+}
+
+# install_broker deploys demarkus-knowledge-broker in file-backend (single-host) mode:
 # the broker owns tokens.toml writes, the server keeps its read+hot-reload
 # contract, and every credential the broker persists lives in BROKER_STATE_DIR.
 install_broker() {
@@ -1137,9 +1207,13 @@ install_broker() {
     return
   fi
 
-  log_step "Installing demarkus-broker (single-host mode)"
-  download_and_verify_asset "demarkus-broker" "$tools_version" "tools" "$tmpdir"
-  install_binaries "$tmpdir" "demarkus-broker"
+  # A pre-rename install migrates in place before the fresh-install steps
+  # rerun over it; otherwise this would stand up a second unit beside it.
+  migrate_broker_single_host
+
+  log_step "Installing ${BROKER_SERVICE} (single-host mode)"
+  download_and_verify_asset "$BROKER_SERVICE" "$tools_version" "tools" "$tmpdir"
+  install_binaries "$tmpdir" "$BROKER_SERVICE"
 
   if ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /usr/sbin/nologin "$BROKER_SERVICE"
@@ -1264,7 +1338,7 @@ After=network.target demarkus.service
 [Service]
 Type=simple
 User=${BROKER_SERVICE}
-ExecStart=${INSTALL_DIR}/demarkus-broker -config ${BROKER_CONFIG_DIR}/config.yaml
+ExecStart=${INSTALL_DIR}/${BROKER_SERVICE} -config ${BROKER_CONFIG_DIR}/config.yaml
 EnvironmentFile=${BROKER_CONFIG_DIR}/env
 Restart=on-failure
 RestartSec=5
@@ -2175,14 +2249,18 @@ update_stack_components() {
     return
   fi
 
+  # A pre-rename install must migrate first or the installed-check below
+  # would silently skip it forever.
+  migrate_broker_single_host
+
   # An empty tools version would otherwise make the broker branch log a skip
   # and return success, reporting a clean update that never refreshed it.
-  if [ -z "$tools_version" ] && stack_component_installed "demarkus-broker" "$BROKER_SERVICE"; then
+  if [ -z "$tools_version" ] && stack_component_installed "demarkus-knowledge-broker" "$BROKER_SERVICE"; then
     log_error "Could not resolve the tools release; the installed broker cannot be updated"
     exit 1
   fi
 
-  update_stack_component "demarkus-broker" "$BROKER_SERVICE" "$tools_version" "$tmpdir"
+  update_stack_component "$BROKER_SERVICE" "$BROKER_SERVICE" "$tools_version" "$tmpdir"
   update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "$library_version" "$tmpdir"
 }
 
@@ -2456,8 +2534,9 @@ do_uninstall() {
     $SUDO systemctl disable demarkus 2>/dev/null || true
     remove_path "${SYSTEMD_DIR}/demarkus.service"
     # Remove the optional single-host stack components too. Each is a
-    # no-op when it was never installed.
-    for svc in "$BROKER_SERVICE" "$LIBRARY_SERVICE"; do
+    # no-op when it was never installed. demarkus-broker is the broker's
+    # pre-rename identity, still present on never-migrated installs.
+    for svc in "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE" "$LIBRARY_SERVICE"; do
       if $SUDO test -f "${SYSTEMD_DIR}/${svc}.service"; then
         $SUDO systemctl stop "$svc" 2>/dev/null || true
         $SUDO systemctl disable "$svc" 2>/dev/null || true
@@ -2482,14 +2561,14 @@ do_uninstall() {
   fi
 
   # Remove binaries
-  for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install demarkus-broker demarkus-library; do
+  for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install demarkus-knowledge-broker "$BROKER_LEGACY_SERVICE" demarkus-library; do
     remove_path "${INSTALL_DIR}/${bin}"
   done
   log_info "Removed binaries from ${INSTALL_DIR}/"
 
   # Remove config (server, plus broker/library when present — the broker
   # config and state hold credential-bearing artifacts, so always clear).
-  for d in "$CONFIG_DIR" "$BROKER_CONFIG_DIR" "$BROKER_STATE_DIR" "$LIBRARY_CONFIG_DIR"; do
+  for d in "$CONFIG_DIR" "$BROKER_CONFIG_DIR" "$BROKER_STATE_DIR" "$BROKER_LEGACY_CONFIG_DIR" "$BROKER_LEGACY_STATE_DIR" "$LIBRARY_CONFIG_DIR"; do
     if [ -n "$d" ] && $SUDO test -d "$d"; then
       remove_path "$d" && log_info "Removed ${d}/"
     fi
@@ -2510,7 +2589,7 @@ do_uninstall() {
   # Remove system users (Linux only). The broker user is removed before
   # the server user because it is a member of the server group.
   if [ "$PLATFORM" = "linux" ]; then
-    for u in "$BROKER_SERVICE" "$LIBRARY_SERVICE" "$SERVICE_NAME"; do
+    for u in "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE" "$LIBRARY_SERVICE" "$SERVICE_NAME"; do
       if id "$u" >/dev/null 2>&1; then
         if $SUDO userdel "$u" 2>/dev/null; then
           log_info "Removed system user '${u}'"
