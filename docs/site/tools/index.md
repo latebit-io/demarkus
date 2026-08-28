@@ -24,6 +24,12 @@ The broker is the front door of a knowledge system: it authenticates people and 
 
 See `tools/demarkus-knowledge-broker/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-knowledge-broker/`) for deployment.
 
+## Memory Broker (`demarkus-memory-broker`)
+
+The memory broker is the knowledge broker's personal sibling: one OAuth connector URL gives any MCP host (Claude Desktop, ChatGPT, Claude Code, Cursor) a private, versioned soul. Identity maps to exactly one world; reads and writes are locked to it, the soul template is seeded on first access, and dynamic provisioning can create the world itself on first arrival behind a `static | allowlisted | open` gate.
+
+See [Memory Broker](./memory-broker.md) for connector setup per host.
+
 ## Token Generation (`demarkus-token`)
 
 The server is secure by default and **denies writes** unless you configure a tokens file. Tokens are capability-based: they grant operations on path patterns, not identities. The server stores **only the SHA-256 hash** of tokens, never the raw secret.

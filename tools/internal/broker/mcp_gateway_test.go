@@ -34,7 +34,7 @@ func newTestMCPGateway(t *testing.T, cfg *Config, verifier Verifier) *httptest.S
 	signer := newTestSigner(t)
 	k8s := fake.NewSimpleClientset()
 	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(brokerSrv.MCPGateway("test"))
+	ts := httptest.NewServer(brokerSrv.MCPGateway("test", KnowledgeGatewayProfile()))
 	t.Cleanup(ts.Close)
 	return ts
 }

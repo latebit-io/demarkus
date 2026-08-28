@@ -111,18 +111,8 @@ func (g *mcpGateway) registerTools() {
 }
 
 // toolHandlers maps tools to implementations; registerTools wires only
-// the profile's tool list. The tenant-scoped profile swaps mark_worlds
-// for the self-only variant.
+// the profile's tool list.
 func (g *mcpGateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
-	if g.profile.TenantScoped {
-		h := g.knowledgeToolHandlers()
-		h["mark_worlds"] = g.handleMarkWorldsSelf
-		return h
-	}
-	return g.knowledgeToolHandlers()
-}
-
-func (g *mcpGateway) knowledgeToolHandlers() map[string]mcpserver.ToolHandlerFunc {
 	return map[string]mcpserver.ToolHandlerFunc{
 		"mark_fetch":         g.handleMarkFetch,
 		"mark_explore":       g.handleMarkExplore,
@@ -177,18 +167,10 @@ func (g *mcpGateway) Routes() http.Handler {
 	return mux
 }
 
-// MCPGateway returns the MCP gateway's http.Handler with the
-// production worldPool wired as the dispatcher. main.go starts a
-// second http.Server bound to cfg.Server.MCP.Addr with this handler
-// at startup — the gateway is always on; every broker is a
-// knowledge-system gateway. version is the broker binary's build
-// version, threaded through to the MCP initialize response so
-// clients can correlate broker behavior with a specific release.
-//
-// The returned worldPool's lifecycle is bound to the gateway;
-// main.go calls (*Server).CloseMCPGateway during shutdown to drain
-// pooled QUIC connections. For test injection use MCPGatewayWith.
-func (s *Server) MCPGateway(version string) http.Handler {
+// MCPGateway returns the gateway handler for the given profile with the
+// production worldPool as dispatcher; CloseMCPGateway drains its pooled
+// QUIC connections at shutdown. Tests inject via MCPGatewayWith.
+func (s *Server) MCPGateway(version string, profile *GatewayProfile) http.Handler {
 	// WorldDialer.InsecureSkipVerify propagates into fetch.Options.Insecure
 	// so the QUIC client skips TLS chain + hostname verification on
 	// dial. Required today for in-cluster deployments using per-world
@@ -199,31 +181,14 @@ func (s *Server) MCPGateway(version string) http.Handler {
 		Insecure: s.cfg.WorldDialer.InsecureSkipVerify,
 	})
 	s.mcpPool = pool
-	return newMCPGateway(s, version, pool, KnowledgeGatewayProfile()).Routes()
+	return newMCPGateway(s, version, pool, profile).Routes()
 }
 
-// MemoryMCPGateway is MCPGateway's memory-broker sibling: same worldPool
-// wiring, tenant-scoped profile (identity = world, soul seeding).
-func (s *Server) MemoryMCPGateway(version string) http.Handler {
-	pool := newWorldPool(s.cfg, fetch.Options{
-		Insecure: s.cfg.WorldDialer.InsecureSkipVerify,
-	})
-	s.mcpPool = pool
-	return newMCPGateway(s, version, pool, MemoryGatewayProfile()).Routes()
-}
-
-// MCPGatewayWith returns the MCP gateway's http.Handler using the
-// supplied dispatcher. Test seam for injecting a fakeDispatcher
-// without forcing every test to spin up a real QUIC listener. The
-// production path always goes through MCPGateway, which owns the
-// worldPool lifecycle.
-func (s *Server) MCPGatewayWith(version string, dispatcher worldDispatcher) http.Handler {
-	return newMCPGateway(s, version, dispatcher, KnowledgeGatewayProfile()).Routes()
-}
-
-// MemoryMCPGatewayWith is MCPGatewayWith's memory-profile sibling.
-func (s *Server) MemoryMCPGatewayWith(version string, dispatcher worldDispatcher) http.Handler {
-	return newMCPGateway(s, version, dispatcher, MemoryGatewayProfile()).Routes()
+// MCPGatewayWith returns the gateway handler for the given profile with
+// an injected dispatcher: the test seam (no QUIC listener needed). The
+// production path is MCPGateway, which owns the worldPool lifecycle.
+func (s *Server) MCPGatewayWith(version string, dispatcher worldDispatcher, profile *GatewayProfile) http.Handler {
+	return newMCPGateway(s, version, dispatcher, profile).Routes()
 }
 
 // CloseMCPGateway closes the production worldPool wired by

@@ -12,7 +12,7 @@ import (
 // ships as slash commands, restated for plugin-less hosts. Both address
 // the caller's single world; tenantGate scopes every tool call they trigger.
 
-// registerMemoryPrompts wires the two v1 soul prompts.
+// registerMemoryPrompts wires the three v1 soul prompts.
 func (g *mcpGateway) registerMemoryPrompts() {
 	g.mcpServer.AddPrompt(mcp.NewPrompt("soul-context",
 		mcp.WithPromptDescription("Restore working context from your soul: the index hub, recent journal entries, and active plans, digested into a short brief."),
@@ -27,6 +27,29 @@ func (g *mcpGateway) registerMemoryPrompts() {
 			mcp.ArgumentDescription("optional summary of what to record; when omitted, distill the current conversation"),
 		),
 	), soulJournalPrompt)
+
+	g.mcpServer.AddPrompt(mcp.NewPrompt("soul-export",
+		mcp.WithPromptDescription("Export your whole soul to local files: walk every document and save it, so the service is never a lock-in."),
+		mcp.WithArgument("directory",
+			mcp.ArgumentDescription("local directory to write the export into (default ./soul-export)"),
+		),
+	), soulExportPrompt)
+}
+
+func soulExportPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
+	dir := strings.TrimSpace(req.Params.Arguments["directory"])
+	if dir == "" {
+		dir = "./soul-export"
+	}
+	text := fmt.Sprintf(`Export this soul to local files under %q.
+
+1. Call mark_worlds to learn your world name <w>.
+2. Walk the tree: mark_list "mark://<w>/" and recurse into every subdirectory (follow next-cursor when a listing is incomplete; pass include_archived true so nothing is silently dropped).
+3. For every document, mark_fetch with force=true and write the body verbatim to %s/<path>, preserving the directory layout. Record each document's version and modified timestamp in an export manifest %s/manifest.md as a table row.
+4. Finish by reporting the document count and the manifest location. Do not summarize or rewrite bodies; this is a byte-preserving export.`, dir, dir, dir)
+	return mcp.NewGetPromptResult("Soul export", []mcp.PromptMessage{
+		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
+	}), nil
 }
 
 func soulContextPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go

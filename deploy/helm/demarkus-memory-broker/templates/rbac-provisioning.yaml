@@ -1,0 +1,40 @@
+{{- if and .Values.rbac.create (ne .Values.provisioning.mode "static") }}
+{{- /* Server-namespace RBAC for dynamic provisioning: the broker writes
+       the worlds fragment and per-tenant tokens keys into the two
+       Secrets the knowledge server mounts. get/update pinned by name;
+       create needs its own name-unrestricted rule (resourceNames does
+       not match create requests). */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "demarkus-memory-broker.fullname" . }}-provisioning
+  namespace: {{ .Values.provisioning.serverNamespace }}
+  labels:
+    {{- include "demarkus-memory-broker.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ .Values.provisioning.worldsSecret | quote }}
+      - {{ .Values.provisioning.tokensSecret | quote }}
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "demarkus-memory-broker.fullname" . }}-provisioning
+  namespace: {{ .Values.provisioning.serverNamespace }}
+  labels:
+    {{- include "demarkus-memory-broker.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "demarkus-memory-broker.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "demarkus-memory-broker.fullname" . }}-provisioning
+{{- end }}

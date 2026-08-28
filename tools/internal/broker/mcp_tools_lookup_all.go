@@ -94,8 +94,8 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 	return mcp.NewToolResultText(formatLookupAllResult(query, len(worlds), matches, failures)), nil
 }
 
-func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []*WorldConfig, scope, query string, opts fetch.LookupOptions) []lookupAllWorldResult {
-	jobs := make(chan *WorldConfig)
+func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []WorldConfig, scope, query string, opts fetch.LookupOptions) []lookupAllWorldResult {
+	jobs := make(chan WorldConfig)
 	results := make(chan lookupAllWorldResult, len(worlds))
 	workers := min(lookupAllWorkers, len(worlds))
 
@@ -122,7 +122,7 @@ func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []*WorldConfig,
 		})
 	}
 	go func() {
-		for _, world := range worlds {
+		for j := range worlds {
 			if ctx.Err() != nil {
 				close(jobs)
 				wg.Wait()
@@ -130,7 +130,7 @@ func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []*WorldConfig,
 				return
 			}
 			select {
-			case jobs <- world:
+			case jobs <- worlds[j]:
 			case <-ctx.Done():
 				close(jobs)
 				wg.Wait()
@@ -158,7 +158,7 @@ func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []*WorldConfig,
 	return out
 }
 
-func completeCanceledLookupResults(out []lookupAllWorldResult, worlds []*WorldConfig, err error) []lookupAllWorldResult {
+func completeCanceledLookupResults(out []lookupAllWorldResult, worlds []WorldConfig, err error) []lookupAllWorldResult {
 	if err == nil {
 		err = errors.New("lookup workers stopped before all worlds returned")
 	}
@@ -166,9 +166,9 @@ func completeCanceledLookupResults(out []lookupAllWorldResult, worlds []*WorldCo
 	for _, result := range out {
 		seen[result.world] = true
 	}
-	for _, world := range worlds {
-		if !seen[world.Name] {
-			out = append(out, lookupAllWorldResult{world: world.Name, err: err})
+	for j := range worlds {
+		if !seen[worlds[j].Name] {
+			out = append(out, lookupAllWorldResult{world: worlds[j].Name, err: err})
 		}
 	}
 	return out

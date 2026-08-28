@@ -16,6 +16,20 @@ server:
 # must exist before installation; this chart does not provision them.
 worlds: []
 
+# Dynamic tenant worlds (memory-broker plan Phase 3): the memory broker
+# writes a worlds fragment plus one <slug>.toml tokens key per tenant
+# into the two Secrets below, and the server hot-reloads the fragment
+# and opens tenant worlds at runtime (bootstrap genesis on first open).
+# With this enabled, `worlds: []` is a legitimate install: the server
+# idles until the broker provisions the first tenant.
+dynamicWorlds:
+  enabled: false
+  # Secret in this namespace whose worlds.yaml key carries the fragment.
+  worldsSecret: memory-worlds-config
+  # Secret in this namespace holding one <slug>.toml key per tenant,
+  # mounted as a directory.
+  tokensSecret: memory-worlds-tokens
+
 worldDefaults:
   readOnly: false
   limits:

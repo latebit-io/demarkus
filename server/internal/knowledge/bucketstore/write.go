@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -57,6 +58,11 @@ func (store *Store) WriteVersionResult(path string, expected int, content []byte
 	meta := maps.Clone(metadata)
 	blindBase := -1
 	return store.runMutation(func(_ context.Context, view *readView, operationID string) (*candidateMutation, MutationResult, error) {
+		if _, exists := view.snapshot.Paths[canonical]; !exists {
+			if err := store.checkDocumentQuota(view); err != nil {
+				return nil, MutationResult{}, err
+			}
+		}
 		if expected < 0 {
 			current := 0
 			if entry, exists := view.snapshot.Paths[canonical]; exists {
@@ -70,6 +76,22 @@ func (store *Store) WriteVersionResult(path string, expected int, content []byte
 		}
 		return store.buildWriteCandidate(view, operationID, canonical, expected, body, meta)
 	})
+}
+
+// ErrDocumentQuota rejects a write that would create a new document
+// path beyond Options.MaxDocuments. Existing documents keep accepting
+// updates, appends, and archives.
+var ErrDocumentQuota = errors.New("document quota exceeded")
+
+// checkDocumentQuota gates new-path creation against MaxDocuments.
+func (store *Store) checkDocumentQuota(view *readView) error {
+	if store.maxDocuments <= 0 {
+		return nil
+	}
+	if len(view.snapshot.Paths) >= store.maxDocuments {
+		return fmt.Errorf("%w: world holds %d documents (limit %d)", ErrDocumentQuota, len(view.snapshot.Paths), store.maxDocuments)
+	}
+	return nil
 }
 
 // Append commits content on the exact expected version.

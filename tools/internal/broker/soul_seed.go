@@ -66,10 +66,28 @@ const soulSeedRetryInterval = time.Minute
 // Single-flight so concurrent first calls seed once; waiters block until
 // the seeding attempt finishes so their own reads see the seeded world.
 type soulSeeder struct {
-	mu       sync.Mutex
-	seeded   map[string]bool
-	inflight map[string]chan struct{}
-	failedAt map[string]time.Time
+	mu     sync.Mutex
+	worlds map[string]*soulSeedState
+}
+
+// soulSeedState is one world's seeding lifecycle: done, in flight, or
+// throttled after a failure.
+type soulSeedState struct {
+	seeded   bool
+	inflight chan struct{}
+	failedAt time.Time
+}
+
+func (s *soulSeeder) stateFor(world string) *soulSeedState {
+	if s.worlds == nil {
+		s.worlds = make(map[string]*soulSeedState)
+	}
+	state, ok := s.worlds[world]
+	if !ok {
+		state = &soulSeedState{}
+		s.worlds[world] = state
+	}
+	return state
 }
 
 // ensureSoulSeed makes sure w carries the soul template, seeding it when
@@ -78,11 +96,13 @@ type soulSeeder struct {
 func (g *mcpGateway) ensureSoulSeed(ctx context.Context, w *WorldConfig) {
 	s := &g.soulSeed
 	s.mu.Lock()
-	if s.seeded[w.Name] {
+	state := s.stateFor(w.Name)
+	if state.seeded {
 		s.mu.Unlock()
 		return
 	}
-	if done := s.inflight[w.Name]; done != nil {
+	if state.inflight != nil {
+		done := state.inflight
 		s.mu.Unlock()
 		select {
 		case <-done:
@@ -92,34 +112,25 @@ func (g *mcpGateway) ensureSoulSeed(ctx context.Context, w *WorldConfig) {
 	}
 	// Failure throttle: don't re-attempt against an unhealthy world on
 	// every tool call (same shape as seedCheckInterval for graph seeds).
-	if last, failed := s.failedAt[w.Name]; failed && time.Since(last) < soulSeedRetryInterval {
+	if !state.failedAt.IsZero() && time.Since(state.failedAt) < soulSeedRetryInterval {
 		s.mu.Unlock()
 		return
 	}
-	if s.seeded == nil {
-		s.seeded = make(map[string]bool)
-	}
-	if s.inflight == nil {
-		s.inflight = make(map[string]chan struct{})
-	}
-	if s.failedAt == nil {
-		s.failedAt = make(map[string]time.Time)
-	}
 	done := make(chan struct{})
-	s.inflight[w.Name] = done
+	state.inflight = done
 	s.mu.Unlock()
 
 	ok := g.seedSoulWorld(ctx, w)
 
 	s.mu.Lock()
+	state.seeded = ok
 	if ok {
-		s.seeded[w.Name] = true
-		delete(s.failedAt, w.Name)
+		state.failedAt = time.Time{}
 	} else {
-		s.failedAt[w.Name] = time.Now()
+		state.failedAt = time.Now()
 	}
+	state.inflight = nil
 	close(done)
-	delete(s.inflight, w.Name)
 	s.mu.Unlock()
 }
 

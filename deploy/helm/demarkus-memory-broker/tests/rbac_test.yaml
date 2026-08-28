@@ -2,6 +2,7 @@ suite: rbac
 templates:
   - rbac-broker-ns.yaml
   - rbac-worlds.yaml
+  - rbac-provisioning.yaml
 release:
   namespace: broker-ns
 set:
@@ -293,6 +294,53 @@ tests:
             paths: ["/team-a/*"]
             operations: ["read"]
             expiresAfter: 24h
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: provisioning mode grants namespace-wide secrets rule in broker ns and a server-ns role
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    set:
+      worlds: []
+      provisioning:
+        mode: allowlisted
+        authorityDomain: m.svc
+        dialAddress: s.m.svc:6309
+        bucketPrefix: gs://m-
+        bucketProject: p
+        serverNamespace: memory-worlds
+    asserts:
+      - equal:
+          path: rules[3].verbs
+          value: ["get", "update", "create"]
+      - notExists:
+          path: rules[3].resourceNames
+
+  - it: provisioning server-ns role pins fragment and tokens Secrets for get/update
+    template: rbac-provisioning.yaml
+    documentIndex: 0
+    set:
+      provisioning:
+        mode: allowlisted
+        authorityDomain: m.svc
+        dialAddress: s.m.svc:6309
+        bucketPrefix: gs://m-
+        bucketProject: p
+        serverNamespace: memory-worlds
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: memory-worlds
+      - equal:
+          path: rules[0].resourceNames
+          value: ["memory-worlds-config", "memory-worlds-tokens"]
+      - equal:
+          path: rules[1].verbs
+          value: ["create"]
+
+  - it: static mode renders no provisioning role
+    template: rbac-provisioning.yaml
     asserts:
       - hasDocuments:
           count: 0

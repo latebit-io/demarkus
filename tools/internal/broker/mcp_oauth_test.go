@@ -72,7 +72,7 @@ func TestOAuthAuthorizationServerNeverOnGateway(t *testing.T) {
 	d, _ := newTestDiscovery(t, newFakeDiscoveryIdP(t), time.Minute)
 	brokerSrv := NewServer(mcpTestConfig(), newTestSigner(t), &fakeVerifier{},
 		NewK8sSecretStore(fake.NewSimpleClientset()), d, newTestIDTokenSigner(t), nil)
-	ts := httptest.NewServer(brokerSrv.MCPGateway("test"))
+	ts := httptest.NewServer(brokerSrv.MCPGateway("test", KnowledgeGatewayProfile()))
 	t.Cleanup(ts.Close)
 
 	resp, err := http.Get(ts.URL + "/.well-known/oauth-authorization-server")

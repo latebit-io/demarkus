@@ -48,24 +48,20 @@ func (e *errWorldNotFound) Error() string {
 	return fmt.Sprintf("broker: unknown world %q (not in broker config)", e.worldName)
 }
 
-// worldPool keeps one *fetch.Client per world the broker is
-// configured for, sharing a single client object across all
-// requests against the same world. The client owns its own QUIC
-// connection pool (see client/fetch.Client.Close); pooling clients
-// per-world rather than per-request reuses QUIC connections across
-// the busy worlds while keeping the pool's lifecycle local to the
-// broker process.
-//
-// Internal-address resolution: worldName is mapped to a cluster-
-// internal host:port using WorldConfig.InternalAddress when set,
-// or the default `<name>.<namespace>.svc.cluster.local:6309`
-// otherwise. The Mark Protocol scheme is implicit (always
-// mark://); the dispatcher hands fetch.Client just the host:port,
-// matching the rest of the codebase's host-string convention.
+// pooledWorld caches the per-world client together with its resolved
+// host so cache hits skip the config scan and address formatting.
+type pooledWorld struct {
+	client *fetch.Client
+	host   string
+}
+
+// worldPool keeps one lazily created *fetch.Client (with its own QUIC
+// connection pool) per world, resolved to a cluster-internal host:port
+// via resolveWorldAddress; the mark:// scheme is implicit.
 type worldPool struct {
+	cfg     *Config
 	mu      sync.Mutex
-	clients map[string]*fetch.Client
-	hosts   map[string]string // worldName → host:port
+	clients map[string]pooledWorld
 	opts    fetch.Options
 }
 
@@ -77,14 +73,9 @@ type worldPool struct {
 // pass insecure-skip-verify, production picks up the broker's
 // TLS posture from the chart.
 func newWorldPool(cfg *Config, opts fetch.Options) *worldPool {
-	hosts := make(map[string]string, len(cfg.Worlds))
-	for i := range cfg.Worlds {
-		w := &cfg.Worlds[i]
-		hosts[w.Name] = resolveWorldAddress(w)
-	}
 	return &worldPool{
-		clients: make(map[string]*fetch.Client, len(cfg.Worlds)),
-		hosts:   hosts,
+		cfg:     cfg,
+		clients: make(map[string]pooledWorld, len(cfg.Worlds)),
 		opts:    opts,
 	}
 }
@@ -234,28 +225,42 @@ func (p *worldPool) Archive(worldName, path, token string) (fetch.Result, error)
 func (p *worldPool) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for name, c := range p.clients {
-		c.Close()
+	for name, pooled := range p.clients {
+		pooled.client.Close()
 		delete(p.clients, name)
 	}
 }
 
-// clientFor returns the worldName's client + host. Clients are
-// created lazily on first use so an unreachable world (e.g. a
-// dev-only world configured but never targeted) doesn't burn a
-// QUIC dial at startup. Returns errWorldNotFound when the
-// worldName isn't in the broker's config.
+// clientFor returns the worldName's lazily created client + host,
+// resolving from config at call time so provisioned tenants dial without
+// a pool rebuild. DialAddress dials there while SNI/URLs keep the authority.
 func (p *worldPool) clientFor(worldName string) (*fetch.Client, string, error) {
-	host, ok := p.hosts[worldName]
+	p.mu.Lock()
+	if pooled, ok := p.clients[worldName]; ok {
+		p.mu.Unlock()
+		return pooled.client, pooled.host, nil
+	}
+	p.mu.Unlock()
+
+	w, ok := p.cfg.FindWorld(worldName)
 	if !ok {
 		return nil, "", &errWorldNotFound{worldName: worldName}
 	}
+	host := resolveWorldAddress(&w)
+	opts := p.opts
+	if w.DialAddress != "" {
+		// ServerName stays unset: fetch derives SNI from the authority
+		// itself, keeping that rule in one place.
+		opts.Endpoints = map[string]fetch.Endpoint{
+			host: {DialAddress: w.DialAddress},
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if c, ok := p.clients[worldName]; ok {
-		return c, host, nil
+	if pooled, ok := p.clients[worldName]; ok {
+		return pooled.client, pooled.host, nil
 	}
-	c := fetch.NewClient(p.opts)
-	p.clients[worldName] = c
+	c := fetch.NewClient(opts)
+	p.clients[worldName] = pooledWorld{client: c, host: host}
 	return c, host, nil
 }

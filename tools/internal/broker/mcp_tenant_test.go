@@ -275,11 +275,12 @@ func TestTenantGateAllowsOwnWorld(t *testing.T) {
 	assertNoWorldTraffic(t, d, "bob-w")
 }
 
-// TestHandleMarkWorldsSelfListsOnlyOwnWorld: the discovery tool must
-// never reveal other tenants' world names.
-func TestHandleMarkWorldsSelfListsOnlyOwnWorld(t *testing.T) {
+// TestMarkWorldsTenantScopedListsOnlyOwnWorld: the discovery tool must
+// never reveal other tenants' world names (handleMarkWorlds is shared;
+// tenant mode narrows it via scopedWorlds).
+func TestMarkWorldsTenantScopedListsOnlyOwnWorld(t *testing.T) {
 	g := newMemoryGateway(t, memoryTestConfig(), seededDispatcher())
-	res, err := g.handleMarkWorldsSelf(withAliceClaims(context.Background()), callToolReq("mark_worlds", nil))
+	res, err := g.handleMarkWorlds(withAliceClaims(context.Background()), callToolReq("mark_worlds", nil))
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
@@ -349,7 +350,7 @@ func TestMemoryGatewayEndToEnd(t *testing.T) {
 	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
 	k8s := fake.NewSimpleClientset()
 	srv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(srv.MemoryMCPGatewayWith("test", seededDispatcher()))
+	ts := httptest.NewServer(srv.MCPGatewayWith("test", seededDispatcher(), MemoryGatewayProfile()))
 	t.Cleanup(ts.Close)
 
 	resp := mcpRequest(t, ts.URL, "alice-token", "", initializeRequest(1))
@@ -407,5 +408,98 @@ func TestMemoryGatewayEndToEnd(t *testing.T) {
 	}
 	if isErr, _ := callResp.Result["isError"].(bool); !isErr {
 		t.Fatalf("cross-tenant mark_fetch over the wire was not denied: %+v", callResp.Result)
+	}
+}
+
+// memoryGatewayWithProvisioning wires a memory gateway whose server has
+// dynamic provisioning enabled over the k8s fake Secret store.
+func memoryGatewayWithProvisioning(t *testing.T, cfg *Config, d worldDispatcher) (*mcpGateway, *fakeBuckets) {
+	t.Helper()
+	g := newMemoryGateway(t, cfg, d)
+	buckets := &fakeBuckets{}
+	g.srv.EnableProvisioning(buckets)
+	return g, buckets
+}
+
+// TestTenantGateProvisionsFirstArrival: an admitted identity with no
+// world gets one created on its first tool call, and the created world
+// then serves it while other tenants stay unreachable.
+func TestTenantGateProvisionsFirstArrival(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	d := seededDispatcher()
+	g, buckets := memoryGatewayWithProvisioning(t, cfg, d)
+	eveCtx := ctxWithClaims(context.Background(), eveClaims())
+
+	h := g.tenantGate(g.toolHandlers()["mark_worlds"])
+	res, err := h(eveCtx, callToolReq("mark_worlds", nil))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("first arrival not provisioned: %s", toolResultText(t, res))
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "eve-adams-") {
+		t.Errorf("mark_worlds after provisioning = %q, want the new slug", text)
+	}
+	if len(buckets.created) != 1 {
+		t.Errorf("buckets created = %v, want exactly one", buckets.created)
+	}
+
+	// Cross-tenant stays denied for the new tenant too.
+	fetchGate := g.tenantGate(g.toolHandlers()["mark_fetch"])
+	res, err = fetchGate(eveCtx, callToolReq("mark_fetch", map[string]any{"url": "mark://alice-w/index.md"}))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("provisioned tenant reached another tenant's world")
+	}
+}
+
+// TestTenantGateProvisioningNotReadyMessage: when the backend has not
+// picked the new world up yet, the caller gets a clear retry message
+// instead of a transport error.
+func TestTenantGateProvisioningNotReadyMessage(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	d := &fakeDispatcher{
+		fetchFn: func(worldName, _, _ string) (fetch.Result, error) {
+			if strings.HasPrefix(worldName, "eve-adams-") {
+				return fetch.Result{}, errors.New("dial: no route to world")
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
+		},
+	}
+	g, _ := memoryGatewayWithProvisioning(t, cfg, d)
+	h := g.tenantGate(g.toolHandlers()["mark_worlds"])
+	res, err := h(ctxWithClaims(context.Background(), eveClaims()), callToolReq("mark_worlds", nil))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("not-ready world did not produce a retry message")
+	}
+	if text := toolResultText(t, res); !strings.Contains(text, "being provisioned") {
+		t.Errorf("text = %q, want provisioning-in-progress message", text)
+	}
+}
+
+// TestTenantGateDeniedIdentityGetsNoWorld: provisioning enabled but the
+// gate rejects the identity; nothing is created.
+func TestTenantGateDeniedIdentityGetsNoWorld(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionAllowlisted)
+	cfg.Provisioning.Allow = AllowConfig{Domains: []string{"other.org"}}
+	d := seededDispatcher()
+	g, buckets := memoryGatewayWithProvisioning(t, cfg, d)
+	h := g.tenantGate(g.toolHandlers()["mark_worlds"])
+	res, err := h(ctxWithClaims(context.Background(), eveClaims()), callToolReq("mark_worlds", nil))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("denied identity was provisioned")
+	}
+	if len(buckets.created) != 0 {
+		t.Errorf("denied identity created buckets: %v", buckets.created)
 	}
 }

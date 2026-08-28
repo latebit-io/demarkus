@@ -50,14 +50,17 @@ func (g *mcpGateway) handleMarkWorlds(ctx context.Context, _ mcp.CallToolRequest
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
-	worlds := readableWorlds(g.srv.cfg)
+	// Tenant mode scopes the listing to the caller's own world; the
+	// writable column then renders yes via the same Allow predicate.
+	worlds := g.scopedWorlds(ctx)
 
 	var b strings.Builder
 	b.WriteString("status: ok\n")
 	fmt.Fprintf(&b, "count: %d\n", len(worlds))
 	if len(worlds) > 0 {
 		b.WriteString("\n| world | url | address | writable |\n|-------|-----|---------|----------|\n")
-		for _, w := range worlds {
+		for j := range worlds {
+			w := &worlds[j]
 			fmt.Fprintf(&b, "| %s | %s | mark://%s | %s |\n",
 				w.Name, w.PublicURL, resolveWorldAddress(w), yesNo(worldAllows(&w.Allow, claims)))
 		}

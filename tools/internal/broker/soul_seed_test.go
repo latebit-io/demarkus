@@ -126,7 +126,7 @@ func TestEnsureSoulSeedRetriesAfterFailure(t *testing.T) {
 
 	g.ensureSoulSeed(withAliceClaims(context.Background()), w)
 	g.soulSeed.mu.Lock()
-	seeded := g.soulSeed.seeded[w.Name]
+	seeded := g.soulSeed.stateFor(w.Name).seeded
 	g.soulSeed.mu.Unlock()
 	if seeded {
 		t.Fatal("world marked seeded after a failed publish")
@@ -147,11 +147,11 @@ func TestEnsureSoulSeedRetriesAfterFailure(t *testing.T) {
 
 	// Past the window the retry runs and seeds.
 	g.soulSeed.mu.Lock()
-	g.soulSeed.failedAt[w.Name] = time.Now().Add(-2 * soulSeedRetryInterval)
+	g.soulSeed.stateFor(w.Name).failedAt = time.Now().Add(-2 * soulSeedRetryInterval)
 	g.soulSeed.mu.Unlock()
 	g.ensureSoulSeed(withAliceClaims(context.Background()), w)
 	g.soulSeed.mu.Lock()
-	seeded = g.soulSeed.seeded[w.Name]
+	seeded = g.soulSeed.stateFor(w.Name).seeded
 	g.soulSeed.mu.Unlock()
 	if !seeded {
 		t.Fatal("retry after failure did not seed the world")

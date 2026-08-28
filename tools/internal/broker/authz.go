@@ -52,12 +52,12 @@ func oidcDomainAllowed(allowDomains []string, hd string) bool {
 // SSO org gate alone, not Allow (a world's tokens.toml grants no read op), so
 // filtering the world LIST by the writer allowlist wrongly hides readable
 // worlds from non-writers. Use readableWorlds for that.
-func authorizedWorlds(cfg *Config, claims *Claims) []*WorldConfig {
-	out := make([]*WorldConfig, 0, len(cfg.Worlds))
-	for j := range cfg.Worlds {
-		w := &cfg.Worlds[j]
-		if worldAllows(&w.Allow, claims) {
-			out = append(out, w)
+func authorizedWorlds(cfg *Config, claims *Claims) []WorldConfig {
+	worlds := cfg.AllWorlds()
+	out := make([]WorldConfig, 0, len(worlds))
+	for j := range worlds {
+		if worldAllows(&worlds[j].Allow, claims) {
+			out = append(out, worlds[j])
 		}
 	}
 	return out
@@ -72,12 +72,8 @@ func authorizedWorlds(cfg *Config, claims *Claims) []*WorldConfig {
 // expressible: opening reads here never widens writes. Per-world READ
 // restrictions (Phase 2 restricted collections) would filter here, on a
 // dedicated read predicate, never on the write Allow.
-func readableWorlds(cfg *Config) []*WorldConfig {
-	out := make([]*WorldConfig, 0, len(cfg.Worlds))
-	for j := range cfg.Worlds {
-		out = append(out, &cfg.Worlds[j])
-	}
-	return out
+func readableWorlds(cfg *Config) []WorldConfig {
+	return cfg.AllWorlds()
 }
 
 // errAmbiguousTenant is the deny-closed provisioning error for an identity
@@ -94,22 +90,23 @@ func (errAmbiguousTenant) Error() string {
 // tenantWorldFor resolves the single world a memory-broker identity owns
 // (identity = world): zero matches is ErrNotAuthorized, two or more is a
 // provisioning error and denies closed rather than guessing.
-func tenantWorldFor(cfg *Config, claims *Claims) (*WorldConfig, error) {
+func tenantWorldFor(cfg *Config, claims *Claims) (WorldConfig, error) {
 	var match *WorldConfig
-	for j := range cfg.Worlds {
-		w := &cfg.Worlds[j]
+	worlds := cfg.AllWorlds()
+	for j := range worlds {
+		w := &worlds[j]
 		if !worldAllows(&w.Allow, claims) {
 			continue
 		}
 		if match != nil {
-			return nil, errAmbiguousTenant{First: match.Name, Second: w.Name}
+			return WorldConfig{}, errAmbiguousTenant{First: match.Name, Second: w.Name}
 		}
 		match = w
 	}
 	if match == nil {
-		return nil, ErrNotAuthorized
+		return WorldConfig{}, ErrNotAuthorized
 	}
-	return match, nil
+	return *match, nil
 }
 
 // ValidateTenantWorlds (memory broker, called after LoadConfig) requires
@@ -125,14 +122,12 @@ func (c *Config) ValidateTenantWorlds() error {
 	return nil
 }
 
-// lookupWorld returns the configured world with the given name, or nil
-// when none matches. Shared by the MCP write gate and the per-world
-// write-token store so the two layers resolve world names identically.
+// lookupWorld returns the configured world (static or dynamic) with the
+// given name, or nil when none matches. Shared by the MCP write gate and
+// the per-world write-token store so both resolve names identically.
 func lookupWorld(cfg *Config, name string) *WorldConfig {
-	for j := range cfg.Worlds {
-		if cfg.Worlds[j].Name == name {
-			return &cfg.Worlds[j]
-		}
+	if w, ok := cfg.FindWorld(name); ok {
+		return &w
 	}
 	return nil
 }

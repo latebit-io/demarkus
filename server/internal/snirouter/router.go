@@ -113,6 +113,13 @@ func validateLabel(label string) error {
 // HandshakeHook returns a strict SNI gate suitable for tls.Config.GetConfigForClient.
 // Existing config and certificate selection run only after routing succeeds.
 func (r *Router) HandshakeHook(config *tls.Config) (func(*tls.ClientHelloInfo) (*tls.Config, error), error) {
+	return handshakeHook(config, r.lookup)
+}
+
+// handshakeHook is the one strict-SNI gate implementation, shared by the
+// static Router and the swappable Dynamic so the rejection rule cannot
+// diverge between them.
+func handshakeHook(config *tls.Config, lookup func(string) (quicserve.Endpoint, error)) (func(*tls.ClientHelloInfo) (*tls.Config, error), error) {
 	if config == nil {
 		return nil, errors.New("snirouter: TLS config is nil")
 	}
@@ -121,7 +128,7 @@ func (r *Router) HandshakeHook(config *tls.Config) (func(*tls.ClientHelloInfo) (
 		if hello == nil {
 			return nil, fmt.Errorf("TLS handshake: %w: missing client hello", ErrInvalidAuthority)
 		}
-		if _, err := r.lookup(hello.ServerName); err != nil {
+		if _, err := lookup(hello.ServerName); err != nil {
 			return nil, fmt.Errorf("TLS handshake SNI: %w", err)
 		}
 		if previousHook != nil {

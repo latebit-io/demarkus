@@ -288,6 +288,50 @@ worlds: []
   #     # token never expires, so there is no operations/expiresAfter
   #     # field to set.
 
+# Dynamic tenant provisioning (memory-broker plan Phase 3). Mode static
+# (default) disables it: worlds are only the hand-provisioned list above.
+# allowlisted admits identities matching provisioning.allow; open admits
+# any verified identity and REQUIRES maxTenants. On an admitted
+# identity's first arrival the broker creates its GCS bucket, writes the
+# tenant registry (broker namespace), the knowledge-server worlds
+# fragment, and the shared tokens key (server namespace); the knowledge
+# server hot-reloads the fragment and bootstraps the world. The broker
+# pod needs GCP credentials with bucket-create rights (Workload Identity;
+# see the README) when provisioning is enabled.
+provisioning:
+  mode: static
+  # Gate for allowlisted mode; same predicate as per-world allow.
+  allow: {}
+    # domains: ["example.com"]
+    # emails: ["alice@example.com"]
+  # Hard cap on dynamic tenants. Required (>0) in open mode.
+  maxTenants: 0
+  # Per-tenant document quota rendered into the server fragment
+  # (limits.maxDocuments). 0 = unlimited.
+  maxDocumentsPerTenant: 0
+  # DNS suffix for tenant authorities: <slug>.<authorityDomain>. Must
+  # match the SNI the knowledge server routes (its Service DNS zone).
+  authorityDomain: ""
+  # Shared knowledge-server host:port every tenant world dials.
+  dialAddress: ""
+  # gs://<bucketPrefix><slug> is each tenant's bucket.
+  bucketPrefix: ""
+  # GCP project + location for bucket creation.
+  bucketProject: ""
+  bucketLocation: ""
+  # Namespace holding the knowledge server (fragment + tokens Secrets).
+  serverNamespace: ""
+  # Secret names the broker writes and the server chart mounts
+  # (dynamicWorlds.worldsSecret / dynamicWorlds.tokensSecret there).
+  worldsSecret: memory-worlds-config
+  tokensSecret: memory-worlds-tokens
+  # Path the server mounts tokensSecret at; rendered into each fragment
+  # world's auth.tokensFile. Must match the server chart's mount.
+  tokensMountPath: /run/demarkus/worlds-tokens
+  # Broker-namespace registry Secret name; blank uses the binary's
+  # default (demarkus-memory-broker-registry) so there is one default.
+  registrySecret: ""
+
 # Registered confidential web clients (RFC 6749 §2.1) — server-side
 # apps (e.g. the Universe Library) that authenticate with a client
 # secret and receive the authorization-code redirect at a real https

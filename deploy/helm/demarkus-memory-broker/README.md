@@ -6,11 +6,20 @@ from the demarkus-knowledge-broker deployment profile (same HA posture:
 2 replicas, leader-elected sweeper, optimistic-concurrency Secret
 writes) with the memory authorization model: identity maps to exactly
 one world, and reads AND writes are locked to the caller's own world.
-Worlds are static hand-provisioned tenants in Phase 2; every world must
-carry a non-empty `allow` block naming its tenant or the broker refuses
-to start. On a tenant's first access the broker seeds the soul template
+Static worlds are hand-provisioned tenants; every world must carry a
+non-empty `allow` block naming its tenant or the broker refuses to
+start. On a tenant's first access the broker seeds the soul template
 (`/index.md`, `/.well-known/demarkus/policy.md`,
 `/.well-known/demarkus/template.md`) into the world.
+
+With `provisioning.mode` set to `allowlisted` or `open`, tenants are
+also created dynamically: an admitted identity's first authenticated
+tool call creates its GCS bucket, registers the world in the tenant
+registry (broker namespace) and the knowledge-server worlds fragment
+(server namespace), and writes the shared tokens key; the
+demarkus-knowledge-server chart's `dynamicWorlds` mode mounts those
+Secrets, hot-reloads the fragment, and bootstraps the world. See
+"Dynamic provisioning" below.
 
 ## What this chart ships
 
@@ -474,6 +483,39 @@ rate-limit registry doc-comment. Audit them against your actual
 expected concurrency. The default
 `podDisruptionBudget.minAvailable: 1` prevents a node drain from
 taking both replicas down.
+
+## Dynamic provisioning
+
+Enable with `provisioning.mode: allowlisted` (gate via
+`provisioning.allow`) or `open` (any verified identity;
+`provisioning.maxTenants` is then required as the blast-radius cap).
+The remaining `provisioning.*` values describe the shared
+knowledge-server deployment: `authorityDomain` and `dialAddress` must
+match its Service DNS, `worldsSecret` / `tokensSecret` /
+`tokensMountPath` must match the server chart's `dynamicWorlds` values,
+and `bucketPrefix` / `bucketProject` / `bucketLocation` drive per-tenant
+GCS bucket creation.
+
+Requirements the chart wires for you when provisioning is enabled:
+
+- Broker-namespace RBAC widens to namespace-wide secrets
+  get/update/create (per-tenant write-token Secret names are
+  runtime-derived, so `resourceNames` pinning is impossible).
+- A Role/RoleBinding in `provisioning.serverNamespace` lets the broker
+  write the worlds fragment and tokens Secrets the server mounts.
+
+Requirement the chart cannot wire: the broker pod needs GCP credentials
+with bucket-create rights in `provisioning.bucketProject` (GKE Workload
+Identity: annotate the ServiceAccount via `serviceAccount.annotations`
+with `iam.gke.io/gcp-service-account` and grant that GSA
+`roles/storage.admin` scoped to the project, or narrower with a bucket
+name condition on the `bucketPrefix`).
+
+Per-tenant quotas: `provisioning.maxTenants` caps signups;
+`provisioning.maxDocumentsPerTenant` renders a `limits.maxDocuments`
+quota into every tenant world (enforced server-side at write time);
+request rate is the existing per-subject limiter; body size is capped
+by the protocol's 4MB object limit.
 
 ## Cookie key preservation
 

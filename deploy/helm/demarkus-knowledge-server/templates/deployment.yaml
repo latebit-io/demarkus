@@ -82,6 +82,14 @@ spec:
               mountPath: {{ printf "/run/demarkus/worlds/%s" $world.name | quote }}
               readOnly: true
             {{- end }}
+            {{- if .Values.dynamicWorlds.enabled }}
+            - name: dynamic-worlds
+              mountPath: /run/demarkus/dynamic-worlds
+              readOnly: true
+            - name: dynamic-worlds-tokens
+              mountPath: /run/demarkus/worlds-tokens
+              readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
           resources:
@@ -108,6 +116,18 @@ spec:
             items:
               - key: {{ $world.tokenSecret.key | quote }}
                 path: tokens.toml
+        {{- end }}
+        {{- if .Values.dynamicWorlds.enabled }}
+        {{- /* optional: the broker creates both Secrets on the first
+               provision, which may happen after install. */}}
+        - name: dynamic-worlds
+          secret:
+            secretName: {{ .Values.dynamicWorlds.worldsSecret | quote }}
+            optional: true
+        - name: dynamic-worlds-tokens
+          secret:
+            secretName: {{ .Values.dynamicWorlds.tokensSecret | quote }}
+            optional: true
         {{- end }}
         - name: tmp
           emptyDir: {}

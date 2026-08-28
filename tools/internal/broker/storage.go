@@ -288,10 +288,14 @@ func (c *Config) worldWriteTokenRef(worldName string) SecretRef {
 }
 
 func (c *Config) worldTokensRef(world *WorldConfig) SecretRef {
+	key := world.TokensSecretKey
+	if key == "" {
+		key = TokensSecretKey
+	}
 	return SecretRef{
 		Namespace: world.Namespace,
 		Name:      world.TokensSecret,
-		Key:       TokensSecretKey,
+		Key:       key,
 		Path:      world.TokensFile,
 	}
 }

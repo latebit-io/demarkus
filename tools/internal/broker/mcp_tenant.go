@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -32,13 +33,25 @@ var tenantWorldArgs = map[string][]string{
 	"mark_worlds":    {},
 }
 
+// tenantWorldCtxKey carries the world tenantGate already resolved, so
+// downstream surfaces (graph seed/crawl, mark_worlds) skip re-scanning
+// the world set two or three times per request.
+type tenantWorldCtxKey struct{}
+
+func ctxWithTenantWorld(ctx context.Context, w *WorldConfig) context.Context {
+	return context.WithValue(ctx, tenantWorldCtxKey{}, *w)
+}
+
 // tenantWorld resolves the caller's single world; shared by every
 // tenant-gated surface. Failures log here, once per resolution, and the
 // client only sees opaque error text (world names identify tenants).
-func (g *mcpGateway) tenantWorld(ctx context.Context) (*WorldConfig, error) {
+func (g *mcpGateway) tenantWorld(ctx context.Context) (WorldConfig, error) {
+	if w, ok := ctx.Value(tenantWorldCtxKey{}).(WorldConfig); ok {
+		return w, nil
+	}
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
-		return nil, ErrNotAuthorized
+		return WorldConfig{}, ErrNotAuthorized
 	}
 	w, err := tenantWorldFor(g.srv.cfg, claims)
 	if err != nil {
@@ -49,9 +62,46 @@ func (g *mcpGateway) tenantWorld(ctx context.Context) (*WorldConfig, error) {
 		} else {
 			g.log.Warn("tenant resolution failed", "subject", hashSubject(claims.Subject), "err", err)
 		}
-		return nil, err
+		return WorldConfig{}, err
 	}
 	return w, nil
+}
+
+// resolveOrProvision resolves the caller's world, provisioning one on
+// first arrival when the broker runs with dynamic provisioning. The
+// second return is a ready-to-return tool error when resolution fails.
+func (g *mcpGateway) resolveOrProvision(ctx context.Context) (WorldConfig, *mcp.CallToolResult) {
+	w, err := g.tenantWorld(ctx)
+	if err == nil {
+		return w, nil
+	}
+	if !errors.Is(err, ErrNotAuthorized) || g.srv.provisioner == nil {
+		return WorldConfig{}, mcp.NewToolResultError(fmt.Sprintf("not authorized: %v", err))
+	}
+	claims, ok := claimsFromCtx(ctx)
+	if !ok {
+		return WorldConfig{}, mcp.NewToolResultError("internal: missing identity on tool-call context")
+	}
+	w, perr := g.srv.provisioner.EnsureTenant(ctx, claims)
+	switch {
+	case perr == nil:
+		// The knowledge server picks the new world up asynchronously;
+		// give the caller a clear retry message until it answers.
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, ferr := g.dispatcher.FetchContext(probeCtx, w.Name, "/index.md", "")
+		cancel()
+		if ferr != nil {
+			return WorldConfig{}, mcp.NewToolResultError("your memory world is being provisioned; try again in about a minute")
+		}
+		return w, nil
+	case errors.Is(perr, ErrProvisioningDenied):
+		return WorldConfig{}, mcp.NewToolResultError("not authorized: this memory service does not admit your identity; contact the operator")
+	case errors.Is(perr, ErrTenantCapacity):
+		return WorldConfig{}, mcp.NewToolResultError("this memory service is at capacity; contact the operator")
+	default:
+		g.log.Warn("tenant provisioning failed", "subject", hashSubject(claims.Subject), "err", perr)
+		return WorldConfig{}, mcp.NewToolResultError("provisioning your memory world failed; try again shortly")
+	}
 }
 
 // tenantGate (tenant-scoped profiles only) resolves the caller's world,
@@ -59,9 +109,9 @@ func (g *mcpGateway) tenantWorld(ctx context.Context) (*WorldConfig, error) {
 // template before the first handler runs against a fresh world.
 func (g *mcpGateway) tenantGate(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		w, err := g.tenantWorld(ctx)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("not authorized: %v", err)), nil
+		w, errRes := g.resolveOrProvision(ctx)
+		if errRes != nil {
+			return errRes, nil
 		}
 		args, known := tenantWorldArgs[req.Params.Name]
 		if !known {
@@ -82,32 +132,18 @@ func (g *mcpGateway) tenantGate(next mcpserver.ToolHandlerFunc) mcpserver.ToolHa
 				return mcp.NewToolResultError(fmt.Sprintf("access denied: this memory service serves only your world %q", w.Name)), nil
 			}
 		}
+		ctx = ctxWithTenantWorld(ctx, &w)
 		if g.profile.SeedSoul {
-			g.ensureSoulSeed(ctx, w)
+			g.ensureSoulSeed(ctx, &w)
 		}
 		return next(ctx, req)
 	}
 }
 
-// handleMarkWorldsSelf is the tenant-scoped mark_worlds handler: only
-// ever the caller's own world, always writable. Column parity with
-// handleMarkWorlds keeps client-side parsers identical across brokers.
-func (g *mcpGateway) handleMarkWorldsSelf(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
-	w, err := g.tenantWorld(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("not authorized: %v", err)), nil
-	}
-	var b strings.Builder
-	b.WriteString("status: ok\ncount: 1\n")
-	b.WriteString("\n| world | url | address | writable |\n|-------|-----|---------|----------|\n")
-	fmt.Fprintf(&b, "| %s | %s | mark://%s | yes |\n", w.Name, w.PublicURL, resolveWorldAddress(w))
-	return mcp.NewToolResultText(b.String()), nil
-}
-
 // scopedWorlds returns the worlds visible to the current call: in
 // tenant mode the caller's single world (empty on resolution failure,
 // degrading closed), otherwise every configured world.
-func (g *mcpGateway) scopedWorlds(ctx context.Context) []*WorldConfig {
+func (g *mcpGateway) scopedWorlds(ctx context.Context) []WorldConfig {
 	if !g.profile.TenantScoped {
 		return readableWorlds(g.srv.cfg)
 	}
@@ -115,8 +151,5 @@ func (g *mcpGateway) scopedWorlds(ctx context.Context) []*WorldConfig {
 	if err != nil {
 		return nil
 	}
-	return []*WorldConfig{w}
+	return []WorldConfig{w}
 }
-
-// compile-time check that the handler matches mcp-go's expected shape.
-var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkWorldsSelf

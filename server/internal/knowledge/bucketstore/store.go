@@ -30,6 +30,10 @@ type Options struct {
 	RequestTimeout time.Duration
 	ShardWorkers   int
 	RequirePolicy  bool
+	// MaxDocuments caps distinct document paths (0 = unlimited); a new
+	// path beyond the cap is rejected. Approximate under concurrency:
+	// a per-tenant quota, not an exact invariant.
+	MaxDocuments int
 }
 
 // Store owns a validated immutable snapshot for one world.
@@ -39,6 +43,7 @@ type Store struct {
 	requestTimeout time.Duration
 	shardWorkers   int
 	requirePolicy  bool
+	maxDocuments   int
 	snapshot       atomic.Pointer[snapshot]
 	refreshMu      sync.Mutex
 	commitToken    chan struct{}
@@ -119,6 +124,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		requestTimeout: options.RequestTimeout,
 		shardWorkers:   options.ShardWorkers,
 		requirePolicy:  options.RequirePolicy,
+		maxDocuments:   options.MaxDocuments,
 		commitToken:    make(chan struct{}, 1),
 		commitInterval: defaultCommitInterval,
 		now:            time.Now,

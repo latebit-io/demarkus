@@ -54,19 +54,7 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 
 	out := []installWorld{}
 	if claims.Email != "" {
-		for _, world := range readableWorlds(s.cfg) {
-			// A world without a PublicURL is not installable: the
-			// plugin has no address to wire the client at. Skip it
-			// rather than report it and force the consumer to
-			// re-filter.
-			if world.PublicURL == "" {
-				continue
-			}
-			out = append(out, installWorld{
-				Name:      world.Name,
-				PublicURL: world.PublicURL,
-			})
-		}
+		out = installableWorlds(s.cfg)
 	}
 	s.log.InfoContext(r.Context(), "broker: /me/install succeeded",
 		"subject", hashSubject(claims.Subject), "worlds", len(out))
@@ -74,4 +62,21 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 		Email:  claims.Email,
 		Worlds: out,
 	})
+}
+
+// installableWorlds lists the readable worlds a client can be wired at:
+// a world without a PublicURL is skipped (no address to install).
+func installableWorlds(cfg *Config) []installWorld {
+	worlds := readableWorlds(cfg)
+	out := make([]installWorld, 0, len(worlds))
+	for j := range worlds {
+		if worlds[j].PublicURL == "" {
+			continue
+		}
+		out = append(out, installWorld{
+			Name:      worlds[j].Name,
+			PublicURL: worlds[j].PublicURL,
+		})
+	}
+	return out
 }

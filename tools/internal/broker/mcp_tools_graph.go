@@ -110,11 +110,12 @@ const seedCheckInterval = 5 * time.Minute
 // mode: only the caller's own world, so one tenant's traffic never pulls
 // another's graph into the shared per-pod store); throttled per world.
 func (g *mcpGateway) seedGraphStore(ctx context.Context) {
-	for _, w := range g.scopedWorlds(ctx) {
+	worlds := g.scopedWorlds(ctx)
+	for j := range worlds {
 		if ctx.Err() != nil {
 			return
 		}
-		g.seedWorldGraph(ctx, w.Name)
+		g.seedWorldGraph(ctx, worlds[j].Name)
 	}
 }
 
@@ -224,7 +225,7 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, worldName string) {
 // gateway queries key on world names, so untranslated rows are unreachable.
 // Unknown hosts stay as labels. Both sides canonicalize (ADR 0005).
 func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) {
-	worlds := g.srv.cfg.Worlds
+	worlds := g.srv.cfg.AllWorlds()
 	byAddr := make(map[string]string, len(worlds))
 	for i := range worlds {
 		// CanonicalURL normalizes an empty path to "/"; the prefix match wants a

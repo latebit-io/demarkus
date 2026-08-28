@@ -19,13 +19,12 @@ type Source struct {
 	now         func() time.Time
 }
 
-// Open loads and validates the initial certificate.
+// Open loads and validates the initial certificate. An empty authority
+// set skips hostname pinning: dynamic deployments add worlds at runtime
+// and check coverage per world via Covers instead.
 func Open(certFile, keyFile string, authorities []string) (*Source, error) {
 	if certFile == "" || keyFile == "" {
 		return nil, errors.New("certificate and key files are required")
-	}
-	if len(authorities) == 0 {
-		return nil, errors.New("at least one certificate authority is required")
 	}
 	source := &Source{
 		certFile:    certFile,
@@ -63,6 +62,17 @@ func (source *Source) Reload() error {
 	certificate.Leaf = leaf
 	source.current.Store(&certificate)
 	return nil
+}
+
+// Covers reports whether the current certificate is valid for authority;
+// the hot-reload path warns on uncovered dynamic worlds (routing works,
+// verifying clients fail until the cert rotates).
+func (source *Source) Covers(authority string) error {
+	certificate := source.current.Load()
+	if certificate == nil || certificate.Leaf == nil {
+		return errors.New("no TLS certificate loaded")
+	}
+	return certificate.Leaf.VerifyHostname(authority)
 }
 
 // GetCertificate returns the current last-known-good certificate.

@@ -942,7 +942,7 @@ func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 	signer := newTestSigner(t)
 	k8s := fake.NewSimpleClientset()
 	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d))
+	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d, KnowledgeGatewayProfile()))
 	t.Cleanup(ts.Close)
 
 	initR := mcpRequest(t, ts.URL, "alice-token", "", initializeRequest(1))
