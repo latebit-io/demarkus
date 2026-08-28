@@ -100,6 +100,9 @@ func (g *mcpGateway) resolveOrProvision(ctx context.Context) (WorldConfig, *mcp.
 	case errors.Is(perr, ErrProvisioningDenied):
 		g.log.Warn("tenant provisioning denied by gate", "subject", hashSubject(claims.Subject))
 		return WorldConfig{}, mcp.NewToolResultError("not authorized: this memory service does not admit your identity; contact the operator")
+	case errors.Is(perr, ErrTenantDeprovisioning):
+		g.log.Warn("tool call denied for tombstoned tenant", "subject", hashSubject(claims.Subject))
+		return WorldConfig{}, mcp.NewToolResultError("your memory world is being removed; contact the operator if this persists")
 	case errors.Is(perr, ErrTenantCapacity):
 		g.log.Warn("tenant provisioning denied at capacity", "subject", hashSubject(claims.Subject))
 		return WorldConfig{}, mcp.NewToolResultError("this memory service is at capacity; contact the operator")

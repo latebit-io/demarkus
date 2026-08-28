@@ -40,6 +40,10 @@ var ErrProvisioningDenied = errors.New("broker: provisioning denied")
 // ErrTenantCapacity is returned when maxTenants is reached.
 var ErrTenantCapacity = errors.New("broker: tenant capacity reached")
 
+// ErrTenantDeprovisioning is returned when the slug is tombstoned: a
+// deprovision is (or crashed) mid-cleanup and must finish first.
+var ErrTenantDeprovisioning = errors.New("broker: tenant is being deprovisioned")
+
 // BucketCreator ensures tenant buckets exist AND carry the locked-down
 // tenant posture; implementations must refuse to adopt a pre-existing
 // bucket with looser access. Production wraps GCS; tests fake it.
@@ -60,6 +64,10 @@ type tenantRecord struct {
 	Subject string `json:"subject"`
 	WorldID string `json:"worldID"`
 	Created string `json:"created"`
+	// Deleting tombstones a tenant mid-deprovision: provisioning the
+	// slug is blocked and every projection drops the world until the
+	// cleanup finishes and removes the record.
+	Deleting bool `json:"deleting,omitempty"`
 }
 
 // tenantRegistry is the registry document shape.
@@ -119,14 +127,21 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Phase 1: tombstone the record. Provisioning the slug is blocked
+	// and every projection drops the world; a crash mid-cleanup leaves
+	// the tombstone, so a rerun converges and re-provision never races.
 	var snapshot tenantRegistry
 	err = p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
 		registry, decodeErr := decodeRegistry(existing)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		_, found = registry.Tenants[slug]
-		delete(registry.Tenants, slug)
+		record, ok := registry.Tenants[slug]
+		found = ok
+		if ok {
+			record.Deleting = true
+			registry.Tenants[slug] = record
+		}
 		snapshot = registry
 		encoded, encErr := json.Marshal(&registry)
 		if encErr != nil {
@@ -139,8 +154,7 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 	}
 
 	// Union minus the target: only slug leaves the fragment, so tenants
-	// provisioned concurrently by other pods survive. A same-slug
-	// re-provision racing this is repaired by the sync loop's converge.
+	// provisioned concurrently by other pods survive.
 	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func(existing []byte) ([]byte, error) {
 		return p.renderWorldsFragmentUnion(&snapshot, existing, slug)
 	}); err != nil {
@@ -159,6 +173,24 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 		if err := deleter.DeleteBucket(ctx, p.bucketName(slug)); err != nil {
 			return found, err
 		}
+	}
+
+	// Phase 2: cleanup done; clear the tombstone so the slug is free.
+	err = p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
+		registry, decodeErr := decodeRegistry(existing)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		delete(registry.Tenants, slug)
+		snapshot = registry
+		encoded, encErr := json.Marshal(&registry)
+		if encErr != nil {
+			return nil, fmt.Errorf("encode tenant registry: %w", encErr)
+		}
+		return encoded, nil
+	})
+	if err != nil {
+		return found, fmt.Errorf("clear tombstone for %q: %w", slug, err)
 	}
 
 	p.applySnapshot(&snapshot)
@@ -284,7 +316,11 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		if _, ok := registry.Tenants[slug]; !ok {
+		if record, ok := registry.Tenants[slug]; ok {
+			if record.Deleting {
+				return nil, ErrTenantDeprovisioning
+			}
+		} else {
 			if gateErr := p.admits(claims); gateErr != nil {
 				return nil, gateErr
 			}
@@ -412,6 +448,12 @@ func (p *Provisioner) renderWorldsFragmentUnion(registry *tenantRegistry, existi
 		}
 	}
 	for slug, record := range registry.Tenants {
+		if record.Deleting {
+			// Tombstoned: drop from both sources so the sync loop also
+			// removes a crashed deprovision's leftover entry.
+			delete(worlds, slug)
+			continue
+		}
 		world := fragmentWorld{
 			Name:        slug,
 			Authorities: []string{slug + "." + p.cfg.Provisioning.AuthorityDomain},
@@ -442,6 +484,9 @@ func (p *Provisioner) worldsFromRegistry(registry *tenantRegistry) []WorldConfig
 	slugs := sortedSlugs(registry)
 	worlds := make([]WorldConfig, 0, len(slugs))
 	for _, slug := range slugs {
+		if registry.Tenants[slug].Deleting {
+			continue // tombstoned: out of service until cleanup finishes
+		}
 		worlds = append(worlds, p.cfg.Provisioning.tenantWorld(slug, registry.Tenants[slug].Email))
 	}
 	return worlds

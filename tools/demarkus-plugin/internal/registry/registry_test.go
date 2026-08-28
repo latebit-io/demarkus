@@ -690,6 +690,9 @@ func TestValidateBrokerEndpointRejectsQueryAndFragment(t *testing.T) {
 		"http://broker.example?x=1",
 		"http://broker.example/?",
 		"http://broker.example/#x",
+		// Empty fragment marker: Parse erases it but keeps the path
+		// untrimmed, which would double the slash in appended paths.
+		"http://broker.example/#",
 	} {
 		if _, err := ValidateBrokerEndpoint(u); err == nil || !strings.Contains(err.Error(), "query or fragment") {
 			t.Errorf("ValidateBrokerEndpoint(%q) err = %v, want query/fragment rejection", u, err)

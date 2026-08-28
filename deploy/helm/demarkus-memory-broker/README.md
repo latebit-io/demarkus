@@ -528,12 +528,15 @@ demarkus-memory-broker -config /etc/demarkus-memory-broker/config.yaml \
   -deprovision-tenant <world> [-delete-bucket]
 ```
 
-It removes the registry entry, rewrites the worlds fragment (the
-knowledge server drops the world live), deletes the shared tokens key
-and the broker's write-token record, and with `-delete-bucket` destroys
-the tenant's GCS bucket and data. Idempotent; rerun to converge after a
-partial failure or a raced provisioning union. In-cluster, exec into a
-broker pod or run a one-off Job with the broker image and ServiceAccount.
+It tombstones the registry entry (blocking any re-provision of the slug
+while cleanup runs), rewrites the worlds fragment (the knowledge server
+drops the world live), deletes the shared tokens key and the broker's
+write-token record, with `-delete-bucket` destroys the tenant's GCS
+bucket and data, then clears the tombstone. Idempotent; a crashed run
+leaves the tombstone, which keeps the world out of service (the sync
+loop drops it from every projection) until a rerun finishes the cleanup.
+In-cluster, exec into a broker pod or run a one-off Job with the broker
+image and ServiceAccount.
 
 Backups: demarkus documents are versioned by the protocol itself, and
 GCS soft delete (on by default, 7 days) covers storage-layer accidents

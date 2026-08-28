@@ -552,8 +552,10 @@ func ValidateBrokerEndpoint(rawURL string) (*BrokerEndpoint, error) {
 	if parsed.User != nil {
 		return nil, fmt.Errorf("broker URL must not carry userinfo (user:password@); authentication is OAuth in the MCP client")
 	}
-	// Query/fragment would corrupt the appended discovery and /mcp paths.
-	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+	// Query/fragment would corrupt the appended discovery and /mcp
+	// paths. "#" is checked on the raw string: Parse erases an empty
+	// fragment marker ("...#") but its path survives untrimmed.
+	if parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(raw, "#") {
 		return nil, fmt.Errorf("broker URL must not carry a query or fragment (got: %s)", raw)
 	}
 	u := parsed.String()

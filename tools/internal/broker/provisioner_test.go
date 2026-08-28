@@ -398,39 +398,111 @@ func (f *fakeBuckets) DeleteBucket(_ context.Context, bucket string) error {
 	return nil
 }
 
-// TestDeprovisionPreservesRacingFragmentEntry: a world a sibling
-// provisioned after this pod's registry snapshot must survive the
-// deprovision fragment rewrite; only the target slug leaves.
+// hookedStore fires hook once, right before the first Mutate of ref,
+// to interleave a concurrent actor at an exact point in a flow.
+type hookedStore struct {
+	SecretStore
+	mu   sync.Mutex
+	ref  SecretRef
+	hook func()
+}
+
+func (h *hookedStore) Mutate(ctx context.Context, ref SecretRef, fn func([]byte) ([]byte, error)) error {
+	h.mu.Lock()
+	hook := h.hook
+	if hook != nil && ref == h.ref {
+		h.hook = nil
+	} else {
+		hook = nil
+	}
+	h.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return h.SecretStore.Mutate(ctx, ref, fn)
+}
+
+// TestDeprovisionPreservesRacingFragmentEntry: a world provisioned
+// AFTER the deprovision's registry snapshot survives the fragment
+// rewrite; the tombstoned slug stays blocked until cleanup finishes.
 func TestDeprovisionPreservesRacingFragmentEntry(t *testing.T) {
 	cfg := provisioningTestConfig(ProvisionOpen)
-	store := newProvisionerStore()
-	p := newTestProvisioner(cfg, store, &fakeBuckets{})
+	raw := newProvisionerStore()
+	hooked := &hookedStore{SecretStore: raw, ref: cfg.worldsFragmentRef()}
+	p := newTestProvisioner(cfg, hooked, &fakeBuckets{})
 	eveWorld, err := p.EnsureTenant(context.Background(), eveClaims())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// A sibling provisions frank via its own store view; p's next
-	// deprovision must not drop him even though frank postdates any
-	// snapshot p could have taken.
-	sibling := newTestProvisioner(provisioningTestConfig(ProvisionOpen), store, &fakeBuckets{})
+	// Between p's registry tombstone and its fragment rewrite: a sibling
+	// provisions frank (postdating p's snapshot) and eve tries to come
+	// back (must be blocked by the tombstone).
+	sibling := newTestProvisioner(provisioningTestConfig(ProvisionOpen), raw, &fakeBuckets{})
 	frank := &Claims{Subject: "google|frank", Email: "frank@example.com", EmailVerified: true}
-	frankWorld, err := sibling.EnsureTenant(context.Background(), frank)
-	if err != nil {
-		t.Fatal(err)
+	var frankWorld WorldConfig
+	hooked.hook = func() {
+		var hookErr error
+		if frankWorld, hookErr = sibling.EnsureTenant(context.Background(), frank); hookErr != nil {
+			t.Errorf("racing EnsureTenant(frank): %v", hookErr)
+		}
+		if _, hookErr = sibling.EnsureTenant(context.Background(), eveClaims()); !errors.Is(hookErr, ErrTenantDeprovisioning) {
+			t.Errorf("EnsureTenant on tombstoned slug err = %v, want ErrTenantDeprovisioning", hookErr)
+		}
 	}
 
 	if _, err := p.DeprovisionTenant(context.Background(), eveWorld.Name, false); err != nil {
 		t.Fatalf("DeprovisionTenant: %v", err)
 	}
-	fragment := string(store.get(cfg.worldsFragmentRef()))
+	fragment := string(raw.get(cfg.worldsFragmentRef()))
 	if strings.Contains(fragment, "name: "+eveWorld.Name) {
 		t.Errorf("deprovisioned world survived the fragment rewrite:\n%s", fragment)
 	}
 	if !strings.Contains(fragment, "name: "+frankWorld.Name) {
 		t.Errorf("racing sibling world dropped by deprovision:\n%s", fragment)
 	}
+	// Tombstone cleared: eve can provision again.
+	if _, err := sibling.EnsureTenant(context.Background(), eveClaims()); err != nil {
+		t.Errorf("re-provision after completed deprovision: %v", err)
+	}
 }
+
+// TestSyncRemovesTombstonedWorld: a crashed deprovision leaves the
+// tombstone; the sync loop must still take the world out of service.
+func TestSyncRemovesTombstonedWorld(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	raw := newProvisionerStore()
+	// Crash simulation: fail the tombstone's fragment rewrite so
+	// DeprovisionTenant exits after phase 1.
+	failing := &hookedStore{SecretStore: raw, ref: cfg.worldsFragmentRef()}
+	p := newTestProvisioner(cfg, failing, &fakeBuckets{})
+	world, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing.hook = func() { panic(errAbortMutate) }
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = p.DeprovisionTenant(context.Background(), world.Name, false)
+	}()
+
+	// Registry holds the tombstone, fragment still holds the world; a
+	// sibling's sync must drop it from both projections.
+	sibling := provisioningTestConfig(ProvisionOpen)
+	q := newTestProvisioner(sibling, raw, &fakeBuckets{})
+	if err := q.SyncRegistry(context.Background()); err != nil {
+		t.Fatalf("SyncRegistry: %v", err)
+	}
+	fragment := string(raw.get(cfg.worldsFragmentRef()))
+	if strings.Contains(fragment, "name: "+world.Name) {
+		t.Errorf("sync kept a tombstoned world in the fragment:\n%s", fragment)
+	}
+	if _, ok := sibling.FindWorld(world.Name); ok {
+		t.Error("sync kept a tombstoned world resolvable")
+	}
+}
+
+var errAbortMutate = errors.New("test: abort mutate")
 
 // TestSyncRegistryConvergesFragment: the sync loop repairs a fragment
 // that lost a registry-held world to a stale rewrite.
