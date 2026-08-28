@@ -19,7 +19,8 @@
 #   the broker config for later editing; --with-library alone serves a
 #   read-only reading room: HTTPS on :443 with the world's cert when TLS
 #   is configured (--domain or --tls-cert), else HTTP on :8090. Override
-#   with --library-port; pin the version with --library-version.
+#   with --library-port; pin the version with --library-version. Pin the
+#   broker with --broker-version.
 #
 # For private repos, set GITHUB_TOKEN:
 #   curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
@@ -29,6 +30,7 @@
 # After install:
 #   demarkus-install update          # update to latest version
 #                                    #   --library-version pins the reading room
+#                                    #   --broker-version pins the broker
 #   demarkus-install uninstall       # remove everything
 #
 set -euo pipefail
@@ -1599,7 +1601,7 @@ do_install() {
   local tls_key=""
   local with_broker=false
   local with_library=false
-  local library_version=""
+  local library_version="" broker_version_pin=""
   local library_port=""
   local broker_public_url=""
   local broker_oidc_issuer=""
@@ -1620,6 +1622,7 @@ do_install() {
       --with-broker)  with_broker=true; shift ;;
       --with-library) with_library=true; shift ;;
       --library-version)           library_version="$2"; shift 2 ;;
+      --broker-version)            broker_version_pin="$2"; shift 2 ;;
       --library-port)              library_port="$2"; shift 2 ;;
       --broker-public-url)         broker_public_url="$2"; shift 2 ;;
       --broker-oidc-issuer)        broker_oidc_issuer="$2"; shift 2 ;;
@@ -1974,9 +1977,9 @@ do_install() {
   # the broker writes its tokens file, the library reads its documents).
   if [ "$with_broker" = true ]; then
     local broker_version
-    broker_version=$(fetch_latest_version "broker")
+    broker_version="${broker_version_pin:-$(fetch_latest_version "broker")}"
     if [ -z "$broker_version" ]; then
-      log_error "Could not find a broker release (broker/v* tag)"
+      log_error "Could not find a broker release; pin one with --broker-version"
       exit 1
     fi
     install_broker "$broker_version" "$tokens_file" "$domain" "$no_tls" \
@@ -2165,13 +2168,14 @@ do_install_client() {
 
 do_update() {
   local version=""
-  local library_version=""
+  local library_version="" broker_version_pin=""
 
   # Parse flags
   while [ $# -gt 0 ]; do
     case "$1" in
       --version)         version="$2"; shift 2 ;;
       --library-version) library_version="$2"; shift 2 ;;
+      --broker-version)  broker_version_pin="$2"; shift 2 ;;
       *)                 log_error "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2207,7 +2211,7 @@ do_update() {
     # _TMPDIR, not a local: fetch_library_binary exits on a fatal download or
     # checksum failure, and only the EXIT trap runs then.
     _TMPDIR=$(mktemp -d) || { log_error "Failed to create temporary directory"; exit 1; }
-    update_stack_components "$(fetch_latest_version "broker")" "$library_version" "$_TMPDIR"
+    update_stack_components "${broker_version_pin:-$(fetch_latest_version "broker")}" "$library_version" "$_TMPDIR"
     rm -rf "$_TMPDIR"
     _TMPDIR=""
     exit_on_stack_failure
@@ -2235,10 +2239,10 @@ do_update() {
     $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
     # Re-execute with the new script for migrations
     exec "${INSTALL_DIR}/demarkus-install" _do_update_inner \
-      --from "$current_version" --to "$version" --library-version "$library_version"
+      --from "$current_version" --to "$version" --library-version "$library_version" --broker-version "$broker_version_pin"
   fi
 
-  _do_update_inner --from "$current_version" --to "$version" --library-version "$library_version"
+  _do_update_inner --from "$current_version" --to "$version" --library-version "$library_version" --broker-version "$broker_version_pin"
 }
 
 # stack_component_installed reports whether an optional component is present,
@@ -2334,12 +2338,13 @@ exit_on_stack_failure() {
 }
 
 _do_update_inner() {
-  local from="" to="" library_version=""
+  local from="" to="" library_version="" broker_version_pin=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --from)            from="$2"; shift 2 ;;
       --to)              to="$2"; shift 2 ;;
       --library-version) library_version="$2"; shift 2 ;;
+      --broker-version)  broker_version_pin="$2"; shift 2 ;;
       *)                 shift ;;
     esac
   done
@@ -2380,7 +2385,7 @@ _do_update_inner() {
   # Installed once by install/install-stack and never refreshed here, so a
   # single-host deployment drifted behind for as long as it ran. The broker
   # ships on its own release stream.
-  update_stack_components "$(fetch_latest_version "broker")" "$library_version" "$_TMPDIR"
+  update_stack_components "${broker_version_pin:-$(fetch_latest_version "broker")}" "$library_version" "$_TMPDIR"
 
   # Run migrations before replacing binaries
   migrate "$from" "$to"
@@ -2690,12 +2695,14 @@ main() {
       echo "  --root DIR         Content directory (default: platform-specific)"
       echo "  --version X.Y.Z    Install specific version (default: latest)"
       echo "  --library-version X.Y.Z  Reading-room version (default: latest)"
+      echo "  --broker-version X.Y.Z   Broker version (default: latest broker release)"
       echo "  --client-only      Only install the client binary"
       echo "  --no-tls           Skip TLS setup"
       echo ""
       echo "Update options:"
       echo "  --version X.Y.Z    Update to specific version (default: latest)"
       echo "  --library-version X.Y.Z  Reading-room version (default: latest)"
+      echo "  --broker-version X.Y.Z   Broker version (default: latest broker release)"
       echo ""
       echo "Uninstall options:"
       echo "  --keep-data        Don't remove content directory"
