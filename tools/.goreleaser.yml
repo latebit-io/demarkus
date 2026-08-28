@@ -7,23 +7,6 @@ monorepo:
   dir: tools
 
 builds:
-  - id: demarkus-knowledge-broker
-    main: ./demarkus-knowledge-broker
-    binary: demarkus-knowledge-broker
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-      - arm
-    goarm:
-      - "7"
-    ldflags:
-      - -s -w
-
   - id: demarkus-token
     main: ./demarkus-token
     binary: demarkus-token
@@ -78,11 +61,6 @@ builds:
 # Separate archives so operators (and plugins) pull only the binary they
 # need don't carry the full bundle. Same shape as client/.goreleaser.yml.
 archives:
-  - id: demarkus-knowledge-broker
-    builds:
-      - demarkus-knowledge-broker
-    name_template: "demarkus-knowledge-broker_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-
   - id: demarkus-token
     builds:
       - demarkus-token

@@ -1147,6 +1147,13 @@ migrate_broker_single_host() {
   if $SUDO test -d "$BROKER_LEGACY_STATE_DIR" && ! $SUDO test -e "$BROKER_STATE_DIR"; then
     $SUDO mv "$BROKER_LEGACY_STATE_DIR" "$BROKER_STATE_DIR" || { log_error "Could not move ${BROKER_LEGACY_STATE_DIR} to ${BROKER_STATE_DIR}"; exit 1; }
   fi
+  # Rename the user and group before any chown to the new name.
+  if id "$BROKER_LEGACY_SERVICE" >/dev/null 2>&1 && ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
+    if ! $SUDO usermod -l "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE" || ! $SUDO groupmod -n "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE"; then
+      log_error "Could not rename the ${BROKER_LEGACY_SERVICE} system user"
+      exit 1
+    fi
+  fi
   # The kept config still points storage.dir (and comments) at old paths.
   # Normalize-then-replace keeps the rewrite idempotent across a rerun;
   # temp+mv instead of sed -i so ownership is restored explicitly.
@@ -1154,7 +1161,7 @@ migrate_broker_single_host() {
   local cfg="${BROKER_CONFIG_DIR}/config.yaml"
   if $SUDO test -f "$cfg"; then
     if ! $SUDO sh -c "sed '$rename_expr' '$cfg' > '${cfg}.tmp'" || ! $SUDO mv "${cfg}.tmp" "$cfg" \
-      || ! $SUDO chown root:"$BROKER_SERVICE" "$cfg" 2>/dev/null || ! $SUDO chmod 640 "$cfg"; then
+      || ! $SUDO chown root:"$BROKER_SERVICE" "$cfg" || ! $SUDO chmod 640 "$cfg"; then
       $SUDO rm -f "${cfg}.tmp"
       log_error "Could not rewrite ${cfg} for the new broker name"
       exit 1
@@ -1169,12 +1176,6 @@ migrate_broker_single_host() {
   fi
   if $SUDO test -f "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}" && ! $SUDO test -e "${INSTALL_DIR}/${BROKER_SERVICE}"; then
     $SUDO mv "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}" "${INSTALL_DIR}/${BROKER_SERVICE}" || { log_error "Could not rename the broker binary"; exit 1; }
-  fi
-  if id "$BROKER_LEGACY_SERVICE" >/dev/null 2>&1 && ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
-    if ! $SUDO usermod -l "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE" || ! $SUDO groupmod -n "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE"; then
-      log_error "Could not rename the ${BROKER_LEGACY_SERVICE} system user"
-      exit 1
-    fi
   fi
   $SUDO systemctl daemon-reload
   if [ "$was_enabled" = true ] && ! $SUDO systemctl enable "$BROKER_SERVICE"; then
@@ -1192,7 +1193,7 @@ migrate_broker_single_host() {
 # the broker owns tokens.toml writes, the server keeps its read+hot-reload
 # contract, and every credential the broker persists lives in BROKER_STATE_DIR.
 install_broker() {
-  local tools_version="$1"
+  local broker_version="$1"
   local tokens_file="$2"
   local domain="$3"
   local no_tls="$4"
@@ -1212,7 +1213,12 @@ install_broker() {
   migrate_broker_single_host
 
   log_step "Installing ${BROKER_SERVICE} (single-host mode)"
-  download_and_verify_asset "$BROKER_SERVICE" "$tools_version" "tools" "$tmpdir"
+  # The broker ships on its own release stream (broker/v), separate from
+  # the admin-CLI tools stream.
+  download_asset_file "broker/v${broker_version}" "demarkus-broker_checksums.txt" \
+    "${tmpdir}/demarkus-broker_checksums.txt" 2>/dev/null \
+    || log_warn "Could not download broker checksums; verification will be skipped"
+  download_and_verify_asset "$BROKER_SERVICE" "$broker_version" "broker" "$tmpdir"
   install_binaries "$tmpdir" "$BROKER_SERVICE"
 
   if ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
@@ -1967,7 +1973,13 @@ do_install() {
   # Optional single-host stack components (after the world server is up:
   # the broker writes its tokens file, the library reads its documents).
   if [ "$with_broker" = true ]; then
-    install_broker "$tools_version" "$tokens_file" "$domain" "$no_tls" \
+    local broker_version
+    broker_version=$(fetch_latest_version "broker")
+    if [ -z "$broker_version" ]; then
+      log_error "Could not find a broker release (broker/v* tag)"
+      exit 1
+    fi
+    install_broker "$broker_version" "$tokens_file" "$domain" "$no_tls" \
       "$broker_oidc_issuer" "$broker_oidc_client_id" "$broker_oidc_client_secret" \
       "$broker_public_url" "$_TMPDIR"
     # Broker listeners are loopback-only; the reverse proxy's HTTPS port
@@ -2195,7 +2207,7 @@ do_update() {
     # _TMPDIR, not a local: fetch_library_binary exits on a fatal download or
     # checksum failure, and only the EXIT trap runs then.
     _TMPDIR=$(mktemp -d) || { log_error "Failed to create temporary directory"; exit 1; }
-    update_stack_components "$(fetch_latest_version "tools")" "$library_version" "$_TMPDIR"
+    update_stack_components "$(fetch_latest_version "broker")" "$library_version" "$_TMPDIR"
     rm -rf "$_TMPDIR"
     _TMPDIR=""
     exit_on_stack_failure
@@ -2241,7 +2253,7 @@ stack_component_installed() {
 # upgrade path and the server-already-current path, where a stale library is
 # still worth updating.
 update_stack_components() {
-  local tools_version="$1" library_version="$2" tmpdir="$3"
+  local broker_version="$1" library_version="$2" tmpdir="$3"
 
   # These components are systemd services; nothing to refresh elsewhere, and
   # the checks below would otherwise fail an update on a stray binary.
@@ -2253,14 +2265,14 @@ update_stack_components() {
   # would silently skip it forever.
   migrate_broker_single_host
 
-  # An empty tools version would otherwise make the broker branch log a skip
+  # An empty broker version would otherwise make the broker branch log a skip
   # and return success, reporting a clean update that never refreshed it.
-  if [ -z "$tools_version" ] && stack_component_installed "demarkus-knowledge-broker" "$BROKER_SERVICE"; then
-    log_error "Could not resolve the tools release; the installed broker cannot be updated"
+  if [ -z "$broker_version" ] && stack_component_installed "demarkus-knowledge-broker" "$BROKER_SERVICE"; then
+    log_error "Could not resolve the broker release; the installed broker cannot be updated"
     exit 1
   fi
 
-  update_stack_component "$BROKER_SERVICE" "$BROKER_SERVICE" "$tools_version" "$tmpdir"
+  update_stack_component "$BROKER_SERVICE" "$BROKER_SERVICE" "$broker_version" "$tmpdir"
   update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "$library_version" "$tmpdir"
 }
 
@@ -2282,6 +2294,18 @@ update_stack_component() {
     demarkus-library)
       fetch_library_binary "$version" "$tmpdir"
       log_info "${binary} updated to ${_LIBRARY_VERSION}"
+      ;;
+    "$BROKER_SERVICE")
+      if [ -z "$version" ]; then
+        log_warn "No broker release resolved; skipping ${binary} update"
+        return
+      fi
+      download_asset_file "broker/v${version}" "demarkus-broker_checksums.txt" \
+        "${tmpdir}/demarkus-broker_checksums.txt" 2>/dev/null \
+        || log_warn "Could not download broker checksums; verification will be skipped"
+      download_and_verify_asset "$binary" "$version" "broker" "$tmpdir"
+      install_binary_atomic "${tmpdir}/${binary}" "${INSTALL_DIR}/${binary}"
+      log_info "${binary} updated to ${version}"
       ;;
     *)
       if [ -z "$version" ]; then
@@ -2354,8 +2378,9 @@ _do_update_inner() {
   fi
 
   # Installed once by install/install-stack and never refreshed here, so a
-  # single-host deployment drifted behind for as long as it ran.
-  update_stack_components "$tools_version" "$library_version" "$_TMPDIR"
+  # single-host deployment drifted behind for as long as it ran. The broker
+  # ships on its own release stream.
+  update_stack_components "$(fetch_latest_version "broker")" "$library_version" "$_TMPDIR"
 
   # Run migrations before replacing binaries
   migrate "$from" "$to"

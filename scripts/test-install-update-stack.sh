@@ -30,7 +30,8 @@ mkdir -p "$INSTALL_DIR" "$SYSTEMD_DIR"
 CALLS="$TMP/calls"
 : > "$CALLS"
 fetch_library_binary() { echo "fetch_library $*" >> "$CALLS"; _LIBRARY_VERSION="9.9.9"; }
-download_and_verify_asset() { echo "download $1 $2" >> "$CALLS"; }
+download_and_verify_asset() { echo "download $1 $2 $3" >> "$CALLS"; }
+download_asset_file() { echo "download_file $1 $2" >> "$CALLS"; }
 install_binary_atomic() { echo "install $(basename "$2")" >> "$CALLS"; }
 # Stub systemctl so a restart is recorded, never executed.
 systemctl() { echo "systemctl $*" >> "$CALLS"; }
@@ -75,11 +76,12 @@ touch "$SYSTEMD_DIR/demarkus-library.service"
 update_stack_component "demarkus-library" "demarkus-library" "" "$TMP"
 grep -q "^fetch_library " "$CALLS" || fail "unit-only install was not refreshed"
 
-# 4. Broker takes its binary from the tools release.
+# 4. Broker takes its binary (and checksums) from the broker release stream.
 : > "$CALLS"
 touch "$INSTALL_DIR/demarkus-knowledge-broker"; chmod +x "$INSTALL_DIR/demarkus-knowledge-broker"
 update_stack_component "demarkus-knowledge-broker" "demarkus-knowledge-broker" "0.15.3" "$TMP"
-grep -q "^download demarkus-knowledge-broker 0.15.3" "$CALLS" || fail "broker not downloaded from tools"
+grep -q "^download demarkus-knowledge-broker 0.15.3 broker" "$CALLS" || fail "broker not downloaded from the broker stream"
+grep -q "^download_file broker/v0.15.3 demarkus-broker_checksums.txt" "$CALLS" || fail "broker checksums not fetched from the broker stream"
 grep -q "^install demarkus-knowledge-broker" "$CALLS" || fail "broker binary not installed"
 grep -q "try-restart demarkus-knowledge-broker" "$CALLS" || fail "broker was not restarted"
 

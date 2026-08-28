@@ -439,6 +439,28 @@ expected concurrency. The default
 `podDisruptionBudget.minAvailable: 1` prevents a node drain from
 taking both replicas down.
 
+## Migrating from the demarkus-broker chart
+
+This chart is the renamed `demarkus-broker` chart. Chart-derived resource
+names (config Secret, refresh-tokens Secret, TLS Certificate, Service)
+follow the new fullname, so a plain reinstall under the new chart starts
+with a fresh cookie key and an empty refresh-token Secret: every user
+re-authenticates once. That is the supported default migration.
+
+To retain live state instead, override the derived names before the
+first upgrade:
+
+- `server.refreshTokensSecret: <old release>-demarkus-broker-refresh-tokens`
+  keeps existing refresh tokens (sessions survive).
+- Per-world write-token Secrets keep their `demarkus-broker-write-token-*`
+  names in both chart and broker; no action needed.
+- Ingress/Certificate Secret names change with the fullname; expect a
+  short TLS gap while cert-manager issues the new Certificate, or
+  pre-copy the old TLS Secret to the new name.
+- If the broker stays in its old namespace, update any peer
+  NetworkPolicy that matched `app.kubernetes.io/name: demarkus-broker`
+  (the knowledge-server chart's default now matches the new name).
+
 ## Cookie key preservation
 
 The signed-state-cookie HMAC key is generated on first install and

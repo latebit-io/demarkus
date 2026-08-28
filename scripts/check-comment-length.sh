@@ -10,11 +10,10 @@ if ! base=$(git merge-base main HEAD 2>/dev/null); then
   exit 1
 fi
 
-# One tree-wide diff so rename detection pairs moved files; a pure rename
-# has no hunks and stays untouched, per tighten-on-touch. The first awk
-# emits "file line" pairs; the second reads them (NR==FNR) then scans each
-# touched file once, so the whole check is two processes.
+# One tree-wide diff so rename detection pairs moved files; a pure
+# rename then has no hunks and stays untouched, per tighten-on-touch.
 files_and_lines=$(git diff -U0 -M "$base" -- '*.go' | awk '
+  /^\+\+\+ \/dev\/null/ { file = ""; next }
   /^\+\+\+ b\// { file = substr($0, 7); next }
   /^@@/ {
     if (file != "" && match($0, /\+[0-9]+(,[0-9]+)?/)) {

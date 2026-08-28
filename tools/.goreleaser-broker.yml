@@ -1,0 +1,38 @@
+version: 2
+
+project_name: demarkus-broker
+
+monorepo:
+  tag_prefix: broker/
+  dir: tools
+
+builds:
+  - id: demarkus-knowledge-broker
+    main: ./demarkus-knowledge-broker
+    binary: demarkus-knowledge-broker
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: demarkus-knowledge-broker
+    builds:
+      - demarkus-knowledge-broker
+    name_template: "demarkus-knowledge-broker_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+# install.sh derives this name from the release stream ("broker").
+checksum:
+  name_template: "demarkus-broker_checksums.txt"
+
+changelog:
+  use: github-native
