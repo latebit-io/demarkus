@@ -266,6 +266,42 @@ jobs:
           fi
           echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
 
+  # Memory broker releases on its own stream (memory-broker/v), mirroring
+  # the knowledge broker's split: the two binaries share tools/internal/
+  # but ship, image, and chart independently.
+  semver-memory-broker:
+    needs: test-tools
+    if: always() && needs.test-tools.result == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.semver.outputs.version }}
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: PaulHatch/semantic-version@v5.3.0
+        id: semver
+        with:
+          tag_prefix: "memory-broker/v"
+          major_pattern: "BREAKING CHANGE:"
+          minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
+          # See server's change_path note: chart-only commits must
+          # bump the version so the chart actually publishes.
+          change_path: "tools/demarkus-memory-broker/ tools/internal/ tools/go.mod tools/go.sum protocol/ client/ deploy/helm/demarkus-memory-broker/"
+          bump_each_commit: false
+          search_commit_body: true
+      - name: Check if version changed
+        id: check
+        run: |
+          TAG="memory-broker/v${{ steps.semver.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
+
   release-protocol:
     needs: semver-protocol
     if: needs.semver-protocol.outputs.should_release == 'true'
@@ -633,6 +669,90 @@ jobs:
           VER="${{ needs.semver-broker.outputs.new_version }}"
           helm package deploy/helm/demarkus-knowledge-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
           helm push "/tmp/charts/demarkus-knowledge-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+
+  release-memory-broker:
+    needs: semver-memory-broker
+    if: needs.semver-memory-broker.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Create module tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = 'memory-broker/v${{ needs.semver-memory-broker.outputs.new_version }}';
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${tag}`,
+              sha: context.sha
+            });
+            console.log(`Created tag: ${tag}`);
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser-pro
+          version: latest
+          args: release --clean -f tools/.goreleaser-memory-broker.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          GORELEASER_CURRENT_TAG: "memory-broker/v${{ needs.semver-memory-broker.outputs.new_version }}"
+
+      # Stage pre-built binary (built by tools/.goreleaser-memory-broker.yml
+      # above) into dist/docker/<arch>/ so the Dockerfile is COPY-only
+      # and buildx skips QEMU compilation.
+      - name: Stage binaries for Docker build
+        run: |
+          set -euxo pipefail
+          ls dist/
+          mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
+          cp dist/demarkus-memory-broker_linux_amd64*/demarkus-memory-broker dist/docker/amd64/
+          cp dist/demarkus-memory-broker_linux_arm64*/demarkus-memory-broker dist/docker/arm64/
+          cp dist/demarkus-memory-broker_linux_arm_7*/demarkus-memory-broker dist/docker/armv7/
+
+      - name: Build + push demarkus-memory-broker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tools/demarkus-memory-broker/Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: |
+            ghcr.io/latebit-io/demarkus-memory-broker:${{ needs.semver-memory-broker.outputs.new_version }}
+            ghcr.io/latebit-io/demarkus-memory-broker:latest
+
+      # Chart version + appVersion pinned 1:1 to the memory-broker stream
+      # version so the chart and image released in the same bump always
+      # reference each other.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.2
+
+      - name: Package + push demarkus-memory-broker chart
+        run: |
+          VER="${{ needs.semver-memory-broker.outputs.new_version }}"
+          helm package deploy/helm/demarkus-memory-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
+          helm push "/tmp/charts/demarkus-memory-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
 
   # Dispatch the pin-bump workflow after any binary release. The bump
   # workflow's own release trigger never fires: GoReleaser publishes with

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -19,14 +20,67 @@ import (
 // world's namespace; the broker's own refresh-token and per-world
 // write-token Secrets live in the broker's namespace.
 type Config struct {
-	Server      ServerConfig      `yaml:"server"`
-	OIDC        OIDCConfig        `yaml:"oidc"`
-	Storage     StorageConfig     `yaml:"storage"`
-	Worlds      []WorldConfig     `yaml:"worlds"`
-	WebClients  []WebClientConfig `yaml:"webClients"`
-	Sweeper     SweeperConfig     `yaml:"sweeper"`
-	RateLimit   RateLimitConfig   `yaml:"rateLimit"`
-	WorldDialer WorldDialerConfig `yaml:"worldDialer"`
+	Server       ServerConfig       `yaml:"server"`
+	OIDC         OIDCConfig         `yaml:"oidc"`
+	Storage      StorageConfig      `yaml:"storage"`
+	Worlds       []WorldConfig      `yaml:"worlds"`
+	WebClients   []WebClientConfig  `yaml:"webClients"`
+	Sweeper      SweeperConfig      `yaml:"sweeper"`
+	RateLimit    RateLimitConfig    `yaml:"rateLimit"`
+	WorldDialer  WorldDialerConfig  `yaml:"worldDialer"`
+	Provisioning ProvisioningConfig `yaml:"provisioning"`
+
+	// dynamicWorlds is the runtime tenant set (memory broker Phase 3),
+	// swapped whole from the provisioning registry; every world consumer
+	// goes through AllWorlds / FindWorld so both sets are visible.
+	dynamicMu     sync.RWMutex
+	dynamicWorlds []WorldConfig
+}
+
+// AllWorlds returns a snapshot of static plus dynamic worlds. The
+// returned slice is the caller's to keep; entries are copies.
+func (c *Config) AllWorlds() []WorldConfig {
+	c.dynamicMu.RLock()
+	defer c.dynamicMu.RUnlock()
+	out := make([]WorldConfig, 0, len(c.Worlds)+len(c.dynamicWorlds))
+	out = append(out, c.Worlds...)
+	out = append(out, c.dynamicWorlds...)
+	return out
+}
+
+// FindWorld returns a copy of the named world, static or dynamic.
+func (c *Config) FindWorld(name string) (WorldConfig, bool) {
+	for j := range c.Worlds {
+		if c.Worlds[j].Name == name {
+			return c.Worlds[j], true
+		}
+	}
+	c.dynamicMu.RLock()
+	defer c.dynamicMu.RUnlock()
+	for j := range c.dynamicWorlds {
+		if c.dynamicWorlds[j].Name == name {
+			return c.dynamicWorlds[j], true
+		}
+	}
+	return WorldConfig{}, false
+}
+
+// SetDynamicWorlds replaces the dynamic tenant set. Static names win on
+// collision: a registry entry shadowing a static world is dropped.
+func (c *Config) SetDynamicWorlds(worlds []WorldConfig) {
+	static := make(map[string]bool, len(c.Worlds))
+	for j := range c.Worlds {
+		static[c.Worlds[j].Name] = true
+	}
+	filtered := make([]WorldConfig, 0, len(worlds))
+	for j := range worlds {
+		if !static[worlds[j].Name] {
+			filtered = append(filtered, worlds[j])
+		}
+	}
+	c.dynamicMu.Lock()
+	c.dynamicWorlds = filtered
+	c.dynamicMu.Unlock()
 }
 
 // StorageConfig selects the credential-persistence backend. "kubernetes"
@@ -251,6 +305,10 @@ type ServerConfig struct {
 	// itself stretches the effective session lifetime via fresh
 	// id_tokens minted on each poll.
 	IDTokenTTL time.Duration `yaml:"idTokenTTL"`
+	// Realm names the broker product in the MCP gateway's RFC 6750
+	// WWW-Authenticate challenge; each binary defaults its own name
+	// before NewServer (knowledge vs memory broker).
+	Realm string `yaml:"realm"`
 	// MCP is the broker's MCP-gateway-specific config. The gateway
 	// is opt-in: an operator runs the broker without MCP by leaving
 	// `mcp.enabled` unset, in which case the existing management
@@ -400,6 +458,14 @@ type WorldConfig struct {
 	// The Mark Protocol scheme is always `mark://`; the value here is
 	// host:port only (e.g. `team-a-mark.team-a:6309`).
 	InternalAddress string `yaml:"internalAddress"`
+	// DialAddress optionally splits the socket target from the logical
+	// authority: dial here, keep SNI/URL identity on InternalAddress
+	// (dynamic tenants share one knowledge-server Service this way).
+	DialAddress string `yaml:"dialAddress"`
+	// TokensSecretKey overrides the data key inside TokensSecret
+	// (default "tokens.toml"). Dynamic tenant worlds share one Secret
+	// with a key per world so new tenants need no new volume mounts.
+	TokensSecretKey string `yaml:"tokensSecretKey"`
 	// TokensFile is the world server's tokens.toml path on local disk.
 	// Required (and only meaningful) in file-backend mode, where the
 	// broker writes token hashes directly to the file the world server

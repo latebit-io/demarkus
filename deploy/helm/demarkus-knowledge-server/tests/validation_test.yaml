@@ -78,12 +78,22 @@ tests:
       - failedTemplate:
           errorMessage: serviceAccount.name is required when serviceAccount.create is false
 
+  - it: dynamicWorlds mode renders worldsFile and permits zero static worlds
+    set:
+      worlds: []
+      dynamicWorlds.enabled: true
+    asserts:
+      - template: configmap.yaml
+        matchRegex:
+          path: data["config.yaml"]
+          pattern: 'worldsFile: /run/demarkus/dynamic-worlds/worlds.yaml'
+
   - it: requires at least one world
     set:
       worlds: []
     asserts:
       - failedTemplate:
-          errorMessage: worlds must contain at least one world
+          errorMessage: worlds must contain at least one world (or enable dynamicWorlds)
 
   - it: rejects duplicate world names
     set:

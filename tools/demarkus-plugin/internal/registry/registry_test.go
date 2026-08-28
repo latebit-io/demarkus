@@ -2,6 +2,8 @@ package registry
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -638,5 +640,89 @@ func TestSoulJoinURLWithFragment(t *testing.T) {
 		if _, err := SoulJoin(bad, "t", false, ""); err == nil {
 			t.Errorf("expected error for malformed host %q", bad)
 		}
+	}
+}
+
+func TestSoulJoinBroker(t *testing.T) {
+	t.Setenv("DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP", "1")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/oauth-protected-resource" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	res, err := SoulJoin(ts.URL, "", false, "")
+	if err != nil {
+		t.Fatalf("SoulJoin(broker): %v", err)
+	}
+	if !res.Broker || res.McpURL != res.Host+"/mcp" {
+		t.Errorf("broker result = %+v", res)
+	}
+	if res.TokenFile != "-" {
+		t.Errorf("broker soul must not reference a token file, got %q", res.TokenFile)
+	}
+	// Catalog row lands in SOULS (destination gate + binding apply).
+	row, ok, err := RemoteSoulRow(res.Slug)
+	if err != nil || !ok {
+		t.Fatalf("catalog row missing after broker join: ok=%v err=%v", ok, err)
+	}
+	if row.Host != res.Host {
+		t.Errorf("catalog host = %q, want %q", row.Host, res.Host)
+	}
+
+	// A token alongside an HTTPS broker URL is rejected: OAuth owns auth.
+	if _, err := SoulJoin(ts.URL, "sekret", false, ""); err == nil {
+		t.Error("broker join accepted a token")
+	}
+}
+
+// Query and fragment components corrupt the appended discovery and
+// /mcp paths; both are rejected before any request.
+func TestValidateBrokerEndpointRejectsQueryAndFragment(t *testing.T) {
+	t.Setenv("DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP", "1")
+	for _, u := range []string{
+		"http://broker.example?x=1",
+		"http://broker.example/?",
+		"http://broker.example/#x",
+		// Empty fragment marker: Parse erases it but keeps the path
+		// untrimmed, which would double the slash in appended paths.
+		"http://broker.example/#",
+	} {
+		if _, err := ValidateBrokerEndpoint(u); err == nil || !strings.Contains(err.Error(), "query or fragment") {
+			t.Errorf("ValidateBrokerEndpoint(%q) err = %v, want query/fragment rejection", u, err)
+		}
+	}
+}
+
+func TestValidateBrokerEndpointRejectsUserinfo(t *testing.T) {
+	t.Setenv("DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP", "1")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	requests := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	withUser := strings.Replace(ts.URL, "http://", "http://user:password@", 1)
+	if _, err := SoulJoin(withUser, "", false, ""); err == nil || !strings.Contains(err.Error(), "userinfo") {
+		t.Fatalf("userinfo URL err = %v, want userinfo rejection", err)
+	}
+	// The rejection must happen before any request: credentials in the
+	// URL must never reach the wire as a Basic Authorization header.
+	if requests != 0 {
+		t.Fatalf("userinfo URL produced %d requests, want 0", requests)
+	}
+	// No catalog row may exist for the bogus "user" slug.
+	if _, ok, err := RemoteSoulRow("user"); err != nil || ok {
+		t.Fatalf("catalog row after rejected join: ok=%v err=%v", ok, err)
 	}
 }

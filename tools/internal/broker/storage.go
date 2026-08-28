@@ -39,6 +39,10 @@ func (r SecretRef) String() string {
 // (no spurious version/mtime churn for watchers).
 type SecretStore interface {
 	Mutate(ctx context.Context, ref SecretRef, mutate func(current []byte) ([]byte, error)) error
+	// Delete removes the credential document (the key; the Secret too
+	// when it holds no other keys). Absent is success: deprovisioning
+	// converges on reruns.
+	Delete(ctx context.Context, ref SecretRef) error
 }
 
 // NewK8sSecretStore returns the Kubernetes-backed SecretStore.
@@ -123,6 +127,46 @@ func NewFileSecretStore() SecretStore {
 	return &fileSecretStore{locks: make(map[string]*sync.Mutex)}
 }
 
+// Delete removes ref.Key from the Secret, deleting the Secret itself
+// when no keys remain: per-tenant Secrets (write-token records) would
+// otherwise accumulate as empty husks across deprovisions.
+func (s *k8sSecretStore) Delete(ctx context.Context, ref SecretRef) error {
+	for range maxConflictRetries {
+		secret, getErr := s.client.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+		if apierrors.IsNotFound(getErr) {
+			return nil
+		}
+		if getErr != nil {
+			return fmt.Errorf("get secret %s/%s: %w", ref.Namespace, ref.Name, getErr)
+		}
+		if _, ok := secret.Data[ref.Key]; !ok {
+			return nil
+		}
+		if len(secret.Data) == 1 {
+			deleteErr := s.client.CoreV1().Secrets(ref.Namespace).Delete(ctx, ref.Name, metav1.DeleteOptions{
+				Preconditions: &metav1.Preconditions{ResourceVersion: &secret.ResourceVersion},
+			})
+			if deleteErr == nil || apierrors.IsNotFound(deleteErr) {
+				return nil
+			}
+			if apierrors.IsConflict(deleteErr) {
+				continue
+			}
+			return fmt.Errorf("delete secret %s/%s: %w", ref.Namespace, ref.Name, deleteErr)
+		}
+		delete(secret.Data, ref.Key)
+		_, updateErr := s.client.CoreV1().Secrets(ref.Namespace).Update(ctx, secret, metav1.UpdateOptions{})
+		if updateErr == nil {
+			return nil
+		}
+		if apierrors.IsConflict(updateErr) {
+			continue
+		}
+		return fmt.Errorf("update secret %s/%s: %w", ref.Namespace, ref.Name, updateErr)
+	}
+	return fmt.Errorf("conflict deleting secret %s/%s after %d retries", ref.Namespace, ref.Name, maxConflictRetries)
+}
+
 type fileSecretStore struct {
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -137,6 +181,20 @@ func (s *fileSecretStore) lockFor(path string) *sync.Mutex {
 		s.locks[path] = l
 	}
 	return l
+}
+
+// Delete removes the backing file; absent is success.
+func (s *fileSecretStore) Delete(_ context.Context, ref SecretRef) error {
+	if ref.Path == "" {
+		return fmt.Errorf("file secret store: ref %s has no path (storage.dir or world tokensFile missing)", ref)
+	}
+	l := s.lockFor(ref.Path)
+	l.Lock()
+	defer l.Unlock()
+	if err := os.Remove(ref.Path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s: %w", ref.Path, err)
+	}
+	return nil
 }
 
 func (s *fileSecretStore) Mutate(_ context.Context, ref SecretRef, mutate func([]byte) ([]byte, error)) error {
@@ -288,10 +346,14 @@ func (c *Config) worldWriteTokenRef(worldName string) SecretRef {
 }
 
 func (c *Config) worldTokensRef(world *WorldConfig) SecretRef {
+	key := world.TokensSecretKey
+	if key == "" {
+		key = TokensSecretKey
+	}
 	return SecretRef{
 		Namespace: world.Namespace,
 		Name:      world.TokensSecret,
-		Key:       TokensSecretKey,
+		Key:       key,
 		Path:      world.TokensFile,
 	}
 }

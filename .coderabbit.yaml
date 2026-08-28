@@ -154,7 +154,8 @@ reviews:
         type(scope): description. Valid types: feat, fix, docs, style,
         refactor, perf, test, build, ci, chore, revert.
         The scope is optional. Valid scopes: protocol, server, client,
-        tui, mcp, tools, plugins, deploy, install, publish.
+        tui, mcp, tools, plugins, deploy, install, publish, broker,
+        memory-broker, kind.
 
 chat:
   auto_reply: true

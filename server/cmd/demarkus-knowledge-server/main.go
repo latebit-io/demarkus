@@ -17,14 +17,12 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
+	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob/gcs"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/logging"
 	"github.com/latebit-io/demarkus/server/internal/management"
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
-	"github.com/latebit-io/demarkus/server/internal/snirouter"
-	"github.com/latebit-io/demarkus/server/internal/worldruntime"
 	"github.com/quic-go/quic-go"
 )
 
@@ -63,7 +61,13 @@ func run(arguments []string) error {
 		logger.Error("configuration invalid", "error", err)
 		return err
 	}
+	// Dynamic mode (worldsFile set) skips authority pinning on the cert:
+	// tenant worlds come and go at runtime, so coverage is checked
+	// per-world with a warning instead of failing cert reloads.
 	authorities := configuredAuthorities(config)
+	if config.WorldsFile != "" {
+		authorities = nil
+	}
 	certificates, err := certsource.Open(config.TLS.CertFile, config.TLS.KeyFile, authorities)
 	if err != nil {
 		logger.Error("TLS setup failed", "error", err)
@@ -83,22 +87,24 @@ func run(arguments []string) error {
 		}
 	}()
 
-	runtimes, mappings, tokenWorlds, err := openWorlds(startupCtx, config, client, logger)
+	watchCtx, stopWatchers := context.WithCancel(context.Background())
+	var watcherGroup sync.WaitGroup
+	defer func() {
+		stopWatchers()
+		watcherGroup.Wait()
+	}()
+
+	newStore := func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
+		return gcs.New(client, world.Bucket.Name(), maxObjectBytes)
+	}
+	worlds, err := newWorldManager(watchCtx, &watcherGroup, *configFile, config, newStore, certificates, logger)
 	if err != nil {
 		logger.Error("world startup failed", "error", err)
 		return err
 	}
-	defer closeRuntimes(runtimes, logger)
-	tokens, err := newTokenCoordinator(tokenWorlds)
-	if err != nil {
-		logger.Error("token isolation failed", "error", err)
-		return err
-	}
-	router, err := snirouter.New(mappings)
-	if err != nil {
-		logger.Error("SNI router invalid", "error", err)
-		return err
-	}
+	defer worlds.Close()
+	tokens := worlds.Tokens()
+	router := worlds.Router()
 	tlsConfig := certificates.TLSConfig(protocol.ALPN)
 	handshakeHook, err := router.HandshakeHook(tlsConfig)
 	if err != nil {
@@ -144,13 +150,7 @@ func run(arguments []string) error {
 		}
 	}()
 
-	watchCtx, stopWatchers := context.WithCancel(context.Background())
-	var watcherGroup sync.WaitGroup
-	startTokenWatchers(watchCtx, &watcherGroup, config, tokens, logger)
-	defer func() {
-		stopWatchers()
-		watcherGroup.Wait()
-	}()
+	startConfigWatchers(watchCtx, &watcherGroup, *configFile, config, worlds, logger)
 
 	quicResult := make(chan error, 1)
 	go func() { quicResult <- quicServer.Serve(context.Background(), router.Selector()) }()
@@ -158,7 +158,7 @@ func run(arguments []string) error {
 	go func() { healthResult <- healthServer.Serve(healthListener) }()
 	health.SetLive(true)
 	health.SetReady(true)
-	logger.Info("knowledge server started", "quic_addr", quicServer.Addr(), "health_addr", healthListener.Addr(), "worlds", len(runtimes))
+	logger.Info("knowledge server started", "quic_addr", quicServer.Addr(), "health_addr", healthListener.Addr(), "worlds", worlds.WorldCount())
 
 	signalChannel := make(chan os.Signal, 1)
 	signal.Notify(signalChannel, processSignals()...)
@@ -181,58 +181,6 @@ func run(arguments []string) error {
 	return runErr
 }
 
-func openWorlds(
-	ctx context.Context,
-	config *knowledgeconfig.Config,
-	client *storage.Client,
-	logger *slog.Logger,
-) ([]*worldruntime.Runtime, []snirouter.Mapping, []tokenWorld, error) {
-	runtimes := make([]*worldruntime.Runtime, 0, len(config.Worlds))
-	mappings := make([]snirouter.Mapping, 0)
-	tokenWorlds := make([]tokenWorld, 0, len(config.Worlds))
-	for worldIndex := range config.Worlds {
-		world := &config.Worlds[worldIndex]
-		objects, err := gcs.New(client, world.Bucket.Name(), maxObjectBytes)
-		if err != nil {
-			closeRuntimes(runtimes, logger)
-			return nil, nil, nil, fmt.Errorf("open world %q blob store: %w", world.Name, err)
-		}
-		store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
-			WorldID:        world.Bucket.WorldID,
-			RequestTimeout: time.Duration(world.Limits.RequestTimeout),
-			RequirePolicy:  true,
-		})
-		if err != nil {
-			closeRuntimes(runtimes, logger)
-			return nil, nil, nil, fmt.Errorf("open world %q bucket: %w", world.Name, err)
-		}
-		runtime, err := worldruntime.New(&worldruntime.Config{
-			Name:              world.Name,
-			Store:             store,
-			Catalog:           store,
-			Views:             store,
-			TokensFile:        world.Auth.TokensFile,
-			DisableTokenWatch: true,
-			ReadOnly:          world.ReadOnly,
-			RequestTimeout:    time.Duration(world.Limits.RequestTimeout),
-			MaxConcurrent:     world.Limits.MaxConcurrentRequests,
-			RateLimit:         world.Limits.RequestsPerSecond,
-			RateBurst:         world.Limits.Burst,
-			Logger:            logger,
-		})
-		if err != nil {
-			closeRuntimes(runtimes, logger)
-			return nil, nil, nil, fmt.Errorf("open world %q runtime: %w", world.Name, err)
-		}
-		runtimes = append(runtimes, runtime)
-		tokenWorlds = append(tokenWorlds, tokenWorld{name: world.Name, runtime: runtime})
-		for _, authority := range world.Authorities {
-			mappings = append(mappings, snirouter.Mapping{Authority: authority, Endpoint: runtime.Endpoint(authority)})
-		}
-	}
-	return runtimes, mappings, tokenWorlds, nil
-}
-
 func configuredAuthorities(config *knowledgeconfig.Config) []string {
 	count := 0
 	for worldIndex := range config.Worlds {
@@ -244,24 +192,6 @@ func configuredAuthorities(config *knowledgeconfig.Config) []string {
 		authorities = append(authorities, world.Authorities...)
 	}
 	return authorities
-}
-
-func startTokenWatchers(
-	ctx context.Context,
-	group *sync.WaitGroup,
-	config *knowledgeconfig.Config,
-	tokens *tokenCoordinator,
-	logger *slog.Logger,
-) {
-	for worldIndex := range config.Worlds {
-		world := &config.Worlds[worldIndex]
-		watcher := &configwatch.Watcher{Target: world.Auth.TokensFile, Reload: tokens.Reload, Logger: logger}
-		group.Go(func() {
-			if err := watcher.Run(ctx); err != nil {
-				logger.Warn("token watcher exited", "target", watcher.Target, "error", err)
-			}
-		})
-	}
 }
 
 func waitForStop(
@@ -304,10 +234,27 @@ func waitForStop(
 	}
 }
 
-func closeRuntimes(runtimes []*worldruntime.Runtime, logger *slog.Logger) {
-	for index := len(runtimes) - 1; index >= 0; index-- {
-		if err := runtimes[index].Close(); err != nil {
-			logger.Warn("world runtime close failed", "error", err)
-		}
+// startConfigWatchers reloads the world set when the main config or the
+// worldsFile fragment changes on disk (both are typically projected
+// ConfigMaps whose updates arrive as atomic symlink swaps).
+func startConfigWatchers(
+	ctx context.Context,
+	group *sync.WaitGroup,
+	configFile string,
+	config *knowledgeconfig.Config,
+	worlds *worldManager,
+	logger *slog.Logger,
+) {
+	targets := []string{configFile}
+	if fragment := config.WorldsFilePath(configFile); fragment != "" {
+		targets = append(targets, fragment)
+	}
+	for _, target := range targets {
+		watcher := &configwatch.Watcher{Target: target, Reload: worlds.Reload, Logger: logger}
+		group.Go(func() {
+			if err := watcher.Run(ctx); err != nil {
+				logger.Warn("config watcher exited", "target", watcher.Target, "error", err)
+			}
+		})
 	}
 }

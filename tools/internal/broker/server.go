@@ -77,6 +77,16 @@ type Server struct {
 	// own their fake dispatcher's lifecycle).
 	mcpPool *worldPool
 
+	// provisioner is the dynamic-tenant creator (memory broker with
+	// provisioning enabled); nil everywhere else. tenantGate consults it
+	// when an authenticated identity resolves to no world.
+	provisioner *Provisioner
+
+	// profile is the gateway profile, held so the management API
+	// (/me/install, /auth/callback) shares the gateway's tenant scoping
+	// from one source of truth. Nil in tests that skip Run.
+	profile *GatewayProfile
+
 	// subjectReg is the per-subject limiter for /me/install; loginReg
 	// is the per-IP limiter for /auth/login.
 	// Either may be nil (Slice C.4 RateLimitConfig.Disabled, or a test
@@ -404,19 +414,9 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "email claim missing", http.StatusForbidden)
 		return
 	}
-	worlds := readableWorlds(s.cfg)
-	// Publish tokens remain broker-internal. PublicURL-less worlds are
-	// omitted because clients cannot install them.
-	out := make([]installWorld, 0, len(worlds))
-	for _, world := range worlds {
-		if world.PublicURL == "" {
-			continue
-		}
-		out = append(out, installWorld{
-			Name:      world.Name,
-			PublicURL: world.PublicURL,
-		})
-	}
+	// Publish tokens remain broker-internal; installability rules live
+	// in listInstallableWorlds (one fail-closed policy site).
+	out := s.listInstallableWorlds(r.Context(), &claims)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	s.log.InfoContext(r.Context(), "broker: login succeeded", "subject", hashSubject(claims.Subject), "worlds", len(out))

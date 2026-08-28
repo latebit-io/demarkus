@@ -42,11 +42,15 @@ func (duration *Duration) UnmarshalYAML(node *yaml.Node) error {
 
 // Config is one complete, validated knowledge-server configuration.
 type Config struct {
-	Version int           `yaml:"version"`
-	Listen  ListenConfig  `yaml:"listen"`
-	Health  HealthConfig  `yaml:"health"`
-	TLS     TLSConfig     `yaml:"tls"`
-	Worlds  []WorldConfig `yaml:"worlds"`
+	Version int          `yaml:"version"`
+	Listen  ListenConfig `yaml:"listen"`
+	Health  HealthConfig `yaml:"health"`
+	TLS     TLSConfig    `yaml:"tls"`
+	// WorldsFile optionally names a worlds-only YAML document appended
+	// to Worlds at Load: the dynamic-world seam a provisioner (the
+	// memory broker) owns while the operator owns this file.
+	WorldsFile string        `yaml:"worldsFile"`
+	Worlds     []WorldConfig `yaml:"worlds"`
 }
 
 // ListenConfig contains process-wide QUIC listener settings.
@@ -76,6 +80,10 @@ type WorldConfig struct {
 	Policy      PolicyConfig `yaml:"policy"`
 	ReadOnly    bool         `yaml:"readOnly"`
 	Limits      LimitsConfig `yaml:"limits"`
+	// Bootstrap makes the server initialize the bucket's genesis on world
+	// open when it holds no head object, and opens the store without
+	// requiring a policy document (the provisioner seeds one later).
+	Bootstrap bool `yaml:"bootstrap"`
 }
 
 // BucketConfig identifies one world's GCS bucket and immutable marker ID.
@@ -118,14 +126,18 @@ type LimitsConfig struct {
 	RequestTimeout        Duration `yaml:"requestTimeout"`
 	RequestsPerSecond     float64  `yaml:"requestsPerSecond"`
 	Burst                 int      `yaml:"burst"`
+	// MaxDocuments caps distinct document paths in the world (per-tenant
+	// quota). 0 = unlimited.
+	MaxDocuments int `yaml:"maxDocuments"`
 }
 
 type rawConfig struct {
-	Version int              `yaml:"version"`
-	Listen  rawListenConfig  `yaml:"listen"`
-	Health  rawHealthConfig  `yaml:"health"`
-	TLS     TLSConfig        `yaml:"tls"`
-	Worlds  []rawWorldConfig `yaml:"worlds"`
+	Version    int              `yaml:"version"`
+	Listen     rawListenConfig  `yaml:"listen"`
+	Health     rawHealthConfig  `yaml:"health"`
+	TLS        TLSConfig        `yaml:"tls"`
+	WorldsFile string           `yaml:"worldsFile"`
+	Worlds     []rawWorldConfig `yaml:"worlds"`
 }
 
 type rawListenConfig struct {
@@ -146,6 +158,7 @@ type rawWorldConfig struct {
 	Policy      rawPolicyConfig `yaml:"policy"`
 	ReadOnly    bool            `yaml:"readOnly"`
 	Limits      rawLimitsConfig `yaml:"limits"`
+	Bootstrap   bool            `yaml:"bootstrap"`
 }
 
 type rawPolicyConfig struct {
@@ -157,9 +170,12 @@ type rawLimitsConfig struct {
 	RequestTimeout        *Duration `yaml:"requestTimeout"`
 	RequestsPerSecond     *float64  `yaml:"requestsPerSecond"`
 	Burst                 *int      `yaml:"burst"`
+	MaxDocuments          *int      `yaml:"maxDocuments"`
 }
 
-// Load reads, strictly parses, and validates a configuration file.
+// Load reads, strictly parses, and validates a configuration file,
+// merging the worldsFile fragment (relative to the config's directory).
+// A missing or empty fragment contributes zero worlds.
 func Load(filename string) (*Config, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -169,23 +185,94 @@ func Load(filename string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("knowledge config %q: %w", filename, err)
 	}
+	if config.WorldsFile == "" {
+		return config, nil
+	}
+	fragmentPath := config.WorldsFilePath(filename)
+	fragment, err := os.ReadFile(fragmentPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("knowledge config: read worlds file %q: %w", fragmentPath, err)
+		}
+		fragment = nil
+	}
+	worlds, err := ParseWorldsFragment(fragment)
+	if err != nil {
+		return nil, fmt.Errorf("knowledge config: worlds file %q: %w", fragmentPath, err)
+	}
+	config.Worlds = append(config.Worlds, worlds...)
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("knowledge config: after merging worlds file %q: %w", fragmentPath, err)
+	}
 	return config, nil
+}
+
+// WorldsFilePath resolves the worldsFile fragment location against the
+// main config's directory. Load and the hot-reload watcher share it so
+// they can never watch a different file than the loader reads.
+func (config *Config) WorldsFilePath(configFile string) string {
+	if config.WorldsFile == "" || filepath.IsAbs(config.WorldsFile) {
+		return config.WorldsFile
+	}
+	return filepath.Join(filepath.Dir(configFile), config.WorldsFile)
+}
+
+// ParseWorldsFragment strictly parses a worlds-only YAML document with
+// Parse's per-world defaults; empty input yields zero worlds and
+// cross-world invariants are validated by the caller after merging.
+func ParseWorldsFragment(data []byte) ([]WorldConfig, error) {
+	var raw struct {
+		Worlds []rawWorldConfig `yaml:"worlds"`
+	}
+	if err := decodeStrictSingleDoc(data, &raw); err != nil {
+		// Empty, whitespace-only, and comment-only fragments are a
+		// legitimate not-yet-provisioned state.
+		if errors.Is(err, errEmptyDocument) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	worlds := make([]WorldConfig, len(raw.Worlds))
+	for index := range raw.Worlds {
+		worlds[index] = worldFromRaw(&raw.Worlds[index])
+	}
+	return worlds, nil
+}
+
+// errEmptyDocument names the no-content outcome (empty, whitespace, or
+// comments only) so callers state their own policy instead of matching
+// the YAML library's io.EOF detail.
+var errEmptyDocument = errors.New("empty YAML document")
+
+// decodeStrictSingleDoc enforces the shared YAML posture: unknown fields
+// rejected, exactly one document; no content is errEmptyDocument.
+func decodeStrictSingleDoc(data []byte, out any) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(out); err != nil {
+		if errors.Is(err, io.EOF) {
+			return errEmptyDocument
+		}
+		return fmt.Errorf("parse YAML: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("parse YAML: multiple documents are not allowed")
+		}
+		return fmt.Errorf("parse trailing YAML: %w", err)
+	}
+	return nil
 }
 
 // Parse strictly parses and validates one YAML document.
 func Parse(data []byte) (*Config, error) {
 	var raw rawConfig
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("parse YAML: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return nil, errors.New("parse YAML: multiple documents are not allowed")
+	if err := decodeStrictSingleDoc(data, &raw); err != nil {
+		if errors.Is(err, errEmptyDocument) {
+			return nil, errors.New("configuration file is empty")
 		}
-		return nil, fmt.Errorf("parse trailing YAML: %w", err)
+		return nil, err
 	}
 
 	config := raw.config()
@@ -203,28 +290,34 @@ func (raw *rawConfig) config() *Config {
 			MaxIncomingStreams: valueOr(raw.Listen.MaxIncomingStreams, int64(128)),
 			IdleTimeout:        valueOr(raw.Listen.IdleTimeout, Duration(30*time.Second)),
 		},
-		Health: HealthConfig{Address: valueOr(raw.Health.Address, ":8081")},
-		TLS:    raw.TLS,
-		Worlds: make([]WorldConfig, len(raw.Worlds)),
+		Health:     HealthConfig{Address: valueOr(raw.Health.Address, ":8081")},
+		TLS:        raw.TLS,
+		WorldsFile: strings.TrimSpace(raw.WorldsFile),
+		Worlds:     make([]WorldConfig, len(raw.Worlds)),
 	}
 	for index := range raw.Worlds {
-		world := &raw.Worlds[index]
-		config.Worlds[index] = WorldConfig{
-			Name:        world.Name,
-			Authorities: append([]string(nil), world.Authorities...),
-			Bucket:      world.Bucket,
-			Auth:        world.Auth,
-			Policy:      PolicyConfig{Path: valueOr(world.Policy.Path, defaultPolicyPath)},
-			ReadOnly:    world.ReadOnly,
-			Limits: LimitsConfig{
-				MaxConcurrentRequests: valueOr(world.Limits.MaxConcurrentRequests, 32),
-				RequestTimeout:        valueOr(world.Limits.RequestTimeout, Duration(10*time.Second)),
-				RequestsPerSecond:     valueOr(world.Limits.RequestsPerSecond, 50.0),
-				Burst:                 valueOr(world.Limits.Burst, 100),
-			},
-		}
+		config.Worlds[index] = worldFromRaw(&raw.Worlds[index])
 	}
 	return config
+}
+
+func worldFromRaw(world *rawWorldConfig) WorldConfig {
+	return WorldConfig{
+		Name:        world.Name,
+		Authorities: append([]string(nil), world.Authorities...),
+		Bucket:      world.Bucket,
+		Auth:        world.Auth,
+		Policy:      PolicyConfig{Path: valueOr(world.Policy.Path, defaultPolicyPath)},
+		ReadOnly:    world.ReadOnly,
+		Limits: LimitsConfig{
+			MaxConcurrentRequests: valueOr(world.Limits.MaxConcurrentRequests, 32),
+			RequestTimeout:        valueOr(world.Limits.RequestTimeout, Duration(10*time.Second)),
+			RequestsPerSecond:     valueOr(world.Limits.RequestsPerSecond, 50.0),
+			Burst:                 valueOr(world.Limits.Burst, 100),
+			MaxDocuments:          valueOr(world.Limits.MaxDocuments, 0),
+		},
+		Bootstrap: world.Bootstrap,
+	}
 }
 
 func valueOr[T any](value *T, fallback T) T {
@@ -260,10 +353,17 @@ func (config *Config) Validate() error {
 	if strings.TrimSpace(config.TLS.KeyFile) == "" {
 		return errors.New("tls.keyFile is required")
 	}
-	if len(config.Worlds) == 0 {
+	// A dynamic deployment (worldsFile set) legitimately starts with zero
+	// worlds: the server idles until the provisioner writes the first one.
+	if len(config.Worlds) == 0 && config.WorldsFile == "" {
 		return errors.New("worlds must contain at least one world")
 	}
+	return config.validateWorlds()
+}
 
+// validateWorlds enforces per-world and cross-world invariants; split
+// from Validate for the gocyclo budget.
+func (config *Config) validateWorlds() error {
 	worldNames := make(map[string]int, len(config.Worlds))
 	authorities := make(map[string]int)
 	bucketURLs := make(map[string]int, len(config.Worlds))
@@ -461,6 +561,9 @@ func validatePolicyPath(value string) error {
 }
 
 func validateLimits(location string, limits *LimitsConfig) error {
+	if limits.MaxDocuments < 0 {
+		return fmt.Errorf("%s.limits.maxDocuments must not be negative (got %d)", location, limits.MaxDocuments)
+	}
 	if limits.MaxConcurrentRequests <= 0 {
 		return fmt.Errorf("%s.limits.maxConcurrentRequests must be positive (got %d)", location, limits.MaxConcurrentRequests)
 	}

@@ -70,11 +70,26 @@ func brokerCrawlParseURL(raw string) (worldName, urlPath string, err error) {
 	return worldName, urlPath, nil
 }
 
-// crawlFetchFn returns graphstore.CrawlAndPersist's fetchFunc. Reads
-// dispatch unauthenticated; per-fetch failures are tolerated (the crawler
-// marks the node "error" and continues) — a graph crawl is best-effort.
-func (g *mcpGateway) crawlFetchFn() graphstore.FetchFunc {
+// crawlFetchFn returns graphstore.CrawlAndPersist's best-effort fetchFunc
+// (per-fetch failures mark the node "error"). In tenant mode the crawl
+// never leaves the caller's world; a foreign link errors instead of fetching.
+func (g *mcpGateway) crawlFetchFn(ctx context.Context) graphstore.FetchFunc {
+	tenant := ""
+	if g.profile.TenantScoped {
+		w, err := g.tenantWorld(ctx)
+		if err != nil {
+			// The tenantGate already denied unresolvable identities;
+			// deny every fetch rather than crawl unscoped.
+			return func(string, string) (graph.FetchResult, error) {
+				return graph.FetchResult{}, ErrNotAuthorized
+			}
+		}
+		tenant = w.Name
+	}
 	return func(worldName, path string) (graph.FetchResult, error) {
+		if tenant != "" && worldName != tenant {
+			return graph.FetchResult{}, fmt.Errorf("world %q is outside your world %q", worldName, tenant)
+		}
 		result, derr := g.dispatcher.Fetch(worldName, path, "")
 		if derr != nil {
 			return graph.FetchResult{}, derr
@@ -91,15 +106,16 @@ func (g *mcpGateway) crawlFetchFn() graphstore.FetchFunc {
 // interval; the first graph-tool call after a pod restart always checks.
 const seedCheckInterval = 5 * time.Minute
 
-// seedGraphStore seeds from every configured world: only hubs publish
-// /graph.md and the broker does not know which world is the hub; the
-// per-world throttle bounds the cost.
+// seedGraphStore seeds from every world in the caller's scope (tenant
+// mode: only the caller's own world, so one tenant's traffic never pulls
+// another's graph into the shared per-pod store); throttled per world.
 func (g *mcpGateway) seedGraphStore(ctx context.Context) {
-	for i := range g.srv.cfg.Worlds {
+	worlds := g.scopedWorlds(ctx)
+	for j := range worlds {
 		if ctx.Err() != nil {
 			return
 		}
-		g.seedWorldGraph(ctx, g.srv.cfg.Worlds[i].Name)
+		g.seedWorldGraph(ctx, worlds[j].Name)
 	}
 }
 
@@ -209,7 +225,7 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, worldName string) {
 // gateway queries key on world names, so untranslated rows are unreachable.
 // Unknown hosts stay as labels. Both sides canonicalize (ADR 0005).
 func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) {
-	worlds := g.srv.cfg.Worlds
+	worlds := g.srv.cfg.AllWorlds()
 	byAddr := make(map[string]string, len(worlds))
 	for i := range worlds {
 		// CanonicalURL normalizes an empty path to "/"; the prefix match wants a
@@ -290,7 +306,7 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 	crawled, crawlErr := g.graphStore.CrawlAndPersist(
 		ctx,
 		raw,
-		g.crawlFetchFn(),
+		g.crawlFetchFn(ctx),
 		brokerCrawlParseURL,
 		graphstore.CrawlOptions{
 			MaxDepth: depth,

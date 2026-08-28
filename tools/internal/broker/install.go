@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"net/http"
 	"strings"
 )
@@ -54,19 +55,7 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 
 	out := []installWorld{}
 	if claims.Email != "" {
-		for _, world := range readableWorlds(s.cfg) {
-			// A world without a PublicURL is not installable: the
-			// plugin has no address to wire the client at. Skip it
-			// rather than report it and force the consumer to
-			// re-filter.
-			if world.PublicURL == "" {
-				continue
-			}
-			out = append(out, installWorld{
-				Name:      world.Name,
-				PublicURL: world.PublicURL,
-			})
-		}
+		out = s.listInstallableWorlds(r.Context(), claims)
 	}
 	s.log.InfoContext(r.Context(), "broker: /me/install succeeded",
 		"subject", hashSubject(claims.Subject), "worlds", len(out))
@@ -74,4 +63,50 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 		Email:  claims.Email,
 		Worlds: out,
 	})
+}
+
+// tenantScopedInstall reports whether management-API world listings are
+// tenant-scoped, from the same profile that scopes the gateway.
+func (s *Server) tenantScopedInstall() bool {
+	return s.profile != nil && s.profile.TenantScoped
+}
+
+// listInstallableWorlds is the one fail-closed policy site for the
+// management API: resolution errors log (redacted) and yield an empty
+// listing, never a leak.
+func (s *Server) listInstallableWorlds(ctx context.Context, claims *Claims) []installWorld {
+	out, err := installableWorlds(s.cfg, claims, s.tenantScopedInstall())
+	if err != nil {
+		s.log.WarnContext(ctx, "broker: world listing denied",
+			"subject", hashSubject(claims.Subject), "err", err)
+		return []installWorld{}
+	}
+	return out
+}
+
+// installableWorlds lists the worlds a client can be wired at (no
+// PublicURL = uninstallable); tenant scoping uses the canonical
+// resolver, denying closed with an error the caller logs.
+func installableWorlds(cfg *Config, claims *Claims, tenantScoped bool) ([]installWorld, error) {
+	var worlds []WorldConfig
+	if tenantScoped {
+		w, err := tenantWorldFor(cfg, claims)
+		if err != nil {
+			return []installWorld{}, err
+		}
+		worlds = []WorldConfig{w}
+	} else {
+		worlds = readableWorlds(cfg)
+	}
+	out := make([]installWorld, 0, len(worlds))
+	for j := range worlds {
+		if worlds[j].PublicURL == "" {
+			continue
+		}
+		out = append(out, installWorld{
+			Name:      worlds[j].Name,
+			PublicURL: worlds[j].PublicURL,
+		})
+	}
+	return out, nil
 }

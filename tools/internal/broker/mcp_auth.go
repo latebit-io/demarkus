@@ -91,7 +91,11 @@ func (s *Server) writeMCPAuthChallenge(w http.ResponseWriter, errCode, body stri
 	// Built from the gateway's own host — the metadata path only
 	// exists on the MCP listener, not the issuer host.
 	metadataURL := s.cfg.Server.MCP.PublicURL + prmPath
-	challenge := fmt.Sprintf(`Bearer realm="demarkus-knowledge-broker", error=%q, resource_metadata=%q`, errCode, metadataURL)
+	realm := s.cfg.Server.Realm
+	if realm == "" {
+		realm = "demarkus-knowledge-broker"
+	}
+	challenge := fmt.Sprintf(`Bearer realm=%q, error=%q, resource_metadata=%q`, realm, errCode, metadataURL)
 	w.Header().Set("WWW-Authenticate", challenge)
 	http.Error(w, body, http.StatusUnauthorized)
 }

@@ -25,14 +25,34 @@ type tokenCoordinator struct {
 
 func newTokenCoordinator(worlds []tokenWorld) (*tokenCoordinator, error) {
 	coordinator := &tokenCoordinator{worlds: append([]tokenWorld(nil), worlds...)}
+	if err := coordinator.ValidateWorlds(coordinator.worlds); err != nil {
+		return nil, err
+	}
+	return coordinator, nil
+}
+
+// SetWorlds replaces the coordinated world set (hot-reload seam). The
+// new set's current stores must satisfy the cross-world uniqueness
+// invariant before the swap publishes.
+func (coordinator *tokenCoordinator) SetWorlds(worlds []tokenWorld) error {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	replacement := append([]tokenWorld(nil), worlds...)
+	if err := coordinator.ValidateWorlds(replacement); err != nil {
+		return err
+	}
+	coordinator.worlds = replacement
+	return nil
+}
+
+// ValidateWorlds checks a candidate world set against the cross-world
+// token-uniqueness invariant without publishing it (prevalidation seam).
+func (coordinator *tokenCoordinator) ValidateWorlds(worlds []tokenWorld) error {
 	stores := make([]*auth.TokenStore, len(worlds))
 	for index := range worlds {
 		stores[index] = worlds[index].runtime.Tokens()
 	}
-	if err := coordinator.validateUnique(stores); err != nil {
-		return nil, err
-	}
-	return coordinator, nil
+	return validateUniqueTokens(worlds, stores)
 }
 
 func (coordinator *tokenCoordinator) Reload() error {
@@ -50,7 +70,7 @@ func (coordinator *tokenCoordinator) Reload() error {
 		}
 		candidates[index] = store
 	}
-	if err := coordinator.validateUnique(candidates); err != nil {
+	if err := validateUniqueTokens(coordinator.worlds, candidates); err != nil {
 		return err
 	}
 	if err := coordinator.validateTransition(candidates); err != nil {
@@ -64,15 +84,15 @@ func (coordinator *tokenCoordinator) Reload() error {
 	return nil
 }
 
-func (coordinator *tokenCoordinator) validateUnique(stores []*auth.TokenStore) error {
+func validateUniqueTokens(worlds []tokenWorld, stores []*auth.TokenStore) error {
 	owners := make(map[string]int)
 	for worldIndex, store := range stores {
 		if store == nil {
-			return fmt.Errorf("world %q has no token store", coordinator.worlds[worldIndex].name)
+			return fmt.Errorf("world %q has no token store", worlds[worldIndex].name)
 		}
 		for _, hash := range store.Hashes() {
 			if owner, exists := owners[hash]; exists {
-				return fmt.Errorf("token hash is shared by worlds %q and %q", coordinator.worlds[owner].name, coordinator.worlds[worldIndex].name)
+				return fmt.Errorf("token hash is shared by worlds %q and %q", worlds[owner].name, worlds[worldIndex].name)
 			}
 			owners[hash] = worldIndex
 		}

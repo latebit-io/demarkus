@@ -2,6 +2,7 @@ package broker
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -51,12 +52,12 @@ func oidcDomainAllowed(allowDomains []string, hd string) bool {
 // SSO org gate alone, not Allow (a world's tokens.toml grants no read op), so
 // filtering the world LIST by the writer allowlist wrongly hides readable
 // worlds from non-writers. Use readableWorlds for that.
-func authorizedWorlds(cfg *Config, claims *Claims) []*WorldConfig {
-	out := make([]*WorldConfig, 0, len(cfg.Worlds))
-	for j := range cfg.Worlds {
-		w := &cfg.Worlds[j]
-		if worldAllows(&w.Allow, claims) {
-			out = append(out, w)
+func authorizedWorlds(cfg *Config, claims *Claims) []WorldConfig {
+	worlds := cfg.AllWorlds()
+	out := make([]WorldConfig, 0, len(worlds))
+	for j := range worlds {
+		if worldAllows(&worlds[j].Allow, claims) {
+			out = append(out, worlds[j])
 		}
 	}
 	return out
@@ -71,22 +72,62 @@ func authorizedWorlds(cfg *Config, claims *Claims) []*WorldConfig {
 // expressible: opening reads here never widens writes. Per-world READ
 // restrictions (Phase 2 restricted collections) would filter here, on a
 // dedicated read predicate, never on the write Allow.
-func readableWorlds(cfg *Config) []*WorldConfig {
-	out := make([]*WorldConfig, 0, len(cfg.Worlds))
-	for j := range cfg.Worlds {
-		out = append(out, &cfg.Worlds[j])
-	}
-	return out
+func readableWorlds(cfg *Config) []WorldConfig {
+	return cfg.AllWorlds()
 }
 
-// lookupWorld returns the configured world with the given name, or nil
-// when none matches. Shared by the MCP write gate and the per-world
-// write-token store so the two layers resolve world names identically.
-func lookupWorld(cfg *Config, name string) *WorldConfig {
-	for j := range cfg.Worlds {
-		if cfg.Worlds[j].Name == name {
-			return &cfg.Worlds[j]
+// errAmbiguousTenant is the deny-closed provisioning error for an identity
+// matching several worlds. World names identify tenants, so Error() stays
+// opaque for clients; the resolution site logs First/Second for the operator.
+type errAmbiguousTenant struct {
+	First, Second string
+}
+
+func (errAmbiguousTenant) Error() string {
+	return "broker: identity maps to more than one world; contact the operator"
+}
+
+// tenantWorldFor resolves the single world a memory-broker identity owns
+// (identity = world): zero matches is ErrNotAuthorized, two or more is a
+// provisioning error and denies closed rather than guessing.
+func tenantWorldFor(cfg *Config, claims *Claims) (WorldConfig, error) {
+	var match *WorldConfig
+	worlds := cfg.AllWorlds()
+	for j := range worlds {
+		w := &worlds[j]
+		if !worldAllows(&w.Allow, claims) {
+			continue
 		}
+		if match != nil {
+			return WorldConfig{}, errAmbiguousTenant{First: match.Name, Second: w.Name}
+		}
+		match = w
+	}
+	if match == nil {
+		return WorldConfig{}, ErrNotAuthorized
+	}
+	return *match, nil
+}
+
+// ValidateTenantWorlds (memory broker, called after LoadConfig) requires
+// every world to name its tenant: an empty Allow admits every identity,
+// which in identity-=-world mode makes tenant resolution ambiguous.
+func (c *Config) ValidateTenantWorlds() error {
+	for i := range c.Worlds {
+		a := &c.Worlds[i].Allow
+		if len(a.Domains) == 0 && len(a.Groups) == 0 && len(a.Emails) == 0 {
+			return fmt.Errorf("worlds[%d] (%s): allow must not be empty in a memory broker; each world is provisioned for one identity", i, c.Worlds[i].Name)
+		}
+	}
+	return nil
+}
+
+// lookupWorld returns the configured world (static or dynamic) with the
+// given name, or nil when none matches. Shared by the MCP write gate and
+// the per-world write-token store so both resolve names identically.
+func lookupWorld(cfg *Config, name string) *WorldConfig {
+	if w, ok := cfg.FindWorld(name); ok {
+		return &w
 	}
 	return nil
 }

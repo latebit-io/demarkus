@@ -1,0 +1,29 @@
+apiVersion: v2
+name: demarkus-memory-broker
+description: |
+  Memory-as-a-service broker for demarkus. OAuth-fronted MCP gateway that
+  gives each identity a private, versioned personal soul: identity maps to
+  exactly one world, reads and writes are locked to the caller's own world.
+  Multi-replica HA, leader-elected expiry/drift sweeper, per-subject and
+  per-IP rate limiting.
+type: application
+# version + appVersion are pinned 1:1 to the `memory-broker/v<X>` git
+# tag at publish time — the release workflow renders the chart with
+# `helm package --version $VER --app-version $VER` where $VER is the
+# auto-bumped memory-broker semver. The values committed below are only
+# used for local-render and unittest paths; the source-of-truth at
+# publish is the workflow.
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - demarkus
+  - mark-protocol
+  - oidc
+  - memory
+  - soul
+home: https://demarkus.io
+sources:
+  - https://github.com/latebit-io/demarkus
+maintainers:
+  - name: latebit-io
+    url: https://github.com/latebit-io

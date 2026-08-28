@@ -17,6 +17,9 @@ data:
     tls:
       certFile: /run/demarkus/tls/tls.crt
       keyFile: /run/demarkus/tls/tls.key
+    {{- if .Values.dynamicWorlds.enabled }}
+    worldsFile: /run/demarkus/dynamic-worlds/worlds.yaml
+    {{- end }}
     worlds:
       {{- range $index, $configuredWorld := .Values.worlds }}
       {{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy $configuredWorld) }}

@@ -120,3 +120,35 @@ func tokenStore(hashes ...string) *auth.TokenStore {
 	}
 	return auth.NewTokenStore(tokens)
 }
+
+func TestTokenCoordinatorSetWorlds(t *testing.T) {
+	first := &fakeTokenRuntime{current: tokenStore("a"), next: tokenStore("a")}
+	coordinator, err := newTokenCoordinator([]tokenWorld{{name: "first", runtime: first}})
+	if err != nil {
+		t.Fatalf("newTokenCoordinator: %v", err)
+	}
+
+	second := &fakeTokenRuntime{current: tokenStore("b"), next: tokenStore("b")}
+	if err := coordinator.SetWorlds([]tokenWorld{
+		{name: "first", runtime: first},
+		{name: "second", runtime: second},
+	}); err != nil {
+		t.Fatalf("SetWorlds: %v", err)
+	}
+	if err := coordinator.Reload(); err != nil {
+		t.Fatalf("Reload after SetWorlds: %v", err)
+	}
+
+	// A replacement set violating uniqueness is rejected and the
+	// previous set stays coordinated.
+	dup := &fakeTokenRuntime{current: tokenStore("b"), next: tokenStore("b")}
+	if err := coordinator.SetWorlds([]tokenWorld{
+		{name: "second", runtime: second},
+		{name: "dup", runtime: dup},
+	}); err == nil || !strings.Contains(err.Error(), "shared by worlds") {
+		t.Fatalf("SetWorlds err = %v, want shared-token rejection", err)
+	}
+	if err := coordinator.Reload(); err != nil {
+		t.Fatalf("Reload after rejected SetWorlds: %v (previous set must remain valid)", err)
+	}
+}

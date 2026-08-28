@@ -1,0 +1,89 @@
+{{- if .Values.rbac.create }}
+{{- /* Broker-namespace RBAC: the broker SA's access to its own state.
+
+   K8s RBAC has a hard limitation that shapes the structure below:
+   `resourceNames` does not apply to `create` requests (the name of
+   the new object isn't known at authorization time, so the rule
+   simply does not match). A single rule that lists `create`
+   alongside `get`/`update` AND uses `resourceNames` will silently
+   deny create. Each create-capable surface therefore needs a
+   separate, name-unrestricted rule. The cost is that create is
+   namespace-wide for that resource type — acceptable here because
+   the namespace is broker-owned, and the rest of the SA's surface
+   (get/update) is still tightly scoped by resourceNames.
+
+   - coordination.k8s.io/leases: the sweeper's leader-election Lease.
+     get/update pinned to the configured lease name; create gets
+     its own rule (namespace-wide).
+
+   - secrets (refresh-tokens): chart-seeded at install time
+     (secret-refresh-tokens.yaml), so the broker only needs
+     get/update — never create. The resource-policy: keep
+     annotation means helm upgrade never re-templates it, so the
+     broker SA's update verb is the only path that mutates it
+     after install.
+
+   - secrets (per-world write-token): the broker provisions these
+     lazily on the first write to each configured world. get/update
+     pinned per-world; create gets its own rule (namespace-wide).
+     Names are pinned per world via resourceNames so a compromised
+     broker SA cannot read or update any other Secret in the broker
+     namespace. */ -}}
+{{- $brokerNs := include "demarkus-memory-broker.brokerNamespace" . -}}
+{{- $name := include "demarkus-memory-broker.fullname" . -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $brokerNs }}
+  labels:
+    {{- include "demarkus-memory-broker.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: [{{ .Values.sweeper.leaseName | quote }}]
+    verbs: ["get", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ include "demarkus-memory-broker.refreshTokensSecretName" . | quote }}
+    verbs: ["get", "update"]
+  {{- if ne (include "demarkus-memory-broker.provisioningMode" .) "static" }}
+  {{- /* Dynamic provisioning: runtime-created Secret names cannot be
+         resourceNames-pinned, so secrets access is namespace-wide in
+         the broker-owned namespace. */}}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "update", "create"]
+  {{- else if .Values.worlds }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- range .Values.worlds }}
+      - {{ include "demarkus-memory-broker.writeTokenSecretName" (dict "worldName" .name) | quote }}
+      {{- end }}
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $brokerNs }}
+  labels:
+    {{- include "demarkus-memory-broker.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "demarkus-memory-broker.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+{{- end }}

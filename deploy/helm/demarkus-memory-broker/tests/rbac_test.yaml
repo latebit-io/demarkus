@@ -1,0 +1,346 @@
+suite: rbac
+templates:
+  - rbac-broker-ns.yaml
+  - rbac-worlds.yaml
+  - rbac-provisioning.yaml
+release:
+  namespace: broker-ns
+set:
+  oidc.issuer: https://accounts.example.com
+  oidc.clientID: broker-app
+  oidc.clientSecret: shh
+  oidc.redirectURL: https://broker.example.com/auth/callback
+  # PR4 requires a signing-key surface in chart-render; rbac tests
+  # don't exercise it but the chart fails fast without it.
+  oidc.brokerSigningKey: "test-pem-placeholder"
+  server.publicURL: https://broker.example.com
+tests:
+  - it: broker-namespace Role + RoleBinding render in brokerNamespace
+    template: rbac-broker-ns.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: Role
+      - documentIndex: 0
+        equal:
+          path: metadata.namespace
+          value: broker-ns
+      - documentIndex: 1
+        isKind:
+          of: RoleBinding
+      - documentIndex: 1
+        equal:
+          path: metadata.namespace
+          value: broker-ns
+
+  - it: broker-ns Role leases get/update rule pinned to the configured leaseName
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[0].apiGroups
+          value: ["coordination.k8s.io"]
+      - equal:
+          path: rules[0].resources
+          value: ["leases"]
+      - equal:
+          path: rules[0].resourceNames
+          value: ["demarkus-broker-sweeper"]
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "update"]
+      - notContains:
+          path: rules[0].verbs
+          content: create
+      - notContains:
+          path: rules[0].verbs
+          content: delete
+
+  - it: broker-ns Role leases create rule is namespace-wide (resourceNames is unsupported for create)
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[1].apiGroups
+          value: ["coordination.k8s.io"]
+      - equal:
+          path: rules[1].resources
+          value: ["leases"]
+      - equal:
+          path: rules[1].verbs
+          value: ["create"]
+      - notExists:
+          # Critical: resourceNames MUST NOT be set on a create
+          # rule. k8s evaluates the rule as "does not match" when
+          # both are present, silently denying create. The Lease
+          # bootstrap depends on this rule landing un-restricted.
+          path: rules[1].resourceNames
+
+  - it: broker-ns Role secrets rule pinned to get/update on refresh-tokens Secret
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[2].apiGroups
+          value: [""]
+      - equal:
+          path: rules[2].resources
+          value: ["secrets"]
+      - equal:
+          path: rules[2].resourceNames
+          value:
+            - "RELEASE-NAME-demarkus-memory-broker-refresh-tokens"
+      - equal:
+          path: rules[2].verbs
+          value: ["get", "update"]
+      - notContains:
+          path: rules[2].verbs
+          content: create
+      - notContains:
+          path: rules[2].verbs
+          content: delete
+      - notContains:
+          path: rules[2].verbs
+          content: list
+
+  - it: broker-ns Role per-world write-token rule pins get/update to each configured world's Secret
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {emails: ["tenant@example.com"]}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["publish"]
+            expiresAfter: 24h
+        - name: team-b
+          namespace: team-b
+          tokensSecret: team-b-tokens
+          allow: {emails: ["tenant@example.com"]}
+          defaultToken:
+            paths: ["/team-b/*"]
+            operations: ["publish"]
+            expiresAfter: 24h
+    asserts:
+      - equal:
+          path: rules[3].apiGroups
+          value: [""]
+      - equal:
+          path: rules[3].resources
+          value: ["secrets"]
+      - equal:
+          path: rules[3].resourceNames
+          value:
+            - "demarkus-broker-write-token-team-a"
+            - "demarkus-broker-write-token-team-b"
+      - equal:
+          path: rules[3].verbs
+          value: ["get", "update"]
+      - notContains:
+          path: rules[3].verbs
+          content: create
+      - notContains:
+          path: rules[3].verbs
+          content: delete
+
+  - it: broker-ns Role secrets create rule is namespace-wide (resourceNames is unsupported for create)
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {emails: ["tenant@example.com"]}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["publish"]
+            expiresAfter: 24h
+    asserts:
+      - equal:
+          path: rules[4].apiGroups
+          value: [""]
+      - equal:
+          path: rules[4].resources
+          value: ["secrets"]
+      - equal:
+          path: rules[4].verbs
+          value: ["create"]
+      - notExists:
+          # Same hard k8s RBAC constraint as the leases create rule:
+          # resourceNames on a create rule silently denies create.
+          # The per-world write-token bootstrap depends on this
+          # rule landing un-restricted.
+          path: rules[4].resourceNames
+
+  - it: broker-ns Role omits both worlds rules entirely when worlds[] is empty
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    set:
+      worlds: []
+    asserts:
+      # Only the two leases rules + the chart-seeded-secrets rule
+      # render; no rules[3] or [4] are emitted without worlds.
+      - notExists:
+          path: rules[3]
+      - notExists:
+          path: rules[4]
+
+  - it: per-world template emits 2 Roles + 2 RoleBindings for two worlds
+    template: rbac-worlds.yaml
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {emails: ["tenant@example.com"]}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+        - name: team-b
+          namespace: team-b
+          tokensSecret: team-b-tokens
+          allow: {emails: ["tenant@example.com"]}
+          defaultToken:
+            paths: ["/team-b/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: per-world Role scopes get/update to the named tokens Secret, NOT create
+    template: rbac-worlds.yaml
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {emails: ["tenant@example.com"]}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: team-a
+      - equal:
+          path: rules[0].apiGroups
+          value: [""]
+      - equal:
+          path: rules[0].resources
+          value: ["secrets"]
+      - equal:
+          path: rules[0].resourceNames
+          value: ["team-a-tokens"]
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "update"]
+      - notContains:
+          path: rules[0].verbs
+          content: create
+      - notContains:
+          path: rules[0].verbs
+          content: delete
+
+  - it: per-world RoleBinding subject references broker SA in release namespace
+    template: rbac-worlds.yaml
+    set:
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {emails: ["tenant@example.com"]}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: team-a
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-demarkus-memory-broker
+      - equal:
+          path: subjects[0].namespace
+          value: broker-ns
+
+  - it: rbac.create=false skips both broker-ns and per-world RBAC
+    set:
+      rbac.create: false
+      worlds:
+        - name: team-a
+          namespace: team-a
+          tokensSecret: team-a-tokens
+          allow: {emails: ["tenant@example.com"]}
+          defaultToken:
+            paths: ["/team-a/*"]
+            operations: ["read"]
+            expiresAfter: 24h
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: provisioning mode grants namespace-wide secrets rule in broker ns and a server-ns role
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    set:
+      worlds: []
+      provisioning:
+        mode: allowlisted
+        authorityDomain: m.svc
+        dialAddress: s.m.svc:6309
+        bucketPrefix: gs://m-
+        bucketProject: p
+        serverNamespace: memory-worlds
+    asserts:
+      - equal:
+          path: rules[3].verbs
+          value: ["get", "update", "create"]
+      - notExists:
+          path: rules[3].resourceNames
+
+  - it: provisioning server-ns role pins fragment and tokens Secrets for get/update
+    template: rbac-provisioning.yaml
+    documentIndex: 0
+    set:
+      provisioning:
+        mode: allowlisted
+        authorityDomain: m.svc
+        dialAddress: s.m.svc:6309
+        bucketPrefix: gs://m-
+        bucketProject: p
+        serverNamespace: memory-worlds
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: memory-worlds
+      - equal:
+          path: rules[0].resourceNames
+          value: ["memory-worlds-config", "memory-worlds-tokens"]
+      - equal:
+          path: rules[1].verbs
+          value: ["create"]
+
+  - it: static mode renders no provisioning role
+    template: rbac-provisioning.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -34,7 +34,7 @@ func newTestMCPGateway(t *testing.T, cfg *Config, verifier Verifier) *httptest.S
 	signer := newTestSigner(t)
 	k8s := fake.NewSimpleClientset()
 	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(brokerSrv.MCPGateway("test"))
+	ts := httptest.NewServer(brokerSrv.MCPGateway("test", KnowledgeGatewayProfile()))
 	t.Cleanup(ts.Close)
 	return ts
 }
@@ -240,7 +240,7 @@ func TestMCPGatewayEveryAdvertisedToolHasAHandler(t *testing.T) {
 	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
 	k8s := fake.NewSimpleClientset()
 	srv := NewServer(mcpTestConfig(), signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	gw := newMCPGateway(srv, "test", &fakeDispatcher{})
+	gw := newMCPGateway(srv, "test", &fakeDispatcher{}, KnowledgeGatewayProfile())
 
 	handlers := gw.toolHandlers()
 	for _, name := range mcpToolNames {

@@ -101,8 +101,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail "service.externalTrafficPolicy must be Local when networkPolicy.externalCIDRs is set" -}}
 {{- end -}}
 {{- end -}}
-{{- if empty .Values.worlds -}}
-{{- fail "worlds must contain at least one world" -}}
+{{- if and (empty .Values.worlds) (not .Values.dynamicWorlds.enabled) -}}
+{{- fail "worlds must contain at least one world (or enable dynamicWorlds)" -}}
 {{- end -}}
 {{- $names := dict -}}
 {{- $authorities := dict -}}
