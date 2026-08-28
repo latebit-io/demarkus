@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
@@ -294,14 +295,27 @@ func (m *worldManager) publishLocked() error {
 		}
 		worlds = append(worlds, tokenWorld{name: name, runtime: entry.runtime})
 	}
-	var errs []error
-	if err := m.router.Swap(mappings); err != nil {
-		errs = append(errs, fmt.Errorf("router swap failed; keeping previous routing: %w", err))
+	// Prevalidate BOTH candidate views before committing either, so a
+	// failure never leaves routing and token state referencing
+	// different world sets.
+	router, routerErr := snirouter.New(mappings)
+	stores := make([]*auth.TokenStore, len(worlds))
+	for index := range worlds {
+		stores[index] = worlds[index].runtime.Tokens()
 	}
+	tokensErr := validateUniqueTokens(worlds, stores)
+	if routerErr != nil || tokensErr != nil {
+		return errors.Join(routerErr, tokensErr)
+	}
+	previous := m.router.Load()
+	m.router.Store(router)
 	if err := m.tokens.SetWorlds(worlds); err != nil {
-		errs = append(errs, fmt.Errorf("token coordinator swap failed; keeping previous set: %w", err))
+		// A token reload raced between validate and commit; restore the
+		// previous routing so the two views stay paired.
+		m.router.Store(previous)
+		return fmt.Errorf("token coordinator swap failed; rolled back routing: %w", err)
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // retryLoop re-attempts pending world opens until ctx ends.

@@ -416,7 +416,12 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Publish tokens remain broker-internal; installability rules live
 	// in installableWorlds.
-	out := installableWorlds(s.cfg, &claims, s.tenantScopedInstall())
+	out, listErr := installableWorlds(s.cfg, &claims, s.tenantScopedInstall())
+	if listErr != nil {
+		// Fail closed with an empty listing, but log the denial.
+		s.log.WarnContext(r.Context(), "broker: callback world listing denied",
+			"subject", hashSubject(claims.Subject), "err", listErr)
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	s.log.InfoContext(r.Context(), "broker: login succeeded", "subject", hashSubject(claims.Subject), "worlds", len(out))

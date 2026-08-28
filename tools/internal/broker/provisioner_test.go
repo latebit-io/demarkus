@@ -340,3 +340,39 @@ func TestValidateProvisioningTrimsMode(t *testing.T) {
 		t.Error("padded open mode bypassed the maxTenants requirement")
 	}
 }
+
+// TestFragmentUnionSurvivesStaleSnapshot: a replica holding a stale
+// registry snapshot must not drop a tenant a sibling published into the
+// fragment between the registry read and the fragment write.
+func TestFragmentUnionSurvivesStaleSnapshot(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	store := newProvisionerStore()
+	sibling := newTestProvisioner(provisioningTestConfig(ProvisionOpen), store, &fakeBuckets{})
+
+	// Sibling provisions frank first; the fragment now carries his world.
+	frank := &Claims{Subject: "google|frank", Email: "frank@example.com", EmailVerified: true}
+	frankWorld, err := sibling.EnsureTenant(context.Background(), frank)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Provision eve, then simulate the worst case: render from an
+	// eve-only STALE snapshot over the live fragment; frank must survive.
+	p := newTestProvisioner(cfg, store, &fakeBuckets{})
+	eveWorld, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := &tenantRegistry{Tenants: map[string]tenantRecord{
+		eveWorld.Name: {Email: "eve.adams@example.com", WorldID: tenantWorldID(cfg.OIDC.Issuer, "google|eve-123")},
+	}}
+	merged, err := p.renderWorldsFragment(stale, store.get(cfg.worldsFragmentRef()))
+	if err != nil {
+		t.Fatalf("union render: %v", err)
+	}
+	for _, want := range []string{"name: " + eveWorld.Name, "name: " + frankWorld.Name} {
+		if !strings.Contains(string(merged), want) {
+			t.Errorf("union fragment dropped %q:\n%s", want, merged)
+		}
+	}
+}

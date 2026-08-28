@@ -54,7 +54,14 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 
 	out := []installWorld{}
 	if claims.Email != "" {
-		out = installableWorlds(s.cfg, claims, s.tenantScopedInstall())
+		var listErr error
+		out, listErr = installableWorlds(s.cfg, claims, s.tenantScopedInstall())
+		if listErr != nil {
+			// Fail closed with an empty listing, but never silently:
+			// an ambiguous tenant mapping is an operator problem.
+			s.log.WarnContext(r.Context(), "broker: install world listing denied",
+				"subject", hashSubject(claims.Subject), "err", listErr)
+		}
 	}
 	s.log.InfoContext(r.Context(), "broker: /me/install succeeded",
 		"subject", hashSubject(claims.Subject), "worlds", len(out))
@@ -70,15 +77,15 @@ func (s *Server) tenantScopedInstall() bool {
 	return s.profile != nil && s.profile.TenantScoped
 }
 
-// installableWorlds lists the worlds a client can be wired at: no
-// PublicURL means no address to install; tenant scoping goes through
-// the canonical resolver, denying closed on an ambiguous mapping.
-func installableWorlds(cfg *Config, claims *Claims, tenantScoped bool) []installWorld {
+// installableWorlds lists the worlds a client can be wired at (no
+// PublicURL = uninstallable); tenant scoping uses the canonical
+// resolver, denying closed with an error the caller logs.
+func installableWorlds(cfg *Config, claims *Claims, tenantScoped bool) ([]installWorld, error) {
 	var worlds []WorldConfig
 	if tenantScoped {
 		w, err := tenantWorldFor(cfg, claims)
 		if err != nil {
-			return []installWorld{}
+			return []installWorld{}, err
 		}
 		worlds = []WorldConfig{w}
 	} else {
@@ -94,5 +101,5 @@ func installableWorlds(cfg *Config, claims *Claims, tenantScoped bool) []install
 			PublicURL: worlds[j].PublicURL,
 		})
 	}
-	return out
+	return out, nil
 }

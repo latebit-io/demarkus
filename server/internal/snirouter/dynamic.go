@@ -36,6 +36,13 @@ func (d *Dynamic) Swap(mappings []Mapping) error {
 	return nil
 }
 
+// Load returns the currently published router (nil before first Swap).
+// Paired with Store for prevalidate-then-commit transitions.
+func (d *Dynamic) Load() *Router { return d.current.Load() }
+
+// Store publishes an already-validated router (from New).
+func (d *Dynamic) Store(r *Router) { d.current.Store(r) }
+
 // Selector returns a stable quicserve selector backed by the current set.
 func (d *Dynamic) Selector() quicserve.Selector {
 	return d.Select

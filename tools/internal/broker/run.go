@@ -44,6 +44,9 @@ type RunOptions struct {
 // listeners, sweeper + device janitor, signal handling, and the
 // two-phase shutdown. Blocks until shutdown completes.
 func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
+	if opts.Profile == nil {
+		return errors.New("broker: RunOptions.Profile is required")
+	}
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return err
@@ -63,57 +66,11 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 		"version", opts.Version,
 	)
 
-	signer, err := NewSigner(cfg.Server.CookieKey)
+	srv, k8s, err := buildServer(cfg, opts, log)
 	if err != nil {
 		return err
 	}
 
-	// OIDC discovery is eager so a misconfigured broker fails to start
-	// rather than failing the first user login. coreos/go-oidc builds
-	// its own background context for JWKS refresh, so Background is fine.
-	verifier, err := NewVerifier(context.Background(), &cfg.OIDC)
-	if err != nil {
-		return err
-	}
-
-	// Storage backend: kubernetes needs a client; file mode (single-host)
-	// runs with no cluster at all.
-	var store SecretStore
-	var k8s kubernetes.Interface
-	if cfg.FileBackend() {
-		store = NewFileSecretStore()
-		log.Info(opts.LogName+": file storage backend", "dir", cfg.Storage.Dir)
-	} else {
-		k8s, err = newKubeClient(opts.KubeconfigPath)
-		if err != nil {
-			return err
-		}
-		store = NewK8sSecretStore(k8s)
-	}
-
-	// Same eager-failure posture as NewVerifier; 5-minute TTL bounds
-	// IdP key-rotation propagation.
-	discovery, err := NewDiscovery(context.Background(), DiscoveryConfig{
-		BrokerURL: cfg.Server.PublicURL,
-		IdPIssuer: cfg.OIDC.Issuer,
-		Log:       log,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Broker-side ECDSA signer for the refresh-grant path; an invalid
-	// PEM fails the pod fast rather than the first refresh.
-	idTokenSigner, err := NewIDTokenSigner([]byte(cfg.OIDC.BrokerSigningKey))
-	if err != nil {
-		return err
-	}
-	log.Info(opts.LogName+": id_token signer ready", "kid", idTokenSigner.KeyID())
-
-	srv := NewServer(cfg, signer, verifier, store, discovery, idTokenSigner, log)
-
-	// One deferred site owns Setup teardown on every path, including a
-	// failed Setup that still handed back a cleanup.
 	var background []func(ctx context.Context)
 	cleanup := func() {}
 	defer func() { cleanup() }() //nolint:gocritic // deliberate lambda: cleanup is reassigned by Setup after this defer
@@ -149,6 +106,9 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 		Addr:              cfg.Server.Addr,
 		Handler:           srv.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// Bound whole-request reads too: header timeout alone lets a
+		// client hold the connection open mid-body.
+		ReadTimeout: 60 * time.Second,
 	}
 	errs := make(chan error, 1)
 	go func() {
@@ -162,6 +122,9 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 		Addr:              cfg.Server.MCP.Addr,
 		Handler:           srv.MCPGateway(opts.Version, opts.Profile),
 		ReadHeaderTimeout: 10 * time.Second,
+		// Read side only: SSE streaming happens on the write side and
+		// stays unaffected; request bodies are bounded JSON-RPC.
+		ReadTimeout: 60 * time.Second,
 	}
 	mcpErrs := make(chan error, 1)
 	mcpTLS := cfg.Server.MCP.TLS
@@ -286,4 +249,58 @@ func newKubeClient(kubeconfigPath string) (kubernetes.Interface, error) {
 		return nil, err
 	}
 	return kubernetes.NewForConfig(cfg)
+}
+
+// buildServer constructs the auth machinery and Server shared by both
+// broker binaries: signer, verifier, storage backend, discovery, and
+// the broker-side id_token signer, each failing fast on misconfiguration.
+func buildServer(cfg *Config, opts *RunOptions, log *slog.Logger) (*Server, kubernetes.Interface, error) {
+	signer, err := NewSigner(cfg.Server.CookieKey)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// OIDC discovery is eager so a misconfigured broker fails to start
+	// rather than failing the first user login. coreos/go-oidc builds
+	// its own background context for JWKS refresh, so Background is fine.
+	verifier, err := NewVerifier(context.Background(), &cfg.OIDC)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Storage backend: kubernetes needs a client; file mode (single-host)
+	// runs with no cluster at all.
+	var store SecretStore
+	var k8s kubernetes.Interface
+	if cfg.FileBackend() {
+		store = NewFileSecretStore()
+		log.Info(opts.LogName+": file storage backend", "dir", cfg.Storage.Dir)
+	} else {
+		k8s, err = newKubeClient(opts.KubeconfigPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		store = NewK8sSecretStore(k8s)
+	}
+
+	// Same eager-failure posture as NewVerifier; 5-minute TTL bounds
+	// IdP key-rotation propagation.
+	discovery, err := NewDiscovery(context.Background(), DiscoveryConfig{
+		BrokerURL: cfg.Server.PublicURL,
+		IdPIssuer: cfg.OIDC.Issuer,
+		Log:       log,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Broker-side ECDSA signer for the refresh-grant path; an invalid
+	// PEM fails the pod fast rather than the first refresh.
+	idTokenSigner, err := NewIDTokenSigner([]byte(cfg.OIDC.BrokerSigningKey))
+	if err != nil {
+		return nil, nil, err
+	}
+	log.Info(opts.LogName+": id_token signer ready", "kid", idTokenSigner.KeyID())
+
+	return NewServer(cfg, signer, verifier, store, discovery, idTokenSigner, log), k8s, nil
 }

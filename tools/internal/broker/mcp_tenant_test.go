@@ -512,18 +512,29 @@ func TestInstallableWorldsTenantScoped(t *testing.T) {
 	cfg.Worlds[1].PublicURL = "mark://bob-w.example:6309"
 	alice := &Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}
 
-	scoped := installableWorlds(cfg, alice, true)
+	scoped, err := installableWorlds(cfg, alice, true)
+	if err != nil {
+		t.Fatalf("tenant-scoped listing: %v", err)
+	}
 	if len(scoped) != 1 || scoped[0].Name != "alice-w" {
 		t.Errorf("tenant-scoped install worlds = %+v, want only alice-w", scoped)
 	}
-	open := installableWorlds(cfg, alice, false)
+	open, err := installableWorlds(cfg, alice, false)
+	if err != nil {
+		t.Fatalf("org-open listing: %v", err)
+	}
 	if len(open) != 2 {
 		t.Errorf("org-open install worlds = %+v, want both", open)
 	}
 
-	// An ambiguous mapping denies closed: neither world may be listed.
+	// An ambiguous mapping denies closed with a surfaced error.
 	cfg.Worlds[1].Allow.Emails = []string{"alice@example.com"}
-	if got := installableWorlds(cfg, alice, true); len(got) != 0 {
+	got, err := installableWorlds(cfg, alice, true)
+	if len(got) != 0 {
 		t.Errorf("ambiguous tenant mapping listed worlds: %+v", got)
+	}
+	var ambiguous errAmbiguousTenant
+	if !errors.As(err, &ambiguous) {
+		t.Errorf("ambiguous mapping err = %v, want errAmbiguousTenant for the caller's log", err)
 	}
 }

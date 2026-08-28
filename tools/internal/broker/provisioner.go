@@ -247,10 +247,11 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 		return WorldConfig{}, err
 	}
 
-	// Step 4: knowledge-server worlds fragment, rendered whole from the
-	// registry snapshot so replicas converge on identical content.
-	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func([]byte) ([]byte, error) {
-		return p.renderWorldsFragment(&snapshot)
+	// Step 4: worlds fragment, rendered as a UNION with the existing
+	// fragment so a stale snapshot never drops a sibling's tenant;
+	// removal is a deliberate future flow rewriting from the registry.
+	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func(existing []byte) ([]byte, error) {
+		return p.renderWorldsFragment(&snapshot, existing)
 	}); err != nil {
 		return WorldConfig{}, fmt.Errorf("write worlds fragment: %w", err)
 	}
@@ -310,14 +311,23 @@ type fragmentWorld struct {
 	Bootstrap bool            `yaml:"bootstrap"`
 }
 
-// renderWorldsFragment renders the full fragment from the registry,
-// sorted by slug for deterministic output across replicas.
-func (p *Provisioner) renderWorldsFragment(registry *tenantRegistry) ([]byte, error) {
-	slugs := sortedSlugs(registry)
-	doc := struct {
-		Worlds []fragmentWorld `yaml:"worlds"`
-	}{Worlds: make([]fragmentWorld, 0, len(slugs))}
-	for _, slug := range slugs {
+// renderWorldsFragment renders the fragment as the union of the
+// existing fragment's worlds and the registry snapshot's (snapshot wins
+// per slug), sorted by slug for deterministic output across replicas.
+func (p *Provisioner) renderWorldsFragment(registry *tenantRegistry, existing []byte) ([]byte, error) {
+	worlds := map[string]fragmentWorld{}
+	if len(existing) > 0 {
+		var current struct {
+			Worlds []fragmentWorld `yaml:"worlds"`
+		}
+		if err := yaml.Unmarshal(existing, &current); err != nil {
+			return nil, fmt.Errorf("parse existing worlds fragment: %w", err)
+		}
+		for _, world := range current.Worlds {
+			worlds[world.Name] = world
+		}
+	}
+	for _, slug := range sortedSlugs(registry) {
 		record := registry.Tenants[slug]
 		world := fragmentWorld{
 			Name:        slug,
@@ -330,7 +340,18 @@ func (p *Provisioner) renderWorldsFragment(registry *tenantRegistry) ([]byte, er
 		if quota := p.cfg.Provisioning.MaxDocumentsPerTenant; quota > 0 {
 			world.Limits = &fragmentLimits{MaxDocuments: quota}
 		}
-		doc.Worlds = append(doc.Worlds, world)
+		worlds[slug] = world
+	}
+	names := make([]string, 0, len(worlds))
+	for name := range worlds {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	doc := struct {
+		Worlds []fragmentWorld `yaml:"worlds"`
+	}{Worlds: make([]fragmentWorld, 0, len(names))}
+	for _, name := range names {
+		doc.Worlds = append(doc.Worlds, worlds[name])
 	}
 	return yaml.Marshal(doc)
 }

@@ -159,10 +159,8 @@ assert on exact key values, only on structure.
 {{- end -}}
 {{- end -}}
 
-{{- /* provisioningMode validates and normalizes provisioning.mode; every
-       template that branches on the mode goes through this one seam so
-       the legal set and whitespace handling cannot drift (the Go
-       validator trims too). */ -}}
+{{- /* One validation seam for provisioning.mode; normalization (trim)
+       must match the Go validator. */ -}}
 {{- define "demarkus-memory-broker.provisioningMode" -}}
 {{- $mode := .Values.provisioning.mode | toString | trim -}}
 {{- if not (has $mode (list "static" "allowlisted" "open")) -}}
