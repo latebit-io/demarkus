@@ -7,11 +7,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -370,9 +373,21 @@ func TestFragmentUnionSurvivesStaleSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("union render: %v", err)
 	}
-	for _, want := range []string{"name: " + eveWorld.Name, "name: " + frankWorld.Name} {
-		if !strings.Contains(string(merged), want) {
-			t.Errorf("union fragment dropped %q:\n%s", want, merged)
-		}
+	var doc struct {
+		Worlds []fragmentWorld `yaml:"worlds"`
+	}
+	if err := yaml.Unmarshal(merged, &doc); err != nil {
+		t.Fatalf("parse union fragment: %v", err)
+	}
+	got := make([]string, 0, len(doc.Worlds))
+	for _, world := range doc.Worlds {
+		got = append(got, world.Name)
+	}
+	// Exact sorted set: no drops, no duplicates, and the deterministic
+	// order Mutate's unchanged-bytes suppression depends on.
+	want := []string{eveWorld.Name, frankWorld.Name}
+	sort.Strings(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("union fragment worlds = %v, want %v", got, want)
 	}
 }

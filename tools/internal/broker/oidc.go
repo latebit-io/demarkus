@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -98,6 +99,9 @@ func NewVerifier(ctx context.Context, cfg *OIDCConfig) (Verifier, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("broker: oidc config is required")
 	}
+	// Bound the discovery fetch: the default client has no timeout and
+	// the context alone does not cancel it (same cap as Discovery's).
+	ctx = oidc.ClientContext(ctx, &http.Client{Timeout: discoveryHTTPTimeout})
 	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("broker: oidc discovery for %s: %w", cfg.Issuer, err)

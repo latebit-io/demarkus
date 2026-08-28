@@ -109,6 +109,7 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 		// Bound whole-request reads too: header timeout alone lets a
 		// client hold the connection open mid-body.
 		ReadTimeout: 60 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 	errs := make(chan error, 1)
 	go func() {
@@ -122,9 +123,11 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 		Addr:              cfg.Server.MCP.Addr,
 		Handler:           srv.MCPGateway(opts.Version, opts.Profile),
 		ReadHeaderTimeout: 10 * time.Second,
-		// Read side only: SSE streaming happens on the write side and
-		// stays unaffected; request bodies are bounded JSON-RPC.
+		// Caps reading one whole POST body (mcp-go slurps it before
+		// dispatch); SSE GET responses are write-side and unaffected.
+		// IdleTimeout keeps keep-alive idling off ReadTimeout.
 		ReadTimeout: 60 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 	mcpErrs := make(chan error, 1)
 	mcpTLS := cfg.Server.MCP.TLS
