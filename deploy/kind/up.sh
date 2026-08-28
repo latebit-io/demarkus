@@ -41,7 +41,7 @@ RELEASE="${RELEASE:-world-default}"
 SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.30.3}"
 SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
 BROKER_RELEASE="${BROKER_RELEASE:-broker}"
-BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.24.7}"
+BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.24.8}"
 BROKER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-knowledge-broker"
 # Ephemeral curl pod image used by the Stage 4 mint smoke test. Pinned so
 # behavior is reproducible across hosts; busybox sh + curl is all we need.
