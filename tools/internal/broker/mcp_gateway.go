@@ -61,6 +61,9 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher, profil
 			fetchSeen.drop(session.SessionID())
 		}
 	})
+	// The Server shares the profile so the management API's tenant
+	// scoping can never diverge from the gateway's.
+	s.profile = profile
 	g := &mcpGateway{
 		srv:        s,
 		log:        s.log,

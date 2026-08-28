@@ -503,3 +503,27 @@ func TestTenantGateDeniedIdentityGetsNoWorld(t *testing.T) {
 		t.Errorf("denied identity created buckets: %v", buckets.created)
 	}
 }
+
+// TestInstallableWorldsTenantScoped: the management API's world listing
+// must not leak other tenants' world names on the memory broker.
+func TestInstallableWorldsTenantScoped(t *testing.T) {
+	cfg := memoryTestConfig()
+	cfg.Worlds[0].PublicURL = "mark://alice-w.example:6309"
+	cfg.Worlds[1].PublicURL = "mark://bob-w.example:6309"
+	alice := &Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}
+
+	scoped := installableWorlds(cfg, alice, true)
+	if len(scoped) != 1 || scoped[0].Name != "alice-w" {
+		t.Errorf("tenant-scoped install worlds = %+v, want only alice-w", scoped)
+	}
+	open := installableWorlds(cfg, alice, false)
+	if len(open) != 2 {
+		t.Errorf("org-open install worlds = %+v, want both", open)
+	}
+
+	// An ambiguous mapping denies closed: neither world may be listed.
+	cfg.Worlds[1].Allow.Emails = []string{"alice@example.com"}
+	if got := installableWorlds(cfg, alice, true); len(got) != 0 {
+		t.Errorf("ambiguous tenant mapping listed worlds: %+v", got)
+	}
+}

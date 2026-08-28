@@ -16,7 +16,7 @@ Settings > Connectors > Add custom connector, with the gateway URL. Desktop walk
 
 ### ChatGPT
 
-Settings > Connectors (developer mode) > Add connector, with the same gateway URL and OAuth flow.
+Requires a Business, Enterprise, or Edu workspace with Developer mode authorized by the workspace admin; custom connectors are added through the Apps creation flow with the same gateway URL and OAuth flow. Consumer ChatGPT plans cannot add custom MCP connectors with write support.
 
 ### Claude Code
 

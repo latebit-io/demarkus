@@ -82,6 +82,11 @@ type Server struct {
 	// when an authenticated identity resolves to no world.
 	provisioner *Provisioner
 
+	// profile is the gateway profile, held so the management API
+	// (/me/install, /auth/callback) shares the gateway's tenant scoping
+	// from one source of truth. Nil in tests that skip Run.
+	profile *GatewayProfile
+
 	// subjectReg is the per-subject limiter for /me/install; loginReg
 	// is the per-IP limiter for /auth/login.
 	// Either may be nil (Slice C.4 RateLimitConfig.Disabled, or a test
@@ -411,7 +416,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Publish tokens remain broker-internal; installability rules live
 	// in installableWorlds.
-	out := installableWorlds(s.cfg)
+	out := installableWorlds(s.cfg, &claims, s.tenantScopedInstall())
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	s.log.InfoContext(r.Context(), "broker: login succeeded", "subject", hashSubject(claims.Subject), "worlds", len(out))

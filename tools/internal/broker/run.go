@@ -16,10 +16,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// RunOptions parameterizes the shared broker process lifecycle for the
-// two product binaries. Everything the binaries do NOT share (profile,
-// extra validation, provisioning wiring) is injected here so lifecycle
-// fixes land once instead of drifting between two mains.
+// RunOptions parameterizes the shared broker lifecycle: everything the
+// two product binaries do not share (profile, validation, provisioning)
+// is injected here so lifecycle fixes land once.
 type RunOptions struct {
 	// LogName prefixes every lifecycle log line ("broker", "memory broker").
 	LogName string
@@ -30,9 +29,9 @@ type RunOptions struct {
 	Profile *GatewayProfile
 	// Validate runs extra config checks after LoadConfig.
 	Validate []func(*Config) error
-	// Setup runs after NewServer and before the listeners start. It may
-	// return background tasks (run under the sweep group, canceled with
-	// it) and a cleanup invoked during shutdown. Optional.
+	// Setup runs after NewServer, before the listeners: optional extra
+	// background tasks (sweep group) plus a cleanup Run invokes once on
+	// every exit path; on error, Setup releases its own state first.
 	Setup func(cfg *Config, srv *Server, log *slog.Logger) (background []func(ctx context.Context), cleanup func(), err error)
 	// Version is the binary's build version (initialize response).
 	Version string
@@ -113,16 +112,21 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 
 	srv := NewServer(cfg, signer, verifier, store, discovery, idTokenSigner, log)
 
+	// One deferred site owns Setup teardown on every path, including a
+	// failed Setup that still handed back a cleanup.
 	var background []func(ctx context.Context)
 	cleanup := func() {}
+	defer func() { cleanup() }() //nolint:gocritic // deliberate lambda: cleanup is reassigned by Setup after this defer
 	if opts.Setup != nil {
-		var setupErr error
-		background, cleanup, setupErr = opts.Setup(cfg, srv, log)
+		setupBackground, setupCleanup, setupErr := opts.Setup(cfg, srv, log)
+		background = setupBackground
+		if setupCleanup != nil {
+			cleanup = setupCleanup
+		}
 		if setupErr != nil {
 			return setupErr
 		}
 	}
-	defer cleanup()
 
 	if cfg.RateLimit.Disabled {
 		log.Info(opts.LogName + ": rate limit disabled (rateLimit.disabled=true)")
@@ -134,6 +138,12 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 			"loginBurst", cfg.RateLimit.Login.Burst,
 			"trustForwardedFor", cfg.RateLimit.TrustForwardedFor)
 	}
+
+	// Register the signal handler before any listener starts so a
+	// SIGTERM in the startup window still takes the graceful path (the
+	// buffered channel retains it until the select).
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Server.Addr,
@@ -203,8 +213,6 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 		})
 	}
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case sig := <-stop:
 		log.Info(opts.LogName+": received signal, shutting down", "signal", sig.String())

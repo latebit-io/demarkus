@@ -1,9 +1,7 @@
-{{- if and .Values.rbac.create (ne .Values.provisioning.mode "static") }}
-{{- /* Server-namespace RBAC for dynamic provisioning: the broker writes
-       the worlds fragment and per-tenant tokens keys into the two
-       Secrets the knowledge server mounts. get/update pinned by name;
-       create needs its own name-unrestricted rule (resourceNames does
-       not match create requests). */}}
+{{- if and .Values.rbac.create (ne (include "demarkus-memory-broker.provisioningMode" .) "static") }}
+{{- /* Server-namespace RBAC for the two Secrets the broker writes and
+       the server mounts. create is a separate name-unrestricted rule:
+       resourceNames does not match create requests. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

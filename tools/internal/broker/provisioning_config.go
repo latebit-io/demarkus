@@ -37,7 +37,8 @@ type ProvisioningConfig struct {
 	// BucketProject is the GCP project buckets are created in.
 	BucketProject string `yaml:"bucketProject"`
 	// BucketLocation is the GCS location for new buckets (e.g. EU, US,
-	// europe-west1).
+	// europe-west1). Blank uses the GCS default (US multi-region);
+	// set it explicitly when data residency matters.
 	BucketLocation string `yaml:"bucketLocation"`
 	// ServerNamespace is the k8s namespace holding the knowledge
 	// server's worlds-fragment and shared tokens Secrets.
@@ -71,7 +72,8 @@ func (p *ProvisioningConfig) Enabled() bool {
 // the memory broker's startup (alongside ValidateTenantWorlds); the
 // knowledge broker never enables provisioning.
 func (p *ProvisioningConfig) validate(fileBackend bool) error {
-	switch strings.TrimSpace(p.Mode) {
+	p.Mode = strings.TrimSpace(p.Mode)
+	switch p.Mode {
 	case "", ProvisionStatic:
 		p.Mode = ProvisionStatic
 		return nil

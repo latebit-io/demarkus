@@ -158,3 +158,15 @@ assert on exact key values, only on structure.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{- /* provisioningMode validates and normalizes provisioning.mode; every
+       template that branches on the mode goes through this one seam so
+       the legal set and whitespace handling cannot drift (the Go
+       validator trims too). */ -}}
+{{- define "demarkus-memory-broker.provisioningMode" -}}
+{{- $mode := .Values.provisioning.mode | toString | trim -}}
+{{- if not (has $mode (list "static" "allowlisted" "open")) -}}
+{{- fail (printf "provisioning.mode must be static, allowlisted, or open (got %q)" .Values.provisioning.mode) -}}
+{{- end -}}
+{{- $mode -}}
+{{- end -}}

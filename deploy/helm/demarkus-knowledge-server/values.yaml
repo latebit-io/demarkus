@@ -17,11 +17,8 @@ server:
 worlds: []
 
 # Dynamic tenant worlds (memory-broker plan Phase 3): the memory broker
-# writes a worlds fragment plus one <slug>.toml tokens key per tenant
-# into the two Secrets below, and the server hot-reloads the fragment
-# and opens tenant worlds at runtime (bootstrap genesis on first open).
-# With this enabled, `worlds: []` is a legitimate install: the server
-# idles until the broker provisions the first tenant.
+# writes the two Secrets below and the server hot-reloads them at
+# runtime; `worlds: []` is then a legitimate install.
 dynamicWorlds:
   enabled: false
   # Secret in this namespace whose worlds.yaml key carries the fragment.

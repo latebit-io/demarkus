@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"cloud.google.com/go/storage"
 )
@@ -15,44 +16,74 @@ type GCSBucketCreator struct {
 	client   *storage.Client
 	project  string
 	location string
+	log      *slog.Logger
 }
 
 // NewGCSBucketCreator wires the production bucket creator. project is
 // required; location may be empty (GCS default).
-func NewGCSBucketCreator(client *storage.Client, project, location string) (*GCSBucketCreator, error) {
+func NewGCSBucketCreator(client *storage.Client, project, location string, log *slog.Logger) (*GCSBucketCreator, error) {
 	if client == nil {
 		return nil, errors.New("broker: gcs bucket creator requires a storage client")
 	}
 	if project == "" {
 		return nil, errors.New("broker: gcs bucket creator requires provisioning.bucketProject")
 	}
-	return &GCSBucketCreator{client: client, project: project, location: location}, nil
+	if log == nil {
+		log = slog.Default()
+	}
+	return &GCSBucketCreator{client: client, project: project, location: location, log: log}, nil
 }
 
-// EnsureBucket creates the bucket when absent. Buckets are locked down:
-// uniform bucket-level access and enforced public-access prevention,
-// since only the knowledge server's service account ever reads them.
+// EnsureBucket creates the bucket when absent (uniform bucket-level
+// access, enforced public-access prevention); a pre-existing bucket is
+// adopted only after its lockdown is verified.
 func (c *GCSBucketCreator) EnsureBucket(ctx context.Context, bucket string) error {
 	handle := c.client.Bucket(bucket)
-	_, err := handle.Attrs(ctx)
+	existing, err := handle.Attrs(ctx)
 	if err == nil {
-		return nil
+		return verifyBucketLockdown(bucket, existing)
 	}
 	if !errors.Is(err, storage.ErrBucketNotExist) {
 		return fmt.Errorf("check bucket %q: %w", bucket, err)
 	}
-	attrs := &storage.BucketAttrs{
-		Location:                 c.location,
+	if createErr := handle.Create(ctx, c.project, tenantBucketAttrs(c.location)); createErr != nil {
+		// A racing replica may have won; adopt only a bucket that now
+		// exists AND passes lockdown. Once the bucket exists the create
+		// error is stale, so it rides the log, not the return.
+		raced, attrsErr := handle.Attrs(ctx)
+		if attrsErr != nil {
+			return fmt.Errorf("create bucket %q: %w", bucket, createErr)
+		}
+		if lockErr := verifyBucketLockdown(bucket, raced); lockErr != nil {
+			c.log.Warn("bucket create failed and the existing bucket is not locked down",
+				"bucket", bucket, "createErr", createErr)
+			return lockErr
+		}
+		c.log.Warn("bucket create raced an existing bucket; adopted after lockdown check",
+			"bucket", bucket, "createErr", createErr)
+	}
+	return nil
+}
+
+// tenantBucketAttrs is the ONE definition of the tenant-bucket posture;
+// verifyBucketLockdown must assert every security-relevant field set
+// here, or adopted pre-existing buckets dodge the new requirement.
+func tenantBucketAttrs(location string) *storage.BucketAttrs {
+	return &storage.BucketAttrs{
+		Location:                 location,
 		UniformBucketLevelAccess: storage.UniformBucketLevelAccess{Enabled: true},
 		PublicAccessPrevention:   storage.PublicAccessPreventionEnforced,
 	}
-	if err := handle.Create(ctx, c.project, attrs); err != nil {
-		// A concurrent replica may have won the race; conflict on an
-		// already-owned bucket converges to success on the next Attrs.
-		if _, attrsErr := handle.Attrs(ctx); attrsErr == nil {
-			return nil
-		}
-		return fmt.Errorf("create bucket %q: %w", bucket, err)
+}
+
+// verifyBucketLockdown fails closed on a bucket that does not carry the
+// tenantBucketAttrs posture (location aside, which is create-time only).
+func verifyBucketLockdown(bucket string, attrs *storage.BucketAttrs) error {
+	if !attrs.UniformBucketLevelAccess.Enabled {
+		return fmt.Errorf("bucket %q does not enforce uniform bucket-level access; refusing to adopt it for tenant data", bucket)
+	}
+	if attrs.PublicAccessPrevention != storage.PublicAccessPreventionEnforced {
+		return fmt.Errorf("bucket %q does not enforce public-access prevention; refusing to adopt it for tenant data", bucket)
 	}
 	return nil
 }

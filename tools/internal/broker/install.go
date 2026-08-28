@@ -54,7 +54,7 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 
 	out := []installWorld{}
 	if claims.Email != "" {
-		out = installableWorlds(s.cfg)
+		out = installableWorlds(s.cfg, claims, s.tenantScopedInstall())
 	}
 	s.log.InfoContext(r.Context(), "broker: /me/install succeeded",
 		"subject", hashSubject(claims.Subject), "worlds", len(out))
@@ -64,10 +64,26 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// installableWorlds lists the readable worlds a client can be wired at:
-// a world without a PublicURL is skipped (no address to install).
-func installableWorlds(cfg *Config) []installWorld {
-	worlds := readableWorlds(cfg)
+// tenantScopedInstall reports whether management-API world listings are
+// tenant-scoped, from the same profile that scopes the gateway.
+func (s *Server) tenantScopedInstall() bool {
+	return s.profile != nil && s.profile.TenantScoped
+}
+
+// installableWorlds lists the worlds a client can be wired at: no
+// PublicURL means no address to install; tenant scoping goes through
+// the canonical resolver, denying closed on an ambiguous mapping.
+func installableWorlds(cfg *Config, claims *Claims, tenantScoped bool) []installWorld {
+	var worlds []WorldConfig
+	if tenantScoped {
+		w, err := tenantWorldFor(cfg, claims)
+		if err != nil {
+			return []installWorld{}
+		}
+		worlds = []WorldConfig{w}
+	} else {
+		worlds = readableWorlds(cfg)
+	}
 	out := make([]installWorld, 0, len(worlds))
 	for j := range worlds {
 		if worlds[j].PublicURL == "" {

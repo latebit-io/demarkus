@@ -39,8 +39,9 @@ var ErrProvisioningDenied = errors.New("broker: provisioning denied")
 // ErrTenantCapacity is returned when maxTenants is reached.
 var ErrTenantCapacity = errors.New("broker: tenant capacity reached")
 
-// BucketCreator creates tenant buckets. The production implementation
-// wraps a GCS client; tests fake it.
+// BucketCreator ensures tenant buckets exist AND carry the locked-down
+// tenant posture; implementations must refuse to adopt a pre-existing
+// bucket with looser access. Production wraps GCS; tests fake it.
 type BucketCreator interface {
 	EnsureBucket(ctx context.Context, bucket string) error
 }
@@ -182,6 +183,11 @@ func (p *Provisioner) admits(claims *Claims) error {
 func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldConfig, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// The lock queue can outlive the request; do no remote work for a
+	// caller that already went away.
+	if err := ctx.Err(); err != nil {
+		return WorldConfig{}, err
+	}
 
 	email := canonicalEmail(claims.Email)
 	issuer := p.cfg.OIDC.Issuer

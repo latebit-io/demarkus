@@ -74,7 +74,7 @@ func setupProvisioning(cfg *broker.Config, srv *broker.Server, log *slog.Logger)
 			log.Warn("memory broker: GCS client close failed", "err", closeErr)
 		}
 	}
-	buckets, err := broker.NewGCSBucketCreator(gcsClient, cfg.Provisioning.BucketProject, cfg.Provisioning.BucketLocation)
+	buckets, err := broker.NewGCSBucketCreator(gcsClient, cfg.Provisioning.BucketProject, cfg.Provisioning.BucketLocation, log)
 	if err != nil {
 		closeClient()
 		return nil, nil, err

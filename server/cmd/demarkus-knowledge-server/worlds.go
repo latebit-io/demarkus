@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -48,6 +49,9 @@ type worldManager struct {
 	// pending holds desired worlds whose open failed; the retry loop
 	// re-attempts them until they come up or the config drops them.
 	pending map[string]knowledgeconfig.WorldConfig
+	// needsPublish marks a failed router/token publish so the retry
+	// loop re-attempts it without waiting for another config event.
+	needsPublish bool
 	// resilient marks dynamic deployments (worldsFile set): a failed
 	// world open degrades to pending instead of failing the process.
 	resilient bool
@@ -157,11 +161,17 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 		}
 		delete(m.pending, name)
 	}
-	if firstErr != nil {
-		return firstErr
+	// Publish unconditionally: the diff loop already closed removed and
+	// replaced worlds, so returning early would keep routing to them.
+	publishErr := m.publishLocked()
+	if publishErr != nil && m.resilient {
+		// Dynamic mode degrades like a failed open: log, mark for the
+		// retry loop, keep the process alive.
+		m.logger.Error("world publish failed; will retry", "error", publishErr)
+		m.needsPublish = true
+		publishErr = nil
 	}
-	m.publishLocked()
-	return nil
+	return errors.Join(firstErr, publishErr)
 }
 
 // openLocked opens one world: blob store, optional genesis bootstrap,
@@ -226,7 +236,6 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 type dirWatch struct {
 	count  int
 	cancel context.CancelFunc
-	done   chan struct{}
 }
 
 // acquireTokenWatchLocked starts (or shares) the watcher for the tokens
@@ -239,11 +248,9 @@ func (m *worldManager) acquireTokenWatchLocked(tokensFile string) {
 		return
 	}
 	watchCtx, cancel := context.WithCancel(m.watchCtx)
-	watch := &dirWatch{count: 1, cancel: cancel, done: make(chan struct{})}
-	m.tokenDirs[dir] = watch
+	m.tokenDirs[dir] = &dirWatch{count: 1, cancel: cancel}
 	watcher := &configwatch.Watcher{Target: tokensFile, Reload: m.tokens.Reload, Logger: m.logger}
 	m.group.Go(func() {
-		defer close(watch.done)
 		if err := watcher.Run(watchCtx); err != nil {
 			m.logger.Warn("token watcher exited", "target", watcher.Target, "error", err)
 		}
@@ -260,8 +267,10 @@ func (m *worldManager) releaseTokenWatchLocked(tokensFile string) {
 	if watch.count > 0 {
 		return
 	}
+	// No join: waiting under m.mu would stall every reload behind a
+	// slow watcher exit; the shared group collects the goroutine and a
+	// briefly overlapping successor only adds an idempotent reload.
 	watch.cancel()
-	<-watch.done
 	delete(m.tokenDirs, dir)
 }
 
@@ -273,9 +282,10 @@ func (m *worldManager) closeEntryLocked(name string, entry *worldEntry) {
 	delete(m.entries, name)
 }
 
-// publishLocked rebuilds the router and token-coordinator views from the
-// live entries. Failures keep the previous view (deny-stale over break).
-func (m *worldManager) publishLocked() {
+// publishLocked rebuilds the router and token-coordinator views from
+// the live entries. A failure keeps that surface's previous view and is
+// returned to the caller; every apply re-attempts, so it self-heals.
+func (m *worldManager) publishLocked() error {
 	mappings := make([]snirouter.Mapping, 0, len(m.entries))
 	worlds := make([]tokenWorld, 0, len(m.entries))
 	for name, entry := range m.entries {
@@ -284,12 +294,14 @@ func (m *worldManager) publishLocked() {
 		}
 		worlds = append(worlds, tokenWorld{name: name, runtime: entry.runtime})
 	}
+	var errs []error
 	if err := m.router.Swap(mappings); err != nil {
-		m.logger.Error("router swap failed; keeping previous routing", "error", err)
+		errs = append(errs, fmt.Errorf("router swap failed; keeping previous routing: %w", err))
 	}
 	if err := m.tokens.SetWorlds(worlds); err != nil {
-		m.logger.Error("token coordinator swap failed; keeping previous set", "error", err)
+		errs = append(errs, fmt.Errorf("token coordinator swap failed; keeping previous set: %w", err))
 	}
+	return errors.Join(errs...)
 }
 
 // retryLoop re-attempts pending world opens until ctx ends.
@@ -309,10 +321,10 @@ func (m *worldManager) retryLoop(ctx context.Context) {
 func (m *worldManager) retryPending() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.pending) == 0 {
+	if len(m.pending) == 0 && !m.needsPublish {
 		return
 	}
-	recovered := false
+	recovered := m.needsPublish
 	for name := range m.pending {
 		world := m.pending[name]
 		if err := m.openLocked(&world); err != nil {
@@ -323,7 +335,12 @@ func (m *worldManager) retryPending() {
 		recovered = true
 	}
 	if recovered {
-		m.publishLocked()
+		if err := m.publishLocked(); err != nil {
+			m.logger.Error("publish after world retry failed", "error", err)
+			m.needsPublish = true
+			return
+		}
+		m.needsPublish = false
 	}
 }
 

@@ -221,13 +221,15 @@ func (config *Config) WorldsFilePath(configFile string) string {
 // Parse's per-world defaults; empty input yields zero worlds and
 // cross-world invariants are validated by the caller after merging.
 func ParseWorldsFragment(data []byte) ([]WorldConfig, error) {
-	if len(bytes.TrimSpace(data)) == 0 {
-		return nil, nil
-	}
 	var raw struct {
 		Worlds []rawWorldConfig `yaml:"worlds"`
 	}
 	if err := decodeStrictSingleDoc(data, &raw); err != nil {
+		// Empty, whitespace-only, and comment-only fragments are a
+		// legitimate not-yet-provisioned state.
+		if errors.Is(err, errEmptyDocument) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	worlds := make([]WorldConfig, len(raw.Worlds))
@@ -237,12 +239,20 @@ func ParseWorldsFragment(data []byte) ([]WorldConfig, error) {
 	return worlds, nil
 }
 
+// errEmptyDocument names the no-content outcome (empty, whitespace, or
+// comments only) so callers state their own policy instead of matching
+// the YAML library's io.EOF detail.
+var errEmptyDocument = errors.New("empty YAML document")
+
 // decodeStrictSingleDoc enforces the shared YAML posture: unknown fields
-// rejected, exactly one document.
+// rejected, exactly one document; no content is errEmptyDocument.
 func decodeStrictSingleDoc(data []byte, out any) error {
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(out); err != nil {
+		if errors.Is(err, io.EOF) {
+			return errEmptyDocument
+		}
 		return fmt.Errorf("parse YAML: %w", err)
 	}
 	var trailing any
@@ -259,6 +269,9 @@ func decodeStrictSingleDoc(data []byte, out any) error {
 func Parse(data []byte) (*Config, error) {
 	var raw rawConfig
 	if err := decodeStrictSingleDoc(data, &raw); err != nil {
+		if errors.Is(err, errEmptyDocument) {
+			return nil, errors.New("configuration file is empty")
+		}
 		return nil, err
 	}
 

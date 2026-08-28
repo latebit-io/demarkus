@@ -51,11 +51,10 @@ rules:
     resourceNames:
       - {{ include "demarkus-memory-broker.refreshTokensSecretName" . | quote }}
     verbs: ["get", "update"]
-  {{- if ne .Values.provisioning.mode "static" }}
-  {{- /* Dynamic provisioning: per-tenant write-token Secret names and
-         the registry are runtime-created, so resourceNames pinning is
-         impossible. Namespace-wide get/update/create on secrets in the
-         broker-owned namespace. */}}
+  {{- if ne (include "demarkus-memory-broker.provisioningMode" .) "static" }}
+  {{- /* Dynamic provisioning: runtime-created Secret names cannot be
+         resourceNames-pinned, so secrets access is namespace-wide in
+         the broker-owned namespace. */}}
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "update", "create"]

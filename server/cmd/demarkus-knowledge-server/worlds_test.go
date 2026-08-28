@@ -21,7 +21,10 @@ import (
 type worldsTestHarness struct {
 	dir     string
 	manager *worldManager
-	stores  map[string]*blob.Memory
+	// storesMu guards stores: the manager's retry loop and the test
+	// goroutine both drive newStore.
+	storesMu sync.Mutex
+	stores   map[string]*blob.Memory
 }
 
 const testWorldID = "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48"
@@ -80,16 +83,18 @@ worldsFile: worlds.yaml
 	if err != nil {
 		t.Fatalf("certsource: %v", err)
 	}
-	stores := map[string]*blob.Memory{}
+	h := &worldsTestHarness{dir: dir, stores: map[string]*blob.Memory{}}
 	newStore := func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
-		store, ok := stores[world.Name]
-		if !ok {
-			store, err = blob.NewMemory(maxObjectBytes)
-			if err != nil {
-				return nil, err
-			}
-			stores[world.Name] = store
+		h.storesMu.Lock()
+		defer h.storesMu.Unlock()
+		if store, ok := h.stores[world.Name]; ok {
+			return store, nil
 		}
+		store, err := blob.NewMemory(maxObjectBytes)
+		if err != nil {
+			return nil, err
+		}
+		h.stores[world.Name] = store
 		return store, nil
 	}
 	watchCtx, cancel := context.WithCancel(context.Background())
@@ -99,7 +104,7 @@ worldsFile: worlds.yaml
 		cancel()
 		t.Fatalf("newWorldManager: %v", err)
 	}
-	h := &worldsTestHarness{dir: dir, manager: manager, stores: stores}
+	h.manager = manager
 	t.Cleanup(func() {
 		h.manager.Close()
 		cancel()
@@ -185,7 +190,9 @@ func TestWorldManagerBootstrapInitializesGenesis(t *testing.T) {
 
 	// The memory blob store started empty; a successful open proves the
 	// bootstrap path wrote genesis. The head object must now exist.
+	h.storesMu.Lock()
 	store := h.stores["alice"]
+	h.storesMu.Unlock()
 	if store == nil {
 		t.Fatal("no store opened for alice")
 	}

@@ -324,3 +324,19 @@ func TestWorldsFragmentGolden(t *testing.T) {
 		t.Errorf("rendered fragment drifted from golden; if intended, rerun with UPDATE_GOLDEN=1 and check the server-side parse test\nrendered:\n%s", rendered)
 	}
 }
+
+func TestValidateProvisioningTrimsMode(t *testing.T) {
+	cfg := provisioningTestConfig("open ")
+	if err := cfg.ValidateProvisioning(); err != nil {
+		t.Fatalf("ValidateProvisioning: %v", err)
+	}
+	if cfg.Provisioning.Mode != ProvisionOpen {
+		t.Errorf("mode = %q, want normalized %q (Enabled and the open-mode cap key on it)", cfg.Provisioning.Mode, ProvisionOpen)
+	}
+
+	cfg = provisioningTestConfig("open ")
+	cfg.Provisioning.MaxTenants = 0
+	if err := cfg.ValidateProvisioning(); err == nil {
+		t.Error("padded open mode bypassed the maxTenants requirement")
+	}
+}

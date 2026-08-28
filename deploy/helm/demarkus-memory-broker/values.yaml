@@ -288,16 +288,10 @@ worlds: []
   #     # token never expires, so there is no operations/expiresAfter
   #     # field to set.
 
-# Dynamic tenant provisioning (memory-broker plan Phase 3). Mode static
-# (default) disables it: worlds are only the hand-provisioned list above.
-# allowlisted admits identities matching provisioning.allow; open admits
-# any verified identity and REQUIRES maxTenants. On an admitted
-# identity's first arrival the broker creates its GCS bucket, writes the
-# tenant registry (broker namespace), the knowledge-server worlds
-# fragment, and the shared tokens key (server namespace); the knowledge
-# server hot-reloads the fragment and bootstraps the world. The broker
-# pod needs GCP credentials with bucket-create rights (Workload Identity;
-# see the README) when provisioning is enabled.
+# Dynamic tenant provisioning (memory-broker plan Phase 3): static
+# disables it, allowlisted gates on provisioning.allow, open admits any
+# verified identity and REQUIRES maxTenants. Flow, RBAC, and the GCP
+# credential requirement are documented in the README.
 provisioning:
   mode: static
   # Gate for allowlisted mode; same predicate as per-world allow.

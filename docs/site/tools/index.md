@@ -26,7 +26,7 @@ See `tools/demarkus-knowledge-broker/MCP-API.md` for the full tool contract and 
 
 ## Memory Broker (`demarkus-memory-broker`)
 
-The memory broker is the knowledge broker's personal sibling: one OAuth connector URL gives any MCP host (Claude Desktop, ChatGPT, Claude Code, Cursor) a private, versioned soul. Identity maps to exactly one world; reads and writes are locked to it, the soul template is seeded on first access, and dynamic provisioning can create the world itself on first arrival behind a `static | allowlisted | open` gate.
+The memory broker is the knowledge broker's personal sibling: one OAuth connector URL gives any MCP host (Claude Desktop, Claude Code, Cursor; ChatGPT with a Developer-mode-enabled workspace) a private, versioned soul. Identity maps to exactly one world; reads and writes are locked to it, the soul template is seeded on first access, and dynamic provisioning can create the world itself on first arrival behind a `static | allowlisted | open` gate.
 
 See [Memory Broker](./memory-broker.md) for connector setup per host.
 

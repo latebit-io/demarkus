@@ -108,6 +108,9 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	if options.ShardWorkers < 0 {
 		return nil, fmt.Errorf("open bucket store: %w: shard workers must not be negative", blob.ErrPrecondition)
 	}
+	if options.MaxDocuments < 0 {
+		return nil, fmt.Errorf("open bucket store: %w: max documents must not be negative", blob.ErrPrecondition)
+	}
 	if options.RequestTimeout == 0 {
 		options.RequestTimeout = defaultRequestTimeout
 	}

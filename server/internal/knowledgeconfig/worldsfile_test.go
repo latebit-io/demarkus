@@ -71,14 +71,15 @@ func TestLoadToleratesMissingWorldsFile(t *testing.T) {
 }
 
 func TestLoadValidatesAcrossMergedWorlds(t *testing.T) {
-	// A fragment world duplicating a static world's name must fail the
-	// merged validation, not slip through per-file checks.
+	// A fragment world duplicating a static world's NAME must fail the
+	// merged validation; every other field is unique so the name check
+	// is what trips.
 	main := strings.Replace(validConfig, "version: 1", "version: 1\nworldsFile: worlds.yaml", 1)
-	fragment := strings.Replace(worldsFragment, "fritz-3a9f", "world-a", 2)
-	fragment = strings.Replace(fragment, "gs://memory-world-a", "gs://other-bucket", 1)
+	fragment := strings.Replace(worldsFragment, "name: fritz-3a9f", "name: world-a", 1)
+	fragment = strings.Replace(fragment, "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48", "62b471f7-8d38-4c89-b44a-6f4f8b1a4f48", 1)
 	dir := writeConfigDir(t, main, fragment)
 	_, err := Load(filepath.Join(dir, "config.yaml"))
-	if err == nil || !strings.Contains(err.Error(), "duplicates") {
+	if err == nil || !strings.Contains(err.Error(), `name "world-a" duplicates`) {
 		t.Fatalf("Load err = %v, want duplicate-name failure across merged worlds", err)
 	}
 }
@@ -95,7 +96,7 @@ tls:
 }
 
 func TestParseWorldsFragmentEmpty(t *testing.T) {
-	for _, input := range []string{"", "   \n"} {
+	for _, input := range []string{"", "   \n", "# no tenants provisioned yet\n"} {
 		worlds, err := ParseWorldsFragment([]byte(input))
 		if err != nil || len(worlds) != 0 {
 			t.Fatalf("ParseWorldsFragment(%q) = %v, %v; want empty, nil", input, worlds, err)
