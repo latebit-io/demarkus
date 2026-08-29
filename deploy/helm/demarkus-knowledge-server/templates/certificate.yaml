@@ -20,4 +20,10 @@ spec:
     - {{ lower . | quote }}
     {{- end }}
     {{- end }}
+    {{- if .Values.dynamicWorlds.enabled }}
+    {{- /* Dynamic tenant authorities are <slug>.<service-dns>; one
+         wildcard covers every provisioned world without reissuing. */}}
+    - {{ printf "%s.%s.svc.cluster.local" (include "demarkus-knowledge-server.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "*.%s.%s.svc.cluster.local" (include "demarkus-knowledge-server.fullname" .) .Release.Namespace | quote }}
+    {{- end }}
 {{- end }}
