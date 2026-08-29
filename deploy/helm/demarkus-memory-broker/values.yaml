@@ -84,6 +84,11 @@ server:
   # chart lifecycle events never invalidate live refresh tokens.
   refreshTokensSecret: ""
 
+  # RFC 7591 dynamic-client registration map (kept Secret, like
+  # refreshTokensSecret). Renaming it after install orphans existing
+  # registrations; connected MCP hosts must then re-register.
+  dynamicClientsSecret: ""
+
   # MCP gateway listener (memory service surface; see plan: Memory Broker
   # Gateway). The gateway is ALWAYS ON — every broker is a
   # memory gateway, there is no `enabled` knob. Operators

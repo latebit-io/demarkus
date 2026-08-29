@@ -50,6 +50,7 @@ rules:
     resources: ["secrets"]
     resourceNames:
       - {{ include "demarkus-knowledge-broker.refreshTokensSecretName" . | quote }}
+      - {{ include "demarkus-knowledge-broker.dynamicClientsSecretName" . | quote }}
     verbs: ["get", "update"]
   {{- if .Values.worlds }}
   - apiGroups: [""]

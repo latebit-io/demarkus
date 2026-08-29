@@ -66,6 +66,11 @@ Names for the chart-managed Secrets.
 {{- default (printf "%s-refresh-tokens" (include "demarkus-knowledge-broker.fullname" .)) .Values.server.refreshTokensSecret -}}
 {{- end -}}
 
+{{/* Dynamic-clients Secret: RFC 7591 registrations (client_id -> redirect URIs). */}}
+{{- define "demarkus-knowledge-broker.dynamicClientsSecretName" -}}
+{{- default (printf "%s-dynamic-clients" (include "demarkus-knowledge-broker.fullname" .)) .Values.server.dynamicClientsSecret -}}
+{{- end -}}
+
 {{/*
 Per-world write-token Secret name. The broker provisions one of
 these lazily on the first write to each world (see

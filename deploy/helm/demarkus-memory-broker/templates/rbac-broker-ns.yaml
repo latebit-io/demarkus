@@ -50,6 +50,7 @@ rules:
     resources: ["secrets"]
     resourceNames:
       - {{ include "demarkus-memory-broker.refreshTokensSecretName" . | quote }}
+      - {{ include "demarkus-memory-broker.dynamicClientsSecretName" . | quote }}
     verbs: ["get", "update"]
   {{- if ne (include "demarkus-memory-broker.provisioningMode" .) "static" }}
   {{- /* Dynamic provisioning: runtime-created Secret names cannot be

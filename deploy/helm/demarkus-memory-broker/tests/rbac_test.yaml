@@ -92,6 +92,7 @@ tests:
           path: rules[2].resourceNames
           value:
             - "RELEASE-NAME-demarkus-memory-broker-refresh-tokens"
+            - "RELEASE-NAME-demarkus-memory-broker-dynamic-clients"
       - equal:
           path: rules[2].verbs
           value: ["get", "update"]

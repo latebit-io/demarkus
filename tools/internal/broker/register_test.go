@@ -80,8 +80,8 @@ func TestRegister(t *testing.T) {
 				t.Errorf("token_endpoint_auth_method = %v, want \"none\"", got["token_endpoint_auth_method"])
 			}
 			grants, _ := got["grant_types"].([]any)
-			if len(grants) != 1 || grants[0] != "urn:ietf:params:oauth:grant-type:device_code" {
-				t.Errorf("grant_types = %v, want [\"urn:ietf:params:oauth:grant-type:device_code\"]", got["grant_types"])
+			if len(grants) != 2 || grants[0] != "authorization_code" || grants[1] != "urn:ietf:params:oauth:grant-type:device_code" {
+				t.Errorf("grant_types = %v, want [authorization_code, device_code]", got["grant_types"])
 			}
 			if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
 				t.Errorf("Cache-Control = %q, want \"no-store\"", cc)
@@ -157,8 +157,8 @@ func TestRegisterBrokerFieldsOverrideRequest(t *testing.T) {
 		t.Errorf("token_endpoint_auth_method = %v, want \"none\"", got["token_endpoint_auth_method"])
 	}
 	grants, _ := got["grant_types"].([]any)
-	if len(grants) != 1 || grants[0] != "urn:ietf:params:oauth:grant-type:device_code" {
-		t.Errorf("grant_types = %v, want force-pinned to device_code only", got["grant_types"])
+	if len(grants) != 2 || grants[0] != "authorization_code" || grants[1] != "urn:ietf:params:oauth:grant-type:device_code" {
+		t.Errorf("grant_types = %v, want force-pinned to the broker's supported grants", got["grant_types"])
 	}
 }
 

@@ -49,6 +49,10 @@ type Server struct {
 	// injects one SecretStore shared with the write-token store.
 	refreshStore *RefreshStore
 
+	// dynamicClients persists RFC 7591 registrations so the authorize
+	// leg can trust an MCP host's registered https redirect URIs.
+	dynamicClients *DynamicClientStore
+
 	// idTokenSigner mints broker-signed id_tokens on the
 	// /device/token refresh-grant path and serves its public key at
 	// /.well-known/jwks.json. May be nil in tests that don't
@@ -144,6 +148,9 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, store SecretStore
 	if cfg.Server.RefreshTokensSecret == "" {
 		cfg.Server.RefreshTokensSecret = defaultRefreshTokensSecret
 	}
+	if cfg.Server.DynamicClientsSecret == "" {
+		cfg.Server.DynamicClientsSecret = defaultDynamicClientsSecret
+	}
 	if cfg.Server.RefreshTokenTTL <= 0 {
 		cfg.Server.RefreshTokenTTL = defaultRefreshTokenTTL
 	}
@@ -168,6 +175,7 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, store SecretStore
 		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
 		authCodeStore:     newAuthCodeStore(clock, defaultPendingAuthCodeTTL, defaultAuthCodeTTL),
 		refreshStore:      NewRefreshStore(cfg, store),
+		dynamicClients:    NewDynamicClientStore(cfg, store),
 		worldWriteTokens:  newWorldWriteTokenStore(cfg, store),
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
