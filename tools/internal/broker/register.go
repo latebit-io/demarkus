@@ -74,6 +74,20 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	doc["token_endpoint_auth_method"] = "none"
 	doc["grant_types"] = []string{"authorization_code", "urn:ietf:params:oauth:grant-type:device_code"}
 
+	// A present client_name must be a string regardless of the other
+	// fields: a 201 echoing invalid metadata would mislead the caller.
+	name := ""
+	if rawName, present := doc["client_name"]; present {
+		var isString bool
+		if name, isString = rawName.(string); !isString {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error":             "invalid_client_metadata",
+				"error_description": "client_name must be a string",
+			})
+			return
+		}
+	}
+
 	// redirect_uris, when supplied, are validated and PERSISTED: the
 	// authorize leg trusts non-loopback redirects only for a client_id
 	// whose registration records them (the MCP-host path).
@@ -85,17 +99,6 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 				"error_description": parseErr.Error(),
 			})
 			return
-		}
-		name := ""
-		if rawName, present := doc["client_name"]; present {
-			var isString bool
-			if name, isString = rawName.(string); !isString {
-				writeJSON(w, http.StatusBadRequest, map[string]string{
-					"error":             "invalid_client_metadata",
-					"error_description": "client_name must be a string",
-				})
-				return
-			}
 		}
 		if regErr := s.dynamicClients.Register(r.Context(), clientID, redirectURIs, name); regErr != nil {
 			s.log.ErrorContext(r.Context(), "broker: register: persist registration failed", "err", regErr)
