@@ -91,6 +91,7 @@ func (p *ProvisioningConfig) validate(fileBackend bool) error {
 		"provisioning.authorityDomain": p.AuthorityDomain,
 		"provisioning.dialAddress":     p.DialAddress,
 		"provisioning.bucketPrefix":    p.BucketPrefix,
+		"provisioning.bucketProject":   p.BucketProject,
 		"provisioning.serverNamespace": p.ServerNamespace,
 		"provisioning.worldsSecret":    p.WorldsSecret,
 		"provisioning.tokensSecret":    p.TokensSecret,

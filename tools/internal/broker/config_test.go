@@ -91,6 +91,16 @@ func writeConfig(t *testing.T, body string) string {
 	return path
 }
 
+// mustReplace guards fixture surgery: a stale needle would silently
+// return the original config and the case would stop covering its branch.
+func mustReplace(t *testing.T, s, old, replacement string) string {
+	t.Helper()
+	if !strings.Contains(s, old) {
+		t.Fatalf("fixture replacement missed: %q not present", old)
+	}
+	return strings.Replace(s, old, replacement, 1)
+}
+
 func TestLoadConfig(t *testing.T) {
 	// applyEnvOverrides reads BROKER_SIGNING_KEY and
 	// OIDC_CLIENT_SECRET from the process environment. Without
@@ -138,8 +148,8 @@ func TestLoadConfig(t *testing.T) {
 		},
 		{
 			name: "no worlds is legal with provisioning enabled",
-			body: strings.Replace(validConfig, validWorldBlock,
-				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  dialAddress: memory.svc:6309\n  bucketPrefix: p-\n  bucketProject: p\n  serverNamespace: ns\n", 1),
+			body: mustReplace(t, validConfig, validWorldBlock,
+				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  dialAddress: memory.svc:6309\n  bucketPrefix: p-\n  bucketProject: p\n  serverNamespace: ns\n"),
 		},
 		{
 			name:    "duplicate world name",

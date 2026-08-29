@@ -57,4 +57,7 @@ tests:
     asserts:
       - contains:
           path: spec.dnsNames
+          content: "RELEASE-NAME-demarkus-knowledge-server.NAMESPACE.svc.cluster.local"
+      - contains:
+          path: spec.dnsNames
           content: "*.RELEASE-NAME-demarkus-knowledge-server.NAMESPACE.svc.cluster.local"
