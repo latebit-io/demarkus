@@ -148,6 +148,9 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, store SecretStore
 	if cfg.Server.RefreshTokensSecret == "" {
 		cfg.Server.RefreshTokensSecret = defaultRefreshTokensSecret
 	}
+	if cfg.Server.DynamicClientsSecret == "" {
+		cfg.Server.DynamicClientsSecret = defaultDynamicClientsSecret
+	}
 	if cfg.Server.RefreshTokenTTL <= 0 {
 		cfg.Server.RefreshTokenTTL = defaultRefreshTokenTTL
 	}

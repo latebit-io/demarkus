@@ -86,7 +86,17 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		name, _ := doc["client_name"].(string)
+		name := ""
+		if rawName, present := doc["client_name"]; present {
+			var isString bool
+			if name, isString = rawName.(string); !isString {
+				writeJSON(w, http.StatusBadRequest, map[string]string{
+					"error":             "invalid_client_metadata",
+					"error_description": "client_name must be a string",
+				})
+				return
+			}
+		}
 		if regErr := s.dynamicClients.Register(r.Context(), clientID, redirectURIs, name); regErr != nil {
 			s.log.ErrorContext(r.Context(), "broker: register: persist registration failed", "err", regErr)
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{

@@ -3,7 +3,6 @@ package broker
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -69,10 +68,6 @@ func decodeDynamicClients(existing []byte) (map[string]dynamicClientRecord, erro
 	return clients, nil
 }
 
-// ErrDynamicClientCapacity is returned when the registration map is
-// full even after pruning expired entries.
-var ErrDynamicClientCapacity = errors.New("broker: dynamic client registry at capacity")
-
 // Register persists a new registration under clientID.
 func (s *DynamicClientStore) Register(ctx context.Context, clientID string, redirectURIs []string, name string) error {
 	now := s.clock().UTC()
@@ -86,8 +81,18 @@ func (s *DynamicClientStore) Register(ctx context.Context, clientID string, redi
 				delete(clients, id)
 			}
 		}
-		if len(clients) >= maxDynamicClients {
-			return nil, ErrDynamicClientCapacity
+		// At capacity, evict the oldest instead of refusing: refusal
+		// would let anonymous churn deny new hosts, while an evicted
+		// live host just re-registers on its next connect.
+		for len(clients) >= maxDynamicClients {
+			oldestID := ""
+			var oldest time.Time
+			for id, record := range clients {
+				if oldestID == "" || record.Created.Before(oldest) {
+					oldestID, oldest = id, record.Created
+				}
+			}
+			delete(clients, oldestID)
 		}
 		clients[clientID] = dynamicClientRecord{
 			RedirectURIs: redirectURIs,

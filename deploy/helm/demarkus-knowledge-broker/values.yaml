@@ -84,10 +84,9 @@ server:
   # chart lifecycle events never invalidate live refresh tokens.
   refreshTokensSecret: ""
 
-  # Secret name for the RFC 7591 dynamic-client registration map
-  # (client_id -> redirect URIs; MCP hosts register their callbacks
-  # here). Default derived from the release name; created with
-  # helm.sh/resource-policy: keep like the refresh-tokens Secret.
+  # RFC 7591 dynamic-client registration map (kept Secret, like
+  # refreshTokensSecret). Renaming it after install orphans existing
+  # registrations; connected MCP hosts must then re-register.
   dynamicClientsSecret: ""
 
   # MCP gateway listener (knowledge-system layer; plan: Broker MCP
