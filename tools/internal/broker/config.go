@@ -126,7 +126,8 @@ func (c *Config) validateStorage() error {
 // broker-state file: two stores mutating one document corrupts it.
 func (c *Config) validateFilePaths() error {
 	seen := map[string]string{
-		filepath.Clean(c.refreshTokensRef().Path): "storage.dir refresh-tokens state",
+		filepath.Clean(c.refreshTokensRef().Path):  "storage.dir refresh-tokens state",
+		filepath.Clean(c.dynamicClientsRef().Path): "storage.dir dynamic-clients state",
 	}
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
@@ -290,6 +291,10 @@ type ServerConfig struct {
 	// universe-onboarding PR4; defaulted in validate when omitted so
 	// existing dev configs upgrade without an explicit value.
 	RefreshTokensSecret string `yaml:"refreshTokensSecret"`
+	// DynamicClientsSecret is the broker-namespace Secret holding the
+	// RFC 7591 registration map (client_id → redirect URIs); written
+	// on /register, read on /oauth/authorize. Defaulted in validate.
+	DynamicClientsSecret string `yaml:"dynamicClientsSecret"`
 	// RefreshTokenTTL is the lifetime of a newly-issued refresh token.
 	// Default 90 days. Tokens past their TTL are rejected at refresh
 	// time and reaped by the periodic Sweeper. Operators tighten this
@@ -802,6 +807,9 @@ func (o *OIDCConfig) validate() error {
 func (s *ServerConfig) applyRefreshDefaults() error {
 	if s.RefreshTokensSecret == "" {
 		s.RefreshTokensSecret = defaultRefreshTokensSecret
+	}
+	if s.DynamicClientsSecret == "" {
+		s.DynamicClientsSecret = defaultDynamicClientsSecret
 	}
 	if s.RefreshTokenTTL == 0 {
 		s.RefreshTokenTTL = defaultRefreshTokenTTL

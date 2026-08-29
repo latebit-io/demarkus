@@ -6,41 +6,9 @@ import (
 	"strings"
 )
 
-// oauthAuthorize implements GET / POST /oauth/authorize — the RFC
-// 6749 §4.1.1 authorization endpoint, scoped to the
-// `response_type=code` + PKCE-S256 flow MCP clients drive against
-// the broker. The handler does not bounce to an IdP directly; the
-// broker is its own AS to the MCP client, and the IdP dance is
-// resumed by /auth/callback via the signed State cookie's
-// AuthCodeID field (mirroring the existing DeviceCode dispatch).
-//
-// Two-phase validation matches RFC 6749 §4.1.2.1: errors that
-// happen BEFORE the redirect_uri is trusted (missing client_id,
-// unacceptable redirect_uri) surface as a JSON 400 directly to the
-// user agent. Errors AFTER trust is established (bad response_type,
-// missing PKCE, store failure) redirect to the client's
-// redirect_uri with `error=...&state=...` so the MCP SDK can surface
-// the failure programmatically.
-//
-// Redirect trust is two-class: a client_id registered in the
-// WebClients registry (confidential web app) must present an exact
-// match against its registered https redirect allowlist; every other
-// client_id is the native/public path and must present a loopback
-// redirect per RFC 8252 §7.3. Whether the grant then requires client
-// authentication at the token endpoint is decided there by the same
-// registry lookup — the auth-code store's client_id binding
-// guarantees the two lookups see the same client.
-//
-// PKCE is required: the broker accepts only `code_challenge_method=
-// S256` and rejects requests missing `code_challenge`. OAuth 2.1
-// guidance + the MCP authorization spec both require this; with no
-// legacy clients to placate, the broker fails closed.
-//
-// Method handling: GET (per RFC 6749 §3.1) is the canonical entry;
-// POST is accepted on the same handler. r.URL.Query() covers both
-// because Go's net/http populates form values on POST too, but we
-// stick to query semantics so signed-state state cookie set here
-// doesn't depend on POST body parsing.
+// oauthAuthorize: RFC 6749 §4.1.1 endpoint, code + PKCE-S256 only;
+// pre-trust errors return JSON 400, post-trust errors redirect. Trust
+// is WebClients allowlist, RFC 7591 registration, or loopback.
 func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
@@ -70,13 +38,19 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if !isLoopbackRedirectURI(redirectURI) {
-		// RFC 8252 §7.3: native apps MUST use loopback. Any other
-		// host is a configuration mistake or an attack; either way
-		// the broker refuses BEFORE the redirect is trusted, so the
-		// error stays on the broker's surface (no 302 to a hostile
-		// host).
-		writeAuthorizeJSONError(w, "invalid_request", "redirect_uri must be loopback (http://127.0.0.1:PORT or http://localhost:PORT)")
-		return
+		// Non-loopback public client: trusted only when an RFC 7591
+		// registration recorded this exact redirect (MCP-host path);
+		// refused BEFORE trust, so no 302 to a hostile host.
+		record, ok, lookupErr := s.dynamicClients.Lookup(r.Context(), clientID)
+		if lookupErr != nil {
+			s.log.ErrorContext(r.Context(), "broker: authorize: dynamic client lookup failed", "err", lookupErr)
+			writeAuthorizeJSONError(w, "server_error", "client registry unavailable; try again")
+			return
+		}
+		if !ok || !record.allowsRedirect(redirectURI) {
+			writeAuthorizeJSONError(w, "invalid_request", "redirect_uri is not registered for this client; register it via the RFC 7591 registration_endpoint or use a loopback redirect")
+			return
+		}
 	}
 
 	// redirect_uri is now trusted. All subsequent errors redirect.
