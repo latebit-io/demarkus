@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -378,13 +379,86 @@ func TestEnsureTenantTombstonedDeniedAfterEmailChange(t *testing.T) {
 	}
 	// Crash the deprovision after phase 1 so the tombstone persists.
 	failing.hook = func() { panic(errAbortMutate) }
+	var recovered any
+	var deprovisionErr error
 	func() {
-		defer func() { _ = recover() }()
-		_, _ = p.DeprovisionTenant(context.Background(), world.Name, false)
+		defer func() { recovered = recover() }()
+		_, deprovisionErr = p.DeprovisionTenant(context.Background(), world.Name, false)
 	}()
+	if recoveredErr, ok := recovered.(error); !ok || !errors.Is(recoveredErr, errAbortMutate) {
+		t.Fatalf("recovered %v (deprovision err %v), want the injected abort panic", recovered, deprovisionErr)
+	}
 
 	if _, err := p.EnsureTenant(context.Background(), movedEveClaims()); !errors.Is(err, ErrTenantDeprovisioning) {
 		t.Fatalf("err = %v, want ErrTenantDeprovisioning", err)
+	}
+}
+
+// TestLegacyDuplicateIdentityResolvesDeterministically: two records for
+// one identity (the pre-pinning orphan bug) resolve identically on both
+// paths; tombstoning the pinned duplicate moves both to the live one.
+func TestLegacyDuplicateIdentityResolvesDeterministically(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	store := newProvisionerStore()
+	p := newTestProvisioner(cfg, store, &fakeBuckets{})
+
+	seedRegistry := func(registry *tenantRegistry) {
+		encoded, err := json.Marshal(registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Mutate(context.Background(), cfg.registryRef(), func([]byte) ([]byte, error) {
+			return encoded, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record := func(email string, deleting bool) tenantRecord {
+		return tenantRecord{
+			Email: email, Issuer: cfg.OIDC.Issuer, Subject: "google|eve-123",
+			WorldID: tenantWorldID(cfg.OIDC.Issuer, "google|eve-123"), Deleting: deleting,
+		}
+	}
+	seedRegistry(&tenantRegistry{Tenants: map[string]tenantRecord{
+		"a-eve-0000": record("eve.adams@example.com", false),
+		"b-eve-1111": record("eve.old@example.com", false),
+	}})
+
+	// Both paths pin the first sorted slug.
+	world, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if world.Name != "a-eve-0000" {
+		t.Errorf("EnsureTenant resolved %q, want the first sorted slug a-eve-0000", world.Name)
+	}
+	w, err := tenantWorldFor(cfg, eveClaims())
+	if err != nil {
+		t.Fatalf("tenantWorldFor: %v", err)
+	}
+	if w.Name != world.Name {
+		t.Errorf("fast path resolved %q, EnsureTenant %q", w.Name, world.Name)
+	}
+
+	// Tombstoning the pinned duplicate (the orphan-cleanup flow) moves
+	// resolution to the live record instead of denying the tenant.
+	seedRegistry(&tenantRegistry{Tenants: map[string]tenantRecord{
+		"a-eve-0000": record("eve.adams@example.com", true),
+		"b-eve-1111": record("eve.old@example.com", false),
+	}})
+	world, err = p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if world.Name != "b-eve-1111" {
+		t.Errorf("EnsureTenant with tombstoned duplicate resolved %q, want b-eve-1111", world.Name)
+	}
+	w, err = tenantWorldFor(cfg, eveClaims())
+	if err != nil {
+		t.Fatalf("tenantWorldFor with tombstoned duplicate: %v", err)
+	}
+	if w.Name != world.Name {
+		t.Errorf("fast path resolved %q, EnsureTenant %q", w.Name, world.Name)
 	}
 }
 

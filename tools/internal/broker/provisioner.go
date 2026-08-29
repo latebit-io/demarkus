@@ -206,30 +206,45 @@ func (p *Provisioner) applySnapshot(registry *tenantRegistry) {
 	p.cfg.SetDynamicWorlds(p.worldsFromRegistry(registry), tenantIndexFromRegistry(registry))
 }
 
-// tenantIndexFromRegistry projects live records to identityKey -> slug;
+// tenantIndexFromRegistry projects live records to identityKey -> slug.
+// First live slug in sorted order wins (matches findTenantByIdentity);
 // tombstoned records stay out so a deprovision denies via the slow path.
 func tenantIndexFromRegistry(registry *tenantRegistry) map[string]string {
 	index := make(map[string]string, len(registry.Tenants))
-	for slug, record := range registry.Tenants {
+	for _, slug := range sortedSlugs(registry) {
+		record := registry.Tenants[slug]
 		if record.Deleting {
 			continue
 		}
-		index[identityKey(record.Issuer, record.Subject)] = slug
+		key := identityKey(record.Issuer, record.Subject)
+		if _, ok := index[key]; !ok {
+			index[key] = slug
+		}
 	}
 	return index
 }
 
 // findTenantByIdentity resolves a registry record by stable identity;
-// the returned slug is the world name pinned at provision time. Slug
-// order keeps legacy duplicate-identity registries deterministic.
+// the slug is the world name pinned at provision time. First sorted
+// live slug wins (matches the index); tombstoned only when none live.
 func findTenantByIdentity(registry *tenantRegistry, issuer, subject string) (string, tenantRecord, bool) {
+	var tombSlug string
+	var tombRecord tenantRecord
+	tombFound := false
 	for _, slug := range sortedSlugs(registry) {
 		record := registry.Tenants[slug]
-		if record.Issuer == issuer && record.Subject == subject {
-			return slug, record, true
+		if record.Issuer != issuer || record.Subject != subject {
+			continue
 		}
+		if record.Deleting {
+			if !tombFound {
+				tombSlug, tombRecord, tombFound = slug, record, true
+			}
+			continue
+		}
+		return slug, record, true
 	}
-	return "", tenantRecord{}, false
+	return tombSlug, tombRecord, tombFound
 }
 
 func (c *Config) registryRef() SecretRef {
