@@ -82,6 +82,8 @@ The memory and knowledge tiers sit on one foundation: the **Mark Protocol**, ver
 - **Graph-aware**: persistent document graph with backlink queries across sessions
 - **OKF-compatible**: interoperates with [Open Knowledge Format](/reference/markdown/#open-knowledge-format-okf-compatibility) v0.1
 
+The servers are **memory storage engines**: versioned, hash-chained document stores kept deliberately simple. Brokers add the service tier: identity, tenancy, and one HTTPS front door. The knowledge broker composes many worlds into an organizational system, and the memory broker serves each identity a private hosted soul from any MCP host (Claude Desktop, ChatGPT, Cursor). The intelligence lives in the agent: lookup, routing, and graph traversal.
+
 ## Tools
 
 | Tool | Purpose |
@@ -94,6 +96,7 @@ The memory and knowledge tiers sit on one foundation: the **Mark Protocol**, ver
 | `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |
 | `demarkus-agent` | Indexing agent: crawls worlds, aggregates the graph, publishes hub indexes |
 | `demarkus-broker` | OIDC-fronted MCP gateway composing many worlds into one system |
+| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private soul world per identity (memory as a service) |
 | `demarkus-library` | Web reading room with the AI librarian |
 | `demarkus-token` | Generate capability-based auth tokens |
 | `demarkus-publish` | Write directly to the store for read-only server installs |

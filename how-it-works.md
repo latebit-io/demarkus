@@ -28,7 +28,8 @@ it promotes it to the shared catalog. Three stores, one flow.
 
 The **soul** is your private draft tier. The **knowledge system** is the shared,
 authoritative one. The [library](/library/) is a read surface over either, not a
-third store.
+third store. A soul can live on a local plugin-managed server or as a hosted
+world behind the memory broker; the flow is the same either way.
 
 ## It is the agent, not you
 

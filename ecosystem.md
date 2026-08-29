@@ -128,6 +128,7 @@ Published artifacts carry a version retention cap (newest 20 by default) so a ge
 | `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |
 | `demarkus-agent` | Indexing agent: crawls worlds, aggregates the graph, publishes hub indexes |
 | `demarkus-broker` | OIDC-fronted MCP gateway composing many worlds into one system |
+| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private soul world per identity (memory as a service) |
 | `demarkus-library` | Web reading room with the AI librarian |
 | `demarkus-token` | Generate capability-based auth tokens |
 | `demarkus-publish` | Write directly to the store for read-only server installs |
