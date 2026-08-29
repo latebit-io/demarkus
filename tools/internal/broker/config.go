@@ -703,8 +703,10 @@ func (c *Config) validate() error {
 	if err := c.OIDC.validate(); err != nil {
 		return err
 	}
-	if len(c.Worlds) == 0 {
-		return fmt.Errorf("at least one world is required")
+	// Zero static worlds is legal when provisioning is enabled: the
+	// whole world set then arrives dynamically via the registry.
+	if len(c.Worlds) == 0 && !c.Provisioning.Enabled() {
+		return fmt.Errorf("at least one world is required (or enable provisioning)")
 	}
 	seen := make(map[string]bool, len(c.Worlds))
 	seenSecretRefs := make(map[[2]string]string, len(c.Worlds))

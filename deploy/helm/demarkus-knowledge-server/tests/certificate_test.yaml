@@ -47,3 +47,14 @@ tests:
       - equal:
           path: metadata.annotations["example.com/owner"]
           value: platform
+
+  - it: covers dynamic tenant authorities with a service wildcard
+    set:
+      tls.existingSecret: ""
+      tls.certManager.enabled: true
+      worlds: []
+      dynamicWorlds.enabled: true
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "*.RELEASE-NAME-demarkus-knowledge-server.NAMESPACE.svc.cluster.local"

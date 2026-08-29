@@ -137,6 +137,11 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "at least one world is required",
 		},
 		{
+			name: "no worlds is legal with provisioning enabled",
+			body: strings.Replace(validConfig, validWorldBlock,
+				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  dialAddress: memory.svc:6309\n  bucketPrefix: p-\n  bucketProject: p\n  serverNamespace: ns\n", 1),
+		},
+		{
 			name:    "duplicate world name",
 			body:    validConfig + "  - name: team-a\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    defaultToken:\n      paths: [\"/x\"]\n",
 			wantErr: `duplicate name "team-a"`,
