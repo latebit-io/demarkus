@@ -1,6 +1,6 @@
 {
   "name": "demarkus-opencode-knowledge",
-  "version": "0.5.79",
+  "version": "0.5.80",
   "description": "Join an organizational demarkus knowledge system from OpenCode. Registers broker-backed remote MCP servers with OAuth, injects catalog guidance, and enforces knowledge publishing policy.",
   "author": "latebit",
   "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/opencode-knowledge",
