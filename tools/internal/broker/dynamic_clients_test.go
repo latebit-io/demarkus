@@ -1,11 +1,14 @@
 package broker
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -86,5 +89,69 @@ func TestRegisterRejectsInvalidRedirectURIs(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("register %s = %d, want 400", body, resp.StatusCode)
 		}
+	}
+}
+
+// Per-registration shape bounds keep the count and byte caps honest.
+func TestRegisterRejectsOversizedMetadata(t *testing.T) {
+	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
+	client := testClient(srv)
+
+	manyURIs := make([]string, maxRedirectURIsPerClient+1)
+	for i := range manyURIs {
+		manyURIs[i] = fmt.Sprintf(`"https://host.example/cb%d"`, i)
+	}
+	longURI := "https://host.example/" + strings.Repeat("a", maxRedirectURILen)
+	longName := strings.Repeat("n", maxClientNameLen+1)
+	for _, body := range []string{
+		`{"redirect_uris":[` + strings.Join(manyURIs, ",") + `]}`,
+		`{"redirect_uris":["` + longURI + `"]}`,
+		`{"client_name":"` + longName + `","redirect_uris":["https://host.example/cb"]}`,
+	} {
+		resp, err := client.Post(srv.URL+"/register", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("register: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("oversized registration = %d, want 400", resp.StatusCode)
+		}
+	}
+}
+
+// The serialized map must stay under the byte cap: max-size hostile
+// registrations trigger oldest-first eviction, never unbounded growth.
+func TestDynamicClientStoreEnforcesByteCap(t *testing.T) {
+	cfg := testConfig()
+	cfg.Server.DynamicClientsSecret = "dyn-clients"
+	clientset := fake.NewSimpleClientset()
+	store := NewDynamicClientStore(cfg, NewK8sSecretStore(clientset))
+
+	uris := make([]string, maxRedirectURIsPerClient)
+	for i := range uris {
+		uris[i] = "https://host.example/" + strings.Repeat("x", maxRedirectURILen-30) + fmt.Sprint(i)
+	}
+	// Enough max-size records to exceed the byte cap several times over.
+	n := maxDynamicClientsBytes/(maxRedirectURIsPerClient*maxRedirectURILen) + 20
+	for i := range n {
+		if err := store.Register(context.Background(), fmt.Sprintf("client-%04d", i), uris, strings.Repeat("n", maxClientNameLen)); err != nil {
+			t.Fatalf("register %d: %v", i, err)
+		}
+	}
+
+	secret, err := clientset.CoreV1().Secrets(cfg.Server.BrokerNamespace).Get(context.Background(), "dyn-clients", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read secret: %v", err)
+	}
+	payload := secret.Data[DynamicClientsSecretKey]
+	if len(payload) > maxDynamicClientsBytes {
+		t.Errorf("serialized map = %d bytes, want <= %d", len(payload), maxDynamicClientsBytes)
+	}
+	// Oldest evicted, newest kept.
+	if _, found, _ := store.Lookup(context.Background(), "client-0000"); found {
+		t.Error("oldest registration survived byte-cap eviction")
+	}
+	if _, found, _ := store.Lookup(context.Background(), fmt.Sprintf("client-%04d", n-1)); !found {
+		t.Error("newest registration missing after eviction")
 	}
 }

@@ -79,10 +79,10 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	name := ""
 	if rawName, present := doc["client_name"]; present {
 		var isString bool
-		if name, isString = rawName.(string); !isString {
+		if name, isString = rawName.(string); !isString || len(name) > maxClientNameLen {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error":             "invalid_client_metadata",
-				"error_description": "client_name must be a string",
+				"error_description": fmt.Sprintf("client_name must be a string of at most %d bytes", maxClientNameLen),
 			})
 			return
 		}
@@ -126,11 +126,17 @@ func parseRedirectURIs(raw any) ([]string, error) {
 	if !ok || len(list) == 0 {
 		return nil, fmt.Errorf("redirect_uris must be a non-empty array of strings")
 	}
+	if len(list) > maxRedirectURIsPerClient {
+		return nil, fmt.Errorf("redirect_uris must not exceed %d entries", maxRedirectURIsPerClient)
+	}
 	uris := make([]string, 0, len(list))
 	for _, entry := range list {
 		u, ok := entry.(string)
 		if !ok {
 			return nil, fmt.Errorf("redirect_uris must be a non-empty array of strings")
+		}
+		if len(u) > maxRedirectURILen {
+			return nil, fmt.Errorf("redirect_uri must not exceed %d bytes", maxRedirectURILen)
 		}
 		if err := validateClientRedirectURI(u); err != nil {
 			return nil, err

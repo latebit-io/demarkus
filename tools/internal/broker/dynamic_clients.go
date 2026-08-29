@@ -25,6 +25,18 @@ const DynamicClientsSecretKey = "dynamic-clients.json"
 // unauthenticated storage-growth surface.
 const maxDynamicClients = 2000
 
+// maxDynamicClientsBytes caps the SERIALIZED map, well under the 1MiB
+// Kubernetes Secret limit: record count alone cannot bound bytes.
+const maxDynamicClientsBytes = 512 << 10
+
+// Per-registration shape bounds; count and byte caps only hold when a
+// single anonymous registration cannot be arbitrarily large.
+const (
+	maxRedirectURIsPerClient = 8
+	maxRedirectURILen        = 512
+	maxClientNameLen         = 128
+)
+
 // dynamicClientTTL expires registrations. MCP hosts re-register
 // cheaply on their next connect, so expiry only costs a re-dance.
 const dynamicClientTTL = 90 * 24 * time.Hour
@@ -81,25 +93,37 @@ func (s *DynamicClientStore) Register(ctx context.Context, clientID string, redi
 				delete(clients, id)
 			}
 		}
-		// At capacity, evict the oldest instead of refusing: refusal
-		// would let anonymous churn deny new hosts, while an evicted
-		// live host just re-registers on its next connect.
-		for len(clients) >= maxDynamicClients {
-			oldestID := ""
-			var oldest time.Time
-			for id, record := range clients {
-				if oldestID == "" || record.Created.Before(oldest) {
-					oldestID, oldest = id, record.Created
-				}
-			}
-			delete(clients, oldestID)
-		}
 		clients[clientID] = dynamicClientRecord{
 			RedirectURIs: redirectURIs,
 			ClientName:   name,
 			Created:      now,
 		}
-		return json.Marshal(clients)
+		// Over capacity (count OR serialized bytes), evict oldest
+		// rather than refuse: refusal lets anonymous churn deny new
+		// hosts; an evicted live host re-registers on next connect.
+		for {
+			encoded, encErr := json.Marshal(clients)
+			if encErr != nil {
+				return nil, encErr
+			}
+			if len(clients) <= maxDynamicClients && len(encoded) <= maxDynamicClientsBytes {
+				return encoded, nil
+			}
+			oldestID := ""
+			var oldest time.Time
+			for id, record := range clients {
+				if id == clientID {
+					continue // never evict the registration being added
+				}
+				if oldestID == "" || record.Created.Before(oldest) {
+					oldestID, oldest = id, record.Created
+				}
+			}
+			if oldestID == "" {
+				return encoded, nil // only the new record remains
+			}
+			delete(clients, oldestID)
+		}
 	})
 }
 
