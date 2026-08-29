@@ -43,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 - `demarkus-server`, `demarkus-token`, `demarkus-publish` (server releases)
 - `demarkus`, `demarkus-tui`, `demarkus-mcp` (client releases)
-- `demarkus-broker` and `demarkus-library`, when installed via `--with-broker` / `--with-library`
+- `demarkus-knowledge-broker` and `demarkus-library`, when installed via `--with-broker` / `--with-library`
 - `demarkus-install` (the update helper itself)
 
 ## What is preserved

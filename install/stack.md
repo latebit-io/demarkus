@@ -21,7 +21,7 @@ No flags, no DNS setup, nothing to sign up for.
 | Component | Role |
 |---|---|
 | `demarkus-server` | The world: versioned markdown over QUIC |
-| `demarkus-broker` | OIDC-fronted MCP gateway; agents join here |
+| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway; agents join here |
 | `demarkus-library` | Reading room, plus the AI librarian if you supply a key |
 | `demarkus-agent` | Indexing agent; republishes hub indexes and the link graph every 6 hours |
 | Authelia | Self-hosted identity provider |

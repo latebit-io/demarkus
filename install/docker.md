@@ -119,7 +119,7 @@ docker compose up -d
 ## Notes
 
 - The image is built `FROM scratch`: no shell, no OS, just the `demarkus-server` and `demarkus` binaries. Keep this in mind for debugging.
-- Every release also publishes `demarkus-server-pg`, `demarkus-knowledge-server`, `demarkus-broker`, and `demarkus-agent` images, plus Helm charts at `oci://ghcr.io/latebit-io/charts`.
+- Every release also publishes `demarkus-server-pg`, `demarkus-knowledge-server`, `demarkus-knowledge-broker`, `demarkus-memory-broker`, and `demarkus-agent` images, plus Helm charts at `oci://ghcr.io/latebit-io/charts`.
 - Content directory and tokens file live on the host via volume mounts, so they persist across container restarts and upgrades.
 - The image exposes UDP port 6309 only. No HTTP, no healthcheck endpoint over TCP.
 
