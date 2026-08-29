@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -15,8 +16,10 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // provisionerStore backs provisioner tests with the real Kubernetes
@@ -185,6 +188,277 @@ func TestEnsureTenantProvisionsAndConverges(t *testing.T) {
 	registry := string(store.get(cfg.registryRef()))
 	if strings.Count(registry, `"email"`) != 1 {
 		t.Errorf("registry has duplicate tenants:\n%s", registry)
+	}
+}
+
+// movedEveClaims is eve after an email change touching both the local
+// part and the domain: the recomputed slug would differ entirely.
+func movedEveClaims() *Claims {
+	return &Claims{Subject: "google|eve-123", Email: "Eve.Moved@elsewhere.io", EmailVerified: true}
+}
+
+// registryUpdateCount counts Secret update writes against the tenant
+// registry, so tests can assert exactly when a refresh persists.
+func registryUpdateCount(store *provisionerStore, cfg *Config) int {
+	count := 0
+	for _, action := range store.clientset.Actions() {
+		update, ok := action.(k8stesting.UpdateAction)
+		if !ok || action.GetVerb() != "update" {
+			continue
+		}
+		secret, ok := update.GetObject().(*corev1.Secret)
+		if !ok || secret.Name != cfg.Provisioning.RegistrySecret {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// TestEnsureTenantEmailChangeKeepsWorld: an email change (new local
+// part AND domain) resolves to the ORIGINAL world; no second world
+// appears anywhere and the record's email is refreshed.
+func TestEnsureTenantEmailChangeKeepsWorld(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	store := newProvisionerStore()
+	p := newTestProvisioner(cfg, store, &fakeBuckets{})
+	original, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	world, err := p.EnsureTenant(context.Background(), movedEveClaims())
+	if err != nil {
+		t.Fatalf("EnsureTenant after email change: %v", err)
+	}
+	if world.Name != original.Name {
+		t.Errorf("email change moved the world: %q -> %q", original.Name, world.Name)
+	}
+	if len(world.Allow.Emails) != 1 || world.Allow.Emails[0] != "eve.moved@elsewhere.io" {
+		t.Errorf("returned world allow = %+v, want the new canonical email", world.Allow)
+	}
+
+	registry := string(store.get(cfg.registryRef()))
+	if strings.Count(registry, `"email"`) != 1 {
+		t.Errorf("email change duplicated the tenant:\n%s", registry)
+	}
+	if !strings.Contains(registry, "eve.moved@elsewhere.io") || strings.Contains(registry, "eve.adams@example.com") {
+		t.Errorf("record email not refreshed:\n%s", registry)
+	}
+	fragment := string(store.get(cfg.worldsFragmentRef()))
+	if strings.Count(fragment, "name: ") != 1 {
+		t.Errorf("email change grew the fragment:\n%s", fragment)
+	}
+	// Dynamic world set converged on the new email for this pod.
+	w, ok := cfg.FindWorld(original.Name)
+	if !ok {
+		t.Fatal("original world missing from dynamic set")
+	}
+	if len(w.Allow.Emails) != 1 || w.Allow.Emails[0] != "eve.moved@elsewhere.io" {
+		t.Errorf("dynamic world allow = %+v, want the new email", w.Allow)
+	}
+}
+
+// TestEnsureTenantEmailRefreshOnceThenFastPath: the refresh writes the
+// registry exactly once, after which tenantWorldFor resolves the tenant
+// without EnsureTenant.
+func TestEnsureTenantEmailRefreshOnceThenFastPath(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	store := newProvisionerStore()
+	p := newTestProvisioner(cfg, store, &fakeBuckets{})
+	if _, err := p.EnsureTenant(context.Background(), eveClaims()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stale record: identity index hits but Allow rejects the new email,
+	// denying so the slow path runs once and refreshes.
+	if _, err := tenantWorldFor(cfg, movedEveClaims()); !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("pre-refresh tenantWorldFor err = %v, want ErrNotAuthorized", err)
+	}
+
+	before := registryUpdateCount(store, cfg)
+	world, err := p.EnsureTenant(context.Background(), movedEveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := registryUpdateCount(store, cfg); got != before+1 {
+		t.Errorf("registry updates during refresh = %d, want exactly 1", got-before)
+	}
+
+	// Fast path: the resolver answers by identity index, no provisioner.
+	w, err := tenantWorldFor(cfg, movedEveClaims())
+	if err != nil {
+		t.Fatalf("post-refresh tenantWorldFor: %v", err)
+	}
+	if w.Name != world.Name {
+		t.Errorf("fast path world = %q, want %q", w.Name, world.Name)
+	}
+
+	// A repeat EnsureTenant is a no-op on the registry.
+	after := registryUpdateCount(store, cfg)
+	if _, err := p.EnsureTenant(context.Background(), movedEveClaims()); err != nil {
+		t.Fatal(err)
+	}
+	if got := registryUpdateCount(store, cfg); got != after {
+		t.Errorf("converged EnsureTenant wrote the registry %d more times", got-after)
+	}
+}
+
+// TestEnsureTenantSharedLocalPartDistinctWorlds: two identities whose
+// emails share a local part keep distinct worlds and resolve to their
+// own.
+func TestEnsureTenantSharedLocalPartDistinctWorlds(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	store := newProvisionerStore()
+	p := newTestProvisioner(cfg, store, &fakeBuckets{})
+	eveWorld, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	twin := &Claims{Subject: "google|mallory", Email: "eve.adams@other.org", EmailVerified: true}
+	twinWorld, err := p.EnsureTenant(context.Background(), twin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if twinWorld.Name == eveWorld.Name {
+		t.Fatalf("shared local part collapsed two identities into %q", eveWorld.Name)
+	}
+	w, err := tenantWorldFor(cfg, twin)
+	if err != nil {
+		t.Fatalf("tenantWorldFor(twin): %v", err)
+	}
+	if w.Name != twinWorld.Name {
+		t.Errorf("twin resolved to %q, want %q", w.Name, twinWorld.Name)
+	}
+}
+
+// TestEnsureTenantRaceEmailChangeConverges: two provisioners racing on
+// one identity, one carrying a changed email, converge on one slug.
+func TestEnsureTenantRaceEmailChangeConverges(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	raw := newProvisionerStore()
+	hooked := &hookedStore{SecretStore: raw, ref: cfg.registryRef()}
+	p := newTestProvisioner(cfg, hooked, &fakeBuckets{})
+	sibling := newTestProvisioner(provisioningTestConfig(ProvisionOpen), raw, &fakeBuckets{})
+
+	// Right before p's registry mutate: the sibling provisions eve under
+	// her original email, so p's create decision must become a hit.
+	var originalWorld WorldConfig
+	hooked.hook = func() {
+		var hookErr error
+		if originalWorld, hookErr = sibling.EnsureTenant(context.Background(), eveClaims()); hookErr != nil {
+			t.Errorf("racing EnsureTenant(original email): %v", hookErr)
+		}
+	}
+	world, err := p.EnsureTenant(context.Background(), movedEveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if world.Name != originalWorld.Name {
+		t.Errorf("race produced two slugs: %q vs %q", world.Name, originalWorld.Name)
+	}
+	registry := string(raw.get(cfg.registryRef()))
+	if strings.Count(registry, `"email"`) != 1 {
+		t.Errorf("race duplicated the tenant:\n%s", registry)
+	}
+	if !strings.Contains(registry, "eve.moved@elsewhere.io") {
+		t.Errorf("race lost the email refresh:\n%s", registry)
+	}
+}
+
+// TestEnsureTenantTombstonedDeniedAfterEmailChange: the tombstone still
+// blocks re-provisioning when the caller's email has changed.
+func TestEnsureTenantTombstonedDeniedAfterEmailChange(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	raw := newProvisionerStore()
+	failing := &hookedStore{SecretStore: raw, ref: cfg.worldsFragmentRef()}
+	p := newTestProvisioner(cfg, failing, &fakeBuckets{})
+	world, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Crash the deprovision after phase 1 so the tombstone persists.
+	failing.hook = func() { panic(errAbortMutate) }
+	var recovered any
+	var deprovisionErr error
+	func() {
+		defer func() { recovered = recover() }()
+		_, deprovisionErr = p.DeprovisionTenant(context.Background(), world.Name, false)
+	}()
+	if recoveredErr, ok := recovered.(error); !ok || !errors.Is(recoveredErr, errAbortMutate) {
+		t.Fatalf("recovered %v (deprovision err %v), want the injected abort panic", recovered, deprovisionErr)
+	}
+
+	if _, err := p.EnsureTenant(context.Background(), movedEveClaims()); !errors.Is(err, ErrTenantDeprovisioning) {
+		t.Fatalf("err = %v, want ErrTenantDeprovisioning", err)
+	}
+}
+
+// TestLegacyDuplicateIdentityResolvesDeterministically: two records for
+// one identity (the pre-pinning orphan bug) resolve identically on both
+// paths; tombstoning the pinned duplicate moves both to the live one.
+func TestLegacyDuplicateIdentityResolvesDeterministically(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	store := newProvisionerStore()
+	p := newTestProvisioner(cfg, store, &fakeBuckets{})
+
+	seedRegistry := func(registry *tenantRegistry) {
+		encoded, err := json.Marshal(registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Mutate(context.Background(), cfg.registryRef(), func([]byte) ([]byte, error) {
+			return encoded, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record := func(email string, deleting bool) tenantRecord {
+		return tenantRecord{
+			Email: email, Issuer: cfg.OIDC.Issuer, Subject: "google|eve-123",
+			WorldID: tenantWorldID(cfg.OIDC.Issuer, "google|eve-123"), Deleting: deleting,
+		}
+	}
+	seedRegistry(&tenantRegistry{Tenants: map[string]tenantRecord{
+		"a-eve-0000": record("eve.adams@example.com", false),
+		"b-eve-1111": record("eve.old@example.com", false),
+	}})
+
+	// Both paths pin the first sorted slug.
+	world, err := p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if world.Name != "a-eve-0000" {
+		t.Errorf("EnsureTenant resolved %q, want the first sorted slug a-eve-0000", world.Name)
+	}
+	w, err := tenantWorldFor(cfg, eveClaims())
+	if err != nil {
+		t.Fatalf("tenantWorldFor: %v", err)
+	}
+	if w.Name != world.Name {
+		t.Errorf("fast path resolved %q, EnsureTenant %q", w.Name, world.Name)
+	}
+
+	// Tombstoning the pinned duplicate (the orphan-cleanup flow) moves
+	// resolution to the live record instead of denying the tenant.
+	seedRegistry(&tenantRegistry{Tenants: map[string]tenantRecord{
+		"a-eve-0000": record("eve.adams@example.com", true),
+		"b-eve-1111": record("eve.old@example.com", false),
+	}})
+	world, err = p.EnsureTenant(context.Background(), eveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if world.Name != "b-eve-1111" {
+		t.Errorf("EnsureTenant with tombstoned duplicate resolved %q, want b-eve-1111", world.Name)
+	}
+	w, err = tenantWorldFor(cfg, eveClaims())
+	if err != nil {
+		t.Fatalf("tenantWorldFor with tombstoned duplicate: %v", err)
+	}
+	if w.Name != world.Name {
+		t.Errorf("fast path resolved %q, EnsureTenant %q", w.Name, world.Name)
 	}
 }
 

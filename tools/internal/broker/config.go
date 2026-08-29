@@ -35,6 +35,9 @@ type Config struct {
 	// goes through AllWorlds / FindWorld so both sets are visible.
 	dynamicMu     sync.RWMutex
 	dynamicWorlds []WorldConfig
+	// dynamicTenants maps identityKey(issuer, subject) to the pinned
+	// slug, so tenant resolution survives email changes.
+	dynamicTenants map[string]string
 }
 
 // AllWorlds returns a snapshot of static plus dynamic worlds. The
@@ -65,9 +68,10 @@ func (c *Config) FindWorld(name string) (WorldConfig, bool) {
 	return WorldConfig{}, false
 }
 
-// SetDynamicWorlds replaces the dynamic tenant set. Static names win on
-// collision: a registry entry shadowing a static world is dropped.
-func (c *Config) SetDynamicWorlds(worlds []WorldConfig) {
+// SetDynamicWorlds replaces the dynamic tenant set and its identity
+// index (identityKey -> slug). Static names win on collision: a
+// registry entry shadowing a static world is dropped from both.
+func (c *Config) SetDynamicWorlds(worlds []WorldConfig, tenants map[string]string) {
 	static := make(map[string]bool, len(c.Worlds))
 	for j := range c.Worlds {
 		static[c.Worlds[j].Name] = true
@@ -78,9 +82,25 @@ func (c *Config) SetDynamicWorlds(worlds []WorldConfig) {
 			filtered = append(filtered, worlds[j])
 		}
 	}
+	index := make(map[string]string, len(tenants))
+	for key, slug := range tenants {
+		if !static[slug] {
+			index[key] = slug
+		}
+	}
 	c.dynamicMu.Lock()
 	c.dynamicWorlds = filtered
+	c.dynamicTenants = index
 	c.dynamicMu.Unlock()
+}
+
+// tenantSlugForIdentity resolves a provisioned identity to its pinned
+// world slug via the dynamic tenant index.
+func (c *Config) tenantSlugForIdentity(key string) (string, bool) {
+	c.dynamicMu.RLock()
+	defer c.dynamicMu.RUnlock()
+	slug, ok := c.dynamicTenants[key]
+	return slug, ok
 }
 
 // StorageConfig selects the credential-persistence backend. "kubernetes"
