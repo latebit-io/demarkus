@@ -148,10 +148,18 @@ func TestDynamicClientStoreEnforcesByteCap(t *testing.T) {
 		t.Errorf("serialized map = %d bytes, want <= %d", len(payload), maxDynamicClientsBytes)
 	}
 	// Oldest evicted, newest kept.
-	if _, found, _ := store.Lookup(context.Background(), "client-0000"); found {
+	_, found, err := store.Lookup(context.Background(), "client-0000")
+	if err != nil {
+		t.Fatalf("lookup oldest: %v", err)
+	}
+	if found {
 		t.Error("oldest registration survived byte-cap eviction")
 	}
-	if _, found, _ := store.Lookup(context.Background(), fmt.Sprintf("client-%04d", n-1)); !found {
+	_, found, err = store.Lookup(context.Background(), fmt.Sprintf("client-%04d", n-1))
+	if err != nil {
+		t.Fatalf("lookup newest: %v", err)
+	}
+	if !found {
 		t.Error("newest registration missing after eviction")
 	}
 }
