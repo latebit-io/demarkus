@@ -200,9 +200,36 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 	return found, nil
 }
 
-// applySnapshot publishes a registry snapshot to this pod's world set.
+// applySnapshot publishes a registry snapshot to this pod's world set
+// and identity index.
 func (p *Provisioner) applySnapshot(registry *tenantRegistry) {
-	p.cfg.SetDynamicWorlds(p.worldsFromRegistry(registry))
+	p.cfg.SetDynamicWorlds(p.worldsFromRegistry(registry), tenantIndexFromRegistry(registry))
+}
+
+// tenantIndexFromRegistry projects live records to identityKey -> slug;
+// tombstoned records stay out so a deprovision denies via the slow path.
+func tenantIndexFromRegistry(registry *tenantRegistry) map[string]string {
+	index := make(map[string]string, len(registry.Tenants))
+	for slug, record := range registry.Tenants {
+		if record.Deleting {
+			continue
+		}
+		index[identityKey(record.Issuer, record.Subject)] = slug
+	}
+	return index
+}
+
+// findTenantByIdentity resolves a registry record by stable identity;
+// the returned slug is the world name pinned at provision time. Slug
+// order keeps legacy duplicate-identity registries deterministic.
+func findTenantByIdentity(registry *tenantRegistry, issuer, subject string) (string, tenantRecord, bool) {
+	for _, slug := range sortedSlugs(registry) {
+		record := registry.Tenants[slug]
+		if record.Issuer == issuer && record.Subject == subject {
+			return slug, record, true
+		}
+	}
+	return "", tenantRecord{}, false
 }
 
 func (c *Config) registryRef() SecretRef {
@@ -292,7 +319,7 @@ func (p *Provisioner) admits(claims *Claims) error {
 
 // EnsureTenant provisions (or converges) the caller's world and returns
 // its broker-side WorldConfig. Every step is idempotent and keyed by
-// the identity-derived slug; any replica can re-run it safely.
+// the slug pinned in the registry; any replica can re-run it safely.
 func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldConfig, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -304,21 +331,27 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 
 	email := canonicalEmail(claims.Email)
 	issuer := p.cfg.OIDC.Issuer
-	slug := tenantSlug(issuer, claims.Subject, email)
-	worldID := tenantWorldID(issuer, claims.Subject)
 
-	// Step 1: registry entry (the create decision lives here, under the
-	// Secret's optimistic concurrency).
+	// Step 1: registry entry, under the Secret's optimistic concurrency.
+	// Lookup is by identity, never the recomputed slug: an email change
+	// refreshes the record instead of orphaning the world.
 	var snapshot tenantRegistry
+	var slug string
 	created := false
 	err := p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
 		registry, decodeErr := decodeRegistry(existing)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		if record, ok := registry.Tenants[slug]; ok {
+		created = false
+		if found, record, ok := findTenantByIdentity(&registry, issuer, claims.Subject); ok {
 			if record.Deleting {
 				return nil, ErrTenantDeprovisioning
+			}
+			slug = found
+			if record.Email != email {
+				record.Email = email
+				registry.Tenants[slug] = record
 			}
 		} else {
 			if gateErr := p.admits(claims); gateErr != nil {
@@ -328,11 +361,12 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 			if maxTenants > 0 && len(registry.Tenants) >= maxTenants {
 				return nil, ErrTenantCapacity
 			}
+			slug = tenantSlug(issuer, claims.Subject, email)
 			registry.Tenants[slug] = tenantRecord{
 				Email:   email,
 				Issuer:  issuer,
 				Subject: claims.Subject,
-				WorldID: worldID,
+				WorldID: tenantWorldID(issuer, claims.Subject),
 				Created: p.clock().UTC().Format(time.RFC3339),
 			}
 			created = true

@@ -91,6 +91,15 @@ func (errAmbiguousTenant) Error() string {
 // (identity = world): zero matches is ErrNotAuthorized, two or more is a
 // provisioning error and denies closed rather than guessing.
 func tenantWorldFor(cfg *Config, claims *Claims) (WorldConfig, error) {
+	// Identity index first: a provisioned tenant owns its pinned slug. A
+	// hit whose Allow rejects the caller means the record's email is
+	// stale; fail so EnsureTenant's slow path refreshes it.
+	if slug, ok := cfg.tenantSlugForIdentity(identityKey(cfg.OIDC.Issuer, claims.Subject)); ok {
+		if w, found := cfg.FindWorld(slug); found && worldAllows(&w.Allow, claims) {
+			return w, nil
+		}
+		return WorldConfig{}, ErrNotAuthorized
+	}
 	var match *WorldConfig
 	worlds := cfg.AllWorlds()
 	for j := range worlds {

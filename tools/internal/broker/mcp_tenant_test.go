@@ -457,6 +457,46 @@ func TestTenantGateProvisionsFirstArrival(t *testing.T) {
 	}
 }
 
+// TestTenantGateEmailChangeResolvesSameWorld: after an email change the
+// gate serves the ORIGINAL world (one slow-path refresh, then the
+// resolver fast path with no further EnsureTenant).
+func TestTenantGateEmailChangeResolvesSameWorld(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	d := seededDispatcher()
+	g, buckets := memoryGatewayWithProvisioning(t, cfg, d)
+	h := g.tenantGate(g.toolHandlers()["mark_worlds"])
+
+	res, err := h(ctxWithClaims(context.Background(), eveClaims()), callToolReq("mark_worlds", nil))
+	if err != nil || res.IsError {
+		t.Fatalf("first arrival: err=%v res=%s", err, toolResultText(t, res))
+	}
+	slug := tenantSlug(cfg.OIDC.Issuer, "google|eve-123", "eve.adams@example.com")
+
+	moved := &Claims{Subject: "google|eve-123", Email: "Eve.Moved@elsewhere.io", EmailVerified: true}
+	res, err = h(ctxWithClaims(context.Background(), moved), callToolReq("mark_worlds", nil))
+	if err != nil || res.IsError {
+		t.Fatalf("post-change call: err=%v res=%s", err, toolResultText(t, res))
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, slug) {
+		t.Errorf("mark_worlds after email change = %q, want the original slug %q", text, slug)
+	}
+	if strings.Contains(text, "eve-moved-") {
+		t.Errorf("email change provisioned a second world: %q", text)
+	}
+
+	// Third call must ride the resolver fast path: the refresh already
+	// converged, so EnsureTenant (and its bucket re-ensure) stays idle.
+	ensured := len(buckets.created)
+	res, err = h(ctxWithClaims(context.Background(), moved), callToolReq("mark_worlds", nil))
+	if err != nil || res.IsError {
+		t.Fatalf("fast-path call: err=%v res=%s", err, toolResultText(t, res))
+	}
+	if len(buckets.created) != ensured {
+		t.Errorf("fast path re-ran EnsureTenant: bucket ensures %d -> %d", ensured, len(buckets.created))
+	}
+}
+
 // TestTenantGateProvisioningNotReadyMessage: when the backend has not
 // picked the new world up yet, the caller gets a clear retry message
 // instead of a transport error.
