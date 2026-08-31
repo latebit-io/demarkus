@@ -9,12 +9,20 @@ stores each world in its own pre-provisioned GCS bucket.
 - Kubernetes 1.25+
 - GKE Workload Identity, or an existing Kubernetes ServiceAccount with equivalent identity
 - One initialized GCS bucket and immutable world ID per world
-- One existing token Secret per world
 - One existing multi-SAN TLS Secret, or cert-manager and a suitable Issuer
 - Policy document at `/.well-known/demarkus/policy.md` in every bucket
 
-The chart never creates buckets, PVCs, token Secrets, or TLS Secrets. The
-optional `Certificate` asks cert-manager to populate the referenced TLS Secret.
+The chart never creates buckets, PVCs, or TLS Secrets. The optional
+`Certificate` asks cert-manager to populate the referenced TLS Secret.
+
+Token Secrets are runtime-owned (the broker appends minted hashes to
+`tokens.toml`), so the chart never templates them either. Instead a
+pre-install/pre-upgrade bootstrap Job (`tokens.bootstrap`, enabled by
+default) creates any missing `<world>.tokenSecret` with a publish-only
+admin entry and hands off; existing Secrets are left untouched. With
+`tokens.emitRawValues: true` it also writes the raw token to a
+`<world>-token-values` Secret. Disable `tokens.bootstrap.enabled` to
+provision token Secrets some other way.
 
 Initialize each bucket with `demarkus-knowledge-bootstrap -bucket gs://<bucket>
 -world-id <uuid> -policy-file <policy.md>`, which writes the world skeleton and

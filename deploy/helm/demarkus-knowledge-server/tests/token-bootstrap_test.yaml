@@ -1,0 +1,61 @@
+suite: token bootstrap
+templates:
+  - token-bootstrap.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: renders the bootstrap Job as a PreSync hook with one line per world
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/hook"]
+          value: PreSync
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: spec.template.spec.containers[0].env[5].name
+          value: WORLDS
+      - equal:
+          path: spec.template.spec.containers[0].env[5].value
+          value: |-
+            team-a team-a-tokens tokens.toml
+            team-b team-b-tokens tokens.toml
+
+  - it: grants only get/create/patch on secrets
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "create", "patch"]
+
+  - it: renders publish-only recursive admin defaults into the script
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'paths = \["/\*\*"\]'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'operations = \["publish"\]'
+
+  - it: is omitted when bootstrap is disabled
+    set:
+      tokens.bootstrap.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: is omitted when only dynamic worlds are configured
+    set:
+      worlds: []
+      dynamicWorlds.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

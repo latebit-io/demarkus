@@ -202,3 +202,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Admin token paths/operations, rendered as a quoted, comma-joined TOML array
+body (e.g. `"/**"` or `"publish"`). Used by the token-bootstrap Job to build
+the admin entry in tokens.toml.
+*/}}
+{{- define "demarkus-knowledge-server.tokenAdminPaths" -}}
+{{- range $i, $p := .Values.tokens.admin.paths }}{{ if $i }}, {{ end }}{{ $p | quote }}{{- end -}}
+{{- end -}}
+{{- define "demarkus-knowledge-server.tokenAdminOps" -}}
+{{- range $i, $o := .Values.tokens.admin.operations }}{{ if $i }}, {{ end }}{{ $o | quote }}{{- end -}}
+{{- end -}}
