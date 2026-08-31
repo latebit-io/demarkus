@@ -45,6 +45,34 @@ tests:
       - notExists:
           path: rules[1].resourceNames
 
+  - it: omits raw-token secret names when emitRawValues is disabled
+    set:
+      tokens.emitRawValues: false
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - team-a-tokens
+            - team-b-tokens
+
+  - it: rejects a tokenSecret name colliding with a generated raw secret name
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+        - name: team-b
+          authorities: [team-b.example.com]
+          bucket: {url: gs://deployment-team-b, worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49}
+          tokenSecret: {name: team-a-token-values, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with a tokenSecret.name'
+
   - it: renders publish-only recursive admin defaults into the script
     documentSelector:
       path: kind

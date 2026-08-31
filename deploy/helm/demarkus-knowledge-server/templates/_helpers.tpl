@@ -201,6 +201,17 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail (printf "%s.tokenSecret.key is required" $location) -}}
 {{- end -}}
 {{- end -}}
+{{- /* The bootstrap Job generates one <world>-token-values Secret per world;
+       a primary tokenSecret.name colliding with any generated name would make
+       the world mount raw, non-TOML content. */ -}}
+{{- if and .Values.tokens.bootstrap.enabled .Values.tokens.emitRawValues -}}
+{{- range $index, $world := .Values.worlds -}}
+{{- $rawName := printf "%s-token-values" $world.name -}}
+{{- if hasKey $tokenSecrets $rawName -}}
+{{- fail (printf "worlds[%d]: generated raw Secret name %q collides with a tokenSecret.name" $index $rawName) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

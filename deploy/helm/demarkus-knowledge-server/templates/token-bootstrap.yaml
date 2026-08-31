@@ -1,3 +1,4 @@
+{{- include "demarkus-knowledge-server.validate" . -}}
 {{- if and .Values.tokens.bootstrap.enabled .Values.worlds }}
 {{- /* Token Secrets are runtime-owned: the broker appends to tokens.toml and
        the admin hash must match the raw value, so a reconciler must never
@@ -40,7 +41,9 @@ rules:
     resourceNames:
       {{- range .Values.worlds }}
       - {{ .tokenSecret.name | quote }}
+      {{- if $.Values.tokens.emitRawValues }}
       - {{ printf "%s-token-values" .name | quote }}
+      {{- end }}
       {{- end }}
   - apiGroups: [""]
     resources: ["secrets"]
