@@ -38,8 +38,8 @@ tokens:
   # templates them. Disable only if tokens are provisioned some other way.
   bootstrap:
     enabled: true
-    # Needs kubectl + sh + coreutils. Pinned within one minor of the cluster
-    # per the kubectl version-skew policy; bump with cluster upgrades.
+    # Needs kubectl + sh + coreutils. kubectl supports only ±1 minor of the
+    # API server, so override this to match your cluster (default fits 1.34+).
     image: docker.io/alpine/k8s:1.35.5
     imagePullPolicy: IfNotPresent
 

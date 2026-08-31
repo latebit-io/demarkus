@@ -24,14 +24,26 @@ tests:
             team-a team-a-tokens tokens.toml
             team-b team-b-tokens tokens.toml
 
-  - it: grants only get/create/patch on secrets
+  - it: scopes get/patch to world token secrets and keeps create unscoped
     documentSelector:
       path: kind
       value: Role
     asserts:
       - equal:
           path: rules[0].verbs
-          value: ["get", "create", "patch"]
+          value: ["get", "patch"]
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - team-a-tokens
+            - team-a-token-values
+            - team-b-tokens
+            - team-b-token-values
+      - equal:
+          path: rules[1].verbs
+          value: ["create"]
+      - notExists:
+          path: rules[1].resourceNames
 
   - it: renders publish-only recursive admin defaults into the script
     documentSelector:

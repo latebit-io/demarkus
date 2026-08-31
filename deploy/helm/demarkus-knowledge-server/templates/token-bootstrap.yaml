@@ -1,8 +1,7 @@
 {{- if and .Values.tokens.bootstrap.enabled .Values.worlds }}
-{{- /* Token Secrets are runtime-owned, not desired-state: the broker appends
-       to tokens.toml and the admin hash must match the raw value, so a
-       reconciler must never template them. Ported from demarkus-server's
-       tokenBootstrap; loops every static world and skips existing Secrets. */}}
+{{- /* Token Secrets are runtime-owned: the broker appends to tokens.toml and
+       the admin hash must match the raw value, so a reconciler must never
+       template them; this Job creates missing ones and hands off. */}}
 {{- $sa := printf "%s-token-bootstrap" (include "demarkus-knowledge-server.fullname" .) -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -32,12 +31,20 @@ metadata:
     argocd.argoproj.io/hook: PreSync
     argocd.argoproj.io/sync-wave: "-10"
 rules:
-  # Bootstrap-only: read to detect an existing (runtime-owned) Secret and skip;
-  # create + annotate to write the initial pair. No update/delete — the Job
-  # never overwrites what the broker owns.
+  # Bootstrap-only: get/patch scoped to the world token Secrets; create in a
+  # separate unscoped rule (RBAC cannot restrict creates by resourceNames).
+  # No update/delete — the Job never overwrites what the broker owns.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create", "patch"]
+    verbs: ["get", "patch"]
+    resourceNames:
+      {{- range .Values.worlds }}
+      - {{ .tokenSecret.name | quote }}
+      - {{ printf "%s-token-values" .name | quote }}
+      {{- end }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -126,22 +133,35 @@ spec:
             - |
               echo "$WORLDS" | while read -r WORLD SECRET KEY; do
                 [ -n "$WORLD" ] || continue
-                if kubectl -n "$NS" get secret "$SECRET" >/dev/null 2>&1; then
+                # Plain assignment so an API/auth error exits non-zero and
+                # fails the Job (set -e); only a clean empty result proceeds.
+                EXISTING=$(kubectl -n "$NS" get secret "$SECRET" --ignore-not-found -o name)
+                if [ -n "$EXISTING" ]; then
                   echo "world $WORLD: tokens secret $SECRET exists; handing off to runtime owners (broker). no-op."
                   continue
                 fi
                 TOKEN="$EXPLICIT_TOKEN"
-                if [ -z "$TOKEN" ]; then
+                if [ "$EMIT_RAW" = "true" ]; then
+                  # Raw Secret is written first and is the retry-safe source of
+                  # truth until the primary lands: a rerun after a partial
+                  # failure re-reads the same token instead of minting a new one.
+                  RAW=$(kubectl -n "$NS" get secret "$WORLD-token-values" --ignore-not-found -o jsonpath="{.data.$LABEL}")
+                  if [ -n "$RAW" ]; then
+                    TOKEN=$(printf %s "$RAW" | base64 -d)
+                  else
+                    if [ -z "$TOKEN" ]; then
+                      TOKEN=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)
+                    fi
+                    kubectl -n "$NS" create secret generic "$WORLD-token-values" --from-literal="$LABEL=$TOKEN"
+                    kubectl -n "$NS" patch secret "$WORLD-token-values" -p '{"metadata":{"annotations":{"helm.sh/resource-policy":"keep","demarkus.io/raw-tokens":"true"}}}'
+                  fi
+                elif [ -z "$TOKEN" ]; then
                   TOKEN=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)
                 fi
                 HASH="sha256-$(printf %s "$TOKEN" | sha256sum | cut -d' ' -f1)"
                 TOML=$(printf '[tokens.%s]\nhash = "%s"\npaths = [{{ include "demarkus-knowledge-server.tokenAdminPaths" . }}]\noperations = [{{ include "demarkus-knowledge-server.tokenAdminOps" . }}]\n' "$LABEL" "$HASH")
                 kubectl -n "$NS" create secret generic "$SECRET" --from-literal="$KEY=$TOML"
                 kubectl -n "$NS" patch secret "$SECRET" -p '{"metadata":{"annotations":{"helm.sh/resource-policy":"keep"}}}'
-                if [ "$EMIT_RAW" = "true" ]; then
-                  kubectl -n "$NS" create secret generic "$WORLD-token-values" --from-literal="$LABEL=$TOKEN"
-                  kubectl -n "$NS" patch secret "$WORLD-token-values" -p '{"metadata":{"annotations":{"helm.sh/resource-policy":"keep","demarkus.io/raw-tokens":"true"}}}'
-                fi
                 echo "world $WORLD: bootstrapped $SECRET (emit-raw=$EMIT_RAW), hash $HASH."
               done
       volumes:
