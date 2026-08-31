@@ -1,6 +1,6 @@
 {
   "name": "demarkus-pi-knowledge",
-  "version": "0.5.81",
+  "version": "0.5.82",
   "description": "Join an organizational demarkus knowledge system from the Pi coding agent. Registers the broker as an OAuth MCP server, steers sessions to the shared catalog, and enforces publishing policy. Runs no local server; a shared helper binary provides gates and guidance.",
   "author": "latebit",
   "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/pi-knowledge",
