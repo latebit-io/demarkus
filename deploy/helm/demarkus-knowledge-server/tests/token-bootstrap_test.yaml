@@ -73,6 +73,23 @@ tests:
       - failedTemplate:
           errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with a tokenSecret.name'
 
+  - it: rejects a raw secret name colliding with dynamic-worlds secrets
+    set:
+      dynamicWorlds:
+        enabled: true
+        worldsSecret: team-a-token-values
+        tokensSecret: memory-worlds-tokens
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with dynamicWorlds.worldsSecret'
+
+  - it: rejects a raw secret name colliding with the TLS secret
+    set:
+      tls.existingSecret: team-b-token-values
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[1]: generated raw Secret name "team-b-token-values" collides with tls.existingSecret'
+
   - it: renders publish-only recursive admin defaults into the script
     documentSelector:
       path: kind
