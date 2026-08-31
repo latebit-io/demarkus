@@ -1,0 +1,118 @@
+suite: token bootstrap
+templates:
+  - token-bootstrap.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: renders the bootstrap Job as a PreSync hook with one line per world
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/hook"]
+          value: PreSync
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: spec.template.spec.containers[0].env[5].name
+          value: WORLDS
+      - equal:
+          path: spec.template.spec.containers[0].env[5].value
+          value: |-
+            team-a team-a-tokens tokens.toml
+            team-b team-b-tokens tokens.toml
+
+  - it: scopes get/patch to world token secrets and keeps create unscoped
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "patch"]
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - team-a-tokens
+            - team-a-token-values
+            - team-b-tokens
+            - team-b-token-values
+      - equal:
+          path: rules[1].verbs
+          value: ["create"]
+      - notExists:
+          path: rules[1].resourceNames
+
+  - it: omits raw-token secret names when emitRawValues is disabled
+    set:
+      tokens.emitRawValues: false
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - team-a-tokens
+            - team-b-tokens
+
+  - it: rejects a tokenSecret name colliding with a generated raw secret name
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+        - name: team-b
+          authorities: [team-b.example.com]
+          bucket: {url: gs://deployment-team-b, worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49}
+          tokenSecret: {name: team-a-token-values, key: tokens.toml}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with a tokenSecret.name'
+
+  - it: rejects a raw secret name colliding with dynamic-worlds secrets
+    set:
+      dynamicWorlds:
+        enabled: true
+        worldsSecret: team-a-token-values
+        tokensSecret: memory-worlds-tokens
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with dynamicWorlds.worldsSecret'
+
+  - it: rejects a raw secret name colliding with the TLS secret
+    set:
+      tls.existingSecret: team-b-token-values
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[1]: generated raw Secret name "team-b-token-values" collides with tls.existingSecret'
+
+  - it: renders publish-only recursive admin defaults into the script
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'paths = \["/\*\*"\]'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'operations = \["publish"\]'
+
+  - it: is omitted when bootstrap is disabled
+    set:
+      tokens.bootstrap.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: is omitted when only dynamic worlds are configured
+    set:
+      worlds: []
+      dynamicWorlds.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

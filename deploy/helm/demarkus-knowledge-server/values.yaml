@@ -12,9 +12,36 @@ server:
   maxIncomingStreams: 128
   idleTimeout: 30s
 
-# Supply at least one world. Buckets, policy documents, and token Secrets
-# must exist before installation; this chart does not provision them.
+# Supply at least one world. Buckets and policy documents must exist before
+# installation; token Secrets are bootstrapped per world by the pre-install
+# Job below (tokens.bootstrap) unless already present.
 worlds: []
+
+tokens:
+  admin:
+    label: admin
+    # Recursive: `/*` is root-level only (Go path.Match).
+    paths: ["/**"]
+    # Publish-only: any token with `read` flips a world into
+    # read-auth-required mode and breaks the broker's open reads.
+    operations: ["publish"]
+    # Explicit token shared by every bootstrapped world; if empty, a fresh
+    # 64-char token is generated per world.
+    token: ""
+
+  # When true, also create a <world>-token-values Secret with the raw value.
+  # Required when the broker / federation agent manages the world.
+  emitRawValues: true
+
+  # Token Secrets are runtime-owned (the broker appends to tokens.toml), so a
+  # pre-install Job creates any missing ones out-of-band and the chart never
+  # templates them. Disable only if tokens are provisioned some other way.
+  bootstrap:
+    enabled: true
+    # Needs kubectl + sh + coreutils. kubectl supports only ±1 minor of the
+    # API server, so override this to match your cluster (default fits 1.34+).
+    image: docker.io/alpine/k8s:1.35.5
+    imagePullPolicy: IfNotPresent
 
 # Dynamic tenant worlds (memory-broker plan Phase 3): the memory broker
 # writes the two Secrets below and the server hot-reloads them at

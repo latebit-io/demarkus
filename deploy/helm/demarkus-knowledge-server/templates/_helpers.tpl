@@ -201,4 +201,38 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail (printf "%s.tokenSecret.key is required" $location) -}}
 {{- end -}}
 {{- end -}}
+{{- /* The bootstrap Job generates one <world>-token-values Secret per world;
+       a generated name colliding with a tokenSecret.name or another
+       chart-owned Secret would hand a consumer the wrong data. */ -}}
+{{- if and .Values.tokens.bootstrap.enabled .Values.tokens.emitRawValues -}}
+{{- $reserved := dict -}}
+{{- if .Values.dynamicWorlds.enabled -}}
+{{- $_ := set $reserved .Values.dynamicWorlds.worldsSecret "dynamicWorlds.worldsSecret" -}}
+{{- $_ := set $reserved .Values.dynamicWorlds.tokensSecret "dynamicWorlds.tokensSecret" -}}
+{{- end -}}
+{{- if .Values.tls.existingSecret -}}
+{{- $_ := set $reserved .Values.tls.existingSecret "tls.existingSecret" -}}
+{{- end -}}
+{{- range $index, $world := .Values.worlds -}}
+{{- $rawName := printf "%s-token-values" $world.name -}}
+{{- if hasKey $tokenSecrets $rawName -}}
+{{- fail (printf "worlds[%d]: generated raw Secret name %q collides with a tokenSecret.name" $index $rawName) -}}
+{{- end -}}
+{{- if hasKey $reserved $rawName -}}
+{{- fail (printf "worlds[%d]: generated raw Secret name %q collides with %s" $index $rawName (get $reserved $rawName)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Admin token paths/operations, rendered as a quoted, comma-joined TOML array
+body (e.g. `"/**"` or `"publish"`). Used by the token-bootstrap Job to build
+the admin entry in tokens.toml.
+*/}}
+{{- define "demarkus-knowledge-server.tokenAdminPaths" -}}
+{{- range $i, $p := .Values.tokens.admin.paths }}{{ if $i }}, {{ end }}{{ $p | quote }}{{- end -}}
+{{- end -}}
+{{- define "demarkus-knowledge-server.tokenAdminOps" -}}
+{{- range $i, $o := .Values.tokens.admin.operations }}{{ if $i }}, {{ end }}{{ $o | quote }}{{- end -}}
 {{- end -}}
