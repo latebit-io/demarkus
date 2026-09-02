@@ -53,8 +53,8 @@ config:
     perServerConcurrency: 2
 
 # Publishing mode. true = one index per discovered server at /index/<host>.md.
-# false = single aggregated /index.md per hub, which overwrites a curated
-# /index.md entry point on the hub; only set false on a hub with no curated index.
+# false = single aggregated /index.md published to every configured hub,
+# overwriting any curated /index.md there; only set false when no hub has one.
 perServer: true
 
 # Also publish a link-graph export to each hub at /graph.md (the durable

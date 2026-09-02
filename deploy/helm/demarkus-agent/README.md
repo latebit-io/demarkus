@@ -80,7 +80,7 @@ For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env v
 | Setting | What the agent publishes |
 |---|---|
 | `hubs: []` | Nothing. Crawl-only. State is updated. |
-| `hubs: [X]`, `perServer: true` (default) | One `/index/<server>.md` per discovered seed, to each hub |
+| `hubs: [X]`, `perServer: true` (default) | One `/index/<server>.md` per discovered server, to each hub |
 | `hubs: [X]`, `perServer: false` | Single aggregated `/index.md` to each hub, replacing any curated `/index.md` there |
 
 Configured hubs are not followed from document links unless they also appear in
