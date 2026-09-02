@@ -66,16 +66,28 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --publish
 
-  - it: includes --per-server when perServer=true
+  - it: includes --per-server by default
     template: deployment.yaml
     set:
       config.seeds:
         - mark://team-a:6309
       config.hubs:
         - mark://hub:6309
-      perServer: true
     asserts:
       - contains:
+          path: spec.template.spec.containers[0].args
+          content: --per-server
+
+  - it: omits --per-server when perServer=false
+    template: deployment.yaml
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      config.hubs:
+        - mark://hub:6309
+      perServer: false
+    asserts:
+      - notContains:
           path: spec.template.spec.containers[0].args
           content: --per-server
 
