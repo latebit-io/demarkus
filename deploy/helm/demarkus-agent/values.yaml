@@ -52,9 +52,10 @@ config:
     requestDelay: 100ms
     perServerConcurrency: 2
 
-# Publishing mode. false = single aggregated /index.md per hub.
-# true = one index per discovered server at /index/<host>.md.
-perServer: false
+# Publishing mode. true = one index per discovered server at /index/<host>.md.
+# false = single aggregated /index.md per hub, which overwrites a curated
+# /index.md entry point on the hub; only set false on a hub with no curated index.
+perServer: true
 
 # Also publish a link-graph export to each hub at /graph.md (the durable
 # topology the reading-room floor renders: nodes + edges). Independent of the

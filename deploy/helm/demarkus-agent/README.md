@@ -33,7 +33,7 @@ For private seeds (read-auth enabled), add a token entry for that host as well.
 | `config.schedule.interval` | duration | `6h` | Time between crawl runs |
 | `config.politeness.requestDelay` | duration | `100ms` | Delay between requests to same server |
 | `config.politeness.perServerConcurrency` | int | `2` | Max concurrent requests per server |
-| `perServer` | bool | `false` | `true` → one index per server at `/index/<host>.md`; `false` → single aggregated `/index.md` |
+| `perServer` | bool | `true` | `true` → one index per server at `/index/<host>.md`; `false` → single aggregated `/index.md` (overwrites a curated `/index.md` on the hub) |
 | `insecure` | bool | `false` | Skip TLS cert verification (self-signed dev clusters only) |
 | `tokens.existingSecret` | string | `""` | Name of an existing Secret with key `tokens.toml`. Takes precedence over `tokens.inline` |
 | `tokens.inline` | map | `{}` | Inline `host:port → token` map. Generates `<release>-tokens` Secret |
@@ -80,8 +80,8 @@ For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env v
 | Setting | What the agent publishes |
 |---|---|
 | `hubs: []` | Nothing. Crawl-only. State is updated. |
-| `hubs: [X]`, `perServer: false` | Single aggregated `/index.md` to each hub |
-| `hubs: [X]`, `perServer: true` | One `/index/<server>.md` per discovered seed, to each hub |
+| `hubs: [X]`, `perServer: true` (default) | One `/index/<server>.md` per discovered seed, to each hub |
+| `hubs: [X]`, `perServer: false` | Single aggregated `/index.md` to each hub, replacing any curated `/index.md` there |
 
 Configured hubs are not followed from document links unless they also appear in
 `config.seeds`. This prevents an aggregation hub from recursively crawling and
