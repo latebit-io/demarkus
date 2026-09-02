@@ -242,7 +242,7 @@ func TestProvisionFileBackend(t *testing.T) {
 	cfg := &Config{
 		Storage: StorageConfig{Backend: storageBackendFile, Dir: filepath.Join(dir, "state")},
 		Worlds: []WorldConfig{{
-			Name:            "soul",
+			Name:            "memory",
 			TokensFile:      tokensFile,
 			InternalAddress: "localhost:6309",
 			DefaultToken:    TokenScope{Paths: []string{"/*"}},
@@ -250,7 +250,7 @@ func TestProvisionFileBackend(t *testing.T) {
 	}
 	store := newWorldWriteTokenStore(cfg, NewFileSecretStore())
 
-	raw, err := store.Provision(context.Background(), "soul")
+	raw, err := store.Provision(context.Background(), "memory")
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -262,9 +262,9 @@ func TestProvisionFileBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse tokens.toml: %v", err)
 	}
-	entry, ok := parsed.Tokens[worldWriteTokenLabel("soul")]
+	entry, ok := parsed.Tokens[worldWriteTokenLabel("memory")]
 	if !ok {
-		t.Fatalf("tokens.toml missing label %q", worldWriteTokenLabel("soul"))
+		t.Fatalf("tokens.toml missing label %q", worldWriteTokenLabel("memory"))
 	}
 	if entry.Hash != protocol.HashToken(raw) {
 		t.Error("tokens.toml hash does not match minted token")
@@ -272,7 +272,7 @@ func TestProvisionFileBackend(t *testing.T) {
 
 	// Fresh store (broker restart): converges on the same token, no rewrite.
 	before := mustStat(t, tokensFile)
-	raw2, err := newWorldWriteTokenStore(cfg, NewFileSecretStore()).Provision(context.Background(), "soul")
+	raw2, err := newWorldWriteTokenStore(cfg, NewFileSecretStore()).Provision(context.Background(), "memory")
 	if err != nil {
 		t.Fatalf("re-Provision: %v", err)
 	}

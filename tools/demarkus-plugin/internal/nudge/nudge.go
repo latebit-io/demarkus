@@ -23,7 +23,9 @@ type Input struct {
 	// session-end signals (computed by the adapter: Claude from the transcript,
 	// pi from in-session activity tracking).
 	ChangedFiles bool `json:"changedFiles"`
-	SoulWrite    bool `json:"soulWrite"`
+	MemoryWrite  bool `json:"memoryWrite"`
+	// LegacyMemoryWrite is the pre-rename key older adapters still send.
+	LegacyMemoryWrite bool `json:"soulWrite"`
 	// Claude hook payload fields (used when Tool/Input are absent) so an adapter
 	// can pipe the raw Claude payload verbatim. UserPromptSubmit carries `prompt`
 	// (already mapped above); PostToolUse carries tool_name/tool_input.
@@ -43,14 +45,15 @@ var knowledgeRecallRe = regexp.MustCompile(memoryRecallRe.String() + `|\bwhat do
 
 var adrRe = regexp.MustCompile(`/adr/.*\.md$`)
 
-const memoryRecallNudge = "This reads like a recall question. Before answering from this conversation alone, check the soul first: mark_lookup the project for the subject (and mark_fetch the project /index.md), then answer from what's recorded; or say plainly if nothing is there."
+const memoryRecallNudge = "This reads like a recall question. Before answering from this conversation alone, check the memory first: mark_lookup the project for the subject (and mark_fetch the project /index.md), then answer from what's recorded; or say plainly if nothing is there."
 
 const knowledgeRecallNudge = "This reads like a recall question. If it concerns shared or organizational knowledge, check the joined demarkus knowledge system first: mark_lookup the system for the subject (and fetch the relevant world's index.md / the root hub), then answer from what's recorded; or say plainly if nothing is there."
 
-const journalNudge = "This session changed files but recorded nothing to the soul. If something here is worth remembering (a decision, a gotcha, a non-obvious why), capture it with /soul-journal (or mark_append to today's journal under /<project>/journal/<YYYY-MM-DD>.md). If it's all routine, ignore this."
+const journalNudge = "This session changed files but recorded nothing to the memory. If something here is worth remembering (a decision, a gotcha, a non-obvious why), capture it with /memory-journal (or mark_append to today's journal under /<project>/journal/<YYYY-MM-DD>.md). If it's all routine, ignore this."
 
 // Evaluate dispatches on the event and returns the nudge text (or empty).
 func Evaluate(in *Input) (Output, error) {
+	in.MemoryWrite = in.MemoryWrite || in.LegacyMemoryWrite
 	// Accept the Claude PostToolUse shape (tool_name/tool_input) for promote.
 	if in.Tool == "" && in.ToolName != "" {
 		in.Tool = in.ToolName
@@ -80,8 +83,8 @@ func recall(in *Input) (Output, error) {
 		}
 		return Output{}, nil
 	}
-	// default: memory soul
-	present, err := config.LocalSoulPresent()
+	// default: memory memory
+	present, err := config.LocalMemoryPresent()
 	if err != nil {
 		return Output{}, err
 	}
@@ -119,15 +122,15 @@ func promote(in *Input) (Output, error) {
 	if strings.Contains(body, "promoted: mark://") {
 		return Output{}, nil // already back-stamped → don't re-nudge
 	}
-	return Output{Nudge: "New ADR published to the soul (" + url + "). ADRs are high-signal, shared-team knowledge: if this decision is durable and useful beyond you, /promote " + url + " to lift it into the knowledge system (curate → gate → publish). If it is personal or provisional, leave it here; most soul content correctly stays put."}, nil
+	return Output{Nudge: "New ADR published to the memory (" + url + "). ADRs are high-signal, shared-team knowledge: if this decision is durable and useful beyond you, /promote " + url + " to lift it into the knowledge system (curate → gate → publish). If it is personal or provisional, leave it here; most memory content correctly stays put."}, nil
 }
 
 func sessionEnd(in *Input) (Output, error) {
-	present, err := config.LocalSoulPresent()
+	present, err := config.LocalMemoryPresent()
 	if err != nil {
 		return Output{}, err
 	}
-	if present && in.ChangedFiles && !in.SoulWrite {
+	if present && in.ChangedFiles && !in.MemoryWrite {
 		return Output{Nudge: journalNudge}, nil
 	}
 	return Output{}, nil

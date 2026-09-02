@@ -12,31 +12,9 @@ import (
 	"time"
 )
 
-// State is the payload of the OIDC state cookie. It carries the OAuth
-// CSRF nonce plus an absolute expiry the broker enforces server-side.
-// The cookie is signed with HMAC-SHA256 over the JSON encoding of this
-// struct; the IdP never sees it (only the Nonce is echoed as the OAuth
-// `state` query parameter).
-//
-// DeviceCode is non-empty when /auth/login was entered from the device
-// flow: it pins the dispatch on /auth/callback to a single, signed
-// value rather than an ambient cookie. Without this field a stale
-// device cookie left in the browser jar (user abandoned a /soul-join
-// mid-flow, then later did a normal browser login) would silently
-// route /auth/callback through the device branch and bind the
-// wrong grant. Empty means a regular browser code-flow callback.
-//
-// AuthCodeID is the analogous field for the OAuth authorization-code
-// grant the broker offers to MCP clients (Claude Code etc.) that do
-// not pivot to device flow. It opaquely identifies the pending
-// /oauth/authorize request the callback must resume; same dispatch
-// rationale as DeviceCode — keep the callback branch driven by a
-// tamper-evident value, not by an ambient cookie. DeviceCode and
-// AuthCodeID are mutually exclusive in practice (a single /auth/login
-// is driven by one entry-point), but encoded independently so the
-// callback handler's branch order — DeviceCode first, then
-// AuthCodeID — stays unambiguous if a future entry-point ever sets
-// both.
+// State is the HMAC-signed OIDC state cookie payload: CSRF nonce, server-side
+// expiry, and the pending device or auth-code entry point. Dispatch on
+// /auth/callback keys off these signed fields, never an ambient cookie.
 type State struct {
 	Nonce      string    `json:"n"`
 	ExpiresAt  time.Time `json:"e"`

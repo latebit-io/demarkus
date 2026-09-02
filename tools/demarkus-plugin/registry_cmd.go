@@ -112,19 +112,19 @@ func fail(msg string) {
 }
 
 // cmdRegistry dispatches the registry mutations that replace the per-plugin bash
-// (soul-join/soul-default/register-knowledge/mirror-policy/promote-target) and
+// (memory-join/memory-default/register-knowledge/mirror-policy/promote-target) and
 // the mcp-config.mjs JS.
 func cmdRegistry(args []string) {
 	if len(args) == 0 {
-		fail("registry: missing subcommand (mcp|soul-join|soul-default|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote)")
+		fail("registry: missing subcommand (mcp|memory-join|memory-default|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote)")
 	}
 	switch args[0] {
 	case "mcp":
 		registryMcp(args[1:])
-	case "soul-join":
-		registrySoulJoin(args[1:])
-	case "soul-default":
-		registrySoulDefault(args[1:])
+	case "memory-join", "soul-join": // soul-* names: aliases kept for older plugin scripts
+		registryMemoryJoin(args[1:])
+	case "memory-default", "soul-default":
+		registryMemoryDefault(args[1:])
 	case "knowledge-join":
 		registryKnowledgeJoin(args[1:])
 	case "knowledge-register":
@@ -234,12 +234,12 @@ func registryMcp(args []string) {
 	}
 }
 
-func registrySoulJoin(args []string) {
-	opts, err := parseSoulJoinArgs(args, os.Stdin)
+func registryMemoryJoin(args []string) {
+	opts, err := parseMemoryJoinArgs(args, os.Stdin)
 	if err != nil {
 		fail(err.Error())
 	}
-	res, err := registry.SoulJoin(opts.host, opts.token, opts.insecure, opts.bind)
+	res, err := registry.MemoryJoin(opts.host, opts.token, opts.insecure, opts.bind)
 	if err != nil {
 		fail(err.Error())
 	}
@@ -258,24 +258,24 @@ func registrySoulJoin(args []string) {
 	}
 }
 
-type soulJoinOptions struct {
+type memoryJoinOptions struct {
 	host     string
 	token    string
 	insecure bool
 	bind     string
 }
 
-const maxSoulJoinTokenInput = 4096
+const maxMemoryJoinTokenInput = 4096
 
-func parseSoulJoinArgs(args []string, stdin io.Reader) (soulJoinOptions, error) {
-	var opts soulJoinOptions
+func parseMemoryJoinArgs(args []string, stdin io.Reader) (memoryJoinOptions, error) {
+	var opts memoryJoinOptions
 	tokenStdin := false
 	positionalOnly := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if positionalOnly {
 			if opts.host != "" {
-				return soulJoinOptions{}, fmt.Errorf("soul-join: unexpected extra argument %q", arg)
+				return memoryJoinOptions{}, fmt.Errorf("memory-join: unexpected extra argument %q", arg)
 			}
 			opts.host = arg
 			continue
@@ -284,9 +284,9 @@ func parseSoulJoinArgs(args []string, stdin io.Reader) (soulJoinOptions, error) 
 			positionalOnly = true
 			continue
 		}
-		handled, err := parseSoulJoinFlag(args, &i, &opts, &tokenStdin)
+		handled, err := parseMemoryJoinFlag(args, &i, &opts, &tokenStdin)
 		if err != nil {
-			return soulJoinOptions{}, err
+			return memoryJoinOptions{}, err
 		}
 		if handled {
 			continue
@@ -294,32 +294,32 @@ func parseSoulJoinArgs(args []string, stdin io.Reader) (soulJoinOptions, error) 
 		if opts.host == "" {
 			opts.host = arg
 		} else {
-			return soulJoinOptions{}, fmt.Errorf("soul-join: unexpected extra argument %q", arg)
+			return memoryJoinOptions{}, fmt.Errorf("memory-join: unexpected extra argument %q", arg)
 		}
 	}
 	if opts.host == "" {
-		return soulJoinOptions{}, errors.New("soul-join: usage: registry soul-join <host> [--token T|--token-stdin] [--insecure] [--bind DIR]")
+		return memoryJoinOptions{}, errors.New("memory-join: usage: registry memory-join <host> [--token T|--token-stdin] [--insecure] [--bind DIR]")
 	}
 	if tokenStdin && opts.token != "" {
-		return soulJoinOptions{}, errors.New("soul-join: --token and --token-stdin are mutually exclusive")
+		return memoryJoinOptions{}, errors.New("memory-join: --token and --token-stdin are mutually exclusive")
 	}
 	if tokenStdin {
-		body, err := io.ReadAll(io.LimitReader(stdin, maxSoulJoinTokenInput+1))
+		body, err := io.ReadAll(io.LimitReader(stdin, maxMemoryJoinTokenInput+1))
 		if err != nil {
-			return soulJoinOptions{}, fmt.Errorf("soul-join: read token from stdin: %w", err)
+			return memoryJoinOptions{}, fmt.Errorf("memory-join: read token from stdin: %w", err)
 		}
-		if len(body) > maxSoulJoinTokenInput {
-			return soulJoinOptions{}, fmt.Errorf("soul-join: token from stdin exceeds %d bytes", maxSoulJoinTokenInput)
+		if len(body) > maxMemoryJoinTokenInput {
+			return memoryJoinOptions{}, fmt.Errorf("memory-join: token from stdin exceeds %d bytes", maxMemoryJoinTokenInput)
 		}
 		opts.token = strings.TrimSpace(string(body))
 		if opts.token == "" {
-			return soulJoinOptions{}, errors.New("soul-join: token from stdin is empty")
+			return memoryJoinOptions{}, errors.New("memory-join: token from stdin is empty")
 		}
 	}
 	return opts, nil
 }
 
-func parseSoulJoinFlag(args []string, i *int, opts *soulJoinOptions, tokenStdin *bool) (bool, error) {
+func parseMemoryJoinFlag(args []string, i *int, opts *memoryJoinOptions, tokenStdin *bool) (bool, error) {
 	arg := args[*i]
 	if arg == "-" || !strings.HasPrefix(arg, "-") {
 		return false, nil
@@ -332,7 +332,7 @@ func parseSoulJoinFlag(args []string, i *int, opts *soulJoinOptions, tokenStdin 
 		if hasInline {
 			parsed, err := strconv.ParseBool(inline)
 			if err != nil {
-				return true, fmt.Errorf("soul-join: --%s wants a boolean, got %q", name, inline)
+				return true, fmt.Errorf("memory-join: --%s wants a boolean, got %q", name, inline)
 			}
 			value = parsed
 		}
@@ -342,43 +342,43 @@ func parseSoulJoinFlag(args []string, i *int, opts *soulJoinOptions, tokenStdin 
 			opts.insecure = value
 		}
 	case "token", "bind":
-		value, err := soulJoinFlagValue(args, i, name, inline, hasInline)
+		value, err := memoryJoinFlagValue(args, i, name, inline, hasInline)
 		if err != nil {
 			return true, err
 		}
 		if name == "token" {
 			if value == "" {
-				return true, errors.New("soul-join: token is empty")
+				return true, errors.New("memory-join: token is empty")
 			}
 			opts.token = value
 		} else {
 			opts.bind = value
 		}
 	default:
-		return true, fmt.Errorf("soul-join: unknown flag %q", arg)
+		return true, fmt.Errorf("memory-join: unknown flag %q", arg)
 	}
 	return true, nil
 }
 
-func soulJoinFlagValue(args []string, i *int, name, inline string, hasInline bool) (string, error) {
+func memoryJoinFlagValue(args []string, i *int, name, inline string, hasInline bool) (string, error) {
 	if hasInline {
 		return inline, nil
 	}
 	*i++
 	if *i >= len(args) {
-		return "", fmt.Errorf("soul-join: --%s requires a value", name)
+		return "", fmt.Errorf("memory-join: --%s requires a value", name)
 	}
 	return args[*i], nil
 }
 
-func registrySoulDefault(args []string) {
-	fs := flag.NewFlagSet("soul-default", flag.ExitOnError)
+func registryMemoryDefault(args []string) {
+	fs := flag.NewFlagSet("memory-default", flag.ExitOnError)
 	list := fs.Bool("list", false, "list the catalog")
-	set := fs.String("set", "", "set DIR's default soul to SLUG")
+	set := fs.String("set", "", "set DIR's default memory to SLUG")
 	bind := fs.String("bind", "", "the project directory")
 	_ = fs.Parse(args)
 	if *bind == "" {
-		fail("soul-default: --bind DIR is required")
+		fail("memory-default: --bind DIR is required")
 	}
 	current, err := config.ProjectBinding(*bind)
 	if err != nil {
@@ -386,7 +386,7 @@ func registrySoulDefault(args []string) {
 	}
 	switch {
 	case *list:
-		cat, err := registry.SoulCatalog()
+		cat, err := registry.MemoryCatalog()
 		if err != nil {
 			fail(err.Error())
 		}
@@ -409,7 +409,7 @@ func registrySoulDefault(args []string) {
 		}
 		fmt.Println("OK " + *set)
 	default:
-		fail("soul-default: choose --list or --set SLUG")
+		fail("memory-default: choose --list or --set SLUG")
 	}
 }
 
@@ -453,13 +453,17 @@ func registryPromoteTarget(args []string) {
 	}
 }
 
-// cmdMcpServe launches demarkus-mcp for the local soul (default) or a joined
-// remote soul (--soul <slug>), reading host/insecure/token from the shared state
-// and injecting DEMARKUS_AUTH. Replaces mcp-wrapper.sh + soul-remote-wrapper.sh.
+// cmdMcpServe launches demarkus-mcp for the local memory or a joined remote one
+// (--memory <slug>), injecting DEMARKUS_AUTH from the shared state. --soul stays
+// accepted: older plugin versions persisted it in users' .mcp.json entries.
 func cmdMcpServe(args []string) {
 	fs := flag.NewFlagSet("mcp-serve", flag.ExitOnError)
-	soul := fs.String("soul", "", "joined remote-soul slug (omit for the local managed soul)")
+	memory := fs.String("memory", "", "joined remote-memory slug (omit for the local managed memory)")
+	legacy := fs.String("soul", "", "deprecated alias of -memory")
 	_ = fs.Parse(args)
+	if *memory == "" {
+		*memory = *legacy
+	}
 
 	binDir, err := config.StatePath("bin")
 	if err != nil {
@@ -468,16 +472,16 @@ func cmdMcpServe(args []string) {
 	}
 	mcpBin := filepath.Join(binDir, "demarkus-mcp")
 	if _, err := os.Stat(mcpBin); err != nil {
-		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: demarkus-mcp not installed at "+mcpBin+"; run /soul-init")
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: demarkus-mcp not installed at "+mcpBin+"; run /memory-init")
 		os.Exit(1)
 	}
 
 	var host, tokenFile string
 	insecure := false
-	if *soul == "" {
+	if *memory == "" {
 		cfg, err := config.LoadConfig()
 		if err != nil || cfg == nil {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: no local soul configured; SessionStart may not have run yet")
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: no local memory configured; SessionStart may not have run yet")
 			os.Exit(1)
 		}
 		host = "mark://localhost:" + cfg.Port
@@ -485,18 +489,18 @@ func cmdMcpServe(args []string) {
 		tf, _ := config.StatePath("plugin-memory.token")
 		tokenFile = tf
 	} else {
-		row, ok, err := registry.RemoteSoulRow(*soul)
+		row, ok, err := registry.RemoteMemoryRow(*memory)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: catalog lookup failed: "+err.Error())
 			os.Exit(1)
 		}
 		if !ok {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: soul '"+*soul+"' not in the catalog; re-run /soul-join")
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: memory '"+*memory+"' not in the catalog; re-run /memory-join")
 			os.Exit(1)
 		}
 		host, insecure, tokenFile = row.Host, row.Insecure, row.TokenFile
 		if row.IsBroker() {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: soul '"+*soul+"' is a broker soul served over HTTP MCP; register it with `claude mcp add --transport http` instead of mcp-serve")
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: memory '"+*memory+"' is a broker memory served over HTTP MCP; register it with `claude mcp add --transport http` instead of mcp-serve")
 			os.Exit(1)
 		}
 	}
@@ -506,8 +510,8 @@ func cmdMcpServe(args []string) {
 		tok, err := os.ReadFile(tokenFile)
 		if err == nil && strings.TrimSpace(string(tok)) != "" {
 			env = append(env, "DEMARKUS_AUTH="+strings.TrimSpace(string(tok)))
-		} else if *soul != "" {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: token file "+tokenFile+" missing/empty; re-run /soul-join --token")
+		} else if *memory != "" {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: token file "+tokenFile+" missing/empty; re-run /memory-join --token")
 			os.Exit(1)
 		}
 	}

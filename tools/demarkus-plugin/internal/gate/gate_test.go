@@ -131,7 +131,7 @@ func TestDestinationGate(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// bind repo → a different soul; a write to the local soul from repo/subdir misroutes.
+	// bind repo → a different memory; a write to the local memory from repo/subdir misroutes.
 	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(repo+"\tother\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -141,9 +141,9 @@ func TestDestinationGate(t *testing.T) {
 	if d.Decision != "block" { // dest strictness defaults to block
 		t.Fatalf("misroute from subdir: want block, got %q (%s)", d.Decision, d.Reason)
 	}
-	// a write to the bound soul is fine — but "other" isn't a registered remote
-	// soul here, so it classifies as unrelated → allow. Use the bound case where
-	// target == bound by binding to the local soul instead.
+	// a write to the bound memory is fine — but "other" isn't a registered remote
+	// memory here, so it classifies as unrelated → allow. Use the bound case where
+	// target == bound by binding to the local memory instead.
 	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(repo+"\tdemarkus-memory\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestDestinationGate(t *testing.T) {
 		"url": "/x.md", "metadata": map[string]any{"tags": "a"},
 	}})
 	if d2.Decision != "allow" {
-		t.Fatalf("bound-soul write: want allow, got %q", d2.Decision)
+		t.Fatalf("bound-memory write: want allow, got %q", d2.Decision)
 	}
 }
 
@@ -284,7 +284,7 @@ func TestMcpProxyUnwrap(t *testing.T) {
 func TestUnrelatedServerAllowed(t *testing.T) {
 	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
 	setupHome(t, nil)
-	// not the local soul, not a registered remote soul or knowledge system → allow
+	// not the local memory, not a registered remote memory or knowledge system → allow
 	if d := mustEval(t, Input{Tool: "someother_mark_publish", Input: map[string]any{"url": "/x.md"}}); d.Decision != "allow" {
 		t.Fatalf("unrelated server: want allow, got %q", d.Decision)
 	}

@@ -1,8 +1,8 @@
 // Package provision ports the demarkus-memory server-lifecycle logic from the
-// plugins' bash (lib.sh + setup.sh + session-start.sh + detect-soul.sh) into Go.
+// plugins' bash (lib.sh + setup.sh + session-start.sh + detect-memory.sh) into Go.
 // It owns the per-session managed-server lifecycle: download/verify/install the
 // pinned binaries, generate the plugin token, spawn (or adopt) a demarkus-server,
-// and seed the soul docs. Every readiness/progress line goes to STDERR so a
+// and seed the memory docs. Every readiness/progress line goes to STDERR so a
 // caller can run Provision purely for its side effects with a clean stdout.
 //
 // Faithful port note: the bash carries hard-won safety — notably the PID-at-root
@@ -95,7 +95,7 @@ const (
 var seedFS embed.FS
 
 // pristineTemplateHashes are the sha256 of every project-template.md the old
-// filesystem seeding ever shipped. The layout now lives in the soul-memory
+// filesystem seeding ever shipped. The layout now lives in the memory-memory
 // skill; a flat copy matching one of these is an untouched seed, safe to delete.
 var pristineTemplateHashes = map[string]bool{
 	"2573bd505e8ed7f3573a2fd24e903b2dbf65df4dc03a933a8f5a10f63610c7a6": true,
@@ -114,11 +114,11 @@ func warnf(format string, a ...any) {
 
 // --- path helpers (lib.sh readonly PLUGIN_* paths) ---------------------------
 
-func pluginBinDir() (string, error)  { return underHome("bin") }
-func pluginConfig() (string, error)  { return underHome("plugin-memory.conf") }
-func pluginToken() (string, error)   { return underHome("plugin-memory.token") }
-func sharedSoulDir() (string, error) { return underHome("soul") }
-func isolatedSoulDir() (string, error) {
+func pluginBinDir() (string, error)    { return underHome("bin") }
+func pluginConfig() (string, error)    { return underHome("plugin-memory.conf") }
+func pluginToken() (string, error)     { return underHome("plugin-memory.token") }
+func sharedMemoryDir() (string, error) { return underHome("soul") }
+func isolatedMemoryDir() (string, error) {
 	return underHome("plugin-soul")
 }
 
@@ -138,31 +138,31 @@ func binPath(name string) (string, error) {
 	return filepath.Join(d, name), nil
 }
 
-// soulID is a stable per-soul identifier: basename for readability plus a
-// path hash for uniqueness across souls.
-func soulID(soulDir string) string {
-	sum := sha256.Sum256([]byte(soulDir))
-	return filepath.Base(soulDir) + "-" + hex.EncodeToString(sum[:4])
+// memoryID is a stable per-memory identifier: basename for readability plus a
+// path hash for uniqueness across memories.
+func memoryID(memoryDir string) string {
+	sum := sha256.Sum256([]byte(memoryDir))
+	return filepath.Base(memoryDir) + "-" + hex.EncodeToString(sum[:4])
 }
 
 // managedServerLogPath places the managed server's log under ~/.demarkus/logs,
-// never inside soulDir, which the server watches for tokens.toml changes (#289).
-func managedServerLogPath(soulDir string) (string, error) {
-	return underHome(filepath.Join("logs", "server-"+soulID(soulDir)+".log"))
+// never inside memoryDir, which the server watches for tokens.toml changes (#289).
+func managedServerLogPath(memoryDir string) (string, error) {
+	return underHome(filepath.Join("logs", "server-"+memoryID(memoryDir)+".log"))
 }
 
-// managedTokensPath is the out-of-root tokens.toml for soulDir's managed
+// managedTokensPath is the out-of-root tokens.toml for memoryDir's managed
 // server: token data does not belong inside the served content root (#289
 // follow-up). Managed modes only; reuse mode keeps <root>/tokens.toml.
-func managedTokensPath(soulDir string) (string, error) {
-	return underHome(filepath.Join("tokens", soulID(soulDir), "tokens.toml"))
+func managedTokensPath(memoryDir string) (string, error) {
+	return underHome(filepath.Join("tokens", memoryID(memoryDir), "tokens.toml"))
 }
 
-// tokensPathFor resolves the live tokens.toml for soulDir: the out-of-root
-// path once migrated, a legacy <soulDir>/tokens.toml until then (the running
+// tokensPathFor resolves the live tokens.toml for memoryDir: the out-of-root
+// path once migrated, a legacy <memoryDir>/tokens.toml until then (the running
 // server's -tokens flag still points there), the new path on fresh installs.
-func tokensPathFor(soulDir string) (string, error) {
-	newPath, err := managedTokensPath(soulDir)
+func tokensPathFor(memoryDir string) (string, error) {
+	newPath, err := managedTokensPath(memoryDir)
 	if err != nil {
 		return "", err
 	}
@@ -170,21 +170,21 @@ func tokensPathFor(soulDir string) (string, error) {
 		return newPath, nil
 	}
 	// TODO: drop the legacy branch once released installs have migrated.
-	if legacy := filepath.Join(soulDir, "tokens.toml"); fileExists(legacy) {
+	if legacy := filepath.Join(memoryDir, "tokens.toml"); fileExists(legacy) {
 		return legacy, nil
 	}
 	return newPath, nil
 }
 
-// migrateManagedTokens moves a legacy <soulDir>/tokens.toml to the out-of-root
+// migrateManagedTokens moves a legacy <memoryDir>/tokens.toml to the out-of-root
 // path and returns the final path. Only call with the managed server stopped:
 // a live server reads the legacy path.
-func migrateManagedTokens(soulDir string) (string, error) {
-	newPath, err := managedTokensPath(soulDir)
+func migrateManagedTokens(memoryDir string) (string, error) {
+	newPath, err := managedTokensPath(memoryDir)
 	if err != nil {
 		return "", err
 	}
-	legacy := filepath.Join(soulDir, "tokens.toml")
+	legacy := filepath.Join(memoryDir, "tokens.toml")
 	if fileExists(newPath) {
 		// Retry a legacy cleanup that failed after a successful copy on a
 		// prior run; a leftover copy keeps token material in the content root.
@@ -202,26 +202,26 @@ func migrateManagedTokens(soulDir string) (string, error) {
 		return "", err
 	}
 	if err := os.Rename(legacy, newPath); err != nil {
-		// Cross-device fallback: project souls can sit on another volume.
+		// Cross-device fallback: project memories can sit on another volume.
 		if err := installFile(legacy, newPath, 0o600); err != nil {
-			return "", fmt.Errorf("migrate tokens.toml out of soul root: %w", err)
+			return "", fmt.Errorf("migrate tokens.toml out of memory root: %w", err)
 		}
 		if err := os.Remove(legacy); err != nil {
 			return "", fmt.Errorf("remove legacy tokens.toml after copy: %w", err)
 		}
 	}
-	logf("moved tokens.toml out of the soul root (%s)", newPath)
+	logf("moved tokens.toml out of the memory root (%s)", newPath)
 	return newPath, nil
 }
 
 // ensureManagedTokenEntry mints the plugin token against the resolved managed
-// tokens path for soul.
-func ensureManagedTokenEntry(soul string) error {
-	tokensTOML, err := tokensPathFor(soul)
+// tokens path for memory.
+func ensureManagedTokenEntry(memory string) error {
+	tokensTOML, err := tokensPathFor(memory)
 	if err != nil {
 		return err
 	}
-	return ensureTokenEntry(soul, tokensTOML)
+	return ensureTokenEntry(memory, tokensTOML)
 }
 
 // --- detectPlatform (lib.sh detect_platform) ---------------------------------
@@ -302,7 +302,7 @@ func loadConfig() (*config.PluginConfig, error) {
 // saveConfig atomically writes plugin-memory.conf. Values are backslash-escaped
 // (shellQuote), equivalent to bash printf '%q' for the simple path/word values we
 // store, and reversed by config.unquoteShell on load.
-func saveConfig(soul string, port int, mode, tokensTOML string) error {
+func saveConfig(memory string, port int, mode, tokensTOML string) error {
 	h, err := config.Home()
 	if err != nil {
 		return err
@@ -316,7 +316,7 @@ func saveConfig(soul string, port int, mode, tokensTOML string) error {
 	}
 	content := fmt.Sprintf(
 		"# demarkus-memory plugin config: managed by demarkus-plugin provision\nSOUL_DIR=%s\nPORT=%d\nMODE=%s\n",
-		shellQuote(soul), port, shellQuote(mode),
+		shellQuote(memory), port, shellQuote(mode),
 	)
 	// Persisted so a later run (or VerifyAuth) with the server down still
 	// targets the registry resolved at setup, not a conventional guess.
@@ -989,11 +989,11 @@ func managedServerCurrent(pidFile, versionFile, root string) bool {
 
 // stopStaleManagedServer stops a live-but-stale managed server and confirms it
 // exited: the caller's token migration moves the file the old server reads. A
-// live PID that is not our server for soulDir is left untouched (kill safety).
-func stopStaleManagedServer(runningPID int, soulDir string) error {
-	if !pidIsServerAtRoot(runningPID, soulDir) {
+// live PID that is not our server for memoryDir is left untouched (kill safety).
+func stopStaleManagedServer(runningPID int, memoryDir string) error {
+	if !pidIsServerAtRoot(runningPID, memoryDir) {
 		if runningPID > 0 && lockdir.PidAlive(runningPID) {
-			warnf("recorded pid %d is live but is not the demarkus-server for %s (stale .pid, reused PID); leaving it alone and clearing our bookkeeping", runningPID, soulDir)
+			warnf("recorded pid %d is live but is not the demarkus-server for %s (stale .pid, reused PID); leaving it alone and clearing our bookkeeping", runningPID, memoryDir)
 		}
 		return nil
 	}
@@ -1020,40 +1020,35 @@ func stopStaleManagedServer(runningPID int, soulDir string) error {
 	return nil
 }
 
-// ensureManagedServer spawns a demarkus-server for soulDir on port if ours isn't
-// already running and current. Writes the PID to <soulDir>/.pid and the spawned
-// binary's version to <soulDir>/.server-version. For default/isolated modes only.
-//
-// CRITICAL PID-at-root kill safety: a recorded PID is only killed once confirmed
-// to be genuinely OUR demarkus-server for this root. A dead/garbage PID just gets
-// its bookkeeping files cleared; a live PID that is NOT our server (stale .pid,
-// number reused by an unrelated process) is left untouched.
-func ensureManagedServer(soulDir string, port int) error {
-	pidFile := filepath.Join(soulDir, ".pid")
-	versionFile := filepath.Join(soulDir, ".server-version")
+// ensureManagedServer spawns a demarkus-server for memoryDir unless ours is
+// already running and current (default/isolated modes only). A recorded PID is
+// killed only once confirmed to be our server for this root; a stale PID is left alone.
+func ensureManagedServer(memoryDir string, port int) error {
+	pidFile := filepath.Join(memoryDir, ".pid")
+	versionFile := filepath.Join(memoryDir, ".server-version")
 
-	if managedServerCurrent(pidFile, versionFile, soulDir) {
+	if managedServerCurrent(pidFile, versionFile, memoryDir) {
 		return nil
 	}
 
 	// Not reusable. Stop a live-but-stale managed server before respawning — but
 	// only after confirming it is genuinely ours for this root.
-	if err := stopStaleManagedServer(readPID(pidFile), soulDir); err != nil {
+	if err := stopStaleManagedServer(readPID(pidFile), memoryDir); err != nil {
 		return err
 	}
 	_ = os.Remove(pidFile)
 	_ = os.Remove(versionFile)
-	// Pre-#289 the log sat at <soulDir>/.log, inside the server's tokens-watch
+	// Pre-#289 the log sat at <memoryDir>/.log, inside the server's tokens-watch
 	// directory, feeding the watcher its own output. Remove it on migration.
-	legacyLog := filepath.Join(soulDir, ".log")
+	legacyLog := filepath.Join(memoryDir, ".log")
 	if err := os.Remove(legacyLog); err != nil && !os.IsNotExist(err) {
 		warnf("remove legacy server log %s: %v", legacyLog, err)
 	}
 
-	if err := os.MkdirAll(soulDir, 0o755); err != nil {
+	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
 		return err
 	}
-	tokensPath, err := migrateManagedTokens(soulDir)
+	tokensPath, err := migrateManagedTokens(memoryDir)
 	if err != nil {
 		return err
 	}
@@ -1062,7 +1057,7 @@ func ensureManagedServer(soulDir string, port int) error {
 	if err != nil {
 		return err
 	}
-	logFile, err := managedServerLogPath(soulDir)
+	logFile, err := managedServerLogPath(memoryDir)
 	if err != nil {
 		return err
 	}
@@ -1076,7 +1071,7 @@ func ensureManagedServer(soulDir string, port int) error {
 	defer func() { _ = lf.Close() }()
 
 	cmd := exec.Command(serverBin,
-		"-root", soulDir,
+		"-root", memoryDir,
 		"-port", strconv.Itoa(port),
 		"-tokens", tokensPath,
 	)
@@ -1115,29 +1110,20 @@ func ensureManagedServer(soulDir string, port int) error {
 			if t := tailFile(logFile, 5); t != "" {
 				tailInfo = "\nrecent log:\n" + t
 			}
-			return fmt.Errorf("demarkus-server failed to start (port %d may be in use; re-run /soul-init)%s", port, tailInfo)
+			return fmt.Errorf("demarkus-server failed to start (port %d may be in use; re-run /memory-init)%s", port, tailInfo)
 		}
 		if !portIsFree(port) {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	logf("spawned demarkus-server (pid=%d, port=%d, root=%s)", pid, port, soulDir)
+	logf("spawned demarkus-server (pid=%d, port=%d, root=%s)", pid, port, memoryDir)
 	return nil
 }
 
-// restartLocalServerOnUpgrade, when ensureBinaries swapped the binary this run,
-// makes the configured local server run on the new binary using its OWN recorded
-// config. No-op when no binary changed or no local soul is configured.
-//
-// Ownership is the MODE, not a .pid file:
-//   - default/isolated: the server is ours → ensureManagedServer restarts it.
-//   - reuse: the server is the user's, ALWAYS. A .pid is not proof of ownership
-//     (a reuse config can carry a stale .pid), so reuse never takes the managed
-//     path: a running server is left alone (warned it's on the old binary), and
-//     only a DOWN one is started on the new binary with the recorded config.
-//
-// Never fails the caller: a restart problem is warned, not propagated.
+// restartLocalServerOnUpgrade moves the local server onto a freshly swapped
+// binary. Ownership is the MODE, not a .pid: reuse-mode servers are the user's,
+// so only a down one is started. Restart problems are warned, never propagated.
 func restartLocalServerOnUpgrade(replaced bool) {
 	if !replaced {
 		return
@@ -1148,33 +1134,33 @@ func restartLocalServerOnUpgrade(replaced bool) {
 	}
 	port, err := strconv.Atoi(strings.TrimSpace(cfg.Port))
 	if err != nil {
-		warnf("could not parse recorded PORT %q for upgrade restart; run /soul-init to recover", cfg.Port)
+		warnf("could not parse recorded PORT %q for upgrade restart; run /memory-init to recover", cfg.Port)
 		return
 	}
 
 	// Our own managed server — safe to restart onto the new binary. Gated on MODE
 	// (not just .pid) so a stale .pid under a reuse config can't trigger this.
-	if cfg.Mode != "reuse" && fileExists(filepath.Join(cfg.SoulDir, ".pid")) {
-		logf("binary upgraded; restarting managed server (mode=%s, soul=%s, port=%d) on the new binary", cfg.Mode, cfg.SoulDir, port)
-		if err := ensureManagedServer(cfg.SoulDir, port); err != nil {
-			warnf("could not (re)start the local server after a binary upgrade; run /soul-init to recover: %v", err)
+	if cfg.Mode != "reuse" && fileExists(filepath.Join(cfg.MemoryDir, ".pid")) {
+		logf("binary upgraded; restarting managed server (mode=%s, memory=%s, port=%d) on the new binary", cfg.Mode, cfg.MemoryDir, port)
+		if err := ensureManagedServer(cfg.MemoryDir, port); err != nil {
+			warnf("could not (re)start the local server after a binary upgrade; run /memory-init to recover: %v", err)
 		}
 		return
 	}
 
 	// Reuse mode, or a managed server that's down: don't assume it's ours.
-	if extPID := pidOfServerAtRoot(cfg.SoulDir); extPID > 0 {
-		warnf("binary upgraded, but the server at %s (pid=%d, mode=%s) is user-managed and still running the old binary; restart it yourself to pick up the new one", cfg.SoulDir, extPID, cfg.Mode)
+	if extPID := pidOfServerAtRoot(cfg.MemoryDir); extPID > 0 {
+		warnf("binary upgraded, but the server at %s (pid=%d, mode=%s) is user-managed and still running the old binary; restart it yourself to pick up the new one", cfg.MemoryDir, extPID, cfg.Mode)
 		return
 	}
 
-	logf("binary upgraded; starting down server (mode=%s, soul=%s, port=%d) on the new binary", cfg.Mode, cfg.SoulDir, port)
-	if err := ensureManagedServer(cfg.SoulDir, port); err != nil {
-		warnf("could not (re)start the local server after a binary upgrade; run /soul-init to recover: %v", err)
+	logf("binary upgraded; starting down server (mode=%s, memory=%s, port=%d) on the new binary", cfg.Mode, cfg.MemoryDir, port)
+	if err := ensureManagedServer(cfg.MemoryDir, port); err != nil {
+		warnf("could not (re)start the local server after a binary upgrade; run /memory-init to recover: %v", err)
 	}
 }
 
-// --- seed (lib.sh seed_doc + session-start.sh seed_souldocs) -----------------
+// --- seed (lib.sh seed_doc + session-start.sh seed_memorydocs) -----------------
 
 // seedClient is the protocol surface seeding needs; *fetch.Client satisfies it.
 type seedClient interface {
@@ -1202,10 +1188,10 @@ func localClient() *fetch.Client {
 	return fetch.NewClient(fetch.Options{Insecure: true, DialTimeout: time.Second, RequestTimeout: 5 * time.Second})
 }
 
-// seedSoulDocs seeds index.md via PUBLISH so it gets version history; a
+// seedMemoryDocs seeds index.md via PUBLISH so it gets version history; a
 // flat file on disk is not FETCHable (issue #288). Best-effort: failures
 // warn and provision continues.
-func seedSoulDocs(port int) {
+func seedMemoryDocs(port int) {
 	tok, err := readPluginToken()
 	if err != nil {
 		warnf("could not read plugin token; skipping doc seeding: %v", err)
@@ -1222,10 +1208,10 @@ func seedSoulDocs(port int) {
 
 // cleanupLegacyTemplate deletes the old seeding's flat project-template.md
 // (never FETCHable, issue #288) when pristine; the layout now ships in the
-// soul-memory skill. A customized copy stays until its owner republishes.
-func cleanupLegacyTemplate(soulDir string) {
+// memory-memory skill. A customized copy stays until its owner republishes.
+func cleanupLegacyTemplate(memoryDir string) {
 	const name = "project-template.md"
-	flatPath := filepath.Join(soulDir, name)
+	flatPath := filepath.Join(memoryDir, name)
 	fi, err := os.Lstat(flatPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -1249,10 +1235,10 @@ func cleanupLegacyTemplate(soulDir string) {
 		warnf("could not remove legacy flat %s: %v", name, err)
 		return
 	}
-	logf("removed legacy flat %s (the layout now ships in the soul-memory skill)", name)
+	logf("removed legacy flat %s (the layout now ships in the memory-memory skill)", name)
 }
 
-// seedDoc publishes the embedded seed for name at the soul root unless the
+// seedDoc publishes the embedded seed for name at the memory root unless the
 // server already serves it. Create-only: over a legacy flat file this relies
 // on the store's flat-to-v1 migration, whose conflict preserves user content.
 func seedDoc(cl seedClient, host, tok, name string, meta map[string]string) {
@@ -1319,7 +1305,7 @@ func Provision() error {
 		return err
 	}
 	if seedPort > 0 {
-		seedSoulDocs(seedPort)
+		seedMemoryDocs(seedPort)
 	}
 	return nil
 }
@@ -1358,7 +1344,7 @@ func provisionLocked() (int, error) {
 		if perr != nil {
 			return 0, fmt.Errorf("malformed PORT %q in plugin-memory.conf", cfg.Port)
 		}
-		if err := ensureManagedServer(cfg.SoulDir, port); err != nil {
+		if err := ensureManagedServer(cfg.MemoryDir, port); err != nil {
 			return 0, err
 		}
 	case "reuse":
@@ -1366,16 +1352,16 @@ func provisionLocked() (int, error) {
 			warnf("malformed PORT %q in plugin-memory.conf; skipping doc seeding", cfg.Port)
 			seed = false
 		}
-		if pidOfServerAtRoot(cfg.SoulDir) == 0 {
-			warnf("configured to reuse server at %s but none is running; run /soul-init to reconfigure", cfg.SoulDir)
+		if pidOfServerAtRoot(cfg.MemoryDir) == 0 {
+			warnf("configured to reuse server at %s but none is running; run /memory-init to reconfigure", cfg.MemoryDir)
 			seed = false // known down; don't pay the seeding dial retries
 		}
 	default:
 		return 0, fmt.Errorf("unknown MODE in plugin-memory.conf: %s", cfg.Mode)
 	}
 
-	cleanupLegacyTemplate(cfg.SoulDir) // local-only; runs even when seeding is skipped
-	logf("ready (mode=%s, soul=%s, port=%s)", cfg.Mode, cfg.SoulDir, cfg.Port)
+	cleanupLegacyTemplate(cfg.MemoryDir) // local-only; runs even when seeding is skipped
+	logf("ready (mode=%s, memory=%s, port=%s)", cfg.Mode, cfg.MemoryDir, cfg.Port)
 	if !seed {
 		port = 0
 	}
@@ -1410,25 +1396,25 @@ func doDefault() error {
 		logf("port %d is in use; falling back to isolated mode", defaultPort)
 		return doIsolated()
 	}
-	soul, err := sharedSoulDir()
+	memory, err := sharedMemoryDir()
 	if err != nil {
 		return err
 	}
-	if err := ensureManagedTokenEntry(soul); err != nil {
+	if err := ensureManagedTokenEntry(memory); err != nil {
 		return err
 	}
-	if err := ensureManagedServer(soul, defaultPort); err != nil {
+	if err := ensureManagedServer(memory, defaultPort); err != nil {
 		return err
 	}
 	// Same end-to-end auth guarantee as reuse mode: setup success must mean
 	// writes work, not just that local files were written.
 	if err := verifyPluginToken(defaultPort); err != nil {
-		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /soul-init", err)
+		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /memory-init", err)
 	}
-	if err := saveConfig(soul, defaultPort, "default", ""); err != nil {
+	if err := saveConfig(memory, defaultPort, "default", ""); err != nil {
 		return err
 	}
-	logf("default setup complete (soul=%s, port=%d)", soul, defaultPort)
+	logf("default setup complete (memory=%s, port=%d)", memory, defaultPort)
 	return nil
 }
 
@@ -1440,23 +1426,23 @@ func doIsolated() error {
 	if err != nil {
 		return err
 	}
-	soul, err := isolatedSoulDir()
+	memory, err := isolatedMemoryDir()
 	if err != nil {
 		return err
 	}
-	if err := ensureManagedTokenEntry(soul); err != nil {
+	if err := ensureManagedTokenEntry(memory); err != nil {
 		return err
 	}
-	if err := ensureManagedServer(soul, port); err != nil {
+	if err := ensureManagedServer(memory, port); err != nil {
 		return err
 	}
 	if err := verifyPluginToken(port); err != nil {
-		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /soul-init", err)
+		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /memory-init", err)
 	}
-	if err := saveConfig(soul, port, "isolated", ""); err != nil {
+	if err := saveConfig(memory, port, "isolated", ""); err != nil {
 		return err
 	}
-	logf("isolated setup complete (soul=%s, port=%d)", soul, port)
+	logf("isolated setup complete (memory=%s, port=%d)", memory, port)
 	return nil
 }
 
@@ -1475,7 +1461,7 @@ func doReuse(port int, root string) error {
 	if err != nil {
 		return fmt.Errorf("load plugin config: %w", err)
 	}
-	if prior != nil && prior.Mode == "reuse" && prior.SoulDir == root && prior.TokensTOML != "" {
+	if prior != nil && prior.Mode == "reuse" && prior.MemoryDir == root && prior.TokensTOML != "" {
 		// A prior adoption resolved a custom registry; keep it when the server
 		// is down rather than falling back to the convention.
 		tokensTOML = prior.TokensTOML
@@ -1495,7 +1481,7 @@ func doReuse(port int, root string) error {
 			// conventional file instead would mutate a registry the server never
 			// reads (a flattened ps string can truncate paths with whitespace).
 			if !fileExists(discovered) {
-				return fmt.Errorf("the adopted server (pid %d) reads tokens from %s, but no such file exists; check its -tokens flag or DEMARKUS_TOKENS and re-run /soul-init", targetPID, discovered)
+				return fmt.Errorf("the adopted server (pid %d) reads tokens from %s, but no such file exists; check its -tokens flag or DEMARKUS_TOKENS and re-run /memory-init", targetPID, discovered)
 			}
 			logf("adopted server (pid %d) reads tokens from %s, not the conventional %s; using it", targetPID, discovered, tokensTOML)
 			tokensTOML = discovered
@@ -1515,16 +1501,16 @@ func doReuse(port int, root string) error {
 		// server never reads passes every local check and fails only at first
 		// write; refuse to report success on that state.
 		if err := verifyPluginToken(port); err != nil {
-			return fmt.Errorf("plugin token does not authenticate against the adopted server (tokens file: %s): %w; check the server's -tokens flag or DEMARKUS_TOKENS and re-run /soul-init", tokensTOML, err)
+			return fmt.Errorf("plugin token does not authenticate against the adopted server (tokens file: %s): %w; check the server's -tokens flag or DEMARKUS_TOKENS and re-run /memory-init", tokensTOML, err)
 		}
 	} else {
-		warnf("no running server found with -root %s; proceeding with config, but /soul-init may need a rerun once it's up", root)
+		warnf("no running server found with -root %s; proceeding with config, but /memory-init may need a rerun once it's up", root)
 	}
 
 	if err := saveConfig(root, port, "reuse", tokensTOML); err != nil {
 		return err
 	}
-	logf("reuse setup complete (soul=%s, port=%d)", root, port)
+	logf("reuse setup complete (memory=%s, port=%d)", root, port)
 	return nil
 }
 
@@ -1575,14 +1561,14 @@ func verifyTokenWith(cl authProbeClient, host, tok string) error {
 
 // VerifyAuth reports whether the plugin token authenticates against the
 // configured local server, naming the token registry the server actually reads.
-// Read-only apart from the non-mutating ARCHIVE probe. (soul-doctor drift check.)
+// Read-only apart from the non-mutating ARCHIVE probe. (memory-doctor drift check.)
 func VerifyAuth() (string, error) {
 	cfg, err := loadConfig()
 	if err != nil {
 		return "", err
 	}
 	if cfg == nil {
-		return "no demarkus-memory soul configured (run /soul-init)", nil
+		return "no demarkus-memory memory configured (run /memory-init)", nil
 	}
 	port, err := strconv.Atoi(cfg.Port)
 	if err != nil {
@@ -1591,7 +1577,7 @@ func VerifyAuth() (string, error) {
 	// Name the registry for the report: the running server's own -tokens or
 	// DEMARKUS_TOKENS wins; otherwise the path provisioning would use.
 	tokensTOML := ""
-	pid := pidOfServerAtRoot(cfg.SoulDir)
+	pid := pidOfServerAtRoot(cfg.MemoryDir)
 	serverPort := ""
 	if pid > 0 {
 		args := psArgs(pid)
@@ -1603,23 +1589,23 @@ func VerifyAuth() (string, error) {
 	}
 	if tokensTOML == "" {
 		if cfg.Mode == "reuse" {
-			tokensTOML = filepath.Join(cfg.SoulDir, "tokens.toml")
+			tokensTOML = filepath.Join(cfg.MemoryDir, "tokens.toml")
 		} else {
-			p, err := tokensPathFor(cfg.SoulDir)
+			p, err := tokensPathFor(cfg.MemoryDir)
 			if err != nil {
-				return "", fmt.Errorf("resolve token registry for %s: %w", cfg.SoulDir, err)
+				return "", fmt.Errorf("resolve token registry for %s: %w", cfg.MemoryDir, err)
 			}
 			tokensTOML = p
 		}
 	}
 	if pid <= 0 {
-		return fmt.Sprintf("cannot verify: no running demarkus-server for %s (expected token registry: %s)", cfg.SoulDir, tokensTOML), nil
+		return fmt.Sprintf("cannot verify: no running demarkus-server for %s (expected token registry: %s)", cfg.MemoryDir, tokensTOML), nil
 	}
 	// A port mismatch means the probe would hit some other process, so any
 	// verdict from it would describe the wrong server. Parsed comparison:
 	// "06309" and "6309" are the same port.
 	if sp, err := strconv.Atoi(serverPort); err != nil || sp != port {
-		return fmt.Sprintf("cannot verify: server pid %d listens on port %s but the config says %s; re-run /soul-init", pid, serverPort, cfg.Port), nil
+		return fmt.Sprintf("cannot verify: server pid %d listens on port %s but the config says %s; re-run /memory-init", pid, serverPort, cfg.Port), nil
 	}
 	if err := verifyPluginToken(port); err != nil {
 		// Only a definitive unauthorized is drift; a transport failure means the
@@ -1627,29 +1613,29 @@ func VerifyAuth() (string, error) {
 		if !errors.Is(err, errUnauthorized) {
 			return fmt.Sprintf("cannot verify: %v (server pid %d, port %s)", err, pid, cfg.Port), nil
 		}
-		return fmt.Sprintf("token drift: plugin token does not authenticate (server pid %d, token registry %s); re-run /soul-init or update the registry hash", pid, tokensTOML), nil
+		return fmt.Sprintf("token drift: plugin token does not authenticate (server pid %d, token registry %s); re-run /memory-init or update the registry hash", pid, tokensTOML), nil
 	}
 	return fmt.Sprintf("write auth healthy (server pid %d, token registry %s)", pid, tokensTOML), nil
 }
 
 // Status returns a human-readable one-line status of the configured server, or a
-// note that no soul is configured.
+// note that no memory is configured.
 func Status() (string, error) {
 	cfg, err := loadConfig()
 	if err != nil {
 		return "", err
 	}
 	if cfg == nil {
-		return "no demarkus-memory soul configured (run /soul-init)", nil
+		return "no demarkus-memory memory configured (run /memory-init)", nil
 	}
 	w, err := HealthWarning()
 	if err != nil {
 		return "", err
 	}
 	if w != "" {
-		return fmt.Sprintf("mode=%s soul=%s port=%s: %s", cfg.Mode, cfg.SoulDir, cfg.Port, w), nil
+		return fmt.Sprintf("mode=%s memory=%s port=%s: %s", cfg.Mode, cfg.MemoryDir, cfg.Port, w), nil
 	}
-	return fmt.Sprintf("mode=%s soul=%s port=%s : healthy", cfg.Mode, cfg.SoulDir, cfg.Port), nil
+	return fmt.Sprintf("mode=%s memory=%s port=%s : healthy", cfg.Mode, cfg.MemoryDir, cfg.Port), nil
 }
 
 // HealthWarning echoes a one-line human warning when the configured memory server
@@ -1669,22 +1655,20 @@ func HealthWarning() (string, error) {
 		// Verify the recorded PID is genuinely OUR demarkus-server for this root,
 		// not just any live process that reused the number — otherwise a stale
 		// .pid would falsely report healthy while memory tools fail.
-		pid := readPID(filepath.Join(cfg.SoulDir, ".pid"))
-		if pid <= 0 || !pidIsServerAtRoot(pid, cfg.SoulDir) {
-			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.SoulDir), nil
+		pid := readPID(filepath.Join(cfg.MemoryDir, ".pid"))
+		if pid <= 0 || !pidIsServerAtRoot(pid, cfg.MemoryDir) {
+			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /memory-init to restart, or /memory-status to diagnose.", cfg.MemoryDir), nil
 		}
 	case "reuse":
-		if pidOfServerAtRoot(cfg.SoulDir) == 0 {
-			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.SoulDir), nil
+		if pidOfServerAtRoot(cfg.MemoryDir) == 0 {
+			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /memory-init to reconfigure.", cfg.MemoryDir), nil
 		}
 	}
 	return "", nil
 }
 
-// DetectServers reports running demarkus-server processes, matching detect-soul.sh:
-//
-//	"NO_SERVER"                    — nothing detected
-//	"SERVERS\n<PID PORT ROOT>..."  — one or more running servers
+// DetectServers reports running demarkus-server processes as "NO_SERVER" or
+// "SERVERS\n<PID PORT ROOT>..." lines, matching the old detect script.
 func DetectServers() (string, error) {
 	results := findRunningDemarkus()
 	if results == "" {

@@ -7,7 +7,7 @@
 //   - before_agent_start → inject standing guidance (once) + recall nudge
 //   - tool_call          → publish tag-gate + destination gate + promote nudge
 //   - session_shutdown   → journal nudge
-//   - registerCommand    → generated /soul-* and /promote prompts
+//   - registerCommand    → generated /memory-* and /promote prompts
 //
 // The shared demarkus-plugin binary owns gate, nudge, and guidance decisions.
 // This adapter maps Pi events and shares ~/.demarkus state with other harnesses.

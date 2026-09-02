@@ -25,7 +25,7 @@ It declares who owns the world, what subject domain it holds, its partition role
 
 ## How a joined agent consumes them
 
-`/knowledge-join` registers the system so the publish tag-gate enforces on its writes (the same tag check as the local soul; tags travel in the tool call, so no broker access is needed for that). For the rest:
+`/knowledge-join` registers the system so the publish tag-gate enforces on its writes (the same tag check as the local memory; tags travel in the tool call, so no broker access is needed for that). For the rest:
 
 1. On first substantive work against a knowledge system, the agent fetches `mark://root/.well-known/demarkus/policy.md` and `mark://root/.well-known/demarkus/template.md` and follows them; structure conventions are advisory by necessity (only the agent, via its MCP OAuth session, can reach the broker; a hook cannot).
 2. The agent mirrors the policy's **enforced core** into local files the gate reads (`<slug>` is the MCP server name `/knowledge-join` registered, shown by `claude mcp list`):
@@ -39,4 +39,4 @@ It declares who owns the world, what subject domain it holds, its partition role
 
 ## Why this shape
 
-A shared catalog with many writers needs consistency conventions more than a personal soul does, and the org should set the bar centrally rather than each member re-deriving it. Hosting the policy and template on `root` means a single edit propagates to everyone, with no plugin release and no per-user setup; the conventions travel through the same knowledge system they govern.
+A shared catalog with many writers needs consistency conventions more than a personal memory does, and the org should set the bar centrally rather than each member re-deriving it. Hosting the policy and template on `root` means a single edit propagates to everyone, with no plugin release and no per-user setup; the conventions travel through the same knowledge system they govern.

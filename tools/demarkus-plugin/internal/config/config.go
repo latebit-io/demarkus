@@ -24,8 +24,8 @@ const (
 	Ask   Strictness = "ask"
 )
 
-// LocalSoulID is the reserved catalog id / MCP server name of the local managed soul.
-const LocalSoulID = "demarkus-memory"
+// LocalMemoryID is the reserved catalog id / MCP server name of the local managed memory.
+const LocalMemoryID = "demarkus-memory"
 
 // Home returns the ~/.demarkus base directory that all plugin paths resolve under.
 func Home() (string, error) {
@@ -157,11 +157,9 @@ func StyleStrictness() (Strictness, error) {
 	return validStrictness(s, Warn), nil
 }
 
-// RetentionStrictness is the enforcement level for the retention guard (a
-// publish/append whose metadata carries a prunable retention value permanently
-// deletes older versions). env override → plugin.retention-strictness → ask:
-// destructive-by-metadata warrants a human decision by default, on every
-// surface the gate covers (soul and knowledge alike).
+// RetentionStrictness is the retention guard's level: env override, then
+// plugin.retention-strictness, then ask. A prunable retention value deletes
+// older versions permanently, so a human decision is the default everywhere.
 func RetentionStrictness() (Strictness, error) {
 	if v := os.Getenv("DEMARKUS_RETENTION_STRICTNESS"); v != "" {
 		return validStrictness(v, Ask), nil
@@ -327,11 +325,11 @@ func legacyKnowledgePolicy(slug string) (publishpolicy.Policy, error) {
 
 // --- registries ---------------------------------------------------------------
 
-// LocalSoulPresent the local managed soul is configured (plugin-memory.conf).
-func LocalSoulPresent() (bool, error) { return fileExists("plugin-memory.conf") }
+// LocalMemoryPresent the local managed memory is configured (plugin-memory.conf).
+func LocalMemoryPresent() (bool, error) { return fileExists("plugin-memory.conf") }
 
-// SoulConfigured is an alias used by the knowledge surface for the soul↔system note.
-func SoulConfigured() (bool, error) { return fileExists("plugin-memory.conf") }
+// MemoryConfigured is an alias used by the knowledge surface for the memory↔system note.
+func MemoryConfigured() (bool, error) { return fileExists("plugin-memory.conf") }
 
 // ListKnowledgeSystems registered knowledge-system slugs.
 func ListKnowledgeSystems() ([]string, error) {
@@ -342,8 +340,8 @@ func ListKnowledgeSystems() ([]string, error) {
 	return records(p)
 }
 
-// ListRemoteSouls registered remote-soul slugs (field 1 of each tab-separated row).
-func ListRemoteSouls() ([]string, error) {
+// ListRemoteMemories registered remote-memory slugs (field 1 of each tab-separated row).
+func ListRemoteMemories() ([]string, error) {
 	p, err := path("souls")
 	if err != nil {
 		return nil, err
@@ -425,25 +423,25 @@ func ParseTool(tool string) (ParsedTool, bool) {
 // norm makes "demarkus-memory" and "demarkus_memory" compare equal.
 func norm(s string) string { return strings.ToLower(strings.ReplaceAll(s, "-", "_")) }
 
-func serverIsLocalSoul(server string) bool {
+func serverIsLocalMemory(server string) bool {
 	if server == "" {
-		return true // un-prefixed: assume the local soul
+		return true // un-prefixed: assume the local memory
 	}
 	n := norm(server)
-	return n == norm(LocalSoulID) || strings.HasSuffix(n, "_"+norm(LocalSoulID))
+	return n == norm(LocalMemoryID) || strings.HasSuffix(n, "_"+norm(LocalMemoryID))
 }
 
-// SoulTargetID canonical id of the soul a tool writes to (for binding compare),
+// MemoryTargetID canonical id of the memory a tool writes to (for binding compare),
 // or "" when the tool targets a knowledge system or unrelated server.
-func SoulTargetID(tool string) (string, error) {
+func MemoryTargetID(tool string) (string, error) {
 	pt, ok := ParseTool(tool)
 	if !ok {
 		return "", nil
 	}
-	if serverIsLocalSoul(pt.Server) {
-		return LocalSoulID, nil
+	if serverIsLocalMemory(pt.Server) {
+		return LocalMemoryID, nil
 	}
-	remotes, err := ListRemoteSouls()
+	remotes, err := ListRemoteMemories()
 	if err != nil {
 		return "", err
 	}
@@ -456,13 +454,13 @@ func SoulTargetID(tool string) (string, error) {
 }
 
 // KnowledgeScope the registered knowledge-system slug a tool targets, or "".
-// The local soul is explicitly NOT a knowledge target.
+// The local memory is explicitly NOT a knowledge target.
 func KnowledgeScope(tool string) (string, error) {
 	pt, ok := ParseTool(tool)
 	if !ok {
 		return "", nil
 	}
-	if serverIsLocalSoul(pt.Server) {
+	if serverIsLocalMemory(pt.Server) {
 		return "", nil
 	}
 	systems, err := ListKnowledgeSystems()
@@ -508,10 +506,10 @@ func PromoteDestinationPresent() (bool, error) {
 	return len(targets) > 0, err
 }
 
-// PublishGateScopeLocal true when a tool targets a soul this plugin routes
-// (local managed soul or a registered remote soul) — i.e. SoulTargetID != "".
+// PublishGateScopeLocal true when a tool targets a memory this plugin routes
+// (local managed memory or a registered remote memory) — i.e. MemoryTargetID != "".
 func PublishGateScopeLocal(tool string) (bool, error) {
-	id, err := SoulTargetID(tool)
+	id, err := MemoryTargetID(tool)
 	return id != "", err
 }
 
@@ -521,7 +519,7 @@ func PublishGateScopeLocal(tool string) (bool, error) {
 // TokensTOML records the token registry resolved at setup (reuse mode may adopt
 // a server whose -tokens points outside the root); empty on older configs.
 type PluginConfig struct {
-	SoulDir    string
+	MemoryDir  string
 	Port       string
 	Mode       string
 	TokensTOML string
@@ -551,7 +549,7 @@ func LoadConfig() (*PluginConfig, error) {
 	if out["SOUL_DIR"] == "" || out["PORT"] == "" || out["MODE"] == "" {
 		return nil, nil
 	}
-	return &PluginConfig{SoulDir: out["SOUL_DIR"], Port: out["PORT"], Mode: out["MODE"], TokensTOML: out["TOKENS"]}, nil
+	return &PluginConfig{MemoryDir: out["SOUL_DIR"], Port: out["PORT"], Mode: out["MODE"], TokensTOML: out["TOKENS"]}, nil
 }
 
 // unquoteShell undoes a printf %q quoting for the simple values we store

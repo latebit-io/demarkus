@@ -165,12 +165,12 @@ func TestConfigRefsFileMode(t *testing.T) {
 		Storage: StorageConfig{Backend: storageBackendFile, Dir: testStorageDir},
 		Server:  ServerConfig{RefreshTokensSecret: "rt"},
 	}
-	world := &WorldConfig{Name: "soul", TokensFile: "/etc/demarkus/tokens.toml"}
+	world := &WorldConfig{Name: "memory", TokensFile: "/etc/demarkus/tokens.toml"}
 
 	if got := cfg.refreshTokensRef().Path; got != testStorageDir+"/"+RefreshTokensSecretKey {
 		t.Errorf("refresh ref path = %q", got)
 	}
-	if got := cfg.worldWriteTokenRef("soul").Path; got != testStorageDir+"/demarkus-broker-write-token-soul.json" {
+	if got := cfg.worldWriteTokenRef("memory").Path; got != testStorageDir+"/demarkus-broker-write-token-memory.json" {
 		t.Errorf("write-token ref path = %q", got)
 	}
 	if got := cfg.worldTokensRef(world).Path; got != "/etc/demarkus/tokens.toml" {

@@ -1,14 +1,14 @@
 # demarkus-memory-broker Helm chart
 
 Memory-as-a-service broker for demarkus: an OAuth-fronted MCP gateway
-that gives each identity a private, versioned personal soul. Cloned
+that gives each identity a private, versioned personal memory. Cloned
 from the demarkus-knowledge-broker deployment profile (same HA posture:
 2 replicas, leader-elected sweeper, optimistic-concurrency Secret
 writes) with the memory authorization model: identity maps to exactly
 one world, and reads AND writes are locked to the caller's own world.
 Static worlds are hand-provisioned tenants; every world must carry a
 non-empty `allow` block naming its tenant or the broker refuses to
-start. On a tenant's first access the broker seeds the soul template
+start. On a tenant's first access the broker seeds the memory template
 (`/index.md`, `/.well-known/demarkus/policy.md`,
 `/.well-known/demarkus/template.md`) into the world.
 
@@ -55,7 +55,7 @@ the same Ingress controller through different hostnames:
 | Listener | Default port | Default Ingress host | Purpose |
 | --- | --- | --- | --- |
 | Management API | `:8080` (`server.port`) | `ingress.host` | OIDC login + device flow + token management + `/me/install` (see table below). |
-| MCP gateway | `:8081` (`server.mcp.addr`) | `ingress.mcp.host` (optional) | 12-tool tenant-scoped soul surface over JSON-RPC/Streamable HTTP. See [MCP gateway](#mcp-gateway). |
+| MCP gateway | `:8081` (`server.mcp.addr`) | `ingress.mcp.host` (optional) | 12-tool tenant-scoped memory surface over JSON-RPC/Streamable HTTP. See [MCP gateway](#mcp-gateway). |
 
 The two listeners share auth (`compositeVerifier`), rate-limit
 buckets (per-canonical-email), and the `Issuer` machinery; only the

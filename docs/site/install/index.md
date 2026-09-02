@@ -8,14 +8,14 @@ Demarkus has four install paths, distinguished by **where it runs and who reache
 
 | Path | Runs where | Exposure | Use it for |
 |---|---|---|---|
-| **demarkus-memory plugin** (`/soul-init`) | your laptop | local only, no ports, no TLS | a personal soul for one agent; nothing to operate |
+| **demarkus-memory plugin** (`/memory-init`) | your laptop | local only, no ports, no TLS | a personal memory for one agent; nothing to operate |
 | **`install.sh`** | any Linux (or macOS) host | local by default; public with `--domain` | one server: a LAN/dev world, or a public server with real TLS |
-| **`install-stack.sh`** (the appliance) | a **public** Linux VPS | public HTTPS on 80/443 **and the world on UDP 6309** | the full self-hosted knowledge system in one command, plus the world as your personal remote soul (see [the five-minute appliance](../deployment/appliance.md)) |
+| **`install-stack.sh`** (the appliance) | a **public** Linux VPS | public HTTPS on 80/443 **and the world on UDP 6309** | the full self-hosted knowledge system in one command, plus the world as your personal remote memory (see [the five-minute appliance](../deployment/appliance.md)) |
 | **Helm charts** (`deploy/helm/`) | a Kubernetes cluster | cluster-defined | multi-replica production deployments, including the multi-world knowledge server (see [Kubernetes & Helm](../deployment/kubernetes.md)) |
 
 The knowledge server (`demarkus-knowledge-server`) has no install-script path: it deploys via Helm only.
 
-The appliance is **not** a local tool: without `--domain` it serves `library.`, `broker.`, `auth.`, and `soul.<public-ip>.sslip.io` and provisions a Let's Encrypt certificate for each, all of which need a reachable public address. For a single server that also runs fine on a laptop or private network, use `install.sh` without `--domain`. For a personal, zero-exposure soul, use the plugin.
+The appliance is **not** a local tool: without `--domain` it serves `library.`, `broker.`, `auth.`, and `memory.<public-ip>.sslip.io` and provisions a Let's Encrypt certificate for each, all of which need a reachable public address. For a single server that also runs fine on a laptop or private network, use `install.sh` without `--domain`. For a personal, zero-exposure memory, use the plugin.
 
 ## Options
 

@@ -37,8 +37,8 @@ func (g *mcpGateway) registerResources() {
 		// readResource tenant gate is the whole surface.
 		g.mcpServer.AddResourceTemplate(mcp.NewResourceTemplate(
 			"mark://{world}/{+path}",
-			"soul document",
-			mcp.WithTemplateDescription("Any document in your soul, by world name and path; append #<anchor> to attach a single section (anchors are GitHub-style heading slugs). Your world name comes from the mark_worlds tool."),
+			"memory document",
+			mcp.WithTemplateDescription("Any document in your memory, by world name and path; append #<anchor> to attach a single section (anchors are GitHub-style heading slugs). Your world name comes from the mark_worlds tool."),
 			mcp.WithTemplateMIMEType("text/markdown"),
 		), g.readResource)
 		return

@@ -221,12 +221,9 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
-	// /.well-known/openid-configuration: public, unauthenticated, no
-	// rate limit. Polling-friendly: device-flow clients fetch it once
-	// per /soul-join and never again; intermediaries cache via the
-	// Cache-Control header the Discovery handler emits.
-	// oauth-authorization-server aliases the same doc at the RFC 8414
-	// path; §3.3 requires it on the issuer's origin, which is this listener.
+	// Discovery is public and unrate-limited (fetched once per join, cached via
+	// Cache-Control). The RFC 8414 path aliases the same document; §3.3 requires
+	// it on the issuer's origin, which is this listener.
 	if s.discovery != nil {
 		mux.Handle("GET /.well-known/openid-configuration", s.discovery.Handler())
 		mux.Handle("GET /.well-known/oauth-authorization-server", s.discovery.Handler())

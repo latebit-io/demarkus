@@ -50,8 +50,8 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifacts) != 54 {
-		t.Fatalf("renderAll() produced %d artifacts, want 54", len(artifacts))
+	if len(artifacts) != 81 {
+		t.Fatalf("renderAll() produced %d artifacts, want 81", len(artifacts))
 	}
 }
 
@@ -156,4 +156,37 @@ func validManifest() manifest {
 
 func contains(values []string, want string) bool {
 	return slices.Contains(values, want)
+}
+
+func TestRenderAliasShipsTargetBodyWithDeprecatedDescription(t *testing.T) {
+	dir := t.TempDir()
+	commands := filepath.Join(dir, "commands")
+	if err := os.MkdirAll(commands, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := "---\ndescription: Do the thing\n---\n\nBody for {{.Agent}}.\n"
+	if err := os.WriteFile(filepath.Join(commands, "memory-x.md.tmpl"), []byte(tmpl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(commands, "soul-x.md.alias")
+	if err := os.WriteFile(alias, []byte("memory-x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := renderAlias(alias, &target{Agent: "Claude Code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{"description: Deprecated alias of /memory-x. Do the thing\n", "Body for Claude Code.", generatedMarker} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("alias output missing %q:\n%s", want, text)
+		}
+	}
+	self := filepath.Join(commands, "memory-x.md.alias")
+	if err := os.WriteFile(self, []byte("memory-x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := renderAlias(self, &target{Agent: "Claude Code"}); err == nil {
+		t.Fatal("self-alias should be rejected")
+	}
 }

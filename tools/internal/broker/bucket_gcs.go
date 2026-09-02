@@ -164,7 +164,7 @@ func (c *GCSBucketCreator) purgeAndDelete(ctx context.Context, bucket string) er
 	if err := query.SetAttrSelection([]string{"Name", "Generation"}); err != nil {
 		return fmt.Errorf("bucket %q attr selection: %w", bucket, err)
 	}
-	// Bounded-parallel deletes: a soul holds thousands of generations
+	// Bounded-parallel deletes: a memory holds thousands of generations
 	// and strictly sequential round trips take minutes. The iterator
 	// runs on groupCtx so paging observes a failed delete's cancel.
 	group, groupCtx := errgroup.WithContext(ctx)

@@ -559,16 +559,9 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 
 	exchange, err := s.verifier.Exchange(r.Context(), code)
 	if err != nil {
-		// Do NOT translate broker-side exchange failures into
-		// access_denied: that error is reserved for the user
-		// explicitly denying at the IdP (handled above on the
-		// `error` query param). Calling Deny here would permanently
-		// tell the polling client "user rejected" on a transient
-		// failure (JWKS unreachable, IdP rate-limited, etc.). Leave
-		// the grant pending so the user can retry by re-running
-		// /soul-join; if the broker stays broken until the device
-		// code's TTL, the polling client sees expired_token, which
-		// is the truthful state.
+		// Not access_denied: that is reserved for an explicit IdP denial. A
+		// transient exchange failure leaves the grant pending so the user can
+		// retry; if it never recovers the poller sees expired_token, truthfully.
 		s.log.WarnContext(r.Context(), "broker: device callback oauth exchange failed", "err", err)
 		s.renderDeviceDone(w, r)
 		return
@@ -586,14 +579,9 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 		s.renderDeviceDone(w, r)
 		return
 	}
-	// Mint the refresh token BEFORE Bind so a Secret-side failure
-	// keeps the grant pending — the polling client retries on the
-	// next interval, the user re-runs soul-join, and no orphan
-	// statusComplete state goes out without its refresh token.
-	// Orphaned refresh-tokens Secret entries (mint succeeded, Bind
-	// then races a sweep) age out on Sweep via their expiry.
-	// Device-flow tokens are never client-bound — the polling clients
-	// are public/native by construction.
+	// Mint before Bind so a Secret-side failure keeps the grant pending rather
+	// than completing it without a refresh token; an orphaned mint ages out on
+	// Sweep. Device-flow clients are public, so tokens are never client-bound.
 	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, "", s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: device callback refresh mint failed",

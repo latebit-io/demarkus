@@ -1,7 +1,7 @@
 // Package registry owns every mutation of the shared ~/.demarkus + ~/.config/mcp
-// state (soul catalog, project bindings, knowledge registry, policy mirrors,
+// state (memory catalog, project bindings, knowledge registry, policy mirrors,
 // promote targets, MCP server config). Centralizing it here replaces the
-// per-plugin bash (soul-join.sh, soul-default.sh, register-knowledge.sh,
+// per-plugin bash (memory-join.sh, memory-default.sh, register-knowledge.sh,
 // mirror-policy.sh, promote-target.sh) and the mcp-config.mjs JS — one
 // implementation, called by every harness's thin adapter.
 package registry

@@ -103,7 +103,7 @@ function isFileMutation(toolName: string): boolean {
 }
 
 // Per-session adapter state: one guidance injection, one idle nudge, and the
-// two session-end signals (files changed / soul written).
+// two session-end signals (files changed / memory written).
 interface SessionState {
   guidanceDelivered: boolean;
   idleNudged: boolean;
@@ -117,7 +117,7 @@ function run(cmd: string, args: string[], label: string, timeout: number): Promi
     execFile(cmd, args, { timeout }, (err, _out, stderr) => {
       if (err) {
         const tail = (stderr || "").trim().split("\n").slice(-3).join(" ");
-        resolve(`demarkus-memory ${label} failed: ${tail || err.message}. Run /soul-init to recover.`);
+        resolve(`demarkus-memory ${label} failed: ${tail || err.message}. Run /memory-init to recover.`);
         return;
       }
       resolve("");
@@ -253,29 +253,29 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
         enabled: true,
       };
 
-      // Joined remote souls: the binary's `registry mcp add` writes pi's MCP
-      // config, which OpenCode never reads, so wire every soul in the shared
+      // Joined remote memories: the binary's `registry mcp add` writes pi's MCP
+      // config, which OpenCode never reads, so wire every memory in the shared
       // catalog here. The binary owns the catalog format (TSV: slug host
       // insecure token-file, "#" comments); follow-up: query it via a
       // `registry soul-list` subcommand instead of parsing the file.
       try {
-        const souls = readFileSync(join(homedir(), ".demarkus", "souls"), "utf8");
-        for (const rawLine of souls.split("\n")) {
+        const memories = readFileSync(join(homedir(), ".demarkus", "memories"), "utf8");
+        for (const rawLine of memories.split("\n")) {
           const line = rawLine.trim();
           if (line.startsWith("#")) continue;
           const slug = line.split("\t")[0]?.trim();
           if (!slug || slug === MCP_SERVER_NAME) continue;
           config.mcp[slug] = config.mcp[slug] ?? {
             type: "local",
-            command: [BIN, "mcp-serve", "--soul", slug],
+            command: [BIN, "mcp-serve", "--memory", slug],
             enabled: true,
           };
         }
       } catch (e) {
         // ENOENT = nothing joined yet. Anything else must be loud: it makes
-        // every joined soul silently vanish from the MCP config.
+        // every joined memory silently vanish from the MCP config.
         if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
-          console.error(`[demarkus-memory] souls catalog unreadable, remote souls not wired: ${e}`);
+          console.error(`[demarkus-memory] memories catalog unreadable, remote memories not wired: ${e}`);
         }
       }
 
@@ -336,7 +336,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       }
     },
 
-    // Gate soul writes before execution. block → throw (OpenCode cancels the
+    // Gate memory writes before execution. block → throw (OpenCode cancels the
     // call and shows the reason). ask → no native ask here, so block with a
     // reason that routes through the user. allow/warn is stashed for the
     // after-hook so the gate runs once per write.

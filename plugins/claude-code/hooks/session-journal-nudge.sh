@@ -2,7 +2,7 @@
 # Stop adapter for the session-end journal nudge. The Stop mechanics are
 # Claude-specific and stay here: parse the payload, guard against re-blocking,
 # and derive the two signals (did the session change files? did it write to a
-# soul?) from the transcript. The DECISION + text comes from the shared
+# memory?) from the transcript. The DECISION + text comes from the shared
 # demarkus-plugin binary. Self-contained (no lib.sh) — the small JSON field
 # extractor is inlined so the bash infra can be fully retired.
 #

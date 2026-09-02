@@ -125,18 +125,27 @@ func renderAll(root string) ([]artifact, error) {
 			if walkErr != nil {
 				return walkErr
 			}
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tmpl") {
+			if entry.IsDir() {
+				return nil
+			}
+			isAlias := strings.HasSuffix(entry.Name(), ".alias")
+			if !isAlias && !strings.HasSuffix(entry.Name(), ".tmpl") {
 				return nil
 			}
 			rel, err := filepath.Rel(templateRoot, path)
 			if err != nil {
 				return err
 			}
-			rendered, err := renderTemplate(path, target)
+			var rendered []byte
+			if isAlias {
+				rendered, err = renderAlias(path, target)
+			} else {
+				rendered, err = renderTemplate(path, target)
+			}
 			if err != nil {
 				return err
 			}
-			output := filepath.Join(root, target.Output, strings.TrimSuffix(rel, ".tmpl"))
+			output := filepath.Join(root, target.Output, strings.TrimSuffix(strings.TrimSuffix(rel, ".tmpl"), ".alias"))
 			if err := validateArtifact(output, rendered, target); err != nil {
 				return err
 			}
@@ -229,6 +238,51 @@ func renderTemplate(path string, target *target) ([]byte, error) {
 		return nil, fmt.Errorf("execute %s for %s: %w", path, target.Name, err)
 	}
 	return addMarker(output.Bytes()), nil
+}
+
+// renderAlias renders a deprecated command alias: a `<old>.md.alias` file in
+// commands/ names the target command, and the alias ships the target's full
+// body under the old name so both names behave identically on every harness.
+func renderAlias(path string, target *target) ([]byte, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(string(raw))
+	if name == "" || strings.ContainsAny(name, "/\\ \n") {
+		return nil, fmt.Errorf("%s: alias must name one command", path)
+	}
+	if filepath.Base(filepath.Dir(path)) != "commands" {
+		return nil, fmt.Errorf("%s: aliases are only supported under commands/", path)
+	}
+	if strings.TrimSuffix(filepath.Base(path), ".md.alias") == name {
+		return nil, fmt.Errorf("%s: alias targets itself", path)
+	}
+	rendered, err := renderTemplate(filepath.Join(filepath.Dir(path), name+".md.tmpl"), target)
+	if err != nil {
+		return nil, fmt.Errorf("%s: alias target: %w", path, err)
+	}
+	text := string(rendered)
+	if !strings.HasPrefix(text, "---\n") {
+		return nil, fmt.Errorf("%s: alias target has no frontmatter", path)
+	}
+	prefix := "description: Deprecated alias of /" + name + ". "
+	replaced := false
+	lines := strings.Split(text, "\n")
+	for i, line := range lines[1:] {
+		if line == "---" {
+			break
+		}
+		if rest, ok := strings.CutPrefix(line, "description: "); ok {
+			lines[i+1] = prefix + rest
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		return nil, fmt.Errorf("%s: alias target has no description", path)
+	}
+	return []byte(strings.Join(lines, "\n")), nil
 }
 
 func addMarker(content []byte) []byte {

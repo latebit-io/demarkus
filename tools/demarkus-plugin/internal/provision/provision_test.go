@@ -45,8 +45,8 @@ func TestDetectPlatform(t *testing.T) {
 func TestConfigRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	soul := filepath.Join(t.TempDir(), "soul dir") // a space to exercise quoting
-	if err := saveConfig(soul, 16312, "isolated", ""); err != nil {
+	memory := filepath.Join(t.TempDir(), "memory dir") // a space to exercise quoting
+	if err := saveConfig(memory, 16312, "isolated", ""); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
 	cfg, err := loadConfig()
@@ -56,8 +56,8 @@ func TestConfigRoundTrip(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("loadConfig returned nil after save")
 	}
-	if cfg.SoulDir != soul {
-		t.Errorf("SoulDir = %q, want %q", cfg.SoulDir, soul)
+	if cfg.MemoryDir != memory {
+		t.Errorf("MemoryDir = %q, want %q", cfg.MemoryDir, memory)
 	}
 	if cfg.Port != "16312" {
 		t.Errorf("Port = %q, want 16312", cfg.Port)
@@ -69,15 +69,15 @@ func TestConfigRoundTrip(t *testing.T) {
 
 func TestConfigPlainPathRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	soul := "/Users/x/.demarkus/soul"
-	if err := saveConfig(soul, 6310, "default", ""); err != nil {
+	memory := "/Users/x/.demarkus/memory"
+	if err := saveConfig(memory, 6310, "default", ""); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
 	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if cfg == nil || cfg.SoulDir != soul || cfg.Port != "6310" || cfg.Mode != "default" {
+	if cfg == nil || cfg.MemoryDir != memory || cfg.Port != "6310" || cfg.Mode != "default" {
 		t.Fatalf("round-trip mismatch: %+v", cfg)
 	}
 }
@@ -145,14 +145,14 @@ func TestArgsRootMatches(t *testing.T) {
 		args, target string
 		want         bool
 	}{
-		{" demarkus-server -root /home/x/soul -port 6310", "/home/x/soul", true},
-		{" demarkus-server -root=/home/x/soul -port 6310", "/home/x/soul", true},
-		{" demarkus-server -port 6310 -root /home/x/soul", "/home/x/soul", true},   // at end
-		{" demarkus-server -port 6310 -root=/home/x/soul", "/home/x/soul", true},   // at end, = form
-		{" demarkus-server -root /home/x/soul2 -port 6310", "/home/x/soul", false}, // prefix only
-		{" demarkus-server -root /other -port 6310", "/home/x/soul", false},
-		{" demarkus-server --root /home/x/soul -port 6310", "/home/x/soul", true}, // long form
-		{" demarkus-server --root=/home/x/soul", "/home/x/soul", true},            // long form, = at end
+		{" demarkus-server -root /home/x/memory -port 6310", "/home/x/memory", true},
+		{" demarkus-server -root=/home/x/memory -port 6310", "/home/x/memory", true},
+		{" demarkus-server -port 6310 -root /home/x/memory", "/home/x/memory", true},   // at end
+		{" demarkus-server -port 6310 -root=/home/x/memory", "/home/x/memory", true},   // at end, = form
+		{" demarkus-server -root /home/x/memory2 -port 6310", "/home/x/memory", false}, // prefix only
+		{" demarkus-server -root /other -port 6310", "/home/x/memory", false},
+		{" demarkus-server --root /home/x/memory -port 6310", "/home/x/memory", true}, // long form
+		{" demarkus-server --root=/home/x/memory", "/home/x/memory", true},            // long form, = at end
 	}
 	for _, c := range cases {
 		if got := argsRootMatches(c.args, c.target); got != c.want {
@@ -234,20 +234,20 @@ func TestSha256Verify(t *testing.T) {
 func TestShellQuoteRoundTrip(t *testing.T) {
 	// Quote values then save/load to confirm config.unquoteShell reverses it.
 	t.Setenv("HOME", t.TempDir())
-	for _, soul := range []string{
+	for _, memory := range []string{
 		"/plain/path",
 		"/path with space",
 		"/path/with'quote",
 	} {
-		if err := saveConfig(soul, 6310, "default", ""); err != nil {
-			t.Fatalf("saveConfig(%q): %v", soul, err)
+		if err := saveConfig(memory, 6310, "default", ""); err != nil {
+			t.Fatalf("saveConfig(%q): %v", memory, err)
 		}
 		cfg, err := loadConfig()
 		if err != nil || cfg == nil {
-			t.Fatalf("loadConfig(%q): %v", soul, err)
+			t.Fatalf("loadConfig(%q): %v", memory, err)
 		}
-		if cfg.SoulDir != soul {
-			t.Errorf("round-trip %q -> %q", soul, cfg.SoulDir)
+		if cfg.MemoryDir != memory {
+			t.Errorf("round-trip %q -> %q", memory, cfg.MemoryDir)
 		}
 	}
 }
@@ -482,11 +482,11 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 	argsLog := filepath.Join(home, "args.log")
 	writeFakeTokenBin(t, home, argsLog)
 
-	soul := filepath.Join(home, "root")
-	if err := os.MkdirAll(soul, 0o755); err != nil {
+	memory := filepath.Join(home, "root")
+	if err := os.MkdirAll(memory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tokensTOML := filepath.Join(soul, "tokens.toml")
+	tokensTOML := filepath.Join(memory, "tokens.toml")
 	readLog := func() string {
 		t.Helper()
 		b, err := os.ReadFile(argsLog)
@@ -509,7 +509,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 
 	// Fresh install mints with the recursive scope.
 	log := phaseLog(func() {
-		if err := ensureTokenEntry(soul, tokensTOML); err != nil {
+		if err := ensureTokenEntry(memory, tokensTOML); err != nil {
 			t.Fatalf("fresh mint: %v", err)
 		}
 	})
@@ -519,7 +519,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 
 	// Provisioned-and-current is a no-op: no further binary invocations.
 	log = phaseLog(func() {
-		if err := ensureTokenEntry(soul, tokensTOML); err != nil {
+		if err := ensureTokenEntry(memory, tokensTOML); err != nil {
 			t.Fatalf("idempotent rerun: %v", err)
 		}
 	})
@@ -532,7 +532,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	log = phaseLog(func() {
-		if err := ensureTokenEntry(soul, tokensTOML); err != nil {
+		if err := ensureTokenEntry(memory, tokensTOML); err != nil {
 			t.Fatalf("stale-scope remint: %v", err)
 		}
 	})
@@ -559,7 +559,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("FAKE_REVOKE_FAIL", "1")
-	if err := ensureTokenEntry(soul, tokensTOML); err == nil {
+	if err := ensureTokenEntry(memory, tokensTOML); err == nil {
 		t.Error("revoke failure did not surface an error")
 	}
 	t.Setenv("FAKE_REVOKE_FAIL", "")
@@ -570,7 +570,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 	if err := os.WriteFile(tokensTOML, []byte(malformed), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureTokenEntry(soul, tokensTOML); err == nil {
+	if err := ensureTokenEntry(memory, tokensTOML); err == nil {
 		t.Error("malformed tokens.toml did not surface an error")
 	}
 
@@ -579,7 +579,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 	if err := os.Remove(tokensTOML); err != nil { // clear the malformed file
 		t.Fatal(err)
 	}
-	if err := ensureTokenEntry(soul, tokensTOML); err != nil {
+	if err := ensureTokenEntry(memory, tokensTOML); err != nil {
 		t.Fatalf("re-mint after malformed: %v", err)
 	}
 	tokenFile, err := pluginToken()
@@ -590,7 +590,7 @@ func TestEnsureTokenEntryScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	log = phaseLog(func() {
-		if err := ensureTokenEntry(soul, tokensTOML); err != nil {
+		if err := ensureTokenEntry(memory, tokensTOML); err != nil {
 			t.Fatalf("mismatched-raw remint: %v", err)
 		}
 	})
@@ -607,11 +607,11 @@ func TestEnsureTokenEntryReload(t *testing.T) {
 	t.Setenv("HOME", home)
 	writeFakeTokenBin(t, home, "")
 
-	soul := filepath.Join(home, "root")
-	if err := os.MkdirAll(soul, 0o755); err != nil {
+	memory := filepath.Join(home, "root")
+	if err := os.MkdirAll(memory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tokensTOML := filepath.Join(soul, "tokens.toml")
+	tokensTOML := filepath.Join(memory, "tokens.toml")
 	tokenFile, err := pluginToken()
 	if err != nil {
 		t.Fatal(err)
@@ -623,7 +623,7 @@ func TestEnsureTokenEntryReload(t *testing.T) {
 	reloads := 0
 	reloadServer = func(int) error { reloads++; return errors.New("injected reload failure") }
 
-	if err := ensureTokenEntry(soul, tokensTOML); err == nil {
+	if err := ensureTokenEntry(memory, tokensTOML); err == nil {
 		t.Fatal("failed reload did not surface an error")
 	}
 	if reloads != 1 {
@@ -635,7 +635,7 @@ func TestEnsureTokenEntryReload(t *testing.T) {
 
 	// The next run retries: mint again, reload succeeds, token file commits.
 	reloadServer = func(int) error { reloads++; return nil }
-	if err := ensureTokenEntry(soul, tokensTOML); err != nil {
+	if err := ensureTokenEntry(memory, tokensTOML); err != nil {
 		t.Fatalf("retry after failed reload: %v", err)
 	}
 	if reloads != 2 {
@@ -651,36 +651,36 @@ func TestEnsureTokenEntryReload(t *testing.T) {
 func TestManagedTokensMigration(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	soul := filepath.Join(home, "soul")
-	if err := os.MkdirAll(soul, 0o755); err != nil {
+	memory := filepath.Join(home, "memory")
+	if err := os.MkdirAll(memory, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	newPath, err := managedTokensPath(soul)
+	newPath, err := managedTokensPath(memory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasPrefix(newPath, soul+string(os.PathSeparator)) {
-		t.Fatalf("managed tokens path %s is inside the soul root", newPath)
+	if strings.HasPrefix(newPath, memory+string(os.PathSeparator)) {
+		t.Fatalf("managed tokens path %s is inside the memory root", newPath)
 	}
 
 	// Fresh install: nothing on disk resolves to the new path.
-	if got, err := tokensPathFor(soul); err != nil || got != newPath {
+	if got, err := tokensPathFor(memory); err != nil || got != newPath {
 		t.Fatalf("fresh tokensPathFor = %q, %v; want %q", got, err, newPath)
 	}
 
 	// A legacy file wins resolution until migrated: the running server's
 	// -tokens flag still points there.
-	legacy := filepath.Join(soul, "tokens.toml")
+	legacy := filepath.Join(memory, "tokens.toml")
 	if err := os.WriteFile(legacy, []byte("[tokens]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := tokensPathFor(soul); err != nil || got != legacy {
+	if got, err := tokensPathFor(memory); err != nil || got != legacy {
 		t.Fatalf("unmigrated tokensPathFor = %q, %v; want %q", got, err, legacy)
 	}
 
 	// Migration moves the file, preserving content; resolution flips.
-	migrated, err := migrateManagedTokens(soul)
+	migrated, err := migrateManagedTokens(memory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -694,12 +694,12 @@ func TestManagedTokensMigration(t *testing.T) {
 	if fileExists(legacy) {
 		t.Error("legacy tokens.toml still present after migration")
 	}
-	if got, err := tokensPathFor(soul); err != nil || got != newPath {
+	if got, err := tokensPathFor(memory); err != nil || got != newPath {
 		t.Fatalf("post-migration tokensPathFor = %q, %v; want %q", got, err, newPath)
 	}
 
 	// Idempotent rerun leaves the migrated file alone.
-	if again, err := migrateManagedTokens(soul); err != nil || again != newPath {
+	if again, err := migrateManagedTokens(memory); err != nil || again != newPath {
 		t.Fatalf("rerun migrateManagedTokens = %q, %v; want %q", again, err, newPath)
 	}
 
@@ -708,7 +708,7 @@ func TestManagedTokensMigration(t *testing.T) {
 	if err := os.WriteFile(legacy, []byte("leftover"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := migrateManagedTokens(soul); err != nil || got != newPath {
+	if got, err := migrateManagedTokens(memory); err != nil || got != newPath {
 		t.Fatalf("leftover-cleanup migrateManagedTokens = %q, %v; want %q", got, err, newPath)
 	}
 	if fileExists(legacy) {

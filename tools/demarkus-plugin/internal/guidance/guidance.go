@@ -1,7 +1,7 @@
 // Package guidance assembles the session-start context for every demarkus plugin
 // — the dynamic pieces (managed-server health warning, the one-time "make
 // demarkus your only memory" offer, the joined-knowledge-systems list, the
-// one-time join hint, the soul↔system note) wrapped around generated static
+// one-time join hint, the memory↔system note) wrapped around generated static
 // guidance. Plugins bundle rendered copies; plugins/prompt-source owns the prose.
 package guidance
 
@@ -120,12 +120,12 @@ func knowledge(in Input) (Output, error) {
 	if g := readFile(in.GuidanceFile); g != "" {
 		parts = append(parts, g)
 	}
-	soul, err := config.SoulConfigured()
+	memory, err := config.MemoryConfigured()
 	if err != nil {
 		return Output{}, err
 	}
-	if !soul {
-		parts = append(parts, "(No local demarkus soul is configured here, so the soul↔system guidance above is informational only; everything durable goes to the knowledge system.)")
+	if !memory {
+		parts = append(parts, "(No local demarkus memory is configured here, so the memory↔system guidance above is informational only; everything durable goes to the knowledge system.)")
 	}
 	return Output{Context: strings.Join(parts, "\n\n")}, nil
 }

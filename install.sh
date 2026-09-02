@@ -1344,17 +1344,17 @@ install_broker() {
     if [ -n "$oidc_issuer" ] || [ -n "$oidc_client_id" ] || [ -n "$public_url" ]; then
       log_warn "Broker OIDC flags were given but the existing config was kept; edit ${BROKER_CONFIG_DIR}/config.yaml to apply them"
     fi
-    # Migrate the managed soul world's defaultToken from the single-segment /*
+    # Migrate the managed world's (named soul) defaultToken from the single-segment /*
     # scope (fails on nested docs) to /**. Other worlds are untouched; the
     # broker restarts later in this run.
-    # The scan exits 0 when the soul world carries the legacy scope, 1 when
+    # The scan exits 0 when that world carries the legacy scope, 1 when
     # not; anything else is an awk/read failure and must abort, not skip.
     local cfg="${BROKER_CONFIG_DIR}/config.yaml"
     local legacy_scope='/^  - name: /{soul=($3=="soul")} soul && prev ~ /defaultToken:[[:space:]]*$/ && $0 ~ /^      paths: \["\/\*"\]$/{found=1} {prev=$0} END{exit !found}'
     local scope_rc=0
     awk "$legacy_scope" "$cfg" || scope_rc=$?
     if [ "$scope_rc" -gt 1 ]; then
-      log_error "Could not scan ${cfg} for the legacy soul token scope"
+      log_error "Could not scan ${cfg} for the legacy world token scope"
       exit 1
     fi
     if [ "$scope_rc" -eq 0 ]; then
@@ -1362,7 +1362,7 @@ install_broker() {
         { if (soul && prev ~ /defaultToken:[[:space:]]*$/ && $0 ~ /^      paths: \["\/\*"\]$/) $0="      paths: [\"/**\"]"
           prev=$0; print }' "$cfg" > "${cfg}.tmp" || ! mv "${cfg}.tmp" "$cfg"; then
         rm -f "${cfg}.tmp"
-        log_error "Could not migrate the soul defaultToken.paths to /** in ${cfg}; edit it manually"
+        log_error "Could not migrate the world's defaultToken.paths to /** in ${cfg}; edit it manually"
         exit 1
       fi
       if ! chown root:"$BROKER_SERVICE" "$cfg" || ! chmod 640 "$cfg"; then
@@ -1372,10 +1372,10 @@ install_broker() {
       scope_rc=0
       awk "$legacy_scope" "$cfg" || scope_rc=$?
       if [ "$scope_rc" -ne 1 ]; then
-        log_error "soul defaultToken.paths still \"/*\" (or unverifiable) after migration in ${cfg}; edit it manually"
+        log_error "world defaultToken.paths still \"/*\" (or unverifiable) after migration in ${cfg}; edit it manually"
         exit 1
       fi
-      log_info "Migrated the soul world's defaultToken.paths to the recursive /** scope"
+      log_info "Migrated the world's defaultToken.paths to the recursive /** scope"
     fi
   fi
 
@@ -2147,7 +2147,7 @@ do_install() {
     if [ -n "$join_url" ]; then
       echo ""
       log_info "Join this server from another machine (paste one line):"
-      echo "  Claude Code (demarkus-memory plugin):  /soul-join $join_url"
+      echo "  Claude Code (demarkus-memory plugin):  /memory-join $join_url"
       echo "  CLI:                                   demarkus join '$join_url'"
       if [ -z "$domain" ]; then
         log_warn "'$join_host' must resolve from the joining machine; if it doesn't, rebuild the line with the public address: demarkus-token join -host <public-host> -token <TOKEN>"

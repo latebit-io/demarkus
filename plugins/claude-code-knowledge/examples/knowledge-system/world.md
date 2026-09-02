@@ -23,7 +23,7 @@ The five lines above are the **structured core** the curation pipeline reads whe
 
 ## How the pipeline consumes it
 
-When promoting a soul document up to this knowledge system, the destination-selection step:
+When promoting a memory document up to this knowledge system, the destination-selection step:
 
 1. Enumerates the worlds the caller may **write** (the `writable` column of `mark_worlds`: readable is not writable).
 2. Fetches each writable world's `world.md`.

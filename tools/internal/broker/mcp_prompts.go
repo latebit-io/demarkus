@@ -12,7 +12,7 @@ import (
 // and default whats-new aggregate every readable world.
 
 // registerPrompts wires the profile's prompt surface: orient, recall,
-// whats-new for the knowledge broker; soul-context, soul-journal for the
+// whats-new for the knowledge broker; memory-context, memory-journal for the
 // tenant-scoped memory broker (mcp_prompts_memory.go).
 func (g *mcpGateway) registerPrompts() {
 	if g.profile.TenantScoped {

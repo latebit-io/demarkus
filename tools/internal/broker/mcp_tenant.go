@@ -113,7 +113,7 @@ func (g *mcpGateway) resolveOrProvision(ctx context.Context) (WorldConfig, *mcp.
 }
 
 // tenantGate (tenant-scoped profiles only) resolves the caller's world,
-// checks every world-bearing argument against it, and seeds the soul
+// checks every world-bearing argument against it, and seeds the memory
 // template before the first handler runs against a fresh world.
 func (g *mcpGateway) tenantGate(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -145,8 +145,8 @@ func (g *mcpGateway) tenantGate(next mcpserver.ToolHandlerFunc) mcpserver.ToolHa
 			}
 		}
 		ctx = ctxWithTenantWorld(ctx, &w)
-		if g.profile.SeedSoul {
-			g.ensureSoulSeed(ctx, &w)
+		if g.profile.SeedMemory {
+			g.ensureMemorySeed(ctx, &w)
 		}
 		return next(ctx, req)
 	}

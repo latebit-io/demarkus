@@ -77,7 +77,8 @@ func cmdNudge() {
 	event := fs.String("event", "", "override event: recall | promote | session-end")
 	surface := fs.String("surface", "", "override surface: memory | knowledge")
 	changed := fs.Bool("changed-files", false, "session-end: the session changed files")
-	soulWrite := fs.Bool("soul-write", false, "session-end: a soul write happened")
+	memoryWrite := fs.Bool("memory-write", false, "session-end: a memory write happened")
+	legacyWrite := fs.Bool("soul-write", false, "deprecated alias of -memory-write")
 	_ = fs.Parse(os.Args[2:])
 
 	var in nudge.Input
@@ -102,8 +103,8 @@ func cmdNudge() {
 	if set["changed-files"] {
 		in.ChangedFiles = *changed
 	}
-	if set["soul-write"] {
-		in.SoulWrite = *soulWrite
+	if set["memory-write"] || set["soul-write"] {
+		in.MemoryWrite = *memoryWrite || *legacyWrite
 	}
 
 	out, err := nudge.Evaluate(&in)

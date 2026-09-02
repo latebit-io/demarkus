@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.72
+
+- Rename the personal store from "soul" to "memory" across guidance, commands, and the skill: `/soul-*` commands become `/memory-*`; the `soul-memory` skill becomes `memory`. The old command names keep working as deprecated aliases for one release. On-disk state under `~/.demarkus` is unchanged.
+
 ## 0.13.41
 
 - Generate session guidance, the memory skill, and all slash-command prompts from the shared `plugins/prompt-source` corpus.
