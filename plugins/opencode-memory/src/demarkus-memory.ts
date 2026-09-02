@@ -267,7 +267,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
           if (!slug || slug === MCP_SERVER_NAME) continue;
           config.mcp[slug] = config.mcp[slug] ?? {
             type: "local",
-            command: [BIN, "mcp-serve", "--memory", slug],
+            command: [BIN, "mcp-serve", "--soul", slug], // pinned binary predates --memory
             enabled: true,
           };
         }

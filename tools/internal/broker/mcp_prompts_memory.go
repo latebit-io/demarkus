@@ -6,67 +6,58 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 // Memory-broker prompts: the memory workflows the demarkus-memory plugin
 // ships as slash commands, restated for plugin-less hosts. Both address
 // the caller's single world; tenantGate scopes every tool call they trigger.
 
-// registerMemoryPrompts wires the three v1 memory prompts.
+// registerMemoryPrompts wires the memory prompts. Each pre-rename soul-* name
+// stays registered for one release on the same handler and arguments.
 func (g *mcpGateway) registerMemoryPrompts() {
-	g.mcpServer.AddPrompt(mcp.NewPrompt("memory-context",
-		mcp.WithPromptDescription("Restore working context from your memory: the index hub, recent journal entries, and active plans, digested into a short brief."),
-		mcp.WithArgument("focus",
-			mcp.ArgumentDescription("optional subject to prioritize, e.g. a project or topic"),
-		),
-	), memoryContextPrompt)
-
-	g.mcpServer.AddPrompt(mcp.NewPrompt("memory-journal",
-		mcp.WithPromptDescription("Record a dated journal entry in your memory: append what happened this session to today's journal document."),
-		mcp.WithArgument("entry",
-			mcp.ArgumentDescription("optional summary of what to record; when omitted, distill the current conversation"),
-		),
-	), memoryJournalPrompt)
-
-	g.mcpServer.AddPrompt(mcp.NewPrompt("memory-export",
-		mcp.WithPromptDescription("Export your whole memory to local files: walk every document and save it, so the service is never a lock-in."),
-		mcp.WithArgument("directory",
-			mcp.ArgumentDescription("local directory to write the export into (default ./memory-export)"),
-		),
-	), memoryExportPrompt)
-
-	// Pre-rename names stay registered for one release so hosts that saved
-	// them keep working; same handlers, deprecated descriptions.
-	g.mcpServer.AddPrompt(mcp.NewPrompt("soul-context",
-		mcp.WithPromptDescription("Deprecated alias of memory-context."),
-		mcp.WithArgument("focus", mcp.ArgumentDescription("optional subject to prioritize")),
-	), memoryContextPrompt)
-	g.mcpServer.AddPrompt(mcp.NewPrompt("soul-journal",
-		mcp.WithPromptDescription("Deprecated alias of memory-journal."),
-		mcp.WithArgument("entry", mcp.ArgumentDescription("optional summary of what to record")),
-	), memoryJournalPrompt)
-	g.mcpServer.AddPrompt(mcp.NewPrompt("soul-export",
-		mcp.WithPromptDescription("Deprecated alias of memory-export."),
-		mcp.WithArgument("directory", mcp.ArgumentDescription("local directory to write the export into (default ./soul-export)")),
-	), soulExportPrompt)
-}
-
-// soulExportPrompt keeps the alias's pre-rename default directory.
-func soulExportPrompt(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
-	if strings.TrimSpace(req.Params.Arguments["directory"]) == "" {
-		if req.Params.Arguments == nil {
-			req.Params.Arguments = map[string]string{}
+	prompts := []struct {
+		name, old string
+		desc      string
+		arg       mcp.PromptOption
+		handler   mcpserver.PromptHandlerFunc
+	}{
+		{"memory-context", "soul-context",
+			"Restore working context from your memory: the index hub, recent journal entries, and active plans, digested into a short brief.",
+			mcp.WithArgument("focus", mcp.ArgumentDescription("optional subject to prioritize, e.g. a project or topic")),
+			memoryContextPrompt},
+		{"memory-journal", "soul-journal",
+			"Record a dated journal entry in your memory: append what happened this session to today's journal document.",
+			mcp.WithArgument("entry", mcp.ArgumentDescription("optional summary of what to record; when omitted, distill the current conversation")),
+			memoryJournalPrompt},
+		{"memory-export", "soul-export",
+			"Export your whole memory to local files: walk every document and save it, so the service is never a lock-in.",
+			mcp.WithArgument("directory", mcp.ArgumentDescription("local directory to write the export into (default ./<prompt name>)")),
+			exportPrompt("./memory-export")},
+	}
+	for _, p := range prompts {
+		g.mcpServer.AddPrompt(mcp.NewPrompt(p.name, mcp.WithPromptDescription(p.desc), p.arg), p.handler)
+		h := p.handler
+		if p.name == "memory-export" {
+			h = exportPrompt("./soul-export") // the alias keeps its pre-rename default
 		}
-		req.Params.Arguments["directory"] = "./soul-export"
+		g.mcpServer.AddPrompt(mcp.NewPrompt(p.old, mcp.WithPromptDescription("Deprecated alias of "+p.name+"."), p.arg), h)
 	}
-	return memoryExportPrompt(ctx, req)
 }
 
-func memoryExportPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
-	dir := strings.TrimSpace(req.Params.Arguments["directory"])
-	if dir == "" {
-		dir = "./memory-export"
+// exportPrompt builds the export handler with defaultDir used when the
+// directory argument is empty.
+func exportPrompt(defaultDir string) mcpserver.PromptHandlerFunc {
+	return func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		dir := strings.TrimSpace(req.Params.Arguments["directory"])
+		if dir == "" {
+			dir = defaultDir
+		}
+		return memoryExportResult(dir), nil
 	}
+}
+
+func memoryExportResult(dir string) *mcp.GetPromptResult {
 	text := fmt.Sprintf(`Export this memory to local files under %q.
 
 1. Call mark_worlds to learn your world name <w>.
@@ -75,7 +66,7 @@ func memoryExportPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPr
 4. Finish by reporting the document count and the manifest location. Do not summarize or rewrite bodies; this is a byte-preserving export.`, dir, dir, dir)
 	return mcp.NewGetPromptResult("Memory export", []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
-	}), nil
+	})
 }
 
 func memoryContextPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go

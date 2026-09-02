@@ -459,11 +459,8 @@ func registryPromoteTarget(args []string) {
 func cmdMcpServe(args []string) {
 	fs := flag.NewFlagSet("mcp-serve", flag.ExitOnError)
 	memory := fs.String("memory", "", "joined remote-memory slug (omit for the local managed memory)")
-	legacy := fs.String("soul", "", "deprecated alias of -memory")
+	fs.StringVar(memory, "soul", "", "deprecated alias of -memory")
 	_ = fs.Parse(args) // ExitOnError: Parse never returns
-	if *memory == "" {
-		*memory = *legacy
-	}
 
 	binDir, err := config.StatePath("bin")
 	if err != nil {

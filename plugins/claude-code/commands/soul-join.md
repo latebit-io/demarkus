@@ -74,8 +74,6 @@ For a hosted memory, skip the QUIC join and MCP-registration steps below, but st
     claude mcp add '<slug>' --scope project -- "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --soul '<slug>'
    ```
 
-   The catalog row and project binding were committed in the previous step, so check this command's exit status. On failure, surface the exact error, report the join as partial (memory joined and bound, MCP server not registered), and have the user re-run the registration command above; do not report the join as complete until it succeeds.
-
 4. Confirm the slug, host, project binding, and whether a token file is used. State that the token is injected by `demarkus-plugin mcp-serve`, not stored in MCP config.
 
 5. Explain removal without performing it unasked. Remove the memory catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`. A stale binding makes the destination gate block writes to remaining memories.

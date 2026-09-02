@@ -67,24 +67,36 @@ STACK_HOST_FILE="/etc/demarkus/stack-host"
 # (certs, units, and plugin registrations reference it). See set_memory_paths.
 MEMORY_LABEL="memory"
 
-# set_memory_paths derives the memory-side paths from MEMORY_LABEL.
+MEMORY_LABEL_FILE="/etc/demarkus/memory-label"
+
 set_memory_paths() {
   MEMORY_TOKEN_FILE="/etc/demarkus/${MEMORY_LABEL}-join.token"
   CERTSYNC_SERVICE="demarkus-${MEMORY_LABEL}-certsync"
   CERTSYNC_BIN="${INSTALL_DIR}/demarkus-${MEMORY_LABEL}-certsync"
   MEMORY_DROPIN="appliance-${MEMORY_LABEL}-tls.conf"
-  MEMORY_TOKEN_LABEL="memory"
-  [ "$MEMORY_LABEL" = "soul" ] && MEMORY_TOKEN_LABEL="soul-memory"
+  # ensure_token revokes by label, so a pre-rename install keeps its old label.
+  if [ "$MEMORY_LABEL" = "soul" ]; then
+    MEMORY_TOKEN_LABEL="soul-memory"
+  else
+    MEMORY_TOKEN_LABEL="memory"
+  fi
 }
 set_memory_paths
 
-# resolve_memory_label keeps a pre-rename install on its "soul" label so a
-# rerun never re-issues certs or invalidates the join URL users registered.
+# resolve_memory_label keeps an existing install on the label it was built
+# with: the recorded file first, else the Caddyfile route of a pre-rename
+# install; a flip would re-issue certs and invalidate registered join URLs.
 resolve_memory_label() {
-  if [ -f /etc/demarkus/soul-join.token ] || [ -f "${SYSTEMD_DIR}/demarkus-soul-certsync.timer" ]; then
+  if [ -f "$MEMORY_LABEL_FILE" ]; then
+    MEMORY_LABEL=$(tr -d '[:space:]' < "$MEMORY_LABEL_FILE")
+  elif grep -Eqs '^soul\.[^ ]+ \{' "${PROXY_CONFIG_DIR}/Caddyfile" || [ -f /etc/demarkus/soul-join.token ]; then
     MEMORY_LABEL="soul"
-    set_memory_paths
   fi
+  case "$MEMORY_LABEL" in
+    memory|soul) ;;
+    *) log_error "Unexpected memory label '${MEMORY_LABEL}' in ${MEMORY_LABEL_FILE}"; exit 1 ;;
+  esac
+  set_memory_paths
 }
 
 # Fixed to systemd's search path in production; the test harness redirects it
@@ -889,12 +901,11 @@ EOF
   # Bounded poll so a stuck ACME never blocks the install (the timer finishes
   # later). Ready means the world's cert equals Caddy's CURRENT memory-host cert,
   # so a stale cert from a prior host is never called ready.
-  local status="pending" waited=0 max=90
+  local status="pending" waited=0 max=90 sync_out=""
   [ "${DEMARKUS_INSTALL_TESTMODE:-}" = "1" ] && max=0
   while : ; do
     # The helper exits 0 when no cert exists yet; a nonzero exit is a real copy,
     # permission, or reload failure and must not be reported as merely pending.
-    local sync_out=""
     if ! sync_out=$("$CERTSYNC_BIN" 2>&1); then
       log_error "Memory cert sync failed: ${sync_out}" >&2
       exit 1
@@ -1180,6 +1191,7 @@ main() {
   # Record the host now that the stack is fully configured for it, so the next
   # rerun can detect and migrate a hostname change.
   printf '%s\n' "$host" > "$STACK_HOST_FILE"
+  printf '%s\n' "$MEMORY_LABEL" > "$MEMORY_LABEL_FILE"
 
   persist_self
 

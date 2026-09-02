@@ -15,13 +15,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 OPENCODE_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/opencode"
 PLUGIN_DEST="${OPENCODE_DIR}/plugins/demarkus-memory.ts"
 SKILL_DEST="${OPENCODE_DIR}/skills/remember"
-# Pre-rename skill dirs, removed after a successful install.
-LEGACY_SKILL_DIRS=("${OPENCODE_DIR}/skills/soul-memory" "${OPENCODE_DIR}/skills/memory")
+# Pre-rename skill dir, removed after a successful install.
+LEGACY_SKILL_DIR="${OPENCODE_DIR}/skills/soul-memory"
 ASSETS_DEST="${HOME}/.demarkus/opencode-memory"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
   rm -f "${PLUGIN_DEST}"
-  rm -rf "${SKILL_DEST}" "${ASSETS_DEST}" "${LEGACY_SKILL_DIRS[@]}"
+  rm -rf "${SKILL_DEST}" "${ASSETS_DEST}" "${LEGACY_SKILL_DIR}"
   echo "[demarkus-memory] uninstalled (plugin, skill, assets). ~/.demarkus state and binaries untouched."
   exit 0
 fi
@@ -85,12 +85,11 @@ done
 mkdir -p "${OPENCODE_DIR}/plugins" "${SKILL_DEST}"
 mv -f "${staging}/demarkus-memory.ts" "${PLUGIN_DEST}"
 mv -f "${staging}/SKILL.md" "${SKILL_DEST}/SKILL.md"
-rm -rf "${LEGACY_SKILL_DIRS[@]}"
 prev="${ASSETS_DEST}.prev.$$"
 rm -rf "${prev}"
 [[ -e "${ASSETS_DEST}" ]] && mv "${ASSETS_DEST}" "${prev}"
 if mv "${staging}/assets" "${ASSETS_DEST}"; then
-  rm -rf "${prev}" "${staging}"
+  rm -rf "${prev}" "${staging}" "${LEGACY_SKILL_DIR}"
   staging=""
 else
   if [[ ! -e "${prev}" ]]; then

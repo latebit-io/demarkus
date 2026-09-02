@@ -1563,7 +1563,7 @@ func VerifyAuth() (string, error) {
 		return "", err
 	}
 	if cfg == nil {
-		return "no demarkus-memory memory configured (run /memory-init)", nil
+		return "no local memory configured (run /memory-init)", nil
 	}
 	port, err := strconv.Atoi(cfg.Port)
 	if err != nil {
@@ -1621,7 +1621,7 @@ func Status() (string, error) {
 		return "", err
 	}
 	if cfg == nil {
-		return "no demarkus-memory memory configured (run /memory-init)", nil
+		return "no local memory configured (run /memory-init)", nil
 	}
 	w, err := HealthWarning()
 	if err != nil {

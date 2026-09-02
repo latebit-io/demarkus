@@ -115,6 +115,7 @@ func renderAll(root string) ([]artifact, error) {
 	}
 
 	var artifacts []artifact
+	seen := map[string]string{}
 	for i := range spec.Targets {
 		target := &spec.Targets[i]
 		if err := validateTarget(target); err != nil {
@@ -146,6 +147,9 @@ func renderAll(root string) ([]artifact, error) {
 				return err
 			}
 			output := filepath.Join(root, target.Output, strings.TrimSuffix(strings.TrimSuffix(rel, ".tmpl"), ".alias"))
+			if err := claimOutput(seen, output, path); err != nil {
+				return err
+			}
 			if err := validateArtifact(output, rendered, target); err != nil {
 				return err
 			}
@@ -240,10 +244,24 @@ func renderTemplate(path string, target *target) ([]byte, error) {
 	return addMarker(output.Bytes()), nil
 }
 
+// claimOutput rejects two sources (e.g. foo.md.tmpl and foo.md.alias) mapping
+// to one generated path, which writeAll would otherwise silently overwrite.
+func claimOutput(seen map[string]string, output, source string) error {
+	key := filepath.Clean(output)
+	if prev, ok := seen[key]; ok {
+		return fmt.Errorf("%s: output %s already generated from %s", source, output, prev)
+	}
+	seen[key] = source
+	return nil
+}
+
 // renderAlias renders a deprecated command alias: a `<old>.md.alias` file in
 // commands/ names the target command, and the alias ships the target's full
 // body under the old name so both names behave identically on every harness.
 func renderAlias(path string, target *target) ([]byte, error) {
+	if !strings.HasSuffix(path, ".md.alias") {
+		return nil, fmt.Errorf("%s: alias files must be named <command>.md.alias", path)
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -251,9 +269,6 @@ func renderAlias(path string, target *target) ([]byte, error) {
 	name := strings.TrimSpace(string(raw))
 	if name == "" || strings.ContainsAny(name, "/\\ \n") {
 		return nil, fmt.Errorf("%s: alias must name one command", path)
-	}
-	if !strings.HasSuffix(path, ".md.alias") {
-		return nil, fmt.Errorf("%s: alias files must be named <command>.md.alias", path)
 	}
 	if filepath.Base(filepath.Dir(path)) != "commands" {
 		return nil, fmt.Errorf("%s: aliases are only supported under commands/", path)
@@ -266,35 +281,36 @@ func renderAlias(path string, target *target) ([]byte, error) {
 		return nil, fmt.Errorf("%s: alias target: %w", path, err)
 	}
 	text := string(rendered)
-	if !strings.HasPrefix(text, "---\n") {
+	end, ok := frontmatterEnd(text)
+	if !ok {
 		return nil, fmt.Errorf("%s: alias target has no frontmatter", path)
 	}
-	prefix := "description: Deprecated alias of /" + name + ". "
-	replaced := false
-	lines := strings.Split(text, "\n")
-	for i, line := range lines[1:] {
-		if line == "---" {
-			break
-		}
-		if rest, ok := strings.CutPrefix(line, "description: "); ok {
-			lines[i+1] = prefix + rest
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
+	head, body := text[:end], text[end:]
+	marker := "\ndescription: "
+	at := strings.Index(head, marker)
+	if at < 0 {
 		return nil, fmt.Errorf("%s: alias target has no description", path)
 	}
-	return []byte(strings.Join(lines, "\n")), nil
+	at += len(marker)
+	return []byte(head[:at] + "Deprecated alias of /" + name + ". " + head[at:] + body), nil
+}
+
+// frontmatterEnd returns the offset just past a leading `---` block.
+func frontmatterEnd(text string) (int, bool) {
+	if !strings.HasPrefix(text, "---\n") {
+		return 0, false
+	}
+	end := strings.Index(text[4:], "\n---\n")
+	if end < 0 {
+		return 0, false
+	}
+	return end + 9, true
 }
 
 func addMarker(content []byte) []byte {
 	text := strings.TrimRight(string(content), "\n") + "\n"
-	if strings.HasPrefix(text, "---\n") {
-		if end := strings.Index(text[4:], "\n---\n"); end >= 0 {
-			at := end + 9
-			return []byte(text[:at] + markdownlintDirective + "\n" + generatedMarker + "\n" + text[at:])
-		}
+	if at, ok := frontmatterEnd(text); ok {
+		return []byte(text[:at] + markdownlintDirective + "\n" + generatedMarker + "\n" + text[at:])
 	}
 	return []byte(markdownlintDirective + "\n" + generatedMarker + "\n" + text)
 }

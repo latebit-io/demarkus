@@ -182,8 +182,12 @@ func TestRenderAliasShipsTargetBodyWithDeprecatedDescription(t *testing.T) {
 			t.Fatalf("alias output missing %q:\n%s", want, text)
 		}
 	}
-	if _, err := renderAlias(filepath.Join(commands, "bare.alias"), &target{Agent: "Claude Code"}); err == nil {
-		t.Fatal("alias without .md.alias suffix should be rejected")
+	bare := filepath.Join(commands, "bare.alias")
+	if err := os.WriteFile(bare, []byte("memory-x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := renderAlias(bare, &target{Agent: "Claude Code"}); err == nil || !strings.Contains(err.Error(), ".md.alias") {
+		t.Fatalf("alias without .md.alias suffix should be rejected by name, got %v", err)
 	}
 	self := filepath.Join(commands, "memory-x.md.alias")
 	if err := os.WriteFile(self, []byte("memory-x"), 0o644); err != nil {
@@ -191,5 +195,16 @@ func TestRenderAliasShipsTargetBodyWithDeprecatedDescription(t *testing.T) {
 	}
 	if _, err := renderAlias(self, &target{Agent: "Claude Code"}); err == nil {
 		t.Fatal("self-alias should be rejected")
+	}
+}
+
+func TestClaimOutputRejectsDuplicateArtifactPath(t *testing.T) {
+	seen := map[string]string{}
+	if err := claimOutput(seen, "/out/commands/foo.md", "foo.md.tmpl"); err != nil {
+		t.Fatal(err)
+	}
+	err := claimOutput(seen, "/out/commands/./foo.md", "foo.md.alias")
+	if err == nil || !strings.Contains(err.Error(), "foo.md.tmpl") {
+		t.Fatalf("expected duplicate-path error naming the first source, got %v", err)
 	}
 }
