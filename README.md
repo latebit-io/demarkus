@@ -2,7 +2,7 @@
 
 **Memory for agents, knowledge for teams, a second brain for you**
 
-Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. The same store scales up to a team's shared world and an organizational **knowledge system**: a broker-fronted universe of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
+Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. The same store scales up to a team's shared world and an organizational **knowledge system**: a broker-fronted set of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
 
 Every link between documents feeds a persistent **knowledge graph**. Agents query backlinks and related documents across sessions, the TUI and the [reading room](https://github.com/latebit-io/demarkus-library) render it, and `demarkus-agent` aggregates it across worlds. Memory here is connected knowledge you traverse, not a pile of files.
 
@@ -104,7 +104,7 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
 | `demarkus-agent` | Federation agent: crawls worlds, aggregates the link graph, publishes hub indexes |
-| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with universe-wide catalog lookup (`mark_lookup_all`) |
+| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with system-wide catalog lookup (`mark_lookup_all`) |
 | `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private memory world per identity: memory as a service with dynamic tenant provisioning |
 | `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
 | `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its publish policy |
@@ -139,7 +139,7 @@ modified: 2026-01-15T10:30:00Z
 
 **Agent Memory**: Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/README.md).
 
-**Organizational Knowledge System**: Compose many servers ("worlds") into a broker-fronted universe reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command, `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/), and their agents share organizational memory over MCP, with no per-developer server or token setup. Humans browse the same universe in the [web reading room](https://github.com/latebit-io/demarkus-library). See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
+**Organizational Knowledge System**: Compose many servers ("worlds") into a broker-fronted knowledge system reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command, `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/), and their agents share organizational memory over MCP, with no per-developer server or token setup. Humans browse the same universe in the [web reading room](https://github.com/latebit-io/demarkus-library). See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
 
 **Personal Knowledge Base**: Local server, versioned documents, TUI browser. Everything from first write.
 

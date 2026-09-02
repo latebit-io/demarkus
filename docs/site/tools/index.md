@@ -20,13 +20,13 @@ demarkus-agent daemon -config fedcrawl.toml -insecure
 
 ## Broker (`demarkus-knowledge-broker`)
 
-The broker is the front door of a knowledge system: it authenticates people and agents with OIDC, mints per-world capability tokens, and exposes every world through one MCP-over-HTTPS gateway that agents join with `/knowledge-join`. On top of the per-world tool surface it adds `mark_worlds` (the world directory, with per-world write access) and `mark_lookup_all` (universe-wide catalog lookup with a single merged, globally limited result).
+The broker is the front door of a knowledge system: it authenticates people and agents with OIDC, mints per-world capability tokens, and exposes every world through one MCP-over-HTTPS gateway that agents join with `/knowledge-join`. On top of the per-world tool surface it adds `mark_worlds` (the world directory, with per-world write access) and `mark_lookup_all` (system-wide catalog lookup with a single merged, globally limited result).
 
 See `tools/demarkus-knowledge-broker/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-knowledge-broker/`) for deployment.
 
 ## Memory Broker (`demarkus-memory-broker`)
 
-The memory broker is the knowledge broker's personal sibling: one OAuth connector URL gives any MCP host (Claude Desktop, Claude Code, Cursor; ChatGPT with a Developer-mode-enabled workspace) a private, versioned memory. Identity maps to exactly one world; reads and writes are locked to it, the memory template is seeded on first access, and dynamic provisioning can create the world itself on first arrival behind a `static | allowlisted | open` gate.
+The memory broker is the knowledge broker's personal sibling: one OAuth connector URL gives any MCP host (Claude Desktop, Claude Code, Cursor; ChatGPT on a Business, Enterprise, or Edu workspace with admin-authorized Developer mode) a private, versioned memory. Identity maps to exactly one world; reads and writes are locked to it, the memory template is seeded on first access, and dynamic provisioning can create the world itself on first arrival behind a `static | allowlisted | open` gate.
 
 See [Memory Broker](./memory-broker.md) for connector setup per host.
 

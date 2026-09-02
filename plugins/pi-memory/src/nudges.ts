@@ -4,9 +4,8 @@
 // hand those two signals to `demarkus-plugin nudge --event session-end` at
 // shutdown. (Claude derives the same signals from its Stop transcript.)
 
-// Parse the verb out of an MCP tool name (incl. the pi-mcp-adapter proxy isn't
-// needed here — memory writes arrive as the proxy "mcp" tool too, so match on the
-// underlying name when present).
+// Memory writes can arrive wrapped in the pi-mcp-adapter "mcp" proxy tool, so
+// unwrap input.tool before parsing the verb out of the tool name.
 function isSoulWrite(toolName: string, input: Record<string, unknown>): boolean {
   let name = toolName;
   if (name === "mcp" && typeof input.tool === "string") name = input.tool;

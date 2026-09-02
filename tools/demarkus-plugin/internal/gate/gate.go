@@ -183,7 +183,7 @@ func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, memory
 			reason := fmt.Sprintf(
 				"demarkus write to %s is going to memory '%s', but this project is bound to memory '%s'. "+
 					"Re-issue the write against the bound memory's tools (the %s MCP server's mark_publish / mark_append). "+
-					"To change which memory this project uses, run /memory-join in this repo; to relax this check, set "+
+					"To change which memory this project uses, run /memory-default in this repo; to relax this check, set "+
 					"DEMARKUS_MEMORY_DEST_STRICTNESS=warn (or ask).",
 				target, memoryID, bound, bound)
 			s, err := config.MemoryDestStrictness()

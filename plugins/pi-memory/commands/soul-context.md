@@ -8,7 +8,7 @@ Bring the current project's recent memory into the session so the agent and the 
 
 ## Steps
 
-1. **Resolve the project slug.** Use the basename of the current project directory. Lowercase it and replace spaces with hyphens. If the project directory is unavailable, ask the user which project.
+1. **Resolve and validate the project slug.** Use the absolute current project directory; use its basename, lowercased with spaces replaced by hyphens, as the candidate. If the project directory is unavailable, ask the user which project. Before reading, check whether that candidate subtree belongs to this exact absolute project path (this session established it, or the user confirms); if the subtree exists but that is not established, ask the user to confirm or choose the unique slug rather than restoring another project's context. Never assume equal basenames mean the same project.
 
 2. **Confirm the project exists in the memory.** Call `mark_fetch /<project>/index.md` with `force: true` (or `mark_list /<project>/`). If the result is `not-found`, tell the user the project has no entries in the memory yet, suggest `/memory-journal "<entry>"` to start one, and stop. Surface unauthorized, transport, server, malformed-response, and list failures instead of treating them as absence.
 

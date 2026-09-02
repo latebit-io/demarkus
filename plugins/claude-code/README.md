@@ -26,7 +26,7 @@ Zero-config: the plugin spawns a local `demarkus-server`, generates a capability
 - **`/promote`**: lift a memory document to a shared knowledge system (curate, route, gate, publish, back-stamp).
 - **`/promote-scan`**: sweep the memory for promotion candidates.
 - **`/memory-refresh`**: refresh promoted documents from the knowledge system, the downward leg of the coherence edge.
-- **`memory` skill**: routing rules for recall and recording (which file gets decisions, lessons, patterns, journal entries).
+- **`remember` skill**: routing rules for recall and recording (which file gets decisions, lessons, patterns, journal entries).
 
 ## Hooks
 
@@ -37,7 +37,7 @@ Zero-config: the plugin spawns a local `demarkus-server`, generates a capability
 
 ## Local state
 
-The plugin bootstraps the shared `demarkus-plugin` helper and keeps its state under `~/.demarkus/`: the managed server, its token, `plugin-memory.conf`, and per-project memory bindings in `project-memories`.
+The plugin bootstraps the shared `demarkus-plugin` helper and keeps its state under `~/.demarkus/`: the managed server, its token, `plugin-memory.conf`, and per-project memory bindings in `project-souls` (the pre-rename file name, kept so existing state keeps working).
 
 ## Development
 

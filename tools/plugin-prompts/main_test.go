@@ -182,6 +182,9 @@ func TestRenderAliasShipsTargetBodyWithDeprecatedDescription(t *testing.T) {
 			t.Fatalf("alias output missing %q:\n%s", want, text)
 		}
 	}
+	if _, err := renderAlias(filepath.Join(commands, "bare.alias"), &target{Agent: "Claude Code"}); err == nil {
+		t.Fatal("alias without .md.alias suffix should be rejected")
+	}
 	self := filepath.Join(commands, "memory-x.md.alias")
 	if err := os.WriteFile(self, []byte("memory-x"), 0o644); err != nil {
 		t.Fatal(err)

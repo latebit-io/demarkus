@@ -376,7 +376,7 @@ func registryMemoryDefault(args []string) {
 	list := fs.Bool("list", false, "list the catalog")
 	set := fs.String("set", "", "set DIR's default memory to SLUG")
 	bind := fs.String("bind", "", "the project directory")
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse never returns
 	if *bind == "" {
 		fail("memory-default: --bind DIR is required")
 	}
@@ -460,7 +460,7 @@ func cmdMcpServe(args []string) {
 	fs := flag.NewFlagSet("mcp-serve", flag.ExitOnError)
 	memory := fs.String("memory", "", "joined remote-memory slug (omit for the local managed memory)")
 	legacy := fs.String("soul", "", "deprecated alias of -memory")
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse never returns
 	if *memory == "" {
 		*memory = *legacy
 	}
@@ -486,7 +486,11 @@ func cmdMcpServe(args []string) {
 		}
 		host = "mark://localhost:" + cfg.Port
 		insecure = true
-		tf, _ := config.StatePath("plugin-memory.token")
+		tf, err := config.StatePath("plugin-memory.token")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: resolve token path: "+err.Error())
+			os.Exit(1)
+		}
 		tokenFile = tf
 	} else {
 		row, ok, err := registry.RemoteMemoryRow(*memory)

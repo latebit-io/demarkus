@@ -1344,11 +1344,9 @@ install_broker() {
     if [ -n "$oidc_issuer" ] || [ -n "$oidc_client_id" ] || [ -n "$public_url" ]; then
       log_warn "Broker OIDC flags were given but the existing config was kept; edit ${BROKER_CONFIG_DIR}/config.yaml to apply them"
     fi
-    # Migrate the managed world's (named soul) defaultToken from the single-segment /*
-    # scope (fails on nested docs) to /**. Other worlds are untouched; the
-    # broker restarts later in this run.
-    # The scan exits 0 when that world carries the legacy scope, 1 when
-    # not; anything else is an awk/read failure and must abort, not skip.
+    # Migrate the managed world's (named soul) legacy /* defaultToken scope to
+    # /**; other worlds untouched. Scan exit 0 = legacy scope, 1 = not; anything
+    # else is an awk/read failure and must abort, not skip.
     local cfg="${BROKER_CONFIG_DIR}/config.yaml"
     local legacy_scope='/^  - name: /{soul=($3=="soul")} soul && prev ~ /defaultToken:[[:space:]]*$/ && $0 ~ /^      paths: \["\/\*"\]$/{found=1} {prev=$0} END{exit !found}'
     local scope_rc=0

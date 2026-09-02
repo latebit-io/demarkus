@@ -52,10 +52,9 @@ AGENT_CONFIG_DIR="/etc/demarkus-agent"
 AGENT_STATE_DIR="/var/lib/demarkus-agent"
 WORLD_INTERNAL="localhost:6309"
 
-# Memory path: the world is exposed as <MEMORY_LABEL>.<host> with a real Caddy
-# cert, so the demarkus-memory plugin can /memory-join it without --insecure.
-# The world runs as user/group demarkus (install.sh's SERVICE_NAME) and reads
-# its cert from WORLD_TLS_DIR; a drop-in points DEMARKUS_TLS_CERT there.
+# The world is exposed as <MEMORY_LABEL>.<host> with a real Caddy cert so the
+# memory plugin can /memory-join it without --insecure; a drop-in points the
+# world (user demarkus, install.sh's SERVICE_NAME) at the cert in WORLD_TLS_DIR.
 WORLD_SERVICE="demarkus"
 WORLD_GROUP="demarkus"
 WORLD_PUBLIC_PORT="6309"
@@ -839,19 +838,15 @@ EOF
   chmod 755 "$CERTSYNC_BIN"
 }
 
-# install_memory turns the world into a remote memory: mints a capability token,
-# wires the memory host's cert sync (helper + 12h renewal timer), and eagerly
-# provisions the first cert so /memory-join works without --insecure. Prints
-# memory_token= and memory_status=(ready|pending) for the caller's summary card.
+# install_memory turns the world into a remote memory (token, cert sync, eager
+# first cert). Prints memory_token= and memory_status=(ready|pending) for the card.
 install_memory() {
   local host="$1"
 
   log_step "Enabling the world as a remote memory (${MEMORY_LABEL}.${host})" >&2
 
-  # Capability token: publish also authorizes APPEND, which is all the memory
-  # plugin needs. Appended to the broker-owned tokens.toml (server hot-reloads).
-  # The raw token is stashed root-only so reruns reuse it (no duplicate
-  # credential) and the operator can recover the join URL later.
+  # publish also authorizes APPEND, all the plugin needs. The raw token is
+  # stashed root-only so reruns reuse it and the operator can recover the join URL.
   local memory_token=""
   # Guard the read: the stash is absent on a fresh install, and an unguarded
   # read on a missing file trips pipefail and aborts before minting.
@@ -891,15 +886,19 @@ EOF
   systemctl enable "${CERTSYNC_SERVICE}.timer"
   systemctl start "${CERTSYNC_SERVICE}.timer"
 
-  # Eager first issuance: Caddy (already running) obtains the cert within a few
-  # seconds; poll the sync so the card's /memory-join line is truthful. Bounded
-  # so a stuck ACME never blocks the install; the timer upgrades it later.
-  # Readiness is authoritative: the world's cert must equal Caddy's CURRENT
-  # memory-host cert, so a stale cert from a prior host is never called ready.
+  # Bounded poll so a stuck ACME never blocks the install (the timer finishes
+  # later). Ready means the world's cert equals Caddy's CURRENT memory-host cert,
+  # so a stale cert from a prior host is never called ready.
   local status="pending" waited=0 max=90
   [ "${DEMARKUS_INSTALL_TESTMODE:-}" = "1" ] && max=0
   while : ; do
-    "$CERTSYNC_BIN" >/dev/null 2>&1 || true
+    # The helper exits 0 when no cert exists yet; a nonzero exit is a real copy,
+    # permission, or reload failure and must not be reported as merely pending.
+    local sync_out=""
+    if ! sync_out=$("$CERTSYNC_BIN" 2>&1); then
+      log_error "Memory cert sync failed: ${sync_out}" >&2
+      exit 1
+    fi
     local src=""
     for c in "${PROXY_STATE_DIR}/caddy/certificates/"*/"${MEMORY_LABEL}.${host}/${MEMORY_LABEL}.${host}.crt"; do
       [ -f "$c" ] && src="$c" && break

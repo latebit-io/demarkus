@@ -259,7 +259,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       // insecure token-file, "#" comments); follow-up: query it via a
       // `registry soul-list` subcommand instead of parsing the file.
       try {
-        const memories = readFileSync(join(homedir(), ".demarkus", "memories"), "utf8");
+        const memories = readFileSync(join(homedir(), ".demarkus", "souls"), "utf8");
         for (const rawLine of memories.split("\n")) {
           const line = rawLine.trim();
           if (line.startsWith("#")) continue;

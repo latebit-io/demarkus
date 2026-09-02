@@ -28,7 +28,7 @@ Before answering "what do I know about / did we decide / have we seen X", and at
 
 ## Record as you go (proactively)
 
-When something is worth persisting, write it without being prompted. The full per-project layout lives in the `memory` skill (a `/project-template.md` published at the memory root overrides it); the common routes:
+When something is worth persisting, write it without being prompted. The full per-project layout lives in the `remember` skill (a `/project-template.md` published at the memory root overrides it); the common routes:
 
 - **Decision** → an ADR at `/<slug>/adr/<NNNN>-<title>.md`
 - **Lesson from a bug / a gotcha** → `/<slug>/debugging.md` (often the highest recall value)
@@ -54,5 +54,5 @@ Soft checks back you up at the moment they matter: the publish gate (tags), a se
 
 - Don't journal trivia, ephemeral chat, or things derivable from the repo and git history. Capture the non-obvious: why a decision was made, a pattern, a gotcha.
 - Don't save secrets, credentials, or anything the user hasn't authorized.
-- The `memory` skill has the full file-routing rules; `/memory-context` primes a session, `/memory-journal` appends a dated entry, `/memory-status` diagnoses the server.
+- The `remember` skill has the full file-routing rules; `/memory-context` primes a session, `/memory-journal` appends a dated entry, `/memory-status` diagnoses the server.
 - When a promote destination exists, a joined knowledge system (demarkus-knowledge plugin) or a registered plain remote demarkus server (`"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add`), `/promote <memory-path>` lifts a ready memory doc up to it (curate → gate → publish → back-stamp), `/promote-scan` sweeps the memory for promotion candidates, and `/memory-refresh` pulls promoted docs back down as their authoritative copies evolve. Publishing a new ADR also nudges promotion. With no destination configured, all of these stay dormant.

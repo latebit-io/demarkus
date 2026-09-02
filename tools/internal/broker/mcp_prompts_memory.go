@@ -47,8 +47,19 @@ func (g *mcpGateway) registerMemoryPrompts() {
 	), memoryJournalPrompt)
 	g.mcpServer.AddPrompt(mcp.NewPrompt("soul-export",
 		mcp.WithPromptDescription("Deprecated alias of memory-export."),
-		mcp.WithArgument("directory", mcp.ArgumentDescription("local directory to write the export into")),
-	), memoryExportPrompt)
+		mcp.WithArgument("directory", mcp.ArgumentDescription("local directory to write the export into (default ./soul-export)")),
+	), soulExportPrompt)
+}
+
+// soulExportPrompt keeps the alias's pre-rename default directory.
+func soulExportPrompt(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
+	if strings.TrimSpace(req.Params.Arguments["directory"]) == "" {
+		if req.Params.Arguments == nil {
+			req.Params.Arguments = map[string]string{}
+		}
+		req.Params.Arguments["directory"] = "./soul-export"
+	}
+	return memoryExportPrompt(ctx, req)
 }
 
 func memoryExportPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go

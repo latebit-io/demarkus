@@ -1,14 +1,6 @@
-// Package provision ports the demarkus-memory server-lifecycle logic from the
-// plugins' bash (lib.sh + setup.sh + session-start.sh + detect-memory.sh) into Go.
-// It owns the per-session managed-server lifecycle: download/verify/install the
-// pinned binaries, generate the plugin token, spawn (or adopt) a demarkus-server,
-// and seed the memory docs. Every readiness/progress line goes to STDERR so a
-// caller can run Provision purely for its side effects with a clean stdout.
-//
-// Faithful port note: the bash carries hard-won safety — notably the PID-at-root
-// ownership check that gates ever killing a recorded .pid (a stale .pid whose
-// number has been reused by an unrelated process must never be killed). That
-// safety is preserved here verbatim in pidIsServerAtRoot / ensureManagedServer.
+// Package provision owns the plugin's managed-server lifecycle: pinned binary
+// install, token generation, spawn or adopt of a demarkus-server, and seeding.
+// A recorded .pid is only ever killed once proven to be our server for this root.
 package provision
 
 import (
@@ -95,7 +87,7 @@ const (
 var seedFS embed.FS
 
 // pristineTemplateHashes are the sha256 of every project-template.md the old
-// filesystem seeding ever shipped. The layout now lives in the memory-memory
+// filesystem seeding ever shipped. The layout now lives in the remember
 // skill; a flat copy matching one of these is an untouched seed, safe to delete.
 var pristineTemplateHashes = map[string]bool{
 	"2573bd505e8ed7f3573a2fd24e903b2dbf65df4dc03a933a8f5a10f63610c7a6": true,
@@ -1036,8 +1028,11 @@ func ensureManagedServer(memoryDir string, port int) error {
 	if err := stopStaleManagedServer(readPID(pidFile), memoryDir); err != nil {
 		return err
 	}
-	_ = os.Remove(pidFile)
-	_ = os.Remove(versionFile)
+	for _, f := range []string{pidFile, versionFile} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			warnf("could not clear stale bookkeeping file %s: %v", f, err)
+		}
+	}
 	// Pre-#289 the log sat at <memoryDir>/.log, inside the server's tokens-watch
 	// directory, feeding the watcher its own output. Remove it on migration.
 	legacyLog := filepath.Join(memoryDir, ".log")
@@ -1208,7 +1203,7 @@ func seedMemoryDocs(port int) {
 
 // cleanupLegacyTemplate deletes the old seeding's flat project-template.md
 // (never FETCHable, issue #288) when pristine; the layout now ships in the
-// memory-memory skill. A customized copy stays until its owner republishes.
+// remember skill. A customized copy stays until its owner republishes.
 func cleanupLegacyTemplate(memoryDir string) {
 	const name = "project-template.md"
 	flatPath := filepath.Join(memoryDir, name)
@@ -1235,7 +1230,7 @@ func cleanupLegacyTemplate(memoryDir string) {
 		warnf("could not remove legacy flat %s: %v", name, err)
 		return
 	}
-	logf("removed legacy flat %s (the layout now ships in the memory-memory skill)", name)
+	logf("removed legacy flat %s (the layout now ships in the remember skill)", name)
 }
 
 // seedDoc publishes the embedded seed for name at the memory root unless the

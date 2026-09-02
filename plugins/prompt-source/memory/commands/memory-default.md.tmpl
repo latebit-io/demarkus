@@ -26,7 +26,8 @@ Reads and one-off writes to a *different* joined memory are unaffected: call
    - Non-zero exit or malformed output → surface the exact registry failure and stop; do not report an empty catalog.
    - `CATALOG` header → each following line is
      `<id>\t<tier>\t<host>\t<insecure>\t<current>`. `tier` is `local` (the
-     plugin-managed memory, id `demarkus-memory`) or `remote`. `current` is `*` for
+     plugin-managed memory, id `demarkus-memory`), `remote` (a direct-QUIC memory),
+     or `broker` (a hosted memory behind an HTTPS memory broker). `current` is `*` for
      the project's existing default.
 
 {{if eq .Harness "claude"}}2. **Ask which memory to make the default** via one `AskUserQuestion`, one option per catalog row (label = id, description = tier + host). Mark the current default in its description. Do not invent memories not in the list.

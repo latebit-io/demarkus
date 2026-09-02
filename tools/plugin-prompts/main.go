@@ -128,7 +128,7 @@ func renderAll(root string) ([]artifact, error) {
 			if entry.IsDir() {
 				return nil
 			}
-			isAlias := strings.HasSuffix(entry.Name(), ".alias")
+			isAlias := strings.HasSuffix(entry.Name(), ".md.alias")
 			if !isAlias && !strings.HasSuffix(entry.Name(), ".tmpl") {
 				return nil
 			}
@@ -251,6 +251,9 @@ func renderAlias(path string, target *target) ([]byte, error) {
 	name := strings.TrimSpace(string(raw))
 	if name == "" || strings.ContainsAny(name, "/\\ \n") {
 		return nil, fmt.Errorf("%s: alias must name one command", path)
+	}
+	if !strings.HasSuffix(path, ".md.alias") {
+		return nil, fmt.Errorf("%s: alias files must be named <command>.md.alias", path)
 	}
 	if filepath.Base(filepath.Dir(path)) != "commands" {
 		return nil, fmt.Errorf("%s: aliases are only supported under commands/", path)

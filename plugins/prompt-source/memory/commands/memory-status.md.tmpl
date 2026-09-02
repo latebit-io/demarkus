@@ -46,11 +46,11 @@ Diagnose the plugin's current setup: configured mode, memory path, port, server 
    ## demarkus-memory status
 
    - **Mode:** <default | isolated | reuse>
-   - **Memory:** <SOUL_DIR>
+   - **Memory:** <memory directory>
    - **Port:** <PORT>
    - **Server:** running (pid <N>) | not running | reused (user-managed)
    - **Binaries:** demarkus-server <ver>, demarkus-mcp <ver>, demarkus-token <ver> | unknown (directory inspection failed)
-   - **Connectivity:** ok | not-found (empty memory) | unauthorized (token mismatch) | unreachable
+   - **Connectivity:** ok | not-found (index missing) | unauthorized (token mismatch) | unreachable
 
    <If anything is degraded, suggest the specific fix:>
    - Server not running (managed mode) → "Run /memory-init to restart, or check that demarkus-server is in the bin directory."

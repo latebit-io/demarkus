@@ -28,7 +28,8 @@ the destination server's `mark_*` tools directly. This command only moves the de
    - Non-zero exit or malformed output → surface the exact registry failure and stop; do not report an empty catalog.
    - `CATALOG` header → each following line is
      `<id>\t<tier>\t<host>\t<insecure>\t<current>`. `tier` is `local` (the
-     plugin-managed memory, id `demarkus-memory`) or `remote`. `current` is `*` for
+     plugin-managed memory, id `demarkus-memory`), `remote` (a direct-QUIC memory),
+     or `broker` (a hosted memory behind an HTTPS memory broker). `current` is `*` for
      the project's existing default.
 
 2. **Ask which memory to make the default** in one plain question listing the catalog rows as numbered options (id, tier, host). Mark the current default. Do not invent memories not in the list; wait for the user's answer.

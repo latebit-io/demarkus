@@ -83,7 +83,7 @@ func recall(in *Input) (Output, error) {
 		}
 		return Output{}, nil
 	}
-	// default: memory memory
+	// default: the local memory
 	present, err := config.LocalMemoryPresent()
 	if err != nil {
 		return Output{}, err

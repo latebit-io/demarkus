@@ -54,3 +54,5 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 | librarian | the library's agent, or simply the agent |
 
 Command names and MCP prompt names that carried the older terms remain as aliases for one release after the rename.
+
+Glossary exceptions, kept on purpose: the single-host installer and its page are still called the appliance until the installer is renamed; on-disk plugin state under `~/.demarkus` (`souls`, `project-souls`, `SOUL_DIR`) and the memory subdomain of installs made before the rename (`soul.<host>`) keep their names so existing installs work unchanged; `soul.demarkus.io` is the project's hostname.

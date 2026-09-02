@@ -178,7 +178,9 @@ func TestMcpRejectsArrayConfig(t *testing.T) {
 func TestMemoryJoinAndCollision(t *testing.T) {
 	home := setupHome(t)
 	repo := filepath.Join(home, "repo")
-	_ = os.MkdirAll(repo, 0o755)
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	res, err := MemoryJoin("soul.demarkus.io", "tok", true, repo)
 	if err != nil {
 		t.Fatal(err)

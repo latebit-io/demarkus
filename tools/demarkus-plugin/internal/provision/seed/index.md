@@ -8,7 +8,7 @@ _No projects yet. Add a link below when the agent creates a project subtree._
 
 ## Per-Project Structure
 
-Each `/<project>/` subtree follows the canonical layout carried by the memory plugin's memory-memory skill. In brief: a maintained `index.md` hub, plus `architecture.md`, `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `thoughts.md`, an `adr/` directory (one ADR per decision), a `plans/` directory, and `journal/<YYYY-MM-DD>.md` dated notes.
+Each `/<project>/` subtree follows the canonical layout carried by the memory plugin's remember skill. In brief: a maintained `index.md` hub, plus `architecture.md`, `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `thoughts.md`, an `adr/` directory (one ADR per decision), a `plans/` directory, and `journal/<YYYY-MM-DD>.md` dated notes.
 
 The agent keeps this layout consistent across projects so `/memory`, `/memory-journal`, and the memory skill always know where to look. To tailor the layout, publish `/project-template.md` at the memory root; when present it overrides the skill's built-in layout.
 
