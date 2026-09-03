@@ -52,7 +52,8 @@ type artifact struct {
 	Path    string
 	Content []byte
 	Target  *target
-	Copied  bool // verbatim copy of a base plugin file, not a rendered template
+	Copied  bool        // verbatim copy of a base plugin file, not a rendered template
+	Mode    fs.FileMode // source mode for copies (hooks must stay executable); zero means 0o644
 }
 
 func main() {
@@ -76,7 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 	if mode == "write" {
-		err = writeAll(artifacts)
+		err = writeAll(root, artifacts)
 	} else {
 		err = checkAll(root, artifacts)
 	}
@@ -403,17 +404,72 @@ func forbiddenTerms(harness string) []string {
 	}
 }
 
-func writeAll(artifacts []artifact) error {
+func writeAll(root string, artifacts []artifact) error {
+	expected := make(map[string]struct{}, len(artifacts))
 	for i := range artifacts {
 		artifact := &artifacts[i]
+		expected[filepath.Clean(artifact.Path)] = struct{}{}
 		if err := os.MkdirAll(filepath.Dir(artifact.Path), 0o755); err != nil {
 			return fmt.Errorf("create output directory: %w", err)
 		}
-		if err := os.WriteFile(artifact.Path, artifact.Content, 0o644); err != nil {
+		mode := artifact.Mode
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := os.WriteFile(artifact.Path, artifact.Content, mode); err != nil {
 			return fmt.Errorf("write %s: %w", artifact.Path, err)
+		}
+		// WriteFile keeps an existing file's mode; make the copy's mode win.
+		if err := os.Chmod(artifact.Path, mode); err != nil {
+			return fmt.Errorf("chmod %s: %w", artifact.Path, err)
+		}
+	}
+	return pruneBrandOutputs(root, artifacts, expected)
+}
+
+// pruneBrandOutputs deletes files under brand outputs that no artifact
+// produced, so write converges on the check that reports them as stale.
+// Canonical plugins are never pruned: they mix generated and hand-kept files.
+func pruneBrandOutputs(root string, artifacts []artifact, expected map[string]struct{}) error {
+	for _, output := range brandOutputs(artifacts) {
+		dir := filepath.Join(root, output)
+		var stale []string
+		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if _, ok := expected[filepath.Clean(path)]; !entry.IsDir() && !ok {
+				stale = append(stale, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("scan brand output %s: %w", dir, err)
+		}
+		for _, path := range stale {
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("remove stale %s: %w", path, err)
+			}
+			fmt.Printf("removed stale brand file %s\n", filepath.ToSlash(strings.TrimPrefix(path, root+string(filepath.Separator))))
 		}
 	}
 	return nil
+}
+
+// brandOutputs lists the distinct brand output dirs among the artifacts.
+func brandOutputs(artifacts []artifact) []string {
+	seen := map[string]struct{}{}
+	var outputs []string
+	for i := range artifacts {
+		output := artifacts[i].Target.Output
+		if _, ok := seen[output]; ok || !strings.HasPrefix(filepath.ToSlash(output), brandOutputPrefix) {
+			continue
+		}
+		seen[output] = struct{}{}
+		outputs = append(outputs, output)
+	}
+	sort.Strings(outputs)
+	return outputs
 }
 
 func checkAll(root string, artifacts []artifact) error {

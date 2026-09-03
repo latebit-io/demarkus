@@ -50,11 +50,14 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 81 rendered prompts (54 canonical + 27 aliases) plus each brand's
-	// re-rendered memory or knowledge prompts and its copied plugin files.
-	want := 81 + brandArtifactCount(t, root, artifacts)
+	// 81 rendered prompts (54 canonical + 27 aliases) plus each brand's share,
+	// derived from the manifest and source tree rather than from the render.
+	want := 81 + expectedBrandArtifacts(t, root)
 	if len(artifacts) != want {
 		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)
+	}
+	if got := brandArtifactCount(t, root, artifacts); got != want-81 {
+		t.Fatalf("brand artifacts = %d, want %d", got, want-81)
 	}
 }
 
@@ -224,6 +227,93 @@ func brandArtifactCount(t *testing.T, root string, artifacts []artifact) int {
 		}
 	}
 	return n
+}
+
+// expectedBrandArtifacts derives each brand's artifact count from the
+// manifest and the base plugin's source files.
+func expectedBrandArtifacts(t *testing.T, root string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "plugins", "prompt-source", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := decodeManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bases := map[string]target{}
+	for i := range spec.Targets {
+		bases[spec.Targets[i].Name] = spec.Targets[i]
+	}
+	total := 0
+	for _, b := range spec.Brands {
+		base := bases[b.Base]
+		total += countFiles(t, filepath.Join(root, "plugins", "prompt-source", base.Surface), func(name string) bool {
+			return strings.HasSuffix(name, ".tmpl") || strings.HasSuffix(name, ".md.alias")
+		})
+		for _, name := range copiedFiles {
+			total += countFiles(t, filepath.Join(root, base.Output, name), func(string) bool { return true })
+		}
+		total += 2 // plugin.json and README
+	}
+	return total
+}
+
+func countFiles(t *testing.T, dir string, keep func(string) bool) int {
+	t.Helper()
+	n := 0
+	err := filepath.WalkDir(dir, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && keep(entry.Name()) {
+			n++
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestWriteAllPreservesCopyModeAndPrunesStaleBrandFiles(t *testing.T) {
+	root := t.TempDir()
+	output := "plugins/brands/acme"
+	hooks := filepath.Join(root, output, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(hooks, "removed-upstream.sh")
+	if err := os.WriteFile(stale, []byte("stale"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hook := filepath.Join(hooks, "gate.sh")
+	// Pre-existing non-executable file: the copy's mode must still win.
+	if err := os.WriteFile(hook, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := &target{Output: output}
+	arts := []artifact{
+		{Path: hook, Content: []byte("#!/bin/sh\n"), Target: target, Copied: true, Mode: 0o755},
+		{Path: filepath.Join(root, output, "commands", "memory.md"), Content: []byte("# m\n"), Target: target},
+	}
+	if err := writeAll(root, arts); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(hook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("copied hook is not executable: %v", info.Mode())
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale brand file still present (err=%v)", err)
+	}
+	if err := checkAll(root, arts); err != nil {
+		t.Fatalf("check after write should be clean, got %v", err)
+	}
 }
 
 func TestBrandArtifactCountMatchesBrandPrefix(t *testing.T) {

@@ -111,11 +111,15 @@ func brandArtifacts(root string, b *brand, base, t *target) ([]artifact, error) 
 			if err != nil {
 				return err
 			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
 			rel, err := filepath.Rel(baseDir, path)
 			if err != nil {
 				return err
 			}
-			out = append(out, artifact{Path: filepath.Join(outDir, rel), Content: content, Target: t, Copied: true})
+			out = append(out, artifact{Path: filepath.Join(outDir, rel), Content: content, Target: t, Copied: true, Mode: info.Mode().Perm()})
 			return nil
 		})
 		if err != nil {
