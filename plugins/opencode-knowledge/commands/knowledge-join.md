@@ -35,7 +35,7 @@ Before invoking Bash, require the entire argument to match `https://` plus a DNS
 3. Register the endpoint, then the publish-gate entry. Check each result before continuing.
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add-http '<slug>' '<mcp-url>'
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add-http '<slug>' '<mcp-url>' && \
    "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>'
    ```
 

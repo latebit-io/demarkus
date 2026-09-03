@@ -6,4 +6,4 @@
 set -uo pipefail
 BIN="${HOME}/.demarkus/bin/demarkus-plugin"
 [ -x "${BIN}" ] || exit 0
-"${BIN}" gate --format cursor || exit 0
+"${BIN}" gate --format cursor || { echo "[demarkus-memory] gate exited $?; allowing the write (fail-open)" >&2; exit 0; }

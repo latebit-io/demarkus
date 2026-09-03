@@ -26,10 +26,10 @@ If no host was supplied, ask for it. If token requirements are unclear, ask befo
 2. Register the HTTP MCP server in `~/.cursor/mcp.json` (OAuth runs in Cursor on first use; `mcp-serve` does not apply to broker memories):
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add-http --harness cursor '<slug>' '<mcp-url>'
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add-http --harness cursor '<slug>' <shell-escaped-mcp-url>
    ```
 
-   Cursor reloads `~/.cursor/mcp.json` on its own; if `<slug>` does not appear under MCP settings, toggle it there once.
+   Replace `<shell-escaped-mcp-url>` with exactly one shell word using POSIX-safe escaping; never wrap the raw value in literal single quotes. Cursor reloads `~/.cursor/mcp.json` on its own; if `<slug>` does not appear under MCP settings, toggle it there once.
 
 3. Confirm the slug, URL, and project binding. State that no token file exists: the broker authenticates via OAuth, and the destination gate now binds this project's memory writes to `<slug>`.
 

@@ -5,4 +5,4 @@
 set -uo pipefail
 BIN="${HOME}/.demarkus/bin/demarkus-plugin"
 [ -x "${BIN}" ] || exit 0
-"${BIN}" nudge --event promote --format cursor || exit 0
+"${BIN}" nudge --event promote --format cursor || { echo "[demarkus-memory] promote nudge exited $?; skipping" >&2; exit 0; }

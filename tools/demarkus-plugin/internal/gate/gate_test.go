@@ -470,3 +470,37 @@ func TestCursorPayloadQualifiesServerAndProject(t *testing.T) {
 		t.Fatalf("destination gate reason should name the bound memory: %s", d.Reason)
 	}
 }
+
+func TestCursorMultiRootBindingResolution(t *testing.T) {
+	t.Setenv("DEMARKUS_MEMORY_DEST_STRICTNESS", "block")
+	home := setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	unbound := filepath.Join(home, "unbound")
+	remote := filepath.Join(home, "remote-bound")
+	local := filepath.Join(home, "local-bound")
+	for _, d := range []string{unbound, remote, local} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := remote + "\tremote\n" + local + "\t" + config.LocalMemoryID + "\n"
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(rows), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tagged := map[string]any{"url": "/x.md", "metadata": map[string]any{"tags": "a"}}
+	// An unbound first root must not hide a bound second root.
+	d := mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", WorkspaceRoots: []string{unbound, remote}, ToolInput: tagged})
+	if d.Decision != "block" || !strings.Contains(d.Reason, "remote") {
+		t.Fatalf("second-root binding should gate the write: got %q (%s)", d.Decision, d.Reason)
+	}
+	// A root bound to the target memory makes the write legitimate.
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", WorkspaceRoots: []string{remote, local}, ToolInput: tagged})
+	if d.Decision != "allow" {
+		t.Fatalf("root bound to the target memory should allow: got %q (%s)", d.Decision, d.Reason)
+	}
+	// No roots at all: the harness env var stands in.
+	t.Setenv("CURSOR_PROJECT_DIR", remote)
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", ToolInput: tagged})
+	if d.Decision != "block" {
+		t.Fatalf("env project dir should gate the write: got %q", d.Decision)
+	}
+}

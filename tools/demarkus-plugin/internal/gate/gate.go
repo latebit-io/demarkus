@@ -146,9 +146,6 @@ func Evaluate(in *Input) (Decision, error) {
 		in.Input = in.ToolInput
 	}
 	in.Tool = config.QualifyTool(in.Tool, in.McpServerName)
-	if in.Cwd == "" {
-		in.Cwd = projectDir(in.WorkspaceRoots)
-	}
 	tool, args := config.NormalizeCall(in.Tool, in.Input)
 	pt, ok := config.ParseTool(tool)
 	if !ok {
@@ -160,7 +157,13 @@ func Evaluate(in *Input) (Decision, error) {
 		return Decision{}, err
 	}
 	if memoryID != "" {
-		return evalMemory(tool, pt, args, in.Cwd, memoryID)
+		cwd := in.Cwd
+		if cwd == "" {
+			if cwd, err = projectDir(in.WorkspaceRoots, memoryID); err != nil {
+				return Decision{}, err
+			}
+		}
+		return evalMemory(tool, pt, args, cwd, memoryID)
 	}
 
 	ksSlug, err := config.KnowledgeScope(tool)
@@ -174,18 +177,44 @@ func Evaluate(in *Input) (Decision, error) {
 	return allow(), nil // unrelated server — not ours to gate
 }
 
-// projectDir resolves the project for the binding check when the payload has
-// no cwd: the first workspace root, else the harness's project env var.
-func projectDir(roots []string) string {
-	if len(roots) > 0 && roots[0] != "" {
-		return roots[0]
-	}
-	for _, k := range []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"} {
-		if v := os.Getenv(k); v != "" {
-			return v
+// projectDir resolves the binding-check project when the payload has no cwd.
+// workspace_roots has no active-root order: prefer a root bound to memoryID,
+// else the first bound root so the gate still fires; no roots → the env var.
+func projectDir(roots []string, memoryID string) (string, error) {
+	var found []string
+	for _, r := range roots {
+		if r != "" {
+			found = append(found, r)
 		}
 	}
-	return ""
+	switch len(found) {
+	case 0:
+		for _, k := range []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"} {
+			if v := os.Getenv(k); v != "" {
+				return v, nil
+			}
+		}
+		return "", nil
+	case 1:
+		return found[0], nil
+	}
+	firstBound := ""
+	for _, r := range found {
+		bound, err := config.ProjectBinding(r)
+		if err != nil {
+			return "", err
+		}
+		if bound == "" {
+			continue
+		}
+		if bound == memoryID {
+			return r, nil
+		}
+		if firstBound == "" {
+			firstBound = r
+		}
+	}
+	return firstBound, nil
 }
 
 func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, memoryID string) (Decision, error) {

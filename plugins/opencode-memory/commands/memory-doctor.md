@@ -48,7 +48,7 @@ Render its one-line verdict as a finding: `write auth healthy` → healthy; `tok
 
 ## Deep checks (per-doc `mark_fetch`; run on a small scope, or when asked)
 
-These cost one fetch per document, so only run them for a single project or when the user asks for a thorough audit. Fetch at most **100** documents per audit, preferring hub-linked and recently modified docs when sampling. If you cap or sample, report exact coverage and skipped count; do not imply a full audit.
+These cost one fetch per document, so only run them for a single project or when the user asks for a thorough audit. Fetch at most **100** documents per audit, preferring hub-linked and recently modified docs when sampling. Use `force: true` for every check that inspects a document body; a plain fetch returns an outline for bodies of 8KB or more, and an outline passes body checks it should fail. If you cap or sample, report exact coverage and skipped count; do not imply a full audit.
 
 - **Untagged docs**: fetch and check the `tags` metadata is non-empty. An untagged doc cannot be found by subject tags, only by title or explicit path. (This is what the publish gate now prevents going forward; this finds pre-existing ones.)
 - **Metadata lost across versions** *(legacy servers)*: an untagged doc that **used to** carry tags. Servers before the APPEND metadata merge wrote each appended version with only `{agent: …}`, dropping the doc's `tags`, `importance`, `title`, and `type` and knocking it out of `mark_lookup`; journals, appended every session, are the usual victims. Retire the check once the corpus is clean. Run it only on docs the untagged check already flagged that have more than one version:

@@ -2,7 +2,7 @@
   "version": 1,
   "hooks": {
     "sessionStart": [
-      { "command": "./hooks/session-start.sh", "timeout": 120 }
+      { "command": "./hooks/session-start.sh", "timeout": 900 }
     ],
     "sessionEnd": [
       { "command": "./hooks/mark-activity.sh", "timeout": 10 }
