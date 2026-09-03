@@ -50,8 +50,11 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifacts) != 81 {
-		t.Fatalf("renderAll() produced %d artifacts, want 81", len(artifacts))
+	// 81 rendered prompts (54 canonical + 27 aliases) plus each brand's
+	// re-rendered memory or knowledge prompts and its copied plugin files.
+	want := 81 + brandArtifactCount(t, artifacts)
+	if len(artifacts) != want {
+		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)
 	}
 }
 
@@ -206,5 +209,74 @@ func TestClaimOutputRejectsDuplicateArtifactPath(t *testing.T) {
 	err := claimOutput(seen, "/out/commands/./foo.md", "foo.md.alias")
 	if err == nil || !strings.Contains(err.Error(), "foo.md.tmpl") {
 		t.Fatalf("expected duplicate-path error naming the first source, got %v", err)
+	}
+}
+
+// brandArtifactCount counts artifacts under plugins/brands/ so the corpus
+// expectation tracks the manifest's brand list without hard-coding it.
+func brandArtifactCount(t *testing.T, artifacts []artifact) int {
+	t.Helper()
+	n := 0
+	for i := range artifacts {
+		if strings.Contains(filepath.ToSlash(artifacts[i].Path), "/"+brandOutputPrefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestBrandTargetNamesItself(t *testing.T) {
+	base := &target{Name: "claude-memory", Surface: "memory", Harness: "claude", Output: "plugins/claude-code", PluginName: "demarkus-memory", MemoryPluginName: "demarkus-memory", KnowledgePluginName: "demarkus-knowledge"}
+	b := &brand{Name: "acme", Base: "claude-memory", Output: "plugins/brands/acme", PluginName: "acme-brain", Description: "d"}
+	got := brandTarget(b, base)
+	if got.PluginName != "acme-brain" || got.MemoryPluginName != "acme-brain" || got.KnowledgePluginName != "demarkus-knowledge" || got.Output != b.Output {
+		t.Fatalf("unexpected brand target: %+v", got)
+	}
+	b.KnowledgePluginName = "acme-knowledge"
+	if brandTarget(b, base).KnowledgePluginName != "acme-knowledge" {
+		t.Fatal("brand knowledge_plugin_name should override the base sibling name")
+	}
+}
+
+func TestValidateBrandsRejectsBadEntries(t *testing.T) {
+	base := target{Name: "claude-memory", Surface: "memory", Harness: "claude", Output: "plugins/claude-code", PluginName: "demarkus-memory"}
+	pi := target{Name: "pi-memory", Surface: "memory", Harness: "pi", Output: "plugins/pi-memory", PluginName: "demarkus-memory"}
+	ok := brand{Name: "acme", Base: "claude-memory", Output: "plugins/brands/acme", PluginName: "acme-brain", Description: "d"}
+	cases := map[string]brand{
+		"unknown base":    {Name: "x", Base: "nope", Output: "plugins/brands/x", PluginName: "x-brain", Description: "d"},
+		"non-claude base": {Name: "x", Base: "pi-memory", Output: "plugins/brands/x", PluginName: "x-brain", Description: "d"},
+		"bad plugin name": {Name: "x", Base: "claude-memory", Output: "plugins/brands/x", PluginName: "X Brain", Description: "d"},
+		"base name":       {Name: "x", Base: "claude-memory", Output: "plugins/brands/x", PluginName: "demarkus-memory", Description: "d"},
+		"output outside":  {Name: "x", Base: "claude-memory", Output: "plugins/x", PluginName: "x-brain", Description: "d"},
+	}
+	if err := validateBrands(&manifest{Targets: []target{base, pi}, Brands: []brand{ok}}); err != nil {
+		t.Fatalf("valid brand rejected: %v", err)
+	}
+	for name, bad := range cases {
+		if err := validateBrands(&manifest{Targets: []target{base, pi}, Brands: []brand{bad}}); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	if err := validateBrands(&manifest{Targets: []target{base}, Brands: []brand{ok, ok}}); err == nil {
+		t.Error("duplicate brand should be rejected")
+	}
+}
+
+func TestBrandPluginJSONRewritesNameAndDescription(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "plugin.json")
+	src := "{\n  \"name\": \"demarkus-memory\",\n  \"version\": \"0.1.0\",\n  \"description\": \"base \\\"quoted\\\" text\",\n  \"hooks\": {}\n}\n"
+	if err := os.WriteFile(basePath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := brandPluginJSON(basePath, "demarkus-memory", &brand{PluginName: "acme-brain", Description: "Acme \"brain\""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{"\"name\": \"acme-brain\"", "\"description\": \"Acme \\\"brain\\\"\"", "\"version\": \"0.1.0\""} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
 	}
 }

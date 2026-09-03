@@ -29,6 +29,7 @@ var canonicalOutputs = map[string]string{
 
 type manifest struct {
 	Targets []target `json:"targets"`
+	Brands  []brand  `json:"brands"`
 }
 
 type target struct {
@@ -40,12 +41,18 @@ type target struct {
 	ProjectDir       string `json:"project_dir"`
 	RepoInstructions string `json:"repo_instructions"`
 	ToolForm         string `json:"tool_form"`
+	// Plugin names surface in prose. PluginName is this target's own; the
+	// sibling names let memory and knowledge prompts refer to each other.
+	PluginName          string `json:"plugin_name"`
+	MemoryPluginName    string `json:"memory_plugin_name"`
+	KnowledgePluginName string `json:"knowledge_plugin_name"`
 }
 
 type artifact struct {
 	Path    string
 	Content []byte
 	Target  *target
+	Copied  bool // verbatim copy of a base plugin file, not a rendered template
 }
 
 func main() {
@@ -113,11 +120,35 @@ func renderAll(root string) ([]artifact, error) {
 	if err := validateManifest(&spec); err != nil {
 		return nil, err
 	}
+	if err := validateBrands(&spec); err != nil {
+		return nil, err
+	}
 
 	var artifacts []artifact
 	seen := map[string]string{}
+	renderTargets := make([]*target, 0, len(spec.Targets)+len(spec.Brands))
+	baseByName := map[string]*target{}
 	for i := range spec.Targets {
-		target := &spec.Targets[i]
+		renderTargets = append(renderTargets, &spec.Targets[i])
+		baseByName[spec.Targets[i].Name] = &spec.Targets[i]
+	}
+	for i := range spec.Brands {
+		b := &spec.Brands[i]
+		base := baseByName[b.Base]
+		t := brandTarget(b, base)
+		renderTargets = append(renderTargets, t)
+		copied, err := brandArtifacts(root, b, base, t)
+		if err != nil {
+			return nil, err
+		}
+		for j := range copied {
+			if err := claimOutput(seen, copied[j].Path, "brand "+b.Name); err != nil {
+				return nil, err
+			}
+		}
+		artifacts = append(artifacts, copied...)
+	}
+	for _, target := range renderTargets {
 		if err := validateTarget(target); err != nil {
 			return nil, err
 		}
@@ -221,6 +252,18 @@ func validateTarget(target *target) error {
 	}
 	if target.Surface != "memory" && target.Surface != "knowledge" {
 		return fmt.Errorf("manifest target %s: invalid surface %q", target.Name, target.Surface)
+	}
+	if target.MemoryPluginName == "" {
+		target.MemoryPluginName = "demarkus-memory"
+	}
+	if target.KnowledgePluginName == "" {
+		target.KnowledgePluginName = "demarkus-knowledge"
+	}
+	if target.PluginName == "" {
+		target.PluginName = target.MemoryPluginName
+		if target.Surface == "knowledge" {
+			target.PluginName = target.KnowledgePluginName
+		}
 	}
 	if target.Harness != "claude" && target.Harness != "pi" && target.Harness != "opencode" {
 		return fmt.Errorf("manifest target %s: invalid harness %q", target.Name, target.Harness)
