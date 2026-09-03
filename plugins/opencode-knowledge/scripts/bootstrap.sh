@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-TOOLS_VERSION="0.25.3"
+TOOLS_VERSION="0.26.0"
 BIN_DIR="${HOME}/.demarkus/bin"
 BIN="${BIN_DIR}/demarkus-plugin"
 
