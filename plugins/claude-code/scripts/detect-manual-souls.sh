@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# detect-manual-souls.sh — report hand-wired remote demarkus souls so /soul-join
+# detect-manual-souls.sh — report hand-wired remote demarkus memories so /memory-join
 # can offer to adopt them into managed config.
 #
-# A "manual soul" is an MCP server that invokes demarkus-mcp DIRECTLY against a
-# remote mark:// host — i.e. a soul wired by editing .mcp.json by hand, with its
+# A "manual memory" is an MCP server that invokes demarkus-mcp DIRECTLY against a
+# remote mark:// host — i.e. a memory wired by editing .mcp.json by hand, with its
 # token sitting inline in the config (and in `claude mcp list` output). Entries
 # that go through our launch wrappers (soul-remote-wrapper.sh / mcp-wrapper.sh)
 # are already managed and are NOT reported.
@@ -33,8 +33,8 @@ fi
 LIST="$(claude mcp list 2>/dev/null || true)"
 
 ROWS="$(printf '%s\n' "${LIST}" | awk '
-  # Skip our managed wrappers and the local-soul wrapper outright.
-  /soul-remote-wrapper\.sh/ { next }
+  # Skip our managed wrappers and the local-memory wrapper outright.
+  /memory-remote-wrapper\.sh/ { next }
   /mcp-wrapper\.sh/         { next }
   # Must invoke demarkus-mcp directly against a remote mark:// host.
   /demarkus-mcp/ && /mark:\/\// {

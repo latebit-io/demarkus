@@ -1,5 +1,5 @@
 ---
-description: Append an entry to today's journal for the current project
+description: Deprecated alias of /memory-journal. Append an entry to today's journal for the current project
 argument-hint: <entry text>
 ---
 <!-- markdownlint-disable MD041 -->
@@ -7,9 +7,11 @@ argument-hint: <entry text>
 
 Append the following entry to today's journal file for the current project. One journal file per day per project, appended as the day progresses.
 
+If `$ARGUMENTS` is blank or whitespace only, ask for the entry text and stop; call no write tool.
+
 ## Steps
 
-1. **Resolve and validate the project slug.** Use the absolute current project directory; use its basename, lowercased with spaces replaced by hyphens, as the candidate. If the project directory is unavailable, ask the user which project. Before writing, check whether that candidate subtree already exists in the selected soul. If it does and this session has not established that it belongs to this exact absolute project path, ask the user to confirm or choose a unique slug; never assume equal basenames mean the same project. Use the final confirmed slug consistently for the journal path and root-index link.
+1. **Resolve and validate the project slug.** Use the absolute current project directory; use its basename, lowercased with spaces replaced by hyphens, as the candidate. If the project directory is unavailable, ask the user which project. Before writing, check whether that candidate subtree already exists in the selected memory. If it does and this session has not established that it belongs to this exact absolute project path, ask the user to confirm or choose a unique slug; never assume equal basenames mean the same project. Use the final confirmed slug consistently for the journal path and root-index link.
 
 2. **Compute the target path.** Use today's date in UTC as `YYYY-MM-DD`. Target: `/<project>/journal/<YYYY-MM-DD>.md`.
 

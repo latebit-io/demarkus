@@ -36,15 +36,15 @@ function run(cmd: string, args: string[]): Promise<string | null> {
 // success. Bounded so a hung download can't wedge session start.
 export async function provisionServer(): Promise<string> {
   const bootErr = await run("bash", [BOOTSTRAP_SH]);
-  if (bootErr) return `demarkus-memory bootstrap failed: ${bootErr}. Run /soul-init to recover.`;
+  if (bootErr) return `demarkus-memory bootstrap failed: ${bootErr}. Run /memory-init to recover.`;
   const provErr = await run(BIN, ["provision"]);
-  if (provErr) return `demarkus-memory provisioning failed: ${provErr}. Run /soul-init to recover.`;
+  if (provErr) return `demarkus-memory provisioning failed: ${provErr}. Run /memory-init to recover.`;
   return "";
 }
 
 export type EnsureResult = { status: "ok" } | { status: "error"; message: string };
 
-// ensureMcpServerEntry — register the local-soul MCP server (launched via
+// ensureMcpServerEntry — register the local-memory MCP server (launched via
 // `demarkus-plugin mcp-serve`) through the binary's registry command. Idempotent.
 // Returns an error result if the binary isn't installed yet or the call fails.
 export function ensureMcpServerEntry(): EnsureResult {

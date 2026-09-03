@@ -2,13 +2,13 @@
 
 **Memory for agents, knowledge for teams, a second brain for you**
 
-Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. The same store scales up to a team's shared world and an organizational **knowledge system**: a broker-fronted universe of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
+Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. The same store scales up to a team's shared world and an organizational **knowledge system**: a broker-fronted set of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
 
 Every link between documents feeds a persistent **knowledge graph**. Agents query backlinks and related documents across sessions, the TUI and the [reading room](https://github.com/latebit-io/demarkus-library) render it, and `demarkus-agent` aggregates it across worlds. Memory here is connected knowledge you traverse, not a pile of files.
 
 Underneath sits the **Mark Protocol**: versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Capability tokens gate writes, every change is kept, and one static binary runs anywhere.
 
-Architecturally, the servers (`demarkus-server`, `demarkus-knowledge-server`) are **memory storage engines**: deliberately simple, versioned, hash-chained document stores. The brokers are the access tier that turns an engine into a service. The **memory broker** gives each identity a private soul world over MCP with OAuth (memory as a service for Claude Desktop, ChatGPT, Cursor), and the **knowledge broker** composes many worlds into one organizational knowledge system. The intelligence (lookup, routing, graph traversal) lives in the agent.
+Architecturally, the servers (`demarkus-server`, `demarkus-knowledge-server`) are **memory storage engines**: deliberately simple, versioned, hash-chained document stores. The brokers are the access tier that turns an engine into a service. The **memory broker** gives each identity a private memory world over MCP with OAuth (memory as a service for Claude Desktop, ChatGPT, Cursor), and the **knowledge broker** composes many worlds into one organizational knowledge system. The intelligence (lookup, routing, graph traversal) lives in the agent.
 
 ## Install
 
@@ -81,7 +81,7 @@ See [full install docs](https://www.demarkus.io/install/) for platform-specific 
 ## Quick Start
 
 ```bash
-# Fetch a document from the live soul server
+# Fetch a document from the live memory server
 demarkus mark://soul.demarkus.io/index.md
 
 # Browse interactively with the TUI
@@ -104,8 +104,8 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
 | `demarkus-agent` | Federation agent: crawls worlds, aggregates the link graph, publishes hub indexes |
-| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with universe-wide catalog lookup (`mark_lookup_all`) |
-| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private soul world per identity: memory as a service with dynamic tenant provisioning |
+| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with system-wide catalog lookup (`mark_lookup_all`) |
+| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private memory world per identity: memory as a service with dynamic tenant provisioning |
 | `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
 | `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its publish policy |
 
@@ -139,7 +139,7 @@ modified: 2026-01-15T10:30:00Z
 
 **Agent Memory**: Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/README.md).
 
-**Organizational Knowledge System**: Compose many servers ("worlds") into a broker-fronted universe reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command, `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/), and their agents share organizational memory over MCP, with no per-developer server or token setup. Humans browse the same universe in the [web reading room](https://github.com/latebit-io/demarkus-library). See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
+**Organizational Knowledge System**: Compose many servers ("worlds") into a broker-fronted knowledge system reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command, `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/), and their agents share organizational memory over MCP, with no per-developer server or token setup. Humans browse the same universe in the [web reading room](https://github.com/latebit-io/demarkus-library). See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
 
 **Personal Knowledge Base**: Local server, versioned documents, TUI browser. Everything from first write.
 
@@ -153,7 +153,7 @@ modified: 2026-01-15T10:30:00Z
 - [Caztor](https://github.com/kevinboone/caztor): cross-platform Java GUI browser with preliminary Demarkus support
 - [Claude Code memory plugin](plugins/claude-code/README.md): zero-config local memory for Claude Code
 - [Claude Code knowledge plugin](plugins/claude-code-knowledge/): join an organizational knowledge system (broker-fronted, MCP OAuth)
-- [OpenCode memory plugin](plugins/opencode-memory/): the same local memory for OpenCode (one shared soul across harnesses). Install:
+- [OpenCode memory plugin](plugins/opencode-memory/): the same local memory for OpenCode (one shared memory across harnesses). Install:
 
   ```bash
   curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash

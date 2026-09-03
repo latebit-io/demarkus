@@ -132,7 +132,7 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 }
 
 // Evaluate applies the right gate(s) for the tool's target and returns the
-// decision. Memory (soul) and knowledge surfaces are mutually exclusive by scope.
+// decision. Memory (memory) and knowledge surfaces are mutually exclusive by scope.
 func Evaluate(in Input) (Decision, error) {
 	// Accept the Claude hook shape (tool_name/tool_input) when the native fields
 	// are absent.
@@ -146,12 +146,12 @@ func Evaluate(in Input) (Decision, error) {
 		return allow(), nil
 	}
 
-	soulID, err := config.SoulTargetID(tool)
+	memoryID, err := config.MemoryTargetID(tool)
 	if err != nil {
 		return Decision{}, err
 	}
-	if soulID != "" {
-		return evalMemory(tool, pt, args, in.Cwd, soulID)
+	if memoryID != "" {
+		return evalMemory(tool, pt, args, in.Cwd, memoryID)
 	}
 
 	ksSlug, err := config.KnowledgeScope(tool)
@@ -165,7 +165,7 @@ func Evaluate(in Input) (Decision, error) {
 	return allow(), nil // unrelated server — not ours to gate
 }
 
-func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, soulID string) (Decision, error) {
+func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, memoryID string) (Decision, error) {
 	// The destination gate and the publish tag-gate are INDEPENDENT (in Claude
 	// Code they're two separate hooks) — evaluate both and return the most severe
 	// outcome, so e.g. a misroute set to `warn` can't suppress a `block` from the
@@ -178,14 +178,14 @@ func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, soulID
 		if err != nil {
 			return Decision{}, err
 		}
-		if bound != "" && bound != soulID {
+		if bound != "" && bound != memoryID {
 			target := urlOr(args, "this document")
 			reason := fmt.Sprintf(
-				"demarkus write to %s is going to soul '%s', but this project is bound to soul '%s'. "+
-					"Re-issue the write against the bound soul's tools (the %s MCP server's mark_publish / mark_append). "+
-					"To change which soul this project uses, run /soul-join in this repo; to relax this check, set "+
+				"demarkus write to %s is going to memory '%s', but this project is bound to memory '%s'. "+
+					"Re-issue the write against the bound memory's tools (the %s MCP server's mark_publish / mark_append). "+
+					"To change which memory this project uses, run /memory-default in this repo; to relax this check, set "+
 					"DEMARKUS_MEMORY_DEST_STRICTNESS=warn (or ask).",
-				target, soulID, bound, bound)
+				target, memoryID, bound, bound)
 			s, err := config.MemoryDestStrictness()
 			if err != nil {
 				return Decision{}, err

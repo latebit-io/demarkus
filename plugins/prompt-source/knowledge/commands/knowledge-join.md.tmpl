@@ -2,7 +2,7 @@
 description: Join an organizational demarkus knowledge system through its HTTPS broker and {{.Agent}} OAuth.
 ---
 
-Connect this {{.Agent}} installation to an organizational demarkus knowledge system. This joins an HTTPS broker, not a direct-QUIC soul. The harness owns OAuth credentials; this command never requests or stores them.
+Connect this {{.Agent}} installation to an organizational demarkus knowledge system. This joins an HTTPS broker, not a direct-QUIC memory. The harness owns OAuth credentials; this command never requests or stores them.
 
 ## Argument
 
@@ -18,7 +18,7 @@ Before invoking Bash, require the entire argument to match `https://` plus a DNS
    "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-join '<broker-url>'
    ```
 
-   Continue only when the command exits zero, the first line is exactly `OK`, and exactly one nonempty `url=`, `slug=`, and `mcp-url=` line follows. Reject unexpected output, a slug outside `[a-z0-9][a-z0-9-]*`, a non-HTTPS URL, or an MCP URL other than `<url>/mcp`. Reject `demarkus-memory` and names ending in `-demarkus-memory`; those are local-soul names.
+   Continue only when the command exits zero, the first line is exactly `OK`, and exactly one nonempty `url=`, `slug=`, and `mcp-url=` line follows. Reject unexpected output, a slug outside `[a-z0-9][a-z0-9-]*`, a non-HTTPS URL, or an MCP URL other than `<url>/mcp`. Reject `demarkus-memory` and names ending in `-demarkus-memory`; those are local-memory names.
 
 2. Check registration state before changing it:
 
@@ -56,7 +56,7 @@ Accept a document only when `status: ok` includes the full body and is not `mode
 
 ## Remove
 
-Removal is separate and user-requested. Require a slug matching `[a-z0-9][a-z0-9-]*`, reject local-soul names, and confirm the shared-registry impact before changing state.
+Removal is separate and user-requested. Require a slug matching `[a-z0-9][a-z0-9-]*`, reject local-memory names, and confirm the shared-registry impact before changing state.
 
 {{if eq .Harness "claude"}}Run `claude mcp remove '<slug>'`, then `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-unregister '<slug>'`.
 {{else if eq .Harness "opencode"}}Run `opencode mcp logout '<slug>'`, then `registry mcp remove '<slug>'`, then `registry knowledge-unregister '<slug>'`. Tell the user to restart {{.Agent}}.
@@ -68,5 +68,5 @@ Stop on the first failure, list remaining endpoint and gate state, and provide t
 
 - Do not continue after validation failure or a slug collision.
 - Do not request, read, paste, or store OAuth tokens.
-- Do not use this command for direct `mark://` souls; use `/soul-join`.
+- Do not use this command for direct `mark://` memories; use `/memory-join`.
 - Do not run this command automatically.

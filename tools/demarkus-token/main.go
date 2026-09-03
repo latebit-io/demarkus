@@ -66,7 +66,7 @@ func cmdJoin(args []string) {
 	tok := fs.String("token", "", "raw token to embed; reads stdin when omitted (pipe from generate)")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus-token join -host HOST [-token RAW]\n\n")
-		fmt.Fprintf(os.Stderr, "Prints a single join URL carrying the token, for /soul-join or\n")
+		fmt.Fprintf(os.Stderr, "Prints a single join URL carrying the token, for /memory-join or\n")
 		fmt.Fprintf(os.Stderr, "'demarkus join'. Compose with generate:\n")
 		fmt.Fprintf(os.Stderr, "  demarkus-token generate -label phone -tokens tokens.toml | demarkus-token join -host kb.example.com\n\n")
 		fs.PrintDefaults()

@@ -2,7 +2,7 @@ apiVersion: v2
 name: demarkus-memory-broker
 description: |
   Memory-as-a-service broker for demarkus. OAuth-fronted MCP gateway that
-  gives each identity a private, versioned personal soul: identity maps to
+  gives each identity a private, versioned personal memory: identity maps to
   exactly one world, reads and writes are locked to the caller's own world.
   Multi-replica HA, leader-elected expiry/drift sweeper, per-subject and
   per-IP rate limiting.
@@ -20,7 +20,6 @@ keywords:
   - mark-protocol
   - oidc
   - memory
-  - soul
 home: https://demarkus.io
 sources:
   - https://github.com/latebit-io/demarkus

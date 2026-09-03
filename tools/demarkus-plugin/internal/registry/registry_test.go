@@ -88,7 +88,7 @@ func TestAtomicWritePermConcurrent(t *testing.T) {
 
 func TestProjectBindSetUsesTransactionWriter(t *testing.T) {
 	home := setupHome(t)
-	if err := SoulRegister("remote", "mark://remote.example", false, "-"); err != nil {
+	if err := MemoryRegister("remote", "mark://remote.example", false, "-"); err != nil {
 		t.Fatal(err)
 	}
 	failWritesTo(t, "project-souls")
@@ -106,7 +106,7 @@ func TestProjectBindSetUsesTransactionWriter(t *testing.T) {
 
 func TestProjectBindSetRejectsRecordDelimiters(t *testing.T) {
 	setupHome(t)
-	if err := SoulRegister("remote", "mark://remote.example", false, "-"); err != nil {
+	if err := MemoryRegister("remote", "mark://remote.example", false, "-"); err != nil {
 		t.Fatal(err)
 	}
 	for _, dir := range []string{"/repo\tother", "/repo\rnext", "/repo\nnext", "/repo\x00next", " relative", "relative "} {
@@ -175,11 +175,13 @@ func TestMcpRejectsArrayConfig(t *testing.T) {
 	}
 }
 
-func TestSoulJoinAndCollision(t *testing.T) {
+func TestMemoryJoinAndCollision(t *testing.T) {
 	home := setupHome(t)
 	repo := filepath.Join(home, "repo")
-	_ = os.MkdirAll(repo, 0o755)
-	res, err := SoulJoin("soul.demarkus.io", "tok", true, repo)
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, err := MemoryJoin("soul.demarkus.io", "tok", true, repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,24 +194,24 @@ func TestSoulJoinAndCollision(t *testing.T) {
 		t.Fatalf("token file perms: %v %v", err, info)
 	}
 	// binding recorded
-	if b, _ := IsCatalogSoul("soul"); !b {
-		t.Error("soul should be a catalog soul")
+	if b, _ := IsCatalogMemory("soul"); !b {
+		t.Error("soul should be a catalog memory")
 	}
 	// collision: a different host under the same slug is rejected
-	if _, err := SoulJoin("soul.other.net", "t2", false, ""); err == nil {
+	if _, err := MemoryJoin("soul.other.net", "t2", false, ""); err == nil {
 		t.Error("expected slug collision error for a different host")
 	}
 	// re-join same host is fine (idempotent upsert)
-	if _, err := SoulJoin("soul.demarkus.io", "tok2", true, ""); err != nil {
+	if _, err := MemoryJoin("soul.demarkus.io", "tok2", true, ""); err != nil {
 		t.Errorf("re-join same host should succeed: %v", err)
 	}
 	// reserved slug rejected
-	if _, err := SoulJoin("demarkus-memory.example.com", "", false, ""); err == nil {
+	if _, err := MemoryJoin("demarkus-memory.example.com", "", false, ""); err == nil {
 		t.Error("expected reserved-slug rejection")
 	}
 }
 
-func TestSoulJoinRollsBackBindingFailure(t *testing.T) {
+func TestMemoryJoinRollsBackBindingFailure(t *testing.T) {
 	home := setupHome(t)
 	repo := filepath.Join(home, "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
@@ -217,8 +219,8 @@ func TestSoulJoinRollsBackBindingFailure(t *testing.T) {
 	}
 	failWritesTo(t, "project-souls")
 
-	if _, err := SoulJoin("soul.demarkus.io", "secret", false, repo); err == nil {
-		t.Fatal("SoulJoin succeeded despite binding failure")
+	if _, err := MemoryJoin("soul.demarkus.io", "secret", false, repo); err == nil {
+		t.Fatal("MemoryJoin succeeded despite binding failure")
 	}
 	for _, name := range []string{"souls", "project-souls", "soul-soul.token"} {
 		path := filepath.Join(home, ".demarkus", name)
@@ -228,13 +230,13 @@ func TestSoulJoinRollsBackBindingFailure(t *testing.T) {
 	}
 }
 
-func TestSoulJoinRestoresExistingStateOnBindingFailure(t *testing.T) {
+func TestMemoryJoinRestoresExistingStateOnBindingFailure(t *testing.T) {
 	home := setupHome(t)
 	repo := filepath.Join(home, "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, repo); err != nil {
+	if _, err := MemoryJoin("soul.demarkus.io", "old-token", false, repo); err != nil {
 		t.Fatal(err)
 	}
 	paths := []string{
@@ -258,8 +260,8 @@ func TestSoulJoinRestoresExistingStateOnBindingFailure(t *testing.T) {
 	}
 
 	failWritesTo(t, "project-souls")
-	if _, err := SoulJoin("soul.demarkus.io", "new-token", true, repo); err == nil {
-		t.Fatal("SoulJoin succeeded despite binding failure")
+	if _, err := MemoryJoin("soul.demarkus.io", "new-token", true, repo); err == nil {
+		t.Fatal("MemoryJoin succeeded despite binding failure")
 	}
 	for _, path := range paths {
 		body, err := os.ReadFile(path)
@@ -279,25 +281,25 @@ func TestSoulJoinRestoresExistingStateOnBindingFailure(t *testing.T) {
 	}
 }
 
-func TestSoulJoinWithoutTokenRemovesManagedToken(t *testing.T) {
+func TestMemoryJoinWithoutTokenRemovesManagedToken(t *testing.T) {
 	home := setupHome(t)
-	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, ""); err != nil {
+	if _, err := MemoryJoin("soul.demarkus.io", "old-token", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	tokenPath := filepath.Join(home, ".demarkus", "soul-soul.token")
-	if _, err := SoulJoin("soul.demarkus.io", "", false, ""); err != nil {
+	if _, err := MemoryJoin("soul.demarkus.io", "", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(tokenPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("managed token remains after tokenless rejoin: %v", err)
 	}
-	row, ok, err := RemoteSoulRow("soul")
+	row, ok, err := RemoteMemoryRow("soul")
 	if err != nil || !ok || row.TokenFile != "-" {
 		t.Fatalf("tokenless row = %+v, ok=%v, err=%v", row, ok, err)
 	}
 }
 
-func TestSoulJoinWithoutTokenRemovesOrphanManagedToken(t *testing.T) {
+func TestMemoryJoinWithoutTokenRemovesOrphanManagedToken(t *testing.T) {
 	home := setupHome(t)
 	tokenPath := filepath.Join(home, ".demarkus", "soul-soul.token")
 	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o755); err != nil {
@@ -306,7 +308,7 @@ func TestSoulJoinWithoutTokenRemovesOrphanManagedToken(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte("orphan-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := SoulJoin("soul.demarkus.io", "", false, ""); err != nil {
+	if _, err := MemoryJoin("soul.demarkus.io", "", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(tokenPath); !errors.Is(err, os.ErrNotExist) {
@@ -314,19 +316,19 @@ func TestSoulJoinWithoutTokenRemovesOrphanManagedToken(t *testing.T) {
 	}
 }
 
-func TestSoulJoinWithoutTokenPreservesExternalTokenReference(t *testing.T) {
+func TestMemoryJoinWithoutTokenPreservesExternalTokenReference(t *testing.T) {
 	home := setupHome(t)
 	tokenPath := filepath.Join(home, "external.token")
 	if err := os.WriteFile(tokenPath, []byte("external-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SoulRegister("soul", "mark://soul.demarkus.io", false, tokenPath); err != nil {
+	if err := MemoryRegister("soul", "mark://soul.demarkus.io", false, tokenPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := SoulJoin("soul.demarkus.io", "", false, ""); err == nil || !strings.Contains(err.Error(), "externally managed token file") {
+	if _, err := MemoryJoin("soul.demarkus.io", "", false, ""); err == nil || !strings.Contains(err.Error(), "externally managed token file") {
 		t.Fatalf("tokenless rejoin error = %v", err)
 	}
-	row, ok, err := RemoteSoulRow("soul")
+	row, ok, err := RemoteMemoryRow("soul")
 	if err != nil || !ok || row.TokenFile != tokenPath {
 		t.Fatalf("external token row = %+v, ok=%v, err=%v", row, ok, err)
 	}
@@ -336,17 +338,17 @@ func TestSoulJoinWithoutTokenPreservesExternalTokenReference(t *testing.T) {
 	}
 }
 
-func TestSoulJoinWithTokenReportsReplacedExternalTokenReference(t *testing.T) {
+func TestMemoryJoinWithTokenReportsReplacedExternalTokenReference(t *testing.T) {
 	home := setupHome(t)
 	externalPath := filepath.Join(home, "external.token")
 	if err := os.WriteFile(externalPath, []byte("external-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SoulRegister("soul", "mark://soul.demarkus.io", false, externalPath); err != nil {
+	if err := MemoryRegister("soul", "mark://soul.demarkus.io", false, externalPath); err != nil {
 		t.Fatal(err)
 	}
 	warning, joinErr := captureStderr(t, func() error {
-		_, err := SoulJoin("soul.demarkus.io", "managed-token", false, "")
+		_, err := MemoryJoin("soul.demarkus.io", "managed-token", false, "")
 		return err
 	})
 	if joinErr != nil {
@@ -360,41 +362,41 @@ func TestSoulJoinWithTokenReportsReplacedExternalTokenReference(t *testing.T) {
 	}
 }
 
-func TestSoulJoinDoesNotReportExternalTokenReplacementAfterRollback(t *testing.T) {
+func TestMemoryJoinDoesNotReportExternalTokenReplacementAfterRollback(t *testing.T) {
 	home := setupHome(t)
 	externalPath := filepath.Join(home, "external.token")
 	if err := os.WriteFile(externalPath, []byte("external-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SoulRegister("soul", "mark://soul.demarkus.io", false, externalPath); err != nil {
+	if err := MemoryRegister("soul", "mark://soul.demarkus.io", false, externalPath); err != nil {
 		t.Fatal(err)
 	}
 	failWritesTo(t, "project-souls")
 	warning, joinErr := captureStderr(t, func() error {
-		_, err := SoulJoin("soul.demarkus.io", "managed-token", false, filepath.Join(home, "repo"))
+		_, err := MemoryJoin("soul.demarkus.io", "managed-token", false, filepath.Join(home, "repo"))
 		return err
 	})
 	if joinErr == nil {
-		t.Fatal("SoulJoin succeeded despite binding failure")
+		t.Fatal("MemoryJoin succeeded despite binding failure")
 	}
 	if warning != "" {
 		t.Fatalf("warning after rollback = %q", warning)
 	}
-	row, ok, err := RemoteSoulRow("soul")
+	row, ok, err := RemoteMemoryRow("soul")
 	if err != nil || !ok || row.TokenFile != externalPath {
 		t.Fatalf("external token row after rollback = %+v, ok=%v, err=%v", row, ok, err)
 	}
 }
 
-func TestSoulJoinRestoresDeletedTokenOnLaterFailure(t *testing.T) {
+func TestMemoryJoinRestoresDeletedTokenOnLaterFailure(t *testing.T) {
 	home := setupHome(t)
-	if _, err := SoulJoin("soul.demarkus.io", "old-token", false, ""); err != nil {
+	if _, err := MemoryJoin("soul.demarkus.io", "old-token", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	tokenPath := filepath.Join(home, ".demarkus", "soul-soul.token")
 	failWritesTo(t, "project-souls")
-	if _, err := SoulJoin("soul.demarkus.io", "", false, filepath.Join(home, "repo")); err == nil {
-		t.Fatal("SoulJoin succeeded despite binding failure")
+	if _, err := MemoryJoin("soul.demarkus.io", "", false, filepath.Join(home, "repo")); err == nil {
+		t.Fatal("MemoryJoin succeeded despite binding failure")
 	}
 	body, err := os.ReadFile(tokenPath)
 	if err != nil || string(body) != "old-token" {
@@ -592,14 +594,14 @@ func TestPromoteTargetAdd(t *testing.T) {
 	}
 }
 
-func TestSoulJoinURLWithFragment(t *testing.T) {
+func TestMemoryJoinURLWithFragment(t *testing.T) {
 	home := setupHome(t)
 	repo := filepath.Join(home, "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := SoulJoin("mark://kb.example.com#token=fragtok", "", false, repo)
+	res, err := MemoryJoin("mark://kb.example.com#token=fragtok", "", false, repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,24 +613,24 @@ func TestSoulJoinURLWithFragment(t *testing.T) {
 		t.Fatalf("token file: %v %q", err, b)
 	}
 
-	row, ok, err := RemoteSoulRow("kb")
+	row, ok, err := RemoteMemoryRow("kb")
 	if err != nil || !ok {
-		t.Fatalf("RemoteSoulRow: %v ok=%v", err, ok)
+		t.Fatalf("RemoteMemoryRow: %v ok=%v", err, ok)
 	}
 	if row.Host != "mark://kb.example.com" || row.Insecure {
 		t.Fatalf("row round trip: %+v", row)
 	}
 
 	// Conflicting explicit --token and fragment token is rejected.
-	if _, err := SoulJoin("mark://kb2.example.com#token=a", "b", false, ""); err == nil {
+	if _, err := MemoryJoin("mark://kb2.example.com#token=a", "b", false, ""); err == nil {
 		t.Error("expected conflict error for --token + fragment token")
 	}
 	// Bad fragment key fails loudly.
-	if _, err := SoulJoin("mark://kb3.example.com#tokn=a", "", false, ""); err == nil {
+	if _, err := MemoryJoin("mark://kb3.example.com#tokn=a", "", false, ""); err == nil {
 		t.Error("expected error for unknown fragment key")
 	}
 	// Bracketed IPv6 would derive a garbage slug; the join-URL path rejects it.
-	if _, err := SoulJoin("mark://[2001:db8::1]:6309#token=a", "", false, ""); err == nil {
+	if _, err := MemoryJoin("mark://[2001:db8::1]:6309#token=a", "", false, ""); err == nil {
 		t.Error("expected error for bracketed IPv6 join URL")
 	}
 	// Malformed hosts on the legacy (no-fragment) path fail loudly too.
@@ -637,13 +639,13 @@ func TestSoulJoinURLWithFragment(t *testing.T) {
 		"mark://user@kb.example.com",
 		"mark://kb.example.com/docs",
 	} {
-		if _, err := SoulJoin(bad, "t", false, ""); err == nil {
+		if _, err := MemoryJoin(bad, "t", false, ""); err == nil {
 			t.Errorf("expected error for malformed host %q", bad)
 		}
 	}
 }
 
-func TestSoulJoinBroker(t *testing.T) {
+func TestMemoryJoinBroker(t *testing.T) {
 	t.Setenv("DEMARKUS_KNOWLEDGE_JOIN_ALLOW_HTTP", "1")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -657,18 +659,18 @@ func TestSoulJoinBroker(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	res, err := SoulJoin(ts.URL, "", false, "")
+	res, err := MemoryJoin(ts.URL, "", false, "")
 	if err != nil {
-		t.Fatalf("SoulJoin(broker): %v", err)
+		t.Fatalf("MemoryJoin(broker): %v", err)
 	}
 	if !res.Broker || res.McpURL != res.Host+"/mcp" {
 		t.Errorf("broker result = %+v", res)
 	}
 	if res.TokenFile != "-" {
-		t.Errorf("broker soul must not reference a token file, got %q", res.TokenFile)
+		t.Errorf("broker memory must not reference a token file, got %q", res.TokenFile)
 	}
 	// Catalog row lands in SOULS (destination gate + binding apply).
-	row, ok, err := RemoteSoulRow(res.Slug)
+	row, ok, err := RemoteMemoryRow(res.Slug)
 	if err != nil || !ok {
 		t.Fatalf("catalog row missing after broker join: ok=%v err=%v", ok, err)
 	}
@@ -677,7 +679,7 @@ func TestSoulJoinBroker(t *testing.T) {
 	}
 
 	// A token alongside an HTTPS broker URL is rejected: OAuth owns auth.
-	if _, err := SoulJoin(ts.URL, "sekret", false, ""); err == nil {
+	if _, err := MemoryJoin(ts.URL, "sekret", false, ""); err == nil {
 		t.Error("broker join accepted a token")
 	}
 }
@@ -713,7 +715,7 @@ func TestValidateBrokerEndpointRejectsUserinfo(t *testing.T) {
 	defer ts.Close()
 
 	withUser := strings.Replace(ts.URL, "http://", "http://user:password@", 1)
-	if _, err := SoulJoin(withUser, "", false, ""); err == nil || !strings.Contains(err.Error(), "userinfo") {
+	if _, err := MemoryJoin(withUser, "", false, ""); err == nil || !strings.Contains(err.Error(), "userinfo") {
 		t.Fatalf("userinfo URL err = %v, want userinfo rejection", err)
 	}
 	// The rejection must happen before any request: credentials in the
@@ -722,7 +724,7 @@ func TestValidateBrokerEndpointRejectsUserinfo(t *testing.T) {
 		t.Fatalf("userinfo URL produced %d requests, want 0", requests)
 	}
 	// No catalog row may exist for the bogus "user" slug.
-	if _, ok, err := RemoteSoulRow("user"); err != nil || ok {
+	if _, ok, err := RemoteMemoryRow("user"); err != nil || ok {
 		t.Fatalf("catalog row after rejected join: ok=%v err=%v", ok, err)
 	}
 }

@@ -37,11 +37,11 @@ When something is useful to another person and ready to rely on, publish it to t
 - Prefer one well-tagged document over scattered fragments.
 - Follow the writing standards at `mark://root/.well-known/demarkus/style.md` for brokered systems. For a plain endpoint, fetch the complete bare `/.well-known/demarkus/style.md` with `force: true` through its MCP tools when present; otherwise apply the same inline baseline: audience upfront, one-sentence summary under the H1, unique headings because headings are anchors, and no em dashes. A style gate warns at write time on the mechanically checkable rules: a frontmatter fence opening the body, a missing `# H1`, em dashes, and duplicate headings (`DEMARKUS_STYLE_STRICTNESS` (or the `~/.demarkus/plugin.style-strictness` file) adjusts the severity).
 
-## The soul ↔ knowledge-system relationship
+## The memory ↔ knowledge-system relationship
 
-If you also have a personal **soul** (the demarkus-memory plugin), the two compose; keep them in their lanes:
+If you also have a personal **memory** (the demarkus-memory plugin), the two compose; keep them in their lanes:
 
-- **Soul** = personal, local, your drafts and machine-local working notes. Fast, private, yours.
+- **Memory** = personal, local, your drafts and machine-local working notes. Fast, private, yours.
 - **Knowledge system** = shared and authoritative. The bar is higher because others depend on it.
 
-Draft and think in the soul; **promote to the knowledge system when it's ready for others**: re-tagged for the shared taxonomy and following the world's template. For a shared/org subject, the knowledge system is the source of truth and the first place to look; the soul is your scratch space and personal backstop. Don't duplicate authoritative org knowledge into the soul; link to it or fetch it fresh.
+Draft and think in the memory; **promote to the knowledge system when it's ready for others**: re-tagged for the shared taxonomy and following the world's template. For a shared/org subject, the knowledge system is the source of truth and the first place to look; the memory is your scratch space and personal backstop. Don't duplicate authoritative org knowledge into the memory; link to it or fetch it fresh.

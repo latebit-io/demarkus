@@ -44,13 +44,13 @@ func readRecords(name string) ([]string, error) {
 	return out, nil
 }
 
-// --- soul catalog -------------------------------------------------------------
+// --- memory catalog -------------------------------------------------------------
 
-// SoulRegister upserts a remote-soul row "<slug>\t<host>\t<insecure>\t<tokenFile>",
+// MemoryRegister upserts a remote-memory row "<slug>\t<host>\t<insecure>\t<tokenFile>",
 // keyed on slug. Locked + atomic. Rejects an empty slug/host.
-func SoulRegister(slug, host string, insecure bool, tokenFile string) error {
+func MemoryRegister(slug, host string, insecure bool, tokenFile string) error {
 	if slug == "" || host == "" {
-		return fmt.Errorf("soul register: slug and host are required")
+		return fmt.Errorf("memory register: slug and host are required")
 	}
 	if tokenFile == "" {
 		tokenFile = "-"
@@ -79,20 +79,20 @@ func SoulRegister(slug, host string, insecure bool, tokenFile string) error {
 	})
 }
 
-// RemoteSoulRow returns the catalog row for SLUG.
+// RemoteMemoryRow returns the catalog row for SLUG.
 // ok is false when the slug isn't registered.
-func RemoteSoulRow(slug string) (SoulRow, bool, error) {
+func RemoteMemoryRow(slug string) (MemoryRow, bool, error) {
 	rows, err := readRecords("souls")
 	if err != nil {
-		return SoulRow{}, false, err
+		return MemoryRow{}, false, err
 	}
 	for _, r := range rows {
 		f := strings.Split(r, "\t")
 		if f[0] == slug {
 			if len(f) < 2 || f[1] == "" {
-				return SoulRow{}, false, fmt.Errorf("souls catalog row for %q has no host; re-run /soul-join", slug)
+				return MemoryRow{}, false, fmt.Errorf("memories catalog row for %q has no host; re-run /memory-join", slug)
 			}
-			var row SoulRow
+			var row MemoryRow
 			if len(f) >= 2 {
 				row.Host = f[1]
 			}
@@ -105,32 +105,32 @@ func RemoteSoulRow(slug string) (SoulRow, bool, error) {
 			return row, true, nil
 		}
 	}
-	return SoulRow{}, false, nil
+	return MemoryRow{}, false, nil
 }
 
-// SoulRow is one souls-catalog record.
-type SoulRow struct {
+// MemoryRow is one memories-catalog record.
+type MemoryRow struct {
 	Host      string
 	Insecure  bool
 	TokenFile string
 }
 
-// isBrokerHost reports whether a soul host is an HTTPS memory-broker
+// isBrokerHost reports whether a memory host is an HTTPS memory-broker
 // endpoint (OAuth in the MCP client; never served by mcp-serve).
 func isBrokerHost(host string) bool {
 	low := strings.ToLower(host)
 	return strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://")
 }
 
-// IsBroker reports whether the row is an HTTPS memory-broker soul.
-func (r SoulRow) IsBroker() bool {
+// IsBroker reports whether the row is an HTTPS memory-broker memory.
+func (r MemoryRow) IsBroker() bool {
 	return isBrokerHost(r.Host)
 }
 
-// SoulCatalog emits one row per bindable soul: "<id>\t<tier>\t<host>\t<insecure>".
-func SoulCatalog() ([]string, error) {
+// MemoryCatalog emits one row per bindable memory: "<id>\t<tier>\t<host>\t<insecure>".
+func MemoryCatalog() ([]string, error) {
 	var out []string
-	local, err := config.LocalSoulPresent()
+	local, err := config.LocalMemoryPresent()
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func SoulCatalog() ([]string, error) {
 		if len(f) >= 3 {
 			ins = f[2]
 		}
-		// Broker souls register via HTTP MCP, not mcp-serve; the tier
+		// Broker memories register via HTTP MCP, not mcp-serve; the tier
 		// column is how pickers show that difference.
 		tier := "remote"
 		if isBrokerHost(host) {
@@ -161,15 +161,15 @@ func SoulCatalog() ([]string, error) {
 	return out, nil
 }
 
-// IsCatalogSoul reports whether slug is a bindable write target.
-func IsCatalogSoul(slug string) (bool, error) {
+// IsCatalogMemory reports whether slug is a bindable write target.
+func IsCatalogMemory(slug string) (bool, error) {
 	if slug == "" {
 		return false, nil
 	}
-	if slug == config.LocalSoulID {
-		return config.LocalSoulPresent()
+	if slug == config.LocalMemoryID {
+		return config.LocalMemoryPresent()
 	}
-	remotes, err := config.ListRemoteSouls()
+	remotes, err := config.ListRemoteMemories()
 	if err != nil {
 		return false, err
 	}
@@ -179,10 +179,10 @@ func IsCatalogSoul(slug string) (bool, error) {
 	return false, nil
 }
 
-// ProjectBindSet records that DIR writes to catalog soul SLUG by default. Locked
-// + atomic; validates SLUG is a joined soul first.
+// ProjectBindSet records that DIR writes to catalog memory SLUG by default. Locked
+// + atomic; validates SLUG is a joined memory first.
 func ProjectBindSet(dir, slug string) error {
-	soulsPath, err := config.StatePath("souls")
+	memoriesPath, err := config.StatePath("souls")
 	if err != nil {
 		return err
 	}
@@ -190,14 +190,14 @@ func ProjectBindSet(dir, slug string) error {
 	if err != nil {
 		return err
 	}
-	return withLock(soulsPath, func() error {
+	return withLock(memoriesPath, func() error {
 		return withLock(bindingsPath, func() error {
-			ok, err := IsCatalogSoul(slug)
+			ok, err := IsCatalogMemory(slug)
 			if err != nil {
 				return err
 			}
 			if !ok {
-				return fmt.Errorf("'%s' is not a joined soul; run /soul-join first (see /soul-default --list)", slug)
+				return fmt.Errorf("'%s' is not a joined memory; run /memory-join first (see /memory-default --list)", slug)
 			}
 			mutation, err := prepareProjectBindingMutation(dir, slug, bindingsPath)
 			if err != nil {
@@ -481,7 +481,7 @@ func DetectPromote() ([]string, error) {
 	return out, nil
 }
 
-// --- soul-join / knowledge-join orchestration ---------------------------------
+// --- memory-join / knowledge-join orchestration ---------------------------------
 
 var genericLabels = map[string]bool{"mcp": true, "broker": true, "api": true, "gateway": true, "gw": true, "www": true}
 
@@ -528,7 +528,7 @@ type BrokerEndpoint struct {
 
 // ValidateBrokerEndpoint validates a broker URL (https + RFC 9728
 // metadata) and derives a slug; shared by /knowledge-join and the
-// /soul-join broker path. Errors are user-presentable verbatim.
+// /memory-join broker path. Errors are user-presentable verbatim.
 func ValidateBrokerEndpoint(rawURL string) (*BrokerEndpoint, error) {
 	// Parse BEFORE any request: userinfo must never reach the wire (Go
 	// turns it into a Basic Authorization header) or an error message.
@@ -584,30 +584,26 @@ func ValidateBrokerEndpoint(rawURL string) (*BrokerEndpoint, error) {
 	return &BrokerEndpoint{URL: u, Slug: slug, McpURL: u + "/mcp"}, nil
 }
 
-// SoulJoinResult is the outcome of a successful /soul-join.
-type SoulJoinResult struct {
+// MemoryJoinResult is the outcome of a successful /memory-join.
+type MemoryJoinResult struct {
 	Slug      string
 	Host      string
 	Insecure  bool
 	TokenFile string
-	// Broker marks an HTTPS memory-broker soul (OAuth at the endpoint,
+	// Broker marks an HTTPS memory-broker memory (OAuth at the endpoint,
 	// registered with the harness's HTTP MCP transport, never mcp-serve);
 	// McpURL is then the endpoint to register.
 	Broker bool
 	McpURL string
 }
 
-// SoulJoin normalizes a remote-soul host, derives a slug, writes the token to a
-// 0600 file, registers the catalog row (rejecting a slug collision to a different
-// host), and optionally binds the project. The token never transits any channel
-// but this call's argument + the 0600 file.
-//
-// rawHost may also be a join URL (mark://host#token=...) as emitted by
-// install.sh or demarkus-token join; its fragment supplies the token.
-func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinResult, error) {
+// MemoryJoin registers a remote memory: slug from host, token to a 0600 file,
+// catalog row (slug collisions to another host rejected), optional binding.
+// rawHost may be a join URL (mark://host#token=...) whose fragment supplies the token.
+func MemoryJoin(rawHost, token string, insecure bool, bindDir string) (*MemoryJoinResult, error) {
 	h := strings.TrimSpace(rawHost)
 	if isBrokerHost(h) {
-		return soulJoinBroker(h, token, insecure, bindDir)
+		return memoryJoinBroker(h, token, insecure, bindDir)
 	}
 	// Every host form goes through joinurl.Parse so malformed input (paths,
 	// userinfo, query, IPv6 literals) is rejected instead of half-parsed
@@ -629,7 +625,7 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 		return nil, fmt.Errorf("could not derive a slug from host '%s'", rawHost)
 	}
 	host := "mark://" + h
-	soulsPath, bindingsPath, managedTokenFile, err := soulJoinPaths(slug, bindDir)
+	memoriesPath, bindingsPath, managedTokenFile, err := memoryJoinPaths(slug, bindDir)
 	if err != nil {
 		return nil, err
 	}
@@ -637,44 +633,44 @@ func SoulJoin(rawHost, token string, insecure bool, bindDir string) (*SoulJoinRe
 	if token != "" {
 		tokenFile = managedTokenFile
 	}
-	if err := commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath, insecure); err != nil {
+	if err := commitMemoryJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, memoriesPath, bindingsPath, insecure); err != nil {
 		return nil, err
 	}
-	return &SoulJoinResult{Slug: slug, Host: host, Insecure: insecure, TokenFile: tokenFile}, nil
+	return &MemoryJoinResult{Slug: slug, Host: host, Insecure: insecure, TokenFile: tokenFile}, nil
 }
 
-// soulJoinBroker joins an HTTPS memory-broker soul: /knowledge-join's
-// metadata validation, but the row lands in the SOULS catalog (gate +
+// memoryJoinBroker joins an HTTPS memory-broker memory: /knowledge-join's
+// metadata validation, but the row lands in the memories catalog (gate +
 // binding apply), no token file; OAuth happens in the MCP client.
-func soulJoinBroker(rawURL, token string, insecure bool, bindDir string) (*SoulJoinResult, error) {
+func memoryJoinBroker(rawURL, token string, insecure bool, bindDir string) (*MemoryJoinResult, error) {
 	if token != "" {
-		return nil, fmt.Errorf("a memory-broker soul authenticates via OAuth in the MCP client; do not pass a token")
+		return nil, fmt.Errorf("a memory-broker memory authenticates via OAuth in the MCP client; do not pass a token")
 	}
 	if insecure {
-		return nil, fmt.Errorf("--insecure applies only to self-signed QUIC souls; a memory broker is joined over verified TLS")
+		return nil, fmt.Errorf("--insecure applies only to self-signed QUIC memories; a memory broker is joined over verified TLS")
 	}
 	validated, err := ValidateBrokerEndpoint(rawURL)
 	if err != nil {
 		return nil, err
 	}
 	slug := validated.Slug
-	soulsPath, bindingsPath, managedTokenFile, err := soulJoinPaths(slug, bindDir)
+	memoriesPath, bindingsPath, managedTokenFile, err := memoryJoinPaths(slug, bindDir)
 	if err != nil {
 		return nil, err
 	}
-	if err := commitSoulJoin(slug, validated.URL, "", "-", managedTokenFile, bindDir, soulsPath, bindingsPath, false); err != nil {
+	if err := commitMemoryJoin(slug, validated.URL, "", "-", managedTokenFile, bindDir, memoriesPath, bindingsPath, false); err != nil {
 		return nil, err
 	}
-	return &SoulJoinResult{Slug: slug, Host: validated.URL, TokenFile: "-", Broker: true, McpURL: validated.McpURL}, nil
+	return &MemoryJoinResult{Slug: slug, Host: validated.URL, TokenFile: "-", Broker: true, McpURL: validated.McpURL}, nil
 }
 
-// soulJoinPaths resolves the state files every soul join touches and
+// memoryJoinPaths resolves the state files every memory join touches and
 // rejects the reserved local slug; shared by the QUIC and broker paths.
-func soulJoinPaths(slug, bindDir string) (soulsPath, bindingsPath, managedTokenFile string, err error) {
-	if slug == config.LocalSoulID {
-		return "", "", "", fmt.Errorf("slug '%s' is reserved for the local managed soul; join a host with a different first label", config.LocalSoulID)
+func memoryJoinPaths(slug, bindDir string) (memoriesPath, bindingsPath, managedTokenFile string, err error) {
+	if slug == config.LocalMemoryID {
+		return "", "", "", fmt.Errorf("slug '%s' is reserved for the local managed memory; join a host with a different first label", config.LocalMemoryID)
 	}
-	soulsPath, err = config.StatePath("souls")
+	memoriesPath, err = config.StatePath("souls")
 	if err != nil {
 		return "", "", "", err
 	}
@@ -688,13 +684,13 @@ func soulJoinPaths(slug, bindDir string) (soulsPath, bindingsPath, managedTokenF
 	if err != nil {
 		return "", "", "", err
 	}
-	return soulsPath, bindingsPath, managedTokenFile, nil
+	return memoriesPath, bindingsPath, managedTokenFile, nil
 }
 
-// Every multi-file registry path locks souls before project-souls; never reverse.
-func commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) error {
+// Every multi-file registry path locks memories before project-memories; never reverse.
+func commitMemoryJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, memoriesPath, bindingsPath string, insecure bool) error {
 	mutate := func() error {
-		mutations, replacedExternal, err := prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath, insecure)
+		mutations, replacedExternal, err := prepareMemoryJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, memoriesPath, bindingsPath, insecure)
 		if err != nil {
 			return err
 		}
@@ -702,13 +698,13 @@ func commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, sou
 			return err
 		}
 		if replacedExternal != "" {
-			if _, err := fmt.Fprintf(os.Stderr, "soul %s: catalog reference moved from %s to %s; the old external token file still exists\n", slug, replacedExternal, managedTokenFile); err != nil {
-				return fmt.Errorf("soul join committed but reporting replaced external token reference failed: %w", err)
+			if _, err := fmt.Fprintf(os.Stderr, "memory %s: catalog reference moved from %s to %s; the old external token file still exists\n", slug, replacedExternal, managedTokenFile); err != nil {
+				return fmt.Errorf("memory join committed but reporting replaced external token reference failed: %w", err)
 			}
 		}
 		return nil
 	}
-	return withLock(soulsPath, func() error {
+	return withLock(memoriesPath, func() error {
 		if bindingsPath == "" {
 			return mutate()
 		}
@@ -716,13 +712,13 @@ func commitSoulJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, sou
 	})
 }
 
-func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, soulsPath, bindingsPath string, insecure bool) ([]stateMutation, string, error) {
-	existing, exists, err := RemoteSoulRow(slug)
+func prepareMemoryJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, memoriesPath, bindingsPath string, insecure bool) ([]stateMutation, string, error) {
+	existing, exists, err := RemoteMemoryRow(slug)
 	if err != nil {
 		return nil, "", err
 	}
 	if exists && existing.Host != host {
-		return nil, "", fmt.Errorf("soul slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existing.Host, host)
+		return nil, "", fmt.Errorf("memory slug '%s' is already joined for host '%s'; joining '%s' would retarget every project bound to it; remove the existing entry or join from a host with a different first label", slug, existing.Host, host)
 	}
 	replacedExternal, err := replacedExternalToken(slug, token, managedTokenFile, existing, exists)
 	if err != nil {
@@ -759,7 +755,7 @@ func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bi
 		}
 		tokenDelete = &mutation
 	}
-	catalog, err := prepareStateMutation(soulsPath, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
+	catalog, err := prepareStateMutation(memoriesPath, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
 	if err != nil {
 		return nil, "", err
 	}
@@ -779,12 +775,12 @@ func prepareSoulJoinMutations(slug, host, token, tokenFile, managedTokenFile, bi
 	return mutations, replacedExternal, nil
 }
 
-func replacedExternalToken(slug, token, managedTokenFile string, existing SoulRow, exists bool) (string, error) {
+func replacedExternalToken(slug, token, managedTokenFile string, existing MemoryRow, exists bool) (string, error) {
 	if !exists || existing.TokenFile == "" || existing.TokenFile == "-" || existing.TokenFile == managedTokenFile {
 		return "", nil
 	}
 	if token == "" {
-		return "", fmt.Errorf("soul '%s' uses externally managed token file %q; refusing to remove its catalog reference during tokenless rejoin; resolve that credential explicitly first", slug, existing.TokenFile)
+		return "", fmt.Errorf("memory '%s' uses externally managed token file %q; refusing to remove its catalog reference during tokenless rejoin; resolve that credential explicitly first", slug, existing.TokenFile)
 	}
 	return existing.TokenFile, nil
 }

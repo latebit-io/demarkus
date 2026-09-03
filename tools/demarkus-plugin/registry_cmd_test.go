@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestParseSoulJoinArgsAcceptsFlagsAfterHost(t *testing.T) {
-	opts, err := parseSoulJoinArgs([]string{"mark://example.com", "--bind", "/project", "--insecure"}, strings.NewReader(""))
+func TestParseMemoryJoinArgsAcceptsFlagsAfterHost(t *testing.T) {
+	opts, err := parseMemoryJoinArgs([]string{"mark://example.com", "--bind", "/project", "--insecure"}, strings.NewReader(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,8 +16,8 @@ func TestParseSoulJoinArgsAcceptsFlagsAfterHost(t *testing.T) {
 	}
 }
 
-func TestParseSoulJoinArgsReadsTokenFromStdin(t *testing.T) {
-	opts, err := parseSoulJoinArgs([]string{"--token-stdin", "mark://example.com"}, strings.NewReader("secret\n"))
+func TestParseMemoryJoinArgsReadsTokenFromStdin(t *testing.T) {
+	opts, err := parseMemoryJoinArgs([]string{"--token-stdin", "mark://example.com"}, strings.NewReader("secret\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,15 +26,15 @@ func TestParseSoulJoinArgsReadsTokenFromStdin(t *testing.T) {
 	}
 }
 
-func TestParseSoulJoinArgsRejectsTwoTokenSources(t *testing.T) {
-	_, err := parseSoulJoinArgs([]string{"mark://example.com", "--token", "secret", "--token-stdin"}, strings.NewReader("other"))
+func TestParseMemoryJoinArgsRejectsTwoTokenSources(t *testing.T) {
+	_, err := parseMemoryJoinArgs([]string{"mark://example.com", "--token", "secret", "--token-stdin"}, strings.NewReader("other"))
 	if err == nil {
-		t.Fatal("parseSoulJoinArgs accepted two token sources")
+		t.Fatal("parseMemoryJoinArgs accepted two token sources")
 	}
 }
 
-func TestParseSoulJoinArgsPreservesFlagPackageForms(t *testing.T) {
-	opts, err := parseSoulJoinArgs([]string{"-token=secret", "-bind", "/project", "--insecure=false", "--", "mark://example.com"}, strings.NewReader(""))
+func TestParseMemoryJoinArgsPreservesFlagPackageForms(t *testing.T) {
+	opts, err := parseMemoryJoinArgs([]string{"-token=secret", "-bind", "/project", "--insecure=false", "--", "mark://example.com"}, strings.NewReader(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,28 +43,28 @@ func TestParseSoulJoinArgsPreservesFlagPackageForms(t *testing.T) {
 	}
 }
 
-func TestParseSoulJoinArgsBoundsTokenStdin(t *testing.T) {
-	token := strings.Repeat("x", maxSoulJoinTokenInput)
-	opts, err := parseSoulJoinArgs([]string{"--token-stdin", "mark://example.com"}, strings.NewReader(token))
+func TestParseMemoryJoinArgsBoundsTokenStdin(t *testing.T) {
+	token := strings.Repeat("x", maxMemoryJoinTokenInput)
+	opts, err := parseMemoryJoinArgs([]string{"--token-stdin", "mark://example.com"}, strings.NewReader(token))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if opts.token != token {
 		t.Fatalf("token length = %d, want %d", len(opts.token), len(token))
 	}
-	_, err = parseSoulJoinArgs([]string{"--token-stdin", "mark://example.com"}, strings.NewReader(token+"x"))
+	_, err = parseMemoryJoinArgs([]string{"--token-stdin", "mark://example.com"}, strings.NewReader(token+"x"))
 	if err == nil {
-		t.Fatal("parseSoulJoinArgs accepted token input over the limit")
+		t.Fatal("parseMemoryJoinArgs accepted token input over the limit")
 	}
 }
 
-func TestParseSoulJoinArgsRejectsEmptyTokenFlag(t *testing.T) {
+func TestParseMemoryJoinArgsRejectsEmptyTokenFlag(t *testing.T) {
 	for _, args := range [][]string{
 		{"--token=", "mark://example.com"},
 		{"--token", "", "mark://example.com"},
 	} {
-		if _, err := parseSoulJoinArgs(args, strings.NewReader("")); err == nil {
-			t.Fatalf("parseSoulJoinArgs(%q) accepted an empty token", args)
+		if _, err := parseMemoryJoinArgs(args, strings.NewReader("")); err == nil {
+			t.Fatalf("parseMemoryJoinArgs(%q) accepted an empty token", args)
 		}
 	}
 }

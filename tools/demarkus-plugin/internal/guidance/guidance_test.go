@@ -39,7 +39,7 @@ func TestMemoryGuidanceHealthAndOffer(t *testing.T) {
 
 	out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile})
 	if !strings.Contains(out, "server is not running") {
-		t.Error("expected health warning (no .pid for the configured soul)")
+		t.Error("expected health warning (no .pid for the configured memory)")
 	}
 	if !strings.Contains(out, "One-time setup offer") {
 		t.Error("expected the one-time memory offer on first call")
@@ -72,7 +72,7 @@ func TestKnowledgeGuidance(t *testing.T) {
 	if !strings.Contains(out, "**acme**") || !strings.Contains(out, "**beta**") {
 		t.Errorf("expected joined systems listed, got: %s", out[:min(120, len(out))])
 	}
-	if !strings.Contains(out, "No local demarkus soul is configured") {
-		t.Error("expected the soul↔system note when no soul is configured")
+	if !strings.Contains(out, "No local demarkus memory is configured") {
+		t.Error("expected the memory↔system note when no memory is configured")
 	}
 }

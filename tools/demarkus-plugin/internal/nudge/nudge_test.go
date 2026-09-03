@@ -40,10 +40,10 @@ func TestRecallMemory(t *testing.T) {
 	}
 }
 
-func TestRecallMemorySilentWithoutSoul(t *testing.T) {
+func TestRecallMemorySilentWithoutMemory(t *testing.T) {
 	setupHome(t, nil) // no plugin-memory.conf
 	if eval(t, &Input{Event: "recall", Surface: "memory", Prompt: "did we decide?"}) != "" {
-		t.Error("no soul configured → no nudge")
+		t.Error("no memory configured → no nudge")
 	}
 }
 
@@ -86,13 +86,20 @@ func TestPromoteNoDestination(t *testing.T) {
 
 func TestSessionEnd(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
-	if eval(t, &Input{Event: "session-end", ChangedFiles: true, SoulWrite: false}) == "" {
-		t.Error("changed files + no soul write → journal nudge")
+	if eval(t, &Input{Event: "session-end", ChangedFiles: true, MemoryWrite: false}) == "" {
+		t.Error("changed files + no memory write → journal nudge")
 	}
-	if eval(t, &Input{Event: "session-end", ChangedFiles: true, SoulWrite: true}) != "" {
-		t.Error("a soul write suppresses the nudge")
+	if eval(t, &Input{Event: "session-end", ChangedFiles: true, MemoryWrite: true}) != "" {
+		t.Error("a memory write suppresses the nudge")
 	}
-	if eval(t, &Input{Event: "session-end", ChangedFiles: false, SoulWrite: false}) != "" {
+	if eval(t, &Input{Event: "session-end", ChangedFiles: false, MemoryWrite: false}) != "" {
 		t.Error("no file changes → no nudge")
+	}
+}
+
+func TestSessionEndAcceptsLegacySoulWriteKey(t *testing.T) {
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=1\nMODE=default\n"})
+	if eval(t, &Input{Event: "session-end", ChangedFiles: true, LegacyMemoryWrite: true}) != "" {
+		t.Error("legacy soulWrite=true must suppress the journal nudge like memoryWrite=true")
 	}
 }

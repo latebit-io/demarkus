@@ -1,9 +1,9 @@
 // demarkus-memory-broker is memory as a service for MCP hosts: the
 // OAuth-fronted MCP gateway that gives each identity a private,
-// versioned personal soul. Built over the same shared broker libraries
+// versioned personal memory. Built over the same shared broker libraries
 // as demarkus-knowledge-broker with the memory authorization model:
 // identity maps to exactly one world and reads AND writes are locked to
-// it, with soul-template seeding, endpoint instructions and soul
+// it, with memory-template seeding, endpoint instructions and memory
 // prompts, and (when enabled) dynamic tenant provisioning behind the
 // static | allowlisted | open gate. Process lifecycle is the shared
 // broker.Run; this main wires the memory profile and provisioning.

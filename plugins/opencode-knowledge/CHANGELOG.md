@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.83
+
+- Guidance and commands now say "memory" for the personal store (formerly "soul") and point at the renamed `/memory-*` commands.
+
 ## 0.5.66
 
 - Prefer broker-wide `mark_lookup_all` for shared catalog recall, with fallback for older brokers and plain endpoints.

@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Decision records binding the protocol, spec, and repo; git is canonical, and each ADR is mirrored verbatim into the project soul.
+Decision records binding the protocol, spec, and repo; git is canonical, and each ADR is mirrored verbatim into the project memory.
 
 | ADR | Title | Status |
 |-----|-------|--------|

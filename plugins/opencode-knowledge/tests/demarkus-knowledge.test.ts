@@ -78,7 +78,7 @@ test("wireKnowledgeMcp rejects the reserved local-memory slug", () => {
     "acme-demarkus-memory": { type: "remote", url: "https://explicit.test/mcp", enabled: false },
   });
   assert.deepEqual(reports, [
-    "knowledge slug 'acme-demarkus-memory' is reserved by local-soul tool normalization and was disabled; unregister it",
+    "knowledge slug 'acme-demarkus-memory' is reserved by local-memory tool normalization and was disabled; unregister it",
   ]);
 });
 

@@ -23,7 +23,7 @@ type mcpGateway struct {
 	log        *slog.Logger
 	dispatcher worldDispatcher
 	// profile selects the product surface (knowledge vs memory):
-	// tool set, instructions, tenant scoping, soul seeding.
+	// tool set, instructions, tenant scoping, memory seeding.
 	profile *GatewayProfile
 	// graphStore is an ephemeral in-process graph store backing
 	// mark_backlinks / mark_graph / mark_graph_export /
@@ -45,8 +45,8 @@ type mcpGateway struct {
 	graphSeedMu         sync.Mutex
 	graphSeedChecked    map[string]time.Time
 	graphSeedRefreshing map[string]chan struct{}
-	// soulSeed tracks per-world soul-template seeding (memory profile).
-	soulSeed soulSeeder
+	// memorySeed tracks per-world memory-template seeding (memory profile).
+	memorySeed memorySeeder
 }
 
 // newMCPGateway registers the profile's tools and wraps them in Streamable

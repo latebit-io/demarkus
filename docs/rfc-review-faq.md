@@ -23,18 +23,18 @@ Two access paths: MCP over HTTPS for agents, web or CLI for humans.
 Five hooks in the memory plugin.
 
 - SessionStart: injects the routing table (decisions to `/adr/`, gotchas to `debugging.md`, progress to `journal/`).
-- Stop: journal nudge when files changed but nothing was written to the soul.
-- PostToolUse on `mark_publish`: promote nudge when an ADR is published to the soul and a promote destination is configured.
+- Stop: journal nudge when files changed but nothing was written to the memory.
+- PostToolUse on `mark_publish`: promote nudge when an ADR is published to the memory and a promote destination is configured.
 - UserPromptSubmit: recall-first reminder on "did we decide" questions.
 - Pre/PostToolUse write gate: checks tags and importance, plus write destination, retention, and style. Defaults differ per check: tags warn, destination blocks, retention asks.
 
 ## How does content get into the knowledge system?
 
-Through the promote bridge: `/promote <soul-path>` runs the `knowledge-promote` cascade.
+Through the promote bridge: `/promote <memory-path>` runs the `knowledge-promote` cascade.
 
 - Triage → distill for a shared audience (strip personal framing, secrets, PII).
 - Dedup against the catalog → tag to the system taxonomy → route to a writable world.
-- Human gate → `mark_publish` with provenance. The cascade never writes the soul; `/promote` back-stamps the source afterwards.
+- Human gate → `mark_publish` with provenance. The cascade never writes the memory; `/promote` back-stamps the source afterwards.
 - Direct `mark_publish` to a joined system also works; it passes the same write gate and policy.
 
 ## How does finding knowledge work?
@@ -66,7 +66,7 @@ The publisher declares it.
 
 The agent chooses it, following guidance injected at session start. Nothing computes it.
 
-- SessionStart context and the `soul-memory` / `knowledge-promote` skills instruct: reserve 0.8+ for hubs, architecture, key decisions; routine notes lower.
+- SessionStart context and the `memory` / `knowledge-promote` skills instruct: reserve 0.8+ for hubs, architecture, key decisions; routine notes lower.
 - The server never infers it; the gate only validates the range.
 
 ## How does the document graph work?
@@ -128,7 +128,7 @@ A knowledge system is distributed: many logically isolated worlds behind one bro
 - Each write creates a new hash-chained version. Re-writing identical content is a no-op that returns the existing version rather than a new one.
 - Optimistic concurrency (`expected_version` plus merge-on-conflict) stops stale writes clobbering newer ones.
 - A scheduled agent re-crawls every world and republishes the content-hash index and graph on the hub.
-- Soul copies of promoted documents can go stale. Refresh runs one way only: `/soul-refresh` copies the knowledge system's version down to the soul, and `/promote` is the only way a soul edit goes back up. There is no two-way sync.
+- Memory copies of promoted documents can go stale. Refresh runs one way only: `/memory-refresh` copies the knowledge system's version down to the memory, and `/promote` is the only way a memory edit goes back up. There is no two-way sync.
 
 ## How do diffs and merges work?
 
@@ -165,7 +165,7 @@ that property.
 - Anyone can run a server; content mirrors freely; every client that caches is a mirror.
 - Each version carries a `content-hash`, which is what lets agents on different mirrors confirm they hold identical content. The hash chain is a separate guarantee: it proves one server has not rewritten its own history. VERSIONS returns no per-version hashes, so the chain is not a cross-mirror check.
 - A server per world makes the ownership boundary physical: own store, token file, writer allowlist, release. Blast radius stays contained.
-- A soul is the same `demarkus-server` binary at personal scale.
+- A memory is the same `demarkus-server` binary at personal scale.
 - `mark_resolve` fetches by hash via a hub index, across the worlds the broker is configured for. Cross-org resolution is explicitly out of scope today.
 - Worth saying plainly at review: this deployment is centrally administered by design, with one broker, an OIDC org gate, a domain allowlist, and per-world writer allowlists. The protocol is decentralized; this instance is not.
 

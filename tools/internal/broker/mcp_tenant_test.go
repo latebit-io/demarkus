@@ -51,13 +51,13 @@ func newMemoryGateway(t *testing.T, cfg *Config, d worldDispatcher) *mcpGateway 
 }
 
 // seededDispatcher returns a fakeDispatcher whose worlds already carry
-// /index.md, so tenantGate's soul seeding takes the already-seeded fast
+// /index.md, so tenantGate's memory seeding takes the already-seeded fast
 // path and tests do not see seed publishes unless they want them.
 func seededDispatcher() *fakeDispatcher {
 	return &fakeDispatcher{
 		published: map[string]fetch.Result{
-			"alice-w/index.md": {Response: protocol.Response{Status: protocol.StatusOK, Body: "# Soul"}},
-			"bob-w/index.md":   {Response: protocol.Response{Status: protocol.StatusOK, Body: "# Soul"}},
+			"alice-w/index.md": {Response: protocol.Response{Status: protocol.StatusOK, Body: "# Memory"}},
+			"bob-w/index.md":   {Response: protocol.Response{Status: protocol.StatusOK, Body: "# Memory"}},
 		},
 	}
 }
@@ -361,8 +361,8 @@ func TestMemoryGatewayEndToEnd(t *testing.T) {
 		t.Errorf("serverInfo = %+v, want name demarkus-memory-broker", resp.Result["serverInfo"])
 	}
 	instructions, _ := resp.Result["instructions"].(string)
-	if !strings.Contains(instructions, "soul") {
-		t.Errorf("initialize instructions missing soul guidance: %q", instructions)
+	if !strings.Contains(instructions, "memory") {
+		t.Errorf("initialize instructions missing memory guidance: %q", instructions)
 	}
 	session := resp.Headers[mcpSessionHeader]
 

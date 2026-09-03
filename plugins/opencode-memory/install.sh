@@ -14,12 +14,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OPENCODE_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/opencode"
 PLUGIN_DEST="${OPENCODE_DIR}/plugins/demarkus-memory.ts"
-SKILL_DEST="${OPENCODE_DIR}/skills/soul-memory"
+SKILL_DEST="${OPENCODE_DIR}/skills/remember"
+# Skill dirs from before the rename and from the interim "memory" name,
+# removed after a successful install.
+LEGACY_SKILL_DIRS=("${OPENCODE_DIR}/skills/soul-memory" "${OPENCODE_DIR}/skills/memory")
 ASSETS_DEST="${HOME}/.demarkus/opencode-memory"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
   rm -f "${PLUGIN_DEST}"
-  rm -rf "${SKILL_DEST}" "${ASSETS_DEST}"
+  rm -rf "${SKILL_DEST}" "${ASSETS_DEST}" "${LEGACY_SKILL_DIRS[@]}"
   echo "[demarkus-memory] uninstalled (plugin, skill, assets). ~/.demarkus state and binaries untouched."
   exit 0
 fi
@@ -56,7 +59,7 @@ if [[ ! -e "${SRC}/src/demarkus-memory.ts" ]]; then
   SRC="${tmpdir}/${topdir}/plugins/opencode-memory"
 fi
 
-for d in src/demarkus-memory.ts package.json commands context scripts skills/soul-memory/SKILL.md; do
+for d in src/demarkus-memory.ts package.json commands context scripts skills/remember/SKILL.md; do
   [[ -e "${SRC}/${d}" ]] || { echo "[demarkus-memory] install: missing ${d} in ${SRC}" >&2; exit 1; }
 done
 
@@ -73,7 +76,7 @@ chmod 0755 "${staging}/assets/scripts/"*.sh
 # OpenCode's flat plugin file has nowhere else to carry one.
 install -m 0644 "${SRC}/package.json" "${staging}/assets/package.json"
 install -m 0644 "${SRC}/src/demarkus-memory.ts" "${staging}/demarkus-memory.ts"
-install -m 0644 "${SRC}/skills/soul-memory/SKILL.md" "${staging}/SKILL.md"
+install -m 0644 "${SRC}/skills/remember/SKILL.md" "${staging}/SKILL.md"
 for f in demarkus-memory.ts SKILL.md assets/package.json assets/commands assets/context assets/scripts/bootstrap.sh; do
   [[ -s "${staging}/${f}" || -d "${staging}/${f}" ]] || { echo "[demarkus-memory] install: staging incomplete (${f})" >&2; exit 1; }
 done
@@ -87,7 +90,7 @@ prev="${ASSETS_DEST}.prev.$$"
 rm -rf "${prev}"
 [[ -e "${ASSETS_DEST}" ]] && mv "${ASSETS_DEST}" "${prev}"
 if mv "${staging}/assets" "${ASSETS_DEST}"; then
-  rm -rf "${prev}" "${staging}"
+  rm -rf "${prev}" "${staging}" "${LEGACY_SKILL_DIRS[@]}"
   staging=""
 else
   if [[ ! -e "${prev}" ]]; then
@@ -104,4 +107,4 @@ echo "[demarkus-memory] installed:"
 echo "  plugin  ${PLUGIN_DEST}"
 echo "  skill   ${SKILL_DEST}/SKILL.md"
 echo "  assets  ${ASSETS_DEST}"
-echo "Start (or restart) opencode; the first session provisions the soul. Diagnose with /soul-status."
+echo "Start (or restart) opencode; the first session provisions the memory. Diagnose with /memory-status."

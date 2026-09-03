@@ -18,7 +18,7 @@ exactly one match:
 - Zero matches: every tool call is denied (`not authorized`), unless
   dynamic provisioning is enabled and admits the identity, in which
   case the first call creates the world (see Provisioning below).
-- One match: that world is the caller's soul; reads AND writes are
+- One match: that world is the caller's memory; reads AND writes are
   locked to it. Nothing is org-open.
 - More than one match: a provisioning error; the broker denies closed
   with an opaque error and logs the colliding world names.
@@ -47,12 +47,12 @@ single-world tenant) and `mark_graph_export` / `mark_graph_publish`
 (whole-store reads of the shared per-pod graph store would leak
 cross-tenant edges).
 
-## Soul seeding
+## Memory seeding
 
-A tenant world's first authorized tool call seeds the soul template
+A tenant world's first authorized tool call seeds the memory template
 when `/index.md` is absent: `/.well-known/demarkus/policy.md`
 (low-ceremony write policy: warn strictness, no required tag axes),
-`/.well-known/demarkus/template.md` (the soul layout), then
+`/.well-known/demarkus/template.md` (the memory layout), then
 `/index.md` last as the seeded sentinel. Publishes are create-only
 and conflict-tolerant, so concurrent replicas converge; failures are
 logged, throttled, and retried on a later call.
@@ -80,8 +80,10 @@ the protocol's 4MB object limit.
 
 The initialize result carries server `instructions` (recall-first,
 record-as-you-go routing, metadata rules), and three prompts ship in
-place of the knowledge broker's: `soul-context` (restore working
-context from the soul), `soul-journal` (append a dated journal entry),
-and `soul-export` (byte-preserving export of every document to local
+place of the knowledge broker's: `memory-context` (restore working
+context from the memory), `memory-journal` (append a dated journal entry),
+and `memory-export` (byte-preserving export of every document to local
 files; the service is not a lock-in). Plugin-less hosts (Claude
 Desktop, ChatGPT, Cursor) get their usage contract from these.
+
+The pre-rename `soul-context`, `soul-journal`, and `soul-export` prompt names remain registered as deprecated aliases for one release.

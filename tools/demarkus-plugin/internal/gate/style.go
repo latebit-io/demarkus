@@ -18,17 +18,9 @@ const (
 	styleRefMemory    = "Rules: metadata out of band, one # H1, unique headings, no em dashes."
 )
 
-// styleDecision checks a publish body against the style rules that can be
-// verified mechanically: no frontmatter fence opening the body, an H1
-// present, no em dashes, and unique headings (headings are anchors; a
-// duplicate gets a -1 suffix that shifts when sections move, silently
-// breaking inbound links). Publish only: appends are fragments, where an H1
-// or fence heuristic would misfire. Default severity warn
-// (DEMARKUS_STYLE_STRICTNESS overrides): style steers, it does not wall.
-// guideRef is a scope-appropriate pointer to the style rules, appended to the
-// reason: the knowledge surface cites the system's style.md URL, the memory
-// surface a plain-text summary (a mark://root/ URL does not resolve in a
-// standalone soul).
+// styleDecision checks the mechanically verifiable style rules (no leading
+// frontmatter fence, an H1, no em dashes, unique headings since they are anchors).
+// Publish only: appends are fragments. Default warn; guideRef names the rules.
 func styleDecision(pt config.ParsedTool, args map[string]any, guideRef string) (*Decision, error) {
 	if pt.Verb != "publish" {
 		return nil, nil

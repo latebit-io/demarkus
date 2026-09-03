@@ -179,7 +179,7 @@ export function wireKnowledgeMcp(
       } else {
         delete mcp[slug];
       }
-      report(`knowledge slug '${slug}' is reserved by local-soul tool normalization and was disabled; unregister it`);
+      report(`knowledge slug '${slug}' is reserved by local-memory tool normalization and was disabled; unregister it`);
       continue;
     }
     if (mcp[slug] !== undefined) continue;

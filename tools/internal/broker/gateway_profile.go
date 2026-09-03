@@ -4,7 +4,7 @@ import "github.com/mark3labs/mcp-go/mcp"
 
 // GatewayProfile selects which product the shared MCP gateway serves:
 // the knowledge broker's full multi-world surface with org-open reads,
-// or the memory broker's tenant-scoped soul surface.
+// or the memory broker's tenant-scoped memory surface.
 type GatewayProfile struct {
 	// ServerName is the MCP server name reported in the initialize
 	// result (e.g. "demarkus-knowledge-broker").
@@ -17,9 +17,9 @@ type GatewayProfile struct {
 	// world (tenantWorldFor). Cross-tenant access is denied at the
 	// tool, resource, and crawl layers.
 	TenantScoped bool
-	// SeedSoul seeds the soul template into a tenant world on first
+	// SeedMemory seeds the memory template into a tenant world on first
 	// access (memory broker only).
-	SeedSoul bool
+	SeedMemory bool
 	// Tools is the tool surface this profile registers.
 	Tools []mcp.Tool
 }
@@ -42,7 +42,7 @@ func MemoryGatewayProfile() *GatewayProfile {
 		ServerName:   "demarkus-memory-broker",
 		Instructions: memoryInstructions,
 		TenantScoped: true,
-		SeedSoul:     true,
+		SeedMemory:   true,
 		Tools: []mcp.Tool{
 			markFetchTool(),
 			markExploreTool(),

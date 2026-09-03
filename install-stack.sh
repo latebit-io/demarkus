@@ -52,20 +52,52 @@ AGENT_CONFIG_DIR="/etc/demarkus-agent"
 AGENT_STATE_DIR="/var/lib/demarkus-agent"
 WORLD_INTERNAL="localhost:6309"
 
-# Memory/soul path: the world is exposed as soul.<host> with a real Caddy cert,
-# so the demarkus-memory plugin can /soul-join it without --insecure. The world
-# runs as user/group demarkus (install.sh's SERVICE_NAME) and reads its cert
-# from WORLD_TLS_DIR; a drop-in points DEMARKUS_TLS_CERT there.
+# The world is exposed as <MEMORY_LABEL>.<host> with a real Caddy cert so the
+# memory plugin can /memory-join it without --insecure; a drop-in points the
+# world (user demarkus, install.sh's SERVICE_NAME) at the cert in WORLD_TLS_DIR.
 WORLD_SERVICE="demarkus"
 WORLD_GROUP="demarkus"
 WORLD_PUBLIC_PORT="6309"
 WORLD_TLS_DIR="/etc/demarkus/tls"
-SOUL_TOKEN_FILE="/etc/demarkus/soul-join.token"
 # Records the host the stack is currently configured for, so a rerun with a
 # different --domain migrates in place instead of leaving stale per-host config.
 STACK_HOST_FILE="/etc/demarkus/stack-host"
-CERTSYNC_SERVICE="demarkus-soul-certsync"
-CERTSYNC_BIN="${INSTALL_DIR}/demarkus-soul-certsync"
+# MEMORY_LABEL names the memory subdomain and every artifact derived from it.
+# Fresh installs use "memory"; installs made before the rename keep "soul"
+# (certs, units, and plugin registrations reference it). See set_memory_paths.
+MEMORY_LABEL="memory"
+
+MEMORY_LABEL_FILE="/etc/demarkus/memory-label"
+
+set_memory_paths() {
+  MEMORY_TOKEN_FILE="/etc/demarkus/${MEMORY_LABEL}-join.token"
+  CERTSYNC_SERVICE="demarkus-${MEMORY_LABEL}-certsync"
+  CERTSYNC_BIN="${INSTALL_DIR}/demarkus-${MEMORY_LABEL}-certsync"
+  MEMORY_DROPIN="appliance-${MEMORY_LABEL}-tls.conf"
+  # ensure_token revokes by label, so a pre-rename install keeps its old label.
+  if [ "$MEMORY_LABEL" = "soul" ]; then
+    MEMORY_TOKEN_LABEL="soul-memory"
+  else
+    MEMORY_TOKEN_LABEL="memory"
+  fi
+}
+set_memory_paths
+
+# resolve_memory_label keeps an existing install on the label it was built
+# with: the recorded file first, else the Caddyfile route of a pre-rename
+# install; a flip would re-issue certs and invalidate registered join URLs.
+resolve_memory_label() {
+  if [ -f "$MEMORY_LABEL_FILE" ]; then
+    MEMORY_LABEL=$(tr -d '[:space:]' < "$MEMORY_LABEL_FILE")
+  elif grep -Eqs '^soul\.[^ ]+ \{' "${PROXY_CONFIG_DIR}/Caddyfile" || [ -f /etc/demarkus/soul-join.token ]; then
+    MEMORY_LABEL="soul"
+  fi
+  case "$MEMORY_LABEL" in
+    memory|soul) ;;
+    *) log_error "Unexpected memory label '${MEMORY_LABEL}' in ${MEMORY_LABEL_FILE}"; exit 1 ;;
+  esac
+  set_memory_paths
+}
 
 # Fixed to systemd's search path in production; the test harness redirects it
 # via DEMARKUS_TEST_SYSTEMD_DIR only under DEMARKUS_INSTALL_TESTMODE=1.
@@ -686,9 +718,9 @@ auth.${host} {
 	reverse_proxy 127.0.0.1:9091
 }
 
-# Exists only so Caddy obtains + renews a real cert for soul.<host>; the
+# Exists only so Caddy obtains + renews a real cert for ${MEMORY_LABEL}.<host>; the
 # world server (QUIC/UDP 6309) serves that cert, not Caddy. See install_memory.
-soul.${host} {
+${MEMORY_LABEL}.${host} {
 	respond "demarkus world server — connect over the mark protocol on UDP ${WORLD_PUBLIC_PORT}" 200
 }
 EOF
@@ -696,16 +728,16 @@ EOF
     chmod 640 "${PROXY_CONFIG_DIR}/Caddyfile"
   else
     log_info "Keeping existing Caddyfile: ${PROXY_CONFIG_DIR}/Caddyfile"
-    # Upgrade path: a Caddyfile from before the soul route exists needs the
-    # block appended, else soul.<host> never gets a cert and memory stays pending.
-    if ! grep -Fqx "soul.${host} {" "${PROXY_CONFIG_DIR}/Caddyfile"; then
+    # Upgrade path: a Caddyfile from before the memory route exists needs the
+    # block appended, else the memory host never gets a cert and stays pending.
+    if ! grep -Fqx "${MEMORY_LABEL}.${host} {" "${PROXY_CONFIG_DIR}/Caddyfile"; then
       cat >> "${PROXY_CONFIG_DIR}/Caddyfile" << EOF
 
-soul.${host} {
+${MEMORY_LABEL}.${host} {
 	respond "demarkus world server — connect over the mark protocol on UDP ${WORLD_PUBLIC_PORT}" 200
 }
 EOF
-      log_info "Added the soul.${host} route to the existing Caddyfile"
+      log_info "Added the ${MEMORY_LABEL}.${host} route to the existing Caddyfile"
     fi
   fi
 
@@ -755,10 +787,10 @@ EOF
   log_info "Caddy running: https://library.${host}, https://broker.${host}, https://auth.${host}"
 }
 
-# --- memory / soul (the world as a remote soul) ---------------------------------
+# --- memory (the world as a remote memory) --------------------------------------
 
 # write_certsync writes the idempotent cert-sync helper. Caddy obtains the
-# soul.<host> cert (see install_proxy); the world server, which runs as a
+# memory host's cert (see install_proxy); the world server, which runs as a
 # different user and cannot read Caddy's 700 store, needs the cert copied into
 # its own TLS dir. This helper does that copy and reloads the world:
 #   - first issuance: create the drop-in + restart (the server only reloads
@@ -770,18 +802,18 @@ write_certsync() {
   local host="$1"
   cat > "$CERTSYNC_BIN" << EOF
 #!/usr/bin/env bash
-# Generated by install-stack.sh. Copies Caddy's soul.${host} cert into the
+# Generated by install-stack.sh. Copies Caddy's ${MEMORY_LABEL}.${host} cert into the
 # world's TLS dir and reloads the world. Idempotent; safe to run repeatedly.
 set -euo pipefail
-SOUL_HOST="soul.${host}"
+MEMORY_HOST="${MEMORY_LABEL}.${host}"
 CADDY_CERTS="${PROXY_STATE_DIR}/caddy/certificates"
 TLS_DIR="${WORLD_TLS_DIR}"
 WORLD_GROUP="${WORLD_GROUP}"
 DROPIN_DIR="${WORLD_DROPIN_DIR}"
-DROPIN="\${DROPIN_DIR}/appliance-soul-tls.conf"
+DROPIN="\${DROPIN_DIR}/${MEMORY_DROPIN}"
 
 # Caddy nests certs under an issuer dir (prod vs staging); glob across it.
-src_crt=\$(ls -1t "\${CADDY_CERTS}"/*/"\${SOUL_HOST}"/"\${SOUL_HOST}.crt" 2>/dev/null | head -1 || true)
+src_crt=\$(ls -1t "\${CADDY_CERTS}"/*/"\${MEMORY_HOST}"/"\${MEMORY_HOST}.crt" 2>/dev/null | head -1 || true)
 [ -z "\$src_crt" ] && exit 0
 src_key="\${src_crt%.crt}.key"
 [ -f "\$src_key" ] || exit 0
@@ -789,7 +821,7 @@ src_key="\${src_crt%.crt}.key"
 mkdir -p "\$TLS_DIR"
 chown root:"\$WORLD_GROUP" "\$TLS_DIR" 2>/dev/null || true
 chmod 750 "\$TLS_DIR"
-dst_crt="\${TLS_DIR}/soul.crt"; dst_key="\${TLS_DIR}/soul.key"
+dst_crt="\${TLS_DIR}/${MEMORY_LABEL}.crt"; dst_key="\${TLS_DIR}/${MEMORY_LABEL}.key"
 
 changed=0
 if ! cmp -s "\$src_crt" "\$dst_crt" || ! cmp -s "\$src_key" "\$dst_key"; then
@@ -804,8 +836,8 @@ if [ ! -f "\$DROPIN" ]; then
   mkdir -p "\$DROPIN_DIR"
   cat > "\$DROPIN" <<UNIT
 [Service]
-Environment=DEMARKUS_TLS_CERT=\${TLS_DIR}/soul.crt
-Environment=DEMARKUS_TLS_KEY=\${TLS_DIR}/soul.key
+Environment=DEMARKUS_TLS_CERT=\${TLS_DIR}/${MEMORY_LABEL}.crt
+Environment=DEMARKUS_TLS_KEY=\${TLS_DIR}/${MEMORY_LABEL}.key
 UNIT
   systemctl daemon-reload
   systemctl restart ${WORLD_SERVICE}
@@ -818,36 +850,32 @@ EOF
   chmod 755 "$CERTSYNC_BIN"
 }
 
-# install_memory turns the world into a remote soul: mints a capability token,
-# wires the soul.<host> cert sync (helper + 12h renewal timer), and eagerly
-# provisions the first cert so /soul-join works without --insecure. Prints
-# soul_token= and soul_status=(ready|pending) for the caller's summary card.
+# install_memory turns the world into a remote memory (token, cert sync, eager
+# first cert). Prints memory_token= and memory_status=(ready|pending) for the card.
 install_memory() {
   local host="$1"
 
-  log_step "Enabling the world as a remote soul (soul.${host})" >&2
+  log_step "Enabling the world as a remote memory (${MEMORY_LABEL}.${host})" >&2
 
-  # Capability token: publish also authorizes APPEND, which is all the memory
-  # plugin needs. Appended to the broker-owned tokens.toml (server hot-reloads).
-  # The raw token is stashed root-only so reruns reuse it (no duplicate
-  # credential) and the operator can recover the join URL later.
-  local soul_token=""
+  # publish also authorizes APPEND, all the plugin needs. The raw token is
+  # stashed root-only so reruns reuse it and the operator can recover the join URL.
+  local memory_token=""
   # Guard the read: the stash is absent on a fresh install, and an unguarded
   # read on a missing file trips pipefail and aborts before minting.
-  if [ -f "$SOUL_TOKEN_FILE" ]; then
-    soul_token=$(tr -d '[:space:]' < "$SOUL_TOKEN_FILE")
+  if [ -f "$MEMORY_TOKEN_FILE" ]; then
+    memory_token=$(tr -d '[:space:]' < "$MEMORY_TOKEN_FILE")
   fi
-  soul_token=$(ensure_token soul-memory "soul capability" "$soul_token") || exit 1
+  memory_token=$(ensure_token "$MEMORY_TOKEN_LABEL" "memory capability" "$memory_token") || exit 1
   # Re-stash unconditionally: same bytes on reuse, fresh value after a
   # rotation; the chmod reasserts 0600 on a stash left loose by older installs.
-  ( umask 077; printf '%s\n' "$soul_token" > "$SOUL_TOKEN_FILE" )
-  chmod 600 "$SOUL_TOKEN_FILE"
+  ( umask 077; printf '%s\n' "$memory_token" > "$MEMORY_TOKEN_FILE" )
+  chmod 600 "$MEMORY_TOKEN_FILE"
 
   write_certsync "$host"
 
   cat > "${SYSTEMD_DIR}/${CERTSYNC_SERVICE}.service" << EOF
 [Unit]
-Description=Sync Caddy's soul.${host} cert into the demarkus world
+Description=Sync Caddy's ${MEMORY_LABEL}.${host} cert into the demarkus world
 After=${PROXY_SERVICE}.service
 
 [Service]
@@ -856,7 +884,7 @@ ExecStart=${CERTSYNC_BIN}
 EOF
   cat > "${SYSTEMD_DIR}/${CERTSYNC_SERVICE}.timer" << EOF
 [Unit]
-Description=Renew the demarkus world's soul.${host} cert from Caddy
+Description=Renew the demarkus world's ${MEMORY_LABEL}.${host} cert from Caddy
 
 [Timer]
 OnBootSec=2min
@@ -870,32 +898,35 @@ EOF
   systemctl enable "${CERTSYNC_SERVICE}.timer"
   systemctl start "${CERTSYNC_SERVICE}.timer"
 
-  # Eager first issuance: Caddy (already running) obtains the cert within a few
-  # seconds; poll the sync so the card's /soul-join line is truthful. Bounded
-  # so a stuck ACME never blocks the install; the timer upgrades it later.
-  # Readiness is authoritative: the world's cert must equal Caddy's CURRENT
-  # soul.<host> cert, so a stale cert from a prior host is never called ready.
-  local status="pending" waited=0 max=90
+  # Bounded poll so a stuck ACME never blocks the install (the timer finishes
+  # later). Ready means the world's cert equals Caddy's CURRENT memory-host cert,
+  # so a stale cert from a prior host is never called ready.
+  local status="pending" waited=0 max=90 sync_out=""
   [ "${DEMARKUS_INSTALL_TESTMODE:-}" = "1" ] && max=0
   while : ; do
-    "$CERTSYNC_BIN" >/dev/null 2>&1 || true
+    # The helper exits 0 when no cert exists yet; a nonzero exit is a real copy,
+    # permission, or reload failure and must not be reported as merely pending.
+    if ! sync_out=$("$CERTSYNC_BIN" 2>&1); then
+      log_error "Memory cert sync failed: ${sync_out}" >&2
+      exit 1
+    fi
     local src=""
-    for c in "${PROXY_STATE_DIR}/caddy/certificates/"*/"soul.${host}/soul.${host}.crt"; do
+    for c in "${PROXY_STATE_DIR}/caddy/certificates/"*/"${MEMORY_LABEL}.${host}/${MEMORY_LABEL}.${host}.crt"; do
       [ -f "$c" ] && src="$c" && break
     done
-    if [ -n "$src" ] && cmp -s "$src" "${WORLD_TLS_DIR}/soul.crt"; then status="ready"; break; fi
+    if [ -n "$src" ] && cmp -s "$src" "${WORLD_TLS_DIR}/${MEMORY_LABEL}.crt"; then status="ready"; break; fi
     [ "$waited" -ge "$max" ] && break
     sleep 5; waited=$((waited + 5))
   done
 
   if [ "$status" = "ready" ]; then
-    log_info "World reachable as a soul at mark://soul.${host}:${WORLD_PUBLIC_PORT} (real cert)" >&2
+    log_info "World reachable as a memory at mark://${MEMORY_LABEL}.${host}:${WORLD_PUBLIC_PORT} (real cert)" >&2
   else
-    log_warn "soul.${host} cert not issued yet; the renewal timer will finish it shortly" >&2
+    log_warn "${MEMORY_LABEL}.${host} cert not issued yet; the renewal timer will finish it shortly" >&2
   fi
 
-  printf 'soul_token=%s\n' "$soul_token"
-  printf 'soul_status=%s\n' "$status"
+  printf 'memory_token=%s\n' "$memory_token"
+  printf 'memory_status=%s\n' "$status"
 }
 
 # persist_self installs this script as demarkus-stack so `demarkus-stack
@@ -920,7 +951,7 @@ persist_self() {
 
 print_card() {
   local host="$1" owner_user="$2" owner_password="$3" owner_email="$4" librarian="$5"
-  local soul_token="$6" soul_status="$7"
+  local memory_token="$6" memory_status="$7"
   echo ""
   log_step "Your knowledge system is running"
   echo ""
@@ -936,9 +967,9 @@ print_card() {
   echo "  Librarian AI:           ${librarian}"
   echo ""
   echo "  Personal memory (demarkus-memory plugin):"
-  echo "    /soul-join mark://soul.${host}:${WORLD_PUBLIC_PORT}#token=${soul_token}"
-  if [ "$soul_status" != "ready" ]; then
-    echo "    (soul.${host} cert still provisioning — add --insecure until the renewal timer lands it)"
+  echo "    /memory-join mark://${MEMORY_LABEL}.${host}:${WORLD_PUBLIC_PORT}#token=${memory_token}"
+  if [ "$memory_status" != "ready" ]; then
+    echo "    (${MEMORY_LABEL}.${host} cert still provisioning — add --insecure until the renewal timer lands it)"
   fi
   echo ""
   echo "  Notes:"
@@ -954,10 +985,11 @@ print_card() {
 # broker, and library. Each script tears down exactly what it installed.
 do_uninstall() {
   require_linux_root
+  resolve_memory_label
   log_step "Removing the stack's identity, proxy, and agent layers"
   local fail=0
 
-  # Soul cert-sync timer + oneshot. stop/disable may legitimately fail on an
+  # Memory cert-sync timer + oneshot. stop/disable may legitimately fail on an
   # already-inactive unit, so those stay best-effort; the removals do not.
   if [ -f "${SYSTEMD_DIR}/${CERTSYNC_SERVICE}.timer" ]; then
     systemctl stop "${CERTSYNC_SERVICE}.timer" 2>/dev/null || true
@@ -969,8 +1001,8 @@ do_uninstall() {
   rm -f "${CERTSYNC_BIN}" || { log_error "Could not remove ${CERTSYNC_BIN}"; fail=1; }
   # Remove only the drop-in we created; leave operator overrides, and drop the
   # dir only when it is left empty.
-  rm -f "${WORLD_DROPIN_DIR}/appliance-soul-tls.conf" \
-    || { log_error "Could not remove the soul TLS drop-in"; fail=1; }
+  rm -f "${WORLD_DROPIN_DIR}/${MEMORY_DROPIN}" \
+    || { log_error "Could not remove the memory TLS drop-in"; fail=1; }
   rmdir "${WORLD_DROPIN_DIR}" 2>/dev/null || true
 
   for svc in "$AUTH_SERVICE" "$PROXY_SERVICE" "$AGENT_SERVICE"; do
@@ -1077,6 +1109,7 @@ main() {
   fi
 
   require_linux_root
+  resolve_memory_label
 
   local host
   host=$(resolve_stack_host "$domain")
@@ -1090,7 +1123,7 @@ main() {
       *[!a-zA-Z0-9.@_+-]*) log_error "Invalid owner email '${owner_email}'"; exit 1 ;;
     esac
   fi
-  log_step "Stack host: ${host} (library.${host}, broker.${host}, auth.${host}, soul.${host})"
+  log_step "Stack host: ${host} (library.${host}, broker.${host}, auth.${host}, ${MEMORY_LABEL}.${host})"
   [ -z "$owner_email" ] && owner_email="owner@${host}"
 
   local tmpdir
@@ -1144,27 +1177,28 @@ main() {
   install_agent "$tmpdir"
   install_proxy "$host" "$tmpdir"
 
-  # Memory is on by default: the world doubles as a remote soul. Runs after
-  # Caddy so the soul.<host> cert is already being obtained.
-  local soul_token soul_status
+  # Memory is on by default: the world doubles as a remote memory. Runs after
+  # Caddy so the memory host's cert is already being obtained.
+  local memory_token memory_status
   install_memory "$host" > "${tmpdir}/mem_out"
-  soul_token=$(sed -n 's/^soul_token=//p' "${tmpdir}/mem_out")
-  soul_status=$(sed -n 's/^soul_status=//p' "${tmpdir}/mem_out")
-  if [ -z "$soul_token" ]; then
-    log_error "Memory setup did not return a soul token; aborting"
+  memory_token=$(sed -n 's/^memory_token=//p' "${tmpdir}/mem_out")
+  memory_status=$(sed -n 's/^memory_status=//p' "${tmpdir}/mem_out")
+  if [ -z "$memory_token" ]; then
+    log_error "Memory setup did not return a memory token; aborting"
     exit 1
   fi
 
   # Record the host now that the stack is fully configured for it, so the next
   # rerun can detect and migrate a hostname change.
   printf '%s\n' "$host" > "$STACK_HOST_FILE"
+  printf '%s\n' "$MEMORY_LABEL" > "$MEMORY_LABEL_FILE"
 
   persist_self
 
   local librarian_status="off (add LLM_API_KEY to ${LIBRARY_CONFIG_DIR}/env)"
   [ -n "$librarian_key" ] && librarian_status="on"
   print_card "$host" "$owner_user" "$owner_password" "$owner_email" "$librarian_status" \
-    "$soul_token" "$soul_status"
+    "$memory_token" "$memory_status"
 }
 
 # Guard so tests can source this script and call individual functions

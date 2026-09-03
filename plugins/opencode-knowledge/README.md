@@ -2,7 +2,7 @@
 
 Connect [OpenCode](https://opencode.ai) to an organizational demarkus knowledge system: a shared, versioned markdown catalog behind an HTTPS broker and OAuth.
 
-This plugin complements [`demarkus-opencode-memory`](../opencode-memory/). Memory owns personal souls and working notes; knowledge owns shared, curated, authoritative material. Both reuse `~/.demarkus` registries and one helper binary.
+This plugin complements [`demarkus-opencode-memory`](../opencode-memory/). Memory owns personal memories and working notes; knowledge owns shared, curated, authoritative material. Both reuse `~/.demarkus` registries and one helper binary.
 
 ## Features
 

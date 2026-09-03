@@ -14,7 +14,7 @@ The lines above are the **enforced core**: the agent mirrors them into the plugi
 
 This is a shared catalog, not a scratch pad. Publish when the content is useful to another team and ready to rely on.
 
-- Keep drafts and personal working notes in your own soul; promote to a world when ready.
+- Keep drafts and personal working notes in your own memory; promote to a world when ready.
 - Never publish secrets, credentials, tokens, or PII.
 - Prefer one well-tagged document over scattered fragments.
 

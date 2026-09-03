@@ -572,14 +572,9 @@ func TestRunDeviceJanitorRespectsContextCancel(t *testing.T) {
 	}
 }
 
-// TestStaleDeviceCookieDoesNotHijackBrowserCallback guards against the
-// abandoned-mid-flow regression: user starts /soul-join, types the
-// user_code into /device (setting the device cookie), then abandons
-// without ever following /auth/login. A later legitimate browser
-// /auth/login + /auth/callback from the same jar must NOT be routed
-// through the device branch. The fix is dispatch driven by the signed
-// State (set fresh at each /auth/login) rather than the ambient
-// cookie — this test exercises the failure mode the old design had.
+// A device cookie left by an abandoned /memory-join must not route a later
+// browser /auth/login + /auth/callback through the device branch; dispatch
+// is driven by the signed State, not the ambient cookie.
 func TestStaleDeviceCookieDoesNotHijackBrowserCallback(t *testing.T) {
 	verifier := &fakeVerifier{
 		authURL: "https://idp.example.com/authorize",
