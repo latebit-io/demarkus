@@ -29,7 +29,7 @@ If no host was supplied, ask for it. If token requirements are unclear, ask befo
    "$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor add-http '<slug>' <shell-escaped-mcp-url>
    ```
 
-   Replace `<shell-escaped-mcp-url>` with exactly one shell word using POSIX-safe escaping; never wrap the raw value in literal single quotes. Cursor reloads `~/.cursor/mcp.json` on its own; if `<slug>` does not appear under MCP settings, toggle it there once.
+   Replace `<shell-escaped-mcp-url>` with exactly one shell word using POSIX-safe escaping; never wrap the raw value in literal single quotes. Check the exit status: the catalog row and project binding were committed in step 1, so on failure surface the exact error, report the join as partial (memory joined and bound, MCP server not registered), give this command as the retry, and do not continue to the confirmation. On success, Cursor reloads `~/.cursor/mcp.json` on its own; if `<slug>` does not appear under MCP settings, toggle it there once.
 
 3. Confirm the slug, URL, and project binding. State that no token file exists: the broker authenticates via OAuth, and the destination gate now binds this project's memory writes to `<slug>`.
 
@@ -75,7 +75,7 @@ For a hosted memory, skip the QUIC join and MCP-registration steps below, but st
 
 3. Confirm the slug, host, project binding, and whether a token file is used. State that the token is injected by `demarkus-plugin mcp-serve`, not stored in MCP config.
 
-4. Explain removal without performing it unasked. Remove the memory catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`. A stale binding makes the destination gate block writes to remaining memories.
+4. Explain removal without performing it unasked. Remove the memory catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`. A stale binding makes the destination gate block writes to remaining memories. Then remove the MCP entry so Cursor stops launching the removed server: `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor remove '<slug>'`, for broker and QUIC memories alike.
 
 ## Don't
 

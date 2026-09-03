@@ -224,10 +224,9 @@ func projectDir(roots []string) (cwd, ambiguous string, err error) {
 }
 
 func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambiguous string) (Decision, error) {
-	// The destination gate and the publish tag-gate are INDEPENDENT (in Claude
-	// Code they're two separate hooks) — evaluate both and return the most severe
-	// outcome, so e.g. a misroute set to `warn` can't suppress a `block` from the
-	// tag gate. Reasons at the winning severity are combined.
+	// The guards are independent: evaluate every one and return the most
+	// severe outcome (reasons at that severity combined), so a `warn` misroute
+	// never hides a `block` from the tag gate.
 	var decisions []Decision
 
 	// Destination gate (publish + append): misroute against the project binding.
