@@ -18,7 +18,7 @@ Verify without writing:
 cd tools && go run ./plugin-prompts check
 ```
 
-A `commands/<old>.md.alias` file whose body names another command renders that command's full body under the old name with a `Deprecated alias of /<new>` description prefix, so a renamed command keeps working under both names on every harness for one release.
+A `commands/<old>.md.alias` file whose body names another command renders that command's full body under the old name with a `Deprecated alias of /<new>` description prefix, so a renamed command keeps working under both names on every harness while the alias file exists.
 
 ## Brands
 
