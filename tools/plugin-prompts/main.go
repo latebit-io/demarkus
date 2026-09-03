@@ -29,6 +29,7 @@ var canonicalOutputs = map[string]string{
 
 type manifest struct {
 	Targets []target `json:"targets"`
+	Brands  []brand  `json:"brands"`
 }
 
 type target struct {
@@ -40,12 +41,19 @@ type target struct {
 	ProjectDir       string `json:"project_dir"`
 	RepoInstructions string `json:"repo_instructions"`
 	ToolForm         string `json:"tool_form"`
+	// Plugin names surface in prose. PluginName is this target's own; the
+	// sibling names let memory and knowledge prompts refer to each other.
+	PluginName          string `json:"plugin_name"`
+	MemoryPluginName    string `json:"memory_plugin_name"`
+	KnowledgePluginName string `json:"knowledge_plugin_name"`
 }
 
 type artifact struct {
 	Path    string
 	Content []byte
 	Target  *target
+	Copied  bool        // verbatim copy of a base plugin file, not a rendered template
+	Mode    fs.FileMode // source mode for copies (hooks must stay executable); zero means 0o644
 }
 
 func main() {
@@ -69,7 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 	if mode == "write" {
-		err = writeAll(artifacts)
+		err = writeAll(root, artifacts)
 	} else {
 		err = checkAll(root, artifacts)
 	}
@@ -113,11 +121,35 @@ func renderAll(root string) ([]artifact, error) {
 	if err := validateManifest(&spec); err != nil {
 		return nil, err
 	}
+	if err := validateBrands(&spec); err != nil {
+		return nil, err
+	}
 
 	var artifacts []artifact
 	seen := map[string]string{}
+	renderTargets := make([]*target, 0, len(spec.Targets)+len(spec.Brands))
+	baseByName := map[string]*target{}
 	for i := range spec.Targets {
-		target := &spec.Targets[i]
+		renderTargets = append(renderTargets, &spec.Targets[i])
+		baseByName[spec.Targets[i].Name] = &spec.Targets[i]
+	}
+	for i := range spec.Brands {
+		b := &spec.Brands[i]
+		base := baseByName[b.Base]
+		t := brandTarget(b, base)
+		renderTargets = append(renderTargets, t)
+		copied, err := brandArtifacts(root, b, base, t)
+		if err != nil {
+			return nil, err
+		}
+		for j := range copied {
+			if err := claimOutput(seen, copied[j].Path, "brand "+b.Name); err != nil {
+				return nil, err
+			}
+		}
+		artifacts = append(artifacts, copied...)
+	}
+	for _, target := range renderTargets {
 		if err := validateTarget(target); err != nil {
 			return nil, err
 		}
@@ -221,6 +253,18 @@ func validateTarget(target *target) error {
 	}
 	if target.Surface != "memory" && target.Surface != "knowledge" {
 		return fmt.Errorf("manifest target %s: invalid surface %q", target.Name, target.Surface)
+	}
+	if target.MemoryPluginName == "" {
+		target.MemoryPluginName = "demarkus-memory"
+	}
+	if target.KnowledgePluginName == "" {
+		target.KnowledgePluginName = "demarkus-knowledge"
+	}
+	if target.PluginName == "" {
+		target.PluginName = target.MemoryPluginName
+		if target.Surface == "knowledge" {
+			target.PluginName = target.KnowledgePluginName
+		}
 	}
 	if target.Harness != "claude" && target.Harness != "pi" && target.Harness != "opencode" {
 		return fmt.Errorf("manifest target %s: invalid harness %q", target.Name, target.Harness)
@@ -360,17 +404,72 @@ func forbiddenTerms(harness string) []string {
 	}
 }
 
-func writeAll(artifacts []artifact) error {
+func writeAll(root string, artifacts []artifact) error {
+	expected := make(map[string]struct{}, len(artifacts))
 	for i := range artifacts {
 		artifact := &artifacts[i]
+		expected[filepath.Clean(artifact.Path)] = struct{}{}
 		if err := os.MkdirAll(filepath.Dir(artifact.Path), 0o755); err != nil {
 			return fmt.Errorf("create output directory: %w", err)
 		}
-		if err := os.WriteFile(artifact.Path, artifact.Content, 0o644); err != nil {
+		mode := artifact.Mode
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := os.WriteFile(artifact.Path, artifact.Content, mode); err != nil {
 			return fmt.Errorf("write %s: %w", artifact.Path, err)
+		}
+		// WriteFile keeps an existing file's mode; make the copy's mode win.
+		if err := os.Chmod(artifact.Path, mode); err != nil {
+			return fmt.Errorf("chmod %s: %w", artifact.Path, err)
+		}
+	}
+	return pruneBrandOutputs(root, artifacts, expected)
+}
+
+// pruneBrandOutputs deletes files under brand outputs that no artifact
+// produced, so write converges on the check that reports them as stale.
+// Canonical plugins are never pruned: they mix generated and hand-kept files.
+func pruneBrandOutputs(root string, artifacts []artifact, expected map[string]struct{}) error {
+	for _, output := range brandOutputs(artifacts) {
+		dir := filepath.Join(root, output)
+		var stale []string
+		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if _, ok := expected[filepath.Clean(path)]; !entry.IsDir() && !ok {
+				stale = append(stale, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("scan brand output %s: %w", dir, err)
+		}
+		for _, path := range stale {
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("remove stale %s: %w", path, err)
+			}
+			fmt.Printf("removed stale brand file %s\n", filepath.ToSlash(strings.TrimPrefix(path, root+string(filepath.Separator))))
 		}
 	}
 	return nil
+}
+
+// brandOutputs lists the distinct brand output dirs among the artifacts.
+func brandOutputs(artifacts []artifact) []string {
+	seen := map[string]struct{}{}
+	var outputs []string
+	for i := range artifacts {
+		output := artifacts[i].Target.Output
+		if _, ok := seen[output]; ok || !strings.HasPrefix(filepath.ToSlash(output), brandOutputPrefix) {
+			continue
+		}
+		seen[output] = struct{}{}
+		outputs = append(outputs, output)
+	}
+	sort.Strings(outputs)
+	return outputs
 }
 
 func checkAll(root string, artifacts []artifact) error {
@@ -396,13 +495,21 @@ func checkAll(root string, artifacts []artifact) error {
 		outputs[artifacts[i].Target.Output] = struct{}{}
 	}
 	for output := range outputs {
-		for _, subtree := range []string{"commands", "context", "skills"} {
+		// A brand directory is generated in full, so every file in it is
+		// managed; canonical plugins mix generated prompts with hand-kept files.
+		subtrees := []string{"commands", "context", "skills"}
+		managedOnly := false
+		if strings.HasPrefix(filepath.ToSlash(output), brandOutputPrefix) {
+			subtrees = []string{""}
+			managedOnly = true
+		}
+		for _, subtree := range subtrees {
 			dir := filepath.Join(root, output, subtree)
 			err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 				if walkErr != nil {
 					return walkErr
 				}
-				if entry.IsDir() || filepath.Ext(path) != ".md" {
+				if entry.IsDir() || (!managedOnly && filepath.Ext(path) != ".md") {
 					return nil
 				}
 				if _, ok := expected[filepath.Clean(path)]; !ok {

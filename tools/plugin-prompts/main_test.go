@@ -50,8 +50,14 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifacts) != 81 {
-		t.Fatalf("renderAll() produced %d artifacts, want 81", len(artifacts))
+	// 81 rendered prompts (54 canonical + 27 aliases) plus each brand's share,
+	// derived from the manifest and source tree rather than from the render.
+	want := 81 + expectedBrandArtifacts(t, root)
+	if len(artifacts) != want {
+		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)
+	}
+	if got := brandArtifactCount(t, root, artifacts); got != want-81 {
+		t.Fatalf("brand artifacts = %d, want %d", got, want-81)
 	}
 }
 
@@ -206,5 +212,195 @@ func TestClaimOutputRejectsDuplicateArtifactPath(t *testing.T) {
 	err := claimOutput(seen, "/out/commands/./foo.md", "foo.md.alias")
 	if err == nil || !strings.Contains(err.Error(), "foo.md.tmpl") {
 		t.Fatalf("expected duplicate-path error naming the first source, got %v", err)
+	}
+}
+
+// brandArtifactCount counts artifacts under plugins/brands/ so the corpus
+// expectation tracks the manifest's brand list without hard-coding it.
+func brandArtifactCount(t *testing.T, root string, artifacts []artifact) int {
+	t.Helper()
+	prefix := filepath.Join(root, filepath.FromSlash(brandOutputPrefix)) + string(filepath.Separator)
+	n := 0
+	for i := range artifacts {
+		if strings.HasPrefix(artifacts[i].Path, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// expectedBrandArtifacts derives each brand's artifact count from the
+// manifest and the base plugin's source files.
+func expectedBrandArtifacts(t *testing.T, root string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "plugins", "prompt-source", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := decodeManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bases := map[string]target{}
+	for i := range spec.Targets {
+		bases[spec.Targets[i].Name] = spec.Targets[i]
+	}
+	total := 0
+	for _, b := range spec.Brands {
+		base := bases[b.Base]
+		total += countFiles(t, filepath.Join(root, "plugins", "prompt-source", base.Surface), func(name string) bool {
+			return strings.HasSuffix(name, ".tmpl") || strings.HasSuffix(name, ".md.alias")
+		})
+		for _, name := range copiedFiles {
+			total += countFiles(t, filepath.Join(root, base.Output, name), func(string) bool { return true })
+		}
+		total += 2 // plugin.json and README
+	}
+	return total
+}
+
+func countFiles(t *testing.T, dir string, keep func(string) bool) int {
+	t.Helper()
+	n := 0
+	err := filepath.WalkDir(dir, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && keep(entry.Name()) {
+			n++
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestWriteAllPreservesCopyModeAndPrunesStaleBrandFiles(t *testing.T) {
+	root := t.TempDir()
+	output := "plugins/brands/acme"
+	hooks := filepath.Join(root, output, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(hooks, "removed-upstream.sh")
+	if err := os.WriteFile(stale, []byte("stale"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hook := filepath.Join(hooks, "gate.sh")
+	// Pre-existing non-executable file: the copy's mode must still win.
+	if err := os.WriteFile(hook, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := &target{Output: output}
+	arts := []artifact{
+		{Path: hook, Content: []byte("#!/bin/sh\n"), Target: target, Copied: true, Mode: 0o755},
+		{Path: filepath.Join(root, output, "commands", "memory.md"), Content: []byte("# m\n"), Target: target},
+	}
+	if err := writeAll(root, arts); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(hook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("copied hook is not executable: %v", info.Mode())
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale brand file still present (err=%v)", err)
+	}
+	if err := checkAll(root, arts); err != nil {
+		t.Fatalf("check after write should be clean, got %v", err)
+	}
+}
+
+func TestBrandArtifactCountMatchesBrandPrefix(t *testing.T) {
+	root := t.TempDir()
+	arts := []artifact{
+		{Path: filepath.Join(root, "plugins", "brands", "acme", "hooks", "a.sh")},
+		{Path: filepath.Join(root, "plugins", "claude-code", "commands", "x.md")},
+	}
+	if got := brandArtifactCount(t, root, arts); got != 1 {
+		t.Fatalf("brandArtifactCount = %d, want 1", got)
+	}
+}
+
+func TestCheckAllReportsStaleCopiedBrandFile(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join("plugins", "brands", "acme")
+	dir := filepath.Join(root, output, "hooks")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(dir, "keep.sh")
+	if err := os.WriteFile(keep, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "removed-upstream.sh"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := &target{Output: filepath.ToSlash(output)}
+	err := checkAll(root, []artifact{{Path: keep, Content: []byte("ok"), Target: target, Copied: true}})
+	if err == nil || !strings.Contains(err.Error(), "hooks/removed-upstream.sh (unexpected)") {
+		t.Fatalf("checkAll() error = %v, want the stale copied file reported", err)
+	}
+}
+
+func TestBrandTargetNamesItself(t *testing.T) {
+	base := &target{Name: "claude-memory", Surface: "memory", Harness: "claude", Output: "plugins/claude-code", PluginName: "demarkus-memory", MemoryPluginName: "demarkus-memory", KnowledgePluginName: "demarkus-knowledge"}
+	b := &brand{Name: "acme", Base: "claude-memory", Output: "plugins/brands/acme", PluginName: "acme-brain", Description: "d"}
+	got := brandTarget(b, base)
+	if got.PluginName != "acme-brain" || got.MemoryPluginName != "acme-brain" || got.KnowledgePluginName != "demarkus-knowledge" || got.Output != b.Output {
+		t.Fatalf("unexpected brand target: %+v", got)
+	}
+	b.KnowledgePluginName = "acme-knowledge"
+	if brandTarget(b, base).KnowledgePluginName != "acme-knowledge" {
+		t.Fatal("brand knowledge_plugin_name should override the base sibling name")
+	}
+}
+
+func TestValidateBrandsRejectsBadEntries(t *testing.T) {
+	base := target{Name: "claude-memory", Surface: "memory", Harness: "claude", Output: "plugins/claude-code", PluginName: "demarkus-memory"}
+	pi := target{Name: "pi-memory", Surface: "memory", Harness: "pi", Output: "plugins/pi-memory", PluginName: "demarkus-memory"}
+	ok := brand{Name: "acme", Base: "claude-memory", Output: "plugins/brands/acme", PluginName: "acme-brain", Description: "d"}
+	cases := map[string]brand{
+		"unknown base":    {Name: "x", Base: "nope", Output: "plugins/brands/x", PluginName: "x-brain", Description: "d"},
+		"non-claude base": {Name: "x", Base: "pi-memory", Output: "plugins/brands/x", PluginName: "x-brain", Description: "d"},
+		"bad plugin name": {Name: "x", Base: "claude-memory", Output: "plugins/brands/x", PluginName: "X Brain", Description: "d"},
+		"base name":       {Name: "x", Base: "claude-memory", Output: "plugins/brands/x", PluginName: "demarkus-memory", Description: "d"},
+		"output outside":  {Name: "x", Base: "claude-memory", Output: "plugins/x", PluginName: "x-brain", Description: "d"},
+		"bad sibling":     {Name: "x", Base: "claude-memory", Output: "plugins/brands/x", PluginName: "x-brain", Description: "d", MemoryPluginName: "bad\nname"},
+	}
+	if err := validateBrands(&manifest{Targets: []target{base, pi}, Brands: []brand{ok}}); err != nil {
+		t.Fatalf("valid brand rejected: %v", err)
+	}
+	for name, bad := range cases {
+		if err := validateBrands(&manifest{Targets: []target{base, pi}, Brands: []brand{bad}}); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	if err := validateBrands(&manifest{Targets: []target{base}, Brands: []brand{ok, ok}}); err == nil {
+		t.Error("duplicate brand should be rejected")
+	}
+}
+
+func TestBrandPluginJSONRewritesNameAndDescription(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "plugin.json")
+	src := "{\n  \"name\": \"demarkus-memory\",\n  \"version\": \"0.1.0\",\n  \"description\": \"base \\\"quoted\\\" text\",\n  \"hooks\": {}\n}\n"
+	if err := os.WriteFile(basePath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := brandPluginJSON(basePath, "demarkus-memory", &brand{PluginName: "acme-brain", Description: "Acme \"brain\""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{"\"name\": \"acme-brain\"", "\"description\": \"Acme \\\"brain\\\"\"", "\"version\": \"0.1.0\""} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
 	}
 }
