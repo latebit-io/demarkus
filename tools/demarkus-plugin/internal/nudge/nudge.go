@@ -31,6 +31,8 @@ type Input struct {
 	// (already mapped above); PostToolUse carries tool_name/tool_input.
 	ToolName  string         `json:"tool_name"`
 	ToolInput map[string]any `json:"tool_input"`
+	// Cursor reports the MCP server apart from the tool name.
+	McpServerName string `json:"mcp_server_name"`
 }
 
 // Output carries the nudge text, empty when nothing should be surfaced.
@@ -59,6 +61,7 @@ func Evaluate(in *Input) (Output, error) {
 		in.Tool = in.ToolName
 		in.Input = in.ToolInput
 	}
+	in.Tool = config.QualifyTool(in.Tool, in.McpServerName)
 	switch in.Event {
 	case "recall":
 		return recall(in)

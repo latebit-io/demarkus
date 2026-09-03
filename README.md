@@ -46,6 +46,10 @@ pi install git:github.com/latebit-io/demarkus-pi-memory
 
 Teams: [pi knowledge plugin](plugins/pi-knowledge/). Details: [pi memory plugin](plugins/pi-memory/).
 
+**Cursor**
+
+Install `demarkus-memory` from the Cursor marketplace (once listed), add `latebit-io/demarkus` as a team marketplace, or link a checkout into `~/.cursor/plugins/local/demarkus-memory`. Details: [Cursor memory plugin](plugins/cursor-memory/).
+
 ### Binaries
 
 ```bash
@@ -165,6 +169,7 @@ modified: 2026-01-15T10:30:00Z
   curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash
   ```
 
+- [Cursor memory plugin](plugins/cursor-memory/): the same local memory for Cursor, as a Cursor Plugin (marketplace, team marketplace, or `~/.cursor/plugins/local`)
 - [pi memory plugin](plugins/pi-memory/): the same local memory for the pi coding agent
 - [pi knowledge plugin](plugins/pi-knowledge/): join an organizational knowledge system from pi
 

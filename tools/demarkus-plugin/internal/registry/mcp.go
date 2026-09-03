@@ -8,12 +8,39 @@ import (
 	"sort"
 )
 
+// McpHarness selects whose MCP config the mcp commands edit: "" (pi-mcp-adapter,
+// ~/.config/mcp/mcp.json) or "cursor" (~/.cursor/mcp.json). Claude Code and
+// OpenCode never route through here (claude mcp add; opencode.json on load).
+var McpHarness = ""
+
+// SetMcpHarness validates and selects the harness for later mcp calls.
+func SetMcpHarness(h string) error {
+	switch h {
+	case "", "pi", "cursor":
+		McpHarness = h
+		return nil
+	}
+	return errors.New("unknown MCP harness '" + h + "' (use pi or cursor)")
+}
+
 func mcpConfigPath() (string, error) {
 	h, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
+	if McpHarness == "cursor" {
+		return filepath.Join(h, ".cursor", "mcp.json"), nil
+	}
 	return filepath.Join(h, ".config", "mcp", "mcp.json"), nil
+}
+
+// httpEntry is the harness's shape for a remote server. Cursor discovers OAuth
+// from the endpoint; pi-mcp-adapter needs the explicit auth marker.
+func httpEntry(url string) map[string]any {
+	if McpHarness == "cursor" {
+		return map[string]any{"url": url}
+	}
+	return map[string]any{"url": url, "auth": "oauth"}
 }
 
 // loadMcp reads ~/.config/mcp/mcp.json, normalizing to a {mcpServers:{}} object.
@@ -91,7 +118,7 @@ func McpAddHTTP(name, url string) error {
 		if err != nil {
 			return err
 		}
-		servers(m)[name] = map[string]any{"url": url, "auth": "oauth"}
+		servers(m)[name] = httpEntry(url)
 		return saveMcp(path, m)
 	})
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 
@@ -14,15 +15,19 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
-// Input accepts native {tool,input,cwd} and Claude hook payloads.
+// Input accepts native {tool,input,cwd}, Claude, and Cursor hook payloads.
 // The pi-mcp-adapter proxy shape is unwrapped downstream.
 type Input struct {
 	Tool  string         `json:"tool"`
 	Input map[string]any `json:"input"`
 	Cwd   string         `json:"cwd"`
-	// Claude hook payload fields (used when Tool/Input are absent).
+	// Claude and Cursor hook payload fields (used when Tool/Input are absent).
 	ToolName  string         `json:"tool_name"`
 	ToolInput map[string]any `json:"tool_input"`
+	// Cursor reports the server apart from the tool and the project as
+	// workspace_roots instead of cwd.
+	McpServerName  string   `json:"mcp_server_name"`
+	WorkspaceRoots []string `json:"workspace_roots"`
 }
 
 // Decision is the gate verdict. Reason is plain; adapters add any presentation
@@ -133,12 +138,16 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 
 // Evaluate applies the right gate(s) for the tool's target and returns the
 // decision. Memory (memory) and knowledge surfaces are mutually exclusive by scope.
-func Evaluate(in Input) (Decision, error) {
+func Evaluate(in *Input) (Decision, error) {
 	// Accept the Claude hook shape (tool_name/tool_input) when the native fields
 	// are absent.
 	if in.Tool == "" && in.ToolName != "" {
 		in.Tool = in.ToolName
 		in.Input = in.ToolInput
+	}
+	in.Tool = config.QualifyTool(in.Tool, in.McpServerName)
+	if in.Cwd == "" {
+		in.Cwd = projectDir(in.WorkspaceRoots)
 	}
 	tool, args := config.NormalizeCall(in.Tool, in.Input)
 	pt, ok := config.ParseTool(tool)
@@ -163,6 +172,20 @@ func Evaluate(in Input) (Decision, error) {
 	}
 
 	return allow(), nil // unrelated server — not ours to gate
+}
+
+// projectDir resolves the project for the binding check when the payload has
+// no cwd: the first workspace root, else the harness's project env var.
+func projectDir(roots []string) string {
+	if len(roots) > 0 && roots[0] != "" {
+		return roots[0]
+	}
+	for _, k := range []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"} {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, memoryID string) (Decision, error) {

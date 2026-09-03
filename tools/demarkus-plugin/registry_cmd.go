@@ -186,8 +186,30 @@ func cmdRegistry(args []string) {
 }
 
 func registryMcp(args []string) {
+	// --harness may appear anywhere; strip it before positional parsing so the
+	// pi call sites (no flag) keep working unchanged.
+	harness := ""
+	rest := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--harness":
+			if i+1 >= len(args) {
+				fail("mcp: --harness requires a value (pi|cursor)")
+			}
+			i++
+			harness = args[i]
+		case strings.HasPrefix(args[i], "--harness="):
+			harness = strings.TrimPrefix(args[i], "--harness=")
+		default:
+			rest = append(rest, args[i])
+		}
+	}
+	if err := registry.SetMcpHarness(harness); err != nil {
+		fail(err.Error())
+	}
+	args = rest
 	if len(args) == 0 {
-		fail("mcp: usage: registry mcp add|add-http|remove|list ...")
+		fail("mcp: usage: registry mcp [--harness pi|cursor] add|add-http|remove|list ...")
 	}
 	switch args[0] {
 	case "add":

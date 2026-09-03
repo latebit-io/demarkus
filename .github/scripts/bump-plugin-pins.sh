@@ -17,7 +17,8 @@
 #
 # It also patch-bumps the affected plugins' versions, in two lineages:
 #   - memory    (changes when server|client|tools change): claude-code +
-#     pi-memory + opencode-memory + the claude-code marketplace entry.
+#     pi-memory + opencode-memory + cursor-memory + the claude-code and cursor
+#     marketplace entries.
 #   - knowledge (changes when tools changes, via its bootstrap): claude-code-
 #     knowledge + pi-knowledge + opencode-knowledge + the claude-code-knowledge
 #     marketplace entry.
@@ -31,6 +32,7 @@ set -euo pipefail
 repo="${GH_REPO:-latebit-io/demarkus}"
 provision="tools/demarkus-plugin/internal/provision/provision.go"
 marketplace=".claude-plugin/marketplace.json"
+cursor_marketplace=".cursor-plugin/marketplace.json"
 
 # latest <module> -> "X.Y.Z" (highest semver among that module's release tags).
 latest() {
@@ -107,9 +109,10 @@ bump_json_version() {
   echo "$new"
 }
 
-# set_marketplace_version <source-path> <value> — set the version of the
+# set_marketplace_version <file> <source-path> <value> — set the version of the
 # marketplace entry whose "source" is <source-path>, preserving hand formatting.
 set_marketplace_version() {
+  local file="$1"; shift
   local tmp; tmp=$(mktemp)
   # awk exits 42 unless EXACTLY one entry matched the source and got its version
   # updated, so a source typo or reordered field fails loudly instead of leaving
@@ -120,9 +123,9 @@ set_marketplace_version() {
     inblock && /^[[:space:]]*}/ { inblock = 0 }
     { print }
     END { if (seen != 1 || updated != 1) exit 42 }
-  ' "$marketplace" >"$tmp" && mv "$tmp" "$marketplace" || {
+  ' "$file" >"$tmp" && mv "$tmp" "$file" || {
     rm -f "$tmp"
-    echo "error: expected exactly one marketplace entry for source '$1' (matched=${seen:-?})" >&2
+    echo "error: expected exactly one $file entry for source '$1' (matched=${seen:-?})" >&2
     exit 1
   }
 }
@@ -188,14 +191,16 @@ knowledge_changed=false
 
 if [[ "$memory_changed" == true ]]; then
   mv_ver="$(bump_json_version plugins/claude-code/.claude-plugin/plugin.json)"
-  set_marketplace_version "./plugins/claude-code" "$mv_ver"
+  set_marketplace_version "$marketplace" "./plugins/claude-code" "$mv_ver"
   _=$(bump_json_version plugins/pi-memory/package.json)
   _=$(bump_json_version plugins/opencode-memory/package.json)
+  cv_ver="$(bump_json_version plugins/cursor-memory/.cursor-plugin/plugin.json)"
+  set_marketplace_version "$cursor_marketplace" "plugins/cursor-memory" "$cv_ver"
   emit memory_version "$mv_ver"
 fi
 if [[ "$knowledge_changed" == true ]]; then
   kv_ver="$(bump_json_version plugins/claude-code-knowledge/.claude-plugin/plugin.json)"
-  set_marketplace_version "./plugins/claude-code-knowledge" "$kv_ver"
+  set_marketplace_version "$marketplace" "./plugins/claude-code-knowledge" "$kv_ver"
   _=$(bump_json_version plugins/pi-knowledge/package.json)
   if ! bump_json_version plugins/opencode-knowledge/package.json >/dev/null; then
     echo "error: failed to bump plugins/opencode-knowledge/package.json" >&2

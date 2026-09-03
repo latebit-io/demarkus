@@ -7,8 +7,8 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
-func styleInput(body string) Input {
-	return Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+func styleInput(body string) *Input {
+	return &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 		"url": "/doc.md", "body": body, "metadata": map[string]any{"tags": "a,b"},
 	}}
 }
@@ -45,7 +45,7 @@ func TestStyleGate(t *testing.T) {
 	})
 
 	t.Run("index.md exempt from H1", func(t *testing.T) {
-		d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 			"url": "/world/index.md", "body": "- [a](a.md)\n", "metadata": map[string]any{"tags": "a"},
 		}})
 		if d.Decision != "allow" {
@@ -85,7 +85,7 @@ func TestStyleGate(t *testing.T) {
 	})
 
 	t.Run("append is exempt", func(t *testing.T) {
-		d := mustEval(t, Input{Tool: "demarkus_memory_mark_append", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "demarkus_memory_mark_append", Input: map[string]any{
 			"url": "/doc.md", "body": "fragment — no H1, and that is fine for the style gate\n",
 		}})
 		if d.Decision != "allow" {
@@ -110,7 +110,7 @@ func TestStyleGate(t *testing.T) {
 
 	t.Run("tag-gate block outranks style warn", func(t *testing.T) {
 		t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
-		d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 			"url": "/doc.md", "body": "no heading here",
 		}})
 		if d.Decision != "block" || !strings.Contains(d.Reason, "metadata.tags") {
@@ -120,7 +120,7 @@ func TestStyleGate(t *testing.T) {
 
 	t.Run("knowledge surface gets style gate too", func(t *testing.T) {
 		setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
-		d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
 			"url": "/k.md", "body": "prose — no heading", "metadata": map[string]any{"tags": "a,b", "type": "Note"},
 		}})
 		if d.Decision != "warn" || !strings.Contains(d.Reason, "style") {

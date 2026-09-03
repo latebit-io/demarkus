@@ -420,6 +420,19 @@ func ParseTool(tool string) (ParsedTool, bool) {
 	return ParsedTool{Server: server, Verb: verb}, true
 }
 
+// QualifyTool prefixes a bare tool name with its MCP server when the harness
+// reports them separately (Cursor: tool_name + mcp_server_name), so ParseTool
+// can resolve the target server. Already-qualified names pass through.
+func QualifyTool(tool, server string) string {
+	if server == "" || tool == "" {
+		return tool
+	}
+	if pt, ok := ParseTool(tool); ok && pt.Server != "" {
+		return tool
+	}
+	return "mcp__" + server + "__" + tool
+}
+
 // norm makes "demarkus-memory" and "demarkus_memory" compare equal.
 func norm(s string) string { return strings.ToLower(strings.ReplaceAll(s, "-", "_")) }
 
