@@ -83,8 +83,10 @@ if grep -qE '"name":"(Edit|Write|NotebookEdit)"' "${tpath}"; then
 fi
 
 # Non-blocking: a nudge failure is logged, never allowed to block the Stop hook.
-if ! out="$("${BIN}" nudge --event session-end --changed-files="${changed_files}" --memory-write="${memory_write}" --format claude < /dev/null)"; then
-  echo "[demarkus-memory] session-end nudge failed (exit $?); skipping" >&2
+status=0
+out="$("${BIN}" nudge --event session-end --changed-files="${changed_files}" --memory-write="${memory_write}" --format claude < /dev/null)" || status=$?
+if [[ "${status}" -ne 0 ]]; then
+  echo "[demarkus-memory] session-end nudge failed (exit ${status}); skipping" >&2
   out=""
 fi
 if [[ -n "${out}" ]]; then
