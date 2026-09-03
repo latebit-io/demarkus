@@ -17,7 +17,7 @@ If no host was supplied, ask for it. If token requirements are unclear, ask befo
 1. Validate, register the catalog row, and bind the project:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join <shell-escaped-url> --bind <shell-escaped-absolute-project-dir>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry memory-join <shell-escaped-url> --bind <shell-escaped-absolute-project-dir>
    ```
 
    Continue only on `OK` with `broker=1` and an `mcp-url=` value; on `FAIL`, surface the message and stop.
@@ -33,7 +33,7 @@ For a hosted memory, skip the QUIC join and MCP-registration steps below, but st
 1. Validate, store credentials, add the memory catalog row, and bind the absolute current project directory:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join <shell-escaped-host> --bind <shell-escaped-absolute-project-dir>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry memory-join <shell-escaped-host> --bind <shell-escaped-absolute-project-dir>
    ```
 
    For a tokened memory, have the user run this variant in their terminal so the token never appears in argv:
@@ -47,7 +47,7 @@ For a hosted memory, skip the QUIC join and MCP-registration steps below, but st
    if ! stty echo; then printf '\nFailed to restore terminal echo; retrying on exit. Run `stty echo` manually if needed.\n' >&2; exit 1; fi
    trap - EXIT HUP INT TERM; printf '\n' >&2
    [ "$read_status" -eq 0 ] || { unset DEMARKUS_TOKEN; exit "$read_status"; }
-   printf '%s' "$DEMARKUS_TOKEN" | "$HOME/.demarkus/bin/demarkus-plugin" registry soul-join <shell-escaped-host> --token-stdin --bind <shell-escaped-absolute-project-dir>
+   printf '%s' "$DEMARKUS_TOKEN" | "$HOME/.demarkus/bin/demarkus-plugin" registry memory-join <shell-escaped-host> --token-stdin --bind <shell-escaped-absolute-project-dir>
    join_status=$?; unset DEMARKUS_TOKEN; exit "$join_status"
    )
    ```
@@ -59,7 +59,7 @@ For a hosted memory, skip the QUIC join and MCP-registration steps below, but st
 2. Register the MCP server without putting the token in config.
 
    ```bash
-    "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add '<slug>' "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --soul '<slug>'
+    "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add '<slug>' "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --memory '<slug>'
    ```
 
    Reconnect MCP servers through the harness or restart Pi.

@@ -18,7 +18,7 @@ Reads and one-off writes to a *different* joined memory are unaffected: call
 1. **List the catalog.** Run:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --list --bind "${CLAUDE_PROJECT_DIR}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind "${CLAUDE_PROJECT_DIR}"
    ```
 
    When the command contains `<shell-escaped-absolute-project-dir>`, replace it with exactly one POSIX-shell-safe word, including correct escaping for embedded apostrophes; never wrap the raw path in literal single quotes.
@@ -37,7 +37,7 @@ Reads and one-off writes to a *different* joined memory are unaffected: call
 3. **Save it.** With the chosen `<slug>`:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --set '<slug>' --bind "${CLAUDE_PROJECT_DIR}"
+   "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --set '<slug>' --bind "${CLAUDE_PROJECT_DIR}"
    ```
 
    - Only on exact `OK <chosen-slug>`, with the returned slug matching the selection, confirm: "This project now writes to memory **`<slug>`** by

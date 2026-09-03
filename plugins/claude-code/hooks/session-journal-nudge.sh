@@ -73,16 +73,16 @@ sentinel="${TMPDIR:-/tmp}/demarkus-memory-nudge-${sid//[^A-Za-z0-9_-]/_}"
 [[ -e "${sentinel}" ]] && exit 0
 [[ -n "${tpath}" && -r "${tpath}" ]] || exit 0
 
-soul_write="false"
+memory_write="false"
 if grep -qE '"attributionMcpTool":"mark_(publish|append)"|"name":"mcp__[^"]*mark_(publish|append)"' "${tpath}"; then
-  soul_write="true"
+  memory_write="true"
 fi
 changed_files="false"
 if grep -qE '"name":"(Edit|Write|NotebookEdit)"' "${tpath}"; then
   changed_files="true"
 fi
 
-out="$("${BIN}" nudge --event session-end --changed-files="${changed_files}" --soul-write="${soul_write}" --format claude < /dev/null || true)"
+out="$("${BIN}" nudge --event session-end --changed-files="${changed_files}" --memory-write="${memory_write}" --format claude < /dev/null || true)"
 if [[ -n "${out}" ]]; then
   : > "${sentinel}" 2>/dev/null || true
   printf '%s\n' "${out}"
