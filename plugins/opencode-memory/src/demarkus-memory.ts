@@ -253,11 +253,9 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
         enabled: true,
       };
 
-      // Joined remote memories: the binary's `registry mcp add` writes pi's MCP
-      // config, which OpenCode never reads, so wire every memory in the shared
-      // catalog here. The binary owns the catalog format (TSV: slug host
-      // insecure token-file, "#" comments); follow-up: query it via a
-      // `registry memory-list` subcommand instead of parsing the file.
+      // OpenCode never reads the MCP config `registry mcp add` writes, so wire
+      // every joined memory from the shared catalog here (TSV, "#" comments).
+      // Follow-up: read it via `registry memory-default --list` instead.
       try {
         const memories = readFileSync(join(homedir(), ".demarkus", "souls"), "utf8");
         for (const rawLine of memories.split("\n")) {
@@ -267,7 +265,9 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
           if (!slug || slug === MCP_SERVER_NAME) continue;
           config.mcp[slug] = config.mcp[slug] ?? {
             type: "local",
-            command: [BIN, "mcp-serve", "--memory", slug],
+            // --soul, not --memory: this hook can run before the fire-and-forget
+            // bootstrap has replaced an older binary. Switch when --soul is removed.
+            command: [BIN, "mcp-serve", "--soul", slug],
             enabled: true,
           };
         }
