@@ -48,6 +48,11 @@ func validateBrands(spec *manifest) error {
 		if b.Name == "" || b.Description == "" || !pluginNameRE.MatchString(b.PluginName) {
 			return fmt.Errorf("brand %q: name, description, and a lowercase plugin_name are required", b.Name)
 		}
+		for _, sibling := range []string{b.MemoryPluginName, b.KnowledgePluginName} {
+			if sibling != "" && !pluginNameRE.MatchString(sibling) {
+				return fmt.Errorf("brand %q: sibling plugin name %q must be lowercase letters, digits, and hyphens", b.Name, sibling)
+			}
+		}
 		if b.PluginName == base.PluginName {
 			return fmt.Errorf("brand %q: plugin_name %q is the base plugin's own name", b.Name, b.PluginName)
 		}

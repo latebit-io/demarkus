@@ -439,13 +439,21 @@ func checkAll(root string, artifacts []artifact) error {
 		outputs[artifacts[i].Target.Output] = struct{}{}
 	}
 	for output := range outputs {
-		for _, subtree := range []string{"commands", "context", "skills"} {
+		// A brand directory is generated in full, so every file in it is
+		// managed; canonical plugins mix generated prompts with hand-kept files.
+		subtrees := []string{"commands", "context", "skills"}
+		managedOnly := false
+		if strings.HasPrefix(filepath.ToSlash(output), brandOutputPrefix) {
+			subtrees = []string{""}
+			managedOnly = true
+		}
+		for _, subtree := range subtrees {
 			dir := filepath.Join(root, output, subtree)
 			err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 				if walkErr != nil {
 					return walkErr
 				}
-				if entry.IsDir() || filepath.Ext(path) != ".md" {
+				if entry.IsDir() || (!managedOnly && filepath.Ext(path) != ".md") {
 					return nil
 				}
 				if _, ok := expected[filepath.Clean(path)]; !ok {

@@ -52,7 +52,7 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	}
 	// 81 rendered prompts (54 canonical + 27 aliases) plus each brand's
 	// re-rendered memory or knowledge prompts and its copied plugin files.
-	want := 81 + brandArtifactCount(t, artifacts)
+	want := 81 + brandArtifactCount(t, root, artifacts)
 	if len(artifacts) != want {
 		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)
 	}
@@ -214,15 +214,48 @@ func TestClaimOutputRejectsDuplicateArtifactPath(t *testing.T) {
 
 // brandArtifactCount counts artifacts under plugins/brands/ so the corpus
 // expectation tracks the manifest's brand list without hard-coding it.
-func brandArtifactCount(t *testing.T, artifacts []artifact) int {
+func brandArtifactCount(t *testing.T, root string, artifacts []artifact) int {
 	t.Helper()
+	prefix := filepath.Join(root, filepath.FromSlash(brandOutputPrefix)) + string(filepath.Separator)
 	n := 0
 	for i := range artifacts {
-		if strings.Contains(filepath.ToSlash(artifacts[i].Path), "/"+brandOutputPrefix) {
+		if strings.HasPrefix(artifacts[i].Path, prefix) {
 			n++
 		}
 	}
 	return n
+}
+
+func TestBrandArtifactCountMatchesBrandPrefix(t *testing.T) {
+	root := t.TempDir()
+	arts := []artifact{
+		{Path: filepath.Join(root, "plugins", "brands", "acme", "hooks", "a.sh")},
+		{Path: filepath.Join(root, "plugins", "claude-code", "commands", "x.md")},
+	}
+	if got := brandArtifactCount(t, root, arts); got != 1 {
+		t.Fatalf("brandArtifactCount = %d, want 1", got)
+	}
+}
+
+func TestCheckAllReportsStaleCopiedBrandFile(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join("plugins", "brands", "acme")
+	dir := filepath.Join(root, output, "hooks")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(dir, "keep.sh")
+	if err := os.WriteFile(keep, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "removed-upstream.sh"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := &target{Output: filepath.ToSlash(output)}
+	err := checkAll(root, []artifact{{Path: keep, Content: []byte("ok"), Target: target, Copied: true}})
+	if err == nil || !strings.Contains(err.Error(), "hooks/removed-upstream.sh (unexpected)") {
+		t.Fatalf("checkAll() error = %v, want the stale copied file reported", err)
+	}
 }
 
 func TestBrandTargetNamesItself(t *testing.T) {
@@ -248,6 +281,7 @@ func TestValidateBrandsRejectsBadEntries(t *testing.T) {
 		"bad plugin name": {Name: "x", Base: "claude-memory", Output: "plugins/brands/x", PluginName: "X Brain", Description: "d"},
 		"base name":       {Name: "x", Base: "claude-memory", Output: "plugins/brands/x", PluginName: "demarkus-memory", Description: "d"},
 		"output outside":  {Name: "x", Base: "claude-memory", Output: "plugins/x", PluginName: "x-brain", Description: "d"},
+		"bad sibling":     {Name: "x", Base: "claude-memory", Output: "plugins/brands/x", PluginName: "x-brain", Description: "d", MemoryPluginName: "bad\nname"},
 	}
 	if err := validateBrands(&manifest{Targets: []target{base, pi}, Brands: []brand{ok}}); err != nil {
 		t.Fatalf("valid brand rejected: %v", err)
