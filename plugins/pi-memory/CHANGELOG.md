@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.76
+
+- Remove the deprecated `/soul-*` command aliases; use the `/memory-*` names. The pinned binary is unchanged and still accepts its `soul-*` helper names.
+
 ## 0.13.75
 
 - Call the canonical `memory-*` helper names now that the pinned binary (tools 0.27.0) provides them: `registry memory-join`, `registry memory-default`, `mcp-serve --memory`, and the `memoryWrite` session-end signal. The `soul-*` names stay accepted by the binary for one more release; MCP entries registered earlier with `--soul` keep working.
