@@ -492,10 +492,20 @@ func TestCursorMultiRootBindingResolution(t *testing.T) {
 	if d.Decision != "block" || !strings.Contains(d.Reason, "remote") {
 		t.Fatalf("second-root binding should gate the write: got %q (%s)", d.Decision, d.Reason)
 	}
-	// A root bound to the target memory makes the write legitimate.
+	// Roots bound to different memories cannot be resolved without a cwd: gate, never guess.
 	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", WorkspaceRoots: []string{remote, local}, ToolInput: tagged})
+	if d.Decision != "block" || !strings.Contains(d.Reason, "several roots") {
+		t.Fatalf("differing bindings should be gated as ambiguous: got %q (%s)", d.Decision, d.Reason)
+	}
+	// Roots that agree on one binding resolve to it.
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", WorkspaceRoots: []string{unbound, local}, ToolInput: tagged})
 	if d.Decision != "allow" {
-		t.Fatalf("root bound to the target memory should allow: got %q (%s)", d.Decision, d.Reason)
+		t.Fatalf("single agreeing binding to the target memory should allow: got %q (%s)", d.Decision, d.Reason)
+	}
+	// An explicit cwd wins over the roots.
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", Cwd: local, WorkspaceRoots: []string{remote, local}, ToolInput: tagged})
+	if d.Decision != "allow" {
+		t.Fatalf("explicit cwd should resolve the project: got %q (%s)", d.Decision, d.Reason)
 	}
 	// No roots at all: the harness env var stands in.
 	t.Setenv("CURSOR_PROJECT_DIR", remote)

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -420,5 +421,32 @@ func TestCursorCommandFrontmatter(t *testing.T) {
 	}
 	if _, err := cursorCommand("x", []byte("no frontmatter\n")); err == nil {
 		t.Fatal("missing frontmatter should error")
+	}
+}
+
+// splitMcpHarness in demarkus-plugin consumes --harness only before the mcp
+// subcommand, so a rendered command with the flag after it would fail at runtime.
+func TestCursorArtifactsPutHarnessFlagBeforeSubcommand(t *testing.T) {
+	root, err := findRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := renderAll(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := regexp.MustCompile(`registry mcp (add|add-http|remove|list)\b[^\n]*--harness`)
+	seen := 0
+	for _, a := range artifacts {
+		if a.Target == nil || a.Target.Harness != "cursor" {
+			continue
+		}
+		if m := wrong.Find(a.Content); m != nil {
+			t.Errorf("%s: harness flag after the subcommand: %s", a.Path, m)
+		}
+		seen += strings.Count(string(a.Content), "registry mcp --harness cursor ")
+	}
+	if seen == 0 {
+		t.Fatal("no rendered Cursor command registers an MCP server with --harness cursor")
 	}
 }

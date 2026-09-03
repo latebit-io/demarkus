@@ -26,7 +26,7 @@ If no host was supplied, ask for it. If token requirements are unclear, ask befo
 2. Register the HTTP MCP server in `~/.cursor/mcp.json` (OAuth runs in Cursor on first use; `mcp-serve` does not apply to broker memories):
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add-http --harness cursor '<slug>' <shell-escaped-mcp-url>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor add-http '<slug>' <shell-escaped-mcp-url>
    ```
 
    Replace `<shell-escaped-mcp-url>` with exactly one shell word using POSIX-safe escaping; never wrap the raw value in literal single quotes. Cursor reloads `~/.cursor/mcp.json` on its own; if `<slug>` does not appear under MCP settings, toggle it there once.
@@ -66,7 +66,7 @@ For a hosted memory, skip the QUIC join and MCP-registration steps below, but st
 2. Register the MCP server without putting the token in config.
 
    ```bash
-    "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add --harness cursor '<slug>' "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --memory '<slug>'
+    "$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor add '<slug>' "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --memory '<slug>'
    ```
 
    This writes `~/.cursor/mcp.json` (user scope). Cursor reloads it on its own; if `<slug>` does not appear under MCP settings, toggle it there once.

@@ -157,13 +157,13 @@ func Evaluate(in *Input) (Decision, error) {
 		return Decision{}, err
 	}
 	if memoryID != "" {
-		cwd := in.Cwd
+		cwd, ambiguous := in.Cwd, ""
 		if cwd == "" {
-			if cwd, err = projectDir(in.WorkspaceRoots, memoryID); err != nil {
+			if cwd, ambiguous, err = projectDir(in.WorkspaceRoots); err != nil {
 				return Decision{}, err
 			}
 		}
-		return evalMemory(tool, pt, args, cwd, memoryID)
+		return evalMemory(pt, args, cwd, memoryID, ambiguous)
 	}
 
 	ksSlug, err := config.KnowledgeScope(tool)
@@ -178,9 +178,9 @@ func Evaluate(in *Input) (Decision, error) {
 }
 
 // projectDir resolves the binding-check project when the payload has no cwd.
-// workspace_roots has no active-root order: prefer a root bound to memoryID,
-// else the first bound root so the gate still fires; no roots → the env var.
-func projectDir(roots []string, memoryID string) (string, error) {
+// workspace_roots has no active-root order: roots agreeing on one binding
+// resolve to it, differing bindings come back ambiguous, no roots → env var.
+func projectDir(roots []string) (cwd, ambiguous string, err error) {
 	var found []string
 	for _, r := range roots {
 		if r != "" {
@@ -191,33 +191,39 @@ func projectDir(roots []string, memoryID string) (string, error) {
 	case 0:
 		for _, k := range []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"} {
 			if v := os.Getenv(k); v != "" {
-				return v, nil
+				return v, "", nil
 			}
 		}
-		return "", nil
+		return "", "", nil
 	case 1:
-		return found[0], nil
+		return found[0], "", nil
 	}
-	firstBound := ""
+	bindings := map[string]string{} // slug → first root bound to it
+	var order []string
 	for _, r := range found {
 		bound, err := config.ProjectBinding(r)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if bound == "" {
 			continue
 		}
-		if bound == memoryID {
-			return r, nil
-		}
-		if firstBound == "" {
-			firstBound = r
+		if _, seen := bindings[bound]; !seen {
+			bindings[bound] = r
+			order = append(order, bound)
 		}
 	}
-	return firstBound, nil
+	switch len(order) {
+	case 0:
+		return "", "", nil
+	case 1:
+		return bindings[order[0]], "", nil
+	}
+	return "", fmt.Sprintf("this workspace has several roots bound to different memories (%s) and the write carries no cwd, so the project cannot be determined",
+		strings.Join(order, ", ")), nil
 }
 
-func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, memoryID string) (Decision, error) {
+func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambiguous string) (Decision, error) {
 	// The destination gate and the publish tag-gate are INDEPENDENT (in Claude
 	// Code they're two separate hooks) — evaluate both and return the most severe
 	// outcome, so e.g. a misroute set to `warn` can't suppress a `block` from the
@@ -225,7 +231,17 @@ func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, memory
 	var decisions []Decision
 
 	// Destination gate (publish + append): misroute against the project binding.
-	if pt.Verb == "publish" || pt.Verb == "append" {
+	// An ambiguous multi-root workspace is gated at the same strictness rather
+	// than guessed, since the caller fails open on errors.
+	if (pt.Verb == "publish" || pt.Verb == "append") && ambiguous != "" {
+		s, err := config.MemoryDestStrictness()
+		if err != nil {
+			return Decision{}, err
+		}
+		decisions = append(decisions, Decision{Decision: string(s), Reason: fmt.Sprintf(
+			"demarkus write to %s: %s. Open a single workspace root, or run /memory-default so the roots agree; to relax this check, set DEMARKUS_MEMORY_DEST_STRICTNESS=warn (or ask).",
+			urlOr(args, "this document"), ambiguous)})
+	} else if pt.Verb == "publish" || pt.Verb == "append" {
 		bound, err := config.ProjectBinding(cwd)
 		if err != nil {
 			return Decision{}, err

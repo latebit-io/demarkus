@@ -38,7 +38,7 @@ Marketplace installs refresh from the repository (enable **Auto Refresh** in mar
 
 - `hooks/hooks.json` and `hooks/*.sh`: zero-logic bash shims. Each pipes Cursor's hook payload to `~/.demarkus/bin/demarkus-plugin` with `--format cursor` and prints the binary's answer. They fail open when the binary is absent. `hooks/test.sh` is their contract test (a fake binary records the calls).
 - `scripts/bootstrap.sh`: installs the pinned `demarkus-plugin` binary; byte-identical across every plugin.
-- `mcp.json`: the local memory server. Joined memories and knowledge systems are registered in `~/.cursor/mcp.json` by `demarkus-plugin registry mcp ... --harness cursor`.
+- `mcp.json`: the local memory server. Joined memories and knowledge systems are registered in `~/.cursor/mcp.json` by `demarkus-plugin registry mcp --harness cursor add|add-http|remove|list`.
 - `commands/*.md`, `context/`, and `skills/`: generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
 
 ### Behavior mapping (Claude Code → Cursor)
