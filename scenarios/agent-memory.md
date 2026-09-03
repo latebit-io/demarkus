@@ -1,10 +1,10 @@
 ---
 layout: default
-title: Agent Memory (Soul Pattern)
+title: Agent Memory
 permalink: /scenarios/agent-memory/
 ---
 
-# Agent Memory (Soul Pattern)
+# Agent Memory
 
 Give Claude Code, OpenCode, pi, or any MCP-compatible LLM agent persistent memory across sessions: architecture notes, debugging lessons, roadmap, journal.
 
@@ -22,7 +22,7 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 
 Claude Code, [OpenCode](https://opencode.ai), and [pi](https://pi.dev) each have
 a plugin, with the same behavior mapped onto each agent's extension API. They
-share `~/.demarkus` state, so one machine running all three has one soul, one
+share `~/.demarkus` state, so one machine running all three has one memory, one
 token, one registry.
 
 ### Claude Code
@@ -34,7 +34,7 @@ token, one registry.
 /plugin install demarkus-memory@demarkus
 ```
 
-On the first session it spawns a local `demarkus-server`, auto-generates a publish token, wires the MCP tools, and **seeds the soul**, so you never hand-author an index. It adds the `/soul`, `/soul-context`, `/soul-init`, `/soul-journal`, `/soul-status`, and `/soul-doctor` commands plus a `soul-memory` skill that triggers on "remember / recall / save / note" intents.
+On the first session it spawns a local `demarkus-server`, auto-generates a publish token, wires the MCP tools, and **seeds the memory**, so you never hand-author an index. It adds the `/memory`, `/memory-context`, `/memory-init`, `/memory-journal`, `/memory-status`, and `/memory-doctor` commands plus a `remember` skill that triggers on "remember / recall / save / note" intents.
 
 Hooks keep the catalog honest: a publish without tags is caught at write time, an end-of-session nudge asks for a journal entry when files changed but nothing was recorded, and a "did we decide X" question nudges a recall before you answer from context.
 
@@ -48,9 +48,9 @@ Install `demarkus-opencode-memory` with the standalone installer:
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
 ```
 
-Restart OpenCode. The first session provisions the soul; restart once more so
-OpenCode connects the newly registered MCP server. `/soul-status` diagnoses and
-`/soul-init` reconfigures the installation.
+Restart OpenCode. The first session provisions the memory; restart once more so
+OpenCode connects the newly registered MCP server. `/memory-status` diagnoses and
+`/memory-init` reconfigures the installation.
 
 ### pi
 
@@ -69,11 +69,11 @@ git clone https://github.com/latebit-io/demarkus
 pi install ./demarkus/plugins/pi-memory     # add -l for project-local scope
 ```
 
-The soul provisions on the next session. Run `/mcp` once (or restart pi) to
-connect the newly registered server; `/soul-status` diagnoses, `/soul-init`
+The memory provisions on the next session. Run `/mcp` once (or restart pi) to
+connect the newly registered server; `/memory-status` diagnoses, `/memory-init`
 reconfigures.
 
-That is the whole setup for any of the three agents. The manual steps below are for other MCP agents, a custom port, or a remote soul server.
+That is the whole setup for any of the three agents. The manual steps below are for other MCP agents, a custom port, or a remote memory server.
 
 ## Manual setup (any MCP agent)
 
@@ -86,28 +86,28 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 On macOS, this installs the server and registers it as a launchd service.
 On Linux, this installs and enables the systemd service.
 
-### 2. Create the soul directory
+### 2. Create the memory directory
 
 ```bash
-mkdir -p ~/soul
+mkdir -p ~/memory
 ```
 
-That's it: leave it empty. You don't pre-build an index or a structure by hand. The agent creates and maintains the layout itself (driven by the `CLAUDE.md` instructions in step 6), publishing `index.md` and the per-project documents on its first writes. The server serves an empty root fine until then. See [Recommended soul structure](#recommended-soul-structure) for the layout the agent should follow.
+That's it: leave it empty. You don't pre-build an index or a structure by hand. The agent creates and maintains the layout itself (driven by the `CLAUDE.md` instructions in step 6), publishing `index.md` and the per-project documents on its first writes. The server serves an empty root fine until then. See [Recommended memory structure](#recommended-memory-structure) for the layout the agent should follow.
 
 ### 3. Generate a publish token
 
 ```bash
-demarkus-token generate -label my-soul -paths "/*" -ops publish -tokens ~/soul/tokens.toml
+demarkus-token generate -label my-memory -paths "/*" -ops publish -tokens ~/memory/tokens.toml
 ```
 
 `-label` is required. A single `publish` op is all you need; it authorizes `PUBLISH`, `APPEND`, and `ARCHIVE` (there is no separate `archive` operation). Copy the raw token from the output, since you'll need it for the MCP config.
 
-### 4. Start the soul server on port 6310
+### 4. Start the memory server on port 6310
 
 Run it alongside your main server (which uses 6309):
 
 ```bash
-demarkus-server -root ~/soul -tokens ~/soul/tokens.toml -port 6310
+demarkus-server -root ~/memory -tokens ~/memory/tokens.toml -port 6310
 ```
 
 The flag is `-port` (an integer), not `-addr`. Run this alongside any main server you already have on the default 6309.
@@ -119,7 +119,7 @@ Create or update `.mcp.json` in your project root:
 ```json
 {
   "mcpServers": {
-    "demarkus-soul": {
+    "demarkus-memory": {
       "command": "/path/to/demarkus-mcp",
       "args": [
         "-host", "mark://localhost:6310",
@@ -135,14 +135,14 @@ Replace `/path/to/demarkus-mcp` with the actual path (`which demarkus-mcp` to fi
 
 ### 6. Add CLAUDE.md instructions
 
-Tell the agent how to use the soul. Create `CLAUDE.md` in your project:
+Tell the agent how to use the memory. Create `CLAUDE.md` in your project:
 
 ```markdown
 # CLAUDE.md
 
-## Soul
+## Memory
 
-All project context lives on the soul server, organized per project under
+All project context lives on the memory server, organized per project under
 `/<project>/`.
 
 ### Preflight (every session)
@@ -206,7 +206,7 @@ mark_graph_publish url="/graphs/my-network.md" expected_version=0
 
 The published graph is plain markdown with `mark://` links. Other agents can crawl it with `mark_graph` to inherit the topology instantly. See the [Public Hub](/scenarios/public-hub/) scenario for multi-agent discovery patterns.
 
-## Recommended soul structure
+## Recommended memory structure
 
 Memory is organized **per project**. Each project lives under `/<project>/`
 (the slug is the basename of your project directory, lowercased, spaces →
@@ -233,15 +233,15 @@ architecture / patterns / decisions the work actually produces. The agent keeps
 the per-project `index.md` current as the discovery backstop for anything
 `mark_lookup` can't surface.
 
-> A single-project soul can instead keep these files flat at the root (no
-> `/<project>/` prefix). That's what the Demarkus project's own soul at
+> A single-project memory can instead keep these files flat at the root (no
+> `/<project>/` prefix). That's what the Demarkus project's own memory at
 > `mark://soul.demarkus.io` does: a documented exception, not the default.
 
-## Remote souls and promotion
+## Remote memories and promotion
 
-A soul does not have to be local. `/soul-join` takes a join URL (host and token
+A memory does not have to be local. `/memory-join` takes a join URL (host and token
 in one paste-able string), registers that server as an MCP server, and binds it to
-the current project. `/soul-default` picks which joined soul a project writes to
+the current project. `/memory-default` picks which joined memory a project writes to
 when several exist, and the binding is enforced at write time rather than left to
 convention. The [appliance](/install/stack/) prints a ready-made join URL for its
 world.
@@ -250,24 +250,24 @@ When a note is ready for other people, `/promote <path>` lifts it to a joined
 [knowledge system](/scenarios/knowledge-system/): the cascade distills it, strips
 personal framing and secrets, dedups against the shared catalog, tags it to that
 system's taxonomy, picks a writable world, and stops at a human gate before
-publishing. `/promote-scan` sweeps the soul for candidates; `/soul-refresh` pulls
+publishing. `/promote-scan` sweeps the memory for candidates; `/memory-refresh` pulls
 promoted documents back down as the authoritative copy evolves.
 
-Soul is the draft tier, the knowledge system is the authoritative one. Nothing
+Memory is the draft tier, the knowledge system is the authoritative one. Nothing
 auto-publishes. [How knowledge flows](/how-it-works/) walks the whole loop end to
 end.
 
-## Using a remote soul server manually
+## Using a remote memory server manually
 
-If you run the soul on a remote host with TLS, remove `-insecure` from the MCP args and use the `mark://` URL with your domain:
+If you run the memory on a remote host with TLS, remove `-insecure` from the MCP args and use the `mark://` URL with your domain:
 
 ```json
 {
   "mcpServers": {
-    "demarkus-soul": {
+    "demarkus-memory": {
       "command": "/path/to/demarkus-mcp",
       "args": [
-        "-host", "mark://soul.yourdomain.com",
+        "-host", "mark://memory.yourdomain.com",
         "-token", "<your-token>"
       ]
     }
@@ -277,7 +277,7 @@ If you run the soul on a remote host with TLS, remove `-insecure` from the MCP a
 
 ## Live example
 
-Browse the Demarkus project's own soul:
+Browse the Demarkus project's own memory:
 
 ```bash
 demarkus-tui mark://soul.demarkus.io/index.md
@@ -285,7 +285,7 @@ demarkus-tui mark://soul.demarkus.io/index.md
 
 ## Related
 
-- [Soul page](/soul/)
+- [Memory page](/memory/)
 - [Agent Install](/agent-install/)
 - [Organizational knowledge system](/scenarios/knowledge-system/): where promoted notes land
 - [The library](/library/): browse a world in the reading room

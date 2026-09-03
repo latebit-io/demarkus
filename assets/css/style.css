@@ -547,9 +547,9 @@ body {
     color: var(--faint);
 }
 
-/* ---------- Soul demo plate ---------- */
+/* ---------- Memory demo plate ---------- */
 
-.soul-demo {
+.memory-demo {
     margin: 2rem auto;
     max-width: 600px;
     background: var(--panel);
@@ -560,7 +560,7 @@ body {
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
 }
 
-.soul-demo img {
+.memory-demo img {
     display: block;
     width: 100%;
     height: auto;
@@ -568,7 +568,7 @@ body {
     border-radius: 2px;
 }
 
-.soul-demo-caption {
+.memory-demo-caption {
     margin: 0;
     padding: 0.55rem 0.4rem 0.3rem;
     font-family: var(--mono);

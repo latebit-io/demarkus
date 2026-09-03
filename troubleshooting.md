@@ -173,4 +173,4 @@ You fetched the document, it was updated by someone else, and your `expected_ver
 ## Getting help
 
 - [GitHub Issues](https://github.com/latebit-io/demarkus/issues)
-- Browse the project soul: `demarkus-tui mark://soul.demarkus.io/index.md`
+- Browse the project memory: `demarkus-tui mark://soul.demarkus.io/index.md`

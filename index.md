@@ -67,7 +67,7 @@ No DNS setup, no accounts. [The five-minute appliance →](/install/stack/)
 
 Store, verbs, history, and MCP surface are identical at every tier. Only reach and identity change, so moving up is a deployment change rather than a migration. [Compare the tiers →](/scenarios/)
 
-The tiers compose: anyone runs a personal soul and joins the org system in the same agent. The agent captures to the soul as it works, and `/promote` lifts a ready note up through a curation gate; `/soul-refresh` pulls the authoritative copy back as it changes. [How knowledge flows →](/how-it-works/)
+The tiers compose: anyone runs a personal memory and joins the org system in the same agent. The agent captures to the memory as it works, and `/promote` lifts a ready note up through a curation gate; `/memory-refresh` pulls the authoritative copy back as it changes. [How knowledge flows →](/how-it-works/)
 
 ---
 
@@ -82,7 +82,7 @@ The memory and knowledge tiers sit on one foundation: the **Mark Protocol**, ver
 - **Graph-aware**: persistent document graph with backlink queries across sessions
 - **OKF-compatible**: interoperates with [Open Knowledge Format](/reference/markdown/#open-knowledge-format-okf-compatibility) v0.1
 
-The servers are **memory storage engines**: versioned, hash-chained document stores kept deliberately simple. Brokers add the service tier: identity, tenancy, and one HTTPS front door. The knowledge broker composes many worlds into an organizational system, and the memory broker serves each identity a private hosted soul from any MCP host (Claude Desktop, ChatGPT, Cursor). The intelligence lives in the agent: lookup, routing, and graph traversal.
+The servers are **memory storage engines**: versioned, hash-chained document stores kept deliberately simple. Brokers add the service tier: identity, tenancy, and one HTTPS front door. The knowledge broker composes many worlds into an organizational system, and the memory broker serves each identity a private hosted memory from any MCP host (Claude Desktop, ChatGPT, Cursor). The intelligence lives in the agent: lookup, routing, and graph traversal.
 
 ## Tools
 
@@ -96,7 +96,7 @@ The servers are **memory storage engines**: versioned, hash-chained document sto
 | `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |
 | `demarkus-agent` | Indexing agent: crawls worlds, aggregates the graph, publishes hub indexes |
 | `demarkus-knowledge-broker` | OIDC-fronted MCP gateway composing many worlds into one system |
-| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private soul world per identity (memory as a service) |
+| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private memory world per identity (memory as a service) |
 | `demarkus-library` | Web reading room with the AI librarian |
 | `demarkus-token` | Generate capability-based auth tokens |
 | `demarkus-publish` | Write directly to the store for read-only server installs |
@@ -113,6 +113,6 @@ The servers are **memory storage engines**: versioned, hash-chained document sto
 - [The library and the librarian](/library/)
 - [Security model](/security/): attack surface, hardening, threat model
 - [Ecosystem](/ecosystem/): browsers, plugins, and tools that speak Demarkus
-- [Soul: the project's live AI memory](/soul/)
+- [Memory: the project's own live memory](/memory/)
 - [Public hub](https://github.com/latebit-io/demarkus-hub): discovery index at `mark://hub.demarkus.io`
 - [GitHub](https://github.com/latebit-io/demarkus)

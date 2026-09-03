@@ -15,20 +15,20 @@ it promotes it to the shared catalog. Three stores, one flow.
    ─────────                 ───────────────
       │                            │
       ▼                            ▼
-  a request  ──▶  [ agent ]  ──record──▶  SOUL          personal, local, drafts
+  a request  ──▶  [ agent ]  ──record──▶  MEMORY        personal, local, drafts
                      │                     │
                      │ recall              │ /promote  (curate + human gate)
                      │ (both stores)       ▼
                      │             KNOWLEDGE SYSTEM      shared, authoritative
                      │                     │
-                     └─────read────────────┤ /soul-refresh (authoritative wins)
+                     └─────read────────────┤ /memory-refresh (authoritative wins)
                                            ▼
                                         LIBRARY          humans read the same store
 ```
 
-The **soul** is your private draft tier. The **knowledge system** is the shared,
+The **memory** is your private draft tier. The **knowledge system** is the shared,
 authoritative one. The [library](/library/) is a read surface over either, not a
-third store. A soul can live on a local plugin-managed server or as a hosted
+third store. A memory can live on a local plugin-managed server or as a hosted
 world behind the memory broker; the flow is the same either way.
 
 ## It is the agent, not you
@@ -40,7 +40,7 @@ catalog without a human gate.
 
 Two plugins, each in its lane, composing in one install:
 
-- **`demarkus-memory`** owns the personal soul: capture, recall, and the intent
+- **`demarkus-memory`** owns the personal memory: capture, recall, and the intent
   to promote.
 - **`demarkus-knowledge`** owns the shared system: the consult-first bar and the
   curation cascade that gates what lands there.
@@ -80,20 +80,20 @@ publishes it to the hub as an atomic sharded snapshot under `/graph/manifest.md`
 so a cold agent seeds its graph on the first call and never reads a half-written
 export.
 
-This is the whole loop for one person. The soul is fast, private, and
+This is the whole loop for one person. The memory is fast, private, and
 yours: on your own machine, or on a [remote host](/scenarios/agent-memory/)
 you join from every device.
 
 ## Up to the knowledge system
 
-Most soul content should stay personal. A debugging note about your local setup,
+Most memory content should stay personal. A debugging note about your local setup,
 a half-formed idea, a session journal: none of that belongs in the shared catalog.
 Promotion is the deliberate step that lifts the small fraction that does.
 
-`/promote <soul-path>` runs the **curation cascade** (the `knowledge-promote`
+`/promote <memory-path>` runs the **curation cascade** (the `knowledge-promote`
 skill on the knowledge side):
 
-1. **Triage.** Durable? Broadly useful? Not already in the catalog? Most soul
+1. **Triage.** Durable? Broadly useful? Not already in the catalog? Most memory
    content correctly fails here and stays personal.
 2. **Distill.** Rewrite for a shared audience, stripping personal and local
    framing and any secrets or PII. This strips them, it does not summarize around
@@ -105,41 +105,41 @@ skill on the knowledge side):
 5. **Route.** Pick a writable world via `mark_worlds` and each world's `world.md`.
 6. **Gate.** A human approves, capped by the world's autonomy ceiling. Nothing
    auto-publishes to a shared store.
-7. **Publish with provenance,** then **back-stamp** the soul doc so it is not
+7. **Publish with provenance,** then **back-stamp** the memory doc so it is not
    re-promoted and can be refreshed later.
 
-`/promote-scan` sweeps the soul for candidates worth lifting, and publishing a new
+`/promote-scan` sweeps the memory for candidates worth lifting, and publishing a new
 ADR nudges promotion. The trigger is always explicit; the human always gates.
 
 ## Staying coherent
 
 Once promoted, the authoritative copy lives in the knowledge system and may move
-on. `/soul-refresh` is the downward leg: it finds promoted docs (they carry a
+on. `/memory-refresh` is the downward leg: it finds promoted docs (they carry a
 `promoted:` marker and tag), checks each against the live copy, and refreshes the
 stale ones. Reconciliation is **directional**: knowledge is the base of truth, the
-soul refreshes from it, and any local edits go back up through `/promote`'s gate,
+memory refreshes from it, and any local edits go back up through `/promote`'s gate,
 never as a silent two-way merge.
 
 So the edge between the two stores is a loop with a clear direction: draft in the
-soul, promote up through the gate, refresh back down as the shared copy evolves.
+memory, promote up through the gate, refresh back down as the shared copy evolves.
 
 ## Using it day to day
 
 A typical session:
 
-1. **Orient.** `/soul-context` restores where you left off; for a shared subject
+1. **Orient.** `/memory-context` restores where you left off; for a shared subject
    the agent consults the knowledge system first (`/knowledge` to navigate it).
 2. **Work.** The agent recalls as questions come up and records decisions,
    lessons, and patterns as they land.
-3. **Close out.** `/soul-journal` captures progress if the Stop nudge has not
+3. **Close out.** `/memory-journal` captures progress if the Stop nudge has not
    already prompted it.
 4. **Promote when ready.** `/promote` a note that others should rely on, or
    `/promote-scan` to sweep for candidates. The cascade gates it into the catalog.
-5. **Refresh.** `/soul-refresh` pulls promoted docs back down as their
+5. **Refresh.** `/memory-refresh` pulls promoted docs back down as their
    authoritative copies change.
 
 For anything shared or organizational, the knowledge system is the first place to
-look and the source of truth; the soul is your scratch space and personal backstop.
+look and the source of truth; the memory is your scratch space and personal backstop.
 On a brokered system, `mark_lookup_all` runs that first lookup across every
 readable world in one call.
 Humans browse the same catalog in the [library](/library/); agents read it over
@@ -147,6 +147,6 @@ MCP. Same store, same versions.
 
 ## Where each tier fits
 
-- [Agent memory](/scenarios/agent-memory/): the personal soul, the capture loop, the plugin setup.
+- [Agent memory](/scenarios/agent-memory/): the personal memory, the capture loop, the plugin setup.
 - [Organizational knowledge system](/scenarios/knowledge-system/): the shared, broker-fronted catalog and how teams join.
 - [The library](/library/): the human reading room over either.

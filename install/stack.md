@@ -36,15 +36,17 @@ components, then layers identity and TLS on top.
 https://library.<host>     reading room (read + edit)
 https://broker.<host>      MCP gateway
 https://auth.<host>        login
-mark://soul.<host>:6309    the world, direct over QUIC
+mark://memory.<host>:6309    the world, direct over QUIC
 ```
 
 The install prints a card with the owner login and both join commands:
 
 ```text
 Agents join with:   /knowledge-join https://broker.<host>
-Personal memory:    /soul-join mark://soul.<host>:6309#token=<token>
+Personal memory:    /memory-join mark://memory.<host>:6309#token=<token>
 ```
+
+Installs made before the soul to memory rename keep `soul.<host>` as the world hostname; their join line prints that name instead.
 
 ## DNS
 
@@ -67,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-st
 
 | Flag | Meaning |
 |---|---|
-| `--domain <host>` | Base domain; `library.`, `broker.`, `auth.`, `soul.` hang off it |
+| `--domain <host>` | Base domain; `library.`, `broker.`, `auth.`, `memory.` hang off it |
 | `--owner-email <addr>` | First user's email, and the Let's Encrypt contact |
 | `--librarian-key-file <path>` | File holding the LLM API key that enables the [librarian](/library/#configuring-the-provider); pick the provider with `LLM_BASE_URL`/`LLM_MODEL` in the env file |
 | `--library-version <ver>` | Pin a library release instead of the latest |

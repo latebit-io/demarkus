@@ -1,23 +1,25 @@
 ---
 layout: default
-title: Soul
-permalink: /soul/
+title: Memory
+permalink: /memory/
+redirect_from:
+  - /soul/
 ---
 
-# Soul
+# Memory
 
-The live soul of the Demarkus project is persistent memory for the AI agent that helps build it.
+The Demarkus project keeps a live memory: persistent, versioned memory for the AI agent that helps build it. It was formerly called the soul, and its hostname keeps that name.
 
-This is an experiment in the **project soul pattern**: a minimal Demarkus server holding architecture notes, debugging lessons, a roadmap, a journal, and the agent's own thoughts. Each session, the agent reconnects, reads what it left behind, and picks up where it stopped.
+This is an experiment in the **project memory pattern**: a minimal Demarkus server holding architecture notes, debugging lessons, a roadmap, a journal, and the agent's own thoughts. Each session, the agent reconnects, reads what it left behind, and picks up where it stopped.
 
-<div class="soul-demo">
-  <img src="/demarkus-soul.gif" alt="Claude Agent connecting to demarkus-soul via MCP" />
-  <p class="soul-demo-caption">Claude Agent connecting to the soul via MCP</p>
+<div class="memory-demo">
+  <img src="/demarkus-memory.gif" alt="Claude Agent connecting to demarkus-memory via MCP" />
+  <p class="memory-demo-caption">Claude Agent connecting to the memory via MCP</p>
 </div>
 
-The soul is served at `mark://soul.demarkus.io` and can be browsed with any Demarkus client, or read in the browser at **[soul.demarkus.io](https://soul.demarkus.io)** through the [library](/library/) reading room.
+The memory is served at `mark://soul.demarkus.io` and can be browsed with any Demarkus client, or read in the browser at **[soul.demarkus.io](https://soul.demarkus.io)** through the [library](/library/) reading room.
 
-## Connect to the soul
+## Connect to the memory
 
 ### 1. Install the client
 
@@ -50,12 +52,12 @@ demarkus-tui mark://soul.demarkus.io/index.md
 
 ### 3. Connect via MCP
 
-Agents can connect to the soul using `demarkus-mcp`. Add this to your `.mcp.json`:
+Agents can connect to the memory using `demarkus-mcp`. Add this to your `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "demarkus-soul": {
+    "demarkus-memory": {
       "command": "/path/to/demarkus-mcp",
       "args": [
         "-host", "mark://soul.demarkus.io"
@@ -71,7 +73,7 @@ Fifteen MCP tools: `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `m
 
 The server also vends **resources** (`mark://{host}/{+path}`, attachable in the client's picker, `#anchor` for a single section) and three **prompts** (`orient`, `recall`, `whats-new`) as slash-style commands in MCP clients that support them.
 
-## What's on the soul
+## What's on the memory
 
 | Document | Contents |
 |---|---|
@@ -85,8 +87,8 @@ The server also vends **resources** (`mark://{host}/{+path}`, attachable in the 
 | `debt.md` | Technical debt and improvement opportunities |
 | `journal/<YYYY-MM-DD>.md` | Dated session notes, one file per day |
 | `thoughts.md` | The agent's own reflections |
-| `guide.md` | Setup instructions for the soul pattern |
-| `universe.md` | Souls, worlds, and hubs as a deployment topology |
+| `guide.md` | Setup instructions for the memory pattern |
+| `universe.md` | Memories, worlds, and hubs as a deployment topology |
 | `plans/<name>.md` | Plan documents, active and archived |
 | `faq.md` | Common questions and comparisons |
 
@@ -94,7 +96,7 @@ All documents are public and read-open. The version history of every page is per
 
 ## Browse it in the library
 
-This soul is served through the [library](/library/) at
+This memory is served through the [library](/library/) at
 **[soul.demarkus.io](https://soul.demarkus.io)**: read it in the browser, walk
 the trail, and open the floor and the document graph, no account needed.
 
@@ -106,6 +108,6 @@ git clone https://github.com/latebit-io/demarkus-library
 cd demarkus-library && go run ./cmd/demarkus-library
 ```
 
-## Run your own soul
+## Run your own memory
 
 Want persistent memory for your own AI agent? See the [Agent Memory scenario](/scenarios/agent-memory/) for a step-by-step guide.

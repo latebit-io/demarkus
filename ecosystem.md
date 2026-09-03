@@ -39,14 +39,14 @@ The reference terminal browser, built on Bubble Tea and Glamour.
 
 Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/demarkus`). They compose in one install and partition by server scope.
 
-**`demarkus-memory`** is personal agent memory (the [soul pattern](/scenarios/agent-memory/)). Zero-config: spawns a local `demarkus-server`, auto-generates a token, and wires the MCP tools on first session.
+**`demarkus-memory`** is personal agent memory (the [memory pattern](/scenarios/agent-memory/)). Zero-config: spawns a local `demarkus-server`, auto-generates a token, and wires the MCP tools on first session.
 
 - Source: [plugins/claude-code](https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code)
 - Install: `/plugin install demarkus-memory@demarkus`
-- Local soul: `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-status`, `/soul-doctor`
-- Remote souls: `/soul-join <join-url>` adds a remote soul to the catalog and binds it to the project; `/soul-default` picks which one this project writes to
-- Promotion: `/promote <path>` lifts a ready note to a knowledge system through the curation gate, `/promote-scan` sweeps for candidates, `/soul-refresh` pulls promoted docs back as the authoritative copy changes
-- Skill: `soul-memory`, which triggers on "remember / recall / save / note" intents
+- Local memory: `/memory`, `/memory-context`, `/memory-journal`, `/memory-init`, `/memory-status`, `/memory-doctor`
+- Remote memories: `/memory-join <join-url>` adds a remote memory to the catalog and binds it to the project; `/memory-default` picks which one this project writes to
+- Promotion: `/promote <path>` lifts a ready note to a knowledge system through the curation gate, `/promote-scan` sweeps for candidates, `/memory-refresh` pulls promoted docs back as the authoritative copy changes
+- Skill: `remember`, which triggers on "remember / recall / save / note" intents
 
 **`demarkus-knowledge`** joins an organizational [knowledge system](/scenarios/knowledge-system/), a broker-fronted universe of worlds. No binaries and no local server: pure broker plus the Claude Code MCP OAuth flow.
 
@@ -61,7 +61,7 @@ Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/
 The OpenCode ports provide the same memory and knowledge-system workflows and
 share `~/.demarkus` state with the Claude Code and pi plugins.
 
-**`demarkus-opencode-memory`** installs local soul support:
+**`demarkus-opencode-memory`** installs local memory support:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
@@ -74,12 +74,12 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/op
 ```
 
 - Source: [plugins/opencode-memory](https://github.com/latebit-io/demarkus/tree/main/plugins/opencode-memory) · [plugins/opencode-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/opencode-knowledge)
-- Commands: the same `/soul*`, `/promote*`, and `/knowledge*` command sets described above
+- Commands: the same `/memory*`, `/promote*`, and `/knowledge*` command sets described above
 - Restart OpenCode after installation; restart once more after memory's first session or after joining a knowledge system so the new MCP entry connects
 
 ### pi
 
-The same two plugins, ported to the [pi](https://pi.dev) coding agent and mapped onto its extension API. They share `~/.demarkus` state with the Claude Code and OpenCode plugins (one soul, one token, one set of registries), so all three agents can run on the same machine.
+The same two plugins, ported to the [pi](https://pi.dev) coding agent and mapped onto its extension API. They share `~/.demarkus` state with the Claude Code and OpenCode plugins (one memory, one token, one set of registries), so all three agents can run on the same machine.
 
 Both need the MCP adapter first:
 
@@ -87,7 +87,7 @@ Both need the MCP adapter first:
 pi install npm:pi-mcp-adapter
 ```
 
-**`demarkus-pi-memory`** is the local soul, with the same zero-config provisioning, gates, and nudges. Commands: `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the `soul-memory` skill.
+**`demarkus-pi-memory`** is the local memory, with the same zero-config provisioning, gates, and nudges. Commands: `/memory`, `/memory-context`, `/memory-journal`, `/memory-init`, `/memory-join`, `/memory-default`, `/memory-status`, `/memory-doctor`, `/memory-refresh`, `/promote`, `/promote-scan`, plus the `remember` skill.
 
 **`demarkus-pi-knowledge`** joins a knowledge system over the adapter's OAuth, with no tokens stored locally. Commands: `/knowledge`, `/knowledge-join`, `/knowledge-doctor`, plus the `knowledge-promote` skill.
 
@@ -128,7 +128,7 @@ Published artifacts carry a version retention cap (newest 20 by default) so a ge
 | `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |
 | `demarkus-agent` | Indexing agent: crawls worlds, aggregates the graph, publishes hub indexes |
 | `demarkus-knowledge-broker` | OIDC-fronted MCP gateway composing many worlds into one system |
-| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private soul world per identity (memory as a service) |
+| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private memory world per identity (memory as a service) |
 | `demarkus-library` | Web reading room with the AI librarian |
 | `demarkus-token` | Generate capability-based auth tokens |
 | `demarkus-publish` | Write directly to the store for read-only server installs |

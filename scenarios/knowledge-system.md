@@ -31,7 +31,7 @@ This is the tier above the [team knowledge base](/scenarios/team/). A team scena
         ▼             ▼             ▼             ▼
    world: planner  world: storage  hub: root   library      ← reading room
         ▲             ▲             ▲
-     souls          souls        agent           ← crawls worlds, publishes the graph
+    memories      memories        agent           ← crawls worlds, publishes the graph
 ```
 
 The broker is the only public surface. Worlds stay private; the broker authenticates the caller against your IdP, mints a scoped token for the world being addressed, and proxies the request. The MCP tool surface the agent sees is byte-for-byte the same as talking to a local `demarkus-server`, federation, graph, and lookup tools included, plus two broker-only tools: `mark_worlds` lists the worlds and `mark_lookup_all` runs one catalog lookup across every readable world, globally limited, with a partial status when a world fails instead of a failed query.
@@ -46,7 +46,7 @@ The knowledge server is stateless: all durable state lives in the world's GCS bu
 
 Before a world serves, `demarkus-knowledge-bootstrap` initializes its bucket and seeds its publish policy. Credentials come only from Workload Identity / Application Default Credentials; no keys are mounted. Egress to GCS requires the explicit `networkPolicy.allowUnrestrictedHTTPS` opt-in, because a NetworkPolicy cannot express GCS hostnames. Per-world tokens mount from Secrets and hot-reload on change or SIGHUP. The chart README covers all of it.
 
-For the design rationale behind worlds, hubs, and souls, see [Creating an automated knowledge universe](/blog/creating-an-automated-knowledge-universe/).
+For the design rationale behind worlds, hubs, and memories, see [Creating an automated knowledge universe](/blog/creating-an-automated-knowledge-universe/).
 
 ## Stand up the system
 
@@ -113,7 +113,7 @@ Complete OAuth when prompted, or run `opencode mcp auth <slug>`.
 
 The plugin's session guidance steers agents to recall from the system before answering and to publish back to it as work lands, with the system's tag policy enforced at publish time, so the catalog stays searchable via `mark_lookup`.
 
-A personal [soul](/scenarios/agent-memory/) and an organizational knowledge system compose cleanly in the same install. The soul is your private scratch space over direct QUIC; the system is the shared, broker-fronted universe. They don't conflict; the plugins partition by server scope.
+A personal [memory](/scenarios/agent-memory/) and an organizational knowledge system compose cleanly in the same install. The memory is your private scratch space over direct QUIC; the system is the shared, broker-fronted universe. They don't conflict; the plugins partition by server scope.
 
 ## Live example
 
@@ -127,6 +127,6 @@ A personal [soul](/scenarios/agent-memory/) and an organizational knowledge syst
 
 - [How knowledge flows](/how-it-works/): the agent-driven capture-and-promote loop, personal memory up to the shared catalog
 - [Team knowledge base](/scenarios/team/): the single-server tier below this
-- [Agent memory (soul pattern)](/scenarios/agent-memory/): personal agent memory that composes with a knowledge system
-- [Creating an automated knowledge universe](/blog/creating-an-automated-knowledge-universe/): the worlds / hubs / souls design
+- [Agent memory](/scenarios/agent-memory/): personal agent memory that composes with a knowledge system
+- [Creating an automated knowledge universe](/blog/creating-an-automated-knowledge-universe/): the worlds / hubs / memories design
 - [Ecosystem](/ecosystem/): plugins and tools that speak Demarkus

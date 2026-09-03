@@ -7,6 +7,8 @@ permalink: /blog/creating-an-automated-knowledge-universe/
 
 # Creating an automated knowledge universe
 
+> Editor's note (September 2026): what this post calls a *soul* is now called a **memory**. The concept is unchanged; see the [Memory](/memory/) page.
+
 Humans are bad at documentation. Really bad. Not some of us, most of us. Maybe 1% of engineers consistently write and maintain accurate docs. The rest write it once and have intention of maintaining, but never do.
 
 We develop or use systems that assume otherwise. Wikis, Confluence spaces, Notion databases, README files, all with intention to create up-to-date knowledge bases.

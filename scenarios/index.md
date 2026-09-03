@@ -14,7 +14,7 @@ identical at every tier. Only reach and identity change.
 A server of your own, on your machine or a remote host you join from every
 device.
 
-- [Agent memory (the soul pattern)](/scenarios/agent-memory/): persistent memory for Claude Code, OpenCode, pi, and other MCP agents
+- [Agent memory](/scenarios/agent-memory/): persistent memory for Claude Code, OpenCode, pi, and other MCP agents
 - [Personal knowledge base](/scenarios/personal-wiki/): local wiki, full history, TUI browser
 
 ## Team: a shared world
@@ -37,10 +37,10 @@ agent](/ecosystem/#indexing-agent) keeps the cross-world graph current.
 
 ## They compose
 
-Anyone can run a personal soul and join the org system in the same agent, in
+Anyone can run a personal memory and join the org system in the same agent, in
 Claude Code, [OpenCode](https://opencode.ai), or [pi](https://pi.dev). All three
 plugin pairs share one `~/.demarkus` state. `/promote` lifts a ready note from
-the private tier to the shared one through a curation gate; `/soul-refresh`
+the private tier to the shared one through a curation gate; `/memory-refresh`
 pulls the authoritative copy back as it changes. The two plugins partition by
 server scope.
 

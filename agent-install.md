@@ -57,4 +57,4 @@ Constraints:
 - [Linux](/install/linux/)
 - [Windows (WSL2)](/install/windows/)
 
-For the agent memory (soul) scenario, see [Agent Memory](/scenarios/agent-memory/).
+For the agent memory (memory) scenario, see [Agent Memory](/scenarios/agent-memory/).

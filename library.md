@@ -10,14 +10,14 @@ permalink: /library/
 server-rendered reading room over one world or a whole knowledge system. Humans
 read here; agents read the same documents over MCP.
 
-- **Live: [soul.demarkus.io](https://soul.demarkus.io)**: the project's own soul, open and read-only
+- **Live: [soul.demarkus.io](https://soul.demarkus.io)**: the project's own memory, open and read-only
 - Source: [latebit-io/demarkus-library](https://github.com/latebit-io/demarkus-library)
 - Ships with the [five-minute appliance](/install/stack/) and the [knowledge system deployment](/scenarios/knowledge-system/)
 
 ## The reading room
 
 <figure class="shot">
-  <img src="/assets/img/library-trail.png" alt="Two reading panes side by side: the soul index on the left, its architecture document on the right, with a trail bar across the bottom" />
+  <img src="/assets/img/library-trail.png" alt="Two reading panes side by side: the memory index on the left, its architecture document on the right, with a trail bar across the bottom" />
   <figcaption>A trail of panes: index opened alongside the document it links to</figcaption>
 </figure>
 
@@ -51,8 +51,8 @@ entrance, plus a per-world map and link-graph canvas.
 </figure>
 
 <figure class="shot">
-  <img src="/assets/img/library-graph.png" alt="A per-world map: a force-directed graph of the soul's documents, a central hub linked to architecture, roadmap, ADRs, and plans, with an unlinked grid below" />
-  <figcaption>The per-world map: the whole soul as a link graph, connected nodes above the unlinked grid</figcaption>
+  <img src="/assets/img/library-graph.png" alt="A per-world map: a force-directed graph of the memory's documents, a central hub linked to architecture, roadmap, ADRs, and plans, with an unlinked grid below" />
+  <figcaption>The per-world map: the whole memory as a link graph, connected nodes above the unlinked grid</figcaption>
 </figure>
 
 **Cataloging desk.** Create, edit, and append with live preview from the same
@@ -135,7 +135,7 @@ go run ./cmd/demarkus-library
 # open http://localhost:8080
 ```
 
-Defaults to `quic` against the public [soul](/soul/), so a clone and one command
+Defaults to `quic` against the public [memory](/memory/), so a clone and one command
 gives you a real room to browse.
 
 | Var | Default | Meaning |
@@ -167,7 +167,7 @@ and served from the binary: no CDN, no Node build, one Go binary.
 
 ## Where it runs
 
-The project's own soul is served through the library, open and read-only:
+The project's own memory is served through the library, open and read-only:
 **[soul.demarkus.io](https://soul.demarkus.io)**. Browse the demarkus project's
 live memory in the reading room, walk the trail, and open the floor and document
 graph, no account required.
