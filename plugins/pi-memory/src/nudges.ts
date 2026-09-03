@@ -6,19 +6,19 @@
 
 // Memory writes can arrive wrapped in the pi-mcp-adapter "mcp" proxy tool, so
 // unwrap input.tool before parsing the verb out of the tool name.
-function isSoulWrite(toolName: string, input: Record<string, unknown>): boolean {
+function isMemoryWrite(toolName: string, input: Record<string, unknown>): boolean {
   let name = toolName;
   if (name === "mcp" && typeof input.tool === "string") name = input.tool;
   return /mark_(publish|append)$/.test(name);
 }
 
 export class SessionActivity {
-  private soulWrite = false;
+  private memoryWrite = false;
   private fileMutation = false;
 
   observe(toolName: string, input: Record<string, unknown> = {}): void {
-    if (isSoulWrite(toolName, input)) {
-      this.soulWrite = true;
+    if (isMemoryWrite(toolName, input)) {
+      this.memoryWrite = true;
       return;
     }
     if (/(^|_)(Edit|Write|NotebookEdit)$/.test(toolName) || ["edit", "write"].includes(toolName)) {
@@ -29,7 +29,7 @@ export class SessionActivity {
   get changedFiles(): boolean {
     return this.fileMutation;
   }
-  get hadSoulWrite(): boolean {
-    return this.soulWrite;
+  get hadMemoryWrite(): boolean {
+    return this.memoryWrite;
   }
 }

@@ -18,7 +18,7 @@ the destination server's `mark_*` tools directly. This command only moves the de
 1. **List the catalog.** Run:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --list --bind <shell-escaped-absolute-project-dir>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind <shell-escaped-absolute-project-dir>
    ```
 
    When the command contains `<shell-escaped-absolute-project-dir>`, replace it with exactly one POSIX-shell-safe word, including correct escaping for embedded apostrophes; never wrap the raw path in literal single quotes.
@@ -37,7 +37,7 @@ the destination server's `mark_*` tools directly. This command only moves the de
 3. **Save it.** With the chosen `<slug>`:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry soul-default --set '<slug>' --bind <shell-escaped-absolute-project-dir>
+   "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --set '<slug>' --bind <shell-escaped-absolute-project-dir>
    ```
 
    - Only on exact `OK <chosen-slug>`, with the returned slug matching the selection, confirm: "This project now writes to memory **`<slug>`** by

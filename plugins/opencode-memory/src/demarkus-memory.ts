@@ -94,7 +94,7 @@ async function callGuidance(): Promise<string | null> {
   return o === null ? null : (o.context ?? "");
 }
 
-function isSoulWrite(toolName: string): boolean {
+function isMemoryWrite(toolName: string): boolean {
   return /mark_(publish|append)$/.test(toolName);
 }
 
@@ -108,7 +108,7 @@ interface SessionState {
   guidanceDelivered: boolean;
   idleNudged: boolean;
   changedFiles: boolean;
-  soulWrite: boolean;
+  memoryWrite: boolean;
 }
 
 // run executes a provisioning step; resolves "" on success, a warning on failure.
@@ -205,7 +205,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
   const state = (id: string): SessionState => {
     let s = sessions.get(id);
     if (!s) {
-      s = { guidanceDelivered: false, idleNudged: false, changedFiles: false, soulWrite: false };
+      s = { guidanceDelivered: false, idleNudged: false, changedFiles: false, memoryWrite: false };
       sessions.set(id, s);
     }
     return s;
@@ -253,11 +253,9 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
         enabled: true,
       };
 
-      // Joined remote memories: the binary's `registry mcp add` writes pi's MCP
-      // config, which OpenCode never reads, so wire every memory in the shared
-      // catalog here. The binary owns the catalog format (TSV: slug host
-      // insecure token-file, "#" comments); follow-up: query it via a
-      // `registry soul-list` subcommand instead of parsing the file.
+      // OpenCode never reads the MCP config `registry mcp add` writes, so wire
+      // every joined memory from the shared catalog here (TSV, "#" comments).
+      // Follow-up: read it via `registry memory-default --list` instead.
       try {
         const memories = readFileSync(join(homedir(), ".demarkus", "souls"), "utf8");
         for (const rawLine of memories.split("\n")) {
@@ -267,7 +265,9 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
           if (!slug || slug === MCP_SERVER_NAME) continue;
           config.mcp[slug] = config.mcp[slug] ?? {
             type: "local",
-            command: [BIN, "mcp-serve", "--soul", slug], // pinned binary predates --memory
+            // --soul, not --memory: this hook can run before the fire-and-forget
+            // bootstrap has replaced an older binary. Switch when --soul is removed.
+            command: [BIN, "mcp-serve", "--soul", slug],
             enabled: true,
           };
         }
@@ -344,7 +344,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       input: { tool: string; sessionID?: string; callID?: string },
       output: { args: Record<string, unknown> },
     ) => {
-      if (!isSoulWrite(input.tool) || !adapters.has("memory")) return;
+      if (!isMemoryWrite(input.tool) || !adapters.has("memory")) return;
       const decision = await callGate(input.tool, output.args ?? {}, directory);
       if (decision.decision === "block") {
         throw new Error(decision.reason ?? "demarkus-memory gate blocked this write");
@@ -368,11 +368,11 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
     ) => {
       if (!adapters.has("memory")) return;
       const s = state(input.sessionID ?? "default");
-      if (!isSoulWrite(input.tool)) {
+      if (!isMemoryWrite(input.tool)) {
         if (isFileMutation(input.tool)) s.changedFiles = true;
         return;
       }
-      s.soulWrite = true;
+      s.memoryWrite = true;
 
       const key = `${input.sessionID}:${input.callID}`;
       const warn = pendingWarns.get(key);
@@ -411,12 +411,12 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       const s = state(event.properties?.sessionID ?? "default");
       // Pre-filter with the same signals the binary checks, so the common
       // nothing-to-say case doesn't spawn a subprocess after every turn.
-      if (s.idleNudged || !s.changedFiles || s.soulWrite) return;
+      if (s.idleNudged || !s.changedFiles || s.memoryWrite) return;
       s.idleNudged = true;
       const nudge = await callNudge({
         event: "session-end",
         changedFiles: s.changedFiles,
-        soulWrite: s.soulWrite,
+        memoryWrite: s.memoryWrite,
       });
       if (nudge) await toast(nudge);
     },
