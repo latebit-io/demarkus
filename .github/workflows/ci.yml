@@ -243,12 +243,20 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+          cache-dependency-path: tools/go.sum
       - name: Check generated prompts
         run: |
           cd tools
           go test ./plugin-prompts ./demarkus-plugin/...
           go run ./plugin-prompts check
       - name: Install plugin development dependencies
+        # No audit or fund calls in CI, and a short fetch timeout: a hung
+        # registry request otherwise waits npm's 5-minute default per install.
+        env:
+          NPM_CONFIG_AUDIT: "false"
+          NPM_CONFIG_FUND: "false"
+          NPM_CONFIG_FETCH_TIMEOUT: "60000"
+          NPM_CONFIG_FETCH_RETRIES: "1"
         run: |
           npm ci --prefix plugins/pi-memory
           npm ci --prefix plugins/pi-knowledge
