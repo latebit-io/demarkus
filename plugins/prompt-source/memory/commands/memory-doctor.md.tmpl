@@ -26,7 +26,7 @@ Anchor on the scope hub: `/index.md` or `/<slug>/index.md`.
 4. **Bound supplemental crawling.** At most 100 supplemental `mark_graph` calls, retries included. When the budget hits, list skipped documents and mark orphan analysis partial.
 5. **Retry once.** Retry each unsuccessful source once while budget remains. A final source failure makes orphan analysis incomplete.
 
-Any gather call fails, unauthorized, or partial: surface the exact failure and stop. Empty-memory handling applies only to successful empty responses; a partial gather cannot support broken-link or orphan conclusions.
+Root crawl (1) or inventory (2) fails, unauthorized, or partial: surface the exact failure and stop; nothing downstream is trustworthy. Supplemental crawl (3-5) failures do not stop the audit: continue with completed data, mark only the source-dependent checks incomplete (that source's broken-link edges, orphan analysis), keep findings already confirmed by successful sources, suppress unconfirmed ones. Empty-memory handling applies only to successful empty responses.
 
 ## Core checks (graph + inventory; per-doc fetching only for the bounded broken-link confirmations below)
 
