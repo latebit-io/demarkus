@@ -1,6 +1,6 @@
 {
   "name": "demarkus-memory",
-  "version": "0.13.84",
+  "version": "0.13.85",
   "description": "Local, versioned memory for Cursor via demarkus. Zero-config install: spawns a local demarkus-server, auto-generates a token, wires MCP tools for fetch/publish/append/graph/lookup, injects standing guidance so sessions self-document to the memory, and enforces a publish tag-gate so documents stay findable via lookup.",
   "author": {
     "name": "latebit"

@@ -21,13 +21,13 @@ Replace `<shell-escaped-absolute-project-dir>` with exactly one POSIX-shell-safe
 1. **Resolve and validate the project slug.** Use the absolute current project directory; candidate = its basename, lowercased, spaces replaced by hyphens. Before reading, check that the candidate subtree belongs to this exact absolute project path (established this session, or confirmed by the user); if the subtree exists but that is not established, ask the user to confirm or choose the unique slug rather than restoring another project's context. Never assume equal basenames mean the same project. Before interpolating the slug into any soul path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`, `..`, and any URL or path delimiter such as `/`, `\`, `:`, `?`, `#`, or `%`.
 2. **Confirm the project exists in the soul.** `mark_fetch /<project>/index.md` with `force: true`. `not-found` → `mark_list /<project>/`, follow `next-cursor` as `cursor` until `complete: true` (max 20 pages; cursor rule as in step 3):
    - complete and `not-found` or empty → no entries yet: say so, suggest `/soul-journal "<entry>"`, stop.
-   - incomplete (budget, cursor failure) → report partial context, continue with what was listed.
+   - incomplete (budget, cursor failure) → subtree identity unknown: step 1 confirmation required; confirmed → continue with what was listed, else stop.
    - unauthorized, transport, server, malformed, other list failure → surface, never treat as absence.
    - entries present → note the root index is missing, continue.
 
-3. **Pull recent journal entries.** `mark_list /<project>/journal/`, following `next-cursor` as `cursor` until `complete: true`, at most 100 list calls. Track seen cursors; require every incomplete page to return a non-empty, different, unseen cursor. If the 100-call bound is reached first, the final output must state journal context is partial and name the 100-call limit. Take today's entry plus the two most recent prior days (UTC `YYYY-MM-DD.md`). `mark_fetch` each with `force: true`; read in full. Today `not-found` → use the two most recent prior days. Surface any cursor, list, or fetch failure and mark that context incomplete.
+3. **Pull recent journal entries.** `mark_list /<project>/journal/`, following `next-cursor` as `cursor` until `complete: true`, at most 100 list calls. Track seen cursors; require every incomplete page to return a non-empty, different, unseen cursor. Take today's entry plus the two most recent prior days (UTC `YYYY-MM-DD.md`). `mark_fetch` each with `force: true`; read in full. Today `not-found` → use the two most recent prior days. 100-call bound reached first, or any cursor, list, or fetch failure → partial.
 
-4. **Pull active work.** `mark_fetch /<project>/roadmap.md` with `force: true` if it exists (what's next / in flight). Skip silently only on `not-found`; surface other failures and mark roadmap context incomplete.
+4. **Pull active work.** `mark_fetch /<project>/roadmap.md` with `force: true` if it exists (what's next / in flight). Skip silently only on `not-found`; surface other failures.
 
 5. **Summarize.** Plain text, no preamble, this shape:
 
@@ -43,6 +43,9 @@ Replace `<shell-escaped-absolute-project-dir>` with exactly one POSIX-shell-safe
 
    ### Pick up where you left off
    <one or two specific suggestions tied to the most recent journal entry; what was the user about to do next?>
+
+   ### Coverage
+   <each partial or failed read from steps 2 to 4: what, exact error or bound; omit when all succeeded>
    ```
 
    One line per summary. Restore context, don't read entries verbatim.
