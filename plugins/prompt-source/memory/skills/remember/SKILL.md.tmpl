@@ -1,6 +1,6 @@
 ---
 name: remember
-description: Use when the user wants to remember, save, recall, or query personal notes that should persist across {{.Agent}} sessions. Routes through the demarkus-memory MCP tools against a versioned personal store (local by default, remote when the project is bound) organized by project.
+description: Use when the user wants to remember, save, recall, or query personal notes that persist across {{.Agent}} sessions. Versioned personal {{.Store}} (local by default, remote when the project is bound), organized by project.
 ---
 
 # Remember
@@ -27,7 +27,7 @@ Resolve the slug before any read or write:
 {{else}}1. Canonicalize the current project directory, take its basename. Lowercase slug if needed (spaces → hyphens).
 2. Project directory unavailable, or user clearly means another project: ask which project.
 {{end}}
-3. Before interpolating the slug into any path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`/`..`, and any URL/path delimiter (`/`, `\`, `:`, `?`, `#`, `%`). Never infer project identity from basename alone. Inspect only the root index/listing for a slug collision; when listing, follow `next-cursor` as `cursor` until `complete: true`, and treat an incomplete listing as unknown (ask before writing). Do not fetch or construct the project subtree yet. If the root records a canonical checkout path for the slug, require an exact match. If the slug exists otherwise, ask the user to confirm it belongs to this exact checkout; if not, choose and confirm a unique slug. Only then construct or access `/<slug>/...`. A confirmed new slug is created on first write and linked from `/index.md`.
+3. Before interpolating the slug into any path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`/`..`, and any URL/path delimiter (`/`, `\`, `:`, `?`, `#`, `%`). Never infer project identity from basename alone. Inspect only the bound {{.Store}}'s root index/listing (binding: next section) for a slug collision; when listing, follow `next-cursor` as `cursor` until `complete: true`, and treat an incomplete listing as unknown (ask before writing). Do not fetch or construct the project subtree yet. If the root records a canonical checkout path for the slug, require an exact match. If the slug exists otherwise, ask the user to confirm it belongs to this exact checkout; if not, choose and confirm a unique slug. Only then construct or access `/<slug>/...`. A confirmed new slug is created on first write and linked from `/index.md`.
 
 ## Resolving the {{.Store}} binding
 

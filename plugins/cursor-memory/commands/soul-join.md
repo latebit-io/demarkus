@@ -80,7 +80,7 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
 
 3. Confirm slug, host, project binding, and whether a token file is used. State: the token is injected by `demarkus-plugin mcp-serve`, not stored in MCP config.
 
-4. Explain removal; do not perform it unasked. Remove the catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`; a stale binding makes the destination gate block writes to remaining souls. Then remove the MCP entry so Cursor stops launching the removed server: `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor remove '<slug>'`, for broker and QUIC souls alike. Check each command's exit status in order; on failure surface the exact error, report cleanup incomplete naming what remains (row, token, or binding; or the MCP entry), give the command as the retry, and stop.
+4. Explain removal; do not perform it unasked. Order: (a) remove the MCP entry: `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor remove '<slug>'`; (b) rebind or remove every matching row in `~/.demarkus/project-souls` (else the destination gate blocks writes); (c) remove the catalog row and token file through the registry tooling. Check each command's exit status in order; on failure surface the exact error, report cleanup incomplete naming what remains, give the command as the retry, and stop.
 
 ## Don't
 
