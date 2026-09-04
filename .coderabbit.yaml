@@ -20,6 +20,10 @@ reviews:
   labeling_instructions: []
   path_filters:
     - "!**/bin/**"
+    # Generated from plugins/prompt-source; review the templates instead.
+    - "!plugins/*/commands/**"
+    - "!plugins/*/context/**"
+    - "!plugins/*/skills/**"
   path_instructions:
     - path: "protocol/**"
       instructions: >

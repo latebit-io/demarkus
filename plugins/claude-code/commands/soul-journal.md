@@ -41,12 +41,6 @@ Read the last line first: trailing `STALE <slug>` means the bound soul is no lon
      <entry text>
      ```
 
-     After the journal write commits, repair both hubs from the saved state. Hub rule: republish only if link missing or metadata off contract; saved body plus link once, saved metadata minus `type` and unrequested `retention`, saved version, `on_conflict: "fail"`.
-     - `/<project>/index.md`: `not-found` → create at v0: `# <Project>`, `## Journal` linking today, `tags: index,<slug>`, `importance: 0.8`, no `type`. Present → hub rule; link under `## Journal`, else appended.
-     - `/index.md`: `not-found` → create at v0: `# Projects` plus project link, `tags: projects,index`, `importance: 0.9`, no `type`. Present → hub rule; contract: `projects,index` in tags, `importance` 0.9 if unset.
-
-     Conflict: refetch `force: true` (outline or malformed → stop); link present and on contract → done; else keep concurrent content, apply hub rule to the refetch, retry once; second conflict → stop (step 4 reports).
-
    - `ok`: today's file exists. `mark_append` with:
 
      ```text
@@ -60,6 +54,12 @@ Read the last line first: trailing `STALE <slug>` means the bound soul is no lon
 
    - Unauthorized, transport, server, malformed-response, or other fetch failure: surface the exact error and stop without writing or claiming success.
 
-4. **Report operation-specific results.** Check every `mark_publish` and `mark_append` result. Journal write failure: surface the exact result, do not claim it was written. After successful creation/append, report that write as committed and never repeat it because a dependent index or metadata update failed. Report each later failure separately as partial success: journal committed, dependent update incomplete.
+4. **Repair hubs.** After any successful journal write, repair both hubs from the saved state. Hub rule: republish only if link missing or metadata off contract; saved body plus link once, saved metadata minus `type` and unrequested `retention`, saved version, `on_conflict: "fail"`.
+   - `/<project>/index.md`: `not-found` → create at v0: `# <Project>`, `## Journal` linking today, `tags: index,<slug>`, `importance: 0.8`, no `type`. Present → hub rule; link under `## Journal`, else appended.
+   - `/index.md`: `not-found` → create at v0: `# Projects` plus project link, `tags: projects,index`, `importance: 0.9`, no `type`. Present → hub rule; contract: `projects,index` in tags, `importance` 0.9 if unset.
+
+   Conflict: refetch `force: true` (outline or malformed → stop); link present and on contract → done; else keep concurrent content, apply hub rule to the refetch, retry once; second conflict → stop (step 5 reports).
+
+5. **Report operation-specific results.** Check every `mark_publish` and `mark_append` result. Journal write failure: surface the exact result, do not claim it was written. After successful creation/append, report that write as committed and never repeat it because a dependent index or metadata update failed. Report each later failure separately as partial success: journal committed, dependent update incomplete.
 
 Entry: $ARGUMENTS
