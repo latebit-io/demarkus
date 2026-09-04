@@ -19,8 +19,8 @@ Diagnose the plugin's current setup: configured mode, memory path, port, server 
          if [ ! -e "$HOME/.demarkus/bin/$b" ]; then echo "(not installed)"
          elif [ ! -x "$HOME/.demarkus/bin/$b" ]; then echo "(present but not executable)"
          else
-            output=$("$HOME/.demarkus/bin/$b" --version 2>&1); status=$?
-            if [ "$status" -eq 0 ]; then printf '%s\n' "$output"; else printf '(version check failed, exit %s) %s\n' "$status" "$output"; fi
+            output=$("$HOME/.demarkus/bin/$b" --version 2>&1); version_status=$?
+            if [ "$version_status" -eq 0 ]; then printf '%s\n' "$output"; else printf '(version check failed, exit %s) %s\n' "$version_status" "$output"; fi
          fi
       done
    else
