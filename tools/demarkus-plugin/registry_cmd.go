@@ -418,18 +418,8 @@ func registryMemoryDefault(args []string) {
 		if err != nil {
 			fail(err.Error())
 		}
-		if len(cat) == 0 {
-			fmt.Println("EMPTY")
-			return
-		}
-		fmt.Println("CATALOG")
-		for _, row := range cat {
-			id := strings.SplitN(row, "\t", 2)[0]
-			marker := "-"
-			if id == current {
-				marker = "*"
-			}
-			fmt.Println(row + "\t" + marker)
+		if _, err := fmt.Println(strings.Join(memoryDefaultListing(cat, current), "\n")); err != nil {
+			fail("memory-default: write listing: " + err.Error())
 		}
 	case *set != "":
 		if err := registry.ProjectBindSet(*bind, *set); err != nil {
@@ -439,6 +429,31 @@ func registryMemoryDefault(args []string) {
 	default:
 		fail("memory-default: choose --list or --set SLUG")
 	}
+}
+
+// memoryDefaultListing renders `memory-default --list`: EMPTY or starred
+// CATALOG rows, plus a trailing STALE line when the binding names a memory the
+// catalog lacks, so callers stop instead of falling back to the local memory.
+func memoryDefaultListing(cat []string, current string) []string {
+	var out []string
+	matched := false
+	if len(cat) == 0 {
+		out = append(out, "EMPTY")
+	} else {
+		out = append(out, "CATALOG")
+		for _, row := range cat {
+			marker := "-"
+			if strings.SplitN(row, "\t", 2)[0] == current {
+				marker = "*"
+				matched = true
+			}
+			out = append(out, row+"\t"+marker)
+		}
+	}
+	if current != "" && !matched {
+		out = append(out, "STALE "+current)
+	}
+	return out
 }
 
 func registryKnowledgeJoin(args []string) {
