@@ -1,6 +1,6 @@
 {
   "name": "demarkus-opencode-memory",
-  "version": "0.13.82",
+  "version": "0.13.83",
   "description": "Local, versioned memory for OpenCode via demarkus. Provisions a local demarkus-server, auto-generates a token, wires the demarkus-memory MCP server, injects standing guidance so sessions self-document to the memory, and enforces a publish tag-gate plus a destination gate.",
   "author": "latebit",
   "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/opencode-memory",
