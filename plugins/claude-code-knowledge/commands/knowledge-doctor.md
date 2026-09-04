@@ -45,7 +45,7 @@ Before the first broker call, set a command-wide deadline five minutes out. Chec
    Any failure, truncating limit, partial-result marker, or unavailable subtree makes the inventory incomplete. Preserve returned entries, list missing scope and exact coverage, suppress definitive orphan, missing-hub, broken-link, and dangling-reference conclusions that depend on omitted paths. Cross-world conclusions use only complete inventories and crawls from worlds in the same resolved system and audit scope.
 3. **Crawl disconnected documents.** For every inventory document absent from the root crawl's successful nodes, including `[error]` nodes, `mark_graph` on that document with depth 1. Captures outbound edges from orphaned, failed, and beyond-depth documents.
 4. **Bound supplemental crawling.** At most 100 supplemental `mark_graph` calls per command, retries included, within the deadline. Report skipped documents and mark affected worlds incomplete when either limit hits.
-5. **Retry once.** Retry each unsuccessful source once while budget remains. A final source failure leaves that source's outbound edges unknown: mark that world's orphan **and** broken-link analysis incomplete and suppress definitive results for both.
+5. **Retry once.** Retry each unsuccessful source once while budget remains. A final source failure leaves only that source's outbound edges unknown: mark that world's orphan analysis incomplete, and broken-link analysis incomplete for edges that source would contribute; `[not-found]` findings already confirmed by successful sources stand.
 
 ## Core checks (graph + inventory; per-doc fetching only for the bounded broken-link confirmations below)
 
@@ -127,7 +127,7 @@ Plain, grouped by world then check, most actionable first. One-line summary per 
 #### Untagged / ADR / index / titles / duplicates …
 ```
 
-End with a short prioritized "what I'd fix first." Say all clean only when every check ran to complete coverage; any deadline, crawl failure, inventory bound, or deep-check cap makes the verdict "no findings in the covered scope" with the gaps listed.
+End with a short prioritized "what I'd fix first." Verdict: "all clean" only when every check ran to complete coverage and found nothing. Incomplete coverage (deadline, crawl failure, inventory bound, deep-check cap): report every confirmed finding as usual, then state coverage incomplete with the gaps listed; "no findings in the covered scope" only when there are zero findings.
 
 ## Don't
 
