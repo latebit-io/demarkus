@@ -250,8 +250,8 @@ func expectedBrandArtifacts(t *testing.T, root string) int {
 		bases[spec.Targets[i].Name] = spec.Targets[i]
 	}
 	total := 0
-	for _, b := range spec.Brands {
-		base := bases[b.Base]
+	for i := range spec.Brands {
+		base := bases[spec.Brands[i].Base]
 		total += countFiles(t, filepath.Join(root, "plugins", "prompt-source", base.Surface), func(name string) bool {
 			return strings.HasSuffix(name, ".tmpl") || strings.HasSuffix(name, ".md.alias")
 		})

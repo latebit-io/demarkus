@@ -20,6 +20,10 @@ cd tools && go run ./plugin-prompts check
 
 A `commands/<old>.md.alias` file whose body names another command renders that command's full body under the old name with a `Deprecated alias of /<new>` description prefix, so a renamed command keeps working under both names on every harness while the alias file exists.
 
+## Store noun
+
+Prose never calls the personal store "memory": hosts ship a built-in memory feature and agents conflated the two. Templates write `{{.Store}}`, `{{.Stores}}`, and `{{.StoreTitle}}` (default `soul` / `souls` / `Soul`); a target or brand overrides them with `store_noun` and `store_noun_plural` in `manifest.json`. Command names (`/memory-*`), plugin names, and MCP server ids are identifiers and stay as they are.
+
 ## Brands
 
 A `brands` entry in `manifest.json` renders a Claude Code base target under another plugin name into `plugins/brands/<name>/`. This repository ships no brands; a fork adds its own. See [plugins/brands/README.md](../brands/README.md) for the rebranding guide.

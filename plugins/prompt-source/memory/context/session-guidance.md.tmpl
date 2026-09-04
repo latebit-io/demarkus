@@ -1,33 +1,33 @@
-# demarkus-memory: persistent project memory is available
+# {{.MemoryPluginName}}: your demarkus {{.Store}} is available
 
-Local, versioned memory store (the "memory", formerly the soul) via the `demarkus-memory` MCP tools. Treat it like project memory from {{.RepoInstructions}}: consult before starting, record as you go, unprompted.
+Your {{.Store}} is a local, versioned demarkus store reached through the `{{.MemoryPluginName}}` MCP tools. It is not the host's built-in memory feature; "recall" and "record" in this guidance always mean the {{.Store}}. Treat it like {{.RepoInstructions}}: consult before starting, record as you go, unprompted.
 
-{{if eq .Harness "claude"}}**Durable memory store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or Claude Code's built-in memory. CLAUDE.md owns always-in-context instructions; the memory owns everything recalled on demand. If Claude Code's built-in memory tool is enabled, you may offer to turn it off, only with the user's say-so; never disable it unasked.
-{{else}}**Durable memory store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or a harness's built-in memory. {{.RepoInstructions}} owns always-in-context instructions; the memory owns everything recalled on demand. A separate one-time setup offer handles built-in memory integration; never disable anything unasked.
+{{if eq .Harness "claude"}}**Your durable store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or Claude Code's built-in memory. CLAUDE.md owns always-in-context instructions; the {{.Store}} owns everything recalled on demand. If Claude Code's built-in memory tool is enabled, you may offer to turn it off, only with the user's say-so; never disable it unasked.
+{{else}}**Your durable store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or a harness's built-in memory. {{.RepoInstructions}} owns always-in-context instructions; the {{.Store}} owns everything recalled on demand. A separate one-time setup offer handles built-in memory integration; never disable anything unasked.
 {{end}}
 **Project slug:** basename of {{.ProjectDir}}, lowercased, spaces → hyphens. Everything lives under `/<slug>/`.
 
 ## Write target (catalog + binding)
 
-Surfaces: local managed memory (`/memory-init`), remote memories (`/memory-join`), knowledge systems (`/knowledge-join`). All expose identical `mark_*` tools, so pick the write target deliberately:
+Surfaces: local managed {{.Store}} (`/memory-init`), remote {{.Stores}} (`/memory-join`), knowledge systems (`/knowledge-join`). All expose identical `mark_*` tools, so pick the write target deliberately:
 
 - **Reads**: explicit URL, or lookup on whichever surface holds the subject.
-- **Writes** route by **role**, then **binding**: personal/draft/working notes → a memory; shared/authoritative knowledge → a knowledge system via `/promote`, never a direct write. Among memories, this repo's bound memory (set by `/memory-join`, changed by `/memory-default`, recorded in `~/.demarkus/project-souls`) is the default; with no binding, the local memory.
+- **Writes** route by **role**, then **binding**: personal/draft/working notes → a {{.Store}}; shared/authoritative knowledge → a knowledge system via `/promote`, never a direct write. Among {{.Stores}}, this repo's bound {{.Store}} (set by `/memory-join`, changed by `/memory-default`, recorded in `~/.demarkus/project-souls`) is the default; with no binding, the local {{.Store}}.
 - Genuinely ambiguous target: ask the user once, don't guess.
 
-Binding is **enforced**: a write to a memory other than the bound one is denied at write time (destination gate); re-issue it through {{.ToolForm}}. The publish tag-gate fires on the local and any remote memory alike, so tag every publish.
+Binding is **enforced**: a write to a {{.Store}} other than the bound one is denied at write time (destination gate); re-issue it through {{.ToolForm}}. The publish tag-gate fires on the local and any remote {{.Store}} alike, so tag every publish.
 
 ## Recall first
 
-Before "what do I know / did we decide / have we seen X", and at the start of substantive work, check the memory:
+Before "what do I know / did we decide / have we seen X", and at the start of substantive work, check the {{.Store}}:
 
 - `mark_lookup` with `url=/<slug>/` and a subject `query` is the **card catalog**: importance-ranked table (path, importance, title, tags), no bodies. Then `mark_fetch` the rows worth reading. It finds only what was tagged or titled, so pair it with `mark_fetch /<slug>/index.md`. Transport/auth/server errors are failures to surface, never empty results.
 - `mark_backlinks` / `mark_graph` surface related docs via the link graph.
-- Nothing relevant: say so. Never fabricate memory.
+- Nothing relevant: say so. Never fabricate recall.
 
 ## Record as you go
 
-Write without prompting. Full per-project layout is in the `remember` skill (a `/project-template.md` at the memory root overrides it). Routes:
+Write without prompting. Full per-project layout is in the `remember` skill (a `/project-template.md` at the {{.Store}} root overrides it). Routes:
 
 - **Decision** → `/<slug>/adr/<NNNN>-<title>.md`
 - **Bug lesson / gotcha** → `/<slug>/debugging.md` (highest recall value)

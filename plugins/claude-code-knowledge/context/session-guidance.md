@@ -13,7 +13,7 @@ Use the joined system's tools through `mcp__<slug>__mark_*`. MCP tools are named
 - Older broker without `mark_lookup_all`: reproduce the aggregation. `mark_worlds` first; on failure or malformed output, surface the exact error and stop, never continue with a stale world set. Empty directory: report no readable scope, not an empty catalog. Otherwise pick one global limit (default 10), run `mark_lookup` per readable world with the same query/filter/limit, keep each row's ordinal, qualify paths as `mark://<world>/<path>`, merge by ordinal asc, importance desc, world asc, path asc, apply the limit once. Some worlds fail: partial, disclose, keep rows, never treat a partial empty merge as proof of absence. All fail: surface the aggregate failure and stop.
 - Plain single-world endpoint: `mark_lookup` directly. Catalog lookup finds only what was tagged or titled, so pair it with the world's `index.md` hub. Surface partial-world, transport, auth, dispatch, and server failures.
 - `mark_backlinks` / `mark_graph` surface related docs via the link graph.
-- Say nothing was found only after a successful non-partial lookup returns no rows. Never fabricate organizational memory.
+- Say nothing was found only after a successful non-partial lookup returns no rows. Never fabricate organizational soul.
 
 ## Navigate: hubs and worlds
 
@@ -37,11 +37,11 @@ Publish only when the user explicitly asks or confirms, through the `knowledge-p
 - One well-tagged document beats scattered fragments.
 - Writing standards: `mark://root/.well-known/demarkus/style.md` (brokered); plain endpoint: bare `/.well-known/demarkus/style.md` with `force: true` when present, else the inline baseline: audience upfront, one-sentence summary under the H1, unique headings (headings are anchors), no em dashes. A style gate warns at write time on a frontmatter fence, missing `# H1`, em dashes, duplicate headings (`DEMARKUS_STYLE_STRICTNESS` or `~/.demarkus/plugin.style-strictness` adjusts severity).
 
-## Memory ↔ knowledge system
+## Soul ↔ knowledge system
 
-With a personal **memory** (demarkus-memory plugin) too, keep lanes:
+With a personal **soul** (demarkus-memory plugin) too, keep lanes:
 
-- **Memory**: personal, local, drafts and machine-local working notes.
+- **Soul**: personal, local, drafts and machine-local working notes.
 - **Knowledge system**: shared, authoritative; higher bar because others depend on it.
 
-Draft in the memory; **promote when ready for others**, re-tagged for the shared taxonomy and following the world's template. For a shared/org subject the knowledge system is the source of truth and first place to look; the memory is scratch space and backstop. Don't duplicate org knowledge into the memory; link or fetch fresh.
+Draft in the soul; **promote when ready for others**, re-tagged for the shared taxonomy and following the world's template. For a shared/org subject the knowledge system is the source of truth and first place to look; the soul is scratch space and backstop. Don't duplicate org knowledge into the soul; link or fetch fresh.

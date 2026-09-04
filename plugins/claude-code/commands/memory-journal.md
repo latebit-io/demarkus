@@ -9,19 +9,19 @@ Append the entry to today's journal file for the current project. One file per d
 
 `$ARGUMENTS` blank or whitespace only: ask for the entry text and stop; no write tool.
 
-## Memory
+## Soul
 
-Resolve which memory this project uses before any `mark_*` call; a project bound with `/memory-join` or `/memory-default` lives on that memory, not the local one. First establish the absolute project directory (`CLAUDE_PROJECT_DIR`); if unavailable, ask the user which project and stop before running anything below. Then run:
+Resolve which soul this project uses before any `mark_*` call; a project bound with `/memory-join` or `/memory-default` lives on that soul, not the local one. First establish the absolute project directory (`CLAUDE_PROJECT_DIR`); if unavailable, ask the user which project and stop before running anything below. Then run:
 
 ```bash
 "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind "${CLAUDE_PROJECT_DIR}"
 ```
 
-Read the last line first: trailing `STALE <slug>` means the bound memory is no longer available; tell the user to restore it (`/memory-init` when the slug is `demarkus-memory`, `/memory-join` for any other) or `/memory-default` to rebind, and stop; never fall back to the local memory when that line is present, whatever precedes it. Otherwise `EMPTY` means no memories joined: use the local memory, id `demarkus-memory`. `CATALOG` is followed by `<id>\t<tier>\t<host>\t<insecure>\t<current>` rows; the `*` row is this project's memory; no marked row means the local memory. Non-zero exit or malformed output: surface the exact error and stop; never fall back silently. Every `mark_*` call below goes through that memory's server (`mcp__<id>__mark_*`; local memory is `mcp__demarkus-memory__mark_*`). If that server's tools are not connected, say so, name the server, and stop.
+Read the last line first: trailing `STALE <slug>` means the bound soul is no longer available; tell the user to restore it (`/memory-init` when the slug is `demarkus-memory`, `/memory-join` for any other) or `/memory-default` to rebind, and stop; never fall back to the local soul when that line is present, whatever precedes it. Otherwise `EMPTY` means no souls joined: use the local soul, id `demarkus-memory`. `CATALOG` is followed by `<id>\t<tier>\t<host>\t<insecure>\t<current>` rows; the `*` row is this project's soul; no marked row means the local soul. Non-zero exit or malformed output: surface the exact error and stop; never fall back silently. Every `mark_*` call below goes through that soul's server (`mcp__<id>__mark_*`; local soul is `mcp__demarkus-memory__mark_*`). If that server's tools are not connected, say so, name the server, and stop.
 
 ## Steps
 
-1. **Resolve and validate the project slug.** Read absolute `CLAUDE_PROJECT_DIR`; candidate = basename, lowercased, spaces to hyphens. Unset: ask the user which project. Before writing, check whether that candidate subtree already exists in the project's memory. If it does and this session has not established it belongs to this exact absolute path, ask the user to confirm or choose a unique slug; equal basenames never imply the same project. Before interpolating the slug into any memory path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`, `..`, and any URL or path delimiter such as `/`, `\\`, `:`, `?`, `#`, or `%`. Use the confirmed slug consistently for the journal path and root-index link.
+1. **Resolve and validate the project slug.** Read absolute `CLAUDE_PROJECT_DIR`; candidate = basename, lowercased, spaces to hyphens. Unset: ask the user which project. Before writing, check whether that candidate subtree already exists in the project's soul. If it does and this session has not established it belongs to this exact absolute path, ask the user to confirm or choose a unique slug; equal basenames never imply the same project. Before interpolating the slug into any soul path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`, `..`, and any URL or path delimiter such as `/`, `\\`, `:`, `?`, `#`, or `%`. Use the confirmed slug consistently for the journal path and root-index link.
 
 2. **Compute the target path.** Today's UTC date as `YYYY-MM-DD`. Target: `/<project>/journal/<YYYY-MM-DD>.md`.
 

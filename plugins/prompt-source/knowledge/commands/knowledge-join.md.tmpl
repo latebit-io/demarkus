@@ -2,7 +2,7 @@
 description: Join an organizational demarkus knowledge system through its HTTPS broker and {{.Agent}} OAuth.
 ---
 
-Connect this {{.Agent}} installation to an organizational demarkus knowledge system: an HTTPS broker, not a direct-QUIC memory. The harness owns OAuth credentials; this command never requests or stores them.
+Connect this {{.Agent}} installation to an organizational demarkus knowledge system: an HTTPS broker, not a direct-QUIC {{.Store}}. The harness owns OAuth credentials; this command never requests or stores them.
 
 ## Argument
 
@@ -73,5 +73,5 @@ Stop on first failure, list remaining endpoint and gate state, give the repair c
 
 - No continuing after validation failure or slug collision.
 - No requesting, reading, pasting, or storing OAuth tokens.
-- Not for direct `mark://` memories; use `/memory-join`.
+- Not for direct `mark://` {{.Stores}}; use `/memory-join`.
 - Never run automatically.

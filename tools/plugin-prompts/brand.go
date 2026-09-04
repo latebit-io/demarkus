@@ -20,6 +20,8 @@ type brand struct {
 	Description         string `json:"description"`
 	MemoryPluginName    string `json:"memory_plugin_name"`
 	KnowledgePluginName string `json:"knowledge_plugin_name"`
+	Store               string `json:"store_noun"`
+	Stores              string `json:"store_noun_plural"`
 }
 
 const brandOutputPrefix = "plugins/brands/"
@@ -91,6 +93,10 @@ func brandTarget(b *brand, base *target) *target {
 	} else {
 		t.KnowledgePluginName = b.PluginName
 	}
+	if b.Store != "" {
+		t.Store, t.Stores = b.Store, b.Stores
+	}
+	applyStoreDefaults(&t)
 	return &t
 }
 
