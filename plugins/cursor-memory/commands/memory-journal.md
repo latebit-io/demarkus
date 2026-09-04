@@ -9,9 +9,19 @@ Append the following entry to today's journal file for the current project. One 
 
 If `$ARGUMENTS` is blank or whitespace only, ask for the entry text and stop; call no write tool.
 
+## Memory
+
+Resolve which memory this project uses before any `mark_*` call; a project bound with `/memory-join` or `/memory-default` lives on that memory, not the local one. Run:
+
+```bash
+"$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind <shell-escaped-absolute-project-dir>
+```
+
+Replace `<shell-escaped-absolute-project-dir>` with exactly one POSIX-shell-safe word for the current project directory; never wrap the raw path in literal single quotes. `EMPTY` means no memories are joined: use the local memory, id `demarkus-memory`. `CATALOG` is followed by `<id>\t<tier>\t<host>\t<insecure>\t<current>` rows; the row marked `*` is this project's memory, and no marked row means the local memory. On a non-zero exit or malformed output, surface the exact error and stop; never fall back silently. Every `mark_*` call below goes through that memory's server (the MCP server named `<id>`; the local memory is `demarkus-memory`). If that server's tools are not connected, say so, name the server, and stop.
+
 ## Steps
 
-1. **Resolve and validate the project slug.** Use the absolute current project directory; use its basename, lowercased with spaces replaced by hyphens, as the candidate. If the project directory is unavailable, ask the user which project. Before writing, check whether that candidate subtree already exists in the selected memory. If it does and this session has not established that it belongs to this exact absolute project path, ask the user to confirm or choose a unique slug; never assume equal basenames mean the same project. Before interpolating the slug into any memory path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`, `..`, and any URL or path delimiter such as `/`, `\\`, `:`, `?`, `#`, or `%`. Use the final confirmed slug consistently for the journal path and root-index link.
+1. **Resolve and validate the project slug.** Use the absolute current project directory; use its basename, lowercased with spaces replaced by hyphens, as the candidate. If the project directory is unavailable, ask the user which project. Before writing, check whether that candidate subtree already exists in the project's memory. If it does and this session has not established that it belongs to this exact absolute project path, ask the user to confirm or choose a unique slug; never assume equal basenames mean the same project. Before interpolating the slug into any memory path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`, `..`, and any URL or path delimiter such as `/`, `\\`, `:`, `?`, `#`, or `%`. Use the final confirmed slug consistently for the journal path and root-index link.
 
 2. **Compute the target path.** Use today's date in UTC as `YYYY-MM-DD`. Target: `/<project>/journal/<YYYY-MM-DD>.md`.
 
