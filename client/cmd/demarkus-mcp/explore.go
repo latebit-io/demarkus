@@ -21,14 +21,7 @@ const exploreSectionCap = 10
 func markExploreTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_explore",
 		mcp.WithDescription(
-			"Orient around one document in a single call: its outline head (heading "+
-				"tree with #anchors plus the opening paragraph), outbound links, recorded "+
-				"backlinks, and sibling documents in the same directory; each section "+
-				"capped at 10 entries. Use this instead of a fetch + backlinks + list "+
-				"chain when you need to understand what a document covers and what to "+
-				"read next; then mark_fetch url#<anchor> for the sections that matter. "+
-				"Backlinks come from the local graph store (mark_graph populates it). "+
-				urlHint(host),
+			"Orient around one document: outline head, outbound links, backlinks, siblings (10 each). Use instead of fetch+backlinks+list, then mark_fetch url#<anchor>. Backlinks from local graph store (mark_graph populates). "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
