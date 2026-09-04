@@ -107,3 +107,21 @@ func TestSplitMcpHarnessLeavesChildArgsAlone(t *testing.T) {
 		t.Fatal("dangling --harness should error")
 	}
 }
+
+func TestMemoryDefaultListingFlagsStaleBinding(t *testing.T) {
+	cat := []string{"demarkus-memory\tlocal\t-\t-", "soul\tremote\tmark://s\t0"}
+	got := strings.Join(memoryDefaultListing(cat, "soul"), "\n")
+	if !strings.Contains(got, "soul\tremote\tmark://s\t0\t*") || strings.Contains(got, "STALE") {
+		t.Fatalf("bound row should be starred, no STALE: %q", got)
+	}
+	got = strings.Join(memoryDefaultListing(cat, "gone"), "\n")
+	if !strings.HasSuffix(got, "\nSTALE gone") || strings.Contains(got, "\t*") {
+		t.Fatalf("missing binding should end with STALE and star nothing: %q", got)
+	}
+	if got := strings.Join(memoryDefaultListing(nil, "gone"), "\n"); got != "EMPTY\nSTALE gone" {
+		t.Fatalf("empty catalog with a binding: %q", got)
+	}
+	if got := strings.Join(memoryDefaultListing(nil, ""), "\n"); got != "EMPTY" {
+		t.Fatalf("unbound empty: %q", got)
+	}
+}

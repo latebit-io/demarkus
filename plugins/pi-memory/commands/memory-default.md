@@ -30,7 +30,9 @@ the destination server's `mark_*` tools directly. This command only moves the de
      `<id>\t<tier>\t<host>\t<insecure>\t<current>`. `tier` is `local` (the
      plugin-managed memory, id `demarkus-memory`), `remote` (a direct-QUIC memory),
      or `broker` (a hosted memory behind an HTTPS memory broker). `current` is `*` for
-     the project's existing default.
+     the project's existing default. A trailing `STALE <slug>` line means the existing
+     default names a memory that is no longer joined; treat the project as having no
+     usable default and say so when asking.
 
 2. **Ask which memory to make the default** in one plain question listing the catalog rows as numbered options (id, tier, host). Mark the current default. Do not invent memories not in the list; wait for the user's answer.
 

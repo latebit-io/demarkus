@@ -30,7 +30,9 @@ Reads and one-off writes to a *different* joined memory are unaffected: call
      `<id>\t<tier>\t<host>\t<insecure>\t<current>`. `tier` is `local` (the
      plugin-managed memory, id `demarkus-memory`), `remote` (a direct-QUIC memory),
      or `broker` (a hosted memory behind an HTTPS memory broker). `current` is `*` for
-     the project's existing default.
+     the project's existing default. A trailing `STALE <slug>` line means the existing
+     default names a memory that is no longer joined; treat the project as having no
+     usable default and say so when asking.
 
 2. **Ask which memory to make the default** via one `AskUserQuestion`, one option per catalog row (label = id, description = tier + host). Mark the current default in its description. Do not invent memories not in the list.
 

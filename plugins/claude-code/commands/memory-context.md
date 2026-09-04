@@ -14,7 +14,7 @@ Resolve which memory this project uses before any `mark_*` call; a project bound
 "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind "${CLAUDE_PROJECT_DIR}"
 ```
 
-`EMPTY` means no memories are joined: use the local memory, id `demarkus-memory`. `CATALOG` is followed by `<id>\t<tier>\t<host>\t<insecure>\t<current>` rows; the row marked `*` is this project's memory, and no marked row means the local memory. On a non-zero exit or malformed output, surface the exact error and stop; never fall back silently. Every `mark_*` call below goes through that memory's server (`mcp__<id>__mark_*`; the local memory is `mcp__demarkus-memory__mark_*`). If that server's tools are not connected, say so, name the server, and stop.
+`EMPTY` means no memories are joined: use the local memory, id `demarkus-memory`. `CATALOG` is followed by `<id>\t<tier>\t<host>\t<insecure>\t<current>` rows; the row marked `*` is this project's memory, and no marked row means the local memory. A trailing `STALE <slug>` line means this project is bound to a memory that is no longer joined: tell the user to run `/memory-join` for it or `/memory-default` to rebind, and stop; do not fall back to the local memory. On a non-zero exit or malformed output, surface the exact error and stop; never fall back silently. Every `mark_*` call below goes through that memory's server (`mcp__<id>__mark_*`; the local memory is `mcp__demarkus-memory__mark_*`). If that server's tools are not connected, say so, name the server, and stop.
 
 ## Steps
 
