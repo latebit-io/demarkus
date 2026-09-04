@@ -11,7 +11,7 @@
       "name": "demarkus-memory",
       "source": "plugins/cursor-memory",
       "description": "Zero-config local memory for Cursor. Spawns a local demarkus-server and wires MCP tools for fetch/publish/append/graph/lookup over your own versioned markdown store, and self-documents sessions to it. /memory-join adds remote memories with per-project binding and a destination gate; /promote lifts ready notes to a joined knowledge system.",
-      "version": "0.13.77",
+      "version": "0.13.78",
       "category": "memory",
       "tags": ["memory", "demarkus", "mark-protocol", "local-first"]
     }
