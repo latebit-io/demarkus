@@ -100,6 +100,29 @@ reviews:
           not the client library
         - URL resolution and token lookup happen at this layer
         - Error messages must be clear for LLM consumption
+        - Tool descriptions and parameter descriptions ride every request in
+          hosts that eager-load MCP schemas (Cursor). Keep each to 1-3 terse
+          sentences: what it does, parameter semantics, safety caveats. Flag
+          any growth in WithDescription / mcp.Description text; rationale
+          belongs in session guidance or the skill, not the schema. Same rule
+          for tools/internal/broker/mcp_tools_list.go
+
+    - path: "plugins/prompt-source/**"
+      instructions: >
+        Canonical prompt templates; every plugin ships generated copies.
+        Session guidance is injected into every session and command/skill
+        bodies load on invocation, so every byte is paid in tokens.
+
+        Check for:
+        - Terse prose: fragments, no articles or filler, no rationale the
+          step already implies. Flag added sentences that restate or explain
+        - Behavior preserved: every step, rule, path, flag, shell snippet,
+          output shape, and Go template directive kept; shell fences unchanged
+          unless the change is deliberate
+        - No em dashes; no volatile content (timestamps, ids, counts) that
+          would bust prompt-cache prefixes
+        - Any change here needs the generated copies regenerated and a
+          version bump of the affected plugin lineage in the same PR
 
     - path: "client/cmd/demarkus/**"
       instructions: >
