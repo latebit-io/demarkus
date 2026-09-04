@@ -226,6 +226,8 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.agent_plugins == 'true'
     runs-on: ubuntu-latest
+    # Healthy runs take 4 to 7 minutes; a sick registry once took 5 minutes per
+    # npm ci, so the store is cached and a slow run fails instead of waiting.
     timeout-minutes: 10
     permissions:
       contents: read
@@ -236,6 +238,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: npm
+          cache-dependency-path: plugins/*/package-lock.json
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"

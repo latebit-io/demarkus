@@ -18,7 +18,7 @@ Show the root index of the memory this project uses. A project bound with `/memo
 
    - `EMPTY` → no memories joined; use the local memory, id `demarkus-memory`.
    - `CATALOG` → each following line is `<id>\t<tier>\t<host>\t<insecure>\t<current>`. The row whose `current` is `*` is this project's memory. If no row is marked, use the local memory, id `demarkus-memory`.
-   - A trailing `STALE <slug>` line → this project is bound to a memory that is no longer joined. Tell the user to run `/memory-join` for it or `/memory-default` to rebind, and stop; do not read the local memory instead.
+   - A trailing `STALE <slug>` line → this project is bound to a memory that is no longer available. Tell the user to restore it (`/memory-init` when the slug is `demarkus-memory`, `/memory-join` for any other slug) or `/memory-default` to rebind, and stop; do not read the local memory instead.
    - Non-zero exit or malformed output → surface the exact error and stop; do not fall back silently.
 
 2. **Fetch the index.** Call `mark_fetch` with `url: /index.md` and `force: true` through the chosen memory's server (the MCP server named `<id>`; the local memory is `demarkus-memory`). If that server's tools are not connected, say so, name the server, and stop.
