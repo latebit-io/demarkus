@@ -128,8 +128,9 @@ reviews:
           unless the change is deliberate
         - No em dashes; no volatile content (timestamps, ids, counts) that
           would bust prompt-cache prefixes
-        - Any change here needs the generated copies regenerated and a
-          version bump of the affected plugin lineage in the same PR
+        - Any template or manifest change that affects generated output
+          needs the generated copies regenerated and a version bump of the
+          affected plugin lineage in the same PR (README edits do not)
 
     - path: "client/cmd/demarkus/**"
       instructions: >

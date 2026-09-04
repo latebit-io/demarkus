@@ -7,7 +7,7 @@ description: Sweep the memory for promotion candidates (high-signal, durable, no
 
 Scan the memory for documents worth promoting to a shared knowledge system; present a ranked candidate list. On-demand, in-session form of the pipeline's batch sweep: automates "mark a candidate" across many docs at once. It **never** promotes on its own; each candidate goes through `/promote`, which owns the human gate. (The fully autonomous batch sweep is a separate scheduled agent, not this command.)
 
-`$ARGUMENTS` optionally scopes to one project slug; empty means every project.
+`$ARGUMENTS` optionally scopes to one project slug; empty means every project. Before the first scoped `mark_lookup`/`mark_list`, require `^[a-z0-9][a-z0-9._-]*$`; anything else (including `/`, `?`, `#`, `%`, `..`) → report the invalid slug and stop; never pass it into a path.
 
 Set a command-wide deadline three minutes ahead before the first tool call. Check it before every call; when it expires, stop starting work, preserve completed results, list skipped scope, mark the scan partial.
 

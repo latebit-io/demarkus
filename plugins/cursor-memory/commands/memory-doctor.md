@@ -106,7 +106,7 @@ Plain, grouped by check, most actionable first. Per finding: path and one-line s
 ### ADR / index / titles / duplicates …
 ```
 
-End with a short prioritized "what I'd fix first." All clean: say so plainly.
+End with a short prioritized "what I'd fix first." Say all clean only when every check ran to complete coverage; any crawl failure, inventory bound, or deep-check cap makes the verdict "no findings in the covered scope" with the gaps listed.
 
 ## Don't
 
