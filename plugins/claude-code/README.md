@@ -15,17 +15,17 @@ Zero-config: the plugin spawns a local `demarkus-server`, generates a capability
 
 ## What it does
 
-- **`/memory`**: show the local memory index.
-- **`/memory-init`**: detect and configure the memory (reuse existing or install new).
-- **`/memory-join`**: join a remote demarkus memory, store its token in a 0600 file, and bind it to the project.
-- **`/memory-default`**: set the project's default demarkus write target.
-- **`/memory-context`**: restore session context from the project's memory (recent journal, active work).
-- **`/memory-journal`**: append an entry to today's journal.
-- **`/memory-status`**: show connection state and verify health.
-- **`/memory-doctor`**: read-only hygiene audit (orphans, broken links, untagged docs, stale index entries, ADR gaps).
+- **`/soul`**: show the local memory index.
+- **`/soul-init`**: detect and configure the memory (reuse existing or install new).
+- **`/soul-join`**: join a remote demarkus memory, store its token in a 0600 file, and bind it to the project.
+- **`/soul-default`**: set the project's default demarkus write target.
+- **`/soul-context`**: restore session context from the project's memory (recent journal, active work).
+- **`/soul-journal`**: append an entry to today's journal.
+- **`/soul-status`**: show connection state and verify health.
+- **`/soul-doctor`**: read-only hygiene audit (orphans, broken links, untagged docs, stale index entries, ADR gaps).
 - **`/promote`**: lift a memory document to a shared knowledge system (curate, route, gate, publish, back-stamp).
 - **`/promote-scan`**: sweep the memory for promotion candidates.
-- **`/memory-refresh`**: refresh promoted documents from the knowledge system, the downward leg of the coherence edge.
+- **`/soul-refresh`**: refresh promoted documents from the knowledge system, the downward leg of the coherence edge.
 - **`remember` skill**: routing rules for recall and recording (which file gets decisions, lessons, patterns, journal entries).
 
 ## Hooks

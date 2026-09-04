@@ -9,7 +9,7 @@ Local, versioned project memory for the [pi](https://pi.dev) coding agent, via [
 - **Publish tag-gate.** A tagless `mark_publish` is invisible to `mark_lookup` forever; the gate makes that loud at write time (`warn` by default, `block`/`ask` available).
 - **Destination gate.** When a repo is bound to a specific memory, a write aimed at a different memory is denied (default `block`) so memory lands on the right store.
 - **Recall / journal / promote nudges.** Discreet reminders at the moments they matter.
-- **Slash commands.** `/memory`, `/memory-context`, `/memory-journal`, `/memory-init`, `/memory-join`, `/memory-default`, `/memory-status`, `/memory-doctor`, `/memory-refresh`, `/promote`, `/promote-scan`, plus the on-demand `memory` skill.
+- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `memory` skill.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ If the plugin is published as its own repository, the one-line git form works to
 pi install git:github.com/latebit-io/demarkus-pi-memory
 ```
 
-On the next session the memory is provisioned automatically. Run `/mcp` (or restart pi) once after the first session to connect the newly-registered `demarkus-memory` server. Use `/memory-status` to diagnose, `/memory-init` to reconfigure (adopt an existing server, switch modes). Remove with `pi remove ./demarkus/plugins/pi-memory`.
+On the next session the memory is provisioned automatically. Run `/mcp` (or restart pi) once after the first session to connect the newly-registered `demarkus-memory` server. Use `/soul-status` to diagnose, `/soul-init` to reconfigure (adopt an existing server, switch modes). Remove with `pi remove ./demarkus/plugins/pi-memory`.
 
 ### Update
 

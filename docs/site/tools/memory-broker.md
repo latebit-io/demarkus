@@ -20,7 +20,7 @@ Requires a Business, Enterprise, or Edu workspace with Developer mode authorized
 
 ### Claude Code
 
-With the demarkus-memory plugin, `/memory-join https://memory.example.com` validates the endpoint, registers the catalog row, binds the project (the destination gate then routes memory writes here), and registers the HTTP MCP server. Without the plugin:
+With the demarkus-memory plugin, `/soul-join https://memory.example.com` validates the endpoint, registers the catalog row, binds the project (the destination gate then routes memory writes here), and registers the HTTP MCP server. Without the plugin:
 
 ```bash
 claude mcp add --transport http soul https://memory.example.com/mcp

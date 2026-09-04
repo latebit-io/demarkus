@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.88
+
+Slash commands renamed from `/memory-*` back to `/soul-*` (`/soul`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-context`, `/soul-journal`, `/soul-status`, `/soul-doctor`, `/soul-refresh`) and prose now says "soul" for the personal store, so it is not confused with the host's built-in memory feature. No aliases for the old names. Plugin name, MCP server id, and `mark_*` tools unchanged. Prompt templates trimmed for token cost.
+
 ## 0.13.76
 
 - Remove the deprecated `/soul-*` command aliases; use the `/memory-*` names. The pinned binary is unchanged and still accepts its `soul-*` helper names.

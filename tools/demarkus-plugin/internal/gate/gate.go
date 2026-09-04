@@ -238,7 +238,7 @@ func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambigu
 			return Decision{}, err
 		}
 		decisions = append(decisions, Decision{Decision: string(s), Reason: fmt.Sprintf(
-			"demarkus write to %s: %s. Open a single workspace root, or run /memory-default so the roots agree; to relax this check, set DEMARKUS_MEMORY_DEST_STRICTNESS=warn (or ask).",
+			"demarkus write to %s: %s. Open a single workspace root, or run /soul-default so the roots agree; to relax this check, set DEMARKUS_MEMORY_DEST_STRICTNESS=warn (or ask).",
 			urlOr(args, "this document"), ambiguous)})
 	} else if pt.Verb == "publish" || pt.Verb == "append" {
 		bound, err := config.ProjectBinding(cwd)
@@ -248,9 +248,9 @@ func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambigu
 		if bound != "" && bound != memoryID {
 			target := urlOr(args, "this document")
 			reason := fmt.Sprintf(
-				"demarkus write to %s is going to memory '%s', but this project is bound to memory '%s'. "+
-					"Re-issue the write against the bound memory's tools (the %s MCP server's mark_publish / mark_append). "+
-					"To change which memory this project uses, run /memory-default in this repo; to relax this check, set "+
+				"demarkus write to %s is going to store '%s', but this project is bound to store '%s'. "+
+					"Re-issue the write against the bound store's tools (the %s MCP server's mark_publish / mark_append). "+
+					"To change which store this project uses, run /soul-default in this repo; to relax this check, set "+
 					"DEMARKUS_MEMORY_DEST_STRICTNESS=warn (or ask).",
 				target, memoryID, bound, bound)
 			s, err := config.MemoryDestStrictness()

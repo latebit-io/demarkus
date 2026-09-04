@@ -1105,7 +1105,7 @@ func ensureManagedServer(memoryDir string, port int) error {
 			if t := tailFile(logFile, 5); t != "" {
 				tailInfo = "\nrecent log:\n" + t
 			}
-			return fmt.Errorf("demarkus-server failed to start (port %d may be in use; re-run /memory-init)%s", port, tailInfo)
+			return fmt.Errorf("demarkus-server failed to start (port %d may be in use; re-run /soul-init)%s", port, tailInfo)
 		}
 		if !portIsFree(port) {
 			break
@@ -1129,7 +1129,7 @@ func restartLocalServerOnUpgrade(replaced bool) {
 	}
 	port, err := strconv.Atoi(strings.TrimSpace(cfg.Port))
 	if err != nil {
-		warnf("could not parse recorded PORT %q for upgrade restart; run /memory-init to recover", cfg.Port)
+		warnf("could not parse recorded PORT %q for upgrade restart; run /soul-init to recover", cfg.Port)
 		return
 	}
 
@@ -1138,7 +1138,7 @@ func restartLocalServerOnUpgrade(replaced bool) {
 	if cfg.Mode != "reuse" && fileExists(filepath.Join(cfg.MemoryDir, ".pid")) {
 		logf("binary upgraded; restarting managed server (mode=%s, memory=%s, port=%d) on the new binary", cfg.Mode, cfg.MemoryDir, port)
 		if err := ensureManagedServer(cfg.MemoryDir, port); err != nil {
-			warnf("could not (re)start the local server after a binary upgrade; run /memory-init to recover: %v", err)
+			warnf("could not (re)start the local server after a binary upgrade; run /soul-init to recover: %v", err)
 		}
 		return
 	}
@@ -1151,7 +1151,7 @@ func restartLocalServerOnUpgrade(replaced bool) {
 
 	logf("binary upgraded; starting down server (mode=%s, memory=%s, port=%d) on the new binary", cfg.Mode, cfg.MemoryDir, port)
 	if err := ensureManagedServer(cfg.MemoryDir, port); err != nil {
-		warnf("could not (re)start the local server after a binary upgrade; run /memory-init to recover: %v", err)
+		warnf("could not (re)start the local server after a binary upgrade; run /soul-init to recover: %v", err)
 	}
 }
 
@@ -1348,7 +1348,7 @@ func provisionLocked() (int, error) {
 			seed = false
 		}
 		if pidOfServerAtRoot(cfg.MemoryDir) == 0 {
-			warnf("configured to reuse server at %s but none is running; run /memory-init to reconfigure", cfg.MemoryDir)
+			warnf("configured to reuse server at %s but none is running; run /soul-init to reconfigure", cfg.MemoryDir)
 			seed = false // known down; don't pay the seeding dial retries
 		}
 	default:
@@ -1404,7 +1404,7 @@ func doDefault() error {
 	// Same end-to-end auth guarantee as reuse mode: setup success must mean
 	// writes work, not just that local files were written.
 	if err := verifyPluginToken(defaultPort); err != nil {
-		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /memory-init", err)
+		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /soul-init", err)
 	}
 	if err := saveConfig(memory, defaultPort, "default", ""); err != nil {
 		return err
@@ -1432,7 +1432,7 @@ func doIsolated() error {
 		return err
 	}
 	if err := verifyPluginToken(port); err != nil {
-		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /memory-init", err)
+		return fmt.Errorf("plugin token does not authenticate against the managed server: %w; re-run /soul-init", err)
 	}
 	if err := saveConfig(memory, port, "isolated", ""); err != nil {
 		return err
@@ -1476,7 +1476,7 @@ func doReuse(port int, root string) error {
 			// conventional file instead would mutate a registry the server never
 			// reads (a flattened ps string can truncate paths with whitespace).
 			if !fileExists(discovered) {
-				return fmt.Errorf("the adopted server (pid %d) reads tokens from %s, but no such file exists; check its -tokens flag or DEMARKUS_TOKENS and re-run /memory-init", targetPID, discovered)
+				return fmt.Errorf("the adopted server (pid %d) reads tokens from %s, but no such file exists; check its -tokens flag or DEMARKUS_TOKENS and re-run /soul-init", targetPID, discovered)
 			}
 			logf("adopted server (pid %d) reads tokens from %s, not the conventional %s; using it", targetPID, discovered, tokensTOML)
 			tokensTOML = discovered
@@ -1496,10 +1496,10 @@ func doReuse(port int, root string) error {
 		// server never reads passes every local check and fails only at first
 		// write; refuse to report success on that state.
 		if err := verifyPluginToken(port); err != nil {
-			return fmt.Errorf("plugin token does not authenticate against the adopted server (tokens file: %s): %w; check the server's -tokens flag or DEMARKUS_TOKENS and re-run /memory-init", tokensTOML, err)
+			return fmt.Errorf("plugin token does not authenticate against the adopted server (tokens file: %s): %w; check the server's -tokens flag or DEMARKUS_TOKENS and re-run /soul-init", tokensTOML, err)
 		}
 	} else {
-		warnf("no running server found with -root %s; proceeding with config, but /memory-init may need a rerun once it's up", root)
+		warnf("no running server found with -root %s; proceeding with config, but /soul-init may need a rerun once it's up", root)
 	}
 
 	if err := saveConfig(root, port, "reuse", tokensTOML); err != nil {
@@ -1563,7 +1563,7 @@ func VerifyAuth() (string, error) {
 		return "", err
 	}
 	if cfg == nil {
-		return "no local memory configured (run /memory-init)", nil
+		return "no local memory configured (run /soul-init)", nil
 	}
 	port, err := strconv.Atoi(cfg.Port)
 	if err != nil {
@@ -1600,7 +1600,7 @@ func VerifyAuth() (string, error) {
 	// verdict from it would describe the wrong server. Parsed comparison:
 	// "06309" and "6309" are the same port.
 	if sp, err := strconv.Atoi(serverPort); err != nil || sp != port {
-		return fmt.Sprintf("cannot verify: server pid %d listens on port %s but the config says %s; re-run /memory-init", pid, serverPort, cfg.Port), nil
+		return fmt.Sprintf("cannot verify: server pid %d listens on port %s but the config says %s; re-run /soul-init", pid, serverPort, cfg.Port), nil
 	}
 	if err := verifyPluginToken(port); err != nil {
 		// Only a definitive unauthorized is drift; a transport failure means the
@@ -1608,7 +1608,7 @@ func VerifyAuth() (string, error) {
 		if !errors.Is(err, errUnauthorized) {
 			return fmt.Sprintf("cannot verify: %v (server pid %d, port %s)", err, pid, cfg.Port), nil
 		}
-		return fmt.Sprintf("token drift: plugin token does not authenticate (server pid %d, token registry %s); re-run /memory-init or update the registry hash", pid, tokensTOML), nil
+		return fmt.Sprintf("token drift: plugin token does not authenticate (server pid %d, token registry %s); re-run /soul-init or update the registry hash", pid, tokensTOML), nil
 	}
 	return fmt.Sprintf("write auth healthy (server pid %d, token registry %s)", pid, tokensTOML), nil
 }
@@ -1621,16 +1621,17 @@ func Status() (string, error) {
 		return "", err
 	}
 	if cfg == nil {
-		return "no local memory configured (run /memory-init)", nil
+		return "no local memory configured (run /soul-init)", nil
 	}
 	w, err := HealthWarning()
 	if err != nil {
 		return "", err
 	}
+	verdict := "healthy"
 	if w != "" {
-		return fmt.Sprintf("mode=%s memory=%s port=%s: %s", cfg.Mode, cfg.MemoryDir, cfg.Port, w), nil
+		verdict = w
 	}
-	return fmt.Sprintf("mode=%s memory=%s port=%s : healthy", cfg.Mode, cfg.MemoryDir, cfg.Port), nil
+	return fmt.Sprintf("mode=%s memory=%s port=%s: %s\ndesired=%s", cfg.Mode, cfg.MemoryDir, cfg.Port, verdict, desiredVersions()), nil
 }
 
 // HealthWarning echoes a one-line human warning when the configured memory server
@@ -1652,11 +1653,11 @@ func HealthWarning() (string, error) {
 		// .pid would falsely report healthy while memory tools fail.
 		pid := readPID(filepath.Join(cfg.MemoryDir, ".pid"))
 		if pid <= 0 || !pidIsServerAtRoot(pid, cfg.MemoryDir) {
-			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /memory-init to restart, or /memory-status to diagnose.", cfg.MemoryDir), nil
+			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.MemoryDir), nil
 		}
 	case "reuse":
 		if pidOfServerAtRoot(cfg.MemoryDir) == 0 {
-			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /memory-init to reconfigure.", cfg.MemoryDir), nil
+			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.MemoryDir), nil
 		}
 	}
 	return "", nil

@@ -90,7 +90,7 @@ func RemoteMemoryRow(slug string) (MemoryRow, bool, error) {
 		f := strings.Split(r, "\t")
 		if f[0] == slug {
 			if len(f) < 2 || f[1] == "" {
-				return MemoryRow{}, false, fmt.Errorf("memories catalog row for %q has no host; re-run /memory-join", slug)
+				return MemoryRow{}, false, fmt.Errorf("memories catalog row for %q has no host; re-run /soul-join", slug)
 			}
 			var row MemoryRow
 			if len(f) >= 2 {
@@ -197,7 +197,7 @@ func ProjectBindSet(dir, slug string) error {
 				return err
 			}
 			if !ok {
-				return fmt.Errorf("'%s' is not a joined memory; run /memory-join first (see /memory-default --list)", slug)
+				return fmt.Errorf("'%s' is not a joined memory; run /soul-join first (see /soul-default --list)", slug)
 			}
 			mutation, err := prepareProjectBindingMutation(dir, slug, bindingsPath)
 			if err != nil {
@@ -528,7 +528,7 @@ type BrokerEndpoint struct {
 
 // ValidateBrokerEndpoint validates a broker URL (https + RFC 9728
 // metadata) and derives a slug; shared by /knowledge-join and the
-// /memory-join broker path. Errors are user-presentable verbatim.
+// /soul-join broker path. Errors are user-presentable verbatim.
 func ValidateBrokerEndpoint(rawURL string) (*BrokerEndpoint, error) {
 	// Parse BEFORE any request: userinfo must never reach the wire (Go
 	// turns it into a Basic Authorization header) or an error message.
@@ -584,7 +584,7 @@ func ValidateBrokerEndpoint(rawURL string) (*BrokerEndpoint, error) {
 	return &BrokerEndpoint{URL: u, Slug: slug, McpURL: u + "/mcp"}, nil
 }
 
-// MemoryJoinResult is the outcome of a successful /memory-join.
+// MemoryJoinResult is the outcome of a successful /soul-join.
 type MemoryJoinResult struct {
 	Slug      string
 	Host      string

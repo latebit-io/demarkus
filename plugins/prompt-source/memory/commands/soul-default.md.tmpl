@@ -1,0 +1,43 @@
+---
+description: Set this project's default {{.Store}} write target (the binding the destination gate enforces).
+---
+
+Choose which joined {{.Store}} **this project writes to by default**. The choice is the per-project binding in `~/.demarkus/project-souls`; the destination gate enforces it on every `mark_publish` / `mark_append`. Does NOT join a {{.Store}} or change MCP config; only re-points an already-joined repo. To add a {{.Store}}, run `/soul-join` first.
+
+Explicit reads from a *different* joined {{.Store}} stay unrestricted: call {{.ToolForm}} directly. Every {{.Store}} write goes through the bound server; the destination gate denies the rest.
+
+## Steps
+
+1. **List the catalog.** Run:
+
+   ```bash
+   "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind {{if eq .Harness "claude"}}"${CLAUDE_PROJECT_DIR}"{{else}}<shell-escaped-absolute-project-dir>{{end}}
+   ```
+
+   When the command contains `<shell-escaped-absolute-project-dir>`, replace it with exactly one POSIX-shell-safe word, escaping embedded apostrophes; never wrap the raw path in literal single quotes.
+
+   - Read the last line first. Trailing `STALE <slug>` → the existing default names a {{.Store}} no longer available: treat the project as having no usable default, and name `<slug>` when asking. Recovery by slug: `demarkus-memory` is the local {{.Store}}, restored with `/soul-init`; any other slug is a remote {{.Store}}, rejoined with `/soul-join`. With `EMPTY` above it, give that recovery (or say they can join another {{.Store}}) and stop.
+   - `EMPTY` (no `STALE` line) → no {{.Stores}} joined. Tell the user to run `/soul-join` (or `/soul-init` for the local managed {{.Store}}) and stop.
+   - Non-zero exit or malformed output → surface the exact registry failure and stop; do not report an empty catalog.
+   - `CATALOG` header → each following line is `<id>\t<tier>\t<host>\t<insecure>\t<current>`. `tier`: `local` (plugin-managed {{.Store}}, id `demarkus-memory`), `remote` (direct-QUIC {{.Store}}), or `broker` (hosted {{.Store}} behind an HTTPS {{.Store}} broker). `current` is `*` for the project's existing default.
+
+{{if eq .Harness "claude"}}2. **Ask which {{.Store}} to make the default** via one `AskUserQuestion`, one option per catalog row (label = id, description = tier + host). Mark the current default in its description. Do not invent {{.Stores}} not in the list.
+{{else}}2. **Ask which {{.Store}} to make the default** in one plain question listing the catalog rows as numbered options (id, tier, host). Mark the current default. Do not invent {{.Stores}} not in the list; wait for the user's answer.
+{{end}}
+3. **Save it.** With the chosen `<slug>`:
+
+   ```bash
+   "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --set '<slug>' --bind {{if eq .Harness "claude"}}"${CLAUDE_PROJECT_DIR}"{{else}}<shell-escaped-absolute-project-dir>{{end}}
+   ```
+
+   - Only on exact `OK <chosen-slug>`, returned slug matching the selection, confirm: "This project now writes to {{.Store}} **`<slug>`** by default." If a server was joined mid-session, note its MCP tools appear only after a restart; the binding itself is live immediately.
+   - Any other result (non-zero exit, `FAIL: <message>`, mismatched slug, malformed zero-exit output) → show it verbatim and stop without confirming the binding.
+
+## Don't
+
+{{if eq .Harness "claude"}}- Don't run `claude mcp add/remove`; this command never touches MCP config.
+{{else}}- Don't touch MCP config; this command only moves the default binding.
+{{end}}
+- Don't read, echo, or store any token.
+- Don't edit `~/.demarkus/project-souls` by hand; the script rewrites only this project's row (awk upsert keyed on the exact directory), preserving the others.
+- Don't use this to join a {{.Store}}; that's `/soul-join` (remote) or `/soul-init` (local managed).

@@ -9,7 +9,7 @@ Local, versioned project memory for [OpenCode](https://opencode.ai) via [demarku
 - **Publish tag-gate.** A tagless `mark_publish` is invisible to `mark_lookup` forever; the gate makes that loud at write time (`warn` by default, `block`/`ask` available).
 - **Destination gate.** When a repo is bound to a specific memory, a write aimed at a different memory is denied so memory lands on the right store.
 - **Recall / journal / promote nudges.** Discreet reminders at the moments they matter.
-- **Slash commands.** `/memory`, `/memory-context`, `/memory-journal`, `/memory-init`, `/memory-join`, `/memory-default`, `/memory-status`, `/memory-doctor`, `/memory-refresh`, `/promote`, `/promote-scan`, plus the on-demand `memory` skill (native OpenCode skill).
+- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `memory` skill (native OpenCode skill).
 
 ## Requirements
 
@@ -30,7 +30,7 @@ git clone https://github.com/latebit-io/demarkus
 demarkus/plugins/opencode-memory/install.sh
 ```
 
-This copies the plugin to `$XDG_CONFIG_HOME/opencode/plugins/demarkus-memory.ts` (default `~/.config/opencode/plugins/`), the skill to the sibling `skills/memory/`, and the assets it reads to `~/.demarkus/opencode-memory/`. Start (or restart) OpenCode; the first session provisions the memory. Restart once after the first session so the newly-registered MCP server connects. Diagnose with `/memory-status`, reconfigure with `/memory-init`, remove with `install.sh --uninstall`.
+This copies the plugin to `$XDG_CONFIG_HOME/opencode/plugins/demarkus-memory.ts` (default `~/.config/opencode/plugins/`), the skill to the sibling `skills/memory/`, and the assets it reads to `~/.demarkus/opencode-memory/`. Start (or restart) OpenCode; the first session provisions the memory. Restart once after the first session so the newly-registered MCP server connects. Diagnose with `/soul-status`, reconfigure with `/soul-init`, remove with `install.sh --uninstall`.
 
 ### Update
 

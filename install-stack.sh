@@ -53,7 +53,7 @@ AGENT_STATE_DIR="/var/lib/demarkus-agent"
 WORLD_INTERNAL="localhost:6309"
 
 # The world is exposed as <MEMORY_LABEL>.<host> with a real Caddy cert so the
-# memory plugin can /memory-join it without --insecure; a drop-in points the
+# memory plugin can /soul-join it without --insecure; a drop-in points the
 # world (user demarkus, install.sh's SERVICE_NAME) at the cert in WORLD_TLS_DIR.
 WORLD_SERVICE="demarkus"
 WORLD_GROUP="demarkus"
@@ -967,7 +967,7 @@ print_card() {
   echo "  Librarian AI:           ${librarian}"
   echo ""
   echo "  Personal memory (demarkus-memory plugin):"
-  echo "    /memory-join mark://${MEMORY_LABEL}.${host}:${WORLD_PUBLIC_PORT}#token=${memory_token}"
+  echo "    /soul-join mark://${MEMORY_LABEL}.${host}:${WORLD_PUBLIC_PORT}#token=${memory_token}"
   if [ "$memory_status" != "ready" ]; then
     echo "    (${MEMORY_LABEL}.${host} cert still provisioning — add --insecure until the renewal timer lands it)"
   fi

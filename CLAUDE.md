@@ -55,6 +55,14 @@ This is a single-project flat soul. The demarkus-memory plugin's per-project
 Never store plans in a vendor-specific folder. Publish them to demarkus-soul
 (`/plans/<name>.md`).
 
+## Prompt and tool-description token budget
+
+Everything under `plugins/prompt-source/` and every MCP tool description
+(`client/cmd/demarkus-mcp`, `tools/internal/broker/mcp_tools_list.go`) is
+paid in tokens on every session, invocation, or request. Write terse:
+fragments, no filler, no rationale the step implies. Keep behavior intact,
+nothing volatile, no em dashes. See `plugins/prompt-source/README.md`.
+
 ## Doc style
 
 Natural language in soul docs; avoid overusing "-" within sentences (bullet "- " is fine).

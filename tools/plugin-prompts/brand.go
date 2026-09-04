@@ -20,6 +20,8 @@ type brand struct {
 	Description         string `json:"description"`
 	MemoryPluginName    string `json:"memory_plugin_name"`
 	KnowledgePluginName string `json:"knowledge_plugin_name"`
+	Store               string `json:"store_noun"`
+	Stores              string `json:"store_noun_plural"`
 }
 
 const brandOutputPrefix = "plugins/brands/"
@@ -91,6 +93,14 @@ func brandTarget(b *brand, base *target) *target {
 	} else {
 		t.KnowledgePluginName = b.PluginName
 	}
+	// A singular override re-derives the plural; a plural-only override keeps the base singular.
+	switch {
+	case b.Store != "":
+		t.Store, t.Stores = b.Store, b.Stores
+	case b.Stores != "":
+		t.Stores = b.Stores
+	}
+	applyStoreDefaults(&t)
 	return &t
 }
 

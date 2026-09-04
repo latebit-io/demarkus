@@ -79,7 +79,7 @@ A join URL packs the host and token into one paste-able string, so onboarding a 
 
 The recipient pastes it once:
 
-- Claude Code (demarkus-memory plugin): `/memory-join <join-url>` (add `--insecure` for a self-signed server)
+- Claude Code (demarkus-memory plugin): `/soul-join <join-url>` (add `--insecure` for a self-signed server)
 - CLI: `demarkus join '<join-url>'` (quote it; the shell would strip the `#fragment`)
 
 The credential rides in the URL fragment, which never appears in any request; still treat a join URL like the token it carries, and send it over a private channel.

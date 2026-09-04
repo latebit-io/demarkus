@@ -72,7 +72,7 @@ func TestKnowledgeGuidance(t *testing.T) {
 	if !strings.Contains(out, "**acme**") || !strings.Contains(out, "**beta**") {
 		t.Errorf("expected joined systems listed, got: %s", out[:min(120, len(out))])
 	}
-	if !strings.Contains(out, "No local demarkus memory is configured") {
+	if !strings.Contains(out, "No local demarkus store is configured") {
 		t.Error("expected the memory↔system note when no memory is configured")
 	}
 }

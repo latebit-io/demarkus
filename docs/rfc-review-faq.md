@@ -128,7 +128,7 @@ A knowledge system is distributed: many logically isolated worlds behind one bro
 - Each write creates a new hash-chained version. Re-writing identical content is a no-op that returns the existing version rather than a new one.
 - Optimistic concurrency (`expected_version` plus merge-on-conflict) stops stale writes clobbering newer ones.
 - A scheduled agent re-crawls every world and republishes the content-hash index and graph on the hub.
-- Memory copies of promoted documents can go stale. Refresh runs one way only: `/memory-refresh` copies the knowledge system's version down to the memory, and `/promote` is the only way a memory edit goes back up. There is no two-way sync.
+- Memory copies of promoted documents can go stale. Refresh runs one way only: `/soul-refresh` copies the knowledge system's version down to the memory, and `/promote` is the only way a memory edit goes back up. There is no two-way sync.
 
 ## How do diffs and merges work?
 

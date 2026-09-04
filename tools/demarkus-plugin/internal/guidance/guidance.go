@@ -125,7 +125,7 @@ func knowledge(in Input) (Output, error) {
 		return Output{}, err
 	}
 	if !memory {
-		parts = append(parts, "(No local demarkus memory is configured here, so the memory↔system guidance above is informational only; everything durable goes to the knowledge system.)")
+		parts = append(parts, "(No local demarkus store is configured here, so the store↔system guidance above is informational only; everything durable goes to the knowledge system.)")
 	}
 	return Output{Context: strings.Join(parts, "\n\n")}, nil
 }

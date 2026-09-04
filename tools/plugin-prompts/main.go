@@ -48,6 +48,26 @@ type target struct {
 	PluginName          string `json:"plugin_name"`
 	MemoryPluginName    string `json:"memory_plugin_name"`
 	KnowledgePluginName string `json:"knowledge_plugin_name"`
+	// Store is the prose noun for the personal store ("soul" by default). It
+	// is deliberately not "memory": hosts have a built-in memory feature and
+	// agents conflated the two. Command and plugin names are unaffected.
+	Store      string `json:"store_noun"`
+	Stores     string `json:"store_noun_plural"`
+	StoreTitle string `json:"-"`
+}
+
+const defaultStoreNoun = "soul"
+
+// applyStoreDefaults fills the store noun triple; StoreTitle is derived.
+func applyStoreDefaults(t *target) {
+	if t.Store == "" {
+		t.Store = defaultStoreNoun
+	}
+	if t.Stores == "" {
+		t.Stores = t.Store + "s"
+	}
+	r := []rune(t.Store)
+	t.StoreTitle = strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
 type artifact struct {
@@ -132,6 +152,7 @@ func renderAll(root string) ([]artifact, error) {
 	renderTargets := make([]*target, 0, len(spec.Targets)+len(spec.Brands))
 	baseByName := map[string]*target{}
 	for i := range spec.Targets {
+		applyStoreDefaults(&spec.Targets[i])
 		renderTargets = append(renderTargets, &spec.Targets[i])
 		baseByName[spec.Targets[i].Name] = &spec.Targets[i]
 	}
