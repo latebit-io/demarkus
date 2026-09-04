@@ -93,10 +93,11 @@ func brandTarget(b *brand, base *target) *target {
 	} else {
 		t.KnowledgePluginName = b.PluginName
 	}
-	if b.Store != "" {
-		t.Store = b.Store
-	}
-	if b.Stores != "" {
+	// A singular override re-derives the plural; a plural-only override keeps the base singular.
+	switch {
+	case b.Store != "":
+		t.Store, t.Stores = b.Store, b.Stores
+	case b.Stores != "":
 		t.Stores = b.Stores
 	}
 	applyStoreDefaults(&t)

@@ -22,7 +22,7 @@ A `commands/<old>.md.alias` file whose body names another command renders that c
 
 ## Store noun
 
-Prose never calls the personal store "memory": hosts ship a built-in memory feature and agents conflated the two. Templates write `{{.Store}}`, `{{.Stores}}`, and `{{.StoreTitle}}` (default `soul` / `souls` / `Soul`); a target or brand overrides them with `store_noun` and `store_noun_plural` in `manifest.json`. Command names (`/memory-*`), plugin names, and MCP server ids are identifiers and stay as they are.
+Prose never calls the personal store "memory": hosts ship a built-in memory feature and agents conflated the two. Templates write `{{.Store}}`, `{{.Stores}}`, and `{{.StoreTitle}}` (default `soul` / `souls` / `Soul`); a target or brand overrides them with `store_noun` and `store_noun_plural` in `manifest.json`. Plugin names, MCP server ids, and registry subcommands are identifiers and stay as they are; slash commands follow the noun (`/soul-*`).
 
 ## Brands
 

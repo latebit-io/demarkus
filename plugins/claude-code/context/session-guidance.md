@@ -4,7 +4,7 @@
 
 Your soul is a versioned demarkus store reached through the `demarkus-memory` MCP tools (local by default; a project binding may select a remote one). It is not the host's built-in memory feature; "recall" and "record" in this guidance always mean the soul. Treat it like CLAUDE.md: consult before starting, record as you go, unprompted.
 
-**Your durable store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or Claude Code's built-in memory. CLAUDE.md owns always-in-context instructions; the soul owns everything recalled on demand. If Claude Code's built-in memory tool is enabled, you may offer to turn it off, only with the user's say-so; never disable it unasked.
+**Your durable store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or the host's built-in memory. CLAUDE.md owns always-in-context instructions; the soul owns everything recalled on demand. If Claude Code's built-in memory tool is enabled, you may offer to turn it off, only with the user's say-so; never disable it unasked.
 
 **Project slug:** basename of `CLAUDE_PROJECT_DIR`, lowercased, spaces → hyphens. Everything lives under `/<slug>/`.
 
@@ -16,7 +16,7 @@ Surfaces: local managed soul (`/soul-init`), remote souls (`/soul-join`), knowle
 - **Writes** route by **role**, then **binding**: personal/draft/working notes → a soul; shared/authoritative knowledge → a knowledge system via `/promote`, never a direct write. Among souls, this repo's bound soul (set by `/soul-join`, changed by `/soul-default`, recorded in `~/.demarkus/project-souls`) is the default; with no binding, the local soul.
 - Genuinely ambiguous target: ask the user once, don't guess.
 
-Binding is **enforced**: a write to a soul other than the bound one is denied at write time (destination gate); re-issue it through `mcp__<slug>__mark_*`. The publish tag-gate fires on the local and any remote soul alike, so tag every publish.
+Binding is **enforced**: a write to a soul other than the bound one is denied at write time (destination gate); re-issue it through `mcp__<slug>__mark_*`. The publish tag-gate fires on the local and any remote soul alike.
 
 ## Recall first
 
@@ -55,4 +55,4 @@ Soft checks: publish gate (tags), session-end journal nudge when files changed b
 - No trivia, ephemeral chat, or anything derivable from the repo and git history. Capture the non-obvious: why, patterns, gotchas.
 - No secrets, credentials, or anything the user hasn't authorized.
 - `remember` skill has full routing; `/soul-context` primes a session, `/soul-journal` appends a dated entry, `/soul-status` diagnoses the server.
-- With a promote destination (a joined demarkus-knowledge system, or a plain remote server registered via `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add`): `/promote <memory-path>` lifts a ready doc (curate → gate → publish → back-stamp), `/promote-scan` finds candidates, `/soul-refresh` pulls promoted docs back down as they evolve. Publishing a new ADR nudges promotion. No destination: all dormant.
+- With a promote destination (a joined demarkus-knowledge system, or a plain remote server registered via `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add`): `/promote <soul-path>` lifts a ready doc (curate → gate → publish → back-stamp), `/promote-scan` finds candidates, `/soul-refresh` pulls promoted docs back down as they evolve. Publishing a new ADR nudges promotion. No destination: all dormant.

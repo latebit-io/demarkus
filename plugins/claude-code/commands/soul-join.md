@@ -12,6 +12,8 @@ A join URL's `#token=` fragment and `--token` value are secrets. Never echo one 
 
 No host supplied: ask. Token requirements unclear: ask before proceeding. Accept `mark://host[:port]` or bare host for QUIC, or an `https://` URL for a soul broker (see "Hosted soul"; never pass a token with it, OAuth owns auth). An HTTPS ORGANIZATIONAL knowledge system belongs to `/knowledge-join`. `--insecure` is explicit and only for self-signed QUIC endpoints.
 
+Every `<shell-escaped-*>` placeholder: exactly one POSIX-safe shell word (embedded apostrophes included); never wrap a raw value in literal single quotes.
+
 ## Hosted soul (https:// broker URL)
 
 1. Validate, register the catalog row, bind the project:
@@ -27,6 +29,8 @@ No host supplied: ask. Token requirements unclear: ask before proceeding. Accept
    ```bash
    claude mcp add --transport http '<slug>' '<mcp-url>' --scope project
    ```
+
+   Registration failure (non-zero exit): the catalog row and binding are already committed, so surface the exact error, report the join as partial (soul joined and bound, MCP server not registered), give the command as the retry, and do not confirm.
 
 3. Confirm slug, URL, and project binding. State: no token file; the broker authenticates via OAuth; the destination gate now binds this project's soul writes to `<slug>`.
 
@@ -64,7 +68,7 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
    )
    ```
 
-   Add `--insecure` before `--bind` only when the user explicitly selected it. Every `shell-escaped-*` placeholder: exactly one POSIX-safe shell word (embedded apostrophes included); never wrap a raw value in literal single quotes. Use `CLAUDE_PROJECT_DIR` for a public soul executed through Bash; for the user-terminal token command, shell-escape its current absolute value rather than relying on that variable outside Claude Code.
+   Add `--insecure` before `--bind` only when the user explicitly selected it. Use `CLAUDE_PROJECT_DIR` for a public soul executed through Bash; for the user-terminal token command, shell-escape its current absolute value rather than relying on that variable outside Claude Code.
 
    Continue only on `OK` with one valid `slug=`, `host=`, `insecure=`, and optional `token-file=` value. `FAIL`: surface the message and stop. Reachability is checked by the first MCP call; absence of an HTTP probe is not success.
 
@@ -74,9 +78,11 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
     claude mcp add '<slug>' --scope project -- "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --memory '<slug>'
    ```
 
+   Registration failure (non-zero exit): the catalog row and binding are already committed, so surface the exact error, report the join as partial (soul joined and bound, MCP server not registered), give the command as the retry, and do not confirm.
+
 4. Confirm slug, host, project binding, and whether a token file is used. State: the token is injected by `demarkus-plugin mcp-serve`, not stored in MCP config.
 
-5. Explain removal; do not perform it unasked. Remove the catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`; a stale binding makes the destination gate block writes to remaining souls. Then `claude mcp remove '<slug>'` so the removed server is no longer launched. Check that removal's exit status: on failure, surface the exact error and report cleanup incomplete (catalog row and token gone, MCP entry still present) with the command as the retry.
+5. Explain removal; do not perform it unasked. Remove the catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`; a stale binding makes the destination gate block writes to remaining souls. Then `claude mcp remove '<slug>'` so the removed server is no longer launched. Check each command's exit status in order; on failure surface the exact error, report cleanup incomplete naming what remains (row, token, or binding; or the MCP entry), give the command as the retry, and stop.
 
 ## Don't
 

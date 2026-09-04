@@ -111,12 +111,11 @@ func fail(msg string) {
 	os.Exit(1)
 }
 
-// cmdRegistry dispatches the registry mutations that replace the per-plugin bash
-// (memory-join/soul-default/register-knowledge/mirror-policy/promote-target) and
-// the mcp-config.mjs JS.
+// cmdRegistry dispatches the registry mutations that replaced the per-plugin
+// bash and the mcp-config.mjs JS; the switch below is the subcommand list.
 func cmdRegistry(args []string) {
 	if len(args) == 0 {
-		fail("registry: missing subcommand (mcp|memory-join|memory-default|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote)")
+		fail("registry: missing subcommand (mcp|memory-join (alias soul-join)|memory-default (alias soul-default)|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote)")
 	}
 	switch args[0] {
 	case "mcp":

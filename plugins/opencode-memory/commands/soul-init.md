@@ -20,7 +20,7 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run once
      `"$HOME/.demarkus/bin/demarkus-plugin" provision init default`
      Do not assume the install landed at `~/.demarkus/soul/`: `default` falls back to isolated mode on a different root and port when 6310 is taken. Report the actual mode, soul path, and port (step 3) from the script's stderr or `~/.demarkus/plugin-memory.conf`.
 
-   - Starts with `SERVERS` → one or more demarkus-server processes running, one `PID PORT ROOT` line each. Show all to the user in a clean list, then ask:
+   - Starts with `SERVERS` → one or more demarkus-server processes running, one `PID PORT ROOT` line each (numeric PID, numeric PORT, absolute ROOT). Any other output, or a row that does not match: surface the exact output and stop; never pick a server from it. Show valid rows to the user in a clean list, then ask:
 
      > Detected running demarkus-server(s). Pick one to reuse for this plugin's soul, or say "isolated" to create a separate instance on its own port:
 
@@ -33,10 +33,10 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run once
        `"$HOME/.demarkus/bin/demarkus-plugin" provision init isolated`
        Creates a separate soul at `~/.demarkus/plugin-soul/` on a free port in `16310+`.
 
-3. MCP registration is managed by the installed integration. After successful setup, report the chosen mode, soul path, and port. Tell the user to restart OpenCode if the MCP connection is not yet loaded, then verify with `/soul`.
+3. MCP registration: the installed integration. Report mode, soul path, port. MCP not loaded yet → restart OpenCode, verify with `/soul`.
 
 ## Important
 
 - Multiple servers and an ambiguous user: ask which one by PID or path; do not guess.
 - Config lives at `~/.demarkus/plugin-memory.conf`. Rerunning overwrites it.
-- In `reuse` mode the plugin does not manage the server's lifecycle; if the user stops that server, the soul is unavailable until they restart it or rerun `/soul-init`.
+- `reuse` mode: the plugin does not manage that server; stopped server → soul unavailable until restarted or `/soul-init` rerun.

@@ -12,6 +12,8 @@ A join URL's `#token=` fragment and `--token` value are secrets. Never echo one 
 
 No host supplied: ask. Token requirements unclear: ask before proceeding. Accept `mark://host[:port]` or bare host for QUIC, or an `https://` URL for a soul broker (see "Hosted soul"; never pass a token with it, OAuth owns auth). An HTTPS ORGANIZATIONAL knowledge system belongs to `/knowledge-join`. `--insecure` is explicit and only for self-signed QUIC endpoints.
 
+Every `<shell-escaped-*>` placeholder: exactly one POSIX-safe shell word (embedded apostrophes included); never wrap a raw value in literal single quotes.
+
 ## Hosted soul (https:// broker URL)
 
 1. Validate, register the catalog row, bind the project:
@@ -22,7 +24,8 @@ No host supplied: ask. Token requirements unclear: ask before proceeding. Accept
 
    Continue only on `OK` with `broker=1` and an `mcp-url=` value; on `FAIL`, surface the message and stop.
 
-2. Register `<mcp-url>` as a streamable-HTTP MCP server through this harness's own MCP configuration (OAuth runs in the client on first use); `mcp-serve` does not apply to broker souls. Check the result: the catalog row and binding were committed in step 1, so on failure surface the exact error, report the join as partial (soul joined and bound, MCP server not registered), have the user re-run the registration; do not confirm until it succeeds.
+2. MCP registration is automatic: at startup the integration wires broker rows from `~/.demarkus/souls` as remote HTTP MCP entries (`<mcp-url>`, OAuth in the client on first use). Restart OpenCode so the new server loads. Do not run `registry mcp add-http`; this harness does not read that config. After restart, if `<slug>` is not connected, surface that as a partial join (soul joined and bound, MCP server not loaded) and do not confirm.
+
 
 3. Confirm slug, URL, and project binding. State: no token file; the broker authenticates via OAuth; the destination gate now binds this project's soul writes to `<slug>`.
 
@@ -52,7 +55,7 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
    )
    ```
 
-   Add `--insecure` before `--bind` only when the user explicitly selected it. Every `shell-escaped-*` placeholder: exactly one POSIX-safe shell word (embedded apostrophes included); never wrap a raw value in literal single quotes. Use the shell-escaped literal absolute project directory, not a variable a separate terminal may expand from the wrong cwd.
+   Add `--insecure` before `--bind` only when the user explicitly selected it. Use the shell-escaped literal absolute project directory, not a variable a separate terminal may expand from the wrong cwd.
 
    Continue only on `OK` with one valid `slug=`, `host=`, `insecure=`, and optional `token-file=` value. `FAIL`: surface the message and stop. Reachability is checked by the first MCP call; absence of an HTTP probe is not success.
 
@@ -60,9 +63,10 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
 
    MCP registration is automatic from `~/.demarkus/souls` at startup. Restart OpenCode so the new server loads. Do not run `registry mcp add`; this harness does not read that config.
 
+
 3. Confirm slug, host, project binding, and whether a token file is used. State: the token is injected by `demarkus-plugin mcp-serve`, not stored in MCP config.
 
-4. Explain removal; do not perform it unasked. Remove the catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`; a stale binding makes the destination gate block writes to remaining souls.
+4. Explain removal; do not perform it unasked. Remove the catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`; a stale binding makes the destination gate block writes to remaining souls. Check each command's exit status in order; on failure surface the exact error, report cleanup incomplete naming what remains (row, token, or binding; or the MCP entry), give the command as the retry, and stop.
 
 ## Don't
 

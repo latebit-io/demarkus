@@ -261,15 +261,21 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
         for (const rawLine of memories.split("\n")) {
           const line = rawLine.trim();
           if (line.startsWith("#")) continue;
-          const slug = line.split("\t")[0]?.trim();
-          if (!slug || slug === MCP_SERVER_NAME) continue;
-          config.mcp[slug] = config.mcp[slug] ?? {
-            type: "local",
-            // --soul, not --memory: this hook can run before the fire-and-forget
-            // bootstrap has replaced an older binary. Switch when --soul is removed.
-            command: [BIN, "mcp-serve", "--soul", slug],
-            enabled: true,
-          };
+          const [slugRaw, hostRaw] = line.split("\t");
+          const slug = slugRaw?.trim();
+          const host = hostRaw?.trim() ?? "";
+          if (!slug || slug === MCP_SERVER_NAME || config.mcp[slug]) continue;
+          // Broker rows (https host) are OAuth HTTP endpoints at <host>/mcp, the
+          // same derivation as registry.ValidateBrokerEndpoint; never mcp-serve.
+          config.mcp[slug] = host.startsWith("https://")
+            ? { type: "remote", url: host + "/mcp", enabled: true }
+            : {
+                type: "local",
+                // --soul, not --memory: this hook can run before the fire-and-forget
+                // bootstrap has replaced an older binary. Switch when --soul is removed.
+                command: [BIN, "mcp-serve", "--soul", slug],
+                enabled: true,
+              };
         }
       } catch (e) {
         // ENOENT = nothing joined yet. Anything else must be loud: it makes

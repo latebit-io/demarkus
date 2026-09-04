@@ -41,7 +41,7 @@ Read the last line first: trailing `STALE <slug>` means the bound soul is no lon
      <entry text>
      ```
 
-     After the journal write commits (created here, or via the `ok` branch after a lost create race), use the saved pre-write state to update `/index.md` when the project was absent or its exact link was missing. Preserve all existing links; publish the saved full body with the correct `expected_version` and `on_conflict: "fail"` (or create a missing root index with version 0). First conflict: refetch `/index.md` with `force: true`; if the exact link now exists, the index step is complete without another write. Otherwise preserve concurrent links, add the link once, retry once. If that retry conflicts, report journal written, index update incomplete; no further retry, no duplicate link.
+     After the journal write commits (created here, or via the `ok` branch after a lost create race), use the saved pre-write state to update `/index.md` when the project was absent or its exact link was missing. Preserve all existing links; publish the saved full body with the saved complete metadata map (`mark_publish` replaces metadata), the correct `expected_version`, and `on_conflict: "fail"`; a missing root index is created at version 0 with `tags` and `importance` set. First conflict: refetch `/index.md` with `force: true`; if the exact link now exists, the index step is complete without another write. Otherwise preserve concurrent links, take the metadata map from that refetch, add the link once, retry once. If that retry conflicts, report journal written, index update incomplete; no further retry, no duplicate link.
 
    - `ok`: today's file exists. `mark_append` with:
 

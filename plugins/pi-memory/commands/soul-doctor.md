@@ -61,7 +61,7 @@ One fetch per document: run only for a single project or on request for a thorou
 
   Untagged since `v1`: never tagged, a curation exercise. *Lost* tags: candidate, not verdict; a later `mark_publish` may have dropped them deliberately. Appends between the two versions point at legacy damage, a publish at intent. Get user confirmation before restoring.
 
-  Repair, as a separate write step (this command never writes): `mark_fetch` with **`force=true`** (a plain fetch returns an outline for bodies of 8KB or more; publishing an outline destroys the doc). Version differs from the audited one: another writer moved the doc; re-run the check. Then `mark_publish` that body with the current metadata map **plus** the recovered fields (publish replaces the map; an omission deletes opaque keys), `retention` only if the user asks, `expected_version` at the current version, `on_conflict: "fail"`. Any error or conflict: report it exactly, stop, say the doc is unchanged.
+  Repair, as a separate write step (this command never writes): `mark_fetch` with **`force=true`** (publishing an outline destroys the doc). Version differs from the audited one: another writer moved the doc; re-run the check. Then `mark_publish` that body with the current metadata map **plus** the recovered fields (publish replaces the map; an omission deletes opaque keys), `retention` only if the user asks, `expected_version` at the current version, `on_conflict: "fail"`. Any error or conflict: report it exactly, stop, say the doc is unchanged.
 - **Duplicate content**: compare `content-hash` across fetched docs; identical hashes under different paths are duplicates.
 - **Untyped docs (OKF `type`)** *(advisory)*: read `type` metadata; no `type` or `type: Document` is un-kinded. A `type` key in `metadata` (`Reference`/`Decision`/`Architecture`/`Plan`/`Journal`/`Guide`/…) makes the soul OKF-typed and filterable (`mark_lookup` `filter: type=…`). **Exempt `index.md` and `log.md`**: the server never defaults their type; an untyped hub is correct. Advisory only: a local soul declares no `require_fields`; backfill suggestion, not violation.
 - **In-body frontmatter block** *(demarkus-specific)*: body whose **first non-blank line is `---`** with reserved/operational keys (`version`, `previous-hash`, `archived`, `meta.*`) is almost always an **exported demarkus doc pasted back into a publish**. The server stores frontmatter out-of-band and treats a body-leading `---` as literal content: stray horizontal rule + garbled headings, and the in-body `version:` won't match the real fetched `version`. Flag; fix = strip the block, re-publish with metadata out-of-band.
@@ -101,7 +101,7 @@ Plain, grouped by check, most actionable first. Per finding: path and one-line s
 - /roadmap.md → "ADR 0006", unlinked: target exists but the citing body has no Markdown link; link the prose mention to the canonical target
 
 ### Token drift        [whole-soul audit]
-- provision verify-auth: token drift (server pid 775, token registry /Users/x/.demarkus/tokens.toml); writes will fail unauthorized; re-run /soul-init or update the registry hash
+- provision verify-auth: <verdict> (server pid <pid>, token registry <path>); on drift: writes will fail unauthorized; re-run /soul-init or update the registry hash
 
 ### ADR / index / titles / duplicates …
 ```

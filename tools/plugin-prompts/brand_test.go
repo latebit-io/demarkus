@@ -17,4 +17,8 @@ func TestStoreDefaultsAndBrandNoun(t *testing.T) {
 	if bt.Store != "soul" || bt.Stores != "vaults" {
 		t.Fatalf("plural-only override = %q %q", bt.Store, bt.Stores)
 	}
+	bt = brandTarget(&brand{Name: "y", Base: "b", PluginName: "y", Store: "vault"}, base)
+	if bt.Store != "vault" || bt.Stores != "vaults" || bt.StoreTitle != "Vault" {
+		t.Fatalf("singular-only override = %q %q %q", bt.Store, bt.Stores, bt.StoreTitle)
+	}
 }

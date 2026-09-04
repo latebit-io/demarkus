@@ -2,9 +2,8 @@
 
 Your {{.Store}} is a versioned demarkus store reached through the `{{.MemoryPluginName}}` MCP tools (local by default; a project binding may select a remote one). It is not the host's built-in memory feature; "recall" and "record" in this guidance always mean the {{.Store}}. Treat it like {{.RepoInstructions}}: consult before starting, record as you go, unprompted.
 
-{{if eq .Harness "claude"}}**Your durable store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or Claude Code's built-in memory. CLAUDE.md owns always-in-context instructions; the {{.Store}} owns everything recalled on demand. If Claude Code's built-in memory tool is enabled, you may offer to turn it off, only with the user's say-so; never disable it unasked.
-{{else}}**Your durable store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or a harness's built-in memory. {{.RepoInstructions}} owns always-in-context instructions; the {{.Store}} owns everything recalled on demand. A separate one-time setup offer handles built-in memory integration; never disable anything unasked.
-{{end}}
+**Your durable store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or the host's built-in memory. {{.RepoInstructions}} owns always-in-context instructions; the {{.Store}} owns everything recalled on demand. {{if eq .Harness "claude"}}If Claude Code's built-in memory tool is enabled, you may offer to turn it off, only with the user's say-so; never disable it unasked.{{else}}A separate one-time setup offer handles built-in memory integration; never disable anything unasked.{{end}}
+
 **Project slug:** basename of {{.ProjectDir}}, lowercased, spaces → hyphens. Everything lives under `/<slug>/`.
 
 ## Write target (catalog + binding)
@@ -15,7 +14,7 @@ Surfaces: local managed {{.Store}} (`/soul-init`), remote {{.Stores}} (`/soul-jo
 - **Writes** route by **role**, then **binding**: personal/draft/working notes → a {{.Store}}; shared/authoritative knowledge → a knowledge system via `/promote`, never a direct write. Among {{.Stores}}, this repo's bound {{.Store}} (set by `/soul-join`, changed by `/soul-default`, recorded in `~/.demarkus/project-souls`) is the default; with no binding, the local {{.Store}}.
 - Genuinely ambiguous target: ask the user once, don't guess.
 
-Binding is **enforced**: a write to a {{.Store}} other than the bound one is denied at write time (destination gate); re-issue it through {{.ToolForm}}. The publish tag-gate fires on the local and any remote {{.Store}} alike, so tag every publish.
+Binding is **enforced**: a write to a {{.Store}} other than the bound one is denied at write time (destination gate); re-issue it through {{.ToolForm}}. The publish tag-gate fires on the local and any remote {{.Store}} alike.
 
 ## Recall first
 
@@ -54,4 +53,4 @@ Soft checks: publish gate (tags), session-end journal nudge when files changed b
 - No trivia, ephemeral chat, or anything derivable from the repo and git history. Capture the non-obvious: why, patterns, gotchas.
 - No secrets, credentials, or anything the user hasn't authorized.
 - `remember` skill has full routing; `/soul-context` primes a session, `/soul-journal` appends a dated entry, `/soul-status` diagnoses the server.
-- With a promote destination (a joined {{.KnowledgePluginName}} system, or a plain remote server registered via `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add`): `/promote <memory-path>` lifts a ready doc (curate → gate → publish → back-stamp), `/promote-scan` finds candidates, `/soul-refresh` pulls promoted docs back down as they evolve. Publishing a new ADR nudges promotion. No destination: all dormant.
+- With a promote destination (a joined {{.KnowledgePluginName}} system, or a plain remote server registered via `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add`): `/promote <{{.Store}}-path>` lifts a ready doc (curate → gate → publish → back-stamp), `/promote-scan` finds candidates, `/soul-refresh` pulls promoted docs back down as they evolve. Publishing a new ADR nudges promotion. No destination: all dormant.

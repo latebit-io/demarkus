@@ -13,6 +13,8 @@ A join URL's `#token=` fragment and `--token` value are secrets. Never echo one 
 
 No host supplied: ask. Token requirements unclear: ask before proceeding. Accept `mark://host[:port]` or bare host for QUIC, or an `https://` URL for a soul broker (see "Hosted soul"; never pass a token with it, OAuth owns auth). An HTTPS ORGANIZATIONAL knowledge system belongs to `/knowledge-join`. `--insecure` is explicit and only for self-signed QUIC endpoints.
 
+Every `<shell-escaped-*>` placeholder: exactly one POSIX-safe shell word (embedded apostrophes included); never wrap a raw value in literal single quotes.
+
 ## Hosted soul (https:// broker URL)
 
 1. Validate, register the catalog row, bind the project:
@@ -29,7 +31,9 @@ No host supplied: ask. Token requirements unclear: ask before proceeding. Accept
    "$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor add-http '<slug>' <shell-escaped-mcp-url>
    ```
 
-   `<shell-escaped-mcp-url>`: exactly one POSIX-safe shell word; never wrap the raw value in literal single quotes. Check exit status: the catalog row and binding were committed in step 1, so on failure surface the exact error, report the join as partial (soul joined and bound, MCP server not registered), give this command as the retry, and skip the confirmation. On success Cursor reloads `~/.cursor/mcp.json` itself; if `<slug>` is missing under MCP settings, toggle it there once.
+   On success Cursor reloads the file itself; if `<slug>` is missing under MCP settings, toggle it there once.
+
+   Registration failure (non-zero exit): the catalog row and binding are already committed, so surface the exact error, report the join as partial (soul joined and bound, MCP server not registered), give the command as the retry, and do not confirm.
 
 3. Confirm slug, URL, and project binding. State: no token file; the broker authenticates via OAuth; the destination gate now binds this project's soul writes to `<slug>`.
 
@@ -59,7 +63,7 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
    )
    ```
 
-   Add `--insecure` before `--bind` only when the user explicitly selected it. Every `shell-escaped-*` placeholder: exactly one POSIX-safe shell word (embedded apostrophes included); never wrap a raw value in literal single quotes. Use the shell-escaped literal absolute project directory, not a variable a separate terminal may expand from the wrong cwd.
+   Add `--insecure` before `--bind` only when the user explicitly selected it. Use the shell-escaped literal absolute project directory, not a variable a separate terminal may expand from the wrong cwd.
 
    Continue only on `OK` with one valid `slug=`, `host=`, `insecure=`, and optional `token-file=` value. `FAIL`: surface the message and stop. Reachability is checked by the first MCP call; absence of an HTTP probe is not success.
 
@@ -71,11 +75,12 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
 
    Writes `~/.cursor/mcp.json` (user scope). Cursor reloads it itself; if `<slug>` is missing under MCP settings, toggle it there once.
 
-   The catalog row and binding were committed in the previous step, so check this command's exit status. On failure: surface the exact error, report the join as partial (soul joined and bound, MCP server not registered), have the user re-run the registration command; do not report the join complete until it succeeds.
+
+   Registration failure (non-zero exit): the catalog row and binding are already committed, so surface the exact error, report the join as partial (soul joined and bound, MCP server not registered), give the command as the retry, and do not confirm.
 
 3. Confirm slug, host, project binding, and whether a token file is used. State: the token is injected by `demarkus-plugin mcp-serve`, not stored in MCP config.
 
-4. Explain removal; do not perform it unasked. Remove the catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`; a stale binding makes the destination gate block writes to remaining souls. Then remove the MCP entry so Cursor stops launching the removed server: `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor remove '<slug>'`, for broker and QUIC souls alike. Check that removal's exit status: on failure, surface the exact error and report cleanup incomplete (catalog row and token gone, MCP entry still present) with the command as the retry.
+4. Explain removal; do not perform it unasked. Remove the catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`; a stale binding makes the destination gate block writes to remaining souls. Then remove the MCP entry so Cursor stops launching the removed server: `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor remove '<slug>'`, for broker and QUIC souls alike. Check each command's exit status in order; on failure surface the exact error, report cleanup incomplete naming what remains (row, token, or binding; or the MCP entry), give the command as the retry, and stop.
 
 ## Don't
 

@@ -1627,10 +1627,11 @@ func Status() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	verdict := "healthy"
 	if w != "" {
-		return fmt.Sprintf("mode=%s memory=%s port=%s: %s\ndesired=%s", cfg.Mode, cfg.MemoryDir, cfg.Port, w, desiredVersions()), nil
+		verdict = w
 	}
-	return fmt.Sprintf("mode=%s memory=%s port=%s : healthy\ndesired=%s", cfg.Mode, cfg.MemoryDir, cfg.Port, desiredVersions()), nil
+	return fmt.Sprintf("mode=%s memory=%s port=%s: %s\ndesired=%s", cfg.Mode, cfg.MemoryDir, cfg.Port, verdict, desiredVersions()), nil
 }
 
 // HealthWarning echoes a one-line human warning when the configured memory server
