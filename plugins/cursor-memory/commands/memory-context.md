@@ -9,7 +9,7 @@ Bring the current project's recent memory into the session so the agent and the 
 
 ## Memory
 
-Resolve which memory this project uses before any `mark_*` call; a project bound with `/memory-join` or `/memory-default` lives on that memory, not the local one. Run:
+Resolve which memory this project uses before any `mark_*` call; a project bound with `/memory-join` or `/memory-default` lives on that memory, not the local one. First establish the absolute project directory; if it is unavailable, ask the user which project and stop before running anything below. Then run:
 
 ```bash
 "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind <shell-escaped-absolute-project-dir>

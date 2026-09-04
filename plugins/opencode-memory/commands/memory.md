@@ -8,7 +8,7 @@ Show the root index of the memory this project uses. A project bound with `/memo
 
 ## Steps
 
-1. **Resolve the project's memory.** Run:
+1. **Resolve the project's memory.** First establish the absolute project directory; if it is unavailable, ask the user which project and stop. Then run:
 
    ```bash
    "$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind <shell-escaped-absolute-project-dir>
