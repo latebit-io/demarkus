@@ -94,7 +94,10 @@ func brandTarget(b *brand, base *target) *target {
 		t.KnowledgePluginName = b.PluginName
 	}
 	if b.Store != "" {
-		t.Store, t.Stores = b.Store, b.Stores
+		t.Store = b.Store
+	}
+	if b.Stores != "" {
+		t.Stores = b.Stores
 	}
 	applyStoreDefaults(&t)
 	return &t

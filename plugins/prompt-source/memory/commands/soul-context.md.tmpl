@@ -1,0 +1,50 @@
+---
+description: Restore session context from the current project's {{.Store}} (recent journal, active work)
+---
+
+Bring the project's recent {{.Store}} into the session so agent and user pick up where they left off. Read-only.
+
+## {{.StoreTitle}}
+
+Resolve which {{.Store}} this project uses before any `mark_*` call; a project bound with `/soul-join` or `/soul-default` lives on that {{.Store}}, not the local one. Establish the absolute project directory{{if eq .Harness "claude"}} (`CLAUDE_PROJECT_DIR`){{end}}; if unavailable, ask the user which project and stop before running anything below. Then run:
+
+```bash
+"$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind {{if eq .Harness "claude"}}"${CLAUDE_PROJECT_DIR}"{{else}}<shell-escaped-absolute-project-dir>{{end}}
+```
+
+{{if eq .Harness "claude"}}{{else}}Replace `<shell-escaped-absolute-project-dir>` with exactly one POSIX-shell-safe word for the current project directory; never wrap the raw path in literal single quotes. {{end}}Read the last line first: trailing `STALE <slug>` → bound {{.Store}} no longer available; tell the user to restore it (`/soul-init` when the slug is `demarkus-memory`, `/soul-join` for any other slug) or `/soul-default` to rebind, and stop; never fall back to the local {{.Store}} when that line is present, whatever precedes it. `EMPTY` → no {{.Stores}} joined: local {{.Store}}, id `demarkus-memory`. `CATALOG` → `<id>\t<tier>\t<host>\t<insecure>\t<current>` rows; the row marked `*` is this project's {{.Store}}; no marked row means the local {{.Store}}. Non-zero exit or malformed output → surface the exact error and stop; never fall back silently. Every `mark_*` call below goes through that {{.Store}}'s server{{if eq .Harness "claude"}} (`mcp__<id>__mark_*`; local {{.Store}} is `mcp__demarkus-memory__mark_*`){{else}} (the MCP server named `<id>`; local {{.Store}} is `demarkus-memory`){{end}}. If that server's tools are not connected, say so, name the server, and stop.
+
+## Steps
+
+{{if eq .Harness "claude"}}1. **Resolve and validate the project slug.** Read the absolute `CLAUDE_PROJECT_DIR`; candidate = its basename, lowercased, spaces replaced by hyphens. If unset, ask the user which project.
+{{- else}}1. **Resolve and validate the project slug.** Use the absolute current project directory; candidate = its basename, lowercased, spaces replaced by hyphens. If unavailable, ask the user which project.
+{{- end}} Before reading, check that the candidate subtree belongs to this exact absolute project path (established this session, or confirmed by the user); if the subtree exists but that is not established, ask the user to confirm or choose the unique slug rather than restoring another project's context. Never assume equal basenames mean the same project. Before interpolating the slug into any {{.Store}} path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`, `..`, and any URL or path delimiter such as `/`, `\`, `:`, `?`, `#`, or `%`.
+2. **Confirm the project exists in the {{.Store}}.** `mark_fetch /<project>/index.md` with `force: true`. On `not-found`, the index may just be missing: `mark_list /<project>/` once (one page, no cursor following). If that is also `not-found` or empty, tell the user the project has no entries in that {{.Store}} yet, suggest `/soul-journal "<entry>"`, and stop. Surface unauthorized, transport, server, malformed-response, and list failures; never treat them as absence. If the listing shows documents, note the root index is missing and continue.
+
+3. **Pull recent journal entries.** `mark_list /<project>/journal/`, following `next-cursor` as `cursor` until `complete: true`, at most 100 list calls. Track seen cursors; require every incomplete page to return a non-empty, different, unseen cursor. If the 100-call bound is reached first, the final output must state journal context is partial and name the 100-call limit. Take today's entry plus the two most recent prior days (UTC `YYYY-MM-DD.md`). `mark_fetch` each with `force: true`; read in full. Today `not-found` → use the two most recent prior days. Surface any cursor, list, or fetch failure and mark that context incomplete.
+
+4. **Pull active work.** `mark_fetch /<project>/roadmap.md` with `force: true` if it exists (what's next / in flight). Skip silently only on `not-found`; surface other failures and mark roadmap context incomplete.
+
+5. **Summarize.** Plain text, no preamble, this shape:
+
+   ```text
+   ## <Project>: recent context
+
+   ### What's in flight
+   <one or two sentences pulled from roadmap.md, or "No roadmap yet">
+
+   ### Recent journal
+   - <YYYY-MM-DD>: <one-line summary of that day's entry>
+   - <YYYY-MM-DD>: <...>
+
+   ### Pick up where you left off
+   <one or two specific suggestions tied to the most recent journal entry; what was the user about to do next?>
+   ```
+
+   One line per summary. Restore context, don't read entries verbatim.
+
+## Don't
+
+- Don't fabricate. Empty section (no roadmap, no recent journals) → say so.
+- Don't pull every doc; session primer, not a dump.
+- Don't write to the {{.Store}}. Read-only.

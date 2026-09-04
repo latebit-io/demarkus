@@ -112,7 +112,7 @@ func fail(msg string) {
 }
 
 // cmdRegistry dispatches the registry mutations that replace the per-plugin bash
-// (memory-join/memory-default/register-knowledge/mirror-policy/promote-target) and
+// (memory-join/soul-default/register-knowledge/mirror-policy/promote-target) and
 // the mcp-config.mjs JS.
 func cmdRegistry(args []string) {
 	if len(args) == 0 {
@@ -512,7 +512,7 @@ func cmdMcpServe(args []string) {
 	}
 	mcpBin := filepath.Join(binDir, "demarkus-mcp")
 	if _, err := os.Stat(mcpBin); err != nil {
-		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: demarkus-mcp not installed at "+mcpBin+"; run /memory-init")
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: demarkus-mcp not installed at "+mcpBin+"; run /soul-init")
 		os.Exit(1)
 	}
 
@@ -539,7 +539,7 @@ func cmdMcpServe(args []string) {
 			os.Exit(1)
 		}
 		if !ok {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: memory '"+*memory+"' not in the catalog; re-run /memory-join")
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: memory '"+*memory+"' not in the catalog; re-run /soul-join")
 			os.Exit(1)
 		}
 		host, insecure, tokenFile = row.Host, row.Insecure, row.TokenFile
@@ -555,7 +555,7 @@ func cmdMcpServe(args []string) {
 		if err == nil && strings.TrimSpace(string(tok)) != "" {
 			env = append(env, "DEMARKUS_AUTH="+strings.TrimSpace(string(tok)))
 		} else if *memory != "" {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: token file "+tokenFile+" missing/empty; re-run /memory-join --token")
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: token file "+tokenFile+" missing/empty; re-run /soul-join --token")
 			os.Exit(1)
 		}
 	}

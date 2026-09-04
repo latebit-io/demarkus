@@ -22,7 +22,7 @@ That is the whole thing. In about two minutes the installer prints a card:
   Librarian AI:           off (add LLM_API_KEY to /etc/demarkus-library/env)
 
   Personal memory (demarkus-memory plugin):
-    /memory-join mark://memory.203.0.113.7.sslip.io:6309#token=eyJ...
+    /soul-join mark://memory.203.0.113.7.sslip.io:6309#token=eyJ...
 ```
 
 Open the library URL, log in with the printed credentials, and you have a working, versioned, browser-editable knowledge base with agent onboarding.
@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-st
   | sudo bash -s -- --domain kb.example.com --owner-email you@example.com
 ```
 
-Re-running the installer is always safe. It reuses the existing credentials (owner password, broker/library secrets, agent and memory tokens) rather than minting new ones, and when the resolved hostname changes it rewrites every per-host URL across Authelia, the broker, the library, and Caddy, then reissues certificates for the new names. Your documents, tokens, and logins survive the move; existing browser sessions are logged out (the cookie domain changed) and the new `memory.<domain>` certificate takes a few seconds to issue. Log in again at the new `library.<domain>` and re-run the printed `/memory-join` line to point memory at the new host.
+Re-running the installer is always safe. It reuses the existing credentials (owner password, broker/library secrets, agent and memory tokens) rather than minting new ones, and when the resolved hostname changes it rewrites every per-host URL across Authelia, the broker, the library, and Caddy, then reissues certificates for the new names. Your documents, tokens, and logins survive the move; existing browser sessions are logged out (the cookie domain changed) and the new `memory.<domain>` certificate takes a few seconds to issue. Log in again at the new `library.<domain>` and re-run the printed `/soul-join` line to point memory at the new host.
 
 ## Options
 
@@ -75,16 +75,16 @@ The stack ships [Authelia](https://www.authelia.com/) as a native binary; no Goo
 - **Change the owner password**: edit `/etc/demarkus-auth/users.yml`, then `systemctl restart demarkus-auth`.
 - **Enable the librarian AI**: add `LLM_API_KEY=...` to `/etc/demarkus-library/env`, then `systemctl restart demarkus-library`.
 - **Add agents**: from Claude Code, `/knowledge-join https://broker.<host>` and log in.
-- **Connect memory**: run the printed `/memory-join mark://memory.<host>:6309#token=...` from the demarkus-memory plugin.
+- **Connect memory**: run the printed `/soul-join mark://memory.<host>:6309#token=...` from the demarkus-memory plugin.
 - **Uninstall everything**: `demarkus-stack uninstall`.
 
 ## Personal memory: the world is also your memory
 
-The appliance's world server is exposed a second way, as `memory.<host>` on UDP 6309 (installs made before the rename keep `soul.<host>`), so the [demarkus-memory plugin](../tools/index.md) can use it as a remote memory. Run the printed `/memory-join` line and your agent's memory persists to the same versioned store the knowledge system and reading room already serve. One world, three doors: memory writes over the mark protocol with a capability token (no login), while the knowledge system and library sit behind broker SSO.
+The appliance's world server is exposed a second way, as `memory.<host>` on UDP 6309 (installs made before the rename keep `soul.<host>`), so the [demarkus-memory plugin](../tools/index.md) can use it as a remote memory. Run the printed `/soul-join` line and your agent's memory persists to the same versioned store the knowledge system and reading room already serve. One world, three doors: memory writes over the mark protocol with a capability token (no login), while the knowledge system and library sit behind broker SSO.
 
 The `memory.<host>` subdomain gets its own real Let's Encrypt certificate (obtained by Caddy, synced into the world by a 12h timer), so remote clients connect and validate cleanly with no `--insecure`. On a brand-new droplet the certificate can take a few seconds to issue; if the card prints a "still provisioning" note, use `--insecure` until the renewal timer lands it, then drop the flag.
 
-The memory token grants direct publish access to the world and bypasses the broker's OIDC allowlists by design (it is the operator's own credential). It is printed once, in the card. For a single-operator appliance that is the point; if you are running a shared knowledge base and do not want a token-only write path, simply do not distribute the printed `/memory-join` line.
+The memory token grants direct publish access to the world and bypasses the broker's OIDC allowlists by design (it is the operator's own credential). It is printed once, in the card. For a single-operator appliance that is the point; if you are running a shared knowledge base and do not want a token-only write path, simply do not distribute the printed `/soul-join` line.
 
 ## Certificates on first load
 

@@ -9,7 +9,7 @@ description: The execution cascade that curates a staged document and publishes 
 
 Knowledge-side half of the promote bridge. Takes a **staged source document** (from a personal soul via `/promote`, or any external inflow distilled into a staging tier) and lands it in a shared knowledge system as curated, authoritative, deduped, well-tagged content, or correctly rejects it. One gate for every inflow.
 
-High bar: a shared catalog is not a soul mirror. **Most staged content should never cross**; much above ~10–20% promoting means the bar is too low and the catalog loses curation value. Ruthlessness is the feature.
+High bar: a shared catalog is not a soul mirror. **Reject most staged content.**
 
 ## Inputs
 

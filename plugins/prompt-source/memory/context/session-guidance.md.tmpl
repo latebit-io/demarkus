@@ -1,6 +1,6 @@
 # {{.MemoryPluginName}}: your demarkus {{.Store}} is available
 
-Your {{.Store}} is a local, versioned demarkus store reached through the `{{.MemoryPluginName}}` MCP tools. It is not the host's built-in memory feature; "recall" and "record" in this guidance always mean the {{.Store}}. Treat it like {{.RepoInstructions}}: consult before starting, record as you go, unprompted.
+Your {{.Store}} is a versioned demarkus store reached through the `{{.MemoryPluginName}}` MCP tools (local by default; a project binding may select a remote one). It is not the host's built-in memory feature; "recall" and "record" in this guidance always mean the {{.Store}}. Treat it like {{.RepoInstructions}}: consult before starting, record as you go, unprompted.
 
 {{if eq .Harness "claude"}}**Your durable store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or Claude Code's built-in memory. CLAUDE.md owns always-in-context instructions; the {{.Store}} owns everything recalled on demand. If Claude Code's built-in memory tool is enabled, you may offer to turn it off, only with the user's say-so; never disable it unasked.
 {{else}}**Your durable store; prefer it over any other.** Decisions, patterns, gotchas, session progress live here, not in scratch files or a harness's built-in memory. {{.RepoInstructions}} owns always-in-context instructions; the {{.Store}} owns everything recalled on demand. A separate one-time setup offer handles built-in memory integration; never disable anything unasked.
@@ -9,10 +9,10 @@ Your {{.Store}} is a local, versioned demarkus store reached through the `{{.Mem
 
 ## Write target (catalog + binding)
 
-Surfaces: local managed {{.Store}} (`/memory-init`), remote {{.Stores}} (`/memory-join`), knowledge systems (`/knowledge-join`). All expose identical `mark_*` tools, so pick the write target deliberately:
+Surfaces: local managed {{.Store}} (`/soul-init`), remote {{.Stores}} (`/soul-join`), knowledge systems (`/knowledge-join`). All expose identical `mark_*` tools, so pick the write target deliberately:
 
 - **Reads**: explicit URL, or lookup on whichever surface holds the subject.
-- **Writes** route by **role**, then **binding**: personal/draft/working notes → a {{.Store}}; shared/authoritative knowledge → a knowledge system via `/promote`, never a direct write. Among {{.Stores}}, this repo's bound {{.Store}} (set by `/memory-join`, changed by `/memory-default`, recorded in `~/.demarkus/project-souls`) is the default; with no binding, the local {{.Store}}.
+- **Writes** route by **role**, then **binding**: personal/draft/working notes → a {{.Store}}; shared/authoritative knowledge → a knowledge system via `/promote`, never a direct write. Among {{.Stores}}, this repo's bound {{.Store}} (set by `/soul-join`, changed by `/soul-default`, recorded in `~/.demarkus/project-souls`) is the default; with no binding, the local {{.Store}}.
 - Genuinely ambiguous target: ask the user once, don't guess.
 
 Binding is **enforced**: a write to a {{.Store}} other than the bound one is denied at write time (destination gate); re-issue it through {{.ToolForm}}. The publish tag-gate fires on the local and any remote {{.Store}} alike, so tag every publish.
@@ -53,5 +53,5 @@ Soft checks: publish gate (tags), session-end journal nudge when files changed b
 
 - No trivia, ephemeral chat, or anything derivable from the repo and git history. Capture the non-obvious: why, patterns, gotchas.
 - No secrets, credentials, or anything the user hasn't authorized.
-- `remember` skill has full routing; `/memory-context` primes a session, `/memory-journal` appends a dated entry, `/memory-status` diagnoses the server.
-- With a promote destination (a joined {{.KnowledgePluginName}} system, or a plain remote server registered via `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add`): `/promote <memory-path>` lifts a ready doc (curate → gate → publish → back-stamp), `/promote-scan` finds candidates, `/memory-refresh` pulls promoted docs back down as they evolve. Publishing a new ADR nudges promotion. No destination: all dormant.
+- `remember` skill has full routing; `/soul-context` primes a session, `/soul-journal` appends a dated entry, `/soul-status` diagnoses the server.
+- With a promote destination (a joined {{.KnowledgePluginName}} system, or a plain remote server registered via `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add`): `/promote <memory-path>` lifts a ready doc (curate → gate → publish → back-stamp), `/promote-scan` finds candidates, `/soul-refresh` pulls promoted docs back down as they evolve. Publishing a new ADR nudges promotion. No destination: all dormant.

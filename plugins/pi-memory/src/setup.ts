@@ -36,9 +36,9 @@ function run(cmd: string, args: string[]): Promise<string | null> {
 // success. Bounded so a hung download can't wedge session start.
 export async function provisionServer(): Promise<string> {
   const bootErr = await run("bash", [BOOTSTRAP_SH]);
-  if (bootErr) return `demarkus-memory bootstrap failed: ${bootErr}. Run /memory-init to recover.`;
+  if (bootErr) return `demarkus-memory bootstrap failed: ${bootErr}. Run /soul-init to recover.`;
   const provErr = await run(BIN, ["provision"]);
-  if (provErr) return `demarkus-memory provisioning failed: ${provErr}. Run /memory-init to recover.`;
+  if (provErr) return `demarkus-memory provisioning failed: ${provErr}. Run /soul-init to recover.`;
   return "";
 }
 

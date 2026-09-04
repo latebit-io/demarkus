@@ -64,5 +64,5 @@ Stop on first failure, list remaining endpoint and gate state, give the repair c
 
 - No continuing after validation failure or slug collision.
 - No requesting, reading, pasting, or storing OAuth tokens.
-- Not for direct `mark://` souls; use `/memory-join`.
+- Not for direct `mark://` souls; use `/soul-join`.
 - Never run automatically.

@@ -66,7 +66,8 @@ func applyStoreDefaults(t *target) {
 	if t.Stores == "" {
 		t.Stores = t.Store + "s"
 	}
-	t.StoreTitle = strings.ToUpper(t.Store[:1]) + t.Store[1:]
+	r := []rune(t.Store)
+	t.StoreTitle = strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
 type artifact struct {

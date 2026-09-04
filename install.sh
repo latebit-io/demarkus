@@ -2145,7 +2145,7 @@ do_install() {
     if [ -n "$join_url" ]; then
       echo ""
       log_info "Join this server from another machine (paste one line):"
-      echo "  Claude Code (demarkus-memory plugin):  /memory-join $join_url"
+      echo "  Claude Code (demarkus-memory plugin):  /soul-join $join_url"
       echo "  CLI:                                   demarkus join '$join_url'"
       if [ -z "$domain" ]; then
         log_warn "'$join_host' must resolve from the joining machine; if it doesn't, rebuild the line with the public address: demarkus-token join -host <public-host> -token <TOKEN>"

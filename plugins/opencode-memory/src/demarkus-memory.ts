@@ -117,7 +117,7 @@ function run(cmd: string, args: string[], label: string, timeout: number): Promi
     execFile(cmd, args, { timeout }, (err, _out, stderr) => {
       if (err) {
         const tail = (stderr || "").trim().split("\n").slice(-3).join(" ");
-        resolve(`demarkus-memory ${label} failed: ${tail || err.message}. Run /memory-init to recover.`);
+        resolve(`demarkus-memory ${label} failed: ${tail || err.message}. Run /soul-init to recover.`);
         return;
       }
       resolve("");

@@ -51,7 +51,7 @@ const memoryRecallNudge = "This reads like a recall question. Before answering f
 
 const knowledgeRecallNudge = "This reads like a recall question. If it concerns shared or organizational knowledge, check the joined demarkus knowledge system first: mark_lookup the system for the subject (and fetch the relevant world's index.md / the root hub), then answer from what's recorded; or say plainly if nothing is there."
 
-const journalNudge = "This session changed files but recorded nothing to demarkus. If something here is worth remembering (a decision, a gotcha, a non-obvious why), capture it with /memory-journal (or mark_append to today's journal under /<project>/journal/<YYYY-MM-DD>.md). If it's all routine, ignore this."
+const journalNudge = "This session changed files but recorded nothing to demarkus. If something here is worth remembering (a decision, a gotcha, a non-obvious why), capture it with /soul-journal (or mark_append to today's journal under /<project>/journal/<YYYY-MM-DD>.md). If it's all routine, ignore this."
 
 // Evaluate dispatches on the event and returns the nudge text (or empty).
 func Evaluate(in *Input) (Output, error) {

@@ -9,7 +9,7 @@ Local, versioned project memory for [Cursor](https://cursor.com), via [demarkus]
 - **Publish tag-gate.** A tagless `mark_publish` is invisible to `mark_lookup` forever; the `beforeMCPExecution` hook makes that loud at write time (`warn` by default, `block` and `ask` available; Cursor supports `ask` natively).
 - **Destination gate.** When a repo is bound to a specific memory, a write aimed at a different memory is denied (default `block`).
 - **Promote and journal nudges.** An ADR publish reminds you to `/promote` once a knowledge system is joined; a conversation that edited files without writing to the memory gets one follow-up nudge at stop.
-- **Slash commands.** `/memory`, `/memory-context`, `/memory-journal`, `/memory-init`, `/memory-join`, `/memory-default`, `/memory-status`, `/memory-doctor`, `/memory-refresh`, `/promote`, `/promote-scan`, plus the on-demand `remember` skill. The MCP server's own prompts appear as `/demarkus-memory/orient`, `/demarkus-memory/recall`, and `/demarkus-memory/whats-new`.
+- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `remember` skill. The MCP server's own prompts appear as `/demarkus-memory/orient`, `/demarkus-memory/recall`, and `/demarkus-memory/whats-new`.
 
 ## Requirements
 
@@ -28,7 +28,7 @@ git clone https://github.com/latebit-io/demarkus
 ln -s "$PWD/demarkus/plugins/cursor-memory" ~/.cursor/plugins/local/demarkus-memory
 ```
 
-Restart Cursor. The first conversation provisions the memory; if the `demarkus-memory` MCP server shows as failed before that (the binary is installed by the first `sessionStart`), toggle it once under Cursor Settings → MCP. Use `/memory-status` to diagnose and `/memory-init` to reconfigure (adopt an existing server, switch modes).
+Restart Cursor. The first conversation provisions the memory; if the `demarkus-memory` MCP server shows as failed before that (the binary is installed by the first `sessionStart`), toggle it once under Cursor Settings → MCP. Use `/soul-status` to diagnose and `/soul-init` to reconfigure (adopt an existing server, switch modes).
 
 ### Update
 

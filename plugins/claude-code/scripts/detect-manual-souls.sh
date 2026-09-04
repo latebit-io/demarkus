@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# detect-manual-souls.sh — report hand-wired remote demarkus memories so /memory-join
+# detect-manual-souls.sh: report hand-wired remote demarkus memories so /soul-join
 # can offer to adopt them into managed config.
 #
 # A "manual memory" is an MCP server that invokes demarkus-mcp DIRECTLY against a
-# remote mark:// host — i.e. a memory wired by editing .mcp.json by hand, with its
+# remote mark:// host, i.e. a memory wired by editing .mcp.json by hand, with its
 # token sitting inline in the config (and in `claude mcp list` output). Entries
 # that go through our launch wrappers (soul-remote-wrapper.sh / mcp-wrapper.sh)
 # are already managed and are NOT reported.
 #
 # Output:
-#   "NONE"                     — nothing to adopt (or `claude` unavailable)
+#   "NONE"                    : nothing to adopt (or `claude` unavailable)
 #   "MANUAL" then one row each: "<name>\t<host>\t<insecure 0|1>\t<has-token 0|1>"
 #
-# The token VALUE is deliberately never emitted — only its presence — so it does
+# The token VALUE is deliberately never emitted, only its presence, so it does
 # not leak into the agent transcript. Adoption re-joins with the user supplying
 # the token (they have it in their existing entry).
 #

@@ -572,7 +572,7 @@ func TestRunDeviceJanitorRespectsContextCancel(t *testing.T) {
 	}
 }
 
-// A device cookie left by an abandoned /memory-join must not route a later
+// A device cookie left by an abandoned /soul-join must not route a later
 // browser /auth/login + /auth/callback through the device branch; dispatch
 // is driven by the signed State, not the ambient cookie.
 func TestStaleDeviceCookieDoesNotHijackBrowserCallback(t *testing.T) {
