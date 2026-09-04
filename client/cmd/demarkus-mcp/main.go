@@ -289,7 +289,7 @@ func (h *handler) resolveURL(rawURL string) (host, path string, err error) {
 // Otherwise, it tells the LLM to use full mark:// URLs.
 func urlHint(host string) string {
 	if host != "" {
-		return fmt.Sprintf("Connected to %s. Use bare paths like /index.md.", host)
+		return fmt.Sprintf("Connected to %s; use bare paths like /index.md.", host)
 	}
 	return "Use full mark:// URLs, e.g. mark://host/index.md."
 }
@@ -304,23 +304,14 @@ func urlDesc(host string) string {
 func markFetchTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_fetch",
 		mcp.WithDescription(
-			"Fetch a document from a Mark Protocol server. "+
-				"Returns the document status, version, modified timestamp, etag, and markdown body. "+
-				"Documents under 8KB return the full body. Larger documents return an outline "+
-				"instead: the heading tree with #anchors and per-section line counts plus the "+
-				"opening paragraph, so you can pull just the section you need by appending "+
-				"#<anchor> to the url (anchors are GitHub-style slugs; #section fetches work at "+
-				"any size). Re-fetching a document whose full body was already returned this "+
-				"session returns a short 'unchanged' notice when it has not changed. "+
-				"Set force=true for the full body regardless of size or session history. "+
-				urlHint(host),
+			"Fetch a document: status, version, etag, markdown body. Over 8KB returns outline (headings with #anchors); url#<anchor> fetches one section, force=true the full body. Unchanged re-fetch returns short notice. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
 			mcp.Description(urlDesc(host)+"; append #<anchor> to fetch a single section"),
 		),
 		mcp.WithBoolean("force",
-			mcp.Description("return the full body even if the document is large or unchanged since an earlier fetch this session (default false)"),
+			mcp.Description("full body regardless of size or unchanged status (default false)"),
 		),
 	)
 }
@@ -333,27 +324,20 @@ const outlineThreshold = 8 * 1024
 func markListTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_list",
 		mcp.WithDescription(
-			"List documents and subdirectories on a Mark Protocol server. "+
-				"Use this to discover what documents exist. To orient around one "+
-				"specific document, prefer mark_explore: it bundles the sibling "+
-				"listing with the outline, links, and backlinks. Archived documents are "+
-				"hidden by default, along with directories that contain only archived "+
-				"documents; set include_archived to true for a recovery/audit view. "+
-				"Results declare complete; when false, pass next-cursor back as cursor. "+
-				urlHint(host),
+			"List documents and subdirectories. Archived hidden unless include_archived. If complete=false, pass next-cursor as cursor. For one document prefer mark_explore. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
 			mcp.Description(urlDesc(host)),
 		),
 		mcp.WithBoolean("include_archived",
-			mcp.Description("Include archived documents (and all-archived directories) in the listing. Default false."),
+			mcp.Description("include archived documents and all-archived directories (default false)"),
 		),
 		mcp.WithString("cursor",
-			mcp.Description("opaque continuation cursor from a prior mark_list result"),
+			mcp.Description("continuation cursor from prior mark_list result"),
 		),
 		mcp.WithNumber("page_size",
-			mcp.Description("maximum entries in this page, 1-1000 (server default 1000)"),
+			mcp.Description("entries per page, 1-1000 (default 1000)"),
 			mcp.Min(1), mcp.Max(protocol.MaxListPageSize), mcp.MultipleOf(1),
 		),
 	)
@@ -362,22 +346,14 @@ func markListTool(host string) mcp.Tool {
 func markGraphTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_graph",
 		mcp.WithDescription(
-			"Crawl outbound links from a document and return the link graph. "+
-				"Follows mark:// links up to the specified depth. External links are "+
-				"recorded but not followed. Use this to understand document relationships "+
-				"or find broken links. Edges carry provenance (link label, source section "+
-				"anchor, occurrence count) and typed relations ingested from rel-<predicate> "+
-				"publisher metadata. When a local graph store is available, results are "+
-				"persisted for backlink queries; the store is seeded from the world's "+
-				"published /graph.md when available, and local crawls take precedence. "+
-				urlHint(host),
+			"Crawl outbound links from a document to depth; returns link graph with edge provenance and rel-* typed relations. External links recorded, not followed. Feeds graph store for mark_backlinks. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
 			mcp.Description(urlDesc(host)),
 		),
 		mcp.WithNumber("depth",
-			mcp.Description("Maximum link depth to follow (default 2, max 5)"),
+			mcp.Description("max link depth (default 2, max 5)"),
 		),
 	)
 }
@@ -385,10 +361,7 @@ func markGraphTool(host string) mcp.Tool {
 func markVersionsTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_versions",
 		mcp.WithDescription(
-			"Retrieve the version history of a document from a Mark Protocol server. "+
-				"Returns total and current version numbers, hash chain validation status, "+
-				"and a list of all versions with timestamps. "+
-				urlHint(host),
+			"Document version history: total and current version, hash chain validity, per-version timestamps. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -400,30 +373,21 @@ func markVersionsTool(host string) mcp.Tool {
 func markLookupTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_lookup",
 		mcp.WithDescription(
-			"Look up documents by subject against a Mark Protocol server's catalog. "+
-				"Matches the query against each document's declared tags and title and returns "+
-				"an importance-ranked markdown table of matches (path, importance, title, tags), "+
-				"not document bodies; FETCH the ones you want. This is a catalog lookup, not "+
-				"full-text search: a subject that was never tagged or titled will not be found. "+
-				"Optionally narrow with a comma-separated key=value filter and cap results with limit. "+
-				"Start here when hunting a subject: lookup to find candidate documents, "+
-				"mark_explore the best match to orient, then mark_fetch url#<anchor> for the "+
-				"sections you actually need; full bodies of large documents are rarely necessary. "+
-				urlHint(host),
+			"Catalog lookup by subject: matches tags and title only (not full text); returns importance-ranked table (path, importance, title, tags), no bodies. Then mark_explore or mark_fetch url#<anchor>. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("scope to search under: / for everything, or a subtree like /docs/. "+urlDesc(host)),
+			mcp.Description("scope: / or subtree like /docs/. "+urlDesc(host)),
 		),
 		mcp.WithString("query",
 			mcp.Required(),
-			mcp.Description("subject to look up; matched against document tags and titles (minimum 2 characters), or '*' to match every catalogued document under the scope (importance order)"),
+			mcp.Description("subject matched against tags and titles (min 2 chars); '*' for all catalogued"),
 		),
 		mcp.WithString("filter",
-			mcp.Description("comma-separated key=value predicates applied before ranking; built-ins: tag=, modified-after=, modified-before="),
+			mcp.Description("comma-separated key=value predicates; built-ins: tag=, modified-after=, modified-before="),
 		),
 		mcp.WithNumber("limit",
-			mcp.Description("maximum number of results (server default 10, hard cap 1000)"),
+			mcp.Description("max results (default 10, cap 1000)"),
 		),
 	)
 }
@@ -431,22 +395,7 @@ func markLookupTool(host string) mcp.Tool {
 func markPublishTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
-			"Publish or update a document on a Mark Protocol server. "+
-				"Returns the created version number and modified timestamp. "+
-				"Requires an auth token configured via the -token flag. "+
-				"The body should be valid markdown content. "+
-				"expected_version is required for optimistic concurrency: set it to the version "+
-				"number from a prior fetch to detect conflicts. If the document has been "+
-				"modified since that version, the server returns a conflict status. "+
-				"Use 0 when creating a new document. "+
-				"on_conflict controls behavior when the version check fails. Default \"merge\" "+
-				"returns a structurally-merged candidate body (with git-style conflict markers "+
-				"if both sides edited the same lines) for the agent to semantically verify, "+
-				"then call mark_publish again with expected_version set to the returned "+
-				"publish-at-version. This prevents the silent content loss that happens when "+
-				"callers naively republish their stale body. Pass \"fail\" to opt out and get "+
-				"the strict conflict response with no merge attempt. "+
-				urlHint(host),
+			"Publish or update a document (markdown body). expected_version: version from prior fetch, 0 to create. On conflict, default on_conflict=merge returns merged candidate body (git-style markers where both sides changed): review, republish at returned publish-at-version. Requires -token. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -454,17 +403,17 @@ func markPublishTool(host string) mcp.Tool {
 		),
 		mcp.WithString("body",
 			mcp.Required(),
-			mcp.Description("markdown content to publish"),
+			mcp.Description("markdown body"),
 		),
 		mcp.WithNumber("expected_version",
 			mcp.Required(),
-			mcp.Description("version number from a prior fetch for conflict detection; use 0 when creating a new document"),
+			mcp.Description("version from prior fetch; 0 to create"),
 		),
 		mcp.WithString("on_conflict",
-			mcp.Description("conflict behavior: \"merge\" (default) returns a merge-candidate body; the agent reviews it (resolving any conflict markers) and calls mark_publish again with expected_version set to the returned publish-at-version. \"fail\" opts out and returns the raw conflict status."),
+			mcp.Description("\"merge\" (default): merge-candidate body to review and republish at returned publish-at-version; \"fail\": raw conflict status"),
 		),
 		mcp.WithObject("metadata",
-			mcp.Description("optional publisher metadata stored with the document, as string values. The server interprets `tags` (comma-separated subject labels) and `importance` (0-1) for mark_lookup ranking; other keys are stored opaquely. Keys with the `rel-` prefix declare typed relations to other documents (e.g. `rel-supersedes: /adr/0002.md`, comma-separated for multiple targets); graph crawls ingest them as typed edges. Reserved keys are rejected. `retention` (positive integer) caps version history: this write and every later write carrying the key permanently delete versions older than the newest N. Destructive and irreversible: confirm with the user before setting it on a document whose history matters; intended for generated documents."),
+			mcp.Description("string values stored with document. tags (comma-separated) and importance (0-1) drive mark_lookup ranking; rel-<predicate> keys declare typed relations (e.g. rel-supersedes: /adr/0002.md); other keys stored opaquely. retention (positive int) permanently deletes all but newest N versions on this and every later write carrying it: irreversible, confirm with user first"),
 		),
 	)
 }
@@ -472,11 +421,7 @@ func markPublishTool(host string) mcp.Tool {
 func markArchiveTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_archive",
 		mcp.WithDescription(
-			"Archive a document on a Mark Protocol server. "+
-				"Returns the archived version number. "+
-				"Archived documents return 'archived' status on FETCH but version history is preserved. "+
-				"Requires an auth token configured via the -token flag. "+
-				urlHint(host),
+			"Archive a document: fetches as 'archived', history kept. Requires -token. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -488,19 +433,7 @@ func markArchiveTool(host string) mcp.Tool {
 func markAppendTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_append",
 		mcp.WithDescription(
-			"Append content to the end of an existing document on a Mark Protocol server. "+
-				"The server concatenates the new content after the existing document body. "+
-				"Returns the created version number and modified timestamp. "+
-				"Requires an auth token configured via the -token flag. "+
-				"The body should be valid markdown content to append. "+
-				"expected_version is optional: when omitted or 0, the tool calls VERSIONS to get the "+
-				"current version automatically. Set it explicitly if you already know the version "+
-				"from a prior fetch. "+
-				"The document keeps its catalog metadata across an append: the server carries the "+
-				"current version's tags, importance, title, and type onto the new version, so an "+
-				"append never drops a document out of mark_lookup. Use mark_publish to change or "+
-				"remove metadata. "+
-				urlHint(host),
+			"Append markdown to an existing document. expected_version optional; omitted or 0 resolves current version. Catalog metadata (tags, importance, title, type) carries over; change via mark_publish. Requires -token. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -508,10 +441,10 @@ func markAppendTool(host string) mcp.Tool {
 		),
 		mcp.WithString("body",
 			mcp.Required(),
-			mcp.Description("markdown content to append"),
+			mcp.Description("markdown to append"),
 		),
 		mcp.WithNumber("expected_version",
-			mcp.Description("version number from a prior fetch for conflict detection; when omitted or 0, resolved via VERSIONS"),
+			mcp.Description("version from prior fetch; omit or 0 to auto-resolve"),
 		),
 	)
 }
@@ -519,14 +452,10 @@ func markAppendTool(host string) mcp.Tool {
 func markDiscoverTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_discover",
 		mcp.WithDescription(
-			"Fetch the agent manifest from a Mark Protocol server. "+
-				"Returns the manifest at /.well-known/agent-manifest.md which describes "+
-				"the server's purpose, key paths, auth requirements, and usage guidelines. "+
-				"Returns not-found if no manifest is published. "+
-				urlHint(host),
+			"Fetch agent manifest (/.well-known/agent-manifest.md): purpose, key paths, auth, usage. not-found if absent. "+urlHint(host),
 		),
 		mcp.WithString("url",
-			mcp.Description("mark:// URL of the server to discover (optional when -host is set)"),
+			mcp.Description("server mark:// URL (optional with -host)"),
 		),
 	)
 }
@@ -534,18 +463,15 @@ func markDiscoverTool(host string) mcp.Tool {
 func markResolveTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_resolve",
 		mcp.WithDescription(
-			"Resolve content by its SHA-256 hash using a hub index document. "+
-				"Looks up the hash in the index, finds servers hosting the content, "+
-				"and fetches it by hash. Returns the document content if found. "+
-				urlHint(host),
+			"Resolve content by SHA-256 hash via hub index document; fetch it. "+urlHint(host),
 		),
 		mcp.WithString("hash",
 			mcp.Required(),
-			mcp.Description("content hash to resolve (sha256-<64 lowercase hex characters>)"),
+			mcp.Description("sha256-<64 lowercase hex>"),
 		),
 		mcp.WithString("index",
 			mcp.Required(),
-			mcp.Description("mark:// URL of the hash index document on a hub, or "+urlDesc(host)),
+			mcp.Description("hub hash index document: mark:// URL or "+urlDesc(host)),
 		),
 	)
 }
@@ -553,28 +479,24 @@ func markResolveTool(host string) mcp.Tool {
 func markIndexTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_index",
 		mcp.WithDescription(
-			"Crawl a Mark Protocol server, collect content hashes from all documents, "+
-				"and publish a sharded hash index to a target server (typically a hub). "+
-				"Publishing requires read access and publish access to the manifest and its sibling .shards subtree. "+
-				"The tool checks the target's agent manifest before publishing. "+
-				urlHint(host),
+			"Crawl a server, collect content hashes, publish sharded hash index to target (typically a hub). Needs source read access and publish access to target manifest and .shards subtree. "+urlHint(host),
 		),
 		mcp.WithString("source",
 			mcp.Required(),
-			mcp.Description("mark:// URL of the server to crawl, or "+urlDesc(host)),
+			mcp.Description("server to crawl: mark:// URL or "+urlDesc(host)),
 		),
 		mcp.WithString("target",
 			mcp.Required(),
-			mcp.Description("mark:// URL where the index should be published, or "+urlDesc(host)),
+			mcp.Description("index destination: mark:// URL or "+urlDesc(host)),
 		),
 		mcp.WithNumber("expected_version",
-			mcp.Description("version of existing index at target for conflict detection; use 0 to create new"),
+			mcp.Description("existing index version at target; 0 to create"),
 		),
 		mcp.WithBoolean("dry_run",
-			mcp.Description("if true, return the index document without publishing (default false)"),
+			mcp.Description("return index without publishing (default false)"),
 		),
 		mcp.WithBoolean("force",
-			mcp.Description("if true, publish even when target has no hub manifest (default false)"),
+			mcp.Description("publish even without hub manifest at target (default false)"),
 		),
 	)
 }
@@ -1479,15 +1401,7 @@ func formatGraph(g *graph.Graph, startURL string) string {
 func markBacklinksTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_backlinks",
 		mcp.WithDescription(
-			"Look up which documents link to a given URL, using the local graph store. "+
-				"Returns results from previous crawls; run mark_graph first to populate. "+
-				"The store is seeded from the world's published /graph.md when available, "+
-				"so backlinks answer even before any local crawl; local crawls take precedence. "+
-				"Each backlink shows its provenance (link label, source section anchor, "+
-				"occurrence count) and typed relations like [supersedes] when present. "+
-				"mark_explore includes this same backlink list alongside the document's "+
-				"outline, outbound links, and siblings; prefer it for general orientation. "+
-				urlHint(host),
+			"Documents linking to a URL, from local graph store (seeded from world /graph.md; mark_graph crawls take precedence). Entries show provenance and typed relations. mark_explore includes same list. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -1539,9 +1453,7 @@ func (h *handler) markBacklinks(ctx context.Context, req mcp.CallToolRequest) (*
 func markGraphExportTool() mcp.Tool {
 	return mcp.NewTool("mark_graph_export",
 		mcp.WithDescription(
-			"Export the local graph store as a publishable markdown document. "+
-				"The output contains mark:// links so crawling it naturally discovers the topology. "+
-				"Run mark_graph first to populate the store.",
+			"Export local graph store as publishable markdown with mark:// links. Run mark_graph first.",
 		),
 	)
 }
@@ -1555,24 +1467,18 @@ const defaultGraphRetention = 20
 func markGraphPublishTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_graph_publish",
 		mcp.WithDescription(
-			"Export the local graph store and publish it to a Mark Protocol server. "+
-				"Combines mark_graph_export + mark_publish in one step. "+
-				"The published document contains mark:// links so other agents can crawl it "+
-				"to discover the topology without recrawling the original servers. "+
-				"Run mark_graph first to populate the store. "+
-				"Requires an auth token configured via the -token flag. "+
-				urlHint(host),
+			"Export graph store and publish as crawlable markdown (mark_graph_export + mark_publish). Run mark_graph first. Requires -token. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
-			mcp.Description("target URL where the graph document should be published, e.g. /graph.md or "+urlDesc(host)),
+			mcp.Description("graph document target, e.g. /graph.md or "+urlDesc(host)),
 		),
 		mcp.WithNumber("expected_version",
 			mcp.Required(),
-			mcp.Description("version number from a prior fetch for conflict detection; use 0 when creating a new document"),
+			mcp.Description("version from prior fetch; 0 to create"),
 		),
 		mcp.WithNumber("retention",
-			mcp.Description("how many versions of the graph document to keep (default 20). The graph is regenerated on every publish, so older versions are permanently pruned. Pass 0 to keep every version."),
+			mcp.Description("graph versions to keep (default 20; 0 keeps all); older permanently pruned"),
 		),
 	)
 }
