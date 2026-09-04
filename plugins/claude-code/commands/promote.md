@@ -11,7 +11,7 @@ Promote one memory document from the personal memory (staging tier) to a shared 
 ## Steps
 
 1. **Detection gate.** Run `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote` via Bash. Non-zero exit or malformed output is a registry failure: surface it and stop. Success lists every destination, one per line:
-   - `knowledge <slug>` → brokered knowledge system (the `<slug>` MCP server). Destination selection there uses `mark_worlds` (writable column) + each world's `world.md`.
+   - `knowledge <slug>` → brokered knowledge system (the `<slug>` MCP server). Destination selection there uses `mark_worlds` (writable column) + each world's descriptor `mark://<world>/.well-known/demarkus/world.md`.
    - `target <slug> <path> [label]` → plain remote endpoint and its declared write `<path>`. Destination is that `<slug>`/`<path>` directly: no `mark_worlds`/`world.md` (no directory on a plain server), default autonomy `human-only`.
    - `NONE` → no destination; promotion dormant. Offer both ways to enable it, act on the user's choice:
       - brokered system: `/knowledge-join <broker-url>` (demarkus-knowledge plugin);

@@ -45,7 +45,7 @@ Before the first broker call, set a command-wide deadline five minutes out. Chec
 4. **Bound supplemental crawling.** At most 100 supplemental `mark_graph` calls per command, retries included, within the deadline. Report skipped documents and mark affected worlds incomplete when either limit hits.
 5. **Retry once.** Retry each unsuccessful source once while budget remains. A final source failure makes that world's orphan analysis incomplete.
 
-## Core checks (graph + inventory; no per-doc fetching)
+## Core checks (graph + inventory; per-doc fetching only for the bounded broken-link confirmations below)
 
 - **Broken links**: an edge whose `mark://` target does not exist. **Crawl-node status says what's already confirmed:**
   - Target **in Nodes as `[not-found]`**: *already confirmed broken*; the broker said not-found. Report directly; **do not re-fetch** (N re-confirmations are N wasted calls).

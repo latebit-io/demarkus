@@ -28,7 +28,7 @@ A knowledge system composes one or more **worlds** (demarkus servers); URLs are 
 
 ## Record to the shared catalog
 
-Publish what is useful to others and ready to rely on. Brokered: follow the root template, write only to a world `mark_worlds` marks writable. Plain endpoint: follow its template when present, write only under the registered path (no `mark_worlds`). Shared catalog, not a scratch pad:
+Publish only when the user explicitly asks or confirms, through the `knowledge-promote` skill (human gate); never a direct `mark_publish` in the course of a read or question task. Brokered: follow the root template, write only to a world `mark_worlds` marks writable. Plain endpoint: follow its template when present, write only under the registered path (no `mark_worlds`). Shared catalog, not a scratch pad:
 
 - **Tag every publish.** `mark_publish` takes a `metadata` object: `tags` (comma-separated subjects from the content; untagged docs are findable only by title or exact path) and `importance` (float 0–1; ≥0.8 for hubs, architecture, key decisions). `require_tags:` axes (e.g. `category:`) need an `axis:value` tag each; `require_fields:` names required metadata fields such as `type`. A write-time gate enforces at the system's severity (warn / block / ask), so set them on the first try.
 - **Never set `metadata.retention` unless the user explicitly asked.** A positive-integer `retention` permanently deletes all but the newest N versions, on that write and every later write carrying it. Generated docs only (graph exports, indexes), never curated knowledge. A guard asks for confirmation on prunable values (`DEMARKUS_RETENTION_STRICTNESS` adjusts).

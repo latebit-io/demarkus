@@ -104,8 +104,15 @@ reviews:
           hosts that eager-load MCP schemas (Cursor). Keep each to 1-3 terse
           sentences: what it does, parameter semantics, safety caveats. Flag
           any growth in WithDescription / mcp.Description text; rationale
-          belongs in session guidance or the skill, not the schema. Same rule
-          for tools/internal/broker/mcp_tools_list.go
+          belongs in session guidance or the skill, not the schema
+
+    - path: "tools/internal/broker/mcp_tools_list.go"
+      instructions: >
+        Broker MCP gateway tool list; every joined knowledge system ships
+        these schemas on every request in eager-loading hosts. Same rule as
+        client/cmd/demarkus-mcp: 1-3 terse sentences per description, no
+        rationale, keep the mark:// URL hint every test asserts on, and
+        keep mcpToolNames in sync with mcpTools()
 
     - path: "plugins/prompt-source/**"
       instructions: >

@@ -7,7 +7,7 @@ description: Use when the user wants to remember, save, recall, or query persona
 
 # Remember
 
-Routes "remember" / "recall" intents through the `demarkus-memory` MCP server: a versioned, link-graph-aware personal memory store. Tool names are harness-specific; use the available server's `mark_*` tools. Organized by project: top-level `/index.md` is the project list, each project lives at `/<slug>/` with a consistent structure.
+Routes "remember" / "recall" intents through the project's memory server (local `demarkus-memory` unless the project is bound elsewhere; see "Resolving the memory binding"): a versioned, link-graph-aware personal memory store. Tool names are harness-specific; use the available server's `mark_*` tools. Organized by project: top-level `/index.md` is the project list, each project lives at `/<slug>/` with a consistent structure.
 
 ## When to trigger
 
@@ -28,6 +28,16 @@ Resolve the slug before any read or write:
 2. Project directory unavailable, or user clearly means another project: ask which project.
 
 3. Before interpolating the slug into any path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`/`..`, and any URL/path delimiter (`/`, `\`, `:`, `?`, `#`, `%`). Never infer project identity from basename alone. Inspect only the root index/listing for a slug collision; do not fetch or construct the project subtree yet. If the root records a canonical checkout path for the slug, require an exact match. If the slug exists otherwise, ask the user to confirm it belongs to this exact checkout; if not, choose and confirm a unique slug. Only then construct or access `/<slug>/...`. A confirmed new slug is created on first write and linked from `/index.md`.
+
+## Resolving the memory binding
+
+Before the first `mark_*` call, resolve which memory this project uses; a project bound with `/memory-join` or `/memory-default` lives on that memory, not the local one. Run:
+
+```bash
+"$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind <shell-escaped-absolute-project-dir>
+```
+
+Replace `<shell-escaped-absolute-project-dir>` with exactly one POSIX-shell-safe word for the project directory; never wrap the raw path in literal single quotes. Read the last line first: trailing `STALE <slug>` → bound memory unavailable; tell the user to restore it (`/memory-init` when the slug is `demarkus-memory`, `/memory-join` otherwise) or `/memory-default` to rebind, and stop; never fall back to the local memory when that line is present. `EMPTY` → local memory, id `demarkus-memory`. `CATALOG` → the row marked `*` is this project's memory; no marked row means the local memory. Non-zero exit or malformed output → surface the exact error and stop. Every read and write in this skill goes through that memory's server (the MCP server named `<id>`; local memory is `demarkus-memory`). If its tools are not connected, say so, name the server, and stop.
 
 ## Per-project structure
 

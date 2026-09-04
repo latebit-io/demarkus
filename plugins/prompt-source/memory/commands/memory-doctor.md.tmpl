@@ -10,7 +10,7 @@ Read-only health check over a demarkus knowledge base; report what's rotting. **
 Audit root from `$ARGUMENTS`:
 
 - **blank** → whole local memory (`/`). Use the `demarkus-memory` MCP tools (`mark_graph` / `mark_list` / `mark_fetch` / `mark_backlinks`) with bare paths.
-- **project slug** (e.g. `demarkus`) → `/<slug>/`.
+- **project slug** (e.g. `demarkus`) → `/<slug>/`. Before building any path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`/`..`, and any delimiter (`/`, `\`, `:`, `?`, `#`, `%`). Invalid → report and stop.
 
 Anchor on the scope hub: `/index.md` or `/<slug>/index.md`.
 
@@ -22,13 +22,16 @@ Anchor on the scope hub: `/index.md` or `/<slug>/index.md`.
    - **Nodes:** `[status] <url> "title" N links`: note any status other than `ok` (e.g. `archived`), and `(no title)`.
    - **Edges:** `<from> -> <to>`: `mark://` targets internal; `http(s)` external.
 2. **Inventory.** `mark_list` the scope with `include_archived: true`, following every `next-cursor` as `cursor` until `complete: true`, then recurse into returned subdirectories with `include_archived: true`. Track visited paths and directory/cursor pairs; each incomplete page must return a non-empty, different, unseen cursor. At most 500 list calls, 200 directories, 10,000 documents. A limit makes coverage incomplete only when another required call, directory, or document remains; a terminal complete page exactly at a limit with no queued directories is exhaustive. On truncation: report the exact boundary and stop before core checks; no conclusions from partial inventory.
+3. **Crawl disconnected documents.** `mark_graph` follows one seed to `depth` at most 5 and caps the crawl at 200 nodes, so the hub crawl alone proves nothing about documents beyond it. For every inventory document absent from the root crawl's successful nodes, including `[error]` nodes, `mark_graph` on that document with `depth: 1`. Captures outbound edges from orphaned, failed, and beyond-depth documents.
+4. **Bound supplemental crawling.** At most 100 supplemental `mark_graph` calls, retries included. When the budget hits, list skipped documents and mark orphan analysis partial.
+5. **Retry once.** Retry each unsuccessful source once while budget remains. A final source failure makes orphan analysis incomplete.
 
-Either gather call fails, unauthorized, or partial: surface the exact failure and stop. Empty-memory handling applies only to successful empty responses; a partial gather cannot support broken-link or orphan conclusions.
+Any gather call fails, unauthorized, or partial: surface the exact failure and stop. Empty-memory handling applies only to successful empty responses; a partial gather cannot support broken-link or orphan conclusions.
 
-## Core checks (graph + inventory; no per-doc fetching)
+## Core checks (graph + inventory; per-doc fetching only for the bounded broken-link confirmations below)
 
 - **Broken links**: edge whose `mark://` target does not exist. Inventory (`mark_list`) is the source of truth for existence, **not** the crawl: a target absent from Nodes may sit beyond crawl depth, which is *not* broken. Flag only targets missing from the inventory, then confirm at most 50 suspects with one `mark_fetch` each. Report only on explicit `not-found`; unauthorized, transport, server, or other errors make the target inconclusive; surface them. Budget exhausted: list unconfirmed suspects, report incomplete broken-link coverage.
-- **Orphans**: classify an inventory document as orphaned only when graph coverage includes successful outbound-edge crawling for every inventory document, not merely the depth-5 root crawl. Otherwise report orphan analysis inconclusive with the depth/node boundary; an uncrawled document may hold the missing inbound edge.
+- **Orphans**: an inventory document never the target of any `mark://` edge across the root crawl plus every supplemental crawl (Gather 3-5), and not the scope hub. Requires every inventory document crawled successfully; otherwise report orphan analysis partial with the skipped documents, since an uncrawled document may hold the missing inbound edge.
 - **Stale index entries**: broken links whose source is a hub/index doc.
 - **Missing hub**: `/<project>/` subtree with documents but no `index.md`.
 - **Untitled docs**: **`ok`** nodes shown `(no title)` (no H1 / declared title). `(no title)` on a `not-found` node is the broken-link finding; don't double-report.
