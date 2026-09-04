@@ -27,7 +27,7 @@ Resolve the slug before any read or write:
 1. Canonicalize `CLAUDE_PROJECT_DIR`, take its basename via Bash (`basename "$CLAUDE_PROJECT_DIR"`). Lowercase slug if needed (spaces → hyphens).
 2. `CLAUDE_PROJECT_DIR` unset, or user clearly means another project: ask which project.
 
-3. Before interpolating the slug into any path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`/`..`, and any URL/path delimiter (`/`, `\`, `:`, `?`, `#`, `%`). Never infer project identity from basename alone. Inspect only the bound soul's root index/listing (binding: next section) for a slug collision; when listing, pass `include_archived: true` and follow `next-cursor` as `cursor` until `complete: true`; an incomplete listing is unknown (ask before writing). Do not fetch or construct the project subtree yet. If the root records a canonical checkout path for the slug, require an exact match. If the slug exists otherwise, ask the user to confirm it belongs to this exact checkout; if not, choose and confirm a unique slug. Only then construct or access `/<slug>/...`. A confirmed new slug is created on first write and linked from `/index.md`.
+3. Slug syntax before any path: `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`/`..`, delimiters (`/`, `\`, `:`, `?`, `#`, `%`). Basename never proves identity. Collision check on the bound soul only (binding: next section): root index or `mark_list /` with `include_archived: true`, `next-cursor` → `cursor` until `complete: true`; incomplete → unknown, ask before writing. Root records a canonical checkout path → require exact match; slug exists otherwise → user confirms this checkout or picks a unique slug. Only then touch `/<slug>/...`; new slug: see "Creating a new project".
 
 ## Resolving the soul binding
 

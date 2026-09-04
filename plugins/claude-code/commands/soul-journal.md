@@ -21,11 +21,11 @@ Read the last line first: trailing `STALE <slug>` means the bound soul is no lon
 
 ## Steps
 
-1. **Resolve and validate the project slug.** Read absolute `CLAUDE_PROJECT_DIR`; candidate = basename, lowercased, spaces to hyphens. Unset: ask the user which project. Before writing, check whether that candidate subtree already exists in the project's soul. If it does and this session has not established it belongs to this exact absolute path, ask the user to confirm or choose a unique slug; equal basenames never imply the same project. Before interpolating the slug into any soul path, require `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`, `..`, and any URL or path delimiter such as `/`, `\\`, `:`, `?`, `#`, or `%`. Use the confirmed slug consistently for the journal path and root-index link.
+1. **Resolve and validate the project slug.** Read absolute `CLAUDE_PROJECT_DIR`; candidate = basename, lowercased, spaces to hyphens. Unset: ask the user which project. Before writing, check whether that candidate subtree already exists in the project's soul. If it does and this session has not established it belongs to this exact absolute path, ask the user to confirm or choose a unique slug; equal basenames never imply the same project. Slug syntax before any path: `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`/`..`, delimiters (`/`, `\`, `:`, `?`, `#`, `%`). Use the confirmed slug consistently for the journal path and root-index link.
 
 2. **Compute the target path.** Today's UTC date as `YYYY-MM-DD`. Target: `/<project>/journal/<YYYY-MM-DD>.md`.
 
-3. **Check existence and capture pre-write project state.** Before creating anything, `mark_list /<project>/` with `include_archived: true`, following `next-cursor` as `cursor` until `complete: true`, at most 100 list calls; track seen cursors, require every incomplete page to return a non-empty unseen cursor; a repeated cursor, the 100-call bound, or an incomplete listing is a failure, not absence. Then force-fetch `/index.md` and `/<project>/index.md`; retain whether the project subtree, the exact `- [<Project>](/<project>/)` root-hub link, and the project hub exist, plus each hub's body, version, and metadata map when present. Only `not-found` establishes absence. Any other failure (unauthorized, transport, server, malformed, outline-only): surface the exact error and stop before any journal write; step 1 depends on this state, and writing blind can land the entry under another checkout's project. Then `mark_fetch` the target path:
+3. **Check existence and capture pre-write project state.** `mark_list /<project>/` with `include_archived: true`, `next-cursor` → `cursor` until `complete: true`, max 100 calls; each incomplete page needs a non-empty unseen cursor. Bound hit before `complete: true` → failure, not absence. Force-fetch `/index.md` and `/<project>/index.md`; retain: subtree exists, exact `- [<Project>](/<project>/)` root link exists, project hub exists, each hub's body, version, metadata map. Only `not-found` = absent. Any other failure (unauthorized, transport, server, malformed, outline-only) → surface, stop before any journal write. Then `mark_fetch` the target path:
 
    - `not-found`: file does not exist yet. Create with `mark_publish` (`expected_version: 0`, `on_conflict: "fail"`). If another writer creates it first, settle ownership before touching that file: when step 3 found no `/<project>/` subtree, the concurrent creator may be another checkout with the same basename, so unless this session already established `/<project>/` is this checkout's, ask the user to confirm; stop if they do not. Then fetch the new journal with `force: true` and continue exactly as in the `ok` branch below (complete body required, present-entry rule, one retry, metadata enrichment); never overwrite or drop either entry. **Set a `metadata` object so the entry is findable via `mark_lookup`**; you choose these, the server does not infer them:
 
@@ -41,12 +41,11 @@ Read the last line first: trailing `STALE <slug>` means the bound soul is no lon
      <entry text>
      ```
 
-     After the journal write commits (created here, or via the `ok` branch after a lost create race), repair the hubs from the saved pre-write state:
-     Hub rule (both hubs): republish only when the link is missing or metadata off contract: saved body plus the link added once, saved metadata minus `type` and unrequested `retention`, saved version, `on_conflict: "fail"`.
-     - `/<project>/index.md`: `not-found` → create at version 0: `# <Project>` H1, `## Journal` linking today's entry, `tags: index,<slug>`, `importance: 0.8`, no `type`. Present → hub rule; link under `## Journal`, else appended.
-     - `/index.md`: `not-found` → create at version 0: `# Projects` plus the project link, `tags: projects,index`, `importance: 0.9`, no `type`. Present → hub rule; contract = `projects,index` unioned into tags, `importance` 0.9 when unset.
+     After the journal write commits, repair both hubs from the saved state. Hub rule: republish only if link missing or metadata off contract; saved body plus link once, saved metadata minus `type` and unrequested `retention`, saved version, `on_conflict: "fail"`.
+     - `/<project>/index.md`: `not-found` → create at v0: `# <Project>`, `## Journal` linking today, `tags: index,<slug>`, `importance: 0.8`, no `type`. Present → hub rule; link under `## Journal`, else appended.
+     - `/index.md`: `not-found` → create at v0: `# Projects` plus project link, `tags: projects,index`, `importance: 0.9`, no `type`. Present → hub rule; contract: `projects,index` in tags, `importance` 0.9 if unset.
 
-     Conflict on either hub: refetch with `force: true` (outline-only or malformed → stop); link present and metadata on contract → done; else preserve concurrent content, apply the hub rule to that refetch, retry once; second conflict → stop (step 4 reports).
+     Conflict: refetch `force: true` (outline or malformed → stop); link present and on contract → done; else keep concurrent content, apply hub rule to the refetch, retry once; second conflict → stop (step 4 reports).
 
    - `ok`: today's file exists. `mark_append` with:
 
