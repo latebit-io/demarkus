@@ -25,6 +25,8 @@ var canonicalOutputs = map[string]string{
 	"knowledge/claude":   "plugins/claude-code-knowledge",
 	"knowledge/pi":       "plugins/pi-knowledge",
 	"knowledge/opencode": "plugins/opencode-knowledge",
+	"memory/cursor":      "plugins/cursor-memory",
+	"knowledge/cursor":   "plugins/cursor-knowledge",
 }
 
 type manifest struct {
@@ -179,6 +181,12 @@ func renderAll(root string) ([]artifact, error) {
 				return err
 			}
 			output := filepath.Join(root, target.Output, strings.TrimSuffix(strings.TrimSuffix(rel, ".tmpl"), ".alias"))
+			if target.Harness == "cursor" && filepath.Base(filepath.Dir(output)) == "commands" {
+				rendered, err = cursorCommand(strings.TrimSuffix(filepath.Base(output), ".md"), rendered)
+				if err != nil {
+					return fmt.Errorf("%s: %w", path, err)
+				}
+			}
 			if err := claimOutput(seen, output, path); err != nil {
 				return err
 			}
@@ -213,8 +221,8 @@ func decodeManifest(raw []byte) (manifest, error) {
 }
 
 func validateManifest(spec *manifest) error {
-	if len(spec.Targets) != 6 {
-		return fmt.Errorf("manifest: got %d targets, want 6", len(spec.Targets))
+	if len(spec.Targets) != 7 {
+		return fmt.Errorf("manifest: got %d targets, want 7", len(spec.Targets))
 	}
 	pairs := make(map[string]string, len(spec.Targets))
 	outputs := make(map[string]string, len(spec.Targets))
@@ -266,7 +274,7 @@ func validateTarget(target *target) error {
 			target.PluginName = target.KnowledgePluginName
 		}
 	}
-	if target.Harness != "claude" && target.Harness != "pi" && target.Harness != "opencode" {
+	if target.Harness != "claude" && target.Harness != "pi" && target.Harness != "opencode" && target.Harness != "cursor" {
 		return fmt.Errorf("manifest target %s: invalid harness %q", target.Name, target.Harness)
 	}
 	return nil
@@ -339,6 +347,25 @@ func renderAlias(path string, target *target) ([]byte, error) {
 	return []byte(head[:at] + "Deprecated alias of /" + name + ". " + head[at:] + body), nil
 }
 
+// cursorCommand reshapes a command's frontmatter for Cursor: `name` comes from
+// the file name and `argument-hint` (a Claude Code key) is dropped, since Cursor
+// documents only name and description.
+func cursorCommand(name string, content []byte) ([]byte, error) {
+	text := string(content)
+	end, ok := frontmatterEnd(text)
+	if !ok {
+		return nil, errors.New("cursor command has no frontmatter")
+	}
+	var head []string
+	for line := range strings.SplitSeq(strings.TrimSuffix(text[4:end-4], "\n"), "\n") {
+		if strings.HasPrefix(line, "argument-hint:") || strings.HasPrefix(line, "name:") {
+			continue
+		}
+		head = append(head, line)
+	}
+	return []byte("---\nname: " + name + "\n" + strings.Join(head, "\n") + "\n---\n" + text[end:]), nil
+}
+
 // frontmatterEnd returns the offset just past a leading `---` block.
 func frontmatterEnd(text string) (int, bool) {
 	if !strings.HasPrefix(text, "---\n") {
@@ -399,6 +426,8 @@ func forbiddenTerms(harness string) []string {
 		return append(common, "OpenCode", "opencode", "pi-mcp-adapter", "AGENTS.md")
 	case "pi":
 		return append(common, "OpenCode", "opencode", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "mcp__", "Claude Code")
+	case "cursor":
+		return append(common, "OpenCode", "opencode", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "mcp__", "Claude Code", "pi-mcp-adapter")
 	default:
 		return append(common, "Claude Code", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "pi-mcp-adapter", "mcp__")
 	}

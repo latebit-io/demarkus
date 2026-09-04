@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 
@@ -14,15 +15,19 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
-// Input accepts native {tool,input,cwd} and Claude hook payloads.
+// Input accepts native {tool,input,cwd}, Claude, and Cursor hook payloads.
 // The pi-mcp-adapter proxy shape is unwrapped downstream.
 type Input struct {
 	Tool  string         `json:"tool"`
 	Input map[string]any `json:"input"`
 	Cwd   string         `json:"cwd"`
-	// Claude hook payload fields (used when Tool/Input are absent).
+	// Claude and Cursor hook payload fields (used when Tool/Input are absent).
 	ToolName  string         `json:"tool_name"`
 	ToolInput map[string]any `json:"tool_input"`
+	// Cursor reports the server apart from the tool and the project as
+	// workspace_roots instead of cwd.
+	McpServerName  string   `json:"mcp_server_name"`
+	WorkspaceRoots []string `json:"workspace_roots"`
 }
 
 // Decision is the gate verdict. Reason is plain; adapters add any presentation
@@ -133,13 +138,14 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 
 // Evaluate applies the right gate(s) for the tool's target and returns the
 // decision. Memory (memory) and knowledge surfaces are mutually exclusive by scope.
-func Evaluate(in Input) (Decision, error) {
+func Evaluate(in *Input) (Decision, error) {
 	// Accept the Claude hook shape (tool_name/tool_input) when the native fields
 	// are absent.
 	if in.Tool == "" && in.ToolName != "" {
 		in.Tool = in.ToolName
 		in.Input = in.ToolInput
 	}
+	in.Tool = config.QualifyTool(in.Tool, in.McpServerName)
 	tool, args := config.NormalizeCall(in.Tool, in.Input)
 	pt, ok := config.ParseTool(tool)
 	if !ok {
@@ -151,7 +157,13 @@ func Evaluate(in Input) (Decision, error) {
 		return Decision{}, err
 	}
 	if memoryID != "" {
-		return evalMemory(tool, pt, args, in.Cwd, memoryID)
+		cwd, ambiguous := in.Cwd, ""
+		if cwd == "" {
+			if cwd, ambiguous, err = projectDir(in.WorkspaceRoots); err != nil {
+				return Decision{}, err
+			}
+		}
+		return evalMemory(pt, args, cwd, memoryID, ambiguous)
 	}
 
 	ksSlug, err := config.KnowledgeScope(tool)
@@ -165,15 +177,70 @@ func Evaluate(in Input) (Decision, error) {
 	return allow(), nil // unrelated server — not ours to gate
 }
 
-func evalMemory(_ string, pt config.ParsedTool, args map[string]any, cwd, memoryID string) (Decision, error) {
-	// The destination gate and the publish tag-gate are INDEPENDENT (in Claude
-	// Code they're two separate hooks) — evaluate both and return the most severe
-	// outcome, so e.g. a misroute set to `warn` can't suppress a `block` from the
-	// tag gate. Reasons at the winning severity are combined.
+// projectDir resolves the binding-check project when the payload has no cwd.
+// workspace_roots has no active-root order: roots agreeing on one binding
+// resolve to it, differing bindings come back ambiguous, no roots → env var.
+func projectDir(roots []string) (cwd, ambiguous string, err error) {
+	var found []string
+	for _, r := range roots {
+		if r != "" {
+			found = append(found, r)
+		}
+	}
+	switch len(found) {
+	case 0:
+		for _, k := range []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"} {
+			if v := os.Getenv(k); v != "" {
+				return v, "", nil
+			}
+		}
+		return "", "", nil
+	case 1:
+		return found[0], "", nil
+	}
+	bindings := map[string]string{} // slug → first root bound to it
+	var order []string
+	for _, r := range found {
+		bound, err := config.ProjectBinding(r)
+		if err != nil {
+			return "", "", err
+		}
+		if bound == "" {
+			continue
+		}
+		if _, seen := bindings[bound]; !seen {
+			bindings[bound] = r
+			order = append(order, bound)
+		}
+	}
+	switch len(order) {
+	case 0:
+		return "", "", nil
+	case 1:
+		return bindings[order[0]], "", nil
+	}
+	return "", fmt.Sprintf("this workspace has several roots bound to different memories (%s) and the write carries no cwd, so the project cannot be determined",
+		strings.Join(order, ", ")), nil
+}
+
+func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambiguous string) (Decision, error) {
+	// The guards are independent: evaluate every one and return the most
+	// severe outcome (reasons at that severity combined), so a `warn` misroute
+	// never hides a `block` from the tag gate.
 	var decisions []Decision
 
 	// Destination gate (publish + append): misroute against the project binding.
-	if pt.Verb == "publish" || pt.Verb == "append" {
+	// An ambiguous multi-root workspace is gated at the same strictness rather
+	// than guessed, since the caller fails open on errors.
+	if (pt.Verb == "publish" || pt.Verb == "append") && ambiguous != "" {
+		s, err := config.MemoryDestStrictness()
+		if err != nil {
+			return Decision{}, err
+		}
+		decisions = append(decisions, Decision{Decision: string(s), Reason: fmt.Sprintf(
+			"demarkus write to %s: %s. Open a single workspace root, or run /memory-default so the roots agree; to relax this check, set DEMARKUS_MEMORY_DEST_STRICTNESS=warn (or ask).",
+			urlOr(args, "this document"), ambiguous)})
+	} else if pt.Verb == "publish" || pt.Verb == "append" {
 		bound, err := config.ProjectBinding(cwd)
 		if err != nil {
 			return Decision{}, err

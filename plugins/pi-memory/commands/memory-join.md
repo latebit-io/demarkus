@@ -68,7 +68,7 @@ For a hosted memory, skip the QUIC join and MCP-registration steps below, but st
 
 3. Confirm the slug, host, project binding, and whether a token file is used. State that the token is injected by `demarkus-plugin mcp-serve`, not stored in MCP config.
 
-4. Explain removal without performing it unasked. Remove the memory catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`. A stale binding makes the destination gate block writes to remaining memories.
+4. Explain removal without performing it unasked. Remove the memory catalog row and token file through the registry tooling, but first rebind or remove every matching row in `~/.demarkus/project-souls`. A stale binding makes the destination gate block writes to remaining memories. Then run `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp remove '<slug>'` so the removed server is no longer launched. Check that removal's exit status: on failure, surface the exact error and report the cleanup as incomplete (catalog row and token gone, MCP entry still present) with the command as the retry.
 
 ## Don't
 

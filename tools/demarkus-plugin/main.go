@@ -67,13 +67,12 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  version   Print version and exit\n")
 }
 
-// cmdNudge reads a nudge request as JSON on stdin and emits the reminder.
-// --format json (default) → {"nudge":...}; claude → the event's hookSpecificOutput
-// (recall→UserPromptSubmit, promote→PostToolUse additionalContext; session-end→
-// a Stop decision:block). Empty nudge → no output. Fails silent (no nudge).
+// cmdNudge reads a nudge request as JSON on stdin and emits the reminder in
+// the adapter's --format shape (json | claude | cursor). Empty nudge → no
+// output; fails silent.
 func cmdNudge() {
 	fs := flag.NewFlagSet("nudge", flag.ExitOnError)
-	format := fs.String("format", "json", "output format: json | claude")
+	format := fs.String("format", "json", "output format: json | claude | cursor")
 	event := fs.String("event", "", "override event: recall | promote | session-end")
 	surface := fs.String("surface", "", "override surface: memory | knowledge")
 	changed := fs.Bool("changed-files", false, "session-end: the session changed files")
@@ -114,6 +113,15 @@ func cmdNudge() {
 	}
 	if out.Nudge == "" {
 		return // nothing to surface
+	}
+	if *format == "cursor" {
+		switch in.Event {
+		case "session-end":
+			printJSON(map[string]any{"followup_message": out.Nudge})
+		default: // promote (recall has no injection channel on Cursor)
+			printJSON(map[string]any{"permission": "allow", "agent_message": out.Nudge})
+		}
+		return
 	}
 	if *format == "claude" {
 		switch in.Event {
@@ -161,13 +169,13 @@ func cmdUpdateCheck() {
 }
 
 // cmdGuidance emits the session-start context for a surface. --format json
-// (default) → {"context":...}; claude → a SessionStart additionalContext payload.
-// Empty context → no output.
+// (default) → {"context":...}; claude → a SessionStart additionalContext payload;
+// cursor → a sessionStart additional_context payload. Empty context → no output.
 func cmdGuidance() {
 	fs := flag.NewFlagSet("guidance", flag.ExitOnError)
 	surface := fs.String("surface", "memory", "memory | knowledge")
 	guidanceFile := fs.String("guidance-file", "", "path to the plugin's static guidance markdown")
-	format := fs.String("format", "json", "output format: json | claude")
+	format := fs.String("format", "json", "output format: json | claude | cursor")
 	_ = fs.Parse(os.Args[2:])
 
 	out, err := guidance.Evaluate(guidance.Input{Surface: *surface, GuidanceFile: *guidanceFile})
@@ -178,28 +186,24 @@ func cmdGuidance() {
 	if out.Context == "" {
 		return
 	}
-	if *format == "claude" {
+	switch *format {
+	case "claude":
 		printJSON(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "SessionStart", "additionalContext": out.Context,
 		}})
-		return
+	case "cursor":
+		printJSON(map[string]any{"additional_context": out.Context})
+	default:
+		printJSON(out)
 	}
-	printJSON(out)
 }
 
-// cmdGate reads a tool call as JSON on stdin (native {tool,input,cwd} or a Claude
-// hook payload) and writes a decision. --format selects the output shape so the
-// per-harness adapters stay zero-logic:
-//
-//	json        (default) → {"decision":...,"reason":...}        (pi reads this)
-//	claude-pre            → Claude PreToolUse hookSpecificOutput  (deny/ask, else empty)
-//	claude-post           → Claude PostToolUse hookSpecificOutput (warn → additionalContext)
-//
-// FAILS OPEN on any internal error (no output / allow) so a transient fault never
-// blocks a legitimate write; the error is logged to stderr.
+// cmdGate reads a tool call (native {tool,input,cwd}, Claude, or Cursor hook
+// payload) from stdin and writes the decision in the adapter's --format shape.
+// FAILS OPEN on any internal error so a transient fault never blocks a write.
 func cmdGate() {
 	fs := flag.NewFlagSet("gate", flag.ExitOnError)
-	format := fs.String("format", "json", "output format: json | claude-pre | claude-post")
+	format := fs.String("format", "json", "output format: json {decision,reason} | claude-pre (deny/ask) | claude-post (warn) | cursor (permission; warn = allow + agent_message)")
 	_ = fs.Parse(os.Args[2:])
 
 	fail := func(msg string) {
@@ -219,7 +223,7 @@ func cmdGate() {
 		fail(fmt.Sprintf("parse input: %v", err))
 		return
 	}
-	d, err := gate.Evaluate(in)
+	d, err := gate.Evaluate(&in)
 	if err != nil {
 		fail(fmt.Sprintf("evaluate: %v", err))
 		return
@@ -250,6 +254,18 @@ func emitDecision(d gate.Decision, format string) {
 		printJSON(map[string]any{"hookSpecificOutput": map[string]any{
 			"hookEventName": "PostToolUse", "additionalContext": "⚠️ " + d.Reason,
 		}})
+	case "cursor":
+		// One pre-call hook carries every verdict; warn is advice on an allow.
+		switch d.Decision {
+		case "block":
+			printJSON(map[string]any{"permission": "deny", "user_message": d.Reason, "agent_message": d.Reason})
+		case "ask":
+			printJSON(map[string]any{"permission": "ask", "user_message": d.Reason, "agent_message": d.Reason})
+		case "warn":
+			printJSON(map[string]any{"permission": "allow", "agent_message": "⚠️ " + d.Reason})
+		default:
+			printJSON(map[string]any{"permission": "allow"})
+		}
 	default: // json
 		printJSON(d)
 	}

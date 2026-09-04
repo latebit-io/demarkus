@@ -185,9 +185,37 @@ func cmdRegistry(args []string) {
 	}
 }
 
+// splitMcpHarness takes `--harness <h>` / `--harness=<h>` from the front of
+// args only, so `mcp add <name> <cmd> ...` keeps every child argument intact.
+func splitMcpHarness(args []string) (harness string, rest []string, err error) {
+	for len(args) > 0 {
+		switch {
+		case args[0] == "--harness":
+			if len(args) < 2 {
+				return "", nil, errors.New("mcp: --harness requires a value (pi|cursor)")
+			}
+			harness = args[1]
+			args = args[2:]
+		case strings.HasPrefix(args[0], "--harness="):
+			harness = strings.TrimPrefix(args[0], "--harness=")
+			args = args[1:]
+		default:
+			return harness, args, nil
+		}
+	}
+	return harness, args, nil
+}
+
 func registryMcp(args []string) {
+	harness, args, err := splitMcpHarness(args)
+	if err != nil {
+		fail(err.Error())
+	}
+	if err := registry.SetMcpHarness(harness); err != nil {
+		fail(err.Error())
+	}
 	if len(args) == 0 {
-		fail("mcp: usage: registry mcp add|add-http|remove|list ...")
+		fail("mcp: usage: registry mcp [--harness pi|cursor] add|add-http|remove|list ...")
 	}
 	switch args[0] {
 	case "add":

@@ -28,7 +28,7 @@ func setupHome(t *testing.T, files map[string]string) string {
 	return home
 }
 
-func mustEval(t *testing.T, in Input) Decision {
+func mustEval(t *testing.T, in *Input) Decision {
 	t.Helper()
 	d, err := Evaluate(in)
 	if err != nil {
@@ -66,24 +66,24 @@ func TestPublishTagGate(t *testing.T) {
 	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
 
-	tagless := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{"url": "/x.md"}})
+	tagless := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{"url": "/x.md"}})
 	if tagless.Decision != "block" {
 		t.Fatalf("tagless: want block, got %q (%s)", tagless.Decision, tagless.Reason)
 	}
 
-	tagged := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+	tagged := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 		"url": "/x.md", "metadata": map[string]any{"tags": "a,b"},
 	}})
 	if tagged.Decision != "allow" {
 		t.Fatalf("tagged: want allow, got %q", tagged.Decision)
 	}
-	separators := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+	separators := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 		"url": "/x.md", "metadata": map[string]any{"tags": ", ,"},
 	}})
 	if separators.Decision != "block" {
 		t.Fatalf("separator-only tags: want block, got %q", separators.Decision)
 	}
-	appendOverride := mustEval(t, Input{Tool: "demarkus_memory_mark_append", Input: map[string]any{
+	appendOverride := mustEval(t, &Input{Tool: "demarkus_memory_mark_append", Input: map[string]any{
 		"url": "/x.md", "metadata": map[string]any{"tags": ""},
 	}})
 	if appendOverride.Decision != "block" || !strings.Contains(appendOverride.Reason, "mark_append") {
@@ -94,8 +94,8 @@ func TestPublishTagGate(t *testing.T) {
 func TestImportanceValidation(t *testing.T) {
 	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
 	setupHome(t, nil)
-	base := func(imp any) Input {
-		return Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+	base := func(imp any) *Input {
+		return &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 			"url": "/x.md", "metadata": map[string]any{"tags": "a", "importance": imp},
 		}}
 	}
@@ -117,7 +117,7 @@ func TestImportanceValidation(t *testing.T) {
 		}
 	}
 	// absent importance is fine
-	if got := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+	if got := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 		"url": "/x.md", "metadata": map[string]any{"tags": "a"},
 	}}); got.Decision != "allow" {
 		t.Errorf("absent importance: want allow, got %s", got.Decision)
@@ -135,7 +135,7 @@ func TestDestinationGate(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(repo+"\tother\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Cwd: sub, Input: map[string]any{
+	d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Cwd: sub, Input: map[string]any{
 		"url": "/x.md", "metadata": map[string]any{"tags": "a"},
 	}})
 	if d.Decision != "block" { // dest strictness defaults to block
@@ -147,7 +147,7 @@ func TestDestinationGate(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(repo+"\tdemarkus-memory\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	d2 := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Cwd: sub, Input: map[string]any{
+	d2 := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Cwd: sub, Input: map[string]any{
 		"url": "/x.md", "metadata": map[string]any{"tags": "a"},
 	}})
 	if d2.Decision != "allow" {
@@ -169,7 +169,7 @@ func TestMostSevereWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	// misroute (dest=warn) + tagless (tag=block) → block, tag reason present
-	d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Cwd: repo, Input: map[string]any{"url": "/x.md"}})
+	d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Cwd: repo, Input: map[string]any{"url": "/x.md"}})
 	if d.Decision != "block" {
 		t.Fatalf("want block (tag gate wins over warn dest), got %q", d.Decision)
 	}
@@ -186,11 +186,11 @@ func TestKnowledgeGate(t *testing.T) {
 		"plugin-knowledge.require-tags.knowledge":   "category\n",
 	})
 	// tagless → block
-	if d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{"url": "/k.md"}}); d.Decision != "block" {
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{"url": "/k.md"}}); d.Decision != "block" {
 		t.Fatalf("ks tagless: want block, got %q", d.Decision)
 	}
 	// tags present but missing required axis (category:) and required field type → block
-	d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+	d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
 		"url": "/k.md", "metadata": map[string]any{"tags": "topic"},
 	}})
 	if d.Decision != "block" {
@@ -205,29 +205,29 @@ func TestKnowledgeGate(t *testing.T) {
 		t.Fatalf("ks reason changed:\n got: %q\nwant: %q", d.Reason, wantReason)
 	}
 	// An axis declaration needs a non-empty value.
-	if d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
 		"url": "/k.md", "metadata": map[string]any{"tags": "category:", "type": "Reference"},
 	}}); d.Decision != "block" {
 		t.Fatalf("ks empty axis value: want block, got %q", d.Decision)
 	}
 	// satisfies axis + type → allow
-	if d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
 		"url": "/k.md", "metadata": map[string]any{"tags": "category:project,topic", "type": "Reference"},
 	}}); d.Decision != "allow" {
 		t.Fatalf("ks compliant: want allow, got %q (%s)", d.Decision, d.Reason)
 	}
 	// index.md is exempt from required type
-	if d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
 		"url": "/world/index.md", "metadata": map[string]any{"tags": "category:project"},
 	}}); d.Decision != "allow" {
 		t.Fatalf("ks index.md exempt: want allow, got %q (%s)", d.Decision, d.Reason)
 	}
 	// Missing APPEND metadata inherits and remains unknown to the plugin.
-	if d := mustEval(t, Input{Tool: "knowledge_mark_append", Input: map[string]any{"url": "/k.md"}}); d.Decision != "allow" {
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_append", Input: map[string]any{"url": "/k.md"}}); d.Decision != "allow" {
 		t.Fatalf("ks append: want allow, got %q (%s)", d.Decision, d.Reason)
 	}
 	// Explicit overrides are enforceable before dispatch.
-	if d := mustEval(t, Input{Tool: "knowledge_mark_append", Input: map[string]any{
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_append", Input: map[string]any{
 		"url": "/k.md", "metadata": map[string]any{"tags": "topic"},
 	}}); d.Decision != "block" || !strings.Contains(d.Reason, "mark_append") {
 		t.Fatalf("ks append override: want block, got %q (%s)", d.Decision, d.Reason)
@@ -239,7 +239,7 @@ func TestKnowledgeInvalidStrictnessDefaultsWarn(t *testing.T) {
 		"knowledge-systems":                     "knowledge\n",
 		"plugin-knowledge.strictness.knowledge": "invalid\n",
 	})
-	d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{"url": "/k.md"}})
+	d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{"url": "/k.md"}})
 	if d.Decision != "warn" {
 		t.Fatalf("invalid strictness: want warn, got %q (%s)", d.Decision, d.Reason)
 	}
@@ -254,13 +254,13 @@ func TestKnowledgeRequiresArbitraryField(t *testing.T) {
 		"plugin-knowledge.require-fields.knowledge": "authors\n",
 	})
 	// missing authors → block
-	if d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
 		"url": "/k.md", "metadata": map[string]any{"tags": "topic"},
 	}}); d.Decision != "block" {
 		t.Fatalf("missing required 'authors': want block, got %q", d.Decision)
 	}
 	// authors present → allow
-	if d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
 		"url": "/k.md", "metadata": map[string]any{"tags": "topic", "authors": "ada"},
 	}}); d.Decision != "allow" {
 		t.Fatalf("authors present: want allow, got %q (%s)", d.Decision, d.Reason)
@@ -272,7 +272,7 @@ func TestMcpProxyUnwrap(t *testing.T) {
 	setupHome(t, nil)
 	// pi-mcp-adapter proxy: tool "mcp", real call in input.tool/input.args (JSON string)
 	args, _ := json.Marshal(map[string]any{"url": "/x.md"})
-	d := mustEval(t, Input{Tool: "mcp", Input: map[string]any{
+	d := mustEval(t, &Input{Tool: "mcp", Input: map[string]any{
 		"tool": "demarkus_memory_mark_publish",
 		"args": string(args),
 	}})
@@ -285,7 +285,7 @@ func TestUnrelatedServerAllowed(t *testing.T) {
 	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
 	setupHome(t, nil)
 	// not the local memory, not a registered remote memory or knowledge system → allow
-	if d := mustEval(t, Input{Tool: "someother_mark_publish", Input: map[string]any{"url": "/x.md"}}); d.Decision != "allow" {
+	if d := mustEval(t, &Input{Tool: "someother_mark_publish", Input: map[string]any{"url": "/x.md"}}); d.Decision != "allow" {
 		t.Fatalf("unrelated server: want allow, got %q", d.Decision)
 	}
 }
@@ -293,8 +293,8 @@ func TestUnrelatedServerAllowed(t *testing.T) {
 func TestRetentionGate(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
 
-	withRetention := func(tool string, retention any) Input {
-		return Input{Tool: tool, Input: map[string]any{
+	withRetention := func(tool string, retention any) *Input {
+		return &Input{Tool: tool, Input: map[string]any{
 			"url": "/x.md", "metadata": map[string]any{"tags": "a,b", "retention": retention},
 		}}
 	}
@@ -351,7 +351,7 @@ func TestRetentionGate(t *testing.T) {
 	})
 
 	t.Run("absent retention allows", func(t *testing.T) {
-		d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 			"url": "/x.md", "metadata": map[string]any{"tags": "a,b"},
 		}})
 		if d.Decision != "allow" {
@@ -377,7 +377,7 @@ func TestRetentionGate(t *testing.T) {
 
 	t.Run("block-level tag gate outranks retention ask", func(t *testing.T) {
 		t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
-		d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 			"url": "/x.md", "metadata": map[string]any{"retention": "20"},
 		}})
 		if d.Decision != "block" {
@@ -387,7 +387,7 @@ func TestRetentionGate(t *testing.T) {
 
 	t.Run("retention ask outranks warn-level tag gate", func(t *testing.T) {
 		t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "warn")
-		d := mustEval(t, Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
 			"url": "/x.md", "metadata": map[string]any{"retention": "20"},
 		}})
 		if d.Decision != "ask" {
@@ -403,7 +403,7 @@ func TestRetentionGateKnowledge(t *testing.T) {
 	setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
 
 	t.Run("compliant publish with retention asks", func(t *testing.T) {
-		d := mustEval(t, Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
 			"url": "/k.md", "metadata": map[string]any{"tags": "a,b", "retention": "10"},
 		}})
 		if d.Decision != "ask" {
@@ -412,7 +412,7 @@ func TestRetentionGateKnowledge(t *testing.T) {
 	})
 
 	t.Run("append with retention asks", func(t *testing.T) {
-		d := mustEval(t, Input{Tool: "knowledge_mark_append", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "knowledge_mark_append", Input: map[string]any{
 			"url": "/k.md", "metadata": map[string]any{"retention": "10"},
 		}})
 		if d.Decision != "ask" {
@@ -421,7 +421,7 @@ func TestRetentionGateKnowledge(t *testing.T) {
 	})
 
 	t.Run("append without retention allows", func(t *testing.T) {
-		d := mustEval(t, Input{Tool: "knowledge_mark_append", Input: map[string]any{
+		d := mustEval(t, &Input{Tool: "knowledge_mark_append", Input: map[string]any{
 			"url": "/k.md", "body": "more",
 		}})
 		if d.Decision != "allow" {
@@ -437,5 +437,80 @@ func TestPrunableRetentionJSONNumber(t *testing.T) {
 	}
 	if _, ok := prunableRetention(map[string]any{"retention": json.Number("0")}); ok {
 		t.Error("json.Number 0 should not be prunable")
+	}
+}
+
+func TestCursorPayloadQualifiesServerAndProject(t *testing.T) {
+	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
+	home := setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	// Cursor sends a bare tool_name with the server alongside.
+	d := mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", ToolInput: map[string]any{"url": "/x.md"}})
+	if d.Decision != "block" {
+		t.Fatalf("bare cursor tool should hit the tag gate: got %q (%s)", d.Decision, d.Reason)
+	}
+	// An unrelated server's mark_publish is not ours.
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "other", ToolInput: map[string]any{"url": "/x.md"}})
+	if d.Decision != "allow" {
+		t.Fatalf("foreign server should be allowed: got %q", d.Decision)
+	}
+	// workspace_roots stands in for cwd in the binding check.
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(repo+"\tremote\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", WorkspaceRoots: []string{repo},
+		ToolInput: map[string]any{"url": "/x.md", "metadata": map[string]any{"tags": "a"}}})
+	if d.Decision == "allow" {
+		t.Fatalf("bound project writing to the local memory should be gated, got allow")
+	}
+	if !strings.Contains(d.Reason, "remote") {
+		t.Fatalf("destination gate reason should name the bound memory: %s", d.Reason)
+	}
+}
+
+func TestCursorMultiRootBindingResolution(t *testing.T) {
+	t.Setenv("DEMARKUS_MEMORY_DEST_STRICTNESS", "block")
+	home := setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	unbound := filepath.Join(home, "unbound")
+	remote := filepath.Join(home, "remote-bound")
+	local := filepath.Join(home, "local-bound")
+	for _, d := range []string{unbound, remote, local} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := remote + "\tremote\n" + local + "\t" + config.LocalMemoryID + "\n"
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(rows), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tagged := map[string]any{"url": "/x.md", "metadata": map[string]any{"tags": "a"}}
+	// An unbound first root must not hide a bound second root.
+	d := mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", WorkspaceRoots: []string{unbound, remote}, ToolInput: tagged})
+	if d.Decision != "block" || !strings.Contains(d.Reason, "remote") {
+		t.Fatalf("second-root binding should gate the write: got %q (%s)", d.Decision, d.Reason)
+	}
+	// Roots bound to different memories cannot be resolved without a cwd: gate, never guess.
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", WorkspaceRoots: []string{remote, local}, ToolInput: tagged})
+	if d.Decision != "block" || !strings.Contains(d.Reason, "several roots") {
+		t.Fatalf("differing bindings should be gated as ambiguous: got %q (%s)", d.Decision, d.Reason)
+	}
+	// Roots that agree on one binding resolve to it.
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", WorkspaceRoots: []string{unbound, local}, ToolInput: tagged})
+	if d.Decision != "allow" {
+		t.Fatalf("single agreeing binding to the target memory should allow: got %q (%s)", d.Decision, d.Reason)
+	}
+	// An explicit cwd wins over the roots.
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", Cwd: local, WorkspaceRoots: []string{remote, local}, ToolInput: tagged})
+	if d.Decision != "allow" {
+		t.Fatalf("explicit cwd should resolve the project: got %q (%s)", d.Decision, d.Reason)
+	}
+	// No roots at all: the harness env var stands in.
+	t.Setenv("CURSOR_PROJECT_DIR", remote)
+	d = mustEval(t, &Input{ToolName: "mark_publish", McpServerName: "demarkus-memory", ToolInput: tagged})
+	if d.Decision != "block" {
+		t.Fatalf("env project dir should gate the write: got %q", d.Decision)
 	}
 }

@@ -103,3 +103,20 @@ func TestSessionEndAcceptsLegacySoulWriteKey(t *testing.T) {
 		t.Error("legacy soulWrite=true must suppress the journal nudge like memoryWrite=true")
 	}
 }
+
+func TestPromoteAcceptsCursorShape(t *testing.T) {
+	setupHome(t, map[string]string{
+		"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n",
+		"knowledge-systems":  "knowledge\n",
+	})
+	got := eval(t, &Input{Event: "promote", ToolName: "mark_publish", McpServerName: "demarkus-memory",
+		ToolInput: map[string]any{"url": "/proj/adr/0001-x.md", "body": "# x"}})
+	if got == "" {
+		t.Fatal("cursor-shaped ADR publish should nudge")
+	}
+	got = eval(t, &Input{Event: "promote", ToolName: "mark_publish", McpServerName: "knowledge",
+		ToolInput: map[string]any{"url": "/proj/adr/0001-x.md", "body": "# x"}})
+	if got != "" {
+		t.Fatal("publish to the knowledge system must not nudge promotion")
+	}
+}

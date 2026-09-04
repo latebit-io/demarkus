@@ -90,3 +90,20 @@ func TestRegistryPromoteTargetReportsCanonicalPath(t *testing.T) {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
+
+func TestSplitMcpHarnessLeavesChildArgsAlone(t *testing.T) {
+	h, rest, err := splitMcpHarness([]string{"--harness", "cursor", "add", "srv", "/bin/x", "--harness", "child"})
+	if err != nil || h != "cursor" {
+		t.Fatalf("harness = %q, err = %v", h, err)
+	}
+	if strings.Join(rest, " ") != "add srv /bin/x --harness child" {
+		t.Fatalf("child args altered: %v", rest)
+	}
+	h, rest, err = splitMcpHarness([]string{"add", "srv", "/bin/x", "--harness=cursor"})
+	if err != nil || h != "" || strings.Join(rest, " ") != "add srv /bin/x --harness=cursor" {
+		t.Fatalf("trailing flag must stay a child arg: %q %v %v", h, rest, err)
+	}
+	if _, _, err := splitMcpHarness([]string{"--harness"}); err == nil {
+		t.Fatal("dangling --harness should error")
+	}
+}

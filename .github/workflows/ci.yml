@@ -65,6 +65,8 @@ jobs:
               - 'plugins/pi-knowledge/**'
               - 'plugins/opencode-memory/**'
               - 'plugins/opencode-knowledge/**'
+              - 'plugins/cursor-memory/**'
+              - '.cursor-plugin/**'
               - 'tools/plugin-prompts/**'
               - 'tools/demarkus-plugin/**'
               - 'tools/go.mod'
@@ -266,6 +268,14 @@ jobs:
           bash -n plugins/opencode-knowledge/scripts/bootstrap.sh
           shellcheck -S warning plugins/opencode-memory/install.sh plugins/opencode-memory/scripts/bootstrap.sh
           shellcheck -S warning plugins/opencode-knowledge/install.sh plugins/opencode-knowledge/scripts/bootstrap.sh
+      - name: Check the Cursor plugin
+        run: |
+          bash -n plugins/cursor-memory/hooks/*.sh plugins/cursor-memory/scripts/bootstrap.sh
+          shellcheck -S warning plugins/cursor-memory/hooks/*.sh plugins/cursor-memory/scripts/bootstrap.sh
+          for f in .cursor-plugin/marketplace.json plugins/cursor-memory/.cursor-plugin/plugin.json plugins/cursor-memory/hooks/hooks.json plugins/cursor-memory/mcp.json; do
+            jq empty "$f"
+          done
+          bash plugins/cursor-memory/hooks/test.sh
 
   # release.yml stages goreleaser build output by id; a rename on either side
   # would otherwise only surface at release time.

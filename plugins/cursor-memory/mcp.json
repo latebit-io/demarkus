@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "demarkus-memory": {
+      "command": "${userHome}/.demarkus/bin/demarkus-plugin",
+      "args": ["mcp-serve"]
+    }
+  }
+}

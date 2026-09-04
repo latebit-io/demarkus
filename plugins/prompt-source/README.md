@@ -2,7 +2,7 @@
 
 Canonical prompt templates for the demarkus agent plugins.
 
-The runtime prompt files shipped by the six agent plugins (claude-code, claude-code-knowledge, opencode-memory, opencode-knowledge, pi-memory, pi-knowledge) are generated from the templates here. `memory/` and `knowledge/` hold the `commands/`, `context/`, and `skills/` template trees; `manifest.json` maps each template to its per-surface output targets.
+The runtime prompt files shipped by the seven agent plugins (claude-code, claude-code-knowledge, opencode-memory, opencode-knowledge, pi-memory, pi-knowledge, cursor-memory) are generated from the templates here. `memory/` and `knowledge/` hold the `commands/`, `context/`, and `skills/` template trees; `manifest.json` maps each template to its per-surface output targets.
 
 ## Workflow
 

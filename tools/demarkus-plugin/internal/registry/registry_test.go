@@ -728,3 +728,33 @@ func TestValidateBrokerEndpointRejectsUserinfo(t *testing.T) {
 		t.Fatalf("catalog row after rejected join: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestMcpCursorHarnessPathAndShape(t *testing.T) {
+	home := setupHome(t)
+	if err := SetMcpHarness("cursor"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { McpHarness = "" })
+	if err := McpAdd("mem", "/bin/x", []string{"mcp-serve"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := McpAddHTTP("kb", "https://b/mcp"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".cursor", "mcp.json"))
+	if err != nil {
+		t.Fatalf("cursor config not written: %v", err)
+	}
+	if strings.Contains(string(b), "\"auth\"") {
+		t.Fatalf("cursor HTTP entry must not carry an auth key: %s", b)
+	}
+	if !strings.Contains(string(b), "\"url\": \"https://b/mcp\"") {
+		t.Fatalf("cursor HTTP entry missing url: %s", b)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "mcp", "mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("pi config must be untouched under the cursor harness: %v", err)
+	}
+	if err := SetMcpHarness("vim"); err == nil {
+		t.Fatal("unknown harness should be rejected")
+	}
+}

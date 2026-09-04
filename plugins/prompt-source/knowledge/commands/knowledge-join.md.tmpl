@@ -23,9 +23,9 @@ Before invoking Bash, require the entire argument to match `https://` plus a DNS
 2. Check registration state before changing it:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp list
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp{{if eq .Harness "cursor"}} --harness cursor{{end}} list
    "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list
-   {{if eq .Harness "claude"}}claude mcp list{{else if eq .Harness "opencode"}}opencode mcp list{{else}}# Inspect the connected MCP servers through the harness's MCP command.{{end}}
+   {{if eq .Harness "claude"}}claude mcp list{{else if eq .Harness "opencode"}}opencode mcp list{{else if eq .Harness "cursor"}}# Also check MCP settings in {{.Agent}} for a server named <slug>.{{else}}# Inspect the connected MCP servers through the harness's MCP command.{{end}}
    ```
 
    If any check fails or `<slug>` already exists, stop. Do not overwrite or remove existing state. Ask for explicit removal first when the user wants to replace it.
@@ -33,11 +33,15 @@ Before invoking Bash, require the entire argument to match `https://` plus a DNS
 3. Register the endpoint, then the publish-gate entry. Check each result before continuing.
 
 {{if eq .Harness "claude"}}   ```bash
-   claude mcp add --transport http <slug> <mcp-url>
+   claude mcp add --transport http <slug> <mcp-url> && \
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>'
+   ```
+{{else if eq .Harness "cursor"}}   ```bash
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor add-http '<slug>' '<mcp-url>' && \
    "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>'
    ```
 {{else}}   ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add-http '<slug>' '<mcp-url>'
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp add-http '<slug>' '<mcp-url>' && \
    "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>'
    ```
 {{end}}
@@ -60,6 +64,7 @@ Removal is separate and user-requested. Require a slug matching `[a-z0-9][a-z0-9
 
 {{if eq .Harness "claude"}}Run `claude mcp remove '<slug>'`, then `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-unregister '<slug>'`.
 {{else if eq .Harness "opencode"}}Run `opencode mcp logout '<slug>'`, then `registry mcp remove '<slug>'`, then `registry knowledge-unregister '<slug>'`. Tell the user to restart {{.Agent}}.
+{{else if eq .Harness "cursor"}}Run `registry mcp --harness cursor remove '<slug>'`, then `registry knowledge-unregister '<slug>'`. {{.Agent}} drops the server when `~/.cursor/mcp.json` changes.
 {{else}}Run `registry mcp remove '<slug>'`, then `registry knowledge-unregister '<slug>'`. Reconnect MCP servers through the harness after removal.
 {{end}}
 Stop on the first failure, list remaining endpoint and gate state, and provide the repair command. A manually configured endpoint must be removed through the mechanism that created it.

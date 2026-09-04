@@ -61,7 +61,9 @@ jobs:
                   plugins/pi-knowledge/package.json \
                   plugins/opencode-memory/package.json \
                   plugins/opencode-knowledge/package.json \
-                  .claude-plugin/marketplace.json
+                  plugins/cursor-memory/.cursor-plugin/plugin.json \
+                  .claude-plugin/marketplace.json \
+                  .cursor-plugin/marketplace.json
           git commit -m "chore(plugins): bump managed binaries to latest release" \
                      -m "server ${SERVER}, client ${CLIENT}, tools ${TOOLS}."
           git push --force origin "$branch"

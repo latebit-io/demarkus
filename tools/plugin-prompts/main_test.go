@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -50,14 +51,16 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 54 rendered canonical prompts plus each brand's share,
-	// derived from the manifest and source tree rather than from the render.
-	want := 54 + expectedBrandArtifacts(t, root)
+	// 67 rendered canonical prompts (six memory/knowledge pairs plus the
+	// Cursor memory target) plus each brand's share, derived from the manifest
+	// and source tree rather than from the render.
+	const canonical = 67
+	want := canonical + expectedBrandArtifacts(t, root)
 	if len(artifacts) != want {
 		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)
 	}
-	if got := brandArtifactCount(t, root, artifacts); got != want-54 {
-		t.Fatalf("brand artifacts = %d, want %d", got, want-54)
+	if got := brandArtifactCount(t, root, artifacts); got != want-canonical {
+		t.Fatalf("brand artifacts = %d, want %d", got, want-canonical)
 	}
 }
 
@@ -138,25 +141,26 @@ func TestCheckAllReportsMissingArtifactAsDrift(t *testing.T) {
 }
 
 func validManifest() manifest {
-	harnesses := []string{"claude", "pi", "opencode"}
-	surfaces := []string{"memory", "knowledge"}
 	spec := manifest{}
-	for _, surface := range surfaces {
-		for _, harness := range harnesses {
-			name := surface + "-" + harness
-			pair := surface + "/" + harness
-			spec.Targets = append(spec.Targets, target{
-				Name:             name,
-				Surface:          surface,
-				Harness:          harness,
-				Agent:            harness,
-				Output:           canonicalOutputs[pair],
-				ProjectDir:       "project",
-				RepoInstructions: "instructions",
-				ToolForm:         "tools",
-			})
+	add := func(surface, harness string) {
+		pair := surface + "/" + harness
+		spec.Targets = append(spec.Targets, target{
+			Name:             surface + "-" + harness,
+			Surface:          surface,
+			Harness:          harness,
+			Agent:            harness,
+			Output:           canonicalOutputs[pair],
+			ProjectDir:       "project",
+			RepoInstructions: "instructions",
+			ToolForm:         "tools",
+		})
+	}
+	for _, surface := range []string{"memory", "knowledge"} {
+		for _, harness := range []string{"claude", "pi", "opencode"} {
+			add(surface, harness)
 		}
 	}
+	add("memory", "cursor") // the Cursor knowledge port is a follow-up
 	return spec
 }
 
@@ -402,5 +406,47 @@ func TestBrandPluginJSONRewritesNameAndDescription(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in:\n%s", want, text)
 		}
+	}
+}
+
+func TestCursorCommandFrontmatter(t *testing.T) {
+	in := []byte("---\ndescription: Do a thing\nargument-hint: <entry text>\n---\n" + generatedMarker + "\nBody.\n")
+	out, err := cursorCommand("memory-journal", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\nname: memory-journal\ndescription: Do a thing\n---\n" + generatedMarker + "\nBody.\n"
+	if string(out) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
+	}
+	if _, err := cursorCommand("x", []byte("no frontmatter\n")); err == nil {
+		t.Fatal("missing frontmatter should error")
+	}
+}
+
+// splitMcpHarness in demarkus-plugin consumes --harness only before the mcp
+// subcommand, so a rendered command with the flag after it would fail at runtime.
+func TestCursorArtifactsPutHarnessFlagBeforeSubcommand(t *testing.T) {
+	root, err := findRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := renderAll(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := regexp.MustCompile(`registry mcp (add|add-http|remove|list)\b[^\n]*--harness`)
+	seen := 0
+	for _, a := range artifacts {
+		if a.Target == nil || a.Target.Harness != "cursor" {
+			continue
+		}
+		if m := wrong.Find(a.Content); m != nil {
+			t.Errorf("%s: harness flag after the subcommand: %s", a.Path, m)
+		}
+		seen += strings.Count(string(a.Content), "registry mcp --harness cursor ")
+	}
+	if seen == 0 {
+		t.Fatal("no rendered Cursor command registers an MCP server with --harness cursor")
 	}
 }

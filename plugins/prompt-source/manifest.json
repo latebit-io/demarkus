@@ -59,6 +59,16 @@
       "project_dir": "the current project directory",
       "repo_instructions": "repo instructions",
       "tool_form": "the destination server's `mark_*` tools"
+    },
+    {
+      "name": "cursor-memory",
+      "surface": "memory",
+      "harness": "cursor",
+      "agent": "Cursor",
+      "output": "plugins/cursor-memory",
+      "project_dir": "the current workspace root",
+      "repo_instructions": "AGENTS.md or Cursor rules",
+      "tool_form": "the destination server's `mark_*` tools"
     }
   ]
 }
