@@ -418,7 +418,9 @@ func registryMemoryDefault(args []string) {
 		if err != nil {
 			fail(err.Error())
 		}
-		fmt.Println(strings.Join(memoryDefaultListing(cat, current), "\n"))
+		if _, err := fmt.Println(strings.Join(memoryDefaultListing(cat, current), "\n")); err != nil {
+			fail("memory-default: write listing: " + err.Error())
+		}
 	case *set != "":
 		if err := registry.ProjectBindSet(*bind, *set); err != nil {
 			fail(err.Error())
