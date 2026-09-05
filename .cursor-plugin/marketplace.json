@@ -11,7 +11,7 @@
       "name": "demarkus-memory",
       "source": "plugins/cursor-memory",
       "description": "Zero-config local memory for Cursor. Spawns a local demarkus-server and wires MCP tools for fetch/publish/append/graph/lookup over your own versioned markdown store, and self-documents sessions to it. /soul-join adds remote souls with per-project binding and a destination gate; /promote lifts ready notes to a joined knowledge system.",
-      "version": "0.13.90",
+      "version": "0.13.91",
       "category": "memory",
       "tags": ["memory", "demarkus", "mark-protocol", "local-first"]
     },
@@ -19,7 +19,7 @@
       "name": "demarkus-knowledge",
       "source": "plugins/cursor-knowledge",
       "description": "Join an organizational demarkus knowledge system from Cursor. Registers the broker as an OAuth MCP server, steers sessions to the shared catalog, and enforces publishing policy at write time. Runs no local server.",
-      "version": "0.5.95",
+      "version": "0.5.96",
       "category": "knowledge",
       "tags": ["knowledge", "demarkus", "mark-protocol", "mcp", "oauth"]
     }
