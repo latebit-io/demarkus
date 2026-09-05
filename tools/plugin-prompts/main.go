@@ -411,22 +411,34 @@ func frontmatterEnd(text string) (int, bool) {
 	return end + 9, true
 }
 
-// validateFrontmatter parses a leading `---` block as strict YAML. Hosts use
-// strict parsers (Cursor ships js-yaml), so an unquoted description containing
-// ": " silently drops the command or skill from the menu.
-func validateFrontmatter(text string) error {
+// validateFrontmatter parses a leading `---` block as strict YAML: Cursor's js-yaml
+// silently drops a command whose description holds an unquoted ": ". needsDescription
+// (commands, skills) also rejects a missing or empty one, which makes pi throw.
+func validateFrontmatter(text string, needsDescription bool) error {
 	end, ok := frontmatterEnd(text)
 	if !ok {
+		if needsDescription {
+			return errors.New("missing frontmatter")
+		}
 		return nil
 	}
 	var fields map[string]any
 	if err := yaml.Unmarshal([]byte(text[4:end-4]), &fields); err != nil {
 		return fmt.Errorf("frontmatter is not valid YAML: %w", err)
 	}
-	if d, ok := fields["description"]; ok {
-		if _, isString := d.(string); !isString {
-			return fmt.Errorf("frontmatter description must be a string, got %T", d)
+	d, present := fields["description"]
+	if !present {
+		if needsDescription {
+			return errors.New("frontmatter has no description")
 		}
+		return nil
+	}
+	str, isString := d.(string)
+	if !isString {
+		return fmt.Errorf("frontmatter description must be a string, got %T", d)
+	}
+	if needsDescription && strings.TrimSpace(str) == "" {
+		return errors.New("frontmatter description is empty")
 	}
 	return nil
 }
@@ -449,7 +461,8 @@ func validateArtifact(path string, content []byte, target *target) error {
 			return fmt.Errorf("%s: invalid skill frontmatter", path)
 		}
 	}
-	if err := validateFrontmatter(text); err != nil {
+	needsDescription := filepath.Base(filepath.Dir(path)) == "commands" || strings.HasSuffix(path, "SKILL.md")
+	if err := validateFrontmatter(text, needsDescription); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	for _, forbidden := range forbiddenTerms(target.Harness) {

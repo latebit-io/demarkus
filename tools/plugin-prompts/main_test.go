@@ -36,7 +36,7 @@ func TestForbiddenTermsAreHarnessSpecific(t *testing.T) {
 }
 
 func TestValidateArtifactRejectsForeignHarness(t *testing.T) {
-	err := validateArtifact("commands/test.md", []byte(generatedMarker+"\nUse OpenClaw here.\n"), &target{Harness: "pi"})
+	err := validateArtifact("commands/test.md", []byte("---\ndescription: Test\n---\n"+generatedMarker+"\nUse OpenClaw here.\n"), &target{Harness: "pi"})
 	if err == nil || !strings.Contains(err.Error(), "OpenClaw") {
 		t.Fatalf("validateArtifact() error = %v, want OpenClaw rejection", err)
 	}
@@ -189,6 +189,23 @@ func TestValidateArtifactRejectsInvalidFrontmatterYAML(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactRequiresCommandDescription(t *testing.T) {
+	tgt := &target{Harness: "claude"}
+	for name, body := range map[string]string{
+		"missing key": "---\nname: a\n---\n\nBody.\n",
+		"empty":       "---\ndescription: \"\"\n---\n\nBody.\n",
+		"no block":    "Body only.\n",
+	} {
+		if err := validateArtifact("plugins/x/commands/a.md", []byte(body), tgt); err == nil {
+			t.Fatalf("%s: command without a description was accepted", name)
+		}
+	}
+	guidance := []byte("---\nname: a\n---\n\n# Guidance\n")
+	if err := validateArtifact("plugins/x/context/session-guidance.md", guidance, tgt); err != nil {
+		t.Fatalf("non-command artifact should not need a description: %v", err)
+	}
+}
+
 func TestRenderAliasKeepsQuotedDescriptionValid(t *testing.T) {
 	for _, tc := range []struct{ tmpl, want string }{
 		{"---\ndescription: \"Do the thing: fully\"\n---\n\nBody.\n", "description: \"Deprecated alias of /memory-x. Do the thing: fully\"\n"},
@@ -213,7 +230,7 @@ func TestRenderAliasKeepsQuotedDescriptionValid(t *testing.T) {
 		if !strings.Contains(string(got), tc.want) {
 			t.Fatalf("alias output missing %q:\n%s", tc.want, got)
 		}
-		if err := validateFrontmatter(string(got)); err != nil {
+		if err := validateFrontmatter(string(got), true); err != nil {
 			t.Fatal(err)
 		}
 	}

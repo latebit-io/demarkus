@@ -165,7 +165,7 @@ async function checkForUpdate(): Promise<string> {
 export function loadCommand(file: string, commandsDir = COMMANDS_DIR): { description: string; template: string } {
   const raw = readFileSync(join(commandsDir, file), "utf8");
   const fm = raw.match(/^---\n([\s\S]*?)\n---\n/);
-  const description = fm?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^"(.*)"$/, "$1") ?? "";
+  const description = fm?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^(["'])(.*)\1$/, "$2") ?? "";
   const body = (fm ? raw.slice(fm[0].length) : raw).replace(/\$\{DEMARKUS_SCRIPTS\}/g, SCRIPTS_DIR).trim();
   // $ARGUMENTS lets the user pass arguments; harmless when empty.
   const template = `${body}\n\nUser arguments (may be empty): $ARGUMENTS\n`;
