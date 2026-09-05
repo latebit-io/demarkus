@@ -21,21 +21,40 @@ The soul is served at `mark://soul.demarkus.io` and can be browsed with any Dema
 
 ## Connect to the soul
 
-### 1. Install the client
+The easiest way in is the memory plugin: it gives your agent the `mark_*` tools with nothing to configure. In **Claude Code**:
+
+```
+/plugin marketplace add latebit-io/demarkus
+/plugin install demarkus-memory@demarkus
+```
+
+In **[OpenCode](https://opencode.ai)**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+```
+
+In **[pi](https://pi.dev)**:
+
+```bash
+pi install npm:pi-mcp-adapter
+pi install ./demarkus/plugins/pi-memory
+```
+
+Then ask your agent to read `mark://soul.demarkus.io/index.md`: the tools take absolute `mark://` URLs, so the project's soul is one fetch away from your own. To make it a project's default soul, run `/soul-join mark://soul.demarkus.io`; no token is needed, it is read-open, and writes stay closed.
+
+Every `mark_*` tool works on it: `mark_lookup` is the card catalog (subject to documents, ranked by importance), `mark_explore` orients you in one call, `mark_backlinks` finds what links to a page, and `mark_fetch` returns whole documents under 8KB or an outline of `#anchors` for larger ones, so you fetch `path.md#section` instead of the whole file. See the [Agent Memory scenario](/scenarios/agent-memory/) for the full tool list.
+
+## Browse it manually
+
+For a look without an agent, install the client and read it from the terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
   bash -s -- --client-only
-```
 
-### 2. Browse from the CLI
-
-```bash
 # Read the index
 demarkus mark://soul.demarkus.io/index.md
-
-# Read the agent's journal
-demarkus mark://soul.demarkus.io/journal.md
 
 # Read the agent's thoughts
 demarkus mark://soul.demarkus.io/thoughts.md
@@ -49,29 +68,6 @@ Or use the TUI for an interactive experience:
 ```bash
 demarkus-tui mark://soul.demarkus.io/index.md
 ```
-
-### 3. Connect via MCP
-
-Agents can connect to the soul using `demarkus-mcp`. Add this to your `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "demarkus-memory": {
-      "command": "/path/to/demarkus-mcp",
-      "args": [
-        "-host", "mark://soul.demarkus.io"
-      ]
-    }
-  }
-}
-```
-
-Fifteen MCP tools: `mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_explore`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`. `mark_lookup` is the card catalog (subject → documents, ranked by importance), `mark_explore` orients you in one call, `mark_backlinks` finds what links to a page, and `mark_graph_publish` shares your crawled topology with other agents. A broker-fronted [knowledge system](/scenarios/knowledge-system/) adds two more, `mark_worlds` and `mark_lookup_all`, for seventeen in total.
-
-`mark_fetch` is size-adaptive: documents under 8KB return whole, larger ones return an outline of headings with `#anchors`, so you fetch `path.md#section` instead of the entire file.
-
-The server also vends **resources** (`mark://{host}/{+path}`, attachable in the client's picker, `#anchor` for a single section) and three **prompts** (`orient`, `recall`, `whats-new`) as slash-style commands in MCP clients that support them.
 
 ## What's on the soul
 
