@@ -29,6 +29,39 @@ tests:
       - equal:
           path: spec.strategy.type
           value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+
+  - it: strategy is overridable so operators can trade surge for availability
+    template: deployment.yaml
+    set:
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: 1
+          maxSurge: 0
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+
+  - it: Recreate strategy omits rollingUpdate, which the API forbids alongside it
+    template: deployment.yaml
+    set:
+      strategy.type: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - notExists:
+          path: spec.strategy.rollingUpdate
 
   - it: container image uses AppVersion when image.tag empty and relies on ENTRYPOINT
     template: deployment.yaml
