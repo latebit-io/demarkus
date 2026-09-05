@@ -51,10 +51,10 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 67 rendered canonical prompts (six memory/knowledge pairs plus the
-	// Cursor memory target) plus each brand's share, derived from the manifest
-	// and source tree rather than from the render.
-	const canonical = 67
+	// 72 rendered canonical prompts (four memory/knowledge pairs) plus each
+	// brand's share, derived from the manifest and source tree rather than
+	// from the render.
+	const canonical = 72
 	want := canonical + expectedBrandArtifacts(t, root)
 	if len(artifacts) != want {
 		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)
@@ -156,11 +156,10 @@ func validManifest() manifest {
 		})
 	}
 	for _, surface := range []string{"memory", "knowledge"} {
-		for _, harness := range []string{"claude", "pi", "opencode"} {
+		for _, harness := range []string{"claude", "pi", "opencode", "cursor"} {
 			add(surface, harness)
 		}
 	}
-	add("memory", "cursor") // the Cursor knowledge port is a follow-up
 	return spec
 }
 

@@ -1,0 +1,18 @@
+{
+  "name": "demarkus-knowledge",
+  "version": "0.5.95",
+  "description": "Join an organizational demarkus knowledge system from Cursor. Registers the broker as an OAuth MCP server, steers sessions to the shared catalog, and enforces publishing policy. Runs no local server; a shared helper binary provides gates and guidance.",
+  "author": {
+    "name": "latebit"
+  },
+  "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/cursor-knowledge",
+  "repository": "https://github.com/latebit-io/demarkus",
+  "license": "MIT",
+  "keywords": [
+    "knowledge",
+    "demarkus",
+    "mark-protocol",
+    "mcp",
+    "oauth"
+  ]
+}
