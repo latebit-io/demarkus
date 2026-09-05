@@ -34,7 +34,14 @@ pi install npm:pi-mcp-adapter
 pi install ./demarkus/plugins/pi-memory
 ```
 
-All three share the same `~/.demarkus` state, so they coexist on one machine. [Agent memory →](/scenarios/agent-memory/)
+In **[Cursor](https://cursor.com)**, add the repository as a marketplace, then install from the sidebar:
+
+```
+Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
+Customize → demarkus-memory → Install
+```
+
+All four share the same `~/.demarkus` state, so they coexist on one machine. [Agent memory →](/scenarios/agent-memory/)
 
 Ready to share it? One command turns a fresh Linux host into a whole knowledge system: world server, broker, [reading room](/library/), self-hosted login, HTTPS, and the indexing agent.
 

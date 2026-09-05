@@ -100,6 +100,34 @@ pi install ./demarkus/plugins/pi-memory      # add -l for project-local scope
 pi install ./demarkus/plugins/pi-knowledge
 ```
 
+### Cursor
+
+The same two plugins as [Cursor Plugins](https://cursor.com/docs/plugins): bash
+hook shims over the shared `demarkus-plugin` binary, prompts generated from the
+same source as the other harnesses, and `~/.demarkus` state shared with them.
+Both ship from one marketplace manifest at the repository root
+(`.cursor-plugin/marketplace.json`).
+
+**`demarkus-memory`** is the local memory, with the same zero-config
+provisioning, gates, and nudges; the publish gate runs on `beforeMCPExecution`,
+where Cursor supports `ask` natively.
+
+**`demarkus-knowledge`** joins a knowledge system over Cursor's MCP OAuth, with
+no tokens stored locally and no local server.
+
+- Source: [plugins/cursor-memory](https://github.com/latebit-io/demarkus/tree/main/plugins/cursor-memory) · [plugins/cursor-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/cursor-knowledge)
+- Install: add the repository as a team marketplace (Teams and Enterprise plans), then install from the sidebar:
+
+```
+Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
+Customize → demarkus-memory → Install
+Customize → demarkus-knowledge → Install
+```
+
+- Without a team marketplace, symlink a checkout: `ln -s "$PWD/demarkus/plugins/cursor-memory" ~/.cursor/plugins/local/demarkus-memory` (same for `cursor-knowledge`)
+- Commands: the same `/memory*`, `/promote*`, and `/knowledge*` command sets described above; the MCP server's prompts appear as `/demarkus-memory/orient`, `/recall`, and `/whats-new`
+- Restart Cursor after install; if the `demarkus-memory` MCP server shows as failed before the first conversation provisions the binary, toggle it once under Settings → MCP. Cloud agents run no hooks and cannot reach a local server; the plugins are for the desktop IDE
+
 ## Agent platforms
 
 ### Indexing agent

@@ -68,7 +68,7 @@ The deployment publishes a system policy and project template to the hub's well-
 
 ## Join as a user
 
-Once the broker is up, anyone on the team joins from Claude Code, [OpenCode](https://opencode.ai), or [pi](https://pi.dev). No local server or capability token is needed: the plugin connects the broker through the agent's MCP OAuth flow.
+Once the broker is up, anyone on the team joins from Claude Code, [Cursor](https://cursor.com), [OpenCode](https://opencode.ai), or [pi](https://pi.dev). No local server or capability token is needed: the plugin connects the broker through the agent's MCP OAuth flow.
 
 ### 1. Install the plugin
 
@@ -94,6 +94,15 @@ pi install npm:pi-mcp-adapter
 pi install ./demarkus/plugins/pi-knowledge
 ```
 
+Cursor, with the repository added as a team marketplace (or symlinked from a checkout into `~/.cursor/plugins/local/`):
+
+```
+Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
+Customize → demarkus-knowledge → Install
+```
+
+Restart Cursor before continuing.
+
 ### 2. Join the system
 
 ```
@@ -103,7 +112,8 @@ pi install ./demarkus/plugins/pi-knowledge
 Pass the full `https://` URL of the broker's MCP gateway. The command validates it, registers it as an MCP server in your agent, and points you at the browser-based auth flow on the first tool call. Authentication follows the standard MCP authorization spec: discovery (RFC 8414 / 9728), dynamic client registration (RFC 7591), then `authorization_code` + PKCE. You log in through your identity provider; the broker handles per-world tokens from there.
 
 In OpenCode, restart once more after joining so it loads the new MCP entry.
-Complete OAuth when prompted, or run `opencode mcp auth <slug>`.
+Complete OAuth when prompted, or run `opencode mcp auth <slug>`. In Cursor,
+restart once more and complete OAuth under Settings → MCP.
 
 ### 3. Navigate and work
 

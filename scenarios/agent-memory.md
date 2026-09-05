@@ -6,7 +6,7 @@ permalink: /scenarios/agent-memory/
 
 # Agent Memory
 
-Give Claude Code, OpenCode, pi, or any MCP-compatible LLM agent persistent memory across sessions: architecture notes, debugging lessons, roadmap, journal.
+Give Claude Code, Cursor, OpenCode, pi, or any MCP-compatible LLM agent persistent memory across sessions: architecture notes, debugging lessons, roadmap, journal.
 
 This is the pattern used by the Demarkus project itself. You can browse the live example at `mark://soul.demarkus.io`.
 
@@ -20,10 +20,10 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 
 ## Quick start: the plugins
 
-Claude Code, [OpenCode](https://opencode.ai), and [pi](https://pi.dev) each have
-a plugin, with the same behavior mapped onto each agent's extension API. They
-share `~/.demarkus` state, so one machine running all three has one memory, one
-token, one registry.
+Claude Code, [Cursor](https://cursor.com), [OpenCode](https://opencode.ai), and
+[pi](https://pi.dev) each have a plugin, with the same behavior mapped onto each
+agent's extension API. They share `~/.demarkus` state, so one machine running all
+four has one memory, one token, one registry.
 
 ### Claude Code
 
@@ -73,7 +73,35 @@ The memory provisions on the next session. Run `/mcp` once (or restart pi) to
 connect the newly registered server; `/memory-status` diagnoses, `/memory-init`
 reconfigures.
 
-That is the whole setup for any of the three agents. The manual steps below are for other MCP agents, a custom port, or a remote memory server.
+### Cursor
+
+`demarkus-memory` for Cursor is a Cursor Plugin: bash hook shims over the same
+`demarkus-plugin` binary, with the publish gate mapped onto `beforeMCPExecution`
+(Cursor supports `ask` natively) and the journal nudge onto `stop`. Install it by
+adding the repository as a marketplace (Teams and Enterprise plans), then
+installing from the sidebar:
+
+```
+Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
+Customize → demarkus-memory → Install
+```
+
+Enable **Auto Refresh** on the marketplace so updates follow the repository. On
+a plan without team marketplaces, symlink a checkout into Cursor's local plugin
+directory:
+
+```bash
+git clone https://github.com/latebit-io/demarkus
+ln -s "$PWD/demarkus/plugins/cursor-memory" ~/.cursor/plugins/local/demarkus-memory
+```
+
+Restart Cursor. The first conversation provisions the memory; if the
+`demarkus-memory` MCP server shows as failed before that, toggle it once under
+Settings → MCP. `/memory-status` diagnoses, `/memory-init` reconfigures. Cloud
+agents run no session hooks and cannot reach a local server, so the plugin is
+for the desktop IDE.
+
+That is the whole setup for any of the four agents. The manual steps below are for other MCP agents, a custom port, or a remote memory server.
 
 ## Manual setup (any MCP agent)
 

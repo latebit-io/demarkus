@@ -41,6 +41,13 @@ pi install npm:pi-mcp-adapter
 pi install ./demarkus/plugins/pi-memory
 ```
 
+In **[Cursor](https://cursor.com)**, add the repository as a marketplace, then install from the sidebar:
+
+```
+Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
+Customize → demarkus-memory → Install
+```
+
 Then ask your agent to read `mark://soul.demarkus.io/index.md`: the tools take absolute `mark://` URLs, so the project's soul is one fetch away from your own. To make it a project's default soul, run `/soul-join mark://soul.demarkus.io`; no token is needed, it is read-open, and writes stay closed.
 
 Every `mark_*` tool works on it: `mark_lookup` is the card catalog (subject to documents, ranked by importance), `mark_explore` orients you in one call, `mark_backlinks` finds what links to a page, and `mark_fetch` returns whole documents under 8KB or an outline of `#anchors` for larger ones, so you fetch `path.md#section` instead of the whole file. See the [Agent Memory scenario](/scenarios/agent-memory/) for the full tool list.
