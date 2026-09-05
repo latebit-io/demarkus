@@ -78,7 +78,8 @@ and the pattern it produced. At the system tier the [indexing
 agent](/ecosystem/#indexing-agent) aggregates the graph across worlds and
 publishes it to the hub as an atomic sharded snapshot under `/graph/manifest.md`,
 so a cold agent seeds its graph on the first call and never reads a half-written
-export.
+export. For a picture of what an agent gets back, see the [crawl of the project's
+own soul](/memory/#what-the-agent-sees).
 
 This is the whole loop for one person. The memory is fast, private, and
 yours: on your own machine, or on a [remote host](/scenarios/agent-memory/)

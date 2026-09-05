@@ -560,6 +560,10 @@ body {
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
 }
 
+.memory-demo--wide {
+    max-width: 100%;
+}
+
 .memory-demo img {
     display: block;
     width: 100%;
