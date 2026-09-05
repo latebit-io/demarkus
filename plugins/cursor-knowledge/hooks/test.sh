@@ -31,8 +31,10 @@ out="$(echo '{"hook_event_name":"sessionStart","conversation_id":"c"}' | bash "$
 [[ "${out}" == '{"additional_context":"guidance"}' ]] || fail "session-start output: ${out}"
 grep -q -- "^guidance --surface knowledge --guidance-file ${HERE}/../context/session-guidance.md --format cursor$" "${CALLS}" || fail "guidance flags wrong: $(cat "${CALLS}")"
 
-# gate fails open without the binary
+# gate fails open without the binary: empty stdout, diagnostic on stderr
 rm "${HOME}/.demarkus/bin/demarkus-plugin"
-out="$(echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish"}' | bash "${HERE}/gate.sh")" || fail "gate exited non-zero without the binary"
-[[ -z "${out}" ]] || fail "gate should be silent without the binary"
+err="${HOME}/gate.err"
+out="$(echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish"}' | bash "${HERE}/gate.sh" 2>"${err}")" || fail "gate exited non-zero without the binary"
+[[ -z "${out}" ]] || fail "gate stdout should be empty without the binary: ${out}"
+grep -q 'demarkus-plugin missing' "${err}" || fail "gate should log the missing binary on stderr: $(cat "${err}")"
 echo "cursor-knowledge hooks: OK"
