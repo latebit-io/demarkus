@@ -5,11 +5,11 @@ Local, versioned project memory for [OpenCode](https://opencode.ai) via [demarku
 ## What it does
 
 - **Zero-config provisioning.** On startup it downloads the pinned demarkus binaries, generates a `0600` capability token, spawns a managed local `demarkus-server`, and registers the `demarkus-memory` MCP server in OpenCode's config.
-- **Standing guidance.** Injects "recall first, record as you go" guidance once per session so the agent self-documents to the memory.
+- **Standing guidance.** Injects "recall first, record as you go" guidance once per session so the agent self-documents to the soul.
 - **Publish tag-gate.** A tagless `mark_publish` is invisible to `mark_lookup` forever; the gate makes that loud at write time (`warn` by default, `block`/`ask` available).
-- **Destination gate.** When a repo is bound to a specific memory, a write aimed at a different memory is denied so memory lands on the right store.
+- **Destination gate.** When a repo is bound to a specific soul, a write aimed at a different soul is denied so writes land on the right soul.
 - **Recall / journal / promote nudges.** Discreet reminders at the moments they matter.
-- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `memory` skill (native OpenCode skill).
+- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `remember` skill (native OpenCode skill).
 
 ## Requirements
 

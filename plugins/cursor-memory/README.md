@@ -5,10 +5,10 @@ Local, versioned project memory for [Cursor](https://cursor.com), via [demarkus]
 ## What it does
 
 - **Zero-config provisioning.** On each new conversation the `sessionStart` hook downloads the pinned demarkus binaries, generates a `0600` capability token, and spawns a managed local `demarkus-server`. The bundled `mcp.json` wires the `demarkus-memory` MCP server (`demarkus-plugin mcp-serve`).
-- **Standing guidance.** "Recall first, record as you go" guidance is injected into every conversation so the agent self-documents to the memory.
+- **Standing guidance.** "Recall first, record as you go" guidance is injected into every conversation so the agent self-documents to the soul.
 - **Publish tag-gate.** A tagless `mark_publish` is invisible to `mark_lookup` forever; the `beforeMCPExecution` hook makes that loud at write time (`warn` by default, `block` and `ask` available; Cursor supports `ask` natively).
-- **Destination gate.** When a repo is bound to a specific memory, a write aimed at a different memory is denied (default `block`).
-- **Promote and journal nudges.** An ADR publish reminds you to `/promote` once a knowledge system is joined; a conversation that edited files without writing to the memory gets one follow-up nudge at stop.
+- **Destination gate.** When a repo is bound to a specific soul, a write aimed at a different soul is denied (default `block`).
+- **Promote and journal nudges.** An ADR publish reminds you to `/promote` once a knowledge system is joined; a conversation that edited files without writing to the soul gets one follow-up nudge at stop.
 - **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `remember` skill. The MCP server's own prompts appear as `/demarkus-memory/orient`, `/demarkus-memory/recall`, and `/demarkus-memory/whats-new`.
 
 ## Requirements
@@ -38,7 +38,7 @@ Marketplace installs refresh from the repository (enable **Auto Refresh** in mar
 
 - `hooks/hooks.json` and `hooks/*.sh`: zero-logic bash shims. Each pipes Cursor's hook payload to `~/.demarkus/bin/demarkus-plugin` with `--format cursor` and prints the binary's answer. They fail open when the binary is absent. `hooks/test.sh` is their contract test (a fake binary records the calls).
 - `scripts/bootstrap.sh`: installs the pinned `demarkus-plugin` binary; byte-identical across every plugin.
-- `mcp.json`: the local memory server. Joined memories and knowledge systems are registered in `~/.cursor/mcp.json` by `demarkus-plugin registry mcp --harness cursor add|add-http|remove|list`.
+- `mcp.json`: the local soul's server. Joined souls and knowledge systems are registered in `~/.cursor/mcp.json` by `demarkus-plugin registry mcp --harness cursor add|add-http|remove|list`.
 - `commands/*.md`, `context/`, and `skills/`: generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
 
 ### Behavior mapping (Claude Code → Cursor)

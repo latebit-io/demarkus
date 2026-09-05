@@ -5,11 +5,11 @@ Local, versioned project memory for the [pi](https://pi.dev) coding agent, via [
 ## What it does
 
 - **Zero-config provisioning.** On session start it downloads the pinned demarkus binaries, generates a `0600` capability token, spawns a managed local `demarkus-server`, and registers the `demarkus-memory` MCP server in the pi-mcp-adapter config (`~/.config/mcp/mcp.json`).
-- **Standing guidance.** Injects "recall first, record as you go" guidance once per session so the agent self-documents to the memory.
+- **Standing guidance.** Injects "recall first, record as you go" guidance once per session so the agent self-documents to the soul.
 - **Publish tag-gate.** A tagless `mark_publish` is invisible to `mark_lookup` forever; the gate makes that loud at write time (`warn` by default, `block`/`ask` available).
-- **Destination gate.** When a repo is bound to a specific memory, a write aimed at a different memory is denied (default `block`) so memory lands on the right store.
+- **Destination gate.** When a repo is bound to a specific soul, a write aimed at a different soul is denied (default `block`) so writes land on the right soul.
 - **Recall / journal / promote nudges.** Discreet reminders at the moments they matter.
-- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `memory` skill.
+- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `remember` skill.
 
 ## Requirements
 
@@ -62,7 +62,7 @@ On session start, after provisioning, the extension hands `demarkus-plugin updat
 Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper behavior are checked separately.
 
 - `src/*.ts`: the Pi adapter: event mapping, MCP wiring, and calls into the shared `demarkus-plugin` helper (loaded directly by Pi via `tsx`, no build step).
-- `scripts/*.sh`: the demarkus binary/server lifecycle, reused verbatim from the Claude Code plugin (single source of truth for provisioning); `provision.sh` is the per-session entrypoint and `mcp-config.mjs` registers remote-memory MCP servers.
+- `scripts/*.sh`: the demarkus binary/server lifecycle, reused verbatim from the Claude Code plugin (single source of truth for provisioning); `provision.sh` is the per-session entrypoint and `mcp-config.mjs` registers remote-soul MCP servers.
 - `commands/*.md`, `context/`, and `skills/`: generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
 
 ### Behavior mapping (Claude Code → pi)
