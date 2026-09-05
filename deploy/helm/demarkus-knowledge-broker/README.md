@@ -6,8 +6,10 @@ Secrets.
 
 ## What this chart ships
 
-- Multi-replica `Deployment` (default 2) with `RollingUpdate` strategy
-  and `PodDisruptionBudget` (`minAvailable: 1`).
+- Multi-replica `Deployment` (default 2) with a configurable `strategy`
+  (default `RollingUpdate`, `maxUnavailable: 0`, `maxSurge: 1`, so even a
+  single replica rolls without a serving gap) and `PodDisruptionBudget`
+  (`minAvailable: 1`).
 - Chart-managed broker config Secret with auto-generated cookie HMAC key
   preserved across `helm upgrade` via `lookup`.
 - Per-world `Role` + `RoleBinding` in each world's namespace
