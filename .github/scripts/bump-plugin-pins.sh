@@ -20,8 +20,8 @@
 #     pi-memory + opencode-memory + cursor-memory + the claude-code and cursor
 #     marketplace entries.
 #   - knowledge (changes when tools changes, via its bootstrap): claude-code-
-#     knowledge + pi-knowledge + opencode-knowledge + the claude-code-knowledge
-#     marketplace entry.
+#     knowledge + pi-knowledge + opencode-knowledge + cursor-knowledge + the
+#     claude-code and cursor knowledge marketplace entries.
 #
 # Idempotent. Writes "changed=true" plus the resolved versions to $GITHUB_OUTPUT
 # (and stdout) when it edited files, "changed=false" otherwise. Requires gh + jq.
@@ -206,6 +206,8 @@ if [[ "$knowledge_changed" == true ]]; then
     echo "error: failed to bump plugins/opencode-knowledge/package.json" >&2
     exit 1
   fi
+  ck_ver="$(bump_json_version plugins/cursor-knowledge/.cursor-plugin/plugin.json)"
+  set_marketplace_version "$cursor_marketplace" "plugins/cursor-knowledge" "$ck_ver"
   emit knowledge_version "$kv_ver"
 fi
 

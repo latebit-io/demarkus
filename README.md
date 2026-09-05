@@ -50,6 +50,8 @@ Teams: [pi knowledge plugin](plugins/pi-knowledge/). Details: [pi memory plugin]
 
 Install `demarkus-memory` from the Cursor marketplace (once listed), add `latebit-io/demarkus` as a team marketplace, or link a checkout into `~/.cursor/plugins/local/demarkus-memory`. Details: [Cursor memory plugin](plugins/cursor-memory/).
 
+Teams: install `demarkus-knowledge` the same way to join a shared knowledge system. Details: [Cursor knowledge plugin](plugins/cursor-knowledge/).
+
 ### Binaries
 
 ```bash
@@ -170,6 +172,7 @@ modified: 2026-01-15T10:30:00Z
   ```
 
 - [Cursor memory plugin](plugins/cursor-memory/): the same local memory for Cursor, as a Cursor Plugin (marketplace, team marketplace, or `~/.cursor/plugins/local`)
+- [Cursor knowledge plugin](plugins/cursor-knowledge/): join an organizational knowledge system from Cursor
 - [pi memory plugin](plugins/pi-memory/): the same local memory for the pi coding agent
 - [pi knowledge plugin](plugins/pi-knowledge/): join an organizational knowledge system from pi
 

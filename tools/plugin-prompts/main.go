@@ -242,8 +242,8 @@ func decodeManifest(raw []byte) (manifest, error) {
 }
 
 func validateManifest(spec *manifest) error {
-	if len(spec.Targets) != 7 {
-		return fmt.Errorf("manifest: got %d targets, want 7", len(spec.Targets))
+	if len(spec.Targets) != len(canonicalOutputs) {
+		return fmt.Errorf("manifest: got %d targets, want %d", len(spec.Targets), len(canonicalOutputs))
 	}
 	pairs := make(map[string]string, len(spec.Targets))
 	outputs := make(map[string]string, len(spec.Targets))

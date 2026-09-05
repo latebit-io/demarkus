@@ -14,6 +14,14 @@
       "version": "0.13.90",
       "category": "memory",
       "tags": ["memory", "demarkus", "mark-protocol", "local-first"]
+    },
+    {
+      "name": "demarkus-knowledge",
+      "source": "plugins/cursor-knowledge",
+      "description": "Join an organizational demarkus knowledge system from Cursor. Registers the broker as an OAuth MCP server, steers sessions to the shared catalog, and enforces publishing policy at write time. Runs no local server.",
+      "version": "0.5.95",
+      "category": "knowledge",
+      "tags": ["knowledge", "demarkus", "mark-protocol", "mcp", "oauth"]
     }
   ]
 }
