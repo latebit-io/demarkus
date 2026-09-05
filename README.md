@@ -48,9 +48,16 @@ Teams: [pi knowledge plugin](plugins/pi-knowledge/). Details: [pi memory plugin]
 
 **Cursor**
 
-Install `demarkus-memory` from the Cursor marketplace (once listed), add `latebit-io/demarkus` as a team marketplace, or link a checkout into `~/.cursor/plugins/local/demarkus-memory`. Details: [Cursor memory plugin](plugins/cursor-memory/).
+Add this repository as a marketplace from the plugins panel, then add the plugin:
 
-Teams: install `demarkus-knowledge` the same way to join a shared knowledge system. Details: [Cursor knowledge plugin](plugins/cursor-knowledge/).
+```text
+Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
+demarkus-memory → Add
+```
+
+Or link a checkout into `~/.cursor/plugins/local/demarkus-memory`. Restart Cursor. Details: [Cursor memory plugin](plugins/cursor-memory/).
+
+Teams: `demarkus-knowledge → Add` from the same marketplace to join a shared knowledge system. Details: [Cursor knowledge plugin](plugins/cursor-knowledge/).
 
 ### Binaries
 

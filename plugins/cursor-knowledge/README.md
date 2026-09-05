@@ -21,7 +21,14 @@ This is the broker-fronted, multi-writer counterpart to [`demarkus-memory` for C
 
 From the Cursor marketplace, once listed: open **Customize** in the sidebar, find `demarkus-knowledge`, and install at user scope.
 
-From this repository as a team marketplace (Teams and Enterprise plans): add `latebit-io/demarkus` as a marketplace source; the manifest lives at `.cursor-plugin/marketplace.json`.
+From this repository as a marketplace, added from the plugins panel:
+
+```text
+Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
+demarkus-knowledge → Add
+```
+
+Enable **Auto Refresh** in the marketplace settings so updates follow the repository. The manifest lives at `.cursor-plugin/marketplace.json`.
 
 Locally, from a checkout:
 
