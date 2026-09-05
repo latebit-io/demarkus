@@ -190,29 +190,32 @@ func TestValidateArtifactRejectsInvalidFrontmatterYAML(t *testing.T) {
 }
 
 func TestRenderAliasKeepsQuotedDescriptionValid(t *testing.T) {
-	dir := t.TempDir()
-	commands := filepath.Join(dir, "commands")
-	if err := os.MkdirAll(commands, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	tmpl := "---\ndescription: \"Do the thing: fully\"\n---\n\nBody.\n"
-	if err := os.WriteFile(filepath.Join(commands, "memory-x.md.tmpl"), []byte(tmpl), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	alias := filepath.Join(commands, "soul-x.md.alias")
-	if err := os.WriteFile(alias, []byte("memory-x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := renderAlias(alias, &target{Agent: "Claude Code"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "description: \"Deprecated alias of /memory-x. Do the thing: fully\"\n"
-	if !strings.Contains(string(got), want) {
-		t.Fatalf("alias output missing %q:\n%s", want, got)
-	}
-	if err := validateFrontmatter(string(got)); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct{ tmpl, want string }{
+		{"---\ndescription: \"Do the thing: fully\"\n---\n\nBody.\n", "description: \"Deprecated alias of /memory-x. Do the thing: fully\"\n"},
+		{"---\ndescription: 'Do the thing: fully'\n---\n\nBody.\n", "description: 'Deprecated alias of /memory-x. Do the thing: fully'\n"},
+	} {
+		dir := t.TempDir()
+		commands := filepath.Join(dir, "commands")
+		if err := os.MkdirAll(commands, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(commands, "memory-x.md.tmpl"), []byte(tc.tmpl), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		alias := filepath.Join(commands, "soul-x.md.alias")
+		if err := os.WriteFile(alias, []byte("memory-x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := renderAlias(alias, &target{Agent: "Claude Code"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(got), tc.want) {
+			t.Fatalf("alias output missing %q:\n%s", tc.want, got)
+		}
+		if err := validateFrontmatter(string(got)); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

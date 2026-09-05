@@ -374,7 +374,7 @@ func renderAlias(path string, target *target) ([]byte, error) {
 		return nil, fmt.Errorf("%s: alias target has no description", path)
 	}
 	at += len(marker)
-	if at < len(head) && head[at] == '"' {
+	if at < len(head) && (head[at] == '"' || head[at] == '\'') {
 		at++ // quoted description: stay inside the quotes
 	}
 	return []byte(head[:at] + "Deprecated alias of /" + name + ". " + head[at:] + body), nil
