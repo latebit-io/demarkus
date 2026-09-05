@@ -116,15 +116,15 @@ where Cursor supports `ask` natively.
 no tokens stored locally and no local server.
 
 - Source: [plugins/cursor-memory](https://github.com/latebit-io/demarkus/tree/main/plugins/cursor-memory) · [plugins/cursor-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/cursor-knowledge)
-- Install: add the repository as a team marketplace (Teams and Enterprise plans), then install from the sidebar:
+- Install: add the repository as a marketplace from the plugins panel, then add the plugins:
 
 ```
-Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
-Customize → demarkus-memory → Install
-Customize → demarkus-knowledge → Install
+Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
+demarkus-memory → Add
+demarkus-knowledge → Add
 ```
 
-- Without a team marketplace, symlink a checkout: `ln -s "$PWD/demarkus/plugins/cursor-memory" ~/.cursor/plugins/local/demarkus-memory` (same for `cursor-knowledge`)
+- Or symlink a checkout: `ln -s "$PWD/demarkus/plugins/cursor-memory" ~/.cursor/plugins/local/demarkus-memory` (same for `cursor-knowledge`)
 - Commands: the same `/memory*`, `/promote*`, and `/knowledge*` command sets described above; the MCP server's prompts appear as `/demarkus-memory/orient`, `/recall`, and `/whats-new`
 - Restart Cursor after install; if the `demarkus-memory` MCP server shows as failed before the first conversation provisions the binary, toggle it once under Settings → MCP. Cloud agents run no hooks and cannot reach a local server; the plugins are for the desktop IDE
 

@@ -41,11 +41,11 @@ pi install npm:pi-mcp-adapter
 pi install ./demarkus/plugins/pi-memory
 ```
 
-In **[Cursor](https://cursor.com)**, add the repository as a marketplace, then install from the sidebar:
+In **[Cursor](https://cursor.com)**, add the repository as a marketplace from the plugins panel, then add the plugin:
 
 ```
-Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
-Customize → demarkus-memory → Install
+Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
+demarkus-memory → Add
 ```
 
 Then ask your agent to read `mark://soul.demarkus.io/index.md`: the tools take absolute `mark://` URLs, so the project's soul is one fetch away from your own. To make it a project's default soul, run `/soul-join mark://soul.demarkus.io`; no token is needed, it is read-open, and writes stay closed.

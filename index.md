@@ -34,11 +34,11 @@ pi install npm:pi-mcp-adapter
 pi install ./demarkus/plugins/pi-memory
 ```
 
-In **[Cursor](https://cursor.com)**, add the repository as a marketplace, then install from the sidebar:
+In **[Cursor](https://cursor.com)**, add the repository as a marketplace from the plugins panel, then add the plugin:
 
 ```
-Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
-Customize → demarkus-memory → Install
+Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
+demarkus-memory → Add
 ```
 
 All four share the same `~/.demarkus` state, so they coexist on one machine. [Agent memory →](/scenarios/agent-memory/)

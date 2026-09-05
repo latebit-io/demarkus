@@ -94,11 +94,11 @@ pi install npm:pi-mcp-adapter
 pi install ./demarkus/plugins/pi-knowledge
 ```
 
-Cursor, with the repository added as a team marketplace (or symlinked from a checkout into `~/.cursor/plugins/local/`):
+Cursor, with the repository added as a marketplace from the plugins panel (or symlinked from a checkout into `~/.cursor/plugins/local/`):
 
 ```
-Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
-Customize → demarkus-knowledge → Install
+Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
+demarkus-knowledge → Add
 ```
 
 Restart Cursor before continuing.

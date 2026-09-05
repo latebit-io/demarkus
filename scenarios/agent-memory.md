@@ -78,17 +78,16 @@ reconfigures.
 `demarkus-memory` for Cursor is a Cursor Plugin: bash hook shims over the same
 `demarkus-plugin` binary, with the publish gate mapped onto `beforeMCPExecution`
 (Cursor supports `ask` natively) and the journal nudge onto `stop`. Install it by
-adding the repository as a marketplace (Teams and Enterprise plans), then
-installing from the sidebar:
+adding the repository as a marketplace from the plugins panel, then adding the
+plugin:
 
 ```
-Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo → latebit-io/demarkus
-Customize → demarkus-memory → Install
+Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
+demarkus-memory → Add
 ```
 
-Enable **Auto Refresh** on the marketplace so updates follow the repository. On
-a plan without team marketplaces, symlink a checkout into Cursor's local plugin
-directory:
+Enable **Auto Refresh** on the marketplace so updates follow the repository. Or
+symlink a checkout into Cursor's local plugin directory:
 
 ```bash
 git clone https://github.com/latebit-io/demarkus
