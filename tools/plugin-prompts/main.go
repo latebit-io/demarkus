@@ -316,6 +316,13 @@ func renderTemplate(path string, target *target) ([]byte, error) {
 	if err := tmpl.Execute(&output, target); err != nil {
 		return nil, fmt.Errorf("execute %s for %s: %w", path, target.Name, err)
 	}
+	// addMarker prepends comments, so an unclosed block would no longer look like
+	// frontmatter downstream and escape validateFrontmatter.
+	if text := output.String(); strings.HasPrefix(text, "---\n") {
+		if _, ok := frontmatterEnd(text); !ok {
+			return nil, fmt.Errorf("%s: frontmatter block is not closed", path)
+		}
+	}
 	return addMarker(output.Bytes()), nil
 }
 

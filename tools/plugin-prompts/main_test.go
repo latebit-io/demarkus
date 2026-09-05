@@ -167,6 +167,16 @@ func contains(values []string, want string) bool {
 	return slices.Contains(values, want)
 }
 
+func TestRenderTemplateRejectsUnclosedFrontmatter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "broken.md.tmpl")
+	if err := os.WriteFile(path, []byte("---\ndescription: Open block\n\nBody for {{.Agent}}.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := renderTemplate(path, &target{Agent: "Claude Code"}); err == nil || !strings.Contains(err.Error(), "not closed") {
+		t.Fatalf("renderTemplate() error = %v, want unclosed frontmatter rejection", err)
+	}
+}
+
 func TestValidateArtifactRejectsInvalidFrontmatterYAML(t *testing.T) {
 	tgt := &target{Harness: "claude"}
 	bad := []byte("---\ndescription: Audit the soul for hygiene: orphans, broken links\n---\n\nBody.\n")
