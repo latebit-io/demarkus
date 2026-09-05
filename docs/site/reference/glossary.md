@@ -16,10 +16,11 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 
 ## Memory
 
-- **memory**: a world owned by one identity, a person or an AI agent. Private by default. It records decisions, lessons, and progress across sessions and recalls them later. Replaces the older term *soul*.
+- **memory**: the personal product: a memory store, a world owned by one identity, a person or an AI agent. Private by default. It records decisions, lessons, and progress across sessions and recalls them later.
+- **soul**: your own memory store, the instance a person or agent reads and writes. A project is bound to one soul; a joined remote memory is another soul. The plugin's `/soul-*` commands act on it.
 - **local memory**: a memory served by a `demarkus-server` that the memory plugin runs on your machine. Zero configuration.
 - **hosted memory**: a memory provisioned by the memory broker, one world per signed-in identity, reachable over MCP with OAuth from any MCP host.
-- **memory plugin**: the per-host adapter (Claude Code, OpenCode, pi) that installs the memory tools, standing guidance, gates, and its slash commands.
+- **memory plugin**: the per-host adapter (Claude Code, OpenCode, pi, Cursor) that installs the memory tools, standing guidance, gates, and its slash commands.
 - **memory broker**: `demarkus-memory-broker`, the OIDC-fronted MCP gateway that provisions and serves hosted memories.
 
 ## Knowledge
@@ -34,8 +35,8 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 
 ## Bridge
 
-- **promote**: lift a memory document into a knowledge system: curate, deduplicate, tag to the shared taxonomy, route to a writable world, gate with a human, publish with provenance, and back-stamp the source.
-- **refresh**: pull the authoritative knowledge copy of a promoted document back into the memory it came from. Knowledge is authoritative; memory refreshes from it.
+- **promote**: lift a soul document into a knowledge system: curate, deduplicate, tag to the shared taxonomy, route to a writable world, gate with a human, publish with provenance, and back-stamp the source.
+- **refresh**: pull the authoritative knowledge copy of a promoted document back into the soul it came from. Knowledge is authoritative; the soul refreshes from it.
 
 ## Operations
 
@@ -48,11 +49,10 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 
 | Older term | Use instead |
 |---|---|
-| soul | memory |
 | universe | knowledge system |
 | appliance | single-host install |
 | librarian | the library's agent, or simply the agent |
 
-The `/soul-*` plugin command aliases are gone; use `/memory-*`. MCP prompt names and `demarkus-plugin` helper names that carried the older terms remain as aliases for one release after the rename.
+Plugin commands are `/soul-*` and act on your soul. Plugin names, MCP server ids, `demarkus-plugin` registry subcommands (`memory-join`, `memory-default`), and memory broker prompt names are identifiers and keep the memory form; their `soul-*` aliases remain for one release.
 
-Glossary exceptions, kept on purpose: the single-host installer and its page are still called the appliance until the installer is renamed; on-disk plugin state under `~/.demarkus` (`souls`, `project-souls`, `SOUL_DIR`) and the memory subdomain of installs made before the rename (`soul.<host>`) keep their names so existing installs work unchanged; `soul.demarkus.io` is the project's hostname.
+Glossary exceptions, kept on purpose: the single-host installer and its page are still called the appliance until the installer is renamed; the memory subdomain of single-host installs made before the rename stays `soul.<host>` so existing installs work unchanged. `soul.demarkus.io` is the project's own soul.

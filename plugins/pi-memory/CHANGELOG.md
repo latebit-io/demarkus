@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.90
+
+Docs follow the vocabulary: "memory" is the store concept, "soul" is your own instance. README and manifest descriptions say soul where they mean the bound store. `package.json` now points pi at `skills/remember/SKILL.md`; it still named the pre-rename `skills/memory` path, so the skill was not registered.
+
 ## 0.13.88
 
 Slash commands renamed from `/memory-*` back to `/soul-*` (`/soul`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-context`, `/soul-journal`, `/soul-status`, `/soul-doctor`, `/soul-refresh`) and prose now says "soul" for the personal store, so it is not confused with the host's built-in memory feature. No aliases for the old names. Plugin name, MCP server id, and `mark_*` tools unchanged. Prompt templates trimmed for token cost.
