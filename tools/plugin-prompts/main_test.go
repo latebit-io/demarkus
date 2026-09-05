@@ -167,6 +167,45 @@ func contains(values []string, want string) bool {
 	return slices.Contains(values, want)
 }
 
+func TestValidateArtifactRejectsInvalidFrontmatterYAML(t *testing.T) {
+	tgt := &target{Harness: "claude"}
+	bad := []byte("---\ndescription: Audit the soul for hygiene: orphans, broken links\n---\n\nBody.\n")
+	if err := validateArtifact("plugins/x/commands/a.md", bad, tgt); err == nil || !strings.Contains(err.Error(), "valid YAML") {
+		t.Fatalf("validateArtifact() error = %v, want YAML rejection", err)
+	}
+	good := []byte("---\ndescription: \"Audit the soul for hygiene: orphans, broken links\"\n---\n\nBody.\n")
+	if err := validateArtifact("plugins/x/commands/a.md", good, tgt); err != nil {
+		t.Fatalf("validateArtifact() rejected quoted description: %v", err)
+	}
+}
+
+func TestRenderAliasKeepsQuotedDescriptionValid(t *testing.T) {
+	dir := t.TempDir()
+	commands := filepath.Join(dir, "commands")
+	if err := os.MkdirAll(commands, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := "---\ndescription: \"Do the thing: fully\"\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(commands, "memory-x.md.tmpl"), []byte(tmpl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(commands, "soul-x.md.alias")
+	if err := os.WriteFile(alias, []byte("memory-x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := renderAlias(alias, &target{Agent: "Claude Code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "description: \"Deprecated alias of /memory-x. Do the thing: fully\"\n"
+	if !strings.Contains(string(got), want) {
+		t.Fatalf("alias output missing %q:\n%s", want, got)
+	}
+	if err := validateFrontmatter(string(got)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRenderAliasShipsTargetBodyWithDeprecatedDescription(t *testing.T) {
 	dir := t.TempDir()
 	commands := filepath.Join(dir, "commands")

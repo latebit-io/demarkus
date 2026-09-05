@@ -1,5 +1,5 @@
 ---
-description: Audit an organizational demarkus knowledge system (broker-fronted, multi-world) for catalog hygiene: orphans, broken links, dangling/unlinked references, untagged + policy-axis-noncompliant docs, ADR gaps. Read-only.
+description: "Audit an organizational demarkus knowledge system (broker-fronted, multi-world) for catalog hygiene: orphans, broken links, dangling/unlinked references, untagged + policy-axis-noncompliant docs, ADR gaps. Read-only."
 argument-hint: "[slug | mark://<world>/ | blank = every joined system, all worlds]"
 ---
 <!-- markdownlint-disable MD041 -->
