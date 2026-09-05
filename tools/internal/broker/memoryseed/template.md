@@ -14,6 +14,7 @@ The canonical layout for this memory. Agents route new knowledge to these docume
 ## Rules
 
 - Keep `/index.md` current: it is the discovery backstop for anything a catalog lookup cannot surface.
+- Hubs (`/index.md`, any link page) are link pages: links plus one line each, nothing copied from children, each child links back; about 40 outbound documents, then a second-level hub.
 - Tag every publish (`tags`, `importance` in the metadata object); prefer one well-tagged document over scattered fragments.
 - Capture the non-obvious (why a decision was made, a gotcha); skip trivia and anything derivable from code or history.
 - Never store secrets or credentials.

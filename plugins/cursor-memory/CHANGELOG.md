@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.90
+
+`remember` skill: hub rule for `index.md` and any link page (links plus one line each, nothing copied from children, children link back, about 40 outbound documents, split an outgrown document into a hub plus topic files).
+
 ## 0.13.89
 
 Docs follow the vocabulary: "memory" is the store concept, "soul" is your own instance. README and manifest descriptions say soul where they mean the bound store.
