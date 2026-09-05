@@ -19,6 +19,16 @@ imagePullSecrets: []
 # leader-election overhead.
 replicaCount: 2
 
+# Rollout strategy. maxUnavailable: 0 keeps the old pod serving until the
+# new one is Ready, so a single-replica deployment still rolls without a
+# gap; the OAuth stores are per-pod memory, so single-replica is common.
+# rollingUpdate is rendered only when type is RollingUpdate.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
 server:
   # HTTP listen port inside the pod. The broker speaks plain HTTP — the
   # Ingress (shipped in the Ingress slice) terminates TLS. The pod listens
