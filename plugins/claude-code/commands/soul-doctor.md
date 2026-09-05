@@ -1,5 +1,5 @@
 ---
-description: Audit the soul (or a single project) for catalog hygiene: orphans, broken links, untagged docs, stale index entries, ADR gaps. Read-only.
+description: "Audit the soul (or a single project) for catalog hygiene: orphans, broken links, untagged docs, stale index entries, ADR gaps. Read-only."
 argument-hint: "[project-slug | blank = whole local soul]"
 ---
 <!-- markdownlint-disable MD041 -->

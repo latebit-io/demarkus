@@ -36,7 +36,7 @@ func TestForbiddenTermsAreHarnessSpecific(t *testing.T) {
 }
 
 func TestValidateArtifactRejectsForeignHarness(t *testing.T) {
-	err := validateArtifact("commands/test.md", []byte(generatedMarker+"\nUse OpenClaw here.\n"), &target{Harness: "pi"})
+	err := validateArtifact("commands/test.md", []byte("---\ndescription: Test\n---\n"+generatedMarker+"\nUse OpenClaw here.\n"), &target{Harness: "pi"})
 	if err == nil || !strings.Contains(err.Error(), "OpenClaw") {
 		t.Fatalf("validateArtifact() error = %v, want OpenClaw rejection", err)
 	}
@@ -165,6 +165,75 @@ func validManifest() manifest {
 
 func contains(values []string, want string) bool {
 	return slices.Contains(values, want)
+}
+
+func TestRenderTemplateRejectsUnclosedFrontmatter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "broken.md.tmpl")
+	if err := os.WriteFile(path, []byte("---\ndescription: Open block\n\nBody for {{.Agent}}.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := renderTemplate(path, &target{Agent: "Claude Code"}); err == nil || !strings.Contains(err.Error(), "not closed") {
+		t.Fatalf("renderTemplate() error = %v, want unclosed frontmatter rejection", err)
+	}
+}
+
+func TestValidateArtifactRejectsInvalidFrontmatterYAML(t *testing.T) {
+	tgt := &target{Harness: "claude"}
+	bad := []byte("---\ndescription: Audit the soul for hygiene: orphans, broken links\n---\n\nBody.\n")
+	if err := validateArtifact("plugins/x/commands/a.md", bad, tgt); err == nil || !strings.Contains(err.Error(), "valid YAML") {
+		t.Fatalf("validateArtifact() error = %v, want YAML rejection", err)
+	}
+	good := []byte("---\ndescription: \"Audit the soul for hygiene: orphans, broken links\"\n---\n\nBody.\n")
+	if err := validateArtifact("plugins/x/commands/a.md", good, tgt); err != nil {
+		t.Fatalf("validateArtifact() rejected quoted description: %v", err)
+	}
+}
+
+func TestValidateArtifactRequiresCommandDescription(t *testing.T) {
+	tgt := &target{Harness: "claude"}
+	for name, body := range map[string]string{
+		"missing key": "---\nname: a\n---\n\nBody.\n",
+		"empty":       "---\ndescription: \"\"\n---\n\nBody.\n",
+		"no block":    "Body only.\n",
+	} {
+		if err := validateArtifact("plugins/x/commands/a.md", []byte(body), tgt); err == nil {
+			t.Fatalf("%s: command without a description was accepted", name)
+		}
+	}
+	guidance := []byte("---\nname: a\n---\n\n# Guidance\n")
+	if err := validateArtifact("plugins/x/context/session-guidance.md", guidance, tgt); err != nil {
+		t.Fatalf("non-command artifact should not need a description: %v", err)
+	}
+}
+
+func TestRenderAliasKeepsQuotedDescriptionValid(t *testing.T) {
+	for _, tc := range []struct{ tmpl, want string }{
+		{"---\ndescription: \"Do the thing: fully\"\n---\n\nBody.\n", "description: \"Deprecated alias of /memory-x. Do the thing: fully\"\n"},
+		{"---\ndescription: 'Do the thing: fully'\n---\n\nBody.\n", "description: 'Deprecated alias of /memory-x. Do the thing: fully'\n"},
+	} {
+		dir := t.TempDir()
+		commands := filepath.Join(dir, "commands")
+		if err := os.MkdirAll(commands, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(commands, "memory-x.md.tmpl"), []byte(tc.tmpl), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		alias := filepath.Join(commands, "soul-x.md.alias")
+		if err := os.WriteFile(alias, []byte("memory-x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := renderAlias(alias, &target{Agent: "Claude Code"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(got), tc.want) {
+			t.Fatalf("alias output missing %q:\n%s", tc.want, got)
+		}
+		if err := validateFrontmatter(string(got), true); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestRenderAliasShipsTargetBodyWithDeprecatedDescription(t *testing.T) {

@@ -73,7 +73,7 @@ function commands(): Command[] {
     .map((file) => {
       const raw = readFileSync(join(COMMANDS_DIR, file), "utf8");
       const frontmatter = raw.match(/^---\n([\s\S]*?)\n---\n/);
-      const description = frontmatter?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
+      const description = frontmatter?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^(["'])(.*)\1$/, "$2");
       if (!description) throw new Error(`command '${file}' has no frontmatter description`);
       return { name: file.replace(/\.md$/, ""), description };
     });

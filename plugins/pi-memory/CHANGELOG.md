@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.93
+
+Frontmatter descriptions containing a colon are now quoted so strict YAML parsers load them; unquoted, Cursor (js-yaml) dropped `/soul-doctor`, `/soul-refresh`, and `/promote` from the slash menu. The generator now rejects frontmatter that is not valid YAML.
+
 ## 0.13.91
 
 `remember` skill: hub rule for `index.md` and any link page (links plus one line each, nothing copied from children, children link back, about 40 outbound documents, split an outgrown document into a hub plus topic files).

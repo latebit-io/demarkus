@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.95
+
+Frontmatter descriptions containing a colon are now quoted so strict YAML parsers load them; unquoted, Cursor (js-yaml) dropped `/knowledge-doctor` and the `knowledge-promote` skill. The generator now rejects frontmatter that is not valid YAML.
+
 ## 0.5.83
 
 - Guidance and commands now say "memory" for the personal store (formerly "soul") and point at the renamed `/memory-*` commands.
