@@ -15,7 +15,7 @@ This is the broker-fronted, multi-writer counterpart to [`demarkus-memory` for C
 
 ## Requirements
 
-`bash`, `curl`, `tar`, and `sha256sum` or `shasum` on PATH (the bootstrap uses them). macOS and Linux.
+`bash`, `curl`, `tar`, `install`, `grep`, `awk`, and `sha256sum` or `shasum` on PATH (the bootstrap uses them). macOS and Linux.
 
 ## Install
 

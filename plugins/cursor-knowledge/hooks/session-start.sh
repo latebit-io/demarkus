@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# sessionStart adapter (knowledge). Ensure the shared demarkus-plugin binary is
-# present (bootstrap.sh; this plugin owns no server), then emit the knowledge
-# session guidance as Cursor's additional_context. Bootstrap chatter goes to
-# stderr; stdout carries only the JSON the binary emits. Fails open.
+# sessionStart adapter (knowledge): bootstrap the shared binary (no local server),
+# then emit knowledge guidance as Cursor additional_context. Bootstrap chatter
+# goes to stderr; stdout carries only the binary JSON. Fails open.
 set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 GUIDANCE_FILE="${HOOK_DIR}/../context/session-guidance.md"
