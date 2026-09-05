@@ -44,6 +44,7 @@ Replace `<shell-escaped-absolute-project-dir>` with exactly one POSIX-shell-safe
 Canonical layout below. A `/project-template.md` at the soul root overrides it: fetch with `force: true` and follow it when present, even above the normal full-body threshold. Only `not-found` means no override; an outline-only response or any other fetch failure (transport, auth, server error) is a real error: surface it and stop, no silent fallback. Each `/<project>/` subtree:
 
 - `/<project>/index.md`: project hub; links every doc below, anchors discovery
+- Hub rule (`index.md`, any link page): links plus one line each; no content, status, or summaries copied from children; each child links back to its hub; about 40 outbound documents, then a second-level hub; a document that outgrows one fetch splits into a hub plus topic files. Real relations go in `rel-*` metadata, not hub adjacency.
 - `/<project>/architecture.md`: system design, module boundaries, key decisions
 - `/<project>/patterns.md`: code patterns, conventions, idioms
 - `/<project>/guidelines.md`: hard code-quality rules; read before writing code

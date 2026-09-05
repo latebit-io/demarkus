@@ -11,7 +11,7 @@ mark://root/.well-known/demarkus/policy.md     ← strictness + required tags (s
 mark://root/.well-known/demarkus/template.md   ← required per-world structure (the canonical layout)
 ```
 
-`template.md` is the canonical per-world layout; publish a copy of it to `root` (tailored as needed). `policy.md` is the example in this directory.
+`template.md` is the canonical per-world layout (world hub, descriptor, `/projects/<slug>/` subtrees, hub and metadata rules); publish a copy of it to `root`, tailored as needed. `policy.md` and `template.md` are the examples in this directory.
 
 ## Per-world descriptors (`world.md`)
 
