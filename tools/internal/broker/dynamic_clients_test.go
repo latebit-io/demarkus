@@ -108,7 +108,11 @@ func TestAuthorizeTrustsAllowlistedNativeSchemeRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	defer func() { _ = reg.Body.Close() }()
+	defer func() {
+		if err := reg.Body.Close(); err != nil {
+			t.Errorf("close register body: %v", err)
+		}
+	}()
 	if reg.StatusCode != http.StatusCreated {
 		t.Fatalf("register status = %d, want 201", reg.StatusCode)
 	}
@@ -130,9 +134,16 @@ func TestAuthorizeTrustsAllowlistedNativeSchemeRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
-	_ = resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Errorf("close authorize body: %v", err)
+	}
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("authorize with allowlisted native redirect = %d, want 302 to IdP", resp.StatusCode)
+	}
+	// The client redirect never rides in Location: it lives in the
+	// auth-code record and is replayed at /auth/callback.
+	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, "https://idp.example.com/authorize") {
+		t.Errorf("redirected to %q, want IdP authorize URL", loc)
 	}
 }
 
