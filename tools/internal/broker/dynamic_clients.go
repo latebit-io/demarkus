@@ -149,11 +149,23 @@ func (s *DynamicClientStore) Lookup(ctx context.Context, clientID string) (dynam
 	return record, found, nil
 }
 
+// nativeRedirectURIs: exact-match allowlist of private-use scheme
+// callbacks (RFC 8252 §7.1) MCP hosts register via DCR. Whole URIs,
+// never schemes; rationale in ADR 0011.
+var nativeRedirectURIs = map[string]struct{}{
+	"cursor://anysphere.cursor-mcp/oauth/callback": {},
+}
+
+func isNativeRedirectURI(raw string) bool {
+	_, ok := nativeRedirectURIs[raw]
+	return ok
+}
+
 // validateClientRedirectURI accepts only trustable redirect shapes:
-// http loopback (RFC 8252 natives), or the webClients registry's
-// https shape (absolute, no userinfo, no fragment) — one rule set.
+// http loopback, an allowlisted native-scheme callback, or the
+// webClients https shape (absolute, no userinfo, no fragment).
 func validateClientRedirectURI(raw string) error {
-	if isLoopbackRedirectURI(raw) {
+	if isLoopbackRedirectURI(raw) || isNativeRedirectURI(raw) {
 		return nil
 	}
 	return validateWebRedirectURI(raw)

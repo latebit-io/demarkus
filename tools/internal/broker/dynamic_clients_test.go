@@ -80,6 +80,9 @@ func TestRegisterRejectsInvalidRedirectURIs(t *testing.T) {
 		`{"redirect_uris":["https://user:pw@host.example/cb"]}`,
 		`{"redirect_uris":["https://host.example/cb#frag"]}`,
 		`{"redirect_uris":[42]}`,
+		`{"redirect_uris":["cursor://evil.example/oauth/callback"]}`,
+		`{"redirect_uris":["windsurf://anysphere.cursor-mcp/oauth/callback"]}`,
+		`{"redirect_uris":["https://host.example/cb","cursor://evil.example/oauth/callback"]}`,
 	} {
 		resp, err := client.Post(srv.URL+"/register", "application/json", strings.NewReader(body))
 		if err != nil {
@@ -89,6 +92,47 @@ func TestRegisterRejectsInvalidRedirectURIs(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("register %s = %d, want 400", body, resp.StatusCode)
 		}
+	}
+}
+
+// Cursor registers a private-use scheme callback (RFC 8252 §7.1).
+// The exact allowlisted URI registers and is trusted at authorize.
+func TestAuthorizeTrustsAllowlistedNativeSchemeRedirect(t *testing.T) {
+	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{authURL: "https://idp.example.com/authorize"}, fake.NewSimpleClientset())
+	client := testClient(srv)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	const callback = "cursor://anysphere.cursor-mcp/oauth/callback"
+	reg, err := client.Post(srv.URL+"/register", "application/json",
+		strings.NewReader(`{"client_name":"Cursor","redirect_uris":["`+callback+`"]}`))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	defer func() { _ = reg.Body.Close() }()
+	if reg.StatusCode != http.StatusCreated {
+		t.Fatalf("register status = %d, want 201", reg.StatusCode)
+	}
+	var regDoc struct {
+		ClientID     string   `json:"client_id"`
+		RedirectURIs []string `json:"redirect_uris"`
+	}
+	if err := json.NewDecoder(reg.Body).Decode(&regDoc); err != nil {
+		t.Fatalf("decode register response: %v", err)
+	}
+	if len(regDoc.RedirectURIs) != 1 || regDoc.RedirectURIs[0] != callback {
+		t.Fatalf("redirect_uris echoed = %v, want [%s]", regDoc.RedirectURIs, callback)
+	}
+
+	q := authorizeQuery()
+	q.Set("client_id", regDoc.ClientID)
+	q.Set("redirect_uri", callback)
+	resp, err := client.Get(srv.URL + "/oauth/authorize?" + q.Encode())
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize with allowlisted native redirect = %d, want 302 to IdP", resp.StatusCode)
 	}
 }
 
