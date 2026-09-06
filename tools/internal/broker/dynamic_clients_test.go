@@ -169,8 +169,11 @@ func TestAuthorizeTrustsAllowlistedNativeSchemeRedirect(t *testing.T) {
 
 	// The IdP returns; the jar replays the state cookie and the
 	// broker must 302 to the native callback with the code.
-	cbReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
+	cbReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
 		srv.URL+"/auth/callback?code=idp-code-abc&state="+url.QueryEscape(nonce), http.NoBody)
+	if err != nil {
+		t.Fatalf("build callback request: %v", err)
+	}
 	cbResp, err := client.Do(cbReq)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
@@ -181,7 +184,10 @@ func TestAuthorizeTrustsAllowlistedNativeSchemeRedirect(t *testing.T) {
 		}
 	}()
 	if cbResp.StatusCode != http.StatusFound {
-		body, _ := io.ReadAll(cbResp.Body)
+		body, readErr := io.ReadAll(cbResp.Body)
+		if readErr != nil {
+			t.Errorf("read callback body: %v", readErr)
+		}
 		t.Fatalf("callback status = %d, want 302; body=%s", cbResp.StatusCode, body)
 	}
 	clientRedirect, err := url.Parse(cbResp.Header.Get("Location"))
