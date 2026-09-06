@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -96,10 +99,22 @@ func TestRegisterRejectsInvalidRedirectURIs(t *testing.T) {
 }
 
 // Cursor registers a private-use scheme callback (RFC 8252 §7.1).
-// The exact allowlisted URI registers and is trusted at authorize.
+// The exact allowlisted URI registers, is trusted at authorize, and
+// is replayed by /auth/callback with the authorization code.
 func TestAuthorizeTrustsAllowlistedNativeSchemeRedirect(t *testing.T) {
-	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{authURL: "https://idp.example.com/authorize"}, fake.NewSimpleClientset())
+	verifier := &fakeVerifier{
+		authURL: "https://idp.example.com/authorize",
+		claims:  Claims{Subject: "google|123", Email: "alice@example.com", EmailVerified: true},
+	}
+	cfg := testConfig()
+	cfg.Server.PublicURL = "https://broker.example.com"
+	srv, _ := newTestServer(t, cfg, verifier, fake.NewSimpleClientset())
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
 	client := testClient(srv)
+	client.Jar = jar
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	const callback = "cursor://anysphere.cursor-mcp/oauth/callback"
@@ -130,20 +145,58 @@ func TestAuthorizeTrustsAllowlistedNativeSchemeRedirect(t *testing.T) {
 	q := authorizeQuery()
 	q.Set("client_id", regDoc.ClientID)
 	q.Set("redirect_uri", callback)
-	resp, err := client.Get(srv.URL + "/oauth/authorize?" + q.Encode())
+	authResp, err := client.Get(srv.URL + "/oauth/authorize?" + q.Encode())
 	if err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
-	if err := resp.Body.Close(); err != nil {
+	if err := authResp.Body.Close(); err != nil {
 		t.Errorf("close authorize body: %v", err)
 	}
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("authorize with allowlisted native redirect = %d, want 302 to IdP", resp.StatusCode)
+	if authResp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize with allowlisted native redirect = %d, want 302 to IdP", authResp.StatusCode)
 	}
-	// The client redirect never rides in Location: it lives in the
-	// auth-code record and is replayed at /auth/callback.
-	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, "https://idp.example.com/authorize") {
-		t.Errorf("redirected to %q, want IdP authorize URL", loc)
+	idpRedirect, err := url.Parse(authResp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parse IdP redirect: %v", err)
+	}
+	if !strings.HasPrefix(idpRedirect.String(), "https://idp.example.com/authorize") {
+		t.Fatalf("redirected to %q, want IdP authorize URL", idpRedirect)
+	}
+	nonce := idpRedirect.Query().Get("state")
+	if nonce == "" {
+		t.Fatal("missing IdP state nonce")
+	}
+
+	// The IdP returns; the jar replays the state cookie and the
+	// broker must 302 to the native callback with the code.
+	cbReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		srv.URL+"/auth/callback?code=idp-code-abc&state="+url.QueryEscape(nonce), http.NoBody)
+	cbResp, err := client.Do(cbReq)
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	defer func() {
+		if err := cbResp.Body.Close(); err != nil {
+			t.Errorf("close callback body: %v", err)
+		}
+	}()
+	if cbResp.StatusCode != http.StatusFound {
+		body, _ := io.ReadAll(cbResp.Body)
+		t.Fatalf("callback status = %d, want 302; body=%s", cbResp.StatusCode, body)
+	}
+	clientRedirect, err := url.Parse(cbResp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parse client redirect: %v", err)
+	}
+	if clientRedirect.Scheme != "cursor" || clientRedirect.Host != "anysphere.cursor-mcp" || clientRedirect.Path != "/oauth/callback" {
+		t.Errorf("client redirect = %q, want %s", clientRedirect, callback)
+	}
+	cq := clientRedirect.Query()
+	if cq.Get("code") == "" {
+		t.Error("missing code on client redirect")
+	}
+	if got := cq.Get("state"); got != "client-state-nonce" {
+		t.Errorf("state passthrough mismatch: got %q", got)
 	}
 }
 
