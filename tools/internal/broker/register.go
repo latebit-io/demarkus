@@ -118,9 +118,9 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, doc)
 }
 
-// parseRedirectURIs decodes and validates RFC 7591 redirect_uris:
-// a non-empty JSON string array whose entries are https URLs or http
-// loopback, with no userinfo and no fragment.
+// parseRedirectURIs decodes and validates RFC 7591 redirect_uris: a
+// non-empty JSON string array of absolute https URLs (no userinfo, no
+// fragment), http loopback, or an allowlisted native-scheme callback.
 func parseRedirectURIs(raw any) ([]string, error) {
 	list, ok := raw.([]any)
 	if !ok || len(list) == 0 {
