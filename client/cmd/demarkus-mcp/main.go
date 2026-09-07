@@ -768,12 +768,12 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 	if onConflict == "" {
 		onConflict = "merge"
 	}
+	if onConflict != "merge" && onConflict != "fail" {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"fail\" or \"merge\"", onConflict)), nil
+	}
 	meta := publisherMeta(ctx, req.GetArguments())
 	narrowing := h.narrowingNote(ctx, host, path, token, expectedVersion, meta)
-	switch onConflict {
-	case "fail":
-		// fall through to plain publish
-	case "merge":
+	if onConflict == "merge" {
 		adapter := &mergeClientAdapter{inner: h.client, host: host, token: token}
 		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, meta)
 		if mErr != nil {
@@ -783,8 +783,6 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 			narrowing = ""
 		}
 		return mcp.NewToolResultText(formatOutcome(&outcome) + narrowing), nil
-	default:
-		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"fail\" or \"merge\"", onConflict)), nil
 	}
 
 	result, err := h.client.Publish(host, path, body, token, expectedVersion, meta)

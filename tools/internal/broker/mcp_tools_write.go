@@ -121,6 +121,9 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 	if onConflict == "" {
 		onConflict = "merge"
 	}
+	if onConflict != "merge" && onConflict != "fail" {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"merge\" or \"fail\"", onConflict)), nil
+	}
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
@@ -130,20 +133,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 	}
 	meta := publisherMeta(req.GetArguments(), claims)
 	narrowing := g.narrowingNote(ctx, worldName, path, expectedVersion, meta)
-	switch onConflict {
-	case "fail":
-		// The world's conflict status is forwarded verbatim.
-		result, perr := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
-			return g.dispatcher.Publish(worldName, path, body, token, expectedVersion, meta)
-		})
-		if perr != nil {
-			return g.toolErrorFor("publish", worldName, perr), nil
-		}
-		if result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated {
-			narrowing = ""
-		}
-		return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version") + narrowing), nil
-	case "merge":
+	if onConflict == "merge" {
 		adapter := &brokerMergeAdapter{
 			g:         g,
 			ctx:       ctx,
@@ -157,9 +147,18 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 			narrowing = ""
 		}
 		return mcp.NewToolResultText(formatMergeOutcome(&outcome) + narrowing), nil
-	default:
-		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"merge\" or \"fail\"", onConflict)), nil
 	}
+	// on_conflict=fail: the world's conflict status is forwarded verbatim.
+	result, perr := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
+		return g.dispatcher.Publish(worldName, path, body, token, expectedVersion, meta)
+	})
+	if perr != nil {
+		return g.toolErrorFor("publish", worldName, perr), nil
+	}
+	if result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated {
+		narrowing = ""
+	}
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version") + narrowing), nil
 }
 
 // brokerMergeAdapter keeps merge reads public and applies a publish token
