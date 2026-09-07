@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -139,7 +140,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 		if perr != nil {
 			return g.toolErrorFor("publish", worldName, perr), nil
 		}
-		return mcp.NewToolResultText(formatToolResult(result, "version", "modified", "server-version")), nil
+		return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version")), nil
 	case "merge":
 		adapter := &brokerMergeAdapter{
 			g:         g,
@@ -187,13 +188,8 @@ func (a *brokerMergeAdapter) FetchCurrent(path string) (merge.Doc, error) {
 	return mergeDocFromResult(r)
 }
 
-// Publish forwards to the dispatcher and lifts the protocol
-// response into a merge.PublishResult. Status, version, and
-// server-version come from the response metadata; the
-// full metadata map rides along for downstream formatters
-// (formatMergeOutcome.OutcomeOK delegates to formatToolResult
-// which echoes the published version/modified/server-version
-// keys).
+// Publish forwards to the dispatcher and lifts the protocol response into
+// a merge.PublishResult; the full metadata map rides along for the formatter.
 func (a *brokerMergeAdapter) Publish(path, body string, expectedVersion int, meta map[string]string) (merge.PublishResult, error) {
 	r, err := a.g.dispatchWithWriteAuth(a.ctx, a.worldName, func(token string) (fetch.Result, error) {
 		return a.g.dispatcher.Publish(a.worldName, path, body, token, expectedVersion, meta)
@@ -251,20 +247,13 @@ func optionalIntMeta(meta map[string]string, key string) (int, error) {
 	return n, nil
 }
 
-// formatMergeOutcome renders a merge.Candidate result in the
-// same text shape the local demarkus-mcp uses. OutcomeOK
-// delegates to formatToolResult so the success path is
-// byte-for-byte identical to a plain publish with
-// on_conflict="fail" — the merge default doesn't change the
-// success contract, only the conflict contract. OutcomeCandidate
-// emits the structured envelope agents key off of:
-// "status: merge-candidate" header, the three version keys, the
-// has-markers flag, then a blank line and the merge candidate
-// body (with or without git-style conflict markers).
+// formatMergeOutcome renders a merge outcome in the tool text shape. OutcomeOK
+// is byte-identical to a plain publish; OutcomeCandidate carries the merge
+// metadata then the candidate body.
 func formatMergeOutcome(o *merge.Outcome) string {
 	switch o.Status {
 	case merge.OutcomeOK:
-		return formatToolResult(fetch.Result{
+		return mcpfmt.Full(fetch.Result{
 			Response: protocol.Response{
 				Status:   o.Publish.Status,
 				Metadata: o.Publish.Metadata,
@@ -340,7 +329,7 @@ func (g *mcpGateway) handleMarkAppend(ctx context.Context, req mcp.CallToolReque
 	if err != nil {
 		return g.toolErrorFor("append", worldName, err), nil
 	}
-	return mcp.NewToolResultText(formatToolResult(result, "version", "modified", "server-version")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version")), nil
 }
 
 // handleMarkArchive implements the mark_archive tool. ARCHIVE is
@@ -370,7 +359,7 @@ func (g *mcpGateway) handleMarkArchive(ctx context.Context, req mcp.CallToolRequ
 	if err != nil {
 		return g.toolErrorFor("archive", worldName, err), nil
 	}
-	return mcp.NewToolResultText(formatToolResult(result, "version")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version")), nil
 }
 
 // Compile-time guard: the write handlers conform to mcp-go's

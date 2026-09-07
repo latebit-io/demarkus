@@ -51,16 +51,22 @@ func TestMCPToolsExposeRequiredArguments(t *testing.T) {
 		{
 			tool:         "mark_fetch",
 			wantRequired: []string{"url"},
-			wantOptional: []string{"force"},
+			wantOptional: []string{"force", "verbose"},
+		},
+		{
+			tool:         "mark_lookup",
+			wantRequired: []string{"url", "query"},
+			wantOptional: []string{"filter", "limit", "match", "verbose"},
 		},
 		{
 			tool:         "mark_lookup_all",
 			wantRequired: []string{"query"},
-			wantOptional: []string{"scope", "filter", "limit"},
+			wantOptional: []string{"scope", "filter", "limit", "match", "verbose"},
 		},
 		{
 			tool:         "mark_explore",
 			wantRequired: []string{"url"},
+			wantOptional: []string{"verbose"},
 		},
 		{
 			tool:         "mark_publish",

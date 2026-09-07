@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -129,15 +130,14 @@ func (r lookupRow) URL() string {
 func parseLookupRows(text string) []lookupRow {
 	var rows []lookupRow
 	for line := range strings.SplitSeq(text, "\n") {
-		cells := strings.Split(line, "|")
-		if len(cells) < 3 {
+		cells, ok := lookuptable.SplitRow(line)
+		if !ok || !lookuptable.IsDataRow(cells) {
 			continue
 		}
-		location := strings.TrimSpace(cells[1])
-		if !strings.HasPrefix(location, "/") {
+		path, anchor := lookuptable.SplitLocation(cells[0])
+		if !strings.HasPrefix(path, "/") {
 			continue
 		}
-		path, anchor, _ := strings.Cut(location, "#")
 		rows = append(rows, lookupRow{Path: path, Anchor: anchor})
 	}
 	return rows

@@ -9,6 +9,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
 	listformat "github.com/latebit-io/demarkus/client/listing"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -27,6 +28,7 @@ func markExploreTool(host string) mcp.Tool {
 			mcp.Required(),
 			mcp.Description(urlDesc(host)),
 		),
+		mcpfmt.Fetch.Param(),
 	)
 }
 
@@ -36,6 +38,7 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("url is required"), nil
 	}
 	docURL, _, _ := strings.Cut(rawURL, "#")
+	opts := mcpfmt.Fetch.Options(&req)
 
 	host, path, err := h.resolveURL(docURL)
 	if err != nil {
@@ -48,14 +51,14 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError(fmt.Sprintf("fetch failed: %v", err)), nil
 	}
 	if result.Response.Status != protocol.StatusOK {
-		return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.Format(result, opts)), nil
 	}
 	body := result.Response.Body
 
 	// Binary/non-UTF-8 body: an outline over it is garbage; return a notice.
 	if mdoutline.BinaryBody(body) {
-		return mcp.NewToolResultText(formatResultWith(result, mdoutline.NonMarkdownNotice(len(body)),
-			map[string]string{"mode": "binary"}, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.NonMarkdownNotice(len(body)),
+			map[string]string{"mode": "binary"}, opts)), nil
 	}
 
 	var b strings.Builder
@@ -89,7 +92,7 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 	extra := map[string]string{
 		"size": fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1),
 	}
-	return mcp.NewToolResultText(formatResultWith(result, b.String(), extra, "version", "modified", "etag")), nil
+	return mcp.NewToolResultText(mcpfmt.FormatWith(result, b.String(), extra, opts)), nil
 }
 
 // writeBacklinksSection appends the backlinks card section from the local

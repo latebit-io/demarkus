@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -70,7 +71,7 @@ func mcpTools() []mcp.Tool {
 func markFetchTool() mcp.Tool {
 	return mcp.NewTool("mark_fetch",
 		mcp.WithDescription(
-			"Fetch a document: status, version, etag, markdown body. Over 8KB returns outline (headings with #anchors); url#<anchor> fetches one section, force=true the full body. Unchanged re-fetch returns short notice. "+mcpURLHint,
+			"Fetch a document: status, version, title, markdown body. Over 8KB returns outline (headings with #anchors); url#<anchor> fetches one section, force=true the full body. Unchanged re-fetch returns short notice. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -79,6 +80,7 @@ func markFetchTool() mcp.Tool {
 		mcp.WithBoolean("force",
 			mcp.Description("full body regardless of size or unchanged status (default false)"),
 		),
+		mcpfmt.Fetch.Param(),
 	)
 }
 
@@ -91,6 +93,7 @@ func markExploreTool() mcp.Tool {
 			mcp.Required(),
 			mcp.Description(mcpURLDesc),
 		),
+		mcpfmt.Fetch.Param(),
 	)
 }
 
@@ -150,6 +153,7 @@ func markLookupTool() mcp.Tool {
 		mcp.WithString("match",
 			mcp.Description(matchParamDesc),
 		),
+		mcpfmt.Lookup.Param(),
 	)
 }
 
@@ -176,6 +180,7 @@ func markLookupAllTool() mcp.Tool {
 		mcp.WithString("match",
 			mcp.Description(matchParamDesc+"; worlds without body match are listed"),
 		),
+		mcpfmt.LookupAll.Param(),
 	)
 }
 

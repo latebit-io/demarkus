@@ -325,18 +325,6 @@ func TestHandleMarkLookupAllRejectsUnknownMatchBeforeFanOut(t *testing.T) {
 	}
 }
 
-func TestSplitLookupLocation(t *testing.T) {
-	for _, tt := range []struct{ cell, path, anchor string }{
-		{`/docs/a.md#intro`, "/docs/a.md", "intro"},
-		{`/docs/a\#b.md#intro`, "/docs/a#b.md", "intro"},
-		{`/docs/a\_b.md`, "/docs/a_b.md", ""},
-	} {
-		if path, anchor := splitLookupLocation(tt.cell); path != tt.path || anchor != tt.anchor {
-			t.Errorf("splitLookupLocation(%q) = %q, %q; want %q, %q", tt.cell, path, anchor, tt.path, tt.anchor)
-		}
-	}
-}
-
 func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "team-b", Namespace: "team-b"})
@@ -381,5 +369,32 @@ func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
 		if opts.Match != fetch.MatchBody {
 			t.Errorf("dispatcher saw match %q, want body", opts.Match)
 		}
+	}
+}
+
+func TestHandleMarkLookupAllCapsTagsUnlessVerbose(t *testing.T) {
+	cfg := mcpTestConfig()
+	many := "t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12"
+	d := &fakeDispatcher{
+		lookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+			return lookupResult("| /a.md | 0.90 | A | " + many + " |"), nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	call := func(args map[string]any) string {
+		t.Helper()
+		res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", args))
+		if err != nil || res.IsError {
+			t.Fatalf("handleMarkLookupAll: err %v res %+v", err, res)
+		}
+		return toolResultText(t, res)
+	}
+	lean := call(map[string]any{"query": "a"})
+	if !strings.Contains(lean, "| t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, +2 more |") {
+		t.Errorf("lean rows not capped:\n%s", lean)
+	}
+	verbose := call(map[string]any{"query": "a", "verbose": true})
+	if !strings.Contains(verbose, "| "+many+" |") {
+		t.Errorf("verbose rows capped:\n%s", verbose)
 	}
 }

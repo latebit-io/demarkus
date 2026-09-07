@@ -29,25 +29,35 @@ func TestUnchangedNotice(t *testing.T) {
 	tests := []struct {
 		name    string
 		doc     Doc
+		verbose bool
 		wantIn  []string
 		wantOut []string
 	}{
 		{
-			"versioned",
+			"versioned lean",
 			Doc{Version: "3", Etag: "abc"},
+			false,
+			[]string{"status: unchanged\n", "version: 3\n", "unchanged since v3", "force=true"},
+			[]string{"etag:"},
+		},
+		{
+			"versioned verbose",
+			Doc{Version: "3", Etag: "abc"},
+			true,
 			[]string{"status: unchanged\n", "version: 3\n", "etag: abc\n", "unchanged since v3", "force=true"},
 			nil,
 		},
 		{
 			"etag-only identity",
 			Doc{Etag: "abc"},
+			false,
 			[]string{"status: unchanged\n", "etag: abc\n", "unchanged since this session's earlier fetch (etag match)"},
 			[]string{"version:", "since v"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := UnchangedNotice(tt.doc)
+			got := UnchangedNotice(tt.doc, tt.verbose)
 			for _, want := range tt.wantIn {
 				if !strings.Contains(got, want) {
 					t.Errorf("notice missing %q in:\n%s", want, got)

@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"math"
 	"net/url"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -185,7 +184,7 @@ func (g *mcpGateway) handleMarkList(_ context.Context, req mcp.CallToolRequest) 
 			return mcp.NewToolResultError("list failed: continuation cursor is missing or did not advance"), nil
 		}
 	}
-	return mcp.NewToolResultText(formatToolResult(result, "modified")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "modified")), nil
 }
 
 func brokerListPageSize(req *mcp.CallToolRequest) (int, error) {
@@ -226,7 +225,7 @@ func (g *mcpGateway) handleMarkVersions(_ context.Context, req mcp.CallToolReque
 	if err != nil {
 		return g.toolErrorFor("versions", worldName, err), nil
 	}
-	return mcp.NewToolResultText(formatToolResult(result, "total", "current", "chain-valid", "chain-error")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "total", "current", "chain-valid", "chain-error")), nil
 }
 
 // handleMarkLookup implements the mark_lookup tool. Like the other
@@ -256,7 +255,8 @@ func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest
 	if err != nil {
 		return g.toolErrorFor("lookup", worldName, err), nil
 	}
-	return mcp.NewToolResultText(formatToolResult(result, "matches", "match") + fetch.CatalogFallbackSuffix(opts, result)), nil
+	render := mcpfmt.Lookup.Options(&req)
+	return mcp.NewToolResultText(mcpfmt.Format(result, render) + fetch.CatalogFallbackSuffix(opts, result)), nil
 }
 
 // toolErrorFor renders a tool-error envelope from a dispatcher
@@ -276,53 +276,4 @@ func (g *mcpGateway) toolErrorFor(verb, worldName string, err error) *mcp.CallTo
 		return mcp.NewToolResultError("identity email is not verified")
 	}
 	return mcp.NewToolResultError(fmt.Sprintf("%s failed: %v", verb, err))
-}
-
-// formatToolResult mirrors the local client/cmd/demarkus-mcp
-// formatResult helper byte-for-byte: status line, then the
-// explicitly-named metadata keys in order, then any remaining
-// metadata keys (sorted for determinism), then a blank line and
-// the body (if present). Duplicated rather than hoisted into a
-// shared package because:
-//
-//   - the function is short and stable;
-//   - hoisting would touch the client module again on top of
-//     Pre-Flight 0;
-//   - drift is detected by the proxy-fidelity test (Slice 2 test)
-//     that pins broker-side output against a verbatim copy of the
-//     local server's helper.
-//
-// If the formatter ever does drift, the right answer is to hoist
-// to client/mcpfmt at that time, not pre-emptively.
-//
-// The remaining-keys order is sorted (not insertion-order — Go's
-// map iteration is randomized — and not a separate "extras"
-// ordering — that would surprise agents diffing tool output across
-// calls). Sorting is the cheapest determinism guarantee that keeps
-// the local server's formatter in lockstep with this one.
-func formatToolResult(r fetch.Result, keys ...string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "status: %s\n", r.Response.Status)
-	shown := make(map[string]bool, len(keys))
-	for _, key := range keys {
-		if v, ok := r.Response.Metadata[key]; ok {
-			fmt.Fprintf(&b, "%s: %s\n", key, v)
-			shown[key] = true
-		}
-	}
-	remaining := make([]string, 0, len(r.Response.Metadata))
-	for k := range r.Response.Metadata {
-		if !shown[k] {
-			remaining = append(remaining, k)
-		}
-	}
-	sort.Strings(remaining)
-	for _, k := range remaining {
-		fmt.Fprintf(&b, "%s: %s\n", k, r.Response.Metadata[k])
-	}
-	if r.Response.Body != "" {
-		b.WriteString("\n")
-		b.WriteString(r.Response.Body)
-	}
-	return b.String()
 }

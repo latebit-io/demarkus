@@ -12,6 +12,8 @@ import (
 	"sync"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/lookuptable"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -101,10 +103,11 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}
-	return mcp.NewToolResultText(formatLookupAllResult(&lookupAllReport{
+	report := lookupAllReport{
 		query: query, worlds: len(worlds), matches: matches, failures: failures,
 		body: opts.Match == fetch.MatchBody, catalogWorlds: catalogWorlds,
-	})), nil
+	}
+	return mcp.NewToolResultText(mcpfmt.Format(report.result(), mcpfmt.LookupAll.Options(&req))), nil
 }
 
 // lookupAllReport is everything the merged table renders.
@@ -217,8 +220,8 @@ func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch,
 	lines := strings.Split(strings.ReplaceAll(result.Response.Body, "\r\n", "\n"), "\n")
 	header, columns := -1, 0
 	for i, line := range lines {
-		cells, ok := splitLookupTableRow(line)
-		if ok && isLookupTableHeader(cells) {
+		cells, ok := lookuptable.SplitRow(line)
+		if ok && lookuptable.IsHeader(cells) {
 			header, columns = i, len(cells)
 			break
 		}
@@ -235,21 +238,21 @@ func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch,
 			}
 			continue
 		}
-		cells, ok := splitLookupTableRow(line)
+		cells, ok := lookuptable.SplitRow(line)
 		if !ok {
 			break
 		}
-		if isLookupTableSeparator(cells) {
+		if lookuptable.IsSeparator(cells) {
 			continue
 		}
 		if len(cells) != columns {
 			return nil, fmt.Errorf("malformed LOOKUP response: row has %d columns, header %d", len(cells), columns)
 		}
-		importance, err := strconv.ParseFloat(unescapeLookupCell(cells[1]), 64)
+		importance, err := strconv.ParseFloat(lookuptable.Unescape(cells[1]), 64)
 		if err != nil || math.IsNaN(importance) || math.IsInf(importance, 0) || importance < 0 || importance > 1 {
 			return nil, fmt.Errorf("malformed LOOKUP response: invalid importance %q", cells[1])
 		}
-		matchPath, anchor := splitLookupLocation(cells[0])
+		matchPath, anchor := lookuptable.SplitLocation(cells[0])
 		if !strings.HasPrefix(matchPath, "/") {
 			return nil, fmt.Errorf("malformed LOOKUP response: invalid path %q", matchPath)
 		}
@@ -258,12 +261,12 @@ func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch,
 			path:       matchPath,
 			anchor:     anchor,
 			importance: importance,
-			title:      unescapeLookupCell(cells[2]),
-			tags:       unescapeLookupCell(cells[3]),
+			title:      lookuptable.Unescape(cells[2]),
+			tags:       lookuptable.Unescape(cells[3]),
 			rank:       len(matches),
 		}
-		if columns == 5 {
-			match.snippet = unescapeLookupCell(cells[4])
+		if columns == lookuptable.BodyColumns {
+			match.snippet = lookuptable.Unescape(cells[4])
 		}
 		matches = append(matches, match)
 	}
@@ -275,122 +278,40 @@ func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch,
 	return matches, nil
 }
 
-// splitLookupLocation separates a row's escaped path cell from the anchor
-// the server appended after escaping: the suffix past the first unescaped
-// '#'. A '#' inside the path itself arrives escaped and stays in the path.
-func splitLookupLocation(cell string) (path, anchor string) {
-	for i := 0; i < len(cell); i++ {
-		if cell[i] == '#' && !lookupCharEscaped(cell, i) {
-			return unescapeLookupCell(cell[:i]), cell[i+1:]
-		}
-	}
-	return unescapeLookupCell(cell), ""
-}
-
-func splitLookupTableRow(line string) ([]string, bool) {
-	line = strings.TrimSpace(line)
-	if len(line) < 2 || line[0] != '|' || line[len(line)-1] != '|' {
-		return nil, false
-	}
-	var cells []string
-	start := 1
-	for i := 1; i < len(line)-1; i++ {
-		if line[i] != '|' || lookupCharEscaped(line, i) {
-			continue
-		}
-		cells = append(cells, strings.TrimSpace(line[start:i]))
-		start = i + 1
-	}
-	cells = append(cells, strings.TrimSpace(line[start:len(line)-1]))
-	return cells, true
-}
-
-func lookupCharEscaped(s string, at int) bool {
-	backslashes := 0
-	for i := at - 1; i >= 0 && s[i] == '\\'; i-- {
-		backslashes++
-	}
-	return backslashes%2 == 1
-}
-
-// isLookupTableHeader recognizes the catalog table and its body-mode
-// extension with the Snippet column.
-func isLookupTableHeader(cells []string) bool {
-	if len(cells) != 4 && len(cells) != 5 {
-		return false
-	}
-	for i, want := range []string{"Path", "Importance", "Title", "Tags", "Snippet"}[:len(cells)] {
-		if !strings.EqualFold(cells[i], want) {
-			return false
-		}
-	}
-	return true
-}
-
-func isLookupTableSeparator(cells []string) bool {
-	if len(cells) != 4 && len(cells) != 5 {
-		return false
-	}
-	for _, cell := range cells {
-		trimmed := strings.Trim(strings.TrimSpace(cell), ":")
-		if len(trimmed) < 3 || strings.Trim(trimmed, "-") != "" {
-			return false
-		}
-	}
-	return true
-}
-
-func unescapeLookupCell(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) && strings.ContainsRune(`\\[]()*_`+"`~#|", rune(s[i+1])) {
-			i++
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
-var lookupCellEscaper = strings.NewReplacer(
-	`\`, `\\`,
-	`[`, `\[`, `]`, `\]`,
-	`(`, `\(`, `)`, `\)`,
-	`*`, `\*`, `_`, `\_`,
-	"`", "\\`", `~`, `\~`,
-	`#`, `\#`, `|`, `\|`,
-)
-
-func escapeLookupCell(s string) string {
-	return lookupCellEscaper.Replace(strings.ReplaceAll(strings.ReplaceAll(s, "\r", " "), "\n", " "))
-}
-
-func formatLookupAllResult(r *lookupAllReport) string {
-	var b strings.Builder
+// result shapes the merged report as a wire-style response so the shared
+// envelope renders it like a single-world lookup.
+func (r *lookupAllReport) result() fetch.Result {
 	status := "ok"
 	if len(r.failures) > 0 {
 		status = "partial"
 	}
-	fmt.Fprintf(&b, "status: %s\nworlds: %d\nsucceeded: %d\nfailed: %d\nmatches: %d\n", status, r.worlds, r.worlds-len(r.failures), len(r.failures), len(r.matches))
-	if r.body {
-		b.WriteString("match: body\n")
+	meta := map[string]string{
+		"worlds":    strconv.Itoa(r.worlds),
+		"succeeded": strconv.Itoa(r.worlds - len(r.failures)),
+		"failed":    strconv.Itoa(len(r.failures)),
+		"matches":   strconv.Itoa(len(r.matches)),
 	}
-	fmt.Fprintf(&b, "\n# Lookup matches for \"%s\" across readable worlds\n\n", escapeLookupCell(r.query))
 	if r.body {
-		b.WriteString("| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n")
-	} else {
-		b.WriteString("| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n")
+		meta["match"] = fetch.MatchBody
 	}
+	return fetch.Result{Response: protocol.Response{Status: status, Metadata: meta, Body: r.table()}}
+}
+
+func (r *lookupAllReport) table() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Lookup matches for \"%s\" across readable worlds\n\n", lookuptable.Escape(r.query))
+	b.WriteString(lookuptable.Header(r.body))
 	for _, match := range r.matches {
 		// The anchor rides after escaping: a slug cannot break the table,
 		// and the agent hands the row to mark_fetch as is.
-		location := escapeLookupCell(qualifiedLookupURL(match.world, match.path))
+		location := lookuptable.Escape(qualifiedLookupURL(match.world, match.path))
 		if match.anchor != "" {
 			location += "#" + match.anchor
 		}
 		fmt.Fprintf(&b, "| %s | %.2f | %s | %s |", location, match.importance,
-			escapeLookupCell(match.title), escapeLookupCell(match.tags))
+			lookuptable.Escape(match.title), lookuptable.Escape(match.tags))
 		if r.body {
-			fmt.Fprintf(&b, " %s |", escapeLookupCell(match.snippet))
+			fmt.Fprintf(&b, " %s |", lookuptable.Escape(match.snippet))
 		}
 		b.WriteString("\n")
 	}
@@ -400,7 +321,7 @@ func formatLookupAllResult(r *lookupAllReport) string {
 	if len(r.failures) > 0 {
 		b.WriteString("\n## World failures\n\n| World | Error |\n|-------|-------|\n")
 		for _, failure := range r.failures {
-			fmt.Fprintf(&b, "| %s | %s |\n", escapeLookupCell(failure.world), escapeLookupCell(failure.err.Error()))
+			fmt.Fprintf(&b, "| %s | %s |\n", lookuptable.Escape(failure.world), lookuptable.Escape(failure.err.Error()))
 		}
 	}
 	return b.String()

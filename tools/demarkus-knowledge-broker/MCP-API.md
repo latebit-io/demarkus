@@ -93,10 +93,10 @@ for caller-supplied URLs.
 ## Tools
 
 Fifteen tools below have semantic parity with the local
-`client/cmd/demarkus-mcp` stdio server. The proxy-fidelity gate is a
-broker-side unit test that asserts the broker's `formatToolResult`
-matches the local server's `formatResult` byte-for-byte across
-representative `fetch.Result` cases.
+`client/cmd/demarkus-mcp` stdio server. Both surfaces render tool text
+through one package, `client/mcpfmt`, so their output is byte-identical
+by construction; `mark_fetch`, `mark_explore`, `mark_lookup`, and
+`mark_lookup_all` take `verbose: true` for the full metadata envelope.
 
 ### Read
 

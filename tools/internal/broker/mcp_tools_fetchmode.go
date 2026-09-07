@@ -4,31 +4,21 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"maps"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// This file is the broker's port of the local demarkus-mcp fetch
-// ergonomics (client/cmd/demarkus-mcp markFetch): size-adaptive outline
-// mode, #section slicing, and unchanged-fetch dedup. The mode-selection
-// logic mirrors the local handler the same way formatToolResult mirrors
-// formatResult — deliberately, so the two surfaces answer identically —
-// while the identity semantics and notice texts are genuinely shared via
-// client/fetchdedup (one copy, not a mirror).
-// The one structural difference is dedup scope: the local client is a
-// per-user process, so a process-lifetime map IS session scope; the
-// broker is multi-tenant, so dedup state is keyed by MCP session and a
-// caller without a session gets no dedup at all (never a cross-user
-// "unchanged" claim).
+// Port of demarkus-mcp markFetch (outline, #section, dedup); rendering and
+// notices are shared through client/mcpfmt and client/fetchdedup. Dedup is
+// keyed by MCP session since the broker is multi-tenant; no session, no dedup.
 
 // outlineThreshold is the body size (bytes) above which mark_fetch
 // returns an outline instead of the full body, unless force=true or a
@@ -158,6 +148,7 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 	// silently drop them; here it has defined meaning.
 	docURL, anchor, _ := strings.Cut(raw, "#")
 	force := req.GetBool("force", false)
+	opts := mcpfmt.Fetch.Options(&req)
 
 	worldName, path, err := parseToolURL(docURL)
 	if err != nil {
@@ -168,7 +159,7 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 		return g.toolErrorFor("fetch", worldName, err), nil
 	}
 	if result.Response.Status != protocol.StatusOK {
-		return mcp.NewToolResultText(formatToolResult(result, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.Format(result, opts)), nil
 	}
 
 	body := result.Response.Body
@@ -179,8 +170,8 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 	// Binary/non-UTF-8 body: always a notice, never bytes. MCP text can't
 	// carry binary faithfully (JSON mangles it). Matches the local client.
 	if mdoutline.BinaryBody(body) {
-		return mcp.NewToolResultText(formatToolResultWith(result, mdoutline.NonMarkdownNotice(len(body)),
-			map[string]string{"mode": "binary"}, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.NonMarkdownNotice(len(body)),
+			map[string]string{"mode": "binary"}, opts)), nil
 	}
 
 	// #section slice: works at any size and bypasses dedup — the agent
@@ -194,8 +185,8 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 			}
 			return mcp.NewToolResultError(fmt.Sprintf("section #%s not found in %s; available anchors: %s", anchor, docURL, available)), nil
 		}
-		return mcp.NewToolResultText(formatToolResultWith(result, section,
-			map[string]string{"section": "#" + anchor}, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.FormatWith(result, section,
+			map[string]string{"section": "#" + anchor}, opts)), nil
 	}
 
 	// Dedup needs at least one identity field: with version and etag
@@ -210,7 +201,7 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 		prev, seenBefore = g.fetchSeen.lookup(sessionID, key)
 	}
 	if seenBefore && !force && cur.Identified() && prev == cur {
-		return mcp.NewToolResultText(fetchdedup.UnchangedNotice(cur)), nil
+		return mcp.NewToolResultText(fetchdedup.UnchangedNotice(cur, opts.Verbose)), nil
 	}
 
 	extra := map[string]string{}
@@ -224,30 +215,11 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 	if !force && len(body) >= outlineThreshold {
 		extra["mode"] = "outline"
 		extra["size"] = fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)
-		return mcp.NewToolResultText(formatToolResultWith(result, mdoutline.OutlineBody(docURL, body),
-			extra, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.OutlineBody(docURL, body), extra, opts)), nil
 	}
 
 	if sessionID != "" && cur.Identified() {
 		g.fetchSeen.record(sessionID, key, cur)
 	}
-	if len(extra) == 0 {
-		return mcp.NewToolResultText(formatToolResult(result, "version", "modified", "etag")), nil
-	}
-	return mcp.NewToolResultText(formatToolResultWith(result, body, extra, "version", "modified", "etag")), nil
-}
-
-// formatToolResultWith renders r via formatToolResult with a replacement
-// body and extra metadata entries. The metadata map is cloned first — r
-// may hold a response whose map must never be mutated. Mirrors the local
-// client's formatResultWith.
-func formatToolResultWith(r fetch.Result, body string, extra map[string]string, keys ...string) string {
-	meta := maps.Clone(r.Response.Metadata)
-	if meta == nil {
-		meta = make(map[string]string, len(extra))
-	}
-	maps.Copy(meta, extra)
-	r.Response.Metadata = meta
-	r.Response.Body = body
-	return formatToolResult(r, keys...)
+	return mcp.NewToolResultText(mcpfmt.FormatWith(result, body, extra, opts)), nil
 }

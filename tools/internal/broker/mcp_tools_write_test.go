@@ -186,13 +186,9 @@ func TestHandleMarkPublishNegativeExpectedVersion(t *testing.T) {
 	}
 }
 
-// TestHandleMarkPublishMergeCleanOutcomeOK: publish succeeds
-// without conflict on the first attempt. merge.Candidate
-// returns OutcomeOK, and formatMergeOutcome delegates to
-// formatToolResult so the success-path text is byte-for-byte
-// identical to a plain on_conflict="fail" success. That's the
-// load-bearing parity invariant: default-flip doesn't disturb
-// the happy path's output shape.
+// TestHandleMarkPublishMergeCleanOutcomeOK: a clean first-attempt publish
+// under on_conflict="merge" renders byte-identically to a plain
+// on_conflict="fail" success (formatMergeOutcome delegates to mcpfmt.Full).
 func TestHandleMarkPublishMergeCleanOutcomeOK(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{

@@ -46,7 +46,7 @@ Style gate warns at write time on: a frontmatter fence opening the body, missing
 
 Soft checks: publish gate (tags), session-end journal nudge when files changed but nothing was recorded, recall nudge on "did we / what did we decide". Reminders, not substitutes; routing is on you.
 
-`mark_append` carries catalog metadata forward (tags, importance, title, type; never `retention`), so an append never drops a doc from `mark_lookup`. It does not extend tags: when an append adds a new subject, re-publish with wider `tags` and resend the whole current metadata, since `mark_publish` **replaces** the metadata map.
+`mark_append` carries catalog metadata forward (tags, importance, title, type; never `retention`), so an append never drops a doc from `mark_lookup`. It does not extend tags: when an append adds a new subject, re-publish with wider `tags` and resend the whole current metadata (fetch with `verbose: true` to see it), since `mark_publish` **replaces** the metadata map.
 
 ## Restraint
 

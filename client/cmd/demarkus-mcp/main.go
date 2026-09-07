@@ -9,9 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"maps"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +24,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/listwalk"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
@@ -304,7 +303,7 @@ func urlDesc(host string) string {
 func markFetchTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_fetch",
 		mcp.WithDescription(
-			"Fetch a document: status, version, etag, markdown body. Over 8KB returns outline (headings with #anchors); url#<anchor> fetches one section, force=true the full body. Unchanged re-fetch returns short notice. "+urlHint(host),
+			"Fetch a document: status, version, title, markdown body. Over 8KB returns outline (headings with #anchors); url#<anchor> fetches one section, force=true the full body. Unchanged re-fetch returns short notice. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -313,6 +312,7 @@ func markFetchTool(host string) mcp.Tool {
 		mcp.WithBoolean("force",
 			mcp.Description("full body regardless of size or unchanged status (default false)"),
 		),
+		mcpfmt.Fetch.Param(),
 	)
 }
 
@@ -392,6 +392,7 @@ func markLookupTool(host string) mcp.Tool {
 		mcp.WithString("match",
 			mcp.Description("catalog (default) or body"),
 		),
+		mcpfmt.Lookup.Param(),
 	)
 }
 
@@ -504,61 +505,9 @@ func markIndexTool(host string) mcp.Tool {
 	)
 }
 
-// formatResult builds a text response with status, selected metadata keys, and body.
-// After the explicitly requested keys, any remaining metadata keys (e.g. publisher
-// metadata) are appended in sorted order so output is deterministic across calls —
-// Go's map iteration is randomized, and the broker MCP gateway's mirror of this
-// formatter relies on byte-for-byte agreement with this function to satisfy the
-// proxy-fidelity contract documented in /plans/broker-https-gateway.md.
-func formatResult(r fetch.Result, keys ...string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "status: %s\n", r.Response.Status)
-	shown := make(map[string]bool, len(keys))
-	for _, key := range keys {
-		if v, ok := r.Response.Metadata[key]; ok {
-			fmt.Fprintf(&b, "%s: %s\n", key, v)
-			shown[key] = true
-		}
-	}
-	remaining := make([]string, 0, len(r.Response.Metadata))
-	for k := range r.Response.Metadata {
-		if !shown[k] {
-			remaining = append(remaining, k)
-		}
-	}
-	sort.Strings(remaining)
-	for _, k := range remaining {
-		fmt.Fprintf(&b, "%s: %s\n", k, r.Response.Metadata[k])
-	}
-	if r.Response.Body != "" {
-		b.WriteString("\n")
-		b.WriteString(r.Response.Body)
-	}
-	return b.String()
-}
-
-// formatResultWith renders r via formatResult with a replacement body and
-// extra metadata entries. The metadata map is cloned first — r may hold a
-// cached response whose map must never be mutated.
-func formatResultWith(r fetch.Result, body string, extra map[string]string, keys ...string) string {
-	meta := maps.Clone(r.Response.Metadata)
-	if meta == nil {
-		meta = make(map[string]string, len(extra))
-	}
-	maps.Copy(meta, extra)
-	r.Response.Metadata = meta
-	r.Response.Body = body
-	return formatResult(r, keys...)
-}
-
-// agentMeta returns publisher metadata with the "agent" key set to the MCP
-// client name from the session context. If the client name is unavailable,
-// it falls back to "unknown".
-// publisherMeta merges caller-supplied publisher metadata (the optional
-// "metadata" object argument, values coerced to strings) with the agent
-// identity. It starts from the agent map and skips a caller-supplied "agent"
-// key so identity cannot be spoofed. The server validates keys/values and
-// rejects reserved keys, so this stays a thin pass-through.
+// publisherMeta merges the optional "metadata" argument (values coerced to
+// strings) over the agent identity; a caller-supplied "agent" key is skipped
+// so identity cannot be spoofed. The server validates keys and values.
 func publisherMeta(ctx context.Context, args map[string]any) map[string]string {
 	meta := agentMeta(ctx)
 	raw, ok := args["metadata"].(map[string]any)
@@ -574,6 +523,8 @@ func publisherMeta(ctx context.Context, args map[string]any) map[string]string {
 	return meta
 }
 
+// agentMeta is the "agent" publisher key: the MCP client name from the
+// session context, "unknown" when unavailable.
 func agentMeta(ctx context.Context) map[string]string {
 	name := "unknown"
 	if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
@@ -596,6 +547,7 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	}
 	docURL, anchor, _ := strings.Cut(rawURL, "#")
 	force := req.GetBool("force", false)
+	opts := mcpfmt.Fetch.Options(&req)
 
 	host, path, err := h.resolveURL(docURL)
 	if err != nil {
@@ -607,7 +559,7 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		return mcp.NewToolResultError(fmt.Sprintf("fetch failed: %v", err)), nil
 	}
 	if result.Response.Status != protocol.StatusOK {
-		return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.Format(result, opts)), nil
 	}
 
 	body := result.Response.Body
@@ -618,8 +570,8 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	// Binary/non-UTF-8 body: always a notice, never bytes. MCP text can't carry
 	// binary faithfully (JSON mangles it); byte-exact retrieval is the CLI's job.
 	if mdoutline.BinaryBody(body) {
-		return mcp.NewToolResultText(formatResultWith(result, mdoutline.NonMarkdownNotice(len(body)),
-			map[string]string{"mode": "binary"}, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.NonMarkdownNotice(len(body)),
+			map[string]string{"mode": "binary"}, opts)), nil
 	}
 
 	// #section slice: works at any size and bypasses dedup — the agent is
@@ -633,8 +585,8 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 			}
 			return mcp.NewToolResultError(fmt.Sprintf("section #%s not found in %s; available anchors: %s", anchor, docURL, available)), nil
 		}
-		return mcp.NewToolResultText(formatResultWith(result, section,
-			map[string]string{"section": "#" + anchor}, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.FormatWith(result, section,
+			map[string]string{"section": "#" + anchor}, opts)), nil
 	}
 
 	// Dedup needs at least one identity field: with version and etag both
@@ -643,7 +595,7 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	cur := fetchdedup.Doc{Version: version, Etag: etag}
 	prev, seenBefore := h.seenLookup(key)
 	if seenBefore && !force && cur.Identified() && prev == cur {
-		return mcp.NewToolResultText(fetchdedup.UnchangedNotice(cur)), nil
+		return mcp.NewToolResultText(fetchdedup.UnchangedNotice(cur, opts.Verbose)), nil
 	}
 
 	extra := map[string]string{}
@@ -657,17 +609,13 @@ func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	if !force && len(body) >= outlineThreshold {
 		extra["mode"] = "outline"
 		extra["size"] = fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)
-		return mcp.NewToolResultText(formatResultWith(result, mdoutline.OutlineBody(docURL, body),
-			extra, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.OutlineBody(docURL, body), extra, opts)), nil
 	}
 
 	if cur.Identified() {
 		h.seenRecord(key, cur)
 	}
-	if len(extra) == 0 {
-		return mcp.NewToolResultText(formatResult(result, "version", "modified", "etag")), nil
-	}
-	return mcp.NewToolResultText(formatResultWith(result, body, extra, "version", "modified", "etag")), nil
+	return mcp.NewToolResultText(mcpfmt.FormatWith(result, body, extra, opts)), nil
 }
 
 func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -701,7 +649,7 @@ func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		}
 	}
 
-	return mcp.NewToolResultText(formatResult(result, "modified")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "modified")), nil
 }
 
 func mcpListPageSize(req *mcp.CallToolRequest) (int, error) {
@@ -743,7 +691,7 @@ func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("versions failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(formatResult(result, "total", "current", "chain-valid", "chain-error")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "total", "current", "chain-valid", "chain-error")), nil
 }
 
 func (h *handler) markLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -770,7 +718,8 @@ func (h *handler) markLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("lookup failed: %v", err)), nil
 	}
-	return mcp.NewToolResultText(formatResult(result, "matches", "match") + fetch.CatalogFallbackSuffix(opts, result)), nil
+	render := mcpfmt.Lookup.Options(&req)
+	return mcp.NewToolResultText(mcpfmt.Format(result, render) + fetch.CatalogFallbackSuffix(opts, result)), nil
 }
 
 func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -837,7 +786,7 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(formatResult(result, "version", "modified", "server-version")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version")), nil
 }
 
 // mergeClientAdapter exposes the markClient interface as a merge.Client. It
@@ -921,16 +870,13 @@ func optionalInt(meta map[string]string, key string) (int, error) {
 	return n, nil
 }
 
-// formatOutcome renders a merge.Candidate outcome in the same key:value text
-// shape as formatResult. On OutcomeOK it delegates to formatResult so the
-// success response is byte-for-byte identical to a plain mark_publish — the
-// on_conflict=merge opt-in does not change the success contract. On
-// OutcomeCandidate it surfaces merge metadata followed by the candidate body
-// (with or without conflict markers) after a blank line.
+// formatOutcome renders a merge outcome in the tool text shape. OutcomeOK is
+// byte-identical to a plain mark_publish; OutcomeCandidate carries the merge
+// metadata then the candidate body.
 func formatOutcome(o *merge.Outcome) string {
 	switch o.Status {
 	case merge.OutcomeOK:
-		return formatResult(fetch.Result{
+		return mcpfmt.Full(fetch.Result{
 			Response: protocol.Response{
 				Status:   o.Publish.Status,
 				Metadata: o.Publish.Metadata,
@@ -971,7 +917,7 @@ func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(fmt.Sprintf("archive failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(formatResult(result, "version")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version")), nil
 }
 
 func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -1023,7 +969,7 @@ func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("append failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(formatResult(result, "version", "modified", "server-version")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version")), nil
 }
 
 func (h *handler) markDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -1052,7 +998,7 @@ func (h *handler) markDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("discover failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(formatResult(result, "version", "modified")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified")), nil
 }
 
 func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -1119,7 +1065,7 @@ func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.
 			lastErr = fmt.Sprintf("%s: hash mismatch (got %s)", m.Server, got)
 			continue
 		}
-		return mcp.NewToolResultText(formatResult(result, "version", "modified", "content-hash")), nil
+		return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "content-hash")), nil
 	}
 
 	return mcp.NewToolResultError(fmt.Sprintf("could not resolve hash from any server: %s", lastErr)), nil
@@ -1542,6 +1488,6 @@ func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest)
 	var b strings.Builder
 	fmt.Fprintf(&b, "Published graph (%d nodes, %d edges) to mark://%s%s\n",
 		h.graphStore.NodeCount(), h.graphStore.EdgeCount(), host, path)
-	b.WriteString(formatResult(result, "version", "modified", "server-version"))
+	b.WriteString(mcpfmt.Full(result, "version", "modified", "server-version"))
 	return mcp.NewToolResultText(b.String()), nil
 }
