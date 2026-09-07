@@ -129,7 +129,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 		return errRes, nil
 	}
 	meta := publisherMeta(req.GetArguments(), claims)
-	narrowing := g.narrowingNote(worldName, path, expectedVersion, meta)
+	narrowing := g.narrowingNote(ctx, worldName, path, expectedVersion, meta)
 	switch onConflict {
 	case "fail":
 		// The world's conflict status is forwarded verbatim.
@@ -377,12 +377,20 @@ var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkArchive
 // narrowingNote is the warn-only metadata gate: what the publish drops from
 // the current version. Best effort by design: a failed pre-read must neither
 // block nor clutter the write, so it yields no note.
-func (g *mcpGateway) narrowingNote(worldName, path string, expectedVersion int, meta map[string]string) string {
+func (g *mcpGateway) narrowingNote(ctx context.Context, worldName, path string, expectedVersion int, meta map[string]string) string {
 	if expectedVersion == 0 {
 		return ""
 	}
-	current, err := g.dispatcher.Fetch(worldName, path, "")
-	if err != nil || current.Response.Status != protocol.StatusOK {
+	ctx, cancel := metaguard.PreReadContext(ctx)
+	defer cancel()
+	current, err := g.dispatcher.FetchContext(ctx, worldName, path, "")
+	if err != nil {
+		g.log.Warn("publish metadata check failed", "world", worldName, "path", path, "err", err)
+		return ""
+	}
+	if current.Response.Status != protocol.StatusOK {
+		// Not readable now (not-found, archived, unauthorized): the publish
+		// itself reports that; nothing to compare against.
 		return ""
 	}
 	return metaguard.Compare(current.Response.Metadata, meta).Note(current.Response.Metadata["version"])

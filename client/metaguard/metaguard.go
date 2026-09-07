@@ -4,10 +4,26 @@
 package metaguard
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
+	"unicode/utf8"
 )
+
+// preReadTimeout bounds the pre-read when the tool call carries no deadline,
+// so a slow server cannot stall a publish on a warn-only check.
+const preReadTimeout = 5 * time.Second
+
+// PreReadContext derives the context for the pre-read: the caller's deadline
+// when it has one, else a short one of its own.
+func PreReadContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, preReadTimeout)
+}
 
 // Server-owned or deliberately uncarried keys never count as dropped.
 var ignoredKeys = map[string]bool{
@@ -41,10 +57,7 @@ func Compare(current, incoming map[string]string) Narrowing {
 			continue
 		}
 		if _, ok := incoming[key]; !ok {
-			if len(value) > maxValue {
-				value = value[:maxValue] + "..."
-			}
-			n.Keys = append(n.Keys, key+"="+value)
+			n.Keys = append(n.Keys, key+"="+truncate(value))
 		}
 	}
 	sort.Strings(n.Tags)
@@ -67,6 +80,18 @@ func (n Narrowing) Note(version string) string {
 	}
 	return fmt.Sprintf("\nnote: this publish dropped %s carried by v%s; fetch with verbose: true and republish the complete metadata map to restore them\n",
 		strings.Join(parts, " and "), version)
+}
+
+// truncate cuts value at maxValue bytes on a rune boundary.
+func truncate(value string) string {
+	if len(value) <= maxValue {
+		return value
+	}
+	cut := maxValue
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut] + "..."
 }
 
 func splitTags(s string) map[string]bool {

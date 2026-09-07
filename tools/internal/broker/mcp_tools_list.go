@@ -187,7 +187,7 @@ func markLookupAllTool() mcp.Tool {
 func markPublishTool() mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
-			"Publish or update a document (markdown body). expected_version: version from prior fetch, 0 to create. On conflict, default on_conflict=merge returns merged candidate body (git-style markers where both sides changed): review, republish at returned publish-at-version. Metadata replaces the current map; a note lists dropped tags or keys. "+mcpURLHint,
+			"Publish or update a document (markdown body); expected_version from prior fetch, 0 to create; metadata replaces the current map, a note lists dropped tags or keys. On conflict the default on_conflict=merge returns a merged candidate body (git-style markers where both sides changed) to review and republish at publish-at-version. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),

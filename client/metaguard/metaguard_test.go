@@ -3,6 +3,7 @@ package metaguard
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestCompareReportsDroppedTagsAndKeys(t *testing.T) {
@@ -41,6 +42,17 @@ func TestCompareNothingDropped(t *testing.T) {
 	}
 	if n := Compare(nil, map[string]string{"tags": "a"}); !n.Empty() {
 		t.Fatalf("nil current narrowed: %+v", n)
+	}
+}
+
+func TestTruncateKeepsValidUTF8(t *testing.T) {
+	value := strings.Repeat("a", 79) + "€"
+	n := Compare(map[string]string{"source": value}, map[string]string{})
+	if got := n.Keys[0]; got != "source="+strings.Repeat("a", 79)+"..." || !utf8.ValidString(got) {
+		t.Fatalf("truncated value = %q", got)
+	}
+	if n := Compare(map[string]string{"source": strings.Repeat("a", 80)}, map[string]string{}); n.Keys[0] != "source="+strings.Repeat("a", 80) {
+		t.Fatalf("value at the cap was truncated: %q", n.Keys[0])
 	}
 }
 

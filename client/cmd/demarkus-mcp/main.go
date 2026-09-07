@@ -400,7 +400,7 @@ func markLookupTool(host string) mcp.Tool {
 func markPublishTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
-			"Publish or update a document (markdown body). expected_version: version from prior fetch, 0 to create. On conflict, default on_conflict=merge returns merged candidate body (git-style markers where both sides changed): review, republish at returned publish-at-version. Metadata replaces the current map; a note lists dropped tags or keys. Requires -token. "+urlHint(host),
+			"Publish or update a document (markdown body); expected_version from prior fetch, 0 to create; metadata replaces the current map, a note lists dropped tags or keys. On conflict the default on_conflict=merge returns a merged candidate body (git-style markers where both sides changed) to review and republish at publish-at-version; requires -token. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -769,7 +769,7 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		onConflict = "merge"
 	}
 	meta := publisherMeta(ctx, req.GetArguments())
-	narrowing := h.narrowingNote(host, path, token, expectedVersion, meta)
+	narrowing := h.narrowingNote(ctx, host, path, token, expectedVersion, meta)
 	switch onConflict {
 	case "fail":
 		// fall through to plain publish
@@ -800,12 +800,20 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 // narrowingNote is the warn-only metadata gate: what the publish drops from
 // the current version. Best effort by design: a failed pre-read must neither
 // block nor clutter the write, so it yields no note.
-func (h *handler) narrowingNote(host, path, token string, expectedVersion int, meta map[string]string) string {
+func (h *handler) narrowingNote(ctx context.Context, host, path, token string, expectedVersion int, meta map[string]string) string {
 	if expectedVersion == 0 {
 		return ""
 	}
-	current, err := h.client.Fetch(host, path, token)
-	if err != nil || current.Response.Status != protocol.StatusOK {
+	ctx, cancel := metaguard.PreReadContext(ctx)
+	defer cancel()
+	current, err := h.client.FetchContext(ctx, host, path, token)
+	if err != nil {
+		log.Printf("warning: publish metadata check mark://%s%s: %v", host, path, err)
+		return ""
+	}
+	if current.Response.Status != protocol.StatusOK {
+		// Not readable now (not-found, archived, unauthorized): the publish
+		// itself reports that; nothing to compare against.
 		return ""
 	}
 	return metaguard.Compare(current.Response.Metadata, meta).Note(current.Response.Metadata["version"])
