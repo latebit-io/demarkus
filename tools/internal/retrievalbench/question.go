@@ -5,6 +5,7 @@
 package retrievalbench
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -62,7 +63,9 @@ func LoadQuestionSet(path string) (QuestionSet, error) {
 // ParseQuestionSet decodes and validates fixture JSON.
 func ParseQuestionSet(raw []byte) (QuestionSet, error) {
 	var set QuestionSet
-	if err := json.Unmarshal(raw, &set); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&set); err != nil {
 		return QuestionSet{}, fmt.Errorf("parse questions: %w", err)
 	}
 	if err := set.Validate(); err != nil {

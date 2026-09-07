@@ -37,6 +37,10 @@ func TestValidateRejects(t *testing.T) {
 		{"path with anchor", strings.Replace(base, `"/a.md"`, `"/a.md#sec"`, 1), "bare absolute path"},
 		{"relative scope", strings.Replace(base, `"scope":"/"`, `"scope":"docs"`, 1), "start and end with /"},
 		{"missing query", strings.Replace(base, `"query":"x"`, `"query":""`, 1), "missing query"},
+		{"missing id", strings.Replace(base, `"id":"a"`, `"id":""`, 1), "missing id"},
+		{"missing question", strings.Replace(base, `"question":"y"`, `"question":""`, 1), "missing question"},
+		{"no questions", `{"scope":"/","questions":[]}`, "no questions"},
+		{"unknown field", strings.Replace(base, `"expected_anchor"`, `"expected_ancher"`, 1), "unknown field"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

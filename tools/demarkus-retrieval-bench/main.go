@@ -1,13 +1,6 @@
-// demarkus-retrieval-bench runs a question set against a demarkus endpoint
-// through the same MCP tools an agent uses and reports tool calls, result
-// tokens (o200k_base), hit rate, and elapsed time per question. Each
-// question runs in a fresh demarkus-mcp process so session dedup cannot
-// leak savings between questions.
-//
-// Usage:
-//
-//	DEMARKUS_AUTH=... demarkus-retrieval-bench -host mark://soul.demarkus.io -json baseline.json
-//	demarkus-retrieval-bench -host mark://localhost:6309 -insecure -mcp-bin ../client/bin/demarkus-mcp
+// demarkus-retrieval-bench scores a question set through the MCP tools an
+// agent uses and reports calls, result tokens, hit rate, and elapsed time.
+// Each question gets a fresh demarkus-mcp process so session dedup cannot leak.
 package main
 
 import (
@@ -72,16 +65,15 @@ func main() {
 		Counter:  counter,
 		Endpoint: *host,
 		Log:      os.Stderr,
+		Timeout:  *timeout,
 		Open: func(ctx context.Context) (retrievalbench.Session, error) {
-			ctx, cancel := context.WithTimeout(ctx, *timeout)
-			defer cancel()
 			return retrievalbench.OpenStdioSession(ctx, retrievalbench.StdioConfig{Command: *mcpBin, Args: args, Env: env})
 		},
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	report, err := retrievalbench.Run(ctx, cfg, set)
+	report, err := retrievalbench.Run(ctx, &cfg, set)
 	if err != nil {
 		fail(err)
 	}
@@ -96,6 +88,9 @@ func main() {
 		if err := retrievalbench.WriteJSON(*jsonOut, &report); err != nil {
 			fail(err)
 		}
+	}
+	if failed := report.Failed(); failed > 0 {
+		fail(fmt.Errorf("%d question(s) failed; see the error column", failed))
 	}
 }
 

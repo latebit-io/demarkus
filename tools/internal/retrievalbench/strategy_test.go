@@ -152,3 +152,17 @@ func TestLookupFetch(t *testing.T) {
 		})
 	}
 }
+
+func TestStrategyByNameRejectsBudgets(t *testing.T) {
+	for _, tt := range []struct{ limit, fetches int }{{0, 5}, {10, 0}, {-1, -1}} {
+		if _, err := StrategyByName("lookup-fetch", "/", tt.limit, tt.fetches); err == nil {
+			t.Fatalf("limit=%d fetches=%d accepted", tt.limit, tt.fetches)
+		}
+	}
+	if _, err := StrategyByName("lookup-fetch", "/", 10, 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StrategyByName("nope", "/", 10, 5); err == nil {
+		t.Fatal("unknown strategy accepted")
+	}
+}

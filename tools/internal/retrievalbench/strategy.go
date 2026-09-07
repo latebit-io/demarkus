@@ -66,9 +66,8 @@ func (r *Recorder) Call(ctx context.Context, name string, args map[string]any) (
 func (r *Recorder) Calls() []Call { return r.calls }
 
 // LookupFetch is the pre-search agent behavior: one catalog lookup, then
-// fetch rows in rank order until the target is in hand or MaxFetches is
-// spent. An outline answer for the target costs one more fetch, of the
-// section when the question names one and of the full body otherwise.
+// fetch rows in rank order until the target is in hand or MaxFetches is spent.
+// An outline for the target costs one more fetch: section if named, else body.
 type LookupFetch struct {
 	Scope       string
 	LookupLimit int
@@ -148,6 +147,9 @@ func rank(rows []string, path string) int {
 func StrategyByName(name, scope string, lookupLimit, maxFetches int) (Strategy, error) {
 	switch name {
 	case "lookup-fetch":
+		if lookupLimit <= 0 || maxFetches <= 0 {
+			return nil, fmt.Errorf("lookup limit %d and max fetches %d must be positive", lookupLimit, maxFetches)
+		}
 		return LookupFetch{Scope: scope, LookupLimit: lookupLimit, MaxFetches: maxFetches}, nil
 	default:
 		return nil, fmt.Errorf("unknown strategy %q", name)

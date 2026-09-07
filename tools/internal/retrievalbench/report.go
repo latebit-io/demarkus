@@ -3,6 +3,7 @@ package retrievalbench
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -23,6 +24,8 @@ type QuestionResult struct {
 	LookupRank      int      `json:"lookup_rank"`
 	ElapsedMS       float64  `json:"elapsed_ms"`
 	Calls           []Call   `json:"calls"`
+	// Error is set when the strategy failed; the question counts as a miss.
+	Error string `json:"error,omitempty"`
 }
 
 // Summary aggregates one category (or "all").
@@ -109,7 +112,7 @@ func summarize(name string, rs []*QuestionResult) Summary {
 
 // percentile uses nearest-rank on an ascending slice.
 func percentile(sorted []int, p float64) int {
-	idx := int(p*float64(len(sorted))+0.999999) - 1
+	idx := int(math.Ceil(p*float64(len(sorted)))) - 1
 	idx = max(0, min(idx, len(sorted)-1))
 	return sorted[idx]
 }
@@ -126,8 +129,8 @@ func (r *Report) Markdown() string {
 			s.Category, s.Questions, s.Hits, s.HitRate*100, s.MeanCallsToHit, s.MeanCalls,
 			s.MeanTokens, s.MedianTokens, s.P90Tokens, s.MeanElapsedMS)
 	}
-	b.WriteString("\n| ID | Category | Query | Target | Hit | Rank | Calls | Tokens | Elapsed ms |\n")
-	b.WriteString("|---|---|---|---|---|---:|---:|---:|---:|\n")
+	b.WriteString("\n| ID | Category | Query | Target | Hit | Rank | Calls | Tokens | Elapsed ms | Error |\n")
+	b.WriteString("|---|---|---|---|---|---:|---:|---:|---:|---|\n")
 	for i := range r.Questions {
 		q := &r.Questions[i]
 		target := q.ExpectedPath
@@ -138,10 +141,26 @@ func (r *Report) Markdown() string {
 		if q.Hit {
 			hit = "hit"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %d | %d | %d | %.0f |\n",
-			q.ID, q.Category, q.Query, target, hit, q.LookupRank, q.CallsTotal, q.Tokens, q.ElapsedMS)
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %d | %d | %d | %.0f | %s |\n",
+			cell(q.ID), q.Category, cell(q.Query), cell(target), hit, q.LookupRank, q.CallsTotal, q.Tokens, q.ElapsedMS, cell(q.Error))
 	}
 	return b.String()
+}
+
+// Failed counts questions whose strategy errored.
+func (r *Report) Failed() int {
+	n := 0
+	for i := range r.Questions {
+		if r.Questions[i].Error != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// cell keeps fixture text from splitting a Markdown table row.
+func cell(s string) string {
+	return strings.ReplaceAll(s, "|", `\|`)
 }
 
 // WriteJSON stores the report as indented JSON.

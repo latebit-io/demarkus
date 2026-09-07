@@ -38,12 +38,23 @@ func TestPercentile(t *testing.T) {
 	}
 }
 
+func TestMarkdownEscapesPipes(t *testing.T) {
+	r := Report{Questions: []QuestionResult{{ID: "x", Category: CategoryBody, Query: "a|b", ExpectedPath: "/p.md", Error: "c|d"}}}
+	r.Summaries = Summarize(r.Questions)
+	if md := r.Markdown(); !strings.Contains(md, `| a\|b | /p.md | miss |`) || !strings.Contains(md, `| c\|d |`) {
+		t.Fatalf("pipes not escaped:\n%s", md)
+	}
+	if r.Failed() != 1 {
+		t.Fatalf("Failed() = %d", r.Failed())
+	}
+}
+
 func TestMarkdown(t *testing.T) {
 	r := Report{Strategy: "lookup-fetch", Endpoint: "mark://x", Scope: "/", Tokenizer: "o200k_base",
 		Questions: []QuestionResult{{ID: "b1", Category: CategoryBody, Query: "q", ExpectedPath: "/a.md", ExpectedAnchor: "s", Hit: true, LookupRank: 2, CallsTotal: 3, Tokens: 42}}}
 	r.Summaries = Summarize(r.Questions)
 	md := r.Markdown()
-	for _, want := range []string{"| body | 1 | 1 | 100% |", "| all | 1 | 1 |", "| b1 | body | q | /a.md#s | hit | 2 | 3 | 42 |"} {
+	for _, want := range []string{"| body | 1 | 1 | 100% |", "| all | 1 | 1 |", "| b1 | body | q | /a.md#s | hit | 2 | 3 | 42 | 0 |  |"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
 		}
