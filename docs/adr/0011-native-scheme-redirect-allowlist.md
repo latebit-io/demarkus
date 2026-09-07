@@ -1,6 +1,6 @@
 # ADR 0011: Allowlisted private-use scheme redirects for MCP hosts
 
-Status: proposed (2026-09-06).
+Status: accepted (2026-09-07). Shipped in PR #422.
 
 ## Context
 
