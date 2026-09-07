@@ -1842,8 +1842,9 @@ func TestHandlerMarkPublish_OnConflictFail_OptOut(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected tool error: %v", result.Content)
 	}
-	if fetchCalls != 0 {
-		t.Errorf("fail mode must not fetch base/current; saw %d fetches", fetchCalls)
+	// One fetch: the narrowing gate's pre-read. No base/current merge reads.
+	if fetchCalls != 1 {
+		t.Errorf("fail mode must fetch only for the narrowing gate; saw %d fetches", fetchCalls)
 	}
 	text := result.Content[0].(mcp.TextContent).Text
 	if !strings.Contains(text, "status: conflict") {

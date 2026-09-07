@@ -71,7 +71,7 @@ func mcpTools() []mcp.Tool {
 func markFetchTool() mcp.Tool {
 	return mcp.NewTool("mark_fetch",
 		mcp.WithDescription(
-			"Fetch a document: status, version, title, markdown body. Over 8KB returns outline (headings with #anchors); url#<anchor> fetches one section, force=true the full body. Unchanged re-fetch returns short notice. "+mcpURLHint,
+			"Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -187,7 +187,7 @@ func markLookupAllTool() mcp.Tool {
 func markPublishTool() mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
-			"Publish or update a document (markdown body). expected_version: version from prior fetch, 0 to create. On conflict, default on_conflict=merge returns merged candidate body (git-style markers where both sides changed): review, republish at returned publish-at-version. "+mcpURLHint,
+			"Publish or update a document (markdown body). expected_version: version from prior fetch, 0 to create. On conflict, default on_conflict=merge returns merged candidate body (git-style markers where both sides changed): review, republish at returned publish-at-version. Metadata replaces the current map; a note lists dropped tags or keys. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),

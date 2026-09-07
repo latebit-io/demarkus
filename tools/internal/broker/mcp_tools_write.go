@@ -9,6 +9,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/merge"
+	"github.com/latebit-io/demarkus/client/metaguard"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -128,19 +129,20 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 		return errRes, nil
 	}
 	meta := publisherMeta(req.GetArguments(), claims)
+	narrowing := g.narrowingNote(worldName, path, expectedVersion, meta)
 	switch onConflict {
 	case "fail":
-		// Pass through to the dispatcher; the world returns
-		// `conflict` status when expectedVersion doesn't match,
-		// and we forward that verbatim. Same shape the
-		// pre-Slice-6 surface exposed.
+		// The world's conflict status is forwarded verbatim.
 		result, perr := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
 			return g.dispatcher.Publish(worldName, path, body, token, expectedVersion, meta)
 		})
 		if perr != nil {
 			return g.toolErrorFor("publish", worldName, perr), nil
 		}
-		return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version")), nil
+		if result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated {
+			narrowing = ""
+		}
+		return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version") + narrowing), nil
 	case "merge":
 		adapter := &brokerMergeAdapter{
 			g:         g,
@@ -151,7 +153,10 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 		if mErr != nil {
 			return g.toolErrorFor("publish", worldName, mErr), nil
 		}
-		return mcp.NewToolResultText(formatMergeOutcome(&outcome)), nil
+		if outcome.Status != merge.OutcomeOK {
+			narrowing = ""
+		}
+		return mcp.NewToolResultText(formatMergeOutcome(&outcome) + narrowing), nil
 	default:
 		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"merge\" or \"fail\"", onConflict)), nil
 	}
@@ -368,3 +373,17 @@ func (g *mcpGateway) handleMarkArchive(ctx context.Context, req mcp.CallToolRequ
 var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkPublish
 var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkAppend
 var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkArchive
+
+// narrowingNote is the warn-only metadata gate: what the publish drops from
+// the current version. Best effort by design: a failed pre-read must neither
+// block nor clutter the write, so it yields no note.
+func (g *mcpGateway) narrowingNote(worldName, path string, expectedVersion int, meta map[string]string) string {
+	if expectedVersion == 0 {
+		return ""
+	}
+	current, err := g.dispatcher.Fetch(worldName, path, "")
+	if err != nil || current.Response.Status != protocol.StatusOK {
+		return ""
+	}
+	return metaguard.Compare(current.Response.Metadata, meta).Note(current.Response.Metadata["version"])
+}

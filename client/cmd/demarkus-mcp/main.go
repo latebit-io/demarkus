@@ -27,6 +27,7 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/merge"
+	"github.com/latebit-io/demarkus/client/metaguard"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -303,7 +304,7 @@ func urlDesc(host string) string {
 func markFetchTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_fetch",
 		mcp.WithDescription(
-			"Fetch a document: status, version, title, markdown body. Over 8KB returns outline (headings with #anchors); url#<anchor> fetches one section, force=true the full body. Unchanged re-fetch returns short notice. "+urlHint(host),
+			"Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -399,7 +400,7 @@ func markLookupTool(host string) mcp.Tool {
 func markPublishTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
-			"Publish or update a document (markdown body). expected_version: version from prior fetch, 0 to create. On conflict, default on_conflict=merge returns merged candidate body (git-style markers where both sides changed): review, republish at returned publish-at-version. Requires -token. "+urlHint(host),
+			"Publish or update a document (markdown body). expected_version: version from prior fetch, 0 to create. On conflict, default on_conflict=merge returns merged candidate body (git-style markers where both sides changed): review, republish at returned publish-at-version. Metadata replaces the current map; a note lists dropped tags or keys. Requires -token. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -767,26 +768,47 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 	if onConflict == "" {
 		onConflict = "merge"
 	}
+	meta := publisherMeta(ctx, req.GetArguments())
+	narrowing := h.narrowingNote(host, path, token, expectedVersion, meta)
 	switch onConflict {
 	case "fail":
 		// fall through to plain publish
 	case "merge":
 		adapter := &mergeClientAdapter{inner: h.client, host: host, token: token}
-		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, publisherMeta(ctx, req.GetArguments()))
+		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, meta)
 		if mErr != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", mErr)), nil
 		}
-		return mcp.NewToolResultText(formatOutcome(&outcome)), nil
+		if outcome.Status != merge.OutcomeOK {
+			narrowing = ""
+		}
+		return mcp.NewToolResultText(formatOutcome(&outcome) + narrowing), nil
 	default:
 		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"fail\" or \"merge\"", onConflict)), nil
 	}
 
-	result, err := h.client.Publish(host, path, body, token, expectedVersion, publisherMeta(ctx, req.GetArguments()))
+	result, err := h.client.Publish(host, path, body, token, expectedVersion, meta)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}
+	if result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated {
+		narrowing = ""
+	}
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version") + narrowing), nil
+}
 
-	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version")), nil
+// narrowingNote is the warn-only metadata gate: what the publish drops from
+// the current version. Best effort by design: a failed pre-read must neither
+// block nor clutter the write, so it yields no note.
+func (h *handler) narrowingNote(host, path, token string, expectedVersion int, meta map[string]string) string {
+	if expectedVersion == 0 {
+		return ""
+	}
+	current, err := h.client.Fetch(host, path, token)
+	if err != nil || current.Response.Status != protocol.StatusOK {
+		return ""
+	}
+	return metaguard.Compare(current.Response.Metadata, meta).Note(current.Response.Metadata["version"])
 }
 
 // mergeClientAdapter exposes the markClient interface as a merge.Client. It

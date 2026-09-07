@@ -756,9 +756,13 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storage
 	token := req.Metadata["auth"]
 	rows := make([]catalog.Result, 0, len(results))
 	for i := range results {
-		// Any authorization error denies the row; the reason is not the
-		// requester's to see.
-		if ok, _ := h.checkReadAuth(results[i].Path, token); !ok {
+		// An authorization error denies the row; the reason is logged, not
+		// shown to the requester.
+		ok, authErr := h.checkReadAuth(results[i].Path, token)
+		if authErr != nil {
+			h.logger().Warn("lookup read authorization failed", "path", sanitize(results[i].Path), "error", authErr)
+		}
+		if !ok {
 			continue
 		}
 		rows = append(rows, results[i])

@@ -1,7 +1,5 @@
-// Package mcpfmt renders a wire response as the text an MCP tool returns.
-// demarkus-mcp and the broker gateway both call it, which is what keeps the
-// two surfaces byte-identical. A lean envelope is the default; verbose
-// restores every metadata key.
+// Package mcpfmt renders a wire response as MCP tool text. demarkus-mcp and
+// the broker share it, which keeps the two surfaces byte-identical.
 package mcpfmt
 
 import (

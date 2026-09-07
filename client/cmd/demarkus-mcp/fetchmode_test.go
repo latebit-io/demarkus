@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -401,5 +402,49 @@ func TestHandlerMarkLookup_TagCapAndVerbose(t *testing.T) {
 	verbose := call(map[string]any{"url": "mark://example.com/", "query": "x", "verbose": true})
 	if verbose != "status: ok\nmatches: 1\n\n"+table {
 		t.Fatalf("verbose lookup:\n%s", verbose)
+	}
+}
+
+func TestHandlerMarkPublish_NarrowingNote(t *testing.T) {
+	// A fresh stub per publish: the stub stores each publish as the new
+	// current version, which would otherwise conflict the next case.
+	publish := func(version float64, meta map[string]any, onConflict string) string {
+		t.Helper()
+		current := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK,
+			Metadata: map[string]string{"version": "3", "etag": "e", "tags": "a,b,c", "type": "Note", "title": "T"}, Body: "x"}}
+		sc := &stubClient{
+			published: map[string]fetch.Result{
+				"example.com:6309/doc.md":                            current,
+				"example.com:6309" + index.VersionPath("/doc.md", 3): current,
+			},
+			publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "4"}}}, nil
+			},
+		}
+		if version == 0 {
+			sc.published = nil
+		}
+		h := &handler{client: sc, token: "test"}
+		result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+			"url": "mark://example.com/doc.md", "body": "y", "expected_version": version,
+			"metadata": meta, "on_conflict": onConflict,
+		}))
+		if err != nil || result.IsError {
+			t.Fatalf("publish failed: %v %v", err, result)
+		}
+		return result.Content[0].(mcp.TextContent).Text
+	}
+	for _, mode := range []string{"fail", "merge"} {
+		narrowed := publish(3, map[string]any{"tags": "a", "title": "T"}, mode)
+		if !strings.HasPrefix(narrowed, "status: ok\nversion: 4\n") ||
+			!strings.Contains(narrowed, "\nnote: this publish dropped tags b, c and keys type=Note carried by v3;") {
+			t.Errorf("%s: narrowing note missing:\n%s", mode, narrowed)
+		}
+	}
+	if full := publish(3, map[string]any{"tags": "c,b,a", "title": "T", "type": "Note"}, "fail"); strings.Contains(full, "note:") {
+		t.Errorf("complete metadata noted:\n%s", full)
+	}
+	if created := publish(0, map[string]any{"tags": "a"}, "fail"); strings.Contains(created, "note:") {
+		t.Errorf("create noted:\n%s", created)
 	}
 }

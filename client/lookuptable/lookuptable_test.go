@@ -52,8 +52,8 @@ func TestSplitLocation(t *testing.T) {
 }
 
 func TestEscapeRoundTrip(t *testing.T) {
-	in := "a|b [c] (d) *e* _f_ `g` ~h~ #i \\j\nk"
-	if got := Unescape(Escape(in)); got != "a|b [c] (d) *e* _f_ `g` ~h~ #i \\j k" {
+	in := "a|b [c] (d) *e* _f_ `g` ~h~ #i \\j\nk\r\nl"
+	if got := Unescape(Escape(in)); got != "a|b [c] (d) *e* _f_ `g` ~h~ #i \\j k l" {
 		t.Fatalf("round trip = %q", got)
 	}
 }

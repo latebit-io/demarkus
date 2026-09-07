@@ -398,8 +398,8 @@ func TestHandleMarkPublishMergeUsesTokenOnlyForPublish(t *testing.T) {
 	if len(publishTokens) != 1 {
 		t.Errorf("publish dispatched %d times, want 1", len(publishTokens))
 	}
-	if len(fetchTokens) != 2 {
-		t.Errorf("fetch dispatched %d times, want 2 (base + current)", len(fetchTokens))
+	if len(fetchTokens) != 3 {
+		t.Errorf("fetch dispatched %d times, want 3 (narrowing gate + base + current)", len(fetchTokens))
 	}
 	if len(publishTokens) == 1 && publishTokens[0] == "" {
 		t.Error("publish dispatched without a publish token")
@@ -1055,5 +1055,35 @@ func TestMCPGatewayMarkPublishEndToEnd(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("end-to-end text missing %q\nfull:\n%s", want, text)
 		}
+	}
+}
+
+func TestHandleMarkPublishNarrowingNote(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		published: map[string]fetch.Result{
+			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK,
+				Metadata: map[string]string{"version": "3", "tags": "a,b", "rel-related": "/x.md"}, Body: "x"}},
+		},
+		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "4"}}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	publish := func(meta map[string]any) string {
+		t.Helper()
+		res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+			"url": "mark://team-a/foo.md", "body": "y", "expected_version": float64(3), "metadata": meta,
+		}))
+		if err != nil || res.IsError {
+			t.Fatalf("handleMarkPublish: %v %+v", err, res)
+		}
+		return toolResultText(t, res)
+	}
+	if text := publish(map[string]any{"tags": "a"}); !strings.Contains(text, "note: this publish dropped tags b and keys rel-related=/x.md carried by v3") {
+		t.Errorf("narrowing note missing:\n%s", text)
+	}
+	if text := publish(map[string]any{"tags": "b,a", "rel-related": "/x.md"}); strings.Contains(text, "note:") {
+		t.Errorf("complete metadata noted:\n%s", text)
 	}
 }
