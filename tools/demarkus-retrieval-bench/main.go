@@ -26,7 +26,7 @@ func main() {
 	strategy := flag.String("strategy", "lookup-fetch", "retrieval strategy: lookup-fetch")
 	lookupLimit := flag.Int("limit", 10, "mark_lookup limit")
 	maxFetches := flag.Int("max-fetches", 5, "fetch budget per question")
-	timeout := flag.Duration("timeout", 60*time.Second, "per-question timeout")
+	timeout := flag.Duration("timeout", 60*time.Second, "per-question timeout covering session open and every tool call; 0 means unbounded")
 	jsonOut := flag.String("json", "", "write the JSON report here")
 	mdOut := flag.String("markdown", "", "write the markdown report here (also printed)")
 	flag.Usage = func() {
@@ -37,6 +37,10 @@ func main() {
 	if *host == "" {
 		fmt.Fprintln(os.Stderr, "error: -host is required")
 		flag.Usage()
+		os.Exit(2)
+	}
+	if *timeout < 0 {
+		fmt.Fprintf(os.Stderr, "error: -timeout %s must be zero or positive\n", *timeout)
 		os.Exit(2)
 	}
 

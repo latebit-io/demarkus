@@ -8,7 +8,9 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -67,6 +69,9 @@ func ParseQuestionSet(raw []byte) (QuestionSet, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&set); err != nil {
 		return QuestionSet{}, fmt.Errorf("parse questions: %w", err)
+	}
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		return QuestionSet{}, fmt.Errorf("parse questions: trailing content after the fixture object")
 	}
 	if err := set.Validate(); err != nil {
 		return QuestionSet{}, err

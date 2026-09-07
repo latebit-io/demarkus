@@ -22,7 +22,8 @@ func (flakyStrategy) Name() string { return "flaky" }
 
 func (s flakyStrategy) Run(ctx context.Context, rec *Recorder, q *Question) (Outcome, error) {
 	if q.ID == s.failID {
-		return Outcome{}, errors.New("boom")
+		// Hit alongside an error must not survive into the report.
+		return Outcome{Hit: true, CallsToEvidence: 1}, errors.New("boom")
 	}
 	if _, err := rec.Call(ctx, "mark_lookup", map[string]any{"url": "/"}); err != nil {
 		return Outcome{}, err
@@ -56,7 +57,7 @@ func TestRunRecordsQuestionFailureAndContinues(t *testing.T) {
 	if len(report.Questions) != 3 || report.Failed() != 1 {
 		t.Fatalf("questions=%d failed=%d", len(report.Questions), report.Failed())
 	}
-	if b := report.Questions[1]; b.Error != "boom" || b.Hit {
+	if b := report.Questions[1]; b.Error != "boom" || b.Hit || b.CallsToEvidence != 0 {
 		t.Fatalf("failed question recorded as %+v", b)
 	}
 	if all := report.Summaries[len(report.Summaries)-1]; all.Hits != 2 || all.Questions != 3 {

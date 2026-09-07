@@ -99,6 +99,8 @@ func runOne(ctx context.Context, cfg *Config, q *Question) (QuestionResult, erro
 	}
 	if runErr != nil {
 		result.Error = runErr.Error()
+		result.Hit = false
+		result.CallsToEvidence = 0
 	}
 	for _, c := range calls {
 		result.Tokens += c.Tokens

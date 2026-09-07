@@ -41,6 +41,7 @@ func TestValidateRejects(t *testing.T) {
 		{"missing question", strings.Replace(base, `"question":"y"`, `"question":""`, 1), "missing question"},
 		{"no questions", `{"scope":"/","questions":[]}`, "no questions"},
 		{"unknown field", strings.Replace(base, `"expected_anchor"`, `"expected_ancher"`, 1), "unknown field"},
+		{"trailing value", base + ` {"scope":"/"}`, "trailing content"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

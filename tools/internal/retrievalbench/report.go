@@ -158,8 +158,9 @@ func (r *Report) Failed() int {
 	return n
 }
 
-// cell keeps fixture text from splitting a Markdown table row.
+// cell keeps fixture or error text from splitting a Markdown table row.
 func cell(s string) string {
+	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
 	return strings.ReplaceAll(s, "|", `\|`)
 }
 

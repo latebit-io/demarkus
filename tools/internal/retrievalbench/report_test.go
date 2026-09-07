@@ -39,10 +39,10 @@ func TestPercentile(t *testing.T) {
 }
 
 func TestMarkdownEscapesPipes(t *testing.T) {
-	r := Report{Questions: []QuestionResult{{ID: "x", Category: CategoryBody, Query: "a|b", ExpectedPath: "/p.md", Error: "c|d"}}}
+	r := Report{Questions: []QuestionResult{{ID: "x", Category: CategoryBody, Query: "a|b", ExpectedPath: "/p.md", Error: "c|d\r\nline two\nthree"}}}
 	r.Summaries = Summarize(r.Questions)
-	if md := r.Markdown(); !strings.Contains(md, `| a\|b | /p.md | miss |`) || !strings.Contains(md, `| c\|d |`) {
-		t.Fatalf("pipes not escaped:\n%s", md)
+	if md := r.Markdown(); !strings.Contains(md, `| a\|b | /p.md | miss |`) || !strings.Contains(md, `| c\|d line two three |`) {
+		t.Fatalf("cells not normalized:\n%s", md)
 	}
 	if r.Failed() != 1 {
 		t.Fatalf("Failed() = %d", r.Failed())
