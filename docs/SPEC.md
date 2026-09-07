@@ -535,7 +535,7 @@ auth: <raw-token>\n
 - `query` (REQUIRED): the subject text. The server lowercases it and splits it on whitespace into terms. A document matches if any term matches its declared `tags` or its title. Matching is case-insensitive and term-based; the precise rule (exact tag membership, title substring) is implementation-defined but MUST be limited to `tags` and title. The query MUST be at least 2 characters; a missing, empty, or too-short query MUST return `bad-request`.
 - `filter` (OPTIONAL): a comma-separated list of `key=value` predicates applied **before** ranking. Each predicate matches a declared metadata value by exact equality, except the built-ins `modified-after` and `modified-before`, which compare an RFC 3339 timestamp (or date) against the document's modification time. A document MUST satisfy all predicates to be included. A malformed `filter` MUST return `bad-request`.
 - `limit` (OPTIONAL): the maximum number of results. Default **10**. Servers MUST impose a hard cap (RECOMMENDED **1000**).
-- `match` (OPTIONAL): `catalog` (default) or `body`. Selects catalog mode or body match. Any other value MUST return `bad-request`. A server that does not implement body match MUST ignore the key and answer in catalog mode.
+- `match` (OPTIONAL): `catalog` (default) or `body`. Selects catalog mode or body match. Any other value MUST return `bad-request`, whether or not the server implements body match. A server that does not implement body match MUST accept `body` and answer in catalog mode, echoing `match: catalog`; a server that predates the key answers in catalog mode with no echo.
 - `auth` (OPTIONAL): a token used to authorise results on read-auth-protected paths (see Read authorisation below).
 
 **Success response** (`ok`):
@@ -587,7 +587,7 @@ The response header echoes `match: body` and the table gains a fifth column:
 | /debugging.md#quic-udp-buffer-size-warning | 0.70 | Debugging › QUIC UDP Buffer Size Warning | debugging, gotchas | quic-go tries to increase the UDP receive buffer ... |
 ```
 
-`Path` is the document path followed by `#` and the section anchor; a bare-path section carries the document path alone. `Title` is the document title, a `›` separator, and the heading text; a bare-path row carries the document title alone. `Snippet` is one line of at most 240 bytes drawn from the section text with markup removed. In body mode `matches` counts section rows. The response MUST NOT include more of the body than the snippet.
+`Path` is the document path followed by `#` and the section anchor; a bare-path section carries the document path alone. `Title` is the document title, a `›` separator, and the heading text; a bare-path row carries the document title alone. `Snippet` is one line of at most 240 bytes drawn from the section text with markup removed; truncation MUST fall on a UTF-8 rune boundary so the snippet is valid UTF-8. In body mode `matches` counts section rows. The response MUST NOT include more of the body than the snippet.
 
 Servers that implement body match SHOULD list `lookup-match: catalog, body` under a `## Capabilities` heading in their agent manifest (`/.well-known/agent-manifest.md`, §11.8). The manifest is author-published and advisory; the `match` echo on the response is the authoritative signal.
 
@@ -638,7 +638,7 @@ The following status values are reserved for future use:
 | `query` | LOOKUP | String | Subject text matched against each document's `tags` and title. REQUIRED; minimum 2 characters. |
 | `filter` | LOOKUP | Comma-separated `key=value` | Predicates applied before ranking. Exact match on declared metadata, plus built-ins `modified-after` / `modified-before`. |
 | `limit` | LOOKUP | Decimal integer | Maximum number of results. Default 10; server-capped (RECOMMENDED 1000). |
-| `match` | LOOKUP | `catalog` or `body` | Catalog mode (default) or body match (§6.7). Unknown values are `bad-request`; servers without body match ignore the key. |
+| `match` | LOOKUP | `catalog` or `body` | Catalog mode (default) or body match (§6.7). Unknown values are `bad-request` on every server; a server without body match answers `body` in catalog mode. |
 | `page-size` | LIST | Decimal integer | Maximum entries in this page. Default and hard maximum 1000. |
 | `cursor` | LIST | Opaque string | Continuation from the preceding page of the same directory and archive mode. |
 | `include-archived` | LIST | `true` or `false` | Include archived documents and directories containing only archived documents. Default false. |

@@ -2,6 +2,7 @@
 package protocol
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -40,6 +41,11 @@ const (
 
 	// WellKnownManifestPath is the conventional path for agent manifest discovery.
 	WellKnownManifestPath = "/.well-known/agent-manifest.md"
+
+	// MatchCatalog is the LOOKUP match mode over tags and title (§6.7).
+	MatchCatalog = "catalog"
+	// MatchBody is the LOOKUP match mode over the section index of bodies.
+	MatchBody = "body"
 
 	// MaxMetaKeys is the maximum number of publisher metadata keys. Sized to
 	// hold the recognized OKF fields (type, title, description, resource, tags,
@@ -80,4 +86,17 @@ func IsValidMetaKey(k string) bool {
 // serialization: valid UTF-8 without carriage returns or newlines.
 func IsValidMetaValue(v string) bool {
 	return utf8.ValidString(v) && !strings.ContainsAny(v, "\r\n")
+}
+
+// ParseMatch validates a LOOKUP match value; empty means catalog. It is the
+// one rule server and clients apply, so a typo is rejected the same way
+// before and after the wire.
+func ParseMatch(match string) (string, error) {
+	switch match {
+	case "", MatchCatalog:
+		return MatchCatalog, nil
+	case MatchBody:
+		return MatchBody, nil
+	}
+	return "", fmt.Errorf("match must be %q or %q, got %q", MatchCatalog, MatchBody, match)
 }

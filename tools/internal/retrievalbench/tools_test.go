@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-func TestParseLookupPaths(t *testing.T) {
-	text := "status: ok\nmatches: 2\n\n# Lookup matches for \"x\" in /\n\n| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n| /a.md | 0.9 | A | a,b |\n| /docs/b.md | 0.5 | B | c |\n"
-	got := parseLookupPaths(text)
-	want := []string{"/a.md", "/docs/b.md"}
+func TestParseLookupRows(t *testing.T) {
+	text := "status: ok\nmatches: 2\n\n# Lookup matches for \"x\" in /\n\n| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n| /a.md | 0.9 | A | a,b |\n| /docs/b.md#intro | 0.5 | B | c |\n"
+	got := parseLookupRows(text)
+	want := []lookupRow{{Path: "/a.md"}, {Path: "/docs/b.md", Anchor: "intro"}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
-	if got := parseLookupPaths("status: ok\nmatches: 0\n"); len(got) != 0 {
+	if got := parseLookupRows("status: ok\nmatches: 0\n"); len(got) != 0 {
 		t.Fatalf("empty table parsed as %v", got)
 	}
 }

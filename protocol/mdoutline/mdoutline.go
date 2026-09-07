@@ -5,6 +5,7 @@
 package mdoutline
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ func Headings(body string) []Heading {
 	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
 
 	var hs []Heading
+	// The callback never returns an error, so Walk cannot either.
 	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -89,6 +91,7 @@ func Headings(body string) []Heading {
 // children (code spans, emphasis) the way GitHub does when slugging.
 func headingText(h *ast.Heading, src []byte) string {
 	var b strings.Builder
+	// The callback never returns an error, so Walk cannot either.
 	_ = ast.Walk(h, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -187,7 +190,7 @@ func countLines(span []byte) int {
 	if len(span) == 0 {
 		return 0
 	}
-	n := strings.Count(string(span), "\n")
+	n := bytes.Count(span, []byte{'\n'})
 	if span[len(span)-1] != '\n' {
 		n++
 	}

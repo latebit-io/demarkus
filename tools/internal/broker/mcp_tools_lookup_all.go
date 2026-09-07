@@ -244,7 +244,7 @@ func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch,
 		if err != nil || math.IsNaN(importance) || math.IsInf(importance, 0) || importance < 0 || importance > 1 {
 			return nil, fmt.Errorf("malformed LOOKUP response: invalid importance %q", cells[1])
 		}
-		matchPath, anchor, _ := strings.Cut(unescapeLookupCell(cells[0]), "#")
+		matchPath, anchor := splitLookupLocation(cells[0])
 		if !strings.HasPrefix(matchPath, "/") {
 			return nil, fmt.Errorf("malformed LOOKUP response: invalid path %q", matchPath)
 		}
@@ -268,6 +268,18 @@ func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch,
 		return nil, fmt.Errorf("malformed LOOKUP response: matches metadata does not match table")
 	}
 	return matches, nil
+}
+
+// splitLookupLocation separates a row's escaped path cell from the anchor
+// the server appended after escaping: the suffix past the first unescaped
+// '#'. A '#' inside the path itself arrives escaped and stays in the path.
+func splitLookupLocation(cell string) (path, anchor string) {
+	for i := 0; i < len(cell); i++ {
+		if cell[i] == '#' && !lookupCharEscaped(cell, i) {
+			return unescapeLookupCell(cell[:i]), cell[i+1:]
+		}
+	}
+	return unescapeLookupCell(cell), ""
 }
 
 func splitLookupTableRow(line string) ([]string, bool) {

@@ -114,7 +114,7 @@ func testBodyLimit(t *testing.T, b LookupBackend) {
 		t.Fatalf("uncapped rows = %d, want 4 (one per section)", len(all))
 	}
 	capped := mustLookup(t, b, "cherry", catalog.Options{Match: catalog.MatchBody, Max: 2})
-	if len(capped) != 2 || rowKey(&capped[0]) != rowKey(&all[0]) || rowKey(&capped[1]) != rowKey(&all[1]) {
+	if len(capped) != 2 || capped[0].Location() != all[0].Location() || capped[1].Location() != all[1].Location() {
 		t.Errorf("capped rows = %v, want the first two of %v", rowKeys(capped), rowKeys(all))
 	}
 }
@@ -168,18 +168,10 @@ func testBodyCatalogModeUnchanged(t *testing.T, b LookupBackend) {
 	}
 }
 
-// rowKey renders a body row as path#anchor, or the bare path.
-func rowKey(r *catalog.Result) string {
-	if r.Anchor == "" {
-		return r.Path
-	}
-	return r.Path + "#" + r.Anchor
-}
-
 func rowKeys(rs []catalog.Result) []string {
 	keys := make([]string, len(rs))
 	for i := range rs {
-		keys[i] = rowKey(&rs[i])
+		keys[i] = rs[i].Location()
 	}
 	return keys
 }

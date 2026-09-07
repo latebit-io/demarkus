@@ -142,14 +142,3 @@ func parseLookupRows(text string) []lookupRow {
 	}
 	return rows
 }
-
-// parseLookupPaths returns document paths from a mark_lookup table in rank
-// order, anchors dropped.
-func parseLookupPaths(text string) []string {
-	rows := parseLookupRows(text)
-	paths := make([]string, len(rows))
-	for i, r := range rows {
-		paths[i] = r.Path
-	}
-	return paths
-}

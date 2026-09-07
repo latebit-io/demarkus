@@ -373,7 +373,7 @@ func markVersionsTool(host string) mcp.Tool {
 func markLookupTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_lookup",
 		mcp.WithDescription(
-			"Catalog lookup by subject: matches tags and title (not full text) unless match=body, which also matches section text and returns path#anchor rows with a snippet; importance-ranked table, no bodies. Then mark_explore or mark_fetch url#<anchor>. "+urlHint(host),
+			"Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet), no bodies. Then mark_explore or mark_fetch url#<anchor>. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -390,7 +390,7 @@ func markLookupTool(host string) mcp.Tool {
 			mcp.Description("max results (default 10, cap 1000)"),
 		),
 		mcp.WithString("match",
-			mcp.Description("catalog (default) or body: every term in a section's text, headings, tags, or title; rows carry path#anchor and a snippet to fetch next. Use body when the subject may be untagged"),
+			mcp.Description("catalog (default) or body"),
 		),
 	)
 }
@@ -770,12 +770,7 @@ func (h *handler) markLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("lookup failed: %v", err)), nil
 	}
-
-	text := formatResult(result, "matches", "match")
-	if fetch.AnsweredFromCatalog(opts, result) {
-		text += "\n" + fetch.CatalogFallbackNote + "\n"
-	}
-	return mcp.NewToolResultText(text), nil
+	return mcp.NewToolResultText(formatResult(result, "matches", "match") + fetch.CatalogFallbackSuffix(opts, result)), nil
 }
 
 func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"os"
 	"slices"
@@ -292,7 +291,7 @@ func (store *Store) buildWriteCandidate(
 	objects = append(objects, historyObjects...)
 	objects = append(objects, manifestModel)
 	result := MutationResult{Document: document, Changed: true, Strictness: strictness, Policy: policyResult}
-	return buildNamespaceCandidate(view, store.logger, operationID, &newEntry, !exists, objects, result, body)
+	return store.buildNamespaceCandidate(view.ctx, view.snapshot, operationID, &newEntry, !exists, objects, result, body)
 }
 
 func (store *Store) buildArchiveCandidate(
@@ -339,7 +338,7 @@ func (store *Store) buildArchiveCandidate(
 	objects := []modelObject{manifestModel}
 	document := documentFromRetained(raw, &tip, &storedTip, archived)
 	result := MutationResult{Document: document, Changed: true}
-	return buildNamespaceCandidate(view, store.logger, operationID, &oldEntry, false, objects, result, nil)
+	return store.buildNamespaceCandidate(view.ctx, view.snapshot, operationID, &oldEntry, false, objects, result, nil)
 }
 
 func validateNewPathTopology(snapshot *snapshot, path string) error {
@@ -476,12 +475,12 @@ func snapshotShardEntry(snapshot *snapshot, path string) (shardEntry, error) {
 	return entries[position], nil
 }
 
-// buildNamespaceCandidate derives the committed snapshot from the view's
-// base plus one changed entry; body is the written content, nil for an
-// archive flip, so the section index needs at most one bucket read.
-func buildNamespaceCandidate(
-	view *readView,
-	logger *slog.Logger,
+// buildNamespaceCandidate derives the committed snapshot from base plus one
+// changed entry; body is the written content, nil for an archive flip, so
+// the section index needs at most one bucket read.
+func (store *Store) buildNamespaceCandidate(
+	ctx context.Context,
+	base *snapshot,
 	operationID string,
 	entry *shardEntry,
 	created bool,
@@ -489,7 +488,6 @@ func buildNamespaceCandidate(
 	result MutationResult,
 	body []byte,
 ) (*candidateMutation, MutationResult, error) {
-	base := view.snapshot
 	shardIndex := int(pathHashBytes(entry.Path)[0])
 	shard := base.Shards[shardIndex]
 	shard.Entries = slices.Clone(shard.Entries)
@@ -552,7 +550,7 @@ func buildNamespaceCandidate(
 	if body != nil {
 		fresh = map[string][]byte{entry.Path: body}
 	}
-	if err := indexSections(view.ctx, view.objects, logger, prepared, base, fresh, 1); err != nil {
+	if err := store.indexSections(ctx, prepared, base, fresh, 1); err != nil {
 		return nil, MutationResult{}, fmt.Errorf("prepare committed snapshot: %w", err)
 	}
 	return &candidateMutation{

@@ -65,10 +65,12 @@ response echo is the authoritative signal.
   the client). Stripped server binaries grow by about 1 MB. The alternative,
   a second hand-rolled splitter, risks anchor drift against links already
   published, which is the failure the shared rule exists to prevent.
-- The bucket store snapshot holds no bodies, so its section index costs one
-  blob read per current document at open and per changed document at
-  refresh; unchanged documents carry their sections forward by body hash.
-  An on-disk index waits until a world passes about 100 MB of bodies.
+- The bucket store snapshot holds no bodies, so its section index reads the
+  manifest, history, and body of every current document at open and of each
+  changed document at refresh; unchanged documents carry their sections
+  forward by body hash. Open indexes under the caller's context, not the
+  per-request timeout. An on-disk index waits until a world passes about
+  100 MB of bodies.
 - `mark_lookup` on demarkus-mcp and the broker gains `match`;
   `mark_lookup_all` merges body rows; `demarkus lookup` gains `-match body`.
   No new MCP tool, so the schema budget is unchanged.

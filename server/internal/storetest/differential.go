@@ -404,42 +404,26 @@ func snapshot(b LookupBackend) []string {
 	}
 	// Queries x scopes unfiltered, then filters on the match-all query: the
 	// full cross product is mostly redundant and dominates snapshot cost.
-	lookup := func(q, scope, filter string) {
+	// Body match rows are compared as a set, the contract, not by rank.
+	lookup := func(label string, mode catalog.Mode, describe func([]catalog.Result) string, q, scope, filter string) {
 		preds, perr := catalog.ParseFilter(filter)
 		if perr != nil {
 			add("filter %q parse error", filter)
 			return
 		}
-		rs, err := b.Catalog.Lookup(q, catalog.Options{Scope: scope, Filter: preds})
-		add("lookup q=%q scope=%q filter=%q = %s %s", q, scope, filter, errClass(err), describeResults(rs))
+		rs, err := b.Catalog.Lookup(q, catalog.Options{Scope: scope, Filter: preds, Match: mode})
+		add("%s q=%q scope=%q filter=%q = %s %s", label, q, scope, filter, errClass(err), describe(rs))
 	}
 	for _, q := range diffQueries {
 		for _, scope := range diffScopes {
-			lookup(q, scope, "")
+			lookup("lookup", catalog.MatchCatalog, describeResults, q, scope, "")
+			lookup("lookup-body", catalog.MatchBody, describeBodyResults, q, scope, "")
 		}
 	}
 	for _, f := range diffFilters {
-		lookup("*", "", f)
-		lookup("alpha", "/d", f)
-	}
-	// Body match: the contract is the row set, so rows are compared in
-	// path and anchor order regardless of how each backend ranked them.
-	lookupBody := func(q, scope, filter string) {
-		preds, perr := catalog.ParseFilter(filter)
-		if perr != nil {
-			add("filter %q parse error", filter)
-			return
-		}
-		rs, err := b.Catalog.Lookup(q, catalog.Options{Scope: scope, Filter: preds, Match: catalog.MatchBody})
-		add("lookup-body q=%q scope=%q filter=%q = %s %s", q, scope, filter, errClass(err), describeBodyResults(rs))
-	}
-	for _, q := range diffQueries {
-		for _, scope := range diffScopes {
-			lookupBody(q, scope, "")
-		}
-	}
-	for _, f := range diffFilters {
-		lookupBody("hairpin", "", f)
+		lookup("lookup", catalog.MatchCatalog, describeResults, "*", "", f)
+		lookup("lookup", catalog.MatchCatalog, describeResults, "alpha", "/d", f)
+		lookup("lookup-body", catalog.MatchBody, describeBodyResults, "hairpin", "", f)
 	}
 	return lines
 }
@@ -458,8 +442,8 @@ func describeBodyResults(rs []catalog.Result) string {
 	parts := make([]string, len(sorted))
 	for i := range sorted {
 		r := &sorted[i]
-		parts[i] = fmt.Sprintf("{%s#%s heading=%q snippet=%q imp=%g title=%q tags=%v}",
-			r.Path, r.Anchor, r.Heading, r.Snippet, r.Importance, r.Title, r.Tags)
+		parts[i] = fmt.Sprintf("{%s heading=%q snippet=%q imp=%g title=%q tags=%v}",
+			r.Location(), r.Heading, r.Snippet, r.Importance, r.Title, r.Tags)
 	}
 	return "[" + strings.Join(parts, " ") + "]"
 }

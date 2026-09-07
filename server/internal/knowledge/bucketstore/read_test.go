@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"os"
 	pathpkg "path"
@@ -174,7 +173,7 @@ func TestSnapshotRefresh(t *testing.T) {
 			result <- readViewResult{view: view, err: err}
 		}()
 		waitForTestSignal(t, delayed.observed, "stale pre-lock head")
-		installedSecond, err := loadRootSnapshot(context.Background(), memory, slog.Default(), testWorldID, defaultShardWorkers)
+		installedSecond, err := loadRootSnapshot(context.Background(), memory, testWorldID, defaultShardWorkers)
 		if err != nil {
 			t.Fatalf("load second snapshot: %v", err)
 		}

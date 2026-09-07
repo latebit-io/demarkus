@@ -7,11 +7,9 @@ import (
 	"unicode/utf8"
 )
 
-// BM25 parameters and the weights the reference ranking adds when a term is
-// found in the heading trail or in the document's tags and title. Curated
-// tags and titles outrank prose hits, as in catalog mode. Order is
-// implementation-defined by the spec; only recall and the importance prior
-// are contractual.
+// BM25 parameters plus the weights added for a term found in the heading
+// trail or in tags and title. Order is implementation-defined by the spec;
+// only recall and the importance prior are contractual.
 const (
 	bm25K1      = 1.2
 	bm25B       = 0.75
@@ -38,10 +36,9 @@ type bodyScan struct {
 	avgLength float64
 }
 
-// lookupBody scans every indexed section under the scope and filter, keeps
-// those in which every term appears (own text, heading trail, tags, title),
-// and orders them by BM25 scaled by the importance prior. Callers hold the
-// read lock.
+// lookupBody keeps every section under the scope and filter in which all
+// terms appear (text, heading trail, tags, title), ordered by BM25 scaled by
+// the importance prior. Callers hold the read lock.
 func (c *Catalog) lookupBody(words []string, scope string, opts Options) []Result {
 	if len(words) == 0 {
 		return nil
@@ -103,7 +100,7 @@ func (c *Catalog) scanBody(terms []term, scope string, filter []Predicate) *body
 			totalLength += int(sec.length)
 			matched, hits := true, 0
 			for j, t := range terms {
-				_, inText := termIndex(sec.tokens, t)
+				inText := hasTerm(sec.tokens, t)
 				inTrail := hasTerm(sec.trail, t)
 				if inText || inTrail {
 					scan.df[j]++
@@ -124,10 +121,9 @@ func (c *Catalog) scanBody(terms []term, scope string, filter []Predicate) *body
 	return scan
 }
 
-// rankBody scores the candidates, normalizes by the best, applies the
-// importance prior, and sorts: catalog rows first in importance order, as
-// catalog mode would return them, then sections by score, with the spec's
-// path-then-anchor tiebreak.
+// rankBody scores, normalizes by the best, applies the importance prior,
+// and sorts: catalog rows first as catalog mode would order them, then
+// sections by score, then the spec's path-then-anchor tiebreak.
 func rankBody(scan *bodyScan, terms []term) {
 	found := scan.found
 	maxScore := 0.0

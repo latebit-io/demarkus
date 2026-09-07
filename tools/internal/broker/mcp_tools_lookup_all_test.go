@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -300,26 +301,38 @@ func lookupResult(rows ...string) fetch.Result {
 	}}
 }
 
-// bodyLookupResult builds a body-mode LOOKUP response with the match echo.
+// bodyLookupResult is lookupResult with the Snippet column and the echo.
 func bodyLookupResult(rows ...string) fetch.Result {
-	body := "\n# Lookup matches\n\n| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n"
-	if len(rows) > 0 {
-		body += strings.Join(rows, "\n") + "\n"
+	r := lookupResult(rows...)
+	r.Response.Metadata["match"] = "body"
+	r.Response.Body = strings.Replace(r.Response.Body,
+		"| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n",
+		"| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n", 1)
+	return r
+}
+
+func TestSplitLookupLocation(t *testing.T) {
+	for _, tt := range []struct{ cell, path, anchor string }{
+		{`/docs/a.md#intro`, "/docs/a.md", "intro"},
+		{`/docs/a\#b.md#intro`, "/docs/a#b.md", "intro"},
+		{`/docs/a\_b.md`, "/docs/a_b.md", ""},
+	} {
+		if path, anchor := splitLookupLocation(tt.cell); path != tt.path || anchor != tt.anchor {
+			t.Errorf("splitLookupLocation(%q) = %q, %q; want %q, %q", tt.cell, path, anchor, tt.path, tt.anchor)
+		}
 	}
-	return fetch.Result{Response: protocol.Response{
-		Status:   protocol.StatusOK,
-		Metadata: map[string]string{"matches": strconv.Itoa(len(rows)), "match": "body"},
-		Body:     body,
-	}}
 }
 
 func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "team-b", Namespace: "team-b"})
+	var mu sync.Mutex
 	var seen []fetch.LookupOptions
 	d := &fakeDispatcher{
 		lookupFn: func(world, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+			mu.Lock()
 			seen = append(seen, opts)
+			mu.Unlock()
 			if world == "team-a" {
 				return bodyLookupResult(
 					"| /debugging.md#hairpin-nat | 0.70 | Debugging › Hairpin NAT | net | same host \\| hairpin |",
@@ -348,6 +361,8 @@ func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
 			t.Errorf("response missing %q\nfull:\n%s", want, text)
 		}
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	for _, opts := range seen {
 		if opts.Match != fetch.MatchBody {
 			t.Errorf("dispatcher saw match %q, want body", opts.Match)

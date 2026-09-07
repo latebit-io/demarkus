@@ -314,14 +314,14 @@ type LookupOptions struct {
 	Match  string // MatchCatalog (default) or MatchBody; empty omits the key
 }
 
-// LOOKUP match modes. A server without body match ignores the key and
-// answers from the catalog; AnsweredFromCatalog detects that.
+// LOOKUP match modes. A server without body match answers from the
+// catalog; AnsweredFromCatalog detects that.
 const (
-	MatchCatalog = "catalog"
-	MatchBody    = "body"
+	MatchCatalog = protocol.MatchCatalog
+	MatchBody    = protocol.MatchBody
 )
 
-// CatalogFallbackNote is the line MCP surfaces append when body match was
+// CatalogFallbackNote is the line surfaces append when body match was
 // requested and the server answered from the catalog instead.
 const CatalogFallbackNote = "note: server answered from the catalog (no body match); an empty table is not evidence of absence"
 
@@ -329,6 +329,15 @@ const CatalogFallbackNote = "note: server answered from the catalog (no body mat
 // in catalog mode: an ok response without the match: body echo.
 func AnsweredFromCatalog(opts LookupOptions, r Result) bool {
 	return opts.Match == MatchBody && r.Response.Status == protocol.StatusOK && r.Response.Metadata["match"] != MatchBody
+}
+
+// CatalogFallbackSuffix is the text a surface appends to a rendered lookup
+// result: the fallback note when it applies, else nothing.
+func CatalogFallbackSuffix(opts LookupOptions, r Result) string {
+	if !AnsweredFromCatalog(opts, r) {
+		return ""
+	}
+	return "\n" + CatalogFallbackNote + "\n"
 }
 
 // Lookup queries a server's catalog for documents matching a subject under
@@ -343,6 +352,11 @@ func (c *Client) Lookup(host, scope, query, token string, opts LookupOptions) (R
 func (c *Client) LookupContext(ctx context.Context, host, scope, query, token string, opts LookupOptions) (Result, error) {
 	if query == "" {
 		return Result{}, fmt.Errorf("LOOKUP requires a non-empty query")
+	}
+	// Rejected here, once for every surface, rather than relayed back as a
+	// bad-request body the caller would have to read.
+	if _, err := protocol.ParseMatch(opts.Match); err != nil {
+		return Result{}, err
 	}
 	req := protocol.Request{Verb: protocol.VerbLookup, Path: scope, Metadata: map[string]string{"query": query}}
 	if opts.Filter != "" {

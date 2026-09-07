@@ -25,9 +25,16 @@ const HandlerToken = "storetest-write-token"
 // NewHandler wires a backend into a Handler the way main.go does for that
 // backend: the store serves documents and the catalog serves LOOKUP.
 func NewHandler(b LookupBackend) *handler.Handler {
-	ts := auth.NewTokenStore(map[string]auth.Token{
+	return newHandlerWithTokens(b, nil)
+}
+
+// newHandlerWithTokens is NewHandler with extra tokens beside HandlerToken.
+func newHandlerWithTokens(b LookupBackend, extra map[string]auth.Token) *handler.Handler {
+	tokens := map[string]auth.Token{
 		protocol.HashToken(HandlerToken): {Paths: []string{"/**"}, Operations: []string{"publish"}},
-	})
+	}
+	maps.Copy(tokens, extra)
+	ts := auth.NewTokenStore(tokens)
 	return &handler.Handler{
 		Store:         b.Store,
 		Catalog:       b.Catalog,

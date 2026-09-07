@@ -510,16 +510,15 @@ func buildLookupResults(query, scope string, rows []catalog.Result, mode catalog
 	}
 	for i := range rows {
 		r := &rows[i]
-		// The anchor is appended verbatim: a slug cannot break the table,
-		// and clients fetch path#anchor next.
-		location, title := escapeMD(r.Path), r.Title
-		if body && r.Anchor != "" {
+		// The anchor is appended after escaping: a slug cannot break the
+		// table, and clients fetch path#anchor next.
+		location := escapeMD(r.Path)
+		if r.Anchor != "" {
 			location += "#" + r.Anchor
-			title += " › " + r.Heading
 		}
 		sb.WriteString("| " + location +
 			" | " + strconv.FormatFloat(r.Importance, 'f', 2, 64) +
-			" | " + escapeMD(title) +
+			" | " + escapeMD(r.DisplayTitle()) +
 			" | " + escapeMD(strings.Join(r.Tags, ", ")))
 		if body {
 			sb.WriteString(" | " + escapeMD(r.Snippet))
@@ -757,6 +756,8 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storage
 	token := req.Metadata["auth"]
 	rows := make([]catalog.Result, 0, len(results))
 	for i := range results {
+		// Any authorization error denies the row; the reason is not the
+		// requester's to see.
 		if ok, _ := h.checkReadAuth(results[i].Path, token); !ok {
 			continue
 		}

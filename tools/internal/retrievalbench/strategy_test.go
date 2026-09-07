@@ -194,7 +194,7 @@ func TestBodyFetch(t *testing.T) {
 		"/b.md": "# B\n\n## Ranking\n\nsorted\n\n### Ties\n\npath order\n",
 		"/d.md": "# D\n\n## Threats\n\nlist\n",
 	}
-	strategy := BodyFetch{Scope: "/", LookupLimit: 5, MaxFetches: 5}
+	strategy := LookupFetch{Scope: "/", LookupLimit: 5, MaxFetches: 5, Body: true}
 	tests := []struct {
 		name     string
 		tools    bodyFakeTools
@@ -221,6 +221,12 @@ func TestBodyFetch(t *testing.T) {
 			tools:   bodyFakeTools{fakeTools: fakeTools{docs: docs}, bodyRows: []string{"/b.md#ties"}},
 			q:       Question{ExpectedPath: "/b.md", ExpectedAnchor: "ranking"},
 			wantHit: false, wantN: 2, wantRank: 1,
+		},
+		{
+			name:    "sibling section first, the named section next",
+			tools:   bodyFakeTools{fakeTools: fakeTools{docs: docs}, bodyRows: []string{"/b.md#ties", "/b.md#ranking"}},
+			q:       Question{ExpectedPath: "/b.md", ExpectedAnchor: "ranking"},
+			wantHit: true, wantCall: 3, wantN: 3, wantRank: 1,
 		},
 		{
 			name:    "bare row on a big document costs the outline round trip",

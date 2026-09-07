@@ -1,8 +1,6 @@
 package storetest
 
 import (
-	"io"
-	"log/slog"
 	"strings"
 	"testing"
 
@@ -15,10 +13,7 @@ import (
 // key through the handler: the echo, the fifth column, read-auth filtering
 // per row, and the byte-identical catalog mode.
 func RunLookupHandlerConformance(t *testing.T, factory LookupFactory) {
-	subtests := []struct {
-		name string
-		fn   func(t *testing.T, b LookupBackend)
-	}{
+	subtests := []lookupSubtest{
 		{"BodyEchoAndColumns", testHandlerBodyEchoAndColumns},
 		{"CatalogByteIdentical", testHandlerCatalogByteIdentical},
 		{"BodyUnknownModeBadRequest", testHandlerBodyUnknownMode},
@@ -33,20 +28,12 @@ func RunLookupHandlerConformance(t *testing.T, factory LookupFactory) {
 
 const readSecret = "storetest-read-token"
 
-// newReadAuthHandler wires b like NewHandler plus a read token for /private/*,
-// which makes that subtree read-protected.
+// newReadAuthHandler is NewHandler plus a read token for /private/*, which
+// makes that subtree read-protected.
 func newReadAuthHandler(b LookupBackend) *handler.Handler {
-	ts := auth.NewTokenStore(map[string]auth.Token{
-		protocol.HashToken(HandlerToken): {Paths: []string{"/**"}, Operations: []string{"publish"}},
-		protocol.HashToken(readSecret):   {Paths: []string{"/private/*"}, Operations: []string{"read"}},
+	return newHandlerWithTokens(b, map[string]auth.Token{
+		protocol.HashToken(readSecret): {Paths: []string{"/private/*"}, Operations: []string{"read"}},
 	})
-	return &handler.Handler{
-		Store:         b.Store,
-		Catalog:       b.Catalog,
-		Views:         b.Views,
-		GetTokenStore: func() *auth.TokenStore { return ts },
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
 }
 
 func publishDoc(t *testing.T, h *handler.Handler, path, body string, meta map[string]string) {

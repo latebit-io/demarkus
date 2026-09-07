@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
@@ -22,6 +23,19 @@ func TestLookupSendsMatchOnlyWhenSet(t *testing.T) {
 	}
 	if _, present := seen[0]["match"]; present || seen[1]["match"] != MatchBody {
 		t.Errorf("match metadata sent = %q / %q, want absent then body", seen[0]["match"], seen[1]["match"])
+	}
+}
+
+func TestLookupRejectsUnknownMatchBeforeDialing(t *testing.T) {
+	c := NewClient(Options{Insecure: true})
+	defer c.Close()
+	for _, bad := range []string{"BODY", "bogus", "body,catalog"} {
+		// An unroutable host proves the request never left: a dial would fail
+		// with a different error.
+		_, err := c.Lookup("mark://127.0.0.1:1", "/", "auth", "", LookupOptions{Match: bad})
+		if err == nil || !strings.Contains(err.Error(), "match must be") {
+			t.Errorf("Lookup(match=%q) err = %v, want validation error", bad, err)
+		}
 	}
 }
 

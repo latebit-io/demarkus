@@ -78,8 +78,9 @@ func TestSectionIndexCorpusDir(t *testing.T) {
 	}
 }
 
-// measureIndex builds a catalog over docs, timing the build and reporting
-// retained heap relative to body bytes.
+// measureIndex reports the section index's retained heap relative to body
+// bytes: a catalog of the same entries without sections is measured first
+// and subtracted, since the budget is on the index, not on catalog mode.
 func measureIndex(t *testing.T, docs []CorpusDoc) (float64, *catalog.Catalog) {
 	t.Helper()
 	bodies := make([][]byte, len(docs))
@@ -88,19 +89,38 @@ func measureIndex(t *testing.T, docs []CorpusDoc) (float64, *catalog.Catalog) {
 		bodies[i] = []byte(docs[i].Body)
 		total += len(bodies[i])
 	}
+	entriesOnly := catalog.New()
+	catalogBytes := retainedBy(func() {
+		for i := range docs {
+			entriesOnly.Set(catalog.FromDocument(docs[i].Path, docs[i].Meta, bodies[i], time.Now()))
+		}
+	})
+	start := time.Now()
+	cat := catalog.New()
+	withIndex := retainedBy(func() {
+		for i := range docs {
+			cat.Put(docs[i].Path, docs[i].Meta, bodies[i], time.Now())
+		}
+	})
+	elapsed := time.Since(start)
+	// Both catalogs and the bodies stay live through the readings; freeing
+	// any of them early would flatter the delta.
+	runtime.KeepAlive(entriesOnly)
+	runtime.KeepAlive(bodies)
+	runtime.KeepAlive(docs)
+	index := withIndex - catalogBytes
+	t.Logf("indexed %d docs in %s: catalog entries %d bytes, section index %d bytes", len(docs), elapsed, catalogBytes, index)
+	return float64(index) / float64(max(total, 1)), cat
+}
+
+// retainedBy runs build between two post-GC heap readings.
+func retainedBy(build func()) int64 {
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
-	start := time.Now()
-	cat := catalog.New()
-	for i := range docs {
-		cat.Put(docs[i].Path, docs[i].Meta, bodies[i], time.Now())
-	}
-	elapsed := time.Since(start)
+	build()
 	runtime.GC()
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
-	delta := int64(after.HeapAlloc) - int64(before.HeapAlloc)
-	t.Logf("indexed %d docs in %s, retained %d bytes", len(docs), elapsed, delta)
-	return float64(delta) / float64(max(total, 1)), cat
+	return int64(after.HeapAlloc) - int64(before.HeapAlloc)
 }

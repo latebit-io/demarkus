@@ -17,7 +17,7 @@ func bodyRows(t *testing.T, store *Store, query string) []string {
 	}
 	keys := make([]string, len(rs))
 	for i := range rs {
-		keys[i] = rs[i].Path + "#" + rs[i].Anchor
+		keys[i] = rs[i].Location()
 	}
 	return keys
 }

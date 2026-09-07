@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"log/slog"
 	"regexp"
 	"slices"
 	"sort"
@@ -20,25 +21,55 @@ type term = uint32
 // nobody types as a query; their word runs are still indexed.
 const maxTokenBytes = 32
 
-// vocabulary interns token strings process-wide. It only grows: bounded by
-// distinct tokens ever indexed, which the length cap keeps small.
-var vocabulary = struct {
-	mu    sync.RWMutex
-	ids   map[string]term
-	words []string
-}{ids: make(map[string]term)}
+// maxVocabulary caps distinct tokens process-wide (about 100 MB at the cap);
+// tokens past it are not indexed, trading recall for bounded memory.
+const maxVocabulary = 1 << 20
 
-// internTerms resolves tokens to ids, adding unknown ones, under one lock.
+// unknownTerm is the id of a token the vocabulary refused; sets drop it.
+const unknownTerm term = 0
+
+// vocabulary interns token strings process-wide so an index carries across
+// snapshots. Entries are never removed; maxVocabulary bounds them.
+var vocabulary = struct {
+	mu     sync.RWMutex
+	ids    map[string]term
+	next   term // next id to hand out; unknownTerm is never handed out
+	warned bool
+}{ids: make(map[string]term), next: unknownTerm + 1}
+
+// internTerms resolves tokens to ids, adding unknown ones. Rebuilds and
+// refreshes mostly see known tokens, so the read lock is tried first.
 func internTerms(tokens []string) []term {
 	ids := make([]term, len(tokens))
-	vocabulary.mu.Lock()
-	defer vocabulary.mu.Unlock()
+	vocabulary.mu.RLock()
+	missing := 0
 	for i, tok := range tokens {
 		id, ok := vocabulary.ids[tok]
 		if !ok {
-			id = term(len(vocabulary.words))
-			vocabulary.words = append(vocabulary.words, tok)
+			missing++
+		}
+		ids[i] = id
+	}
+	vocabulary.mu.RUnlock()
+	if missing == 0 {
+		return ids
+	}
+	vocabulary.mu.Lock()
+	defer vocabulary.mu.Unlock()
+	for i, tok := range tokens {
+		if ids[i] != unknownTerm {
+			continue
+		}
+		id, ok := vocabulary.ids[tok]
+		if !ok && vocabulary.next < maxVocabulary {
+			id = vocabulary.next
+			vocabulary.next++
 			vocabulary.ids[tok] = id
+			ok = true
+		}
+		if !ok && !vocabulary.warned {
+			vocabulary.warned = true
+			slog.Warn("section index vocabulary full; new tokens are not indexed", "cap", maxVocabulary)
 		}
 		ids[i] = id
 	}
@@ -153,13 +184,15 @@ func sortedTerms(counts map[string]int) (ids []term, tf []uint8) {
 		keys = append(keys, k)
 	}
 	interned := internTerms(keys)
-	order := make([]int, len(keys))
-	for i := range order {
-		order[i] = i
+	order := make([]int, 0, len(keys))
+	for i := range keys {
+		if interned[i] != unknownTerm {
+			order = append(order, i)
+		}
 	}
 	sort.Slice(order, func(a, b int) bool { return interned[order[a]] < interned[order[b]] })
-	ids = make([]term, len(keys))
-	tf = make([]uint8, len(keys))
+	ids = make([]term, len(order))
+	tf = make([]uint8, len(order))
 	for i, k := range order {
 		ids[i] = interned[k]
 		tf[i] = uint8(min(counts[keys[k]], 255))
@@ -182,7 +215,7 @@ func termSet(fields []string) []term {
 	for k := range seen {
 		keys = append(keys, k)
 	}
-	ids := internTerms(keys)
+	ids := slices.DeleteFunc(internTerms(keys), func(id term) bool { return id == unknownTerm })
 	slices.Sort(ids)
 	return ids
 }
@@ -202,10 +235,9 @@ func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r)
 
 func notWordRune(r rune) bool { return !isWordRune(r) }
 
-// fieldTokens emits one whitespace-separated field as the whole word with
-// surrounding punctuation trimmed, then each run of word characters inside
-// it, so path.Match is matched by path, match, and path.match. Tokens are
-// lowercase and at least two runes.
+// fieldTokens emits a field as the trimmed whole word, then each run of word
+// characters in it, so path.Match is matched by path, match, and path.match.
+// Tokens are lowercase, at least two runes, and at most maxTokenBytes.
 func fieldTokens(field string, emit func(string)) {
 	whole := strings.ToLower(strings.TrimFunc(field, notWordRune))
 	if whole == "" {
@@ -224,17 +256,24 @@ func fieldTokens(field string, emit func(string)) {
 	}
 }
 
-// queryTerms splits a body-mode query into distinct whole-word terms.
+// queryTerms splits a body-mode query into distinct whole-word terms; a
+// field over maxTokenBytes is queried as its word runs, as it was indexed.
 func queryTerms(query string) []string {
 	seen := make(map[string]bool)
 	var out []string
+	add := func(t string) {
+		if utf8.RuneCountInString(t) >= 2 && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
 	for field := range strings.FieldsSeq(query) {
 		t := strings.ToLower(strings.TrimFunc(field, notWordRune))
-		if utf8.RuneCountInString(t) < 2 || seen[t] {
+		if len(t) > maxTokenBytes {
+			fieldTokens(t, add)
 			continue
 		}
-		seen[t] = true
-		out = append(out, t)
+		add(t)
 	}
 	return out
 }
@@ -246,7 +285,7 @@ var (
 	listRe     = regexp.MustCompile(`^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?`)
 	quoteRe    = regexp.MustCompile(`^(?:>\s?)+`)
 	tableSepRe = regexp.MustCompile(`^\|?[\s|:-]+\|?$`)
-	spaceRe    = regexp.MustCompile(`\s+`)
+	inlineMark = strings.NewReplacer("`", "", "*", "", "~~", "", "|", " ")
 )
 
 // stripMarkup reduces markdown to prose lines: fences, list and quote
@@ -262,14 +301,27 @@ func stripMarkup(raw string) string {
 		if strings.HasPrefix(line, "|") && tableSepRe.MatchString(line) {
 			continue
 		}
-		line = quoteRe.ReplaceAllString(line, "")
-		line = listRe.ReplaceAllString(line, "")
-		line = imageRe.ReplaceAllString(line, "$1")
-		line = linkRe.ReplaceAllString(line, "$1")
-		line = htmlTagRe.ReplaceAllString(line, "")
-		line = strings.NewReplacer("`", "", "*", "", "~~", "", "|", " ").Replace(line)
-		line = strings.TrimSpace(spaceRe.ReplaceAllString(line, " "))
-		if line != "" {
+		// Each pass is guarded by a byte probe: most prose lines carry no
+		// markup, and an unguarded regexp pass allocates even on a miss.
+		if line[0] == '>' {
+			if line = quoteRe.ReplaceAllString(line, ""); line == "" {
+				continue
+			}
+		}
+		if strings.IndexByte("-*+0123456789", line[0]) >= 0 {
+			line = listRe.ReplaceAllString(line, "")
+		}
+		if strings.Contains(line, "](") {
+			line = imageRe.ReplaceAllString(line, "$1")
+			line = linkRe.ReplaceAllString(line, "$1")
+		}
+		if strings.IndexByte(line, '<') >= 0 {
+			line = htmlTagRe.ReplaceAllString(line, "")
+		}
+		if strings.ContainsAny(line, "`*~|") {
+			line = inlineMark.Replace(line)
+		}
+		if line = strings.Join(strings.Fields(line), " "); line != "" {
 			lines = append(lines, line)
 		}
 	}

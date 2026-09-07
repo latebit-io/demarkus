@@ -256,11 +256,7 @@ func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest
 	if err != nil {
 		return g.toolErrorFor("lookup", worldName, err), nil
 	}
-	text := formatToolResult(result, "matches", "match")
-	if fetch.AnsweredFromCatalog(opts, result) {
-		text += "\n" + fetch.CatalogFallbackNote + "\n"
-	}
-	return mcp.NewToolResultText(text), nil
+	return mcp.NewToolResultText(formatToolResult(result, "matches", "match") + fetch.CatalogFallbackSuffix(opts, result)), nil
 }
 
 // toolErrorFor renders a tool-error envelope from a dispatcher

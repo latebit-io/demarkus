@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
 )
 
@@ -46,6 +47,22 @@ type Result struct {
 	Snippet string // body mode: one line of section text, at most SnippetBytes
 }
 
+// Location is the row's path, with #anchor when the row is a section.
+func (r *Result) Location() string {
+	if r.Anchor == "" {
+		return r.Path
+	}
+	return r.Path + "#" + r.Anchor
+}
+
+// DisplayTitle is the document title, joined to the heading for a section.
+func (r *Result) DisplayTitle() string {
+	if r.Anchor == "" {
+		return r.Title
+	}
+	return r.Title + " › " + r.Heading
+}
+
 // SnippetBytes caps a body-mode snippet, per the spec.
 const SnippetBytes = 240
 
@@ -60,13 +77,11 @@ const (
 
 // ParseMode maps the wire value of the match key to a Mode; "" is catalog.
 func ParseMode(s string) (Mode, error) {
-	switch strings.TrimSpace(s) {
-	case "", string(MatchCatalog):
-		return MatchCatalog, nil
-	case string(MatchBody):
-		return MatchBody, nil
+	value, err := protocol.ParseMatch(s)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("unknown match mode %q", s)
+	return Mode(value), nil
 }
 
 // Catalog is a concurrency-safe map of document path to catalog entry, with
@@ -85,25 +100,29 @@ func New() *Catalog {
 // Set adds or replaces the entry for e.Path, leaving its section index as it
 // was. The catalog takes ownership of e; the caller must not mutate it.
 func (c *Catalog) Set(e *Entry) {
-	path := store.CanonicalPath(e.Path)
-	e.Path = path
-	e.terms = termSet(append(append([]string(nil), e.Tags...), e.Title))
+	e.prepare()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[path] = e
+	c.entries[e.Path] = e
 }
 
 // Put derives an entry from a written document and indexes its sections;
 // body has store frontmatter already stripped.
 func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modified time.Time) {
 	e := FromDocument(docPath, meta, body, modified)
-	e.Path = store.CanonicalPath(e.Path)
-	e.terms = termSet(append(append([]string(nil), e.Tags...), e.Title))
+	e.prepare()
 	doc := IndexSections(body)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[e.Path] = e
 	c.sections[e.Path] = doc
+}
+
+// prepare canonicalizes the path and derives the tag and title terms that
+// body match consults; every entry passes through here before storage.
+func (e *Entry) prepare() {
+	e.Path = store.CanonicalPath(e.Path)
+	e.terms = termSet(append(append([]string(nil), e.Tags...), e.Title))
 }
 
 // SetSections installs a prebuilt section index for a document, for stores
@@ -165,14 +184,14 @@ type Options struct {
 // importance — "the most important documents here" without guessing a
 // subject. This is the whole-catalog view that universe browsers build on.
 func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
-	mode, err := ParseMode(string(opts.Match))
-	if err != nil {
-		return nil, err
-	}
-	if mode == MatchBody {
+	switch opts.Match {
+	case "", MatchCatalog:
+	case MatchBody:
 		c.mu.RLock()
 		defer c.mu.RUnlock()
 		return c.lookupBody(queryTerms(query), NormalizeScope(opts.Scope), opts), nil
+	default:
+		return nil, fmt.Errorf("unknown match mode %q", opts.Match)
 	}
 	matchAll := strings.TrimSpace(query) == "*"
 	terms := Tokenize(query)

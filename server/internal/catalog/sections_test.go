@@ -42,15 +42,17 @@ func TestFieldTokens(t *testing.T) {
 }
 
 func TestQueryTerms(t *testing.T) {
-	got := queryTerms("  Path.Match udp a UDP `sysctl` ")
-	want := []string{"path.match", "udp", "sysctl"}
+	// An overlong field is queried as its word runs, as it was indexed; the
+	// 40-byte run is over the cap on both sides.
+	got := queryTerms("  Path.Match udp a UDP `sysctl` auth-" + strings.Repeat("f", 40))
+	want := []string{"path.match", "udp", "sysctl", "auth"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("queryTerms = %v, want %v", got, want)
 	}
 }
 
 func TestStripMarkup(t *testing.T) {
-	raw := "> quoted **bold** `code`\n\n- [x] item [link text](/x.md) ![img](a.png)\n\n```sh\n# comment\nrun it\n```\n\n| a | b |\n|---|---|\n| c | d |\n\n<b>tag</b> ~~gone~~ more\n"
+	raw := "> quoted **bold** `code`\n>\n\n- [x] item [link text](/x.md) ![img](a.png)\n\n```sh\n# comment\nrun it\n```\n\n| a | b |\n|---|---|\n| c | d |\n\n<b>tag</b> ~~gone~~ more\n"
 	got := stripMarkup(raw)
 	// Fence content stays (identifiers and commands are worth matching);
 	// only the fence markers go.

@@ -131,7 +131,7 @@ func markVersionsTool() mcp.Tool {
 func markLookupTool() mcp.Tool {
 	return mcp.NewTool("mark_lookup",
 		mcp.WithDescription(
-			"Catalog lookup by subject in one world: matches tags and title (not full text) unless match=body, which also matches section text and returns path#anchor rows with a snippet; importance-ranked table, no bodies. System-wide: mark_lookup_all. "+mcpURLHint,
+			"Catalog lookup by subject in one world: matches tags and title; match=body also matches section text (rows add #anchor and a snippet; a world without it answers from the catalog and says so). Importance-ranked table, no bodies. System-wide: mark_lookup_all. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -153,12 +153,12 @@ func markLookupTool() mcp.Tool {
 	)
 }
 
-const matchParamDesc = "catalog (default) or body: every term in a section's text, headings, tags, or title; rows carry path#anchor and a snippet to fetch next. Use body when the subject may be untagged"
+const matchParamDesc = "catalog (default) or body"
 
 func markLookupAllTool() mcp.Tool {
 	return mcp.NewTool("mark_lookup_all",
 		mcp.WithDescription(
-			"Catalog lookup by subject across all readable worlds. One globally limited table of mark://{worldName}/{path} rows; partial world failures reported with matches. Not full-text search unless match=body. "+mcpURLHint,
+			"Catalog lookup by subject across all readable worlds. One globally limited table of mark://{worldName}/{path} rows; partial world failures reported with matches. match=body also matches section text. "+mcpURLHint,
 		),
 		mcp.WithString("query",
 			mcp.Required(),
@@ -174,7 +174,7 @@ func markLookupAllTool() mcp.Tool {
 			mcp.Description("global max results across worlds (default 10, cap 1000)"),
 		),
 		mcp.WithString("match",
-			mcp.Description(matchParamDesc+"; worlds without body match answer from their catalog and are listed"),
+			mcp.Description(matchParamDesc+"; worlds without body match are listed"),
 		),
 	)
 }
