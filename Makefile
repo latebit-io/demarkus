@@ -62,7 +62,8 @@ tools: protocol
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-token   ./demarkus-token
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-publish ./demarkus-publish
 	cd tools && go build -o bin/demarkus-loadtest ./demarkus-loadtest
-	@echo "✓ Tools built: tools/bin/{demarkus-knowledge-broker, demarkus-memory-broker, demarkus-token, demarkus-publish, demarkus-loadtest}"
+	cd tools && go build -o bin/demarkus-retrieval-bench ./demarkus-retrieval-bench
+	@echo "✓ Tools built: tools/bin/{demarkus-knowledge-broker, demarkus-memory-broker, demarkus-token, demarkus-publish, demarkus-loadtest, demarkus-retrieval-bench}"
 
 # Build container images. One image per deployable service so each pod
 # carries only the binaries it needs at runtime. Admin CLIs are NOT
