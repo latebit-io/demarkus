@@ -75,6 +75,11 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 		Limit:  limit,
 		Match:  req.GetString("match", ""),
 	}
+	// The client validates per request, which never runs with no readable
+	// worlds and would otherwise surface as an all-worlds failure.
+	if _, err := protocol.ParseMatch(opts.Match); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	results := g.lookupAllWorlds(ctx, worlds, scope, query, opts)
 	matches, failures, catalogWorlds := collectLookupAllResults(results)
 	if len(failures) == len(worlds) && len(worlds) > 0 {

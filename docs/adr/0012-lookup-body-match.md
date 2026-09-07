@@ -27,8 +27,9 @@ LOOKUP gains an optional request key `match` with values `catalog` (default)
 and `body`. No new verb. Catalog mode is byte-identical to today: a request
 without `match` gets the response it always got. When the request carries
 `match`, the response echoes the mode it answered in; a server without body
-match ignores the key, and a client treats any response lacking `match: body`
-as a catalog answer.
+match accepts `body`, answers in catalog mode, and echoes `match: catalog`,
+while a server that predates the key answers with no echo. A client treats
+any response lacking `match: body` as a catalog answer.
 
 The spec fixes recall and leaves order to the implementation:
 

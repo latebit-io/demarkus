@@ -311,6 +311,20 @@ func bodyLookupResult(rows ...string) fetch.Result {
 	return r
 }
 
+func TestHandleMarkLookupAllRejectsUnknownMatchBeforeFanOut(t *testing.T) {
+	d := &fakeDispatcher{}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", map[string]any{
+		"query": "hairpin", "match": "bogus",
+	}))
+	if err != nil || !res.IsError {
+		t.Fatalf("err %v res %+v, want tool error", err, res)
+	}
+	if len(d.lookupCalls) != 0 {
+		t.Errorf("dispatched %d lookups for an invalid match", len(d.lookupCalls))
+	}
+}
+
 func TestSplitLookupLocation(t *testing.T) {
 	for _, tt := range []struct{ cell, path, anchor string }{
 		{`/docs/a.md#intro`, "/docs/a.md", "intro"},
