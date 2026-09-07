@@ -5,6 +5,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // ViolationCode identifies one stable class of policy violation.
@@ -105,12 +107,7 @@ func tagValue(metadata map[string]any) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	for tag := range strings.SplitSeq(tags, ",") {
-		if strings.TrimSpace(tag) != "" {
-			return tags, true
-		}
-	}
-	return tags, false
+	return tags, len(protocol.SplitTags(tags)) > 0
 }
 
 func importanceValid(metadata map[string]any) bool {
@@ -147,8 +144,7 @@ func importanceValid(metadata map[string]any) bool {
 }
 
 func tagsHaveAxis(tags, axis string) bool {
-	for tag := range strings.SplitSeq(tags, ",") {
-		tag = strings.TrimSpace(tag)
+	for _, tag := range protocol.SplitTags(tags) {
 		prefix := axis + ":"
 		if strings.HasPrefix(tag, prefix) && strings.TrimSpace(tag[len(prefix):]) != "" {
 			return true

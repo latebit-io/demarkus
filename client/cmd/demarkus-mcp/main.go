@@ -720,7 +720,7 @@ func (h *handler) markLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError(fmt.Sprintf("lookup failed: %v", err)), nil
 	}
 	render := mcpfmt.Lookup.Options(&req)
-	return mcp.NewToolResultText(mcpfmt.Format(result, render) + fetch.CatalogFallbackSuffix(opts, result)), nil
+	return mcp.NewToolResultText(mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)), nil
 }
 
 func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -755,66 +755,38 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("expected_version must be >= 0"), nil
 	}
 
-	// Default is "merge": on conflict, return a structurally-merged candidate
-	// for the agent to verify and republish. Callers wanting the strict
-	// optimistic-concurrency behavior (a hard conflict response with no merge
-	// attempt) opt out with on_conflict: "fail". Default flipped because the
-	// whole point of the feature is preventing content loss; "fail" left as
-	// default would mean naive callers never benefit. An explicit empty or
-	// whitespace-only value is normalized to the default — MCP clients
-	// commonly send blank strings for optional fields, and rejecting them
-	// would turn the default path into a needless tool error.
-	onConflict := strings.TrimSpace(req.GetString("on_conflict", "merge"))
-	if onConflict == "" {
-		onConflict = "merge"
-	}
-	if onConflict != "merge" && onConflict != "fail" {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"fail\" or \"merge\"", onConflict)), nil
+	onConflict, err := merge.ParseOnConflict(req.GetString("on_conflict", ""))
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 	meta := publisherMeta(ctx, req.GetArguments())
-	narrowing := h.narrowingNote(ctx, host, path, token, expectedVersion, meta)
-	if onConflict == "merge" {
+	// Warn-only narrowing gate, run after a write that landed.
+	gate := func(status string) string {
+		if !protocol.IsWriteSuccess(status) {
+			return ""
+		}
+		note, gateErr := metaguard.Gate(ctx, expectedVersion, meta, func(ctx context.Context) (fetch.Result, error) {
+			return h.client.FetchContext(ctx, host, index.VersionPath(path, expectedVersion), token)
+		})
+		if gateErr != nil {
+			log.Printf("warning: publish metadata check mark://%s%s: %v", host, path, gateErr)
+		}
+		return note
+	}
+	if onConflict == merge.OnConflictMerge {
 		adapter := &mergeClientAdapter{inner: h.client, host: host, token: token}
 		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, meta)
 		if mErr != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", mErr)), nil
 		}
-		if outcome.Status != merge.OutcomeOK {
-			narrowing = ""
-		}
-		return mcp.NewToolResultText(formatOutcome(&outcome) + narrowing), nil
+		return mcp.NewToolResultText(formatOutcome(&outcome) + gate(outcome.Publish.Status)), nil
 	}
 
 	result, err := h.client.Publish(host, path, body, token, expectedVersion, meta)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
 	}
-	if result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated {
-		narrowing = ""
-	}
-	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version") + narrowing), nil
-}
-
-// narrowingNote is the warn-only metadata gate: what the publish drops from
-// the current version. Best effort by design: a failed pre-read must neither
-// block nor clutter the write, so it yields no note.
-func (h *handler) narrowingNote(ctx context.Context, host, path, token string, expectedVersion int, meta map[string]string) string {
-	if expectedVersion == 0 {
-		return ""
-	}
-	ctx, cancel := metaguard.PreReadContext(ctx)
-	defer cancel()
-	current, err := h.client.FetchContext(ctx, host, path, token)
-	if err != nil {
-		log.Printf("warning: publish metadata check mark://%s%s: %v", host, path, err)
-		return ""
-	}
-	if current.Response.Status != protocol.StatusOK {
-		// Not readable now (not-found, archived, unauthorized): the publish
-		// itself reports that; nothing to compare against.
-		return ""
-	}
-	return metaguard.Compare(current.Response.Metadata, meta).Note(current.Response.Metadata["version"])
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version") + gate(result.Response.Status)), nil
 }
 
 // mergeClientAdapter exposes the markClient interface as a merge.Client. It

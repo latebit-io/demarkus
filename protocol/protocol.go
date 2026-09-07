@@ -10,6 +10,43 @@ import (
 // MaxListPageSize is the maximum number of entries in one LIST response.
 const MaxListPageSize = 1000
 
+// SplitTags parses a comma-separated tag list into trimmed, non-empty tags.
+func SplitTags(s string) []string {
+	var tags []string
+	for raw := range strings.SplitSeq(s, ",") {
+		if t := strings.TrimSpace(raw); t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return tags
+}
+
+// IsWriteSuccess reports a PUBLISH or APPEND status that landed.
+func IsWriteSuccess(status string) bool {
+	return status == StatusOK || status == StatusCreated
+}
+
+// ReservedMetadataKeys are server-owned response metadata keys; publishers
+// cannot set them and clients never treat them as publisher metadata.
+var ReservedMetadataKeys = map[string]bool{
+	"version":         true,
+	"modified":        true,
+	"etag":            true,
+	"content-hash":    true,
+	"current-version": true,
+	"server-version":  true,
+	"your-version":    true,
+	"total":           true,
+	"current":         true,
+	"chain-valid":     true,
+	"chain-error":     true,
+	"archived":        true,
+	"entries":         true,
+	"matches":         true,
+	"match":           true,
+	"status":          true,
+}
+
 const (
 	// DefaultPort is the default port for Mark Protocol servers.
 	DefaultPort = 6309

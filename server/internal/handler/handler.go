@@ -45,26 +45,6 @@ var controlKeys = map[string]bool{
 	"if-modified-since": true,
 }
 
-// reservedKeys are server-owned response metadata keys that publishers cannot set.
-var reservedKeys = map[string]bool{
-	"version":         true,
-	"modified":        true,
-	"etag":            true,
-	"content-hash":    true,
-	"current-version": true,
-	"server-version":  true,
-	"your-version":    true,
-	"total":           true,
-	"current":         true,
-	"chain-valid":     true,
-	"chain-error":     true,
-	"archived":        true,
-	"entries":         true,
-	"matches":         true,
-	"match":           true,
-	"status":          true,
-}
-
 // DocumentStore is the handler's view of a content store. The file-backed
 // implementation is protocol/store.Store; alternative backends implement the
 // same contract, including the per-method error contracts below.
@@ -1229,7 +1209,7 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 		if controlKeys[k] {
 			continue
 		}
-		if reservedKeys[k] {
+		if protocol.ReservedMetadataKeys[k] {
 			return nil, fmt.Errorf("metadata key %q is reserved", k)
 		}
 		if !protocol.IsValidMetaKey(k) {
@@ -1258,7 +1238,7 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 // leaking server-owned keys into responses.
 func copyPublisherMeta(dst, src map[string]string) {
 	for k, v := range src {
-		if reservedKeys[k] || controlKeys[k] {
+		if protocol.ReservedMetadataKeys[k] || controlKeys[k] {
 			continue
 		}
 		if !protocol.IsValidMetaKey(k) || !protocol.IsValidMetaValue(v) {

@@ -6,29 +6,6 @@ import (
 	"time"
 )
 
-func TestParseTags(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want []string
-	}{
-		{"empty", "", nil},
-		{"single", "go", []string{"go"}},
-		{"multiple", "go,auth,middleware", []string{"go", "auth", "middleware"}},
-		{"trims spaces", " go , auth ", []string{"go", "auth"}},
-		{"drops empties", "go,,auth,", []string{"go", "auth"}},
-		{"only commas", ",,,", nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ParseTags(tt.in)
-			if !slices.Equal(got, tt.want) {
-				t.Errorf("ParseTags(%q) = %v, want %v", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestParseImportance(t *testing.T) {
 	tests := []struct {
 		name string

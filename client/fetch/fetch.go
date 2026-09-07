@@ -321,23 +321,14 @@ const (
 	MatchBody    = protocol.MatchBody
 )
 
-// CatalogFallbackNote is the line surfaces append when body match was
-// requested and the server answered from the catalog instead.
-const CatalogFallbackNote = "note: server answered from the catalog (no body match); an empty table is not evidence of absence"
+// CatalogFallbackNote is what surfaces report when body match was requested
+// and the server answered from the catalog instead.
+const CatalogFallbackNote = "server answered from the catalog (no body match); an empty table is not evidence of absence"
 
 // AnsweredFromCatalog reports a body-match request that the server answered
 // in catalog mode: an ok response without the match: body echo.
 func AnsweredFromCatalog(opts LookupOptions, r Result) bool {
 	return opts.Match == MatchBody && r.Response.Status == protocol.StatusOK && r.Response.Metadata["match"] != MatchBody
-}
-
-// CatalogFallbackSuffix is the text a surface appends to a rendered lookup
-// result: the fallback note when it applies, else nothing.
-func CatalogFallbackSuffix(opts LookupOptions, r Result) string {
-	if !AnsweredFromCatalog(opts, r) {
-		return ""
-	}
-	return "\n" + CatalogFallbackNote + "\n"
 }
 
 // Lookup queries a server's catalog for documents matching a subject under

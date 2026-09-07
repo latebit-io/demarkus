@@ -10,40 +10,50 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
-// preReadTimeout bounds the pre-read when the tool call carries no deadline,
-// so a slow server cannot stall a publish on a warn-only check.
-const preReadTimeout = 5 * time.Second
-
-// PreReadContext derives the context for the pre-read: the caller's deadline
-// when it has one, else a short one of its own.
-func PreReadContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if _, ok := ctx.Deadline(); ok {
-		return context.WithCancel(ctx)
-	}
-	return context.WithTimeout(ctx, preReadTimeout)
-}
-
-// Server-owned or deliberately uncarried keys never count as dropped.
-var ignoredKeys = map[string]bool{
-	"version": true, "modified": true, "etag": true, "content-hash": true,
-	"agent": true, "retention": true,
-}
+// uncarried keys never count as dropped: the surface stamps agent, the store
+// never inherits retention, and tags are compared as a set.
+var uncarried = map[string]bool{"agent": true, "retention": true, "tags": true}
 
 // maxValue bounds a dropped key's value in the note.
 const maxValue = 80
 
-// Narrowing lists what a publish drops relative to the current version.
+// readTimeout bounds the read of the replaced version when the tool call
+// carries no deadline of its own.
+const readTimeout = 5 * time.Second
+
+// Gate runs after a successful update: read fetches the replaced version and
+// the note names what the new one dropped. A create (expectedVersion 0)
+// yields nothing; the read error is the caller's to log, never a blocker.
+func Gate(ctx context.Context, expectedVersion int, meta map[string]string, read func(context.Context) (fetch.Result, error)) (string, error) {
+	if expectedVersion == 0 {
+		return "", nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	defer cancel()
+	replaced, err := read(ctx)
+	if err != nil {
+		return "", err
+	}
+	if replaced.Response.Status != protocol.StatusOK {
+		// Pruned by retention or otherwise unreadable: nothing to compare.
+		return "", nil
+	}
+	return Compare(replaced.Response.Metadata, meta).Note(replaced.Response.Metadata["version"]), nil
+}
+
+// Narrowing lists what a publish drops relative to the version it replaced.
 type Narrowing struct {
 	Tags []string // tags present before, absent now
 	Keys []string // "key=value" for keys present before, absent now
 }
 
-// Empty reports that nothing was dropped.
-func (n Narrowing) Empty() bool { return len(n.Tags) == 0 && len(n.Keys) == 0 }
-
-// Compare diffs the current version's metadata against the incoming map.
+// Compare diffs the replaced version's metadata against the incoming map.
 func Compare(current, incoming map[string]string) Narrowing {
 	var n Narrowing
 	have := splitTags(incoming["tags"])
@@ -53,7 +63,7 @@ func Compare(current, incoming map[string]string) Narrowing {
 		}
 	}
 	for key, value := range current {
-		if ignoredKeys[key] || key == "tags" {
+		if protocol.ReservedMetadataKeys[key] || uncarried[key] {
 			continue
 		}
 		if _, ok := incoming[key]; !ok {
@@ -68,9 +78,6 @@ func Compare(current, incoming map[string]string) Narrowing {
 // Note renders the warning appended to a successful publish result, or ""
 // when nothing was dropped. version is the replaced version's number.
 func (n Narrowing) Note(version string) string {
-	if n.Empty() {
-		return ""
-	}
 	var parts []string
 	if len(n.Tags) > 0 {
 		parts = append(parts, "tags "+strings.Join(n.Tags, ", "))
@@ -78,8 +85,11 @@ func (n Narrowing) Note(version string) string {
 	if len(n.Keys) > 0 {
 		parts = append(parts, "keys "+strings.Join(n.Keys, "; "))
 	}
-	return fmt.Sprintf("\nnote: this publish dropped %s carried by v%s; fetch with verbose: true and republish the complete metadata map to restore them\n",
-		strings.Join(parts, " and "), version)
+	if len(parts) == 0 {
+		return ""
+	}
+	return mcpfmt.Note(fmt.Sprintf("this publish dropped %s carried by v%s; fetch with verbose: true and republish the complete metadata map to restore them",
+		strings.Join(parts, " and "), version))
 }
 
 // truncate cuts value at maxValue bytes on a rune boundary.
@@ -96,10 +106,8 @@ func truncate(value string) string {
 
 func splitTags(s string) map[string]bool {
 	set := map[string]bool{}
-	for raw := range strings.SplitSeq(s, ",") {
-		if t := strings.TrimSpace(raw); t != "" {
-			set[t] = true
-		}
+	for _, t := range protocol.SplitTags(s) {
+		set[t] = true
 	}
 	return set
 }

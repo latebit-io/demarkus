@@ -62,8 +62,8 @@ OKF `type` on publish: `architecture.md` → `Architecture`, `adr/*` → `Decisi
 
 Read intents: `mark_lookup` (catalog) first, then `mark_fetch`:
 
-1. `mark_lookup` with `url=/<project>/` (or `/` for every project) and a subject `query`: importance-ranked table (path, importance, title, tags), no bodies. Catalog lookup, not full-text search: finds only what was tagged or titled. Narrow with `filter` (`tag=`, `modified-after=`, `modified-before=`), cap with `limit`.
-2. `mark_fetch` the rows worth reading. Also `mark_fetch /index.md` / `/<project>/index.md` directly; lookup misses untagged docs, the hub still anchors discovery.
+1. `mark_lookup` with `url=/<project>/` (or `/` for every project) and a subject `query`: importance-ranked table (path, importance, title, tags), no bodies. Catalog lookup finds only what was tagged or titled; `match: body` also matches section text, and body rows carry `#anchor` and a snippet. Narrow with `filter` (`tag=`, `modified-after=`, `modified-before=`), cap with `limit`.
+2. `mark_fetch` rows at their `#anchor`; a whole document only when the outline shows the answer spans sections. Also `mark_fetch /index.md` / `/<project>/index.md` directly; lookup misses untagged docs, the hub still anchors discovery.
 3. `mark_backlinks` or `mark_graph` for related documents across projects.
 4. Lookup, fetch, or graph failure: surface the error, never report an empty result. Only a successful search with no matches means nothing found.
 

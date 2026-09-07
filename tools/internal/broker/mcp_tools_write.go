@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/client/metaguard"
@@ -111,18 +112,9 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 	if expectedVersion < 0 {
 		return mcp.NewToolResultError("expected_version must be >= 0"), nil
 	}
-	// Default flipped to "merge" in Slice 6 — matches the local
-	// demarkus-mcp's surface. An explicit empty or whitespace-
-	// only on_conflict normalizes to the default since MCP
-	// clients commonly send blank strings for optional fields;
-	// rejecting them would turn the default path into a needless
-	// tool error.
-	onConflict := strings.TrimSpace(req.GetString("on_conflict", "merge"))
-	if onConflict == "" {
-		onConflict = "merge"
-	}
-	if onConflict != "merge" && onConflict != "fail" {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid on_conflict %q: expected \"merge\" or \"fail\"", onConflict)), nil
+	onConflict, err := merge.ParseOnConflict(req.GetString("on_conflict", ""))
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
@@ -132,8 +124,20 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 		return errRes, nil
 	}
 	meta := publisherMeta(req.GetArguments(), claims)
-	narrowing := g.narrowingNote(ctx, worldName, path, expectedVersion, meta)
-	if onConflict == "merge" {
+	// Warn-only narrowing gate, run after a write that landed.
+	gate := func(status string) string {
+		if !protocol.IsWriteSuccess(status) {
+			return ""
+		}
+		note, gateErr := metaguard.Gate(ctx, expectedVersion, meta, func(ctx context.Context) (fetch.Result, error) {
+			return g.dispatcher.FetchContext(ctx, worldName, index.VersionPath(path, expectedVersion), "")
+		})
+		if gateErr != nil {
+			g.log.Warn("publish metadata check failed", "world", worldName, "path", path, "err", gateErr)
+		}
+		return note
+	}
+	if onConflict == merge.OnConflictMerge {
 		adapter := &brokerMergeAdapter{
 			g:         g,
 			ctx:       ctx,
@@ -143,10 +147,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 		if mErr != nil {
 			return g.toolErrorFor("publish", worldName, mErr), nil
 		}
-		if outcome.Status != merge.OutcomeOK {
-			narrowing = ""
-		}
-		return mcp.NewToolResultText(formatMergeOutcome(&outcome) + narrowing), nil
+		return mcp.NewToolResultText(formatMergeOutcome(&outcome) + gate(outcome.Publish.Status)), nil
 	}
 	// on_conflict=fail: the world's conflict status is forwarded verbatim.
 	result, perr := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
@@ -155,10 +156,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 	if perr != nil {
 		return g.toolErrorFor("publish", worldName, perr), nil
 	}
-	if result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated {
-		narrowing = ""
-	}
-	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version") + narrowing), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version") + gate(result.Response.Status)), nil
 }
 
 // brokerMergeAdapter keeps merge reads public and applies a publish token
@@ -372,25 +370,3 @@ func (g *mcpGateway) handleMarkArchive(ctx context.Context, req mcp.CallToolRequ
 var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkPublish
 var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkAppend
 var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkArchive
-
-// narrowingNote is the warn-only metadata gate: what the publish drops from
-// the current version. Best effort by design: a failed pre-read must neither
-// block nor clutter the write, so it yields no note.
-func (g *mcpGateway) narrowingNote(ctx context.Context, worldName, path string, expectedVersion int, meta map[string]string) string {
-	if expectedVersion == 0 {
-		return ""
-	}
-	ctx, cancel := metaguard.PreReadContext(ctx)
-	defer cancel()
-	current, err := g.dispatcher.FetchContext(ctx, worldName, path, "")
-	if err != nil {
-		g.log.Warn("publish metadata check failed", "world", worldName, "path", path, "err", err)
-		return ""
-	}
-	if current.Response.Status != protocol.StatusOK {
-		// Not readable now (not-found, archived, unauthorized): the publish
-		// itself reports that; nothing to compare against.
-		return ""
-	}
-	return metaguard.Compare(current.Response.Metadata, meta).Note(current.Response.Metadata["version"])
-}

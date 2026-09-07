@@ -22,7 +22,7 @@ Binding is **enforced**: a write to a soul other than the bound one is denied at
 
 Before "what do I know / did we decide / have we seen X", and at the start of substantive work, check the soul:
 
-- `mark_lookup` with `url=/<slug>/` and a subject `query` is the **card catalog**: importance-ranked table (path, importance, title, tags), no bodies. Then `mark_fetch` the rows worth reading. It finds only what was tagged or titled, so pair it with `mark_fetch /<slug>/index.md`. Transport/auth/server errors are failures to surface, never empty results.
+- `mark_lookup` with `url=/<slug>/` and a subject `query` is the **card catalog**: importance-ranked table (path, importance, title, tags), no bodies; `match: body` when the subject lives in section text rather than tags; body rows carry `#anchor` and a snippet. Then `mark_fetch` rows at their `#anchor`; a whole document only when the outline shows the answer spans sections. It finds only what was tagged or titled, so pair it with `mark_fetch /<slug>/index.md`. Transport/auth/server errors are failures to surface, never empty results.
 - `mark_backlinks` / `mark_graph` surface related docs via the link graph.
 - Nothing relevant: say so. Never fabricate recall.
 

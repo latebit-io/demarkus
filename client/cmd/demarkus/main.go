@@ -733,7 +733,7 @@ func lookupMain(args []string) {
 		log.Fatal(err)
 	}
 	if fetch.AnsweredFromCatalog(opts, result) {
-		fmt.Fprintln(os.Stderr, fetch.CatalogFallbackNote)
+		fmt.Fprintln(os.Stderr, "note: "+fetch.CatalogFallbackNote)
 	}
 
 	if *verbose {

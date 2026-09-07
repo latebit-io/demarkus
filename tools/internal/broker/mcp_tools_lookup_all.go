@@ -316,7 +316,7 @@ func (r *lookupAllReport) table() string {
 		b.WriteString("\n")
 	}
 	if len(r.catalogWorlds) > 0 {
-		fmt.Fprintf(&b, "\nnote: answered from the catalog (no body match): %s\n", strings.Join(r.catalogWorlds, ", "))
+		b.WriteString(mcpfmt.Note("answered from the catalog (no body match): " + strings.Join(r.catalogWorlds, ", ")))
 	}
 	if len(r.failures) > 0 {
 		b.WriteString("\n## World failures\n\n| World | Error |\n|-------|-------|\n")

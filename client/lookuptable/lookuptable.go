@@ -120,6 +120,7 @@ func Unescape(s string) string {
 }
 
 var cellEscaper = strings.NewReplacer(
+	"\r\n", " ", "\r", " ", "\n", " ",
 	`\`, `\\`,
 	`[`, `\[`, `]`, `\]`,
 	`(`, `\(`, `)`, `\)`,
@@ -131,6 +132,5 @@ var cellEscaper = strings.NewReplacer(
 // Escape applies the server's markdown cell escaping; a line break of any
 // form becomes one space.
 func Escape(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", " ")
-	return cellEscaper.Replace(strings.ReplaceAll(strings.ReplaceAll(s, "\r", " "), "\n", " "))
+	return cellEscaper.Replace(s)
 }

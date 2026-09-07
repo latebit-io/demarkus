@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // defaultImportance is used when a document declares no importance, or an
@@ -23,26 +25,12 @@ func FromDocument(docPath string, metadata map[string]string, body []byte, modif
 	maps.Copy(meta, metadata)
 	return &Entry{
 		Path:       docPath,
-		Tags:       ParseTags(meta["tags"]),
+		Tags:       protocol.SplitTags(meta["tags"]),
 		Importance: ParseImportance(meta["importance"]),
 		Title:      resolveTitle(meta["title"], body, docPath),
 		Modified:   modified,
 		Metadata:   meta,
 	}
-}
-
-// ParseTags splits a comma-separated tag string into trimmed, non-empty tags.
-func ParseTags(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var tags []string
-	for raw := range strings.SplitSeq(s, ",") {
-		if t := strings.TrimSpace(raw); t != "" {
-			tags = append(tags, t)
-		}
-	}
-	return tags
 }
 
 // ParseImportance parses a float in [0,1]. Absent, unparseable, or

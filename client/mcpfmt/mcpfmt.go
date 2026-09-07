@@ -171,3 +171,17 @@ func CapTableTags(table string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// Note renders the trailer surfaces append to a tool result.
+func Note(text string) string {
+	return "\nnote: " + text + "\n"
+}
+
+// CatalogFallback is the note appended to a lookup result when body match
+// was requested and the server answered from the catalog; else "".
+func CatalogFallback(opts fetch.LookupOptions, r fetch.Result) string {
+	if !fetch.AnsweredFromCatalog(opts, r) {
+		return ""
+	}
+	return Note(fetch.CatalogFallbackNote)
+}

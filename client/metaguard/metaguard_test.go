@@ -35,12 +35,11 @@ func TestCompareNothingDropped(t *testing.T) {
 		{"tags": "b, a, c", "title": "T2"},
 		{"tags": "a,b", "title": "T", "extra": "new"},
 	} {
-		n := Compare(current, incoming)
-		if !n.Empty() || n.Note("3") != "" {
+		if n := Compare(current, incoming); n.Note("3") != "" {
 			t.Fatalf("unexpected narrowing %+v for %v", n, incoming)
 		}
 	}
-	if n := Compare(nil, map[string]string{"tags": "a"}); !n.Empty() {
+	if n := Compare(nil, map[string]string{"tags": "a"}); n.Note("3") != "" {
 		t.Fatalf("nil current narrowed: %+v", n)
 	}
 }

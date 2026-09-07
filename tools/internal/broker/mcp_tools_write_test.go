@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -398,8 +399,8 @@ func TestHandleMarkPublishMergeUsesTokenOnlyForPublish(t *testing.T) {
 	if len(publishTokens) != 1 {
 		t.Errorf("publish dispatched %d times, want 1", len(publishTokens))
 	}
-	if len(fetchTokens) != 3 {
-		t.Errorf("fetch dispatched %d times, want 3 (narrowing gate + base + current)", len(fetchTokens))
+	if len(fetchTokens) != 2 {
+		t.Errorf("fetch dispatched %d times, want 2 (base + current)", len(fetchTokens))
 	}
 	if len(publishTokens) == 1 && publishTokens[0] == "" {
 		t.Error("publish dispatched without a publish token")
@@ -1062,7 +1063,8 @@ func TestHandleMarkPublishNarrowingNote(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
 		published: map[string]fetch.Result{
-			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK,
+			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "3"}}},
+			"team-a" + index.VersionPath("/foo.md", 3): {Response: protocol.Response{Status: protocol.StatusOK,
 				Metadata: map[string]string{"version": "3", "tags": "a,b", "rel-related": "/x.md"}, Body: "x"}},
 		},
 		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
