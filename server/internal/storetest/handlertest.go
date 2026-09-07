@@ -152,7 +152,10 @@ func normalize(resp protocol.Response) string {
 		}
 	}
 	body := rfc3339.ReplaceAllString(resp.Body, "<ts>")
-	if strings.HasPrefix(body, "\n# Lookup matches") {
+	switch {
+	case resp.Metadata["match"] == "body":
+		body = sortBodyRows(body)
+	case strings.HasPrefix(body, "\n# Lookup matches"):
 		body = sortLookupTies(body)
 	}
 	fmt.Fprintf(&sb, " body=%q", body)
@@ -196,6 +199,27 @@ func sortLookupTies(body string) string {
 		}
 		sort.Strings(lines[i:j])
 		i = j
+	}
+	return strings.Join(lines, "\n")
+}
+
+// sortBodyRows sorts every data row of a body-mode table: the spec fixes the
+// row set, not the order, so backends are compared on the set.
+func sortBodyRows(body string) string {
+	lines := strings.Split(body, "\n")
+	start := -1
+	for i, line := range lines {
+		isRow := strings.HasPrefix(line, "| /")
+		if isRow && start < 0 {
+			start = i
+		}
+		if !isRow && start >= 0 {
+			sort.Strings(lines[start:i])
+			start = -1
+		}
+	}
+	if start >= 0 {
+		sort.Strings(lines[start:])
 	}
 	return strings.Join(lines, "\n")
 }
@@ -244,5 +268,11 @@ func handlerSnapshot(t *testing.T, h *handler.Handler, currents map[string]int) 
 	for _, f := range diffFilters {
 		add("lookup filter "+f, request(protocol.VerbLookup, "/", map[string]string{"query": "*", "filter": f}, ""))
 	}
+	for _, q := range diffQueries {
+		for _, scope := range diffScopes {
+			add(fmt.Sprintf("lookup-body q=%q scope=%q", q, scope), request(protocol.VerbLookup, scope, map[string]string{"query": q, "match": "body"}, ""))
+		}
+	}
+	add("lookup-catalog-echo", request(protocol.VerbLookup, "/", map[string]string{"query": "alpha", "match": "catalog"}, ""))
 	return lines
 }

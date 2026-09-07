@@ -24,6 +24,13 @@ func TestLookupConformance(t *testing.T) {
 	})
 }
 
+func TestLookupHandlerConformance(t *testing.T) {
+	storetest.RunLookupHandlerConformance(t, func(t *testing.T) storetest.LookupBackend {
+		store, _ := newWritableStore(t)
+		return storetest.LookupBackend{Store: store, Catalog: store, Views: store}
+	})
+}
+
 func TestFileDifferential(t *testing.T) {
 	storetest.RunDifferential(t,
 		func(t *testing.T) storetest.LookupBackend { return storetest.FileBackend(t) },

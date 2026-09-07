@@ -29,6 +29,8 @@ type lookupAllMatch struct {
 	importance float64
 	title      string
 	tags       string
+	anchor     string // body mode: section anchor without '#'
+	snippet    string // body mode only
 	rank       int
 }
 
@@ -40,6 +42,7 @@ type lookupAllFailure struct {
 type lookupAllWorldResult struct {
 	world   string
 	matches []lookupAllMatch
+	catalog bool // body match requested, world answered from its catalog
 	err     error
 }
 
@@ -67,11 +70,13 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 	}
 
 	worlds := readableWorlds(g.srv.cfg)
-	results := g.lookupAllWorlds(ctx, worlds, scope, query, fetch.LookupOptions{
+	opts := fetch.LookupOptions{
 		Filter: req.GetString("filter", ""),
 		Limit:  limit,
-	})
-	matches, failures := collectLookupAllResults(results)
+		Match:  req.GetString("match", ""),
+	}
+	results := g.lookupAllWorlds(ctx, worlds, scope, query, opts)
+	matches, failures, catalogWorlds := collectLookupAllResults(results)
 	if len(failures) == len(worlds) && len(worlds) > 0 {
 		return mcp.NewToolResultError("lookup failed in all worlds: " + formatLookupAllFailureList(failures)), nil
 	}
@@ -91,7 +96,20 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}
-	return mcp.NewToolResultText(formatLookupAllResult(query, len(worlds), matches, failures)), nil
+	return mcp.NewToolResultText(formatLookupAllResult(&lookupAllReport{
+		query: query, worlds: len(worlds), matches: matches, failures: failures,
+		body: opts.Match == fetch.MatchBody, catalogWorlds: catalogWorlds,
+	})), nil
+}
+
+// lookupAllReport is everything the merged table renders.
+type lookupAllReport struct {
+	query         string
+	worlds        int
+	matches       []lookupAllMatch
+	failures      []lookupAllFailure
+	body          bool     // body match requested: render the Snippet column
+	catalogWorlds []string // worlds that answered a body request from the catalog
 }
 
 func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []WorldConfig, scope, query string, opts fetch.LookupOptions) []lookupAllWorldResult {
@@ -117,7 +135,7 @@ func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []WorldConfig, 
 				if err == nil {
 					matches, err = parseLookupAllMatches(world.Name, result)
 				}
-				results <- lookupAllWorldResult{world: world.Name, matches: matches, err: err}
+				results <- lookupAllWorldResult{world: world.Name, matches: matches, catalog: fetch.AnsweredFromCatalog(opts, result), err: err}
 			}
 		})
 	}
@@ -174,27 +192,29 @@ func completeCanceledLookupResults(out []lookupAllWorldResult, worlds []WorldCon
 	return out
 }
 
-func collectLookupAllResults(results []lookupAllWorldResult) ([]lookupAllMatch, []lookupAllFailure) {
-	var matches []lookupAllMatch
-	var failures []lookupAllFailure
+func collectLookupAllResults(results []lookupAllWorldResult) (matches []lookupAllMatch, failures []lookupAllFailure, catalogWorlds []string) {
 	for _, result := range results {
 		if result.err != nil {
 			failures = append(failures, lookupAllFailure{world: result.world, err: result.err})
 			continue
 		}
+		if result.catalog {
+			catalogWorlds = append(catalogWorlds, result.world)
+		}
 		matches = append(matches, result.matches...)
 	}
 	sort.Slice(failures, func(i, j int) bool { return failures[i].world < failures[j].world })
-	return matches, failures
+	sort.Strings(catalogWorlds)
+	return matches, failures, catalogWorlds
 }
 
 func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch, error) {
 	lines := strings.Split(strings.ReplaceAll(result.Response.Body, "\r\n", "\n"), "\n")
-	header := -1
+	header, columns := -1, 0
 	for i, line := range lines {
 		cells, ok := splitLookupTableRow(line)
-		if ok && len(cells) == 4 && strings.EqualFold(cells[0], "Path") && strings.EqualFold(cells[1], "Importance") && strings.EqualFold(cells[2], "Title") && strings.EqualFold(cells[3], "Tags") {
-			header = i
+		if ok && isLookupTableHeader(cells) {
+			header, columns = i, len(cells)
 			break
 		}
 	}
@@ -217,25 +237,30 @@ func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch,
 		if isLookupTableSeparator(cells) {
 			continue
 		}
-		if len(cells) != 4 {
-			return nil, fmt.Errorf("malformed LOOKUP response: row has %d columns", len(cells))
+		if len(cells) != columns {
+			return nil, fmt.Errorf("malformed LOOKUP response: row has %d columns, header %d", len(cells), columns)
 		}
 		importance, err := strconv.ParseFloat(unescapeLookupCell(cells[1]), 64)
 		if err != nil || math.IsNaN(importance) || math.IsInf(importance, 0) || importance < 0 || importance > 1 {
 			return nil, fmt.Errorf("malformed LOOKUP response: invalid importance %q", cells[1])
 		}
-		matchPath := unescapeLookupCell(cells[0])
+		matchPath, anchor, _ := strings.Cut(unescapeLookupCell(cells[0]), "#")
 		if !strings.HasPrefix(matchPath, "/") {
 			return nil, fmt.Errorf("malformed LOOKUP response: invalid path %q", matchPath)
 		}
-		matches = append(matches, lookupAllMatch{
+		match := lookupAllMatch{
 			world:      world,
 			path:       matchPath,
+			anchor:     anchor,
 			importance: importance,
 			title:      unescapeLookupCell(cells[2]),
 			tags:       unescapeLookupCell(cells[3]),
 			rank:       len(matches),
-		})
+		}
+		if columns == 5 {
+			match.snippet = unescapeLookupCell(cells[4])
+		}
+		matches = append(matches, match)
 	}
 
 	want, err := strconv.Atoi(result.Response.Metadata["matches"])
@@ -271,8 +296,22 @@ func lookupCharEscaped(s string, at int) bool {
 	return backslashes%2 == 1
 }
 
+// isLookupTableHeader recognizes the catalog table and its body-mode
+// extension with the Snippet column.
+func isLookupTableHeader(cells []string) bool {
+	if len(cells) != 4 && len(cells) != 5 {
+		return false
+	}
+	for i, want := range []string{"Path", "Importance", "Title", "Tags", "Snippet"}[:len(cells)] {
+		if !strings.EqualFold(cells[i], want) {
+			return false
+		}
+	}
+	return true
+}
+
 func isLookupTableSeparator(cells []string) bool {
-	if len(cells) != 4 {
+	if len(cells) != 4 && len(cells) != 5 {
 		return false
 	}
 	for _, cell := range cells {
@@ -308,23 +347,42 @@ func escapeLookupCell(s string) string {
 	return lookupCellEscaper.Replace(strings.ReplaceAll(strings.ReplaceAll(s, "\r", " "), "\n", " "))
 }
 
-func formatLookupAllResult(query string, worldCount int, matches []lookupAllMatch, failures []lookupAllFailure) string {
+func formatLookupAllResult(r *lookupAllReport) string {
 	var b strings.Builder
 	status := "ok"
-	if len(failures) > 0 {
+	if len(r.failures) > 0 {
 		status = "partial"
 	}
-	fmt.Fprintf(&b, "status: %s\nworlds: %d\nsucceeded: %d\nfailed: %d\nmatches: %d\n", status, worldCount, worldCount-len(failures), len(failures), len(matches))
-	fmt.Fprintf(&b, "\n# Lookup matches for \"%s\" across readable worlds\n\n", escapeLookupCell(query))
-	b.WriteString("| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n")
-	for _, match := range matches {
-		fmt.Fprintf(&b, "| %s | %.2f | %s | %s |\n",
-			escapeLookupCell(qualifiedLookupURL(match.world, match.path)), match.importance,
-			escapeLookupCell(match.title), escapeLookupCell(match.tags))
+	fmt.Fprintf(&b, "status: %s\nworlds: %d\nsucceeded: %d\nfailed: %d\nmatches: %d\n", status, r.worlds, r.worlds-len(r.failures), len(r.failures), len(r.matches))
+	if r.body {
+		b.WriteString("match: body\n")
 	}
-	if len(failures) > 0 {
+	fmt.Fprintf(&b, "\n# Lookup matches for \"%s\" across readable worlds\n\n", escapeLookupCell(r.query))
+	if r.body {
+		b.WriteString("| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n")
+	} else {
+		b.WriteString("| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n")
+	}
+	for _, match := range r.matches {
+		// The anchor rides after escaping: a slug cannot break the table,
+		// and the agent hands the row to mark_fetch as is.
+		location := escapeLookupCell(qualifiedLookupURL(match.world, match.path))
+		if match.anchor != "" {
+			location += "#" + match.anchor
+		}
+		fmt.Fprintf(&b, "| %s | %.2f | %s | %s |", location, match.importance,
+			escapeLookupCell(match.title), escapeLookupCell(match.tags))
+		if r.body {
+			fmt.Fprintf(&b, " %s |", escapeLookupCell(match.snippet))
+		}
+		b.WriteString("\n")
+	}
+	if len(r.catalogWorlds) > 0 {
+		fmt.Fprintf(&b, "\nnote: answered from the catalog (no body match): %s\n", strings.Join(r.catalogWorlds, ", "))
+	}
+	if len(r.failures) > 0 {
 		b.WriteString("\n## World failures\n\n| World | Error |\n|-------|-------|\n")
-		for _, failure := range failures {
+		for _, failure := range r.failures {
 			fmt.Fprintf(&b, "| %s | %s |\n", escapeLookupCell(failure.world), escapeLookupCell(failure.err.Error()))
 		}
 	}

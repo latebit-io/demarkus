@@ -250,12 +250,17 @@ func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest
 	opts := fetch.LookupOptions{
 		Filter: req.GetString("filter", ""),
 		Limit:  req.GetInt("limit", 0),
+		Match:  req.GetString("match", ""),
 	}
 	result, err := g.dispatcher.Lookup(worldName, scope, query, "", opts)
 	if err != nil {
 		return g.toolErrorFor("lookup", worldName, err), nil
 	}
-	return mcp.NewToolResultText(formatToolResult(result, "matches")), nil
+	text := formatToolResult(result, "matches", "match")
+	if fetch.AnsweredFromCatalog(opts, result) {
+		text += "\n" + fetch.CatalogFallbackNote + "\n"
+	}
+	return mcp.NewToolResultText(text), nil
 }
 
 // toolErrorFor renders a tool-error envelope from a dispatcher

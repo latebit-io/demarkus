@@ -2149,7 +2149,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		b := newBackend(t)
 		h := newHandler(b, tokenStore)
 
-		for _, key := range []string{"version", "modified", "etag", "current-version", "server-version", "matches"} {
+		for _, key := range []string{"version", "modified", "etag", "current-version", "server-version", "matches", "match"} {
 			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": evil\n---\n# Content\n")
 			h.HandleStream(stream)
 

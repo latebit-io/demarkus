@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"reflect"
 	"slices"
@@ -34,6 +35,8 @@ type Options struct {
 	// path beyond the cap is rejected. Approximate under concurrency:
 	// a per-tenant quota, not an exact invariant.
 	MaxDocuments int
+	// Logger receives section-index warnings; nil uses slog.Default.
+	Logger *slog.Logger
 }
 
 // Store owns a validated immutable snapshot for one world.
@@ -43,6 +46,7 @@ type Store struct {
 	requestTimeout time.Duration
 	shardWorkers   int
 	requirePolicy  bool
+	logger         *slog.Logger
 	maxDocuments   int
 	snapshot       atomic.Pointer[snapshot]
 	refreshMu      sync.Mutex
@@ -127,6 +131,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		requestTimeout: options.RequestTimeout,
 		shardWorkers:   options.ShardWorkers,
 		requirePolicy:  options.RequirePolicy,
+		logger:         options.Logger,
 		maxDocuments:   options.MaxDocuments,
 		commitToken:    make(chan struct{}, 1),
 		commitInterval: defaultCommitInterval,
@@ -137,7 +142,10 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	requestCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
 	store.refreshMu.Lock()
-	loaded, err := loadRootSnapshot(requestCtx, store.objects, store.worldID, store.shardWorkers)
+	if store.logger == nil {
+		store.logger = slog.Default()
+	}
+	loaded, err := loadRootSnapshot(requestCtx, store.objects, store.logger, store.worldID, store.shardWorkers)
 	if err != nil {
 		store.refreshMu.Unlock()
 		return nil, fmt.Errorf("open bucket store: %w", err)
@@ -154,7 +162,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	return store, nil
 }
 
-func loadRootSnapshot(ctx context.Context, objects blob.Store, worldID string, workers int) (*snapshot, error) {
+func loadRootSnapshot(ctx context.Context, objects blob.Store, logger *slog.Logger, worldID string, workers int) (*snapshot, error) {
 	head, headAttributes, err := loadHeadObject(ctx, objects, worldID)
 	if err != nil {
 		if errors.Is(err, blob.ErrNotFound) {
@@ -176,6 +184,9 @@ func loadRootSnapshot(ctx context.Context, objects blob.Store, worldID string, w
 	loaded, err := buildDerivedSnapshot(&head, headAttributes, &root, shards)
 	if err != nil {
 		return nil, fmt.Errorf("%w: build snapshot: %v", blob.ErrIntegrity, err)
+	}
+	if err := indexSections(ctx, objects, logger, loaded, nil, nil, workers); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -263,6 +274,9 @@ func (store *Store) refreshSnapshot(ctx context.Context) (*snapshot, error) {
 	loaded, err := buildDerivedSnapshot(&head, currentAttributes, &root, shards)
 	if err != nil {
 		return nil, fmt.Errorf("%w: build snapshot: %v", blob.ErrIntegrity, err)
+	}
+	if err := indexSections(ctx, store.objects, store.logger, loaded, cached, nil, store.shardWorkers); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

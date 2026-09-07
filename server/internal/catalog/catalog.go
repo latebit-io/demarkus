@@ -14,6 +14,7 @@
 package catalog
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -30,46 +31,108 @@ type Entry struct {
 	Title      string
 	Modified   time.Time
 	Metadata   map[string]string // declared publisher metadata, for filter predicates
+
+	terms []term // tag and title tokens for body match; set by Set
 }
 
-// Result is a ranked LOOKUP match.
+// Result is a ranked LOOKUP match. Anchor, Heading, and Snippet are set
+// only in body mode; the bare-path section of a document leaves Anchor and
+// Heading empty.
 type Result struct {
 	Entry
-	Score int // number of distinct query terms matched in tags or title
+	Score   int    // catalog mode: distinct query terms matched in tags or title
+	Anchor  string // body mode: section anchor without '#'
+	Heading string // body mode: heading text of the section
+	Snippet string // body mode: one line of section text, at most SnippetBytes
 }
 
-// Catalog is a concurrency-safe map of document path to catalog entry.
+// SnippetBytes caps a body-mode snippet, per the spec.
+const SnippetBytes = 240
+
+// Mode selects what a Lookup matches against.
+type Mode string
+
+// Lookup modes. The empty Mode is catalog mode.
+const (
+	MatchCatalog Mode = "catalog" // declared tags and title
+	MatchBody    Mode = "body"    // the section index
+)
+
+// ParseMode maps the wire value of the match key to a Mode; "" is catalog.
+func ParseMode(s string) (Mode, error) {
+	switch strings.TrimSpace(s) {
+	case "", string(MatchCatalog):
+		return MatchCatalog, nil
+	case string(MatchBody):
+		return MatchBody, nil
+	}
+	return "", fmt.Errorf("unknown match mode %q", s)
+}
+
+// Catalog is a concurrency-safe map of document path to catalog entry, with
+// the section index for body match beside it.
 type Catalog struct {
-	mu      sync.RWMutex
-	entries map[string]*Entry
+	mu       sync.RWMutex
+	entries  map[string]*Entry
+	sections map[string]*DocSections
 }
 
 // New returns an empty catalog.
 func New() *Catalog {
-	return &Catalog{entries: make(map[string]*Entry)}
+	return &Catalog{entries: make(map[string]*Entry), sections: make(map[string]*DocSections)}
 }
 
-// Set adds or replaces the entry for e.Path. The catalog takes ownership of e;
-// the caller must not mutate it afterward.
+// Set adds or replaces the entry for e.Path, leaving its section index as it
+// was. The catalog takes ownership of e; the caller must not mutate it.
 func (c *Catalog) Set(e *Entry) {
 	path := store.CanonicalPath(e.Path)
+	e.Path = path
+	e.terms = termSet(append(append([]string(nil), e.Tags...), e.Title))
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e.Path = path
 	c.entries[path] = e
 }
 
-// Put derives an entry from a written document and records it; body has
-// store frontmatter already stripped.
+// Put derives an entry from a written document and indexes its sections;
+// body has store frontmatter already stripped.
 func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modified time.Time) {
-	c.Set(FromDocument(docPath, meta, body, modified))
-}
-
-// Remove deletes the entry for the given path, if present.
-func (c *Catalog) Remove(docPath string) {
+	e := FromDocument(docPath, meta, body, modified)
+	e.Path = store.CanonicalPath(e.Path)
+	e.terms = termSet(append(append([]string(nil), e.Tags...), e.Title))
+	doc := IndexSections(body)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.entries, store.CanonicalPath(docPath))
+	c.entries[e.Path] = e
+	c.sections[e.Path] = doc
+}
+
+// SetSections installs a prebuilt section index for a document, for stores
+// that carry indexes across snapshots. nil removes the index.
+func (c *Catalog) SetSections(docPath string, doc *DocSections) {
+	path := store.CanonicalPath(docPath)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if doc == nil {
+		delete(c.sections, path)
+		return
+	}
+	c.sections[path] = doc
+}
+
+// Sections returns the section index of a document, or nil when none.
+func (c *Catalog) Sections(docPath string) *DocSections {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.sections[store.CanonicalPath(docPath)]
+}
+
+// Remove deletes the entry and section index for the given path, if present.
+func (c *Catalog) Remove(docPath string) {
+	path := store.CanonicalPath(docPath)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, path)
+	delete(c.sections, path)
 }
 
 // Len returns the number of cataloged documents.
@@ -88,6 +151,8 @@ type Options struct {
 	Filter []Predicate
 	// Max caps the number of results returned. Zero means no cap.
 	Max int
+	// Match selects catalog mode (default) or body mode.
+	Match Mode
 }
 
 // Lookup returns documents whose tags or title match at least one query term,
@@ -100,6 +165,15 @@ type Options struct {
 // importance — "the most important documents here" without guessing a
 // subject. This is the whole-catalog view that universe browsers build on.
 func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
+	mode, err := ParseMode(string(opts.Match))
+	if err != nil {
+		return nil, err
+	}
+	if mode == MatchBody {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+		return c.lookupBody(queryTerms(query), NormalizeScope(opts.Scope), opts), nil
+	}
 	matchAll := strings.TrimSpace(query) == "*"
 	terms := Tokenize(query)
 	if !matchAll && len(terms) == 0 {

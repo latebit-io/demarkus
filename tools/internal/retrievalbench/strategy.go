@@ -79,54 +79,56 @@ func (LookupFetch) Name() string { return "lookup-fetch" }
 
 // Run implements Strategy.
 func (s LookupFetch) Run(ctx context.Context, rec *Recorder, q *Question) (Outcome, error) {
-	lookup, err := rec.Call(ctx, "mark_lookup", map[string]any{
+	return runLookupThenFetch(ctx, rec, q, map[string]any{
 		"url": s.Scope, "query": q.Query, "limit": s.LookupLimit,
-	})
+	}, s.MaxFetches)
+}
+
+// BodyFetch is the body-match behavior: one lookup with match body, then
+// fetch rows in rank order, each at its anchor, until the target section is
+// in hand or MaxFetches is spent. A bare-path row behaves as in LookupFetch.
+type BodyFetch struct {
+	Scope       string
+	LookupLimit int
+	MaxFetches  int
+}
+
+// Name implements Strategy.
+func (BodyFetch) Name() string { return "body-fetch" }
+
+// Run implements Strategy.
+func (s BodyFetch) Run(ctx context.Context, rec *Recorder, q *Question) (Outcome, error) {
+	return runLookupThenFetch(ctx, rec, q, map[string]any{
+		"url": s.Scope, "query": q.Query, "limit": s.LookupLimit, "match": "body",
+	}, s.MaxFetches)
+}
+
+// runLookupThenFetch is the shared shape of both strategies: rank comes from
+// the lookup table, and each row is visited in order within the fetch budget.
+func runLookupThenFetch(ctx context.Context, rec *Recorder, q *Question, lookupArgs map[string]any, maxFetches int) (Outcome, error) {
+	lookup, err := rec.Call(ctx, "mark_lookup", lookupArgs)
 	if err != nil {
 		return Outcome{}, err
 	}
 	if lookup.IsError {
 		return Outcome{}, nil
 	}
-	rows := parseLookupPaths(lookup.Text)
-	out := Outcome{LookupRank: rank(rows, q.ExpectedPath)}
+	rows := parseLookupRows(lookup.Text)
+	out := Outcome{LookupRank: rankRows(rows, q.ExpectedPath)}
 	fetches := 0
-	for _, path := range rows {
-		if fetches >= s.MaxFetches {
+	for _, row := range rows {
+		if fetches >= maxFetches {
 			break
 		}
-		fetches++
-		res, err := rec.Call(ctx, "mark_fetch", map[string]any{"url": path})
+		done, hit, err := visitRow(ctx, rec, q, row, &fetches, maxFetches)
 		if err != nil {
 			return Outcome{}, err
 		}
-		if path != q.ExpectedPath {
+		if !done {
 			continue
 		}
-		if res.IsError {
-			return out, nil
-		}
-		parsed := parseFetchResponse(res.Text)
-		if !parsed.isOutline() {
-			out.Hit = q.ExpectedAnchor == "" || parsed.hasSection(q.ExpectedAnchor)
-			if out.Hit {
-				out.CallsToEvidence = len(rec.Calls())
-			}
-			return out, nil
-		}
-		if fetches >= s.MaxFetches {
-			return out, nil
-		}
-		args := map[string]any{"url": path, "force": true}
-		if q.ExpectedAnchor != "" {
-			args = map[string]any{"url": path + "#" + q.ExpectedAnchor}
-		}
-		res, err = rec.Call(ctx, "mark_fetch", args)
-		if err != nil {
-			return Outcome{}, err
-		}
-		out.Hit = !res.IsError
-		if out.Hit {
+		out.Hit = hit
+		if hit {
 			out.CallsToEvidence = len(rec.Calls())
 		}
 		return out, nil
@@ -134,9 +136,43 @@ func (s LookupFetch) Run(ctx context.Context, rec *Recorder, q *Question) (Outco
 	return out, nil
 }
 
-func rank(rows []string, path string) int {
+// visitRow fetches one row and reports whether the search is over: a decoy
+// is not done; the target is done with its hit verdict. The named section
+// must be in the fetched text; an outline costs one more fetch if affordable.
+func visitRow(ctx context.Context, rec *Recorder, q *Question, row lookupRow, fetches *int, maxFetches int) (done, hit bool, err error) {
+	*fetches++
+	res, err := rec.Call(ctx, "mark_fetch", map[string]any{"url": row.URL()})
+	if err != nil {
+		return false, false, err
+	}
+	if row.Path != q.ExpectedPath {
+		return false, false, nil
+	}
+	if res.IsError {
+		return true, false, nil
+	}
+	parsed := parseFetchResponse(res.Text)
+	if !parsed.isOutline() {
+		return true, q.ExpectedAnchor == "" || parsed.hasSection(q.ExpectedAnchor), nil
+	}
+	if *fetches >= maxFetches {
+		return true, false, nil
+	}
+	*fetches++
+	args := map[string]any{"url": row.Path, "force": true}
+	if q.ExpectedAnchor != "" {
+		args = map[string]any{"url": row.Path + "#" + q.ExpectedAnchor}
+	}
+	res, err = rec.Call(ctx, "mark_fetch", args)
+	if err != nil {
+		return false, false, err
+	}
+	return true, !res.IsError, nil
+}
+
+func rankRows(rows []lookupRow, path string) int {
 	for i, row := range rows {
-		if row == path {
+		if row.Path == path {
 			return i + 1
 		}
 	}
@@ -145,12 +181,14 @@ func rank(rows []string, path string) int {
 
 // StrategyByName resolves a CLI strategy name.
 func StrategyByName(name, scope string, lookupLimit, maxFetches int) (Strategy, error) {
+	if lookupLimit <= 0 || maxFetches <= 0 {
+		return nil, fmt.Errorf("lookup limit %d and max fetches %d must be positive", lookupLimit, maxFetches)
+	}
 	switch name {
 	case "lookup-fetch":
-		if lookupLimit <= 0 || maxFetches <= 0 {
-			return nil, fmt.Errorf("lookup limit %d and max fetches %d must be positive", lookupLimit, maxFetches)
-		}
 		return LookupFetch{Scope: scope, LookupLimit: lookupLimit, MaxFetches: maxFetches}, nil
+	case "body-fetch":
+		return BodyFetch{Scope: scope, LookupLimit: lookupLimit, MaxFetches: maxFetches}, nil
 	default:
 		return nil, fmt.Errorf("unknown strategy %q", name)
 	}

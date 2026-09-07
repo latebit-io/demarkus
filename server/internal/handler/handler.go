@@ -61,6 +61,7 @@ var reservedKeys = map[string]bool{
 	"archived":        true,
 	"entries":         true,
 	"matches":         true,
+	"match":           true,
 	"status":          true,
 }
 
@@ -493,19 +494,37 @@ func buildDirectoryIndex(reqPath string, entries []store.DirEntry) (body string,
 	return page.Body, page.EntryCount, err
 }
 
-// buildLookupResults renders LOOKUP matches as a markdown table. Cells are
-// markdown-escaped so paths, titles, and tags cannot break the table or inject
-// markup. The Path column is server-relative; clients compose the full URL.
-func buildLookupResults(query, scope string, rows []catalog.Result) string {
+// buildLookupResults renders LOOKUP matches as a markdown table, cells
+// escaped so they cannot break it. Body mode adds #anchor to the path, the
+// heading to the title, and a Snippet column; catalog mode is unchanged.
+func buildLookupResults(query, scope string, rows []catalog.Result, mode catalog.Mode) string {
+	body := mode == catalog.MatchBody
 	var sb strings.Builder
 	sb.WriteString("\n# Lookup matches for \"" + escapeMD(query) + "\" in " + escapeMD(scope) + "\n\n")
-	sb.WriteString("| Path | Importance | Title | Tags |\n")
-	sb.WriteString("|------|------------|-------|------|\n")
-	for _, r := range rows {
-		sb.WriteString("| " + escapeMD(r.Path) +
+	if body {
+		sb.WriteString("| Path | Importance | Title | Tags | Snippet |\n")
+		sb.WriteString("|------|------------|-------|------|---------|\n")
+	} else {
+		sb.WriteString("| Path | Importance | Title | Tags |\n")
+		sb.WriteString("|------|------------|-------|------|\n")
+	}
+	for i := range rows {
+		r := &rows[i]
+		// The anchor is appended verbatim: a slug cannot break the table,
+		// and clients fetch path#anchor next.
+		location, title := escapeMD(r.Path), r.Title
+		if body && r.Anchor != "" {
+			location += "#" + r.Anchor
+			title += " › " + r.Heading
+		}
+		sb.WriteString("| " + location +
 			" | " + strconv.FormatFloat(r.Importance, 'f', 2, 64) +
-			" | " + escapeMD(r.Title) +
-			" | " + escapeMD(strings.Join(r.Tags, ", ")) + " |\n")
+			" | " + escapeMD(title) +
+			" | " + escapeMD(strings.Join(r.Tags, ", ")))
+		if body {
+			sb.WriteString(" | " + escapeMD(r.Snippet))
+		}
+		sb.WriteString(" |\n")
 	}
 	return sb.String()
 }
@@ -703,6 +722,12 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storage
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
 	}
+	matchValue, matchCarried := req.Metadata["match"]
+	mode, err := catalog.ParseMode(matchValue)
+	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
 
 	// Scope must be the whole-server root or an existing directory.
 	if req.Path != "/" {
@@ -719,7 +744,7 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storage
 		}
 	}
 
-	results, err := lookup.Lookup(query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults})
+	results, err := lookup.Lookup(query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults, Match: mode})
 	if err != nil {
 		h.logger().Error("lookup failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
@@ -731,20 +756,26 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storage
 	// never reveal their existence (no path, no title, not counted).
 	token := req.Metadata["auth"]
 	rows := make([]catalog.Result, 0, len(results))
-	for _, r := range results {
-		if ok, _ := h.checkReadAuth(r.Path, token); !ok {
+	for i := range results {
+		if ok, _ := h.checkReadAuth(results[i].Path, token); !ok {
 			continue
 		}
-		rows = append(rows, r)
+		rows = append(rows, results[i])
 		if len(rows) >= limit {
 			break
 		}
 	}
 
+	meta := map[string]string{"matches": strconv.Itoa(len(rows))}
+	if matchCarried {
+		// Echo only when asked, so a request without match gets the
+		// response it always got, byte for byte.
+		meta["match"] = string(mode)
+	}
 	resp := protocol.Response{
 		Status:   protocol.StatusOK,
-		Metadata: map[string]string{"matches": strconv.Itoa(len(rows))},
-		Body:     buildLookupResults(query, req.Path, rows),
+		Metadata: meta,
+		Body:     buildLookupResults(query, req.Path, rows, mode),
 	}
 	h.writeResponse(w, resp)
 }

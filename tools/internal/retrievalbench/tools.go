@@ -109,19 +109,47 @@ func (r fetchResponse) hasSection(anchor string) bool {
 	return ok
 }
 
-// parseLookupPaths returns document paths from a mark_lookup table in rank
-// order. Only rows whose first cell is an absolute path count.
-func parseLookupPaths(text string) []string {
-	var paths []string
+// lookupRow is one table row's location: the document path and, in body
+// mode, the section anchor after '#'.
+type lookupRow struct {
+	Path   string
+	Anchor string
+}
+
+// URL is what an agent passes to mark_fetch next.
+func (r lookupRow) URL() string {
+	if r.Anchor == "" {
+		return r.Path
+	}
+	return r.Path + "#" + r.Anchor
+}
+
+// parseLookupRows returns the rows of a mark_lookup table in rank order.
+// Only rows whose first cell is an absolute path count.
+func parseLookupRows(text string) []lookupRow {
+	var rows []lookupRow
 	for line := range strings.SplitSeq(text, "\n") {
 		cells := strings.Split(line, "|")
 		if len(cells) < 3 {
 			continue
 		}
-		path := strings.TrimSpace(cells[1])
-		if strings.HasPrefix(path, "/") {
-			paths = append(paths, path)
+		location := strings.TrimSpace(cells[1])
+		if !strings.HasPrefix(location, "/") {
+			continue
 		}
+		path, anchor, _ := strings.Cut(location, "#")
+		rows = append(rows, lookupRow{Path: path, Anchor: anchor})
+	}
+	return rows
+}
+
+// parseLookupPaths returns document paths from a mark_lookup table in rank
+// order, anchors dropped.
+func parseLookupPaths(text string) []string {
+	rows := parseLookupRows(text)
+	paths := make([]string, len(rows))
+	for i, r := range rows {
+		paths[i] = r.Path
 	}
 	return paths
 }

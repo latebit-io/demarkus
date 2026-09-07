@@ -23,7 +23,7 @@ func main() {
 	tokenFile := flag.String("token-file", "", "file holding the auth token; DEMARKUS_AUTH env is used when empty")
 	questions := flag.String("questions", "", "question fixture path; embedded soul set when empty")
 	scope := flag.String("scope", "", "lookup scope override, e.g. /demarkus/")
-	strategy := flag.String("strategy", "lookup-fetch", "retrieval strategy: lookup-fetch")
+	strategy := flag.String("strategy", "lookup-fetch", "retrieval strategy: lookup-fetch (catalog) or body-fetch (match body, fetch rows at their anchor)")
 	lookupLimit := flag.Int("limit", 10, "mark_lookup limit")
 	maxFetches := flag.Int("max-fetches", 5, "fetch budget per question")
 	timeout := flag.Duration("timeout", 60*time.Second, "per-question timeout covering session open and every tool call; 0 means unbounded")

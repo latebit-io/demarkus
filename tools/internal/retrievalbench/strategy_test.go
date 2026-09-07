@@ -166,3 +166,101 @@ func TestStrategyByNameRejectsBudgets(t *testing.T) {
 		t.Fatal("unknown strategy accepted")
 	}
 }
+
+// bodyFakeTools serves a body-mode table (path#anchor rows with a snippet)
+// when match=body is requested, else the catalog table; nobody flags a
+// server that ignores the key and answers from the catalog.
+type bodyFakeTools struct {
+	fakeTools
+	bodyRows []string // path#anchor or bare path
+	nobody   bool
+}
+
+func (f *bodyFakeTools) Call(ctx context.Context, name string, args map[string]any) (ToolResult, error) {
+	if name != "mark_lookup" || args["match"] != "body" || f.nobody {
+		return f.fakeTools.Call(ctx, name, args)
+	}
+	var b strings.Builder
+	b.WriteString("status: ok\nmatch: body\n\n| Path | Importance | Title | Tags | Snippet |\n|---|---|---|---|---|\n")
+	for _, r := range f.bodyRows {
+		fmt.Fprintf(&b, "| %s | 0.5 | t › h | a | snippet words |\n", r)
+	}
+	return ToolResult{Text: b.String()}, nil
+}
+
+func TestBodyFetch(t *testing.T) {
+	docs := map[string]string{
+		"/a.md": "# A\n\n## Intro\n\ntext\n",
+		"/b.md": "# B\n\n## Ranking\n\nsorted\n\n### Ties\n\npath order\n",
+		"/d.md": "# D\n\n## Threats\n\nlist\n",
+	}
+	strategy := BodyFetch{Scope: "/", LookupLimit: 5, MaxFetches: 5}
+	tests := []struct {
+		name     string
+		tools    bodyFakeTools
+		q        Question
+		wantHit  bool
+		wantCall int
+		wantN    int
+		wantRank int
+	}{
+		{
+			name:    "top row at the named anchor",
+			tools:   bodyFakeTools{fakeTools: fakeTools{docs: docs}, bodyRows: []string{"/b.md#ranking", "/a.md#intro"}},
+			q:       Question{ExpectedPath: "/b.md", ExpectedAnchor: "ranking"},
+			wantHit: true, wantCall: 2, wantN: 2, wantRank: 1,
+		},
+		{
+			name:    "decoy first then the target section",
+			tools:   bodyFakeTools{fakeTools: fakeTools{docs: docs}, bodyRows: []string{"/a.md#intro", "/d.md#threats"}},
+			q:       Question{ExpectedPath: "/d.md", ExpectedAnchor: "threats"},
+			wantHit: true, wantCall: 3, wantN: 3, wantRank: 2,
+		},
+		{
+			name:    "sibling section of the target document is a miss",
+			tools:   bodyFakeTools{fakeTools: fakeTools{docs: docs}, bodyRows: []string{"/b.md#ties"}},
+			q:       Question{ExpectedPath: "/b.md", ExpectedAnchor: "ranking"},
+			wantHit: false, wantN: 2, wantRank: 1,
+		},
+		{
+			name:    "bare row on a big document costs the outline round trip",
+			tools:   bodyFakeTools{fakeTools: fakeTools{docs: docs, big: map[string]bool{"/d.md": true}}, bodyRows: []string{"/d.md"}},
+			q:       Question{ExpectedPath: "/d.md", ExpectedAnchor: "threats"},
+			wantHit: true, wantCall: 3, wantN: 3, wantRank: 1,
+		},
+		{
+			name:    "server without body match falls back to catalog rows",
+			tools:   bodyFakeTools{fakeTools: fakeTools{docs: docs, rows: []string{"/b.md"}}, nobody: true},
+			q:       Question{ExpectedPath: "/b.md", ExpectedAnchor: "ranking"},
+			wantHit: true, wantCall: 2, wantN: 2, wantRank: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := NewRecorder(&tt.tools, wordCounter{})
+			out, err := strategy.Run(context.Background(), rec, &tt.q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Hit != tt.wantHit || out.CallsToEvidence != tt.wantCall || out.LookupRank != tt.wantRank {
+				t.Fatalf("outcome %+v, want hit=%v calls=%d rank=%d", out, tt.wantHit, tt.wantCall, tt.wantRank)
+			}
+			if n := len(rec.Calls()); n != tt.wantN {
+				t.Fatalf("recorded %d calls, want %d", n, tt.wantN)
+			}
+			if rec.Calls()[0].Args["match"] != "body" {
+				t.Fatalf("lookup args = %v, want match body", rec.Calls()[0].Args)
+			}
+		})
+	}
+}
+
+func TestStrategyByNameBodyFetch(t *testing.T) {
+	s, err := StrategyByName("body-fetch", "/x/", 5, 3)
+	if err != nil || s.Name() != "body-fetch" {
+		t.Fatalf("StrategyByName body-fetch = %v, %v", s, err)
+	}
+	if _, err := StrategyByName("body-fetch", "/", 0, 3); err == nil {
+		t.Fatal("zero lookup limit accepted")
+	}
+}

@@ -985,3 +985,31 @@ func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleMarkLookupBodyMatchFallbackNote(t *testing.T) {
+	cfg := mcpTestConfig()
+	var seen fetch.LookupOptions
+	d := &fakeDispatcher{
+		lookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+			seen = opts
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"matches": "0"},
+				Body:     "| Path | Importance | Title | Tags |\n",
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkLookup(withAliceClaims(context.Background()), callToolReq("mark_lookup", map[string]any{
+		"url": "mark://team-a/", "query": "hairpin", "match": "body",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkLookup: err %v res %+v", err, res)
+	}
+	if seen.Match != fetch.MatchBody {
+		t.Errorf("dispatcher saw match %q, want body", seen.Match)
+	}
+	if text := toolResultText(t, res); !strings.Contains(text, fetch.CatalogFallbackNote) {
+		t.Errorf("fallback note missing:\n%s", text)
+	}
+}

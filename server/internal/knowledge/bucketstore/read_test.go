@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	pathpkg "path"
@@ -108,8 +109,10 @@ func TestSnapshotRefresh(t *testing.T) {
 		if counts.heads[headObjectKey] != 2 || counts.gets[headObjectKey] != 1 || counts.gets[commit.rootRef.Key] != 1 || counts.gets[changedShardKey] != 1 {
 			t.Errorf("refresh operations = heads %v gets %v", counts.heads, counts.gets)
 		}
-		if sumCounts(counts.gets) != 3 {
-			t.Errorf("refresh Get count = %d, want head, root, one shard", sumCounts(counts.gets))
+		// The changed document's section index costs its manifest, history,
+		// and blob on top of head, root, and the one shard.
+		if sumCounts(counts.gets) != 6 {
+			t.Errorf("refresh Get count = %d, want head, root, one shard, and the changed body", sumCounts(counts.gets))
 		}
 		if counts.gets[commit.root.Shards[unchangedIndex].Key] != 0 {
 			t.Error("unchanged shard was fetched")
@@ -171,7 +174,7 @@ func TestSnapshotRefresh(t *testing.T) {
 			result <- readViewResult{view: view, err: err}
 		}()
 		waitForTestSignal(t, delayed.observed, "stale pre-lock head")
-		installedSecond, err := loadRootSnapshot(context.Background(), memory, testWorldID, defaultShardWorkers)
+		installedSecond, err := loadRootSnapshot(context.Background(), memory, slog.Default(), testWorldID, defaultShardWorkers)
 		if err != nil {
 			t.Fatalf("load second snapshot: %v", err)
 		}

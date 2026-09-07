@@ -299,3 +299,58 @@ func lookupResult(rows ...string) fetch.Result {
 		Body:     body,
 	}}
 }
+
+// bodyLookupResult builds a body-mode LOOKUP response with the match echo.
+func bodyLookupResult(rows ...string) fetch.Result {
+	body := "\n# Lookup matches\n\n| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n"
+	if len(rows) > 0 {
+		body += strings.Join(rows, "\n") + "\n"
+	}
+	return fetch.Result{Response: protocol.Response{
+		Status:   protocol.StatusOK,
+		Metadata: map[string]string{"matches": strconv.Itoa(len(rows)), "match": "body"},
+		Body:     body,
+	}}
+}
+
+func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "team-b", Namespace: "team-b"})
+	var seen []fetch.LookupOptions
+	d := &fakeDispatcher{
+		lookupFn: func(world, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+			seen = append(seen, opts)
+			if world == "team-a" {
+				return bodyLookupResult(
+					"| /debugging.md#hairpin-nat | 0.70 | Debugging › Hairpin NAT | net | same host \\| hairpin |",
+				), nil
+			}
+			// team-b predates body match: catalog answer, no echo.
+			return lookupResult("| /legacy.md | 0.90 | Legacy | net |"), nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", map[string]any{
+		"query": "hairpin", "match": "body",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkLookupAll: err %v res %+v", err, res)
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{
+		"match: body",
+		"| Path | Importance | Title | Tags | Snippet |",
+		"| mark://team-a/debugging.md#hairpin-nat | 0.70 | Debugging › Hairpin NAT | net | same host \\| hairpin |",
+		"| mark://team-b/legacy.md | 0.90 | Legacy | net |  |",
+		"note: answered from the catalog (no body match): team-b",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing %q\nfull:\n%s", want, text)
+		}
+	}
+	for _, opts := range seen {
+		if opts.Match != fetch.MatchBody {
+			t.Errorf("dispatcher saw match %q, want body", opts.Match)
+		}
+	}
+}

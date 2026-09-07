@@ -311,6 +311,24 @@ func (c *Client) Append(host, path, body, token string, expectedVersion int, met
 type LookupOptions struct {
 	Filter string // comma-separated key=value predicates
 	Limit  int    // max results; <= 0 lets the server choose
+	Match  string // MatchCatalog (default) or MatchBody; empty omits the key
+}
+
+// LOOKUP match modes. A server without body match ignores the key and
+// answers from the catalog; AnsweredFromCatalog detects that.
+const (
+	MatchCatalog = "catalog"
+	MatchBody    = "body"
+)
+
+// CatalogFallbackNote is the line MCP surfaces append when body match was
+// requested and the server answered from the catalog instead.
+const CatalogFallbackNote = "note: server answered from the catalog (no body match); an empty table is not evidence of absence"
+
+// AnsweredFromCatalog reports a body-match request that the server answered
+// in catalog mode: an ok response without the match: body echo.
+func AnsweredFromCatalog(opts LookupOptions, r Result) bool {
+	return opts.Match == MatchBody && r.Response.Status == protocol.StatusOK && r.Response.Metadata["match"] != MatchBody
 }
 
 // Lookup queries a server's catalog for documents matching a subject under
@@ -332,6 +350,9 @@ func (c *Client) LookupContext(ctx context.Context, host, scope, query, token st
 	}
 	if opts.Limit > 0 {
 		req.Metadata["limit"] = strconv.Itoa(opts.Limit)
+	}
+	if opts.Match != "" {
+		req.Metadata["match"] = opts.Match
 	}
 	if token != "" {
 		req.Metadata["auth"] = token

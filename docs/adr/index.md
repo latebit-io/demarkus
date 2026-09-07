@@ -15,3 +15,4 @@ Decision records binding the protocol, spec, and repo; git is canonical, and eac
 | [0009](0009-license-split-core-agpl-plugins-mit.md) | AGPL for the core, MIT for plugins and satellites | accepted 2026-08-27 |
 | [0010](0010-remove-postgres-backend.md) | Remove the Postgres backend | accepted 2026-08-27 |
 | [0011](0011-native-scheme-redirect-allowlist.md) | Allowlisted private-use scheme redirects for MCP hosts | accepted 2026-09-07 |
+| [0012](0012-lookup-body-match.md) | Body match is an optional mode of LOOKUP | proposed 2026-09-07 |

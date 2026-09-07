@@ -153,8 +153,13 @@ Look up documents by subject against the world's catalog. Matches the
 query against each document's declared tags and title and returns an
 importance-ranked markdown table of matches (path, importance, title,
 tags), not document bodies. A catalog lookup, not full-text search:
-a subject never tagged or titled is not found. Returns `matches` (the
-row count). Dispatched unauthenticated like the other reads.
+a subject never tagged or titled is not found unless `match` is
+`body`, which also matches section text (SPEC §6.7). Body rows carry
+`path#anchor`, the heading in the title, and a fifth `Snippet` column;
+the response echoes `match: body`. A world without body match answers
+from its catalog and the tool appends a note saying so. Returns
+`matches` (the row count). Dispatched unauthenticated like the other
+reads.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -162,6 +167,7 @@ row count). Dispatched unauthenticated like the other reads.
 | `query` | string | yes | Subject; matched against tags and titles (min 2 chars). |
 | `filter` | string | no | Comma-separated `key=value`; built-ins `tag=`, `modified-after=`, `modified-before=`. |
 | `limit` | number | no | Max results (server default 10, cap 1000). |
+| `match` | string | no | `catalog` (default) or `body`. |
 
 #### `mark_lookup_all`
 
@@ -179,6 +185,7 @@ world fails, the tool returns an error.
 | `scope` | string | no | Server-relative scope applied to every world (default `/`). |
 | `filter` | string | no | Comma-separated `key=value` predicates applied in every world. |
 | `limit` | number | no | Global max results (default 10, cap 1000). |
+| `match` | string | no | `catalog` (default) or `body`. Body rows merge by the same ordinal rule and carry a `Snippet` column; worlds that answered from their catalog are listed in a note. |
 
 ### Write
 

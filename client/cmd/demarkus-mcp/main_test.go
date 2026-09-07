@@ -769,6 +769,39 @@ func TestHandlerMarkLookup(t *testing.T) {
 	}
 }
 
+func TestHandlerMarkLookup_BodyMatch(t *testing.T) {
+	answer := func(echo bool) *stubClient {
+		return &stubClient{lookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+			if opts.Match != fetch.MatchBody {
+				return fetch.Result{}, fmt.Errorf("match = %q, want body", opts.Match)
+			}
+			meta := map[string]string{"matches": "0"}
+			if echo {
+				meta["match"] = "body"
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: "| Path | Importance | Title | Tags | Snippet |\n"}}, nil
+		}}
+	}
+	call := func(sc *stubClient) string {
+		h := &handler{client: sc, token: "test-token"}
+		result, err := h.markLookup(context.Background(), newCallToolRequest(map[string]any{
+			"url": "mark://example.com/", "query": "hairpin", "match": "body",
+		}))
+		if err != nil || result.IsError {
+			t.Fatalf("markLookup: err %v result %+v", err, result)
+		}
+		return result.Content[0].(mcp.TextContent).Text
+	}
+	echoed := call(answer(true))
+	if !strings.Contains(echoed, "match: body") || strings.Contains(echoed, fetch.CatalogFallbackNote) {
+		t.Errorf("echoed body answer wrong:\n%s", echoed)
+	}
+	silent := call(answer(false))
+	if !strings.Contains(silent, fetch.CatalogFallbackNote) {
+		t.Errorf("catalog fallback not flagged:\n%s", silent)
+	}
+}
+
 func TestHandlerMarkLookup_RequiresQuery(t *testing.T) {
 	h := &handler{client: &stubClient{}, token: "test-token"}
 	result, err := h.markLookup(context.Background(), newCallToolRequest(map[string]any{

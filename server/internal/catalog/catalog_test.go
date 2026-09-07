@@ -19,7 +19,8 @@ func mustLookup(t *testing.T, c *Catalog, query string, opts Options) []Result {
 // paths returns the result paths in order, for concise assertions.
 func paths(rs []Result) []string {
 	out := make([]string, len(rs))
-	for i, r := range rs {
+	for i := range rs {
+		r := &rs[i]
 		out[i] = r.Path
 	}
 	return out
