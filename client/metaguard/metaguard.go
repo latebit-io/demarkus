@@ -69,6 +69,11 @@ func Compare(current, incoming map[string]string) Narrowing {
 		if protocol.ReservedMetadataKeys[key] || uncarried[key] {
 			continue
 		}
+		// The server stamps the default type on every version, so omitting
+		// it loses nothing when that is all the old version carried.
+		if key == "type" && value == protocol.OKFDefaultType {
+			continue
+		}
 		if _, ok := incoming[key]; !ok {
 			n.Keys = append(n.Keys, key+"="+truncate(value))
 		}

@@ -34,7 +34,7 @@ func TestCompareReportsDroppedTagsAndKeys(t *testing.T) {
 }
 
 func TestCompareNothingDropped(t *testing.T) {
-	current := map[string]string{"version": "3", "tags": "a,b", "title": "T", "retention": "2"}
+	current := map[string]string{"version": "3", "tags": "a,b", "title": "T", "retention": "2", "type": "Document"}
 	for _, incoming := range []map[string]string{
 		{"tags": "b, a, c", "title": "T2"},
 		{"tags": "a,b", "title": "T", "extra": "new"},
