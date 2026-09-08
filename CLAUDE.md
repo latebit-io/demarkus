@@ -63,6 +63,16 @@ paid in tokens on every session, invocation, or request. Write terse:
 fragments, no filler, no rationale the step implies. Keep behavior intact,
 nothing volatile, no em dashes. See `plugins/prompt-source/README.md`.
 
+## Prompt procedures are edited whole
+
+A skill or command template has no compiler. Never fix a review finding by
+changing one sentence: read the whole step and the steps it hands off to,
+rewrite the step, define every named state (`incomplete-dedup`,
+`catalog-only`) once as terminal or carried forward and grep for every other
+use, give every call in the step its failure line, then reread against the
+skill's top-level rule. Repeated findings on one paragraph mean it was
+patched, not rewritten. Full rule: `/conventions.md` on demarkus-soul.
+
 ## Doc style
 
 Natural language in soul docs; avoid overusing "-" within sentences (bullet "- " is fine).
