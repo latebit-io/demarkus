@@ -49,7 +49,9 @@ The spec fixes recall and leaves order to the implementation:
 - Importance is a prior among matches and never admits a non-match. Ties
   break by path then anchor. Nothing else about order is specified. The
   reference server ranks by BM25 with heading and tag terms weighted higher,
-  scaled by `0.7 + 0.3 * importance`.
+  a catalog answer boosted, scaled by an importance prior with a floor and
+  demoted under a `journal` path segment; the values live in `bodymatch.go`
+  and are retuned on the retrieval benchmark.
 - Body rows carry `#anchor` in the path, `title › heading` in the title, and
   a fifth `Snippet` column of one line at most 240 bytes.
 

@@ -1,8 +1,9 @@
 package catalog
 
 import (
+	"cmp"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -17,10 +18,19 @@ const (
 	docWeight   = 2.0
 )
 
+// Reference ranking knobs tuned on the retrieval benchmark (plan:
+// token-efficient retrieval, workstream 3): the importance prior's floor,
+// the boost for a tags-or-title match, and the multiplier under journal/.
+const (
+	priorFloor    = 0.3
+	catalogBoost  = 2.0
+	journalDemote = 0.5
+)
+
 type bodyCandidate struct {
 	entry   *Entry
 	sec     *section
-	catalog bool // tags or title carry every term: ranks before section rows
+	catalog bool // tags or title carry every term: one boosted bare-path row
 	score   float64
 }
 
@@ -121,14 +131,17 @@ func (c *Catalog) scanBody(terms []term, scope string, filter []Predicate) *body
 	return scan
 }
 
-// rankBody scores, normalizes by the best, applies the importance prior,
-// and sorts: catalog rows first as catalog mode would order them, then
-// sections by score, then the spec's path-then-anchor tiebreak.
+// rankBody scores (catalog rows boosted), normalizes by the best, applies
+// the prior, and sorts by score, then the spec's path-then-anchor tiebreak.
 func rankBody(scan *bodyScan, terms []term) {
 	found := scan.found
+	idf := idfs(scan, len(terms))
 	maxScore := 0.0
 	for i := range found {
-		found[i].score = bm25(&found[i], terms, scan.df, scan.sections, scan.avgLength)
+		found[i].score = bm25(&found[i], terms, idf, scan.avgLength)
+		if found[i].catalog {
+			found[i].score *= catalogBoost
+		}
 		maxScore = max(maxScore, found[i].score)
 	}
 	for i := range found {
@@ -136,39 +149,52 @@ func rankBody(scan *bodyScan, terms []term) {
 		if maxScore > 0 {
 			norm = found[i].score / maxScore
 		}
-		found[i].score = norm * (0.7 + 0.3*found[i].entry.Importance)
+		found[i].score = norm * prior(found[i].entry)
 	}
-	sort.SliceStable(found, func(i, j int) bool {
-		a, b := found[i], found[j]
-		if a.catalog != b.catalog {
-			return a.catalog
-		}
+	slices.SortStableFunc(found, func(a, b bodyCandidate) int {
 		if a.score != b.score {
-			return a.score > b.score
+			return cmp.Compare(b.score, a.score)
 		}
-		if a.entry.Path != b.entry.Path {
-			return a.entry.Path < b.entry.Path
+		if c := cmp.Compare(a.entry.Path, b.entry.Path); c != 0 {
+			return c
 		}
-		return a.sec.anchor < b.sec.anchor
+		return cmp.Compare(a.sec.anchor, b.sec.anchor)
 	})
 }
 
+// prior scales a normalized score by declared importance, then by the
+// document's path demotion.
+func prior(e *Entry) float64 {
+	return (priorFloor + (1-priorFloor)*e.Importance) * e.demote
+}
+
+// idfs is the BM25 inverse document frequency per term over the scanned
+// sections, fixed for the query.
+func idfs(scan *bodyScan, n int) []float64 {
+	idf := make([]float64, n)
+	sections := float64(scan.sections)
+	for j := range idf {
+		df := float64(scan.df[j])
+		idf[j] = math.Log(1 + (sections-df+0.5)/(df+0.5))
+	}
+	return idf
+}
+
 // bm25 scores one candidate: the text part per term plus the trail and
-// document weights when the term was found there.
-func bm25(cand *bodyCandidate, terms []term, df []int, sections int, avgLength float64) float64 {
+// document weights when the term was found there; idf is per term.
+func bm25(cand *bodyCandidate, terms []term, idf []float64, avgLength float64) float64 {
 	score := 0.0
 	lengthNorm := 1 - bm25B + bm25B*float64(cand.sec.length)/max(avgLength, 1)
 	for j, t := range terms {
-		idf := math.Log(1 + (float64(sections)-float64(df[j])+0.5)/(float64(df[j])+0.5))
 		if i, ok := termIndex(cand.sec.tokens, t); ok {
 			tf := float64(cand.sec.tf[i])
-			score += idf * tf * (bm25K1 + 1) / (tf + bm25K1*lengthNorm)
+			score += idf[j] * tf * (bm25K1 + 1) / (tf + bm25K1*lengthNorm)
 		}
 		if hasTerm(cand.sec.trail, t) {
-			score += idf * trailWeight
+			score += idf[j] * trailWeight
 		}
 		if hasTerm(cand.entry.terms, t) {
-			score += idf * docWeight
+			score += idf[j] * docWeight
 		}
 	}
 	return score
