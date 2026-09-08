@@ -218,8 +218,8 @@ func (s Context) Run(ctx context.Context, rec *Recorder, q *Question) (Outcome, 
 }
 
 // expansionHolds reports whether a delimiter-framed block carries the expected
-// path and section: the anchor on its header, or a whole-document block whose
-// headings include the anchor. An outline block holds nothing.
+// path and section: the anchor on its header, or a whole-document block (one
+// with headings) holding the anchor. An outline block never counts.
 func expansionHolds(text string, q *Question) bool {
 	var loc, block string
 	check := func() bool {
@@ -230,10 +230,16 @@ func expansionHolds(text string, q *Question) bool {
 		if path != q.ExpectedPath {
 			return false
 		}
-		if q.ExpectedAnchor == "" || anchor == q.ExpectedAnchor {
-			return true
+		if anchor != "" {
+			return q.ExpectedAnchor == "" || anchor == q.ExpectedAnchor
 		}
-		return anchor == "" && slices.Contains(mdoutline.Anchors(block), q.ExpectedAnchor)
+		// A bare-path block is the whole document when it has headings and
+		// an outline (which holds nothing) when it has none.
+		anchors := mdoutline.Anchors(block)
+		if len(anchors) == 0 {
+			return false
+		}
+		return q.ExpectedAnchor == "" || slices.Contains(anchors, q.ExpectedAnchor)
 	}
 	for line := range strings.SplitSeq(text, "\n") {
 		rest, ok := strings.CutPrefix(line, lookupexpand.Delimiter+" ")

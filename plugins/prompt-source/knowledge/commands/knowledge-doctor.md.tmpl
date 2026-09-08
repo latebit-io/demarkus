@@ -60,7 +60,7 @@ Before the first broker call, set a command-wide deadline five minutes out. Chec
 
 ## Deep checks (per-doc `mark_fetch`; bounded scope, or when asked)
 
-One fetch per document: run only for a single world, or when the user asks for a thorough audit. Fetch at most 100 documents. If capped or sampled, report exact coverage and skipped count; never imply full coverage.
+One fetch per document: run only for a single world, or when the user asks for a thorough audit. Fetch at most 100 documents, `force: true` for every body-inspecting check (a plain fetch returns an outline at or over 8 KB, and an outline is incomplete for hub and document shape). If capped or sampled, report exact coverage and skipped count; never imply full coverage.
 
 - **Untagged docs**: fetch, check `tags` non-empty. Untagged docs are findable only by title or explicit path. (Publish gate prevents new ones; this finds pre-existing.)
 - **Metadata lost across versions** *(legacy servers)*: an untagged doc that **used to** carry tags. Brokers before the APPEND metadata merge passed only `{agent: …}` on append, dropping `tags`, `importance`, `title`, `type`, and with them the **policy tag axes** satisfied at publish time: compliant turns noncompliant with no write rejected. Retire once the catalog is clean. Run only on docs the untagged or policy-axis check flagged that have more than one version:

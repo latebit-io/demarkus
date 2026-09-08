@@ -297,4 +297,7 @@ func TestExpansionHolds(t *testing.T) {
 	if !expansionHolds("\n>>> /a.md#nine\n\ntext\n\n>>> note: x\n", &Question{ExpectedPath: "/a.md"}) {
 		t.Error("no expected anchor: any section of the path is evidence")
 	}
+	if expansionHolds("\n>>> /a.md\n\n- A (#a, 9 lines)\n  - Two (#two, 3 lines)\n\n>>> note: x\n", &Question{ExpectedPath: "/a.md"}) {
+		t.Error("no expected anchor: an outline block is still not evidence")
+	}
 }

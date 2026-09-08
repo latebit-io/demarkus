@@ -124,6 +124,35 @@ func TestExpandBoundsFetchesAndHonorsCancel(t *testing.T) {
 	}
 }
 
+func TestExpandEscapesFrameLinesInBodies(t *testing.T) {
+	docs["/q.md"] = "# Q\n\n## Quote\n\n>>> quoted three deep\n\nafter\n"
+	defer delete(docs, "/q.md")
+	var calls []string
+	out := Expand(context.Background(), rowTable("/q.md#quote"), "x", 4096, fakeFetch(&calls))
+	if !strings.Contains(out, "\n >>> quoted three deep\n") || strings.Count(out, "\n>>> ") != 2 {
+		t.Errorf("body frame line must be indented, only the header and the note may start with the delimiter:\n%s", out)
+	}
+}
+
+func TestExpandFetchLimitKeepsCachedRows(t *testing.T) {
+	paths := make([]string, 0, MaxFetches+2)
+	for i := range MaxFetches {
+		paths = append(paths, fmt.Sprintf("/none-%d.md", i))
+	}
+	paths = append(paths, "/b.md", "/a.md#two") // b.md needs a fetch past the limit; a.md is not cached either
+	docs["/none-0.md"] = "# N0\n\nzero.\n"
+	defer delete(docs, "/none-0.md")
+	paths = append(paths, "/none-0.md")
+	var calls []string
+	out := Expand(context.Background(), rowTable(paths...), "x", 1<<20, fakeFetch(&calls))
+	if len(calls) != MaxFetches || !strings.Contains(out, "later rows on unfetched documents skipped") {
+		t.Errorf("want %d fetches and one limit note, got %d:\n%s", MaxFetches, len(calls), out)
+	}
+	if !strings.Contains(out, ">>> /none-0.md\n\n# N0") || strings.Contains(out, ">>> /b.md") {
+		t.Errorf("a later row on a cached document must still expand, an unfetched one must not:\n%s", out)
+	}
+}
+
 func TestExpandMissingSectionAndEmptyInputs(t *testing.T) {
 	var calls []string
 	out := Expand(context.Background(), rowTable("/a.md#nine"), "x", 4096, fakeFetch(&calls))

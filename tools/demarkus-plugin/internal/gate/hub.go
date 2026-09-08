@@ -24,21 +24,20 @@ const (
 )
 
 var (
-	mdLink       = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
-	mdRefLink    = regexp.MustCompile(`\[([^\]]*)\]\[[^\]]*\]`)
-	mdCodeSpan   = regexp.MustCompile("`[^`\n]*`")
-	hubBold      = regexp.MustCompile(`\*\*[^*\n]+\*\*|__[^_\n]+__`)
 	hubStatusKey = regexp.MustCompile(`(?i)\bstatus:`)
 	hubISODate   = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
 	hubPRNumber  = regexp.MustCompile(`#\d+\b`)
 )
 
-// bullet is one list item: its first paragraph joined into a line, whether
-// that paragraph opens with a link (inline or reference, per the parser),
-// and whether the item holds further block content beyond nested lists.
+// bullet is one list item as the parser resolves it: visible text (link
+// text kept, destinations dropped), the text outside links and code spans,
+// whether it opens with a link, carries bold, or holds further blocks.
 type bullet struct {
-	text       string
+	visible    string
+	outside    string
+	label      string
 	opensLink  bool
+	bold       bool
 	multiBlock bool
 }
 
@@ -57,7 +56,7 @@ func hubProblems(leaf, body string) []string {
 	var bad []string
 	for _, b := range items {
 		if !bulletOK(b) {
-			bad = append(bad, fmt.Sprintf("%q", bulletLabel(b.text)))
+			bad = append(bad, fmt.Sprintf("%q", b.label))
 		}
 	}
 	if len(bad) > 0 {
@@ -87,34 +86,17 @@ func linkPage(items []bullet, textLines int) bool {
 	return n >= hubMinLinkItems && textLines > 0 && float64(n) >= hubLinkShare*float64(textLines)
 }
 
-// bulletOK: one paragraph, under the visible cap with destinations stripped,
-// and no status marker outside link text and code spans (a journal hub links
-// by date; a rule page quotes `Status:`).
+// bulletOK: one paragraph, under the visible cap, and no status marker
+// outside links and code spans (a journal hub links by date; a rule page
+// quotes `Status:`).
 func bulletOK(b bullet) bool {
-	if b.multiBlock {
+	if b.multiBlock || b.bold {
 		return false
 	}
-	visible := mdRefLink.ReplaceAllString(mdLink.ReplaceAllString(b.text, "[$1]"), "[$1]")
-	if utf8.RuneCountInString(visible) > hubBulletMax {
+	if utf8.RuneCountInString(b.visible) > hubBulletMax {
 		return false
 	}
-	outside := mdCodeSpan.ReplaceAllString(mdRefLink.ReplaceAllString(mdLink.ReplaceAllString(b.text, ""), ""), "")
-	return !hubBold.MatchString(outside) && !hubStatusKey.MatchString(outside) &&
-		!hubISODate.MatchString(outside) && !hubPRNumber.MatchString(outside)
-}
-
-// bulletLabel names a bullet by its first link text, else its opening words.
-func bulletLabel(s string) string {
-	if m := mdLink.FindStringSubmatch(s); len(m) == 2 && m[1] != "" {
-		return m[1]
-	}
-	if m := mdRefLink.FindStringSubmatch(s); len(m) == 2 && m[1] != "" {
-		return m[1]
-	}
-	if r := []rune(s); len(r) > 40 {
-		return string(r[:40]) + "..."
-	}
-	return s
+	return !hubStatusKey.MatchString(b.outside) && !hubISODate.MatchString(b.outside) && !hubPRNumber.MatchString(b.outside)
 }
 
 // outboundDocs counts distinct link destinations that are documents in the
@@ -153,8 +135,8 @@ func listItems(body string) (items []bullet, textLines int) {
 	return items, textLines
 }
 
-// bulletOf reads one list item: first paragraph joined, link-opening, and
-// whether further blocks follow.
+// bulletOf reads one list item from its first text block; nested lists are
+// not blocks of their own, anything else after the first block is.
 func bulletOf(item *ast.ListItem, src []byte) bullet {
 	var b bullet
 	blocks := 0
@@ -163,20 +145,68 @@ func bulletOf(item *ast.ListItem, src []byte) bullet {
 			continue
 		}
 		blocks++
-		if b.text != "" {
+		if blocks > 1 {
 			continue
 		}
-		// The parser resolves reference links, so an item opening with
-		// [text][label] counts as a link bullet like [text](dest) does.
+		// The parser resolves reference links, so [text][label] and
+		// [text] with a definition are links; unresolved ones stay text.
 		_, b.opensLink = c.FirstChild().(*ast.Link)
-		lines := c.Lines()
-		parts := make([]string, 0, lines.Len())
-		for i := range lines.Len() {
-			seg := lines.At(i)
-			parts = append(parts, strings.TrimSpace(string(seg.Value(src))))
+		var r inlineReader
+		r.walk(c, src, 0, 0)
+		b.visible = strings.TrimSpace(r.visible.String())
+		b.outside = r.outside.String()
+		b.bold = r.bold
+		b.label = r.label
+		if b.label == "" {
+			b.label = b.visible
+			if rs := []rune(b.label); len(rs) > 40 {
+				b.label = string(rs[:40]) + "..."
+			}
 		}
-		b.text = strings.Join(parts, " ")
 	}
 	b.multiBlock = blocks > 1
 	return b
+}
+
+// inlineReader flattens an inline tree: visible text for the length rule,
+// the text outside links and code spans for the marker rules, bold seen
+// outside links, and the first link's text as the bullet's label.
+type inlineReader struct {
+	visible, outside strings.Builder
+	bold             bool
+	label            string
+	labelDone        bool
+}
+
+func (r *inlineReader) walk(n ast.Node, src []byte, inLink, inCode int) {
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		switch v := c.(type) {
+		case *ast.Text:
+			s := string(v.Segment.Value(src))
+			if v.SoftLineBreak() || v.HardLineBreak() {
+				s += " "
+			}
+			r.visible.WriteString(s)
+			if inLink == 0 && inCode == 0 {
+				r.outside.WriteString(s)
+			}
+		case *ast.CodeSpan:
+			r.walk(v, src, inLink, inCode+1)
+		case *ast.Link:
+			start := r.visible.Len()
+			r.walk(v, src, inLink+1, inCode)
+			if !r.labelDone {
+				r.label, r.labelDone = strings.TrimSpace(r.visible.String()[start:]), true
+			}
+		case *ast.AutoLink:
+			r.visible.Write(v.URL(src))
+		case *ast.Emphasis:
+			if v.Level >= 2 && inLink == 0 {
+				r.bold = true
+			}
+			r.walk(v, src, inLink, inCode)
+		default:
+			r.walk(v, src, inLink, inCode)
+		}
+	}
 }

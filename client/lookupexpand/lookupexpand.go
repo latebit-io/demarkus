@@ -20,8 +20,9 @@ const Param = "budget"
 // ParamDesc describes the budget argument on both surfaces.
 const ParamDesc = "approximate result tokens (4 bytes each); when set, the matched sections' text follows the table in rank order under '" + Delimiter + " path#anchor' lines, whole sections only, until spent (default 0: table only)"
 
-// Delimiter opens every expanded block and every note; markdown bodies do
-// not start lines with it, so consumers can frame blocks unambiguously.
+// Delimiter opens every expanded block and every note. Body lines that start
+// with it (a nested blockquote) are indented one space, so only the frame
+// carries it at column zero.
 const Delimiter = ">>>"
 
 // bytesPerToken is the budget's unit; the surfaces carry no tokenizer.
@@ -57,7 +58,7 @@ type expansion struct {
 
 // add appends a block when it fits whole and reports whether it did.
 func (e *expansion) add(loc, text string) bool {
-	block := Delimiter + " " + loc + "\n\n" + strings.TrimSpace(text) + "\n\n"
+	block := Delimiter + " " + loc + "\n\n" + escapeFrame(strings.TrimSpace(text)) + "\n\n"
 	if len(block) > e.remaining {
 		return false
 	}
@@ -81,7 +82,7 @@ func Expand(ctx context.Context, table, query string, budgetBytes int, fetch Fet
 	}
 	e := &expansion{remaining: budgetBytes}
 	bodies := make(map[string]string)
-	fetches := 0
+	fetches, limitNoted := 0, false
 	for _, loc := range rows {
 		if e.remaining <= 0 {
 			break
@@ -94,8 +95,11 @@ func Expand(ctx context.Context, table, query string, budgetBytes int, fetch Fet
 		body, seen := bodies[path]
 		if !seen {
 			if fetches >= MaxFetches {
-				e.note("fetch limit of %d documents reached", MaxFetches)
-				break
+				if !limitNoted {
+					e.note("fetch limit of %d documents reached; later rows on unfetched documents skipped", MaxFetches)
+					limitNoted = true
+				}
+				continue
 			}
 			fetches++
 			var err error
@@ -139,6 +143,20 @@ func Expand(ctx context.Context, table, query string, budgetBytes int, fetch Fet
 	}
 	e.note("expanded %d of %d rows within the budget", e.expanded, len(rows))
 	return "\n" + e.b.String()
+}
+
+// escapeFrame indents body lines that would read as a frame line.
+func escapeFrame(text string) string {
+	if !strings.Contains(text, Delimiter) {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, ln := range lines {
+		if strings.HasPrefix(ln, Delimiter) {
+			lines[i] = " " + ln
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // matchingSections returns the H2-or-deeper sections whose text holds every
