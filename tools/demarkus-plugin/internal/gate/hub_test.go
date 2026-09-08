@@ -65,6 +65,8 @@ func TestHubProblems(t *testing.T) {
 			"# Hub\n\n" + linkBullets(5) + "- [Plan](/p.md) [Status: active][missing]\n", []string{`"Plan"`}},
 		{"autolink bullets make a link page", "links.md",
 			"# Links\n\n- <https://a.example/1>: one\n- <https://a.example/2>: two\n- <https://a.example/3>: three\n- <https://a.example/4>: four\n- <https://a.example/5>: five\n- [Plan](/p.md): merged 2026-09-01\n", []string{`"Plan"`}},
+		{"emphasis-wrapped links make a link page", "wrapped.md",
+			"# Wrapped\n\n- **[A](/a.md)**: a\n- *[B](/b.md)*: b\n- **[C](/c.md)**: c\n- **[D](/d.md)**: d\n- ***[E](/e.md)***: e\n- [Plan](/p.md): merged 2026-09-01\n", []string{`"Plan"`}},
 		{"bold link label is a link, not status", "index.md",
 			"# Hub\n\n" + linkBullets(5) + "- **[Plan](/p.md)**: the plan\n", nil},
 		{"link page by shape gets the rules", "related.md",

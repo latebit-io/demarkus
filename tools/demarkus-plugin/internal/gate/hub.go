@@ -150,10 +150,7 @@ func bulletOf(item *ast.ListItem, src []byte) bullet {
 		}
 		// The parser resolves reference links, so [text][label] and
 		// [text] with a definition are links; unresolved ones stay text.
-		switch c.FirstChild().(type) {
-		case *ast.Link, *ast.AutoLink:
-			b.opensLink = true
-		}
+		b.opensLink = opensWithLink(c.FirstChild())
 		var r inlineReader
 		r.walk(c, src, 0, 0)
 		b.visible = strings.TrimSpace(r.visible.String())
@@ -169,6 +166,21 @@ func bulletOf(item *ast.ListItem, src []byte) bullet {
 	}
 	b.multiBlock = blocks > 1
 	return b
+}
+
+// opensWithLink descends through leading emphasis wrappers to the first
+// real inline node and reports whether it is a link.
+func opensWithLink(n ast.Node) bool {
+	for {
+		switch v := n.(type) {
+		case *ast.Link, *ast.AutoLink:
+			return true
+		case *ast.Emphasis:
+			n = v.FirstChild()
+		default:
+			return false
+		}
+	}
 }
 
 // inlineReader flattens an inline tree: visible text for the length rule,
