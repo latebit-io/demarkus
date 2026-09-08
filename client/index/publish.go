@@ -161,7 +161,7 @@ func stageShard(ctx context.Context, artifact ShardArtifact, fetchDocument Fetch
 
 func publishAndVerify(ctx context.Context, docPath, body string, expectedVersion int, fetchDocument FetchDocument, publishDocument PublishDocument) (protocol.Response, int, error) {
 	published, publishErr := publishDocument(ctx, docPath, body, expectedVersion)
-	if publishErr == nil && published.Status != protocol.StatusOK && published.Status != protocol.StatusCreated {
+	if publishErr == nil && !protocol.IsWriteSuccess(published.Status) {
 		publishErr = fmt.Errorf("publish returned %s", published.Status)
 	}
 	version := 0

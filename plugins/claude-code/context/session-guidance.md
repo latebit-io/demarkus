@@ -22,7 +22,7 @@ Binding is **enforced**: a write to a soul other than the bound one is denied at
 
 Before "what do I know / did we decide / have we seen X", and at the start of substantive work, check the soul:
 
-- `mark_lookup` with `url=/<slug>/` and a subject `query` is the **card catalog**: importance-ranked table (path, importance, title, tags), no bodies. Then `mark_fetch` the rows worth reading. It finds only what was tagged or titled, so pair it with `mark_fetch /<slug>/index.md`. Transport/auth/server errors are failures to surface, never empty results.
+- `mark_lookup` with `url=/<slug>/` and a subject `query` is the **card catalog**: importance-ranked table (path, importance, title, tags), no bodies; `match: body` when the subject lives in section text rather than tags; body rows carry `#anchor` and a snippet. Then `mark_fetch` rows at their `#anchor`; a whole document only when the outline shows the answer spans sections. It finds only what was tagged or titled, so pair it with `mark_fetch /<slug>/index.md`. Transport/auth/server errors are failures to surface, never empty results.
 - `mark_backlinks` / `mark_graph` surface related docs via the link graph.
 - Nothing relevant: say so. Never fabricate recall.
 
@@ -48,7 +48,7 @@ Style gate warns at write time on: a frontmatter fence opening the body, missing
 
 Soft checks: publish gate (tags), session-end journal nudge when files changed but nothing was recorded, recall nudge on "did we / what did we decide". Reminders, not substitutes; routing is on you.
 
-`mark_append` carries catalog metadata forward (tags, importance, title, type; never `retention`), so an append never drops a doc from `mark_lookup`. It does not extend tags: when an append adds a new subject, re-publish with wider `tags` and resend the whole current metadata, since `mark_publish` **replaces** the metadata map.
+`mark_append` carries catalog metadata forward (tags, importance, title, type; never `retention`), so an append never drops a doc from `mark_lookup`. It does not extend tags: when an append adds a new subject, re-publish with wider `tags` and resend the whole current metadata (fetch with `verbose: true` to see it), since `mark_publish` **replaces** the metadata map.
 
 ## Restraint
 

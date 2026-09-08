@@ -800,8 +800,7 @@ func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, 
 		return err
 	}
 
-	status := result.Response.Status
-	if status != protocol.StatusOK && status != protocol.StatusCreated {
+	if status := result.Response.Status; !protocol.IsWriteSuccess(status) {
 		return fmt.Errorf("publish returned %s", status)
 	}
 

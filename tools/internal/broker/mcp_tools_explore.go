@@ -8,6 +8,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
 	listingpage "github.com/latebit-io/demarkus/client/listing"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -30,6 +31,7 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultError("url is required"), nil
 	}
 	docURL, _, _ := strings.Cut(raw, "#")
+	opts := mcpfmt.Fetch.Options(&req)
 
 	worldName, path, err := parseToolURL(docURL)
 	if err != nil {
@@ -40,14 +42,14 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 		return g.toolErrorFor("explore", worldName, err), nil
 	}
 	if result.Response.Status != protocol.StatusOK {
-		return mcp.NewToolResultText(formatToolResult(result, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.Format(result, opts)), nil
 	}
 	body := result.Response.Body
 
 	// Binary/non-UTF-8 body: an outline over it is garbage; return a notice.
 	if mdoutline.BinaryBody(body) {
-		return mcp.NewToolResultText(formatToolResultWith(result, mdoutline.NonMarkdownNotice(len(body)),
-			map[string]string{"mode": "binary"}, "version", "modified", "etag")), nil
+		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.NonMarkdownNotice(len(body)),
+			map[string]string{"mode": "binary"}, opts)), nil
 	}
 
 	var b strings.Builder
@@ -81,7 +83,7 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 	extra := map[string]string{
 		"size": fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1),
 	}
-	return mcp.NewToolResultText(formatToolResultWith(result, b.String(), extra, "version", "modified", "etag")), nil
+	return mcp.NewToolResultText(mcpfmt.FormatWith(result, b.String(), extra, opts)), nil
 }
 
 // writeBacklinksSection appends the backlinks card section from the

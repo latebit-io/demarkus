@@ -97,7 +97,7 @@ func requestMain() {
 		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus bookmark <add|list|remove>\n")
-		fmt.Fprintf(os.Stderr, "       demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] mark://host:port/scope/\n")
+		fmt.Fprintf(os.Stderr, "       demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body] mark://host:port/scope/\n")
 		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
 	}
@@ -696,13 +696,15 @@ func lookupMain(args []string) {
 	query := fs.String("query", "", "subject to look up; matched against document tags and titles (required)")
 	filter := fs.String("filter", "", "comma-separated key=value predicates (e.g. project=broker,modified-after=2025-01-01)")
 	limit := fs.Int("limit", 0, "maximum results (0 = server default)")
+	match := fs.String("match", "", "catalog (default) or body: match section text too; rows carry path#anchor and a snippet")
 	authToken := fs.String("auth", "", "auth token (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	verbose := fs.Bool("v", false, "show status and metadata header before the results table")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-auth TOKEN] mark://host:port/scope/\n\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body] [-auth TOKEN] mark://host:port/scope/\n\n")
 		fmt.Fprintf(os.Stderr, "Look up documents by subject against the server's catalog. Use / as the scope\n")
-		fmt.Fprintf(os.Stderr, "to search everything, or a subtree like /docs/ to narrow it.\n\n")
+		fmt.Fprintf(os.Stderr, "to search everything, or a subtree like /docs/ to narrow it. -match body also\n")
+		fmt.Fprintf(os.Stderr, "matches section text; a server without body match answers from the catalog.\n\n")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args)
@@ -725,9 +727,13 @@ func lookupMain(args []string) {
 	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 	defer client.Close()
 
-	result, err := client.Lookup(host, scope, *query, token, fetch.LookupOptions{Filter: *filter, Limit: *limit})
+	opts := fetch.LookupOptions{Filter: *filter, Limit: *limit, Match: *match}
+	result, err := client.Lookup(host, scope, *query, token, opts)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if fetch.AnsweredFromCatalog(opts, result) {
+		fmt.Fprintln(os.Stderr, "note: "+fetch.CatalogFallbackNote)
 	}
 
 	if *verbose {

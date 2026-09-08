@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/latebit-io/demarkus/client/fetch"
 )
 
 // Call records one tool invocation and what it cost.
@@ -65,68 +67,54 @@ func (r *Recorder) Call(ctx context.Context, name string, args map[string]any) (
 // Calls returns the log so far.
 func (r *Recorder) Calls() []Call { return r.calls }
 
-// LookupFetch is the pre-search agent behavior: one catalog lookup, then
-// fetch rows in rank order until the target is in hand or MaxFetches is spent.
-// An outline for the target costs one more fetch: section if named, else body.
+// LookupFetch is the lookup-then-fetch agent behavior: one mark_lookup (with
+// match=body when Body is set), then rows in rank order until the target is
+// in hand or MaxFetches is spent; an outline costs one more fetch.
 type LookupFetch struct {
 	Scope       string
 	LookupLimit int
 	MaxFetches  int
+	Body        bool
 }
 
 // Name implements Strategy.
-func (LookupFetch) Name() string { return "lookup-fetch" }
+func (s LookupFetch) Name() string {
+	if s.Body {
+		return "body-fetch"
+	}
+	return "lookup-fetch"
+}
 
 // Run implements Strategy.
 func (s LookupFetch) Run(ctx context.Context, rec *Recorder, q *Question) (Outcome, error) {
-	lookup, err := rec.Call(ctx, "mark_lookup", map[string]any{
-		"url": s.Scope, "query": q.Query, "limit": s.LookupLimit,
-	})
+	args := map[string]any{"url": s.Scope, "query": q.Query, "limit": s.LookupLimit}
+	if s.Body {
+		args["match"] = fetch.MatchBody
+	}
+	lookup, err := rec.Call(ctx, "mark_lookup", args)
 	if err != nil {
 		return Outcome{}, err
 	}
 	if lookup.IsError {
 		return Outcome{}, nil
 	}
-	rows := parseLookupPaths(lookup.Text)
-	out := Outcome{LookupRank: rank(rows, q.ExpectedPath)}
+	rows := parseLookupRows(lookup.Text)
+	out := Outcome{LookupRank: rankRows(rows, q.ExpectedPath)}
 	fetches := 0
-	for _, path := range rows {
+	for _, row := range rows {
 		if fetches >= s.MaxFetches {
 			break
 		}
-		fetches++
-		res, err := rec.Call(ctx, "mark_fetch", map[string]any{"url": path})
+		visit, err := visitRow(ctx, rec, q, row, s.MaxFetches-fetches)
 		if err != nil {
 			return Outcome{}, err
 		}
-		if path != q.ExpectedPath {
+		fetches += visit.used
+		if !visit.done {
 			continue
 		}
-		if res.IsError {
-			return out, nil
-		}
-		parsed := parseFetchResponse(res.Text)
-		if !parsed.isOutline() {
-			out.Hit = q.ExpectedAnchor == "" || parsed.hasSection(q.ExpectedAnchor)
-			if out.Hit {
-				out.CallsToEvidence = len(rec.Calls())
-			}
-			return out, nil
-		}
-		if fetches >= s.MaxFetches {
-			return out, nil
-		}
-		args := map[string]any{"url": path, "force": true}
-		if q.ExpectedAnchor != "" {
-			args = map[string]any{"url": path + "#" + q.ExpectedAnchor}
-		}
-		res, err = rec.Call(ctx, "mark_fetch", args)
-		if err != nil {
-			return Outcome{}, err
-		}
-		out.Hit = !res.IsError
-		if out.Hit {
+		out.Hit = visit.hit
+		if visit.hit {
 			out.CallsToEvidence = len(rec.Calls())
 		}
 		return out, nil
@@ -134,9 +122,59 @@ func (s LookupFetch) Run(ctx context.Context, rec *Recorder, q *Question) (Outco
 	return out, nil
 }
 
-func rank(rows []string, path string) int {
+// rowVisit is the outcome of fetching one row: fetches spent, whether the
+// search is over, and the verdict when it is.
+type rowVisit struct {
+	used int
+	done bool
+	hit  bool
+}
+
+// visitRow fetches one row within remaining fetches. A decoy or a sibling
+// section of the target is not done, since a later row may name the right
+// one. An outline costs one more fetch if affordable.
+func visitRow(ctx context.Context, rec *Recorder, q *Question, row lookupRow, remaining int) (rowVisit, error) {
+	res, err := rec.Call(ctx, "mark_fetch", map[string]any{"url": row.URL()})
+	if err != nil {
+		return rowVisit{}, err
+	}
+	visit := rowVisit{used: 1}
+	if row.Path != q.ExpectedPath {
+		return visit, nil
+	}
+	if res.IsError {
+		visit.done = true
+		return visit, nil
+	}
+	parsed := parseFetchResponse(res.Text)
+	if !parsed.isOutline() {
+		visit.hit = q.ExpectedAnchor == "" || parsed.hasSection(q.ExpectedAnchor)
+		// A bare-path row was the whole document: no later row can add the
+		// section. An anchored miss leaves the remaining rows to try.
+		visit.done = visit.hit || row.Anchor == ""
+		return visit, nil
+	}
+	if remaining < 2 {
+		visit.done = true
+		return visit, nil
+	}
+	args := map[string]any{"url": row.Path, "force": true}
+	if q.ExpectedAnchor != "" {
+		args = map[string]any{"url": row.Path + "#" + q.ExpectedAnchor}
+	}
+	res, err = rec.Call(ctx, "mark_fetch", args)
+	if err != nil {
+		return rowVisit{}, err
+	}
+	visit.used = 2
+	visit.done = true
+	visit.hit = !res.IsError
+	return visit, nil
+}
+
+func rankRows(rows []lookupRow, path string) int {
 	for i, row := range rows {
-		if row == path {
+		if row.Path == path {
 			return i + 1
 		}
 	}
@@ -145,12 +183,12 @@ func rank(rows []string, path string) int {
 
 // StrategyByName resolves a CLI strategy name.
 func StrategyByName(name, scope string, lookupLimit, maxFetches int) (Strategy, error) {
+	if lookupLimit <= 0 || maxFetches <= 0 {
+		return nil, fmt.Errorf("lookup limit %d and max fetches %d must be positive", lookupLimit, maxFetches)
+	}
 	switch name {
-	case "lookup-fetch":
-		if lookupLimit <= 0 || maxFetches <= 0 {
-			return nil, fmt.Errorf("lookup limit %d and max fetches %d must be positive", lookupLimit, maxFetches)
-		}
-		return LookupFetch{Scope: scope, LookupLimit: lookupLimit, MaxFetches: maxFetches}, nil
+	case "lookup-fetch", "body-fetch":
+		return LookupFetch{Scope: scope, LookupLimit: lookupLimit, MaxFetches: maxFetches, Body: name == "body-fetch"}, nil
 	default:
 		return nil, fmt.Errorf("unknown strategy %q", name)
 	}

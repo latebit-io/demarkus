@@ -26,10 +26,7 @@ type LookupFactory func(t *testing.T) LookupBackend
 // must rank, score, scope, and filter identically. Helpers drive the catalog
 // exactly as the handler's write paths do.
 func RunLookupConformance(t *testing.T, factory LookupFactory) {
-	subtests := []struct {
-		name string
-		fn   func(t *testing.T, b LookupBackend)
-	}{
+	subtests := []lookupSubtest{
 		{"Matching", testLookupMatching},
 		{"Ranking", testLookupRanking},
 		{"Tiebreaks", testLookupTiebreaks},
@@ -42,11 +39,17 @@ func RunLookupConformance(t *testing.T, factory LookupFactory) {
 		{"UpdateReplacesEntry", testLookupUpdateReplacesEntry},
 		{"MaxCap", testLookupMaxCap},
 	}
-	for _, st := range subtests {
+	for _, st := range append(subtests, bodyLookupSubtests...) {
 		t.Run(st.name, func(t *testing.T) {
 			st.fn(t, factory(t))
 		})
 	}
+}
+
+// lookupSubtest is one named case of the LOOKUP conformance suite.
+type lookupSubtest struct {
+	name string
+	fn   func(t *testing.T, b LookupBackend)
 }
 
 func testLookupMatching(t *testing.T, b LookupBackend) {
@@ -144,9 +147,9 @@ func testLookupMatchAll(t *testing.T, b LookupBackend) {
 	// "*" returns everything, importance-ranked, all scores zero.
 	assertLookup(t, b, "*", catalog.Options{}, "/hub.md", "/docs/deep.md", "/low.md")
 	rs := mustLookup(t, b, "*", catalog.Options{})
-	for _, r := range rs {
-		if r.Score != 0 {
-			t.Errorf("match-all score for %s = %d, want 0", r.Path, r.Score)
+	for i := range rs {
+		if rs[i].Score != 0 {
+			t.Errorf("match-all score for %s = %d, want 0", rs[i].Path, rs[i].Score)
 		}
 	}
 	// Scope, filters, and Max still narrow the universe.
@@ -305,8 +308,8 @@ func assertLookup(t *testing.T, b LookupBackend, query string, opts catalog.Opti
 	t.Helper()
 	rs := mustLookup(t, b, query, opts)
 	got := make([]string, len(rs))
-	for i, r := range rs {
-		got[i] = r.Path
+	for i := range rs {
+		got[i] = rs[i].Path
 	}
 	if len(got) != len(want) {
 		t.Errorf("lookup %q = %v, want %v", query, got, want)

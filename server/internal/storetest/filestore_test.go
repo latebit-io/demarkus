@@ -28,6 +28,12 @@ func TestFileStoreLookupConformance(t *testing.T) {
 	RunLookupConformance(t, func(t *testing.T) LookupBackend { return FileBackend(t) })
 }
 
+// TestFileStoreLookupHandlerConformance pins the LOOKUP wire contract for
+// the match key on the file backend.
+func TestFileStoreLookupHandlerConformance(t *testing.T) {
+	RunLookupHandlerConformance(t, func(t *testing.T) LookupBackend { return FileBackend(t) })
+}
+
 // TestFileStoreDifferentialSelf runs the differential harness with the file
 // store on both sides. It proves the harness itself is deterministic and
 // backend-neutral: a self-diff failure is a harness bug, not a store bug.

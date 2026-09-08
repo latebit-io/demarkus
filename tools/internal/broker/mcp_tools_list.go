@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -70,7 +71,7 @@ func mcpTools() []mcp.Tool {
 func markFetchTool() mcp.Tool {
 	return mcp.NewTool("mark_fetch",
 		mcp.WithDescription(
-			"Fetch a document: status, version, etag, markdown body. Over 8KB returns outline (headings with #anchors); url#<anchor> fetches one section, force=true the full body. Unchanged re-fetch returns short notice. "+mcpURLHint,
+			"Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -79,6 +80,7 @@ func markFetchTool() mcp.Tool {
 		mcp.WithBoolean("force",
 			mcp.Description("full body regardless of size or unchanged status (default false)"),
 		),
+		mcpfmt.Fetch.Param(),
 	)
 }
 
@@ -91,6 +93,7 @@ func markExploreTool() mcp.Tool {
 			mcp.Required(),
 			mcp.Description(mcpURLDesc),
 		),
+		mcpfmt.Fetch.Param(),
 	)
 }
 
@@ -131,7 +134,7 @@ func markVersionsTool() mcp.Tool {
 func markLookupTool() mcp.Tool {
 	return mcp.NewTool("mark_lookup",
 		mcp.WithDescription(
-			"Catalog lookup by subject in one world: matches tags and title only (not full text); returns importance-ranked table (path, importance, title, tags), no bodies. System-wide: mark_lookup_all. "+mcpURLHint,
+			"Catalog lookup by subject in one world: matches tags and title; match=body also matches section text (rows add #anchor and a snippet; a world without it answers from the catalog and says so). Importance-ranked table, no bodies. System-wide: mark_lookup_all. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -147,13 +150,19 @@ func markLookupTool() mcp.Tool {
 		mcp.WithNumber("limit",
 			mcp.Description("max results (default 10, cap 1000)"),
 		),
+		mcp.WithString("match",
+			mcp.Description(matchParamDesc),
+		),
+		mcpfmt.Lookup.Param(),
 	)
 }
+
+const matchParamDesc = "catalog (default) or body"
 
 func markLookupAllTool() mcp.Tool {
 	return mcp.NewTool("mark_lookup_all",
 		mcp.WithDescription(
-			"Catalog lookup by subject across all readable worlds. One globally limited table of mark://{worldName}/{path} rows; partial world failures reported with matches. Not full-text search. "+mcpURLHint,
+			"Catalog lookup by subject across all readable worlds. One globally limited table of mark://{worldName}/{path} rows; partial world failures reported with matches. match=body also matches section text. "+mcpURLHint,
 		),
 		mcp.WithString("query",
 			mcp.Required(),
@@ -168,13 +177,17 @@ func markLookupAllTool() mcp.Tool {
 		mcp.WithNumber("limit",
 			mcp.Description("global max results across worlds (default 10, cap 1000)"),
 		),
+		mcp.WithString("match",
+			mcp.Description(matchParamDesc+"; worlds without body match are listed"),
+		),
+		mcpfmt.LookupAll.Param(),
 	)
 }
 
 func markPublishTool() mcp.Tool {
 	return mcp.NewTool("mark_publish",
 		mcp.WithDescription(
-			"Publish or update a document (markdown body). expected_version: version from prior fetch, 0 to create. On conflict, default on_conflict=merge returns merged candidate body (git-style markers where both sides changed): review, republish at returned publish-at-version. "+mcpURLHint,
+			"Publish or update a document (markdown body); expected_version from prior fetch, 0 to create; metadata replaces the current map, a note lists dropped tags or keys. On conflict the default on_conflict=merge returns a merged candidate body (git-style markers where both sides changed) to review and republish at publish-at-version. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),

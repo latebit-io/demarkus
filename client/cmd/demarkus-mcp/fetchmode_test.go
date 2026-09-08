@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -352,5 +353,98 @@ func TestHandlerMarkFetch_NonOKStatusPassthrough(t *testing.T) {
 	text := fetchText(t, h, map[string]any{"url": "mark://example.com/missing.md#setup"})
 	if !strings.Contains(text, "status: not-found") {
 		t.Errorf("non-ok status should pass through, got:\n%s", text)
+	}
+}
+
+func TestHandlerMarkFetch_LeanEnvelopeAndVerbose(t *testing.T) {
+	h := &handler{client: &stubClient{fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK,
+			Metadata: map[string]string{"version": "3", "modified": "2026-07-04T00:00:00Z", "etag": "abc",
+				"content-hash": "sha256-1", "agent": "x", "tags": "a,b", "title": "Doc", "type": "Note"},
+			Body: smallDoc,
+		}}, nil
+	}}}
+	lean := fetchText(t, h, map[string]any{"url": "mark://example.com/doc.md"})
+	if !strings.HasPrefix(lean, "status: ok\nversion: 3\ntitle: Doc\n\n# Doc") {
+		t.Fatalf("lean envelope:\n%s", lean)
+	}
+	verbose := fetchText(t, h, map[string]any{"url": "mark://example.com/doc.md", "verbose": true, "force": true})
+	for _, want := range []string{"etag: abc\n", "content-hash: sha256-1\n", "tags: a,b\n", "type: Note\n", "modified: "} {
+		if !strings.Contains(verbose, want) {
+			t.Errorf("verbose envelope missing %q:\n%s", want, verbose)
+		}
+	}
+	unchanged := fetchText(t, h, map[string]any{"url": "mark://example.com/doc.md"})
+	if !strings.HasPrefix(unchanged, "status: unchanged\nversion: 3\n\n") {
+		t.Fatalf("lean unchanged notice:\n%s", unchanged)
+	}
+}
+
+func TestHandlerMarkLookup_TagCapAndVerbose(t *testing.T) {
+	many := "t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12"
+	table := "# Lookup matches for \"x\" in /\n\n| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n| /a.md | 0.90 | A | " + many + " |\n"
+	h := &handler{client: &stubClient{lookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"matches": "1"}, Body: table}}, nil
+	}}}
+	call := func(args map[string]any) string {
+		t.Helper()
+		result, err := h.markLookup(context.Background(), newCallToolRequest(args))
+		if err != nil || result.IsError {
+			t.Fatalf("lookup failed: %v %v", err, result)
+		}
+		return result.Content[0].(mcp.TextContent).Text
+	}
+	lean := call(map[string]any{"url": "mark://example.com/", "query": "x"})
+	if !strings.Contains(lean, "| t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, +2 more |") {
+		t.Fatalf("lean lookup not capped:\n%s", lean)
+	}
+	verbose := call(map[string]any{"url": "mark://example.com/", "query": "x", "verbose": true})
+	if verbose != "status: ok\nmatches: 1\n\n"+table {
+		t.Fatalf("verbose lookup:\n%s", verbose)
+	}
+}
+
+func TestHandlerMarkPublish_NarrowingNote(t *testing.T) {
+	// A fresh stub per publish: the stub stores each publish as the new
+	// current version, which would otherwise conflict the next case.
+	publish := func(version float64, meta map[string]any, onConflict string) string {
+		t.Helper()
+		current := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK,
+			Metadata: map[string]string{"version": "3", "etag": "e", "tags": "a,b,c", "type": "Note", "title": "T"}, Body: "x"}}
+		sc := &stubClient{
+			published: map[string]fetch.Result{
+				"example.com:6309/doc.md":                            current,
+				"example.com:6309" + index.VersionPath("/doc.md", 3): current,
+			},
+			publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "4"}}}, nil
+			},
+		}
+		if version == 0 {
+			sc.published = nil
+		}
+		h := &handler{client: sc, token: "test"}
+		result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+			"url": "mark://example.com/doc.md", "body": "y", "expected_version": version,
+			"metadata": meta, "on_conflict": onConflict,
+		}))
+		if err != nil || result.IsError {
+			t.Fatalf("publish failed: %v %v", err, result)
+		}
+		return result.Content[0].(mcp.TextContent).Text
+	}
+	for _, mode := range []string{"fail", "merge"} {
+		narrowed := publish(3, map[string]any{"tags": "a", "title": "T"}, mode)
+		if !strings.HasPrefix(narrowed, "status: ok\nversion: 4\n") ||
+			!strings.Contains(narrowed, "\nnote: this publish dropped tags b, c and keys type=Note carried by v3;") {
+			t.Errorf("%s: narrowing note missing:\n%s", mode, narrowed)
+		}
+	}
+	if full := publish(3, map[string]any{"tags": "c,b,a", "title": "T", "type": "Note"}, "fail"); strings.Contains(full, "note:") {
+		t.Errorf("complete metadata noted:\n%s", full)
+	}
+	if created := publish(0, map[string]any{"tags": "a"}, "fail"); strings.Contains(created, "note:") {
+		t.Errorf("create noted:\n%s", created)
 	}
 }

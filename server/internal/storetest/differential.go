@@ -178,6 +178,10 @@ var (
 		[]byte("# Üñí cödé\n"),
 		[]byte("no heading, just text"),
 		{0x89, 'P', 'N', 'G', 0xff, 0xfe, 0x00},
+		// Sectioned bodies give body match something to find at every
+		// depth: preamble, own text, subsection, heading trail.
+		[]byte("Preamble mentions hairpin nat.\n\n# Guide\n\nwords about gamma\n\n## Alpha Section\n\nudp buffers and `path.Match`\n\n### Deeper\n\nkqueue symlink swap\n\n## Beta\n\nkept words\n"),
+		[]byte("# Guide\n\n## Alpha Section\n\ngamma only here\n\n## Alpha Section\n\nduplicate heading, hairpin\n"),
 	}
 	diffMetas = []map[string]string{
 		nil,
@@ -197,7 +201,7 @@ var (
 		{"tags": strings.Repeat("x", protocol.MaxMetaBytes+8)},
 		{"rel-depends-on": "/a.md, /b.md", "importance": "1"},
 	}
-	diffQueries = []string{"*", "alpha", "beta", "Alpha gamma", "words", "title", "kept words", "nothing", ""}
+	diffQueries = []string{"*", "alpha", "beta", "Alpha gamma", "words", "title", "kept words", "nothing", "", "hairpin", "udp", "kqueue alpha", "path.match"}
 	diffScopes  = []string{"", "/", "/d", "/d/", "/ü", "/a.md", "/nope"}
 	diffFilters = []string{"", "tag=alpha", "type=Plan", "modified-after=2000-01-01", "modified-before=2000-01-01", "tag=alpha,importance=0.9"}
 )
@@ -400,25 +404,48 @@ func snapshot(b LookupBackend) []string {
 	}
 	// Queries x scopes unfiltered, then filters on the match-all query: the
 	// full cross product is mostly redundant and dominates snapshot cost.
-	lookup := func(q, scope, filter string) {
+	// Body match rows are compared as a set, the contract, not by rank.
+	lookup := func(label string, mode catalog.Mode, describe func([]catalog.Result) string, q, scope, filter string) {
 		preds, perr := catalog.ParseFilter(filter)
 		if perr != nil {
 			add("filter %q parse error", filter)
 			return
 		}
-		rs, err := b.Catalog.Lookup(q, catalog.Options{Scope: scope, Filter: preds})
-		add("lookup q=%q scope=%q filter=%q = %s %s", q, scope, filter, errClass(err), describeResults(rs))
+		rs, err := b.Catalog.Lookup(q, catalog.Options{Scope: scope, Filter: preds, Match: mode})
+		add("%s q=%q scope=%q filter=%q = %s %s", label, q, scope, filter, errClass(err), describe(rs))
 	}
 	for _, q := range diffQueries {
 		for _, scope := range diffScopes {
-			lookup(q, scope, "")
+			lookup("lookup", catalog.MatchCatalog, describeResults, q, scope, "")
+			lookup("lookup-body", catalog.MatchBody, describeBodyResults, q, scope, "")
 		}
 	}
 	for _, f := range diffFilters {
-		lookup("*", "", f)
-		lookup("alpha", "/d", f)
+		lookup("lookup", catalog.MatchCatalog, describeResults, "*", "", f)
+		lookup("lookup", catalog.MatchCatalog, describeResults, "alpha", "/d", f)
+		lookup("lookup-body", catalog.MatchBody, describeBodyResults, "hairpin", "", f)
 	}
 	return lines
+}
+
+// describeBodyResults renders body rows sorted by path then anchor: order
+// is implementation-defined, the row set is the contract.
+func describeBodyResults(rs []catalog.Result) string {
+	sorted := make([]catalog.Result, len(rs))
+	copy(sorted, rs)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Path != sorted[j].Path {
+			return sorted[i].Path < sorted[j].Path
+		}
+		return sorted[i].Anchor < sorted[j].Anchor
+	})
+	parts := make([]string, len(sorted))
+	for i := range sorted {
+		r := &sorted[i]
+		parts[i] = fmt.Sprintf("{%s heading=%q snippet=%q imp=%g title=%q tags=%v}",
+			r.Location(), r.Heading, r.Snippet, r.Importance, r.Title, r.Tags)
+	}
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
 // describeResults renders lookup results in an order independent of the
@@ -438,7 +465,8 @@ func describeResults(rs []catalog.Result) string {
 		return a.Path < b.Path
 	})
 	parts := make([]string, len(sorted))
-	for i, r := range sorted {
+	for i := range sorted {
+		r := &sorted[i]
 		parts[i] = fmt.Sprintf("{%s score=%d imp=%g title=%q tags=%v meta=%s mod=%v}",
 			r.Path, r.Score, r.Importance, r.Title, r.Tags, describeMeta(r.Metadata), !r.Modified.IsZero())
 	}

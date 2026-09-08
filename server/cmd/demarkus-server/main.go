@@ -34,13 +34,13 @@ type tokenReloader interface {
 	ReloadTokens() error
 }
 
-// buildCatalog builds the in-memory LOOKUP catalog by walking current
-// documents, for backends that have no catalog of their own. A failed walk
-// leaves an empty catalog rather than aborting startup.
+// buildCatalog builds the in-memory LOOKUP catalog and section index by
+// walking current documents, for backends that have no catalog of their
+// own. A failed walk leaves an empty catalog rather than aborting startup.
 func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
 	cat := catalog.New()
 	err := s.WalkCurrent(func(d store.CurrentDoc) error {
-		cat.Set(catalog.FromDocument(d.Path, d.Metadata, d.Body, d.Modified))
+		cat.Put(d.Path, d.Metadata, d.Body, d.Modified)
 		return nil
 	})
 	if err != nil && !logPartialWalk(logger, "lookup catalog", err) {

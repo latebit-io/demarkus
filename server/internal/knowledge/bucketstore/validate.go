@@ -222,7 +222,7 @@ func validateCatalogRecord(record *catalogRecord, expectedPath, expectedModified
 	if record.Title == "" {
 		return fmt.Errorf("title must not be empty")
 	}
-	expectedTags := catalog.ParseTags(record.Metadata["tags"])
+	expectedTags := protocol.SplitTags(record.Metadata["tags"])
 	if !slices.Equal(record.Tags, expectedTags) {
 		return fmt.Errorf("tags do not match metadata tags")
 	}

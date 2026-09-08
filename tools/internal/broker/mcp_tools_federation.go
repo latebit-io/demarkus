@@ -7,6 +7,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/index"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -36,11 +37,7 @@ func (g *mcpGateway) handleMarkDiscover(_ context.Context, req mcp.CallToolReque
 	if err != nil {
 		return g.toolErrorFor("discover", worldName, err), nil
 	}
-	// Same metadata keys the local demarkus-mcp surfaces for
-	// discover (version + modified). The full manifest body is
-	// also part of the formatted text per formatToolResult's
-	// convention.
-	return mcp.NewToolResultText(formatToolResult(result, "version", "modified")), nil
+	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified")), nil
 }
 
 // handleMarkResolve implements the mark_resolve tool: fetch a
@@ -106,7 +103,7 @@ func (g *mcpGateway) handleMarkResolve(_ context.Context, req mcp.CallToolReques
 			lastErr = perCandidateErr
 			continue
 		}
-		return mcp.NewToolResultText(formatToolResult(result, "version", "modified", "content-hash")), nil
+		return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "content-hash")), nil
 	}
 	return mcp.NewToolResultError(fmt.Sprintf("could not resolve hash from any server: %s", lastErr)), nil
 }

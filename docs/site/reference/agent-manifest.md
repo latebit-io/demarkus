@@ -27,6 +27,7 @@ The manifest is a standard markdown document. Sections are identified by heading
 - **`## Auth`**: how to obtain tokens, what operations require auth
 - **`## Guidelines`**: usage guidelines for agents (preferred patterns, rate limits, what not to do)
 - **`## Contact`**: maintainer info
+- **`## Capabilities`**: optional protocol extensions the server implements, one per line (`- lookup-match: catalog, body` for LOOKUP body match, SPEC §6.7). Advisory: the response header is the authoritative signal.
 
 ## Example
 
@@ -55,6 +56,10 @@ Write operations require a token. Read access is open.
 - Prefer FETCH over LIST for known paths
 - Use APPEND for journal entries, not PUBLISH
 - Always include expected-version on writes
+
+## Capabilities
+
+- lookup-match: catalog, body
 ```
 
 ## Client Support

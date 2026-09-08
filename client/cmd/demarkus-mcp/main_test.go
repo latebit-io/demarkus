@@ -353,105 +353,6 @@ func TestHandlerMarkGraph_InvalidURL(t *testing.T) {
 	assertIsToolError(t, result, "requires -host flag")
 }
 
-func TestFormatResult(t *testing.T) {
-	tests := []struct {
-		name     string
-		result   fetch.Result
-		keys     []string
-		wantSubs []string
-	}{
-		{
-			name: "status and metadata keys present",
-			result: fetch.Result{
-				Response: protocol.Response{
-					Status:   "ok",
-					Metadata: map[string]string{"version": "3", "modified": "2026-02-23T10:00:00Z", "etag": "abc123"},
-					Body:     "# Hello",
-				},
-			},
-			keys:     []string{"version", "modified", "etag"},
-			wantSubs: []string{"status: ok", "version: 3", "modified: 2026-02-23T10:00:00Z", "etag: abc123", "# Hello"},
-		},
-		{
-			name: "missing metadata keys are skipped",
-			result: fetch.Result{
-				Response: protocol.Response{
-					Status:   "ok",
-					Metadata: map[string]string{"version": "1"},
-					Body:     "content",
-				},
-			},
-			keys:     []string{"version", "etag"},
-			wantSubs: []string{"status: ok", "version: 1", "content"},
-		},
-		{
-			name: "no body omits trailing newline",
-			result: fetch.Result{
-				Response: protocol.Response{
-					Status:   "created",
-					Metadata: map[string]string{"version": "5"},
-				},
-			},
-			keys:     []string{"version"},
-			wantSubs: []string{"status: created", "version: 5"},
-		},
-		{
-			name: "publisher metadata included after explicit keys",
-			result: fetch.Result{
-				Response: protocol.Response{
-					Status:   "ok",
-					Metadata: map[string]string{"version": "2", "type": "journal", "author": "claude"},
-					Body:     "hello",
-				},
-			},
-			keys:     []string{"version"},
-			wantSubs: []string{"status: ok", "version: 2", "type: journal", "author: claude", "hello"},
-		},
-		{
-			name: "publisher metadata only when no explicit keys requested",
-			result: fetch.Result{
-				Response: protocol.Response{
-					Status:   "ok",
-					Metadata: map[string]string{"type": "note"},
-					Body:     "body",
-				},
-			},
-			keys:     nil,
-			wantSubs: []string{"status: ok", "type: note", "body"},
-		},
-		{
-			name: "no duplicate when publisher key also in explicit keys",
-			result: fetch.Result{
-				Response: protocol.Response{
-					Status:   "ok",
-					Metadata: map[string]string{"version": "1", "type": "log"},
-					Body:     "data",
-				},
-			},
-			keys:     []string{"version", "type"},
-			wantSubs: []string{"version: 1", "type: log"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := formatResult(tt.result, tt.keys...)
-			for _, sub := range tt.wantSubs {
-				if !strings.Contains(got, sub) {
-					t.Errorf("output %q does not contain %q", got, sub)
-				}
-			}
-			// Verify no metadata key appears more than once.
-			for k := range tt.result.Response.Metadata {
-				prefix := k + ": "
-				if count := strings.Count(got, prefix); count > 1 {
-					t.Errorf("key %q appears %d times in output %q", k, count, got)
-				}
-			}
-		})
-	}
-}
-
 func TestAgentMeta(t *testing.T) {
 	t.Run("returns client name from session", func(t *testing.T) {
 		s := mcpserver.NewMCPServer("test", "0.1.0")
@@ -766,6 +667,39 @@ func TestHandlerMarkLookup(t *testing.T) {
 	}
 	if gotOpts.Filter != "project=broker" || gotOpts.Limit != 5 {
 		t.Errorf("opts = %+v, want {Filter:project=broker Limit:5}", gotOpts)
+	}
+}
+
+func TestHandlerMarkLookup_BodyMatch(t *testing.T) {
+	answer := func(echo bool) *stubClient {
+		return &stubClient{lookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+			if opts.Match != fetch.MatchBody {
+				return fetch.Result{}, fmt.Errorf("match = %q, want body", opts.Match)
+			}
+			meta := map[string]string{"matches": "0"}
+			if echo {
+				meta["match"] = "body"
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: "| Path | Importance | Title | Tags | Snippet |\n"}}, nil
+		}}
+	}
+	call := func(sc *stubClient) string {
+		h := &handler{client: sc, token: "test-token"}
+		result, err := h.markLookup(context.Background(), newCallToolRequest(map[string]any{
+			"url": "mark://example.com/", "query": "hairpin", "match": "body",
+		}))
+		if err != nil || result.IsError {
+			t.Fatalf("markLookup: err %v result %+v", err, result)
+		}
+		return result.Content[0].(mcp.TextContent).Text
+	}
+	echoed := call(answer(true))
+	if !strings.Contains(echoed, "match: body") || strings.Contains(echoed, fetch.CatalogFallbackNote) {
+		t.Errorf("echoed body answer wrong:\n%s", echoed)
+	}
+	silent := call(answer(false))
+	if !strings.Contains(silent, fetch.CatalogFallbackNote) {
+		t.Errorf("catalog fallback not flagged:\n%s", silent)
 	}
 }
 
@@ -1960,7 +1894,7 @@ func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess(t *testing.T) {
 func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess_PreservesAllMetadata(t *testing.T) {
 	// on_conflict=merge must not change the success contract — every
 	// metadata key the server returned should reach the agent, just like a
-	// plain mark_publish would do via formatResult.
+	// plain mark_publish would.
 	sc := &stubClient{
 		published: map[string]fetch.Result{
 			"example.com:6309/doc.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "5"}}},

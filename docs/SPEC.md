@@ -515,7 +515,7 @@ modified: <RFC 3339 timestamp>
 
 ### 6.7. LOOKUP
 
-Looks up documents by subject and returns a compact, importance-ranked list of matches. LOOKUP is a discovery aid: a card catalog, not full-text search. It matches a subject query against each document's declared `tags` and title, never against the document body. Servers SHOULD answer LOOKUP from an in-memory catalog and MUST NOT read document bodies at query time.
+Looks up documents by subject and returns a compact, importance-ranked list of matches. LOOKUP is a discovery aid: a card catalog, not full-text search. In its default catalog mode it matches a subject query against each document's declared `tags` and title, never against the document body. A server MAY additionally offer body match (see **Body match** below), selected by the optional `match` request key and answered from a section index the server maintains beside its catalog. Servers SHOULD answer LOOKUP from in-memory state and MUST NOT read document bodies at query time in either mode.
 
 LOOKUP operates over current versions only; archived documents MUST be excluded. The path in the request line is a scope: `LOOKUP /` covers the whole server, `LOOKUP /docs/` restricts to that subtree.
 
@@ -527,6 +527,7 @@ LOOKUP /docs/\n
 query: auth middleware\n
 filter: project=broker,modified-after=2025-01-01\n
 limit: 10\n
+match: catalog\n
 auth: <raw-token>\n
 ---\n
 ```
@@ -534,6 +535,7 @@ auth: <raw-token>\n
 - `query` (REQUIRED): the subject text. The server lowercases it and splits it on whitespace into terms. A document matches if any term matches its declared `tags` or its title. Matching is case-insensitive and term-based; the precise rule (exact tag membership, title substring) is implementation-defined but MUST be limited to `tags` and title. The query MUST be at least 2 characters; a missing, empty, or too-short query MUST return `bad-request`.
 - `filter` (OPTIONAL): a comma-separated list of `key=value` predicates applied **before** ranking. Each predicate matches a declared metadata value by exact equality, except the built-ins `modified-after` and `modified-before`, which compare an RFC 3339 timestamp (or date) against the document's modification time. A document MUST satisfy all predicates to be included. A malformed `filter` MUST return `bad-request`.
 - `limit` (OPTIONAL): the maximum number of results. Default **10**. Servers MUST impose a hard cap (RECOMMENDED **1000**).
+- `match` (OPTIONAL): `catalog` (default) or `body`. Selects catalog mode or body match. Any other value MUST return `bad-request`, whether or not the server implements body match. A server that does not implement body match MUST accept `body` and answer in catalog mode, echoing `match: catalog`; a server that predates the key answers in catalog mode with no echo.
 - `auth` (OPTIONAL): a token used to authorise results on read-auth-protected paths (see Read authorisation below).
 
 **Success response** (`ok`):
@@ -553,6 +555,8 @@ matches: <count>
 
 The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags. The `Path` is server-relative; clients compose the full `mark://authority/path` URL from the logical authority used for the request, never from an overridden dial address. The response MUST NOT include document body content; clients FETCH the documents they choose. `matches` is the number of rows returned.
 
+When the request carries `match`, the response MUST echo the mode it answered in as `match: catalog` or `match: body`. A request without `match` is answered exactly as before this key existed, with no `match` header. Clients MUST treat a response without `match: body` as a catalog answer, whatever the request asked for.
+
 **Ranking**: results are ordered by (1) the number of distinct query terms matched, then (2) descending `importance`, then (3) descending modification time, then (4) ascending path. Importance influences ordering only among documents that already matched the query; it MUST NOT cause an unmatched document to appear in the results.
 
 **Declared catalog metadata** (set on PUBLISH as publisher metadata):
@@ -565,9 +569,31 @@ The body MUST be a markdown table, one row per result. Columns are the document'
 
 **Read authorisation**: a server that enforces per-path read authorisation MUST filter LOOKUP results so that documents the requester is not authorised to read are omitted entirely; no path, no title, no tags, and not counted in `matches`. Knowledge of a subject MUST NOT reveal the existence of protected documents.
 
+**Body match** (`match: body`): an OPTIONAL capability. The unit of match is the section, and the contract is recall: which sections match is specified, how they are ordered is not.
+
+- Section: a heading and its subtree, split and anchored by the same rule FETCH uses for `#anchor` (GitHub-style slug of the heading text, duplicate anchors suffixed `-1`, `-2`, ...). A document with no headings is one section addressed by its bare path, as is any text before the first heading.
+- Section text: the text under a heading before its first subheading (the heading's own content, not its subtree), so a term found in a subsection names the subsection rather than every ancestor.
+- Term: `query` split on whitespace, lowercased, terms shorter than 2 characters dropped. Section text is tokenised on token boundaries after splitting on every character that is not a letter, digit, or underscore, and also as each whole whitespace-separated word with surrounding punctuation trimmed, so `path.Match` is matched by `path`, `match`, and `path.match`. A query with no usable term matches nothing.
+- Match: a document whose declared `tags` or title contain every term is one row at its bare path, the catalog answer. Otherwise a section is a row when every term appears in its section text, in its heading trail (its heading and every ancestor heading), or in the document's `tags` or title, and at least one term appears in the text or trail itself.
+- Recall: every matching section of every current, non-archived document under the scope that satisfies `filter` and that the requester may read is a candidate. `limit` truncates after ordering. One row per section.
+- Ordering: importance is a prior among matching sections and MUST NOT cause a non-matching section to appear. Ties break by ascending path, then ascending anchor. Everything else about order is implementation-defined.
+- Read authorisation: per-row filtering exactly as in catalog mode, by the document's path.
+
+The response header echoes `match: body` and the table gains a fifth column:
+
+```text
+| Path | Importance | Title | Tags | Snippet |
+|------|------------|-------|------|---------|
+| /debugging.md#quic-udp-buffer-size-warning | 0.70 | Debugging › QUIC UDP Buffer Size Warning | debugging, gotchas | quic-go tries to increase the UDP receive buffer ... |
+```
+
+`Path` is the document path followed by `#` and the section anchor; a bare-path section carries the document path alone. `Title` is the document title, a `›` separator, and the heading text; a bare-path row carries the document title alone. `Snippet` is one line of at most 240 bytes drawn from the section text with markup removed; truncation MUST fall on a UTF-8 rune boundary so the snippet is valid UTF-8. In body mode `matches` counts section rows. The response MUST NOT include more of the body than the snippet.
+
+Servers that implement body match SHOULD list `lookup-match: catalog, body` under a `## Capabilities` heading in their agent manifest (`/.well-known/agent-manifest.md`, §11.8). The manifest is author-published and advisory; the `match` echo on the response is the authoritative signal.
+
 **Errors**:
 
-- `bad-request`: Missing, empty, or too-short `query`, or a malformed `filter`.
+- `bad-request`: Missing, empty, or too-short `query`, a malformed `filter`, an invalid `limit`, or an unknown `match` value.
 - `not-found`: The scope path does not exist or is not a directory.
 - `server-error`: Internal error.
 
@@ -612,6 +638,7 @@ The following status values are reserved for future use:
 | `query` | LOOKUP | String | Subject text matched against each document's `tags` and title. REQUIRED; minimum 2 characters. |
 | `filter` | LOOKUP | Comma-separated `key=value` | Predicates applied before ranking. Exact match on declared metadata, plus built-ins `modified-after` / `modified-before`. |
 | `limit` | LOOKUP | Decimal integer | Maximum number of results. Default 10; server-capped (RECOMMENDED 1000). |
+| `match` | LOOKUP | `catalog` or `body` | Catalog mode (default) or body match (§6.7). Unknown values are `bad-request` on every server; a server without body match answers `body` in catalog mode. |
 | `page-size` | LIST | Decimal integer | Maximum entries in this page. Default and hard maximum 1000. |
 | `cursor` | LIST | Opaque string | Continuation from the preceding page of the same directory and archive mode. |
 | `include-archived` | LIST | `true` or `false` | Include archived documents and directories containing only archived documents. Default false. |
@@ -639,7 +666,8 @@ Beyond the interpreted fields above, a PUBLISH request MAY carry additional publ
 | `chain-valid` | VERSIONS | `true` or `false` | Whether the version hash chain is intact. |
 | `chain-error` | VERSIONS | String | Description of chain verification failure. Present only when `chain-valid` is `false`. |
 | `content-hash` | FETCH | `sha256-` + 64-char lowercase hex | SHA-256 hash of the response body (stripped of store frontmatter). Enables content-addressed retrieval. |
-| `matches` | LOOKUP | Decimal integer | Number of catalog matches returned in the table body. |
+| `matches` | LOOKUP | Decimal integer | Number of rows returned in the table body: documents in catalog mode, sections in body mode. |
+| `match` | LOOKUP | `catalog` or `body` | The mode the server answered in. Present exactly when the request carried `match`. |
 
 ## 9. Versioning
 
@@ -1011,6 +1039,7 @@ These will be specified in future versions of this document.
 | Recommended max directory entries | 1000 |
 | Default LOOKUP limit | 10 |
 | Recommended max LOOKUP results | 1000 |
+| Max LOOKUP snippet | 240 bytes |
 | Hash algorithm | SHA-256 |
 | Hash format | `sha256-<64 lowercase hex chars>` |
 | Default OKF type | `Document` |

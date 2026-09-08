@@ -123,7 +123,7 @@ func okfImportMain(args []string) {
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "error: %s: %v\n", it.Path, err)
 			failed++
-		case result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated:
+		case !protocol.IsWriteSuccess(result.Response.Status):
 			fmt.Fprintf(os.Stderr, "error: %s: server returned %q\n", it.Path, result.Response.Status)
 			failed++
 		default:
@@ -137,17 +137,9 @@ func okfImportMain(args []string) {
 	}
 }
 
-// serverRespKeys are response metadata fields owned by the server; everything
-// else in a FETCH response is publisher metadata to carry into the bundle.
-var serverRespKeys = map[string]bool{
-	"status": true, "version": true, "modified": true, "etag": true,
-	"content-hash": true, "current-version": true, "entries": true,
-}
-
-// okfExportMain renders a demarkus world subtree into an OKF bundle on disk:
-// it enumerates the subtree with LIST, fetches each document, reattaches OKF
-// frontmatter from its metadata, strips the world prefix from paths and links,
-// and writes the tree under <out-dir>.
+// okfExportMain renders a world subtree into an OKF bundle under <out-dir>:
+// LIST the subtree, fetch each document, reattach frontmatter from metadata,
+// strip the world prefix from paths and links.
 func okfExportMain(args []string) {
 	fs := flag.NewFlagSet("okf export", flag.ExitOnError)
 	authToken := fs.String("auth", "", "auth token for reads on private paths (env: DEMARKUS_AUTH)")
@@ -221,7 +213,7 @@ func okfExportMain(args []string) {
 func publisherMeta(respMeta map[string]string) map[string]string {
 	out := make(map[string]string, len(respMeta))
 	for k, v := range respMeta {
-		if !serverRespKeys[k] {
+		if !protocol.ReservedMetadataKeys[k] {
 			out[k] = v
 		}
 	}

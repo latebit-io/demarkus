@@ -13,6 +13,7 @@ require (
 	github.com/latebit-io/demarkus/client v0.0.0-00010101000000-000000000000
 	github.com/latebit-io/demarkus/protocol v0.0.0
 	github.com/mark3labs/mcp-go v0.44.0
+	github.com/tiktoken-go/tokenizer v0.8.1
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/time v0.15.0
@@ -69,7 +70,6 @@ require (
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
-	github.com/tiktoken-go/tokenizer v0.8.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect

@@ -6,7 +6,6 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -497,9 +496,18 @@ func TestHandleMarkFetchHappyPath(t *testing.T) {
 		t.Fatalf("isError = true: %+v", res.Content)
 	}
 	text := toolResultText(t, res)
-	// Body + every metadata key must appear verbatim — proxy
-	// fidelity: the broker does not transform the world's
-	// response.
+	// Lean envelope by default: version and body, identity keys trimmed.
+	if want := "status: ok\nversion: 3\n\n# hello\n"; text != want {
+		t.Errorf("lean response = %q, want %q", text, want)
+	}
+	res, err = g.handleMarkFetch(ctx, callToolReq("mark_fetch", map[string]any{
+		"url": "mark://team-a/foo.md", "verbose": true, "force": true,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("verbose handleMarkFetch: %v %+v", err, res)
+	}
+	text = toolResultText(t, res)
+	// Verbose: every metadata key verbatim, the proxy-fidelity rendering.
 	for _, want := range []string{
 		"status: ok",
 		"version: 3",
@@ -509,13 +517,13 @@ func TestHandleMarkFetchHappyPath(t *testing.T) {
 		"# hello",
 	} {
 		if !strings.Contains(text, want) {
-			t.Errorf("response missing %q\nfull:\n%s", want, text)
+			t.Errorf("verbose response missing %q\nfull:\n%s", want, text)
 		}
 	}
 	// Dispatcher must have seen the worldName + path resolved
 	// from the tool URL.
-	if d.fetchCallCount() != 1 {
-		t.Errorf("fetch dispatch count = %d, want 1", d.fetchCallCount())
+	if d.fetchCallCount() != 2 {
+		t.Errorf("fetch dispatch count = %d, want 2", d.fetchCallCount())
 	}
 	call := d.fetchCalls[0]
 	if call.worldName != "team-a" {
@@ -760,149 +768,8 @@ func TestHandleMarkFetchUnknownWorld(t *testing.T) {
 	}
 }
 
-// formatResultReference is a verbatim copy of the local
-// client/cmd/demarkus-mcp formatResult helper. Drift between the
-// broker's formatToolResult and this reference would silently
-// break the byte-for-byte proxy contract; the parity test below
-// catches it. If the local server ever changes its formatter,
-// this copy must move in lockstep — at which point hoisting both
-// into a shared package becomes the right call.
-//
-// The remaining-keys sort below mirrors the determinism fix
-// applied in both implementations after PR #146 review surfaced
-// nondeterministic map iteration order.
-func formatResultReference(r fetch.Result, keys ...string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "status: %s\n", r.Response.Status)
-	shown := make(map[string]bool, len(keys))
-	for _, key := range keys {
-		if v, ok := r.Response.Metadata[key]; ok {
-			fmt.Fprintf(&b, "%s: %s\n", key, v)
-			shown[key] = true
-		}
-	}
-	remaining := make([]string, 0, len(r.Response.Metadata))
-	for k := range r.Response.Metadata {
-		if !shown[k] {
-			remaining = append(remaining, k)
-		}
-	}
-	sort.Strings(remaining)
-	for _, k := range remaining {
-		fmt.Fprintf(&b, "%s: %s\n", k, r.Response.Metadata[k])
-	}
-	if r.Response.Body != "" {
-		b.WriteString("\n")
-		b.WriteString(r.Response.Body)
-	}
-	return b.String()
-}
-
-func TestFormatToolResultDeterministicRemainingOrder(t *testing.T) {
-	// Go's map iteration is randomized; running the formatter
-	// many times on the same Result must produce one canonical
-	// output, otherwise the byte-for-byte proxy contract is a
-	// statistical claim rather than a property. Five keys none
-	// of which are in the explicit `keys` argument exercises
-	// the remaining-order code path. PR #146 review surfaced
-	// the bug; this test pins the fix.
-	r := fetch.Result{Response: protocol.Response{
-		Status: protocol.StatusOK,
-		Metadata: map[string]string{
-			"zeta":  "1",
-			"alpha": "2",
-			"beta":  "3",
-			"delta": "4",
-			"gamma": "5",
-		},
-		Body: "body",
-	}}
-	first := formatToolResult(r)
-	for range 20 {
-		if got := formatToolResult(r); got != first {
-			t.Fatalf("formatToolResult nondeterministic across runs\nfirst:\n%s\nlater:\n%s", first, got)
-		}
-	}
-	// Pin the actual ordering — alpha, beta, delta, gamma, zeta.
-	wantOrder := []string{"alpha", "beta", "delta", "gamma", "zeta"}
-	idx := 0
-	for _, key := range wantOrder {
-		next := strings.Index(first[idx:], key)
-		if next < 0 {
-			t.Fatalf("expected key %q in remaining order, not found at or after offset %d\nfull:\n%s", key, idx, first)
-		}
-		idx += next
-	}
-}
-
-func TestProxyFidelityFormatMatchesLocalServer(t *testing.T) {
-	// The broker is a byte-for-byte proxy: a document fetched
-	// through the gateway and the same document fetched directly
-	// via the local demarkus-mcp must produce identical text. We
-	// pin equality against formatResultReference (the local
-	// server's helper) here so any drift in formatToolResult
-	// trips this test before it ships to production.
-	cases := []struct {
-		name string
-		r    fetch.Result
-		keys []string
-	}{
-		{
-			name: "ok with multiple metadata keys",
-			r: fetch.Result{Response: protocol.Response{
-				Status: protocol.StatusOK,
-				Metadata: map[string]string{
-					"version":      "7",
-					"modified":     "2026-05-21T10:00:00Z",
-					"etag":         "abc-123",
-					"content-hash": "sha256-deadbeef",
-				},
-				Body: "# title\nbody body body\n",
-			}},
-			keys: []string{"version", "modified", "etag"},
-		},
-		{
-			name: "no body",
-			r: fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusArchived,
-				Metadata: map[string]string{"version": "3"},
-			}},
-			keys: []string{"version"},
-		},
-		{
-			name: "unauthorized status with no metadata",
-			r: fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusUnauthorized,
-				Metadata: map[string]string{},
-			}},
-			keys: nil,
-		},
-		{
-			name: "metadata key not in keys still appears",
-			r: fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"version": "1", "content-hash": "sha256-cafe"},
-				Body:     "x",
-			}},
-			keys: []string{"version"},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := formatToolResult(tc.r, tc.keys...)
-			want := formatResultReference(tc.r, tc.keys...)
-			if got != want {
-				t.Errorf("formatToolResult drift from local server\nbroker:\n%s\nlocal:\n%s", got, want)
-			}
-		})
-	}
-}
-
-// toolResultText extracts the first text-content chunk from a
-// CallToolResult so assertions can inspect the rendered output.
-// Tools always emit a single text content; if that ever changes
-// the test needs to fan out, but until then a single helper covers
-// every assertion.
+// toolResultText extracts the first text-content chunk; tools always emit
+// a single text content.
 func toolResultText(t *testing.T, res *mcp.CallToolResult) string {
 	t.Helper()
 	if len(res.Content) == 0 {
@@ -979,9 +846,37 @@ func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 	}
 	first, _ := contents[0].(map[string]any)
 	text, _ := first["text"].(string)
-	for _, want := range []string{"status: ok", "version: 1", "etag: abc", "content-hash: sha256-deadbeef", "body via gateway"} {
+	for _, want := range []string{"status: ok\nversion: 1\n\nbody via gateway"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("end-to-end text missing %q\nfull:\n%s", want, text)
 		}
+	}
+}
+
+func TestHandleMarkLookupBodyMatchFallbackNote(t *testing.T) {
+	cfg := mcpTestConfig()
+	var seen fetch.LookupOptions
+	d := &fakeDispatcher{
+		lookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+			seen = opts
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"matches": "0"},
+				Body:     "| Path | Importance | Title | Tags |\n",
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkLookup(withAliceClaims(context.Background()), callToolReq("mark_lookup", map[string]any{
+		"url": "mark://team-a/", "query": "hairpin", "match": "body",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkLookup: err %v res %+v", err, res)
+	}
+	if seen.Match != fetch.MatchBody {
+		t.Errorf("dispatcher saw match %q, want body", seen.Match)
+	}
+	if text := toolResultText(t, res); !strings.Contains(text, fetch.CatalogFallbackNote) {
+		t.Errorf("fallback note missing:\n%s", text)
 	}
 }

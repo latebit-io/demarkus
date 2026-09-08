@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"reflect"
 	"slices"
@@ -34,6 +35,8 @@ type Options struct {
 	// path beyond the cap is rejected. Approximate under concurrency:
 	// a per-tenant quota, not an exact invariant.
 	MaxDocuments int
+	// Logger receives section-index warnings; nil uses slog.Default.
+	Logger *slog.Logger
 }
 
 // Store owns a validated immutable snapshot for one world.
@@ -43,6 +46,7 @@ type Store struct {
 	requestTimeout time.Duration
 	shardWorkers   int
 	requirePolicy  bool
+	logger         *slog.Logger
 	maxDocuments   int
 	snapshot       atomic.Pointer[snapshot]
 	refreshMu      sync.Mutex
@@ -127,6 +131,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		requestTimeout: options.RequestTimeout,
 		shardWorkers:   options.ShardWorkers,
 		requirePolicy:  options.RequirePolicy,
+		logger:         options.Logger,
 		maxDocuments:   options.MaxDocuments,
 		commitToken:    make(chan struct{}, 1),
 		commitInterval: defaultCommitInterval,
@@ -137,8 +142,17 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	requestCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
 	store.refreshMu.Lock()
+	if store.logger == nil {
+		store.logger = slog.Default()
+	}
 	loaded, err := loadRootSnapshot(requestCtx, store.objects, store.worldID, store.shardWorkers)
 	if err != nil {
+		store.refreshMu.Unlock()
+		return nil, fmt.Errorf("open bucket store: %w", err)
+	}
+	// The first index reads every body, so it runs under the caller's
+	// context rather than the per-request timeout that bounds one refresh.
+	if err := store.indexSections(ctx, loaded, nil, nil, store.shardWorkers); err != nil {
 		store.refreshMu.Unlock()
 		return nil, fmt.Errorf("open bucket store: %w", err)
 	}
@@ -264,6 +278,9 @@ func (store *Store) refreshSnapshot(ctx context.Context) (*snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: build snapshot: %v", blob.ErrIntegrity, err)
 	}
+	if err := store.indexSections(ctx, loaded, cached, nil, store.shardWorkers); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -294,9 +311,6 @@ func loadShards(
 	workers int,
 ) (*[shardCount]shardObject, error) {
 	loaded := new([shardCount]shardObject)
-	if workers < 1 {
-		return nil, fmt.Errorf("%w: shard workers must be positive", blob.ErrPrecondition)
-	}
 	changed := make([]int, 0, shardCount)
 	for index := range shardCount {
 		if previous != nil && refs[index] == previous.Root.Shards[index] {
@@ -305,43 +319,56 @@ func loadShards(
 		}
 		changed = append(changed, index)
 	}
-	if len(changed) == 0 {
-		return loaded, nil
+	err := runParallel(ctx, workers, changed, func(ctx context.Context, index int) error {
+		ref := refs[index]
+		expectedShard := fmt.Sprintf("%02x", index)
+		shard, err := getImmutable(ctx, objects, ref.objectRef, shardKey(expectedShard, ref.Hash), func(shard *shardObject) error {
+			return validateShardObject(shard, expectedShard)
+		})
+		if err != nil {
+			return fmt.Errorf("load shard %s: %w", expectedShard, err)
+		}
+		loaded[index] = shard
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	return loaded, nil
+}
 
+// runParallel applies fn to every job on up to workers goroutines. The first
+// error cancels the rest and is returned; fn's errors are not retried.
+func runParallel[T any](ctx context.Context, workers int, jobs []T, fn func(ctx context.Context, job T) error) error {
+	if workers < 1 {
+		return fmt.Errorf("%w: workers must be positive", blob.ErrPrecondition)
+	}
+	if len(jobs) == 0 {
+		return nil
+	}
 	workCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	jobs := make(chan int, len(changed))
-	for _, index := range changed {
-		jobs <- index
+	queue := make(chan T, len(jobs))
+	for _, job := range jobs {
+		queue <- job
 	}
-	close(jobs)
-
+	close(queue)
 	var wait sync.WaitGroup
-	for range min(workers, len(changed)) {
+	for range min(workers, len(jobs)) {
 		wait.Go(func() {
-			for index := range jobs {
+			for job := range queue {
 				if workCtx.Err() != nil {
 					return
 				}
-				ref := refs[index]
-				expectedShard := fmt.Sprintf("%02x", index)
-				shard, err := getImmutable(workCtx, objects, ref.objectRef, shardKey(expectedShard, ref.Hash), func(shard *shardObject) error {
-					return validateShardObject(shard, expectedShard)
-				})
-				if err != nil {
-					cancel(fmt.Errorf("load shard %s: %w", expectedShard, err))
+				if err := fn(workCtx, job); err != nil {
+					cancel(err)
 					return
 				}
-				loaded[index] = shard
 			}
 		})
 	}
 	wait.Wait()
-	if cause := context.Cause(workCtx); cause != nil {
-		return nil, cause
-	}
-	return loaded, nil
+	return context.Cause(workCtx)
 }
 
 func getImmutable[T any](

@@ -2,12 +2,50 @@
 package protocol
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
 
 // MaxListPageSize is the maximum number of entries in one LIST response.
 const MaxListPageSize = 1000
+
+// SplitTags parses a comma-separated tag list into trimmed, non-empty tags.
+func SplitTags(s string) []string {
+	var tags []string
+	for raw := range strings.SplitSeq(s, ",") {
+		if t := strings.TrimSpace(raw); t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return tags
+}
+
+// IsWriteSuccess reports a PUBLISH or APPEND status that landed.
+func IsWriteSuccess(status string) bool {
+	return status == StatusOK || status == StatusCreated
+}
+
+// ReservedMetadataKeys are server-owned response metadata keys; publishers
+// cannot set them and clients never treat them as publisher metadata.
+var ReservedMetadataKeys = map[string]bool{
+	"version":         true,
+	"modified":        true,
+	"etag":            true,
+	"content-hash":    true,
+	"current-version": true,
+	"server-version":  true,
+	"your-version":    true,
+	"total":           true,
+	"current":         true,
+	"chain-valid":     true,
+	"chain-error":     true,
+	"archived":        true,
+	"entries":         true,
+	"matches":         true,
+	"match":           true,
+	"status":          true,
+}
 
 const (
 	// DefaultPort is the default port for Mark Protocol servers.
@@ -40,6 +78,11 @@ const (
 
 	// WellKnownManifestPath is the conventional path for agent manifest discovery.
 	WellKnownManifestPath = "/.well-known/agent-manifest.md"
+
+	// MatchCatalog is the LOOKUP match mode over tags and title (§6.7).
+	MatchCatalog = "catalog"
+	// MatchBody is the LOOKUP match mode over the section index of bodies.
+	MatchBody = "body"
 
 	// MaxMetaKeys is the maximum number of publisher metadata keys. Sized to
 	// hold the recognized OKF fields (type, title, description, resource, tags,
@@ -80,4 +123,17 @@ func IsValidMetaKey(k string) bool {
 // serialization: valid UTF-8 without carriage returns or newlines.
 func IsValidMetaValue(v string) bool {
 	return utf8.ValidString(v) && !strings.ContainsAny(v, "\r\n")
+}
+
+// ParseMatch validates a LOOKUP match value; empty means catalog. It is the
+// one rule server and clients apply, so a typo is rejected the same way
+// before and after the wire.
+func ParseMatch(match string) (string, error) {
+	switch match {
+	case "", MatchCatalog:
+		return MatchCatalog, nil
+	case MatchBody:
+		return MatchBody, nil
+	}
+	return "", fmt.Errorf("match must be %q or %q, got %q", MatchCatalog, MatchBody, match)
 }

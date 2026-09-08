@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -298,4 +299,102 @@ func lookupResult(rows ...string) fetch.Result {
 		Metadata: map[string]string{"matches": strconv.Itoa(len(rows))},
 		Body:     body,
 	}}
+}
+
+// bodyLookupResult is lookupResult with the Snippet column and the echo.
+func bodyLookupResult(rows ...string) fetch.Result {
+	r := lookupResult(rows...)
+	r.Response.Metadata["match"] = "body"
+	r.Response.Body = strings.Replace(r.Response.Body,
+		"| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n",
+		"| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n", 1)
+	return r
+}
+
+func TestHandleMarkLookupAllRejectsUnknownMatchBeforeFanOut(t *testing.T) {
+	d := &fakeDispatcher{}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", map[string]any{
+		"query": "hairpin", "match": "bogus",
+	}))
+	if err != nil || !res.IsError {
+		t.Fatalf("err %v res %+v, want tool error", err, res)
+	}
+	if len(d.lookupCalls) != 0 {
+		t.Errorf("dispatched %d lookups for an invalid match", len(d.lookupCalls))
+	}
+}
+
+func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "team-b", Namespace: "team-b"})
+	var mu sync.Mutex
+	var seen []fetch.LookupOptions
+	d := &fakeDispatcher{
+		lookupFn: func(world, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+			mu.Lock()
+			seen = append(seen, opts)
+			mu.Unlock()
+			if world == "team-a" {
+				return bodyLookupResult(
+					"| /debugging.md#hairpin-nat | 0.70 | Debugging › Hairpin NAT | net | same host \\| hairpin |",
+				), nil
+			}
+			// team-b predates body match: catalog answer, no echo.
+			return lookupResult("| /legacy.md | 0.90 | Legacy | net |"), nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", map[string]any{
+		"query": "hairpin", "match": "body",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkLookupAll: err %v res %+v", err, res)
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{
+		"match: body",
+		"| Path | Importance | Title | Tags | Snippet |",
+		"| mark://team-a/debugging.md#hairpin-nat | 0.70 | Debugging › Hairpin NAT | net | same host \\| hairpin |",
+		"| mark://team-b/legacy.md | 0.90 | Legacy | net |  |",
+		"note: answered from the catalog (no body match): team-b",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing %q\nfull:\n%s", want, text)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, opts := range seen {
+		if opts.Match != fetch.MatchBody {
+			t.Errorf("dispatcher saw match %q, want body", opts.Match)
+		}
+	}
+}
+
+func TestHandleMarkLookupAllCapsTagsUnlessVerbose(t *testing.T) {
+	cfg := mcpTestConfig()
+	many := "t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12"
+	d := &fakeDispatcher{
+		lookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+			return lookupResult("| /a.md | 0.90 | A | " + many + " |"), nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	call := func(args map[string]any) string {
+		t.Helper()
+		res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", args))
+		if err != nil || res.IsError {
+			t.Fatalf("handleMarkLookupAll: err %v res %+v", err, res)
+		}
+		return toolResultText(t, res)
+	}
+	lean := call(map[string]any{"query": "a"})
+	if !strings.Contains(lean, "| t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, +2 more |") {
+		t.Errorf("lean rows not capped:\n%s", lean)
+	}
+	verbose := call(map[string]any{"query": "a", "verbose": true})
+	if !strings.Contains(verbose, "| "+many+" |") {
+		t.Errorf("verbose rows capped:\n%s", verbose)
+	}
 }

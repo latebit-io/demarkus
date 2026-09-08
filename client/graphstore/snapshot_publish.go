@@ -143,7 +143,7 @@ func stageSnapshotShard(ctx context.Context, artifact SnapshotArtifact, fetchDoc
 
 func publishAndVerifySnapshot(ctx context.Context, docPath, body string, expectedVersion int, fetchDocument SnapshotFetch, publishDocument SnapshotPublish) (protocol.Response, int, error) {
 	published, publishErr := publishDocument(ctx, docPath, body, expectedVersion)
-	if publishErr == nil && published.Status != protocol.StatusOK && published.Status != protocol.StatusCreated {
+	if publishErr == nil && !protocol.IsWriteSuccess(published.Status) {
 		publishErr = fmt.Errorf("publish returned %s", published.Status)
 	}
 	version := 0

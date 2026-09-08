@@ -2018,13 +2018,7 @@ func FormatTagsList(csv string) string { return formatTagsList(csv) }
 // formatTagsList serializes a comma-separated tag string as an OKF YAML flow
 // list, e.g. "sales,revenue" → "[sales, revenue]". Empty input yields "[]".
 func formatTagsList(csv string) string {
-	var tags []string
-	for raw := range strings.SplitSeq(csv, ",") {
-		if t := strings.TrimSpace(raw); t != "" {
-			tags = append(tags, t)
-		}
-	}
-	return "[" + strings.Join(tags, ", ") + "]"
+	return "[" + strings.Join(protocol.SplitTags(csv), ", ") + "]"
 }
 
 // parseTagsList parses a tags value back to the comma-separated form held in the
@@ -2036,13 +2030,7 @@ func parseTagsList(v string) string {
 	if strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]") {
 		v = v[1 : len(v)-1]
 	}
-	var tags []string
-	for raw := range strings.SplitSeq(v, ",") {
-		if t := strings.TrimSpace(raw); t != "" {
-			tags = append(tags, t)
-		}
-	}
-	return strings.Join(tags, ",")
+	return strings.Join(protocol.SplitTags(v), ",")
 }
 
 // metaEqual reports whether two metadata maps are equal.

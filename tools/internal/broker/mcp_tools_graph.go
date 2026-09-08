@@ -16,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/listing"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -417,7 +418,7 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	}
 	var out strings.Builder
 	fmt.Fprintf(&out, "Published graph (%d nodes, %d edges) to %s\n", g.graphStore.NodeCount(), g.graphStore.EdgeCount(), raw)
-	out.WriteString(formatToolResult(result, "version", "modified", "server-version"))
+	out.WriteString(mcpfmt.Full(result, "version", "modified", "server-version"))
 	return mcp.NewToolResultText(out.String()), nil
 }
 
@@ -587,7 +588,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 		out.WriteString(w + "\n")
 	}
 	fmt.Fprintf(&out, "Indexed %d documents from %s\n", len(entries), sourceScheme)
-	out.WriteString(formatToolResult(result, "version", "shards-published", "shards-reused"))
+	out.WriteString(mcpfmt.Full(result, "version", "shards-published", "shards-reused"))
 	return mcp.NewToolResultText(out.String()), nil
 }
 

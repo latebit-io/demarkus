@@ -45,25 +45,6 @@ var controlKeys = map[string]bool{
 	"if-modified-since": true,
 }
 
-// reservedKeys are server-owned response metadata keys that publishers cannot set.
-var reservedKeys = map[string]bool{
-	"version":         true,
-	"modified":        true,
-	"etag":            true,
-	"content-hash":    true,
-	"current-version": true,
-	"server-version":  true,
-	"your-version":    true,
-	"total":           true,
-	"current":         true,
-	"chain-valid":     true,
-	"chain-error":     true,
-	"archived":        true,
-	"entries":         true,
-	"matches":         true,
-	"status":          true,
-}
-
 // DocumentStore is the handler's view of a content store. The file-backed
 // implementation is protocol/store.Store; alternative backends implement the
 // same contract, including the per-method error contracts below.
@@ -493,19 +474,36 @@ func buildDirectoryIndex(reqPath string, entries []store.DirEntry) (body string,
 	return page.Body, page.EntryCount, err
 }
 
-// buildLookupResults renders LOOKUP matches as a markdown table. Cells are
-// markdown-escaped so paths, titles, and tags cannot break the table or inject
-// markup. The Path column is server-relative; clients compose the full URL.
-func buildLookupResults(query, scope string, rows []catalog.Result) string {
+// buildLookupResults renders LOOKUP matches as a markdown table, cells
+// escaped so they cannot break it. Body mode adds #anchor to the path, the
+// heading to the title, and a Snippet column; catalog mode is unchanged.
+func buildLookupResults(query, scope string, rows []catalog.Result, mode catalog.Mode) string {
+	body := mode == catalog.MatchBody
 	var sb strings.Builder
 	sb.WriteString("\n# Lookup matches for \"" + escapeMD(query) + "\" in " + escapeMD(scope) + "\n\n")
-	sb.WriteString("| Path | Importance | Title | Tags |\n")
-	sb.WriteString("|------|------------|-------|------|\n")
-	for _, r := range rows {
-		sb.WriteString("| " + escapeMD(r.Path) +
+	if body {
+		sb.WriteString("| Path | Importance | Title | Tags | Snippet |\n")
+		sb.WriteString("|------|------------|-------|------|---------|\n")
+	} else {
+		sb.WriteString("| Path | Importance | Title | Tags |\n")
+		sb.WriteString("|------|------------|-------|------|\n")
+	}
+	for i := range rows {
+		r := &rows[i]
+		// The anchor is appended after escaping: a slug cannot break the
+		// table, and clients fetch path#anchor next.
+		location := escapeMD(r.Path)
+		if r.Anchor != "" {
+			location += "#" + r.Anchor
+		}
+		sb.WriteString("| " + location +
 			" | " + strconv.FormatFloat(r.Importance, 'f', 2, 64) +
-			" | " + escapeMD(r.Title) +
-			" | " + escapeMD(strings.Join(r.Tags, ", ")) + " |\n")
+			" | " + escapeMD(r.DisplayTitle()) +
+			" | " + escapeMD(strings.Join(r.Tags, ", ")))
+		if body {
+			sb.WriteString(" | " + escapeMD(r.Snippet))
+		}
+		sb.WriteString(" |\n")
 	}
 	return sb.String()
 }
@@ -703,6 +701,12 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storage
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
 	}
+	matchValue, matchCarried := req.Metadata["match"]
+	mode, err := catalog.ParseMode(matchValue)
+	if err != nil {
+		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		return
+	}
 
 	// Scope must be the whole-server root or an existing directory.
 	if req.Path != "/" {
@@ -719,7 +723,7 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storage
 		}
 	}
 
-	results, err := lookup.Lookup(query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults})
+	results, err := lookup.Lookup(query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults, Match: mode})
 	if err != nil {
 		h.logger().Error("lookup failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
@@ -731,20 +735,32 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storage
 	// never reveal their existence (no path, no title, not counted).
 	token := req.Metadata["auth"]
 	rows := make([]catalog.Result, 0, len(results))
-	for _, r := range results {
-		if ok, _ := h.checkReadAuth(r.Path, token); !ok {
+	for i := range results {
+		// An authorization error denies the row; the reason is logged, not
+		// shown to the requester.
+		ok, authErr := h.checkReadAuth(results[i].Path, token)
+		if authErr != nil {
+			h.logger().Warn("lookup read authorization failed", "path", sanitize(results[i].Path), "error", authErr)
+		}
+		if !ok {
 			continue
 		}
-		rows = append(rows, r)
+		rows = append(rows, results[i])
 		if len(rows) >= limit {
 			break
 		}
 	}
 
+	meta := map[string]string{"matches": strconv.Itoa(len(rows))}
+	if matchCarried {
+		// Echo only when asked, so a request without match gets the
+		// response it always got, byte for byte.
+		meta["match"] = string(mode)
+	}
 	resp := protocol.Response{
 		Status:   protocol.StatusOK,
-		Metadata: map[string]string{"matches": strconv.Itoa(len(rows))},
-		Body:     buildLookupResults(query, req.Path, rows),
+		Metadata: meta,
+		Body:     buildLookupResults(query, req.Path, rows, mode),
 	}
 	h.writeResponse(w, resp)
 }
@@ -1193,7 +1209,7 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 		if controlKeys[k] {
 			continue
 		}
-		if reservedKeys[k] {
+		if protocol.ReservedMetadataKeys[k] {
 			return nil, fmt.Errorf("metadata key %q is reserved", k)
 		}
 		if !protocol.IsValidMetaKey(k) {
@@ -1222,7 +1238,7 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 // leaking server-owned keys into responses.
 func copyPublisherMeta(dst, src map[string]string) {
 	for k, v := range src {
-		if reservedKeys[k] || controlKeys[k] {
+		if protocol.ReservedMetadataKeys[k] || controlKeys[k] {
 			continue
 		}
 		if !protocol.IsValidMetaKey(k) || !protocol.IsValidMetaValue(v) {
