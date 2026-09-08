@@ -15,6 +15,7 @@ package catalog
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -33,7 +34,8 @@ type Entry struct {
 	Modified   time.Time
 	Metadata   map[string]string // declared publisher metadata, for filter predicates
 
-	terms []term // tag and title tokens for body match; set by Set
+	terms  []term  // tag and title tokens for body match; set by Set
+	demote float64 // body-match prior multiplier from the path; set by Set
 }
 
 // Result is a ranked LOOKUP match. Anchor, Heading, and Snippet are set
@@ -118,11 +120,15 @@ func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modif
 	c.sections[e.Path] = doc
 }
 
-// prepare canonicalizes the path and derives the tag and title terms that
-// body match consults; every entry passes through here before storage.
+// prepare canonicalizes the path and derives what body match consults (tag
+// and title terms, path demotion); every entry passes through here first.
 func (e *Entry) prepare() {
 	e.Path = store.CanonicalPath(e.Path)
 	e.terms = termSet(append(append([]string(nil), e.Tags...), e.Title))
+	e.demote = 1
+	if slices.Contains(strings.Split(strings.Trim(e.Path, "/"), "/"), "journal") {
+		e.demote = journalDemote
+	}
 }
 
 // SetSections installs a prebuilt section index for a document, for stores
