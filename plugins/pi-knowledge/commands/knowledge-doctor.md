@@ -1,5 +1,5 @@
 ---
-description: "Audit an organizational demarkus knowledge system (broker-fronted, multi-world) for catalog hygiene: orphans, broken links, dangling/unlinked references, untagged + policy-axis-noncompliant docs, ADR gaps. Read-only."
+description: "Audit an organizational demarkus knowledge system (broker-fronted, multi-world) for catalog hygiene: orphans, broken links, dangling/unlinked references, untagged + policy-axis-noncompliant docs, hub and document shape, ADR gaps. Read-only."
 argument-hint: "[slug | mark://<world>/ | blank = every joined system, all worlds]"
 ---
 <!-- markdownlint-disable MD041 -->
@@ -62,12 +62,12 @@ Before the first broker call, set a command-wide deadline five minutes out. Chec
 
 ## Deep checks (per-doc `mark_fetch`; bounded scope, or when asked)
 
-One fetch per document: run only for a single world, or when the user asks for a thorough audit. Fetch at most 100 documents. If capped or sampled, report exact coverage and skipped count; never imply full coverage.
+One fetch per document: run only for a single world, or when the user asks for a thorough audit. Fetch at most 100 documents, `force: true` for every body-inspecting check (a plain fetch returns an outline at or over 8 KB, and an outline is incomplete for hub and document shape). If capped or sampled, report exact coverage and skipped count; never imply full coverage.
 
 - **Untagged docs**: fetch, check `tags` non-empty. Untagged docs are findable only by title or explicit path. (Publish gate prevents new ones; this finds pre-existing.)
 - **Metadata lost across versions** *(legacy servers)*: an untagged doc that **used to** carry tags. Brokers before the APPEND metadata merge passed only `{agent: …}` on append, dropping `tags`, `importance`, `title`, `type`, and with them the **policy tag axes** satisfied at publish time: compliant turns noncompliant with no write rejected. Retire once the catalog is clean. Run only on docs the untagged or policy-axis check flagged that have more than one version:
   1. `mark_versions`. `chain-valid` false: report the `chain-error`, mark the doc **inconclusive**; metadata from a broken chain is not evidence.
-  2. Fetch versions newest-first below current (`mark_fetch mark://<world>/<path>/v<N>`) until one carries `tags` **and** satisfies the policy's required axes and `require_fields`; a version that was itself noncompliant is not a repair, keep walking, say so if none qualifies. At most 10 fetches per doc and 100 calls total for this check, `mark_versions` included; when the budget is gone, stop, list skipped or truncated docs, treat a hit found after truncating as low-confidence.
+  2. Fetch versions newest-first below current (`mark_fetch mark://<world>/<path>/v<N>` with `verbose: true`, since the lean envelope hides the metadata map) until one carries `tags` **and** satisfies the policy's required axes and `require_fields`; a version that was itself noncompliant is not a repair, keep walking, say so if none qualifies. At most 10 fetches per doc and 100 calls total for this check, `mark_versions` included; when the budget is gone, stop, list skipped or truncated docs, treat a hit found after truncating as low-confidence.
   3. Report recovered `tags`/`importance`/`type`/`title` and their source version as a **repair candidate**. Any failed call leaves the doc inconclusive; never infer metadata a call did not return.
 
   Untagged since `v1`: never tagged, a curation exercise. *Lost* tags: a candidate, not a verdict; a later `mark_publish` may have dropped them deliberately. Appends between the two versions point at legacy damage, a publish at intent. Get user confirmation before restoring.
@@ -78,6 +78,9 @@ One fetch per document: run only for a single world, or when the user asks for a
 - **In-body frontmatter block** *(demarkus-specific)*: body whose **first non-blank line is `---`** with reserved/operational keys (`version`, `previous-hash`, `archived`, `meta.*`): almost always an **exported demarkus doc pasted back into a publish**. Frontmatter is stored out-of-band; a body-leading `---` is literal content: stray horizontal rule, garbled headings, stale `version:` (won't match the real fetched `version`). Flag; fix is strip the block and re-publish with metadata as request metadata.
 - **Style-guide violations** (`mark://root/.well-known/demarkus/style.md`): per fetched body flag **em dashes** anywhere (banned; count per doc) and **duplicate headings** within one document (headings are `#section` anchors; a duplicate takes a `-1` suffix that shifts when sections move, silently breaking inbound anchors; exclude `#` lines inside fenced code). Fix: re-publish with unique headings and em dashes replaced by comma, colon, semicolon, or parentheses. The style gate (default `warn`, `DEMARKUS_STYLE_STRICTNESS` adjusts) catches these at write time; this finds the pre-existing corpus.
 - **Duplicate content**: compare `content-hash` (fetch with `verbose: true`) across fetched docs; identical hashes under different paths (even different worlds) are duplicates.
+- **Hub shape** (`index.md` at any depth, or any link page: mostly link bullets; rules in `mark://root/.well-known/demarkus/style.md`): body at or over 8 KB; a bullet past one line or carrying bold, `Status:`, a date, or a PR number; over 40 outbound documents (anchors into one doc count once). Fix, as a gated update: split into a link hub plus topic files; one line per link, status in the child; a second-level hub.
+- **Oversized docs** *(advisory)*: any body at or over 8 KB, largest first. Fix: hub plus topic files.
+- **Document shape**: no summary between the `# H1` and the first heading (`index.md`, `log.md`, journals exempt); a heading below the H1 carrying a date, a PR number, or an all-caps status word. Fix: republish with the summary and the name-only heading, as a gated update.
 - **Dangling & unlinked references**: a relationship in *prose* (or inline code) the link graph never captured, because only `[text](url)` becomes an edge. "supersedes ADR 0005" is invisible to every graph check above. Per fetched body, scan for high-confidence patterns; resolve each against the **inventory** (existence) and the **doc's own parsed links** (already-linked?); no fetches beyond this tier's bodies:
   - **Patterns** (tight set; prose false positives are worse than a missed edge):
     - ADR references: `ADR[ -]?#?\d{3,4}` (case-insensitive). Canonical target: inventory path matching `<world>/adr/NNNN-*.md`.
@@ -116,6 +119,15 @@ Plain, grouped by world then check, most actionable first. One-line summary per 
 
 #### Policy-axis noncompliance (<n>)        [deep check, scanned <k>/<N> docs]
 - mark://<world>/<doc>.md: missing required axis `category:` (policy strictness: block); re-publish with the axis tag
+
+#### Hub shape (<n>)        [deep check, scanned <k>/<N> docs]
+- mark://<world>/index.md: <size> KB, <b> bullets past one line or with status, <l> outbound documents; split into a link hub plus topic files
+
+#### Oversized (<n>)        [deep check, scanned <k>/<N> docs]
+- mark://<world>/<doc>.md: <size> KB; a plain fetch returns an outline; split into a hub plus topic files when it outgrows one fetch
+
+#### Document shape (<n>)        [deep check, scanned <k>/<N> docs]
+- mark://<world>/<doc>.md: no summary under the H1; heading "<name> COMPLETED" carries status; republish as a gated update
 
 #### Dangling & unlinked references (<n>)        [deep check, scanned <k>/<N> docs]
 - mark://<world>/adr/0006-….md → "ADR 0005", dangling: no such doc in any complete in-scope world inventory; restore or drop the reference

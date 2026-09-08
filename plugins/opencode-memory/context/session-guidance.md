@@ -22,7 +22,7 @@ Binding is **enforced**: a write to a soul other than the bound one is denied at
 
 Before "what do I know / did we decide / have we seen X", and at the start of substantive work, check the soul:
 
-- `mark_lookup` with `url=/<slug>/` and a subject `query` is the **card catalog**: importance-ranked table (path, importance, title, tags), no bodies; `match: body` when the subject lives in section text rather than tags; body rows carry `#anchor` and a snippet. Then `mark_fetch` rows at their `#anchor`; a whole document only when the outline shows the answer spans sections. It finds only what was tagged or titled, so pair it with `mark_fetch /<slug>/index.md`. Transport/auth/server errors are failures to surface, never empty results.
+- `mark_lookup` with `url=/<slug>/` and a subject `query` is the **card catalog**: importance-ranked table (path, importance, title, tags), no bodies; `match: body` when the subject lives in section text rather than tags; body rows carry `#anchor` and a snippet. When the question is phrased in the words the answer would use, add `budget: 1500`: the matched sections' text follows the table in one call (a subject or name query still needs the fetch). Otherwise `mark_fetch` rows at their `#anchor`; a whole document only when the outline shows the answer spans sections. It finds only what was tagged or titled, so pair it with `mark_fetch /<slug>/index.md`. Transport/auth/server errors are failures to surface, never empty results.
 - `mark_backlinks` / `mark_graph` surface related docs via the link graph.
 - Nothing relevant: say so. Never fabricate recall.
 
@@ -42,7 +42,7 @@ Keep `/<slug>/index.md` current; it is the discovery backstop for what `mark_loo
 
 **Never set `metadata.retention` unless the user explicitly asked.** A positive-integer `retention` permanently deletes all but the newest N versions, on that write and every later write carrying it. Generated docs only (graph exports, indexes); authored notes are history. A guard asks for confirmation on prunable values (`DEMARKUS_RETENTION_STRICTNESS` adjusts).
 
-Style gate warns at write time on: a frontmatter fence opening the body, missing `# H1`, em dashes, duplicate headings (headings are `#section` anchors; duplicates break inbound links). Fix the body; `DEMARKUS_STYLE_STRICTNESS` or `~/.demarkus/plugin.style-strictness` adjusts severity.
+Style gate warns at write time on: a frontmatter fence opening the body; missing `# H1`; em dashes; duplicate headings (anchors); a hub (`index.md`, any link page) over 8 KB, a hub bullet past one line or carrying bold, `Status:`, a date, or a PR number, over 40 outbound documents; no summary under the H1 (`index.md`, `log.md`, journals exempt); a date, PR number, or all-caps status word in a heading below the H1. Fix the body; `DEMARKUS_STYLE_STRICTNESS` or `~/.demarkus/plugin.style-strictness` adjusts severity.
 
 **All metadata goes in the `metadata` object, never the body.** Recognized keys: `title`, `tags`, `importance`, OKF `type` (document kind); other keys stored opaquely, reachable via `mark_lookup` filters. No hand-written YAML frontmatter (a `---` fence, or `name:`/`description:`/`type:` keys): pass `type` as `metadata: {"type": "Reference"}`. Metadata travels out of band, so a body opening with `---` is stored literally: garbled headings, invisible to `mark_lookup`. Name = `# H1` (or `metadata.title`); kind = `metadata.type` (e.g. `Reference`/`Decision`; server default `Document`; `index.md`/`log.md` stay untyped); summary = first sentence under the H1.
 

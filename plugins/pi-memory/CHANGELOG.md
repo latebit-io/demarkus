@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.101
+
+Hub size gate: the style gate warns when a hub (`index.md` at any depth, or any link page) is at or over 8 KB, has a bullet past one line or carrying status (bold, `Status:`, a date, a PR number), or links over 40 documents. `/soul-doctor` gains hub shape, oversized-document, and document-shape findings; the remember skill's hub rule names the limits. Document shape: the style gate also warns on a missing summary under the H1 and on a heading carrying a date, a PR number, or a status word. New `/soul-curate <path>`: checks one document against the style rules and, behind a human gate, adds the summary, renames status headings, or splits a document over 8 KB into a hub plus topic files with anchors preserved. Task context: `mark_lookup` takes `budget` (approximate result tokens) and appends the matched sections' text in rank order, so one call answers a task; the same on the broker's `mark_lookup` and `mark_lookup_all`.
+
 ## 0.13.95
 
 Lean MCP envelope: `mark_fetch` and `mark_explore` return status, version, and title by default; `mark_lookup` rows show ten tags then `+N more`. `verbose: true` restores every metadata key and full tag lists. Every prompt step that republishes a fetched document now fetches with `verbose: true` so the metadata map is preserved. Session guidance now steers reads to `match: body` and section anchors.

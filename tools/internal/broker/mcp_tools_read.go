@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -233,7 +234,7 @@ func (g *mcpGateway) handleMarkVersions(_ context.Context, req mcp.CallToolReque
 // world ranks and filters, and the broker forwards the importance-
 // ranked table verbatim. query is required; filter and limit are
 // optional and passed through to the world.
-func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (g *mcpGateway) handleMarkLookup(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -256,7 +257,26 @@ func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest
 		return g.toolErrorFor("lookup", worldName, err), nil
 	}
 	render := mcpfmt.Lookup.Options(&req)
-	return mcp.NewToolResultText(mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)), nil
+	text := mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)
+	if budget := lookupexpand.Budget(&req); budget > 0 && result.Response.Status == protocol.StatusOK {
+		text += lookupexpand.Expand(ctx, result.Response.Body, query, budget, func(ctx context.Context, path string) (string, error) {
+			return g.bodyFor(ctx, worldName, path)
+		})
+	}
+	return mcp.NewToolResultText(text), nil
+}
+
+// bodyFor fetches one document for a lookup expansion; a non-ok status is
+// the error the expansion notes.
+func (g *mcpGateway) bodyFor(ctx context.Context, worldName, path string) (string, error) {
+	r, err := g.dispatcher.FetchContext(ctx, worldName, path, "")
+	if err != nil {
+		return "", err
+	}
+	if r.Response.Status != protocol.StatusOK {
+		return "", errors.New(r.Response.Status)
+	}
+	return r.Response.Body, nil
 }
 
 // toolErrorFor renders a tool-error envelope from a dispatcher

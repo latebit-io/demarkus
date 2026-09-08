@@ -9,7 +9,7 @@ Local, versioned project memory for [OpenCode](https://opencode.ai) via [demarku
 - **Publish tag-gate.** A tagless `mark_publish` is invisible to `mark_lookup` forever; the gate makes that loud at write time (`warn` by default, `block`/`ask` available).
 - **Destination gate.** When a repo is bound to a specific soul, a write aimed at a different soul is denied so writes land on the right soul.
 - **Recall / journal / promote nudges.** Discreet reminders at the moments they matter.
-- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `remember` skill (native OpenCode skill).
+- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-curate`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `remember` skill (native OpenCode skill).
 
 ## Requirements
 

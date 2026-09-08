@@ -51,10 +51,10 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 72 rendered canonical prompts (four memory/knowledge pairs) plus each
+	// 76 rendered canonical prompts (four memory/knowledge pairs) plus each
 	// brand's share, derived from the manifest and source tree rather than
 	// from the render.
-	const canonical = 72
+	const canonical = 76
 	want := canonical + expectedBrandArtifacts(t, root)
 	if len(artifacts) != want {
 		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)

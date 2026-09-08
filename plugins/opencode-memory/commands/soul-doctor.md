@@ -1,5 +1,5 @@
 ---
-description: "Audit the soul (or a single project) for catalog hygiene: orphans, broken links, untagged docs, stale index entries, ADR gaps. Read-only."
+description: "Audit the soul (or a single project) for catalog hygiene: orphans, broken links, untagged docs, stale index entries, hub and document shape, ADR gaps. Read-only."
 argument-hint: "[project-slug | blank = whole local soul]"
 ---
 <!-- markdownlint-disable MD041 -->
@@ -56,13 +56,16 @@ One fetch per document: run only for a single project or on request for a thorou
 - **Untagged docs**: fetch, check `tags` metadata non-empty. Untagged docs are findable only by title or explicit path. (The publish gate prevents this going forward; this finds pre-existing ones.)
 - **Metadata lost across versions** *(legacy servers)*: an untagged doc that **used to** carry tags. Servers before the APPEND metadata merge wrote each appended version with only `{agent: …}`, dropping `tags`, `importance`, `title`, `type` and knocking the doc out of `mark_lookup`; journals, appended every session, are the usual victims. Retire once the corpus is clean. Run only on docs the untagged check flagged that have more than one version:
   1. `mark_versions`. `chain-valid` false: report the `chain-error`, mark the doc **inconclusive**; metadata from a broken chain is not evidence.
-  2. Fetch versions newest-first below the current one (`mark_fetch /<path>/v<N>`) until one carries `tags`. At most 10 fetches per doc and 100 calls total for this check, `mark_versions` included; when the budget is gone, stop, list docs skipped or truncated, treat a hit found after truncating as low-confidence.
+  2. Fetch versions newest-first below the current one (`mark_fetch /<path>/v<N>` with `verbose: true`, since the lean envelope hides the metadata map) until one carries `tags`. At most 10 fetches per doc and 100 calls total for this check, `mark_versions` included; when the budget is gone, stop, list docs skipped or truncated, treat a hit found after truncating as low-confidence.
   3. Report recovered `tags`/`importance`/`type`/`title` and their source version as a **repair candidate**. Any failed call leaves the doc inconclusive; never infer metadata a call did not return.
 
   Untagged since `v1`: never tagged, a curation exercise. *Lost* tags: candidate, not verdict; a later `mark_publish` may have dropped them deliberately. Appends between the two versions point at legacy damage, a publish at intent. Get user confirmation before restoring.
 
   Repair, as a separate write step (this command never writes): `mark_fetch` with **`force=true`** and **`verbose=true`** (publishing an outline destroys the doc; the lean envelope hides the metadata map). Version differs from the audited one: another writer moved the doc; re-run the check. Then `mark_publish` that body with the current metadata map **plus** the recovered fields (publish replaces the map; an omission deletes opaque keys), `retention` only if the user asks, `expected_version` at the current version, `on_conflict: "fail"`. Any error or conflict: report it exactly, stop, say the doc is unchanged.
 - **Duplicate content**: compare `content-hash` (fetch with `verbose: true`) across fetched docs; identical hashes under different paths are duplicates.
+- **Hub shape** (`index.md` at any depth, or any link page: mostly link bullets): body at or over 8 KB; a bullet past one line or carrying bold, `Status:`, a date, or a PR number; over 40 outbound documents (anchors into one doc count once). Fix: `/soul-curate <path>` (split; one line per link, status in the child; a second-level hub).
+- **Oversized docs** *(advisory)*: any body at or over 8 KB, largest first. Fix: `/soul-curate <path>` (hub plus topic files).
+- **Document shape**: no summary between the `# H1` and the first heading (`index.md`, `log.md`, journals exempt); a heading below the H1 carrying a date, a PR number, or an all-caps status word. Fix: `/soul-curate <path>`.
 - **Untyped docs (OKF `type`)** *(advisory)*: read `type` metadata; no `type` or `type: Document` is un-kinded. A `type` key in `metadata` (`Reference`/`Decision`/`Architecture`/`Plan`/`Journal`/`Guide`/…) makes the soul OKF-typed and filterable (`mark_lookup` `filter: type=…`). **Exempt `index.md` and `log.md`**: the server never defaults their type; an untyped hub is correct. Advisory only: a local soul declares no `require_fields`; backfill suggestion, not violation.
 - **In-body frontmatter block** *(demarkus-specific)*: body whose **first non-blank line is `---`** with reserved/operational keys (`version`, `previous-hash`, `archived`, `meta.*`) is almost always an **exported demarkus doc pasted back into a publish**. The server stores frontmatter out-of-band and treats a body-leading `---` as literal content: stray horizontal rule + garbled headings, and the in-body `version:` won't match the real fetched `version`. Flag; fix = strip the block, re-publish with metadata out-of-band.
 - **Dangling & unlinked references**: a relationship in *prose* (or inline code) the link graph never captured; only `[text](url)` becomes an edge. "supersedes ADR 0005" is invisible to every graph check above. For each fetched body, scan for high-confidence reference patterns; resolve each against the **inventory** (existence) and the **doc's own parsed links** (already linked?); no fetches beyond the bodies this tier already pulls:
@@ -95,6 +98,15 @@ Plain, grouped by check, most actionable first. Per finding: path and one-line s
 
 ### Metadata lost across versions (<n>)        [deep check, scanned <k>/<N> docs]
 - /journal/2026-08-12.md: candidate: tagged at v1 (11 tags, importance 0.6, type Journal), none at v5; repair = force-fetch v5, publish that body with v5's metadata map plus the v1 fields, `expected_version: 5`, `on_conflict: "fail"`
+
+### Hub shape (<n>)        [deep check, scanned <k>/<N> docs]
+- /index.md: <size> KB, <b> bullets past one line or with status, <l> outbound documents; split into a link hub plus topic files
+
+### Oversized (<n>)        [deep check, scanned <k>/<N> docs]
+- /plans/<name>.md: <size> KB; a plain fetch returns an outline; split into a hub plus topic files when it outgrows one fetch
+
+### Document shape (<n>)        [deep check, scanned <k>/<N> docs]
+- /plans/<name>.md: no summary under the H1; heading "<name> COMPLETED" carries status; run /soul-curate
 
 ### Dangling & unlinked references (<n>)        [deep check, scanned <k>/<N> docs]
 - /adr/0006-navigation-rework.md → "ADR 0005", dangling: no such doc in scope (mark_list → no match); restore it or drop the reference

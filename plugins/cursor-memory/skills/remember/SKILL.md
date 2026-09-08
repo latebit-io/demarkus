@@ -44,7 +44,7 @@ Replace `<shell-escaped-absolute-project-dir>` with exactly one POSIX-shell-safe
 Canonical layout below. A `/project-template.md` at the soul root overrides it: fetch with `force: true` and follow it when present, even above the normal full-body threshold. Only `not-found` means no override; an outline-only response or any other fetch failure (transport, auth, server error) is a real error: surface it and stop, no silent fallback. Each `/<project>/` subtree:
 
 - `/<project>/index.md`: project hub; links every doc below, anchors discovery
-- Hub rule (`index.md`, any link page): links plus one line each; no content, status, or summaries copied from children; each child links back to its hub; about 40 outbound documents, then a second-level hub; a document that outgrows one fetch splits into a hub plus topic files. Real relations go in `rel-*` metadata, not hub adjacency.
+- Hub rule (`index.md`, any link page): links plus one line each, under 8 KB; no content, status, dates, or summaries copied from children; tags name the hub, not its children; each child links back to its hub; about 40 outbound documents, then a second-level hub; a document that outgrows one fetch splits into a hub plus topic files. Real relations go in `rel-*` metadata, not hub adjacency. The style gate warns on a hub over 8 KB, a bullet past one line or carrying status, or over 40 outbound documents.
 - `/<project>/architecture.md`: system design, module boundaries, key decisions
 - `/<project>/patterns.md`: code patterns, conventions, idioms
 - `/<project>/guidelines.md`: hard code-quality rules; read before writing code
@@ -62,7 +62,7 @@ OKF `type` on publish: `architecture.md` → `Architecture`, `adr/*` → `Decisi
 
 Read intents: `mark_lookup` (catalog) first, then `mark_fetch`:
 
-1. `mark_lookup` with `url=/<project>/` (or `/` for every project) and a subject `query`: importance-ranked table (path, importance, title, tags), no bodies. Catalog lookup finds only what was tagged or titled; `match: body` also matches section text, and body rows carry `#anchor` and a snippet. Narrow with `filter` (`tag=`, `modified-after=`, `modified-before=`), cap with `limit`.
+1. `mark_lookup` with `url=/<project>/` (or `/` for every project) and a subject `query`: importance-ranked table (path, importance, title, tags), no bodies. Catalog lookup finds only what was tagged or titled; `match: body` also matches section text, and body rows carry `#anchor` and a snippet; `budget: 1500` appends the matched sections' text so one call answers a question phrased in the answer's own words. Narrow with `filter` (`tag=`, `modified-after=`, `modified-before=`), cap with `limit`.
 2. `mark_fetch` rows at their `#anchor`; a whole document only when the outline shows the answer spans sections. Also `mark_fetch /index.md` / `/<project>/index.md` directly; lookup misses untagged docs, the hub still anchors discovery.
 3. `mark_backlinks` or `mark_graph` for related documents across projects.
 4. Lookup, fetch, or graph failure: surface the error, never report an empty result. Only a successful search with no matches means nothing found.

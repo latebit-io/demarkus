@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
@@ -107,7 +108,18 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 		query: query, worlds: len(worlds), matches: matches, failures: failures,
 		body: opts.Match == fetch.MatchBody, catalogWorlds: catalogWorlds,
 	}
-	return mcp.NewToolResultText(mcpfmt.Format(report.result(), mcpfmt.LookupAll.Options(&req))), nil
+	merged := report.result()
+	text := mcpfmt.Format(merged, mcpfmt.LookupAll.Options(&req))
+	if budget := lookupexpand.Budget(&req); budget > 0 {
+		text += lookupexpand.Expand(ctx, merged.Response.Body, query, budget, func(ctx context.Context, loc string) (string, error) {
+			worldName, path, err := parseToolURL(loc)
+			if err != nil {
+				return "", err
+			}
+			return g.bodyFor(ctx, worldName, path)
+		})
+	}
+	return mcp.NewToolResultText(text), nil
 }
 
 // lookupAllReport is everything the merged table renders.

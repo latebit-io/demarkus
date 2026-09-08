@@ -3,9 +3,14 @@ package retrievalbench
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/lookupexpand"
+	"github.com/latebit-io/demarkus/client/lookuptable"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 )
 
 // Call records one tool invocation and what it cost.
@@ -181,14 +186,92 @@ func rankRows(rows []lookupRow, path string) int {
 	return 0
 }
 
+// Context is one budgeted body-match lookup: the evidence must arrive in
+// the sections expanded by that single call.
+type Context struct {
+	Scope       string
+	LookupLimit int
+	Budget      int // approximate result tokens passed as the budget argument
+}
+
+// Name describes the strategy for the report header.
+func (s Context) Name() string {
+	return fmt.Sprintf("context (match body, limit %d, budget %d)", s.LookupLimit, s.Budget)
+}
+
+// Run issues the one call and checks the expansion for the expected section.
+func (s Context) Run(ctx context.Context, rec *Recorder, q *Question) (Outcome, error) {
+	args := map[string]any{"url": s.Scope, "query": q.Query, "limit": s.LookupLimit, "match": fetch.MatchBody, "budget": s.Budget}
+	res, err := rec.Call(ctx, "mark_lookup", args)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if res.IsError {
+		return Outcome{}, nil
+	}
+	out := Outcome{LookupRank: rankRows(parseLookupRows(res.Text), q.ExpectedPath)}
+	if expansionHolds(res.Text, q) {
+		out.Hit = true
+		out.CallsToEvidence = 1
+	}
+	return out, nil
+}
+
+// expansionHolds reports whether a delimiter-framed block carries the expected
+// path and section: the anchor on its header, or a whole-document block (one
+// with headings) holding the anchor. An outline block never counts.
+func expansionHolds(text string, q *Question) bool {
+	var loc, block string
+	check := func() bool {
+		if loc == "" {
+			return false
+		}
+		path, anchor := lookuptable.SplitLocation(loc)
+		if path != q.ExpectedPath {
+			return false
+		}
+		if anchor != "" {
+			return q.ExpectedAnchor == "" || anchor == q.ExpectedAnchor
+		}
+		// A bare-path block is the whole document when it has headings and
+		// an outline (which holds nothing) when it has none.
+		anchors := mdoutline.Anchors(block)
+		if len(anchors) == 0 {
+			return false
+		}
+		return q.ExpectedAnchor == "" || slices.Contains(anchors, q.ExpectedAnchor)
+	}
+	for line := range strings.SplitSeq(text, "\n") {
+		rest, ok := strings.CutPrefix(line, lookupexpand.Delimiter+" ")
+		if !ok {
+			block += line + "\n"
+			continue
+		}
+		if check() {
+			return true
+		}
+		if strings.HasPrefix(rest, "note: ") {
+			loc, block = "", ""
+		} else {
+			loc, block = rest, ""
+		}
+	}
+	return check()
+}
+
 // StrategyByName resolves a CLI strategy name.
-func StrategyByName(name, scope string, lookupLimit, maxFetches int) (Strategy, error) {
+func StrategyByName(name, scope string, lookupLimit, maxFetches, budget int) (Strategy, error) {
 	if lookupLimit <= 0 || maxFetches <= 0 {
 		return nil, fmt.Errorf("lookup limit %d and max fetches %d must be positive", lookupLimit, maxFetches)
 	}
 	switch name {
 	case "lookup-fetch", "body-fetch":
 		return LookupFetch{Scope: scope, LookupLimit: lookupLimit, MaxFetches: maxFetches, Body: name == "body-fetch"}, nil
+	case "context":
+		if budget <= 0 {
+			return nil, fmt.Errorf("budget %d must be positive", budget)
+		}
+		return Context{Scope: scope, LookupLimit: lookupLimit, Budget: budget}, nil
 	default:
 		return nil, fmt.Errorf("unknown strategy %q", name)
 	}
