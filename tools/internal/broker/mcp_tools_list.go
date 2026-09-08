@@ -164,7 +164,7 @@ const matchParamDesc = "catalog (default) or body"
 func markLookupAllTool() mcp.Tool {
 	return mcp.NewTool("mark_lookup_all",
 		mcp.WithDescription(
-			"Catalog lookup by subject across all readable worlds. One globally limited table of mark://{worldName}/{path} rows; partial world failures reported with matches. match=body also matches section text. "+mcpURLHint,
+			"Catalog lookup by subject across all readable worlds. One globally limited table of mark://{worldName}/{path} rows; partial world failures reported with matches. match=body also matches section text. budget>0 appends the matched sections' text within that token budget. "+mcpURLHint,
 		),
 		mcp.WithString("query",
 			mcp.Required(),

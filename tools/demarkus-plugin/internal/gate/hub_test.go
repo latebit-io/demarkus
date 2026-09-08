@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// linkBullets renders n one-line link bullets.
 func linkBullets(n int) string {
 	var b strings.Builder
 	for i := range n {
@@ -54,6 +55,10 @@ func TestHubProblems(t *testing.T) {
 			"# Hub\n\n" + linkBullets(41), []string{"41 outbound documents", "second-level hub"}},
 		{"anchored links into one document count once", "index.md",
 			"# Hub\n\n" + linkBullets(38) + "- [A](/a.md#x)\n- [B](/a.md#y)\n- [C](/a.md#z)\n- [D](https://example.com/d)\n", nil},
+		{"reference links make a link page", "related.md",
+			"# Related\n\n" + strings.Repeat("- [Doc][d]: one line\n", 6) + "- [Plan][p]: merged 2026-09-01\n\n[d]: /docs/d.md\n[p]: /p.md\n", []string{`"Plan"`}},
+		{"collapsed reference link with a long destination passes", "index.md",
+			"# Hub\n\n" + linkBullets(5) + "- [Short][]: fine\n\n[Short]: /" + strings.Repeat("p/", 120) + "x.md\n", nil},
 		{"link page by shape gets the rules", "related.md",
 			"# Related\n\nLinks:\n\n" + linkBullets(8) + "- [Plan](/p.md): merged 2026-09-01\n", []string{`"Plan"`}},
 		{"prose document with a short list is not a hub", "notes.md",

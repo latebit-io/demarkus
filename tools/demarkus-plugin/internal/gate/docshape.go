@@ -46,6 +46,8 @@ func shapeProblems(url, body string, headings []mdoutline.Heading) []string {
 	return problems
 }
 
+// journalPath reports a path with a journal segment, the memory template's
+// convention for dated entries.
 func journalPath(url string) bool {
 	return slices.Contains(strings.Split(url, "/"), "journal")
 }

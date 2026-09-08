@@ -30,7 +30,7 @@ Resolve the bound {{.Store}} first, exactly as the `remember` skill does (`regis
 
 4. **Gate.** Ask for approval on the exact proposal. Declined: stop, nothing written.
 
-5. **Publish.** Split: topic files first (`expected_version: 0`, `on_conflict: "fail"`), then the hub at the step 1 version with the preserved metadata map, `on_conflict: "fail"`, `retention` never unless the user asked for this write. Edit: one publish at the step 1 version. Conflict: force-fetch again with `verbose: true`, show the difference, return to step 4. Any failure: report it exactly and which files landed; never claim the split is complete.
+5. **Publish.** Split: preflight every topic path with `mark_fetch` (`force: true`, `verbose: true`): `not-found` publishes at `expected_version: 0`; an existing topic whose body and metadata equal the proposal is skipped; one that differs stops before the hub (a resumed split must match what was approved). Then the topic files, then the hub at the step 1 version with the preserved metadata map, `on_conflict: "fail"`, `retention` never unless the user asked for this write. Edit: one publish at the step 1 version. Conflict: force-fetch again with `verbose: true`, show the difference, return to step 4. Any failure: report it exactly and which files landed; never claim the split is complete.
 
 6. **Report.** Path, what changed, every new path with its size, the inbound links the user should repoint, and the version the old body lives at.
 

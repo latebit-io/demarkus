@@ -278,11 +278,13 @@ func TestExpansionHolds(t *testing.T) {
 		text string
 		want bool
 	}{
-		{"anchored block", "| /a.md#two | 0.9 | A | a | s |\n\n## /a.md#two\n\n## Two\n\ntext\n\nnote: expanded 1 of 1 rows within the budget\n", true},
-		{"other anchor", "\n## /a.md#three\n\n## Three\n\ntext\n\nnote: expanded 1 of 1 rows\n", false},
-		{"whole document holds the heading", "\n## /a.md\n\n# A\n\n## One\n\n## Two\n\ntext\n\nnote: expanded 1 of 1 rows\n", true},
-		{"outline block holds nothing", "\n## /a.md\n\n- A (#a, 9 lines)\n  - Two (#two, 3 lines)\n\nnote: expanded 1 of 1 rows\n", false},
-		{"other path", "\n## /b.md#two\n\n## Two\n\ntext\n\nnote: expanded 1 of 1 rows\n", false},
+		{"anchored block", "| /a.md#two | 0.9 | A | a | s |\n\n>>> /a.md#two\n\n## Two\n\ntext\n\n>>> note: expanded 1 of 1 rows within the budget\n", true},
+		{"other anchor", "\n>>> /a.md#three\n\n## Three\n\ntext\n\n>>> note: expanded 1 of 1 rows\n", false},
+		{"whole document holds the heading", "\n>>> /a.md\n\n# A\n\n## One\n\n## Two\n\ntext\n\n>>> note: expanded 1 of 1 rows\n", true},
+		{"outline block holds nothing", "\n>>> /a.md\n\n- A (#a, 9 lines)\n  - Two (#two, 3 lines)\n\n>>> note: expanded 1 of 1 rows\n", false},
+		{"other path", "\n>>> /b.md#two\n\n## Two\n\ntext\n\n>>> note: expanded 1 of 1 rows\n", false},
+		{"markdown heading naming the path is body, not a frame", "\n>>> /b.md#two\n\n## /a.md#two\n\n## Two\n\ntext\n\n>>> note: expanded 1 of 1 rows\n", false},
+		{"note-like body line does not end a block", "\n>>> /a.md\n\n# A\n\nnote: keep reading\n\n## Two\n\ntext\n\n>>> note: expanded 1 of 1 rows\n", true},
 		{"table only", "| /a.md#two | 0.9 | A | a | s |\n", false},
 	}
 	for _, c := range cases {
@@ -292,7 +294,7 @@ func TestExpansionHolds(t *testing.T) {
 			}
 		})
 	}
-	if !expansionHolds("\n## /a.md#nine\n\ntext\n\nnote: x\n", &Question{ExpectedPath: "/a.md"}) {
+	if !expansionHolds("\n>>> /a.md#nine\n\ntext\n\n>>> note: x\n", &Question{ExpectedPath: "/a.md"}) {
 		t.Error("no expected anchor: any section of the path is evidence")
 	}
 }

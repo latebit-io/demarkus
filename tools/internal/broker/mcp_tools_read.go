@@ -234,7 +234,7 @@ func (g *mcpGateway) handleMarkVersions(_ context.Context, req mcp.CallToolReque
 // world ranks and filters, and the broker forwards the importance-
 // ranked table verbatim. query is required; filter and limit are
 // optional and passed through to the world.
-func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (g *mcpGateway) handleMarkLookup(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -259,8 +259,8 @@ func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest
 	render := mcpfmt.Lookup.Options(&req)
 	text := mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)
 	if budget := lookupexpand.Budget(&req); budget > 0 && result.Response.Status == protocol.StatusOK {
-		text += lookupexpand.Expand(result.Response.Body, query, budget, func(path string) (string, error) {
-			return g.bodyFor(worldName, path)
+		text += lookupexpand.Expand(ctx, result.Response.Body, query, budget, func(ctx context.Context, path string) (string, error) {
+			return g.bodyFor(ctx, worldName, path)
 		})
 	}
 	return mcp.NewToolResultText(text), nil
@@ -268,8 +268,8 @@ func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest
 
 // bodyFor fetches one document for a lookup expansion; a non-ok status is
 // the error the expansion notes.
-func (g *mcpGateway) bodyFor(worldName, path string) (string, error) {
-	r, err := g.dispatcher.Fetch(worldName, path, "")
+func (g *mcpGateway) bodyFor(ctx context.Context, worldName, path string) (string, error) {
+	r, err := g.dispatcher.FetchContext(ctx, worldName, path, "")
 	if err != nil {
 		return "", err
 	}

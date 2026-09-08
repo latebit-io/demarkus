@@ -1,10 +1,10 @@
-// Package lookupexpand turns a LOOKUP table into task context: the matched
-// sections' text, in rank order, within a result budget. Both MCP surfaces
-// call it after rendering the table, so one lookup call can answer a task
-// without a fetch per row.
+// Package lookupexpand appends the matched sections' text to a LOOKUP table
+// within a byte budget, so one lookup call can answer a task on both MCP
+// surfaces without a fetch per row.
 package lookupexpand
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -18,17 +18,22 @@ import (
 const Param = "budget"
 
 // ParamDesc describes the budget argument on both surfaces.
-const ParamDesc = "approximate result tokens (4 bytes each); when set, the matched sections' text follows the table in rank order under '## path#anchor' lines, whole sections only, until spent (default 0: table only)"
+const ParamDesc = "approximate result tokens (4 bytes each); when set, the matched sections' text follows the table in rank order under '" + Delimiter + " path#anchor' lines, whole sections only, until spent (default 0: table only)"
+
+// Delimiter opens every expanded block and every note; markdown bodies do
+// not start lines with it, so consumers can frame blocks unambiguously.
+const Delimiter = ">>>"
 
 // bytesPerToken is the budget's unit; the surfaces carry no tokenizer.
 const bytesPerToken = 4
 
-// minRemaining stops the walk once no useful section can fit.
-const minRemaining = 64
+// MaxFetches bounds the documents one expansion fetches, whatever the row
+// count: the budget bounds output, this bounds wire calls.
+const MaxFetches = 10
 
 // Fetch returns the body of the document at a table row's location (a bare
 // path or a mark:// URL, as the table printed it).
-type Fetch func(location string) (string, error)
+type Fetch func(ctx context.Context, location string) (string, error)
 
 // Option declares the budget argument on a tool.
 func Option() mcp.ToolOption {
@@ -43,32 +48,60 @@ func Budget(req *mcp.CallToolRequest) int {
 	return 0
 }
 
-// Expand renders the sections of the table's rows in order, each under a
-// "## location" line, skipping any that would not fit whole, until the byte
-// budget is spent or the rows run out. A bare-path row on a document over
-// the outline threshold expands to the sections holding every query term,
-// else its outline. Ends with a note saying how many rows were expanded.
-// Fetch failures cost a note line, never the call.
-func Expand(table, query string, budgetBytes int, fetch Fetch) string {
+// expansion accumulates blocks against the remaining budget.
+type expansion struct {
+	b         strings.Builder
+	remaining int
+	expanded  int
+}
+
+// add appends a block when it fits whole and reports whether it did.
+func (e *expansion) add(loc, text string) bool {
+	block := Delimiter + " " + loc + "\n\n" + strings.TrimSpace(text) + "\n\n"
+	if len(block) > e.remaining {
+		return false
+	}
+	e.b.WriteString(block)
+	e.remaining -= len(block)
+	return true
+}
+
+// note appends a delimited note line.
+func (e *expansion) note(format string, args ...any) {
+	fmt.Fprintf(&e.b, Delimiter+" note: "+format+"\n", args...)
+}
+
+// Expand renders the rows' sections in order, whole sections only, until the
+// budget or MaxFetches is spent or ctx ends; a bare path on a large document
+// expands to the sections holding every query term, else its outline.
+func Expand(ctx context.Context, table, query string, budgetBytes int, fetch Fetch) string {
 	rows := locations(table)
 	if len(rows) == 0 || budgetBytes <= 0 {
 		return ""
 	}
-	var b strings.Builder
-	remaining := budgetBytes
+	e := &expansion{remaining: budgetBytes}
 	bodies := make(map[string]string)
-	expanded := 0
+	fetches := 0
 	for _, loc := range rows {
-		if remaining < minRemaining {
+		if e.remaining <= 0 {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			e.note("stopped: %v", err)
 			break
 		}
 		path, anchor := lookuptable.SplitLocation(loc)
-		body, ok := bodies[path]
-		if !ok {
+		body, seen := bodies[path]
+		if !seen {
+			if fetches >= MaxFetches {
+				e.note("fetch limit of %d documents reached", MaxFetches)
+				break
+			}
+			fetches++
 			var err error
-			body, err = fetch(path)
+			body, err = fetch(ctx, path)
 			if err != nil {
-				fmt.Fprintf(&b, "note: %s: %v\n", path, err)
+				e.note("%s: %v", path, err)
 				bodies[path] = ""
 				continue
 			}
@@ -80,54 +113,36 @@ func Expand(table, query string, budgetBytes int, fetch Fetch) string {
 		if anchor == "" && len(body) >= mdoutline.OutlineThreshold {
 			n := 0
 			for _, h := range matchingSections(body, query) {
-				block := "## " + path + "#" + h.Anchor + "\n\n" + strings.TrimSpace(body[h.Start:h.End]) + "\n\n"
-				if len(block) > remaining {
-					continue
-				}
-				b.WriteString(block)
-				remaining -= len(block)
-				n++
-			}
-			if n == 0 {
-				block := "## " + path + "\n\n" + strings.TrimSpace(mdoutline.OutlineBody(path, body)) + "\n\n"
-				if len(block) <= remaining {
-					b.WriteString(block)
-					remaining -= len(block)
+				if e.add(path+"#"+h.Anchor, body[h.Start:h.End]) {
 					n++
 				}
 			}
+			if n == 0 && e.add(path, mdoutline.OutlineBody(path, body)) {
+				n++
+			}
 			if n > 0 {
-				expanded++
+				e.expanded++
 			}
 			continue
 		}
-		text, found := sectionText(body, anchor)
-		if !found {
-			fmt.Fprintf(&b, "note: %s: section #%s not found\n", path, anchor)
-			continue
+		text := body
+		if anchor != "" {
+			var found bool
+			if text, found = mdoutline.Section(body, anchor); !found {
+				e.note("%s: section #%s not found", path, anchor)
+				continue
+			}
 		}
-		block := "## " + loc + "\n\n" + strings.TrimSpace(text) + "\n\n"
-		if len(block) > remaining {
-			continue
+		if e.add(loc, text) {
+			e.expanded++
 		}
-		b.WriteString(block)
-		remaining -= len(block)
-		expanded++
 	}
-	fmt.Fprintf(&b, "note: expanded %d of %d rows within the budget\n", expanded, len(rows))
-	return "\n" + b.String()
-}
-
-// sectionText is the row's section, or the whole document for a bare path.
-func sectionText(body, anchor string) (string, bool) {
-	if anchor != "" {
-		return mdoutline.Section(body, anchor)
-	}
-	return body, true
+	e.note("expanded %d of %d rows within the budget", e.expanded, len(rows))
+	return "\n" + e.b.String()
 }
 
 // matchingSections returns the H2-or-deeper sections whose text holds every
-// query term (case-insensitive substrings), in document order.
+// query term (case-insensitive substrings), outermost only, in order.
 func matchingSections(body, query string) []mdoutline.Heading {
 	var terms []string
 	for t := range strings.FieldsSeq(strings.ToLower(query)) {
@@ -139,7 +154,7 @@ func matchingSections(body, query string) []mdoutline.Heading {
 		return nil
 	}
 	var out []mdoutline.Heading
-	lastEnd := 0 // a matching subsection inside a matching section is already in
+	lastEnd := 0
 	for _, h := range mdoutline.Headings(body) {
 		if h.Level < 2 || h.Start < lastEnd {
 			continue

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 )
@@ -216,9 +217,9 @@ func (s Context) Run(ctx context.Context, rec *Recorder, q *Question) (Outcome, 
 	return out, nil
 }
 
-// expansionHolds reports whether an expanded block carries the expected
-// path and section: the anchor on its header, or a whole-document block
-// whose headings include the anchor. An outline block holds nothing.
+// expansionHolds reports whether a delimiter-framed block carries the expected
+// path and section: the anchor on its header, or a whole-document block whose
+// headings include the anchor. An outline block holds nothing.
 func expansionHolds(text string, q *Question) bool {
 	var loc, block string
 	check := func() bool {
@@ -235,21 +236,19 @@ func expansionHolds(text string, q *Question) bool {
 		return anchor == "" && slices.Contains(mdoutline.Anchors(block), q.ExpectedAnchor)
 	}
 	for line := range strings.SplitSeq(text, "\n") {
-		if rest, ok := strings.CutPrefix(line, "## "); ok && strings.HasPrefix(rest, "/") {
-			if check() {
-				return true
-			}
-			loc, block = rest, ""
+		rest, ok := strings.CutPrefix(line, lookupexpand.Delimiter+" ")
+		if !ok {
+			block += line + "\n"
 			continue
 		}
-		if strings.HasPrefix(line, "note: ") {
-			if check() {
-				return true
-			}
+		if check() {
+			return true
+		}
+		if strings.HasPrefix(rest, "note: ") {
 			loc, block = "", ""
-			continue
+		} else {
+			loc, block = rest, ""
 		}
-		block += line + "\n"
 	}
 	return check()
 }

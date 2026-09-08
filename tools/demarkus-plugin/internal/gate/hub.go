@@ -25,6 +25,7 @@ const (
 
 var (
 	mdLink       = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	mdRefLink    = regexp.MustCompile(`\[([^\]]*)\]\[[^\]]*\]`)
 	mdCodeSpan   = regexp.MustCompile("`[^`\n]*`")
 	hubBold      = regexp.MustCompile(`\*\*[^*\n]+\*\*|__[^_\n]+__`)
 	hubStatusKey = regexp.MustCompile(`(?i)\bstatus:`)
@@ -32,10 +33,12 @@ var (
 	hubPRNumber  = regexp.MustCompile(`#\d+\b`)
 )
 
-// bullet is one list item: its first paragraph joined into a line, and
-// whether the item holds further block content beyond nested lists.
+// bullet is one list item: its first paragraph joined into a line, whether
+// that paragraph opens with a link (inline or reference, per the parser),
+// and whether the item holds further block content beyond nested lists.
 type bullet struct {
 	text       string
+	opensLink  bool
 	multiBlock bool
 }
 
@@ -77,16 +80,11 @@ func hubProblems(leaf, body string) []string {
 func linkPage(items []bullet, textLines int) bool {
 	n := 0
 	for _, b := range items {
-		if opensWithLink(b.text) {
+		if b.opensLink {
 			n++
 		}
 	}
 	return n >= hubMinLinkItems && textLines > 0 && float64(n) >= hubLinkShare*float64(textLines)
-}
-
-func opensWithLink(s string) bool {
-	loc := mdLink.FindStringIndex(s)
-	return len(loc) == 2 && loc[0] == 0
 }
 
 // bulletOK: one paragraph, under the visible cap with destinations stripped,
@@ -96,11 +94,11 @@ func bulletOK(b bullet) bool {
 	if b.multiBlock {
 		return false
 	}
-	visible := mdLink.ReplaceAllString(b.text, "[$1]")
+	visible := mdRefLink.ReplaceAllString(mdLink.ReplaceAllString(b.text, "[$1]"), "[$1]")
 	if utf8.RuneCountInString(visible) > hubBulletMax {
 		return false
 	}
-	outside := mdCodeSpan.ReplaceAllString(mdLink.ReplaceAllString(b.text, ""), "")
+	outside := mdCodeSpan.ReplaceAllString(mdRefLink.ReplaceAllString(mdLink.ReplaceAllString(b.text, ""), ""), "")
 	return !hubBold.MatchString(outside) && !hubStatusKey.MatchString(outside) &&
 		!hubISODate.MatchString(outside) && !hubPRNumber.MatchString(outside)
 }
@@ -108,6 +106,9 @@ func bulletOK(b bullet) bool {
 // bulletLabel names a bullet by its first link text, else its opening words.
 func bulletLabel(s string) string {
 	if m := mdLink.FindStringSubmatch(s); len(m) == 2 && m[1] != "" {
+		return m[1]
+	}
+	if m := mdRefLink.FindStringSubmatch(s); len(m) == 2 && m[1] != "" {
 		return m[1]
 	}
 	if r := []rune(s); len(r) > 40 {
@@ -152,6 +153,8 @@ func listItems(body string) (items []bullet, textLines int) {
 	return items, textLines
 }
 
+// bulletOf reads one list item: first paragraph joined, link-opening, and
+// whether further blocks follow.
 func bulletOf(item *ast.ListItem, src []byte) bullet {
 	var b bullet
 	blocks := 0
@@ -163,6 +166,9 @@ func bulletOf(item *ast.ListItem, src []byte) bullet {
 		if b.text != "" {
 			continue
 		}
+		// The parser resolves reference links, so an item opening with
+		// [text][label] counts as a link bullet like [text](dest) does.
+		_, b.opensLink = c.FirstChild().(*ast.Link)
 		lines := c.Lines()
 		parts := make([]string, 0, lines.Len())
 		for i := range lines.Len() {

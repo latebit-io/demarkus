@@ -111,12 +111,12 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 	merged := report.result()
 	text := mcpfmt.Format(merged, mcpfmt.LookupAll.Options(&req))
 	if budget := lookupexpand.Budget(&req); budget > 0 {
-		text += lookupexpand.Expand(merged.Response.Body, query, budget, func(loc string) (string, error) {
+		text += lookupexpand.Expand(ctx, merged.Response.Body, query, budget, func(ctx context.Context, loc string) (string, error) {
 			worldName, path, err := parseToolURL(loc)
 			if err != nil {
 				return "", err
 			}
-			return g.bodyFor(worldName, path)
+			return g.bodyFor(ctx, worldName, path)
 		})
 	}
 	return mcp.NewToolResultText(text), nil

@@ -375,7 +375,7 @@ func markVersionsTool(host string) mcp.Tool {
 func markLookupTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_lookup",
 		mcp.WithDescription(
-			"Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends the matched sections' text within that token budget, so one call answers a task; else mark_fetch url#<anchor>. "+urlHint(host),
+			"Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends the matched sections' text within that token budget; else mark_fetch url#<anchor>. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -697,7 +697,7 @@ func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(mcpfmt.Full(result, "total", "current", "chain-valid", "chain-error")), nil
 }
 
-func (h *handler) markLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (h *handler) markLookup(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -725,8 +725,8 @@ func (h *handler) markLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 	text := mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)
 	if budget := lookupexpand.Budget(&req); budget > 0 && result.Response.Status == protocol.StatusOK {
 		token := h.resolveToken(host)
-		text += lookupexpand.Expand(result.Response.Body, query, budget, func(path string) (string, error) {
-			return fetchBody(h.client.Fetch(host, path, token))
+		text += lookupexpand.Expand(ctx, result.Response.Body, query, budget, func(ctx context.Context, path string) (string, error) {
+			return fetchBody(h.client.FetchContext(ctx, host, path, token))
 		})
 	}
 	return mcp.NewToolResultText(text), nil
