@@ -12,10 +12,8 @@ import (
 )
 
 // TestRankCorpus reports the target's body-mode rank per benchmark question
-// over a real corpus, for tuning weights without a full MCP run. It runs
-// only with DEMARKUS_RANK_CORPUS (a file-store root) and
-// DEMARKUS_RANK_QUESTIONS (a retrieval-bench fixture) set; DEMARKUS_RANK_SHOW
-// lists question ids whose top rows to print.
+// over a real file store, so weights can be tuned without a full MCP run.
+// Opt-in through the DEMARKUS_RANK_* variables read below.
 func TestRankCorpus(t *testing.T) {
 	root, questions := os.Getenv("DEMARKUS_RANK_CORPUS"), os.Getenv("DEMARKUS_RANK_QUESTIONS")
 	if root == "" || questions == "" {

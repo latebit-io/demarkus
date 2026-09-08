@@ -6,10 +6,12 @@ import (
 	"time"
 )
 
+// putDoc publishes one document into the catalog with the given metadata.
 func putDoc(c *Catalog, path, body string, meta map[string]string) {
 	c.Put(path, meta, []byte(body), time.Now())
 }
 
+// locations joins result locations in rank order for one-line assertions.
 func locations(rs []Result) string {
 	out := make([]string, len(rs))
 	for i := range rs {
