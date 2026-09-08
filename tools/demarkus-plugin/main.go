@@ -128,8 +128,16 @@ func cmdNudge() {
 		return // nothing to surface
 	}
 	if sentinel != "" {
-		if err := os.WriteFile(sentinel, nil, 0o600); err != nil {
+		// O_EXCL: concurrent Stops race to one nudge; a pre-existing path or
+		// symlink in the shared temp dir is refused, not truncated.
+		f, err := os.OpenFile(sentinel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			if os.IsExist(err) {
+				return
+			}
 			fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: sentinel: "+err.Error())
+		} else if err := f.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: sentinel close: "+err.Error())
 		}
 	}
 	if *format == "cursor" {
