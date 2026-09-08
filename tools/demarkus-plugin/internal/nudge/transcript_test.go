@@ -133,3 +133,27 @@ func TestScanIncludesSubagentTranscripts(t *testing.T) {
 		t.Error("main transcript edit still counts")
 	}
 }
+
+func TestScanSubagentVanishedIsNotFatal(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "sess.jsonl")
+	subdir := filepath.Join(dir, "sess", "subagents")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(main, []byte(editLine+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A dangling symlink globs but fails to open with ENOENT, like a file
+	// rotated away between Glob and Open.
+	if err := os.Symlink(filepath.Join(dir, "gone.jsonl"), filepath.Join(subdir, "agent-1.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	sig, err := ScanTranscript(main)
+	if err != nil {
+		t.Fatalf("vanished subagent transcript must not fail the scan: %v", err)
+	}
+	if !sig.ChangedFiles {
+		t.Error("main transcript signals survive a missing subagent file")
+	}
+}

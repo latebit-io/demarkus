@@ -72,6 +72,9 @@ func ScanTranscript(path string) (Signals, error) {
 	}
 	for _, sub := range subs {
 		ss, err := scanFile(sub)
+		if os.IsNotExist(err) {
+			continue // rotated away between Glob and Open; supplementary, not fatal
+		}
 		if err != nil {
 			return Signals{}, err
 		}
