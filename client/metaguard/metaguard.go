@@ -28,8 +28,8 @@ const maxValue = 80
 const readTimeout = 5 * time.Second
 
 // Gate runs after a successful update: read fetches the replaced version and
-// the note names what the new one dropped. A create (expectedVersion 0)
-// yields nothing; the read error is the caller's to log, never a blocker.
+// the note names what the new one dropped. A create or a pruned version yields
+// nothing; any other failed read is the caller's to log, never a blocker.
 func Gate(ctx context.Context, expectedVersion int, meta map[string]string, read func(context.Context) (fetch.Result, error)) (string, error) {
 	if expectedVersion == 0 {
 		return "", nil
@@ -40,9 +40,12 @@ func Gate(ctx context.Context, expectedVersion int, meta map[string]string, read
 	if err != nil {
 		return "", err
 	}
-	if replaced.Response.Status != protocol.StatusOK {
-		// Pruned by retention or otherwise unreadable: nothing to compare.
-		return "", nil
+	switch replaced.Response.Status {
+	case protocol.StatusOK:
+	case protocol.StatusNotFound:
+		return "", nil // pruned by retention: nothing to compare
+	default:
+		return "", fmt.Errorf("read v%d: status %s", expectedVersion, replaced.Response.Status)
 	}
 	return Compare(replaced.Response.Metadata, meta).Note(replaced.Response.Metadata["version"]), nil
 }

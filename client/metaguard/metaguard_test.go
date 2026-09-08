@@ -1,9 +1,13 @@
 package metaguard
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestCompareReportsDroppedTagsAndKeys(t *testing.T) {
@@ -61,5 +65,27 @@ func TestNoteWordsEachPartAlone(t *testing.T) {
 	}
 	if got := (Narrowing{Keys: []string{"type=Plan"}}).Note("2"); !strings.Contains(got, "dropped keys type=Plan carried by v2") {
 		t.Fatalf("keys-only note: %q", got)
+	}
+}
+
+func TestGateStatuses(t *testing.T) {
+	meta := map[string]string{"tags": "a"}
+	read := func(status string) func(context.Context) (fetch.Result, error) {
+		return func(context.Context) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{Status: status,
+				Metadata: map[string]string{"version": "3", "tags": "a,b"}}}, nil
+		}
+	}
+	if note, err := Gate(context.Background(), 3, meta, read(protocol.StatusOK)); err != nil || !strings.Contains(note, "dropped tags b carried by v3") {
+		t.Fatalf("ok read: note %q err %v", note, err)
+	}
+	if note, err := Gate(context.Background(), 3, meta, read(protocol.StatusNotFound)); err != nil || note != "" {
+		t.Fatalf("not-found read: note %q err %v", note, err)
+	}
+	if note, err := Gate(context.Background(), 3, meta, read(protocol.StatusUnauthorized)); err == nil || note != "" {
+		t.Fatalf("unauthorized read: note %q err %v", note, err)
+	}
+	if note, err := Gate(context.Background(), 0, meta, read(protocol.StatusOK)); err != nil || note != "" {
+		t.Fatalf("create: note %q err %v", note, err)
 	}
 }
