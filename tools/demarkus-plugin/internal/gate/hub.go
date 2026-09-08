@@ -150,7 +150,10 @@ func bulletOf(item *ast.ListItem, src []byte) bullet {
 		}
 		// The parser resolves reference links, so [text][label] and
 		// [text] with a definition are links; unresolved ones stay text.
-		_, b.opensLink = c.FirstChild().(*ast.Link)
+		switch c.FirstChild().(type) {
+		case *ast.Link, *ast.AutoLink:
+			b.opensLink = true
+		}
 		var r inlineReader
 		r.walk(c, src, 0, 0)
 		b.visible = strings.TrimSpace(r.visible.String())
@@ -201,10 +204,13 @@ func (r *inlineReader) walk(n ast.Node, src []byte, inLink, inCode int) {
 		case *ast.AutoLink:
 			r.visible.Write(v.URL(src))
 		case *ast.Emphasis:
-			if v.Level >= 2 && inLink == 0 {
+			// Bold counts only when it adds text outside links: a bold
+			// link label is a link, not a status marker.
+			before := r.outside.Len()
+			r.walk(v, src, inLink, inCode)
+			if v.Level >= 2 && r.outside.Len() > before {
 				r.bold = true
 			}
-			r.walk(v, src, inLink, inCode)
 		default:
 			r.walk(v, src, inLink, inCode)
 		}
