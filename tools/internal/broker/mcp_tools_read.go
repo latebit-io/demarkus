@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -256,7 +257,26 @@ func (g *mcpGateway) handleMarkLookup(_ context.Context, req mcp.CallToolRequest
 		return g.toolErrorFor("lookup", worldName, err), nil
 	}
 	render := mcpfmt.Lookup.Options(&req)
-	return mcp.NewToolResultText(mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)), nil
+	text := mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)
+	if budget := lookupexpand.Budget(&req); budget > 0 && result.Response.Status == protocol.StatusOK {
+		text += lookupexpand.Expand(result.Response.Body, query, budget, func(path string) (string, error) {
+			return g.bodyFor(worldName, path)
+		})
+	}
+	return mcp.NewToolResultText(text), nil
+}
+
+// bodyFor fetches one document for a lookup expansion; a non-ok status is
+// the error the expansion notes.
+func (g *mcpGateway) bodyFor(worldName, path string) (string, error) {
+	r, err := g.dispatcher.Fetch(worldName, path, "")
+	if err != nil {
+		return "", err
+	}
+	if r.Response.Status != protocol.StatusOK {
+		return "", errors.New(r.Response.Status)
+	}
+	return r.Response.Body, nil
 }
 
 // toolErrorFor renders a tool-error envelope from a dispatcher

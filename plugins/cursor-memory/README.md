@@ -9,7 +9,7 @@ Local, versioned project memory for [Cursor](https://cursor.com), via [demarkus]
 - **Publish tag-gate.** A tagless `mark_publish` is invisible to `mark_lookup` forever; the `beforeMCPExecution` hook makes that loud at write time (`warn` by default, `block` and `ask` available; Cursor supports `ask` natively).
 - **Destination gate.** When a repo is bound to a specific soul, a write aimed at a different soul is denied (default `block`).
 - **Promote and journal nudges.** An ADR publish reminds you to `/promote` once a knowledge system is joined; a conversation that edited files without writing to the soul gets one follow-up nudge at stop.
-- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `remember` skill. The MCP server's own prompts appear as `/demarkus-memory/orient`, `/demarkus-memory/recall`, and `/demarkus-memory/whats-new`.
+- **Slash commands.** `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-curate`, `/soul-refresh`, `/promote`, `/promote-scan`, plus the on-demand `remember` skill. The MCP server's own prompts appear as `/demarkus-memory/orient`, `/demarkus-memory/recall`, and `/demarkus-memory/whats-new`.
 
 ## Requirements
 

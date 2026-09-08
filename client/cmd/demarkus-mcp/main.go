@@ -24,6 +24,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/listwalk"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/merge"
@@ -320,7 +321,7 @@ func markFetchTool(host string) mcp.Tool {
 // outlineThreshold is the body size (bytes) above which mark_fetch returns
 // an outline instead of the full body, unless force=true or a #section is
 // requested.
-const outlineThreshold = 8 * 1024
+const outlineThreshold = mdoutline.OutlineThreshold
 
 func markListTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_list",
@@ -374,7 +375,7 @@ func markVersionsTool(host string) mcp.Tool {
 func markLookupTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_lookup",
 		mcp.WithDescription(
-			"Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet), no bodies. Then mark_explore or mark_fetch url#<anchor>. "+urlHint(host),
+			"Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends the matched sections' text within that token budget, so one call answers a task; else mark_fetch url#<anchor>. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -393,6 +394,7 @@ func markLookupTool(host string) mcp.Tool {
 		mcp.WithString("match",
 			mcp.Description("catalog (default) or body"),
 		),
+		lookupexpand.Option(),
 		mcpfmt.Lookup.Param(),
 	)
 }
@@ -720,7 +722,25 @@ func (h *handler) markLookup(_ context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError(fmt.Sprintf("lookup failed: %v", err)), nil
 	}
 	render := mcpfmt.Lookup.Options(&req)
-	return mcp.NewToolResultText(mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)), nil
+	text := mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)
+	if budget := lookupexpand.Budget(&req); budget > 0 && result.Response.Status == protocol.StatusOK {
+		token := h.resolveToken(host)
+		text += lookupexpand.Expand(result.Response.Body, query, budget, func(path string) (string, error) {
+			return fetchBody(h.client.Fetch(host, path, token))
+		})
+	}
+	return mcp.NewToolResultText(text), nil
+}
+
+// fetchBody adapts a fetch result to the expansion's body-or-error contract.
+func fetchBody(r fetch.Result, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	if r.Response.Status != protocol.StatusOK {
+		return "", errors.New(r.Response.Status)
+	}
+	return r.Response.Body, nil
 }
 
 func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

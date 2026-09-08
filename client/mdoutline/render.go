@@ -13,6 +13,10 @@ import (
 // their tool responses from these, so outline mode and the explore card
 // read identically regardless of transport.
 
+// OutlineThreshold is the body size (bytes) at or above which the MCP
+// surfaces answer a plain fetch with an outline.
+const OutlineThreshold = 8 * 1024
+
 // OutlineBody builds the outline-mode body for a large document: heading
 // tree with anchors and line counts, the opening paragraph, and the hint
 // telling the agent how to get more. docURL is the URL shape the consumer

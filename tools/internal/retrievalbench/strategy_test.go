@@ -155,14 +155,14 @@ func TestLookupFetch(t *testing.T) {
 
 func TestStrategyByNameRejectsBudgets(t *testing.T) {
 	for _, tt := range []struct{ limit, fetches int }{{0, 5}, {10, 0}, {-1, -1}} {
-		if _, err := StrategyByName("lookup-fetch", "/", tt.limit, tt.fetches); err == nil {
+		if _, err := StrategyByName("lookup-fetch", "/", tt.limit, tt.fetches, 1500); err == nil {
 			t.Fatalf("limit=%d fetches=%d accepted", tt.limit, tt.fetches)
 		}
 	}
-	if _, err := StrategyByName("lookup-fetch", "/", 10, 5); err != nil {
+	if _, err := StrategyByName("lookup-fetch", "/", 10, 5, 1500); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := StrategyByName("nope", "/", 10, 5); err == nil {
+	if _, err := StrategyByName("nope", "/", 10, 5, 1500); err == nil {
 		t.Fatal("unknown strategy accepted")
 	}
 }
@@ -262,11 +262,37 @@ func TestBodyFetch(t *testing.T) {
 }
 
 func TestStrategyByNameBodyFetch(t *testing.T) {
-	s, err := StrategyByName("body-fetch", "/x/", 5, 3)
+	s, err := StrategyByName("body-fetch", "/x/", 5, 3, 1500)
 	if err != nil || s.Name() != "body-fetch" {
 		t.Fatalf("StrategyByName body-fetch = %v, %v", s, err)
 	}
-	if _, err := StrategyByName("body-fetch", "/", 0, 3); err == nil {
+	if _, err := StrategyByName("body-fetch", "/", 0, 3, 1500); err == nil {
 		t.Fatal("zero lookup limit accepted")
+	}
+}
+
+func TestExpansionHolds(t *testing.T) {
+	q := &Question{ExpectedPath: "/a.md", ExpectedAnchor: "two"}
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"anchored block", "| /a.md#two | 0.9 | A | a | s |\n\n## /a.md#two\n\n## Two\n\ntext\n\nnote: expanded 1 of 1 rows within the budget\n", true},
+		{"other anchor", "\n## /a.md#three\n\n## Three\n\ntext\n\nnote: expanded 1 of 1 rows\n", false},
+		{"whole document holds the heading", "\n## /a.md\n\n# A\n\n## One\n\n## Two\n\ntext\n\nnote: expanded 1 of 1 rows\n", true},
+		{"outline block holds nothing", "\n## /a.md\n\n- A (#a, 9 lines)\n  - Two (#two, 3 lines)\n\nnote: expanded 1 of 1 rows\n", false},
+		{"other path", "\n## /b.md#two\n\n## Two\n\ntext\n\nnote: expanded 1 of 1 rows\n", false},
+		{"table only", "| /a.md#two | 0.9 | A | a | s |\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := expansionHolds(c.text, q); got != c.want {
+				t.Errorf("expansionHolds = %v, want %v", got, c.want)
+			}
+		})
+	}
+	if !expansionHolds("\n## /a.md#nine\n\ntext\n\nnote: x\n", &Question{ExpectedPath: "/a.md"}) {
+		t.Error("no expected anchor: any section of the path is evidence")
 	}
 }

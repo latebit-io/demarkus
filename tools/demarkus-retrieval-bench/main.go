@@ -23,9 +23,10 @@ func main() {
 	tokenFile := flag.String("token-file", "", "file holding the auth token; DEMARKUS_AUTH env is used when empty")
 	questions := flag.String("questions", "", "question fixture path; embedded soul set when empty")
 	scope := flag.String("scope", "", "lookup scope override, e.g. /demarkus/")
-	strategy := flag.String("strategy", "lookup-fetch", "retrieval strategy: lookup-fetch (catalog) or body-fetch (match body, fetch rows at their anchor)")
+	strategy := flag.String("strategy", "lookup-fetch", "retrieval strategy: lookup-fetch (catalog), body-fetch (match body, fetch rows at their anchor), or context (one budgeted body-match lookup)")
 	lookupLimit := flag.Int("limit", 10, "mark_lookup limit")
 	maxFetches := flag.Int("max-fetches", 5, "fetch budget per question")
+	budget := flag.Int("budget", 1500, "context strategy: approximate result tokens for the expanded sections")
 	timeout := flag.Duration("timeout", 60*time.Second, "per-question timeout covering session open and every tool call; 0 means unbounded")
 	jsonOut := flag.String("json", "", "write the JSON report here")
 	mdOut := flag.String("markdown", "", "write the markdown report here (also printed)")
@@ -48,7 +49,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	retrieval, err := retrievalbench.StrategyByName(*strategy, set.Scope, *lookupLimit, *maxFetches)
+	retrieval, err := retrievalbench.StrategyByName(*strategy, set.Scope, *lookupLimit, *maxFetches, *budget)
 	if err != nil {
 		fail(err)
 	}

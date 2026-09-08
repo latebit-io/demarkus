@@ -15,11 +15,11 @@ import (
 // Scope-appropriate style-rule references for styleDecision reasons.
 const (
 	styleRefKnowledge = "See mark://root/.well-known/demarkus/style.md."
-	styleRefMemory    = "Rules: metadata out of band, one # H1, unique headings, no em dashes."
+	styleRefMemory    = "Rules: metadata out of band, one # H1 with a summary under it, unique status-free headings, no em dashes, hubs are links plus one line each under 8 KB."
 )
 
-// styleDecision checks the mechanically verifiable style rules (no leading
-// frontmatter fence, an H1, no em dashes, unique headings since they are anchors).
+// styleDecision checks the mechanically verifiable style rules: frontmatter
+// fence, H1, em dashes, unique headings (anchors), and the hub rules in hub.go.
 // Publish only: appends are fragments. Default warn; guideRef names the rules.
 func styleDecision(pt config.ParsedTool, args map[string]any, guideRef string) (*Decision, error) {
 	if pt.Verb != "publish" {
@@ -58,6 +58,9 @@ func styleDecision(pt config.ParsedTool, args map[string]any, guideRef string) (
 		problems = append(problems, fmt.Sprintf(
 			"duplicate headings (%s); headings are #section anchors, and duplicates get -1 suffixes that shift when sections move, breaking inbound links; make each heading unique", strings.Join(dups, ", ")))
 	}
+
+	problems = append(problems, hubProblems(leaf, body)...)
+	problems = append(problems, shapeProblems(urlOf(args), body, headings)...)
 
 	if len(problems) == 0 {
 		return nil, nil

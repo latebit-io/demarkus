@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -134,7 +135,7 @@ func markVersionsTool() mcp.Tool {
 func markLookupTool() mcp.Tool {
 	return mcp.NewTool("mark_lookup",
 		mcp.WithDescription(
-			"Catalog lookup by subject in one world: matches tags and title; match=body also matches section text (rows add #anchor and a snippet; a world without it answers from the catalog and says so). Importance-ranked table, no bodies. System-wide: mark_lookup_all. "+mcpURLHint,
+			"Catalog lookup by subject in one world: matches tags and title; match=body also matches section text (rows add #anchor and a snippet; a world without it answers from the catalog and says so). Importance-ranked table; budget>0 appends the matched sections' text within that token budget. System-wide: mark_lookup_all. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -153,6 +154,7 @@ func markLookupTool() mcp.Tool {
 		mcp.WithString("match",
 			mcp.Description(matchParamDesc),
 		),
+		lookupexpand.Option(),
 		mcpfmt.Lookup.Param(),
 	)
 }
@@ -180,6 +182,7 @@ func markLookupAllTool() mcp.Tool {
 		mcp.WithString("match",
 			mcp.Description(matchParamDesc+"; worlds without body match are listed"),
 		),
+		lookupexpand.Option(),
 		mcpfmt.LookupAll.Param(),
 	)
 }

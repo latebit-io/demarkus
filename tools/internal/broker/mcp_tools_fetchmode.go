@@ -23,7 +23,7 @@ import (
 // outlineThreshold is the body size (bytes) above which mark_fetch
 // returns an outline instead of the full body, unless force=true or a
 // #section is requested. Matches client/cmd/demarkus-mcp.
-const outlineThreshold = 8 * 1024
+const outlineThreshold = mdoutline.OutlineThreshold
 
 // sessionSeen is the per-session fetch dedup state: MCP session ID →
 // (world+path → identity of the version whose full body that session
