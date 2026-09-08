@@ -20,10 +20,9 @@ type Input struct {
 	Prompt  string         `json:"prompt"`
 	Tool    string         `json:"tool"`
 	Input   map[string]any `json:"input"`
-	// session-end signals (computed by the adapter: Claude from the transcript,
-	// pi from in-session activity tracking).
-	ChangedFiles bool `json:"changedFiles"`
-	MemoryWrite  bool `json:"memoryWrite"`
+	// session-end signals: supplied by the adapter (pi, Cursor) or derived from
+	// TranscriptPath (Claude); the two sources are OR-merged.
+	Signals
 	// LegacyMemoryWrite is the pre-rename key older adapters still send.
 	LegacyMemoryWrite bool `json:"soulWrite"`
 	// Claude hook payload fields (used when Tool/Input are absent) so an adapter
@@ -33,6 +32,10 @@ type Input struct {
 	ToolInput map[string]any `json:"tool_input"`
 	// Cursor reports the MCP server apart from the tool name.
 	McpServerName string `json:"mcp_server_name"`
+	// Claude Stop payload, piped raw by the Stop adapter.
+	SessionID      string `json:"session_id"`
+	TranscriptPath string `json:"transcript_path"`
+	StopHookActive bool   `json:"stop_hook_active"`
 }
 
 // Output carries the nudge text, empty when nothing should be surfaced.
@@ -129,11 +132,23 @@ func promote(in *Input) (Output, error) {
 }
 
 func sessionEnd(in *Input) (Output, error) {
+	if in.StopHookActive {
+		return Output{}, nil // already blocked once this turn
+	}
 	present, err := config.LocalMemoryPresent()
-	if err != nil {
+	if err != nil || !present {
 		return Output{}, err
 	}
-	if present && in.ChangedFiles && !in.MemoryWrite {
+	if in.TranscriptPath != "" {
+		sig, err := ScanTranscript(in.TranscriptPath)
+		if err != nil {
+			return Output{}, err
+		}
+		in.ChangedFiles = in.ChangedFiles || sig.ChangedFiles
+		in.MemoryWrite = in.MemoryWrite || sig.MemoryWrite
+		in.PendingBackground = in.PendingBackground || sig.PendingBackground
+	}
+	if in.ChangedFiles && !in.MemoryWrite && !in.PendingBackground {
 		return Output{Nudge: journalNudge}, nil
 	}
 	return Output{}, nil
