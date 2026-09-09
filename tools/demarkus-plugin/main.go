@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/gate"
@@ -67,6 +69,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  version   Print version and exit\n")
 }
 
+var sentinelSafeRe = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+
 // cmdNudge reads a nudge request as JSON on stdin and emits the reminder in
 // the adapter's --format shape (json | claude | cursor). Empty nudge → no
 // output; fails silent.
@@ -106,6 +110,15 @@ func cmdNudge() {
 		in.MemoryWrite = *memoryWrite
 	}
 
+	// Claude's Stop fires at every turn end and the nudge blocks a turn, so it
+	// fires once per session: a sentinel keyed on session_id in the temp dir.
+	var sentinel string
+	if *format == "claude" && in.Event == "session-end" && in.SessionID != "" {
+		sentinel = filepath.Join(os.TempDir(), "demarkus-memory-nudge-"+sentinelSafeRe.ReplaceAllString(in.SessionID, "_"))
+		if _, err := os.Stat(sentinel); err == nil {
+			return
+		}
+	}
 	out, err := nudge.Evaluate(&in)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: evaluate: "+err.Error())
@@ -113,6 +126,19 @@ func cmdNudge() {
 	}
 	if out.Nudge == "" {
 		return // nothing to surface
+	}
+	if sentinel != "" {
+		// O_EXCL: concurrent Stops race to one nudge; a pre-existing path or
+		// symlink in the shared temp dir is refused, not truncated.
+		f, err := os.OpenFile(sentinel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			if os.IsExist(err) {
+				return
+			}
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: sentinel: "+err.Error())
+		} else if err := f.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: sentinel close: "+err.Error())
+		}
 	}
 	if *format == "cursor" {
 		switch in.Event {

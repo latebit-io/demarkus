@@ -86,20 +86,48 @@ func TestPromoteNoDestination(t *testing.T) {
 
 func TestSessionEnd(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
-	if eval(t, &Input{Event: "session-end", ChangedFiles: true, MemoryWrite: false}) == "" {
+	sig := func(changed, write, pending bool) *Input {
+		return &Input{Event: "session-end", Signals: Signals{ChangedFiles: changed, MemoryWrite: write, PendingBackground: pending}}
+	}
+	if eval(t, sig(true, false, false)) == "" {
 		t.Error("changed files + no memory write → journal nudge")
 	}
-	if eval(t, &Input{Event: "session-end", ChangedFiles: true, MemoryWrite: true}) != "" {
+	if eval(t, sig(true, true, false)) != "" {
 		t.Error("a memory write suppresses the nudge")
 	}
-	if eval(t, &Input{Event: "session-end", ChangedFiles: false, MemoryWrite: false}) != "" {
+	if eval(t, sig(false, false, false)) != "" {
 		t.Error("no file changes → no nudge")
+	}
+	if eval(t, sig(true, false, true)) != "" {
+		t.Error("a pending background agent means the session is paused, not over")
+	}
+	in := sig(true, false, false)
+	in.StopHookActive = true
+	if eval(t, in) != "" {
+		t.Error("stop_hook_active=true must not block again")
+	}
+}
+
+func TestSessionEndScansTranscript(t *testing.T) {
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(path, []byte(editLine+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if eval(t, &Input{Event: "session-end", TranscriptPath: path}) == "" {
+		t.Error("an Edit in the transcript should nudge")
+	}
+	if eval(t, &Input{Event: "session-end", TranscriptPath: path, Signals: Signals{MemoryWrite: true}}) != "" {
+		t.Error("adapter-supplied memoryWrite OR-merges with the scan")
+	}
+	if _, err := Evaluate(&Input{Event: "session-end", TranscriptPath: filepath.Join(t.TempDir(), "missing")}); err == nil {
+		t.Error("unreadable transcript must surface an error, not nudge silently")
 	}
 }
 
 func TestSessionEndAcceptsLegacySoulWriteKey(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=1\nMODE=default\n"})
-	if eval(t, &Input{Event: "session-end", ChangedFiles: true, LegacyMemoryWrite: true}) != "" {
+	if eval(t, &Input{Event: "session-end", Signals: Signals{ChangedFiles: true}, LegacyMemoryWrite: true}) != "" {
 		t.Error("legacy soulWrite=true must suppress the journal nudge like memoryWrite=true")
 	}
 }
