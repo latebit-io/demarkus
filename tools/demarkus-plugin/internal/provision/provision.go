@@ -389,7 +389,7 @@ const (
 // probeBounded runs a read-only discovery command under the probe budget, so a
 // stalled ps or pgrep cannot block session start or /soul-status. Empty on any
 // failure, matching its callers' best-effort contract; nil env inherits ours.
-func probeBounded(env []string, name string, args ...string) string {
+func probeBounded(env []string, name string, args ...string) (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout-probeKillGrace)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -399,9 +399,12 @@ func probeBounded(env []string, name string, args ...string) string {
 	cmd.WaitDelay = probeKillGrace
 	out, err := cmd.Output()
 	if err != nil {
-		return ""
+		// A clean non-zero exit is an answer (pgrep says "no match" that way);
+		// only a failure to run at all leaves us without one.
+		var exit *exec.ExitError
+		return "", errors.As(err, &exit) && ctx.Err() == nil
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), true
 }
 
 // binaryVersionAt runs --version on an executable path. Empty when the path is
@@ -919,16 +922,27 @@ func tokensFromArgv(argv []string) string {
 // pidOfServerAtRoot returns the PID of a demarkus-server whose -root flag (or
 // DEMARKUS_ROOT env) equals root (literal match), or 0 when none match.
 func pidOfServerAtRoot(root string) int {
-	for _, pid := range pgrepDemarkusServer() {
+	pid, _ := pidOfServerAtRootProbed(root)
+	return pid
+}
+
+// pidOfServerAtRootProbed adds whether process discovery ran at all, so callers
+// that would otherwise announce "no server" can say they could not look.
+func pidOfServerAtRootProbed(root string) (int, bool) {
+	pids, ran := pgrepDemarkusServer()
+	if !ran {
+		return 0, false
+	}
+	for _, pid := range pids {
 		args := psArgs(pid)
 		if argsRootMatches(args, root) {
-			return pid
+			return pid, true
 		}
 		if procEnv(pid, "DEMARKUS_ROOT") == root {
-			return pid
+			return pid, true
 		}
 	}
-	return 0
+	return 0, true
 }
 
 // pidIsServerAtRoot reports whether pid is a LIVE demarkus-server whose -root
@@ -967,9 +981,13 @@ func argsRootMatches(args, target string) bool {
 // findRunningDemarkus emits "PID PORT ROOT" per running demarkus-server, one per
 // line (empty when none). Args take precedence over env; falls back to
 // DEMARKUS_PORT/DEMARKUS_ROOT env, then the protocol default port / "(unknown)" root.
-func findRunningDemarkus() string {
+func findRunningDemarkus() (string, bool) {
+	pids, ran := pgrepDemarkusServer()
+	if !ran {
+		return "", false
+	}
 	var lines []string
-	for _, pid := range pgrepDemarkusServer() {
+	for _, pid := range pids {
 		args := psArgs(pid)
 		if args == "" {
 			continue
@@ -984,7 +1002,7 @@ func findRunningDemarkus() string {
 		}
 		lines = append(lines, fmt.Sprintf("%d %s %s", pid, port, root))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), true
 }
 
 // portOfServer returns the port the server listens on (-port flag in args,
@@ -1693,7 +1711,7 @@ func serverExecutable(pid int) string {
 // so the two cannot describe different processes. Empty unless the owner is us,
 // or where ps reports a bare name (Linux comm) rather than a path.
 func psOwnedExecutable(pid int) string {
-	line := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "uid=,comm=")
+	line, _ := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "uid=,comm=")
 	uidField, exe, found := strings.Cut(strings.TrimSpace(line), " ")
 	if !found {
 		return ""
@@ -1742,7 +1760,7 @@ var lstartLayouts = []string{"Mon _2 Jan 15:04:05 2006", "Mon Jan _2 15:04:05 20
 func processStart(pid int) (time.Time, bool) {
 	// /proc/<pid> ModTime is not a defined start time: it can reflect when the
 	// procfs entry was instantiated, which hides a replacement. ps lstart is.
-	out := probeBounded([]string{"LC_ALL=C"}, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=") // lstart is locale-formatted
+	out, _ := probeBounded([]string{"LC_ALL=C"}, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=") // lstart is locale-formatted
 	if out == "" {
 		return time.Time{}, false
 	}
@@ -1787,14 +1805,14 @@ func reuseDriftWarning(pid int) string {
 		return fmt.Sprintf("cannot version-check the reused demarkus server (pid %d): its binary %s %s, so this plugin will not run it. Drift goes unreported until that is fixed.", pid, exe, why)
 	}
 	got := binaryVersionAt(exe)
+	// Replacement first: got describes the binary on disk, so once it has been
+	// swapped the below-pin text would report a version nothing is serving.
+	if w := replacedBinaryWarning(pid, exe, got); w != "" {
+		return w
+	}
 	less, ordered := semverLess(got, serverVersion)
 	if ordered && less {
 		return fmt.Sprintf("the reused demarkus server (pid %d, %s) is version %s, below the %s this plugin expects; features the plugin assumes may be missing. Upgrade that server, or run /soul-init to let the plugin manage one.", pid, exe, got, serverVersion)
-	}
-	// The replacement check speaks first: it needs no parsed version, and names
-	// the more specific problem when both are true.
-	if w := replacedBinaryWarning(pid, exe, got); w != "" {
-		return w
 	}
 	if !ordered {
 		reported := "no version"
@@ -1845,7 +1863,10 @@ func HealthWarning() (string, error) {
 			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.MemoryDir), nil
 		}
 	case "reuse":
-		pid := pidOfServerAtRoot(cfg.MemoryDir)
+		pid, ran := pidOfServerAtRootProbed(cfg.MemoryDir)
+		if !ran {
+			return fmt.Sprintf("cannot tell whether the reused server rooted at %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir), nil
+		}
 		if pid == 0 {
 			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.MemoryDir), nil
 		}
@@ -1859,7 +1880,10 @@ func HealthWarning() (string, error) {
 // DetectServers reports running demarkus-server processes as "NO_SERVER" or
 // "SERVERS\n<PID PORT ROOT>..." lines, matching the old detect script.
 func DetectServers() (string, error) {
-	results := findRunningDemarkus()
+	results, ran := findRunningDemarkus()
+	if !ran {
+		return "", errors.New("could not list processes: the discovery probe did not run")
+	}
 	if results == "" {
 		return "NO_SERVER", nil
 	}
@@ -1922,10 +1946,13 @@ func tailFile(path string, n int) string {
 
 // pgrepDemarkusServer returns the PIDs of processes whose command line contains
 // "demarkus-server", sorted ascending (deterministic, matching pgrep order).
-func pgrepDemarkusServer() []int {
-	out := probeBounded(nil, "pgrep", "-f", "demarkus-server")
+func pgrepDemarkusServer() ([]int, bool) {
+	out, ran := probeBounded(nil, "pgrep", "-f", "demarkus-server")
+	if !ran {
+		return nil, false
+	}
 	if out == "" {
-		return nil
+		return nil, true
 	}
 	var pids []int
 	self := os.Getpid()
@@ -1941,14 +1968,14 @@ func pgrepDemarkusServer() []int {
 		pids = append(pids, pid)
 	}
 	sort.Ints(pids)
-	return pids
+	return pids, true
 }
 
 // psArgs returns the full command line (args) of pid, or "". The leading/trailing
 // space wrapping matches the bash " -root … " word-boundary matching done by
 // argsRootMatches (ps -o args= gives no leading space, so we add one).
 func psArgs(pid int) string {
-	args := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "args=")
+	args, _ := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "args=")
 	if args == "" {
 		return ""
 	}
@@ -1967,7 +1994,8 @@ func procEnv(pid int, name string) string {
 		}
 		return ""
 	}
-	for tok := range strings.FieldsSeq(probeBounded(nil, "ps", "eww", "-p", strconv.Itoa(pid))) {
+	env, _ := probeBounded(nil, "ps", "eww", "-p", strconv.Itoa(pid))
+	for tok := range strings.FieldsSeq(env) {
 		if v, ok := strings.CutPrefix(tok, name+"="); ok {
 			return v
 		}

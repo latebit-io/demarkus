@@ -1158,3 +1158,45 @@ func TestReuseDriftWarningRefusesUnsafeBinary(t *testing.T) {
 		t.Errorf("reuseDriftWarning = %q, want a refusal naming the permissions", w)
 	}
 }
+
+// TestProbeBounded separates the two failures a discovery command can have: a
+// clean non-zero exit is an answer, an unrunnable command is not.
+func TestProbeBounded(t *testing.T) {
+	if out, ran := probeBounded(nil, "sh", "-c", "echo hello"); out != "hello" || !ran {
+		t.Errorf("probeBounded(echo) = %q, %v; want %q, true", out, ran, "hello")
+	}
+	// pgrep reports "no match" as exit 1, which must not read as a failed probe.
+	if out, ran := probeBounded(nil, "sh", "-c", "exit 1"); out != "" || !ran {
+		t.Errorf("probeBounded(exit 1) = %q, %v; want empty, true", out, ran)
+	}
+	if _, ran := probeBounded(nil, "definitely-not-a-real-command-9f3c"); ran {
+		t.Error("probeBounded(missing command) reported the probe as having run")
+	}
+	if _, ran := probeBounded(nil, "sh", "-c", "sleep 60"); ran {
+		t.Error("probeBounded(hanging command) reported the probe as having run")
+	}
+}
+
+// TestReuseDriftWarningReplacedBelowPin covers the ordering: when the binary was
+// swapped and the replacement is itself below the pin, the replacement is the
+// true statement, since the below-pin text names a version nothing is serving.
+func TestReuseDriftWarningReplacedBelowPin(t *testing.T) {
+	t.Setenv("STUB_VERSION", "0.1.0")
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	old := binaryReplaceSkew
+	binaryReplaceSkew = 0
+	t.Cleanup(func() { binaryReplaceSkew = old })
+
+	time.Sleep(1100 * time.Millisecond) // ps lstart is second-granular
+	now := time.Now()
+	if err := os.Chtimes(exe, now, now); err != nil {
+		t.Fatalf("touch stub: %v", err)
+	}
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "replaced") {
+		t.Errorf("reuseDriftWarning = %q, want the replacement reported, not the on-disk version", w)
+	}
+}
