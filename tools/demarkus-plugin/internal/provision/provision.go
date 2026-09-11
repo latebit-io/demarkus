@@ -386,13 +386,13 @@ const (
 	probeKillGrace      = 500 * time.Millisecond
 )
 
-// psBounded runs ps under the probe budget so an unresponsive ps cannot stall
-// session start. Empty on any failure, matching its callers' best-effort
-// contract. env is appended to the environment; nil inherits it unchanged.
-func psBounded(env []string, args ...string) string {
+// probeBounded runs a read-only discovery command under the probe budget, so a
+// stalled ps or pgrep cannot block session start or /soul-status. Empty on any
+// failure, matching its callers' best-effort contract; nil env inherits ours.
+func probeBounded(env []string, name string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout-probeKillGrace)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ps", args...)
+	cmd := exec.CommandContext(ctx, name, args...)
 	if env != nil {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -1693,7 +1693,7 @@ func serverExecutable(pid int) string {
 // so the two cannot describe different processes. Empty unless the owner is us,
 // or where ps reports a bare name (Linux comm) rather than a path.
 func psOwnedExecutable(pid int) string {
-	line := psBounded(nil, "-p", strconv.Itoa(pid), "-o", "uid=,comm=")
+	line := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "uid=,comm=")
 	uidField, exe, found := strings.Cut(strings.TrimSpace(line), " ")
 	if !found {
 		return ""
@@ -1742,7 +1742,7 @@ var lstartLayouts = []string{"Mon _2 Jan 15:04:05 2006", "Mon Jan _2 15:04:05 20
 func processStart(pid int) (time.Time, bool) {
 	// /proc/<pid> ModTime is not a defined start time: it can reflect when the
 	// procfs entry was instantiated, which hides a replacement. ps lstart is.
-	out := psBounded([]string{"LC_ALL=C"}, "-p", strconv.Itoa(pid), "-o", "lstart=") // lstart is locale-formatted
+	out := probeBounded([]string{"LC_ALL=C"}, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=") // lstart is locale-formatted
 	if out == "" {
 		return time.Time{}, false
 	}
@@ -1787,9 +1787,28 @@ func reuseDriftWarning(pid int) string {
 		return fmt.Sprintf("cannot version-check the reused demarkus server (pid %d): its binary %s %s, so this plugin will not run it. Drift goes unreported until that is fixed.", pid, exe, why)
 	}
 	got := binaryVersionAt(exe)
-	if less, ok := semverLess(got, serverVersion); ok && less {
+	less, ordered := semverLess(got, serverVersion)
+	if ordered && less {
 		return fmt.Sprintf("the reused demarkus server (pid %d, %s) is version %s, below the %s this plugin expects; features the plugin assumes may be missing. Upgrade that server, or run /soul-init to let the plugin manage one.", pid, exe, got, serverVersion)
 	}
+	// The replacement check speaks first: it needs no parsed version, and names
+	// the more specific problem when both are true.
+	if w := replacedBinaryWarning(pid, exe, got); w != "" {
+		return w
+	}
+	if !ordered {
+		reported := "no version"
+		if got != "" {
+			reported = strconv.Quote(got)
+		}
+		return fmt.Sprintf("cannot version-check the reused demarkus server (pid %d): its binary %s reports %s rather than a release, so drift against %s goes unreported.", pid, exe, reported, serverVersion)
+	}
+	return ""
+}
+
+// replacedBinaryWarning reports a process still serving code from memory after
+// its binary was rewritten. Empty when current or undeterminable.
+func replacedBinaryWarning(pid int, exe, got string) string {
 	info, err := os.Stat(exe)
 	if err != nil {
 		return ""
@@ -1904,13 +1923,13 @@ func tailFile(path string, n int) string {
 // pgrepDemarkusServer returns the PIDs of processes whose command line contains
 // "demarkus-server", sorted ascending (deterministic, matching pgrep order).
 func pgrepDemarkusServer() []int {
-	out, err := exec.Command("pgrep", "-f", "demarkus-server").Output()
-	if err != nil {
+	out := probeBounded(nil, "pgrep", "-f", "demarkus-server")
+	if out == "" {
 		return nil
 	}
 	var pids []int
 	self := os.Getpid()
-	for ln := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+	for ln := range strings.SplitSeq(out, "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
 			continue
@@ -1929,11 +1948,7 @@ func pgrepDemarkusServer() []int {
 // space wrapping matches the bash " -root … " word-boundary matching done by
 // argsRootMatches (ps -o args= gives no leading space, so we add one).
 func psArgs(pid int) string {
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
-	if err != nil {
-		return ""
-	}
-	args := strings.TrimSpace(string(out))
+	args := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "args=")
 	if args == "" {
 		return ""
 	}
@@ -1952,11 +1967,7 @@ func procEnv(pid int, name string) string {
 		}
 		return ""
 	}
-	out, err := exec.Command("ps", "eww", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return ""
-	}
-	for tok := range strings.FieldsSeq(string(out)) {
+	for tok := range strings.FieldsSeq(probeBounded(nil, "ps", "eww", "-p", strconv.Itoa(pid))) {
 		if v, ok := strings.CutPrefix(tok, name+"="); ok {
 			return v
 		}

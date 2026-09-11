@@ -968,11 +968,26 @@ func TestServerExecutable(t *testing.T) {
 }
 
 // TestReuseDriftWarningQuietOnHealthy guards the false-positive direction: a
-// live process whose binary predates it must produce no warning, or every
-// session start would nag. The test binary itself is exactly that shape.
+// server at the pin whose binary predates it must say nothing, or every session
+// start would nag.
 func TestReuseDriftWarningQuietOnHealthy(t *testing.T) {
-	if w := reuseDriftWarning(os.Getpid()); w != "" {
-		t.Errorf("reuseDriftWarning(self) = %q, want empty", w)
+	t.Setenv("STUB_VERSION", serverVersion)
+	pid := startStub(t, buildVersionStub(t))
+	if w := reuseDriftWarning(pid); w != "" {
+		t.Errorf("reuseDriftWarning(current server) = %q, want empty", w)
+	}
+}
+
+// TestReuseDriftWarningUnreadableVersion covers the gap that let an unprobeable
+// server read as healthy: no usable version is a lost check, not a clean one.
+func TestReuseDriftWarningUnreadableVersion(t *testing.T) {
+	t.Setenv("STUB_VERSION", "dev")
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "cannot version-check") || !strings.Contains(w, "dev") {
+		t.Errorf("reuseDriftWarning = %q, want a refusal naming the reported build", w)
 	}
 }
 
