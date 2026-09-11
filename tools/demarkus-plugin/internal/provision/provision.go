@@ -375,11 +375,54 @@ func binaryVersion(name string) string {
 	if err != nil {
 		return ""
 	}
+	return binaryVersionAt(p)
+}
+
+// versionProbeTimeout is the whole budget for one probe: the drift check runs it
+// on an adopted binary this plugin did not install, and a hung one would stall
+// session start. probeKillGrace is the slice of it reserved for pipe cleanup.
+const (
+	versionProbeTimeout = 2 * time.Second
+	probeKillGrace      = 500 * time.Millisecond
+)
+
+// probeBounded runs a read-only discovery command under the probe budget, so a
+// stalled ps or pgrep cannot block session start or /soul-status. Empty on any
+// failure, matching its callers' best-effort contract; nil env inherits ours.
+func probeBounded(env []string, name string, args ...string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout-probeKillGrace)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	cmd.WaitDelay = probeKillGrace
+	out, err := cmd.Output()
+	if err != nil {
+		// A clean non-zero exit is an answer (pgrep says "no match" that way);
+		// only a failure to run at all leaves us without one.
+		var exit *exec.ExitError
+		return "", errors.As(err, &exit) && ctx.Err() == nil
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
+// binaryVersionAt runs --version on an executable path. Empty when the path is
+// missing, not executable, or the binary is too old or too slow to answer.
+func binaryVersionAt(p string) string {
 	info, err := os.Stat(p)
 	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
 		return ""
 	}
-	cmd := exec.Command(p, "--version")
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout-probeKillGrace)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, p, "--version")
+	// Own group, killed whole: a --version that forks leaves the grandchild
+	// holding the stdout pipe, and a kill aimed only at the direct child never
+	// unblocks Output() (measured: the probe hangs indefinitely).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = probeKillGrace
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
@@ -839,15 +882,15 @@ func flagValue(args string, re *regexp.Regexp) string {
 	return ""
 }
 
-// tokensPathOfServer returns the tokens.toml the server actually reads
-// (-tokens flag, else DEMARKUS_TOKENS env), or "" when undiscoverable. Exact
-// /proc argv wins over the flattened ps string, which truncates on whitespace.
-func tokensPathOfServer(args string, pid int) string {
+// tokensPathOfServer returns the tokens.toml the server actually reads (-tokens
+// flag, else DEMARKUS_TOKENS env). ok is false when the env probe could not run,
+// where "" means unknown, not none, and no conventional fallback is safe.
+func tokensPathOfServer(args string, pid int) (string, bool) {
 	if p := tokensFromArgv(procArgv(pid)); p != "" {
-		return p
+		return p, true
 	}
 	if p := flagValue(args, tokensFlagRe); p != "" {
-		return p
+		return p, true
 	}
 	return procEnv(pid, "DEMARKUS_TOKENS")
 }
@@ -882,16 +925,34 @@ func tokensFromArgv(argv []string) string {
 // pidOfServerAtRoot returns the PID of a demarkus-server whose -root flag (or
 // DEMARKUS_ROOT env) equals root (literal match), or 0 when none match.
 func pidOfServerAtRoot(root string) int {
-	for _, pid := range pgrepDemarkusServer() {
-		args := psArgs(pid)
-		if argsRootMatches(args, root) {
-			return pid
+	pid, _ := pidOfServerAtRootProbed(root)
+	return pid
+}
+
+// pidOfServerAtRootProbed adds whether process discovery ran at all, so callers
+// that would otherwise announce "no server" can say they could not look.
+func pidOfServerAtRootProbed(root string) (int, bool) {
+	pids, ran := pgrepDemarkusServer()
+	if !ran {
+		return 0, false
+	}
+	for _, pid := range pids {
+		args, ran := psArgs(pid)
+		if !ran {
+			return 0, false // a skipped candidate could be the server we want
 		}
-		if procEnv(pid, "DEMARKUS_ROOT") == root {
-			return pid
+		if argsRootMatches(args, root) {
+			return pid, true
+		}
+		env, ran := procEnv(pid, "DEMARKUS_ROOT")
+		if !ran {
+			return 0, false
+		}
+		if env == root {
+			return pid, true
 		}
 	}
-	return 0
+	return 0, true
 }
 
 // pidIsServerAtRoot reports whether pid is a LIVE demarkus-server whose -root
@@ -905,14 +966,15 @@ func pidIsServerAtRoot(pid int, root string) bool {
 	if !lockdir.PidAlive(pid) {
 		return false
 	}
-	args := psArgs(pid)
+	args, _ := psArgs(pid)
 	if !strings.Contains(args, "demarkus-server") {
 		return false
 	}
 	if argsRootMatches(args, root) {
 		return true
 	}
-	return procEnv(pid, "DEMARKUS_ROOT") == root
+	env, _ := procEnv(pid, "DEMARKUS_ROOT")
+	return env == root
 }
 
 // argsRootMatches mirrors the bash literal substring match for "-root TARGET" /
@@ -930,24 +992,31 @@ func argsRootMatches(args, target string) bool {
 // findRunningDemarkus emits "PID PORT ROOT" per running demarkus-server, one per
 // line (empty when none). Args take precedence over env; falls back to
 // DEMARKUS_PORT/DEMARKUS_ROOT env, then the protocol default port / "(unknown)" root.
-func findRunningDemarkus() string {
+func findRunningDemarkus() (string, bool) {
+	pids, ran := pgrepDemarkusServer()
+	if !ran {
+		return "", false
+	}
 	var lines []string
-	for _, pid := range pgrepDemarkusServer() {
-		args := psArgs(pid)
+	for _, pid := range pids {
+		args, ran := psArgs(pid)
+		if !ran {
+			return "", false // an unlistable process is not an absent one
+		}
 		if args == "" {
 			continue
 		}
 		port := portOfServer(args, pid)
 		root := flagValue(args, rootFlagRe)
 		if root == "" {
-			root = procEnv(pid, "DEMARKUS_ROOT")
+			root, _ = procEnv(pid, "DEMARKUS_ROOT")
 		}
 		if root == "" {
 			root = "(unknown)"
 		}
 		lines = append(lines, fmt.Sprintf("%d %s %s", pid, port, root))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), true
 }
 
 // portOfServer returns the port the server listens on (-port flag in args,
@@ -956,7 +1025,7 @@ func portOfServer(args string, pid int) string {
 	if p := flagValue(args, portFlagRe); p != "" {
 		return p
 	}
-	if p := procEnv(pid, "DEMARKUS_PORT"); p != "" {
+	if p, _ := procEnv(pid, "DEMARKUS_PORT"); p != "" {
 		return p
 	}
 	return strconv.Itoa(demarkusProtocolPort)
@@ -1461,9 +1530,15 @@ func doReuse(port int, root string) error {
 		// is down rather than falling back to the convention.
 		tokensTOML = prior.TokensTOML
 	}
-	targetPID := pidOfServerAtRoot(root)
+	targetPID, ran := pidOfServerAtRootProbed(root)
+	if !ran {
+		return fmt.Errorf("cannot tell whether a demarkus-server is running at root %s: process discovery did not complete; re-run /soul-init", root)
+	}
 	if targetPID > 0 {
-		targetArgs := psArgs(targetPID)
+		targetArgs, argsRan := psArgs(targetPID)
+		if !argsRan {
+			return fmt.Errorf("cannot inspect the demarkus-server at root %s (pid %d): process discovery did not complete; re-run /soul-init", root, targetPID)
+		}
 		if targetArgs != "" {
 			// Compare parsed values, not text: "06309" and "6309" are the same port.
 			raw := portOfServer(targetArgs, targetPID)
@@ -1471,7 +1546,13 @@ func doReuse(port int, root string) error {
 				return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, raw, port, raw)
 			}
 		}
-		if discovered := tokensPathOfServer(targetArgs, targetPID); discovered != "" && discovered != tokensTOML {
+		// An unidentified registry must stop here: ensureTokenEntry would
+		// otherwise write the conventional file the server never reads.
+		discovered, known := tokensPathOfServer(targetArgs, targetPID)
+		if !known {
+			return fmt.Errorf("cannot tell which token registry the demarkus-server at root %s (pid %d) reads: environment discovery did not complete; re-run /soul-init", root, targetPID)
+		}
+		if discovered != "" && discovered != tokensTOML {
 			// An explicit path that does not resolve is a hard stop: writing the
 			// conventional file instead would mutate a registry the server never
 			// reads (a flattened ps string can truncate paths with whitespace).
@@ -1572,11 +1653,23 @@ func VerifyAuth() (string, error) {
 	// Name the registry for the report: the running server's own -tokens or
 	// DEMARKUS_TOKENS wins; otherwise the path provisioning would use.
 	tokensTOML := ""
-	pid := pidOfServerAtRoot(cfg.MemoryDir)
+	pid, ran := pidOfServerAtRootProbed(cfg.MemoryDir)
+	if !ran {
+		return fmt.Sprintf("cannot verify: process discovery did not complete for %s; re-run /soul-status", cfg.MemoryDir), nil
+	}
 	serverPort := ""
 	if pid > 0 {
-		args := psArgs(pid)
-		tokensTOML = tokensPathOfServer(args, pid)
+		args, argsRan := psArgs(pid)
+		if !argsRan {
+			return fmt.Sprintf("cannot verify: cannot inspect server pid %d; process discovery did not complete", pid), nil
+		}
+		// Falling through to cfg.TokensTOML or the default would name a registry
+		// we could not read; say so instead.
+		discovered, known := tokensPathOfServer(args, pid)
+		if !known {
+			return fmt.Sprintf("cannot verify: cannot tell which token registry server pid %d reads; environment discovery did not complete", pid), nil
+		}
+		tokensTOML = discovered
 		serverPort = portOfServer(args, pid)
 	}
 	if tokensTOML == "" {
@@ -1634,10 +1727,202 @@ func Status() (string, error) {
 	return fmt.Sprintf("mode=%s memory=%s port=%s: %s\ndesired=%s", cfg.Mode, cfg.MemoryDir, cfg.Port, verdict, desiredVersions()), nil
 }
 
-// HealthWarning echoes a one-line human warning when the configured memory server
-// does not appear to be up, empty when it looks healthy. Best-effort, probe-only
-// (no QUIC round-trip): for managed modes it trusts the .pid liveness;
-// for reuse it scans for the adopted process. (lib.sh server_health_warning.)
+// serverExecutable resolves pid's executable, refusing anything this plugin must
+// not run: another user's process, or a file someone else can rewrite. Owner and
+// path come from one observation, so a recycled PID cannot split the two.
+func serverExecutable(pid int) string {
+	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err == nil {
+		// Readlink fails on a foreign process only while unprivileged, so as
+		// root it proves nothing: check the process owner explicitly.
+		if !procIsOurs(pid) {
+			return ""
+		}
+		exe = strings.TrimSuffix(exe, " (deleted)")
+	} else {
+		exe = psOwnedExecutable(pid)
+	}
+	if !filepath.IsAbs(exe) {
+		return ""
+	}
+	return exe
+}
+
+// procIsOurs reports whether /proc/<pid> is owned by this user. False where
+// procfs is absent, leaving the ps path to establish ownership instead.
+func procIsOurs(pid int) bool {
+	var st syscall.Stat_t
+	if err := syscall.Stat(fmt.Sprintf("/proc/%d", pid), &st); err != nil {
+		return false
+	}
+	return int(st.Uid) == os.Getuid()
+}
+
+// psOwnedExecutable reads pid's owner and executable in a single ps observation
+// so the two cannot describe different processes. Empty unless the owner is us,
+// or where ps reports a bare name (Linux comm) rather than a path.
+func psOwnedExecutable(pid int) string {
+	line, _ := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "uid=,comm=")
+	uidField, exe, found := strings.Cut(strings.TrimSpace(line), " ")
+	if !found {
+		return ""
+	}
+	uid, err := strconv.Atoi(uidField)
+	if err != nil || uid != os.Getuid() {
+		return ""
+	}
+	return strings.TrimSpace(exe)
+}
+
+// execRefusal explains why the probe must not run p, empty when it is safe: a
+// regular executable owned by us or root that other users cannot rewrite.
+func execRefusal(p string) string {
+	info, err := os.Stat(p)
+	if err != nil {
+		return "cannot be read"
+	}
+	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return "is not a regular executable"
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return "is writable by other users"
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "has unreadable ownership"
+	}
+	if int(st.Uid) != os.Getuid() && st.Uid != 0 {
+		return "is owned by another user"
+	}
+	return ""
+}
+
+// binaryReplaceSkew covers the one-second truncation of ps lstart on the only
+// platform still reduced to comparing mtimes: macOS, whose ps reads an exact
+// start time that only the display rounds down. Linux ps is not this accurate.
+const binaryReplaceSkew = time.Second
+
+// lstartLayouts covers both C-locale ps orderings: BSD/macOS puts the day of the
+// month before the month name, GNU after it.
+var lstartLayouts = []string{"Mon _2 Jan 15:04:05 2006", "Mon Jan _2 15:04:05 2006"}
+
+// processStart reports when pid started. ok is false whenever that cannot be
+// established, which every caller treats as "stay silent".
+func processStart(pid int) (time.Time, bool) {
+	// /proc/<pid> ModTime is not a defined start time: it can reflect when the
+	// procfs entry was instantiated, which hides a replacement. ps lstart is.
+	out, _ := probeBounded([]string{"LC_ALL=C"}, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=") // lstart is locale-formatted
+	if out == "" {
+		return time.Time{}, false
+	}
+	s := strings.Join(strings.Fields(out), " ")
+	for _, layout := range lstartLayouts {
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// semverLess orders two x.y.z strings. ok is false when either side is not a
+// plain release version, where no ordering is meaningful.
+func semverLess(a, b string) (less, ok bool) {
+	if !semverRe.MatchString(a) || !semverRe.MatchString(b) {
+		return false, false
+	}
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := range 3 {
+		ai, aerr := strconv.Atoi(as[i])
+		bi, berr := strconv.Atoi(bs[i])
+		if aerr != nil || berr != nil {
+			return false, false // a component beyond int range has no usable order
+		}
+		if ai != bi {
+			return ai < bi, true
+		}
+	}
+	return false, true
+}
+
+// reuseDriftWarning reports an adopted server whose code is behind: a binary
+// below the pinned floor, or a process predating the binary it was started from.
+// Empty when current or undeterminable; never restarts a server it does not own.
+func reuseDriftWarning(pid int) string {
+	exe := serverExecutable(pid)
+	if exe == "" {
+		return ""
+	}
+	if why := execRefusal(exe); why != "" {
+		return fmt.Sprintf("cannot version-check the reused demarkus server (pid %d): its binary %s %s, so this plugin will not run it. Drift goes unreported until that is fixed.", pid, exe, why)
+	}
+	got := binaryVersionAt(exe)
+	// Replacement first: got describes the binary on disk, so once it has been
+	// swapped the below-pin text would report a version nothing is serving.
+	if w := replacedBinaryWarning(pid, exe, got); w != "" {
+		return w
+	}
+	less, ordered := semverLess(got, serverVersion)
+	if ordered && less {
+		return fmt.Sprintf("the reused demarkus server (pid %d, %s) is version %s, below the %s this plugin expects; features the plugin assumes may be missing. Upgrade that server, or run /soul-init to let the plugin manage one.", pid, exe, got, serverVersion)
+	}
+	if !ordered {
+		reported := "no version"
+		if got != "" {
+			reported = strconv.Quote(got)
+		}
+		return fmt.Sprintf("cannot version-check the reused demarkus server (pid %d): its binary %s reports %s rather than a release, so drift against %s goes unreported.", pid, exe, reported, serverVersion)
+	}
+	return ""
+}
+
+// exeReplaced compares pid's running image against the file at exe. Linux
+// refuses to rewrite a running executable (ETXTBSY), so every real replacement
+// swaps the inode and procfs still names the original: exact, with no window.
+func exeReplaced(pid int, exe string) (replaced, ok bool) {
+	if _, err := os.Stat("/proc/self"); err != nil {
+		return false, false // no procfs: mtime is the only signal left
+	}
+	var running, onDisk syscall.Stat_t
+	if err := syscall.Stat(fmt.Sprintf("/proc/%d/exe", pid), &running); err != nil {
+		return false, true // procfs is here but will not answer; claim nothing
+	}
+	if err := syscall.Stat(exe, &onDisk); err != nil {
+		return false, true
+	}
+	return running.Dev != onDisk.Dev || running.Ino != onDisk.Ino, true
+}
+
+// binaryReplaced reports whether pid runs code the file at exe no longer holds.
+// The mtime comparison is the fallback, not a supplement: Linux ps derives
+// lstart from a whole-second boot time and can place a start after the build.
+func binaryReplaced(pid int, exe string) bool {
+	if replaced, ok := exeReplaced(pid, exe); ok {
+		return replaced
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return false
+	}
+	started, ok := processStart(pid)
+	return ok && info.ModTime().After(started.Add(binaryReplaceSkew))
+}
+
+// replacedBinaryWarning reports a process still serving code from memory after
+// its binary was rewritten. Empty when current or undeterminable.
+func replacedBinaryWarning(pid int, exe, got string) string {
+	if !binaryReplaced(pid, exe) {
+		return ""
+	}
+	installed := "the installed build"
+	if got != "" {
+		installed = got
+	}
+	return fmt.Sprintf("the reused demarkus server (pid %d) started before its binary %s was replaced, so it is still serving the old code rather than %s. Restart that server to pick it up.", pid, exe, installed)
+}
+
+// HealthWarning echoes a one-line warning when the configured memory server is
+// down or behind, empty when healthy. Probe-only (no QUIC round-trip): managed
+// modes trust .pid liveness, reuse also drift-checks the adopted process.
 func HealthWarning() (string, error) {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -1656,8 +1941,15 @@ func HealthWarning() (string, error) {
 			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.MemoryDir), nil
 		}
 	case "reuse":
-		if pidOfServerAtRoot(cfg.MemoryDir) == 0 {
+		pid, ran := pidOfServerAtRootProbed(cfg.MemoryDir)
+		if !ran {
+			return fmt.Sprintf("cannot tell whether the reused server rooted at %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir), nil
+		}
+		if pid == 0 {
 			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.MemoryDir), nil
+		}
+		if w := reuseDriftWarning(pid); w != "" {
+			return w, nil
 		}
 	}
 	return "", nil
@@ -1666,7 +1958,10 @@ func HealthWarning() (string, error) {
 // DetectServers reports running demarkus-server processes as "NO_SERVER" or
 // "SERVERS\n<PID PORT ROOT>..." lines, matching the old detect script.
 func DetectServers() (string, error) {
-	results := findRunningDemarkus()
+	results, ran := findRunningDemarkus()
+	if !ran {
+		return "", errors.New("could not list processes: the discovery probe did not run")
+	}
 	if results == "" {
 		return "NO_SERVER", nil
 	}
@@ -1729,14 +2024,17 @@ func tailFile(path string, n int) string {
 
 // pgrepDemarkusServer returns the PIDs of processes whose command line contains
 // "demarkus-server", sorted ascending (deterministic, matching pgrep order).
-func pgrepDemarkusServer() []int {
-	out, err := exec.Command("pgrep", "-f", "demarkus-server").Output()
-	if err != nil {
-		return nil
+func pgrepDemarkusServer() ([]int, bool) {
+	out, ran := probeBounded(nil, "pgrep", "-f", "demarkus-server")
+	if !ran {
+		return nil, false
+	}
+	if out == "" {
+		return nil, true
 	}
 	var pids []int
 	self := os.Getpid()
-	for ln := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+	for ln := range strings.SplitSeq(out, "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
 			continue
@@ -1748,44 +2046,43 @@ func pgrepDemarkusServer() []int {
 		pids = append(pids, pid)
 	}
 	sort.Ints(pids)
-	return pids
+	return pids, true
 }
 
 // psArgs returns the full command line (args) of pid, or "". The leading/trailing
 // space wrapping matches the bash " -root … " word-boundary matching done by
 // argsRootMatches (ps -o args= gives no leading space, so we add one).
-func psArgs(pid int) string {
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
-	if err != nil {
-		return ""
+func psArgs(pid int) (string, bool) {
+	args, ran := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "args=")
+	if !ran {
+		return "", false
 	}
-	args := strings.TrimSpace(string(out))
 	if args == "" {
-		return ""
+		return "", true
 	}
-	return " " + args
+	return " " + args, true
 }
 
 // procEnv returns the value of env var name for pid, or "". Portable across
 // Linux (/proc/<pid>/environ) and macOS (ps eww).
-func procEnv(pid int, name string) string {
+func procEnv(pid int, name string) (string, bool) {
 	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid)); err == nil {
 		for kv := range bytes.SplitSeq(b, []byte{0}) {
 			s := string(kv)
 			if v, ok := strings.CutPrefix(s, name+"="); ok {
-				return v
+				return v, true
 			}
 		}
-		return ""
+		return "", true
 	}
-	out, err := exec.Command("ps", "eww", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return ""
+	env, ran := probeBounded(nil, "ps", "eww", "-p", strconv.Itoa(pid))
+	if !ran {
+		return "", false
 	}
-	for tok := range strings.FieldsSeq(string(out)) {
+	for tok := range strings.FieldsSeq(env) {
 		if v, ok := strings.CutPrefix(tok, name+"="); ok {
-			return v
+			return v, true
 		}
 	}
-	return ""
+	return "", true
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
@@ -842,5 +843,456 @@ func TestTokensFromArgv(t *testing.T) {
 		if got := tokensFromArgv(c.argv); got != c.want {
 			t.Errorf("%s: tokensFromArgv(%v) = %q, want %q", c.name, c.argv, got, c.want)
 		}
+	}
+}
+
+// TestSemverLess covers the ordering and the not-a-release cases where no
+// ordering exists, which the drift probe must treat as "say nothing".
+func TestSemverLess(t *testing.T) {
+	tests := []struct {
+		name     string
+		a, b     string
+		wantLess bool
+		wantOK   bool
+	}{
+		{name: "patch behind", a: "0.35.0", b: "0.35.1", wantLess: true, wantOK: true},
+		{name: "minor behind", a: "0.17.19", b: "0.35.0", wantLess: true, wantOK: true},
+		{name: "major behind", a: "0.99.99", b: "1.0.0", wantLess: true, wantOK: true},
+		{name: "equal", a: "0.35.0", b: "0.35.0", wantOK: true},
+		{name: "ahead", a: "0.36.0", b: "0.35.0", wantOK: true},
+		{name: "numeric not lexical", a: "0.9.0", b: "0.10.0", wantLess: true, wantOK: true},
+		{name: "dev build", a: "dev", b: "0.35.0"},
+		{name: "tagged build", a: "0.35.0-rc1", b: "0.35.0"},
+		{name: "empty probe", a: "", b: "0.35.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			less, ok := semverLess(tt.a, tt.b)
+			if ok != tt.wantOK {
+				t.Fatalf("semverLess(%q, %q) ok = %v, want %v", tt.a, tt.b, ok, tt.wantOK)
+			}
+			if less != tt.wantLess {
+				t.Errorf("semverLess(%q, %q) less = %v, want %v", tt.a, tt.b, less, tt.wantLess)
+			}
+		})
+	}
+}
+
+// TestBinaryVersionAt checks the path-taking split reports a version, and stays
+// empty for the inputs the drift probe must not read a verdict into.
+func TestBinaryVersionAt(t *testing.T) {
+	dir := t.TempDir()
+
+	good := filepath.Join(dir, "answers")
+	if err := os.WriteFile(good, []byte("#!/bin/sh\necho 0.35.0\n"), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	if got := binaryVersionAt(good); got != "0.35.0" {
+		t.Errorf("binaryVersionAt(executable) = %q, want %q", got, "0.35.0")
+	}
+
+	notExec := filepath.Join(dir, "not-exec")
+	if err := os.WriteFile(notExec, []byte("#!/bin/sh\necho 0.35.0\n"), 0o644); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	if got := binaryVersionAt(notExec); got != "" {
+		t.Errorf("binaryVersionAt(non-executable) = %q, want empty", got)
+	}
+	if got := binaryVersionAt(dir); got != "" {
+		t.Errorf("binaryVersionAt(directory) = %q, want empty", got)
+	}
+	if got := binaryVersionAt(filepath.Join(dir, "absent")); got != "" {
+		t.Errorf("binaryVersionAt(missing) = %q, want empty", got)
+	}
+}
+
+// TestProcessStart pins the contract the drift probe relies on: a real start
+// time for a live process, and ok=false rather than a zero time for a dead one.
+func TestProcessStart(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	t.Cleanup(func() { stopProcess(t, cmd) })
+
+	// Wait before the first lookup: an implementation that stamps the time of
+	// inspection rather than of launch would pass without this, and would then
+	// miss a binary replaced during the gap.
+	const settle = 2 * time.Second
+	time.Sleep(settle)
+
+	started, ok := processStart(cmd.Process.Pid)
+	if !ok {
+		t.Fatalf("processStart(live pid) ok = false, want true")
+	}
+	if d := time.Since(started); d < settle-time.Second {
+		t.Errorf("processStart(live pid) = %v, only %v ago; want the launch time, not the lookup time", started, d)
+	}
+	if d := time.Since(started); d > time.Minute {
+		t.Errorf("processStart(live pid) = %v, %v ago; want within a minute", started, d)
+	}
+
+	// Kill it, then ask about a pid that is certainly gone.
+	pid := cmd.Process.Pid
+	stopProcess(t, cmd)
+	if _, ok := processStart(pid); ok {
+		t.Errorf("processStart(dead pid) ok = true, want false")
+	}
+}
+
+// TestServerExecutable checks the resolver returns a runnable absolute path for
+// a live process on whichever mechanism this platform provides.
+func TestServerExecutable(t *testing.T) {
+	// Launch by absolute path: ps comm= echoes how the process was invoked, so a
+	// PATH-resolved name would test nothing the real adopted server does.
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("no sleep on PATH: %v", err)
+	}
+	cmd := exec.Command(sleepPath, "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	t.Cleanup(func() { stopProcess(t, cmd) })
+
+	exe := serverExecutable(cmd.Process.Pid)
+	if exe == "" {
+		t.Skip("no executable-path mechanism on this platform")
+	}
+	if !filepath.IsAbs(exe) {
+		t.Errorf("serverExecutable = %q, want an absolute path", exe)
+	}
+	if base := filepath.Base(exe); base != "sleep" {
+		t.Errorf("serverExecutable basename = %q, want %q", base, "sleep")
+	}
+}
+
+// TestReuseDriftWarningQuietOnHealthy guards the false-positive direction: a
+// server at the pin whose binary predates it must say nothing, or every session
+// start would nag.
+func TestReuseDriftWarningQuietOnHealthy(t *testing.T) {
+	t.Setenv("STUB_VERSION", serverVersion)
+	pid := startStub(t, buildVersionStub(t))
+	if w := reuseDriftWarning(pid); w != "" {
+		t.Errorf("reuseDriftWarning(current server) = %q, want empty", w)
+	}
+}
+
+// TestReuseDriftWarningUnreadableVersion covers the gap that let an unprobeable
+// server read as healthy: no usable version is a lost check, not a clean one.
+func TestReuseDriftWarningUnreadableVersion(t *testing.T) {
+	t.Setenv("STUB_VERSION", "dev")
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "cannot version-check") || !strings.Contains(w, "dev") {
+		t.Errorf("reuseDriftWarning = %q, want a refusal naming the reported build", w)
+	}
+}
+
+// TestReuseDriftWarningNoProcess checks an unresolvable pid stays silent rather
+// than inventing a verdict.
+func TestReuseDriftWarningNoProcess(t *testing.T) {
+	if w := reuseDriftWarning(-1); w != "" {
+		t.Errorf("reuseDriftWarning(bad pid) = %q, want empty", w)
+	}
+}
+
+// TestBinaryVersionAtTimeout checks a binary that never answers is bounded
+// rather than left to stall session start.
+func TestBinaryVersionAtTimeout(t *testing.T) {
+	hang := filepath.Join(t.TempDir(), "hangs")
+	if err := os.WriteFile(hang, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	start := time.Now()
+	if got := binaryVersionAt(hang); got != "" {
+		t.Errorf("binaryVersionAt(hanging) = %q, want empty", got)
+	}
+	if d := time.Since(start); d > versionProbeTimeout+time.Second {
+		t.Errorf("binaryVersionAt(hanging) took %v, want within the %v budget", d, versionProbeTimeout)
+	}
+}
+
+// TestBinaryVersionAtKillsForkedChild guards the probe against a --version that
+// forks: cancelling has to take the whole process group, since a kill aimed at
+// the direct child leaves the grandchild running.
+func TestBinaryVersionAtKillsForkedChild(t *testing.T) {
+	dir := t.TempDir()
+	beat := filepath.Join(dir, "beat")
+	forker := filepath.Join(dir, "forks")
+	script := "#!/bin/sh\n" +
+		"( while :; do printf x >> \"" + beat + "\"; sleep 1; done ) &\n" +
+		"sleep 60\n"
+	if err := os.WriteFile(forker, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	// Guarded: an ungrouped kill does not just leak the child, it never returns,
+	// and a plain call would hang until the package timeout instead of failing.
+	done := make(chan string, 1)
+	go func() { done <- binaryVersionAt(forker) }()
+	select {
+	case got := <-done:
+		if got != "" {
+			t.Errorf("binaryVersionAt(forking) = %q, want empty", got)
+		}
+	case <-time.After(versionProbeTimeout + 2*time.Second):
+		t.Fatal("binaryVersionAt never returned; the forked grandchild still holds the probe's stdout pipe")
+	}
+	beatSize := func() int64 {
+		info, err := os.Stat(beat)
+		if err != nil {
+			return -1
+		}
+		return info.Size()
+	}
+	before := beatSize()
+	if before < 0 {
+		t.Fatal("the forked child never wrote its heartbeat; descendant cleanup went unverified")
+	}
+	time.Sleep(2 * time.Second)
+	if after := beatSize(); after != before {
+		t.Errorf("forked child outlived the cancelled probe (beat grew %d -> %d)", before, after)
+	}
+}
+
+// stopProcess ends a helper process started by a test. Wait's error is the kill
+// we just sent, so only a Kill failure is worth reporting.
+func stopProcess(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Errorf("kill test process %d: %v", cmd.Process.Pid, err)
+	}
+	_ = cmd.Wait() // reaps the process
+}
+
+// buildVersionStub compiles a real executable that answers --version from the
+// environment. It has to be compiled: ps reports a shell script's interpreter
+// rather than the script, so a script would never reach the probe under test.
+func buildVersionStub(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module versionstub\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	src := "package main\n\n" +
+		"import (\n\t\"fmt\"\n\t\"os\"\n\t\"time\"\n)\n\n" +
+		"func main() {\n" +
+		"\tif len(os.Args) > 1 {\n\t\tfmt.Println(os.Getenv(\"STUB_VERSION\"))\n\t\treturn\n\t}\n" +
+		"\ttime.Sleep(5 * time.Minute)\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write stub source: %v", err)
+	}
+	exe := filepath.Join(dir, "demarkus-server")
+	build := exec.Command("go", "build", "-o", exe, ".")
+	build.Dir = dir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Skipf("cannot build version stub: %v\n%s", err, out)
+	}
+	return exe
+}
+
+// replaceBinary swaps exe for a fresh copy the way an installer does, by rename.
+// The running process keeps the original inode, which is the only replacement
+// Linux allows at all: it refuses to rewrite a running executable.
+func replaceBinary(t *testing.T, exe string) {
+	t.Helper()
+	staged := exe + ".next"
+	if err := installFile(exe, staged, 0o755); err != nil {
+		t.Fatalf("stage replacement: %v", err)
+	}
+	if err := os.Rename(staged, exe); err != nil {
+		t.Fatalf("replace %s: %v", exe, err)
+	}
+}
+
+// startStub runs the stub so it stays alive and returns its pid.
+func startStub(t *testing.T, exe string) int {
+	t.Helper()
+	cmd := exec.Command(exe)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start stub: %v", err)
+	}
+	t.Cleanup(func() { stopProcess(t, cmd) })
+	return cmd.Process.Pid
+}
+
+// TestReuseDriftWarningBelowPin exercises the branch the whole change exists
+// for: an adopted server older than the pinned floor, named in the warning.
+func TestReuseDriftWarningBelowPin(t *testing.T) {
+	t.Setenv("STUB_VERSION", "0.1.0")
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	w := reuseDriftWarning(pid)
+	for _, want := range []string{"0.1.0", serverVersion, exe} {
+		if !strings.Contains(w, want) {
+			t.Errorf("reuseDriftWarning = %q, want it to name %q", w, want)
+		}
+	}
+}
+
+// TestReuseDriftWarningBinaryReplaced covers the second branch: a process at the
+// pinned version whose binary was swapped underneath it.
+func TestReuseDriftWarningBinaryReplaced(t *testing.T) {
+	t.Setenv("STUB_VERSION", serverVersion) // at the pin, so only the swap can warn
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	if w := reuseDriftWarning(pid); w != "" {
+		t.Fatalf("before replacement: reuseDriftWarning = %q, want empty", w)
+	}
+
+	// A second past the start clears binaryReplaceSkew where mtime is the only
+	// signal; procfs sees the swapped inode without waiting.
+	time.Sleep(1100 * time.Millisecond)
+	replaceBinary(t, exe)
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "replaced") || !strings.Contains(w, exe) {
+		t.Errorf("reuseDriftWarning = %q, want it to report %s was replaced", w, exe)
+	}
+}
+
+// TestReuseDriftWarningAtomicReplaceAtStart covers the window the mtime
+// comparison cannot see: a swap in the same second as the launch, caught only by
+// procfs inode identity.
+func TestReuseDriftWarningAtomicReplaceAtStart(t *testing.T) {
+	if _, err := os.Stat("/proc/self"); err != nil {
+		t.Skip("no procfs: the sub-second window is irreducible without inode identity")
+	}
+	t.Setenv("STUB_VERSION", serverVersion) // at the pin, so only the swap can warn
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	replaceBinary(t, exe) // no delay: the window the mtime comparison cannot see
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "replaced") || !strings.Contains(w, exe) {
+		t.Errorf("reuseDriftWarning = %q, want it to report %s was replaced", w, exe)
+	}
+}
+
+// TestExecRefusal pins the gate that stops the probe running a file another user
+// could have rewritten between the adoption and the probe.
+func TestExecRefusal(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, mode os.FileMode) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\ntrue\n"), mode); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		if err := os.Chmod(p, mode); err != nil { // WriteFile respects umask
+			t.Fatalf("chmod %s: %v", name, err)
+		}
+		return p
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "owned and not writable by others", path: write("ok", 0o755)},
+		{name: "world writable", path: write("world-writable", 0o777), want: "is writable by other users"},
+		{name: "group writable", path: write("group-writable", 0o775), want: "is writable by other users"},
+		{name: "not executable", path: write("plain", 0o644), want: "is not a regular executable"},
+		{name: "directory", path: dir, want: "is not a regular executable"},
+		{name: "missing", path: filepath.Join(dir, "absent"), want: "cannot be read"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := execRefusal(tt.path); got != tt.want {
+				t.Errorf("execRefusal(%s) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReuseDriftWarningRefusesUnsafeBinary checks a binary others can rewrite is
+// reported as an unchecked server rather than passed off as healthy.
+func TestReuseDriftWarningRefusesUnsafeBinary(t *testing.T) {
+	t.Setenv("STUB_VERSION", "0.1.0")
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+	if err := os.Chmod(exe, 0o777); err != nil {
+		t.Fatalf("chmod stub: %v", err)
+	}
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "cannot version-check") || !strings.Contains(w, "writable by other users") {
+		t.Errorf("reuseDriftWarning = %q, want a refusal naming the permissions", w)
+	}
+}
+
+// TestProbeBounded separates the two failures a discovery command can have: a
+// clean non-zero exit is an answer, an unrunnable command is not.
+func TestProbeBounded(t *testing.T) {
+	if out, ran := probeBounded(nil, "sh", "-c", "echo hello"); out != "hello" || !ran {
+		t.Errorf("probeBounded(echo) = %q, %v; want %q, true", out, ran, "hello")
+	}
+	// pgrep reports "no match" as exit 1, which must not read as a failed probe.
+	if out, ran := probeBounded(nil, "sh", "-c", "exit 1"); out != "" || !ran {
+		t.Errorf("probeBounded(exit 1) = %q, %v; want empty, true", out, ran)
+	}
+	if _, ran := probeBounded(nil, "definitely-not-a-real-command-9f3c"); ran {
+		t.Error("probeBounded(missing command) reported the probe as having run")
+	}
+	if _, ran := probeBounded(nil, "sh", "-c", "sleep 60"); ran {
+		t.Error("probeBounded(hanging command) reported the probe as having run")
+	}
+}
+
+// TestReuseDriftWarningReplacedBelowPin covers the ordering: when the binary was
+// swapped and the replacement is itself below the pin, the replacement is the
+// true statement, since the below-pin text names a version nothing is serving.
+func TestReuseDriftWarningReplacedBelowPin(t *testing.T) {
+	t.Setenv("STUB_VERSION", "0.1.0")
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	time.Sleep(1100 * time.Millisecond) // clears binaryReplaceSkew where mtime is the only signal
+	replaceBinary(t, exe)
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "replaced") {
+		t.Errorf("reuseDriftWarning = %q, want the replacement reported, not the on-disk version", w)
+	}
+}
+
+// TestProcIsOurs pins the explicit owner check that stops a privileged plugin
+// resolving a foreign process's executable through /proc/<pid>/exe.
+func TestProcIsOurs(t *testing.T) {
+	if _, err := os.Stat("/proc/self"); err != nil {
+		// No procfs: serverExecutable takes the ps path, which carries its own
+		// owner check, and procIsOurs is expected to refuse everything.
+		if procIsOurs(os.Getpid()) {
+			t.Error("procIsOurs reported true without procfs; the ps path must own that decision")
+		}
+		return
+	}
+	if !procIsOurs(os.Getpid()) {
+		t.Error("procIsOurs(self) = false, want true")
+	}
+	// Not "pid 1 is root's": under a rootless container it can be ours, and
+	// procIsOurs is then right to say true.
+	var st syscall.Stat_t
+	if err := syscall.Stat("/proc/1", &st); err == nil && int(st.Uid) != os.Getuid() && procIsOurs(1) {
+		t.Error("procIsOurs(pid 1) = true for a process owned by another user, want false")
+	}
+}
+
+// TestPsArgsReportsProbeRan checks the discovery probes distinguish a process
+// that is gone from an inspection that never happened.
+func TestPsArgsReportsProbeRan(t *testing.T) {
+	args, ran := psArgs(os.Getpid())
+	if !ran || args == "" {
+		t.Errorf("psArgs(self) = %q, %v; want args and true", args, ran)
+	}
+	// A pid that cannot exist: ps exits non-zero, which is still an answer.
+	if _, ran := psArgs(-1); !ran {
+		t.Error("psArgs(bad pid) reported the probe as not having run")
 	}
 }
