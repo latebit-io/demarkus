@@ -1200,3 +1200,35 @@ func TestReuseDriftWarningReplacedBelowPin(t *testing.T) {
 		t.Errorf("reuseDriftWarning = %q, want the replacement reported, not the on-disk version", w)
 	}
 }
+
+// TestProcIsOurs pins the explicit owner check that stops a privileged plugin
+// resolving a foreign process's executable through /proc/<pid>/exe.
+func TestProcIsOurs(t *testing.T) {
+	if _, err := os.Stat("/proc/self"); err != nil {
+		// No procfs: serverExecutable takes the ps path, which carries its own
+		// owner check, and procIsOurs is expected to refuse everything.
+		if procIsOurs(os.Getpid()) {
+			t.Error("procIsOurs reported true without procfs; the ps path must own that decision")
+		}
+		return
+	}
+	if !procIsOurs(os.Getpid()) {
+		t.Error("procIsOurs(self) = false, want true")
+	}
+	if procIsOurs(1) && os.Getuid() != 0 { // pid 1 is root's
+		t.Error("procIsOurs(pid 1) = true as an unprivileged user, want false")
+	}
+}
+
+// TestPsArgsReportsProbeRan checks the discovery probes distinguish a process
+// that is gone from an inspection that never happened.
+func TestPsArgsReportsProbeRan(t *testing.T) {
+	args, ran := psArgs(os.Getpid())
+	if !ran || args == "" {
+		t.Errorf("psArgs(self) = %q, %v; want args and true", args, ran)
+	}
+	// A pid that cannot exist: ps exits non-zero, which is still an answer.
+	if _, ran := psArgs(-1); !ran {
+		t.Error("psArgs(bad pid) reported the probe as not having run")
+	}
+}

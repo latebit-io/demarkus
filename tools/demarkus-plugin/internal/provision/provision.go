@@ -889,7 +889,8 @@ func tokensPathOfServer(args string, pid int) string {
 	if p := flagValue(args, tokensFlagRe); p != "" {
 		return p
 	}
-	return procEnv(pid, "DEMARKUS_TOKENS")
+	tokens, _ := procEnv(pid, "DEMARKUS_TOKENS")
+	return tokens
 }
 
 // procArgv returns the process's exact argument vector from /proc, nil where
@@ -934,11 +935,18 @@ func pidOfServerAtRootProbed(root string) (int, bool) {
 		return 0, false
 	}
 	for _, pid := range pids {
-		args := psArgs(pid)
+		args, ran := psArgs(pid)
+		if !ran {
+			return 0, false // a skipped candidate could be the server we want
+		}
 		if argsRootMatches(args, root) {
 			return pid, true
 		}
-		if procEnv(pid, "DEMARKUS_ROOT") == root {
+		env, ran := procEnv(pid, "DEMARKUS_ROOT")
+		if !ran {
+			return 0, false
+		}
+		if env == root {
 			return pid, true
 		}
 	}
@@ -956,14 +964,15 @@ func pidIsServerAtRoot(pid int, root string) bool {
 	if !lockdir.PidAlive(pid) {
 		return false
 	}
-	args := psArgs(pid)
+	args, _ := psArgs(pid)
 	if !strings.Contains(args, "demarkus-server") {
 		return false
 	}
 	if argsRootMatches(args, root) {
 		return true
 	}
-	return procEnv(pid, "DEMARKUS_ROOT") == root
+	env, _ := procEnv(pid, "DEMARKUS_ROOT")
+	return env == root
 }
 
 // argsRootMatches mirrors the bash literal substring match for "-root TARGET" /
@@ -988,14 +997,17 @@ func findRunningDemarkus() (string, bool) {
 	}
 	var lines []string
 	for _, pid := range pids {
-		args := psArgs(pid)
+		args, ran := psArgs(pid)
+		if !ran {
+			return "", false // an unlistable process is not an absent one
+		}
 		if args == "" {
 			continue
 		}
 		port := portOfServer(args, pid)
 		root := flagValue(args, rootFlagRe)
 		if root == "" {
-			root = procEnv(pid, "DEMARKUS_ROOT")
+			root, _ = procEnv(pid, "DEMARKUS_ROOT")
 		}
 		if root == "" {
 			root = "(unknown)"
@@ -1011,7 +1023,7 @@ func portOfServer(args string, pid int) string {
 	if p := flagValue(args, portFlagRe); p != "" {
 		return p
 	}
-	if p := procEnv(pid, "DEMARKUS_PORT"); p != "" {
+	if p, _ := procEnv(pid, "DEMARKUS_PORT"); p != "" {
 		return p
 	}
 	return strconv.Itoa(demarkusProtocolPort)
@@ -1518,7 +1530,7 @@ func doReuse(port int, root string) error {
 	}
 	targetPID := pidOfServerAtRoot(root)
 	if targetPID > 0 {
-		targetArgs := psArgs(targetPID)
+		targetArgs, _ := psArgs(targetPID)
 		if targetArgs != "" {
 			// Compare parsed values, not text: "06309" and "6309" are the same port.
 			raw := portOfServer(targetArgs, targetPID)
@@ -1630,7 +1642,7 @@ func VerifyAuth() (string, error) {
 	pid := pidOfServerAtRoot(cfg.MemoryDir)
 	serverPort := ""
 	if pid > 0 {
-		args := psArgs(pid)
+		args, _ := psArgs(pid)
 		tokensTOML = tokensPathOfServer(args, pid)
 		serverPort = portOfServer(args, pid)
 	}
@@ -1693,10 +1705,13 @@ func Status() (string, error) {
 // not run: another user's process, or a file someone else can rewrite. Owner and
 // path come from one observation, so a recycled PID cannot split the two.
 func serverExecutable(pid int) string {
-	// Readlink on another user's process fails unless we are privileged, so
-	// success already ties the path to a process we own.
 	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
 	if err == nil {
+		// Readlink fails on a foreign process only while unprivileged, so as
+		// root it proves nothing: check the process owner explicitly.
+		if !procIsOurs(pid) {
+			return ""
+		}
 		exe = strings.TrimSuffix(exe, " (deleted)")
 	} else {
 		exe = psOwnedExecutable(pid)
@@ -1705,6 +1720,16 @@ func serverExecutable(pid int) string {
 		return ""
 	}
 	return exe
+}
+
+// procIsOurs reports whether /proc/<pid> is owned by this user. False where
+// procfs is absent, leaving the ps path to establish ownership instead.
+func procIsOurs(pid int) bool {
+	var st syscall.Stat_t
+	if err := syscall.Stat(fmt.Sprintf("/proc/%d", pid), &st); err != nil {
+		return false
+	}
+	return int(st.Uid) == os.Getuid()
 }
 
 // psOwnedExecutable reads pid's owner and executable in a single ps observation
@@ -1974,31 +1999,37 @@ func pgrepDemarkusServer() ([]int, bool) {
 // psArgs returns the full command line (args) of pid, or "". The leading/trailing
 // space wrapping matches the bash " -root … " word-boundary matching done by
 // argsRootMatches (ps -o args= gives no leading space, so we add one).
-func psArgs(pid int) string {
-	args, _ := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "args=")
-	if args == "" {
-		return ""
+func psArgs(pid int) (string, bool) {
+	args, ran := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "args=")
+	if !ran {
+		return "", false
 	}
-	return " " + args
+	if args == "" {
+		return "", true
+	}
+	return " " + args, true
 }
 
 // procEnv returns the value of env var name for pid, or "". Portable across
 // Linux (/proc/<pid>/environ) and macOS (ps eww).
-func procEnv(pid int, name string) string {
+func procEnv(pid int, name string) (string, bool) {
 	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid)); err == nil {
 		for kv := range bytes.SplitSeq(b, []byte{0}) {
 			s := string(kv)
 			if v, ok := strings.CutPrefix(s, name+"="); ok {
-				return v
+				return v, true
 			}
 		}
-		return ""
+		return "", true
 	}
-	env, _ := probeBounded(nil, "ps", "eww", "-p", strconv.Itoa(pid))
+	env, ran := probeBounded(nil, "ps", "eww", "-p", strconv.Itoa(pid))
+	if !ran {
+		return "", false
+	}
 	for tok := range strings.FieldsSeq(env) {
 		if v, ok := strings.CutPrefix(tok, name+"="); ok {
-			return v
+			return v, true
 		}
 	}
-	return ""
+	return "", true
 }
