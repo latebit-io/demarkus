@@ -5,74 +5,38 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
+	"github.com/latebit-io/demarkus/server/internal/knowledge/knowledgeseed"
 )
 
-var policyMetadata = map[string]string{
-	"title":      "Knowledge System Policy",
-	"tags":       "category:governance",
-	"importance": "1",
-	"type":       "Reference",
-}
+// policyMetadata is shared with the server's default seed so the two
+// entry points cannot drift on the catalog axes a policy must carry.
+var policyMetadata = knowledgeseed.DefaultPolicySeed().Metadata
 
 func bootstrap(ctx context.Context, objects blob.Store, worldID string, policy []byte) error {
-	if err := validatePolicy(policy); err != nil {
+	seed := bucketstore.PolicySeed{Body: policy, Metadata: policyMetadata}
+	// Validated before Initialize so an unusable policy creates no objects.
+	if err := bucketstore.ValidatePolicySeed(seed); err != nil {
 		return err
 	}
 	if err := bucketstore.Initialize(ctx, objects, worldID); err != nil {
 		return fmt.Errorf("initialize bucket: %w", err)
 	}
-	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{WorldID: worldID, RequirePolicy: false})
+	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
+		WorldID: worldID, RequirePolicy: true, PolicySeed: &seed,
+	})
 	if err != nil {
-		return fmt.Errorf("open initialized bucket: %w", err)
+		return fmt.Errorf("seed and enforce policy: %w", err)
 	}
-	if err := seedPolicy(store, policy); err != nil {
-		return err
-	}
-	if _, err := bucketstore.Open(ctx, objects, bucketstore.Options{WorldID: worldID, RequirePolicy: true}); err != nil {
-		return fmt.Errorf("verify required policy: %w", err)
-	}
-	return nil
-}
-
-func validatePolicy(policy []byte) error {
-	if err := protocolstore.ValidateDocumentContent(publishpolicy.DocumentPath, policy); err != nil {
-		return fmt.Errorf("invalid policy document: %w", err)
-	}
-	if err := protocolstore.ValidateWrite(policy, policyMetadata); err != nil {
-		return fmt.Errorf("invalid policy write: %w", err)
-	}
-	parsed := publishpolicy.Parse(string(policy))
-	if err := parsed.Validate(); err != nil {
-		return fmt.Errorf("invalid policy: %w", err)
-	}
-	return nil
-}
-
-func seedPolicy(store *bucketstore.Store, policy []byte) error {
+	// Unlike the server, the operator named an exact policy: an existing
+	// document that differs is a mistake to report, not a world to adopt.
 	document, err := store.Get(publishpolicy.DocumentPath, 0)
-	switch {
-	case err == nil:
-		return verifyPolicy(document, policy)
-	case !errors.Is(err, os.ErrNotExist):
-		return fmt.Errorf("check existing policy: %w", err)
-	}
-
-	document, err = store.WriteVersion(publishpolicy.DocumentPath, 0, policy, policyMetadata)
-	if err == nil {
-		return verifyPolicy(document, policy)
-	}
-	if !errors.Is(err, protocolstore.ErrConflict) {
-		return fmt.Errorf("create policy: %w", err)
-	}
-	document, err = store.Get(publishpolicy.DocumentPath, 0)
 	if err != nil {
-		return fmt.Errorf("read concurrently created policy: %w", err)
+		return fmt.Errorf("read seeded policy: %w", err)
 	}
 	return verifyPolicy(document, policy)
 }

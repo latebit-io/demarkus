@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,8 +12,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
+	"github.com/latebit-io/demarkus/server/internal/knowledge/knowledgeseed"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 )
 
@@ -45,7 +50,9 @@ func testCertFiles(t *testing.T) (certFile, keyFile string) {
 	return certFile, keyFile
 }
 
-func fragmentWorld(name, worldID, tokensFile string) string {
+// worldFragment renders one world. Without bootstrap it is a statically
+// configured world, the path that enforces policy and seeds a default one.
+func worldFragment(name, worldID, tokensFile string, bootstrap bool) string {
 	return fmt.Sprintf(`  - name: %s
     authorities:
       - %s.memory.svc.cluster.local
@@ -54,25 +61,40 @@ func fragmentWorld(name, worldID, tokensFile string) string {
       worldID: %s
     auth:
       tokensFile: %s
-    bootstrap: true
-`, name, name, name, worldID, tokensFile)
+    bootstrap: %t
+`, name, name, name, worldID, tokensFile, bootstrap)
 }
 
 func newWorldsHarness(t *testing.T, fragment string) *worldsTestHarness {
 	t.Helper()
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "worlds.yaml"), []byte(fragment), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, err := openHarness(t, dir, "worldsFile: worlds.yaml\n", nil)
+	if err != nil {
+		t.Fatalf("open harness: %v", err)
+	}
+	return h
+}
+
+// openHarness writes a config whose world set is worldsSection, either a
+// worldsFile pointer or an inline worlds list, and opens a manager over it.
+// newStore overrides the blob-store factory; nil uses in-memory buckets.
+func openHarness(
+	t *testing.T,
+	dir, worldsSection string,
+	newStore func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error),
+) (*worldsTestHarness, error) {
+	t.Helper()
 	certFile, keyFile := testCertFiles(t)
 	main := fmt.Sprintf(`version: 1
 tls:
   certFile: %s
   keyFile: %s
-worldsFile: worlds.yaml
-`, certFile, keyFile)
+%s`, certFile, keyFile, worldsSection)
 	configFile := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(configFile, []byte(main), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "worlds.yaml"), []byte(fragment), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config, err := knowledgeconfig.Load(configFile)
@@ -84,25 +106,28 @@ worldsFile: worlds.yaml
 		t.Fatalf("certsource: %v", err)
 	}
 	h := &worldsTestHarness{dir: dir, stores: map[string]*blob.Memory{}}
-	newStore := func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
-		h.storesMu.Lock()
-		defer h.storesMu.Unlock()
-		if store, ok := h.stores[world.Name]; ok {
+	if newStore == nil {
+		newStore = func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
+			h.storesMu.Lock()
+			defer h.storesMu.Unlock()
+			if store, ok := h.stores[world.Name]; ok {
+				return store, nil
+			}
+			store, err := blob.NewMemory(maxObjectBytes)
+			if err != nil {
+				return nil, err
+			}
+			h.stores[world.Name] = store
 			return store, nil
 		}
-		store, err := blob.NewMemory(maxObjectBytes)
-		if err != nil {
-			return nil, err
-		}
-		h.stores[world.Name] = store
-		return store, nil
 	}
 	watchCtx, cancel := context.WithCancel(context.Background())
 	group := &sync.WaitGroup{}
 	manager, err := newWorldManager(watchCtx, group, configFile, config, newStore, certs, slog.Default())
 	if err != nil {
 		cancel()
-		t.Fatalf("newWorldManager: %v", err)
+		group.Wait()
+		return nil, err
 	}
 	h.manager = manager
 	t.Cleanup(func() {
@@ -110,7 +135,7 @@ worldsFile: worlds.yaml
 		cancel()
 		group.Wait()
 	})
-	return h
+	return h, nil
 }
 
 func (h *worldsTestHarness) writeFragment(t *testing.T, fragment string) {
@@ -143,7 +168,7 @@ func (h *worldsTestHarness) routes(authority string) bool {
 func TestWorldManagerHotAddAndRemove(t *testing.T) {
 	tokensDir := t.TempDir()
 	tokensA := writeTokens(t, tokensDir, "alice")
-	h := newWorldsHarness(t, "worlds:\n"+fragmentWorld("alice", testWorldID, tokensA))
+	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokensA, true))
 
 	if got := h.manager.WorldCount(); got != 1 {
 		t.Fatalf("initial worlds = %d, want 1", got)
@@ -155,8 +180,8 @@ func TestWorldManagerHotAddAndRemove(t *testing.T) {
 	// Hot add a second world through the fragment.
 	tokensB := writeTokens(t, tokensDir, "bob")
 	h.writeFragment(t, "worlds:\n"+
-		fragmentWorld("alice", testWorldID, tokensA)+
-		fragmentWorld("bob", testWorldIDB, tokensB))
+		worldFragment("alice", testWorldID, tokensA, true)+
+		worldFragment("bob", testWorldIDB, tokensB, true))
 	if err := h.manager.Reload(); err != nil {
 		t.Fatalf("reload after add: %v", err)
 	}
@@ -168,7 +193,7 @@ func TestWorldManagerHotAddAndRemove(t *testing.T) {
 	}
 
 	// Remove the first world.
-	h.writeFragment(t, "worlds:\n"+fragmentWorld("bob", testWorldIDB, tokensB))
+	h.writeFragment(t, "worlds:\n"+worldFragment("bob", testWorldIDB, tokensB, true))
 	if err := h.manager.Reload(); err != nil {
 		t.Fatalf("reload after remove: %v", err)
 	}
@@ -186,7 +211,7 @@ func TestWorldManagerHotAddAndRemove(t *testing.T) {
 func TestWorldManagerBootstrapInitializesGenesis(t *testing.T) {
 	tokensDir := t.TempDir()
 	tokens := writeTokens(t, tokensDir, "alice")
-	h := newWorldsHarness(t, "worlds:\n"+fragmentWorld("alice", testWorldID, tokens))
+	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokens, true))
 
 	// The memory blob store started empty; a successful open proves the
 	// bootstrap path wrote genesis. The head object must now exist.
@@ -201,17 +226,68 @@ func TestWorldManagerBootstrapInitializesGenesis(t *testing.T) {
 	}
 }
 
+func TestWorldManagerSeedsDefaultPolicyForStaticWorld(t *testing.T) {
+	tokens := writeTokens(t, t.TempDir(), "acme")
+	h, err := openHarness(t, t.TempDir(), "worlds:\n"+worldFragment("acme", testWorldID, tokens, false), nil)
+	if err != nil {
+		t.Fatalf("static world with an empty bucket must come up: %v", err)
+	}
+	if got := h.manager.WorldCount(); got != 1 {
+		t.Fatalf("worlds = %d, want 1", got)
+	}
+
+	// The world enforces policy, so the open could only succeed if it
+	// created genesis and seeded the default policy itself.
+	h.storesMu.Lock()
+	objects := h.stores["acme"]
+	h.storesMu.Unlock()
+	store, err := bucketstore.Open(context.Background(), objects, bucketstore.Options{
+		WorldID: testWorldID, RequirePolicy: true,
+	})
+	if err != nil {
+		t.Fatalf("reopen seeded world: %v", err)
+	}
+	document, err := store.Get(publishpolicy.DocumentPath, 0)
+	if err != nil {
+		t.Fatalf("get seeded policy: %v", err)
+	}
+	if !bytes.Equal(document.Content, knowledgeseed.DefaultPolicySeed().Body) {
+		t.Errorf("seeded policy = %q", document.Content)
+	}
+}
+
+func TestWorldManagerRefusesBucketWithForeignObjects(t *testing.T) {
+	tokens := writeTokens(t, t.TempDir(), "acme")
+	foreign := func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error) {
+		store, err := blob.NewMemory(maxObjectBytes)
+		if err != nil {
+			return nil, err
+		}
+		_, err = store.Create(context.Background(), "someone-elses-data.json", []byte("{}"))
+		return store, err
+	}
+	// A typo'd bucket URL must fail the open, not silently become a new
+	// empty world that reports healthy.
+	_, err := openHarness(t, t.TempDir(), "worlds:\n"+worldFragment("acme", testWorldID, tokens, false), foreign)
+	if err == nil {
+		t.Fatal("manager started over a bucket holding foreign objects")
+	}
+	if !strings.Contains(err.Error(), "no world head") {
+		t.Errorf("error does not name the cause: %v", err)
+	}
+}
+
 func TestWorldManagerPendingRetryOnMissingTokens(t *testing.T) {
 	tokensDir := t.TempDir()
 	tokensA := writeTokens(t, tokensDir, "alice")
-	h := newWorldsHarness(t, "worlds:\n"+fragmentWorld("alice", testWorldID, tokensA))
+	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokensA, true))
 
 	// A world whose tokens file has not propagated yet: open fails,
 	// world parks in pending, others stay live.
 	missing := filepath.Join(tokensDir, "carol.toml")
 	h.writeFragment(t, "worlds:\n"+
-		fragmentWorld("alice", testWorldID, tokensA)+
-		fragmentWorld("carol", testWorldIDB, missing))
+		worldFragment("alice", testWorldID, tokensA, true)+
+		worldFragment("carol", testWorldIDB, missing, true))
 	if err := h.manager.Reload(); err != nil {
 		t.Fatalf("reload with missing tokens: %v (resilient mode must not fail)", err)
 	}
@@ -235,7 +311,7 @@ func TestWorldManagerPendingRetryOnMissingTokens(t *testing.T) {
 func TestWorldManagerRejectsBadFragmentKeepsRunning(t *testing.T) {
 	tokensDir := t.TempDir()
 	tokensA := writeTokens(t, tokensDir, "alice")
-	h := newWorldsHarness(t, "worlds:\n"+fragmentWorld("alice", testWorldID, tokensA))
+	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokensA, true))
 
 	h.writeFragment(t, "worlds:\n  - name: broken\n    nonsense: true\n")
 	if err := h.manager.Reload(); err == nil {
@@ -250,37 +326,14 @@ func TestWorldManagerRejectsBadFragmentKeepsRunning(t *testing.T) {
 }
 
 func TestWorldManagerStaticModeFailsFast(t *testing.T) {
-	dir := t.TempDir()
-	certFile, keyFile := testCertFiles(t)
-	tokens := writeTokens(t, dir, "alice")
-	main := fmt.Sprintf(`version: 1
-tls:
-  certFile: %s
-  keyFile: %s
-worlds:
-%s`, certFile, keyFile, strings.ReplaceAll(fragmentWorld("alice", testWorldID, tokens), "bootstrap: true", "bootstrap: false"))
-	configFile := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(configFile, []byte(main), 0o600); err != nil {
-		t.Fatal(err)
+	tokens := writeTokens(t, t.TempDir(), "alice")
+	// An unreachable bucket. An empty one is no longer a failure: the
+	// server creates that world and seeds its policy.
+	unreachable := func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error) {
+		return nil, errors.New("bucket unreachable")
 	}
-	config, err := knowledgeconfig.Load(configFile)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	certs, err := certsource.Open(certFile, keyFile, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	newStore := func(_ context.Context, _ *knowledgeconfig.WorldConfig) (blob.Store, error) {
-		store, err := blob.NewMemory(maxObjectBytes)
-		if err != nil {
-			return nil, err
-		}
-		return store, nil // empty, not bootstrapped: open must fail
-	}
-	group := &sync.WaitGroup{}
-	defer group.Wait()
-	if _, err := newWorldManager(t.Context(), group, configFile, config, newStore, certs, slog.Default()); err == nil {
+	worlds := "worlds:\n" + worldFragment("alice", testWorldID, tokens, false)
+	if _, err := openHarness(t, t.TempDir(), worlds, unreachable); err == nil {
 		t.Fatal("static mode must fail fast on an unopenable world")
 	}
 }

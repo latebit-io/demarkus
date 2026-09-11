@@ -21,8 +21,9 @@ One deployment serves every world on one UDP listener; TLS SNI selects the world
 Prerequisites per world:
 
 - A GCS bucket with an immutable world ID (a canonical RFC 4122 UUID).
-- The bucket initialized and its publish policy seeded with `demarkus-knowledge-bootstrap` (`-bucket gs://... -world-id <uuid> -policy-file policy.md`); the bootstrap binary ships in the `demarkus-knowledge-server` release archive.
 - A token Secret referenced by `worlds[].tokenSecret`.
+
+An empty bucket needs nothing else. The server writes the world skeleton on first start and seeds a default write policy at `/.well-known/demarkus/policy.md` that warns rather than blocks, then enforces it. Publish your own policy through the protocol to replace it; it takes effect on the next write and survives restarts. A bucket that holds objects but no world head is refused, so a mistyped `bucket.url` fails the open rather than becoming a second empty world. To pick the policy before the first start, run `demarkus-knowledge-bootstrap` (`-bucket gs://... -world-id <uuid> -policy-file policy.md`) from somewhere with bucket write access; it ships in the `demarkus-knowledge-server` release archive.
 
 Cluster prerequisites:
 

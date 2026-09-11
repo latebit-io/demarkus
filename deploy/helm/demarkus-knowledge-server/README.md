@@ -8,9 +8,8 @@ stores each world in its own pre-provisioned GCS bucket.
 
 - Kubernetes 1.25+
 - GKE Workload Identity, or an existing Kubernetes ServiceAccount with equivalent identity
-- One initialized GCS bucket and immutable world ID per world
+- One GCS bucket and immutable world ID per world; an empty bucket is created on first start
 - One existing multi-SAN TLS Secret, or cert-manager and a suitable Issuer
-- Policy document at `/.well-known/demarkus/policy.md` in every bucket
 
 The chart never creates buckets, PVCs, or TLS Secrets. The optional
 `Certificate` asks cert-manager to populate the referenced TLS Secret.
@@ -26,10 +25,19 @@ provision token Secrets some other way. The Job's `tokens.bootstrap.image`
 defaults to kubectl 1.35, which supports API servers 1.34–1.36; override it
 to match older clusters (kubectl's skew policy is ±1 minor).
 
-Initialize each bucket with `demarkus-knowledge-bootstrap -bucket gs://<bucket>
--world-id <uuid> -policy-file <policy.md>`, which writes the world skeleton and
-seeds the policy document. The tool is idempotent and ships in the
-`demarkus-knowledge-server` release archive, not the container image.
+Buckets need no out-of-band initialization. A world whose bucket is empty is
+created on first start: the server writes the world skeleton and seeds a
+default write policy that warns rather than blocks, then enforces it. Publish
+your own policy to `/.well-known/demarkus/policy.md` through the protocol and
+it governs the next write; restarts never revert it. A bucket holding objects
+but no world head is refused, so a mistyped `bucket.url` fails the open
+instead of quietly becoming an empty world.
+
+To choose the policy before the first start instead, run
+`demarkus-knowledge-bootstrap -bucket gs://<bucket> -world-id <uuid>
+-policy-file <policy.md>` from somewhere with bucket write access. The tool is
+idempotent and ships in the `demarkus-knowledge-server` release archive, not
+the container image.
 
 ## Install
 

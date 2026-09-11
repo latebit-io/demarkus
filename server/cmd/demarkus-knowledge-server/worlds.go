@@ -14,6 +14,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
+	"github.com/latebit-io/demarkus/server/internal/knowledge/knowledgeseed"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/snirouter"
 	"github.com/latebit-io/demarkus/server/internal/worldruntime"
@@ -174,8 +175,8 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 	return errors.Join(firstErr, publishErr)
 }
 
-// openLocked opens one world: blob store, optional genesis bootstrap,
-// bucket store, runtime, and its token-file watcher.
+// openLocked opens one world: blob store, genesis, bucket store, runtime,
+// and its token-file watcher.
 func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), worldAddTimeout)
 	defer cancel()
@@ -184,18 +185,21 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	if err != nil {
 		return fmt.Errorf("blob store: %w", err)
 	}
-	if world.Bootstrap {
-		// Genesis only; no policy document. The provisioner (memory
-		// broker) seeds policy through the protocol, so the store opens
-		// without requiring one.
-		if err := bucketstore.Initialize(ctx, objects, world.Bucket.WorldID); err != nil {
-			return fmt.Errorf("bootstrap genesis: %w", err)
-		}
+	if err := m.ensureGenesis(ctx, objects, world); err != nil {
+		return fmt.Errorf("genesis: %w", err)
+	}
+	var seed *bucketstore.PolicySeed
+	if !world.Bootstrap && !world.ReadOnly {
+		// Provisioned worlds are seeded by their broker over the protocol,
+		// so only a statically configured world carries a default.
+		value := knowledgeseed.DefaultPolicySeed()
+		seed = &value
 	}
 	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
 		WorldID:        world.Bucket.WorldID,
 		RequestTimeout: time.Duration(world.Limits.RequestTimeout),
 		RequirePolicy:  !world.Bootstrap,
+		PolicySeed:     seed,
 		MaxDocuments:   world.Limits.MaxDocuments,
 	})
 	if err != nil {
@@ -228,6 +232,30 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	m.entries[world.Name] = entry
 	m.acquireTokenWatchLocked(world.Auth.TokensFile)
 	m.logger.Info("world opened", "world", world.Name, "bootstrap", world.Bootstrap)
+	return nil
+}
+
+// ensureGenesis creates the world's genesis when its bucket is empty, so a
+// new world needs no out-of-band bootstrap. A read-only world is skipped:
+// authoring its first object would contradict the declaration.
+func (m *worldManager) ensureGenesis(
+	ctx context.Context,
+	objects blob.Store,
+	world *knowledgeconfig.WorldConfig,
+) error {
+	if world.ReadOnly {
+		return nil
+	}
+	created, err := bucketstore.EnsureWorld(ctx, objects, world.Bucket.WorldID)
+	if err != nil {
+		return err
+	}
+	if created {
+		// Loud on purpose: an empty bucket is normally a first install,
+		// but it is also what a wrong bucket URL looks like.
+		m.logger.Warn("created a new world in an empty bucket",
+			"world", world.Name, "bucket", world.Bucket.Name(), "worldID", world.Bucket.WorldID)
+	}
 	return nil
 }
 
