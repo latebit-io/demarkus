@@ -378,9 +378,31 @@ func binaryVersion(name string) string {
 	return binaryVersionAt(p)
 }
 
-// versionProbeTimeout bounds the probe: the drift check runs it on an adopted
-// binary this plugin did not install, and a hung one would stall session start.
-const versionProbeTimeout = 2 * time.Second
+// versionProbeTimeout is the whole budget for one probe: the drift check runs it
+// on an adopted binary this plugin did not install, and a hung one would stall
+// session start. probeKillGrace is the slice of it reserved for pipe cleanup.
+const (
+	versionProbeTimeout = 2 * time.Second
+	probeKillGrace      = 500 * time.Millisecond
+)
+
+// psBounded runs ps under the probe budget so an unresponsive ps cannot stall
+// session start. Empty on any failure, matching its callers' best-effort
+// contract. env is appended to the environment; nil inherits it unchanged.
+func psBounded(env []string, args ...string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout-probeKillGrace)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ps", args...)
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	cmd.WaitDelay = probeKillGrace
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // binaryVersionAt runs --version on an executable path. Empty when the path is
 // missing, not executable, or the binary is too old or too slow to answer.
@@ -389,12 +411,12 @@ func binaryVersionAt(p string) string {
 	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout-probeKillGrace)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p, "--version")
 	// Killing the probe is not enough: a grandchild inherits the stdout pipe and
 	// Output() blocks on it, so WaitDelay force-closes the pipes after the kill.
-	cmd.WaitDelay = versionProbeTimeout
+	cmd.WaitDelay = probeKillGrace
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
@@ -1656,21 +1678,30 @@ func serverExecutable(pid int) string {
 	if p, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
 		return strings.TrimSuffix(p, " (deleted)")
 	}
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
-	if err != nil {
-		return ""
-	}
-	p := strings.TrimSpace(string(out))
+	p := psBounded(nil, "-p", strconv.Itoa(pid), "-o", "comm=")
 	if !filepath.IsAbs(p) {
 		return ""
 	}
 	return p
 }
 
+// processUID reports pid's owner, ok false when it cannot be determined.
+func processUID(pid int) (int, bool) {
+	var st syscall.Stat_t
+	if err := syscall.Stat(fmt.Sprintf("/proc/%d", pid), &st); err == nil {
+		return int(st.Uid), true
+	}
+	uid, err := strconv.Atoi(psBounded(nil, "-p", strconv.Itoa(pid), "-o", "uid="))
+	if err != nil {
+		return 0, false
+	}
+	return uid, true
+}
+
 // binaryReplaceSkew absorbs the one-second granularity of ps lstart and the
 // ordinary gap between installing a binary and launching it, so only a genuine
 // later replacement warns.
-const binaryReplaceSkew = 5 * time.Second
+var binaryReplaceSkew = 5 * time.Second
 
 // lstartLayouts covers both C-locale ps orderings: BSD/macOS puts the day of the
 // month before the month name, GNU after it.
@@ -1682,13 +1713,11 @@ func processStart(pid int) (time.Time, bool) {
 	if info, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
 		return info.ModTime(), true
 	}
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=")
-	cmd.Env = append(os.Environ(), "LC_ALL=C") // lstart is locale-formatted
-	out, err := cmd.Output()
-	if err != nil {
+	out := psBounded([]string{"LC_ALL=C"}, "-p", strconv.Itoa(pid), "-o", "lstart=") // lstart is locale-formatted
+	if out == "" {
 		return time.Time{}, false
 	}
-	s := strings.Join(strings.Fields(string(out)), " ")
+	s := strings.Join(strings.Fields(out), " ")
 	for _, layout := range lstartLayouts {
 		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
 			return t, true
@@ -1705,8 +1734,11 @@ func semverLess(a, b string) (less, ok bool) {
 	}
 	as, bs := strings.Split(a, "."), strings.Split(b, ".")
 	for i := range 3 {
-		ai, _ := strconv.Atoi(as[i])
-		bi, _ := strconv.Atoi(bs[i])
+		ai, aerr := strconv.Atoi(as[i])
+		bi, berr := strconv.Atoi(bs[i])
+		if aerr != nil || berr != nil {
+			return false, false // a component beyond int range has no usable order
+		}
 		if ai != bi {
 			return ai < bi, true
 		}
@@ -1718,6 +1750,11 @@ func semverLess(a, b string) (less, ok bool) {
 // below the pinned floor, or a process predating the binary it was started from.
 // Empty when current or undeterminable; never restarts a server it does not own.
 func reuseDriftWarning(pid int) string {
+	// The probe runs the adopted process's own executable, so a PID belonging to
+	// another user would have us execute a path they chose. Ours or nothing.
+	if uid, ok := processUID(pid); !ok || uid != os.Getuid() {
+		return ""
+	}
 	exe := serverExecutable(pid)
 	if exe == "" {
 		return ""

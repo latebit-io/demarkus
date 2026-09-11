@@ -913,10 +913,7 @@ func TestProcessStart(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start sleep: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	})
+	t.Cleanup(func() { stopProcess(t, cmd) })
 
 	started, ok := processStart(cmd.Process.Pid)
 	if !ok {
@@ -928,8 +925,7 @@ func TestProcessStart(t *testing.T) {
 
 	// Kill it, then ask about a pid that is certainly gone.
 	pid := cmd.Process.Pid
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
+	stopProcess(t, cmd)
 	if _, ok := processStart(pid); ok {
 		t.Errorf("processStart(dead pid) ok = true, want false")
 	}
@@ -948,10 +944,7 @@ func TestServerExecutable(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start sleep: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	})
+	t.Cleanup(func() { stopProcess(t, cmd) })
 
 	exe := serverExecutable(cmd.Process.Pid)
 	if exe == "" {
@@ -993,7 +986,98 @@ func TestBinaryVersionAtTimeout(t *testing.T) {
 	if got := binaryVersionAt(hang); got != "" {
 		t.Errorf("binaryVersionAt(hanging) = %q, want empty", got)
 	}
-	if d := time.Since(start); d > 10*time.Second {
-		t.Errorf("binaryVersionAt(hanging) took %v, want bounded near %v", d, versionProbeTimeout)
+	if d := time.Since(start); d > versionProbeTimeout+time.Second {
+		t.Errorf("binaryVersionAt(hanging) took %v, want within the %v budget", d, versionProbeTimeout)
+	}
+}
+
+// stopProcess ends a helper process started by a test. Wait's error is the kill
+// we just sent, so only a Kill failure is worth reporting.
+func stopProcess(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Errorf("kill test process %d: %v", cmd.Process.Pid, err)
+	}
+	_ = cmd.Wait() // reaps the process
+}
+
+// buildVersionStub compiles a real executable that answers --version from the
+// environment. It has to be compiled: ps reports a shell script's interpreter
+// rather than the script, so a script would never reach the probe under test.
+func buildVersionStub(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module versionstub\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	src := "package main\n\n" +
+		"import (\n\t\"fmt\"\n\t\"os\"\n\t\"time\"\n)\n\n" +
+		"func main() {\n" +
+		"\tif len(os.Args) > 1 {\n\t\tfmt.Println(os.Getenv(\"STUB_VERSION\"))\n\t\treturn\n\t}\n" +
+		"\ttime.Sleep(5 * time.Minute)\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write stub source: %v", err)
+	}
+	exe := filepath.Join(dir, "demarkus-server")
+	build := exec.Command("go", "build", "-o", exe, ".")
+	build.Dir = dir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Skipf("cannot build version stub: %v\n%s", err, out)
+	}
+	return exe
+}
+
+// startStub runs the stub so it stays alive and returns its pid.
+func startStub(t *testing.T, exe string) int {
+	t.Helper()
+	cmd := exec.Command(exe)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start stub: %v", err)
+	}
+	t.Cleanup(func() { stopProcess(t, cmd) })
+	return cmd.Process.Pid
+}
+
+// TestReuseDriftWarningBelowPin exercises the branch the whole change exists
+// for: an adopted server older than the pinned floor, named in the warning.
+func TestReuseDriftWarningBelowPin(t *testing.T) {
+	t.Setenv("STUB_VERSION", "0.1.0")
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	w := reuseDriftWarning(pid)
+	for _, want := range []string{"0.1.0", serverVersion, exe} {
+		if !strings.Contains(w, want) {
+			t.Errorf("reuseDriftWarning = %q, want it to name %q", w, want)
+		}
+	}
+}
+
+// TestReuseDriftWarningBinaryReplaced covers the second branch: a process at the
+// pinned version whose binary was swapped underneath it.
+func TestReuseDriftWarningBinaryReplaced(t *testing.T) {
+	t.Setenv("STUB_VERSION", serverVersion) // at the pin, so only the swap can warn
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	if w := reuseDriftWarning(pid); w != "" {
+		t.Fatalf("before replacement: reuseDriftWarning = %q, want empty", w)
+	}
+
+	old := binaryReplaceSkew
+	binaryReplaceSkew = 0
+	t.Cleanup(func() { binaryReplaceSkew = old })
+
+	// ps lstart is second-granular, so let the clock cross a second boundary or
+	// the replacement can read as simultaneous with the process start.
+	time.Sleep(1100 * time.Millisecond)
+	now := time.Now()
+	if err := os.Chtimes(exe, now, now); err != nil {
+		t.Fatalf("touch stub: %v", err)
+	}
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "replaced") || !strings.Contains(w, exe) {
+		t.Errorf("reuseDriftWarning = %q, want it to report %s was replaced", w, exe)
 	}
 }
