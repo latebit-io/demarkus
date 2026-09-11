@@ -1023,7 +1023,7 @@ func TestBinaryVersionAtKillsForkedChild(t *testing.T) {
 	beat := filepath.Join(dir, "beat")
 	forker := filepath.Join(dir, "forks")
 	script := "#!/bin/sh\n" +
-		"( while :; do sleep 1; printf x >> \"" + beat + "\"; done ) &\n" +
+		"( while :; do printf x >> \"" + beat + "\"; sleep 1; done ) &\n" +
 		"sleep 60\n"
 	if err := os.WriteFile(forker, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
@@ -1049,7 +1049,7 @@ func TestBinaryVersionAtKillsForkedChild(t *testing.T) {
 	}
 	before := beatSize()
 	if before < 0 {
-		t.Skip("the forked child never wrote; nothing to prove about killing it")
+		t.Fatal("the forked child never wrote its heartbeat; descendant cleanup went unverified")
 	}
 	time.Sleep(2 * time.Second)
 	if after := beatSize(); after != before {
@@ -1093,6 +1093,20 @@ func buildVersionStub(t *testing.T) string {
 	return exe
 }
 
+// replaceBinary swaps exe for a fresh copy the way an installer does, by rename.
+// The running process keeps the original inode, which is the only replacement
+// Linux allows at all: it refuses to rewrite a running executable.
+func replaceBinary(t *testing.T, exe string) {
+	t.Helper()
+	staged := exe + ".next"
+	if err := installFile(exe, staged, 0o755); err != nil {
+		t.Fatalf("stage replacement: %v", err)
+	}
+	if err := os.Rename(staged, exe); err != nil {
+		t.Fatalf("replace %s: %v", exe, err)
+	}
+}
+
 // startStub runs the stub so it stays alive and returns its pid.
 func startStub(t *testing.T, exe string) int {
 	t.Helper()
@@ -1130,17 +1144,29 @@ func TestReuseDriftWarningBinaryReplaced(t *testing.T) {
 		t.Fatalf("before replacement: reuseDriftWarning = %q, want empty", w)
 	}
 
-	old := binaryReplaceSkew
-	binaryReplaceSkew = 0
-	t.Cleanup(func() { binaryReplaceSkew = old })
-
-	// ps lstart is second-granular, so let the clock cross a second boundary or
-	// the replacement can read as simultaneous with the process start.
+	// A second past the start clears binaryReplaceSkew where mtime is the only
+	// signal; procfs sees the swapped inode without waiting.
 	time.Sleep(1100 * time.Millisecond)
-	now := time.Now()
-	if err := os.Chtimes(exe, now, now); err != nil {
-		t.Fatalf("touch stub: %v", err)
+	replaceBinary(t, exe)
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "replaced") || !strings.Contains(w, exe) {
+		t.Errorf("reuseDriftWarning = %q, want it to report %s was replaced", w, exe)
 	}
+}
+
+// TestReuseDriftWarningAtomicReplaceAtStart covers the window the mtime
+// comparison cannot see: a swap in the same second as the launch, caught only by
+// procfs inode identity.
+func TestReuseDriftWarningAtomicReplaceAtStart(t *testing.T) {
+	if _, err := os.Stat("/proc/self"); err != nil {
+		t.Skip("no procfs: the sub-second window is irreducible without inode identity")
+	}
+	t.Setenv("STUB_VERSION", serverVersion) // at the pin, so only the swap can warn
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+
+	replaceBinary(t, exe) // no delay: the window the mtime comparison cannot see
 
 	w := reuseDriftWarning(pid)
 	if !strings.Contains(w, "replaced") || !strings.Contains(w, exe) {
@@ -1227,15 +1253,8 @@ func TestReuseDriftWarningReplacedBelowPin(t *testing.T) {
 	exe := buildVersionStub(t)
 	pid := startStub(t, exe)
 
-	old := binaryReplaceSkew
-	binaryReplaceSkew = 0
-	t.Cleanup(func() { binaryReplaceSkew = old })
-
-	time.Sleep(1100 * time.Millisecond) // ps lstart is second-granular
-	now := time.Now()
-	if err := os.Chtimes(exe, now, now); err != nil {
-		t.Fatalf("touch stub: %v", err)
-	}
+	time.Sleep(1100 * time.Millisecond) // clears binaryReplaceSkew where mtime is the only signal
+	replaceBinary(t, exe)
 
 	w := reuseDriftWarning(pid)
 	if !strings.Contains(w, "replaced") {

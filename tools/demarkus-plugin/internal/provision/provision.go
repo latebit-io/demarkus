@@ -1797,10 +1797,10 @@ func execRefusal(p string) string {
 	return ""
 }
 
-// binaryReplaceSkew absorbs the one-second granularity of ps lstart and the
-// ordinary gap between installing a binary and launching it, so only a genuine
-// later replacement warns.
-var binaryReplaceSkew = 5 * time.Second
+// binaryReplaceSkew covers the one-second truncation of ps lstart on the only
+// platform still reduced to comparing mtimes: macOS, whose ps reads an exact
+// start time that only the display rounds down. Linux ps is not this accurate.
+const binaryReplaceSkew = time.Second
 
 // lstartLayouts covers both C-locale ps orderings: BSD/macOS puts the day of the
 // month before the month name, GNU after it.
@@ -1875,15 +1875,42 @@ func reuseDriftWarning(pid int) string {
 	return ""
 }
 
+// exeReplaced compares pid's running image against the file at exe. Linux
+// refuses to rewrite a running executable (ETXTBSY), so every real replacement
+// swaps the inode and procfs still names the original: exact, with no window.
+func exeReplaced(pid int, exe string) (replaced, ok bool) {
+	if _, err := os.Stat("/proc/self"); err != nil {
+		return false, false // no procfs: mtime is the only signal left
+	}
+	var running, onDisk syscall.Stat_t
+	if err := syscall.Stat(fmt.Sprintf("/proc/%d/exe", pid), &running); err != nil {
+		return false, true // procfs is here but will not answer; claim nothing
+	}
+	if err := syscall.Stat(exe, &onDisk); err != nil {
+		return false, true
+	}
+	return running.Dev != onDisk.Dev || running.Ino != onDisk.Ino, true
+}
+
+// binaryReplaced reports whether pid runs code the file at exe no longer holds.
+// The mtime comparison is the fallback, not a supplement: Linux ps derives
+// lstart from a whole-second boot time and can place a start after the build.
+func binaryReplaced(pid int, exe string) bool {
+	if replaced, ok := exeReplaced(pid, exe); ok {
+		return replaced
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return false
+	}
+	started, ok := processStart(pid)
+	return ok && info.ModTime().After(started.Add(binaryReplaceSkew))
+}
+
 // replacedBinaryWarning reports a process still serving code from memory after
 // its binary was rewritten. Empty when current or undeterminable.
 func replacedBinaryWarning(pid int, exe, got string) string {
-	info, err := os.Stat(exe)
-	if err != nil {
-		return ""
-	}
-	started, ok := processStart(pid)
-	if !ok || !info.ModTime().After(started.Add(binaryReplaceSkew)) {
+	if !binaryReplaced(pid, exe) {
 		return ""
 	}
 	installed := "the installed build"
