@@ -1015,6 +1015,48 @@ func TestBinaryVersionAtTimeout(t *testing.T) {
 	}
 }
 
+// TestBinaryVersionAtKillsForkedChild guards the probe against a --version that
+// forks: cancelling has to take the whole process group, since a kill aimed at
+// the direct child leaves the grandchild running.
+func TestBinaryVersionAtKillsForkedChild(t *testing.T) {
+	dir := t.TempDir()
+	beat := filepath.Join(dir, "beat")
+	forker := filepath.Join(dir, "forks")
+	script := "#!/bin/sh\n" +
+		"( while :; do sleep 1; printf x >> \"" + beat + "\"; done ) &\n" +
+		"sleep 60\n"
+	if err := os.WriteFile(forker, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	// Guarded: an ungrouped kill does not just leak the child, it never returns,
+	// and a plain call would hang until the package timeout instead of failing.
+	done := make(chan string, 1)
+	go func() { done <- binaryVersionAt(forker) }()
+	select {
+	case got := <-done:
+		if got != "" {
+			t.Errorf("binaryVersionAt(forking) = %q, want empty", got)
+		}
+	case <-time.After(versionProbeTimeout + 2*time.Second):
+		t.Fatal("binaryVersionAt never returned; the forked grandchild still holds the probe's stdout pipe")
+	}
+	beatSize := func() int64 {
+		info, err := os.Stat(beat)
+		if err != nil {
+			return -1
+		}
+		return info.Size()
+	}
+	before := beatSize()
+	if before < 0 {
+		t.Skip("the forked child never wrote; nothing to prove about killing it")
+	}
+	time.Sleep(2 * time.Second)
+	if after := beatSize(); after != before {
+		t.Errorf("forked child outlived the cancelled probe (beat grew %d -> %d)", before, after)
+	}
+}
+
 // stopProcess ends a helper process started by a test. Wait's error is the kill
 // we just sent, so only a Kill failure is worth reporting.
 func stopProcess(t *testing.T, cmd *exec.Cmd) {
@@ -1215,8 +1257,11 @@ func TestProcIsOurs(t *testing.T) {
 	if !procIsOurs(os.Getpid()) {
 		t.Error("procIsOurs(self) = false, want true")
 	}
-	if procIsOurs(1) && os.Getuid() != 0 { // pid 1 is root's
-		t.Error("procIsOurs(pid 1) = true as an unprivileged user, want false")
+	// Not "pid 1 is root's": under a rootless container it can be ours, and
+	// procIsOurs is then right to say true.
+	var st syscall.Stat_t
+	if err := syscall.Stat("/proc/1", &st); err == nil && int(st.Uid) != os.Getuid() && procIsOurs(1) {
+		t.Error("procIsOurs(pid 1) = true for a process owned by another user, want false")
 	}
 }
 

@@ -417,8 +417,11 @@ func binaryVersionAt(p string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout-probeKillGrace)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p, "--version")
-	// Killing the probe is not enough: a grandchild inherits the stdout pipe and
-	// Output() blocks on it, so WaitDelay force-closes the pipes after the kill.
+	// Own group, killed whole: a --version that forks leaves the grandchild
+	// holding the stdout pipe, and a kill aimed only at the direct child never
+	// unblocks Output() (measured: the probe hangs indefinitely).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = probeKillGrace
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
@@ -879,18 +882,17 @@ func flagValue(args string, re *regexp.Regexp) string {
 	return ""
 }
 
-// tokensPathOfServer returns the tokens.toml the server actually reads
-// (-tokens flag, else DEMARKUS_TOKENS env), or "" when undiscoverable. Exact
-// /proc argv wins over the flattened ps string, which truncates on whitespace.
-func tokensPathOfServer(args string, pid int) string {
+// tokensPathOfServer returns the tokens.toml the server actually reads (-tokens
+// flag, else DEMARKUS_TOKENS env). ok is false when the env probe could not run,
+// where "" means unknown, not none, and no conventional fallback is safe.
+func tokensPathOfServer(args string, pid int) (string, bool) {
 	if p := tokensFromArgv(procArgv(pid)); p != "" {
-		return p
+		return p, true
 	}
 	if p := flagValue(args, tokensFlagRe); p != "" {
-		return p
+		return p, true
 	}
-	tokens, _ := procEnv(pid, "DEMARKUS_TOKENS")
-	return tokens
+	return procEnv(pid, "DEMARKUS_TOKENS")
 }
 
 // procArgv returns the process's exact argument vector from /proc, nil where
@@ -1528,9 +1530,15 @@ func doReuse(port int, root string) error {
 		// is down rather than falling back to the convention.
 		tokensTOML = prior.TokensTOML
 	}
-	targetPID := pidOfServerAtRoot(root)
+	targetPID, ran := pidOfServerAtRootProbed(root)
+	if !ran {
+		return fmt.Errorf("cannot tell whether a demarkus-server is running at root %s: process discovery did not complete; re-run /soul-init", root)
+	}
 	if targetPID > 0 {
-		targetArgs, _ := psArgs(targetPID)
+		targetArgs, argsRan := psArgs(targetPID)
+		if !argsRan {
+			return fmt.Errorf("cannot inspect the demarkus-server at root %s (pid %d): process discovery did not complete; re-run /soul-init", root, targetPID)
+		}
 		if targetArgs != "" {
 			// Compare parsed values, not text: "06309" and "6309" are the same port.
 			raw := portOfServer(targetArgs, targetPID)
@@ -1538,7 +1546,13 @@ func doReuse(port int, root string) error {
 				return fmt.Errorf("the demarkus-server at root %s (pid %d) is listening on port %s, not %d; re-run with --port %s", root, targetPID, raw, port, raw)
 			}
 		}
-		if discovered := tokensPathOfServer(targetArgs, targetPID); discovered != "" && discovered != tokensTOML {
+		// An unidentified registry must stop here: ensureTokenEntry would
+		// otherwise write the conventional file the server never reads.
+		discovered, known := tokensPathOfServer(targetArgs, targetPID)
+		if !known {
+			return fmt.Errorf("cannot tell which token registry the demarkus-server at root %s (pid %d) reads: environment discovery did not complete; re-run /soul-init", root, targetPID)
+		}
+		if discovered != "" && discovered != tokensTOML {
 			// An explicit path that does not resolve is a hard stop: writing the
 			// conventional file instead would mutate a registry the server never
 			// reads (a flattened ps string can truncate paths with whitespace).
@@ -1639,11 +1653,23 @@ func VerifyAuth() (string, error) {
 	// Name the registry for the report: the running server's own -tokens or
 	// DEMARKUS_TOKENS wins; otherwise the path provisioning would use.
 	tokensTOML := ""
-	pid := pidOfServerAtRoot(cfg.MemoryDir)
+	pid, ran := pidOfServerAtRootProbed(cfg.MemoryDir)
+	if !ran {
+		return fmt.Sprintf("cannot verify: process discovery did not complete for %s; re-run /soul-status", cfg.MemoryDir), nil
+	}
 	serverPort := ""
 	if pid > 0 {
-		args, _ := psArgs(pid)
-		tokensTOML = tokensPathOfServer(args, pid)
+		args, argsRan := psArgs(pid)
+		if !argsRan {
+			return fmt.Sprintf("cannot verify: cannot inspect server pid %d; process discovery did not complete", pid), nil
+		}
+		// Falling through to cfg.TokensTOML or the default would name a registry
+		// we could not read; say so instead.
+		discovered, known := tokensPathOfServer(args, pid)
+		if !known {
+			return fmt.Sprintf("cannot verify: cannot tell which token registry server pid %d reads; environment discovery did not complete", pid), nil
+		}
+		tokensTOML = discovered
 		serverPort = portOfServer(args, pid)
 	}
 	if tokensTOML == "" {
