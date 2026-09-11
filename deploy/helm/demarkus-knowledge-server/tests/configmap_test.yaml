@@ -55,3 +55,47 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: 'health:\n  address: ":9090"'
+
+  - it: omits the policy file when no initial policy is configured
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'file: /etc/demarkus/policy'
+      - isNull:
+          path: data["policy-team-a.md"]
+
+  - it: ships an initial policy as chart content and points the world at it
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+          initialPolicy: |
+            # Write Policy
+
+            Ours from the start.
+
+            strictness: block
+        - name: team-b
+          authorities: [team-b.example.com]
+          bucket: {url: gs://deployment-team-b, worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49}
+          tokenSecret: {name: team-b-tokens, key: tokens.toml}
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "team-a"[\s\S]*file: "/etc/demarkus/policy-team-a.md"'
+      - equal:
+          path: data["policy-team-a.md"]
+          value: |
+            # Write Policy
+
+            Ours from the start.
+
+            strictness: block
+      # The second world configures none, so it keeps the embedded default.
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "team-b"[\s\S]*file:'
+      - isNull:
+          path: data["policy-team-b.md"]

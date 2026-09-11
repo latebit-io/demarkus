@@ -40,10 +40,9 @@ server: protocol
 	@echo "✓ Server built: server/bin/demarkus-server"
 
 knowledge-server: protocol
-	@echo "Building knowledge server tools..."
+	@echo "Building knowledge server..."
 	cd server && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-server ./cmd/demarkus-knowledge-server
-	cd server && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-bootstrap ./cmd/demarkus-knowledge-bootstrap
-	@echo "✓ Built: server/bin/demarkus-knowledge-{server,bootstrap}"
+	@echo "✓ Built: server/bin/demarkus-knowledge-server"
 
 # Build client
 client: protocol

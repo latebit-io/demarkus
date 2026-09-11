@@ -81,6 +81,37 @@ tests:
             mountPath: /run/demarkus/tls
             readOnly: true
 
+  - it: projects only the config document when no initial policy is set
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.items
+          value:
+            - key: config.yaml
+              path: config.yaml
+
+  - it: projects a configured initial policy beside the config document
+    template: deployment.yaml
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          tokenSecret: {name: team-a-tokens, key: tokens.toml}
+          initialPolicy: "strictness: warn\n"
+        - name: team-b
+          authorities: [team-b.example.com]
+          bucket: {url: gs://deployment-team-b, worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49}
+          tokenSecret: {name: team-b-tokens, key: tokens.toml}
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.items
+          value:
+            - key: config.yaml
+              path: config.yaml
+            - key: policy-team-a.md
+              path: policy-team-a.md
+
   - it: projects exactly one distinct token volume per world
     template: deployment.yaml
     asserts:

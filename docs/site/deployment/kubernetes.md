@@ -23,7 +23,7 @@ Prerequisites per world:
 - A GCS bucket with an immutable world ID (a canonical RFC 4122 UUID).
 - A token Secret referenced by `worlds[].tokenSecret`.
 
-An empty bucket needs nothing else. The server writes the world skeleton on first start and seeds a default write policy at `/.well-known/demarkus/policy.md` that warns rather than blocks, then enforces it. Publish your own policy through the protocol to replace it; it takes effect on the next write and survives restarts. A bucket that holds objects but no world head is refused, so a mistyped `bucket.url` fails the open rather than becoming a second empty world. To pick the policy before the first start, run `demarkus-knowledge-bootstrap` (`-bucket gs://... -world-id <uuid> -policy-file policy.md`) from somewhere with bucket write access; it ships in the `demarkus-knowledge-server` release archive.
+An empty bucket needs nothing else. The server writes the world skeleton on first start and seeds a default write policy at `/.well-known/demarkus/policy.md` that warns rather than blocks, then enforces it. Publish your own policy through the protocol to replace it; it takes effect on the next write and survives restarts. A bucket that holds objects but no world head is refused, so a mistyped `bucket.url` fails the open rather than becoming a second empty world. To pick the policy instead of taking the default, set `worlds[].initialPolicy` (or `worldDefaults.initialPolicy`) in the chart: the body ships in the config ConfigMap and the server seeds it as version 1. It is create-only, so a world that already has a policy ignores it.
 
 Cluster prerequisites:
 

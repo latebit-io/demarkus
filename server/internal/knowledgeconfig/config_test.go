@@ -81,9 +81,24 @@ worlds:
 	if world.Policy.Path != defaultPolicyPath {
 		t.Errorf("policy path: got %q", world.Policy.Path)
 	}
+	if world.Policy.File != "" {
+		t.Errorf("policy file: got %q, want unset", world.Policy.File)
+	}
 	wantLimits := LimitsConfig{MaxConcurrentRequests: 32, RequestTimeout: Duration(10 * time.Second), RequestsPerSecond: 50, Burst: 100}
 	if world.Limits != wantLimits {
 		t.Errorf("limits defaults: got %+v, want %+v", world.Limits, wantLimits)
+	}
+}
+
+func TestParsePolicyFile(t *testing.T) {
+	body := strings.Replace(validConfig, "      path: /.well-known/demarkus/policy.md",
+		"      path: /.well-known/demarkus/policy.md\n      file: /etc/demarkus/policy-world-a.md", 1)
+	config, err := Parse([]byte(body))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if config.Worlds[0].Policy.File != "/etc/demarkus/policy-world-a.md" {
+		t.Errorf("policy file: got %q", config.Worlds[0].Policy.File)
 	}
 }
 
@@ -132,6 +147,16 @@ func TestValidateRequiredAndLimitFields(t *testing.T) {
 		{"tokens file", func(config *Config) { config.Worlds[0].Auth.TokensFile = "" }, "auth.tokensFile is required"},
 		{"policy path", func(config *Config) { config.Worlds[0].Policy.Path = "/policy/../policy.md" }, "canonical absolute path"},
 		{"unsupported policy path", func(config *Config) { config.Worlds[0].Policy.Path = "/policy.md" }, "only \"/.well-known/demarkus/policy.md\" is supported"},
+		{"relative policy file", func(config *Config) { config.Worlds[0].Policy.File = "policy.md" }, "policy.file must be a canonical absolute path"},
+		{"policy file not canonical", func(config *Config) { config.Worlds[0].Policy.File = "/etc/demarkus/../policy.md" }, "policy.file must be a canonical absolute path"},
+		{"policy file on a read-only world", func(config *Config) {
+			config.Worlds[0].Policy.File = "/etc/demarkus/policy.md"
+			config.Worlds[0].ReadOnly = true
+		}, "must not be set on a read-only world"},
+		{"policy file on a bootstrap world", func(config *Config) {
+			config.Worlds[0].Policy.File = "/etc/demarkus/policy.md"
+			config.Worlds[0].Bootstrap = true
+		}, "must not be set on a bootstrap world"},
 		{"concurrency", func(config *Config) { config.Worlds[0].Limits.MaxConcurrentRequests = 0 }, "maxConcurrentRequests must be positive"},
 		{"request timeout", func(config *Config) { config.Worlds[0].Limits.RequestTimeout = -1 }, "requestTimeout must not be negative"},
 		{"negative rate", func(config *Config) { config.Worlds[0].Limits.RequestsPerSecond = -1 }, "requestsPerSecond must not be negative"},

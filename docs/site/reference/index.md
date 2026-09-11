@@ -57,6 +57,7 @@ worlds:                         # one or more
       tokensFile: <path>        # required, hot-reloaded
     policy:
       path: /.well-known/demarkus/policy.md   # only supported value
+      file: /etc/demarkus/policy-acme.md      # optional: body seeded as version 1
     readOnly: false
     limits:
       maxConcurrentRequests: 32 # default

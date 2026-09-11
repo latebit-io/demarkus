@@ -1,9 +1,12 @@
 package knowledgeseed
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
@@ -43,4 +46,57 @@ func TestDefaultPolicySeedIsFresh(t *testing.T) {
 	if fresh.Body[0] != '#' || fresh.Metadata["tags"] == "mutated" {
 		t.Error("DefaultPolicySeed shares state between calls")
 	}
+}
+
+func TestPolicySeedFromFile(t *testing.T) {
+	t.Run("carries the file body and the shared metadata", func(t *testing.T) {
+		body := "# Write Policy\n\nOurs.\n\nstrictness: block\nrequire_tags: category\n"
+		seed, err := PolicySeedFromFile(writePolicy(t, body))
+		if err != nil {
+			t.Fatalf("PolicySeedFromFile: %v", err)
+		}
+		if string(seed.Body) != body {
+			t.Errorf("body = %q", seed.Body)
+		}
+		for key, expected := range DefaultPolicySeed().Metadata {
+			if seed.Metadata[key] != expected {
+				t.Errorf("metadata[%q] = %q, want %q", key, seed.Metadata[key], expected)
+			}
+		}
+	})
+
+	t.Run("rejects a policy that would not survive a publish", func(t *testing.T) {
+		if _, err := PolicySeedFromFile(writePolicy(t, "strictness: nonsense\n")); err == nil {
+			t.Fatal("accepted an unenforceable policy")
+		}
+	})
+
+	t.Run("rejects a missing file", func(t *testing.T) {
+		if _, err := PolicySeedFromFile(filepath.Join(t.TempDir(), "absent.md")); err == nil {
+			t.Fatal("accepted a missing file")
+		}
+	})
+
+	t.Run("rejects a directory", func(t *testing.T) {
+		if _, err := PolicySeedFromFile(t.TempDir()); err == nil {
+			t.Fatal("accepted a directory")
+		}
+	})
+
+	t.Run("rejects a body past the protocol limit", func(t *testing.T) {
+		oversize := "strictness: warn\n" + strings.Repeat("x", protocol.MaxBodyLength)
+		_, err := PolicySeedFromFile(writePolicy(t, oversize))
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("oversize error = %v", err)
+		}
+	})
+}
+
+func writePolicy(t *testing.T, body string) string {
+	t.Helper()
+	name := filepath.Join(t.TempDir(), "policy.md")
+	if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	return name
 }

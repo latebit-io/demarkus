@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
@@ -63,6 +64,14 @@ func worldFragment(name, worldID, tokensFile string, bootstrap bool) string {
       tokensFile: %s
     bootstrap: %t
 `, name, name, name, worldID, tokensFile, bootstrap)
+}
+
+// worldPolicyFragment renders a statically configured world whose initial
+// policy comes from a local file instead of the embedded default.
+func worldPolicyFragment(name, worldID, tokensFile, policyFile string) string {
+	return worldFragment(name, worldID, tokensFile, false) + fmt.Sprintf(`    policy:
+      file: %s
+`, policyFile)
 }
 
 func newWorldsHarness(t *testing.T, fragment string) *worldsTestHarness {
@@ -127,7 +136,8 @@ tls:
 	if err != nil {
 		cancel()
 		group.Wait()
-		return nil, err
+		// The harness carries the stores the failed open touched.
+		return h, err
 	}
 	h.manager = manager
 	t.Cleanup(func() {
@@ -152,6 +162,34 @@ func writeTokens(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func (h *worldsTestHarness) objects(t *testing.T, world string) *blob.Memory {
+	t.Helper()
+	h.storesMu.Lock()
+	defer h.storesMu.Unlock()
+	store := h.stores[world]
+	if store == nil {
+		t.Fatalf("no store opened for %s", world)
+	}
+	return store
+}
+
+// seededPolicy reopens the world with enforcement on and returns its policy,
+// which only exists if the manager seeded one.
+func (h *worldsTestHarness) seededPolicy(t *testing.T, world string) *protocolstore.Document {
+	t.Helper()
+	store, err := bucketstore.Open(context.Background(), h.objects(t, world), bucketstore.Options{
+		WorldID: testWorldID, RequirePolicy: true,
+	})
+	if err != nil {
+		t.Fatalf("reopen seeded world: %v", err)
+	}
+	document, err := store.Get(publishpolicy.DocumentPath, 0)
+	if err != nil {
+		t.Fatalf("get seeded policy: %v", err)
+	}
+	return document
 }
 
 func (h *worldsTestHarness) routes(authority string) bool {
@@ -215,13 +253,7 @@ func TestWorldManagerBootstrapInitializesGenesis(t *testing.T) {
 
 	// The memory blob store started empty; a successful open proves the
 	// bootstrap path wrote genesis. The head object must now exist.
-	h.storesMu.Lock()
-	store := h.stores["alice"]
-	h.storesMu.Unlock()
-	if store == nil {
-		t.Fatal("no store opened for alice")
-	}
-	if _, err := store.Get(context.Background(), "_demarkus/v1/head.json"); err != nil {
+	if _, err := h.objects(t, "alice").Get(context.Background(), "_demarkus/v1/head.json"); err != nil {
 		t.Fatalf("bootstrap did not create genesis head: %v", err)
 	}
 }
@@ -238,21 +270,51 @@ func TestWorldManagerSeedsDefaultPolicyForStaticWorld(t *testing.T) {
 
 	// The world enforces policy, so the open could only succeed if it
 	// created genesis and seeded the default policy itself.
-	h.storesMu.Lock()
-	objects := h.stores["acme"]
-	h.storesMu.Unlock()
-	store, err := bucketstore.Open(context.Background(), objects, bucketstore.Options{
-		WorldID: testWorldID, RequirePolicy: true,
-	})
-	if err != nil {
-		t.Fatalf("reopen seeded world: %v", err)
-	}
-	document, err := store.Get(publishpolicy.DocumentPath, 0)
-	if err != nil {
-		t.Fatalf("get seeded policy: %v", err)
-	}
+	document := h.seededPolicy(t, "acme")
 	if !bytes.Equal(document.Content, knowledgeseed.DefaultPolicySeed().Body) {
 		t.Errorf("seeded policy = %q", document.Content)
+	}
+}
+
+func TestWorldManagerSeedsConfiguredPolicyFile(t *testing.T) {
+	tokens := writeTokens(t, t.TempDir(), "acme")
+	body := "# Write Policy\n\nOurs from the start.\n\nstrictness: block\nrequire_tags: category\n"
+	policyFile := filepath.Join(t.TempDir(), "policy.md")
+	if err := os.WriteFile(policyFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	worlds := "worlds:\n" + worldPolicyFragment("acme", testWorldID, tokens, policyFile)
+	h, err := openHarness(t, t.TempDir(), worlds, nil)
+	if err != nil {
+		t.Fatalf("world with a configured policy file must come up: %v", err)
+	}
+
+	// Version 1: the operator's policy is the world's first, not a second
+	// version published over the embedded default.
+	document := h.seededPolicy(t, "acme")
+	if string(document.Content) != body || document.Version != 1 {
+		t.Errorf("seeded policy = version %d %q", document.Version, document.Content)
+	}
+	if bytes.Equal(document.Content, knowledgeseed.DefaultPolicySeed().Body) {
+		t.Error("configured policy file did not override the embedded default")
+	}
+}
+
+func TestWorldManagerRefusesUnreadablePolicyFile(t *testing.T) {
+	tokens := writeTokens(t, t.TempDir(), "acme")
+	missing := filepath.Join(t.TempDir(), "absent.md")
+	worlds := "worlds:\n" + worldPolicyFragment("acme", testWorldID, tokens, missing)
+	h, err := openHarness(t, t.TempDir(), worlds, nil)
+	if err == nil {
+		t.Fatal("manager started with an unreadable policy file")
+	}
+	// The seed is read before genesis, so a bad file leaves no world behind.
+	listed, err := h.objects(t, "acme").List(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(listed.Objects) != 0 {
+		t.Errorf("objects created = %d, want none", len(listed.Objects))
 	}
 }
 

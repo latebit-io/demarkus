@@ -85,7 +85,7 @@ See [full install docs](https://www.demarkus.io/install/) for platform-specific 
 
 ### Production knowledge system
 
-`demarkus-knowledge-server` hosts many isolated worlds in one process: TLS SNI selects the world, each world has its own GCS bucket, tokens, policy, and rate limits. It runs as two or more stateless replicas; writes race on a compare-and-swap head object in the bucket, so there is no leader election and no persistent volumes. Deploy with the [`deploy/helm/demarkus-knowledge-server`](deploy/helm/demarkus-knowledge-server/) chart; `demarkus-knowledge-bootstrap` initializes a world bucket and seeds its publish policy.
+`demarkus-knowledge-server` hosts many isolated worlds in one process: TLS SNI selects the world, each world has its own GCS bucket, tokens, policy, and rate limits. It runs as two or more stateless replicas; writes race on a compare-and-swap head object in the bucket, so there is no leader election and no persistent volumes. Deploy with the [`deploy/helm/demarkus-knowledge-server`](deploy/helm/demarkus-knowledge-server/) chart; an empty bucket becomes a world on first start, seeded with the chart's initial write policy or the server's warn-level default.
 
 ### See it in action
 
@@ -120,7 +120,6 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-knowledge-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with system-wide catalog lookup (`mark_lookup_all`) |
 | `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private memory world per identity: memory as a service with dynamic tenant provisioning |
 | `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
-| `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its publish policy |
 
 ## Protocol at a Glance
 
@@ -191,7 +190,7 @@ See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full
 git clone https://github.com/latebit-io/demarkus.git
 cd demarkus
 make all   # protocol, server, client, tools
-make knowledge-server   # demarkus-knowledge-server + demarkus-knowledge-bootstrap
+make knowledge-server   # demarkus-knowledge-server
 ```
 
 Requires Go 1.26+. Binaries land in `server/bin/`, `client/bin/`, and `tools/bin/`.
