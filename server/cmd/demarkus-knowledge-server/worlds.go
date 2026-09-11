@@ -14,6 +14,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
+	"github.com/latebit-io/demarkus/server/internal/knowledge/knowledgeseed"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/snirouter"
 	"github.com/latebit-io/demarkus/server/internal/worldruntime"
@@ -192,10 +193,15 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 			return fmt.Errorf("bootstrap genesis: %w", err)
 		}
 	}
+	seed, err := m.prepareEnforcedWorld(ctx, objects, world)
+	if err != nil {
+		return err
+	}
 	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
 		WorldID:        world.Bucket.WorldID,
 		RequestTimeout: time.Duration(world.Limits.RequestTimeout),
 		RequirePolicy:  !world.Bootstrap,
+		PolicySeed:     seed,
 		MaxDocuments:   world.Limits.MaxDocuments,
 	})
 	if err != nil {
@@ -229,6 +235,33 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	m.acquireTokenWatchLocked(world.Auth.TokensFile)
 	m.logger.Info("world opened", "world", world.Name, "bootstrap", world.Bootstrap)
 	return nil
+}
+
+// prepareEnforcedWorld creates an enforcing world's genesis when its bucket
+// is empty and returns the policy seed to open with, so a new world needs no
+// out-of-band bootstrap. Nil for the provisioned and read-only paths.
+func (m *worldManager) prepareEnforcedWorld(
+	ctx context.Context,
+	objects blob.Store,
+	world *knowledgeconfig.WorldConfig,
+) (*bucketstore.PolicySeed, error) {
+	if world.Bootstrap || world.ReadOnly {
+		return nil, nil
+	}
+	created, err := bucketstore.EnsureWorld(ctx, objects, world.Bucket.WorldID)
+	if err != nil {
+		return nil, err
+	}
+	if created {
+		// Loud on purpose: an empty bucket is normally a first install,
+		// but it is also what a wrong bucket URL looks like.
+		m.logger.Warn("created a new world in an empty bucket",
+			"world", world.Name, "bucket", world.Bucket.Name(), "worldID", world.Bucket.WorldID)
+	}
+	return &bucketstore.PolicySeed{
+		Body:     knowledgeseed.PolicyBody(),
+		Metadata: knowledgeseed.PolicyMetadata(),
+	}, nil
 }
 
 // dirWatch is one refcounted configwatch watcher covering every world

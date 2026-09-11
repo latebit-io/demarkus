@@ -12,6 +12,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob/gcs"
+	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 )
 
@@ -102,7 +103,7 @@ func loadConfig(arguments []string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	if err := validatePolicy(policy); err != nil {
+	if err := bucketstore.ValidatePolicySeed(bucketstore.PolicySeed{Body: policy, Metadata: policyMetadata}); err != nil {
 		return config{}, err
 	}
 	return config{bucketName: bucketName, worldID: *worldID, policy: policy}, nil

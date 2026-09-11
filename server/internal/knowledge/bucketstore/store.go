@@ -31,6 +31,9 @@ type Options struct {
 	RequestTimeout time.Duration
 	ShardWorkers   int
 	RequirePolicy  bool
+	// PolicySeed is published create-only when RequirePolicy is set and
+	// the world holds no policy yet; nil makes a missing policy fatal.
+	PolicySeed *PolicySeed
 	// MaxDocuments caps distinct document paths (0 = unlimited); a new
 	// path beyond the cap is rejected. Approximate under concurrency:
 	// a per-tenant quota, not an exact invariant.
@@ -130,7 +133,9 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		worldID:        options.WorldID,
 		requestTimeout: options.RequestTimeout,
 		shardWorkers:   options.ShardWorkers,
-		requirePolicy:  options.RequirePolicy,
+		// Enforcement switches on only after ensurePolicy: a seeding
+		// write must not be gated by the policy it is creating.
+		requirePolicy:  false,
 		logger:         options.Logger,
 		maxDocuments:   options.MaxDocuments,
 		commitToken:    make(chan struct{}, 1),
@@ -156,15 +161,14 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		store.refreshMu.Unlock()
 		return nil, fmt.Errorf("open bucket store: %w", err)
 	}
-	if store.requirePolicy {
-		view := &readView{ctx: requestCtx, objects: store.objects, snapshot: loaded}
-		if _, err := view.currentPolicy(true); err != nil {
-			store.refreshMu.Unlock()
-			return nil, fmt.Errorf("open bucket store: %w", err)
-		}
-	}
 	store.snapshot.Store(loaded)
 	store.refreshMu.Unlock()
+	if options.RequirePolicy {
+		if err := store.ensurePolicy(ctx, options.PolicySeed); err != nil {
+			return nil, fmt.Errorf("open bucket store: %w", err)
+		}
+		store.requirePolicy = true
+	}
 	return store, nil
 }
 
