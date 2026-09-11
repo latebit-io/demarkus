@@ -6,6 +6,7 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 
@@ -54,7 +55,7 @@ func PolicySeedFromFile(name string) (bucketstore.PolicySeed, error) {
 }
 
 func readPolicyFile(name string) ([]byte, error) {
-	// Stat before open: opening a FIFO blocks, and a device reads unbounded.
+	// Stat before open: opening a FIFO blocks until a writer appears.
 	info, err := os.Stat(name)
 	if err != nil {
 		return nil, fmt.Errorf("stat policy file: %w", err)
@@ -62,12 +63,19 @@ func readPolicyFile(name string) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("policy file %q must be a regular file", name)
 	}
-	if info.Size() > protocol.MaxBodyLength {
-		return nil, fmt.Errorf("policy file %q exceeds %d bytes", name, protocol.MaxBodyLength)
+	file, err := os.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open policy file: %w", err)
 	}
-	body, err := os.ReadFile(name)
+	// Read-only: a close error cannot lose data. The bound is on the read
+	// itself, so a file swapped after the stat cannot allocate past it.
+	defer func() { _ = file.Close() }()
+	body, err := io.ReadAll(io.LimitReader(file, protocol.MaxBodyLength+1))
 	if err != nil {
 		return nil, fmt.Errorf("read policy file: %w", err)
+	}
+	if len(body) > protocol.MaxBodyLength {
+		return nil, fmt.Errorf("policy file %q exceeds %d bytes", name, protocol.MaxBodyLength)
 	}
 	return body, nil
 }

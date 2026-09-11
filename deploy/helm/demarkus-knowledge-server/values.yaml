@@ -12,9 +12,9 @@ server:
   maxIncomingStreams: 128
   idleTimeout: 30s
 
-# Supply at least one world. An empty bucket is created and seeded on first
-# start; token Secrets are bootstrapped per world by the pre-install Job
-# below (tokens.bootstrap) unless already present.
+# Static worlds; empty is valid only with dynamicWorlds below. An existing
+# empty bucket is initialized and seeded on first start; token Secrets are
+# bootstrapped per world by the pre-install Job (tokens.bootstrap).
 worlds: []
 
 tokens:
@@ -56,12 +56,10 @@ dynamicWorlds:
 
 worldDefaults:
   readOnly: false
-  # Body of the world's first write policy, shipped in the config ConfigMap
-  # and seeded as version 1 of /.well-known/demarkus/policy.md. Empty uses
-  # the server's embedded warn-level default. Create-only: once a world has
-  # a policy, this is ignored and never reverts it. Set it per world to
-  # override. Prose must never begin a line with strictness:, require_tags:,
-  # or require_fields:, which parse as directives anywhere in the body.
+  # Seeded as version 1 of /.well-known/demarkus/policy.md when the world is
+  # created; empty uses the embedded warn-level default, and a world that has
+  # a policy keeps it. Prose must never begin a line with a directive name
+  # (strictness:, require_tags:, require_fields:).
   initialPolicy: ""
   limits:
     maxConcurrentRequests: 32
