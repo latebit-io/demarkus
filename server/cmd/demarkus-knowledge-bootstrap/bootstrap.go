@@ -15,22 +15,22 @@ import (
 
 // policyMetadata is shared with the server's default seed so the two
 // entry points cannot drift on the catalog axes a policy must carry.
-var policyMetadata = knowledgeseed.PolicyMetadata()
+var policyMetadata = knowledgeseed.DefaultPolicySeed().Metadata
 
 func bootstrap(ctx context.Context, objects blob.Store, worldID string, policy []byte) error {
 	seed := bucketstore.PolicySeed{Body: policy, Metadata: policyMetadata}
+	// Validated before Initialize so an unusable policy creates no objects.
 	if err := bucketstore.ValidatePolicySeed(seed); err != nil {
 		return err
 	}
 	if err := bucketstore.Initialize(ctx, objects, worldID); err != nil {
 		return fmt.Errorf("initialize bucket: %w", err)
 	}
-	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{WorldID: worldID})
+	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
+		WorldID: worldID, RequirePolicy: true, PolicySeed: &seed,
+	})
 	if err != nil {
-		return fmt.Errorf("open initialized bucket: %w", err)
-	}
-	if _, err := store.SeedPolicy(seed); err != nil {
-		return err
+		return fmt.Errorf("seed and enforce policy: %w", err)
 	}
 	// Unlike the server, the operator named an exact policy: an existing
 	// document that differs is a mistake to report, not a world to adopt.
@@ -38,13 +38,7 @@ func bootstrap(ctx context.Context, objects blob.Store, worldID string, policy [
 	if err != nil {
 		return fmt.Errorf("read seeded policy: %w", err)
 	}
-	if err := verifyPolicy(document, policy); err != nil {
-		return err
-	}
-	if _, err := bucketstore.Open(ctx, objects, bucketstore.Options{WorldID: worldID, RequirePolicy: true}); err != nil {
-		return fmt.Errorf("verify required policy: %w", err)
-	}
-	return nil
+	return verifyPolicy(document, policy)
 }
 
 func verifyPolicy(document *protocolstore.Document, policy []byte) error {

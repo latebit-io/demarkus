@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
@@ -33,19 +32,17 @@ func ValidatePolicySeed(seed PolicySeed) error {
 	return nil
 }
 
-// SeedPolicy publishes seed as the world's policy when it has none and
+// createPolicy publishes seed as the world's policy when it has none and
 // reports whether it created one. Create-only, so a restart never reverts
 // a policy that replaced an earlier seed.
-func (store *Store) SeedPolicy(seed PolicySeed) (bool, error) {
+func (store *Store) createPolicy(seed PolicySeed) (bool, error) {
+	// The installed snapshot is the same freshness currentPolicy trusts,
+	// and an archived entry counts as present so no seed overwrites it.
+	if _, exists := store.snapshot.Load().Paths[publishpolicy.DocumentPath]; exists {
+		return false, nil
+	}
 	if err := ValidatePolicySeed(seed); err != nil {
 		return false, err
-	}
-	_, err := store.Get(publishpolicy.DocumentPath, 0)
-	switch {
-	case err == nil:
-		return false, nil
-	case !errors.Is(err, os.ErrNotExist):
-		return false, fmt.Errorf("check existing policy: %w", err)
 	}
 	if _, err := store.WriteVersion(publishpolicy.DocumentPath, 0, seed.Body, seed.Metadata); err != nil {
 		// A concurrent replica won the create; its policy stands.
@@ -58,8 +55,8 @@ func (store *Store) SeedPolicy(seed PolicySeed) (bool, error) {
 }
 
 // EnsureWorld creates the world's genesis when the bucket is empty and
-// reports whether it did. Objects but no world head is refused: that is
-// another bucket, not a new world, usually a misconfigured bucket URL.
+// reports whether it did. Objects but no head is refused as a misconfigured
+// bucket URL: an advisory check, not a lock against foreign writers.
 func EnsureWorld(ctx context.Context, objects blob.Store, worldID string) (bool, error) {
 	if ctx == nil {
 		return false, fmt.Errorf("ensure world: %w: context is nil", blob.ErrPrecondition)
@@ -93,7 +90,12 @@ func EnsureWorld(ctx context.Context, objects blob.Store, worldID string) (bool,
 // the world actually holds.
 func (store *Store) ensurePolicy(ctx context.Context, seed *PolicySeed) error {
 	if seed != nil {
-		created, err := store.SeedPolicy(*seed)
+		// Mutations in this store carry their own request timeout, so a
+		// started write outlives a canceled ctx; refuse to start one.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("seed policy: %w", err)
+		}
+		created, err := store.createPolicy(*seed)
 		if err != nil {
 			return err
 		}
@@ -104,9 +106,7 @@ func (store *Store) ensurePolicy(ctx context.Context, seed *PolicySeed) error {
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
-	view := &readView{ctx: requestCtx, objects: store.objects, snapshot: store.snapshot.Load()}
-	if _, err := view.currentPolicy(true); err != nil {
-		return err
-	}
-	return nil
+	view := &readView{ctx: requestCtx, cancel: func() {}, objects: store.objects, snapshot: store.snapshot.Load()}
+	_, err := view.currentPolicy(true)
+	return err
 }

@@ -14,7 +14,7 @@ import (
 func defaultSeed() PolicySeed {
 	return PolicySeed{
 		Body:     []byte("# Write Policy\n\nDefault.\n\nstrictness: warn\n"),
-		Metadata: map[string]string{"title": "Write Policy", "tags": "category:governance", "importance": "1"},
+		Metadata: policyMetadata(),
 	}
 }
 
@@ -43,19 +43,16 @@ func TestOpenSeedsMissingPolicy(t *testing.T) {
 func TestOpenLeavesCuratedPolicyInPlace(t *testing.T) {
 	objects := initializedMemory(t)
 	seed := defaultSeed()
-	if _, err := Open(context.Background(), objects, Options{
+	store, err := Open(context.Background(), objects, Options{
 		WorldID: testWorldID, RequirePolicy: true, PolicySeed: &seed,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
 
 	// The agent replaces the seed with the real policy, then the world
 	// restarts: a restart must not revert curated policy.
 	curated := "# Write Policy\n\nCurated.\n\nstrictness: block\nrequire_tags: category\n"
-	store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
-	if err != nil {
-		t.Fatalf("reopen for overwrite: %v", err)
-	}
 	seedPolicy(t, store, curated, 1)
 
 	restarted, err := Open(context.Background(), objects, Options{
@@ -80,8 +77,8 @@ func TestSeedPolicyRejectsInvalidSeed(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	seed := PolicySeed{Body: []byte("strictness: nonsense\n"), Metadata: map[string]string{"tags": "category:governance"}}
-	if _, err := store.SeedPolicy(seed); err == nil {
-		t.Fatal("SeedPolicy accepted an unenforceable policy")
+	if _, err := store.createPolicy(seed); err == nil {
+		t.Fatal("createPolicy accepted an unenforceable policy")
 	}
 	if _, err := store.Get(publishpolicy.DocumentPath, 0); err == nil {
 		t.Error("rejected seed was written anyway")
@@ -131,4 +128,23 @@ func TestEnsureWorld(t *testing.T) {
 			t.Errorf("error does not name the cause: %v", err)
 		}
 	})
+}
+
+func TestEnsurePolicyRefusesCanceledContext(t *testing.T) {
+	objects := initializedMemory(t)
+	store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Cancellation can land after the index phase, the one window where a
+	// seeding write would otherwise outlive the open that asked for it.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	seed := defaultSeed()
+	if err := store.ensurePolicy(ctx, &seed); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ensurePolicy error = %v, want context canceled", err)
+	}
+	if _, err := store.Get(publishpolicy.DocumentPath, 0); err == nil {
+		t.Error("canceled open seeded a policy anyway")
+	}
 }

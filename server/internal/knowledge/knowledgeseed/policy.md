@@ -14,14 +14,8 @@ Set a `metadata` object with `tags`, a comma-separated list of subjects drawn fr
 
 Metadata travels out of band, so none of it belongs in the body. A document that opens with a frontmatter fence stores that fence literally.
 
-## Enforcement you can add
-
-Use `require_tags: category` to demand a category axis on every publish, and `require_fields: type` to demand a document kind. Keep the two satisfiable together, because one publish has to be able to meet every axis and field at once.
-
-Raise strictness to `block` once the taxonomy is settled, or to `ask` when a person should approve a violating write.
-
 ## Style baseline
 
 Every document opens with a `# H1` name and a one-sentence summary directly beneath it. Headings are anchors, so they stay unique within a document. No em dashes.
 
-Never set `metadata.retention` unless the owner asks for it. It permanently deletes all but the newest versions, and history is the point of a versioned store.
+Never set `metadata.retention` on curated knowledge: a positive value permanently deletes every version but the newest few it keeps, and that history is the point of a versioned store. Reserve it for generated documents such as graph exports and indexes, and only when the owner asks for it.

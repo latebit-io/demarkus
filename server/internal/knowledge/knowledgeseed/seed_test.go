@@ -7,16 +7,16 @@ import (
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
-func TestPolicyBodyParsesPermissive(t *testing.T) {
-	policy := publishpolicy.Parse(string(PolicyBody()))
+func TestDefaultPolicyParsesPermissive(t *testing.T) {
+	policy := publishpolicy.Parse(string(DefaultPolicySeed().Body))
 	if err := policy.Validate(); err != nil {
 		t.Fatalf("validate default policy: %v", err)
 	}
 	if policy.Strictness != publishpolicy.Warn {
 		t.Errorf("strictness = %q, want %q", policy.Strictness, publishpolicy.Warn)
 	}
-	// Prose documents the tightening directives; a seeded world must not
-	// inherit them, or its first publish fails on axes nobody chose.
+	// A seeded world must not inherit axes nobody chose, so prose naming a
+	// directive must never start the line it sits on.
 	if len(policy.RequiredTagAxes) != 0 {
 		t.Errorf("required tag axes = %v, want none", policy.RequiredTagAxes)
 	}
@@ -25,28 +25,22 @@ func TestPolicyBodyParsesPermissive(t *testing.T) {
 	}
 }
 
-func TestPolicyBodyFollowsStyleBaseline(t *testing.T) {
-	body := string(PolicyBody())
+func TestDefaultPolicyFollowsStyleBaseline(t *testing.T) {
+	body := string(DefaultPolicySeed().Body)
 	if !strings.HasPrefix(body, "# ") {
 		t.Error("policy does not open with an H1 name")
-	}
-	if strings.HasPrefix(body, "---") {
-		t.Error("policy opens with a frontmatter fence")
 	}
 	if strings.Contains(body, "—") {
 		t.Error("policy contains an em dash")
 	}
 }
 
-func TestAccessorsCopy(t *testing.T) {
-	body := PolicyBody()
-	body[0] = 'x'
-	if PolicyBody()[0] != '#' {
-		t.Error("PolicyBody exposed the embedded slice")
-	}
-	metadata := PolicyMetadata()
-	metadata["tags"] = "mutated"
-	if PolicyMetadata()["tags"] == "mutated" {
-		t.Error("PolicyMetadata exposed the shared map")
+func TestDefaultPolicySeedIsFresh(t *testing.T) {
+	seed := DefaultPolicySeed()
+	seed.Body[0] = 'x'
+	seed.Metadata["tags"] = "mutated"
+	fresh := DefaultPolicySeed()
+	if fresh.Body[0] != '#' || fresh.Metadata["tags"] == "mutated" {
+		t.Error("DefaultPolicySeed shares state between calls")
 	}
 }

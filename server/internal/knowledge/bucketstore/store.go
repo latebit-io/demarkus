@@ -133,9 +133,6 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		worldID:        options.WorldID,
 		requestTimeout: options.RequestTimeout,
 		shardWorkers:   options.ShardWorkers,
-		// Enforcement switches on only after ensurePolicy: a seeding
-		// write must not be gated by the policy it is creating.
-		requirePolicy:  false,
 		logger:         options.Logger,
 		maxDocuments:   options.MaxDocuments,
 		commitToken:    make(chan struct{}, 1),
@@ -167,6 +164,8 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		if err := store.ensurePolicy(ctx, options.PolicySeed); err != nil {
 			return nil, fmt.Errorf("open bucket store: %w", err)
 		}
+		// Enforcement switches on only here: a seeding write must not be
+		// gated by the policy it creates, and no caller holds the store yet.
 		store.requirePolicy = true
 	}
 	return store, nil

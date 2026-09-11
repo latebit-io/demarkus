@@ -6,6 +6,8 @@ import (
 	"bytes"
 	_ "embed"
 	"maps"
+
+	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 )
 
 // policyBody is the default write policy. Directives parse anywhere in the
@@ -24,12 +26,11 @@ var policyMetadata = map[string]string{
 	"type":       "Reference",
 }
 
-// PolicyBody returns a copy of the default write policy document.
-func PolicyBody() []byte {
-	return bytes.Clone(policyBody)
-}
-
-// PolicyMetadata returns a copy of the default policy's catalog metadata.
-func PolicyMetadata() map[string]string {
-	return maps.Clone(policyMetadata)
+// DefaultPolicySeed returns the default write policy as a fresh seed, so a
+// caller can neither mutate the embedded body nor share its metadata map.
+func DefaultPolicySeed() bucketstore.PolicySeed {
+	return bucketstore.PolicySeed{
+		Body:     bytes.Clone(policyBody),
+		Metadata: maps.Clone(policyMetadata),
+	}
 }
