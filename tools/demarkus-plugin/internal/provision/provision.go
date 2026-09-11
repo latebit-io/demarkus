@@ -1671,31 +1671,61 @@ func Status() (string, error) {
 	return fmt.Sprintf("mode=%s memory=%s port=%s: %s\ndesired=%s", cfg.Mode, cfg.MemoryDir, cfg.Port, verdict, desiredVersions()), nil
 }
 
-// serverExecutable resolves pid's executable path: /proc/<pid>/exe where that
-// exists, else ps comm=, which is a full path on macOS but a truncated name on
-// Linux, so a non-absolute answer is discarded rather than guessed at.
+// serverExecutable resolves pid's executable, refusing anything this plugin must
+// not run: another user's process, or a file someone else can rewrite. Owner and
+// path come from one observation, so a recycled PID cannot split the two.
 func serverExecutable(pid int) string {
-	if p, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
-		return strings.TrimSuffix(p, " (deleted)")
+	// Readlink on another user's process fails unless we are privileged, so
+	// success already ties the path to a process we own.
+	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err == nil {
+		exe = strings.TrimSuffix(exe, " (deleted)")
+	} else {
+		exe = psOwnedExecutable(pid)
 	}
-	p := psBounded(nil, "-p", strconv.Itoa(pid), "-o", "comm=")
-	if !filepath.IsAbs(p) {
+	if !filepath.IsAbs(exe) {
 		return ""
 	}
-	return p
+	return exe
 }
 
-// processUID reports pid's owner, ok false when it cannot be determined.
-func processUID(pid int) (int, bool) {
-	var st syscall.Stat_t
-	if err := syscall.Stat(fmt.Sprintf("/proc/%d", pid), &st); err == nil {
-		return int(st.Uid), true
+// psOwnedExecutable reads pid's owner and executable in a single ps observation
+// so the two cannot describe different processes. Empty unless the owner is us,
+// or where ps reports a bare name (Linux comm) rather than a path.
+func psOwnedExecutable(pid int) string {
+	line := psBounded(nil, "-p", strconv.Itoa(pid), "-o", "uid=,comm=")
+	uidField, exe, found := strings.Cut(strings.TrimSpace(line), " ")
+	if !found {
+		return ""
 	}
-	uid, err := strconv.Atoi(psBounded(nil, "-p", strconv.Itoa(pid), "-o", "uid="))
+	uid, err := strconv.Atoi(uidField)
+	if err != nil || uid != os.Getuid() {
+		return ""
+	}
+	return strings.TrimSpace(exe)
+}
+
+// execRefusal explains why the probe must not run p, empty when it is safe: a
+// regular executable owned by us or root that other users cannot rewrite.
+func execRefusal(p string) string {
+	info, err := os.Stat(p)
 	if err != nil {
-		return 0, false
+		return "cannot be read"
 	}
-	return uid, true
+	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return "is not a regular executable"
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return "is writable by other users"
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "has unreadable ownership"
+	}
+	if int(st.Uid) != os.Getuid() && st.Uid != 0 {
+		return "is owned by another user"
+	}
+	return ""
 }
 
 // binaryReplaceSkew absorbs the one-second granularity of ps lstart and the
@@ -1710,9 +1740,8 @@ var lstartLayouts = []string{"Mon _2 Jan 15:04:05 2006", "Mon Jan _2 15:04:05 20
 // processStart reports when pid started. ok is false whenever that cannot be
 // established, which every caller treats as "stay silent".
 func processStart(pid int) (time.Time, bool) {
-	if info, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
-		return info.ModTime(), true
-	}
+	// /proc/<pid> ModTime is not a defined start time: it can reflect when the
+	// procfs entry was instantiated, which hides a replacement. ps lstart is.
 	out := psBounded([]string{"LC_ALL=C"}, "-p", strconv.Itoa(pid), "-o", "lstart=") // lstart is locale-formatted
 	if out == "" {
 		return time.Time{}, false
@@ -1750,14 +1779,12 @@ func semverLess(a, b string) (less, ok bool) {
 // below the pinned floor, or a process predating the binary it was started from.
 // Empty when current or undeterminable; never restarts a server it does not own.
 func reuseDriftWarning(pid int) string {
-	// The probe runs the adopted process's own executable, so a PID belonging to
-	// another user would have us execute a path they chose. Ours or nothing.
-	if uid, ok := processUID(pid); !ok || uid != os.Getuid() {
-		return ""
-	}
 	exe := serverExecutable(pid)
 	if exe == "" {
 		return ""
+	}
+	if why := execRefusal(exe); why != "" {
+		return fmt.Sprintf("cannot version-check the reused demarkus server (pid %d): its binary %s %s, so this plugin will not run it. Drift goes unreported until that is fixed.", pid, exe, why)
 	}
 	got := binaryVersionAt(exe)
 	if less, ok := semverLess(got, serverVersion); ok && less {

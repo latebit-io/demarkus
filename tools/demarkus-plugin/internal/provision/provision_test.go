@@ -915,12 +915,21 @@ func TestProcessStart(t *testing.T) {
 	}
 	t.Cleanup(func() { stopProcess(t, cmd) })
 
+	// Wait before the first lookup: an implementation that stamps the time of
+	// inspection rather than of launch would pass without this, and would then
+	// miss a binary replaced during the gap.
+	const settle = 2 * time.Second
+	time.Sleep(settle)
+
 	started, ok := processStart(cmd.Process.Pid)
 	if !ok {
 		t.Fatalf("processStart(live pid) ok = false, want true")
 	}
-	if d := time.Since(started); d < -time.Minute || d > time.Minute {
-		t.Errorf("processStart(live pid) = %v, %v from now; want within a minute", started, d)
+	if d := time.Since(started); d < settle-time.Second {
+		t.Errorf("processStart(live pid) = %v, only %v ago; want the launch time, not the lookup time", started, d)
+	}
+	if d := time.Since(started); d > time.Minute {
+		t.Errorf("processStart(live pid) = %v, %v ago; want within a minute", started, d)
 	}
 
 	// Kill it, then ask about a pid that is certainly gone.
@@ -1079,5 +1088,58 @@ func TestReuseDriftWarningBinaryReplaced(t *testing.T) {
 	w := reuseDriftWarning(pid)
 	if !strings.Contains(w, "replaced") || !strings.Contains(w, exe) {
 		t.Errorf("reuseDriftWarning = %q, want it to report %s was replaced", w, exe)
+	}
+}
+
+// TestExecRefusal pins the gate that stops the probe running a file another user
+// could have rewritten between the adoption and the probe.
+func TestExecRefusal(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, mode os.FileMode) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\ntrue\n"), mode); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		if err := os.Chmod(p, mode); err != nil { // WriteFile respects umask
+			t.Fatalf("chmod %s: %v", name, err)
+		}
+		return p
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "owned and not writable by others", path: write("ok", 0o755)},
+		{name: "world writable", path: write("world-writable", 0o777), want: "is writable by other users"},
+		{name: "group writable", path: write("group-writable", 0o775), want: "is writable by other users"},
+		{name: "not executable", path: write("plain", 0o644), want: "is not a regular executable"},
+		{name: "directory", path: dir, want: "is not a regular executable"},
+		{name: "missing", path: filepath.Join(dir, "absent"), want: "cannot be read"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := execRefusal(tt.path); got != tt.want {
+				t.Errorf("execRefusal(%s) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReuseDriftWarningRefusesUnsafeBinary checks a binary others can rewrite is
+// reported as an unchecked server rather than passed off as healthy.
+func TestReuseDriftWarningRefusesUnsafeBinary(t *testing.T) {
+	t.Setenv("STUB_VERSION", "0.1.0")
+	exe := buildVersionStub(t)
+	pid := startStub(t, exe)
+	if err := os.Chmod(exe, 0o777); err != nil {
+		t.Fatalf("chmod stub: %v", err)
+	}
+
+	w := reuseDriftWarning(pid)
+	if !strings.Contains(w, "cannot version-check") || !strings.Contains(w, "writable by other users") {
+		t.Errorf("reuseDriftWarning = %q, want a refusal naming the permissions", w)
 	}
 }
