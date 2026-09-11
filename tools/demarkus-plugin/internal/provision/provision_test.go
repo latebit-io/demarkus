@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
@@ -842,5 +843,157 @@ func TestTokensFromArgv(t *testing.T) {
 		if got := tokensFromArgv(c.argv); got != c.want {
 			t.Errorf("%s: tokensFromArgv(%v) = %q, want %q", c.name, c.argv, got, c.want)
 		}
+	}
+}
+
+// TestSemverLess covers the ordering and the not-a-release cases where no
+// ordering exists, which the drift probe must treat as "say nothing".
+func TestSemverLess(t *testing.T) {
+	tests := []struct {
+		name     string
+		a, b     string
+		wantLess bool
+		wantOK   bool
+	}{
+		{name: "patch behind", a: "0.35.0", b: "0.35.1", wantLess: true, wantOK: true},
+		{name: "minor behind", a: "0.17.19", b: "0.35.0", wantLess: true, wantOK: true},
+		{name: "major behind", a: "0.99.99", b: "1.0.0", wantLess: true, wantOK: true},
+		{name: "equal", a: "0.35.0", b: "0.35.0", wantOK: true},
+		{name: "ahead", a: "0.36.0", b: "0.35.0", wantOK: true},
+		{name: "numeric not lexical", a: "0.9.0", b: "0.10.0", wantLess: true, wantOK: true},
+		{name: "dev build", a: "dev", b: "0.35.0"},
+		{name: "tagged build", a: "0.35.0-rc1", b: "0.35.0"},
+		{name: "empty probe", a: "", b: "0.35.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			less, ok := semverLess(tt.a, tt.b)
+			if ok != tt.wantOK {
+				t.Fatalf("semverLess(%q, %q) ok = %v, want %v", tt.a, tt.b, ok, tt.wantOK)
+			}
+			if less != tt.wantLess {
+				t.Errorf("semverLess(%q, %q) less = %v, want %v", tt.a, tt.b, less, tt.wantLess)
+			}
+		})
+	}
+}
+
+// TestBinaryVersionAt checks the path-taking split reports a version, and stays
+// empty for the inputs the drift probe must not read a verdict into.
+func TestBinaryVersionAt(t *testing.T) {
+	dir := t.TempDir()
+
+	good := filepath.Join(dir, "answers")
+	if err := os.WriteFile(good, []byte("#!/bin/sh\necho 0.35.0\n"), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	if got := binaryVersionAt(good); got != "0.35.0" {
+		t.Errorf("binaryVersionAt(executable) = %q, want %q", got, "0.35.0")
+	}
+
+	notExec := filepath.Join(dir, "not-exec")
+	if err := os.WriteFile(notExec, []byte("#!/bin/sh\necho 0.35.0\n"), 0o644); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	if got := binaryVersionAt(notExec); got != "" {
+		t.Errorf("binaryVersionAt(non-executable) = %q, want empty", got)
+	}
+	if got := binaryVersionAt(dir); got != "" {
+		t.Errorf("binaryVersionAt(directory) = %q, want empty", got)
+	}
+	if got := binaryVersionAt(filepath.Join(dir, "absent")); got != "" {
+		t.Errorf("binaryVersionAt(missing) = %q, want empty", got)
+	}
+}
+
+// TestProcessStart pins the contract the drift probe relies on: a real start
+// time for a live process, and ok=false rather than a zero time for a dead one.
+func TestProcessStart(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	started, ok := processStart(cmd.Process.Pid)
+	if !ok {
+		t.Fatalf("processStart(live pid) ok = false, want true")
+	}
+	if d := time.Since(started); d < -time.Minute || d > time.Minute {
+		t.Errorf("processStart(live pid) = %v, %v from now; want within a minute", started, d)
+	}
+
+	// Kill it, then ask about a pid that is certainly gone.
+	pid := cmd.Process.Pid
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if _, ok := processStart(pid); ok {
+		t.Errorf("processStart(dead pid) ok = true, want false")
+	}
+}
+
+// TestServerExecutable checks the resolver returns a runnable absolute path for
+// a live process on whichever mechanism this platform provides.
+func TestServerExecutable(t *testing.T) {
+	// Launch by absolute path: ps comm= echoes how the process was invoked, so a
+	// PATH-resolved name would test nothing the real adopted server does.
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("no sleep on PATH: %v", err)
+	}
+	cmd := exec.Command(sleepPath, "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	exe := serverExecutable(cmd.Process.Pid)
+	if exe == "" {
+		t.Skip("no executable-path mechanism on this platform")
+	}
+	if !filepath.IsAbs(exe) {
+		t.Errorf("serverExecutable = %q, want an absolute path", exe)
+	}
+	if base := filepath.Base(exe); base != "sleep" {
+		t.Errorf("serverExecutable basename = %q, want %q", base, "sleep")
+	}
+}
+
+// TestReuseDriftWarningQuietOnHealthy guards the false-positive direction: a
+// live process whose binary predates it must produce no warning, or every
+// session start would nag. The test binary itself is exactly that shape.
+func TestReuseDriftWarningQuietOnHealthy(t *testing.T) {
+	if w := reuseDriftWarning(os.Getpid()); w != "" {
+		t.Errorf("reuseDriftWarning(self) = %q, want empty", w)
+	}
+}
+
+// TestReuseDriftWarningNoProcess checks an unresolvable pid stays silent rather
+// than inventing a verdict.
+func TestReuseDriftWarningNoProcess(t *testing.T) {
+	if w := reuseDriftWarning(-1); w != "" {
+		t.Errorf("reuseDriftWarning(bad pid) = %q, want empty", w)
+	}
+}
+
+// TestBinaryVersionAtTimeout checks a binary that never answers is bounded
+// rather than left to stall session start.
+func TestBinaryVersionAtTimeout(t *testing.T) {
+	hang := filepath.Join(t.TempDir(), "hangs")
+	if err := os.WriteFile(hang, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	start := time.Now()
+	if got := binaryVersionAt(hang); got != "" {
+		t.Errorf("binaryVersionAt(hanging) = %q, want empty", got)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("binaryVersionAt(hanging) took %v, want bounded near %v", d, versionProbeTimeout)
 	}
 }

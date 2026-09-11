@@ -375,11 +375,26 @@ func binaryVersion(name string) string {
 	if err != nil {
 		return ""
 	}
+	return binaryVersionAt(p)
+}
+
+// versionProbeTimeout bounds the probe: the drift check runs it on an adopted
+// binary this plugin did not install, and a hung one would stall session start.
+const versionProbeTimeout = 2 * time.Second
+
+// binaryVersionAt runs --version on an executable path. Empty when the path is
+// missing, not executable, or the binary is too old or too slow to answer.
+func binaryVersionAt(p string) string {
 	info, err := os.Stat(p)
 	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
 		return ""
 	}
-	cmd := exec.Command(p, "--version")
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, p, "--version")
+	// Killing the probe is not enough: a grandchild inherits the stdout pipe and
+	// Output() blocks on it, so WaitDelay force-closes the pipes after the kill.
+	cmd.WaitDelay = versionProbeTimeout
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
@@ -1634,10 +1649,101 @@ func Status() (string, error) {
 	return fmt.Sprintf("mode=%s memory=%s port=%s: %s\ndesired=%s", cfg.Mode, cfg.MemoryDir, cfg.Port, verdict, desiredVersions()), nil
 }
 
-// HealthWarning echoes a one-line human warning when the configured memory server
-// does not appear to be up, empty when it looks healthy. Best-effort, probe-only
-// (no QUIC round-trip): for managed modes it trusts the .pid liveness;
-// for reuse it scans for the adopted process. (lib.sh server_health_warning.)
+// serverExecutable resolves pid's executable path: /proc/<pid>/exe where that
+// exists, else ps comm=, which is a full path on macOS but a truncated name on
+// Linux, so a non-absolute answer is discarded rather than guessed at.
+func serverExecutable(pid int) string {
+	if p, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
+		return strings.TrimSuffix(p, " (deleted)")
+	}
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil {
+		return ""
+	}
+	p := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(p) {
+		return ""
+	}
+	return p
+}
+
+// binaryReplaceSkew absorbs the one-second granularity of ps lstart and the
+// ordinary gap between installing a binary and launching it, so only a genuine
+// later replacement warns.
+const binaryReplaceSkew = 5 * time.Second
+
+// lstartLayouts covers both C-locale ps orderings: BSD/macOS puts the day of the
+// month before the month name, GNU after it.
+var lstartLayouts = []string{"Mon _2 Jan 15:04:05 2006", "Mon Jan _2 15:04:05 2006"}
+
+// processStart reports when pid started. ok is false whenever that cannot be
+// established, which every caller treats as "stay silent".
+func processStart(pid int) (time.Time, bool) {
+	if info, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
+		return info.ModTime(), true
+	}
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=")
+	cmd.Env = append(os.Environ(), "LC_ALL=C") // lstart is locale-formatted
+	out, err := cmd.Output()
+	if err != nil {
+		return time.Time{}, false
+	}
+	s := strings.Join(strings.Fields(string(out)), " ")
+	for _, layout := range lstartLayouts {
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// semverLess orders two x.y.z strings. ok is false when either side is not a
+// plain release version, where no ordering is meaningful.
+func semverLess(a, b string) (less, ok bool) {
+	if !semverRe.MatchString(a) || !semverRe.MatchString(b) {
+		return false, false
+	}
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := range 3 {
+		ai, _ := strconv.Atoi(as[i])
+		bi, _ := strconv.Atoi(bs[i])
+		if ai != bi {
+			return ai < bi, true
+		}
+	}
+	return false, true
+}
+
+// reuseDriftWarning reports an adopted server whose code is behind: a binary
+// below the pinned floor, or a process predating the binary it was started from.
+// Empty when current or undeterminable; never restarts a server it does not own.
+func reuseDriftWarning(pid int) string {
+	exe := serverExecutable(pid)
+	if exe == "" {
+		return ""
+	}
+	got := binaryVersionAt(exe)
+	if less, ok := semverLess(got, serverVersion); ok && less {
+		return fmt.Sprintf("the reused demarkus server (pid %d, %s) is version %s, below the %s this plugin expects; features the plugin assumes may be missing. Upgrade that server, or run /soul-init to let the plugin manage one.", pid, exe, got, serverVersion)
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return ""
+	}
+	started, ok := processStart(pid)
+	if !ok || !info.ModTime().After(started.Add(binaryReplaceSkew)) {
+		return ""
+	}
+	installed := "the installed build"
+	if got != "" {
+		installed = got
+	}
+	return fmt.Sprintf("the reused demarkus server (pid %d) started before its binary %s was replaced, so it is still serving the old code rather than %s. Restart that server to pick it up.", pid, exe, installed)
+}
+
+// HealthWarning echoes a one-line warning when the configured memory server is
+// down or behind, empty when healthy. Probe-only (no QUIC round-trip): managed
+// modes trust .pid liveness, reuse also drift-checks the adopted process.
 func HealthWarning() (string, error) {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -1656,8 +1762,12 @@ func HealthWarning() (string, error) {
 			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.MemoryDir), nil
 		}
 	case "reuse":
-		if pidOfServerAtRoot(cfg.MemoryDir) == 0 {
+		pid := pidOfServerAtRoot(cfg.MemoryDir)
+		if pid == 0 {
 			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.MemoryDir), nil
+		}
+		if w := reuseDriftWarning(pid); w != "" {
+			return w, nil
 		}
 	}
 	return "", nil
