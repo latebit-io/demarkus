@@ -68,7 +68,7 @@ func main() {
 	// notification is what makes them appear without a reconnect.
 	s := mcpserver.NewMCPServer("demarkus-mcp", version,
 		mcpserver.WithResourceCapabilities(false, true),
-		mcpserver.WithInstructions(mcpfmt.SectionFirst),
+		mcpserver.WithInstructions(mcpfmt.SectionFirst+" "+mcpfmt.ReadOutcomes),
 	)
 
 	gs, gsErr := graphstore.Load(graphstore.DefaultPath())
