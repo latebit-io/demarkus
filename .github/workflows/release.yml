@@ -67,7 +67,6 @@ jobs:
       - run: cd server && go vet ./...
       - run: cd server && go build -o /dev/null ./cmd/demarkus-server
       - run: cd server && go build -o /dev/null ./cmd/demarkus-knowledge-server
-      - run: cd server && go build -o /dev/null ./cmd/demarkus-knowledge-bootstrap
 
   test-client:
     needs: detect-changes

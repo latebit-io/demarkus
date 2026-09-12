@@ -53,6 +53,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "demarkus-knowledge-server.policyKey" -}}
+{{- printf "policy-%s.md" . -}}
+{{- end -}}
+
 {{- define "demarkus-knowledge-server.validate" -}}
 {{- if lt (int .Values.replicaCount) 2 -}}
 {{- fail "replicaCount must be at least 2 for production availability" -}}
@@ -110,7 +114,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $worldIDs := dict -}}
 {{- $tokenSecrets := dict -}}
 {{- range $index, $configuredWorld := .Values.worlds -}}
-{{- $world := default dict $configuredWorld -}}
+{{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy (default dict $configuredWorld)) -}}
 {{- $bucket := default dict $world.bucket -}}
 {{- $tokenSecret := default dict $world.tokenSecret -}}
 {{- $location := printf "worlds[%d]" $index -}}
@@ -199,6 +203,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $_ := set $tokenSecrets $tokenSecret.name true -}}
 {{- if empty $tokenSecret.key -}}
 {{- fail (printf "%s.tokenSecret.key is required" $location) -}}
+{{- end -}}
+{{- /* A world that is never seeded would take the policy body silently. */ -}}
+{{- if and $world.initialPolicy $world.readOnly -}}
+{{- fail (printf "%s.initialPolicy must not be set on a read-only world, which is never seeded" $location) -}}
 {{- end -}}
 {{- end -}}
 {{- /* The bootstrap Job generates one <world>-token-values Secret per world;

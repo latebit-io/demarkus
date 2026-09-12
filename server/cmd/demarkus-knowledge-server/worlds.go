@@ -185,15 +185,14 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	if err != nil {
 		return fmt.Errorf("blob store: %w", err)
 	}
+	// Before genesis: an unusable policy file must fail the open without
+	// leaving a half-made world behind.
+	seed, err := policySeed(world)
+	if err != nil {
+		return fmt.Errorf("policy seed: %w", err)
+	}
 	if err := m.ensureGenesis(ctx, objects, world); err != nil {
 		return fmt.Errorf("genesis: %w", err)
-	}
-	var seed *bucketstore.PolicySeed
-	if !world.Bootstrap && !world.ReadOnly {
-		// Provisioned worlds are seeded by their broker over the protocol,
-		// so only a statically configured world carries a default.
-		value := knowledgeseed.DefaultPolicySeed()
-		seed = &value
 	}
 	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
 		WorldID:        world.Bucket.WorldID,
@@ -233,6 +232,24 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	m.acquireTokenWatchLocked(world.Auth.TokensFile)
 	m.logger.Info("world opened", "world", world.Name, "bootstrap", world.Bootstrap)
 	return nil
+}
+
+// policySeed picks the world's initial policy: the operator's file when
+// configured, else the embedded default. A provisioned world is seeded by
+// its broker and a read-only world never writes, so neither carries one.
+func policySeed(world *knowledgeconfig.WorldConfig) (*bucketstore.PolicySeed, error) {
+	if world.Bootstrap || world.ReadOnly {
+		return nil, nil
+	}
+	if world.Policy.File == "" {
+		seed := knowledgeseed.DefaultPolicySeed()
+		return &seed, nil
+	}
+	seed, err := knowledgeseed.PolicySeedFromFile(world.Policy.File)
+	if err != nil {
+		return nil, err
+	}
+	return &seed, nil
 }
 
 // ensureGenesis creates the world's genesis when its bucket is empty, so a

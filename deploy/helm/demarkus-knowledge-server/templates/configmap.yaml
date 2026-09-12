@@ -35,6 +35,9 @@ data:
           tokensFile: {{ printf "/run/demarkus/worlds/%s/tokens.toml" $world.name | quote }}
         policy:
           path: /.well-known/demarkus/policy.md
+          {{- if $world.initialPolicy }}
+          file: {{ printf "/etc/demarkus/%s" (include "demarkus-knowledge-server.policyKey" $world.name) | quote }}
+          {{- end }}
         readOnly: {{ $world.readOnly }}
         limits:
           maxConcurrentRequests: {{ $world.limits.maxConcurrentRequests }}
@@ -42,3 +45,10 @@ data:
           requestsPerSecond: {{ $world.limits.requestsPerSecond }}
           burst: {{ $world.limits.burst }}
       {{- end }}
+{{- range $configuredWorld := .Values.worlds }}
+{{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy $configuredWorld) }}
+{{- if $world.initialPolicy }}
+  {{ include "demarkus-knowledge-server.policyKey" $world.name }}: |
+    {{- $world.initialPolicy | nindent 4 }}
+{{- end }}
+{{- end }}

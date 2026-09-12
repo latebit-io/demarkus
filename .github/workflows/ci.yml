@@ -126,7 +126,6 @@ jobs:
           fi
           go build -o /tmp/demarkus-server ./cmd/demarkus-server
           go build -o /tmp/demarkus-knowledge-server ./cmd/demarkus-knowledge-server
-          go build -o /tmp/demarkus-knowledge-bootstrap ./cmd/demarkus-knowledge-bootstrap
       # The release builds 32-bit arm, where an untyped 64-bit constant is a
       # compile error the amd64 build never sees (it shipped one: #338).
       - name: Cross-compile the release targets
@@ -139,7 +138,6 @@ jobs:
             case "$rest" in */*) export GOARCH="${rest%%/*}" GOARM="${rest#*/}" ;; *) export GOARCH="$rest" ;; esac
             CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-server
             CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-knowledge-server
-            CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-knowledge-bootstrap
             echo "ok $GOOS/$GOARCH${GOARM:+v$GOARM}"
           done
 

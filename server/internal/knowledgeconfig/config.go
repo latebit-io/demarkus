@@ -118,6 +118,10 @@ type AuthConfig struct {
 // PolicyConfig identifies the world-local policy document.
 type PolicyConfig struct {
 	Path string `yaml:"path"`
+	// File names a local file (a mounted ConfigMap key) whose body seeds
+	// the world's first policy version instead of the embedded default.
+	// Empty keeps the default; either way seeding is create-only.
+	File string `yaml:"file"`
 }
 
 // LimitsConfig contains enforceable world-local fairness controls.
@@ -163,6 +167,7 @@ type rawWorldConfig struct {
 
 type rawPolicyConfig struct {
 	Path *string `yaml:"path"`
+	File string  `yaml:"file"`
 }
 
 type rawLimitsConfig struct {
@@ -307,8 +312,11 @@ func worldFromRaw(world *rawWorldConfig) WorldConfig {
 		Authorities: append([]string(nil), world.Authorities...),
 		Bucket:      world.Bucket,
 		Auth:        world.Auth,
-		Policy:      PolicyConfig{Path: valueOr(world.Policy.Path, defaultPolicyPath)},
-		ReadOnly:    world.ReadOnly,
+		Policy: PolicyConfig{
+			Path: valueOr(world.Policy.Path, defaultPolicyPath),
+			File: strings.TrimSpace(world.Policy.File),
+		},
+		ReadOnly: world.ReadOnly,
 		Limits: LimitsConfig{
 			MaxConcurrentRequests: valueOr(world.Limits.MaxConcurrentRequests, 32),
 			RequestTimeout:        valueOr(world.Limits.RequestTimeout, Duration(10*time.Second)),
@@ -421,6 +429,9 @@ func (config *Config) validateWorlds() error {
 
 		if err := validatePolicyPath(world.Policy.Path); err != nil {
 			return fmt.Errorf("%s.policy.path: %w", location, err)
+		}
+		if err := validatePolicyFile(location, world); err != nil {
+			return err
 		}
 		if err := validateLimits(location, &world.Limits); err != nil {
 			return err
@@ -556,6 +567,25 @@ func validatePolicyPath(value string) error {
 	}
 	if value != publishpolicy.DocumentPath {
 		return fmt.Errorf("only %q is supported (got %q)", publishpolicy.DocumentPath, value)
+	}
+	return nil
+}
+
+// validatePolicyFile accepts an unset file and otherwise refuses a path
+// the seeder could not use, or a world that is never seeded at all.
+func validatePolicyFile(location string, world *WorldConfig) error {
+	if world.Policy.File == "" {
+		return nil
+	}
+	file := world.Policy.File
+	if strings.ContainsRune(file, '\x00') || !filepath.IsAbs(file) || filepath.Clean(file) != file {
+		return fmt.Errorf("%s.policy.file must be a canonical absolute path (got %q)", location, file)
+	}
+	if world.ReadOnly {
+		return fmt.Errorf("%s.policy.file must not be set on a read-only world, which is never seeded", location)
+	}
+	if world.Bootstrap {
+		return fmt.Errorf("%s.policy.file must not be set on a bootstrap world, whose provisioner owns its policy", location)
 	}
 	return nil
 }

@@ -100,7 +100,7 @@ func (store *Store) ensurePolicy(ctx context.Context, seed *PolicySeed) error {
 			return err
 		}
 		if created {
-			store.logger.Info("seeded the default write policy",
+			store.logger.Info("seeded the initial write policy",
 				"world", store.worldID, "path", publishpolicy.DocumentPath)
 		}
 	}

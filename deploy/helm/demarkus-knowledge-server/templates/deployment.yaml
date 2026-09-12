@@ -101,6 +101,14 @@ spec:
             items:
               - key: config.yaml
                 path: config.yaml
+              {{- range $configuredWorld := .Values.worlds }}
+              {{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy $configuredWorld) }}
+              {{- $key := include "demarkus-knowledge-server.policyKey" $world.name }}
+              {{- if $world.initialPolicy }}
+              - key: {{ $key }}
+                path: {{ $key }}
+              {{- end }}
+              {{- end }}
         - name: tls
           secret:
             secretName: {{ include "demarkus-knowledge-server.tlsSecretName" . }}
