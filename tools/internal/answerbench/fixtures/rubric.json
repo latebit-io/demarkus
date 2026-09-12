@@ -1,0 +1,10 @@
+{
+  "q1":{"answer":{"days":7},"evidence":{"days":[{"path":"/ops/retention.md","version":2,"anchor":"retention","quote":"The backup retention interval is 7 days."}]}},
+  "q2":{"answer":{"steps":["hash-check","audit-record"]},"evidence":{"steps":[{"path":"/ops/restore.md","version":1,"anchor":"hash-check","quote":"The first required step is hash-check: verify every restored content hash."},{"path":"/ops/restore.md","version":1,"anchor":"audit-handoff","quote":"The second required step is defined by the [audit procedure](/ops/audit.md#completion)."},{"path":"/ops/audit.md","version":1,"anchor":"completion","quote":"The required completion step is audit-record: record the snapshot revision in the audit trail."}]}},
+  "q3":{"answer":{"decision":"ADR-014","probe":"canary-p95"},"evidence":{"decision":[{"path":"/decisions/adr-014.md","version":1,"anchor":"decision","quote":"ADR-014 is the current deployment decision and supersedes ADR-009."}],"probe":[{"path":"/decisions/adr-014.md","version":1,"anchor":"decision","quote":"The mandatory rollback probe identifier is canary-p95."}]}},
+  "q4":{"answer":{"days":3},"evidence":{"days":[{"path":"/ops/retention.md","version":1,"anchor":"retention","quote":"The backup retention interval is 3 days."}]}},
+  "q5":{"answer":{"east":7,"west":14},"evidence":{"east":[{"path":"/regions/east.md","version":1,"anchor":"regional-interval","quote":"The east region retains backup replicas for 7 days."}],"west":[{"path":"/regions/west.md","version":1,"anchor":"regional-interval","quote":"The west region retains backup replicas for 14 days."}]}},
+  "q6":{"answer":{"microphone":"M-42"},"evidence":{"microphone":[{"path":"/studio/session.md","version":1,"anchor":"percussion","quote":"For the brushed snare, use microphone M-42."}]}},
+  "q7":{"abstain":true,"answer":{},"evidence":{}},
+  "q8":{"answer":{"minutes":19},"evidence":{"minutes":[{"path":"/systems/cache.md","version":1,"anchor":"glacier-tier","quote":"The glacier cache expiry interval is 19 minutes."}]}}
+}

@@ -1,0 +1,43 @@
+suite: graph-baseline-v1
+generated: 2026-09-12T13:50:48Z
+revision: 1524828c9ca3e2a3c07bd4bd4a24ef491cdaf67f
+branch: test/graph-baseline
+count: 6
+benchtime: 200ms
+cpu-flag: 1
+go version go1.26.4 darwin/arm64
+{
+	"CGO_ENABLED": "1",
+	"GOAMD64": "",
+	"GOARCH": "arm64",
+	"GOARM64": "v8.0",
+	"GOEXPERIMENT": "",
+	"GOFLAGS": "",
+	"GOOS": "darwin"
+}
+working-tree:
+ M tools/internal/broker/mcp_tenant_test.go
+ M tools/internal/broker/mcp_tools_read_test.go
+ M tools/internal/broker/session_test.go
+?? client/graphstore/graph_baseline_test.go
+?? client/internal/fedcrawl/graph_baseline_test.go
+?? scripts/graph-benchmark.sh
+?? tools/benchmarks/
+?? tools/internal/broker/graph_baseline_test.go
+?? tools/internal/retrievalbench/graph_baseline_test.go
+?? tools/internal/retrievalbench/questions/graph-context-v1.json
+tracked-diff-hash:
+ea4a06b909b6f159ece3cde1e2ec7f52b2212497
+harness-and-dependency-hashes:
+client/graphstore/graph_baseline_test.go 64193f35c5be25d4c41546522c575e7b50a6ceba
+client/internal/fedcrawl/graph_baseline_test.go 4441b7ef91aca5c3bbceaf657f2942e32a789c27
+tools/internal/broker/graph_baseline_test.go 73e8753bf621e88a86dd8ec365ca1326209a4d14
+tools/internal/retrievalbench/graph_baseline_test.go 3dc4e85083a4124ebd27375d28c0aa64c546d546
+tools/internal/retrievalbench/questions/graph-context-v1.json 6aa150714b480d662285795675aa332f12be9bd1
+scripts/graph-benchmark.sh a3b2df24463aa77ec28c56444dffe95d99230c17
+protocol/go.mod 563aa26abf511b7050ffc593f995aa605280c846
+protocol/go.sum 256b85ea9b295b77e2ba482a77a6da7b615b394f
+client/go.mod 5291f14217942d60c826557e772737b24d36f7e3
+client/go.sum 63b885c501e6189101add65ced1ae8c1db52e7b7
+tools/go.mod 3336a5bd92007c3c7f8d6bb0dfde2f7fd015f8d2
+tools/go.sum 430aaa1c521a6cbd8425b31285ed8c211c4c653b

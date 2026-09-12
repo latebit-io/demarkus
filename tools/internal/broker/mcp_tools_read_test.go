@@ -770,7 +770,7 @@ func TestHandleMarkFetchUnknownWorld(t *testing.T) {
 
 // toolResultText extracts the first text-content chunk; tools always emit
 // a single text content.
-func toolResultText(t *testing.T, res *mcp.CallToolResult) string {
+func toolResultText(t testing.TB, res *mcp.CallToolResult) string {
 	t.Helper()
 	if len(res.Content) == 0 {
 		t.Fatalf("tool result has no content")

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ var version = "dev"
 
 func main() {
 	defaultHost := flag.String("host", "", "default Mark server (e.g. mark://localhost:6309)")
+	dialAddress := flag.String("dial-address", "", "network address for the default host; preserves logical URL identity")
 	token := flag.String("token", "", "auth token for capability-based authentication")
 	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
 	noCache := flag.Bool("no-cache", false, "disable response caching")
@@ -52,6 +54,9 @@ func main() {
 	}
 
 	opts := fetch.Options{Insecure: *insecure}
+	if err := routeDefaultHost(&opts, *defaultHost, *dialAddress); err != nil {
+		log.Fatal(err)
+	}
 	if !*noCache {
 		opts.Cache = cache.New(*cacheDir)
 	}
@@ -96,6 +101,30 @@ func main() {
 	if err := mcpserver.ServeStdio(s); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func routeDefaultHost(opts *fetch.Options, defaultHost, dialAddress string) error {
+	if dialAddress == "" {
+		return nil
+	}
+	host, _, err := fetch.ParseMarkURL(defaultHost)
+	if err != nil {
+		return fmt.Errorf("dial-address requires a valid default host: %w", err)
+	}
+	name, port, err := net.SplitHostPort(dialAddress)
+	if err != nil || name == "" {
+		return fmt.Errorf("invalid dial-address %q; expected host:port", dialAddress)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("invalid dial-address port %q", port)
+	}
+	serverName, _, err := net.SplitHostPort(host)
+	if err != nil {
+		return err
+	}
+	opts.Endpoints = map[string]fetch.Endpoint{host: {DialAddress: dialAddress, ServerName: serverName}}
+	return nil
 }
 
 // markClient defines the fetch operations used by MCP tool handlers.
@@ -375,7 +404,7 @@ func markVersionsTool(host string) mcp.Tool {
 func markLookupTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_lookup",
 		mcp.WithDescription(
-			"Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends the matched sections' text within that token budget; else mark_fetch url#<anchor>. "+urlHint(host),
+			"Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends sections. "+mcpfmt.SectionFirst+" "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),

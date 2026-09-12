@@ -1,0 +1,13 @@
+{
+  "format": "demarkus-corpus-jsonl-gzip-v1",
+  "id": "demarkus-soul-2026-09-12-v1",
+  "source": "mark://soul.demarkus.io",
+  "artifact": "soul-2026-09-12-v1.jsonl.gz",
+  "sha256": "sha256-e52fad764918a57812ff3b186811f2595b351abae17a8b824101d2f6d56433ce",
+  "corpus_sha256": "sha256-b152758c5800ba293988417c52cf8f5044ec4e96e3c41099045cbe05ddd4fe4e",
+  "compressed_bytes": 11340615,
+  "uncompressed_bytes": 41664807,
+  "documents": 320,
+  "active_documents": 311,
+  "versions": 2184
+}

@@ -1,0 +1,60 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/latebit-io/demarkus/tools/internal/broker
+cpu: Apple M2
+BenchmarkGraphBaselineTenantSources/mark_backlinks         	   74499	      2860 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	    2912 B/op	      35 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_backlinks         	   84655	      2830 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	    2912 B/op	      35 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_backlinks         	   84118	      2832 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	    2912 B/op	      35 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_backlinks         	   83720	      2854 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	    2912 B/op	      35 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_backlinks         	   84987	      2811 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	    2912 B/op	      35 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_backlinks         	   84009	      2813 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	    2912 B/op	      35 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_explore           	    5419	     38437 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	   80169 B/op	     541 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_explore           	    6110	     37808 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	   80152 B/op	     541 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_explore           	    5976	     37517 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	   80155 B/op	     541 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_explore           	    6159	     37543 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	   80150 B/op	     541 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_explore           	    5763	     37678 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	   80159 B/op	     541 allocs/op
+BenchmarkGraphBaselineTenantSources/mark_explore           	    5310	     37869 ns/op	         1.000 leaked-responses/op	         0 missing-own-source/op	   80130 B/op	     541 allocs/op
+PASS
+ok  	github.com/latebit-io/demarkus/tools/internal/broker	3.607s
+goos: darwin
+goarch: arm64
+pkg: github.com/latebit-io/demarkus/tools/internal/retrievalbench
+cpu: Apple M2
+BenchmarkGraphBaselineContext/direct         	   22111	     10381 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         1.000 fetches/op	         0 over-budget-B/op	        65.00 result-tokens/op	   22152 B/op	     148 allocs/op
+BenchmarkGraphBaselineContext/direct         	   23456	     10139 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         1.000 fetches/op	         0 over-budget-B/op	        65.00 result-tokens/op	   22152 B/op	     148 allocs/op
+BenchmarkGraphBaselineContext/direct         	   23714	     10058 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         1.000 fetches/op	         0 over-budget-B/op	        65.00 result-tokens/op	   22152 B/op	     148 allocs/op
+BenchmarkGraphBaselineContext/direct         	   23778	     10119 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         1.000 fetches/op	         0 over-budget-B/op	        65.00 result-tokens/op	   22152 B/op	     148 allocs/op
+BenchmarkGraphBaselineContext/direct         	   23737	     10054 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         1.000 fetches/op	         0 over-budget-B/op	        65.00 result-tokens/op	   22152 B/op	     148 allocs/op
+BenchmarkGraphBaselineContext/direct         	   23812	     10096 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         1.000 fetches/op	         0 over-budget-B/op	        65.00 result-tokens/op	   22152 B/op	     148 allocs/op
+BenchmarkGraphBaselineContext/two-documents  	   10000	     21321 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        99.00 result-tokens/op	   44336 B/op	     289 allocs/op
+BenchmarkGraphBaselineContext/two-documents  	   10000	     20222 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        99.00 result-tokens/op	   44336 B/op	     289 allocs/op
+BenchmarkGraphBaselineContext/two-documents  	   10000	     20055 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        99.00 result-tokens/op	   44336 B/op	     289 allocs/op
+BenchmarkGraphBaselineContext/two-documents  	   10000	     20238 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        99.00 result-tokens/op	   44336 B/op	     289 allocs/op
+BenchmarkGraphBaselineContext/two-documents  	   10000	     20351 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        99.00 result-tokens/op	   44336 B/op	     289 allocs/op
+BenchmarkGraphBaselineContext/two-documents  	   10000	     20177 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        99.00 result-tokens/op	   44336 B/op	     289 allocs/op
+BenchmarkGraphBaselineContext/nested-overlap 	    6181	     33281 ns/op	         1.000 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       143.0 result-tokens/op	   71016 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-overlap 	    6958	     33212 ns/op	         1.000 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       143.0 result-tokens/op	   71017 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-overlap 	    6348	     34274 ns/op	         1.000 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       143.0 result-tokens/op	   71017 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-overlap 	    6792	     33126 ns/op	         1.000 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       143.0 result-tokens/op	   71017 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-overlap 	    6544	     33461 ns/op	         1.000 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       143.0 result-tokens/op	   71016 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-overlap 	    7185	     33121 ns/op	         1.000 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       143.0 result-tokens/op	   71016 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-tight-budget         	    6976	     32973 ns/op	         1.000 duplicate-evidence/op	         0.6667 evidence-recall	         2.000 fetches/op	       202.0 over-budget-B/op	       124.0 result-tokens/op	   70904 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-tight-budget         	    7016	     33373 ns/op	         1.000 duplicate-evidence/op	         0.6667 evidence-recall	         2.000 fetches/op	       202.0 over-budget-B/op	       124.0 result-tokens/op	   70905 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-tight-budget         	    6954	     33620 ns/op	         1.000 duplicate-evidence/op	         0.6667 evidence-recall	         2.000 fetches/op	       202.0 over-budget-B/op	       124.0 result-tokens/op	   70905 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-tight-budget         	    6801	     33137 ns/op	         1.000 duplicate-evidence/op	         0.6667 evidence-recall	         2.000 fetches/op	       202.0 over-budget-B/op	       124.0 result-tokens/op	   70905 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-tight-budget         	    7044	     33225 ns/op	         1.000 duplicate-evidence/op	         0.6667 evidence-recall	         2.000 fetches/op	       202.0 over-budget-B/op	       124.0 result-tokens/op	   70904 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/nested-tight-budget         	    7062	     33113 ns/op	         1.000 duplicate-evidence/op	         0.6667 evidence-recall	         2.000 fetches/op	       202.0 over-budget-B/op	       124.0 result-tokens/op	   70905 B/op	     455 allocs/op
+BenchmarkGraphBaselineContext/conflicting-sources         	   10000	     20143 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        98.00 result-tokens/op	   44160 B/op	     292 allocs/op
+BenchmarkGraphBaselineContext/conflicting-sources         	   10000	     20063 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        98.00 result-tokens/op	   44160 B/op	     292 allocs/op
+BenchmarkGraphBaselineContext/conflicting-sources         	   12042	     19997 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        98.00 result-tokens/op	   44160 B/op	     292 allocs/op
+BenchmarkGraphBaselineContext/conflicting-sources         	   10000	     21595 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        98.00 result-tokens/op	   44160 B/op	     292 allocs/op
+BenchmarkGraphBaselineContext/conflicting-sources         	   12075	     19889 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        98.00 result-tokens/op	   44160 B/op	     292 allocs/op
+BenchmarkGraphBaselineContext/conflicting-sources         	   12025	     19927 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	        98.00 result-tokens/op	   44160 B/op	     292 allocs/op
+BenchmarkGraphBaselineContext/failed-source-first         	   21462	     10949 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       101.0 result-tokens/op	   22808 B/op	     155 allocs/op
+BenchmarkGraphBaselineContext/failed-source-first         	   22064	     10775 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       101.0 result-tokens/op	   22808 B/op	     155 allocs/op
+BenchmarkGraphBaselineContext/failed-source-first         	   22094	     10904 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       101.0 result-tokens/op	   22808 B/op	     155 allocs/op
+BenchmarkGraphBaselineContext/failed-source-first         	   21814	     10911 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       101.0 result-tokens/op	   22808 B/op	     155 allocs/op
+BenchmarkGraphBaselineContext/failed-source-first         	   22028	     10846 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       101.0 result-tokens/op	   22808 B/op	     155 allocs/op
+BenchmarkGraphBaselineContext/failed-source-first         	   22141	     10851 ns/op	         0 duplicate-evidence/op	         1.000 evidence-recall	         2.000 fetches/op	         0 over-budget-B/op	       101.0 result-tokens/op	   22808 B/op	     155 allocs/op
+PASS
+ok  	github.com/latebit-io/demarkus/tools/internal/retrievalbench	8.667s

@@ -1,0 +1,76 @@
+[
+  {
+    "name": "direct",
+    "query": "How many versions does the policy retain?",
+    "budget_bytes": 600,
+    "rows": ["/policy.md#retention"],
+    "docs": {"/policy.md": "# Policy\n\n## Retention\n\nKeep seven versions.\n"},
+    "expected": [{"path": "/policy.md", "text": "Keep seven versions."}]
+  },
+  {
+    "name": "two-documents",
+    "query": "What must happen before a restore is complete?",
+    "budget_bytes": 900,
+    "rows": ["/restore.md#checks", "/audit.md#completion"],
+    "docs": {
+      "/restore.md": "# Restore\n\n## Checks\n\nVerify every restored content hash.\n",
+      "/audit.md": "# Audit\n\n## Completion\n\nRecord the restore revision in the audit trail.\n"
+    },
+    "expected": [
+      {"path": "/restore.md", "text": "Verify every restored content hash."},
+      {"path": "/audit.md", "text": "Record the restore revision in the audit trail."}
+    ]
+  },
+  {
+    "name": "nested-overlap",
+    "query": "Which restore checks and audit steps are required?",
+    "budget_bytes": 900,
+    "rows": ["/restore.md#checks", "/restore.md#hashes", "/audit.md#completion"],
+    "docs": {
+      "/restore.md": "# Restore\n\n## Checks\n\nCheck the snapshot owner.\n\n### Hashes\n\nVerify every restored content hash.\n",
+      "/audit.md": "# Audit\n\n## Completion\n\nRecord the restore revision in the audit trail.\n"
+    },
+    "expected": [
+      {"path": "/restore.md", "text": "Check the snapshot owner."},
+      {"path": "/restore.md", "text": "Verify every restored content hash."},
+      {"path": "/audit.md", "text": "Record the restore revision in the audit trail."}
+    ]
+  },
+  {
+    "name": "nested-tight-budget",
+    "query": "Which restore checks and audit steps are required?",
+    "budget_bytes": 230,
+    "rows": ["/restore.md#checks", "/restore.md#hashes", "/audit.md#completion"],
+    "docs": {
+      "/restore.md": "# Restore\n\n## Checks\n\nCheck the snapshot owner.\n\n### Hashes\n\nVerify every restored content hash.\n",
+      "/audit.md": "# Audit\n\n## Completion\n\nRecord the restore revision in the audit trail.\n"
+    },
+    "expected": [
+      {"path": "/restore.md", "text": "Check the snapshot owner."},
+      {"path": "/restore.md", "text": "Verify every restored content hash."},
+      {"path": "/audit.md", "text": "Record the restore revision in the audit trail."}
+    ]
+  },
+  {
+    "name": "conflicting-sources",
+    "query": "How did retention policy change?",
+    "budget_bytes": 900,
+    "rows": ["/old.md#retention", "/new.md#retention"],
+    "docs": {
+      "/old.md": "# Old policy\n\n## Retention\n\nKeep three versions.\n",
+      "/new.md": "# New policy\n\n## Retention\n\nKeep seven versions.\n"
+    },
+    "expected": [
+      {"path": "/old.md", "text": "Keep three versions."},
+      {"path": "/new.md", "text": "Keep seven versions."}
+    ]
+  },
+  {
+    "name": "failed-source-first",
+    "query": "How many versions does the policy retain?",
+    "budget_bytes": 600,
+    "rows": ["/unavailable.md#retention", "/policy.md#retention"],
+    "docs": {"/policy.md": "# Policy\n\n## Retention\n\nKeep seven versions.\n"},
+    "expected": [{"path": "/policy.md", "text": "Keep seven versions."}]
+  }
+]

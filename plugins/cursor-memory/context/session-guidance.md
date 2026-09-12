@@ -22,9 +22,10 @@ Binding is **enforced**: a write to a soul other than the bound one is denied at
 
 Before "what do I know / did we decide / have we seen X", and at the start of substantive work, check the soul:
 
-- `mark_lookup` with `url=/<slug>/` and a subject `query` is the **card catalog**: importance-ranked table (path, importance, title, tags), no bodies; `match: body` when the subject lives in section text rather than tags; body rows carry `#anchor` and a snippet. When the question is phrased in the words the answer would use, add `budget: 1500`: the matched sections' text follows the table in one call (a subject or name query still needs the fetch). Otherwise `mark_fetch` rows at their `#anchor`; a whole document only when the outline shows the answer spans sections. It finds only what was tagged or titled, so pair it with `mark_fetch /<slug>/index.md`. Transport/auth/server errors are failures to surface, never empty results.
-- `mark_backlinks` / `mark_graph` surface related docs via the link graph.
-- Nothing relevant: say so. Never fabricate recall.
+- **Default: section-first.** `mark_lookup` in the requested project/subtree, starting with `limit: 3` and no `budget`; descriptive subjects, not bare IDs across every project. Catalog mode for names/tags; `match: body` for section text or catalog misses. Body rows include `#anchor` and a snippet. Never widen explicit scope unasked.
+- `mark_fetch` the best matching `#anchor`. An outline: select its relevant section; a short document without an anchor may be read whole. Fetch the project's `index.md` as a discovery backstop for untagged content. `mark_backlinks` / `mark_graph` find related documents when needed.
+- Expansion is optional: `budget: 1500` only for a focused body query likely to return the needed evidence directly. Ordinary recall targets two calls and about 1,500 result tokens; preserve correctness over the target.
+- Surface lookup/fetch/graph, transport, auth and server failures; stop the affected read. Disclose partial results. Only a successful non-partial empty lookup means nothing found. Never fabricate recall.
 
 ## Record as you go
 

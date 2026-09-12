@@ -30,6 +30,12 @@ type Session interface {
 	Close() error
 }
 
+// CatalogSession exposes the actual MCP schemas used by a model-driven runner.
+type CatalogSession interface {
+	Session
+	ListTools(context.Context) ([]mcp.Tool, error)
+}
+
 // SessionOpener starts a new Session.
 type SessionOpener func(ctx context.Context) (Session, error)
 
@@ -45,7 +51,7 @@ type stdioSession struct {
 }
 
 // OpenStdioSession spawns cfg.Command and completes the MCP handshake.
-func OpenStdioSession(ctx context.Context, cfg StdioConfig) (Session, error) {
+func OpenStdioSession(ctx context.Context, cfg StdioConfig) (CatalogSession, error) {
 	c, err := mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("spawn %s: %w", cfg.Command, err)
@@ -80,6 +86,27 @@ func (s *stdioSession) Call(ctx context.Context, name string, args map[string]an
 
 func (s *stdioSession) Close() error {
 	return s.client.Close()
+}
+
+func (s *stdioSession) ListTools(ctx context.Context) ([]mcp.Tool, error) {
+	var tools []mcp.Tool
+	req := mcp.ListToolsRequest{}
+	seen := make(map[mcp.Cursor]bool)
+	for {
+		res, err := s.client.ListTools(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("list tools: %w", err)
+		}
+		tools = append(tools, res.Tools...)
+		if res.NextCursor == "" {
+			return tools, nil
+		}
+		if seen[res.NextCursor] {
+			return nil, fmt.Errorf("list tools: repeated cursor %q", res.NextCursor)
+		}
+		seen[res.NextCursor] = true
+		req.Params.Cursor = res.NextCursor
+	}
 }
 
 // fetchResponse is a parsed mark_fetch result: the "key: value" header lines

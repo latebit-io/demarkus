@@ -1,0 +1,10 @@
+[
+  {"id":"q1","category":"direct","question":"What is the current backup retention interval? Return the number of days.","fields":{"days":"number"}},
+  {"id":"q2","category":"multi-document","question":"What are the two named steps required before declaring a restore complete? Return their exact step identifiers, in procedure order.","fields":{"steps":"array of strings"}},
+  {"id":"q3","category":"supersession","question":"Which decision currently governs deployments, and what is its mandatory rollback probe identifier?","fields":{"decision":"string","probe":"string"}},
+  {"id":"q4","category":"historical","question":"What backup retention interval did version 1 of the retention policy specify? Return the original number of days, not the current value.","fields":{"days":"number"}},
+  {"id":"q5","category":"conflicting-sources","question":"How many days does each region retain backup replicas? Keep the east and west values separate.","fields":{"east":"number","west":"number"}},
+  {"id":"q6","category":"body-vocabulary","question":"Which microphone identifier is assigned to the brushed snare?","fields":{"microphone":"string"}},
+  {"id":"q7","category":"absent","question":"What is Aster's emergency pager telephone number?","fields":{"telephone":"string"}},
+  {"id":"q8","category":"section-selection","question":"What is the glacier cache expiry interval? Return the number of minutes.","fields":{"minutes":"number"}}
+]
