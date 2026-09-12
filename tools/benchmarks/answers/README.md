@@ -72,6 +72,13 @@ the reader. Wrong versions, fabricated quotes, irrelevant citations, snippets
 without expanded evidence, extra fields and missing sources fail scoring.
 Whitespace is normalized; answer values and array order remain exact.
 
+Scoring version `section-provenance-v2` keeps observations scoped to their
+document/version/anchor. Equal text in sibling sections cannot satisfy each
+other's citations. Full-document fetches and explicitly returned nested sections
+remain usable; a parent citation must contain the required section and identify
+its passage unambiguously. Storage errors abort scoring rather than count as
+wrong answers. Reports with different scoring versions are not comparable.
+
 The two-source procedure task requires both step-definition quotes and the
 dependency handoff quote linking the procedure to its audit requirement.
 

@@ -1,8 +1,6 @@
 package answerbench
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 )
@@ -36,21 +34,19 @@ func RescoreWithFixture(beforePath, outputPath string, f *Fixture) (report Repor
 	cfg := Config{Origin: report.Spec.Origin, Port: report.Spec.Port}
 	for i := range report.Attempts {
 		attempt := &report.Attempts[i]
-		attempt.Score = f.Score(attempt.Task, &attempt.Trace, cfg.logicalHost())
+		attempt.Score, err = f.Score(attempt.Task, &attempt.Trace, cfg.logicalHost())
+		if err != nil {
+			return report, err
+		}
 	}
 	report.Spec.Hashes["rubric"] = f.Hashes["rubric"]
+	report.Spec.ScoringVersion = scoringVersion
 	report.RescoredFrom = digest(raw)
 	report.summarize()
 	if !complete || len(report.Attempts) != report.Spec.ExpectedAttempts {
 		report.Summary.UsageComplete = false
 		report.Summary.TokensPerCorrect = nil
 	}
-	file, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return report, err
-	}
-	defer func() { err = errors.Join(err, file.Close()) }()
-	enc := json.NewEncoder(file)
-	enc.SetIndent("", "  ")
-	return report, enc.Encode(report)
+	err = writeNewJSON(outputPath, &report)
+	return report, err
 }

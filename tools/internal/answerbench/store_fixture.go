@@ -18,7 +18,7 @@ func LoadStoreFixture(ctx context.Context, root, questions string) (Fixture, err
 	if err != nil {
 		return Fixture{}, err
 	}
-	f := Fixture{StoreRoot: root, Hashes: make(map[string]string)}
+	f := Fixture{StoreRoot: root, Hashes: make(map[string]string), storedVersions: make(map[string]map[int]bool)}
 	hash := sha256.New()
 	encoder := json.NewEncoder(hash)
 	err = store.New(root).ExportDocs(ctx, func(docPath string, doc store.StoredDocument) error {
@@ -26,6 +26,10 @@ func LoadStoreFixture(ctx context.Context, root, questions string) (Fixture, err
 			return err
 		}
 		f.VersionCount += len(doc.Versions)
+		f.storedVersions[docPath] = make(map[int]bool, len(doc.Versions))
+		for _, version := range doc.Versions {
+			f.storedVersions[docPath][version.Version] = true
+		}
 		if doc.Archived {
 			return nil
 		}

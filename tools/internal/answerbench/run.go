@@ -60,6 +60,7 @@ type RunSpec struct {
 	Documents        int               `json:"documents,omitempty"`
 	Versions         int               `json:"versions,omitempty"`
 	ReaderPolicy     string            `json:"reader_policy,omitempty"`
+	ScoringVersion   string            `json:"scoring_version,omitempty"`
 }
 
 // Attempt retains failed answers and their spend alongside successes.
@@ -224,8 +225,7 @@ func Run(ctx context.Context, cfg *Config) (report Report, err error) {
 		}
 	}()
 	host := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
-	index, _ := f.Section(Evidence{Path: "/index.md", Version: f.Latest("/index.md")})
-	if err := awaitServer(ctx, host, index); err != nil {
+	if err := verifyServerIndex(ctx, host, &f); err != nil {
 		return report, err
 	}
 	host = cfg.logicalHost()
@@ -235,11 +235,13 @@ func Run(ctx context.Context, cfg *Config) (report Report, err error) {
 				return report, err
 			}
 			attempt, runErr := runAttempt(ctx, cfg, &attemptInput{task: task, repeat: repeat, work: work, serverLog: serverLog})
+			var scoreErr error
+			attempt.Score, scoreErr = f.Score(task.ID, &attempt.Trace, host)
+			runErr = errors.Join(runErr, scoreErr)
 			if runErr != nil {
 				attempt.Error = runErr.Error()
 				attempt.Trace.UsageComplete = false
 			}
-			attempt.Score = f.Score(task.ID, &attempt.Trace, host)
 			report.Attempts = append(report.Attempts, attempt)
 			if cfg.Log != nil {
 				if _, logErr := fmt.Fprintf(cfg.Log, "%s/%d correct=%t tokens=%d complete=%t calls=%d error=%s\n", task.ID, repeat, attempt.Score.Correct, attempt.Trace.Usage.Tokens(), attempt.Trace.UsageComplete, len(attempt.Trace.Calls), attempt.Error); logErr != nil {
@@ -399,6 +401,7 @@ func prepareReport(ctx context.Context, cfg *Config, f *Fixture) (Report, error)
 	}
 	report.Spec = RunSpec{Suite: "graph-answer-v1", Model: cfg.Model, Variant: cfg.Variant, OpenCode: strings.TrimSpace(string(version)), Steps: cfg.Steps, Timeout: cfg.Timeout.String(), Repeats: cfg.Repeats, Case: cfg.Case, Hashes: f.Hashes, PromptHash: digest([]byte(prompt)), Port: cfg.Port, ReaderPolicy: policyName(cfg.ReaderPolicy)}
 	report.Spec.ExpectedAttempts = len(f.Tasks) * cfg.Repeats
+	report.Spec.ScoringVersion = scoringVersion
 	if cfg.Corpus != "" {
 		report.Spec.Suite = "soul-answer-v1"
 		report.Spec.Origin = cfg.Origin
@@ -432,7 +435,9 @@ func (cfg *Config) logicalHost() string {
 }
 
 func verifyFrozenCorpus(cfg *Config, before string) error {
-	after, err := LoadStoreFixture(context.Background(), cfg.Corpus, cfg.Questions)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	after, err := LoadStoreFixture(ctx, cfg.Corpus, cfg.Questions)
 	if err != nil {
 		return err
 	}

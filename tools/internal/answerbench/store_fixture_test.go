@@ -37,8 +37,8 @@ func TestStoreFixturePreservesHistoryAndDetectsChanges(t *testing.T) {
 	if len(f.Documents) != 2 || f.VersionCount != 3 || f.Latest("/policy.md") != 2 {
 		t.Fatalf("history inventory changed: docs=%d versions=%d latest=%d", len(f.Documents), f.VersionCount, f.Latest("/policy.md"))
 	}
-	if section, ok := f.Section(Evidence{Path: "/policy.md", Version: 1, Anchor: "limit"}); !ok || section != "## Limit\n\nKeep 3 versions.\n" {
-		t.Fatalf("historical evidence changed: %q", section)
+	if section, err := f.Section(Evidence{Path: "/policy.md", Version: 1, Anchor: "limit"}); err != nil || !section.Found || section.Text != "## Limit\n\nKeep 3 versions.\n" {
+		t.Fatalf("historical evidence changed: %+v, %v", section, err)
 	}
 	cfg := Config{Corpus: root, Questions: questions}
 	if err := verifyFrozenCorpus(&cfg, f.Hashes["corpus"]); err != nil {

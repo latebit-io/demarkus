@@ -11,6 +11,12 @@ Archive: **11,340,615 bytes (11.3 MB)**; 320 versioned documents (311 active,
 fingerprint exactly. `baseline-section-first.json` is the software-change before
 report; `baseline-budget-body.json` preserves the earlier reader-policy arm.
 
+Both metrics baselines were replayed from private traces with the corrected
+`section-provenance-v2` scorer. Scores and token counts stayed unchanged. The new
+scorer rejects sibling-section leakage, preserves unambiguous parent/child
+provenance, and surfaces storage failures. Their source-report hashes track the
+replay; original traces remain untouched.
+
 The manifest pins compressed bytes and the logical corpus fingerprint, including
 all versioned documents, retained history, publisher metadata, archive state and
 modified times. The archive is gzip-compressed JSONL produced through the existing

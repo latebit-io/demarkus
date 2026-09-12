@@ -59,12 +59,13 @@ type Rubric struct {
 
 // Fixture binds source snapshots, tasks, and separately held scoring rules.
 type Fixture struct {
-	Documents    []Document
-	Tasks        []Task
-	Rubrics      map[string]Rubric
-	Hashes       map[string]string
-	StoreRoot    string
-	VersionCount int
+	Documents      []Document
+	Tasks          []Task
+	Rubrics        map[string]Rubric
+	Hashes         map[string]string
+	StoreRoot      string
+	VersionCount   int
+	storedVersions map[string]map[int]bool
 }
 
 func digest(raw []byte) string { return fmt.Sprintf("sha256-%x", sha256.Sum256(raw)) }
@@ -105,6 +106,9 @@ func (f *Fixture) Validate() error {
 	for _, doc := range f.Documents {
 		if !strings.HasPrefix(doc.Path, "/") || !strings.HasSuffix(doc.Path, ".md") || path.Clean(doc.Path) != doc.Path || docs[doc.Path] || len(doc.Versions) == 0 {
 			return fmt.Errorf("invalid or duplicate document %q", doc.Path)
+		}
+		if f.StoreRoot == "" && (doc.Current < 0 || doc.Current > len(doc.Versions)) {
+			return fmt.Errorf("document %s: current version %d outside embedded history", doc.Path, doc.Current)
 		}
 		docs[doc.Path] = true
 	}
@@ -162,36 +166,65 @@ func (f *Fixture) validateRubric(task Task) error {
 }
 
 func (f *Fixture) validateEvidence(taskID string, evidence Evidence) error {
-	body, ok := f.Section(evidence)
-	if !ok || evidence.Quote == "" || !strings.Contains(body, evidence.Quote) {
+	section, err := f.Section(evidence)
+	if err != nil {
+		return fmt.Errorf("task %s: %w", taskID, err)
+	}
+	if !section.Found || evidence.Quote == "" || !strings.Contains(section.Text, evidence.Quote) {
 		return fmt.Errorf("task %s: evidence not in source: %+v", taskID, evidence)
 	}
 	return nil
 }
 
-// Section resolves only revisions and anchors present in the frozen corpus.
-func (f *Fixture) Section(e Evidence) (string, bool) {
+// SectionResult retains document-relative ranges for nested-section provenance.
+type SectionResult struct {
+	Text       string
+	Found      bool
+	body       string
+	start, end int
+}
+
+// Section distinguishes absent evidence from failures reading known snapshot data.
+func (f *Fixture) Section(e Evidence) (SectionResult, error) {
+	body, found, err := f.documentBody(e)
+	if err != nil || !found {
+		return SectionResult{}, err
+	}
+	if e.Anchor == "" {
+		return SectionResult{Text: body, Found: true, body: body, end: len(body)}, nil
+	}
+	for _, h := range mdoutline.Headings(body) {
+		if h.Anchor == e.Anchor {
+			return SectionResult{Text: body[h.Start:h.End], Found: true, body: body, start: h.Start, end: h.End}, nil
+		}
+	}
+	return SectionResult{}, nil
+}
+
+func (f *Fixture) documentBody(e Evidence) (body string, found bool, err error) {
+	if e.Version < 1 {
+		return "", false, nil
+	}
 	if f.StoreRoot != "" {
+		if f.storedVersions == nil {
+			return "", false, errors.New("store fixture has no version inventory")
+		}
+		if !f.storedVersions[e.Path][e.Version] {
+			return "", false, nil
+		}
 		doc, err := store.New(f.StoreRoot).Get(e.Path, e.Version)
 		if err != nil {
-			return "", false // An unreadable source cannot support the rubric or a citation.
+			return "", false, fmt.Errorf("read frozen source %s/v%d: %w", e.Path, e.Version, err)
 		}
-		if e.Anchor == "" {
-			return string(doc.Content), true
-		}
-		return mdoutline.Section(string(doc.Content), e.Anchor)
+		return string(doc.Content), true, nil
 	}
 	for _, doc := range f.Documents {
 		if doc.Path != e.Path || e.Version < 1 || e.Version > len(doc.Versions) {
 			continue
 		}
-		body := doc.Versions[e.Version-1]
-		if e.Anchor == "" {
-			return body, true
-		}
-		return mdoutline.Section(body, e.Anchor)
+		return doc.Versions[e.Version-1], true, nil
 	}
-	return "", false
+	return "", false, nil
 }
 
 // Latest is safe for budgeted lookup observations because the server is read-only.

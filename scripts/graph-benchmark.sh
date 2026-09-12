@@ -19,6 +19,13 @@ if [ ! -d "$(dirname "$output")" ]; then
     echo "output parent directory must exist: $(dirname "$output")" >&2
     exit 2
 fi
+# Check before creating run artifacts; paths alone cannot reproduce new inputs.
+untracked=$(git -C "$root" ls-files --others --exclude-standard)
+if [ -n "$untracked" ]; then
+    echo "untracked files must be tracked or excluded before benchmarking:" >&2
+    echo "$untracked" >&2
+    exit 2
+fi
 mkdir "$output"
 
 generated=$(date -u +%Y-%m-%dT%H:%M:%SZ)

@@ -2,6 +2,7 @@ package answerbench
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,6 +12,17 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol/store"
 )
+
+func verifyServerIndex(ctx context.Context, host string, f *Fixture) error {
+	index, err := f.Section(Evidence{Path: "/index.md", Version: f.Latest("/index.md")})
+	if err != nil {
+		return err
+	}
+	if !index.Found {
+		return errors.New("fixture /index.md revision missing; cannot verify server readiness")
+	}
+	return awaitServer(ctx, host, index.Text)
+}
 
 func seed(root string, fixture *Fixture) error {
 	if err := os.Mkdir(root, 0o700); err != nil {
@@ -41,15 +53,24 @@ func awaitServer(ctx context.Context, host, index string) error {
 	defer cancel()
 	client := fetch.NewClient(fetch.Options{Insecure: true})
 	defer client.Close()
+	return waitForIndex(ctx, index, func(probe context.Context) (fetch.Result, error) {
+		return client.FetchContext(probe, host, "/index.md", "")
+	})
+}
+
+func waitForIndex(ctx context.Context, index string, fetchIndex func(context.Context) (fetch.Result, error)) error {
 	var last error
 	for {
 		probe, stop := context.WithTimeout(ctx, 300*time.Millisecond)
-		res, err := client.FetchContext(probe, host, "/index.md", "")
+		res, err := fetchIndex(probe)
 		stop()
 		if err == nil && res.Response.Status == "ok" && res.Response.Body == index {
 			return nil
 		}
 		last = err
+		if err == nil {
+			last = fmt.Errorf("unexpected index response: status=%q body-match=%t", res.Response.Status, res.Response.Body == index)
+		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("fixture server did not start: %w (last probe: %v)", ctx.Err(), last)

@@ -4,7 +4,8 @@ Historical synthetic calibration. Referenced raw reports and traces are retained
 locally and ignored by Git; the standard real-corpus metrics are versioned under
 `tools/benchmarks/corpora/soul-2026-09-12/`.
 
-Comparison baseline: **[report-corrected.json](report-corrected.json)**.
+For reproducible comparisons from a fresh checkout, use the tracked
+[standard corpus package](../../corpora/soul-2026-09-12/README.md).
 
 Eight questions, two fresh reader sessions each, over ten frozen synthetic
 documents. Real production server and MCP binaries from revision
@@ -41,7 +42,7 @@ Two repeats are an initial observation, not a statistical confidence bound.
 
 ## Calibration correction
 
-The untouched [original report](report.json) marked 14/16 correct. Review of both
+The original local-only report marked 14/16 correct. Review of both
 multi-document answers found correct step values and complete source support,
 including the dependency handoff citation. The original rubric had omitted that
 valid supporting passage and consequently rejected it as an unsupported extra.
@@ -51,24 +52,17 @@ handoff to the audit procedure, and audit step definition. A regression test che
 that the dependency provenance is required. Expected answer values, questions,
 source documents, model inputs and provider usage were unchanged.
 
-`report-corrected.json` regrades the exact original traces, records the original
+The local-only corrected report regrades the exact original traces, records the original
 report's SHA-256, and carries the corrected rubric hash. **14/16 to 16/16 is a
 grading correction, not an optimization result.** Both reports and all raw events
 are retained; no extra model calls were made for rescoring.
 
 ## After a roadmap slice
 
-From the repository root:
-
-```bash
-make answer-bench
-tools/bin/demarkus-answer-bench -reader-policy budget-body -out /tmp/answers-after
-tools/bin/demarkus-answer-bench compare tools/benchmarks/answers/baseline-2026-09-12/report-corrected.json /tmp/answers-after/report.json
-```
-
-The comparator checks experiment compatibility, complete usage, complete repeats,
-and per-task accuracy before flagging a lower-cost point estimate. Retain all new
-artifacts and rerun the [mechanical suite](../../graph/README.md) too.
+Follow the [standard corpus package](../../corpora/soul-2026-09-12/README.md) to
+restore the pinned corpus and compare against its tracked metrics-only baseline.
+These commands do not require the ignored synthetic reports. Also rerun the
+[mechanical suite](../../graph/README.md).
 
 Checks passed: full repository tests, scorer/accounting/rescore tests, production
 binary build, live 16-attempt run, self-comparison sanity check, and pre-commit.

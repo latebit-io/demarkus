@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/mdoutline"
@@ -89,13 +90,29 @@ func (s *stdioSession) Close() error {
 }
 
 func (s *stdioSession) ListTools(ctx context.Context) ([]mcp.Tool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return listToolPages(ctx, s.client)
+}
+
+type toolPager interface {
+	ListToolsByPage(context.Context, mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
+}
+
+func listToolPages(ctx context.Context, client toolPager) ([]mcp.Tool, error) {
 	var tools []mcp.Tool
 	req := mcp.ListToolsRequest{}
 	seen := make(map[mcp.Cursor]bool)
-	for {
-		res, err := s.client.ListTools(ctx, req)
+	for range 64 {
+		res, err := client.ListToolsByPage(ctx, req)
 		if err != nil {
 			return nil, fmt.Errorf("list tools: %w", err)
+		}
+		if res == nil {
+			return nil, fmt.Errorf("list tools: missing page")
+		}
+		if len(res.Tools) > 4096-len(tools) {
+			return nil, fmt.Errorf("list tools: limit of 4096 tools exceeded")
 		}
 		tools = append(tools, res.Tools...)
 		if res.NextCursor == "" {
@@ -107,6 +124,7 @@ func (s *stdioSession) ListTools(ctx context.Context) ([]mcp.Tool, error) {
 		seen[res.NextCursor] = true
 		req.Params.Cursor = res.NextCursor
 	}
+	return nil, fmt.Errorf("list tools: limit of 64 pages exceeded")
 }
 
 // fetchResponse is a parsed mark_fetch result: the "key: value" header lines

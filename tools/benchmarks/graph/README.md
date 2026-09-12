@@ -22,6 +22,10 @@ Alternatively use `go run` with that same package/version and the two report pat
 Defaults: six repeated samples per case, 200 ms per sample, `-cpu 1`.
 `BENCH_COUNT` and `BENCH_TIME` override these for both runs. Compare the same
 settings, Go version, architecture, fixture and harness hashes in `manifest.txt`.
+
+The runner rejects untracked repository files before creating output: paths
+alone cannot reproduce extra Go sources or fixtures. Track intended inputs first;
+keep private corpus and run artifacts under their ignored directories.
 Record hardware, power mode and competing load; do not interpret cross-machine
 latency deltas as improvements. Each report includes the source revision and
 working-tree status because benchmark-only changes may not yet be committed.

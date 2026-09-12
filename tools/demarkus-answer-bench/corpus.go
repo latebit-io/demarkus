@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 
 	"github.com/latebit-io/demarkus/tools/internal/answerbench"
@@ -21,6 +22,12 @@ func runCorpus(ctx context.Context, command string, args []string) error {
 	}
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("%s takes flags only; unexpected argument %q", command, flags.Arg(0))
+	}
+	if opts.Root == "" || opts.Archive == "" || opts.Manifest == "" {
+		return fmt.Errorf("%s requires -root, -archive and -manifest", command)
 	}
 	var manifest answerbench.CorpusManifest
 	var err error

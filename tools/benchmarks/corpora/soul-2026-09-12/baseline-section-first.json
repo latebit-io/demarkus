@@ -19,7 +19,8 @@
     "origin": "mark://soul.demarkus.io",
     "documents": 311,
     "versions": 2184,
-    "reader_policy": "section-first"
+    "reader_policy": "section-first",
+    "scoring_version": "section-provenance-v2"
   },
   "generated": "2026-09-12T15:50:51.512315Z",
   "implementation_hashes": {
@@ -814,8 +815,8 @@
       "protocol_requests": 8
     }
   },
-  "rescored_from_sha256": "sha256-c932df159aa2b8994453d3587a7757d4609857920fde41448265277184934602",
+  "rescored_from_sha256": "sha256-003c711f10f9437958cdb60c628e547cd67c7fc31a2bf8acb64a06f268204b3a",
   "metrics_only": true,
-  "source_report_sha256": "sha256-003c711f10f9437958cdb60c628e547cd67c7fc31a2bf8acb64a06f268204b3a",
+  "source_report_sha256": "sha256-fda6fdea74124a798b9b91b36a0796232a3cd7e4745efddc7a4f4c6ffb899cda",
   "tool_result_tokens": 12364
 }

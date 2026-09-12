@@ -68,6 +68,7 @@ func main() {
 	// notification is what makes them appear without a reconnect.
 	s := mcpserver.NewMCPServer("demarkus-mcp", version,
 		mcpserver.WithResourceCapabilities(false, true),
+		mcpserver.WithInstructions(mcpfmt.SectionFirst),
 	)
 
 	gs, gsErr := graphstore.Load(graphstore.DefaultPath())
@@ -404,7 +405,7 @@ func markVersionsTool(host string) mcp.Tool {
 func markLookupTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_lookup",
 		mcp.WithDescription(
-			"Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends sections. "+mcpfmt.SectionFirst+" "+urlHint(host),
+			"Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends sections. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),

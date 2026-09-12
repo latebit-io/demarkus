@@ -46,18 +46,7 @@ func run() error {
 		return runCompare(os.Args[1], os.Args[2:])
 	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
-		flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
-		binary := flags.String("mcp-bin", "", "production MCP binary")
-		host := flags.String("host", "", "fixture host:port")
-		dial := flags.String("dial-address", "", "network route for the frozen origin")
-		if err := flags.Parse(os.Args[2:]); err != nil {
-			return err
-		}
-		args := []string{"-host", "mark://" + *host, "-insecure", "-no-cache"}
-		if *dial != "" {
-			args = append(args, "-dial-address", *dial)
-		}
-		return answerbench.ServeProxy(ctx, retrievalbench.StdioConfig{Command: *binary, Args: args, Env: os.Environ()}, *host)
+		return runMCP(ctx, os.Args[2:])
 	}
 	var cfg answerbench.Config
 	flag.StringVar(&cfg.OpenCode, "opencode", "opencode", "OpenCode 1.18.30 binary")
@@ -107,6 +96,27 @@ func run() error {
 		return fmt.Errorf("incomplete provider usage; tokens-per-correct is unavailable")
 	}
 	return nil
+}
+
+func runMCP(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	binary := flags.String("mcp-bin", "", "production MCP binary")
+	host := flags.String("host", "", "fixture host:port")
+	dial := flags.String("dial-address", "", "network route for the frozen origin")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("mcp takes flags only; unexpected argument %q", flags.Arg(0))
+	}
+	if *binary == "" || *host == "" {
+		return fmt.Errorf("mcp requires -mcp-bin and -host")
+	}
+	childArgs := []string{"-host", "mark://" + *host, "-insecure", "-no-cache"}
+	if *dial != "" {
+		childArgs = append(childArgs, "-dial-address", *dial)
+	}
+	return answerbench.ServeProxy(ctx, retrievalbench.StdioConfig{Command: *binary, Args: childArgs, Env: os.Environ()}, *host)
 }
 
 func runCompare(command string, args []string) error {
