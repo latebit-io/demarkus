@@ -30,16 +30,18 @@ created on first start: the server writes the world skeleton and seeds a
 default write policy that warns rather than blocks, then enforces it. Publish
 your own policy to `/.well-known/demarkus/policy.md` through the protocol and
 it governs the next write; restarts never revert it. A bucket holding objects
-but no world head is refused, so a mistyped `bucket.url` fails the open
-instead of quietly becoming an empty world.
+but no world head is refused, so a mistyped `bucket.url` naming a bucket
+already in use fails the open. A typo naming some other empty bucket still
+creates a world there, logged at Warn.
 
 To choose that first policy instead of taking the default, set
 `initialPolicy` on a world (or on `worldDefaults` for every world). The body
 ships as a key in the config ConfigMap, is projected next to `config.yaml`,
 and the server seeds it as version 1. Seeding is create-only: a world that
-already holds a policy keeps it and the value is ignored, so the chart never
-overwrites or verifies a policy in a bucket. A read-only world is never
-seeded, and setting `initialPolicy` on one fails rendering.
+already holds a policy keeps it, so the chart never overwrites or verifies a
+policy in a bucket. The projected file is still read and validated on every
+world open, so leave it in place once a world has started with it. A read-only
+world is never seeded, and setting `initialPolicy` on one fails rendering.
 
 Policy directives parse anywhere in the body, so prose in `initialPolicy`
 must never begin a line with `strictness:`, `require_tags:`, or

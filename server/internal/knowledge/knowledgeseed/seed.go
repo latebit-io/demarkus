@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"syscall"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
@@ -55,21 +56,22 @@ func PolicySeedFromFile(name string) (bucketstore.PolicySeed, error) {
 }
 
 func readPolicyFile(name string) ([]byte, error) {
-	// Stat before open: opening a FIFO blocks until a writer appears.
-	info, err := os.Stat(name)
-	if err != nil {
-		return nil, fmt.Errorf("stat policy file: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("policy file %q must be a regular file", name)
-	}
-	file, err := os.Open(name)
+	// O_NONBLOCK: a FIFO at this path would otherwise park the world open
+	// until a writer appeared, and no context can interrupt that.
+	file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open policy file: %w", err)
 	}
-	// Read-only: a close error cannot lose data. The bound is on the read
-	// itself, so a file swapped after the stat cannot allocate past it.
+	// Read-only, so a close error cannot lose data.
 	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat policy file: %w", err)
+	}
+	// On the descriptor, not the path: nothing can be swapped in behind it.
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("policy file %q must be a regular file", name)
+	}
 	body, err := io.ReadAll(io.LimitReader(file, protocol.MaxBodyLength+1))
 	if err != nil {
 		return nil, fmt.Errorf("read policy file: %w", err)
