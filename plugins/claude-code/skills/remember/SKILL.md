@@ -60,12 +60,12 @@ OKF `type` on publish: `architecture.md` → `Architecture`, `adr/*` → `Decisi
 
 ## Tool routing
 
-Read intents: `mark_lookup` (catalog) first, then `mark_fetch`:
+Read intents default to section-first:
 
-1. `mark_lookup` with `url=/<project>/` (or `/` for every project) and a subject `query`: importance-ranked table (path, importance, title, tags), no bodies. Catalog lookup finds only what was tagged or titled; `match: body` also matches section text, and body rows carry `#anchor` and a snippet; `budget: 1500` appends the matched sections' text so one call answers a question phrased in the answer's own words. Narrow with `filter` (`tag=`, `modified-after=`, `modified-before=`), cap with `limit`.
-2. `mark_fetch` rows at their `#anchor`; a whole document only when the outline shows the answer spans sections. Also `mark_fetch /index.md` / `/<project>/index.md` directly; lookup misses untagged docs, the hub still anchors discovery.
-3. `mark_backlinks` or `mark_graph` for related documents across projects.
-4. Lookup, fetch, or graph failure: surface the error, never report an empty result. Only a successful search with no matches means nothing found.
+1. `mark_lookup` in `/<project>/` or a narrower established subtree; `/` only for cross-project intent. Start with `limit: 3`, no `budget`, and descriptive subjects rather than bare IDs. Catalog mode for names/tags; `match: body` for section text or catalog misses, with `#anchor` and snippet rows. Narrow with `filter` (`tag=`, `modified-after=`, `modified-before=`). Never widen explicit scope unasked.
+2. `mark_fetch` the best matching `#anchor`; choose a section from an outline, or read a short document whole when no anchor is available. A given URL can be fetched directly. Optional `budget: 1500` expansion is for focused body queries likely to return the evidence directly, not ordinary name lookup. Target two calls and about 1,500 result tokens without sacrificing correctness.
+3. `mark_fetch /index.md` or `/<project>/index.md` when needed as the discovery backstop for untagged content. Use `mark_backlinks` / `mark_graph` for related documents within the requested scope.
+4. Surface any lookup, fetch or graph failure and stop that read; never turn errors into empty results. Disclose partial results. Only a successful non-partial empty lookup means nothing found.
 
 Write intents: route by content type.
 

@@ -40,7 +40,7 @@ func memoryTestConfig() *Config {
 
 // newMemoryGateway builds a memory-profile gateway around a fake
 // dispatcher, mirroring newGatewayWithDispatcher.
-func newMemoryGateway(t *testing.T, cfg *Config, d worldDispatcher) *mcpGateway {
+func newMemoryGateway(t testing.TB, cfg *Config, d worldDispatcher) *mcpGateway {
 	t.Helper()
 	signer := newTestSigner(t)
 	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}

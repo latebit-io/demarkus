@@ -1,4 +1,4 @@
-.PHONY: all protocol server knowledge-server client tools image image-server image-knowledge-server image-broker image-memory-broker image-agent test clean install help lint fmt vet deps
+.PHONY: all protocol server knowledge-server client tools answer-bench image image-server image-knowledge-server image-broker image-memory-broker image-agent test clean install help lint fmt vet deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -14,6 +14,7 @@ help:
 	@echo "  knowledge-server - Build demarkus-knowledge-server (multi-world GCS backend)"
 	@echo "  client    - Build demarkus TUI client"
 	@echo "  tools     - Build broker, token, publish (tools/bin/)"
+	@echo "  answer-bench - Build server, MCP, and model-driven benchmark runner"
 	@echo "  image     - Build runtime container images (TAG overridable)"
 	@echo "  image-knowledge-server - Build the multi-world knowledge server image"
 	@echo "  test      - Run all tests"
@@ -63,6 +64,12 @@ tools: protocol
 	cd tools && go build -o bin/demarkus-loadtest ./demarkus-loadtest
 	cd tools && go build -o bin/demarkus-retrieval-bench ./demarkus-retrieval-bench
 	@echo "✓ Tools built: tools/bin/{demarkus-knowledge-broker, demarkus-memory-broker, demarkus-token, demarkus-publish, demarkus-loadtest, demarkus-retrieval-bench}"
+
+# Build current production surfaces alongside the evaluation runner.
+answer-bench:
+	go build -C server -o bin/demarkus-server ./cmd/demarkus-server
+	go build -C client -o bin/demarkus-mcp ./cmd/demarkus-mcp
+	go build -C tools -o bin/demarkus-answer-bench ./demarkus-answer-bench
 
 # Build container images. One image per deployable service so each pod
 # carries only the binaries it needs at runtime. Admin CLIs are NOT

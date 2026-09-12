@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/mdoutline"
@@ -30,6 +31,12 @@ type Session interface {
 	Close() error
 }
 
+// CatalogSession exposes the actual MCP schemas used by a model-driven runner.
+type CatalogSession interface {
+	Session
+	ListTools(context.Context) ([]mcp.Tool, error)
+}
+
 // SessionOpener starts a new Session.
 type SessionOpener func(ctx context.Context) (Session, error)
 
@@ -45,7 +52,7 @@ type stdioSession struct {
 }
 
 // OpenStdioSession spawns cfg.Command and completes the MCP handshake.
-func OpenStdioSession(ctx context.Context, cfg StdioConfig) (Session, error) {
+func OpenStdioSession(ctx context.Context, cfg StdioConfig) (CatalogSession, error) {
 	c, err := mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("spawn %s: %w", cfg.Command, err)
@@ -80,6 +87,44 @@ func (s *stdioSession) Call(ctx context.Context, name string, args map[string]an
 
 func (s *stdioSession) Close() error {
 	return s.client.Close()
+}
+
+func (s *stdioSession) ListTools(ctx context.Context) ([]mcp.Tool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return listToolPages(ctx, s.client)
+}
+
+type toolPager interface {
+	ListToolsByPage(context.Context, mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
+}
+
+func listToolPages(ctx context.Context, client toolPager) ([]mcp.Tool, error) {
+	var tools []mcp.Tool
+	req := mcp.ListToolsRequest{}
+	seen := make(map[mcp.Cursor]bool)
+	for range 64 {
+		res, err := client.ListToolsByPage(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("list tools: %w", err)
+		}
+		if res == nil {
+			return nil, fmt.Errorf("list tools: missing page")
+		}
+		if len(res.Tools) > 4096-len(tools) {
+			return nil, fmt.Errorf("list tools: limit of 4096 tools exceeded")
+		}
+		tools = append(tools, res.Tools...)
+		if res.NextCursor == "" {
+			return tools, nil
+		}
+		if seen[res.NextCursor] {
+			return nil, fmt.Errorf("list tools: repeated cursor %q", res.NextCursor)
+		}
+		seen[res.NextCursor] = true
+		req.Params.Cursor = res.NextCursor
+	}
+	return nil, fmt.Errorf("list tools: limit of 64 pages exceeded")
 }
 
 // fetchResponse is a parsed mark_fetch result: the "key: value" header lines

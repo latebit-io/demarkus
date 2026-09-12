@@ -1,0 +1,102 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/latebit-io/demarkus/client/graphstore
+cpu: Apple M2
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1         	   87829	      2561 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1         	   93591	      2545 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1         	   95539	      2502 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1         	   95342	      2493 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1         	   93558	      2559 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1         	   93974	      2576 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1000      	    2596	     88491 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1000      	    2425	     92922 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1000      	    2506	     90439 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1000      	    2648	     92521 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1000      	    2601	     91751 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=1000/fan-in=1000      	    2683	     91883 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1        	    9390	     24861 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1        	    9646	     25275 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1        	    8772	     24894 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1        	    9524	     24856 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1        	    9199	     24806 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1        	    9831	     24783 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1000     	    1966	    121972 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1000     	    1990	    122156 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1000     	    1905	    121395 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1000     	    1945	    121896 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1000     	    1875	    122461 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=10000/fan-in=1000     	    1768	    123129 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1       	     891	    250003 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1       	     925	    249023 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1       	     955	    248401 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1       	     969	    247469 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1       	     954	    248396 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1       	     970	    249077 ns/op	         1.000 rows/op	     312 B/op	       4 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1000    	     638	    370330 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1000    	     807	    357725 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1000    	     765	    362786 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1000    	     674	    364691 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1000    	     537	    384332 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineBacklinks/edges=100000/fan-in=1000    	     601	    370577 ns/op	      1000 rows/op	  237256 B/op	      16 allocs/op
+BenchmarkGraphBaselineRestore/edges=1000                    	      58	   4578693 ns/op	 2472641 B/op	   14105 allocs/op
+BenchmarkGraphBaselineRestore/edges=1000                    	      61	   4068199 ns/op	 2472640 B/op	   14105 allocs/op
+BenchmarkGraphBaselineRestore/edges=1000                    	      57	   4045475 ns/op	 2472640 B/op	   14105 allocs/op
+BenchmarkGraphBaselineRestore/edges=1000                    	      63	   4012881 ns/op	 2472640 B/op	   14105 allocs/op
+BenchmarkGraphBaselineRestore/edges=1000                    	      63	   3981304 ns/op	 2472640 B/op	   14105 allocs/op
+BenchmarkGraphBaselineRestore/edges=1000                    	      60	   4054126 ns/op	 2472640 B/op	   14105 allocs/op
+BenchmarkGraphBaselineRestore/edges=100000                  	       1	 410409792 ns/op	289484176 B/op	 1401177 allocs/op
+BenchmarkGraphBaselineRestore/edges=100000                  	       1	 409905541 ns/op	289484176 B/op	 1401177 allocs/op
+BenchmarkGraphBaselineRestore/edges=100000                  	       1	 403813250 ns/op	289484176 B/op	 1401177 allocs/op
+BenchmarkGraphBaselineRestore/edges=100000                  	       1	 406323917 ns/op	289385856 B/op	 1401177 allocs/op
+BenchmarkGraphBaselineRestore/edges=100000                  	       1	 406723583 ns/op	289484176 B/op	 1401177 allocs/op
+BenchmarkGraphBaselineRestore/edges=100000                  	       1	 406901208 ns/op	289484176 B/op	 1401177 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/complete                	      98	   2306496 ns/op	       100.0 edges/op	       101.0 fetches/op	       101.0 nodes/op	         0 silent-incomplete/op	 6269451 B/op	   39870 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/complete                	     100	   2217107 ns/op	       100.0 edges/op	       101.0 fetches/op	       101.0 nodes/op	         0 silent-incomplete/op	 6268839 B/op	   39869 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/complete                	     100	   2204855 ns/op	       100.0 edges/op	       101.0 fetches/op	       101.0 nodes/op	         0 silent-incomplete/op	 6268863 B/op	   39869 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/complete                	     100	   2254703 ns/op	       100.0 edges/op	       101.0 fetches/op	       101.0 nodes/op	         0 silent-incomplete/op	 6268839 B/op	   39869 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/complete                	     100	   2236175 ns/op	       100.0 edges/op	       101.0 fetches/op	       101.0 nodes/op	         0 silent-incomplete/op	 6268827 B/op	   39869 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/complete                	     100	   2214920 ns/op	       100.0 edges/op	       101.0 fetches/op	       101.0 nodes/op	         0 silent-incomplete/op	 6268828 B/op	   39869 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/pre-cancelled           	   32678	      6478 ns/op	         0 edges/op	         0 fetches/op	         0 nodes/op	         1.000 silent-incomplete/op	   26070 B/op	      21 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/pre-cancelled           	   68546	      5387 ns/op	         0 edges/op	         0 fetches/op	         0 nodes/op	         1.000 silent-incomplete/op	   25863 B/op	      20 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/pre-cancelled           	   41199	      6627 ns/op	         0 edges/op	         0 fetches/op	         0 nodes/op	         1.000 silent-incomplete/op	   25751 B/op	      20 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/pre-cancelled           	   44038	      6141 ns/op	         0 edges/op	         0 fetches/op	         0 nodes/op	         1.000 silent-incomplete/op	   25778 B/op	      20 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/pre-cancelled           	  105802	      5226 ns/op	         0 edges/op	         0 fetches/op	         0 nodes/op	         1.000 silent-incomplete/op	   25741 B/op	      20 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/pre-cancelled           	   83443	      5398 ns/op	         0 edges/op	         0 fetches/op	         0 nodes/op	         1.000 silent-incomplete/op	   25731 B/op	      20 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/node-cap                	     644	    560451 ns/op	       100.0 edges/op	        10.00 fetches/op	        10.00 nodes/op	         1.000 silent-incomplete/op	  999108 B/op	    6101 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/node-cap                	     338	    709672 ns/op	       100.0 edges/op	        10.00 fetches/op	        10.00 nodes/op	         1.000 silent-incomplete/op	  999108 B/op	    6101 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/node-cap                	     346	    659411 ns/op	       100.0 edges/op	        10.00 fetches/op	        10.00 nodes/op	         1.000 silent-incomplete/op	  999105 B/op	    6101 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/node-cap                	     348	    660261 ns/op	       100.0 edges/op	        10.00 fetches/op	        10.00 nodes/op	         1.000 silent-incomplete/op	  999108 B/op	    6101 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/node-cap                	     355	    653050 ns/op	       100.0 edges/op	        10.00 fetches/op	        10.00 nodes/op	         1.000 silent-incomplete/op	  999111 B/op	    6101 allocs/op
+BenchmarkGraphBaselineCrawlOutcomes/node-cap                	     356	    662533 ns/op	       100.0 edges/op	        10.00 fetches/op	        10.00 nodes/op	         1.000 silent-incomplete/op	  999108 B/op	    6101 allocs/op
+PASS
+ok  	github.com/latebit-io/demarkus/client/graphstore	24.119s
+goos: darwin
+goarch: arm64
+pkg: github.com/latebit-io/demarkus/client/internal/fedcrawl
+cpu: Apple M2
+BenchmarkGraphBaselineRelativeTargets/root         	   10297	     23270 ns/op	         0 wrong-targets/op	   66552 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/root         	   10000	     23139 ns/op	         0 wrong-targets/op	   66552 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/root         	   10165	     23685 ns/op	         0 wrong-targets/op	   66552 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/root         	   10000	     23122 ns/op	         0 wrong-targets/op	   66552 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/root         	   10000	     23061 ns/op	         0 wrong-targets/op	   66552 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/root         	   10000	     22893 ns/op	         0 wrong-targets/op	   66552 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/nested       	   10000	     22562 ns/op	         1.000 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/nested       	   10150	     23619 ns/op	         1.000 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/nested       	   10000	     22888 ns/op	         1.000 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/nested       	   10000	     21411 ns/op	         1.000 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/nested       	   10000	     21739 ns/op	         1.000 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/nested       	   10000	     21578 ns/op	         1.000 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/parent       	   10000	     21462 ns/op	         1.000 wrong-targets/op	   66576 B/op	     430 allocs/op
+BenchmarkGraphBaselineRelativeTargets/parent       	   10000	     21692 ns/op	         1.000 wrong-targets/op	   66576 B/op	     430 allocs/op
+BenchmarkGraphBaselineRelativeTargets/parent       	   10000	     21866 ns/op	         1.000 wrong-targets/op	   66576 B/op	     430 allocs/op
+BenchmarkGraphBaselineRelativeTargets/parent       	   10000	     21554 ns/op	         1.000 wrong-targets/op	   66576 B/op	     430 allocs/op
+BenchmarkGraphBaselineRelativeTargets/parent       	   10000	     22092 ns/op	         1.000 wrong-targets/op	   66576 B/op	     430 allocs/op
+BenchmarkGraphBaselineRelativeTargets/parent       	   10000	     21677 ns/op	         1.000 wrong-targets/op	   66576 B/op	     430 allocs/op
+BenchmarkGraphBaselineRelativeTargets/absolute     	   10000	     21610 ns/op	         0 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/absolute     	   10000	     21763 ns/op	         0 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/absolute     	   10000	     21659 ns/op	         0 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/absolute     	   10000	     21591 ns/op	         0 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/absolute     	   10000	     21486 ns/op	         0 wrong-targets/op	   66568 B/op	     429 allocs/op
+BenchmarkGraphBaselineRelativeTargets/absolute     	   10000	     21757 ns/op	         0 wrong-targets/op	   66568 B/op	     429 allocs/op
+PASS
+ok  	github.com/latebit-io/demarkus/client/internal/fedcrawl	5.587s

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func newTestSigner(t *testing.T) *Signer {
+func newTestSigner(t testing.TB) *Signer {
 	t.Helper()
 	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
 	s, err := NewSigner(key)
