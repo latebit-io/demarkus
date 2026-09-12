@@ -161,6 +161,7 @@ Operational notes:
 - GCS credentials come from Application Default Credentials (Workload Identity on GKE); there are no credential flags or env vars.
 - The bucket must exist, but needs no out-of-band initialization: an existing empty one is initialized and seeded on first start, and a bucket holding objects but no world head is refused.
 - `policy.file` names a local file whose body seeds the world's first policy version instead of the embedded default. Seeding is create-only, so a world that already holds a policy keeps it, but the file is still read and validated on every open and must stay present and parseable.
+- `policy.file` applies to a writable world only. Configuration refuses it on a read-only world, which is never seeded and must already hold a valid policy in its bucket.
 
 Deploy it with the Helm chart; see [Kubernetes & Helm](../deployment/kubernetes.md) and `deploy/helm/demarkus-knowledge-server/README.md`.
 
