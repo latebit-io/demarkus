@@ -58,6 +58,7 @@ func (g *mcpGateway) tenantWorld(ctx context.Context) (WorldConfig, error) {
 	}
 	w, err := tenantWorldFor(g.srv.cfg, claims)
 	if err != nil {
+		g.evictTenantGraphs(identityKey(g.srv.cfg.OIDC.Issuer, claims.Subject))
 		var ambiguous errAmbiguousTenant
 		if errors.As(err, &ambiguous) {
 			g.log.Warn("tenant resolution ambiguous; denying closed",

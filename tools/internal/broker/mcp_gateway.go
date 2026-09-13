@@ -82,6 +82,18 @@ func (g *mcpGateway) graphFor(ctx context.Context) (*gatewayGraph, error) {
 	return entry.graph, nil
 }
 
+// Failed resolution has no world name. Retire every scope owned by the identity
+// so later reauthorization cannot reuse its graph or seed bookkeeping.
+func (g *mcpGateway) evictTenantGraphs(identity string) {
+	g.tenantGraphsMu.Lock()
+	defer g.tenantGraphsMu.Unlock()
+	for world, entry := range g.tenantGraphs {
+		if entry.identity == identity {
+			delete(g.tenantGraphs, world)
+		}
+	}
+}
+
 // newMCPGateway registers the profile's tools and wraps them in Streamable
 // HTTP. Production supplies *worldPool; tests inject a dispatcher fake.
 func newMCPGateway(s *Server, version string, dispatcher worldDispatcher, profile *GatewayProfile) *mcpGateway {

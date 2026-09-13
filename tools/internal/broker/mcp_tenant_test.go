@@ -526,6 +526,78 @@ func TestMemoryGraphScopeTransitions(t *testing.T) {
 	}
 }
 
+func TestMemoryGraphReauthorizationStartsFresh(t *testing.T) {
+	for _, failure := range []string{"revoke", "deprovision"} {
+		for _, entrypoint := range []string{"graph", "gate"} {
+			t.Run(failure+"/"+entrypoint, func(t *testing.T) {
+				testMemoryGraphReauthorization(t, failure, entrypoint)
+			})
+		}
+	}
+}
+
+func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
+	t.Helper()
+	cfg := memoryTestConfig()
+	aliceWorld := cfg.Worlds[0]
+	identities := map[string]string{identityKey(cfg.OIDC.Issuer, "google|alice"): aliceWorld.Name}
+	if failure == "deprovision" {
+		cfg.Worlds = cfg.Worlds[1:]
+		cfg.SetDynamicWorlds([]WorldConfig{aliceWorld}, identities)
+	}
+	d := seededDispatcher()
+	for _, tenant := range []string{"alice", "bob"} {
+		d.published[tenant+"-w/source.md"] = fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK, Body: "# " + tenant + "_TITLE\n[" + tenant + "_LABEL](mark://" + tenant + "-w/index.md)",
+		}}
+	}
+	g := newMemoryGateway(t, cfg, d)
+	tenantGraphCall(t, g, "alice", "mark_graph", "/source.md")
+	tenantGraphCall(t, g, "bob", "mark_graph", "/source.md")
+	ctx := withAliceClaims(t.Context())
+	old, err := g.graphFor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.graphStore.SetSeedEtag("alice-w", "retired-etag")
+	if failure == "deprovision" {
+		cfg.SetDynamicWorlds(nil, nil)
+	} else {
+		cfg.Worlds[0].Allow.Emails = []string{"replacement@example.com"}
+	}
+	if entrypoint == "graph" {
+		if _, err := g.graphFor(ctx); !errors.Is(err, ErrNotAuthorized) {
+			t.Fatalf("graphFor error = %v, want ErrNotAuthorized", err)
+		}
+	} else {
+		res, err := g.tenantGate(g.handleMarkFetch)(ctx, callToolReq("mark_fetch", map[string]any{"url": "mark://alice-w/index.md"}))
+		if err != nil || res == nil || !res.IsError {
+			t.Fatalf("gate did not deny access: err=%v result=%v", err, res)
+		}
+	}
+	if _, retained := g.tenantGraphs["alice-w"]; retained {
+		t.Error("authorization failure retained Alice's cached graph")
+	}
+	if failure == "deprovision" {
+		cfg.SetDynamicWorlds([]WorldConfig{aliceWorld}, identities)
+	} else {
+		cfg.Worlds[0] = aliceWorld
+	}
+	current, err := g.graphFor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current == old || current.graphStore.NodeCount() != 0 || current.graphStore.SeedEtag("alice-w") != "" || len(current.graphSeedChecked) != 0 {
+		t.Error("reauthorization reused retired graph data or seed bookkeeping")
+	}
+	for _, tool := range []string{"mark_backlinks", "mark_explore"} {
+		if text := tenantGraphCall(t, g, "alice", tool, "/index.md"); strings.Contains(text, "alice-w/source.md") {
+			t.Errorf("%s resurrected retired source: %s", tool, text)
+		}
+	}
+	assertTenantBacklinks(t, g, "bob", "alice")
+}
+
 func TestMemoryGraphSeedRefreshIsScoped(t *testing.T) {
 	d := seededDispatcher()
 	empty := false
@@ -575,11 +647,19 @@ func TestMemoryGraphRefreshDoesNotBlockAnotherTenant(t *testing.T) {
 	}
 	g := newMemoryGateway(t, memoryTestConfig(), d)
 	finished := make(chan struct{})
+	var aliceResult *mcp.CallToolResult
+	var aliceErr error
 	go func() {
 		defer close(finished)
-		tenantGraphCall(t, g, "alice", "mark_backlinks", "/index.md")
+		aliceResult, aliceErr = g.tenantGate(g.handleMarkBacklinks)(withAliceClaims(t.Context()), callToolReq("mark_backlinks", map[string]any{"url": "mark://alice-w/index.md"}))
 	}()
-	defer func() { close(release); <-finished }()
+	defer func() {
+		close(release)
+		<-finished
+		if aliceErr != nil || aliceResult == nil || aliceResult.IsError {
+			t.Errorf("Alice query failed: err=%v result=%v", aliceErr, aliceResult)
+		}
+	}()
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
