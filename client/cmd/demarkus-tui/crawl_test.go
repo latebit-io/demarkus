@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -36,5 +37,17 @@ func TestCancelCrawlInvalidatesLateResult(t *testing.T) {
 	updated, _ := m.handleCrawlResult(crawlResult{graph: graph.New(), seq: 1})
 	if updated.(model).graphData != nil {
 		t.Fatal("stale crawl restored after cancellation")
+	}
+}
+
+func TestCrawlSaveWarningDoesNotRepeatOutcome(t *testing.T) {
+	g := graph.New()
+	g.Outcome = &graph.CrawlOutcome{MaxDepth: 1, Reasons: []string{graph.ReasonOutputCap}}
+	saveErr := errors.New("save graph: disk full")
+	m := model{viewMode: viewGraph, width: 100}
+	updated, _ := m.handleCrawlResult(crawlResult{graph: g, err: errors.Join(g.Outcome, saveErr)})
+	view := updated.(model).renderCurrentGraphSubView()
+	if strings.Count(view, "outcome: partial") != 1 || !strings.Contains(view, saveErr.Error()) {
+		t.Fatalf("outcome must appear once and save failure must survive: %s", view)
 	}
 }

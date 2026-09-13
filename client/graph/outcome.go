@@ -49,6 +49,25 @@ func (o *CrawlOutcome) Unwrap() error { return o.cause }
 // Is preserves a stable sentinel while Unwrap retains caller cancellation.
 func (o *CrawlOutcome) Is(target error) bool { return target == ErrIncomplete && !o.Complete }
 
+// CrawlWarning removes an already-rendered outcome from joined persistence errors.
+// Other errors retain their context and identity, including ordinary wrappers.
+func CrawlWarning(err error, outcome *CrawlOutcome) error {
+	if err == nil || err == outcome {
+		return nil
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return err
+	}
+	var remaining []error
+	for _, cause := range joined.Unwrap() {
+		if warning := CrawlWarning(cause, outcome); warning != nil {
+			remaining = append(remaining, warning)
+		}
+	}
+	return errors.Join(remaining...)
+}
+
 // Summary explicitly qualifies completeness by neighborhood depth.
 func (o *CrawlOutcome) Summary() string {
 	status := "complete"

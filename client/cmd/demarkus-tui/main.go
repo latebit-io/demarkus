@@ -550,8 +550,8 @@ func (m model) handleCrawlResult(msg crawlResult) (tea.Model, tea.Cmd) {
 	}
 	m.graphData = msg.graph
 	m.graphWarning = ""
-	if msg.err != nil && msg.err != msg.graph.Outcome {
-		m.graphWarning = msg.err.Error()
+	if warning := graph.CrawlWarning(msg.err, msg.graph.Outcome); warning != nil {
+		m.graphWarning = warning.Error()
 	}
 
 	// Recompute display list for the active sub-view.

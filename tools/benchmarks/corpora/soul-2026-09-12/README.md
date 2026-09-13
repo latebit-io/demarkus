@@ -80,6 +80,10 @@ outcomes, 94,259 model tokens and 12,364 tool-result tokens. The
 correctness and mechanical costs. This reader made no graph-crawl calls;
 model-token variation is not attributed. Keep `baseline-section-first.json` fixed.
 
+[`after-crawl-outcomes-review.json`](after-crawl-outcomes-review.json) preserves
+the PR 449 review-fix replay: 16/16 correct, 96,193 model tokens and 12,395
+tool-result tokens. Earlier replay and baselines remain unchanged.
+
 ## Rebuild an artifact deliberately
 
 Use new output filenames; pack never overwrites an artifact or manifest:

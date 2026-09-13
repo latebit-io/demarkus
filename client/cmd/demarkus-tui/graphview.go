@@ -239,6 +239,8 @@ func statusIcon(status string) string {
 		return "✗"
 	case "external":
 		return "→"
+	case "partial":
+		return "◐"
 	default:
 		return "○"
 	}

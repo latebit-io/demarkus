@@ -146,3 +146,84 @@ func TestCrawlWorkerCeiling(t *testing.T) {
 		t.Fatalf("worker bound: %+v, %v", g.Outcome, err)
 	}
 }
+
+func TestCrawlRetainsMinimalRootWithinOutputBudget(t *testing.T) {
+	const root = "mark://host/root.md"
+	f := newMockFetcher()
+	f.add("host:6309", "/root.md", "# "+strings.Repeat("large title ", 200))
+	g, err := Crawl(t.Context(), root, f, mockParseURL, CrawlOptions{MaxOutputBytes: 1024})
+	if !errors.Is(err, ErrIncomplete) || !slices.Contains(g.Outcome.Reasons, ReasonOutputCap) {
+		t.Fatalf("want output-cap, got %v", err)
+	}
+	if n := g.GetNode(root); n == nil || !n.Incomplete || n.Depth != 0 || n.Title != "" {
+		t.Fatalf("root observation = %+v, want minimal incomplete root", n)
+	}
+	if len(Summary(g, root)) > 1024 || len(f.calls) != 1 {
+		t.Fatal("root retention exceeded output or fetch budget")
+	}
+}
+
+func TestCrawlRejectsUnrepresentableRootBeforeFetch(t *testing.T) {
+	root := "mark://host/" + strings.Repeat("x", 500)
+	f := newMockFetcher()
+	g, err := Crawl(t.Context(), root, f, mockParseURL, CrawlOptions{MaxOutputBytes: 1024})
+	if err == nil || g != nil || len(f.calls) != 0 {
+		t.Fatalf("unrepresentable root: graph=%v err=%v fetches=%d", g, err, len(f.calls))
+	}
+}
+
+func TestCrawlRetainsMinimalChildWithinOutputBudget(t *testing.T) {
+	const root = "mark://host/root.md"
+	const child = "mark://host/child.md"
+	f := newMockFetcher()
+	f.add("host:6309", "/root.md", "[child](/child.md)")
+	f.add("host:6309", "/child.md", "# "+strings.Repeat("large title ", 200))
+	g, err := Crawl(t.Context(), root, f, mockParseURL, CrawlOptions{MaxDepth: 1, MaxOutputBytes: 1024})
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatal("expected partial traversal")
+	}
+	if n := g.GetNode(child); n == nil || !n.Incomplete || n.Depth != 1 {
+		t.Fatalf("child observation = %+v, want depth 1 incomplete node", n)
+	}
+	if g.EdgeCount() != 1 || len(Summary(g, root)) > 1024 {
+		t.Fatal("fallback lost edge or exceeded output budget")
+	}
+}
+
+func TestCrawlWarningPreservesOtherErrors(t *testing.T) {
+	outcome := &CrawlOutcome{Reasons: []string{ReasonNodeCap}}
+	saveErr := errors.New("disk full")
+	closeErr := errors.New("close failed")
+	wrapped := fmt.Errorf("save graph: %w", saveErr)
+	for _, tt := range []struct {
+		name string
+		err  error
+		want []error
+	}{
+		{"nil", nil, nil},
+		{"outcome", outcome, nil},
+		{"outcomes only", errors.Join(outcome, outcome), nil},
+		{"plain error", saveErr, []error{saveErr}},
+		{"wrapped error", wrapped, []error{wrapped, saveErr}},
+		{"joined", errors.Join(outcome, wrapped), []error{wrapped, saveErr}},
+		{"nested join", errors.Join(errors.Join(outcome, wrapped), closeErr), []error{wrapped, saveErr, closeErr}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			warning := CrawlWarning(tt.err, outcome)
+			if len(tt.want) == 0 {
+				if warning != nil {
+					t.Fatalf("unexpected warning: %v", warning)
+				}
+				return
+			}
+			if warning == nil || strings.Contains(warning.Error(), "outcome:") {
+				t.Fatalf("wrong warning: %v", warning)
+			}
+			for _, want := range tt.want {
+				if !errors.Is(warning, want) {
+					t.Errorf("lost %v from %v", want, warning)
+				}
+			}
+		})
+	}
+}

@@ -147,7 +147,7 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 	opts.applyDefaults()
 	g := New()
 	startURL = links.CanonicalURL(startURL)
-	if len(startURL) > opts.MaxOutputBytes-512 {
+	if len(startURL) > opts.MaxOutputBytes-512 || len(nodeSummary(&Node{URL: startURL, Incomplete: true})) > opts.MaxOutputBytes-512-len(startURL) {
 		return nil, errors.New("crawl start URL exceeds output budget")
 	}
 	if strings.HasPrefix(startURL, "mark://") && (parseURL == nil || fetcher == nil) {
@@ -233,7 +233,10 @@ func (r *crawlRun) observe(ctx context.Context, item crawlItem, res *crawlFetch)
 		node.LinkCount = extracted.BodyLinkCount
 	}
 	if !r.reserveOutput(len(nodeSummary(node))) {
-		return
+		node = &Node{URL: item.url, Depth: item.depth, Incomplete: true}
+		if !r.reserveOutput(len(nodeSummary(node))) {
+			return
+		}
 	}
 	for i := range extracted.Edges {
 		edge := &extracted.Edges[i]

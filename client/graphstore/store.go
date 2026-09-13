@@ -646,7 +646,7 @@ func (s *Store) CrawlAndPersist(
 	if strings.HasPrefix(startURL, "mark://") && parseURL == nil {
 		return nil, fmt.Errorf("crawl %s: parseURL is required for mark:// URLs", startURL)
 	}
-	if fetchFunc == nil {
+	if strings.HasPrefix(startURL, "mark://") && fetchFunc == nil {
 		return nil, fmt.Errorf("crawl %s: fetchFunc is required", startURL)
 	}
 

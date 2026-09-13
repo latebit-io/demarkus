@@ -382,8 +382,8 @@ func graphMain(args []string) {
 	if err != nil && g == nil {
 		log.Fatal(err)
 	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	if warning := graph.CrawlWarning(err, g.Outcome); warning != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", warning)
 	}
 	fmt.Printf("\nGraph: %d nodes, %d edges\n%s\n", g.NodeCount(), g.EdgeCount(), g.Outcome.Summary())
 	if g.EdgeCount() > 0 {

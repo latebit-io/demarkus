@@ -63,3 +63,15 @@ func TestFailedStatusDoesNotEraseSeed(t *testing.T) {
 		})
 	}
 }
+
+func TestCrawlExternalRootWithoutFetcher(t *testing.T) {
+	s := New()
+	const root = "https://example.com/"
+	g, err := s.CrawlAndPersist(t.Context(), root, nil, nil, CrawlOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.Outcome.Complete || g.Outcome.Fetches != 0 || s.GetNode(root).Status != "external" {
+		t.Fatalf("external crawl = %+v", g.Outcome)
+	}
+}

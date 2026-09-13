@@ -304,8 +304,8 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", crawlErr)), nil
 	}
 	text := formatGraphSummary(crawled, raw)
-	if crawlErr != nil && crawlErr != crawled.Outcome {
-		text += fmt.Sprintf("\nwarning: %v\n", crawlErr)
+	if warning := graph.CrawlWarning(crawlErr, crawled.Outcome); warning != nil {
+		text += fmt.Sprintf("\nwarning: %v\n", warning)
 	}
 	return mcp.NewToolResultText(text), nil
 }

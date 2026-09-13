@@ -110,3 +110,35 @@ race suite and `bash pre-commit.sh` passed. Review checked level admission,
 resource accounting, cancellation propagation, source replacement, output scope,
 TUI stale results and federation publication gates. Initial compile/lint failures
 and the test-fixture race were corrected before measurement.
+
+## Review checkpoint
+
+PR 449 review fixes build on user commit `af6efac`. Oversized summaries now
+retain a minimal incomplete node when it fits; roots whose minimal row cannot
+fit are rejected before fetching. External roots accept a nil fetch function.
+Joined persistence warnings remove the already-rendered outcome through a shared
+helper, retaining other errors across CLI, MCP, broker and TUI. Partial TUI nodes
+use a distinct icon.
+
+Regressions reproduced root loss, a fetch for an unrepresentable root, external
+root rejection and duplicated TUI outcome text. Tests also cover child-depth
+retention and nested joined warnings. Affected client and broker race suites,
+federation producer/consumer contracts and `bash pre-commit.sh` pass.
+
+New mechanical run: `tools/benchmarks/artifacts/graph-crawl-outcomes-review-2026-09-13/`;
+diff hash `f8de99e2c1cbf10cec4af057df31e520181a4ed8`. Settings and fixtures remain
+fixed; no concurrent agent-run workload during sampling. Correctness counters
+are unchanged: no silent partial outcomes, complete crawl 101/100/101
+nodes/edges/fetches. Against the fixed baseline, complete time is 2.361 ms
+(+6.04%), bytes 6.048 MiB (+1.16%), allocations +4.57%; pre-cancelled time
+0.9265 us (-83.94%), 904 bytes; capped time 480.4 us (-27.19%), 976.7 KiB
+(+0.10%). Minimum-row validation adds five allocations per crawl. Timing
+variation between runs is not attributed solely to these review changes.
+
+[Review replay metrics](../corpora/soul-2026-09-12/after-crawl-outcomes-review.json):
+16/16 correct, 96,193 model tokens, 6,012.0625 per correct (+1.21% versus fixed
+baseline), 12,395 result tokens, 51 turns, 36 MCP calls and 52 protocol requests.
+Strict comparison passed with complete usage and no task regression. The reader
+still makes no graph calls; token variation is not attributed. Raw traces remain
+local under `tools/benchmarks/artifacts/answers-crawl-outcomes-review-2026-09-13/`.
+All earlier runs and metrics remain preserved.

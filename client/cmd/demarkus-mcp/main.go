@@ -1364,8 +1364,8 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
 	}
 	text := formatGraph(g, startURL)
-	if err != nil && err != g.Outcome {
-		text += fmt.Sprintf("\nwarning: %v\n", err)
+	if warning := graph.CrawlWarning(err, g.Outcome); warning != nil {
+		text += fmt.Sprintf("\nwarning: %v\n", warning)
 	}
 	return mcp.NewToolResultText(text), nil
 }
