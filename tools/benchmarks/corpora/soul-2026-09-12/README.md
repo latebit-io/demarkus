@@ -56,6 +56,14 @@ source snippets in the rubric support those eight scoring rules, not a copy of
 the corpus. The model never receives the rubric. See the [policy comparison](../../answers/section-first-comparison-2026-09-12.md)
 for the original grading correction and measurement boundaries.
 
+## Source isolation replay
+
+[`after-isolation.json`](after-isolation.json) retains the 2026-09-13 metrics-only
+replay: 16/16 correct, 94,152 model tokens, 12,364 tool-result tokens. The
+[slice report](../../graph/source-isolation-2026-09-13.md) records comparison
+boundaries and the separate broker isolation measurements. Keep
+`baseline-section-first.json` as the fixed software-change before report.
+
 ## Rebuild an artifact deliberately
 
 Use new output filenames; pack never overwrites an artifact or manifest:

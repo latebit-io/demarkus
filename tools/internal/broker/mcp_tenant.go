@@ -58,6 +58,7 @@ func (g *mcpGateway) tenantWorld(ctx context.Context) (WorldConfig, error) {
 	}
 	w, err := tenantWorldFor(g.srv.cfg, claims)
 	if err != nil {
+		g.evictTenantGraphs(identityKey(g.srv.cfg.OIDC.Issuer, claims.Subject))
 		var ambiguous errAmbiguousTenant
 		if errors.As(err, &ambiguous) {
 			g.log.Warn("tenant resolution ambiguous; denying closed",
@@ -133,7 +134,9 @@ func (g *mcpGateway) tenantGate(next mcpserver.ToolHandlerFunc) mcpserver.ToolHa
 			if raw == "" {
 				continue // the handler's own required-arg check reports it
 			}
-			worldName, _, perr := parseToolURL(raw)
+			// Section-aware handlers strip fragments before fetching the document.
+			docURL, _, _ := strings.Cut(raw, "#")
+			worldName, _, perr := parseToolURL(docURL)
 			if perr != nil {
 				continue // the handler's own URL validation reports it
 			}

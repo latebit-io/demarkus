@@ -2,6 +2,8 @@
 
 Recorded baseline: [2026-09-12](baseline-2026-09-12/README.md).
 
+First slice: [source isolation, 2026-09-13](source-isolation-2026-09-13.md).
+
 Run **before the first roadmap fix**, then after each slice, on the same machine:
 
 ```bash
