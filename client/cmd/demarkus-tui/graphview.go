@@ -52,18 +52,27 @@ type graphListItem struct {
 const maxCrawlNodes = 200
 
 // startCrawl returns a tea.Cmd that crawls outbound links from url.
-func (m model) startCrawl(url string) tea.Cmd {
+func (m model) startCrawl(ctx context.Context, url string) tea.Cmd {
 	seq := m.crawlSeq
 	client := m.client
 	gs := m.graphStore
 	return func() tea.Msg {
 		store := tokens.LoadDefault()
-		g, err := gs.CrawlAndPersist(context.Background(), url, graphstore.NewFetchFunc(client, store), fetch.ParseMarkURL, graphstore.CrawlOptions{
+		g, err := gs.CrawlAndPersist(ctx, url, graphstore.NewFetchFunc(client, store), fetch.ParseMarkURL, graphstore.CrawlOptions{
 			MaxDepth: 10,
 			MaxNodes: maxCrawlNodes,
 			Workers:  5,
 		})
 		return crawlResult{graph: g, err: err, url: url, seq: seq}
+	}
+}
+
+func (m *model) cancelCrawl() {
+	if m.crawlCancel != nil {
+		m.crawlCancel()
+		m.crawlCancel = nil
+		m.crawling = false
+		m.crawlSeq++
 	}
 }
 
@@ -93,10 +102,14 @@ func flattenGraph(g *graph.Graph, rootURL string) []graphListItem {
 			continue
 		}
 
+		status := n.Status
+		if n.Incomplete {
+			status = "partial"
+		}
 		items = append(items, graphListItem{
 			url:       n.URL,
 			title:     n.Title,
-			status:    n.Status,
+			status:    status,
 			depth:     n.Depth,
 			backlinks: inDegrees[n.URL],
 		})
@@ -310,8 +323,10 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
+		m.cancelCrawl()
 		return m, tea.Quit
 	case "esc":
+		m.cancelCrawl()
 		m.viewMode = viewDocument
 		if m.histIdx >= 0 {
 			m.restoreHistory()
@@ -328,10 +343,11 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.graphIdx = 0
 			}
 			if m.ready {
-				m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+				m.viewport.SetContent(m.renderCurrentGraphSubView())
 				m.viewport.GotoTop()
 			}
 		} else {
+			m.cancelCrawl()
 			m.viewMode = viewDocument
 			if m.histIdx >= 0 {
 				m.restoreHistory()
@@ -346,7 +362,7 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.graphNodes = backlinksList(m.graphStore, url)
 		m.graphIdx = 0
 		if m.ready {
-			m.viewport.SetContent(renderBacklinksView(m.graphNodes, m.graphIdx, m.width))
+			m.viewport.SetContent(m.renderCurrentGraphSubView())
 			m.viewport.GotoTop()
 		}
 		return m, nil
@@ -355,7 +371,7 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.graphNodes = topologyList(m.graphStore)
 		m.graphIdx = 0
 		if m.ready {
-			m.viewport.SetContent(renderTopologyView(m.graphNodes, m.graphIdx, m.width))
+			m.viewport.SetContent(m.renderCurrentGraphSubView())
 			m.viewport.GotoTop()
 		}
 		return m, nil
@@ -377,6 +393,7 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		if m.graphIdx >= 0 && m.graphIdx < len(m.graphNodes) {
+			m.cancelCrawl()
 			target := m.graphNodes[m.graphIdx].url
 			m.viewMode = viewDocument
 			m.addressBar.SetValue(target)
@@ -391,12 +408,19 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // renderCurrentGraphSubView returns the rendered content for the active sub-view.
 func (m model) renderCurrentGraphSubView() string {
+	prefix := ""
+	if m.graphData != nil && m.graphData.Outcome != nil {
+		prefix = m.graphData.Outcome.Summary() + "\n"
+	}
+	if m.graphWarning != "" {
+		prefix += "warning: " + m.graphWarning + "\n"
+	}
 	switch m.graphSubView {
 	case subViewBacklinks:
-		return renderBacklinksView(m.graphNodes, m.graphIdx, m.width)
+		return prefix + renderBacklinksView(m.graphNodes, m.graphIdx, m.width)
 	case subViewTopology:
-		return renderTopologyView(m.graphNodes, m.graphIdx, m.width)
+		return prefix + renderTopologyView(m.graphNodes, m.graphIdx, m.width)
 	default:
-		return renderGraphView(m.graphNodes, m.graphIdx, m.width)
+		return prefix + renderGraphView(m.graphNodes, m.graphIdx, m.width)
 	}
 }

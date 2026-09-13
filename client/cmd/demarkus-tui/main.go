@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -89,6 +90,8 @@ type model struct {
 	graphIdx     int
 	crawling     bool
 	crawlSeq     uint64
+	crawlCancel  context.CancelFunc
+	graphWarning string
 
 	showHelp bool
 
@@ -533,7 +536,11 @@ func (m model) handleCrawlResult(msg crawlResult) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.crawling = false
-	if msg.err != nil {
+	if m.crawlCancel != nil {
+		m.crawlCancel()
+		m.crawlCancel = nil
+	}
+	if msg.err != nil && msg.graph == nil {
 		m.viewMode = viewDocument
 		m.err = msg.err
 		if m.ready {
@@ -542,6 +549,10 @@ func (m model) handleCrawlResult(msg crawlResult) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.graphData = msg.graph
+	m.graphWarning = ""
+	if msg.err != nil && msg.err != msg.graph.Outcome {
+		m.graphWarning = msg.err.Error()
+	}
 
 	// Recompute display list for the active sub-view.
 	switch m.graphSubView {
@@ -636,6 +647,7 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == 'c' && msg.Mod == tea.ModCtrl {
+		m.cancelCrawl()
 		return m, tea.Quit
 	}
 
@@ -644,6 +656,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEnter:
 			raw := m.addressBar.Value()
 			if raw != "" {
+				m.cancelCrawl()
 				m.loading = true
 				m.fetchSeq++
 				m.err = nil
@@ -680,6 +693,7 @@ func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q":
+		m.cancelCrawl()
 		return m, tea.Quit
 	case "esc":
 		if m.status == "bookmarks" {
@@ -754,6 +768,7 @@ func (m model) toggleFocus() model {
 
 func (m model) handleHelpDismiss(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "q" {
+		m.cancelCrawl()
 		return m, tea.Quit
 	}
 	m.showHelp = false
@@ -923,6 +938,12 @@ func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
 	m.viewMode = viewGraph
 	m.graphSubView = subViewLinks
 	m.crawling = true
+	if m.crawlCancel != nil {
+		m.crawlCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.crawlCancel = cancel
+	m.graphWarning = ""
 	m.crawlSeq++
 	m.graphIdx = 0
 
@@ -943,7 +964,7 @@ func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
 		}
 		m.viewport.GotoTop()
 	}
-	return m, m.startCrawl(url)
+	return m, m.startCrawl(ctx, url)
 }
 
 func (m model) handleBookmarkToggle() (tea.Model, tea.Cmd) {

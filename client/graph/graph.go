@@ -10,11 +10,13 @@ import (
 
 // Node represents a document in the graph.
 type Node struct {
-	URL       string
-	Title     string
-	Depth     int
-	Status    string // protocol status (e.g. "ok", "not-found"), "error", "external", or "" for undiscovered
-	LinkCount int
+	URL        string
+	Title      string
+	Depth      int
+	Status     string // protocol status (e.g. "ok", "not-found"), "error", "external", or "" for undiscovered
+	LinkCount  int
+	Incomplete bool   // outgoing observations were capped; never replace a stored source
+	Error      string // bounded fetch failure detail
 }
 
 // Edge represents a directed link from one document to another.
@@ -63,6 +65,7 @@ type edgeKey struct{ from, to, rel string }
 
 // Graph is a concurrency-safe directed graph of document nodes and link edges.
 type Graph struct {
+	Outcome *CrawlOutcome // set only when a crawl has finished
 	nodes   map[string]*Node
 	edges   []Edge
 	edgeIdx map[edgeKey]int

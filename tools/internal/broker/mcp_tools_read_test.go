@@ -27,6 +27,7 @@ type fakeDispatcher struct {
 	mu sync.Mutex
 
 	fetchFn     func(worldName, path, token string) (fetch.Result, error)
+	fetchCtxFn  func(context.Context, string, string, string) (fetch.Result, error)
 	fetchCondFn func(worldName, path, token, etag string) (fetch.Result, error)
 	listFn      func(worldName, path, token string) (fetch.Result, error)
 	listOptsFn  func(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error)
@@ -101,6 +102,9 @@ func (f *fakeDispatcher) Fetch(worldName, path, token string) (fetch.Result, err
 }
 
 func (f *fakeDispatcher) FetchContext(ctx context.Context, worldName, path, token string) (fetch.Result, error) {
+	if f.fetchCtxFn != nil {
+		return f.fetchCtxFn(ctx, worldName, path, token)
+	}
 	if err := ctx.Err(); err != nil {
 		return fetch.Result{}, err
 	}

@@ -6,6 +6,8 @@ First slice: [source isolation, 2026-09-13](source-isolation-2026-09-13.md).
 
 Second slice: [edge extraction parity, 2026-09-13](edge-extraction-parity-2026-09-13.md).
 
+Third slice: [bounded crawl outcomes, 2026-09-13](crawl-outcomes-2026-09-13.md).
+
 Run **before the first roadmap fix**, then after each slice, on the same machine:
 
 ```bash

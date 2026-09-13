@@ -54,17 +54,17 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context) graphstore.FetchFunc {
 		if err != nil {
 			// The tenantGate already denied unresolvable identities;
 			// deny every fetch rather than crawl unscoped.
-			return func(string, string) (graph.FetchResult, error) {
+			return func(context.Context, string, string) (graph.FetchResult, error) {
 				return graph.FetchResult{}, ErrNotAuthorized
 			}
 		}
 		tenant = w.Name
 	}
-	return func(worldName, path string) (graph.FetchResult, error) {
+	return func(ctx context.Context, worldName, path string) (graph.FetchResult, error) {
 		if tenant != "" && worldName != tenant {
 			return graph.FetchResult{}, fmt.Errorf("world %q is outside your world %q", worldName, tenant)
 		}
-		result, derr := g.dispatcher.Fetch(worldName, path, "")
+		result, derr := g.dispatcher.FetchContext(ctx, worldName, path, "")
 		if derr != nil {
 			return graph.FetchResult{}, derr
 		}
@@ -300,46 +300,18 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 			Workers:  5,
 		},
 	)
-	if crawlErr != nil {
+	if crawlErr != nil && crawled == nil {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", crawlErr)), nil
 	}
-	return mcp.NewToolResultText(formatGraphSummary(crawled, raw)), nil
+	text := formatGraphSummary(crawled, raw)
+	if crawlErr != nil && crawlErr != crawled.Outcome {
+		text += fmt.Sprintf("\nwarning: %v\n", crawlErr)
+	}
+	return mcp.NewToolResultText(text), nil
 }
 
-// formatGraphSummary renders a Graph as the same plain-text
-// shape the local demarkus-mcp emits. Duplicated rather than
-// hoisted because the function is ~25 LOC and stable; the edge
-// annotation itself IS hoisted (graph.EdgeAnnotation), and
-// TestFormatGraphSummaryEdgeAnnotationFidelity pins the same
-// literals as the client's TestFormatGraphEdgeAnnotations so
-// drift on either side fails a build.
 func formatGraphSummary(gr *graph.Graph, startURL string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Crawled %d nodes, %d edges from %s\n", gr.NodeCount(), gr.EdgeCount(), startURL)
-
-	nodes := gr.AllNodes()
-	if len(nodes) == 0 {
-		return b.String()
-	}
-
-	b.WriteString("\nNodes:\n")
-	for _, n := range nodes {
-		title := n.Title
-		if title == "" {
-			title = "(no title)"
-		}
-		fmt.Fprintf(&b, "  [%-9s] %-40s %q  %d links\n", n.Status, n.URL, title, n.LinkCount)
-	}
-
-	edges := gr.GetEdges()
-	if len(edges) > 0 {
-		b.WriteString("\nEdges:\n")
-		for _, e := range edges {
-			fmt.Fprintf(&b, "  %s -> %s%s\n", e.From, e.To, e.Annotation())
-		}
-	}
-
-	return b.String()
+	return graph.Summary(gr, startURL)
 }
 
 // handleMarkGraphExport returns the broker's ephemeral graph

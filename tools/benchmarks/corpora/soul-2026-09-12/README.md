@@ -72,6 +72,14 @@ tool-result tokens. The [slice report](../../graph/edge-extraction-parity-2026-0
 records the mechanical correction and comparison boundaries. Keep
 `baseline-section-first.json` as the fixed software-change before report.
 
+## Bounded crawl replay
+
+[`after-crawl-outcomes.json`](after-crawl-outcomes.json) retains 16/16 correct
+outcomes, 94,259 model tokens and 12,364 tool-result tokens. The
+[slice report](../../graph/crawl-outcomes-2026-09-13.md) records bounded-crawl
+correctness and mechanical costs. This reader made no graph-crawl calls;
+model-token variation is not attributed. Keep `baseline-section-first.json` fixed.
+
 ## Rebuild an artifact deliberately
 
 Use new output filenames; pack never overwrites an artifact or manifest:

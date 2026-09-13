@@ -92,7 +92,7 @@ func BenchmarkGraphBaselineCrawlOutcomes(b *testing.B) {
 				opts.MaxNodes = 10
 			}
 			var fetches atomic.Int64
-			fetchDoc := func(_, path string) (graph.FetchResult, error) {
+			fetchDoc := func(_ context.Context, _, path string) (graph.FetchResult, error) {
 				fetches.Add(1)
 				body := "# Child\n"
 				if path == "/index.md" {
@@ -104,7 +104,7 @@ func BenchmarkGraphBaselineCrawlOutcomes(b *testing.B) {
 			for b.Loop() {
 				var store *Store
 				g, err := store.CrawlAndPersist(ctx, "mark://fixture.example/index.md", fetchDoc, fetch.ParseMarkURL, opts)
-				if err != nil && !errors.Is(err, context.Canceled) {
+				if err != nil && !errors.Is(err, graph.ErrIncomplete) {
 					b.Fatalf("crawl: %v", err)
 				}
 				if name == "complete" && err != nil {

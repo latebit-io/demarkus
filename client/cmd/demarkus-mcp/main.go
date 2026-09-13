@@ -1345,8 +1345,8 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	// Seed before crawling so depth-limited crawls still benefit from hub context.
 	h.seedGraph(ctx, host)
 
-	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(host, path string) (graph.FetchResult, error) {
-		r, fetchErr := h.client.Fetch(host, path, h.resolveToken(host))
+	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(ctx context.Context, host, path string) (graph.FetchResult, error) {
+		r, fetchErr := h.client.FetchContext(ctx, host, path, h.resolveToken(host))
 		if fetchErr != nil {
 			return graph.FetchResult{}, fetchErr
 		}
@@ -1360,41 +1360,19 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		MaxNodes: 200,
 		Workers:  5,
 	})
-	if err != nil {
+	if err != nil && g == nil {
 		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
 	}
-
-	return mcp.NewToolResultText(formatGraph(g, startURL)), nil
+	text := formatGraph(g, startURL)
+	if err != nil && err != g.Outcome {
+		text += fmt.Sprintf("\nwarning: %v\n", err)
+	}
+	return mcp.NewToolResultText(text), nil
 }
 
 // formatGraph renders a graph as a plain-text summary for LLM consumption.
 func formatGraph(g *graph.Graph, startURL string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Crawled %d nodes, %d edges from %s\n", g.NodeCount(), g.EdgeCount(), startURL)
-
-	nodes := g.AllNodes()
-	if len(nodes) == 0 {
-		return b.String()
-	}
-
-	b.WriteString("\nNodes:\n")
-	for _, n := range nodes {
-		title := n.Title
-		if title == "" {
-			title = "(no title)"
-		}
-		fmt.Fprintf(&b, "  [%-9s] %-40s %q  %d links\n", n.Status, n.URL, title, n.LinkCount)
-	}
-
-	edges := g.GetEdges()
-	if len(edges) > 0 {
-		b.WriteString("\nEdges:\n")
-		for _, e := range edges {
-			fmt.Fprintf(&b, "  %s -> %s%s\n", e.From, e.To, e.Annotation())
-		}
-	}
-
-	return b.String()
+	return graph.Summary(g, startURL)
 }
 
 func markBacklinksTool(host string) mcp.Tool {

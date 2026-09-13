@@ -17,7 +17,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -238,11 +237,8 @@ func (s *Store) Save() error {
 	return os.Rename(tmp, s.path)
 }
 
-// Merge integrates a crawled graph into the store; returns nodes upserted.
-// Stored nodes and their outgoing edge sets are replaced only for sources
-// the crawl actually read: an unread node (error/external/blank) never
-// regresses last-known-good data or drops edges it knows nothing about,
-// though never-seen unread nodes are still recorded.
+// Merge replaces only fully observed sources; partial observations add new edges
+// without regressing stored rows or their last-known-good outgoing sets.
 func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -257,15 +253,17 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 
 	for _, n := range g.AllNodes() {
 		nodeURL := links.CanonicalURL(n.URL)
-		if !observedStatus(n.Status) {
-			// Failed fetch: we learned nothing about this node. Keep the
-			// stored copy untouched (its CrawledAt keeps it authoritative
-			// against seeds); only record nodes we have never seen.
+		if !graph.SourceComplete(n) {
+			// Partial and failed observations cannot supersede a complete source.
 			if s.nodes[nodeURL] == nil {
+				status := n.Status
+				if n.Incomplete {
+					status = "partial"
+				}
 				s.nodes[nodeURL] = &StoredNode{
 					URL:       nodeURL,
 					Title:     n.Title,
-					Status:    n.Status,
+					Status:    status,
 					LinkCount: n.LinkCount,
 					CrawledAt: now,
 				}
@@ -292,6 +290,9 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 
 	for _, e := range g.GetEdges() {
 		se := StoredEdge{From: links.CanonicalURL(e.From), To: links.CanonicalURL(e.To), Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)}
+		if _, exists := s.edgeIdx[se.key()]; exists && !refreshed[se.From] {
+			continue
+		}
 		s.upsertEdgeLocked(&se)
 	}
 
@@ -331,11 +332,9 @@ func (s *Store) upsertEdgeLocked(se *StoredEdge) {
 	}
 }
 
-// observedStatus reports whether status means the document was actually
-// read, so its recorded outgoing edge set is complete. "external" and
-// "error" nodes were not read; their edge sets carry no information.
+// Only successful reads and confirmed absence establish a complete source.
 func observedStatus(status string) bool {
-	return status != "" && status != "external" && status != "error"
+	return graph.SourceComplete(&graph.Node{Status: status})
 }
 
 // authoritativeLocked reports whether url has a successfully fetched local row.
@@ -571,7 +570,7 @@ func (s *Store) ToGraph() *graph.Graph {
 
 // FetchFunc fetches a document and returns its status, body, and publisher
 // metadata; the etag rides in Metadata["etag"].
-type FetchFunc func(host, path string) (graph.FetchResult, error)
+type FetchFunc func(ctx context.Context, host, path string) (graph.FetchResult, error)
 
 // EtagFetcher wraps a FetchFunc and implements graph.Fetcher while collecting
 // etags concurrently. Use Etags() to retrieve them after crawling.
@@ -590,8 +589,8 @@ func NewEtagFetcher(fetchFunc FetchFunc) *EtagFetcher {
 }
 
 // Fetch implements graph.Fetcher.
-func (f *EtagFetcher) Fetch(host, path string) (graph.FetchResult, error) {
-	res, err := f.fetchFunc(host, path)
+func (f *EtagFetcher) Fetch(ctx context.Context, host, path string) (graph.FetchResult, error) {
+	res, err := f.fetchFunc(ctx, host, path)
 	if err != nil {
 		return graph.FetchResult{}, err
 	}
@@ -614,19 +613,14 @@ func (f *EtagFetcher) Etags() map[string]string {
 	return cp
 }
 
-// CrawlOptions configures a persistent crawl.
-type CrawlOptions struct {
-	MaxDepth int               // max link hops from start (0 = start node only, -1 = default 2)
-	MaxNodes int               // node cap (0 = unlimited)
-	Workers  int               // concurrent workers (0 = default 5)
-	OnNode   func(*graph.Node) // optional per-node callback
-}
+// CrawlOptions uses the same admission and resource limits as transient crawls.
+type CrawlOptions = graph.CrawlOptions
 
 // NewFetchFunc creates a FetchFunc for CrawlAndPersist from a protocol
 // client and token store, resolving tokens per host.
 func NewFetchFunc(client *fetch.Client, tokenStore *tokens.Store) FetchFunc {
-	return func(host, path string) (graph.FetchResult, error) {
-		r, fetchErr := client.Fetch(host, path, tokens.Resolve("", host, tokenStore))
+	return func(ctx context.Context, host, path string) (graph.FetchResult, error) {
+		r, fetchErr := client.FetchContext(ctx, host, path, tokens.Resolve("", host, tokenStore))
 		if fetchErr != nil {
 			return graph.FetchResult{}, fetchErr
 		}
@@ -648,45 +642,29 @@ func (s *Store) CrawlAndPersist(
 	parseURL func(string) (string, string, error),
 	opts CrawlOptions,
 ) (*graph.Graph, error) {
-	// Crawl canonicalizes the start itself, but a nil parser would only be
-	// dereferenced inside a worker goroutine, panicking the process where no
-	// caller can recover. Fail here instead.
+	// Validate before wrapping a nil fetch function in a non-nil interface.
 	if strings.HasPrefix(startURL, "mark://") && parseURL == nil {
 		return nil, fmt.Errorf("crawl %s: parseURL is required for mark:// URLs", startURL)
+	}
+	if fetchFunc == nil {
+		return nil, fmt.Errorf("crawl %s: fetchFunc is required", startURL)
 	}
 
 	fetcher := NewEtagFetcher(fetchFunc)
 
-	var nodeCount atomic.Int32
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	g, err := graph.Crawl(ctx, startURL, fetcher, parseURL, graph.CrawlOptions{
-		MaxDepth: opts.MaxDepth,
-		Workers:  opts.Workers,
-		OnNode: func(n *graph.Node) {
-			if opts.OnNode != nil {
-				opts.OnNode(n)
-			}
-			if opts.MaxNodes > 0 {
-				if int(nodeCount.Add(1)) >= opts.MaxNodes {
-					cancel()
-				}
-			}
-		},
-	})
-	if err != nil {
+	g, err := graph.Crawl(ctx, startURL, fetcher, parseURL, opts)
+	if err != nil && !errors.Is(err, graph.ErrIncomplete) {
 		return g, err
 	}
 
 	if s != nil {
 		s.Merge(g, fetcher.Etags())
 		if saveErr := s.Save(); saveErr != nil {
-			return g, saveErr
+			return g, errors.Join(err, saveErr)
 		}
 	}
 
-	return g, nil
+	return g, err
 }
 
 // NodeCount returns the number of stored nodes.

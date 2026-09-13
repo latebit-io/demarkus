@@ -2,11 +2,13 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mockFetcher returns canned responses keyed by "host/path".
@@ -28,7 +30,7 @@ func (m *mockFetcher) addWithMeta(host, path, body string, meta map[string]strin
 	m.pages[host+path] = FetchResult{Status: "ok", Body: body, Metadata: meta}
 }
 
-func (m *mockFetcher) Fetch(host, path string) (FetchResult, error) {
+func (m *mockFetcher) Fetch(_ context.Context, host, path string) (FetchResult, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, host+path)
 	m.mu.Unlock()
@@ -99,6 +101,36 @@ func TestCrawlSinglePage(t *testing.T) {
 	if n.Depth != 0 {
 		t.Errorf("Depth = %d, want 0", n.Depth)
 	}
+}
+
+// A slow sibling must not let a longer path claim the depth-boundary node.
+func TestCrawlCompetingDepths(t *testing.T) {
+	f := &competingFetcher{mockFetcher: newMockFetcher()}
+	f.add("host:6309", "/root.md", "[long](/long.md) [short](/short.md)")
+	f.add("host:6309", "/long.md", "[middle](/middle.md)")
+	f.add("host:6309", "/middle.md", "[join](/join.md)")
+	f.add("host:6309", "/short.md", "[join](/join.md)")
+	f.add("host:6309", "/join.md", "[leaf](/leaf.md)")
+	f.add("host:6309", "/leaf.md", "# Leaf")
+	g, err := Crawl(t.Context(), "mark://host/root.md", f, mockParseURL, CrawlOptions{MaxDepth: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := g.GetNode("mark://host/join.md"); n == nil || n.Depth != 2 {
+		t.Errorf("join = %+v, want depth 2", n)
+	}
+	if n := g.GetNode("mark://host/leaf.md"); n == nil || n.Depth != 3 {
+		t.Errorf("leaf = %+v, want depth 3", n)
+	}
+}
+
+type competingFetcher struct{ *mockFetcher }
+
+func (f *competingFetcher) Fetch(ctx context.Context, host, path string) (FetchResult, error) {
+	if path == "/short.md" {
+		time.Sleep(50 * time.Millisecond)
+	}
+	return f.mockFetcher.Fetch(ctx, host, path)
 }
 
 func TestExtractDocumentEdges(t *testing.T) {
@@ -236,14 +268,12 @@ func TestCrawlCancellation(t *testing.T) {
 	cancel() // cancel immediately
 
 	g, err := Crawl(ctx, "mark://host/a.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
-	if err != nil {
-		t.Fatalf("Crawl() error: %v", err)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("Crawl() error = %v, want cancelled incomplete outcome", err)
 	}
 
-	// With immediate cancellation, we may get 0 or 1 nodes depending on timing.
-	// The important thing is that it terminates and doesn't crawl everything.
-	if g.NodeCount() > 1 {
-		t.Logf("NodeCount() = %d (expected 0 or 1 with cancelled context)", g.NodeCount())
+	if g.NodeCount() != 0 || len(f.calls) != 0 || g.Outcome.Complete {
+		t.Fatalf("pre-cancelled crawl did work: %+v", g.Outcome)
 	}
 }
 

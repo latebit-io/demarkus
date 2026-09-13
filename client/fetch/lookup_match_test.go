@@ -8,9 +8,9 @@ import (
 )
 
 func TestLookupSendsMatchOnlyWhenSet(t *testing.T) {
-	var seen []map[string]string
+	seen := make(chan map[string]string, 2)
 	host := startTestServer(t, func(req protocol.Request) protocol.Response {
-		seen = append(seen, req.Metadata)
+		seen <- req.Metadata
 		return protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"matches": "0", "match": req.Metadata["match"]}}
 	})
 	c := NewClient(Options{Insecure: true})
@@ -21,8 +21,9 @@ func TestLookupSendsMatchOnlyWhenSet(t *testing.T) {
 	if _, err := c.Lookup(host, "/", "auth", "", LookupOptions{Match: MatchBody}); err != nil {
 		t.Fatalf("lookup body: %v", err)
 	}
-	if _, present := seen[0]["match"]; present || seen[1]["match"] != MatchBody {
-		t.Errorf("match metadata sent = %q / %q, want absent then body", seen[0]["match"], seen[1]["match"])
+	first, second := <-seen, <-seen
+	if _, present := first["match"]; present || second["match"] != MatchBody {
+		t.Errorf("match metadata sent = %q / %q, want absent then body", first["match"], second["match"])
 	}
 }
 

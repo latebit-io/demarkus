@@ -465,7 +465,7 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 		return Result{}, fmt.Errorf("close request stream: %w", err)
 	}
 
-	resp, err := protocol.ParseResponse(stream)
+	resp, err := protocol.ParseResponse(responseReader(ctx, stream))
 	if err != nil {
 		stream.CancelRead(0)
 		if ctx.Err() != nil {
@@ -601,7 +601,7 @@ func (c *Client) removeConn(host string) {
 }
 
 func isTransientError(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, ErrResponseBudget) {
 		return false
 	}
 	if isTimeoutError(err) || isTemporaryError(err) {

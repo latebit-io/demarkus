@@ -379,11 +379,13 @@ func graphMain(args []string) {
 			fmt.Printf("  [%s] %s (%d links)\n", n.Status, title, n.LinkCount)
 		},
 	})
-	if err != nil {
+	if err != nil && g == nil {
 		log.Fatal(err)
 	}
-
-	fmt.Printf("\nGraph: %d nodes, %d edges\n", g.NodeCount(), g.EdgeCount())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+	fmt.Printf("\nGraph: %d nodes, %d edges\n%s\n", g.NodeCount(), g.EdgeCount(), g.Outcome.Summary())
 	if g.EdgeCount() > 0 {
 		fmt.Println("\nEdges:")
 		for _, e := range g.GetEdges() {

@@ -454,6 +454,7 @@ type stubClient struct {
 	mu          sync.Mutex
 	published   map[string]fetch.Result
 	fetchFn     func(host, path, token string) (fetch.Result, error)
+	fetchCtxFn  func(context.Context, string, string, string) (fetch.Result, error)
 	fetchCondFn func(host, path, token, etag string) (fetch.Result, error)
 	snapshotFn  func(host, path, token, etag string) (fetch.Result, error)
 	listFn      func(host, path, token string) (fetch.Result, error)
@@ -478,6 +479,9 @@ func (s *stubClient) Fetch(host, path, token string) (fetch.Result, error) {
 }
 
 func (s *stubClient) FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error) {
+	if s.fetchCtxFn != nil {
+		return s.fetchCtxFn(ctx, host, path, token)
+	}
 	if err := ctx.Err(); err != nil {
 		return fetch.Result{}, err
 	}

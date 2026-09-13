@@ -2,11 +2,14 @@ package graph
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"unicode"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
@@ -14,7 +17,7 @@ import (
 
 // Fetcher abstracts the ability to fetch a document by host and path.
 type Fetcher interface {
-	Fetch(host, path string) (FetchResult, error)
+	Fetch(ctx context.Context, host, path string) (FetchResult, error)
 }
 
 // FetchResult holds the response from a fetch operation.
@@ -26,9 +29,13 @@ type FetchResult struct {
 
 // CrawlOptions configures the graph crawler.
 type CrawlOptions struct {
-	MaxDepth int         // maximum link hops from start (default: 2, 0 = start node only, -1 = use default)
-	Workers  int         // concurrent fetch goroutines (default: 5)
-	OnNode   func(*Node) // called when a node is discovered, may be nil
+	MaxDepth       int         // maximum link hops from start (default: 2, 0 = start node only, -1 = use default)
+	Workers        int         // concurrent fetch goroutines (default: 5)
+	MaxNodes       int         // admitted nodes (default: 1000)
+	MaxFrontier    int         // queued nodes across both BFS levels (default: MaxNodes)
+	MaxFetchBytes  int64       // network reads and decoded payloads (default: 64 MiB each)
+	MaxOutputBytes int         // summary bytes (default: 1 MiB, minimum: 1024)
+	OnNode         func(*Node) // called when a node is discovered, may be nil
 }
 
 func (o *CrawlOptions) applyDefaults() {
@@ -38,6 +45,21 @@ func (o *CrawlOptions) applyDefaults() {
 	if o.Workers <= 0 {
 		o.Workers = 5
 	}
+	o.Workers = min(o.Workers, 32)
+	if o.MaxNodes <= 0 {
+		o.MaxNodes = 1000
+	}
+	if o.MaxFrontier <= 0 {
+		o.MaxFrontier = o.MaxNodes
+	}
+	o.MaxFrontier = min(o.MaxFrontier, o.MaxNodes)
+	if o.MaxFetchBytes <= 0 {
+		o.MaxFetchBytes = 64 << 20
+	}
+	if o.MaxOutputBytes <= 0 {
+		o.MaxOutputBytes = 1 << 20
+	}
+	o.MaxOutputBytes = max(o.MaxOutputBytes, 1024)
 }
 
 type crawlItem struct {
@@ -85,10 +107,8 @@ func ExtractDocumentEdges(docURL, body string, metadata map[string]string) Extra
 	return extracted
 }
 
-// RelEdges parses rel-<predicate> publisher-metadata keys into typed-relation
-// references. Values are comma-separated refs resolved against docURL.
-// Malformed refs (empty, internal whitespace) and self-references are skipped
-// silently: bad metadata must never fail a crawl.
+// RelEdges resolves comma-separated rel-<predicate> refs against docURL.
+// Malformed and self references are ignored so bad metadata cannot fail a crawl.
 func RelEdges(docURL string, metadata map[string]string) []RelRef {
 	// Callers may pass a dial address (fedcrawl does); compare like with like
 	// so a self-reference is not mistaken for an edge to a different node.
@@ -120,122 +140,202 @@ func RelEdges(docURL string, metadata map[string]string) []RelRef {
 	return refs
 }
 
-// Crawl performs a BFS crawl starting from startURL, following mark:// links
-// up to opts.MaxDepth hops. It uses fetcher to retrieve documents and builds
-// a Graph of all discovered nodes and edges.
-//
-// ParseURL is used to split mark:// URLs into host and path for fetching.
-// Links to non-mark schemes are recorded as nodes but not crawled.
+// Crawl uses level barriers so first admission always has shortest-path depth.
+// Partial crawls return valid observations and an ErrIncomplete outcome.
+// Boundary edges are retained; their destinations are outside requested scope.
 func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(string) (string, string, error), opts CrawlOptions) (*Graph, error) {
 	opts.applyDefaults()
 	g := New()
-
-	// Node identity is canonical from the first key onward (ADR 0005), so a
-	// caller passing a dial address cannot fork the graph into two key spaces.
 	startURL = links.CanonicalURL(startURL)
-
-	queue := make(chan crawlItem, 1000)
-	var wg sync.WaitGroup
-
-	// Track visited URLs to avoid duplicates.
-	visited := make(map[string]bool)
-	var visitMu sync.Mutex
-
-	// markVisited returns true if the URL was not yet visited, and marks it.
-	markVisited := func(url string) bool {
-		visitMu.Lock()
-		defer visitMu.Unlock()
-		if visited[url] {
-			return false
-		}
-		visited[url] = true
-		return true
+	if len(startURL) > opts.MaxOutputBytes-512 {
+		return nil, errors.New("crawl start URL exceeds output budget")
 	}
-
-	// Seed the queue.
-	if !markVisited(startURL) {
-		return g, nil
+	if strings.HasPrefix(startURL, "mark://") && (parseURL == nil || fetcher == nil) {
+		return nil, fmt.Errorf("crawl %s: fetcher and parseURL are required", startURL)
 	}
-	wg.Add(1)
-	queue <- crawlItem{url: startURL, depth: 0}
-
-	// Start workers.
-	for range opts.Workers {
-		go func() {
-			for item := range queue {
-				func() {
-					defer wg.Done()
-
-					if ctx.Err() != nil {
-						return
-					}
-
-					node := &Node{
-						URL:   item.url,
-						Depth: item.depth,
-					}
-
-					// Only crawl mark:// URLs.
-					if !strings.HasPrefix(item.url, "mark://") {
-						node.Status = "external"
-						g.AddNode(node)
-						if opts.OnNode != nil {
-							opts.OnNode(node)
-						}
-						return
-					}
-
-					host, path, err := parseURL(item.url)
-					if err != nil {
-						node.Status = "error"
-						g.AddNode(node)
-						if opts.OnNode != nil {
-							opts.OnNode(node)
-						}
-						return
-					}
-
-					result, err := fetcher.Fetch(host, path)
-					if err != nil {
-						node.Status = "error"
-						g.AddNode(node)
-						if opts.OnNode != nil {
-							opts.OnNode(node)
-						}
-						return
-					}
-
-					node.Status = result.Status
-					if result.Status == protocol.StatusOK {
-						extracted := ExtractDocumentEdges(item.url, result.Body, result.Metadata)
-						node.Title = links.ExtractTitle(result.Body)
-						node.LinkCount = extracted.BodyLinkCount
-
-						enqueue := func(resolved string) {
-							if item.depth < opts.MaxDepth && markVisited(resolved) {
-								wg.Add(1)
-								child := crawlItem{url: resolved, depth: item.depth + 1}
-								go func() { queue <- child }()
-							}
-						}
-
-						for _, edge := range extracted.Edges {
-							g.AddEdgeInfo(edge)
-							enqueue(edge.To)
-						}
-					}
-
-					g.AddNode(node)
-					if opts.OnNode != nil {
-						opts.OnNode(node)
-					}
-				}()
+	o := &CrawlOutcome{StartURL: startURL, MaxDepth: opts.MaxDepth}
+	ctx, budget := fetch.WithResponseBudget(ctx, opts.MaxFetchBytes)
+	run := crawlRun{graph: g, outcome: o, opts: opts, outputBytes: 512 + len(startURL), visited: make(map[string]bool)}
+	var frontier []crawlItem
+	if ctx.Err() == nil {
+		frontier = []crawlItem{{url: startURL}}
+		run.visited[startURL] = true
+		o.Admitted = 1
+		o.PeakFrontier = 1
+	}
+	for len(frontier) > 0 && ctx.Err() == nil {
+		run.next = nil
+		for len(frontier) > 0 && ctx.Err() == nil {
+			batchSize := min(len(frontier), opts.Workers)
+			batch := frontier[:batchSize]
+			frontier = frontier[batchSize:]
+			run.pending = len(frontier)
+			results := make([]crawlFetch, batchSize)
+			var wg sync.WaitGroup
+			for i, item := range batch {
+				wg.Go(func() { results[i] = fetchItem(ctx, item.url, fetcher, parseURL) })
 			}
-		}()
+			o.PeakWorkers = max(o.PeakWorkers, batchSize)
+			wg.Wait()
+			for i, item := range batch {
+				run.observe(ctx, item, &results[i])
+			}
+			if budgetExhausted(o.Reasons) {
+				frontier = nil
+				run.next = nil
+			}
+		}
+		frontier = run.next
 	}
-
-	wg.Wait()
-	close(queue)
-
+	if ctx.Err() != nil {
+		o.addReason(ReasonCancelled)
+		o.cause = ctx.Err()
+	}
+	o.ReadBytes = budget.BytesRead()
+	o.Complete = len(o.Reasons) == 0
+	g.Outcome = o
+	if !o.Complete {
+		return g, o
+	}
 	return g, nil
 }
+
+type crawlRun struct {
+	graph       *Graph
+	outcome     *CrawlOutcome
+	opts        CrawlOptions
+	visited     map[string]bool
+	next        []crawlItem
+	pending     int
+	outputBytes int
+}
+
+func (r *crawlRun) observe(ctx context.Context, item crawlItem, res *crawlFetch) {
+	if res.fetched {
+		r.outcome.Fetches++
+	}
+	node := &Node{URL: item.url, Depth: item.depth, Status: res.result.Status}
+	r.classify(ctx, node, res)
+	size := int64(len(res.result.Body) + len(res.result.Status))
+	for key, value := range res.result.Metadata {
+		size += int64(len(key) + len(value))
+	}
+	if size > r.opts.MaxFetchBytes-r.outcome.FetchedBytes {
+		node.Incomplete = true
+		r.outcome.addReason(ReasonByteCap)
+	} else {
+		r.outcome.FetchedBytes += size
+	}
+	var extracted ExtractedEdges
+	if node.Status == protocol.StatusOK && !node.Incomplete {
+		extracted = ExtractDocumentEdges(item.url, res.result.Body, res.result.Metadata)
+		node.Title = links.ExtractTitle(res.result.Body)
+		node.LinkCount = extracted.BodyLinkCount
+	}
+	if !r.reserveOutput(len(nodeSummary(node))) {
+		return
+	}
+	for i := range extracted.Edges {
+		edge := &extracted.Edges[i]
+		// Repeated occurrences can grow the aggregated count's decimal width.
+		if !r.reserveOutput(len(edgeSummary(edge)) + 20) {
+			node.Incomplete = true
+			break
+		}
+		r.graph.AddEdgeInfo(*edge)
+		r.admit(edge.To, item.depth)
+	}
+	r.graph.AddNode(node)
+	if r.opts.OnNode != nil {
+		r.opts.OnNode(node)
+	}
+}
+
+func (r *crawlRun) classify(ctx context.Context, node *Node, res *crawlFetch) {
+	err := res.err
+	if err != nil {
+		node.Status = "error"
+		node.Error = err.Error()
+		if len(node.Error) > 256 {
+			node.Error = node.Error[:256] + "..."
+		}
+		if errors.Is(err, fetch.ErrResponseBudget) {
+			r.outcome.addReason(ReasonByteCap)
+			return
+		}
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+			return
+		}
+	} else if observedStatus(node.Status) || (!res.fetched && node.Status == "external") {
+		return
+	}
+	r.outcome.addReason(ReasonFetchFailure)
+	r.outcome.Failures++
+}
+
+func (r *crawlRun) reserveOutput(bytes int) bool {
+	if bytes > r.opts.MaxOutputBytes-r.outputBytes {
+		r.outcome.addReason(ReasonOutputCap)
+		return false
+	}
+	r.outputBytes += bytes
+	return true
+}
+
+func (r *crawlRun) admit(url string, parentDepth int) {
+	if parentDepth == r.opts.MaxDepth || r.visited[url] {
+		return
+	}
+	if r.outcome.Admitted == r.opts.MaxNodes {
+		r.outcome.addReason(ReasonNodeCap)
+		return
+	}
+	if r.pending+len(r.next) == r.opts.MaxFrontier {
+		r.outcome.addReason(ReasonFrontierCap)
+		return
+	}
+	r.visited[url] = true
+	r.next = append(r.next, crawlItem{url: url, depth: parentDepth + 1})
+	r.outcome.Admitted++
+	r.outcome.PeakFrontier = max(r.outcome.PeakFrontier, r.pending+len(r.next))
+}
+
+func budgetExhausted(reasons []string) bool {
+	for _, reason := range reasons {
+		if reason == ReasonByteCap || reason == ReasonOutputCap {
+			return true
+		}
+	}
+	return false
+}
+
+type crawlFetch struct {
+	result  FetchResult
+	err     error
+	fetched bool
+}
+
+func fetchItem(ctx context.Context, url string, fetcher Fetcher, parseURL func(string) (string, string, error)) crawlFetch {
+	if err := ctx.Err(); err != nil {
+		return crawlFetch{err: err}
+	}
+	if !strings.HasPrefix(url, "mark://") {
+		return crawlFetch{result: FetchResult{Status: "external"}}
+	}
+	if parseURL == nil {
+		return crawlFetch{err: errors.New("parseURL is required")}
+	}
+	host, path, err := parseURL(url)
+	if err != nil {
+		return crawlFetch{err: err}
+	}
+	result, err := fetcher.Fetch(ctx, host, path)
+	return crawlFetch{result: result, err: err, fetched: true}
+}
+
+func observedStatus(status string) bool {
+	return status == protocol.StatusOK || status == protocol.StatusNotFound || status == protocol.StatusArchived
+}
+
+// SourceComplete means a full outgoing set was read, including confirmed absence.
+func SourceComplete(node *Node) bool { return !node.Incomplete && observedStatus(node.Status) }

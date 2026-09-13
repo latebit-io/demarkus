@@ -561,7 +561,7 @@ func TestCrawlAndPersist(t *testing.T) {
 		"host:6309/about.md": {body: "# About\n", etag: "etag-2"},
 	}
 
-	fetchFunc := func(host, path string) (graph.FetchResult, error) {
+	fetchFunc := func(_ context.Context, host, path string) (graph.FetchResult, error) {
 		key := host + path
 		p, ok := pages[key]
 		if !ok {
@@ -610,7 +610,7 @@ func TestCrawlAndPersist(t *testing.T) {
 func TestCrawlAndPersist_NilStore(t *testing.T) {
 	var s *Store
 
-	fetchFunc := func(_, _ string) (graph.FetchResult, error) {
+	fetchFunc := func(_ context.Context, _, _ string) (graph.FetchResult, error) {
 		return graph.FetchResult{Status: "ok", Body: "# Doc\n", Metadata: map[string]string{"etag": "etag-1"}}, nil
 	}
 	parseURL := func(_ string) (string, string, error) {
@@ -652,7 +652,7 @@ func crawlTwoPageSite(t *testing.T, startURL string) *Store {
 		"host:6309/index.md": {body: "# Home\n[About](/about.md)\n", etag: "etag-1"},
 		"host:6309/about.md": {body: "# About\n", etag: "etag-2"},
 	}
-	fetchFunc := func(host, path string) (graph.FetchResult, error) {
+	fetchFunc := func(_ context.Context, host, path string) (graph.FetchResult, error) {
 		p, ok := pages[host+path]
 		if !ok {
 			return graph.FetchResult{Status: "not-found"}, nil
@@ -705,7 +705,7 @@ func TestCrawlAndPersistCanonicalizesStartURL(t *testing.T) {
 func TestCrawlAndPersistExternalStartNeedsNoParser(t *testing.T) {
 	s := New()
 
-	fetchFunc := func(_, _ string) (graph.FetchResult, error) {
+	fetchFunc := func(_ context.Context, _, _ string) (graph.FetchResult, error) {
 		t.Error("fetch called for an external start URL")
 		return graph.FetchResult{}, nil
 	}
@@ -725,7 +725,7 @@ func TestCrawlAndPersistExternalStartNeedsNoParser(t *testing.T) {
 func TestCrawlAndPersistMarkStartRequiresParser(t *testing.T) {
 	s := New()
 
-	fetchFunc := func(_, _ string) (graph.FetchResult, error) {
+	fetchFunc := func(_ context.Context, _, _ string) (graph.FetchResult, error) {
 		return graph.FetchResult{Status: "ok"}, nil
 	}
 

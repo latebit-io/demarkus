@@ -1,0 +1,821 @@
+{
+  "spec": {
+    "suite": "soul-answer-v1",
+    "model": "openai/gpt-6-astra",
+    "variant": "low",
+    "opencode_version": "1.18.30",
+    "steps": 8,
+    "timeout": "3m0s",
+    "repeats": 2,
+    "fixture_hashes": {
+      "corpus": "sha256-b152758c5800ba293988417c52cf8f5044ec4e96e3c41099045cbe05ddd4fe4e",
+      "rubric": "sha256-3cae6ddddec611d3098c1645de632a3884d318950446a291e15b803b9f489a8e",
+      "tasks": "sha256-f0fb85b07672b1088df85ff6c2f1741eea23533b194e450bcdf54f1199715e55"
+    },
+    "reader_prompt_hash": "sha256-01235625313d96fa827cd43b33d11f17dbfa8f1b9345b5348306219c466bebdd",
+    "port": 16319,
+    "expected_attempts": 16,
+    "reader_config_hash": "sha256-1c6b23ca99db746a32eb09b17d51c25f52206b90b81e94d308e30c5825d81300",
+    "origin": "mark://soul.demarkus.io",
+    "documents": 311,
+    "versions": 2184,
+    "reader_policy": "section-first",
+    "scoring_version": "section-provenance-v2"
+  },
+  "generated": "2026-09-13T20:00:27.980909Z",
+  "implementation_hashes": {
+    "mcp": "sha256-c5c9354674816501fc7c426fa85d21ae4ecf00602900de6c0c4013457aff2a79",
+    "runner": "sha256-832deb1b84be7b67a02b0ba679b798e92d684d710b6332f6cc0811f2d9b57900",
+    "server": "sha256-396d3f6668ff789916e4f2ce229ed170a068d894028ec3f9609877ef92a4eac8"
+  },
+  "attempts": [
+    {
+      "task": "s1",
+      "category": "protocol-facts",
+      "repeat": 1,
+      "elapsed_ms": 15357.114,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 4185,
+          "output": 165,
+          "reasoning": 0,
+          "cache": {
+            "read": 1280,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s2",
+      "category": "default-policy",
+      "repeat": 1,
+      "elapsed_ms": 15193.739,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2126,
+          "output": 143,
+          "reasoning": 26,
+          "cache": {
+            "read": 2816,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s3",
+      "category": "licensing",
+      "repeat": 1,
+      "elapsed_ms": 15727.049,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 3890,
+          "output": 268,
+          "reasoning": 0,
+          "cache": {
+            "read": 1280,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s4",
+      "category": "supersession-multi-document",
+      "repeat": 1,
+      "elapsed_ms": 18892.301,
+      "protocol_requests": 4,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2380,
+          "output": 300,
+          "reasoning": 0,
+          "cache": {
+            "read": 2816,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s5",
+      "category": "response-contract",
+      "repeat": 1,
+      "elapsed_ms": 14664.166,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 4385,
+          "output": 178,
+          "reasoning": 0,
+          "cache": {
+            "read": 1536,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s6",
+      "category": "oauth-policy",
+      "repeat": 1,
+      "elapsed_ms": 21085.509,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2552,
+          "output": 233,
+          "reasoning": 0,
+          "cache": {
+            "read": 2816,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s7",
+      "category": "architecture-roles",
+      "repeat": 1,
+      "elapsed_ms": 15601.145,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2893,
+          "output": 173,
+          "reasoning": 0,
+          "cache": {
+            "read": 2816,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s8",
+      "category": "historical-revision",
+      "repeat": 1,
+      "elapsed_ms": 19268.138,
+      "protocol_requests": 4,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2872,
+          "output": 263,
+          "reasoning": 0,
+          "cache": {
+            "read": 4736,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 4,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s1",
+      "category": "protocol-facts",
+      "repeat": 2,
+      "elapsed_ms": 15522.123,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2649,
+          "output": 165,
+          "reasoning": 0,
+          "cache": {
+            "read": 2816,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s2",
+      "category": "default-policy",
+      "repeat": 2,
+      "elapsed_ms": 15766.66,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 3662,
+          "output": 143,
+          "reasoning": 26,
+          "cache": {
+            "read": 1280,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s3",
+      "category": "licensing",
+      "repeat": 2,
+      "elapsed_ms": 16793.38,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2610,
+          "output": 268,
+          "reasoning": 0,
+          "cache": {
+            "read": 2560,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s4",
+      "category": "supersession-multi-document",
+      "repeat": 2,
+      "elapsed_ms": 16010.267,
+      "protocol_requests": 4,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 1100,
+          "output": 300,
+          "reasoning": 0,
+          "cache": {
+            "read": 4096,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s5",
+      "category": "response-contract",
+      "repeat": 2,
+      "elapsed_ms": 13243.666,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 3105,
+          "output": 178,
+          "reasoning": 0,
+          "cache": {
+            "read": 2816,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s6",
+      "category": "oauth-policy",
+      "repeat": 2,
+      "elapsed_ms": 15391.145,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2552,
+          "output": 234,
+          "reasoning": 0,
+          "cache": {
+            "read": 2816,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s7",
+      "category": "architecture-roles",
+      "repeat": 2,
+      "elapsed_ms": 13303.309,
+      "protocol_requests": 3,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2893,
+          "output": 173,
+          "reasoning": 0,
+          "cache": {
+            "read": 2816,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 3,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    },
+    {
+      "task": "s8",
+      "category": "historical-revision",
+      "repeat": 2,
+      "elapsed_ms": 20434.005,
+      "protocol_requests": 4,
+      "trace": {
+        "session": "",
+        "usage": {
+          "input": 2872,
+          "output": 265,
+          "reasoning": 0,
+          "cache": {
+            "read": 4736,
+            "write": 0
+          }
+        },
+        "usage_complete": true,
+        "turns": 4,
+        "calls": [
+          {
+            "name": "fixture_mark_lookup",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          },
+          {
+            "name": "fixture_mark_fetch",
+            "input": null,
+            "output": ""
+          }
+        ],
+        "final": ""
+      },
+      "score": {
+        "correct": true
+      }
+    }
+  ],
+  "summary": {
+    "attempts": 16,
+    "correct": 16,
+    "known_total_tokens": 94259,
+    "usage_complete": true,
+    "tokens_per_correct_answer": 5891.1875,
+    "usage": {
+      "input": 46726,
+      "output": 3449,
+      "reasoning": 52,
+      "cache": {
+        "read": 44032,
+        "write": 0
+      }
+    },
+    "model_turns": 50,
+    "tool_calls": 36,
+    "protocol_requests": 52
+  },
+  "categories": {
+    "architecture-roles": {
+      "attempts": 2,
+      "correct": 2,
+      "known_total_tokens": 11764,
+      "usage_complete": true,
+      "tokens_per_correct_answer": 5882,
+      "usage": {
+        "input": 5786,
+        "output": 346,
+        "reasoning": 0,
+        "cache": {
+          "read": 5632,
+          "write": 0
+        }
+      },
+      "model_turns": 6,
+      "tool_calls": 4,
+      "protocol_requests": 6
+    },
+    "default-policy": {
+      "attempts": 2,
+      "correct": 2,
+      "known_total_tokens": 10222,
+      "usage_complete": true,
+      "tokens_per_correct_answer": 5111,
+      "usage": {
+        "input": 5788,
+        "output": 286,
+        "reasoning": 52,
+        "cache": {
+          "read": 4096,
+          "write": 0
+        }
+      },
+      "model_turns": 6,
+      "tool_calls": 4,
+      "protocol_requests": 6
+    },
+    "historical-revision": {
+      "attempts": 2,
+      "correct": 2,
+      "known_total_tokens": 15744,
+      "usage_complete": true,
+      "tokens_per_correct_answer": 7872,
+      "usage": {
+        "input": 5744,
+        "output": 528,
+        "reasoning": 0,
+        "cache": {
+          "read": 9472,
+          "write": 0
+        }
+      },
+      "model_turns": 8,
+      "tool_calls": 6,
+      "protocol_requests": 8
+    },
+    "licensing": {
+      "attempts": 2,
+      "correct": 2,
+      "known_total_tokens": 10876,
+      "usage_complete": true,
+      "tokens_per_correct_answer": 5438,
+      "usage": {
+        "input": 6500,
+        "output": 536,
+        "reasoning": 0,
+        "cache": {
+          "read": 3840,
+          "write": 0
+        }
+      },
+      "model_turns": 6,
+      "tool_calls": 4,
+      "protocol_requests": 6
+    },
+    "oauth-policy": {
+      "attempts": 2,
+      "correct": 2,
+      "known_total_tokens": 11203,
+      "usage_complete": true,
+      "tokens_per_correct_answer": 5601.5,
+      "usage": {
+        "input": 5104,
+        "output": 467,
+        "reasoning": 0,
+        "cache": {
+          "read": 5632,
+          "write": 0
+        }
+      },
+      "model_turns": 6,
+      "tool_calls": 4,
+      "protocol_requests": 6
+    },
+    "protocol-facts": {
+      "attempts": 2,
+      "correct": 2,
+      "known_total_tokens": 11260,
+      "usage_complete": true,
+      "tokens_per_correct_answer": 5630,
+      "usage": {
+        "input": 6834,
+        "output": 330,
+        "reasoning": 0,
+        "cache": {
+          "read": 4096,
+          "write": 0
+        }
+      },
+      "model_turns": 6,
+      "tool_calls": 4,
+      "protocol_requests": 6
+    },
+    "response-contract": {
+      "attempts": 2,
+      "correct": 2,
+      "known_total_tokens": 12198,
+      "usage_complete": true,
+      "tokens_per_correct_answer": 6099,
+      "usage": {
+        "input": 7490,
+        "output": 356,
+        "reasoning": 0,
+        "cache": {
+          "read": 4352,
+          "write": 0
+        }
+      },
+      "model_turns": 6,
+      "tool_calls": 4,
+      "protocol_requests": 6
+    },
+    "supersession-multi-document": {
+      "attempts": 2,
+      "correct": 2,
+      "known_total_tokens": 10992,
+      "usage_complete": true,
+      "tokens_per_correct_answer": 5496,
+      "usage": {
+        "input": 3480,
+        "output": 600,
+        "reasoning": 0,
+        "cache": {
+          "read": 6912,
+          "write": 0
+        }
+      },
+      "model_turns": 6,
+      "tool_calls": 6,
+      "protocol_requests": 8
+    }
+  },
+  "metrics_only": true,
+  "source_report_sha256": "sha256-a174ca9ac39fff75449d3c76745c6e484f7b8ffefa41e2ba80f14bb1675a9302",
+  "tool_result_tokens": 12364
+}
