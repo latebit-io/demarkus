@@ -20,7 +20,6 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/listing"
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -346,8 +345,8 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 
 		// Generated graph exports are data, not authored discovery links.
 		if !isGeneratedGraphPath(fullPath) {
-			c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
-			c.discoverServers(doc.Response.Body, s.host, s.run.queue, s.run.wg, s.run.recordIncomplete)
+			edges := c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
+			c.discoverServers(edges, s.host, s.run.queue, s.run.wg, s.run.recordIncomplete)
 		}
 
 		s.run.docCount.Add(1)
@@ -411,19 +410,15 @@ func (s *serverWalk) walkDirectoryPages(ctx context.Context, dirPath string, dep
 	}
 }
 
-// discoverServers extracts mark:// links pointing to other servers and queues them.
-func (c *Crawler) discoverServers(body, currentHost string, queue chan<- string, wg *sync.WaitGroup, recordIncomplete func(string, ...any)) {
-	for _, link := range links.Extract(body) {
-		// Resolve relative links.
-		resolved := links.Resolve("mark://"+currentHost, link)
-
-		// Only follow mark:// links.
-		if !strings.HasPrefix(resolved, "mark://") {
+// discoverServers queues foreign mark:// targets retained by graph policy.
+func (c *Crawler) discoverServers(edges []graph.Edge, currentHost string, queue chan<- string, wg *sync.WaitGroup, recordIncomplete func(string, ...any)) {
+	for _, edge := range edges {
+		if !strings.HasPrefix(edge.To, "mark://") {
 			continue
 		}
 
 		// Parse to extract host.
-		host, _, err := fetch.ParseMarkURL(resolved)
+		host, _, err := fetch.ParseMarkURL(edge.To)
 		if err != nil {
 			continue
 		}
@@ -584,34 +579,29 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 // demarkus documents); external links are left out. The graph is the source
 // for the hub graph export — the durable, transport-symmetric topology the
 // reading-room floor renders (plans "Floor enrichment", decision 11).
-func (c *Crawler) recordEdges(host, docPath, body string, meta map[string]string) {
-	url := "mark://" + host + docPath
-	base := "mark://" + host
+func (c *Crawler) recordEdges(host, docPath, body string, meta map[string]string) []graph.Edge {
+	url := links.NodeURL(host, docPath)
+	extracted := graph.ExtractDocumentEdges(url, body, meta)
+	edges := make([]graph.Edge, 0, len(extracted.Edges))
 	var linkCount int
-	for _, l := range mdoutline.AnchoredLinks(body) {
-		target, ok := c.normalizeTarget(links.Resolve(base, l.Dest))
+	for _, edge := range extracted.Edges {
+		target, ok := c.normalizeTarget(edge.To)
 		if !ok {
 			continue
 		}
-		c.graph.AddEdgeInfo(graph.Edge{From: url, To: target, Label: l.Label, Anchor: l.Anchor, Count: 1})
-		linkCount++
-	}
-	// Typed relations from rel-<predicate> metadata, filtered like body links.
-	for _, r := range graph.RelEdges(url, meta) {
-		target, ok := c.normalizeTarget(r.Target)
-		if !ok {
-			continue
+		edge.To = target
+		c.graph.AddEdgeInfo(edge)
+		edges = append(edges, edge)
+		if edge.Rel == "" {
+			linkCount++
 		}
-		c.graph.AddEdgeInfo(graph.Edge{From: url, To: target, Rel: r.Rel, Count: 1})
 	}
-	// Declared metadata title first, H1 fallback like mark_graph's crawler:
-	// most docs carry their title as a heading, not metadata, and a blank
-	// title here propagates to every hub-graph consumer.
 	title := meta["title"]
 	if title == "" {
 		title = links.ExtractTitle(body)
 	}
 	c.graph.AddNode(&graph.Node{URL: url, Title: title, Status: "ok", LinkCount: linkCount})
+	return edges
 }
 
 // normalizeTarget keeps only mark:// targets with a port-stable host
@@ -628,7 +618,7 @@ func (c *Crawler) normalizeTarget(resolved string) (string, bool) {
 	if err != nil || isLoopbackHost(th) {
 		return "", false
 	}
-	return "mark://" + th + tp, true
+	return links.NodeURL(th, tp), true
 }
 
 // isLoopbackHost reports whether a mark:// host (host:port or bare) is loopback,

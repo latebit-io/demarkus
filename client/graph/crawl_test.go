@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -98,6 +99,36 @@ func TestCrawlSinglePage(t *testing.T) {
 	if n.Depth != 0 {
 		t.Errorf("Depth = %d, want 0", n.Depth)
 	}
+}
+
+func TestExtractDocumentEdges(t *testing.T) {
+	extracted := ExtractDocumentEdges(
+		"mark://host:6309/docs/deep/source.md",
+		"# Heading Title\n\n## References\n\n[first](sibling.md) [second](sibling.md) [parent](../peer.md) [root](/root.md) [web](https://example.com/doc)\n",
+		map[string]string{
+			"title":          "Declared Title",
+			"rel-related":    "../old.md, mark://foreign:6309/typed.md",
+			"rel-depends-on": "/root.md",
+		},
+	)
+
+	if extracted.BodyLinkCount != 5 {
+		t.Errorf("BodyLinkCount = %d, want 5", extracted.BodyLinkCount)
+	}
+	want := []Edge{
+		{From: "mark://host/docs/deep/source.md", To: "mark://host/docs/deep/sibling.md", Label: "first", Anchor: "references", Count: 1},
+		{From: "mark://host/docs/deep/source.md", To: "mark://host/docs/deep/sibling.md", Label: "second", Anchor: "references", Count: 1},
+		{From: "mark://host/docs/deep/source.md", To: "mark://host/docs/peer.md", Label: "parent", Anchor: "references", Count: 1},
+		{From: "mark://host/docs/deep/source.md", To: "mark://host/root.md", Label: "root", Anchor: "references", Count: 1},
+		{From: "mark://host/docs/deep/source.md", To: "https://example.com/doc", Label: "web", Anchor: "references", Count: 1},
+		{From: "mark://host/docs/deep/source.md", To: "mark://host/root.md", Rel: "depends-on", Count: 1},
+		{From: "mark://host/docs/deep/source.md", To: "mark://host/docs/old.md", Rel: "related", Count: 1},
+		{From: "mark://host/docs/deep/source.md", To: "mark://foreign/typed.md", Rel: "related", Count: 1},
+	}
+	if !slices.Equal(extracted.Edges, want) {
+		t.Errorf("Edges = %+v, want %+v", extracted.Edges, want)
+	}
+
 }
 
 func TestCrawlFollowsLinks(t *testing.T) {
@@ -306,23 +337,23 @@ func TestCrawlRecordsLinkInsideInlineFormatting(t *testing.T) {
 
 func TestCrawlAggregatesRepeatedLinks(t *testing.T) {
 	f := newMockFetcher()
-	f.add("host:6309", "/index.md", "# Home\n\n[first](about.md) then [second](about.md)")
-	f.add("host:6309", "/about.md", "# About\n")
+	f.addWithMeta("host:6309", "/docs/index.md", "# Heading Home\n\n[first](about.md) then [second](about.md)", map[string]string{"title": "Declared Home"})
+	f.add("host:6309", "/docs/about.md", "# About\n")
 
-	g, err := Crawl(context.Background(), "mark://host/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
+	g, err := Crawl(context.Background(), "mark://host:6309/docs/index.md", f, mockParseURL, CrawlOptions{MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("Crawl() error: %v", err)
 	}
 
-	e := findEdge(t, g, "mark://host/index.md", "mark://host/about.md", "")
+	e := findEdge(t, g, "mark://host/docs/index.md", "mark://host/docs/about.md", "")
 	if e.Count != 2 {
 		t.Errorf("Count = %d, want 2", e.Count)
 	}
 	if e.Label != "first" {
 		t.Errorf("Label = %q, want first (first label wins)", e.Label)
 	}
-	if n := g.GetNode("mark://host/index.md"); n.LinkCount != 2 {
-		t.Errorf("LinkCount = %d, want 2", n.LinkCount)
+	if n := g.GetNode("mark://host/docs/index.md"); n.LinkCount != 2 || n.Title != "Heading Home" {
+		t.Errorf("node = %+v, want LinkCount 2 and heading title", n)
 	}
 }
 

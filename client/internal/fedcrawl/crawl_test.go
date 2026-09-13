@@ -374,6 +374,37 @@ func TestCrawlerMultiServer(t *testing.T) {
 	}
 }
 
+func TestCrawlerDiscoversServerFromTypedRelation(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seeds = []string{"mark://server1.com"}
+	cfg.Crawl.MaxDocuments = 100
+	cfg.Crawl.MaxServers = 2
+
+	client := newMockClient()
+	client.addList("server1.com:6309", "/", "- [source.md](source.md)\n")
+	client.addDocWithMeta(
+		"server1.com:6309",
+		"/source.md",
+		"# Source\n",
+		"sha256-1111111111111111111111111111111111111111111111111111111111111111",
+		map[string]string{"rel-related": "mark://server2.com:6309/target.md"},
+	)
+	client.addList("server2.com:6309", "/", "- [target.md](target.md)\n")
+	client.addDoc("server2.com:6309", "/target.md", "# Target\n", "sha256-2222222222222222222222222222222222222222222222222222222222222222")
+
+	crawler := NewCrawler(cfg, client, nil, nil)
+	result, err := crawler.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.ServersDiscovered != 2 || result.DocumentsCrawled != 2 {
+		t.Fatalf("result = %+v, want typed-only foreign target crawled", result)
+	}
+	if graph := crawler.GraphExport(); !strings.Contains(graph, "| mark://server1.com/source.md | mark://server2.com/target.md | related |") {
+		t.Errorf("graph missing typed foreign edge:\n%s", graph)
+	}
+}
+
 func TestCrawlerDoesNotDiscoverPublishOnlyHub(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://content"}
@@ -944,6 +975,32 @@ func TestCrawlerGraphExportAndPublish(t *testing.T) {
 	}
 }
 
+func TestRecordEdgesResolvesDocumentRelativeTargets(t *testing.T) {
+	tests := []struct {
+		name, source, destination, want string
+	}{
+		{name: "root sibling", source: "/source.md", destination: "sibling.md", want: "mark://example.com/sibling.md"},
+		{name: "nested sibling", source: "/docs/source.md", destination: "sibling.md", want: "mark://example.com/docs/sibling.md"},
+		{name: "parent relative", source: "/docs/deep/source.md", destination: "../sibling.md", want: "mark://example.com/docs/sibling.md"},
+		{name: "absolute path", source: "/docs/source.md", destination: "/sibling.md", want: "mark://example.com/sibling.md"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			crawler := NewCrawler(DefaultConfig(), nil, nil, nil)
+			crawler.recordEdges("example.com:6309", test.source, "# Source\n\n[reference]("+test.destination+")\n", nil)
+
+			edges := crawler.graph.GetEdges()
+			if len(edges) != 1 {
+				t.Fatalf("edges = %+v, want one", edges)
+			}
+			if got := links.CanonicalURL(edges[0].To); got != test.want {
+				t.Errorf("target = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestPublishGraphToHubsAttemptsSnapshotAndLegacyIndependently(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -1191,9 +1248,9 @@ func TestRecordEdgesTitlePrecedence(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"mark://example.com:6309/declared.md": "Declared Title",
-		"mark://example.com:6309/heading.md":  "Heading Only",
-		"mark://example.com:6309/bare.md":     "",
+		"mark://example.com/declared.md": "Declared Title",
+		"mark://example.com/heading.md":  "Heading Only",
+		"mark://example.com/bare.md":     "",
 	}
 	for _, n := range c.graph.AllNodes() {
 		expect, ok := want[n.URL]

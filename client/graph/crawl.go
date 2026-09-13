@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -50,6 +51,40 @@ type RelRef struct {
 	Target string // resolved target URL
 }
 
+// ExtractedEdges contains normalized edges from one fetched document.
+type ExtractedEdges struct {
+	BodyLinkCount int
+	Edges         []Edge
+}
+
+// ExtractDocumentEdges resolves body links and typed relations against docURL.
+func ExtractDocumentEdges(docURL, body string, metadata map[string]string) ExtractedEdges {
+	docURL = links.CanonicalURL(docURL)
+	anchored := mdoutline.AnchoredLinks(body)
+	extracted := ExtractedEdges{
+		BodyLinkCount: len(anchored),
+		Edges:         make([]Edge, 0, len(anchored)),
+	}
+	for _, link := range anchored {
+		extracted.Edges = append(extracted.Edges, Edge{
+			From:   docURL,
+			To:     links.CanonicalURL(links.Resolve(docURL, link.Dest)),
+			Label:  link.Label,
+			Anchor: link.Anchor,
+			Count:  1,
+		})
+	}
+	for _, relation := range RelEdges(docURL, metadata) {
+		extracted.Edges = append(extracted.Edges, Edge{
+			From:  docURL,
+			To:    relation.Target,
+			Rel:   relation.Rel,
+			Count: 1,
+		})
+	}
+	return extracted
+}
+
 // RelEdges parses rel-<predicate> publisher-metadata keys into typed-relation
 // references. Values are comma-separated refs resolved against docURL.
 // Malformed refs (empty, internal whitespace) and self-references are skipped
@@ -59,7 +94,13 @@ func RelEdges(docURL string, metadata map[string]string) []RelRef {
 	// so a self-reference is not mistaken for an edge to a different node.
 	docURL = links.CanonicalURL(docURL)
 	var refs []RelRef
-	for key, val := range metadata {
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		val := metadata[key]
 		pred, ok := strings.CutPrefix(key, "rel-")
 		if !ok || pred == "" {
 			continue
@@ -166,9 +207,9 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 
 					node.Status = result.Status
 					if result.Status == protocol.StatusOK {
+						extracted := ExtractDocumentEdges(item.url, result.Body, result.Metadata)
 						node.Title = links.ExtractTitle(result.Body)
-						anchored := mdoutline.AnchoredLinks(result.Body)
-						node.LinkCount = len(anchored) // body links only; rel- edges do not count
+						node.LinkCount = extracted.BodyLinkCount
 
 						enqueue := func(resolved string) {
 							if item.depth < opts.MaxDepth && markVisited(resolved) {
@@ -178,15 +219,9 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 							}
 						}
 
-						for _, l := range anchored {
-							resolved := links.CanonicalURL(links.Resolve(item.url, l.Dest))
-							g.AddEdgeInfo(Edge{From: item.url, To: resolved, Label: l.Label, Anchor: l.Anchor, Count: 1})
-							enqueue(resolved)
-						}
-
-						for _, r := range RelEdges(item.url, result.Metadata) {
-							g.AddEdgeInfo(Edge{From: item.url, To: r.Target, Rel: r.Rel, Count: 1})
-							enqueue(r.Target)
+						for _, edge := range extracted.Edges {
+							g.AddEdgeInfo(edge)
+							enqueue(edge.To)
 						}
 					}
 

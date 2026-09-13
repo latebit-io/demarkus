@@ -24,18 +24,19 @@ func TestGraphExportContract(t *testing.T) {
 	const host = "team-a.team-a.svc.cluster.local:6309"
 
 	client := newMockClient()
-	client.addList(host, "/", "- [index.md](index.md)\n- [a.md](a.md)\n- [b.md](b.md)\n")
+	client.addList(host, "/", "- [index.md](index.md)\n- [docs/](docs/)\n")
+	client.addList(host, "/docs/", "- [a.md](a.md)\n- [b.md](b.md)\n")
 	client.addDocWithMeta(host, "/index.md",
-		"# Team A hub\n\n## Services\n\n- [Applications](/a.md)\n",
+		"# Team A hub\n\n## Services\n\n- [Applications](/docs/a.md)\n",
 		"sha256-"+strings.Repeat("1", 64), map[string]string{"title": "Team A hub"})
 	// No metadata title: the node's title must come from the H1 fallback
 	// (the golden pins it, since the H1 text matches the old declared title).
-	client.addDocWithMeta(host, "/a.md",
-		"# Applications\n\n## Links\n\n- [B doc](/b.md)\n- [external](https://example.com/ext)\n- [dev](mark://localhost:6309/dev.md)\n",
+	client.addDocWithMeta(host, "/docs/a.md",
+		"# Applications\n\n## Links\n\n- [B doc](b.md)\n- [B again](b.md)\n- [external](https://example.com/ext)\n- [dev](mark://localhost:6309/dev.md)\n",
 		"sha256-"+strings.Repeat("2", 64), nil)
-	client.addDocWithMeta(host, "/b.md",
-		"# B doc\n",
-		"sha256-"+strings.Repeat("3", 64), map[string]string{"title": "B doc", "rel-supersedes": "/a.md"})
+	client.addDocWithMeta(host, "/docs/b.md",
+		"# B heading\n",
+		"sha256-"+strings.Repeat("3", 64), map[string]string{"title": "B doc", "rel-supersedes": "a.md"})
 
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://" + host}
@@ -69,7 +70,7 @@ func TestGraphExportContract(t *testing.T) {
 	// Contract facts pinned independently of bytes: rows key on the internal
 	// address in identity form with the dial port removed (ADR 0005), and
 	// non-mark targets never enter. The broker canonicalizes to match.
-	if !strings.Contains(got, "mark://team-a.team-a.svc.cluster.local/a.md") {
+	if !strings.Contains(got, "mark://team-a.team-a.svc.cluster.local/docs/a.md") {
 		t.Error("export lost the internal address URL form")
 	}
 	if strings.Contains(got, host) {

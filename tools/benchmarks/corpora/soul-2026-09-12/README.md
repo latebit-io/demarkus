@@ -64,6 +64,14 @@ replay: 16/16 correct, 94,152 model tokens, 12,364 tool-result tokens. The
 boundaries and the separate broker isolation measurements. Keep
 `baseline-section-first.json` as the fixed software-change before report.
 
+## Edge extraction replay
+
+[`after-edge-resolution.json`](after-edge-resolution.json) retains the edge
+extraction parity replay: 16/16 correct, 96,044 model tokens, and 12,327
+tool-result tokens. The [slice report](../../graph/edge-extraction-parity-2026-09-13.md)
+records the mechanical correction and comparison boundaries. Keep
+`baseline-section-first.json` as the fixed software-change before report.
+
 ## Rebuild an artifact deliberately
 
 Use new output filenames; pack never overwrites an artifact or manifest:

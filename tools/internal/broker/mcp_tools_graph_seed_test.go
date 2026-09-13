@@ -145,7 +145,7 @@ func TestSeedConsumesAgentExportContract(t *testing.T) {
 	g := newGatewayWithDispatcher(t, cfg, d)
 
 	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
-		"url": "mark://team-a/a.md",
+		"url": "mark://team-a/docs/a.md",
 	}))
 	if err != nil {
 		t.Fatalf("handleMarkBacklinks: %v", err)
@@ -153,7 +153,7 @@ func TestSeedConsumesAgentExportContract(t *testing.T) {
 	text := toolResultText(t, res)
 	// index.md's plain link and b.md's typed rel edge, both translated,
 	// with enriched provenance intact.
-	for _, want := range []string{"mark://team-a/index.md", "mark://team-a/b.md", "[supersedes]"} {
+	for _, want := range []string{"mark://team-a/index.md", "mark://team-a/docs/b.md", "[supersedes]"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in backlinks from the agent's real export:\n%s", want, text)
 		}
