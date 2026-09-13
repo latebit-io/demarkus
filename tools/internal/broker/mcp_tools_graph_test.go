@@ -50,6 +50,28 @@ func TestHandleMarkBacklinksEmptyStoreHintsAtMarkGraph(t *testing.T) {
 	}
 }
 
+func TestKnowledgeGraphPreservesCrossWorldSources(t *testing.T) {
+	d := seededDispatcher()
+	d.published["bob-w/source.md"] = fetch.Result{Response: protocol.Response{
+		Status: protocol.StatusOK, Body: "# Shared source\n[reference](mark://alice-w/index.md)",
+	}}
+	g := newGatewayWithDispatcher(t, memoryTestConfig(), d)
+	ctx := withAliceClaims(t.Context())
+	res, err := g.handleMarkGraph(ctx, callToolReq("mark_graph", map[string]any{"url": "mark://bob-w/source.md"}))
+	if err != nil || res == nil || res.IsError {
+		t.Fatalf("cross-world crawl: err=%v result=%v", err, res)
+	}
+	for _, tool := range []string{"mark_backlinks", "mark_explore", "mark_graph_export"} {
+		res, err := g.toolHandlers()[tool](ctx, callToolReq(tool, map[string]any{"url": "mark://alice-w/index.md"}))
+		if err != nil || res == nil || res.IsError {
+			t.Fatalf("%s: err=%v result=%v", tool, err, res)
+		}
+		if text := toolResultText(t, res); !strings.Contains(text, "bob-w/source.md") || !strings.Contains(text, "Shared source") {
+			t.Errorf("%s lost authorized cross-world source: %s", tool, text)
+		}
+	}
+}
+
 func TestHandleMarkBacklinksMissingURL(t *testing.T) {
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
 	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", nil))
@@ -151,7 +173,7 @@ func TestEphemeralGraphStoreResetsAcrossGatewayInstances(t *testing.T) {
 	})); err != nil || res.IsError {
 		t.Fatalf("first crawl: %v %v", err, res.IsError)
 	}
-	if g1.graphStore.NodeCount() == 0 {
+	if g1.knowledgeGraph.graphStore.NodeCount() == 0 {
 		t.Fatal("first crawl produced an empty graph; cannot exercise the reset property")
 	}
 
@@ -159,7 +181,7 @@ func TestEphemeralGraphStoreResetsAcrossGatewayInstances(t *testing.T) {
 	// using the SAME server config, the new mcpGateway
 	// instance must have an empty graph store.
 	g2 := newGatewayWithDispatcher(t, cfg, d)
-	if got := g2.graphStore.NodeCount(); got != 0 {
+	if got := g2.knowledgeGraph.graphStore.NodeCount(); got != 0 {
 		t.Errorf("new gateway's graph store has %d nodes, want 0 (ephemeral semantics broken)", got)
 	}
 
@@ -263,13 +285,13 @@ func TestHandleMarkGraphDepthClamping(t *testing.T) {
 	// the same NodeCount (likely the deep count since the full
 	// chain would be reachable). The strict inequality is what
 	// pins the clamp behavior.
-	if gShallow.graphStore.NodeCount() == gDeep.graphStore.NodeCount() {
+	if gShallow.knowledgeGraph.graphStore.NodeCount() == gDeep.knowledgeGraph.graphStore.NodeCount() {
 		t.Errorf("shallow node count (%d) == deep node count (%d) — depth not producing different traversal scopes",
-			gShallow.graphStore.NodeCount(), gDeep.graphStore.NodeCount())
+			gShallow.knowledgeGraph.graphStore.NodeCount(), gDeep.knowledgeGraph.graphStore.NodeCount())
 	}
-	if gShallow.graphStore.NodeCount() >= gDeep.graphStore.NodeCount() {
+	if gShallow.knowledgeGraph.graphStore.NodeCount() >= gDeep.knowledgeGraph.graphStore.NodeCount() {
 		t.Errorf("shallow node count (%d) should be < deep node count (%d)",
-			gShallow.graphStore.NodeCount(), gDeep.graphStore.NodeCount())
+			gShallow.knowledgeGraph.graphStore.NodeCount(), gDeep.knowledgeGraph.graphStore.NodeCount())
 	}
 }
 

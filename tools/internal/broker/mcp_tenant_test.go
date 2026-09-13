@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	"k8s.io/client-go/kubernetes/fake"
@@ -243,6 +246,20 @@ func TestTenantGateDeniesUnclassifiedTool(t *testing.T) {
 	}
 }
 
+func TestTenantGateDeniesForeignSections(t *testing.T) {
+	for _, tool := range []string{"mark_fetch", "mark_explore"} {
+		t.Run(tool, func(t *testing.T) {
+			d := seededDispatcher()
+			g := newMemoryGateway(t, memoryTestConfig(), d)
+			res, err := g.tenantGate(g.toolHandlers()[tool])(withAliceClaims(t.Context()), callToolReq(tool, map[string]any{"url": "mark://bob-w/index.md#memory"}))
+			if err != nil || res == nil || !res.IsError {
+				t.Fatalf("foreign section allowed: err=%v result=%v", err, res)
+			}
+			assertNoWorldTraffic(t, d, "bob-w")
+		})
+	}
+}
+
 // TestTenantGateDeniesUnknownIdentity: an authenticated identity with
 // no provisioned world gets a denial, not a fallback world.
 func TestTenantGateDeniesUnknownIdentity(t *testing.T) {
@@ -339,6 +356,307 @@ func TestMemoryCrawlNeverLeavesTenantWorld(t *testing.T) {
 		t.Fatalf("own-world crawl denied: %s", toolResultText(t, res))
 	}
 	assertNoWorldTraffic(t, d, "bob-w")
+}
+
+func tenantGraphCall(t *testing.T, g *mcpGateway, tenant, tool, path string) string {
+	t.Helper()
+	ctx := ctxWithClaims(t.Context(), &Claims{Subject: "google|" + tenant, Email: tenant + "@example.com", EmailVerified: true})
+	res, err := g.tenantGate(g.toolHandlers()[tool])(ctx, callToolReq(tool, map[string]any{"url": "mark://" + tenant + "-w" + path}))
+	if err != nil || res == nil || res.IsError {
+		t.Fatalf("%s %s: err=%v result=%v", tenant, tool, err, res)
+	}
+	return toolResultText(t, res)
+}
+
+func assertTenantBacklinks(t *testing.T, g *mcpGateway, tenant, foreign string) {
+	t.Helper()
+	for _, tool := range []string{"mark_backlinks", "mark_explore"} {
+		text := tenantGraphCall(t, g, tenant, tool, "/index.md")
+		count := "Backlinks for mark://" + tenant + "-w/index.md (1)"
+		if tool == "mark_explore" {
+			count = "## Backlinks (1)"
+		}
+		for _, want := range []string{tenant + "-w/source.md", tenant + "_TITLE", tenant + "_LABEL", count} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s missing %q:\n%s", tool, want, text)
+			}
+		}
+		for _, secret := range []string{foreign + "-w/source.md", foreign + "_TITLE", foreign + "_LABEL", foreign + "_ANCHOR", foreign + "_anchor", "spoof"} {
+			if strings.Contains(text, secret) {
+				t.Errorf("%s leaked %q:\n%s", tool, secret, text)
+			}
+		}
+	}
+}
+
+func TestMemoryGraphSourcesIsolated(t *testing.T) {
+	for _, order := range [][]string{{"alice", "bob"}, {"bob", "alice"}} {
+		t.Run(strings.Join(order, "-"), func(t *testing.T) {
+			d := seededDispatcher()
+			for _, tenant := range order {
+				d.published[tenant+"-w/source.md"] = fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   "# " + tenant + "_TITLE\n## " + tenant + "_ANCHOR\n[" + tenant + "_LABEL](mark://alice-w/index.md)\n[" + tenant + "_LABEL](mark://bob-w/index.md)\n",
+				}}
+			}
+			g := newMemoryGateway(t, memoryTestConfig(), d)
+			for _, tenant := range order {
+				tenantGraphCall(t, g, tenant, "mark_graph", "/source.md")
+			}
+			assertTenantBacklinks(t, g, "alice", "bob")
+			assertTenantBacklinks(t, g, "bob", "alice")
+		})
+	}
+}
+
+func TestMemoryGraphSeedSourcesIsolated(t *testing.T) {
+	for _, format := range []string{"legacy", "snapshot"} {
+		t.Run(format, func(t *testing.T) { testMemoryGraphSeedSources(t, format) })
+	}
+}
+
+func tenantSeedGraph(tenant string) *graphstore.Store {
+	gr := graph.New()
+	for _, owner := range []string{"alice", "bob"} {
+		title := owner + "_TITLE"
+		if owner != tenant {
+			title = "spoof " + title
+		}
+		source := "mark://" + owner + "-w." + owner + "-w.svc.cluster.local:6309/source.md"
+		gr.AddNode(&graph.Node{URL: source, Title: title, Status: "ok"})
+		for _, target := range []string{"alice", "bob"} {
+			gr.AddEdgeInfo(graph.Edge{From: source, To: "mark://" + target + "-w/index.md", Rel: "related", Label: owner + "_LABEL", Anchor: owner + "_ANCHOR", Count: 7})
+		}
+	}
+	store := graphstore.New()
+	store.Merge(gr, nil)
+	return store
+}
+
+func testMemoryGraphSeedSources(t *testing.T, format string) {
+	t.Helper()
+	for _, order := range [][]string{{"alice", "bob"}, {"bob", "alice"}} {
+		t.Run(strings.Join(order, "-"), func(t *testing.T) {
+			d := seededDispatcher()
+			responses := make(map[string]protocol.Response)
+			for _, tenant := range order {
+				body := tenantSeedGraph(tenant).Export()
+				if format == "legacy" {
+					responses[tenant+"-w/graph.md"] = protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: map[string]string{"etag": "same-etag"}}
+					continue
+				}
+				nodes, edges, err := graphstore.ParseExportStrict(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				manifest, shards := brokerSnapshotRows(t, nodes, edges)
+				responses[tenant+"-w"+graphstore.SnapshotManifestPath] = manifest
+				for path, shard := range shards {
+					d.published[tenant+"-w"+path] = fetch.Result{Response: shard}
+				}
+			}
+			d.fetchCondFn = func(world, path, _, _ string) (fetch.Result, error) {
+				response, ok := responses[world+path]
+				if !ok {
+					return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+				}
+				return fetch.Result{Response: response}, nil
+			}
+			g := newMemoryGateway(t, memoryTestConfig(), d)
+			for _, tenant := range order {
+				tenantGraphCall(t, g, tenant, "mark_backlinks", "/index.md")
+			}
+			assertTenantBacklinks(t, g, "alice", "bob")
+			assertTenantBacklinks(t, g, "bob", "alice")
+			for _, tenant := range order {
+				text := tenantGraphCall(t, g, tenant, "mark_backlinks", "/index.md")
+				for _, want := range []string{"[related]", "#" + tenant + "_ANCHOR", "x7"} {
+					if !strings.Contains(text, want) {
+						t.Errorf("own provenance missing %q: %s", want, text)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestMemoryGraphScopeTransitions(t *testing.T) {
+	for _, change := range []string{"identity", "address", "dial", "revoke"} {
+		t.Run(change, func(t *testing.T) {
+			cfg := memoryTestConfig()
+			d := seededDispatcher()
+			d.published["alice-w/source.md"] = fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# old secret\n[old](mark://alice-w/index.md)"}}
+			g := newMemoryGateway(t, cfg, d)
+			tenantGraphCall(t, g, "alice", "mark_graph", "/source.md")
+			ctx := withAliceClaims(t.Context())
+			old, err := g.graphFor(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old.graphStore.SetSeedEtag("alice-w", "old-etag")
+			switch change {
+			case "identity":
+				ctx = ctxWithClaims(t.Context(), &Claims{Subject: "new-alice", Email: "alice@example.com", EmailVerified: true})
+			case "address":
+				cfg.Worlds[0].InternalAddress = "replacement:6309"
+			case "dial":
+				cfg.Worlds[0].DialAddress = "replacement:6310"
+			case "revoke":
+				cfg.Worlds[0].Allow.Emails = []string{"new-owner@example.com"}
+			}
+			for _, tool := range []string{"mark_backlinks", "mark_explore"} {
+				res, err := g.tenantGate(g.toolHandlers()[tool])(ctx, callToolReq(tool, map[string]any{"url": "mark://alice-w/index.md"}))
+				if err != nil || res == nil || res.IsError != (change == "revoke") {
+					t.Fatalf("%s: err=%v result=%v", tool, err, res)
+				}
+				if text := toolResultText(t, res); strings.Contains(text, "source.md") || strings.Contains(text, "old secret") {
+					t.Fatalf("stale graph after %s: %s", change, text)
+				}
+			}
+			if change != "revoke" {
+				current, err := g.graphFor(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if current == old || current.graphStore.SeedEtag("alice-w") != "" {
+					t.Fatal("scope change retained old graph or seed etag")
+				}
+			}
+		})
+	}
+}
+
+func TestMemoryGraphSeedRefreshIsScoped(t *testing.T) {
+	d := seededDispatcher()
+	empty := false
+	d.fetchCondFn = func(world, path, _, etag string) (fetch.Result, error) {
+		if path != "/graph.md" {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		}
+		if empty && world == "alice-w" {
+			if etag != "initial-etag" {
+				t.Errorf("refresh etag = %q", etag)
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: graphstore.New().Export(), Metadata: map[string]string{"etag": "empty-etag"}}}, nil
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: tenantSeedGraph(strings.TrimSuffix(world, "-w")).Export(), Metadata: map[string]string{"etag": "initial-etag"}}}, nil
+	}
+	g := newMemoryGateway(t, memoryTestConfig(), d)
+	assertTenantBacklinks(t, g, "alice", "bob")
+	assertTenantBacklinks(t, g, "bob", "alice")
+	state, err := g.graphFor(withAliceClaims(t.Context()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.graphSeedMu.Lock()
+	state.graphSeedChecked["alice-w"] = time.Now().Add(-2 * seedCheckInterval)
+	state.graphSeedMu.Unlock()
+	empty = true
+	for _, tool := range []string{"mark_backlinks", "mark_explore"} {
+		if text := tenantGraphCall(t, g, "alice", tool, "/index.md"); strings.Contains(text, "source.md") {
+			t.Fatalf("removed seed source survived: %s", text)
+		}
+	}
+	assertTenantBacklinks(t, g, "bob", "alice")
+	if state.graphStore.SeedEtag("alice-w") != "empty-etag" {
+		t.Fatal("Alice seed did not refresh")
+	}
+}
+
+func TestMemoryGraphRefreshDoesNotBlockAnotherTenant(t *testing.T) {
+	d := seededDispatcher()
+	started, release := make(chan struct{}), make(chan struct{})
+	d.fetchCondFn = func(world, path, _, _ string) (fetch.Result, error) {
+		if world == "alice-w" && path == graphstore.SnapshotManifestPath {
+			close(started)
+			<-release
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}
+	g := newMemoryGateway(t, memoryTestConfig(), d)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		tenantGraphCall(t, g, "alice", "mark_backlinks", "/index.md")
+	}()
+	defer func() { close(release); <-finished }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Alice seed did not start")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	ctx = ctxWithClaims(ctx, &Claims{Subject: "google|bob", Email: "bob@example.com", EmailVerified: true})
+	res, err := g.tenantGate(g.handleMarkBacklinks)(ctx, callToolReq("mark_backlinks", map[string]any{"url": "mark://bob-w/index.md"}))
+	if err != nil || res == nil || res.IsError || ctx.Err() != nil {
+		t.Fatalf("Bob waited for Alice seed: err=%v result=%v context=%v", err, res, ctx.Err())
+	}
+	if _, ok := g.tenantGraphs["bob-w"]; !ok {
+		t.Fatal("Bob graph was not initialized independently")
+	}
+}
+
+func TestMemoryGraphRetiredRefreshCannotPopulateNewScope(t *testing.T) {
+	d := seededDispatcher()
+	manifest, shards := brokerSnapshotRows(t,
+		[]graphstore.StoredNode{{URL: "mark://alice-w/source.md", Title: "old private source", Status: "ok"}},
+		[]graphstore.StoredEdge{{From: "mark://alice-w/source.md", To: "mark://alice-w/index.md", Count: 1}})
+	for path, shard := range shards {
+		d.published["alice-w"+path] = fetch.Result{Response: shard}
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	d.fetchCondFn = func(_, path, _, _ string) (fetch.Result, error) {
+		if path == graphstore.SnapshotManifestPath && !first.Swap(true) {
+			close(started)
+			<-release
+			return fetch.Result{Response: manifest}, nil
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}
+	g := newMemoryGateway(t, memoryTestConfig(), d)
+	handler := g.tenantGate(g.handleMarkBacklinks)
+	req := callToolReq("mark_backlinks", map[string]any{"url": "mark://alice-w/index.md"})
+	finished := make(chan struct{})
+	var oldResult *mcp.CallToolResult
+	var oldErr error
+	go func() {
+		defer close(finished)
+		oldResult, oldErr = handler(withAliceClaims(t.Context()), req)
+	}()
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+		<-finished
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old seed did not start")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	ctx = ctxWithClaims(ctx, &Claims{Subject: "replacement-alice", Email: "alice@example.com", EmailVerified: true})
+	res, err := handler(ctx, req)
+	if err != nil || res == nil || res.IsError || ctx.Err() != nil {
+		t.Fatalf("new owner waited on retired seed: err=%v result=%v context=%v", err, res, ctx.Err())
+	}
+	close(release)
+	released = true
+	<-finished
+	if oldErr != nil || oldResult == nil || oldResult.IsError || !strings.Contains(toolResultText(t, oldResult), "old private source") {
+		t.Fatalf("old seed did not finish: err=%v result=%v", oldErr, oldResult)
+	}
+	res, err = handler(ctx, req)
+	if err != nil || res == nil || res.IsError {
+		t.Fatalf("new owner query: err=%v result=%v", err, res)
+	}
+	if text := toolResultText(t, res); strings.Contains(text, "source.md") || strings.Contains(text, "old private") {
+		t.Fatalf("late retired seed contaminated replacement scope: %s", text)
+	}
 }
 
 // TestMemoryGatewayEndToEnd drives the full Streamable HTTP transport:

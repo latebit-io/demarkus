@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,36 +23,8 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// mcp_tools_graph.go ships the five graph-store-backed federation
-// tools for Slice 4b+5 of the broker MCP gateway plan:
-//
-//   - mark_backlinks (4b) — local query against the broker's
-//     ephemeral graph store. No dispatch.
-//   - mark_graph (4b) — crawl world(s), persist to the broker's
-//     ephemeral graph store, return the discovered graph.
-//   - mark_index (5) — crawl a source world, collect content
-//     hashes, build an index document, optionally publish to a
-//     target world.
-//   - mark_graph_export (5) — export the broker's ephemeral
-//     graph store as a markdown document. Local-only.
-//   - mark_graph_publish (5) — export + publish in one shot
-//     against a target world.
-//
-// The broker's graph store is ephemeral per the plan v5 4b
-// decision (Fritz, 2026-05-21): drops on every broker pod
-// restart, agents re-crawl to repopulate. An alternate
-// bucket-backed persistent store is parked for the post-broker
-// design window (see /thoughts.md "On Bucket Stores as a
-// k8s-Native Alternate Filestore").
-
-// brokerCrawlParseURL splits a mark:// URL into worldName + path
-// for the crawler. Lenient compared to parseToolURL — fragments
-// and queries are stripped silently because links inside crawled
-// documents legitimately carry them (e.g. `mark://team-a/foo.md#section`
-// referring to a heading), and we want the crawler to fetch
-// the document itself even when the link carries a fragment.
-// parseToolURL stays strict for agent input, where a fragment
-// is a typo signal.
+// Crawl links may carry sections/queries; fetch only the document.
+// Agent-supplied root URLs still pass strict parseToolURL validation.
 func brokerCrawlParseURL(raw string) (worldName, urlPath string, err error) {
 	u, parseErr := url.Parse(raw)
 	if parseErr != nil {
@@ -107,60 +80,54 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context) graphstore.FetchFunc {
 // interval; the first graph-tool call after a pod restart always checks.
 const seedCheckInterval = 5 * time.Minute
 
-// seedGraphStore seeds from every world in the caller's scope (tenant
-// mode: only the caller's own world, so one tenant's traffic never pulls
-// another's graph into the shared per-pod store); throttled per world.
-func (g *mcpGateway) seedGraphStore(ctx context.Context) {
+// Seed checks and graph writes use the same scope selected by the handler.
+func (g *mcpGateway) seedGraphStore(ctx context.Context, state *gatewayGraph) {
 	worlds := g.scopedWorlds(ctx)
 	for j := range worlds {
 		if ctx.Err() != nil {
 			return
 		}
-		g.seedWorldGraph(ctx, worlds[j].Name)
+		g.seedWorldGraph(ctx, state, worlds[j].Name)
 	}
 }
 
-// seedWorldGraph refreshes the broker's ephemeral graph store from the
-// world's published /graph.md aggregate, so a cold pod answers backlinks
-// without a crawl. Local crawls win (see graphstore.SeedFromExport).
-// Never fatal: every failure degrades silently to the unseeded store,
-// warn-logging real errors. Conditional on the stored seed etag; a
-// not-modified response keeps the previously seeded rows.
-func (g *mcpGateway) seedWorldGraph(ctx context.Context, worldName string) {
-	g.graphSeedMu.Lock()
-	if done := g.graphSeedRefreshing[worldName]; done != nil {
-		g.graphSeedMu.Unlock()
+// Cold pods seed published snapshots; local crawls win. Fetch/parse failures
+// are best effort and warn-logged; not-modified preserves the previous seed.
+func (g *mcpGateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, worldName string) {
+	state.graphSeedMu.Lock()
+	if done := state.graphSeedRefreshing[worldName]; done != nil {
+		state.graphSeedMu.Unlock()
 		select {
 		case <-done:
 		case <-ctx.Done():
 		}
 		return
 	}
-	if last, ok := g.graphSeedChecked[worldName]; ok && time.Since(last) < seedCheckInterval {
-		g.graphSeedMu.Unlock()
+	if last, ok := state.graphSeedChecked[worldName]; ok && time.Since(last) < seedCheckInterval {
+		state.graphSeedMu.Unlock()
 		return
 	}
-	if g.graphSeedChecked == nil {
-		g.graphSeedChecked = make(map[string]time.Time)
+	if state.graphSeedChecked == nil {
+		state.graphSeedChecked = make(map[string]time.Time)
 	}
-	if g.graphSeedRefreshing == nil {
-		g.graphSeedRefreshing = make(map[string]chan struct{})
+	if state.graphSeedRefreshing == nil {
+		state.graphSeedRefreshing = make(map[string]chan struct{})
 	}
 	done := make(chan struct{})
-	g.graphSeedRefreshing[worldName] = done
-	g.graphSeedMu.Unlock()
+	state.graphSeedRefreshing[worldName] = done
+	state.graphSeedMu.Unlock()
 	success := false
 	defer func() {
-		g.graphSeedMu.Lock()
+		state.graphSeedMu.Lock()
 		if success {
-			g.graphSeedChecked[worldName] = time.Now()
+			state.graphSeedChecked[worldName] = time.Now()
 		}
 		close(done)
-		delete(g.graphSeedRefreshing, worldName)
-		g.graphSeedMu.Unlock()
+		delete(state.graphSeedRefreshing, worldName)
+		state.graphSeedMu.Unlock()
 	}()
 
-	etag := g.graphStore.SeedEtag(worldName)
+	etag := state.graphStore.SeedEtag(worldName)
 	result, err := g.dispatcher.FetchConditionalContext(ctx, worldName, graphstore.SnapshotManifestPath, "", etag)
 	if err != nil {
 		g.log.Warn("graph seed fetch failed", "world", worldName, "err", err)
@@ -180,9 +147,9 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, worldName string) {
 			return
 		}
 		g.translateSeedURLs(nodes, edges)
-		g.graphStore.ReplaceSeed(worldName, nodes, edges)
+		state.replaceSeed(worldName, nodes, edges)
 		if snapshotEtag := result.Response.Metadata["etag"]; snapshotEtag != "" {
-			g.graphStore.SetSeedEtag(worldName, snapshotEtag)
+			state.graphStore.SetSeedEtag(worldName, snapshotEtag)
 		}
 		success = true
 		return
@@ -215,11 +182,25 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, worldName string) {
 		return
 	}
 	g.translateSeedURLs(nodes, edges)
-	g.graphStore.ReplaceSeed(worldName, nodes, edges)
+	state.replaceSeed(worldName, nodes, edges)
 	if e := result.Response.Metadata["etag"]; e != "" {
-		g.graphStore.SetSeedEtag(worldName, e)
+		state.graphStore.SetSeedEtag(worldName, e)
 	}
 	success = true
+}
+
+// A tenant snapshot cannot introduce another world's source rows, even if
+// it aggregates several worlds. Destinations remain labels from owned sources.
+func (state *gatewayGraph) replaceSeed(owner string, nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) {
+	if state.tenant != "" {
+		owned := func(raw string) bool {
+			world, _, err := parseToolURL(links.CanonicalURL(raw))
+			return err == nil && world == state.tenant
+		}
+		nodes = slices.DeleteFunc(nodes, func(n graphstore.StoredNode) bool { return !owned(n.URL) })
+		edges = slices.DeleteFunc(edges, func(e graphstore.StoredEdge) bool { return !owned(e.From) })
+	}
+	state.graphStore.ReplaceSeed(owner, nodes, edges)
 }
 
 // translateSeedURLs rewrites world dial addresses to mark://{worldName}/...;
@@ -252,11 +233,7 @@ func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []gr
 	}
 }
 
-// handleMarkBacklinks queries the broker's ephemeral graph store
-// for documents linking to a given URL, seeding the store from the
-// world's published /graph.md first so cold pods still answer.
-// First-time callers on a world with no /graph.md see an empty
-// result (and a hint to run mark_graph first).
+// Seed before querying so cold pods can answer without a local crawl.
 func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
@@ -267,8 +244,12 @@ func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRe
 	if _, _, perr := parseToolURL(raw); perr != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
 	}
-	g.seedGraphStore(ctx)
-	backlinks := g.graphStore.BacklinksEnriched(raw)
+	state, err := g.graphFor(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
+	}
+	g.seedGraphStore(ctx, state)
+	backlinks := state.graphStore.BacklinksEnriched(raw)
 	if len(backlinks) == 0 {
 		return mcp.NewToolResultText(
 			fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the broker's graph store. (Note: the broker's graph store is ephemeral; it resets on broker restart.)", raw),
@@ -299,12 +280,16 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
 	}
 	depth := max(1, min(req.GetInt("depth", 2), 5))
+	state, err := g.graphFor(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
+	}
 
 	// Seed before crawling so depth-limited crawls still benefit from
 	// hub context.
-	g.seedGraphStore(ctx)
+	g.seedGraphStore(ctx, state)
 
-	crawled, crawlErr := g.graphStore.CrawlAndPersist(
+	crawled, crawlErr := state.graphStore.CrawlAndPersist(
 		ctx,
 		raw,
 		g.crawlFetchFn(ctx),
@@ -360,8 +345,12 @@ func formatGraphSummary(gr *graph.Graph, startURL string) string {
 // handleMarkGraphExport returns the broker's ephemeral graph
 // store as a publishable markdown document. Pure local read.
 // Empty store → empty document (still valid markdown).
-func (g *mcpGateway) handleMarkGraphExport(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	return mcp.NewToolResultText(g.graphStore.Export()), nil
+func (g *mcpGateway) handleMarkGraphExport(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	state, err := g.graphFor(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
+	}
+	return mcp.NewToolResultText(state.graphStore.Export()), nil
 }
 
 // defaultGraphRetention bounds the published graph document's version
@@ -370,13 +359,7 @@ func (g *mcpGateway) handleMarkGraphExport(_ context.Context, _ mcp.CallToolRequ
 // growth; 20 versions is enough to debug a bad crawl.
 const defaultGraphRetention = 20
 
-// handleMarkGraphPublish exports the broker's ephemeral graph
-// store and PUBLISHes it to a target world. Same expected_version
-// + on_conflict semantics as mark_publish (Slice 3); on_conflict
-// support is deliberately not part of this tool's surface today
-// (the local demarkus-mcp doesn't expose it either — graph
-// publishes are single-writer flows where conflict really means
-// "the agent forgot to fetch first," not a merge case).
+// Graph publication is single-writer: version conflicts surface without merging.
 func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
@@ -405,7 +388,11 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
 		return errRes, nil
 	}
-	body := g.graphStore.Export()
+	state, err := g.graphFor(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
+	}
+	body := state.graphStore.Export()
 	meta := agentMetaFromClaims(claims)
 	if retention > 0 {
 		meta["retention"] = strconv.Itoa(retention)
@@ -417,7 +404,7 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 		return g.toolErrorFor("graph publish", worldName, err), nil
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "Published graph (%d nodes, %d edges) to %s\n", g.graphStore.NodeCount(), g.graphStore.EdgeCount(), raw)
+	fmt.Fprintf(&out, "Published graph (%d nodes, %d edges) to %s\n", state.graphStore.NodeCount(), state.graphStore.EdgeCount(), raw)
 	out.WriteString(mcpfmt.Full(result, "version", "modified", "server-version"))
 	return mcp.NewToolResultText(out.String()), nil
 }

@@ -47,13 +47,18 @@ func seedingDispatcher(etag string) *fakeDispatcher {
 
 func brokerSnapshot(t *testing.T) (protocol.Response, map[string]protocol.Response) { //nolint:gocritic // fixture returns manifest and shard set
 	t.Helper()
-	exported := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
 	const base = "mark://team-a.team-a.svc.cluster.local:6309"
 	nodes := []graphstore.StoredNode{
 		{URL: base + "/a.md", Title: "Page A", Status: "ok", LinkCount: 1},
 		{URL: base + "/b.md", Title: "Page B", Status: "ok"},
 	}
 	edges := []graphstore.StoredEdge{{From: base + "/a.md", To: base + "/b.md", Count: 1}}
+	return brokerSnapshotRows(t, nodes, edges)
+}
+
+func brokerSnapshotRows(t *testing.T, nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) (protocol.Response, map[string]protocol.Response) { //nolint:gocritic // fixture returns manifest and shard set
+	t.Helper()
+	exported := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
 	artifacts, err := graphstore.BuildSnapshotShards(graphstore.SnapshotManifestPath, graphstore.SnapshotSlotA, nodes, edges, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +108,7 @@ func TestSeedWorldGraphPrefersAtomicSnapshot(t *testing.T) {
 	if text := toolResultText(t, res); !strings.Contains(text, "mark://team-a/a.md") {
 		t.Fatalf("translated snapshot backlink missing: %s", text)
 	}
-	if got := g.graphStore.SeedEtag("team-a"); got != "snapshot-etag-1" {
+	if got := g.knowledgeGraph.graphStore.SeedEtag("team-a"); got != "snapshot-etag-1" {
 		t.Fatalf("seed etag = %q", got)
 	}
 }
@@ -156,7 +161,7 @@ func TestSeedConsumesAgentExportContract(t *testing.T) {
 
 	// Addressability invariant: every seeded mark:// row on a configured
 	// world address must be translated; none may keep the dial-address form.
-	for _, n := range g.graphStore.AllNodes() {
+	for _, n := range g.knowledgeGraph.graphStore.AllNodes() {
 		if strings.Contains(n.URL, ".svc.cluster.local") {
 			t.Errorf("unaddressable seeded row survived translation: %s", n.URL)
 		}
@@ -206,10 +211,10 @@ func TestSeedTranslatesInternalAddressesToWorldNames(t *testing.T) {
 	// The external URL is not a world address and must stay as-is, on the
 	// node and on the edge destination (asserted via the store; the tool
 	// URL grammar only admits mark:// URLs).
-	if n := g.graphStore.GetNode("https://example.com/ext"); n == nil {
+	if n := g.knowledgeGraph.graphStore.GetNode("https://example.com/ext"); n == nil {
 		t.Error("external node URL was rewritten or dropped")
 	}
-	if bl := g.graphStore.Backlinks("https://example.com/ext"); len(bl) != 1 || bl[0] != "mark://team-a/a.md" {
+	if bl := g.knowledgeGraph.graphStore.Backlinks("https://example.com/ext"); len(bl) != 1 || bl[0] != "mark://team-a/a.md" {
 		t.Errorf("external edge destination = %v, want [mark://team-a/a.md]", bl)
 	}
 }
@@ -358,9 +363,9 @@ func TestSeedWorldGraphEtagRoundTrip(t *testing.T) {
 	}
 
 	// Expire the throttle so the next call re-checks with the stored etag.
-	g.graphSeedMu.Lock()
-	g.graphSeedChecked["team-a"] = time.Now().Add(-2 * seedCheckInterval)
-	g.graphSeedMu.Unlock()
+	g.knowledgeGraph.graphSeedMu.Lock()
+	g.knowledgeGraph.graphSeedChecked["team-a"] = time.Now().Add(-2 * seedCheckInterval)
+	g.knowledgeGraph.graphSeedMu.Unlock()
 
 	res, err := g.handleMarkBacklinks(ctx, callToolReq("mark_backlinks", map[string]any{
 		"url": "mark://team-a/b.md",

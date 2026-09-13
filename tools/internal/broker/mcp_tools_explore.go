@@ -7,6 +7,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/graphstore"
 	listingpage "github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/mdoutline"
@@ -19,12 +20,7 @@ import (
 // demarkus-mcp value.
 const exploreSectionCap = 10
 
-// handleMarkExplore implements the mark_explore tool: one call returns a
-// neighborhood card for a document — outline head (heading tree + opening
-// paragraph), outbound links, recorded backlinks, and the sibling listing
-// of its parent directory. Mirrors client/cmd/demarkus-mcp markExplore;
-// the broker differences are the world-name URL shape and that backlinks
-// come from the broker's ephemeral graph store.
+// Explore mirrors the client card, using world-name URLs and scoped backlinks.
 func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
@@ -74,8 +70,12 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 		mdoutline.CappedList(&b, out, exploreSectionCap, "links")
 	}
 
-	g.seedGraphStore(ctx)
-	g.writeBacklinksSection(&b, docURL)
+	state, err := g.graphFor(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
+	}
+	g.seedGraphStore(ctx, state)
+	writeBacklinksSection(&b, state.graphStore.BacklinksEnriched(docURL))
 	g.writeSiblingsSection(&b, worldName, path)
 
 	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; mark_fetch force=true for the full body\n", docURL)
@@ -86,12 +86,8 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 	return mcp.NewToolResultText(mcpfmt.FormatWith(result, b.String(), extra, opts)), nil
 }
 
-// writeBacklinksSection appends the backlinks card section from the
-// broker's ephemeral graph store. An empty store degrades to a note,
-// never an error. The store is keyed by full mark://{worldName}/{path}
-// URLs — the same shape mark_graph crawls record.
-func (g *mcpGateway) writeBacklinksSection(b *strings.Builder, docURL string) {
-	backlinks := g.graphStore.BacklinksEnriched(docURL)
+// Counts and truncation operate only on the caller's scoped rows.
+func writeBacklinksSection(b *strings.Builder, backlinks []graphstore.BacklinkEntry) {
 	fmt.Fprintf(b, "\n## Backlinks (%d)\n", len(backlinks))
 	if len(backlinks) == 0 {
 		b.WriteString("(none recorded; run mark_graph to populate; the broker's graph store is per-pod and resets on restart)\n")

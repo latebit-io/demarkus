@@ -133,7 +133,9 @@ func (g *mcpGateway) tenantGate(next mcpserver.ToolHandlerFunc) mcpserver.ToolHa
 			if raw == "" {
 				continue // the handler's own required-arg check reports it
 			}
-			worldName, _, perr := parseToolURL(raw)
+			// Section-aware handlers strip fragments before fetching the document.
+			docURL, _, _ := strings.Cut(raw, "#")
+			worldName, _, perr := parseToolURL(docURL)
 			if perr != nil {
 				continue // the handler's own URL validation reports it
 			}

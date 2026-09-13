@@ -25,28 +25,61 @@ type mcpGateway struct {
 	// profile selects the product surface (knowledge vs memory):
 	// tool set, instructions, tenant scoping, memory seeding.
 	profile *GatewayProfile
-	// graphStore is an ephemeral in-process graph store backing
-	// mark_backlinks / mark_graph / mark_graph_export /
-	// mark_graph_publish. Lifetime = broker pod lifetime: any
-	// restart drops the store and the agent re-crawls. Plan v5
-	// 4b/5 decision (Fritz, 2026-05-21): the broker is a
-	// wire-shape adapter, not a stateful protocol surface; an
-	// alternate bucket-backed persistent store is parked for a
-	// post-broker design window (see /thoughts.md "On Bucket
-	// Stores").
-	graphStore *graphstore.Store
-	// fetchSeen is the per-MCP-session unchanged-fetch dedup state
-	// (mcp_tools_fetchmode.go). Session entries are evicted by the
-	// OnUnregisterSession hook wired in newMCPGateway; like graphStore
-	// it is ephemeral per-pod state, consistent with the wire-shape-
-	// adapter framing.
+	// Knowledge graphs are shared; memory calls select an isolated tenant graph.
+	knowledgeGraph *gatewayGraph
+	tenantGraphsMu sync.Mutex
+	tenantGraphs   map[string]*tenantGraph
+	// Session-end hooks evict unchanged-fetch dedup state.
 	fetchSeen *sessionSeen
+	// memorySeed tracks per-world memory-template seeding (memory profile).
+	memorySeed memorySeeder
+}
+
+// gatewayGraph keeps graph data and refresh state in the same isolation scope.
+// Both are ephemeral and disappear on broker restart.
+type gatewayGraph struct {
+	graphStore *graphstore.Store
+	tenant     string // empty for the organizational graph
 	// graphSeedMu guards per-world refresh single-flight and successful checks.
 	graphSeedMu         sync.Mutex
 	graphSeedChecked    map[string]time.Time
 	graphSeedRefreshing map[string]chan struct{}
-	// memorySeed tracks per-world memory-template seeding (memory profile).
-	memorySeed memorySeeder
+}
+
+type tenantGraph struct {
+	identity string
+	address  string
+	dial     string
+	graph    *gatewayGraph
+}
+
+// graphFor resolves scope on every call. Identity or backend changes retire
+// the entire graph, including etags; in-flight work retains only the old graph.
+func (g *mcpGateway) graphFor(ctx context.Context) (*gatewayGraph, error) {
+	if !g.profile.TenantScoped {
+		return g.knowledgeGraph, nil
+	}
+	w, err := g.tenantWorld(ctx)
+	if err != nil {
+		return nil, err
+	}
+	claims, ok := claimsFromCtx(ctx)
+	if !ok {
+		return nil, ErrNotAuthorized
+	}
+	identity := identityKey(g.srv.cfg.OIDC.Issuer, claims.Subject)
+	address := resolveWorldAddress(&w)
+	g.tenantGraphsMu.Lock()
+	defer g.tenantGraphsMu.Unlock()
+	entry := g.tenantGraphs[w.Name]
+	if entry == nil || entry.identity != identity || entry.address != address || entry.dial != w.DialAddress {
+		entry = &tenantGraph{
+			identity: identity, address: address, dial: w.DialAddress,
+			graph: &gatewayGraph{graphStore: graphstore.New(), tenant: w.Name},
+		}
+		g.tenantGraphs[w.Name] = entry
+	}
+	return entry.graph, nil
 }
 
 // newMCPGateway registers the profile's tools and wraps them in Streamable
@@ -65,15 +98,13 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher, profil
 	// scoping can never diverge from the gateway's.
 	s.profile = profile
 	g := &mcpGateway{
-		srv:        s,
-		log:        s.log,
-		dispatcher: dispatcher,
-		profile:    profile,
-		// Ephemeral graph store — empty on each gateway
-		// construction, dies with the broker pod. See the
-		// graphStore field doc for the design framing.
-		graphStore: graphstore.New(),
-		fetchSeen:  fetchSeen,
+		srv:            s,
+		log:            s.log,
+		dispatcher:     dispatcher,
+		profile:        profile,
+		knowledgeGraph: &gatewayGraph{graphStore: graphstore.New()},
+		tenantGraphs:   make(map[string]*tenantGraph),
+		fetchSeen:      fetchSeen,
 	}
 	opts := []mcpserver.ServerOption{
 		// listChanged=false: the tool set is static across a session,

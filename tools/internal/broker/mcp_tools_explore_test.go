@@ -103,7 +103,7 @@ func TestHandleMarkExploreBacklinksFromGraphStore(t *testing.T) {
 	gr.AddNode(&graph.Node{URL: "mark://team-a/a.md", Title: "Page A", Status: "ok"})
 	gr.AddNode(&graph.Node{URL: "mark://team-a/hub.md", Title: "Hub", Status: "ok"})
 	gr.AddEdge("mark://team-a/a.md", "mark://team-a/hub.md")
-	g.graphStore.Merge(gr, nil)
+	g.knowledgeGraph.graphStore.Merge(gr, nil)
 
 	text := exploreResultText(t, g, "mark://team-a/hub.md")
 	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "[Page A](mark://team-a/a.md)") {
