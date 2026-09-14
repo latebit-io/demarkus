@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -66,7 +67,8 @@ func BuildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) str
 	b.WriteString("\n## Nodes\n\n")
 	b.WriteString("| URL | Title | Status | Links |\n")
 	b.WriteString("|-----|-------|--------|-------|\n")
-	for _, n := range nodes {
+	for i := range nodes {
+		n := &nodes[i]
 		status := strings.ReplaceAll(strings.Join(strings.Fields(n.Status), "-"), "|", "-")
 		if status == "" {
 			status = "external"
@@ -86,6 +88,7 @@ func BuildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) str
 		b.WriteString("\n")
 	}
 
+	writeExportObservations(&b, nodes)
 	return b.String()
 }
 
@@ -196,6 +199,13 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 		}
 	}
 
+	if err := readExportObservations(body, nodes); err != nil {
+		// The permissive legacy API cannot return errors; retain unknown freshness.
+		for i := range nodes {
+			nodes[i].Observation = graph.Observation{}
+			nodes[i].Etag = ""
+		}
+	}
 	return nodes, edges
 }
 
@@ -243,6 +253,9 @@ func ParseExportStrict(body string) ([]StoredNode, []StoredEdge, error) {
 		return nil, nil, err
 	}
 	nodes, edges := ParseExport(body)
+	if err := readExportObservations(body, nodes); err != nil {
+		return nil, nil, err
+	}
 	if len(nodes) != declaredNodes || len(edges) != declaredEdges {
 		return nil, nil, fmt.Errorf("graph export count mismatch: got %d nodes/%d edges, want %d/%d",
 			len(nodes), len(edges), declaredNodes, declaredEdges)

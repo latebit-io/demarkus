@@ -310,17 +310,18 @@ func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 
 		doc, err := c.client.Fetch(s.host, fullPath, s.token)
 		if err != nil {
+			if c.state != nil {
+				c.state.RecordObservation(links.NodeURL(s.host, fullPath), &protocol.Response{Status: "error"})
+			}
 			s.run.recordIncomplete("fetch %s%s: %v", s.host, fullPath, err)
 			continue
 		}
 
-		url := "mark://" + s.host + fullPath
+		url := links.NodeURL(s.host, fullPath)
 
 		// Record visit.
 		if c.state != nil {
-			etag := doc.Response.Metadata["etag"]
-			contentHash := doc.Response.Metadata["content-hash"]
-			c.state.RecordVisit(url, etag, doc.Response.Status, contentHash)
+			c.state.RecordObservation(url, &doc.Response)
 		}
 
 		if doc.Response.Status != protocol.StatusOK {
@@ -574,11 +575,7 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 	return successCount, errors.Join(publishErrs...)
 }
 
-// recordEdges adds a crawled document and its outbound mark:// links to the
-// link graph. Only mark:// targets are kept (the floor's edges are between
-// demarkus documents); external links are left out. The graph is the source
-// for the hub graph export — the durable, transport-symmetric topology the
-// reading-room floor renders (plans "Floor enrichment", decision 11).
+// Federation keeps mark:// topology only; source revisions survive hub export.
 func (c *Crawler) recordEdges(host, docPath, body string, meta map[string]string) []graph.Edge {
 	url := links.NodeURL(host, docPath)
 	extracted := graph.ExtractDocumentEdges(url, body, meta)
@@ -600,7 +597,16 @@ func (c *Crawler) recordEdges(host, docPath, body string, meta map[string]string
 	if title == "" {
 		title = links.ExtractTitle(body)
 	}
-	c.graph.AddNode(&graph.Node{URL: url, Title: title, Status: "ok", LinkCount: linkCount})
+	observation := graph.Observe(url, meta)
+	observation.View = graph.ViewFederation
+	observation.Complete = true
+	if c.state != nil {
+		if previous := c.state.GetURL(url); previous != nil && previous.Observation.Revision > observation.Revision {
+			observation.HighestRevision = previous.Observation.Revision
+			observation.Problem = "revision-regression"
+		}
+	}
+	c.graph.AddNode(&graph.Node{URL: url, Title: title, Status: "ok", LinkCount: linkCount, Observation: observation})
 	return edges
 }
 

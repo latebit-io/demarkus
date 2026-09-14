@@ -8,6 +8,8 @@ Second slice: [edge extraction parity, 2026-09-13](edge-extraction-parity-2026-0
 
 Third slice: [bounded crawl outcomes, 2026-09-13](crawl-outcomes-2026-09-13.md).
 
+Fourth slice: [source freshness, 2026-09-13](source-freshness-2026-09-13.md).
+
 Run **before the first roadmap fix**, then after each slice, on the same machine:
 
 ```bash

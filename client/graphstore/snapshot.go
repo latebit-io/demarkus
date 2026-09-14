@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -22,9 +23,9 @@ const (
 	// SnapshotManifestPath is the additive entry point for atomic graph snapshots.
 	SnapshotManifestPath = "/graph/manifest.md"
 	// SnapshotManifestFormat identifies the manifest wire format.
-	SnapshotManifestFormat = "demarkus-graph-snapshot/v1"
+	SnapshotManifestFormat = "demarkus-graph-snapshot/v2"
 	// SnapshotShardFormat identifies the shard wire format.
-	SnapshotShardFormat = "demarkus-graph-snapshot-shard/v1"
+	SnapshotShardFormat = "demarkus-graph-snapshot-shard/v2"
 	// DefaultSnapshotShardBytes is the target shard body size.
 	DefaultSnapshotShardBytes = 768 * 1024
 	// MaxSnapshotShards bounds manifest fan-out.
@@ -45,6 +46,7 @@ const (
 
 // SnapshotManifest identifies one complete immutable graph generation.
 type SnapshotManifest struct {
+	Format     string
 	Exported   time.Time
 	Complete   bool
 	Nodes      int
@@ -143,7 +145,7 @@ func ParseSnapshotManifest(manifestPath, body string) (SnapshotManifest, error) 
 	if err := validateSnapshotMetadataKeys(meta, "Format", "Exported", "Complete", "Nodes", "Edges", "Active-Slot"); err != nil {
 		return SnapshotManifest{}, err
 	}
-	if meta["Format"] != SnapshotManifestFormat {
+	if meta["Format"] != SnapshotManifestFormat && meta["Format"] != "demarkus-graph-snapshot/v1" {
 		return SnapshotManifest{}, fmt.Errorf("unsupported graph snapshot format %q", meta["Format"])
 	}
 	exported, err := time.Parse(time.RFC3339, meta["Exported"])
@@ -185,6 +187,7 @@ func ParseSnapshotManifest(manifestPath, body string) (SnapshotManifest, error) 
 		})
 	}
 	manifest := SnapshotManifest{
+		Format:   meta["Format"],
 		Exported: exported, Complete: complete, Nodes: nodeCount, Edges: edgeCount,
 		ActiveSlot: meta["Active-Slot"], Shards: refs,
 	}
@@ -280,16 +283,21 @@ func LoadSnapshot(manifestPath string, response protocol.Response, fetchShard fu
 		if err != nil {
 			return nil, nil, fmt.Errorf("fetch graph shard %s: %w", ref.Path, err)
 		}
+		shardFormat := strings.Replace(manifest.Format, "snapshot/", "snapshot-shard/", 1)
+		if !strings.Contains(shard.Body, "\n> Format: "+shardFormat+"\n") {
+			return nil, nil, errors.New("graph manifest and shard format versions differ")
+		}
 		shardNodes, shardEdges, err := verifySnapshotShard(ref, shard)
 		if err != nil {
 			return nil, nil, err
 		}
-		for _, node := range shardNodes {
+		for i := range shardNodes {
+			node := &shardNodes[i]
 			if _, duplicate := seenNodes[node.URL]; duplicate {
 				return nil, nil, fmt.Errorf("duplicate graph snapshot node %q", node.URL)
 			}
 			seenNodes[node.URL] = struct{}{}
-			nodes = append(nodes, node)
+			nodes = append(nodes, *node)
 		}
 		for _, edge := range shardEdges {
 			if _, duplicate := seenEdges[edge.key()]; duplicate {
@@ -307,10 +315,11 @@ func LoadSnapshot(manifestPath string, response protocol.Response, fetchShard fu
 }
 
 type snapshotNode struct {
-	URL       string `json:"url"`
-	Title     string `json:"title,omitempty"`
-	Status    string `json:"status,omitempty"`
-	LinkCount int    `json:"links"`
+	Observation graph.Observation `json:"observation,omitzero"`
+	URL         string            `json:"url"`
+	Title       string            `json:"title,omitempty"`
+	Status      string            `json:"status,omitempty"`
+	LinkCount   int               `json:"links"`
 }
 
 type snapshotEdge struct {
@@ -431,11 +440,15 @@ func largestSnapshotEdgeShard(manifestPath, slot string, edges []StoredEdge, sta
 
 func buildSnapshotArtifact(manifestPath, slot, kind string, part int, nodes []StoredNode, edges []StoredEdge) (SnapshotArtifact, error) {
 	payload := snapshotPayload{Nodes: make([]snapshotNode, len(nodes)), Edges: make([]snapshotEdge, len(edges))}
-	for i, node := range nodes {
+	for i := range nodes {
+		node := &nodes[i]
 		if err := validateSnapshotURL(node.URL); err != nil {
 			return SnapshotArtifact{}, fmt.Errorf("node %d: %w", i+1, err)
 		}
-		payload.Nodes[i] = snapshotNode{URL: node.URL, Title: node.Title, Status: node.Status, LinkCount: node.LinkCount}
+		if err := validateObservation(&node.Observation); err != nil {
+			return SnapshotArtifact{}, err
+		}
+		payload.Nodes[i] = snapshotNode{URL: node.URL, Title: node.Title, Status: node.Status, LinkCount: node.LinkCount, Observation: node.Observation}
 	}
 	for i, edge := range edges {
 		if err := validateSnapshotURL(edge.From); err != nil {
@@ -484,7 +497,7 @@ func verifySnapshotShard(ref SnapshotShardRef, response protocol.Response) ([]St
 	if err := validateSnapshotMetadataKeys(meta, "Format", "Kind", "Part", "Nodes", "Edges"); err != nil {
 		return nil, nil, fmt.Errorf("graph shard %s: %w", ref.Path, err)
 	}
-	if meta["Format"] != SnapshotShardFormat || meta["Kind"] != ref.Kind || meta["Part"] != strconv.Itoa(ref.Part) {
+	if (meta["Format"] != SnapshotShardFormat && meta["Format"] != "demarkus-graph-snapshot-shard/v1") || meta["Kind"] != ref.Kind || meta["Part"] != strconv.Itoa(ref.Part) {
 		return nil, nil, fmt.Errorf("graph shard %s identity mismatch", ref.Path)
 	}
 	var payload snapshotPayload
@@ -508,7 +521,8 @@ func verifySnapshotShard(ref SnapshotShardRef, response protocol.Response) ([]St
 		return nil, nil, fmt.Errorf("graph shard %s count mismatch", ref.Path)
 	}
 	nodes := make([]StoredNode, len(payload.Nodes))
-	for i, node := range payload.Nodes {
+	for i := range payload.Nodes {
+		node := &payload.Nodes[i]
 		if err := validateSnapshotURL(node.URL); err != nil {
 			return nil, nil, err
 		}
@@ -516,7 +530,13 @@ func verifySnapshotShard(ref SnapshotShardRef, response protocol.Response) ([]St
 		if node.LinkCount < 0 {
 			return nil, nil, errors.New("graph shard link count must be non-negative")
 		}
-		nodes[i] = StoredNode{URL: node.URL, Title: node.Title, Status: node.Status, LinkCount: node.LinkCount}
+		if err := validateObservation(&node.Observation); err != nil {
+			return nil, nil, err
+		}
+		if meta["Format"] == "demarkus-graph-snapshot-shard/v1" && node.Observation != (graph.Observation{}) {
+			return nil, nil, errors.New("v1 graph shard cannot carry source observations")
+		}
+		nodes[i] = StoredNode{URL: node.URL, Title: node.Title, Status: node.Status, LinkCount: node.LinkCount, Observation: node.Observation, Etag: node.Observation.Etag}
 	}
 	edges := make([]StoredEdge, len(payload.Edges))
 	for i, edge := range payload.Edges {

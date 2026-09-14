@@ -97,7 +97,7 @@ func nodeSummary(n *Node) string {
 	if n.Error != "" {
 		row += fmt.Sprintf("; error: %q", n.Error)
 	}
-	return row + "\n"
+	return row + n.Observation.Annotation() + "\n"
 }
 
 func edgeSummary(e *Edge) string {

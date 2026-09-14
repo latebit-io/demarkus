@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // schemaVersion is the on-disk format version. Increment on breaking changes.
@@ -23,11 +27,12 @@ type ServerState struct {
 
 // URLState tracks visit state for a single URL.
 type URLState struct {
-	URL         string    `json:"url"`
-	Etag        string    `json:"etag,omitempty"`         // For conditional fetch
-	LastVisited time.Time `json:"last_visited"`           // When this URL was last fetched
-	Status      string    `json:"status"`                 // Last known status (ok, not-found, error)
-	ContentHash string    `json:"content_hash,omitempty"` // SHA-256 content hash
+	Observation graph.Observation `json:"observation,omitzero"`
+	URL         string            `json:"url"`
+	Etag        string            `json:"etag,omitempty"`         // For conditional fetch
+	LastVisited time.Time         `json:"last_visited"`           // When this URL was last fetched
+	Status      string            `json:"status"`                 // Last known status (ok, not-found, error)
+	ContentHash string            `json:"content_hash,omitempty"` // SHA-256 content hash
 }
 
 // stateDocument is the on-disk JSON envelope.
@@ -88,7 +93,14 @@ func LoadState(path string) (*State, error) {
 		s.servers = doc.Servers
 	}
 	if doc.URLs != nil {
-		s.urls = doc.URLs
+		for key := range doc.URLs {
+			value := doc.URLs[key]
+			key = links.CanonicalURL(key)
+			value.URL = key
+			if previous, ok := s.urls[key]; !ok || previous.LastVisited.Before(value.LastVisited) {
+				s.urls[key] = value
+			}
+		}
 	}
 
 	return s, nil
@@ -124,6 +136,7 @@ func (s *State) Save() error {
 
 // RecordVisit records a URL visit with etag and content hash.
 func (s *State) RecordVisit(url, etag, status, contentHash string) {
+	url = links.CanonicalURL(url)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -134,6 +147,26 @@ func (s *State) RecordVisit(url, etag, status, contentHash string) {
 		Status:      status,
 		ContentHash: contentHash,
 	}
+}
+
+// RecordObservation retains last-good source evidence when a response fails.
+func (s *State) RecordObservation(url string, response *protocol.Response) {
+	url = links.CanonicalURL(url)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	observation := graph.Observe(url, response.Metadata)
+	observation.Complete = graph.SourceComplete(&graph.Node{Status: response.Status})
+	previous := s.urls[url]
+	previous.URL, previous.LastVisited = url, observation.AttemptedAt
+	if !observation.Complete {
+		previous.Observation.Problem = "incomplete"
+		previous.Observation.AttemptedAt = observation.AttemptedAt
+	} else if graph.CompareRevision(&observation, &previous.Observation) != "older" {
+		previous.Status = response.Status
+		previous.Etag, previous.ContentHash = observation.Etag, response.Metadata["content-hash"]
+		previous.Observation = observation
+	}
+	s.urls[url] = previous
 }
 
 // RecordServer records a server discovery or updates its crawl timestamp.
@@ -159,6 +192,7 @@ func (s *State) RecordServer(host string, documentCount int) {
 
 // GetURL returns state for a URL, or nil if not visited.
 func (s *State) GetURL(url string) *URLState {
+	url = links.CanonicalURL(url)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if u, ok := s.urls[url]; ok {
@@ -192,6 +226,7 @@ func (s *State) KnownServers() []string {
 // ShouldFetch returns true if the URL should be fetched (not visited or
 // etag changed). If visited, returns the previous etag for conditional fetch.
 func (s *State) ShouldFetch(url string) (shouldFetch bool, previousEtag string) {
+	url = links.CanonicalURL(url)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -214,7 +249,8 @@ func (s *State) AllContentHashes() map[string]string {
 	defer s.mu.RUnlock()
 
 	hashes := make(map[string]string, len(s.urls))
-	for url, u := range s.urls {
+	for url := range s.urls {
+		u := s.urls[url]
 		if u.ContentHash != "" {
 			hashes[u.ContentHash] = url
 		}

@@ -16,3 +16,4 @@ Decision records binding the protocol, spec, and repo; git is canonical, and eac
 | [0010](0010-remove-postgres-backend.md) | Remove the Postgres backend | accepted 2026-08-27 |
 | [0011](0011-native-scheme-redirect-allowlist.md) | Allowlisted private-use scheme redirects for MCP hosts | accepted 2026-09-07 |
 | [0012](0012-lookup-body-match.md) | Body match is an optional mode of LOOKUP | proposed 2026-09-07 |
+| [0013](0013-graph-source-freshness.md) | Graph freshness follows source revisions | proposed 2026-09-13 |

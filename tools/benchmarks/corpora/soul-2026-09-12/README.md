@@ -84,6 +84,15 @@ model-token variation is not attributed. Keep `baseline-section-first.json` fixe
 the PR 449 review-fix replay: 16/16 correct, 96,193 model tokens and 12,395
 tool-result tokens. Earlier replay and baselines remain unchanged.
 
+## Source freshness replay
+
+[`after-source-freshness.json`](after-source-freshness.json) retains the final
+16/16 replay: 95,683 model tokens, 12,327 tool-result tokens and 52 protocol
+requests. The [slice report](../../graph/source-freshness-2026-09-13.md) records
+freshness correctness, direct revalidation costs, mechanical regressions and every
+prior attempt. The proxy disables `mark_graph`; these totals check ordinary
+lookup/fetch retrieval, not graph-assisted answer gains. Fixed baseline unchanged.
+
 ## Rebuild an artifact deliberately
 
 Use new output filenames; pack never overwrites an artifact or manifest:

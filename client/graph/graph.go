@@ -10,13 +10,14 @@ import (
 
 // Node represents a document in the graph.
 type Node struct {
-	URL        string
-	Title      string
-	Depth      int
-	Status     string // protocol status (e.g. "ok", "not-found"), "error", "external", or "" for undiscovered
-	LinkCount  int
-	Incomplete bool   // outgoing observations were capped; never replace a stored source
-	Error      string // bounded fetch failure detail
+	Observation Observation
+	URL         string
+	Title       string
+	Depth       int
+	Status      string // protocol status (e.g. "ok", "not-found"), "error", "external", or "" for undiscovered
+	LinkCount   int
+	Incomplete  bool   // outgoing observations were capped; never replace a stored source
+	Error       string // bounded fetch failure detail
 }
 
 // Edge represents a directed link from one document to another.

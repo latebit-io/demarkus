@@ -64,11 +64,16 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context) graphstore.FetchFunc {
 		if tenant != "" && worldName != tenant {
 			return graph.FetchResult{}, fmt.Errorf("world %q is outside your world %q", worldName, tenant)
 		}
+		world, ok := g.srv.cfg.FindWorld(worldName)
+		if !ok {
+			return graph.FetchResult{}, fmt.Errorf("unknown graph source world %q", worldName)
+		}
 		result, derr := g.dispatcher.FetchContext(ctx, worldName, path, "")
 		if derr != nil {
 			return graph.FetchResult{}, derr
 		}
 		return graph.FetchResult{
+			Source:   links.NodeURL(resolveWorldAddress(&world), path),
 			Status:   result.Response.Status,
 			Body:     result.Response.Body,
 			Metadata: result.Response.Metadata,
@@ -91,8 +96,7 @@ func (g *mcpGateway) seedGraphStore(ctx context.Context, state *gatewayGraph) {
 	}
 }
 
-// Cold pods seed published snapshots; local crawls win. Fetch/parse failures
-// are best effort and warn-logged; not-modified preserves the previous seed.
+// Cold pods seed snapshots; source revisions select adjacency.
 func (g *mcpGateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, worldName string) {
 	state.graphSeedMu.Lock()
 	if done := state.graphSeedRefreshing[worldName]; done != nil {
@@ -118,6 +122,9 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, wo
 	state.graphSeedMu.Unlock()
 	success := false
 	defer func() {
+		if !success {
+			state.graphStore.MarkSeedFailure(worldName)
+		}
 		state.graphSeedMu.Lock()
 		if success {
 			state.graphSeedChecked[worldName] = time.Now()
@@ -225,7 +232,14 @@ func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []gr
 		return canon
 	}
 	for i := range nodes {
+		// Source remains a logical authority even when the graph URL is an alias.
+		if nodes[i].Observation.Source != "" {
+			nodes[i].Observation.Source = links.CanonicalURL(nodes[i].Observation.Source)
+		}
 		nodes[i].URL = translate(nodes[i].URL)
+		if nodes[i].Observation.Source != "" && translate(nodes[i].Observation.Source) != nodes[i].URL {
+			nodes[i].Observation = graph.Observation{Problem: "source-mismatch"}
+		}
 	}
 	for i := range edges {
 		edges[i].From = translate(edges[i].From)
@@ -249,16 +263,19 @@ func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRe
 		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
 	}
 	g.seedGraphStore(ctx, state)
+	freshness := g.revalidateBacklinks(ctx, state, raw)
 	backlinks := state.graphStore.BacklinksEnriched(raw)
 	if len(backlinks) == 0 {
 		return mcp.NewToolResultText(
-			fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the broker's graph store. (Note: the broker's graph store is ephemeral; it resets on broker restart.)", raw),
+			freshness + fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the broker's graph store. (Note: the broker's graph store is ephemeral; it resets on broker restart.)", raw),
 		), nil
 	}
 	var b strings.Builder
+	b.WriteString(freshness)
 	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", raw, len(backlinks))
-	for _, bl := range backlinks {
-		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count)
+	for i := range backlinks {
+		bl := &backlinks[i]
+		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count) + bl.Observation.Annotation()
 		if bl.Title != "" {
 			fmt.Fprintf(&b, "- [%s](%s)%s\n", bl.Title, bl.URL, ann)
 		} else {

@@ -376,7 +376,7 @@ func graphMain(args []string) {
 			if title == "" {
 				title = n.URL
 			}
-			fmt.Printf("  [%s] %s (%d links)\n", n.Status, title, n.LinkCount)
+			fmt.Printf("  [%s] %s (%d links)%s\n", n.Status, title, n.LinkCount, n.Observation.Annotation())
 		},
 	})
 	if err != nil && g == nil {

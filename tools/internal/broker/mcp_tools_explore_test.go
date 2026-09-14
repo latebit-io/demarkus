@@ -100,7 +100,9 @@ func TestHandleMarkExploreCard(t *testing.T) {
 func TestHandleMarkExploreBacklinksFromGraphStore(t *testing.T) {
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), exploreDispatcher())
 	gr := graph.New()
-	gr.AddNode(&graph.Node{URL: "mark://team-a/a.md", Title: "Page A", Status: "ok"})
+	observation := graph.Observe("mark://team-a/a.md", map[string]string{"version": "2"})
+	observation.Complete = true
+	gr.AddNode(&graph.Node{URL: "mark://team-a/a.md", Title: "Page A", Status: "ok", Observation: observation})
 	gr.AddNode(&graph.Node{URL: "mark://team-a/hub.md", Title: "Hub", Status: "ok"})
 	gr.AddEdge("mark://team-a/a.md", "mark://team-a/hub.md")
 	g.knowledgeGraph.graphStore.Merge(gr, nil)

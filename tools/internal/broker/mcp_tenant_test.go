@@ -423,7 +423,9 @@ func tenantSeedGraph(tenant string) *graphstore.Store {
 			title = "spoof " + title
 		}
 		source := "mark://" + owner + "-w." + owner + "-w.svc.cluster.local:6309/source.md"
-		gr.AddNode(&graph.Node{URL: source, Title: title, Status: "ok"})
+		observation := graph.Observe(source, map[string]string{"version": "1"})
+		observation.Complete = true
+		gr.AddNode(&graph.Node{URL: source, Title: title, Status: "ok", Observation: observation})
 		for _, target := range []string{"alice", "bob"} {
 			gr.AddEdgeInfo(graph.Edge{From: source, To: "mark://" + target + "-w/index.md", Rel: "related", Label: owner + "_LABEL", Anchor: owner + "_ANCHOR", Count: 7})
 		}
@@ -679,6 +681,7 @@ func TestMemoryGraphRefreshDoesNotBlockAnotherTenant(t *testing.T) {
 
 func TestMemoryGraphRetiredRefreshCannotPopulateNewScope(t *testing.T) {
 	d := seededDispatcher()
+	d.published["alice-w/source.md"] = fetch.Result{Response: protocol.Response{Status: protocol.StatusServerError}}
 	manifest, shards := brokerSnapshotRows(t,
 		[]graphstore.StoredNode{{URL: "mark://alice-w/source.md", Title: "old private source", Status: "ok"}},
 		[]graphstore.StoredEdge{{From: "mark://alice-w/source.md", To: "mark://alice-w/index.md", Count: 1}})

@@ -1007,7 +1007,15 @@ Publishers require read access and publish access to both the manifest path and 
 
 Federation agents publish a strict graph snapshot at `/graph/manifest.md` alongside the legacy `/graph.md` export. The separate path keeps old graph consumers working during migration.
 
-The `demarkus-graph-snapshot/v1` manifest records export time, completeness, total node and edge counts, active slot, and immutable descriptors for `nodes` and `edges` shards. Shards use `demarkus-graph-snapshot-shard/v1`, contain a fenced JSON payload, and live under `/graph/shards/{a|b}/<kind>-<part>.md`.
+The `demarkus-graph-snapshot/v2` manifest records export time, completeness, total node and edge counts, active slot, and immutable descriptors for `nodes` and `edges` shards. Shards use `demarkus-graph-snapshot-shard/v2`, contain a fenced JSON payload, and live under `/graph/shards/{a|b}/<kind>-<part>.md`. Readers MUST accept v1 generations as having unknown source freshness; manifest and shard format versions MUST match. Older v1 readers reject v2 atomically. The separate legacy `/graph.md` tables remain compatible.
+
+Node payloads MAY carry an `observation` object: canonical logical document URL `source`, positive document `revision` when known, raw-version `etag`, outgoing-set `complete`, source `observed_at`, latest `attempted_at`, and bounded `problem` detail. Missing observations mean unknown freshness. Source revision comparisons MUST be scoped to the same source identity. Body hashes, manifest export timestamps and immutable shard versions MUST NOT substitute for source revisions. Metadata-only writes can change graph relations without changing the body hash. Archive state remains separate from source revision (§9.1).
+
+Observations carry an extraction `view`: `document` for ordinary extraction or `federation` for the existing mark-only, loopback-filtered producer. Completeness is scoped to that view. Equal revision, etag and status across those views prefers `document` without treating filtered adjacency as a source conflict. Missing views have unknown extraction completeness and MUST NOT supersede complete observations.
+
+An observation MAY also carry `highest_revision`, the highest previously observed revision of that same source. If present, it MUST be at least `revision`; surviving older topology MUST remain stale after the newer seed owner's withdrawal. It is not the containing shard's version.
+
+The legacy `/graph.md` export MAY append a `## Source observations` fenced JSON array of `{"url": "...", "observation": {...}}` rows. Existing node and edge tables are unchanged. Strict readers MUST reject malformed, duplicate or unmatched observation rows before applying the export. Readers without sidecar support retain topology with unknown freshness. Revision selection, last-good preservation and bounded revalidation policy are documented in [ADR 0013](adr/0013-graph-source-freshness.md).
 
 Publishers stage and verify the inactive slot before compare-and-swapping the manifest. Readers fetch every shard through its version path and verify version, byte count, content hash, kind, part, and aggregate counts before applying any rows. A failed fetch or integrity check leaves the previous local graph state and seed etag unchanged.
 

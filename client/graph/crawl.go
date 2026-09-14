@@ -22,6 +22,7 @@ type Fetcher interface {
 
 // FetchResult holds the response from a fetch operation.
 type FetchResult struct {
+	Source   string // logical source URL when graph identity is a routing alias
 	Status   string
 	Body     string
 	Metadata map[string]string // publisher metadata from the response, may be nil
@@ -215,6 +216,11 @@ func (r *crawlRun) observe(ctx context.Context, item crawlItem, res *crawlFetch)
 		r.outcome.Fetches++
 	}
 	node := &Node{URL: item.url, Depth: item.depth, Status: res.result.Status}
+	source := res.result.Source
+	if source == "" {
+		source = item.url
+	}
+	node.Observation = Observe(source, res.result.Metadata)
 	r.classify(ctx, node, res)
 	size := int64(len(res.result.Body) + len(res.result.Status))
 	for key, value := range res.result.Metadata {
@@ -232,7 +238,8 @@ func (r *crawlRun) observe(ctx context.Context, item crawlItem, res *crawlFetch)
 		node.Title = links.ExtractTitle(res.result.Body)
 		node.LinkCount = extracted.BodyLinkCount
 	}
-	if !r.reserveOutput(len(nodeSummary(node))) {
+	node.Observation.Complete = SourceComplete(node)
+	if !r.reserveOutput(len(nodeSummary(node)) + 32) {
 		node = &Node{URL: item.url, Depth: item.depth, Incomplete: true}
 		if !r.reserveOutput(len(nodeSummary(node))) {
 			return
@@ -247,6 +254,10 @@ func (r *crawlRun) observe(ctx context.Context, item crawlItem, res *crawlFetch)
 		}
 		r.graph.AddEdgeInfo(*edge)
 		r.admit(edge.To, item.depth)
+	}
+	node.Observation.Complete = SourceComplete(node)
+	if !node.Observation.Complete {
+		node.Observation.Problem = "incomplete"
 	}
 	r.graph.AddNode(node)
 	if r.opts.OnNode != nil {

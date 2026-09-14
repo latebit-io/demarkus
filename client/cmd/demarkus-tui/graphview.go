@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -41,11 +42,12 @@ type crawlResult struct {
 
 // graphListItem is a flattened node for display in the tree view.
 type graphListItem struct {
-	url       string
-	title     string
-	status    string
-	depth     int
-	backlinks int // inbound link count from the graph
+	observation *graph.Observation
+	url         string
+	title       string
+	status      string
+	depth       int
+	backlinks   int // inbound link count from the graph
 }
 
 // maxCrawlNodes caps the number of documents crawled to prevent runaway graphs.
@@ -63,6 +65,12 @@ func (m model) startCrawl(ctx context.Context, url string) tea.Cmd {
 			MaxNodes: maxCrawlNodes,
 			Workers:  5,
 		})
+		if gs != nil && ctx.Err() == nil {
+			if sources := gs.Backlinks(url); len(sources) > 0 {
+				_, validationErr := gs.Revalidate(ctx, sources, graphstore.NewFetchFunc(client, store), fetch.ParseMarkURL)
+				err = errors.Join(err, validationErr)
+			}
+		}
 		return crawlResult{graph: g, err: err, url: url, seq: seq}
 	}
 }
@@ -107,11 +115,12 @@ func flattenGraph(g *graph.Graph, rootURL string) []graphListItem {
 			status = "partial"
 		}
 		items = append(items, graphListItem{
-			url:       n.URL,
-			title:     n.Title,
-			status:    status,
-			depth:     n.Depth,
-			backlinks: inDegrees[n.URL],
+			url:         n.URL,
+			title:       n.Title,
+			status:      status,
+			depth:       n.Depth,
+			backlinks:   inDegrees[n.URL],
+			observation: &n.Observation,
 		})
 
 		for _, neighbor := range g.Neighbors(url) {
@@ -132,11 +141,13 @@ func backlinksList(gs *graphstore.Store, url string) []graphListItem {
 	}
 	entries := gs.BacklinksEnriched(url)
 	items := make([]graphListItem, 0, len(entries))
-	for _, e := range entries {
+	for i := range entries {
+		e := &entries[i]
 		items = append(items, graphListItem{
-			url:    e.URL,
-			title:  e.Title,
-			status: e.Status,
+			url:         e.URL,
+			title:       e.Title,
+			status:      e.Status,
+			observation: e.Observation,
 		})
 	}
 	return items
@@ -150,12 +161,14 @@ func topologyList(gs *graphstore.Store) []graphListItem {
 	nodes := gs.AllNodes()
 	degrees := gs.ToGraph().InDegrees()
 	items := make([]graphListItem, 0, len(nodes))
-	for _, n := range nodes {
+	for i := range nodes {
+		n := &nodes[i]
 		items = append(items, graphListItem{
-			url:       n.URL,
-			title:     n.Title,
-			status:    n.Status,
-			backlinks: degrees[n.URL],
+			url:         n.URL,
+			title:       n.Title,
+			status:      n.Status,
+			backlinks:   degrees[n.URL],
+			observation: &n.Observation,
 		})
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -176,7 +189,8 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 	var b strings.Builder
 	b.WriteString("\n  Document Graph\n\n")
 
-	for i, item := range items {
+	for i := range items {
+		item := &items[i]
 		label := item.title
 		if label == "" {
 			label = item.url
@@ -204,7 +218,7 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 			density = fmt.Sprintf(" [%d←]", item.backlinks)
 		}
 
-		line := fmt.Sprintf("%s%s%s%s %s%s", cursor, indent, connector, icon, label, density)
+		line := fmt.Sprintf("%s%s%s%s %s%s%s", cursor, indent, connector, icon, label, density, item.observation.Annotation())
 
 		// Truncate to terminal cells (CJK/emoji are double-width).
 		if width > 5 {
@@ -257,7 +271,8 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 		return b.String()
 	}
 
-	for i, item := range items {
+	for i := range items {
+		item := &items[i]
 		label := item.title
 		if label == "" {
 			label = item.url
@@ -269,7 +284,7 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 			cursor = "> "
 		}
 
-		line := fmt.Sprintf("%s%s %s", cursor, icon, label)
+		line := fmt.Sprintf("%s%s %s%s", cursor, icon, label, item.observation.Annotation())
 		if width > 5 {
 			line = truncateCells(line, width-2)
 		}
@@ -292,7 +307,8 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 		return b.String()
 	}
 
-	for i, item := range items {
+	for i := range items {
+		item := &items[i]
 		label := item.title
 		if label == "" {
 			label = item.url
@@ -309,7 +325,7 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 			cursor = "> "
 		}
 
-		line := fmt.Sprintf("%s%s %s%s", cursor, icon, label, density)
+		line := fmt.Sprintf("%s%s %s%s%s", cursor, icon, label, density, item.observation.Annotation())
 		if width > 5 {
 			line = truncateCells(line, width-2)
 		}

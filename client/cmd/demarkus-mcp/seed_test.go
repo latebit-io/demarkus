@@ -399,7 +399,10 @@ func TestSeedGraph_EtagRoundTrip(t *testing.T) {
 
 func TestSeedGraph_ExploreBacklinksSeeded(t *testing.T) {
 	sc := &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+			if path == "/a.md" {
+				return fetch.Result{}, errors.New("source unavailable")
+			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# B\n\nBody.\n"}}, nil
 		},
 		fetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {

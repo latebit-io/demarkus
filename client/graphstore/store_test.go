@@ -899,8 +899,8 @@ func TestSeedOverlayProvenanceRoundTrip(t *testing.T) {
 		t.Fatalf("loaded seed overlay = %+v", node)
 	}
 	store.SeedFromExport(nil, nil)
-	if node := store.GetNode("mark://a/a.md"); node == nil || !node.Seeded {
-		t.Fatalf("omitted overlay lost local marker: %+v", node)
+	if node := store.GetNode("mark://a/a.md"); node == nil || node.Status != "error" || node.CrawledAt.IsZero() {
+		t.Fatalf("omitted overlay did not restore independent local encounter: %+v", node)
 	}
 	fetched := graph.New()
 	fetched.AddNode(&graph.Node{URL: "mark://a/a.md", Title: "Local", Status: "ok"})

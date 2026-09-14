@@ -17,6 +17,8 @@ const contractGoldenPath = "testdata/graph-export-incluster.md"
 // exportedLineRe matches the volatile timestamp header of an export.
 var exportedLineRe = regexp.MustCompile(`(?m)^> Exported: .*$`)
 
+var observedTimeRe = regexp.MustCompile(`"(observed_at|attempted_at)":"[^"]+"`)
+
 // TestGraphExportContract pins the exact /graph.md body published for an
 // in-cluster topology. The golden is the producer half of a cross-module
 // contract; the broker's seed suite consumes the same file (-update regenerates).
@@ -28,15 +30,15 @@ func TestGraphExportContract(t *testing.T) {
 	client.addList(host, "/docs/", "- [a.md](a.md)\n- [b.md](b.md)\n")
 	client.addDocWithMeta(host, "/index.md",
 		"# Team A hub\n\n## Services\n\n- [Applications](/docs/a.md)\n",
-		"sha256-"+strings.Repeat("1", 64), map[string]string{"title": "Team A hub"})
+		"sha256-"+strings.Repeat("1", 64), map[string]string{"title": "Team A hub", "version": "4"})
 	// No metadata title: the node's title must come from the H1 fallback
 	// (the golden pins it, since the H1 text matches the old declared title).
 	client.addDocWithMeta(host, "/docs/a.md",
 		"# Applications\n\n## Links\n\n- [B doc](b.md)\n- [B again](b.md)\n- [external](https://example.com/ext)\n- [dev](mark://localhost:6309/dev.md)\n",
-		"sha256-"+strings.Repeat("2", 64), nil)
+		"sha256-"+strings.Repeat("2", 64), map[string]string{"version": "2"})
 	client.addDocWithMeta(host, "/docs/b.md",
 		"# B heading\n",
-		"sha256-"+strings.Repeat("3", 64), map[string]string{"title": "B doc", "rel-supersedes": "a.md"})
+		"sha256-"+strings.Repeat("3", 64), map[string]string{"title": "B doc", "rel-supersedes": "a.md", "version": "3"})
 
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://" + host}
@@ -49,6 +51,7 @@ func TestGraphExportContract(t *testing.T) {
 	}
 
 	got := exportedLineRe.ReplaceAllString(crawler.GraphExport(), "> Exported: GOLDEN")
+	got = observedTimeRe.ReplaceAllString(got, `"${1}":"2026-09-13T00:00:00Z"`)
 
 	if *updateGolden {
 		if err := os.MkdirAll(filepath.Dir(contractGoldenPath), 0o755); err != nil {

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -27,8 +28,13 @@ func worldGraphBody() string {
 }
 
 // seedingDispatcher scripts /graph.md on team-a with the given etag.
+func unavailableSeedSource(_, _, _ string) (fetch.Result, error) {
+	return fetch.Result{}, fmt.Errorf("source unavailable during seed contract test")
+}
+
 func seedingDispatcher(etag string) *fakeDispatcher {
 	return &fakeDispatcher{
+		fetchFn: unavailableSeedSource,
 		fetchCondFn: func(_, path, _, sentEtag string) (fetch.Result, error) {
 			if path != "/graph.md" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
@@ -135,6 +141,7 @@ func TestSeedConsumesAgentExportContract(t *testing.T) {
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
 	body := agentContractGolden(t)
 	d := &fakeDispatcher{
+		fetchFn: unavailableSeedSource,
 		fetchCondFn: func(worldName, path, _, _ string) (fetch.Result, error) {
 			if worldName == "hub" && path == "/graph.md" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body}}, nil
@@ -166,6 +173,10 @@ func TestSeedConsumesAgentExportContract(t *testing.T) {
 			t.Errorf("unaddressable seeded row survived translation: %s", n.URL)
 		}
 	}
+	node := g.knowledgeGraph.graphStore.GetNode("mark://team-a/docs/a.md")
+	if node.Observation.Source != "mark://team-a.team-a.svc.cluster.local/docs/a.md" || node.Observation.Revision != 2 {
+		t.Fatalf("producer source identity/revision lost through translation: %+v", node)
+	}
 }
 
 // internalAddrGraphBody renders a /graph.md the way the federation agent
@@ -189,6 +200,7 @@ func internalAddrGraphBody() string {
 // must translate world addresses to world names and leave unknown hosts alone.
 func TestSeedTranslatesInternalAddressesToWorldNames(t *testing.T) {
 	d := &fakeDispatcher{
+		fetchFn: unavailableSeedSource,
 		fetchCondFn: func(_, path, _, _ string) (fetch.Result, error) {
 			if path != "/graph.md" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
@@ -226,6 +238,7 @@ func TestSeedFindsAggregateOnAnotherWorld(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
 	d := &fakeDispatcher{
+		fetchFn: unavailableSeedSource,
 		fetchCondFn: func(worldName, path, _, _ string) (fetch.Result, error) {
 			if worldName == "hub" && path == "/graph.md" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: internalAddrGraphBody()}}, nil
@@ -280,8 +293,8 @@ func TestHandleMarkBacklinksColdPodSeedsFromWorldGraph(t *testing.T) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.fetchCalls) != 0 {
-		t.Errorf("plain fetches = %d, want 0 (no crawl needed)", len(d.fetchCalls))
+	if len(d.fetchCalls) != 1 {
+		t.Errorf("source revalidation fetches = %d, want 1", len(d.fetchCalls))
 	}
 	if len(d.fetchCondCalls) != 2 || d.fetchCondCalls[0].path != graphstore.SnapshotManifestPath || d.fetchCondCalls[1].path != "/graph.md" {
 		t.Errorf("fetchCondCalls = %+v, want snapshot then legacy checks", d.fetchCondCalls)
@@ -390,7 +403,10 @@ func TestSeedWorldGraphEtagRoundTrip(t *testing.T) {
 // benefits from the same per-world seed.
 func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 	d := seedingDispatcher("hub-etag-1")
-	d.fetchFn = func(_, _, _ string) (fetch.Result, error) {
+	d.fetchFn = func(_, path, _ string) (fetch.Result, error) {
+		if path == "/a.md" {
+			return fetch.Result{}, fmt.Errorf("source unavailable")
+		}
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# B\n\nBody.\n"}}, nil
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)

@@ -84,6 +84,7 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 	}
 
 	h.seedGraph(ctx, host)
+	b.WriteString("\n" + h.revalidateBacklinks(ctx, links.NodeURL(host, path)))
 	h.writeBacklinksSection(&b, links.NodeURL(host, path))
 	h.writeSiblingsSection(&b, host, path, token)
 
@@ -111,8 +112,9 @@ func (h *handler) writeBacklinksSection(b *strings.Builder, fullURL string) {
 		return
 	}
 	lines := make([]string, len(backlinks))
-	for i, bl := range backlinks {
-		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count)
+	for i := range backlinks {
+		bl := &backlinks[i]
+		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count) + bl.Observation.Annotation()
 		if bl.Title != "" {
 			lines[i] = fmt.Sprintf("- [%s](%s)%s", bl.Title, bl.URL, ann)
 		} else {

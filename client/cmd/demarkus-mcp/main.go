@@ -188,7 +188,7 @@ func (h *handler) seenRecord(key string, d fetchdedup.Doc) {
 const seedCheckInterval = 5 * time.Minute
 
 // seedGraph refreshes from the published graph so cold backlink queries work.
-// Local crawls stay authoritative; failures warn and leave current state intact.
+// Source revisions select adjacency; failures preserve last-good observations.
 func (h *handler) seedGraph(ctx context.Context, host string) { //nolint:gocyclo // snapshot-first fallback has explicit terminal states
 	if h.graphStore == nil || h.client == nil || host == "" || ctx.Err() != nil {
 		return
@@ -217,6 +217,9 @@ func (h *handler) seedGraph(ctx context.Context, host string) { //nolint:gocyclo
 	h.seedMu.Unlock()
 	success := false
 	defer func() {
+		if !success {
+			h.graphStore.MarkSeedFailure(host)
+		}
 		h.seedMu.Lock()
 		if success {
 			h.seedChecked[host] = time.Now()
@@ -1345,17 +1348,7 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	// Seed before crawling so depth-limited crawls still benefit from hub context.
 	h.seedGraph(ctx, host)
 
-	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, func(ctx context.Context, host, path string) (graph.FetchResult, error) {
-		r, fetchErr := h.client.FetchContext(ctx, host, path, h.resolveToken(host))
-		if fetchErr != nil {
-			return graph.FetchResult{}, fetchErr
-		}
-		return graph.FetchResult{
-			Status:   r.Response.Status,
-			Body:     r.Response.Body,
-			Metadata: r.Response.Metadata,
-		}, nil
-	}, fetch.ParseMarkURL, graphstore.CrawlOptions{
+	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, h.graphFetch, fetch.ParseMarkURL, graphstore.CrawlOptions{
 		MaxDepth: depth,
 		MaxNodes: 200,
 		Workers:  5,
@@ -1378,7 +1371,7 @@ func formatGraph(g *graph.Graph, startURL string) string {
 func markBacklinksTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_backlinks",
 		mcp.WithDescription(
-			"Documents linking to a URL, from local graph store (seeded from world /graph.md; mark_graph crawls take precedence). Entries show provenance and typed relations. mark_explore includes same list. "+urlHint(host),
+			"Documents linking to a URL, from revision-aware local graph store. Bounded source revalidation; entries show freshness, provenance and typed relations. mark_explore includes same list. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -1407,17 +1400,20 @@ func (h *handler) markBacklinks(ctx context.Context, req mcp.CallToolRequest) (*
 
 	h.seedGraph(ctx, host)
 
+	freshness := h.revalidateBacklinks(ctx, fullURL)
 	backlinks := h.graphStore.BacklinksEnriched(fullURL)
 	if len(backlinks) == 0 {
 		return mcp.NewToolResultText(
-			fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the graph store.", fullURL),
+			freshness + fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the graph store.", fullURL),
 		), nil
 	}
 
 	var b strings.Builder
+	b.WriteString(freshness)
 	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", fullURL, len(backlinks))
-	for _, bl := range backlinks {
-		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count)
+	for i := range backlinks {
+		bl := &backlinks[i]
+		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count) + bl.Observation.Annotation()
 		if bl.Title != "" {
 			fmt.Fprintf(&b, "- [%s](%s)%s\n", bl.Title, bl.URL, ann)
 		} else {

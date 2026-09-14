@@ -109,7 +109,9 @@ func TestHandlerMarkExplore_BacklinksFromStore(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://host:6309/a.md", Title: "Page A", Status: "ok"})
+	observation := graph.Observe("mark://host/a.md", map[string]string{"version": "2"})
+	observation.Complete = true
+	g.AddNode(&graph.Node{URL: "mark://host:6309/a.md", Title: "Page A", Status: "ok", Observation: observation})
 	g.AddNode(&graph.Node{URL: "mark://host:6309/hub.md", Title: "Hub", Status: "ok"})
 	g.AddEdge("mark://host:6309/a.md", "mark://host:6309/hub.md")
 	gs.Merge(g, nil)
