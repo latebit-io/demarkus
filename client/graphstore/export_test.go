@@ -1,9 +1,13 @@
 package graphstore
 
 import (
+	"bytes"
+	"log"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/client/graph"
 )
 
 func TestExport(t *testing.T) {
@@ -86,6 +90,49 @@ func TestBuildExportNormalizesEmptyStatus(t *testing.T) {
 	}
 	if len(nodes) != 1 || nodes[0].Status != "external" {
 		t.Fatalf("nodes = %+v", nodes)
+	}
+}
+
+func TestExportObservationHeadingOnlyMatchesSections(t *testing.T) {
+	for _, title := range []string{"## Source observations", "See ## Source observations for details"} {
+		t.Run(title, func(t *testing.T) {
+			body := BuildExport(time.Now(), []StoredNode{{URL: "mark://host/a.md", Title: title, Status: "ok"}},
+				[]StoredEdge{{From: "mark://host/a.md", To: "mark://host/b.md", Label: "## Source observations", Count: 1}})
+			nodes, edges, err := ParseExportStrict(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(nodes) != 1 || nodes[0].Title != title || len(edges) != 1 || nodes[0].Observation.Freshness() != "unknown" {
+				t.Fatalf("legacy export changed: nodes=%+v edges=%+v", nodes, edges)
+			}
+			for _, suffix := range []string{"\n## Source observations", "\n## Source observations\n", "\n## Source observations \n"} {
+				if _, _, err := ParseExportStrict(body + suffix); err == nil {
+					t.Fatalf("accepted malformed observation section %q", suffix)
+				}
+			}
+		})
+	}
+}
+
+func TestExportInvalidObservationTimeLogsAndRetainsLegacyOutput(t *testing.T) {
+	observation := graph.Observe("mark://host/a.md", map[string]string{"version": "3"})
+	observation.Complete = true
+	observation.ObservedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	var output bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+	body := BuildExport(time.Now(), []StoredNode{{URL: "mark://host/a.md", Status: "ok", Observation: observation}}, nil)
+	log.SetOutput(previousWriter)
+	if !strings.Contains(output.String(), "marshal graph source observations") || !strings.Contains(output.String(), "year outside of range") {
+		t.Fatalf("marshal failure not logged: %s", output.String())
+	}
+	if !strings.Contains(body, "Source observations unavailable: invalid observation time.") || strings.Contains(body, observationSection) {
+		t.Fatalf("legacy fallback changed: %s", body)
+	}
+	nodes, _, err := ParseExportStrict(body)
+	if err != nil || len(nodes) != 1 || nodes[0].Observation.Freshness() != "unknown" {
+		t.Fatalf("fallback parse: nodes=%+v err=%v", nodes, err)
 	}
 }
 

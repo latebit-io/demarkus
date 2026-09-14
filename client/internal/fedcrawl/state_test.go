@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestLoadStateNonexistent(t *testing.T) {
@@ -68,6 +71,38 @@ func TestStateRoundTrip(t *testing.T) {
 	}
 	if sv.DocumentCount != 2 {
 		t.Errorf("DocumentCount = %d, want 2", sv.DocumentCount)
+	}
+}
+
+func TestRecordObservationRegressionPersistsAttempt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	state, err := LoadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const source = "mark://host/a.md"
+	observed := time.Now().Add(-time.Hour).UTC()
+	state.urls[source] = URLState{
+		URL: source, Status: "ok", Etag: "new-etag", ContentHash: "new-hash", LastVisited: observed,
+		Observation: graph.Observation{Source: source, View: graph.ViewDocument, Revision: 7, Etag: "new-etag", Complete: true, ObservedAt: observed, AttemptedAt: observed},
+	}
+	state.RecordObservation("mark://host:6309/a.md", &protocol.Response{Status: "ok", Metadata: map[string]string{"version": "3", "etag": "old-etag", "content-hash": "old-hash"}})
+	if err := state.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := reloaded.GetURL(source)
+	if node == nil {
+		t.Fatal("source missing after reload")
+	}
+	if node.Observation.Problem != "revision-regression" || !node.Observation.AttemptedAt.Equal(node.LastVisited) || !node.LastVisited.After(observed) {
+		t.Fatalf("regression attempt was not recorded: %+v", node)
+	}
+	if node.Status != "ok" || node.Etag != "new-etag" || node.ContentHash != "new-hash" || node.Observation.Revision != 7 || node.Observation.Etag != "new-etag" || !node.Observation.ObservedAt.Equal(observed) {
+		t.Fatalf("older response replaced last-good evidence: %+v", node)
 	}
 }
 

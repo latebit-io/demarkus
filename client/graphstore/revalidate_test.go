@@ -33,14 +33,25 @@ func TestRevalidationSingleFlightAndCancellation(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, err := store.Revalidate(ctx, nil, fetchFn, fetch.ParseMarkURL); done <- err }()
-	<-started
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("revalidation finished before fetching: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("revalidation did not start")
+	}
 	second, err := store.Revalidate(t.Context(), nil, fetchFn, fetch.ParseMarkURL)
 	if err != nil || second.Attempts != 0 {
 		t.Fatalf("duplicate revalidation: %+v, %v", second, err)
 	}
 	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancellation lost: %v", err)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation lost: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("revalidation did not stop after cancellation")
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("fetches = %d", calls.Load())

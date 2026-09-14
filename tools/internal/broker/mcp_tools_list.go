@@ -300,7 +300,7 @@ func markIndexTool() mcp.Tool {
 func markBacklinksTool() mcp.Tool {
 	return mcp.NewTool("mark_backlinks",
 		mcp.WithDescription(
-			"Documents linking to a URL, from revision-aware broker graph store (per-pod). Bounded source revalidation; entries show freshness, provenance and typed relations. mark_explore includes same list. "+mcpURLHint,
+			"Documents linking to a URL, from revision-aware broker graph store (per-pod). Bounded source revalidation; freshness, provenance and typed relations also appear in mark_explore. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),

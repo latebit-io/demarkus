@@ -141,8 +141,7 @@ func backlinksList(gs *graphstore.Store, url string) []graphListItem {
 	}
 	entries := gs.BacklinksEnriched(url)
 	items := make([]graphListItem, 0, len(entries))
-	for i := range entries {
-		e := &entries[i]
+	for _, e := range entries {
 		items = append(items, graphListItem{
 			url:         e.URL,
 			title:       e.Title,
@@ -189,8 +188,7 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 	var b strings.Builder
 	b.WriteString("\n  Document Graph\n\n")
 
-	for i := range items {
-		item := &items[i]
+	for i, item := range items {
 		label := item.title
 		if label == "" {
 			label = item.url
@@ -271,8 +269,7 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 		return b.String()
 	}
 
-	for i := range items {
-		item := &items[i]
+	for i, item := range items {
 		label := item.title
 		if label == "" {
 			label = item.url
@@ -307,8 +304,7 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 		return b.String()
 	}
 
-	for i := range items {
-		item := &items[i]
+	for i, item := range items {
 		label := item.title
 		if label == "" {
 			label = item.url

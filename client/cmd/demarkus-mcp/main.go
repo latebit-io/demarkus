@@ -219,6 +219,9 @@ func (h *handler) seedGraph(ctx context.Context, host string) { //nolint:gocyclo
 	defer func() {
 		if !success {
 			h.graphStore.MarkSeedFailure(host)
+			if err := h.graphStore.Save(); err != nil {
+				log.Printf("warning: graph seed failure save: %v", err)
+			}
 		}
 		h.seedMu.Lock()
 		if success {
@@ -1371,7 +1374,7 @@ func formatGraph(g *graph.Graph, startURL string) string {
 func markBacklinksTool(host string) mcp.Tool {
 	return mcp.NewTool("mark_backlinks",
 		mcp.WithDescription(
-			"Documents linking to a URL, from revision-aware local graph store. Bounded source revalidation; entries show freshness, provenance and typed relations. mark_explore includes same list. "+urlHint(host),
+			"Documents linking to a URL, from revision-aware local graph store. Bounded source revalidation; freshness, provenance and typed relations also appear in mark_explore. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
@@ -1411,8 +1414,7 @@ func (h *handler) markBacklinks(ctx context.Context, req mcp.CallToolRequest) (*
 	var b strings.Builder
 	b.WriteString(freshness)
 	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", fullURL, len(backlinks))
-	for i := range backlinks {
-		bl := &backlinks[i]
+	for _, bl := range backlinks {
 		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count) + bl.Observation.Annotation()
 		if bl.Title != "" {
 			fmt.Fprintf(&b, "- [%s](%s)%s\n", bl.Title, bl.URL, ann)

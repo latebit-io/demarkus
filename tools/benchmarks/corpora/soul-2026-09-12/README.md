@@ -93,6 +93,11 @@ freshness correctness, direct revalidation costs, mechanical regressions and eve
 prior attempt. The proxy disables `mark_graph`; these totals check ordinary
 lookup/fetch retrieval, not graph-assisted answer gains. Fixed baseline unchanged.
 
+[`after-source-freshness-review.json`](after-source-freshness-review.json) preserves
+the PR 451 review rerun: 16/16 correct, 93,815 model tokens, 12,364 tool-result
+tokens and 52 protocol requests. The slice report keeps the runner's process
+attribution limitation explicit; earlier reports remain unchanged.
+
 ## Rebuild an artifact deliberately
 
 Use new output filenames; pack never overwrites an artifact or manifest:

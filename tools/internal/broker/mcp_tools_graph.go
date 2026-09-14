@@ -273,8 +273,7 @@ func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRe
 	var b strings.Builder
 	b.WriteString(freshness)
 	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", raw, len(backlinks))
-	for i := range backlinks {
-		bl := &backlinks[i]
+	for _, bl := range backlinks {
 		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count) + bl.Observation.Annotation()
 		if bl.Title != "" {
 			fmt.Fprintf(&b, "- [%s](%s)%s\n", bl.Title, bl.URL, ann)

@@ -1,7 +1,8 @@
 # Revision-aware graph freshness
 
-Revision-aware source observations are implemented and verified on
-`feat/graph-source-freshness`, based on clean `b70cf87`; changes remain uncommitted.
+Revision-aware source observations were implemented on `feat/graph-source-freshness`,
+based on clean `b70cf87`, and committed as `a925813`. PR review corrections below
+remain uncommitted.
 Design: [ADR 0013](../../../docs/adr/0013-graph-source-freshness.md),
 [SPEC 12.2](../../../docs/SPEC.md#122-atomic-graph-snapshots), and the
 [soul plan](mark://soul.demarkus.io/plans/graph-focus/source-freshness.md).
@@ -105,6 +106,10 @@ Corpus, model `openai/gpt-6-astra`, low variant, OpenCode 1.18.30, section-first
 policy, eight steps, three-minute task timeout, two repeats, tasks, rubric and
 `section-provenance-v2` scorer remained fixed. Server startup and the expected
 52 protocol requests were verified. Strict comparison passes with complete usage.
+This is a conditional ordinary-retrieval check, not process-owned release evidence:
+the runner does not bind responses to the child process or verify its continued
+liveness. Free-port and startup-log checks reduce accidental reuse but do not
+establish that guarantee.
 
 | Measurement | Baseline | Current |
 |---|---:|---:|
@@ -145,5 +150,55 @@ Earlier answer directories retain:
 The runner currently verifies an answering fixture, not ownership of the process
 that answered. A bind failure can therefore yield an apparently successful replay.
 This operational finding is recorded without changing the frozen runner or scorer.
+Authoritative process-owned evidence would require per-run endpoint or authentication
+nonce validation, child ownership/liveness checks, and a separate regenerated run.
 The mechanical runner's untracked-input guard blocked the first run; the user
 explicitly authorized staging the nine new implementation, test and ADR files.
+
+## PR review corrections
+
+[PR 451](https://github.com/latebit-io/demarkus/pull/451) feedback was checked against
+`a925813`. Existing value-range cleanup remains included. Seven comments are
+addressed locally:
+
+| Finding | Correction |
+|---|---|
+| Failed seed diagnostics vanished after restart | Save immediately after failure marking; log save errors |
+| Tool descriptions exceeded three sentences | Shorten both variants while preserving URL hints |
+| Observation marshaling error lacked diagnostics | Log the actual error and retain legacy fallback output |
+| Heading text in titles rejected valid exports | Detect a complete header line; still reject malformed real sections |
+| Revalidation test could wait forever | Bound startup and cancellation-completion waits |
+| Older federation revisions lost attempt state | Advance attempt time and record regression while retaining last-good fields |
+| Replay implied process-owned evidence | Make conditional attribution explicit; frozen runner and scorer unchanged |
+
+Regressions reproduced the parser, logging and persisted-state defects before the
+fixes. Round trips now retain seed-failure diagnostics and older-revision attempt
+state without losing source revision, etag, content hash or outgoing evidence.
+Failed seed refreshes now incur a disk save; the in-memory validation benchmark
+does not measure that filesystem path.
+Full client tests, producer/consumer contracts, affected client races,
+broker/retrieval races and `bash pre-commit.sh` pass. The generic docstring-coverage
+warning remains subordinate to the repository's terse-comment policy.
+
+Mechanical rerun: `tools/benchmarks/artifacts/graph-source-freshness-review-2026-09-14/`,
+complete; working-tree diff hash `5e5c76336ebebfdf51d324377a993ece5c733f31`.
+Six samples, 200 ms, CPU 1; same fixed harness and dependency hashes. Correctness
+counters remain zero for silent incomplete outcomes, wrong targets, tenant leaks
+and missing own sources. Complete/capped/pre-cancelled work counters remain
+101/100/101, 10/100/10 and 0/0/0 nodes/edges/FETCHes respectively.
+
+Against the fixed pre-roadmap baseline: complete crawl median 2.475 ms (+11.13%),
+100k-edge restore 553.7 ms (+36.11%), tenant backlinks 4.444 us (+56.96%), tenant
+explore 40.62 us (+7.62%). Unchanged paths also vary; these movements are not
+attributed solely to the review fixes. Allocation costs remain as previously
+recorded. Direct validation still uses one FETCH/51 decoded bytes and zero repeat
+FETCHes: median setup/validation/repeat 28.3035 us, 74,075 B/op, 529 allocations.
+
+Frozen rerun: `tools/benchmarks/artifacts/answers-source-freshness-review-2026-09-14/`;
+metrics-only [after-source-freshness-review.json](../corpora/soul-2026-09-12/after-source-freshness-review.json).
+Result: 16/16 correct, complete usage, 93,815 model tokens, 5,863.4375 per correct
+(-1.2900% against the fixed baseline), 12,364 tool-result tokens, 50 turns,
+36 MCP calls and 52 protocol requests. Strict comparison passes. This is still
+conditional ordinary-retrieval regression data, not process-owned release evidence
+or a graph-assisted gain. Corpus, model, policy, tasks, rubric and scorer are fixed;
+all prior reports, archive and raw traces remain preserved.

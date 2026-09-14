@@ -158,10 +158,13 @@ func (s *State) RecordObservation(url string, response *protocol.Response) {
 	observation.Complete = graph.SourceComplete(&graph.Node{Status: response.Status})
 	previous := s.urls[url]
 	previous.URL, previous.LastVisited = url, observation.AttemptedAt
-	if !observation.Complete {
+	previous.Observation.AttemptedAt = observation.AttemptedAt
+	switch {
+	case !observation.Complete:
 		previous.Observation.Problem = "incomplete"
-		previous.Observation.AttemptedAt = observation.AttemptedAt
-	} else if graph.CompareRevision(&observation, &previous.Observation) != "older" {
+	case graph.CompareRevision(&observation, &previous.Observation) == "older":
+		previous.Observation.Problem = "revision-regression"
+	default:
 		previous.Status = response.Status
 		previous.Etag, previous.ContentHash = observation.Etag, response.Metadata["content-hash"]
 		previous.Observation = observation

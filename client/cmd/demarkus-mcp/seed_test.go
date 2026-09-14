@@ -269,6 +269,54 @@ func TestSeedGraph_FetchErrorDegrades(t *testing.T) {
 	}
 }
 
+func TestSeedGraph_FailurePersistsLastGoodDiagnostics(t *testing.T) {
+	for _, failure := range []string{"snapshot", "legacy"} {
+		t.Run(failure, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "graph.json")
+			store, err := graphstore.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observation := graph.Observe("mark://host/a.md", map[string]string{"version": "3", "etag": "source-etag"})
+			observation.Complete = true
+			store.ReplaceSeed("host:6309", []graphstore.StoredNode{{URL: "mark://host/a.md", Title: "Last good", Status: "ok", Observation: observation}},
+				[]graphstore.StoredEdge{{From: "mark://host/a.md", To: "mark://host/b.md", Count: 2}})
+			store.SetSeedEtag("host:6309", "last-good-export")
+			if err := store.Save(); err != nil {
+				t.Fatal(err)
+			}
+			sc := &stubClient{
+				snapshotFn: func(_, _, _, _ string) (fetch.Result, error) {
+					if failure == "snapshot" {
+						return fetch.Result{}, errors.New("snapshot unavailable")
+					}
+					return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+				},
+				fetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+					return fetch.Result{}, errors.New("legacy export unavailable")
+				},
+			}
+			h := &handler{client: sc, graphStore: store}
+			h.seedGraph(t.Context(), "host:6309")
+			reloaded, err := graphstore.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			node := reloaded.GetNode("mark://host/a.md")
+			if node == nil || node.Title != "Last good" || node.Observation.Problem != "seed-refresh-failed" || node.Observation.Freshness() != "stale" {
+				t.Fatalf("failed seed diagnostic lost after reload: %+v", node)
+			}
+			if node.Observation.Revision != 3 || node.Observation.Etag != "source-etag" || !node.Observation.ObservedAt.Equal(observation.ObservedAt) {
+				t.Fatalf("last-good observation changed: %+v", node.Observation)
+			}
+			backlinks := reloaded.BacklinksEnriched("mark://host/b.md")
+			if len(backlinks) != 1 || backlinks[0].Count != 2 || reloaded.SeedEtag("host:6309") != "last-good-export" {
+				t.Fatalf("last-good graph changed: %+v", backlinks)
+			}
+		})
+	}
+}
+
 func TestSeedGraph_LocalCrawlWins(t *testing.T) {
 	gs := emptyGraphStore(t)
 	// Local crawl observed a.md linking only to c.md.

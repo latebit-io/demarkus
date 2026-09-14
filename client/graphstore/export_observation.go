@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/graph"
@@ -29,6 +30,7 @@ func writeExportObservations(b *strings.Builder, nodes []StoredNode) {
 	}
 	encoded, err := json.Marshal(observations)
 	if err != nil {
+		log.Printf("warning: marshal graph source observations: %v", err)
 		b.WriteString("\nSource observations unavailable: invalid observation time.\n")
 		return
 	}
@@ -38,7 +40,14 @@ func writeExportObservations(b *strings.Builder, nodes []StoredNode) {
 }
 
 func readExportObservations(body string, nodes []StoredNode) error {
-	if !strings.Contains(body, "## Source observations") {
+	hasSection := false
+	for line := range strings.SplitSeq(body, "\n") {
+		if strings.TrimSpace(line) == "## Source observations" {
+			hasSection = true
+			break
+		}
+	}
+	if !hasSection {
 		return nil
 	}
 	_, payload, found := strings.Cut(body, observationSection)
