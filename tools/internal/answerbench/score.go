@@ -44,7 +44,12 @@ type Score struct {
 var versionPath = regexp.MustCompile(`^(/.*\.md)/v([1-9]\d*)$`)
 
 const scoringVersion = "section-provenance-v2"
-const independentScoringVersion = "independent-evidence-v1"
+const independentScoringVersionV1 = "independent-evidence-v1"
+const independentScoringVersion = "independent-evidence-v2"
+
+func validIndependentScoringVersion(version string) bool {
+	return version == independentScoringVersionV1 || version == independentScoringVersion
+}
 
 func location(raw, host string) (Evidence, error) {
 	u, err := url.Parse(raw)
@@ -151,7 +156,10 @@ func (f *Fixture) scoreScoped(task Task, trace *Trace, host string) (Score, erro
 		score.EvidenceSufficient = assessment.sufficient
 		score.ScopeComplete = completionObserved(rubric.Completion, trace)
 		score.Reasons = assessment.reasons
-		score.Correct = score.AnswerCorrect && score.CitationsValid && score.EvidenceSufficient && score.ScopeComplete
+		score.Correct = score.AnswerCorrect && score.CitationsValid && score.EvidenceSufficient
+		if f.scoringVersion() == independentScoringVersionV1 {
+			score.Correct = score.Correct && score.ScopeComplete
+		}
 	case "not-found", "incomplete":
 		empty := answer.Abstain && len(answer.Answer) == 0 && len(answer.Citations) == 0
 		score.AnswerCorrect = score.AnswerCorrect && empty

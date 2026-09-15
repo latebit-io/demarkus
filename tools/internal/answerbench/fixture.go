@@ -289,6 +289,9 @@ func validateCompletion(task Task, outcome string, completion *Completion) error
 }
 
 func (f *Fixture) scoringVersion() string {
+	if f.Dataset != nil {
+		return f.Dataset.ScoringVersion
+	}
 	if len(f.Tasks) > 0 && f.Tasks[0].Scope != "" {
 		return independentScoringVersion
 	}

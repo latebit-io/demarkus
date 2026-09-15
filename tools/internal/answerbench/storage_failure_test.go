@@ -1,6 +1,7 @@
 package answerbench
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -95,5 +96,53 @@ func TestRunSurfacesLostIndexBeforeReadiness(t *testing.T) {
 	}
 	if report.Summary.UsageComplete || len(report.Attempts) != 0 {
 		t.Fatalf("invalid run accepted: %+v", report.Summary)
+	}
+}
+
+func TestRunAttemptDoesNotReportCleanupCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell process fixture")
+	}
+	bin := filepath.Join(t.TempDir(), "fake-opencode")
+	script := `#!/bin/sh
+printf '%s\n' \
+'{"type":"step_start","sessionID":"session","part":{"id":"start","messageID":"message"}}' \
+'{"type":"text","sessionID":"session","part":{"id":"text","messageID":"message","text":"{}"}}' \
+'{"type":"step_finish","sessionID":"session","part":{"id":"finish","messageID":"message","reason":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}'
+`
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	serverCancel, server := startHelper(t)
+	defer func() {
+		if err := server.stop(serverCancel); err != nil {
+			t.Error(err)
+		}
+	}()
+	serverLog, err := os.Create(filepath.Join(t.TempDir(), "server.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := serverLog.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	cfg := Config{OpenCode: bin, MCP: bin, Proxy: bin, Output: t.TempDir(), ReaderPolicy: "section-first", Steps: 1, Timeout: time.Second}
+	attempt, err := runAttempt(t.Context(), &cfg, &attemptInput{task: Task{ID: "q1", Fields: map[string]string{"value": "string"}}, repeat: 1, work: t.TempDir(), serverLog: serverLog, server: server})
+	if err != nil {
+		t.Fatalf("successful reader reported cleanup failure: %v", err)
+	}
+	if !attempt.Trace.UsageComplete {
+		t.Fatal("completed reader usage marked incomplete")
+	}
+	slow := filepath.Join(t.TempDir(), "slow-opencode")
+	if err := os.WriteFile(slow, []byte("#!/bin/sh\nsleep 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCode, cfg.Output, cfg.Timeout = slow, t.TempDir(), 10*time.Millisecond
+	_, err = runAttempt(t.Context(), &cfg, &attemptInput{task: Task{ID: "q1", Fields: map[string]string{"value": "string"}}, repeat: 1, work: t.TempDir(), serverLog: serverLog, server: server})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("reader timeout not reported: %v", err)
 	}
 }

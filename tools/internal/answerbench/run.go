@@ -503,10 +503,10 @@ func runAttempt(ctx context.Context, cfg *Config, input *attemptInput) (attempt 
 	case <-input.server.Done():
 		runErr = fmt.Errorf("fixture server exited during task: %v", input.server.Err())
 	}
-	runErr = errors.Join(runErr, process.stop(cancel))
 	if ctx.Err() != nil {
 		runErr = errors.Join(runErr, ctx.Err())
 	}
+	runErr = errors.Join(runErr, process.stop(cancel))
 	attempt.ElapsedMS = float64(time.Since(start).Microseconds()) / 1000
 	if _, err := stdout.Seek(0, io.SeekStart); err != nil {
 		return attempt, errors.Join(runErr, err)

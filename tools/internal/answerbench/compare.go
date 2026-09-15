@@ -147,7 +147,7 @@ func validateDatasetContract(report *Report) error {
 		if report.Spec.Dataset == "" || report.Spec.DatasetHash == "" || report.Spec.Hashes["dataset"] == "" || report.Spec.ReaderContractHash == "" {
 			return fmt.Errorf("independent report lacks dataset identity")
 		}
-		if report.Spec.ScoringVersion != independentScoringVersion || report.Lifecycle.ToolProfile != "scoped-direct-read-v1" {
+		if !validIndependentScoringVersion(report.Spec.ScoringVersion) || report.Lifecycle.ToolProfile != "scoped-direct-read-v1" {
 			return fmt.Errorf("independent report lacks scoped scorer contract")
 		}
 	} else if report.Spec.Dataset != "" || report.Spec.DatasetHash != "" || report.Spec.Hashes["dataset"] != "" {

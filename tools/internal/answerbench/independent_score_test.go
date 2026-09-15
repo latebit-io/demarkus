@@ -66,8 +66,13 @@ func TestIndependentScoreSeparatesAnswerEvidenceAndCitations(t *testing.T) {
 	_, _, scopeTrace := scopedAnswerFixture(t, "q2")
 	scopeTrace.Calls = scopeTrace.Calls[1:]
 	score, err = f.Score("q2", &scopeTrace, "127.0.0.1:16319")
-	if err != nil || score.Correct || !score.AnswerCorrect || !score.EvidenceSufficient || !score.CitationsValid || score.ScopeComplete {
+	if err != nil || !score.Correct || !score.AnswerCorrect || !score.EvidenceSufficient || !score.CitationsValid || score.ScopeComplete {
 		t.Fatalf("missing scope completion dimensions=%+v err=%v", score, err)
+	}
+	f.Dataset = &DatasetManifest{ScoringVersion: independentScoringVersionV1}
+	score, err = f.Score("q2", &scopeTrace, "127.0.0.1:16319")
+	if err != nil || score.Correct || score.ScopeComplete {
+		t.Fatalf("v1 accepted missing scope completion: score=%+v err=%v", score, err)
 	}
 }
 

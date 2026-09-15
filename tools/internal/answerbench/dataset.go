@@ -72,7 +72,7 @@ func validateDataset(dataset *DatasetManifest, manifest *CorpusManifest, fixture
 	if dataset.ArchiveManifestSHA256 != digest(manifestRaw) || dataset.CorpusSHA256 != fixture.Hashes["corpus"] || dataset.TasksSHA256 != fixture.Hashes["tasks"] || dataset.RubricSHA256 != fixture.Hashes["rubric"] {
 		return errors.New("answer dataset input hash mismatch")
 	}
-	if dataset.ScoringVersion != independentScoringVersion || dataset.ToolProfile != "scoped-direct-read-v1" {
+	if !validIndependentScoringVersion(dataset.ScoringVersion) || dataset.ToolProfile != "scoped-direct-read-v1" {
 		return errors.New("answer dataset scorer or tool profile mismatch")
 	}
 	contract, err := readerContract(dataset.ReaderPolicy)

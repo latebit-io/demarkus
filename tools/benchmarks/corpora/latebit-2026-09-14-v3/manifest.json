@@ -1,0 +1,13 @@
+{
+  "format": "demarkus-corpus-jsonl-gzip-v1",
+  "id": "latebit-2026-09-14-v3",
+  "source": "mark://latebit",
+  "artifact": "latebit-2026-09-14-v1.jsonl.gz",
+  "sha256": "sha256-e1947391664e97b9d5f9dbd9f6ac7ce75c58482e340c2ecd323be47f8772abaa",
+  "corpus_sha256": "sha256-0ab529782e64685492a6c659adba18df3b8fd04430c18e46bb22050096eb19b9",
+  "compressed_bytes": 81163,
+  "uncompressed_bytes": 252453,
+  "documents": 38,
+  "active_documents": 37,
+  "versions": 52
+}

@@ -61,7 +61,7 @@ func TestDatasetRescoreRequiresAndUpdatesReaderContract(t *testing.T) {
 	}
 	contractHash := digest([]byte(contract))
 	f.Hashes["dataset"] = "new-dataset"
-	f.Dataset = &DatasetManifest{ID: "dataset-v2", Source: "mark://fixture", ToolProfile: "scoped-direct-read-v1", ReaderPolicy: "section-first", ReaderContractSHA256: contractHash}
+	f.Dataset = &DatasetManifest{ID: "dataset-v2", Source: "mark://fixture", ScoringVersion: independentScoringVersion, ToolProfile: "scoped-direct-read-v1", ReaderPolicy: "section-first", ReaderContractSHA256: contractHash}
 	hashes := make(map[string]string, len(f.Hashes))
 	maps.Copy(hashes, f.Hashes)
 	hashes["dataset"] = "old-dataset"
@@ -84,6 +84,9 @@ func TestDatasetRescoreRequiresAndUpdatesReaderContract(t *testing.T) {
 	}
 	if rescored.Spec.DatasetHash != "new-dataset" || rescored.Spec.Hashes["dataset"] != "new-dataset" {
 		t.Fatalf("dataset hashes not updated: %+v", rescored.Spec)
+	}
+	if err := validateReport(&rescored); err != nil {
+		t.Fatalf("rescored report is invalid: %v", err)
 	}
 	report.Spec.ReaderContractHash = "other-contract"
 	if err := writeJSON(before, report); err != nil {
