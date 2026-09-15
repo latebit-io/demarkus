@@ -499,14 +499,14 @@ func runAttempt(ctx context.Context, cfg *Config, input *attemptInput) (attempt 
 	var runErr error
 	select {
 	case <-process.Done():
-		runErr = process.Err()
+		runErr = wrapProcessError("reader process", process.Err())
 	case <-input.server.Done():
 		runErr = fmt.Errorf("fixture server exited during task: %v", input.server.Err())
 	}
 	if ctx.Err() != nil {
 		runErr = errors.Join(runErr, ctx.Err())
 	}
-	runErr = errors.Join(runErr, process.stop(cancel))
+	runErr = errors.Join(runErr, wrapProcessError("stop reader process", process.stop(cancel)))
 	attempt.ElapsedMS = float64(time.Since(start).Microseconds()) / 1000
 	if _, err := stdout.Seek(0, io.SeekStart); err != nil {
 		return attempt, errors.Join(runErr, err)

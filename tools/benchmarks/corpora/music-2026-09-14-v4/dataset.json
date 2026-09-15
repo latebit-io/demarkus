@@ -1,0 +1,14 @@
+{
+  "format": "demarkus-answer-dataset-v1",
+  "id": "music-2026-09-14-v4",
+  "source": "mark://music",
+  "archive_manifest_sha256": "sha256-15f3218200e9dd44b44b0be0d500dacb96b3045863b92bd1d713bf5cb0a31e49",
+  "corpus_sha256": "sha256-8054f289f92773e5eee3fde239688b68f12d6104c2cee6fa122818ea4a02767a",
+  "tasks_sha256": "sha256-da7139de8d892476aa0f9dcf816d64ad5ebb32f65a03ae88170e5156065d154f",
+  "rubric_sha256": "sha256-76b927aa8d717f57ed76e0137cbd33d243248f226b2be3b1e9a77b74caaaa08b",
+  "scoring_version": "independent-evidence-v2",
+  "tool_profile": "scoped-direct-read-v1",
+  "reader_policy": "section-first-outcome-v2",
+  "reader_contract_sha256": "sha256-fb7eae39554b8ec11b3ca494a9f814999d7bdbc934908d3686a5e9d0b1ac487b",
+  "authored": "2026-09-15"
+}

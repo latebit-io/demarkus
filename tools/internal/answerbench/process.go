@@ -76,19 +76,19 @@ func (p *managedProcess) stop(cancel context.CancelFunc) error {
 	}
 	select {
 	case <-p.done:
-		return errors.Join(stopErr, killChild(p.cmd), p.releaseOwnedTree())
+		return errors.Join(wrapProcessError("terminate child process", stopErr), wrapProcessError("kill child process tree", killChild(p.cmd)), wrapProcessError("release child process tree", p.releaseOwnedTree()))
 	case <-time.After(4 * time.Second):
 	}
 	killErr := killChild(p.cmd)
 	releaseErr := p.releaseOwnedTree()
 	if killErr != nil || releaseErr != nil {
-		return errors.Join(stopErr, wrapProcessError("kill child process", killErr), wrapProcessError("kill child process tree", releaseErr))
+		return errors.Join(wrapProcessError("terminate child process", stopErr), wrapProcessError("kill child process tree", killErr), wrapProcessError("release child process tree", releaseErr))
 	}
 	select {
 	case <-p.done:
-		return errors.Join(stopErr, killChild(p.cmd))
+		return errors.Join(wrapProcessError("terminate child process", stopErr), wrapProcessError("kill child process tree", killChild(p.cmd)))
 	case <-time.After(time.Second):
-		return errors.Join(stopErr, errors.New("child process did not exit after kill"))
+		return errors.Join(wrapProcessError("terminate child process", stopErr), errors.New("child process did not exit after kill"))
 	}
 }
 

@@ -60,7 +60,7 @@ func run() error {
 	flag.StringVar(&cfg.Corpus, "corpus", "", "copied versioned store root; synthetic fixture when empty")
 	flag.StringVar(&cfg.Questions, "questions", "", "directory with tasks.json and rubric.json for copied corpus")
 	flag.StringVar(&cfg.Origin, "origin", "", "logical origin for copied corpus, e.g. mark://soul.demarkus.io")
-	flag.StringVar(&cfg.ReaderPolicy, "reader-policy", "section-first", "reader policy: section-first or budget-body (original baseline)")
+	flag.StringVar(&cfg.ReaderPolicy, "reader-policy", "section-first", "reader policy: section-first-outcome-v2, section-first, or budget-body")
 	flag.IntVar(&cfg.Port, "port", 16319, "unused local fixture port")
 	flag.IntVar(&cfg.Repeats, "repeats", 2, "fresh sessions per question")
 	flag.IntVar(&cfg.Steps, "steps", 8, "maximum reader iterations")

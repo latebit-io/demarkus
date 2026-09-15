@@ -66,3 +66,22 @@ func TestPolicyPreservesGradingContractAndLegacyPrompt(t *testing.T) {
 		t.Fatalf("legacy implicit policy rejected: %v", err)
 	}
 }
+
+func TestScopedOutcomeV2PinsCompleteOutputContract(t *testing.T) {
+	prompt, err := policyPrompt("section-first-outcome-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"outcome": "answered"`, `"outcome":"not-found"`, `"outcome":"incomplete"`} {
+		if !strings.Contains(prompt, field) {
+			t.Fatalf("scoped output contract lacks %s", field)
+		}
+	}
+	contract, err := readerContract("section-first-outcome-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := digest([]byte(contract)); got != "sha256-fb7eae39554b8ec11b3ca494a9f814999d7bdbc934908d3686a5e9d0b1ac487b" {
+		t.Fatalf("scoped reader contract hash = %s", got)
+	}
+}

@@ -30,6 +30,14 @@ func killChild(cmd *exec.Cmd) error {
 	if errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
+	if errors.Is(err, syscall.EPERM) && cmd.ProcessState != nil {
+		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
+			if probeErr := syscall.Kill(-cmd.Process.Pid, 0); errors.Is(probeErr, syscall.ESRCH) {
+				return nil
+			}
+		}
+	}
 	return err
 }
 

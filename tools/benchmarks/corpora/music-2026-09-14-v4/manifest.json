@@ -1,0 +1,13 @@
+{
+  "format": "demarkus-corpus-jsonl-gzip-v1",
+  "id": "music-2026-09-14-v4",
+  "source": "mark://music",
+  "artifact": "music-2026-09-14-v1.jsonl.gz",
+  "sha256": "sha256-9a99cb197827d884170db243e2e07a1cb6f6bf3ad853d663f4b3c7f3da8747b6",
+  "corpus_sha256": "sha256-8054f289f92773e5eee3fde239688b68f12d6104c2cee6fa122818ea4a02767a",
+  "compressed_bytes": 168275,
+  "uncompressed_bytes": 700659,
+  "documents": 277,
+  "active_documents": 277,
+  "versions": 350
+}
