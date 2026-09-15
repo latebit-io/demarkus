@@ -12,6 +12,7 @@ No reader run or paid model call has been made for this dataset.
 
 ```bash
 make answer-bench
+rm -rf tools/benchmarks/corpora/latebit-2026-09-14-v2/restored
 tools/bin/demarkus-answer-bench corpus-restore -manifest tools/benchmarks/corpora/latebit-2026-09-14-v2/manifest.json -archive tools/benchmarks/artifacts/latebit-2026-09-14-v1.jsonl.gz -root tools/benchmarks/corpora/latebit-2026-09-14-v2/restored
 tools/bin/demarkus-answer-bench inspect -corpus tools/benchmarks/corpora/latebit-2026-09-14-v2/restored -questions tools/benchmarks/corpora/latebit-2026-09-14-v2
 ```
