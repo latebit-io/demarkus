@@ -46,7 +46,7 @@ type PackOptions struct {
 	Root, Archive, Manifest, ID, Source string
 }
 
-// DocumentExporter streams every retained document from one pinned source.
+// DocumentExporter streams every retained document from one pinned source, once per path.
 type DocumentExporter interface {
 	ExportDocs(context.Context, func(string, store.StoredDocument) error) error
 }
@@ -62,7 +62,12 @@ func exportCorpus(ctx context.Context, source DocumentExporter, output io.Writer
 	var stats CorpusManifest
 	hash, count := sha256.New(), &byteCounter{}
 	enc := json.NewEncoder(io.MultiWriter(output, hash, count))
+	paths := make(map[string]struct{})
 	err := source.ExportDocs(ctx, func(path string, doc store.StoredDocument) error {
+		if _, exists := paths[path]; exists {
+			return fmt.Errorf("duplicate corpus document %s", path)
+		}
+		paths[path] = struct{}{}
 		stats.Documents++
 		stats.Versions += len(doc.Versions)
 		if !doc.Archived {

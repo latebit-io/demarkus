@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/store"
@@ -118,6 +119,22 @@ func TestArchiveRestoreIgnoresExporterTraversalOrder(t *testing.T) {
 	}
 	if _, err := RestoreCorpus(t.Context(), opts.Manifest, opts.Archive, filepath.Join(dir, "restored")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPackExportRejectsDuplicatePaths(t *testing.T) {
+	dir, root := t.TempDir(), archiveSource(t)
+	document := exportedDocs(t, root)["/index.md"]
+	source := orderedExporter{{Path: "/index.md", Document: document}, {Path: "/index.md", Document: document}}
+	opts := PackOptions{Archive: filepath.Join(dir, "corpus.gz"), Manifest: filepath.Join(dir, "manifest.json"), ID: "duplicate-v1", Source: "mark://duplicate"}
+	if _, err := PackExport(t.Context(), &opts, source); err == nil || !strings.Contains(err.Error(), "duplicate corpus document /index.md") {
+		t.Fatalf("duplicate export error = %v", err)
+	}
+	if _, err := os.Stat(opts.Archive); !os.IsNotExist(err) {
+		t.Fatalf("failed duplicate archive retained: %v", err)
+	}
+	if _, err := os.Stat(opts.Manifest); !os.IsNotExist(err) {
+		t.Fatalf("failed duplicate manifest retained: %v", err)
 	}
 }
 
