@@ -29,6 +29,8 @@ func run() error {
 		switch os.Args[1] {
 		case "corpus-pack", "corpus-restore":
 			return runCorpus(ctx, os.Args[1], os.Args[2:])
+		case "corpus-pack-gcs":
+			return runGCSPack(ctx, os.Args[2:])
 		case "export-metrics":
 			if len(os.Args) != 4 {
 				return fmt.Errorf("usage: export-metrics PRIVATE.json NEW_METRICS.json")

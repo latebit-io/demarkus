@@ -6,12 +6,15 @@ replace github.com/latebit-io/demarkus/protocol => ../protocol
 
 replace github.com/latebit-io/demarkus/client => ../client
 
+replace github.com/latebit-io/demarkus/server => ../server
+
 require (
 	cloud.google.com/go/storage v1.66.0
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/latebit-io/demarkus/client v0.0.0-00010101000000-000000000000
 	github.com/latebit-io/demarkus/protocol v0.0.0
+	github.com/latebit-io/demarkus/server v0.0.0
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/tiktoken-go/tokenizer v0.8.1
 	github.com/yuin/goldmark v1.7.8

@@ -43,6 +43,20 @@ func exportedDocs(t *testing.T, root string) map[string]store.StoredDocument {
 	return result
 }
 
+type orderedExporter []corpusEntry
+
+func (e orderedExporter) ExportDocs(ctx context.Context, fn func(string, store.StoredDocument) error) error {
+	for _, entry := range e {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(entry.Path, entry.Document); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func TestArchiveRoundTripAndDeterminism(t *testing.T) {
 	dir, root := t.TempDir(), archiveSource(t)
 	opts := PackOptions{Root: root, Archive: filepath.Join(dir, "corpus.gz"), Manifest: filepath.Join(dir, "manifest.json"), ID: "test-v1", Source: "mark://fixture"}
@@ -71,6 +85,28 @@ func TestArchiveRoundTripAndDeterminism(t *testing.T) {
 	}
 	if _, err := PackCorpus(t.Context(), &opts); err == nil {
 		t.Fatal("existing archive overwritten")
+	}
+}
+
+func TestArchiveRestoreIgnoresExporterTraversalOrder(t *testing.T) {
+	dir, root := t.TempDir(), t.TempDir()
+	s := store.New(root)
+	for _, path := range []string{"/docs/topic.md", "/docs/topic/detail.md"} {
+		if _, err := s.WriteVersion(path, 0, []byte("# Topic\n"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	documents := exportedDocs(t, root)
+	source := orderedExporter{
+		{Path: "/docs/topic.md", Document: documents["/docs/topic.md"]},
+		{Path: "/docs/topic/detail.md", Document: documents["/docs/topic/detail.md"]},
+	}
+	opts := PackOptions{Archive: filepath.Join(dir, "corpus.gz"), Manifest: filepath.Join(dir, "manifest.json"), ID: "ordered-v1", Source: "mark://ordered"}
+	if _, err := PackExport(t.Context(), &opts, source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RestoreCorpus(t.Context(), opts.Manifest, opts.Archive, filepath.Join(dir, "restored")); err != nil {
+		t.Fatal(err)
 	}
 }
 

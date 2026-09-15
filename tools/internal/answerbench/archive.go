@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol/store"
 )
@@ -42,6 +43,11 @@ type PackOptions struct {
 	Root, Archive, Manifest, ID, Source string
 }
 
+// DocumentExporter streams every retained document from one pinned source.
+type DocumentExporter interface {
+	ExportDocs(context.Context, func(string, store.StoredDocument) error) error
+}
+
 type byteCounter struct{ n int64 }
 
 func (c *byteCounter) Write(p []byte) (int, error) {
@@ -49,11 +55,11 @@ func (c *byteCounter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func exportCorpus(ctx context.Context, root string, output io.Writer) (CorpusManifest, error) {
+func exportCorpus(ctx context.Context, source DocumentExporter, output io.Writer) (CorpusManifest, error) {
 	var stats CorpusManifest
 	hash, count := sha256.New(), &byteCounter{}
 	enc := json.NewEncoder(io.MultiWriter(output, hash, count))
-	err := store.New(root).ExportDocs(ctx, func(path string, doc store.StoredDocument) error {
+	err := source.ExportDocs(ctx, func(path string, doc store.StoredDocument) error {
 		stats.Documents++
 		stats.Versions += len(doc.Versions)
 		if !doc.Archived {
@@ -69,8 +75,16 @@ func exportCorpus(ctx context.Context, root string, output io.Writer) (CorpusMan
 // PackCorpus stores raw version bytes, archive state and modified times in gzip.
 // Existing outputs are never overwritten; no live service or credential is needed.
 func PackCorpus(ctx context.Context, opts *PackOptions) (manifest CorpusManifest, err error) {
-	if opts.ID == "" || opts.Source == "" || opts.Root == "" || opts.Archive == "" || opts.Manifest == "" {
+	if opts.Root == "" {
 		return manifest, errors.New("pack requires root, archive, manifest, id and source")
+	}
+	return PackExport(ctx, opts, store.New(opts.Root))
+}
+
+// PackExport stores a pinned document stream in the corpus archive format.
+func PackExport(ctx context.Context, opts *PackOptions, source DocumentExporter) (manifest CorpusManifest, err error) {
+	if opts.ID == "" || opts.Source == "" || opts.Archive == "" || opts.Manifest == "" || source == nil {
+		return manifest, errors.New("pack requires source exporter, archive, manifest, id and source")
 	}
 	file, err := os.OpenFile(opts.Archive, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -86,7 +100,7 @@ func PackCorpus(ctx context.Context, opts *PackOptions) (manifest CorpusManifest
 	if zipErr != nil {
 		return manifest, errors.Join(zipErr, file.Close())
 	}
-	manifest, err = exportCorpus(ctx, opts.Root, gz)
+	manifest, err = exportCorpus(ctx, source, gz)
 	err = errors.Join(err, gz.Close(), file.Sync(), file.Close())
 	if err != nil {
 		return manifest, err
@@ -178,23 +192,58 @@ func RestoreCorpus(ctx context.Context, manifestPath, archivePath, root string) 
 			err = errors.Join(err, os.RemoveAll(root))
 		}
 	}()
-	if err := importCorpus(ctx, compressed, root, &manifest); err != nil {
-		return manifest, err
-	}
-	got, err := exportCorpus(ctx, root, io.Discard)
+	expected, err := importCorpus(ctx, compressed, root, &manifest)
 	if err != nil {
 		return manifest, err
 	}
-	if got.CorpusSHA256 != manifest.CorpusSHA256 || got.Documents != manifest.Documents || got.ActiveDocuments != manifest.ActiveDocuments || got.Versions != manifest.Versions {
-		return manifest, errors.New("restored corpus fingerprint/counts mismatch")
+	if err := verifyRestoredCorpus(ctx, store.New(root), expected); err != nil {
+		return manifest, err
 	}
 	return manifest, nil
 }
 
-func importCorpus(ctx context.Context, compressed []byte, root string, manifest *CorpusManifest) (err error) {
-	gz, err := gzip.NewReader(bytes.NewReader(compressed))
+func corpusDocumentFingerprint(path string, document store.StoredDocument) (string, error) {
+	versions := make([]store.StoredVersion, len(document.Versions))
+	copy(versions, document.Versions)
+	for i := range versions {
+		versions[i].Modified = versions[i].Modified.UTC().Truncate(time.Second)
+	}
+	var encoded bytes.Buffer
+	if err := json.NewEncoder(&encoded).Encode(corpusEntry{Path: path, Document: store.StoredDocument{Versions: versions, Archived: document.Archived}}); err != nil {
+		return "", err
+	}
+	return digest(encoded.Bytes()), nil
+}
+
+func verifyRestoredCorpus(ctx context.Context, source DocumentExporter, expected map[string]string) error {
+	err := source.ExportDocs(ctx, func(path string, document store.StoredDocument) error {
+		want, ok := expected[path]
+		if !ok {
+			return fmt.Errorf("restored corpus has unexpected document %s", path)
+		}
+		got, err := corpusDocumentFingerprint(path, document)
+		if err != nil {
+			return fmt.Errorf("fingerprint restored document %s: %w", path, err)
+		}
+		if got != want {
+			return fmt.Errorf("restored corpus document differs: %s", path)
+		}
+		delete(expected, path)
+		return nil
+	})
 	if err != nil {
 		return err
+	}
+	if len(expected) != 0 {
+		return fmt.Errorf("restored corpus missing %d documents", len(expected))
+	}
+	return nil
+}
+
+func importCorpus(ctx context.Context, compressed []byte, root string, manifest *CorpusManifest) (fingerprints map[string]string, err error) {
+	gz, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return nil, err
 	}
 	defer func() { err = errors.Join(err, gz.Close()) }()
 	hash, count := sha256.New(), &byteCounter{}
@@ -202,27 +251,36 @@ func importCorpus(ctx context.Context, compressed []byte, root string, manifest 
 	dec := json.NewDecoder(input)
 	dec.DisallowUnknownFields()
 	destinationStore := store.New(root)
+	fingerprints = make(map[string]string, manifest.Documents)
 	documents := 0
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		var entry corpusEntry
 		if err := dec.Decode(&entry); errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
-			return fmt.Errorf("decode corpus: %w", err)
+			return nil, fmt.Errorf("decode corpus: %w", err)
 		}
 		documents++
 		if documents > manifest.Documents {
-			return errors.New("archive exceeds declared document count")
+			return nil, errors.New("archive exceeds declared document count")
 		}
+		if _, exists := fingerprints[entry.Path]; exists {
+			return nil, fmt.Errorf("duplicate corpus document %s", entry.Path)
+		}
+		fingerprint, err := corpusDocumentFingerprint(entry.Path, entry.Document)
+		if err != nil {
+			return nil, fmt.Errorf("fingerprint corpus document %s: %w", entry.Path, err)
+		}
+		fingerprints[entry.Path] = fingerprint
 		if err := destinationStore.ImportDoc(ctx, entry.Path, entry.Document); err != nil {
-			return fmt.Errorf("import %s: %w", entry.Path, err)
+			return nil, fmt.Errorf("import %s: %w", entry.Path, err)
 		}
 	}
 	if documents != manifest.Documents || count.n != manifest.UncompressedBytes || fmt.Sprintf("sha256-%x", hash.Sum(nil)) != manifest.CorpusSHA256 {
-		return errors.New("corpus payload checksum/size/count mismatch")
+		return nil, errors.New("corpus payload checksum/size/count mismatch")
 	}
-	return nil
+	return fingerprints, nil
 }

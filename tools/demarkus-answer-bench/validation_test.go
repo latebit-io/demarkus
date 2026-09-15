@@ -19,6 +19,8 @@ func TestSubcommandsRejectMissingAndPositionalArguments(t *testing.T) {
 		{"restore-missing-root", []string{"corpus-restore", "-manifest", "m", "-archive", "a"}, "requires -root"},
 		{"restore-positional", []string{"corpus-restore", "extra"}, "takes flags only"},
 		{"pack-positional", []string{"corpus-pack", "extra"}, "takes flags only"},
+		{"pack-gcs-empty", []string{"corpus-pack-gcs"}, "requires -bucket"},
+		{"pack-gcs-positional", []string{"corpus-pack-gcs", "extra"}, "takes flags only"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			original := os.Args
