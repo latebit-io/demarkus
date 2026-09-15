@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,6 +54,20 @@ func (e orderedExporter) ExportDocs(ctx context.Context, fn func(string, store.S
 			return err
 		}
 		if err := fn(entry.Path, entry.Document); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type generatedExporter int
+
+func (e generatedExporter) ExportDocs(ctx context.Context, fn func(string, store.StoredDocument) error) error {
+	for i := range int(e) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn("/"+strconv.Itoa(i), store.StoredDocument{}); err != nil {
 			return err
 		}
 	}
@@ -135,6 +151,16 @@ func TestPackExportRejectsDuplicatePaths(t *testing.T) {
 	}
 	if _, err := os.Stat(opts.Manifest); !os.IsNotExist(err) {
 		t.Fatalf("failed duplicate manifest retained: %v", err)
+	}
+}
+
+func TestExportCorpusRejectsExcessiveDocuments(t *testing.T) {
+	stats, err := exportCorpus(t.Context(), generatedExporter(maxCorpusDocuments+1), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "corpus exceeds 100000 documents") {
+		t.Fatalf("excessive export error = %v", err)
+	}
+	if stats.Documents != maxCorpusDocuments {
+		t.Fatalf("exported documents = %d, want %d", stats.Documents, maxCorpusDocuments)
 	}
 }
 

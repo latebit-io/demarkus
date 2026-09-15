@@ -67,6 +67,9 @@ func exportCorpus(ctx context.Context, source DocumentExporter, output io.Writer
 		if _, exists := paths[path]; exists {
 			return fmt.Errorf("duplicate corpus document %s", path)
 		}
+		if stats.Documents >= maxCorpusDocuments {
+			return fmt.Errorf("corpus exceeds %d documents", maxCorpusDocuments)
+		}
 		paths[path] = struct{}{}
 		stats.Documents++
 		stats.Versions += len(doc.Versions)
