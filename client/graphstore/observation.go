@@ -3,16 +3,73 @@ package graphstore
 import (
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 type sourceRecord struct {
 	Node  StoredNode   `json:"node"`
 	Edges []StoredEdge `json:"edges"`
+}
+
+// ObserveDocument merges one ordinary fetch without indexing generated graph
+// artifacts. Complete observations replace adjacency; failures age freshness.
+func (s *Store) ObserveDocument(docURL string, result graph.FetchResult) bool {
+	docURL = links.CanonicalURL(docURL)
+	if generatedGraphURL(docURL) {
+		return false
+	}
+	source := result.Source
+	if source == "" {
+		source = docURL
+	}
+	node := &graph.Node{URL: docURL, Status: result.Status, Observation: graph.Observe(source, result.Metadata)}
+	var extracted graph.ExtractedEdges
+	if result.Status == protocol.StatusOK {
+		extracted = graph.ExtractDocumentEdges(docURL, result.Body, result.Metadata)
+		node.Title = links.ExtractTitle(result.Body)
+		node.LinkCount = extracted.BodyLinkCount
+	}
+	node.Observation.Complete = graph.SourceComplete(node)
+	if !node.Observation.Complete {
+		node.Observation.Problem = "incomplete"
+	}
+
+	observed := graph.New()
+	observed.AddNode(node)
+	for _, edge := range extracted.Edges {
+		observed.AddEdgeInfo(edge)
+	}
+	s.Merge(observed, nil)
+	return true
+}
+
+func generatedGraphURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	shards := SnapshotShardRoot(SnapshotManifestPath) + "/"
+	return generatedGraphPath(parsed.Path, "/graph.md") || generatedGraphPath(parsed.Path, SnapshotManifestPath) || strings.HasPrefix(parsed.Path, shards)
+}
+
+func generatedGraphPath(path, base string) bool {
+	if path == base {
+		return true
+	}
+	version, ok := strings.CutPrefix(path, base+"/v")
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(version)
+	return err == nil && n > 0
 }
 
 func sourceRecords(nodes []StoredNode, edges []StoredEdge) map[string]sourceRecord { //nolint:gocritic // normalize private candidate copies

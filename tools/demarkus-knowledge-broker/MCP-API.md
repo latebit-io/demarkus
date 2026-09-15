@@ -119,12 +119,17 @@ the markdown `body`. Identical wire shape to direct-QUIC `FETCH`.
 
 #### `mark_explore`
 
-Orient around one document in one call: outline head, outbound links,
-recorded backlinks, and sibling documents, each capped at 10 entries.
+Orient around one document in one call: outline head, outbound links, cached
+incoming and outgoing relations, and sibling documents. Relation rows group by
+document, include source evidence, and paginate independently of other sections.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `url` | string | yes | `mark://{worldName}/{path}` |
+| `direction` | string | no | `incoming`, `outgoing`, or `both` (default). |
+| `relations` | string[] | no | Exact predicates; `""` selects body links; omitted selects all. |
+| `page_size` | number | no | Neighbor documents per relation page, 1-100; default 10. |
+| `cursor` | string | no | Opaque cursor from the preceding relation page. |
 
 #### `mark_list`
 

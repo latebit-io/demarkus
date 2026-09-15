@@ -87,6 +87,8 @@ type Store struct {
 	nodes           map[string]*StoredNode
 	edges           []StoredEdge
 	edgeIdx         map[edgeKey]int
+	incoming        map[string][]int
+	outgoing        map[string][]int
 	seedEtags       map[string]string        // host -> last seen published graph etag
 	seedGraphs      map[string]seedGraphData // owner -> latest complete non-authoritative graph
 	localSources    map[string]sourceRecord
@@ -108,6 +110,8 @@ func New() *Store {
 	return &Store{
 		nodes:        make(map[string]*StoredNode),
 		edgeIdx:      make(map[edgeKey]int),
+		incoming:     make(map[string][]int),
+		outgoing:     make(map[string][]int),
 		seedEtags:    make(map[string]string),
 		seedGraphs:   make(map[string]seedGraphData),
 		localSources: make(map[string]sourceRecord),
@@ -126,6 +130,8 @@ func Load(path string) (*Store, error) {
 		path:         path,
 		nodes:        make(map[string]*StoredNode),
 		edgeIdx:      make(map[edgeKey]int),
+		incoming:     make(map[string][]int),
+		outgoing:     make(map[string][]int),
 		seedEtags:    make(map[string]string),
 		seedGraphs:   make(map[string]seedGraphData),
 		localSources: make(map[string]sourceRecord),
@@ -169,6 +175,7 @@ func Load(path string) (*Store, error) {
 		if _, exists := s.edgeIdx[e.key()]; !exists {
 			s.edgeIdx[e.key()] = len(s.edges)
 			s.edges = append(s.edges, e)
+			s.indexEdgeLocked(len(s.edges) - 1)
 		}
 	}
 	maps.Copy(s.seedEtags, doc.SeedEtags)
@@ -228,14 +235,64 @@ func (s *Store) loadCandidates(doc *document) {
 
 }
 
-// Save atomically persists one store snapshot through a serialized temp path.
-// In-memory stores from New are a no-op.
+// Save atomically persists one store snapshot. Calls on one Store serialize;
+// independent process owners of the same path remain last-writer-wins.
 func (s *Store) Save() error {
 	if s.path == "" {
 		return nil
 	}
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
+	doc := s.saveDocument()
+
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return writeSaveFile(s.path, data)
+}
+
+func writeSaveFile(path string, data []byte) (saveErr error) {
+	dir := filepath.Dir(path)
+	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create graph store temp file: %w", err)
+	}
+	tmp := file.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			if err := file.Close(); err != nil {
+				saveErr = errors.Join(saveErr, fmt.Errorf("close graph store temp file: %w", err))
+			}
+		}
+		if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+			saveErr = errors.Join(saveErr, fmt.Errorf("remove graph store temp file: %w", err))
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return fmt.Errorf("secure graph store temp file: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("write graph store temp file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		closed = true
+		return fmt.Errorf("close graph store temp file: %w", err)
+	}
+	closed = true
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("replace graph store: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) saveDocument() document {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -247,8 +304,8 @@ func (s *Store) Save() error {
 	doc := document{
 		Version:         schemaVersion,
 		Nodes:           nodes,
-		Edges:           s.edges,
-		SourceRevisions: s.sourceRevisions,
+		Edges:           slices.Clone(s.edges),
+		SourceRevisions: maps.Clone(s.sourceRevisions),
 	}
 	// Selected local rows already live in Nodes/Edges; only shadowed candidates
 	// need a second representation to survive seed-owner withdrawal.
@@ -257,31 +314,24 @@ func (s *Store) Save() error {
 			if doc.LocalSources == nil {
 				doc.LocalSources = make(map[string]sourceRecord)
 			}
-			doc.LocalSources[key] = s.localSources[key]
+			record := s.localSources[key]
+			record.Edges = slices.Clone(record.Edges)
+			doc.LocalSources[key] = record
 		}
 	}
 	if len(s.seedEtags) > 0 {
-		doc.SeedEtags = s.seedEtags
+		doc.SeedEtags = maps.Clone(s.seedEtags)
 	}
 	if len(s.seedGraphs) > 0 {
-		doc.SeedGraphs = s.seedGraphs
+		doc.SeedGraphs = make(map[string]seedGraphData, len(s.seedGraphs))
+		for owner, data := range s.seedGraphs {
+			doc.SeedGraphs[owner] = seedGraphData{
+				Nodes: slices.Clone(data.Nodes),
+				Edges: slices.Clone(data.Edges),
+			}
+		}
 	}
-
-	data, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return doc
 }
 
 // Merge replaces only fully observed sources; partial observations add new edges
@@ -351,7 +401,20 @@ func (s *Store) upsertEdgeLocked(se *StoredEdge) {
 	} else {
 		s.edgeIdx[se.key()] = len(s.edges)
 		s.edges = append(s.edges, *se)
+		s.indexEdgeLocked(len(s.edges) - 1)
 	}
+}
+
+func (s *Store) indexEdgeLocked(index int) {
+	if s.incoming == nil {
+		s.incoming = make(map[string][]int)
+	}
+	if s.outgoing == nil {
+		s.outgoing = make(map[string][]int)
+	}
+	edge := &s.edges[index]
+	s.incoming[edge.To] = append(s.incoming[edge.To], index)
+	s.outgoing[edge.From] = append(s.outgoing[edge.From], index)
 }
 
 // Only successful reads and confirmed absence establish a complete source.
@@ -417,6 +480,8 @@ func (s *Store) rebuildSeedsLocked() {
 	s.nodes = make(map[string]*StoredNode, len(selected))
 	s.edges = nil
 	s.edgeIdx = make(map[edgeKey]int)
+	s.incoming = make(map[string][]int)
+	s.outgoing = make(map[string][]int)
 	for _, key := range slices.Sorted(maps.Keys(selected)) {
 		record := selected[key]
 		node := record.Node
@@ -450,8 +515,9 @@ func (s *Store) Backlinks(url string) []string {
 
 	seen := make(map[string]bool)
 	var result []string
-	for _, e := range s.edges {
-		if e.To == url && !seen[e.From] {
+	for _, index := range s.incoming[url] {
+		e := &s.edges[index]
+		if !seen[e.From] {
 			seen[e.From] = true
 			result = append(result, e.From)
 		}
@@ -480,11 +546,9 @@ func (s *Store) BacklinksEnriched(url string) []BacklinkEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var entries []BacklinkEntry
-	for _, e := range s.edges {
-		if e.To != url {
-			continue
-		}
+	entries := make([]BacklinkEntry, 0, len(s.incoming[url]))
+	for _, index := range s.incoming[url] {
+		e := &s.edges[index]
 		entry := BacklinkEntry{URL: e.From, Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)}
 		if n := s.nodes[e.From]; n != nil {
 			entry.Title = n.Title

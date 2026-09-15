@@ -5,8 +5,12 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestFlattenGraphNilGraph(t *testing.T) {
@@ -269,7 +273,7 @@ func TestRenderDensityIndicator(t *testing.T) {
 func TestRenderBacklinksView(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		out := renderBacklinksView(nil, 0, 80)
-		if !strings.Contains(out, "No backlinks found") {
+		if !strings.Contains(out, "No relations found") {
 			t.Error("expected empty state message")
 		}
 	})
@@ -280,7 +284,7 @@ func TestRenderBacklinksView(t *testing.T) {
 			{url: "mark://h/b.md", title: "Page B", status: "ok"},
 		}
 		out := renderBacklinksView(items, 1, 80)
-		if !strings.Contains(out, "Backlinks") {
+		if !strings.Contains(out, "Relations") {
 			t.Error("missing header")
 		}
 		if !strings.Contains(out, "> ") {
@@ -290,6 +294,110 @@ func TestRenderBacklinksView(t *testing.T) {
 			t.Error("missing item labels")
 		}
 	})
+}
+
+func TestGraphNeighborhoodListGroupsRelationsAndPaginates(t *testing.T) {
+	store := newTestStore(t)
+	edges := []graphstore.StoredEdge{
+		{From: "mark://h/a.md", To: "mark://h/center.md", Rel: "depends-on", Count: 1},
+		{From: "mark://h/center.md", To: "mark://h/a.md", Rel: "supersedes", Count: 1},
+		{From: "mark://h/center.md", To: "mark://h/b.md", Count: 1},
+	}
+	store.ReplaceSeed("hub", nil, edges)
+	first, err := graphNeighborhoodList(store, "mark://h/center.md", graphstore.NeighborhoodOptions{
+		Direction: graphstore.NeighborhoodBoth, PageSize: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.items) != 1 || first.items[0].url != "mark://h/a.md" || len(first.items[0].edges) != 2 || first.nextCursor == "" || first.total != 2 {
+		t.Fatalf("first page = %+v", first)
+	}
+	second, err := graphNeighborhoodList(store, "mark://h/center.md", graphstore.NeighborhoodOptions{
+		Direction: graphstore.NeighborhoodBoth, PageSize: 1, Cursor: first.nextCursor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.items) != 1 || second.items[0].url != "mark://h/b.md" || second.nextCursor != "" {
+		t.Fatalf("second page = %+v", second)
+	}
+	text := renderBacklinksView(first.items, 0, 120)
+	for _, want := range []string{"incoming [depends-on] source mark://h/a.md", "outgoing [supersedes] source mark://h/center.md"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestHandleFetchResultCachesOnlyCurrentResponse(t *testing.T) {
+	store := newTestStore(t)
+	m := model{fetchSeq: 2, graphStore: store, addressBar: textinput.New(), histIdx: -1}
+	response := fetch.Result{Response: protocol.Response{
+		Status: protocol.StatusOK, Body: "# Source\n", Metadata: map[string]string{"version": "1", "rel-depends-on": "/target.md"},
+	}}
+	if _, _ = m.handleFetchResult(fetchResult{result: response, graphURL: "mark://h/source.md", url: "mark://h/source.md", seq: 1}); store.EdgeCount() != 0 {
+		t.Fatal("stale fetch mutated graph cache")
+	}
+	_, save := m.handleFetchResult(fetchResult{result: response, graphURL: "mark://h/source.md", url: "mark://h/source.md", seq: 2})
+	if store.EdgeCount() != 1 {
+		t.Fatalf("current fetch edges = %d, want 1", store.EdgeCount())
+	}
+	if save == nil {
+		t.Fatal("current fetch did not schedule graph save")
+	}
+	if result := save().(graphSaveResult); result.err != nil || result.generation != 1 {
+		t.Fatalf("graph save: %v", result.err)
+	}
+}
+
+func TestRelationRefreshWithNoBacklinksDoesNoGlobalWork(t *testing.T) {
+	store := newTestStore(t)
+	m := model{graphStore: store, crawlSeq: 4}
+	msg := m.startRelationRefresh(t.Context(), "mark://h/target.md")().(relationRefreshResult)
+	if msg.seq != 4 || msg.summary != "" || store.NodeCount() != 0 {
+		t.Fatalf("empty refresh = %+v, nodes=%d", msg, store.NodeCount())
+	}
+}
+
+func TestFlushGraphStorePersistsPendingGeneration(t *testing.T) {
+	store := newTestStore(t)
+	store.ObserveDocument("mark://h/source.md", graph.FetchResult{
+		Status: "ok", Metadata: map[string]string{"version": "1", "rel-depends-on": "/target.md"},
+	})
+	m := model{graphStore: store, graphGeneration: 1}
+	m.flushGraphStore()
+	if m.graphSavedGeneration != 1 {
+		t.Fatalf("saved generation = %d, want 1", m.graphSavedGeneration)
+	}
+}
+
+func TestRelationsToLinksStartsFreshCrawl(t *testing.T) {
+	address := textinput.New()
+	address.SetValue("mark://h/target.md")
+	m := model{graphStore: newTestStore(t), addressBar: address, viewMode: viewGraph, graphSubView: subViewBacklinks}
+	updated, cmd := m.handleGraphKey(tea.KeyPressMsg{Code: 'd'})
+	got := updated.(model)
+	if cmd == nil || !got.crawling || got.graphSubView != subViewLinks {
+		t.Fatalf("links transition: cmd=%v crawling=%t subview=%v", cmd != nil, got.crawling, got.graphSubView)
+	}
+	got.cancelCrawl()
+}
+
+func TestRelationsToggleUsesCacheWithoutCrawl(t *testing.T) {
+	store := newTestStore(t)
+	store.ReplaceSeed("hub", nil, []graphstore.StoredEdge{{From: "mark://h/source.md", To: "mark://h/target.md", Rel: "depends-on", Count: 1}})
+	address := textinput.New()
+	address.SetValue("mark://h/target.md")
+	m := model{graphStore: store, addressBar: address}
+	updated, cmd := m.handleRelationsToggle()
+	got := updated.(model)
+	if cmd != nil || got.crawling || got.viewMode != viewGraph || got.graphSubView != subViewBacklinks {
+		t.Fatalf("relations toggle started work: cmd=%v crawling=%t mode=%v subview=%v", cmd != nil, got.crawling, got.viewMode, got.graphSubView)
+	}
+	if len(got.graphNodes) != 1 || got.graphNodes[0].url != "mark://h/source.md" {
+		t.Fatalf("cached relation rows = %+v", got.graphNodes)
+	}
 }
 
 func TestRenderTopologyView(t *testing.T) {

@@ -467,8 +467,8 @@ func TestSeedGraph_ExploreBacklinksSeeded(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	text := resultText(t, res)
-	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "Page A") {
-		t.Errorf("explore backlinks not seeded: %s", text)
+	if !strings.Contains(text, "## Relations (1 documents)") || !strings.Contains(text, "Page A") {
+		t.Errorf("explore relations not seeded: %s", text)
 	}
 }
 

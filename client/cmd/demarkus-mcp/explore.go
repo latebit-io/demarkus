@@ -7,6 +7,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/links"
 	listformat "github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
@@ -20,16 +21,20 @@ import (
 const exploreSectionCap = 10
 
 func markExploreTool(host string) mcp.Tool {
-	return mcp.NewTool("mark_explore",
+	neighborhoodParams := mcpfmt.NeighborhoodParams()
+	options := make([]mcp.ToolOption, 0, len(neighborhoodParams)+3)
+	options = append(options,
 		mcp.WithDescription(
-			"Orient around one document: outline head, outbound links, backlinks, siblings (10 each). Use instead of fetch+backlinks+list, then mark_fetch url#<anchor>. Backlinks from local graph store (mark_graph populates). "+urlHint(host),
+			"Orient around one document: outline head, outbound links, cached typed relations, siblings. Relation rows are grouped, bounded, and paginated. "+urlHint(host),
 		),
 		mcp.WithString("url",
 			mcp.Required(),
 			mcp.Description(urlDesc(host)),
 		),
-		mcpfmt.Fetch.Param(),
 	)
+	options = append(options, neighborhoodParams...)
+	options = append(options, mcpfmt.Fetch.Param())
+	return mcp.NewTool("mark_explore", options...)
 }
 
 func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -39,6 +44,7 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 	}
 	docURL, _, _ := strings.Cut(rawURL, "#")
 	opts := mcpfmt.Fetch.Options(&req)
+	neighborhoodOpts := mcpfmt.NeighborhoodOptions(&req)
 
 	host, path, err := h.resolveURL(docURL)
 	if err != nil {
@@ -50,14 +56,25 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("fetch failed: %v", err)), nil
 	}
+	fullURL := links.NodeURL(host, path)
 	if result.Response.Status != protocol.StatusOK {
-		return mcp.NewToolResultText(mcpfmt.Format(result, opts)), nil
+		text := mcpfmt.Format(result, opts)
+		if warning := h.observeExploreDocument(fullURL, result); warning != "" {
+			text += mcpfmt.Note(strings.TrimSuffix(warning, "\n"))
+		}
+		return mcp.NewToolResultText(text), nil
 	}
 	body := result.Response.Body
+	h.seedGraph(ctx, host)
+	cacheWarning := h.observeExploreDocument(fullURL, result)
 
 	// Binary/non-UTF-8 body: an outline over it is garbage; return a notice.
 	if mdoutline.BinaryBody(body) {
-		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.NonMarkdownNotice(len(body)),
+		notice := mdoutline.NonMarkdownNotice(len(body))
+		if cacheWarning != "" {
+			notice += "\n" + cacheWarning
+		}
+		return mcp.NewToolResultText(mcpfmt.FormatWith(result, notice,
 			map[string]string{"mode": "binary"}, opts)), nil
 	}
 
@@ -83,9 +100,22 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 		mdoutline.CappedList(&b, out, exploreSectionCap, "links")
 	}
 
-	h.seedGraph(ctx, host)
-	b.WriteString("\n" + h.revalidateBacklinks(ctx, links.NodeURL(host, path)))
-	h.writeBacklinksSection(&b, links.NodeURL(host, path))
+	b.WriteByte('\n')
+	if cacheWarning != "" {
+		b.WriteString(cacheWarning)
+	}
+	if h.graphStore == nil {
+		b.WriteString("## Relations\n(graph store unavailable)\n")
+	} else {
+		if neighborhoodOpts.Direction != graphstore.NeighborhoodOutgoing {
+			b.WriteString(h.revalidateBacklinks(ctx, fullURL))
+		}
+		page, queryErr := h.graphStore.Neighborhood(fullURL, neighborhoodOpts)
+		if queryErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("query relations: %v", queryErr)), nil
+		}
+		b.WriteString(mcpfmt.FormatNeighborhood(fullURL, page))
+	}
 	h.writeSiblingsSection(&b, host, path, token)
 
 	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; mark_fetch force=true for the full body\n", docURL)
@@ -96,31 +126,16 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 	return mcp.NewToolResultText(mcpfmt.FormatWith(result, b.String(), extra, opts)), nil
 }
 
-// writeBacklinksSection appends the backlinks card section from the local
-// graph store. fullURL must be canonical (mark://host:port/path) to match
-// crawled and seeded row keys. An empty or missing store degrades to a
-// note, never an error.
-func (h *handler) writeBacklinksSection(b *strings.Builder, fullURL string) {
-	if h.graphStore == nil {
-		b.WriteString("\n## Backlinks\n(graph store unavailable)\n")
-		return
+func (h *handler) observeExploreDocument(fullURL string, result fetch.Result) string {
+	if h.graphStore == nil || !h.graphStore.ObserveDocument(fullURL, graph.FetchResult{
+		Status: result.Response.Status, Body: result.Response.Body, Metadata: result.Response.Metadata,
+	}) {
+		return ""
 	}
-	backlinks := h.graphStore.BacklinksEnriched(fullURL)
-	fmt.Fprintf(b, "\n## Backlinks (%d)\n", len(backlinks))
-	if len(backlinks) == 0 {
-		b.WriteString("(none recorded; run mark_graph to populate)\n")
-		return
+	if err := h.graphStore.Save(); err != nil {
+		return fmt.Sprintf("graph cache save failed: %v\n", err)
 	}
-	lines := make([]string, len(backlinks))
-	for i, bl := range backlinks {
-		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count) + bl.Observation.Annotation()
-		if bl.Title != "" {
-			lines[i] = fmt.Sprintf("- [%s](%s)%s", bl.Title, bl.URL, ann)
-		} else {
-			lines[i] = "- " + bl.URL + ann
-		}
-	}
-	mdoutline.CappedList(b, lines, exploreSectionCap, "backlinks")
+	return ""
 }
 
 // writeSiblingsSection appends the sibling listing of the document's parent

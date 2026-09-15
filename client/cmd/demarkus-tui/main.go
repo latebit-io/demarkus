@@ -83,15 +83,19 @@ type model struct {
 	fetchSeq uint64
 
 	// Graph view
-	viewMode     viewMode
-	graphSubView graphSubView
-	graphData    *graph.Graph
-	graphNodes   []graphListItem
-	graphIdx     int
-	crawling     bool
-	crawlSeq     uint64
-	crawlCancel  context.CancelFunc
-	graphWarning string
+	viewMode        viewMode
+	graphSubView    graphSubView
+	graphData       *graph.Graph
+	graphNodes      []graphListItem
+	graphIdx        int
+	graphPageCursor string
+	graphPageNext   string
+	graphPageBack   []string
+	graphPageTotal  int
+	crawling        bool
+	crawlSeq        uint64
+	crawlCancel     context.CancelFunc
+	graphWarning    string
 
 	showHelp bool
 
@@ -101,7 +105,9 @@ type model struct {
 	bookmarkSeq   uint64 // sequence counter for stale clear prevention
 
 	// Persistent graph
-	graphStore *graphstore.Store
+	graphStore           *graphstore.Store
+	graphGeneration      uint64
+	graphSavedGeneration uint64
 
 	// Terminal style — "dark" or "light", resolved once before Bubbletea starts.
 	styleName string
@@ -113,10 +119,11 @@ type model struct {
 }
 
 type fetchResult struct {
-	result fetch.Result
-	err    error
-	url    string
-	seq    uint64
+	result   fetch.Result
+	err      error
+	graphURL string
+	url      string
+	seq      uint64
 }
 
 // externalOpenResult is sent after an attempt to open a URL in the system handler.
@@ -204,9 +211,10 @@ const helpText = `
     Enter        Follow selected link / fetch URL
     [ / Alt+Left   Go back
     ] / Alt+Right  Go forward
-    Tab          Cycle through links on page
-    d            Document graph view
-    f            Focus address bar
+	    Tab          Cycle through links on page
+	    d            Document graph view
+	    r            Cached relations view
+	    f            Focus address bar
 
   Bookmarks
     b            Toggle bookmark for current page
@@ -290,6 +298,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleWindowSize(msg)
 	case crawlResult:
 		return m.handleCrawlResult(msg)
+	case relationRefreshResult:
+		return m.handleRelationRefreshResult(msg)
+	case graphSaveResult:
+		if msg.err == nil {
+			m.graphSavedGeneration = max(m.graphSavedGeneration, msg.generation)
+			return m, nil
+		}
+		m.bookmarkMsg = "Graph cache update failed: " + msg.err.Error()
+		m.graphWarning = msg.err.Error()
+		return m.startBookmarkMsgClear()
 	case fetchResult:
 		return m.handleFetchResult(msg)
 	case externalOpenResult:
@@ -557,7 +575,9 @@ func (m model) handleCrawlResult(msg crawlResult) (tea.Model, tea.Cmd) {
 	// Recompute display list for the active sub-view.
 	switch m.graphSubView {
 	case subViewBacklinks:
-		m.graphNodes = backlinksList(m.graphStore, msg.url)
+		if queryErr := m.loadRelationsPage(msg.url, m.graphPageCursor); queryErr != nil {
+			m.graphWarning = "query relations: " + queryErr.Error()
+		}
 	case subViewTopology:
 		m.graphNodes = topologyList(m.graphStore)
 	default:
@@ -565,6 +585,24 @@ func (m model) handleCrawlResult(msg crawlResult) (tea.Model, tea.Cmd) {
 	}
 	m.graphIdx = 0
 
+	if m.ready {
+		m.viewport.SetContent(m.renderCurrentGraphSubView())
+		m.viewport.GotoTop()
+	}
+	return m, nil
+}
+
+func (m model) handleRelationRefreshResult(msg relationRefreshResult) (tea.Model, tea.Cmd) {
+	if msg.seq != m.crawlSeq || m.graphSubView != subViewBacklinks {
+		return m, nil
+	}
+	m.crawlCancel = nil
+	if summary := strings.TrimSpace(msg.summary); summary != "" {
+		m.graphWarning = summary
+	}
+	if err := m.loadRelationsPage(msg.url, m.graphPageCursor); err != nil {
+		m.graphWarning = "query relations: " + err.Error()
+	}
 	if m.ready {
 		m.viewport.SetContent(m.renderCurrentGraphSubView())
 		m.viewport.GotoTop()
@@ -599,6 +637,13 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	m.status = msg.result.Response.Status
 	m.metadata = msg.result.Response.Metadata
 	m.fromCache = msg.result.FromCache
+	var graphSave tea.Cmd
+	if m.graphStore != nil && m.graphStore.ObserveDocument(msg.graphURL, graph.FetchResult{
+		Status: msg.result.Response.Status, Body: msg.result.Response.Body, Metadata: msg.result.Response.Metadata,
+	}) {
+		m.graphGeneration++
+		graphSave = saveGraphStore(m.graphStore, m.graphGeneration)
+	}
 
 	// Extract and resolve links from raw body.
 	m.rawBody = msg.result.Response.Body
@@ -642,12 +687,24 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 
 	m.focus = focusViewport
 	m.addressBar.Blur()
-	return m, nil
+	return m, graphSave
+}
+
+func (m *model) flushGraphStore() {
+	if m.graphStore == nil || m.graphSavedGeneration >= m.graphGeneration {
+		return
+	}
+	if err := m.graphStore.Save(); err != nil {
+		fmt.Fprintf(os.Stderr, "graph cache save failed during shutdown: %v\n", err)
+		return
+	}
+	m.graphSavedGeneration = m.graphGeneration
 }
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == 'c' && msg.Mod == tea.ModCtrl {
 		m.cancelCrawl()
+		m.flushGraphStore()
 		return m, tea.Quit
 	}
 
@@ -694,6 +751,7 @@ func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		m.cancelCrawl()
+		m.flushGraphStore()
 		return m, tea.Quit
 	case "esc":
 		if m.status == "bookmarks" {
@@ -748,6 +806,8 @@ func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleBookmarkView()
 	case "d":
 		return m.handleGraphToggle()
+	case "r":
+		return m.handleRelationsToggle()
 	}
 
 	var cmd tea.Cmd
@@ -769,6 +829,7 @@ func (m model) toggleFocus() model {
 func (m model) handleHelpDismiss(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "q" {
 		m.cancelCrawl()
+		m.flushGraphStore()
 		return m, tea.Quit
 	}
 	m.showHelp = false
@@ -944,6 +1005,10 @@ func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.crawlCancel = cancel
 	m.graphWarning = ""
+	m.graphPageCursor = ""
+	m.graphPageNext = ""
+	m.graphPageBack = nil
+	m.graphPageTotal = 0
 	m.crawlSeq++
 	m.graphIdx = 0
 
@@ -1160,7 +1225,7 @@ func (m model) doFetch(raw string) tea.Cmd {
 			return fetchResult{err: err, url: raw, seq: seq}
 		}
 		result, err := m.client.Fetch(host, path, tokens.Resolve("", host, tokens.LoadDefault()))
-		return fetchResult{result: result, err: err, url: raw, seq: seq}
+		return fetchResult{result: result, err: err, graphURL: links.NodeURL(host, path), url: raw, seq: seq}
 	}
 }
 

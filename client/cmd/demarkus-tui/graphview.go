@@ -40,6 +40,17 @@ type crawlResult struct {
 	seq   uint64
 }
 
+type relationRefreshResult struct {
+	url     string
+	summary string
+	seq     uint64
+}
+
+type graphSaveResult struct {
+	err        error
+	generation uint64
+}
+
 // graphListItem is a flattened node for display in the tree view.
 type graphListItem struct {
 	observation *graph.Observation
@@ -48,6 +59,8 @@ type graphListItem struct {
 	status      string
 	depth       int
 	backlinks   int // inbound link count from the graph
+	edges       []graphstore.NeighborhoodEdge
+	omitted     int
 }
 
 // maxCrawlNodes caps the number of documents crawled to prevent runaway graphs.
@@ -82,6 +95,51 @@ func (m *model) cancelCrawl() {
 		m.crawling = false
 		m.crawlSeq++
 	}
+}
+
+func (m model) handleRelationsToggle() (tea.Model, tea.Cmd) {
+	url := m.addressBar.Value()
+	if url == "" {
+		return m, nil
+	}
+	m.cancelCrawl()
+	m.viewMode = viewGraph
+	m.graphSubView = subViewBacklinks
+	m.graphWarning = ""
+	m.graphPageBack = nil
+	if err := m.loadRelationsPage(url, ""); err != nil {
+		m.graphWarning = "query relations: " + err.Error()
+	}
+	var refresh tea.Cmd
+	if m.graphStore != nil && m.client != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		m.crawlCancel = cancel
+		m.crawlSeq++
+		refresh = m.startRelationRefresh(ctx, url)
+	}
+	if m.ready {
+		m.viewport.SetContent(m.renderCurrentGraphSubView())
+		m.viewport.GotoTop()
+	}
+	return m, refresh
+}
+
+func (m model) startRelationRefresh(ctx context.Context, url string) tea.Cmd {
+	seq := m.crawlSeq
+	store := m.graphStore
+	client := m.client
+	return func() tea.Msg {
+		urls := store.Backlinks(url)
+		if len(urls) == 0 {
+			return relationRefreshResult{url: url, seq: seq}
+		}
+		result, err := store.Revalidate(ctx, urls, graphstore.NewFetchFunc(client, tokens.LoadDefault()), fetch.ParseMarkURL)
+		return relationRefreshResult{url: url, summary: graphstore.ValidationSummary(result, err), seq: seq}
+	}
+}
+
+func saveGraphStore(store *graphstore.Store, generation uint64) tea.Cmd {
+	return func() tea.Msg { return graphSaveResult{err: store.Save(), generation: generation} }
 }
 
 // flattenGraph builds a display list from the graph using BFS from rootURL.
@@ -134,22 +192,72 @@ func flattenGraph(g *graph.Graph, rootURL string) []graphListItem {
 	return items
 }
 
-// backlinksList returns a flat list of documents linking to url from the store.
+type graphNeighborhoodPage struct {
+	items      []graphListItem
+	nextCursor string
+	total      int
+}
+
+const graphNeighborhoodPageSize = 20
+
+// backlinksList preserves the legacy helper over the indexed query contract.
 func backlinksList(gs *graphstore.Store, url string) []graphListItem {
 	if gs == nil {
 		return nil
 	}
-	entries := gs.BacklinksEnriched(url)
-	items := make([]graphListItem, 0, len(entries))
-	for _, e := range entries {
+	page, err := graphNeighborhoodList(gs, url, graphstore.NeighborhoodOptions{
+		Direction: graphstore.NeighborhoodIncoming,
+		PageSize:  graphstore.MaxNeighborhoodPageSize,
+	})
+	if err != nil {
+		return nil
+	}
+	return page.items
+}
+
+func graphNeighborhoodList(gs *graphstore.Store, url string, opts graphstore.NeighborhoodOptions) (graphNeighborhoodPage, error) {
+	if gs == nil {
+		return graphNeighborhoodPage{}, nil
+	}
+	page, err := gs.Neighborhood(url, opts)
+	if err != nil {
+		return graphNeighborhoodPage{}, err
+	}
+	items := make([]graphListItem, 0, len(page.Rows))
+	for i := range page.Rows {
+		row := &page.Rows[i]
+		observation := row.Node.Observation
+		var observed *graph.Observation
+		if observation != (graph.Observation{}) {
+			observed = &observation
+		}
 		items = append(items, graphListItem{
-			url:         e.URL,
-			title:       e.Title,
-			status:      e.Status,
-			observation: e.Observation,
+			url:         row.Node.URL,
+			title:       row.Node.Title,
+			status:      row.Node.Status,
+			observation: observed,
+			edges:       row.Edges,
+			omitted:     row.OmittedEdges,
 		})
 	}
-	return items
+	return graphNeighborhoodPage{items: items, nextCursor: page.NextCursor, total: page.TotalRows}, nil
+}
+
+func (m *model) loadRelationsPage(url, cursor string) error {
+	page, err := graphNeighborhoodList(m.graphStore, url, graphstore.NeighborhoodOptions{
+		Direction: graphstore.NeighborhoodBoth,
+		PageSize:  graphNeighborhoodPageSize,
+		Cursor:    cursor,
+	})
+	if err != nil {
+		return err
+	}
+	m.graphNodes = page.items
+	m.graphPageCursor = cursor
+	m.graphPageNext = page.nextCursor
+	m.graphPageTotal = page.total
+	m.graphIdx = 0
+	return nil
 }
 
 // topologyList returns all nodes from the store sorted by backlink count descending.
@@ -258,14 +366,14 @@ func statusIcon(status string) string {
 	}
 }
 
-// renderBacklinksView renders the backlinks list for the viewport.
+// renderBacklinksView renders grouped cached relations for the viewport.
 func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 	var b strings.Builder
-	b.WriteString("\n  Backlinks\n\n")
+	b.WriteString("\n  Relations\n\n")
 
 	if len(items) == 0 {
-		b.WriteString("  No backlinks found.\n  Navigate to a document and press 'd' to crawl its links.\n")
-		b.WriteString("\n  [d] links  [t] topology  [Esc] close  [q] quit\n")
+		b.WriteString("  No relations found.\n  Ordinary reads and graph crawls populate this view.\n")
+		b.WriteString("\n  [d] links  [t] topology  [ / ] pages  [Esc] close  [q] quit\n")
 		return b.String()
 	}
 
@@ -287,9 +395,33 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
+		for j := range item.edges {
+			edge := &item.edges[j]
+			direction := "outgoing"
+			if edge.Edge.From == item.url {
+				direction = "incoming"
+			}
+			relation := edge.Edge.Rel
+			if relation == "" {
+				relation = "link"
+			}
+			source := edge.Edge.From
+			if edge.Edge.Anchor != "" {
+				source += "#" + edge.Edge.Anchor
+			}
+			detail := fmt.Sprintf("      %s [%s] source %s%s", direction, relation, source, edge.Source.Observation.Annotation())
+			if width > 7 {
+				detail = truncateCells(detail, width-2)
+			}
+			b.WriteString(detail)
+			b.WriteByte('\n')
+		}
+		if item.omitted > 0 {
+			fmt.Fprintf(&b, "      +%d more edges\n", item.omitted)
+		}
 	}
 
-	b.WriteString("\n  [Enter] navigate  [d] links  [t] topology  [Esc] close  [q] quit\n")
+	b.WriteString("\n  [Enter] navigate  [d] links  [t] topology  [ / ] pages  [Esc] close  [q] quit\n")
 	return b.String()
 }
 
@@ -338,6 +470,7 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		m.cancelCrawl()
+		m.flushGraphStore()
 		return m, tea.Quit
 	case "esc":
 		m.cancelCrawl()
@@ -350,38 +483,21 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "d":
 		if m.graphSubView != subViewLinks {
-			m.graphSubView = subViewLinks
-			if m.graphData != nil {
-				url := m.addressBar.Value()
-				m.graphNodes = flattenGraph(m.graphData, url)
-				m.graphIdx = 0
-			}
-			if m.ready {
-				m.viewport.SetContent(m.renderCurrentGraphSubView())
-				m.viewport.GotoTop()
-			}
-		} else {
-			m.cancelCrawl()
-			m.viewMode = viewDocument
-			if m.histIdx >= 0 {
-				m.restoreHistory()
-			} else if m.ready {
-				m.viewport.SetContent("\n  No document loaded.\n  Use the address bar to load a document.\n")
-			}
+			return m.handleGraphToggle()
+		}
+		m.cancelCrawl()
+		m.viewMode = viewDocument
+		if m.histIdx >= 0 {
+			m.restoreHistory()
+		} else if m.ready {
+			m.viewport.SetContent("\n  No document loaded.\n  Use the address bar to load a document.\n")
 		}
 		return m, nil
 	case "r":
-		m.graphSubView = subViewBacklinks
-		url := m.addressBar.Value()
-		m.graphNodes = backlinksList(m.graphStore, url)
-		m.graphIdx = 0
-		if m.ready {
-			m.viewport.SetContent(m.renderCurrentGraphSubView())
-			m.viewport.GotoTop()
-		}
-		return m, nil
+		return m.handleRelationsToggle()
 	case "t":
 		m.graphSubView = subViewTopology
+		m.graphPageBack = nil
 		m.graphNodes = topologyList(m.graphStore)
 		m.graphIdx = 0
 		if m.ready {
@@ -389,6 +505,8 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoTop()
 		}
 		return m, nil
+	case "]", "[":
+		return m.handleRelationsPageKey(msg.String())
 	case "j", "down":
 		if m.graphIdx < len(m.graphNodes)-1 {
 			m.graphIdx++
@@ -420,6 +538,34 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handleRelationsPageKey(key string) (tea.Model, tea.Cmd) {
+	if m.graphSubView != subViewBacklinks {
+		return m, nil
+	}
+	if key == "]" && m.graphPageNext != "" {
+		current, next := m.graphPageCursor, m.graphPageNext
+		if err := m.loadRelationsPage(m.addressBar.Value(), next); err != nil {
+			m.graphWarning = "query relations: " + err.Error()
+		} else {
+			m.graphPageBack = append(m.graphPageBack, current)
+		}
+	}
+	if key == "[" && len(m.graphPageBack) > 0 {
+		last := len(m.graphPageBack) - 1
+		previous := m.graphPageBack[last]
+		if err := m.loadRelationsPage(m.addressBar.Value(), previous); err != nil {
+			m.graphWarning = "query relations: " + err.Error()
+		} else {
+			m.graphPageBack = m.graphPageBack[:last]
+		}
+	}
+	if m.ready {
+		m.viewport.SetContent(m.renderCurrentGraphSubView())
+		m.viewport.GotoTop()
+	}
+	return m, nil
+}
+
 // renderCurrentGraphSubView returns the rendered content for the active sub-view.
 func (m model) renderCurrentGraphSubView() string {
 	prefix := ""
@@ -431,6 +577,7 @@ func (m model) renderCurrentGraphSubView() string {
 	}
 	switch m.graphSubView {
 	case subViewBacklinks:
+		prefix += fmt.Sprintf("relations: %d documents\n", m.graphPageTotal)
 		return prefix + renderBacklinksView(m.graphNodes, m.graphIdx, m.width)
 	case subViewTopology:
 		return prefix + renderTopologyView(m.graphNodes, m.graphIdx, m.width)

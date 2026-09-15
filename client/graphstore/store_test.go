@@ -439,10 +439,72 @@ func TestSaveAtomic(t *testing.T) {
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Error(".tmp file still exists after save")
 	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".graph.json.tmp-") {
+			t.Errorf("unique temp file still exists after save: %s", entry.Name())
+		}
+	}
 
 	// main file should exist
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("graph.json not found: %v", err)
+	}
+}
+
+func TestSaveReplacesLegacyFileWithPrivateMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	legacy := `{"version":1,"nodes":[{"url":"mark://a/source.md","status":"ok","crawled_at":"2026-01-01T00:00:00Z"}],"edges":[{"from":"mark://a/source.md","to":"mark://a/target.md"}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("saved mode = %04o, want 0600", got)
+	}
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Backlinks("mark://a/target.md"); !slices.Equal(got, []string{"mark://a/source.md"}) {
+		t.Fatalf("legacy graph changed across private save: %v", got)
+	}
+}
+
+func TestSaveCleansUniqueTempAfterRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	store := New()
+	store.path = filepath.Join(dir, "graph.json")
+	if err := os.Mkdir(store.path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(); err == nil {
+		t.Fatal("Save succeeded over directory")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".graph.json.tmp-") {
+			t.Fatalf("temp file survived failed rename: %s", entry.Name())
+		}
 	}
 }
 

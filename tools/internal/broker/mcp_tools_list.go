@@ -86,16 +86,20 @@ func markFetchTool() mcp.Tool {
 }
 
 func markExploreTool() mcp.Tool {
-	return mcp.NewTool("mark_explore",
+	neighborhoodParams := mcpfmt.NeighborhoodParams()
+	options := make([]mcp.ToolOption, 0, len(neighborhoodParams)+3)
+	options = append(options,
 		mcp.WithDescription(
-			"Orient around one document: outline head, outbound links, backlinks, siblings (10 each). Use instead of fetch+backlinks+list, then mark_fetch url#<anchor>. Backlinks from broker graph store (mark_graph populates; per-pod, resets on restart). "+mcpURLHint,
+			"Orient around one document: outline head, outbound links, cached typed relations, siblings. Relation rows are grouped, bounded, and paginated; broker cache is per-pod. "+mcpURLHint,
 		),
 		mcp.WithString("url",
 			mcp.Required(),
 			mcp.Description(mcpURLDesc),
 		),
-		mcpfmt.Fetch.Param(),
 	)
+	options = append(options, neighborhoodParams...)
+	options = append(options, mcpfmt.Fetch.Param())
+	return mcp.NewTool("mark_explore", options...)
 }
 
 func markListTool() mcp.Tool {

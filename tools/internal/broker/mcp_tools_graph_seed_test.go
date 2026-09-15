@@ -399,8 +399,7 @@ func TestSeedWorldGraphEtagRoundTrip(t *testing.T) {
 	}
 }
 
-// TestHandleMarkExploreBacklinksSeeded: explore's backlinks section
-// benefits from the same per-world seed.
+// Explore's relation section benefits from the same per-world seed.
 func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 	d := seedingDispatcher("hub-etag-1")
 	d.fetchFn = func(_, path, _ string) (fetch.Result, error) {
@@ -418,7 +417,7 @@ func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 		t.Fatalf("handleMarkExplore: %v", err)
 	}
 	text := toolResultText(t, res)
-	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "Page A") {
-		t.Errorf("explore backlinks not seeded:\n%s", text)
+	if !strings.Contains(text, "## Relations (1 documents)") || !strings.Contains(text, "Page A") {
+		t.Errorf("explore relations not seeded:\n%s", text)
 	}
 }

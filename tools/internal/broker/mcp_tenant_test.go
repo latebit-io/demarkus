@@ -374,7 +374,7 @@ func assertTenantBacklinks(t *testing.T, g *mcpGateway, tenant, foreign string) 
 		text := tenantGraphCall(t, g, tenant, tool, "/index.md")
 		count := "Backlinks for mark://" + tenant + "-w/index.md (1)"
 		if tool == "mark_explore" {
-			count = "## Backlinks (1)"
+			count = "## Relations (1 documents)"
 		}
 		for _, want := range []string{tenant + "-w/source.md", tenant + "_TITLE", tenant + "_LABEL", count} {
 			if !strings.Contains(text, want) {

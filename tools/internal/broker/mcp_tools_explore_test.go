@@ -8,6 +8,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -76,8 +77,8 @@ func TestHandleMarkExploreCard(t *testing.T) {
 		"The hub links everything together.",
 		"## Outbound links (2)",
 		"- [Alpha](/alpha.md)",
-		"## Backlinks (0)",
-		"(none recorded; run mark_graph to populate",
+		"## Relations (2 documents)",
+		"outgoing [link]",
 		"## Siblings in / (3)",
 		"- alpha.md",
 		"- docs/",
@@ -108,8 +109,34 @@ func TestHandleMarkExploreBacklinksFromGraphStore(t *testing.T) {
 	g.knowledgeGraph.graphStore.Merge(gr, nil)
 
 	text := exploreResultText(t, g, "mark://team-a/hub.md")
-	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "[Page A](mark://team-a/a.md)") {
-		t.Errorf("expected enriched backlink in card:\n%s", text)
+	for _, want := range []string{"## Relations (3 documents)", "[Page A](mark://team-a/a.md)", "incoming [link]; [source](mark://team-a/a.md)"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("expected grouped relation %q in card:\n%s", want, text)
+		}
+	}
+}
+
+func TestHandleMarkExploreOrdinaryReadCachesTypedRelations(t *testing.T) {
+	d := exploreDispatcher()
+	d.fetchFn = func(_, _, _ string) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{
+			Status:   protocol.StatusOK,
+			Metadata: map[string]string{"version": "4", "rel-supersedes": "/old.md"},
+			Body:     "# Current\n",
+		}}, nil
+	}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkExplore(withAliceClaims(context.Background()), callToolReq("mark_explore", map[string]any{
+		"url": "mark://team-a/current.md", "direction": "outgoing", "relations": []string{"supersedes"},
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkExplore: err=%v result=%+v", err, res)
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{"## Relations (1 documents)", "mark://team-a/old.md", "outgoing [supersedes]", "[source](mark://team-a/current.md)"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
 	}
 }
 
@@ -168,6 +195,31 @@ func TestHandleMarkExploreInvalidURL(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatal("expected tool error for missing world name")
+	}
+}
+
+func TestHandleMarkExploreConfirmedAbsenceClearsAdjacency(t *testing.T) {
+	d := exploreDispatcher()
+	d.fetchFn = func(_, _, _ string) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound, Metadata: map[string]string{"version": "2"}}}, nil
+	}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	world, ok := g.srv.cfg.FindWorld("team-a")
+	if !ok {
+		t.Fatal("team-a world missing")
+	}
+	g.knowledgeGraph.graphStore.ObserveDocument("mark://team-a/missing.md", graph.FetchResult{
+		Source: links.NodeURL(resolveWorldAddress(&world), "/missing.md"), Status: "ok", Body: "# Old\n\n[target](/target.md)",
+		Metadata: map[string]string{"version": "1"},
+	})
+	res, err := g.handleMarkExplore(withAliceClaims(context.Background()), callToolReq("mark_explore", map[string]any{
+		"url": "mark://team-a/missing.md",
+	}))
+	if err != nil || res.IsError || !strings.Contains(toolResultText(t, res), "status: not-found") {
+		t.Fatalf("handleMarkExplore: err=%v result=%+v", err, res)
+	}
+	if got := g.knowledgeGraph.graphStore.Backlinks("mark://team-a/target.md"); len(got) != 0 {
+		t.Fatalf("confirmed absence retained stale adjacency: %v", got)
 	}
 }
 
