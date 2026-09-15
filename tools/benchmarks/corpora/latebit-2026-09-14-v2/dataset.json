@@ -1,0 +1,14 @@
+{
+  "format": "demarkus-answer-dataset-v1",
+  "id": "latebit-2026-09-14-v2",
+  "source": "mark://latebit",
+  "archive_manifest_sha256": "sha256-7330d3fde84e66de1da4826474c325eaa594936eed6eb20e7abf11a7d9cd89a2",
+  "corpus_sha256": "sha256-0ab529782e64685492a6c659adba18df3b8fd04430c18e46bb22050096eb19b9",
+  "tasks_sha256": "sha256-abcabc01dac85827956408ffa0b9cb64ffd1f8311ccd7708b25a996e759acfee",
+  "rubric_sha256": "sha256-87af4f7d4c035ba5d7c7cf1bb05b5ab0bedbf534689b3241ba23e51425dc17f7",
+  "scoring_version": "independent-evidence-v1",
+  "tool_profile": "scoped-direct-read-v1",
+  "reader_policy": "section-first",
+  "reader_contract_sha256": "sha256-36233075d6700db394d34a52b5dbf2baa52173cfb781d156dcc17592d0bfb27a",
+  "authored": "2026-09-15"
+}
