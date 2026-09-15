@@ -63,11 +63,12 @@ func (e orderedExporter) ExportDocs(ctx context.Context, fn func(string, store.S
 type generatedExporter int
 
 func (e generatedExporter) ExportDocs(ctx context.Context, fn func(string, store.StoredDocument) error) error {
+	document := store.StoredDocument{Versions: []store.StoredVersion{{Version: 1}}}
 	for i := range int(e) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := fn("/"+strconv.Itoa(i), store.StoredDocument{}); err != nil {
+		if err := fn("/"+strconv.Itoa(i), document); err != nil {
 			return err
 		}
 	}
@@ -151,6 +152,31 @@ func TestPackExportRejectsDuplicatePaths(t *testing.T) {
 	}
 	if _, err := os.Stat(opts.Manifest); !os.IsNotExist(err) {
 		t.Fatalf("failed duplicate manifest retained: %v", err)
+	}
+}
+
+func TestExportCorpusRejectsInvalidDocuments(t *testing.T) {
+	valid := store.StoredDocument{Versions: []store.StoredVersion{{Version: 1}}}
+	tests := []struct {
+		name string
+		path string
+		doc  store.StoredDocument
+		want string
+	}{
+		{name: "non-canonical path", path: "docs/x.md", doc: valid, want: "non-canonical corpus document path docs/x.md"},
+		{name: "descending versions", path: "/docs/x.md", doc: store.StoredDocument{Versions: []store.StoredVersion{{Version: 2}, {Version: 1}}}, want: "versions not strictly ascending"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			stats, err := exportCorpus(t.Context(), orderedExporter{{Path: test.path, Document: test.doc}}, &output)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("invalid export error = %v, want %q", err, test.want)
+			}
+			if stats.Documents != 0 || output.Len() != 0 {
+				t.Fatalf("invalid document encoded: stats = %+v, bytes = %d", stats, output.Len())
+			}
+		})
 	}
 }
 

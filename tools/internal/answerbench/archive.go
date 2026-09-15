@@ -64,6 +64,13 @@ func exportCorpus(ctx context.Context, source DocumentExporter, output io.Writer
 	enc := json.NewEncoder(io.MultiWriter(output, hash, count))
 	paths := make(map[string]struct{})
 	err := source.ExportDocs(ctx, func(path string, doc store.StoredDocument) error {
+		rel, err := store.ValidateImport(path, doc)
+		if err != nil {
+			return fmt.Errorf("validate corpus document %s: %w", path, err)
+		}
+		if path != "/"+rel {
+			return fmt.Errorf("non-canonical corpus document path %s", path)
+		}
 		if _, exists := paths[path]; exists {
 			return fmt.Errorf("duplicate corpus document %s", path)
 		}
