@@ -400,6 +400,25 @@ func TestRelationsToggleUsesCacheWithoutCrawl(t *testing.T) {
 	}
 }
 
+func TestRelationsToggleClearsPreviousPageState(t *testing.T) {
+	address := textinput.New()
+	address.SetValue("mark://h/target.md")
+	m := model{
+		addressBar:      address,
+		graphNodes:      []graphListItem{{url: "mark://h/stale.md"}},
+		graphPageCursor: "stale-cursor",
+		graphPageNext:   "stale-next",
+		graphPageTotal:  1,
+		graphIdx:        1,
+	}
+	updated, _ := m.handleRelationsToggle()
+	got := updated.(model)
+	if len(got.graphNodes) != 0 || got.graphPageCursor != "" || got.graphPageNext != "" || got.graphPageTotal != 0 || got.graphIdx != 0 {
+		t.Fatalf("stale relation page retained: nodes=%+v cursor=%q next=%q total=%d idx=%d",
+			got.graphNodes, got.graphPageCursor, got.graphPageNext, got.graphPageTotal, got.graphIdx)
+	}
+}
+
 func TestRenderTopologyView(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		out := renderTopologyView(nil, 0, 80)

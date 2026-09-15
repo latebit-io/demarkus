@@ -56,20 +56,25 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("fetch failed: %v", err)), nil
 	}
+	body := result.Response.Body
+	binary := mdoutline.BinaryBody(body)
+	observed := result
+	if binary {
+		observed.Response.Body = ""
+	}
 	fullURL := links.NodeURL(host, path)
 	if result.Response.Status != protocol.StatusOK {
 		text := mcpfmt.Format(result, opts)
-		if warning := h.observeExploreDocument(fullURL, result); warning != "" {
+		if warning := h.observeExploreDocument(fullURL, observed); warning != "" {
 			text += mcpfmt.Note(strings.TrimSuffix(warning, "\n"))
 		}
 		return mcp.NewToolResultText(text), nil
 	}
-	body := result.Response.Body
 	h.seedGraph(ctx, host)
-	cacheWarning := h.observeExploreDocument(fullURL, result)
+	cacheWarning := h.observeExploreDocument(fullURL, observed)
 
 	// Binary/non-UTF-8 body: an outline over it is garbage; return a notice.
-	if mdoutline.BinaryBody(body) {
+	if binary {
 		notice := mdoutline.NonMarkdownNotice(len(body))
 		if cacheWarning != "" {
 			notice += "\n" + cacheWarning

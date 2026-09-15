@@ -224,12 +224,22 @@ func TestHandleMarkExploreConfirmedAbsenceClearsAdjacency(t *testing.T) {
 }
 
 func TestHandleMarkExploreBinaryNotice(t *testing.T) {
-	g := newGatewayWithDispatcher(t, mcpTestConfig(), fetchModeDispatcher(binaryFetchModeDoc, "1", "abc"))
+	d := exploreDispatcher()
+	d.fetchFn = func(_, _, _ string) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{
+			Status: protocol.StatusOK, Metadata: map[string]string{"version": "1", "etag": "abc"},
+			Body: "[false relation](/false.md)\xff",
+		}}, nil
+	}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
 	text := exploreResultText(t, g, "mark://team-a/img.png")
 	if !strings.Contains(text, "non-markdown or binary document") {
 		t.Errorf("binary body should return the notice, got:\n%s", text)
 	}
 	if strings.Contains(text, "## Outline") {
 		t.Error("binary body must not be run through the outline builder")
+	}
+	if got := g.knowledgeGraph.graphStore.Backlinks("mark://team-a/false.md"); len(got) != 0 {
+		t.Fatalf("binary body cached false relation: %v", got)
 	}
 }

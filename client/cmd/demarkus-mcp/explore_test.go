@@ -287,22 +287,26 @@ func TestHandlerMarkExplore_NonOKPassthrough(t *testing.T) {
 }
 
 func TestHandlerMarkExplore_BinaryNotice(t *testing.T) {
+	gs := graphstore.New()
 	sc := &stubClient{
 		fetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1", "modified": "2026-07-04T00:00:00Z", "etag": "abc"},
-				Body:     "\x89PNG\r\n\x1a\n\xff\xfe\x00",
+				Body:     "[false relation](/false.md)\xff",
 			}}, nil
 		},
 	}
-	h := &handler{client: sc}
+	h := &handler{client: sc, graphStore: gs}
 	text := exploreText(t, h, "mark://host:6309/img.png")
 	if !strings.Contains(text, "non-markdown or binary document") {
 		t.Errorf("binary body should return the notice, got:\n%s", text)
 	}
 	if strings.Contains(text, "## Outline") {
 		t.Error("binary body must not be run through the outline builder")
+	}
+	if got := gs.Backlinks("mark://host/false.md"); len(got) != 0 {
+		t.Fatalf("binary body cached false relation: %v", got)
 	}
 }
 

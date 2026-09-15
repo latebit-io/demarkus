@@ -39,6 +39,12 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 	if err != nil {
 		return g.toolErrorFor("explore", worldName, err), nil
 	}
+	body := result.Response.Body
+	binary := mdoutline.BinaryBody(body)
+	observed := result
+	if binary {
+		observed.Response.Body = ""
+	}
 	state, err := g.graphFor(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
@@ -49,15 +55,14 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 		source = links.NodeURL(resolveWorldAddress(&world), path)
 	}
 	state.graphStore.ObserveDocument(docURL, graph.FetchResult{
-		Source: source, Status: result.Response.Status, Body: result.Response.Body, Metadata: result.Response.Metadata,
+		Source: source, Status: observed.Response.Status, Body: observed.Response.Body, Metadata: observed.Response.Metadata,
 	})
 	if result.Response.Status != protocol.StatusOK {
 		return mcp.NewToolResultText(mcpfmt.Format(result, opts)), nil
 	}
-	body := result.Response.Body
 
 	// Binary/non-UTF-8 body: an outline over it is garbage; return a notice.
-	if mdoutline.BinaryBody(body) {
+	if binary {
 		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.NonMarkdownNotice(len(body)),
 			map[string]string{"mode": "binary"}, opts)), nil
 	}

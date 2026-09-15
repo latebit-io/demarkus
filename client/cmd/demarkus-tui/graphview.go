@@ -107,6 +107,11 @@ func (m model) handleRelationsToggle() (tea.Model, tea.Cmd) {
 	m.graphSubView = subViewBacklinks
 	m.graphWarning = ""
 	m.graphPageBack = nil
+	m.graphNodes = nil
+	m.graphPageCursor = ""
+	m.graphPageNext = ""
+	m.graphPageTotal = 0
+	m.graphIdx = 0
 	if err := m.loadRelationsPage(url, ""); err != nil {
 		m.graphWarning = "query relations: " + err.Error()
 	}
