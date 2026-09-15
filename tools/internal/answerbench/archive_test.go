@@ -88,6 +88,17 @@ func TestArchiveRoundTripAndDeterminism(t *testing.T) {
 	}
 }
 
+func TestPackRejectsNilOptions(t *testing.T) {
+	const corpusError = "pack requires root, archive, manifest, id and source"
+	if _, err := PackCorpus(t.Context(), nil); err == nil || err.Error() != corpusError {
+		t.Fatalf("PackCorpus error = %v, want %q", err, corpusError)
+	}
+	const exportError = "pack requires source exporter, archive, manifest, id and source"
+	if _, err := PackExport(t.Context(), nil, store.New(t.TempDir())); err == nil || err.Error() != exportError {
+		t.Fatalf("PackExport error = %v, want %q", err, exportError)
+	}
+}
+
 func TestArchiveRestoreIgnoresExporterTraversalOrder(t *testing.T) {
 	dir, root := t.TempDir(), t.TempDir()
 	s := store.New(root)
@@ -116,6 +127,12 @@ func TestArchiveRejectsCorruptionAndCleansOwnedOutput(t *testing.T) {
 	manifest, err := PackCorpus(t.Context(), &opts)
 	if err != nil {
 		t.Fatal(err)
+	}
+	tooMany := manifest
+	tooMany.Documents = maxCorpusDocuments + 1
+	tooMany.Versions = tooMany.Documents
+	if err := validateCorpusManifest(&tooMany); err == nil {
+		t.Fatal("excessive document count accepted")
 	}
 	bad := manifest
 	bad.CorpusSHA256 = digest([]byte("wrong corpus"))

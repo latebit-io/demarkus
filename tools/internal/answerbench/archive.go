@@ -16,7 +16,10 @@ import (
 	"github.com/latebit-io/demarkus/protocol/store"
 )
 
-const corpusArchiveFormat = "demarkus-corpus-jsonl-gzip-v1"
+const (
+	corpusArchiveFormat = "demarkus-corpus-jsonl-gzip-v1"
+	maxCorpusDocuments  = 100_000
+)
 
 type corpusEntry struct {
 	Path     string
@@ -75,7 +78,7 @@ func exportCorpus(ctx context.Context, source DocumentExporter, output io.Writer
 // PackCorpus stores raw version bytes, archive state and modified times in gzip.
 // Existing outputs are never overwritten; no live service or credential is needed.
 func PackCorpus(ctx context.Context, opts *PackOptions) (manifest CorpusManifest, err error) {
-	if opts.Root == "" {
+	if opts == nil || opts.Root == "" {
 		return manifest, errors.New("pack requires root, archive, manifest, id and source")
 	}
 	return PackExport(ctx, opts, store.New(opts.Root))
@@ -83,7 +86,7 @@ func PackCorpus(ctx context.Context, opts *PackOptions) (manifest CorpusManifest
 
 // PackExport stores a pinned document stream in the corpus archive format.
 func PackExport(ctx context.Context, opts *PackOptions, source DocumentExporter) (manifest CorpusManifest, err error) {
-	if opts.ID == "" || opts.Source == "" || opts.Archive == "" || opts.Manifest == "" || source == nil {
+	if opts == nil || opts.ID == "" || opts.Source == "" || opts.Archive == "" || opts.Manifest == "" || source == nil {
 		return manifest, errors.New("pack requires source exporter, archive, manifest, id and source")
 	}
 	file, err := os.OpenFile(opts.Archive, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -136,7 +139,7 @@ func writeNewJSON(path string, value any) (err error) {
 }
 
 func validateCorpusManifest(m *CorpusManifest) error {
-	if m.Format != corpusArchiveFormat || m.Documents < 1 || m.ActiveDocuments < 1 || m.ActiveDocuments > m.Documents || m.Versions < m.Documents {
+	if m.Format != corpusArchiveFormat || m.Documents < 1 || m.Documents > maxCorpusDocuments || m.ActiveDocuments < 1 || m.ActiveDocuments > m.Documents || m.Versions < m.Documents {
 		return errors.New("invalid corpus manifest format or counts")
 	}
 	if m.CompressedBytes < 1 || m.CompressedBytes > 256<<20 || m.UncompressedBytes < 1 || m.UncompressedBytes > 1<<30 {
@@ -251,7 +254,7 @@ func importCorpus(ctx context.Context, compressed []byte, root string, manifest 
 	dec := json.NewDecoder(input)
 	dec.DisallowUnknownFields()
 	destinationStore := store.New(root)
-	fingerprints = make(map[string]string, manifest.Documents)
+	fingerprints = make(map[string]string)
 	documents := 0
 	for {
 		if err := ctx.Err(); err != nil {
