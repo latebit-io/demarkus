@@ -33,14 +33,16 @@ func TestSeedGateBoundsAndBacksOff(t *testing.T) {
 }
 
 func TestSeedGateCallerCancelDoesNotCountAsCheck(t *testing.T) {
-	var gate SeedGate
-	ctx, cancel := context.WithCancel(t.Context())
-	gate.Run(ctx, "host", func(context.Context) bool {
-		cancel()
-		return false
-	})
-	if _, checked := gate.LastCheck("host"); checked {
-		t.Fatal("caller cancel must not back off the next call")
+	for _, outcome := range []bool{false, true} {
+		var gate SeedGate
+		ctx, cancel := context.WithCancel(t.Context())
+		gate.Run(ctx, "host", func(context.Context) bool {
+			cancel()
+			return outcome
+		})
+		if _, checked := gate.LastCheck("host"); checked {
+			t.Fatalf("caller cancel with pass=%v must not back off the next call", outcome)
+		}
 	}
 }
 

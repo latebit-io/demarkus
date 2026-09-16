@@ -50,17 +50,16 @@ func (g *SeedGate) Run(ctx context.Context, owner string, pass func(ctx context.
 	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, SeedTimeout)
 	defer cancel()
-	success := false
 	defer func() {
 		g.mu.Lock()
-		if success || callerCtx.Err() == nil {
+		if callerCtx.Err() == nil {
 			g.checked[owner] = time.Now()
 		}
 		close(done)
 		delete(g.refreshing, owner)
 		g.mu.Unlock()
 	}()
-	success = pass(ctx)
+	pass(ctx)
 }
 
 // LastCheck reports when owner was last checked, if ever.
