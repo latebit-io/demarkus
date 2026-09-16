@@ -70,12 +70,8 @@ bin
 node_modules/
 .project/
 
-# Private benchmark corpus and model traces copied from the live soul.
-tools/benchmarks/answers/soul-local/
-tools/benchmarks/artifacts/
-tools/benchmarks/corpora/*/restored/
-tools/benchmarks/answers/baseline-2026-09-12/*
-!tools/benchmarks/answers/baseline-2026-09-12/README.md
+# Benchmark tooling and fixtures live on the benchmarks branch.
+tools/benchmarks/
 
 # Vendored helm library dependency: `helm dependency update` rebuilds it from
 # deploy/helm/demarkus-server-common, so the tarball and lock are artifacts.

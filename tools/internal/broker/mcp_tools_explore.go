@@ -30,6 +30,7 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 	docURL, _, _ := strings.Cut(raw, "#")
 	opts := mcpfmt.Fetch.Options(&req)
 	neighborhoodOpts := mcpfmt.NeighborhoodOptions(&req)
+	neighborhoodRequested := mcpfmt.NeighborhoodRequested(&req)
 
 	worldName, path, err := parseToolURL(docURL)
 	if err != nil {
@@ -90,14 +91,18 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 	}
 
 	b.WriteByte('\n')
-	if neighborhoodOpts.Direction != graphstore.NeighborhoodOutgoing {
+	if !neighborhoodRequested || neighborhoodOpts.Direction != graphstore.NeighborhoodOutgoing {
 		b.WriteString(g.revalidateBacklinks(ctx, state, docURL))
 	}
-	page, queryErr := state.graphStore.Neighborhood(docURL, neighborhoodOpts)
-	if queryErr != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("query relations: %v", queryErr)), nil
+	if neighborhoodRequested {
+		page, queryErr := state.graphStore.Neighborhood(docURL, neighborhoodOpts)
+		if queryErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("query relations: %v", queryErr)), nil
+		}
+		b.WriteString(mcpfmt.FormatNeighborhood(docURL, page))
+	} else {
+		b.WriteString(mcpfmt.FormatExploreBacklinks(state.graphStore.BacklinksEnriched(docURL)))
 	}
-	b.WriteString(mcpfmt.FormatNeighborhood(docURL, page))
 	g.writeSiblingsSection(&b, worldName, path)
 
 	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; mark_fetch force=true for the full body\n", docURL)

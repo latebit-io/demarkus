@@ -81,7 +81,7 @@ func TestHandlerMarkExplore_Card(t *testing.T) {
 		"## Outbound links (2)",
 		"- [Alpha](/alpha.md)",
 		"- [Beta](/docs/beta.md)",
-		"## Relations",
+		"## Backlinks",
 		"(graph store unavailable)",
 		"## Siblings in / (3)",
 		"- alpha.md",
@@ -122,10 +122,13 @@ func TestHandlerMarkExplore_BacklinksFromStore(t *testing.T) {
 
 	// The card shows node identity, which omits the default port (ADR 0005),
 	// even though the caller addressed the document by its dial address.
-	for _, want := range []string{"## Relations (3 documents)", "[Page A](mark://host/a.md)", "incoming [link]; [source](mark://host/a.md)"} {
+	for _, want := range []string{"## Backlinks (1)", "[Page A](mark://host/a.md)", "freshness: fresh"} {
 		if !strings.Contains(text, want) {
-			t.Errorf("expected grouped relation %q in card:\n%s", want, text)
+			t.Errorf("expected backlink %q in card:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "## Relations") || strings.Contains(text, "[source](") {
+		t.Fatalf("default card expanded the relation neighborhood:\n%s", text)
 	}
 }
 

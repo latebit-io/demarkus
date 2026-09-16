@@ -360,20 +360,38 @@ func TestMemoryCrawlNeverLeavesTenantWorld(t *testing.T) {
 
 func tenantGraphCall(t *testing.T, g *mcpGateway, tenant, tool, path string) string {
 	t.Helper()
+	req := callToolReq(tool, map[string]any{"url": "mark://" + tenant + "-w" + path})
+	return tenantGraphRequest(t, g, tenant, &req)
+}
+
+func tenantGraphRequest(t *testing.T, g *mcpGateway, tenant string, req *mcp.CallToolRequest) string {
+	t.Helper()
 	ctx := ctxWithClaims(t.Context(), &Claims{Subject: "google|" + tenant, Email: tenant + "@example.com", EmailVerified: true})
-	res, err := g.tenantGate(g.toolHandlers()[tool])(ctx, callToolReq(tool, map[string]any{"url": "mark://" + tenant + "-w" + path}))
+	res, err := g.tenantGate(g.toolHandlers()[req.Params.Name])(ctx, *req)
 	if err != nil || res == nil || res.IsError {
-		t.Fatalf("%s %s: err=%v result=%v", tenant, tool, err, res)
+		t.Fatalf("%s %s: err=%v result=%v", tenant, req.Params.Name, err, res)
 	}
 	return toolResultText(t, res)
 }
 
 func assertTenantBacklinks(t *testing.T, g *mcpGateway, tenant, foreign string) {
 	t.Helper()
-	for _, tool := range []string{"mark_backlinks", "mark_explore"} {
-		text := tenantGraphCall(t, g, tenant, tool, "/index.md")
+	for _, call := range []struct {
+		tool      string
+		relations bool
+	}{{"mark_backlinks", false}, {"mark_explore", false}, {"mark_explore", true}} {
+		tool := call.tool
+		args := map[string]any{"url": "mark://" + tenant + "-w/index.md"}
+		if call.relations {
+			args["direction"], args["page_size"] = "both", 1
+		}
+		req := callToolReq(tool, args)
+		text := tenantGraphRequest(t, g, tenant, &req)
 		count := "Backlinks for mark://" + tenant + "-w/index.md (1)"
 		if tool == "mark_explore" {
+			count = "## Backlinks (1)"
+		}
+		if call.relations {
 			count = "## Relations (1 documents)"
 		}
 		for _, want := range []string{tenant + "-w/source.md", tenant + "_TITLE", tenant + "_LABEL", count} {

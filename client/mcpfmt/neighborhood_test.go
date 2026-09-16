@@ -1,11 +1,13 @@
 package mcpfmt
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func TestFormatNeighborhoodGroupsRowsAndLinksSources(t *testing.T) {
@@ -39,5 +41,49 @@ func TestFormatNeighborhoodGroupsRowsAndLinksSources(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+func TestNeighborhoodRequested(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want bool
+	}{
+		{"URL only", map[string]any{"url": "/doc.md"}, false},
+		{"verbose metadata", map[string]any{"url": "/doc.md", "verbose": true}, false},
+		{"direction", map[string]any{"direction": "both"}, true},
+		{"all relations", map[string]any{"relations": []string{}}, true},
+		{"page size", map[string]any{"page_size": 10}, true},
+		{"continuation", map[string]any{"cursor": "next"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := mcp.CallToolRequest{}
+			req.Params.Arguments = tc.args
+			if got := NeighborhoodRequested(&req); got != tc.want {
+				t.Fatalf("requested=%t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatExploreBacklinksKeepsEvidenceAndCapsRows(t *testing.T) {
+	rows := make([]graphstore.BacklinkEntry, 12)
+	for i := range rows {
+		rows[i] = graphstore.BacklinkEntry{URL: fmt.Sprintf("mark://world/%02d.md", i)}
+	}
+	rows[0].Title, rows[0].Rel, rows[0].Anchor = "Decision", "supersedes", "decision"
+	rows[0].Label, rows[0].Count = "Old decision", 2
+	text := FormatExploreBacklinks(rows)
+	for _, want := range []string{"## Backlinks (12)", "[Decision](mark://world/00.md)", "[supersedes]", "#decision", "Old decision", "x2", "freshness: unknown", "+2 more backlinks"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in %s", want, text)
+		}
+	}
+	if strings.Contains(text, "mark://world/10.md") || strings.Contains(text, "[source](") || strings.Count(text, "\n- ") != 10 {
+		t.Fatalf("default backlinks exceeded their output contract:\n%s", text)
+	}
+	if empty := FormatExploreBacklinks(nil); empty != "## Backlinks (0)\n(none recorded)\n" {
+		t.Fatalf("empty graph claimed absence: %q", empty)
 	}
 }

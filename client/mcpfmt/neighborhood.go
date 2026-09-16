@@ -5,11 +5,47 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 const neighborhoodPageSize = 10
+
+// ExploreDescription keeps default and explicit navigation behavior consistent.
+const ExploreDescription = "Orient around one document: outline, outbound links, backlinks, siblings (10 each). Relation query arguments request grouped, paginated neighborhoods. "
+
+// NeighborhoodRequested preserves lean defaults for existing URL-only callers.
+func NeighborhoodRequested(req *mcp.CallToolRequest) bool {
+	args := req.GetArguments()
+	for _, name := range []string{"direction", "relations", "page_size", "cursor"} {
+		if _, exists := args[name]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+// FormatExploreBacklinks caps default output without repeating outbound relations.
+func FormatExploreBacklinks(backlinks []graphstore.BacklinkEntry) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Backlinks (%d)\n", len(backlinks))
+	if len(backlinks) == 0 {
+		b.WriteString("(none recorded)\n")
+	}
+	for _, link := range backlinks[:min(len(backlinks), neighborhoodPageSize)] {
+		annotation := graph.EdgeAnnotation(link.Rel, link.Label, link.Anchor, link.Count) + link.Observation.Annotation()
+		if link.Title != "" {
+			fmt.Fprintf(&b, "- [%s](%s)%s\n", link.Title, link.URL, annotation)
+		} else {
+			fmt.Fprintf(&b, "- %s%s\n", link.URL, annotation)
+		}
+	}
+	if omitted := len(backlinks) - neighborhoodPageSize; omitted > 0 {
+		fmt.Fprintf(&b, "+%d more backlinks\n", omitted)
+	}
+	return b.String()
+}
 
 // NeighborhoodParams declares the shared bounded graph query arguments.
 func NeighborhoodParams() []mcp.ToolOption {

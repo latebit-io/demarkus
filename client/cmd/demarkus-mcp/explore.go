@@ -24,9 +24,7 @@ func markExploreTool(host string) mcp.Tool {
 	neighborhoodParams := mcpfmt.NeighborhoodParams()
 	options := make([]mcp.ToolOption, 0, len(neighborhoodParams)+3)
 	options = append(options,
-		mcp.WithDescription(
-			"Orient around one document: outline head, outbound links, cached typed relations, siblings. Relation rows are grouped, bounded, and paginated. "+urlHint(host),
-		),
+		mcp.WithDescription(mcpfmt.ExploreDescription+urlHint(host)),
 		mcp.WithString("url",
 			mcp.Required(),
 			mcp.Description(urlDesc(host)),
@@ -45,6 +43,7 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 	docURL, _, _ := strings.Cut(rawURL, "#")
 	opts := mcpfmt.Fetch.Options(&req)
 	neighborhoodOpts := mcpfmt.NeighborhoodOptions(&req)
+	neighborhoodRequested := mcpfmt.NeighborhoodRequested(&req)
 
 	host, path, err := h.resolveURL(docURL)
 	if err != nil {
@@ -110,16 +109,24 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 		b.WriteString(cacheWarning)
 	}
 	if h.graphStore == nil {
-		b.WriteString("## Relations\n(graph store unavailable)\n")
+		section := "Backlinks"
+		if neighborhoodRequested {
+			section = "Relations"
+		}
+		fmt.Fprintf(&b, "## %s\n(graph store unavailable)\n", section)
 	} else {
-		if neighborhoodOpts.Direction != graphstore.NeighborhoodOutgoing {
+		if !neighborhoodRequested || neighborhoodOpts.Direction != graphstore.NeighborhoodOutgoing {
 			b.WriteString(h.revalidateBacklinks(ctx, fullURL))
 		}
-		page, queryErr := h.graphStore.Neighborhood(fullURL, neighborhoodOpts)
-		if queryErr != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("query relations: %v", queryErr)), nil
+		if neighborhoodRequested {
+			page, queryErr := h.graphStore.Neighborhood(fullURL, neighborhoodOpts)
+			if queryErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("query relations: %v", queryErr)), nil
+			}
+			b.WriteString(mcpfmt.FormatNeighborhood(fullURL, page))
+		} else {
+			b.WriteString(mcpfmt.FormatExploreBacklinks(h.graphStore.BacklinksEnriched(fullURL)))
 		}
-		b.WriteString(mcpfmt.FormatNeighborhood(fullURL, page))
 	}
 	h.writeSiblingsSection(&b, host, path, token)
 

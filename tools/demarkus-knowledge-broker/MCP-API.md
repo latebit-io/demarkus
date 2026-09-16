@@ -120,8 +120,10 @@ the markdown `body`. Identical wire shape to direct-QUIC `FETCH`.
 #### `mark_explore`
 
 Orient around one document in one call: outline head, outbound links, cached
-incoming and outgoing relations, and sibling documents. Relation rows group by
-document, include source evidence, and paginate independently of other sections.
+backlinks, and sibling documents, capped at ten rows each. Supplying any relation
+query argument (`direction`, `relations`, `page_size`, or `cursor`) replaces the
+backlinks section with grouped incoming/outgoing relations and source evidence.
+These explicit relation queries paginate independently of other sections.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |

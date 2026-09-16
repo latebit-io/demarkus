@@ -44,9 +44,10 @@ This produces the following binaries:
 | `demarkus-agent` | `client/bin/demarkus-agent` | Federation crawler |
 | `demarkus-knowledge-broker` | `tools/bin/demarkus-knowledge-broker` | OIDC broker and MCP gateway |
 | `demarkus-publish` | `tools/bin/demarkus-publish` | Local publish (bypasses server) |
-| `demarkus-loadtest` | `tools/bin/demarkus-loadtest` | Load testing |
 
 `make knowledge-server` builds the multi-world GCS server (`server/bin/demarkus-knowledge-server`); it is not part of `make all`.
+
+Standalone load tests and retrieval benchmarks live on the `benchmarks` branch.
 
 > Build note: each module builds separately; use `make server` / `make client` / `make tools`, or from inside a module `cd server && go build -o bin/<name> ./cmd/<name>/` (same shape for `client/` and `tools/`).
 

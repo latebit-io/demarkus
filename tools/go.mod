@@ -6,17 +6,13 @@ replace github.com/latebit-io/demarkus/protocol => ../protocol
 
 replace github.com/latebit-io/demarkus/client => ../client
 
-replace github.com/latebit-io/demarkus/server => ../server
-
 require (
 	cloud.google.com/go/storage v1.66.0
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/latebit-io/demarkus/client v0.0.0-00010101000000-000000000000
 	github.com/latebit-io/demarkus/protocol v0.0.0
-	github.com/latebit-io/demarkus/server v0.0.0
 	github.com/mark3labs/mcp-go v0.44.0
-	github.com/tiktoken-go/tokenizer v0.8.1
 	github.com/yuin/goldmark v1.7.8
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
@@ -45,7 +41,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect

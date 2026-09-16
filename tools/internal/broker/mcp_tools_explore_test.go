@@ -77,8 +77,8 @@ func TestHandleMarkExploreCard(t *testing.T) {
 		"The hub links everything together.",
 		"## Outbound links (2)",
 		"- [Alpha](/alpha.md)",
-		"## Relations (2 documents)",
-		"outgoing [link]",
+		"## Backlinks (0)",
+		"(none recorded)",
 		"## Siblings in / (3)",
 		"- alpha.md",
 		"- docs/",
@@ -96,6 +96,9 @@ func TestHandleMarkExploreCard(t *testing.T) {
 	if strings.Count(text, "(/alpha.md)") != 1 {
 		t.Errorf("outbound links should be deduplicated:\n%s", text)
 	}
+	if strings.Contains(text, "## Relations") || strings.Contains(text, "[source](") {
+		t.Fatalf("default card expanded the relation neighborhood:\n%s", text)
+	}
 }
 
 func TestHandleMarkExploreBacklinksFromGraphStore(t *testing.T) {
@@ -109,9 +112,9 @@ func TestHandleMarkExploreBacklinksFromGraphStore(t *testing.T) {
 	g.knowledgeGraph.graphStore.Merge(gr, nil)
 
 	text := exploreResultText(t, g, "mark://team-a/hub.md")
-	for _, want := range []string{"## Relations (3 documents)", "[Page A](mark://team-a/a.md)", "incoming [link]; [source](mark://team-a/a.md)"} {
+	for _, want := range []string{"## Backlinks (1)", "[Page A](mark://team-a/a.md)", "freshness: fresh"} {
 		if !strings.Contains(text, want) {
-			t.Errorf("expected grouped relation %q in card:\n%s", want, text)
+			t.Errorf("expected backlink %q in card:\n%s", want, text)
 		}
 	}
 }

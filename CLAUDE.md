@@ -55,6 +55,13 @@ This is a single-project flat soul. The demarkus-memory plugin's per-project
 Never store plans in a vendor-specific folder. Publish them to demarkus-soul
 (`/plans/<name>.md`).
 
+## Benchmarks
+
+Standalone benchmark runners, evaluation datasets, performance probes, and reports
+belong on the `benchmarks` branch, never in changes destined for `main`. Keep
+ordinary correctness and regression tests with production code. Record results
+in the soul; preserve raw evidence under ignored benchmark artifacts.
+
 ## Prompt and tool-description token budget
 
 Everything under `plugins/prompt-source/` and every MCP tool description
