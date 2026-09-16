@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/links"
 )
 
 // RevalidationLimit bounds source attempts, including pre-fetch failures.
@@ -122,7 +123,7 @@ func (s *Store) nodesFor(urls []string) []StoredNode {
 	defer s.mu.RUnlock()
 	nodes := make([]StoredNode, 0, len(urls))
 	for _, url := range urls {
-		if node := s.nodes[url]; node != nil {
+		if node := s.nodes[links.CanonicalURL(url)]; node != nil {
 			nodes = append(nodes, *node)
 		}
 	}

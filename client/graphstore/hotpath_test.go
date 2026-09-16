@@ -98,3 +98,18 @@ func TestSeedRecordCacheFollowsOwnerWrites(t *testing.T) {
 	}
 	requireTargets(t, store, "b")
 }
+
+func TestRevalidateCanonicalizesRequestedSources(t *testing.T) {
+	store := New()
+	store.ReplaceSeed("owner", []StoredNode{{URL: "mark://host/a.md", Status: "ok"}}, nil)
+	fetchFn := func(_ context.Context, _, _ string) (graph.FetchResult, error) {
+		return graph.FetchResult{Status: "ok", Body: "# A", Metadata: map[string]string{"version": "2"}}, nil
+	}
+	result, err := store.Revalidate(t.Context(), []string{"mark://host:6309/a.md"}, fetchFn, fetch.ParseMarkURL)
+	if err != nil || result.Attempts != 1 || result.Fetches != 1 {
+		t.Fatalf("dial-address source skipped: %+v, %v", result, err)
+	}
+	if node := store.GetNode("mark://host/a.md"); node == nil || node.Observation.Revision != 2 {
+		t.Fatalf("source not refreshed: %+v", node)
+	}
+}
