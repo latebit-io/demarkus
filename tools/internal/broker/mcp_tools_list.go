@@ -89,7 +89,7 @@ func markExploreTool() mcp.Tool {
 	neighborhoodParams := mcpfmt.NeighborhoodParams()
 	options := make([]mcp.ToolOption, 0, len(neighborhoodParams)+3)
 	options = append(options,
-		mcp.WithDescription(mcpfmt.ExploreDescription+"Broker cache is per-pod. "+mcpURLHint),
+		mcp.WithDescription(mcpfmt.ExploreDescription+mcpURLHint),
 		mcp.WithString("url",
 			mcp.Required(),
 			mcp.Description(mcpURLDesc),
