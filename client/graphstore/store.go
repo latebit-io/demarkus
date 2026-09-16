@@ -7,6 +7,7 @@ package graphstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,6 +93,7 @@ type Store struct {
 	seedEtags       map[string]string        // host -> last seen published graph etag
 	seedGraphs      map[string]seedGraphData // owner -> latest complete non-authoritative graph
 	localSources    map[string]sourceRecord
+	representations map[string][sha256.Size]byte
 	validating      map[string]time.Time
 	sourceRevisions map[string]int
 }
@@ -108,13 +110,14 @@ func DefaultPath() string {
 // New creates an ephemeral store; Save is a no-op. Load enables persistence.
 func New() *Store {
 	return &Store{
-		nodes:        make(map[string]*StoredNode),
-		edgeIdx:      make(map[edgeKey]int),
-		incoming:     make(map[string][]int),
-		outgoing:     make(map[string][]int),
-		seedEtags:    make(map[string]string),
-		seedGraphs:   make(map[string]seedGraphData),
-		localSources: make(map[string]sourceRecord),
+		nodes:           make(map[string]*StoredNode),
+		edgeIdx:         make(map[edgeKey]int),
+		incoming:        make(map[string][]int),
+		outgoing:        make(map[string][]int),
+		seedEtags:       make(map[string]string),
+		seedGraphs:      make(map[string]seedGraphData),
+		localSources:    make(map[string]sourceRecord),
+		representations: make(map[string][sha256.Size]byte),
 	}
 }
 
@@ -127,14 +130,15 @@ func Load(path string) (*Store, error) {
 	}
 
 	s := &Store{
-		path:         path,
-		nodes:        make(map[string]*StoredNode),
-		edgeIdx:      make(map[edgeKey]int),
-		incoming:     make(map[string][]int),
-		outgoing:     make(map[string][]int),
-		seedEtags:    make(map[string]string),
-		seedGraphs:   make(map[string]seedGraphData),
-		localSources: make(map[string]sourceRecord),
+		path:            path,
+		nodes:           make(map[string]*StoredNode),
+		edgeIdx:         make(map[edgeKey]int),
+		incoming:        make(map[string][]int),
+		outgoing:        make(map[string][]int),
+		seedEtags:       make(map[string]string),
+		seedGraphs:      make(map[string]seedGraphData),
+		localSources:    make(map[string]sourceRecord),
+		representations: make(map[string][sha256.Size]byte),
 	}
 
 	data, err := os.ReadFile(path)
@@ -152,6 +156,9 @@ func Load(path string) (*Store, error) {
 	if doc.Version < minSchemaVersion || doc.Version > schemaVersion {
 		return nil, fmt.Errorf("graph store %q: unsupported schema version %d (expected %d..%d)", path, doc.Version, minSchemaVersion, schemaVersion)
 	}
+	s.nodes = make(map[string]*StoredNode, len(doc.Nodes))
+	s.edges = make([]StoredEdge, 0, len(doc.Edges))
+	s.edgeIdx = make(map[edgeKey]int, len(doc.Edges))
 
 	// v1 keyed nodes by whatever the crawler was handed, so one document could
 	// appear under both mark://host/x and mark://host:6309/x. Canonicalizing on
@@ -175,9 +182,9 @@ func Load(path string) (*Store, error) {
 		if _, exists := s.edgeIdx[e.key()]; !exists {
 			s.edgeIdx[e.key()] = len(s.edges)
 			s.edges = append(s.edges, e)
-			s.indexEdgeLocked(len(s.edges) - 1)
 		}
 	}
+	s.rebuildAdjacencyLocked()
 	maps.Copy(s.seedEtags, doc.SeedEtags)
 	for owner, seeded := range doc.SeedGraphs {
 		for i := range seeded.Nodes {
@@ -361,6 +368,7 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	current := sourceRecordsFromStore(s.nodes, s.edges)
 	records := sourceRecords(nodes, edges)
 	for key := range records {
+		delete(s.representations, key)
 		incoming := records[key]
 		if incoming.Node.CrawledAt.IsZero() {
 			incoming.Node.CrawledAt = now
@@ -392,29 +400,34 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	return len(nodes)
 }
 
-// upsertEdgeLocked inserts or replaces an edge by identity. Last write wins,
-// mirroring node upserts: re-merging the same crawl is idempotent and counts
-// never inflate. Caller must hold s.mu.
-func (s *Store) upsertEdgeLocked(se *StoredEdge) {
-	if i, exists := s.edgeIdx[se.key()]; exists {
-		s.edges[i] = *se
-	} else {
-		s.edgeIdx[se.key()] = len(s.edges)
-		s.edges = append(s.edges, *se)
-		s.indexEdgeLocked(len(s.edges) - 1)
+// Caller must hold s.mu or own the unpublished store.
+func (s *Store) rebuildAdjacencyLocked() {
+	incomingCounts := make(map[string]int)
+	outgoingCounts := make(map[string]int)
+	for i := range s.edges {
+		incomingCounts[s.edges[i].To]++
+		outgoingCounts[s.edges[i].From]++
 	}
-}
 
-func (s *Store) indexEdgeLocked(index int) {
-	if s.incoming == nil {
-		s.incoming = make(map[string][]int)
+	incoming := make(map[string][]int, len(incomingCounts))
+	outgoing := make(map[string][]int, len(outgoingCounts))
+	indices := make([]int, 2*len(s.edges))
+	offset := 0
+	for endpoint, count := range incomingCounts {
+		incoming[endpoint] = indices[offset : offset : offset+count]
+		offset += count
 	}
-	if s.outgoing == nil {
-		s.outgoing = make(map[string][]int)
+	for endpoint, count := range outgoingCounts {
+		outgoing[endpoint] = indices[offset : offset : offset+count]
+		offset += count
 	}
-	edge := &s.edges[index]
-	s.incoming[edge.To] = append(s.incoming[edge.To], index)
-	s.outgoing[edge.From] = append(s.outgoing[edge.From], index)
+	for i := range s.edges {
+		edge := &s.edges[i]
+		incoming[edge.To] = append(incoming[edge.To], i)
+		outgoing[edge.From] = append(outgoing[edge.From], i)
+	}
+	s.incoming = incoming
+	s.outgoing = outgoing
 }
 
 // Only successful reads and confirmed absence establish a complete source.
@@ -478,18 +491,27 @@ func (s *Store) rebuildSeedsLocked() {
 		selected[key] = candidate
 	}
 	s.nodes = make(map[string]*StoredNode, len(selected))
-	s.edges = nil
-	s.edgeIdx = make(map[edgeKey]int)
-	s.incoming = make(map[string][]int)
-	s.outgoing = make(map[string][]int)
+	edgeCapacity := 0
+	for key := range selected {
+		edgeCapacity += len(selected[key].Edges)
+	}
+	s.edges = make([]StoredEdge, 0, edgeCapacity)
+	s.edgeIdx = make(map[edgeKey]int, edgeCapacity)
 	for _, key := range slices.Sorted(maps.Keys(selected)) {
 		record := selected[key]
 		node := record.Node
 		s.nodes[key] = &node
 		for i := range record.Edges {
-			s.upsertEdgeLocked(&record.Edges[i])
+			edge := &record.Edges[i]
+			if index, exists := s.edgeIdx[edge.key()]; exists {
+				s.edges[index] = *edge
+				continue
+			}
+			s.edgeIdx[edge.key()] = len(s.edges)
+			s.edges = append(s.edges, *edge)
 		}
 	}
+	s.rebuildAdjacencyLocked()
 }
 
 // SeedEtag returns the last recorded /graph.md etag for host ("" if none).

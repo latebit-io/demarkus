@@ -1,6 +1,8 @@
 package graphstore
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"maps"
 	"net/url"
@@ -31,13 +33,17 @@ func (s *Store) ObserveDocument(docURL string, result graph.FetchResult) bool {
 		source = docURL
 	}
 	node := &graph.Node{URL: docURL, Status: result.Status, Observation: graph.Observe(source, result.Metadata)}
+	node.Observation.Complete = graph.SourceComplete(node)
+	representation := hashDocumentRepresentation(result.Body, result.Metadata)
+	if s.refreshEqualDocument(node, representation) {
+		return true
+	}
 	var extracted graph.ExtractedEdges
 	if result.Status == protocol.StatusOK {
 		extracted = graph.ExtractDocumentEdges(docURL, result.Body, result.Metadata)
 		node.Title = links.ExtractTitle(result.Body)
 		node.LinkCount = extracted.BodyLinkCount
 	}
-	node.Observation.Complete = graph.SourceComplete(node)
 	if !node.Observation.Complete {
 		node.Observation.Problem = "incomplete"
 	}
@@ -48,7 +54,91 @@ func (s *Store) ObserveDocument(docURL string, result graph.FetchResult) bool {
 		observed.AddEdgeInfo(edge)
 	}
 	s.Merge(observed, nil)
+	s.rememberDocumentRepresentation(node, extracted, representation)
 	return true
+}
+
+func (s *Store) refreshEqualDocument(incoming *graph.Node, representation [sha256.Size]byte) bool {
+	next := &incoming.Observation
+	if incoming.Status != protocol.StatusOK || next.Etag == "" || !next.Known() {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	selected := s.nodes[incoming.URL]
+	local, exists := s.localSources[incoming.URL]
+	cachedRepresentation, cached := s.representations[incoming.URL]
+	if !exists || !cached || cachedRepresentation != representation || selected == nil || selected.Seeded || local.Node.Seeded ||
+		!sameDocumentRepresentation(&local.Node, incoming) || !sameDocumentRepresentation(selected, incoming) ||
+		local.Node.Observation.Problem != "" || selected.Observation.Problem != "" ||
+		local.Node.Observation.HighestRevision > next.Revision || selected.Observation.HighestRevision > next.Revision ||
+		s.sourceRevisions[next.Source] > next.Revision ||
+		next.ObservedAt.Before(local.Node.Observation.ObservedAt) || next.ObservedAt.Before(selected.Observation.ObservedAt) {
+		return false
+	}
+
+	now := time.Now().UTC()
+	local.Node.Observation = *next
+	local.Node.CrawledAt = now
+	s.localSources[incoming.URL] = local
+	selected.Observation = *next
+	selected.CrawledAt = now
+	return true
+}
+
+func (s *Store) rememberDocumentRepresentation(node *graph.Node, extracted graph.ExtractedEdges, representation [sha256.Size]byte) {
+	expected := sourceRecord{Node: StoredNode{
+		URL: node.URL, Title: node.Title, Status: node.Status, LinkCount: node.LinkCount,
+		Observation: node.Observation, Etag: node.Observation.Etag,
+	}}
+	for _, edge := range extracted.Edges {
+		expected.Edges = append(expected.Edges, StoredEdge{
+			From: edge.From, To: edge.To, Rel: edge.Rel, Label: edge.Label, Anchor: edge.Anchor, Count: max(edge.Count, 1),
+		})
+	}
+	slices.SortFunc(expected.Edges, compareSnapshotEdges)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.representations == nil {
+		s.representations = make(map[string][sha256.Size]byte)
+	}
+	accepted, exists := s.localSources[node.URL]
+	if !exists || accepted.Node.Title != node.Title || accepted.Node.LinkCount != node.LinkCount ||
+		accepted.Node.Observation.Problem != "" || !sameDocumentRepresentation(&accepted.Node, node) || !sameAdjacency(&accepted, &expected) {
+		delete(s.representations, node.URL)
+		return
+	}
+	s.representations[node.URL] = representation
+}
+
+func hashDocumentRepresentation(body string, metadata map[string]string) [sha256.Size]byte {
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		if strings.HasPrefix(key, "rel-") {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+
+	data := make([]byte, 0, len(body)+len(keys)*32)
+	data = binary.LittleEndian.AppendUint64(data, uint64(len(body)))
+	data = append(data, body...)
+	for _, key := range keys {
+		value := metadata[key]
+		data = binary.LittleEndian.AppendUint64(data, uint64(len(key)))
+		data = append(data, key...)
+		data = binary.LittleEndian.AppendUint64(data, uint64(len(value)))
+		data = append(data, value...)
+	}
+	return sha256.Sum256(data)
+}
+
+func sameDocumentRepresentation(current *StoredNode, incoming *graph.Node) bool {
+	old, next := &current.Observation, &incoming.Observation
+	return current.Status == incoming.Status && current.Etag == next.Etag && old.Known() &&
+		old.Source == next.Source && old.View == next.View && old.Revision == next.Revision && old.Etag == next.Etag
 }
 
 func generatedGraphURL(raw string) bool {

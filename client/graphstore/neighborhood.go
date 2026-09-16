@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/graph"
@@ -82,15 +81,10 @@ func (s *Store) Neighborhood(rawURL string, opts NeighborhoodOptions) (Neighborh
 		return NeighborhoodPage{}, err
 	}
 
-	rows := s.neighborhoodRows(query)
-	start := 0
-	if position.set {
-		start = sort.Search(len(rows), func(i int) bool { return rows[i].Node.URL > position.after })
-	}
-	end := min(start+query.pageSize, len(rows))
-	page := NeighborhoodPage{Rows: slices.Clone(rows[start:end]), TotalRows: len(rows)}
-	if end < len(rows) {
-		page.NextCursor, err = encodeNeighborhoodCursor(query.identity, rows[end-1].Node.URL)
+	result := s.neighborhoodRows(query, position)
+	page := NeighborhoodPage{Rows: result.rows, TotalRows: result.totalRows}
+	if result.hasMore {
+		page.NextCursor, err = encodeNeighborhoodCursor(query.identity, page.Rows[len(page.Rows)-1].Node.URL)
 		if err != nil {
 			return NeighborhoodPage{}, err
 		}
@@ -109,6 +103,12 @@ type neighborhoodQuery struct {
 type neighborhoodPosition struct {
 	after string
 	set   bool
+}
+
+type neighborhoodResult struct {
+	rows      []NeighborhoodRow
+	totalRows int
+	hasMore   bool
 }
 
 func normalizeNeighborhoodQuery(rawURL string, opts NeighborhoodOptions) (neighborhoodQuery, error) {
@@ -208,55 +208,45 @@ func encodeNeighborhoodCursor(identity, after string) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(data), nil
 }
 
-func (s *Store) neighborhoodRows(query neighborhoodQuery) []NeighborhoodRow {
+func (s *Store) neighborhoodRows(query neighborhoodQuery, position neighborhoodPosition) neighborhoodResult {
 	s.mu.RLock()
-	rows := make(map[string]*NeighborhoodRow)
-	seenEdges := make(map[int]struct{})
-	if query.direction != NeighborhoodOutgoing {
-		s.collectNeighborhoodRowsLocked(rows, seenEdges, s.incoming[query.url], query)
-	}
-	if query.direction != NeighborhoodIncoming {
-		s.collectNeighborhoodRowsLocked(rows, seenEdges, s.outgoing[query.url], query)
-	}
-	s.mu.RUnlock()
+	seenNeighbors := make(map[string]struct{})
+	pageURLs := make([]string, 0, query.pageSize+1)
+	s.visitNeighborhoodEdgesLocked(query, func(edge *StoredEdge) {
+		neighbor := neighborhoodNeighbor(edge, query.url)
+		if _, seen := seenNeighbors[neighbor]; seen {
+			return
+		}
+		seenNeighbors[neighbor] = struct{}{}
+		if position.set && neighbor <= position.after {
+			return
+		}
+		index, _ := slices.BinarySearch(pageURLs, neighbor)
+		if len(pageURLs) == query.pageSize+1 && index == len(pageURLs) {
+			return
+		}
+		pageURLs = slices.Insert(pageURLs, index, neighbor)
+		if len(pageURLs) > query.pageSize+1 {
+			pageURLs = pageURLs[:query.pageSize+1]
+		}
+	})
 
-	result := make([]NeighborhoodRow, 0, len(rows))
-	for _, row := range rows {
-		slices.SortFunc(row.Edges, compareNeighborhoodEdges)
-		if len(row.Edges) > MaxNeighborhoodEdgesPerRow {
-			row.OmittedEdges = len(row.Edges) - MaxNeighborhoodEdgesPerRow
-			row.Edges = row.Edges[:MaxNeighborhoodEdgesPerRow]
-		}
-		result = append(result, *row)
+	result := neighborhoodResult{totalRows: len(seenNeighbors), hasMore: len(pageURLs) > query.pageSize}
+	if result.hasMore {
+		pageURLs = pageURLs[:query.pageSize]
 	}
-	slices.SortFunc(result, func(a, b NeighborhoodRow) int { return strings.Compare(a.Node.URL, b.Node.URL) })
-	return result
-}
-
-func (s *Store) collectNeighborhoodRowsLocked(rows map[string]*NeighborhoodRow, seen map[int]struct{}, indices []int, query neighborhoodQuery) {
-	for _, index := range indices {
-		if _, duplicate := seen[index]; duplicate {
-			continue
+	rows := make(map[string]*NeighborhoodRow, len(pageURLs))
+	for _, url := range pageURLs {
+		node := StoredNode{URL: url}
+		if stored := s.nodes[url]; stored != nil {
+			node = *stored
 		}
-		edge := &s.edges[index]
-		if query.relations != nil {
-			if _, match := query.relations[edge.Rel]; !match {
-				continue
-			}
-		}
-		seen[index] = struct{}{}
-		neighbor := edge.To
-		if edge.To == query.url {
-			neighbor = edge.From
-		}
-		row := rows[neighbor]
+		rows[url] = &NeighborhoodRow{Node: node}
+	}
+	s.visitNeighborhoodEdgesLocked(query, func(edge *StoredEdge) {
+		row := rows[neighborhoodNeighbor(edge, query.url)]
 		if row == nil {
-			node := StoredNode{URL: neighbor}
-			if stored := s.nodes[neighbor]; stored != nil {
-				node = *stored
-			}
-			row = &NeighborhoodRow{Node: node}
-			rows[neighbor] = row
+			return
 		}
 		source := StoredNode{URL: edge.From}
 		if stored := s.nodes[edge.From]; stored != nil {
@@ -269,7 +259,51 @@ func (s *Store) collectNeighborhoodRowsLocked(rows map[string]*NeighborhoodRow, 
 			},
 			Source: source,
 		})
+	})
+	s.mu.RUnlock()
+
+	result.rows = make([]NeighborhoodRow, 0, len(pageURLs))
+	for _, url := range pageURLs {
+		row := rows[url]
+		slices.SortFunc(row.Edges, compareNeighborhoodEdges)
+		if len(row.Edges) > MaxNeighborhoodEdgesPerRow {
+			row.OmittedEdges = len(row.Edges) - MaxNeighborhoodEdgesPerRow
+			row.Edges = row.Edges[:MaxNeighborhoodEdgesPerRow]
+		}
+		result.rows = append(result.rows, *row)
 	}
+	return result
+}
+
+func (s *Store) visitNeighborhoodEdgesLocked(query neighborhoodQuery, visit func(*StoredEdge)) {
+	visitIndices := func(indices []int, skipSelfLoops bool) {
+		for _, index := range indices {
+			edge := &s.edges[index]
+			if skipSelfLoops && edge.From == query.url && edge.To == query.url {
+				continue
+			}
+			if query.relations != nil {
+				if _, match := query.relations[edge.Rel]; !match {
+					continue
+				}
+			}
+			visit(edge)
+		}
+	}
+	if query.direction != NeighborhoodOutgoing {
+		visitIndices(s.incoming[query.url], false)
+	}
+	if query.direction != NeighborhoodIncoming {
+		visitIndices(s.outgoing[query.url], query.direction == NeighborhoodBoth)
+	}
+}
+
+func neighborhoodNeighbor(edge *StoredEdge, queryURL string) string {
+	neighbor := edge.To
+	if edge.To == queryURL {
+		neighbor = edge.From
+	}
+	return neighbor
 }
 
 func compareNeighborhoodEdges(a, b NeighborhoodEdge) int { //nolint:gocritic // slices.SortFunc signature

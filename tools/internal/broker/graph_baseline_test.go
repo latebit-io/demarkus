@@ -14,6 +14,9 @@ func BenchmarkGraphBaselineTenantSources(b *testing.B) {
 	for _, tool := range []string{"mark_backlinks", "mark_explore"} {
 		b.Run(tool, func(b *testing.B) {
 			d := seededDispatcher()
+			bobIndex := d.published["bob-w/index.md"]
+			bobIndex.Response.Metadata = map[string]string{"version": "1", "etag": "bob-index-v1"}
+			d.published["bob-w/index.md"] = bobIndex
 			d.published["alice-w/private.md"] = fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Body:   "# ALICE_PRIVATE_TITLE\n[reference](mark://bob-w/index.md)\n",

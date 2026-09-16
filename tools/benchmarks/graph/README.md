@@ -10,6 +10,8 @@ Third slice: [bounded crawl outcomes, 2026-09-13](crawl-outcomes-2026-09-13.md).
 
 Fourth slice: [source freshness, 2026-09-13](source-freshness-2026-09-13.md).
 
+Fifth slice: [cached relation-aware neighborhoods, 2026-09-15](cached-neighborhoods-2026-09-15.md).
+
 Run **before the first roadmap fix**, then after each slice, on the same machine:
 
 ```bash
@@ -44,6 +46,10 @@ working-tree status because benchmark-only changes may not yet be committed.
 |---|---|---|
 | Backlinks, 1k/10k/100k edges, fan-in 1/1k | Warm local query ns/op, B/op, allocs/op; fixed returned rows | Lower cost, same rows |
 | Restore, 1k/100k edges | Fresh Store load plus query; warm OS file cache | Lower cost |
+| Neighborhood, 1k/10k/100k edges, fan-in 1/1k | Warm typed incoming query, bounds, ordering, bytes and allocations | Lower cost, same rows and totals |
+| Neighborhood restore, 1k/100k edges | Fresh Store load, index rebuild and bounded neighborhood query | Lower cost, same total |
+| Observe document, 1/100 links | Body extraction, revision replacement and adjacency-index update | Lower cost, same links |
+| Save, 1k/100k edges | Snapshot copy, serialization and atomic disk replacement | Lower cost, complete file |
 | Complete, cancelled, capped crawl | Fetches, nodes, edges, silent incomplete outcomes | No silent incomplete outcomes; complete graph preserved |
 | Relative targets | Root, nested, parent-relative, absolute link resolution | Zero wrong targets |
 | Tenant backlinks and explore | Alice source visibility to Bob, alongside Bob's permitted source | Zero leaked responses AND zero missing own sources |

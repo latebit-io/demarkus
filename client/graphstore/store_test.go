@@ -373,6 +373,35 @@ func TestBacklinks(t *testing.T) {
 	}
 }
 
+func TestRebuildAdjacencyPreservesEdgeOrder(t *testing.T) {
+	store := &Store{edges: []StoredEdge{
+		{From: "mark://a/z.md", To: "mark://a/target.md"},
+		{From: "mark://a/a.md", To: "mark://a/other.md"},
+		{From: "mark://a/b.md", To: "mark://a/target.md"},
+		{From: "mark://a/z.md", To: "mark://a/last.md"},
+	}}
+	store.rebuildAdjacencyLocked()
+
+	checks := []struct {
+		name string
+		got  []int
+		want []int
+	}{
+		{name: "incoming", got: store.incoming["mark://a/target.md"], want: []int{0, 2}},
+		{name: "outgoing", got: store.outgoing["mark://a/z.md"], want: []int{0, 3}},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			if !slices.Equal(check.got, check.want) {
+				t.Fatalf("indices = %v, want %v", check.got, check.want)
+			}
+			if cap(check.got) != len(check.got) {
+				t.Fatalf("capacity = %d, want %d", cap(check.got), len(check.got))
+			}
+		})
+	}
+}
+
 func TestBacklinksNone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
 	s, err := Load(path)

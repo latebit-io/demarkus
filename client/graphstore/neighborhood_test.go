@@ -254,6 +254,55 @@ func TestNeighborhoodPaginationAndCursorIdentity(t *testing.T) {
 	}
 }
 
+func TestNeighborhoodBothDeduplicatesSelfLoop(t *testing.T) {
+	store := New()
+	store.ReplaceSeed("hub", nil, []StoredEdge{{
+		From: neighborhoodCenter, To: neighborhoodCenter, Rel: "references", Count: 1,
+	}})
+
+	page, err := store.Neighborhood(neighborhoodCenter, NeighborhoodOptions{Direction: NeighborhoodBoth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.TotalRows != 1 || len(page.Rows) != 1 || page.Rows[0].Node.URL != neighborhoodCenter || len(page.Rows[0].Edges) != 1 {
+		t.Fatalf("self-loop neighborhood = %+v", page)
+	}
+}
+
+func TestNeighborhoodFilteredPaginationWithInterleavedMatches(t *testing.T) {
+	store := New()
+	edges := make([]StoredEdge, 0, 6)
+	for _, name := range []string{"f", "a", "d", "c", "b", "e"} {
+		relation := "skip"
+		if name == "b" || name == "d" || name == "f" {
+			relation = "match"
+		}
+		edges = append(edges, StoredEdge{
+			From: neighborhoodCenter, To: "mark://world/" + name + ".md", Rel: relation, Count: 1,
+		})
+	}
+	store.ReplaceSeed("hub", nil, edges)
+
+	first, err := store.Neighborhood(neighborhoodCenter, NeighborhoodOptions{
+		Direction: NeighborhoodOutgoing, Relations: []string{"match"}, PageSize: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := neighborhoodURLs(first); !slices.Equal(got, []string{"mark://world/b.md", "mark://world/d.md"}) || first.TotalRows != 3 || first.NextCursor == "" {
+		t.Fatalf("first filtered page = %v, total %d, cursor %q", got, first.TotalRows, first.NextCursor)
+	}
+	second, err := store.Neighborhood(neighborhoodCenter, NeighborhoodOptions{
+		Direction: NeighborhoodOutgoing, Relations: []string{"match"}, PageSize: 2, Cursor: first.NextCursor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := neighborhoodURLs(second); !slices.Equal(got, []string{"mark://world/f.md"}) || second.TotalRows != 3 || second.NextCursor != "" {
+		t.Fatalf("second filtered page = %v, total %d, cursor %q", got, second.TotalRows, second.NextCursor)
+	}
+}
+
 func TestNeighborhoodPageBounds(t *testing.T) {
 	store := New()
 	edges := make([]StoredEdge, 0, DefaultNeighborhoodPageSize+1)
