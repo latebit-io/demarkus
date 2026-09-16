@@ -81,10 +81,6 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context) graphstore.FetchFunc {
 	}
 }
 
-// seedCheckInterval caps /graph.md seed checks at one per world per
-// interval; the first graph-tool call after a pod restart always checks.
-const seedCheckInterval = 5 * time.Minute
-
 // Seed checks and graph writes use the same scope selected by the handler.
 func (g *mcpGateway) seedGraphStore(ctx context.Context, state *gatewayGraph) {
 	worlds := g.scopedWorlds(ctx)
@@ -98,51 +94,25 @@ func (g *mcpGateway) seedGraphStore(ctx context.Context, state *gatewayGraph) {
 
 // Cold pods seed snapshots; source revisions select adjacency.
 func (g *mcpGateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, worldName string) {
-	state.graphSeedMu.Lock()
-	if done := state.graphSeedRefreshing[worldName]; done != nil {
-		state.graphSeedMu.Unlock()
-		select {
-		case <-done:
-		case <-ctx.Done():
+	state.seedGate.Run(ctx, worldName, func(ctx context.Context) bool {
+		if g.seedPass(ctx, state, worldName) {
+			return true
 		}
-		return
-	}
-	if last, ok := state.graphSeedChecked[worldName]; ok && time.Since(last) < seedCheckInterval {
-		state.graphSeedMu.Unlock()
-		return
-	}
-	if state.graphSeedChecked == nil {
-		state.graphSeedChecked = make(map[string]time.Time)
-	}
-	if state.graphSeedRefreshing == nil {
-		state.graphSeedRefreshing = make(map[string]chan struct{})
-	}
-	done := make(chan struct{})
-	state.graphSeedRefreshing[worldName] = done
-	state.graphSeedMu.Unlock()
-	success := false
-	defer func() {
-		if !success {
-			state.graphStore.MarkSeedFailure(worldName)
-		}
-		state.graphSeedMu.Lock()
-		if success {
-			state.graphSeedChecked[worldName] = time.Now()
-		}
-		close(done)
-		delete(state.graphSeedRefreshing, worldName)
-		state.graphSeedMu.Unlock()
-	}()
+		state.graphStore.MarkSeedFailure(worldName)
+		return false
+	})
+}
 
+// seedPass reports whether the world's published graph was current, refreshed or absent.
+func (g *mcpGateway) seedPass(ctx context.Context, state *gatewayGraph, worldName string) bool { //nolint:gocyclo // snapshot-first fallback has explicit terminal states
 	etag := state.graphStore.SeedEtag(worldName)
 	result, err := g.dispatcher.FetchConditionalContext(ctx, worldName, graphstore.SnapshotManifestPath, "", etag)
 	if err != nil {
 		g.log.Warn("graph seed fetch failed", "world", worldName, "err", err)
-		return
+		return false
 	}
 	if result.Response.Status == protocol.StatusNotModified {
-		success = true
-		return
+		return true
 	}
 	if result.Response.Status == protocol.StatusOK {
 		nodes, edges, loadErr := graphstore.LoadSnapshot(graphstore.SnapshotManifestPath, result.Response, func(shardPath string) (protocol.Response, error) {
@@ -151,49 +121,46 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, wo
 		})
 		if loadErr != nil {
 			g.log.Warn("graph snapshot load failed", "world", worldName, "err", loadErr)
-			return
+			return false
 		}
 		g.translateSeedURLs(nodes, edges)
 		state.replaceSeed(worldName, nodes, edges)
 		if snapshotEtag := result.Response.Metadata["etag"]; snapshotEtag != "" {
 			state.graphStore.SetSeedEtag(worldName, snapshotEtag)
 		}
-		success = true
-		return
+		return true
 	}
 	if result.Response.Status != protocol.StatusNotFound {
 		g.log.Warn("graph snapshot fetch returned unexpected status", "world", worldName, "status", result.Response.Status)
-		return
+		return false
 	}
 
 	result, err = g.dispatcher.FetchConditionalContext(ctx, worldName, "/graph.md", "", etag)
 	if err != nil {
 		g.log.Warn("legacy graph seed fetch failed", "world", worldName, "err", err)
-		return
+		return false
 	}
 	if result.Response.Status == protocol.StatusNotFound {
-		success = true
-		return
+		return true
 	}
 	if result.Response.Status == protocol.StatusNotModified {
-		success = true
-		return
+		return true
 	}
 	if result.Response.Status != protocol.StatusOK {
 		g.log.Warn("legacy graph seed fetch returned unexpected status", "world", worldName, "status", result.Response.Status)
-		return
+		return false
 	}
 	nodes, edges, parseErr := graphstore.ParseExportStrict(result.Response.Body)
 	if parseErr != nil {
 		g.log.Warn("legacy graph seed parse failed", "world", worldName, "err", parseErr)
-		return
+		return false
 	}
 	g.translateSeedURLs(nodes, edges)
 	state.replaceSeed(worldName, nodes, edges)
 	if e := result.Response.Metadata["etag"]; e != "" {
 		state.graphStore.SetSeedEtag(worldName, e)
 	}
-	success = true
+	return true
 }
 
 // A tenant snapshot cannot introduce another world's source rows, even if

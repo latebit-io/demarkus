@@ -376,9 +376,7 @@ func TestSeedWorldGraphEtagRoundTrip(t *testing.T) {
 	}
 
 	// Expire the throttle so the next call re-checks with the stored etag.
-	g.knowledgeGraph.graphSeedMu.Lock()
-	g.knowledgeGraph.graphSeedChecked["team-a"] = time.Now().Add(-2 * seedCheckInterval)
-	g.knowledgeGraph.graphSeedMu.Unlock()
+	g.knowledgeGraph.seedGate.Expire("team-a")
 
 	res, err := g.handleMarkBacklinks(ctx, callToolReq("mark_backlinks", map[string]any{
 		"url": "mark://team-a/b.md",
@@ -419,5 +417,28 @@ func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 	text := toolResultText(t, res)
 	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "Page A") {
 		t.Errorf("explore backlinks not seeded:\n%s", text)
+	}
+}
+
+func TestSeedWorldGraphFailureBacksOff(t *testing.T) {
+	d := &fakeDispatcher{
+		fetchFn: unavailableSeedSource,
+		fetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+			return fetch.Result{}, fmt.Errorf("world unreachable")
+		},
+	}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	for range 2 {
+		res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
+			"url": "mark://team-a/b.md",
+		}))
+		if err != nil || res.IsError {
+			t.Fatalf("handleMarkBacklinks: err=%v result=%+v", err, res)
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.fetchCondCalls) != 1 {
+		t.Fatalf("seed probes = %d, want 1: a failed seed backs off for the check interval", len(d.fetchCondCalls))
 	}
 }

@@ -7,7 +7,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
-	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/links"
 	listingpage "github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
@@ -91,7 +90,7 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 	}
 
 	b.WriteByte('\n')
-	if !neighborhoodRequested || neighborhoodOpts.Direction != graphstore.NeighborhoodOutgoing {
+	if mcpfmt.RevalidatesBacklinks(&req) {
 		b.WriteString(g.revalidateBacklinks(ctx, state, docURL))
 	}
 	if neighborhoodRequested {

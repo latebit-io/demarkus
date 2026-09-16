@@ -30,6 +30,9 @@ const (
 	DefaultSnapshotShardBytes = 768 * 1024
 	// MaxSnapshotShards bounds manifest fan-out.
 	MaxSnapshotShards = 4096
+	// SeedTimeout bounds one snapshot seed pass so a large or slow world
+	// cannot stall the first explore indefinitely.
+	SeedTimeout = 30 * time.Second
 	// MaxSnapshotNodes bounds one complete generation.
 	MaxSnapshotNodes = 1_000_000
 	// MaxSnapshotEdges bounds one complete generation.

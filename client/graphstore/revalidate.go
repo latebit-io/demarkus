@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -41,16 +42,24 @@ func ValidationSummary(result Revalidation, err error) string {
 	return text
 }
 
+// RevalidateBacklinks refreshes the sources linking to url and reports the
+// pass; an empty string means nothing links there. Shared by every surface.
+func (s *Store) RevalidateBacklinks(ctx context.Context, url string, fetchFn FetchFunc, parseURL func(string) (string, string, error)) string {
+	urls := s.Backlinks(url)
+	if len(urls) == 0 {
+		return ""
+	}
+	result, err := s.Revalidate(ctx, urls, fetchFn, parseURL)
+	return ValidationSummary(result, err) + s.FreshnessSummaryFor(urls) + "\n"
+}
+
 // Revalidate reads due sources without following edges. Nil URLs means all sources;
 // an empty non-nil list means no sources. Attempts are single-flight and cooled down.
+// The pass merges and saves once, so the store rebuilds once per call.
 func (s *Store) Revalidate(ctx context.Context, urls []string, fetchFn FetchFunc, parseURL func(string) (string, string, error)) (Revalidation, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	wanted := make(map[string]bool, len(urls))
-	for _, url := range urls {
-		wanted[url] = true
-	}
-	nodes := s.AllNodes()
+	nodes := s.nodesFor(urls)
 	slices.SortFunc(nodes, func(a, b StoredNode) int {
 		if order := a.Observation.AttemptedAt.Compare(b.Observation.AttemptedAt); order != 0 {
 			return order
@@ -59,9 +68,11 @@ func (s *Store) Revalidate(ctx context.Context, urls []string, fetchFn FetchFunc
 	})
 	var result Revalidation
 	var failures []error
+	observed := graph.New()
+	etags := make(map[string]string)
 	for i := range nodes {
 		node := &nodes[i]
-		if (urls != nil && !wanted[node.URL]) || !strings.HasPrefix(node.URL, "mark://") || !dueObservation(node, time.Now()) {
+		if !strings.HasPrefix(node.URL, "mark://") || !dueObservation(node, time.Now()) {
 			continue
 		}
 		if result.Attempts >= RevalidationLimit || max(result.Bytes, result.ReadBytes) >= revalidationBytes || ctx.Err() != nil {
@@ -72,7 +83,7 @@ func (s *Store) Revalidate(ctx context.Context, urls []string, fetchFn FetchFunc
 			continue
 		}
 		result.Attempts++
-		crawled, err := s.CrawlAndPersist(ctx, node.URL, fetchFn, parseURL, CrawlOptions{
+		crawled, crawledEtags, err := crawlGraph(ctx, node.URL, fetchFn, parseURL, CrawlOptions{
 			MaxDepth: 0, MaxNodes: 1, Workers: 1,
 			MaxFetchBytes: revalidationBytes - max(result.Bytes, result.ReadBytes), MaxOutputBytes: 128 << 10,
 		})
@@ -85,11 +96,47 @@ func (s *Store) Revalidate(ctx context.Context, urls []string, fetchFn FetchFunc
 		if err != nil {
 			failures = append(failures, fmt.Errorf("revalidate %s: %w", node.URL, err))
 		}
+		if crawled != nil && (err == nil || errors.Is(err, graph.ErrIncomplete)) {
+			addGraph(observed, crawled)
+			maps.Copy(etags, crawledEtags)
+		}
 	}
 	if ctx.Err() != nil {
 		failures = append(failures, ctx.Err())
 	}
+	if observed.NodeCount() > 0 {
+		s.Merge(observed, etags)
+		if saveErr := s.Save(); saveErr != nil {
+			failures = append(failures, fmt.Errorf("revalidation save: %w", saveErr))
+		}
+	}
 	return result, errors.Join(failures...)
+}
+
+// nodesFor copies the requested sources, or every node when urls is nil.
+func (s *Store) nodesFor(urls []string) []StoredNode {
+	if urls == nil {
+		return s.AllNodes()
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	nodes := make([]StoredNode, 0, len(urls))
+	for _, url := range urls {
+		if node := s.nodes[url]; node != nil {
+			nodes = append(nodes, *node)
+		}
+	}
+	return nodes
+}
+
+// addGraph folds src into dst; depth-0 crawls of distinct sources never conflict.
+func addGraph(dst, src *graph.Graph) {
+	for _, node := range src.AllNodes() {
+		dst.AddNode(node)
+	}
+	for _, edge := range src.GetEdges() {
+		dst.AddEdgeInfo(edge)
+	}
 }
 
 func (s *Store) claimValidation(url string) bool {

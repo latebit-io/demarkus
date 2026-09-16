@@ -428,9 +428,7 @@ func TestSeedGraph_EtagRoundTrip(t *testing.T) {
 	}
 
 	// Expire the throttle so the second call re-checks with the stored etag.
-	h.seedMu.Lock()
-	h.seedChecked["host:6309"] = time.Now().Add(-2 * seedCheckInterval)
-	h.seedMu.Unlock()
+	h.seedGate.Expire("host:6309")
 
 	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
 	if err != nil {
@@ -494,5 +492,21 @@ func TestSeedGraph_MarkGraphSeeds(t *testing.T) {
 	// Hub context is present alongside the crawl result.
 	if n := h.graphStore.GetNode("mark://host:6309/a.md"); n == nil {
 		t.Error("seeded hub node missing after mark_graph")
+	}
+}
+
+func TestSeedGraph_FailureBacksOff(t *testing.T) {
+	var calls atomic.Int32
+	sc := &stubClient{
+		snapshotFn: func(_, _, _, _ string) (fetch.Result, error) {
+			calls.Add(1)
+			return fetch.Result{}, errors.New("world unreachable")
+		},
+	}
+	h := &handler{client: sc, graphStore: emptyGraphStore(t)}
+	h.seedGraph(t.Context(), "host:6309")
+	h.seedGraph(t.Context(), "host:6309")
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("snapshot probes = %d, want 1: a failed seed backs off for the check interval", got)
 	}
 }

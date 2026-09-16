@@ -15,6 +15,12 @@ const neighborhoodPageSize = 10
 // ExploreDescription keeps default and explicit navigation behavior consistent.
 const ExploreDescription = "Orient around one document: outline, outbound links, backlinks, siblings (10 each). Relation query arguments request grouped, paginated neighborhoods. "
 
+// RevalidatesBacklinks decides when explore pays for source revalidation:
+// only relation queries that read incoming edges. Default explore reads the cache.
+func RevalidatesBacklinks(req *mcp.CallToolRequest) bool {
+	return NeighborhoodRequested(req) && NeighborhoodOptions(req).Direction != graphstore.NeighborhoodOutgoing
+}
+
 // NeighborhoodRequested preserves lean defaults for existing URL-only callers.
 func NeighborhoodRequested(req *mcp.CallToolRequest) bool {
 	args := req.GetArguments()

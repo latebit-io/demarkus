@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -607,7 +608,7 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current == old || current.graphStore.NodeCount() != 0 || current.graphStore.SeedEtag("alice-w") != "" || len(current.graphSeedChecked) != 0 {
+	if current == old || current.graphStore.NodeCount() != 0 || current.graphStore.SeedEtag("alice-w") != "" || seedChecked(current, "alice-w") {
 		t.Error("reauthorization reused retired graph data or seed bookkeeping")
 	}
 	for _, tool := range []string{"mark_backlinks", "mark_explore"} {
@@ -640,9 +641,7 @@ func TestMemoryGraphSeedRefreshIsScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.graphSeedMu.Lock()
-	state.graphSeedChecked["alice-w"] = time.Now().Add(-2 * seedCheckInterval)
-	state.graphSeedMu.Unlock()
+	state.seedGate.Expire("alice-w")
 	empty = true
 	for _, tool := range []string{"mark_backlinks", "mark_explore"} {
 		if text := tenantGraphCall(t, g, "alice", tool, "/index.md"); strings.Contains(text, "source.md") {
@@ -996,4 +995,59 @@ func TestInstallableWorldsTenantScoped(t *testing.T) {
 	if !errors.As(err, &ambiguous) {
 		t.Errorf("ambiguous mapping err = %v, want errAmbiguousTenant for the caller's log", err)
 	}
+}
+
+func TestMemoryGraphScopeRetiresIdleTenants(t *testing.T) {
+	g := newMemoryGateway(t, memoryTestConfig(), seededDispatcher())
+	now := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	g.srv.clock = func() time.Time { return now }
+	alice := withAliceClaims(t.Context())
+	bob := ctxWithClaims(t.Context(), &Claims{Subject: "google|bob", Email: "bob@example.com", EmailVerified: true})
+
+	first, err := g.graphFor(alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(tenantGraphTTL / 2)
+	if again, err := g.graphFor(alice); err != nil || again != first {
+		t.Fatalf("scope within TTL must persist: err=%v same=%v", err, again == first)
+	}
+	now = now.Add(tenantGraphTTL + time.Minute)
+	if _, err := g.graphFor(bob); err != nil {
+		t.Fatal(err)
+	}
+	if _, retained := g.tenantGraphs["alice-w"]; retained {
+		t.Fatal("idle scope survived another tenant's call past the TTL")
+	}
+	if replaced, err := g.graphFor(alice); err != nil || replaced == first {
+		t.Fatalf("retired scope must re-seed fresh: err=%v same=%v", err, replaced == first)
+	}
+}
+
+func TestMemoryGraphScopeCapsTenants(t *testing.T) {
+	g := newMemoryGateway(t, memoryTestConfig(), seededDispatcher())
+	now := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	g.srv.clock = func() time.Time { return now }
+	for i := range maxTenantGraphs {
+		g.tenantGraphs[fmt.Sprintf("w%d", i)] = &tenantGraph{
+			graph: &gatewayGraph{graphStore: graphstore.New()}, lastUsed: now.Add(time.Duration(i) * time.Second),
+		}
+	}
+	if _, err := g.graphFor(withAliceClaims(t.Context())); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(g.tenantGraphs); got != maxTenantGraphs {
+		t.Fatalf("tenant graphs = %d, want cap %d", got, maxTenantGraphs)
+	}
+	if _, evicted := g.tenantGraphs["w0"]; evicted {
+		t.Fatal("least recently used scope survived the cap")
+	}
+	if _, kept := g.tenantGraphs["alice-w"]; !kept {
+		t.Fatal("new scope missing after eviction")
+	}
+}
+
+func seedChecked(state *gatewayGraph, world string) bool {
+	_, checked := state.seedGate.LastCheck(world)
+	return checked
 }

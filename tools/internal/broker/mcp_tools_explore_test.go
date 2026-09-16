@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
@@ -244,5 +245,34 @@ func TestHandleMarkExploreBinaryNotice(t *testing.T) {
 	}
 	if got := g.knowledgeGraph.graphStore.Backlinks("mark://team-a/false.md"); len(got) != 0 {
 		t.Fatalf("binary body cached false relation: %v", got)
+	}
+}
+
+func TestHandleMarkExploreDefaultSkipsRevalidation(t *testing.T) {
+	d := exploreDispatcher()
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	gr := graph.New()
+	observation := graph.Observe("mark://team-a/a.md", map[string]string{"version": "2"})
+	observation.Complete = true
+	observation.ObservedAt = time.Now().Add(-time.Hour)
+	observation.AttemptedAt = observation.ObservedAt
+	gr.AddNode(&graph.Node{URL: "mark://team-a/a.md", Title: "Page A", Status: "ok", Observation: observation})
+	gr.AddNode(&graph.Node{URL: "mark://team-a/hub.md", Title: "Hub", Status: "ok"})
+	gr.AddEdge("mark://team-a/a.md", "mark://team-a/hub.md")
+	g.knowledgeGraph.graphStore.Merge(gr, nil)
+
+	text := exploreResultText(t, g, "mark://team-a/hub.md")
+	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "freshness: stale") {
+		t.Fatalf("default card must render cached backlinks with their freshness:\n%s", text)
+	}
+	if strings.Contains(text, "revalidation:") {
+		t.Fatalf("default explore must not revalidate sources:\n%s", text)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, call := range d.fetchCalls {
+		if call.path == "/a.md" {
+			t.Fatalf("default explore fetched a backlink source: %+v", d.fetchCalls)
+		}
 	}
 }

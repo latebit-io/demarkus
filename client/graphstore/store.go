@@ -90,8 +90,8 @@ type Store struct {
 	edgeIdx         map[edgeKey]int
 	incoming        map[string][]int
 	outgoing        map[string][]int
-	seedEtags       map[string]string        // host -> last seen published graph etag
-	seedGraphs      map[string]seedGraphData // owner -> latest complete non-authoritative graph
+	seedEtags       map[string]string                  // host -> last seen published graph etag
+	seedGraphs      map[string]map[string]sourceRecord // owner -> normalized complete non-authoritative graph
 	localSources    map[string]sourceRecord
 	representations map[string][sha256.Size]byte
 	validating      map[string]time.Time
@@ -115,7 +115,7 @@ func New() *Store {
 		incoming:        make(map[string][]int),
 		outgoing:        make(map[string][]int),
 		seedEtags:       make(map[string]string),
-		seedGraphs:      make(map[string]seedGraphData),
+		seedGraphs:      make(map[string]map[string]sourceRecord),
 		localSources:    make(map[string]sourceRecord),
 		representations: make(map[string][sha256.Size]byte),
 	}
@@ -136,7 +136,7 @@ func Load(path string) (*Store, error) {
 		incoming:        make(map[string][]int),
 		outgoing:        make(map[string][]int),
 		seedEtags:       make(map[string]string),
-		seedGraphs:      make(map[string]seedGraphData),
+		seedGraphs:      make(map[string]map[string]sourceRecord),
 		localSources:    make(map[string]sourceRecord),
 		representations: make(map[string][sha256.Size]byte),
 	}
@@ -187,17 +187,14 @@ func Load(path string) (*Store, error) {
 	s.rebuildAdjacencyLocked()
 	maps.Copy(s.seedEtags, doc.SeedEtags)
 	for owner, seeded := range doc.SeedGraphs {
-		for i := range seeded.Nodes {
-			seeded.Nodes[i].URL = links.CanonicalURL(seeded.Nodes[i].URL)
-			seeded.Nodes[i].CrawledAt = time.Time{}
-			seeded.Nodes[i].Seeded = true
+		records := sourceRecords(seeded.Nodes, seeded.Edges)
+		for key := range records {
+			record := records[key]
+			record.Node.CrawledAt = time.Time{}
+			record.Node.Seeded = true
+			records[key] = record
 		}
-		for i := range seeded.Edges {
-			seeded.Edges[i].From = links.CanonicalURL(seeded.Edges[i].From)
-			seeded.Edges[i].To = links.CanonicalURL(seeded.Edges[i].To)
-			seeded.Edges[i].Count = max(seeded.Edges[i].Count, 1)
-		}
-		s.seedGraphs[owner] = seeded
+		s.seedGraphs[owner] = records
 	}
 	if doc.Version < 3 && len(s.seedEtags) > 0 {
 		// Pre-snapshot stores lack owner provenance; force one full refresh.
@@ -209,7 +206,7 @@ func Load(path string) (*Store, error) {
 }
 
 func (s *Store) loadCandidates(doc *document) {
-	records := sourceRecordsFromStore(s.nodes, s.edges)
+	records := s.sourceRecordsLocked()
 	for key := range records {
 		record := records[key]
 		if !record.Node.Seeded {
@@ -229,7 +226,7 @@ func (s *Store) loadCandidates(doc *document) {
 			}
 		}
 		if len(legacySeeds) > 0 {
-			s.seedGraphs[""] = recordsData(legacySeeds)
+			s.seedGraphs[""] = legacySeeds
 		}
 	}
 	if doc.Version >= 4 {
@@ -331,11 +328,8 @@ func (s *Store) saveDocument() document {
 	}
 	if len(s.seedGraphs) > 0 {
 		doc.SeedGraphs = make(map[string]seedGraphData, len(s.seedGraphs))
-		for owner, data := range s.seedGraphs {
-			doc.SeedGraphs[owner] = seedGraphData{
-				Nodes: slices.Clone(data.Nodes),
-				Edges: slices.Clone(data.Edges),
-			}
+		for owner, records := range s.seedGraphs {
+			doc.SeedGraphs[owner] = recordsData(records)
 		}
 	}
 	return doc
@@ -365,7 +359,6 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	for _, e := range g.GetEdges() {
 		edges = append(edges, StoredEdge{From: e.From, To: e.To, Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)})
 	}
-	current := sourceRecordsFromStore(s.nodes, s.edges)
 	records := sourceRecords(nodes, edges)
 	for key := range records {
 		delete(s.representations, key)
@@ -373,18 +366,16 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 		if incoming.Node.CrawledAt.IsZero() {
 			incoming.Node.CrawledAt = now
 		}
-		previous, exists := current[key]
+		previous, exists := s.selectedRecordLocked(key)
 		if !observedStatus(incoming.Node.Status) {
 			// A failed source read cannot turn seed ownership into a local claim.
 			previous, exists = s.localSources[key]
-			for owner, data := range s.seedGraphs {
-				for i := range data.Nodes {
-					if data.Nodes[i].URL == key {
-						data.Nodes[i].Observation.Problem = "incomplete"
-						data.Nodes[i].Observation.AttemptedAt = incoming.Node.Observation.AttemptedAt
-					}
+			for _, records := range s.seedGraphs {
+				if record, owned := records[key]; owned {
+					record.Node.Observation.Problem = "incomplete"
+					record.Node.Observation.AttemptedAt = incoming.Node.Observation.AttemptedAt
+					records[key] = record
 				}
-				s.seedGraphs[owner] = data
 			}
 		}
 		if exists {
@@ -446,8 +437,7 @@ func (s *Store) ReplaceSeed(owner string, nodes []StoredNode, edges []StoredEdge
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	previous := s.seedGraphs[owner]
-	old := sourceRecords(previous.Nodes, previous.Edges)
+	old := s.seedGraphs[owner]
 	incoming := sourceRecords(nodes, edges)
 	for key := range incoming {
 		record := incoming[key]
@@ -458,7 +448,7 @@ func (s *Store) ReplaceSeed(owner string, nodes []StoredNode, edges []StoredEdge
 		record.Node.Seeded = true
 		incoming[key] = record
 	}
-	s.seedGraphs[owner] = recordsData(incoming)
+	s.seedGraphs[owner] = incoming
 	s.rebuildSeedsLocked()
 	added := 0
 	for i := range nodes {
@@ -468,6 +458,39 @@ func (s *Store) ReplaceSeed(owner string, nodes []StoredNode, edges []StoredEdge
 		}
 	}
 	return added
+}
+
+// sourceRecordsLocked snapshots every selected source; Merge reads one key at a time instead.
+func (s *Store) sourceRecordsLocked() map[string]sourceRecord {
+	records := make(map[string]sourceRecord, len(s.nodes))
+	for key := range s.nodes {
+		records[key], _ = s.selectedRecordLocked(key)
+	}
+	for key := range s.outgoing {
+		if _, exists := records[key]; !exists {
+			records[key], _ = s.selectedRecordLocked(key)
+		}
+	}
+	return records
+}
+
+// selectedRecordLocked reads one selected source without copying the whole store.
+func (s *Store) selectedRecordLocked(key string) (sourceRecord, bool) {
+	node := s.nodes[key]
+	indices := s.outgoing[key]
+	if node == nil && len(indices) == 0 {
+		return sourceRecord{}, false
+	}
+	record := sourceRecord{Node: StoredNode{URL: key}}
+	if node != nil {
+		record.Node = *node
+	}
+	record.Edges = make([]StoredEdge, 0, len(indices))
+	for _, index := range indices {
+		record.Edges = append(record.Edges, s.edges[index])
+	}
+	slices.SortFunc(record.Edges, compareSnapshotEdges)
+	return record, true
 }
 
 func (s *Store) rebuildSeedsLocked() {
@@ -712,29 +735,35 @@ func (s *Store) CrawlAndPersist(
 	parseURL func(string) (string, string, error),
 	opts CrawlOptions,
 ) (*graph.Graph, error) {
-	// Validate before wrapping a nil fetch function in a non-nil interface.
-	if strings.HasPrefix(startURL, "mark://") && parseURL == nil {
-		return nil, fmt.Errorf("crawl %s: parseURL is required for mark:// URLs", startURL)
-	}
-	if strings.HasPrefix(startURL, "mark://") && fetchFunc == nil {
-		return nil, fmt.Errorf("crawl %s: fetchFunc is required", startURL)
-	}
-
-	fetcher := NewEtagFetcher(fetchFunc)
-
-	g, err := graph.Crawl(ctx, startURL, fetcher, parseURL, opts)
-	if err != nil && !errors.Is(err, graph.ErrIncomplete) {
+	g, etags, err := crawlGraph(ctx, startURL, fetchFunc, parseURL, opts)
+	if s == nil || (err != nil && !errors.Is(err, graph.ErrIncomplete)) {
 		return g, err
 	}
-
-	if s != nil {
-		s.Merge(g, fetcher.Etags())
-		if saveErr := s.Save(); saveErr != nil {
-			return g, errors.Join(err, saveErr)
-		}
+	s.Merge(g, etags)
+	if saveErr := s.Save(); saveErr != nil {
+		return g, errors.Join(err, saveErr)
 	}
-
 	return g, err
+}
+
+// crawlGraph validates inputs and crawls; callers decide when to merge and save.
+func crawlGraph(
+	ctx context.Context,
+	startURL string,
+	fetchFunc FetchFunc,
+	parseURL func(string) (string, string, error),
+	opts CrawlOptions,
+) (*graph.Graph, map[string]string, error) {
+	// Validate before wrapping a nil fetch function in a non-nil interface.
+	if strings.HasPrefix(startURL, "mark://") && parseURL == nil {
+		return nil, nil, fmt.Errorf("crawl %s: parseURL is required for mark:// URLs", startURL)
+	}
+	if strings.HasPrefix(startURL, "mark://") && fetchFunc == nil {
+		return nil, nil, fmt.Errorf("crawl %s: fetchFunc is required", startURL)
+	}
+	fetcher := NewEtagFetcher(fetchFunc)
+	g, err := graph.Crawl(ctx, startURL, fetcher, parseURL, opts)
+	return g, fetcher.Etags(), err
 }
 
 // NodeCount returns the number of stored nodes.

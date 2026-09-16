@@ -40,10 +40,8 @@ type mcpGateway struct {
 type gatewayGraph struct {
 	graphStore *graphstore.Store
 	tenant     string // empty for the organizational graph
-	// graphSeedMu guards per-world refresh single-flight and successful checks.
-	graphSeedMu         sync.Mutex
-	graphSeedChecked    map[string]time.Time
-	graphSeedRefreshing map[string]chan struct{}
+	// seedGate single-flights and throttles published graph checks per world.
+	seedGate graphstore.SeedGate
 }
 
 type tenantGraph struct {
@@ -51,7 +49,15 @@ type tenantGraph struct {
 	address  string
 	dial     string
 	graph    *gatewayGraph
+	lastUsed time.Time
 }
+
+// Idle tenant graphs retire so a long-lived pod does not hold every tenant's
+// seed forever; the cap bounds memory under churn. Retired scopes re-seed.
+const (
+	tenantGraphTTL  = time.Hour
+	maxTenantGraphs = 256
+)
 
 // graphFor resolves scope on every call. Identity or backend changes retire
 // the entire graph, including etags; in-flight work retains only the old graph.
@@ -69,17 +75,45 @@ func (g *mcpGateway) graphFor(ctx context.Context) (*gatewayGraph, error) {
 	}
 	identity := identityKey(g.srv.cfg.OIDC.Issuer, claims.Subject)
 	address := resolveWorldAddress(&w)
+	now := g.srv.clock()
 	g.tenantGraphsMu.Lock()
 	defer g.tenantGraphsMu.Unlock()
+	g.retireIdleTenantGraphsLocked(now, w.Name)
 	entry := g.tenantGraphs[w.Name]
 	if entry == nil || entry.identity != identity || entry.address != address || entry.dial != w.DialAddress {
+		if entry == nil {
+			g.retireOldestTenantGraphsLocked()
+		}
 		entry = &tenantGraph{
 			identity: identity, address: address, dial: w.DialAddress,
 			graph: &gatewayGraph{graphStore: graphstore.New(), tenant: w.Name},
 		}
 		g.tenantGraphs[w.Name] = entry
 	}
+	entry.lastUsed = now
 	return entry.graph, nil
+}
+
+func (g *mcpGateway) retireIdleTenantGraphsLocked(now time.Time, keep string) {
+	for world, entry := range g.tenantGraphs {
+		if world != keep && now.Sub(entry.lastUsed) > tenantGraphTTL {
+			delete(g.tenantGraphs, world)
+		}
+	}
+}
+
+// retireOldestTenantGraphsLocked makes room for one more scope under the cap.
+func (g *mcpGateway) retireOldestTenantGraphsLocked() {
+	for len(g.tenantGraphs) >= maxTenantGraphs {
+		var oldest string
+		var oldestAt time.Time
+		for world, entry := range g.tenantGraphs {
+			if oldest == "" || entry.lastUsed.Before(oldestAt) {
+				oldest, oldestAt = world, entry.lastUsed
+			}
+		}
+		delete(g.tenantGraphs, oldest)
+	}
 }
 
 // Failed resolution has no world name. Retire every scope owned by the identity

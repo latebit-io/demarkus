@@ -20,12 +20,7 @@ func (h *handler) revalidateBacklinks(ctx context.Context, url string) string {
 	if h.graphStore == nil || h.client == nil {
 		return ""
 	}
-	urls := h.graphStore.Backlinks(url)
-	if len(urls) == 0 {
-		return h.graphStore.FreshnessSummary() + "\n"
-	}
-	result, err := h.graphStore.Revalidate(ctx, urls, h.graphFetch, fetch.ParseMarkURL)
-	return graphstore.ValidationSummary(result, err) + h.graphStore.FreshnessSummary() + "\n"
+	return h.graphStore.RevalidateBacklinks(ctx, url, h.graphFetch, fetch.ParseMarkURL)
 }
 
 var _ graphstore.FetchFunc = (*handler)(nil).graphFetch

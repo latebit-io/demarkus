@@ -200,26 +200,6 @@ func sourceRecords(nodes []StoredNode, edges []StoredEdge) map[string]sourceReco
 	return records
 }
 
-func sourceRecordsFromStore(nodes map[string]*StoredNode, edges []StoredEdge) map[string]sourceRecord {
-	records := make(map[string]sourceRecord, len(nodes))
-	for key, node := range nodes {
-		records[key] = sourceRecord{Node: *node}
-	}
-	for _, edge := range edges {
-		record := records[edge.From]
-		if record.Node.URL == "" {
-			record.Node.URL = edge.From
-		}
-		record.Edges = append(record.Edges, edge)
-		records[edge.From] = record
-	}
-	for key := range records {
-		record := records[key]
-		slices.SortFunc(record.Edges, compareSnapshotEdges)
-	}
-	return records
-}
-
 func recordsData(records map[string]sourceRecord) seedGraphData {
 	var data seedGraphData
 	for _, key := range slices.Sorted(maps.Keys(records)) {
@@ -317,11 +297,10 @@ func refreshValidation(current, next *graph.Observation) {
 	}
 }
 
-func selectSources(local map[string]sourceRecord, owners map[string]seedGraphData) map[string]sourceRecord { //nolint:gocritic // selection annotates copies without mutating owner evidence
+func selectSources(local map[string]sourceRecord, owners map[string]map[string]sourceRecord) map[string]sourceRecord { //nolint:gocritic // selection annotates copies without mutating owner evidence
 	selected := make(map[string]sourceRecord)
 	for _, owner := range slices.Sorted(maps.Keys(owners)) {
-		data := owners[owner]
-		records := sourceRecords(data.Nodes, data.Edges)
+		records := owners[owner]
 		for key := range records {
 			candidate := records[key]
 			previous, exists := selected[key]
@@ -393,20 +372,27 @@ func chooseSource(incumbent, candidate sourceRecord) sourceRecord { //nolint:goc
 func (s *Store) MarkSeedFailure(owner string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data := s.seedGraphs[owner]
-	for i := range data.Nodes {
-		data.Nodes[i].Observation.Problem = "seed-refresh-failed"
+	records := s.seedGraphs[owner]
+	for key := range records {
+		record := records[key]
+		record.Node.Observation.Problem = "seed-refresh-failed"
+		records[key] = record
 	}
-	s.seedGraphs[owner] = data
 	s.rebuildSeedsLocked()
 }
 
-// FreshnessSummary includes unknown coverage even when no backlinks remain.
-func (s *Store) FreshnessSummary() string {
+// FreshnessSummaryFor counts only the given sources, so a card reports its own
+// backlinks rather than the whole store. Unknown URLs count as unknown.
+func (s *Store) FreshnessSummaryFor(urls []string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	counts := map[string]int{}
-	nodes := s.AllNodes()
-	for i := range nodes {
-		counts[nodes[i].Observation.Freshness()]++
+	for _, url := range urls {
+		var observation *graph.Observation
+		if node := s.nodes[links.CanonicalURL(url)]; node != nil {
+			observation = &node.Observation
+		}
+		counts[observation.Freshness()]++
 	}
 	return fmt.Sprintf("freshness: %d fresh, %d stale, %d unknown", counts["fresh"], counts["stale"], counts["unknown"])
 }

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
@@ -350,4 +352,51 @@ func TestHandlerMarkExplore_InvalidURL(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	assertIsToolError(t, result, "requires -host flag")
+}
+
+// staleBacklinkStore returns a store where a.md links to hub.md and a.md's
+// observation is old enough to be due for revalidation.
+func staleBacklinkStore(t *testing.T) *graphstore.Store {
+	t.Helper()
+	gs, err := graphstore.Load(filepath.Join(t.TempDir(), "graph.json"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	g := graph.New()
+	observation := graph.Observe("mark://host/a.md", map[string]string{"version": "2"})
+	observation.Complete = true
+	observation.ObservedAt = time.Now().Add(-time.Hour)
+	observation.AttemptedAt = observation.ObservedAt
+	g.AddNode(&graph.Node{URL: "mark://host/a.md", Title: "Page A", Status: "ok", Observation: observation})
+	g.AddNode(&graph.Node{URL: "mark://host/hub.md", Title: "Hub", Status: "ok"})
+	g.AddEdge("mark://host/a.md", "mark://host/hub.md")
+	gs.Merge(g, nil)
+	return gs
+}
+
+func TestHandlerMarkExplore_DefaultSkipsRevalidation(t *testing.T) {
+	sc := exploreStub()
+	var fetched []string
+	base := sc.fetchFn
+	sc.fetchFn = func(host, path, token string) (fetch.Result, error) {
+		fetched = append(fetched, path)
+		return base(host, path, token)
+	}
+	h := &handler{client: sc, graphStore: staleBacklinkStore(t)}
+
+	text := exploreText(t, h, "mark://host/hub.md")
+	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "freshness: stale") {
+		t.Fatalf("default card must render cached backlinks with their freshness:\n%s", text)
+	}
+	if strings.Contains(text, "revalidation:") || slices.Contains(fetched, "/a.md") {
+		t.Fatalf("default explore must not revalidate sources; fetched=%v\n%s", fetched, text)
+	}
+
+	res, err := h.markExplore(context.Background(), newCallToolRequest(map[string]any{"url": "mark://host/hub.md", "direction": "incoming"}))
+	if err != nil || res.IsError {
+		t.Fatalf("relation explore: err=%v result=%+v", err, res)
+	}
+	if !slices.Contains(fetched, "/a.md") {
+		t.Fatalf("relation explore must revalidate sources; fetched=%v", fetched)
+	}
 }

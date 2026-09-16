@@ -159,10 +159,8 @@ type handler struct {
 	seenMu sync.Mutex
 	seen   map[string]fetchdedup.Doc
 
-	// seedMu guards per-host refresh single-flight and successful-check throttle.
-	seedMu         sync.Mutex
-	seedChecked    map[string]time.Time
-	seedRefreshing map[string]chan struct{}
+	// seedGate single-flights and throttles published graph checks per host.
+	seedGate graphstore.SeedGate
 }
 
 // seenLookup returns the recorded identity for key, if any.
@@ -183,65 +181,35 @@ func (h *handler) seenRecord(key string, d fetchdedup.Doc) {
 	h.seen[key] = d
 }
 
-// seedCheckInterval caps published graph checks at one per host per interval;
-// the first graph-tool call in a session always checks.
-const seedCheckInterval = 5 * time.Minute
-
 // seedGraph refreshes from the published graph so cold backlink queries work.
 // Source revisions select adjacency; failures preserve last-good observations.
-func (h *handler) seedGraph(ctx context.Context, host string) { //nolint:gocyclo // snapshot-first fallback has explicit terminal states
-	if h.graphStore == nil || h.client == nil || host == "" || ctx.Err() != nil {
+func (h *handler) seedGraph(ctx context.Context, host string) {
+	if h.graphStore == nil || h.client == nil || host == "" {
 		return
 	}
-	h.seedMu.Lock()
-	if done := h.seedRefreshing[host]; done != nil {
-		h.seedMu.Unlock()
-		select {
-		case <-done:
-		case <-ctx.Done():
+	h.seedGate.Run(ctx, host, func(ctx context.Context) bool {
+		if h.seedPass(ctx, host) {
+			return true
 		}
-		return
-	}
-	if last, ok := h.seedChecked[host]; ok && time.Since(last) < seedCheckInterval {
-		h.seedMu.Unlock()
-		return
-	}
-	if h.seedChecked == nil {
-		h.seedChecked = make(map[string]time.Time)
-	}
-	if h.seedRefreshing == nil {
-		h.seedRefreshing = make(map[string]chan struct{})
-	}
-	done := make(chan struct{})
-	h.seedRefreshing[host] = done
-	h.seedMu.Unlock()
-	success := false
-	defer func() {
-		if !success {
-			h.graphStore.MarkSeedFailure(host)
-			if err := h.graphStore.Save(); err != nil {
-				log.Printf("warning: graph seed failure save: %v", err)
-			}
+		h.graphStore.MarkSeedFailure(host)
+		if err := h.graphStore.Save(); err != nil {
+			log.Printf("warning: graph seed failure save: %v", err)
 		}
-		h.seedMu.Lock()
-		if success {
-			h.seedChecked[host] = time.Now()
-		}
-		close(done)
-		delete(h.seedRefreshing, host)
-		h.seedMu.Unlock()
-	}()
+		return false
+	})
+}
 
+// seedPass reports whether the published graph was current, refreshed or absent.
+func (h *handler) seedPass(ctx context.Context, host string) bool { //nolint:gocyclo // snapshot-first fallback has explicit terminal states
 	token := h.resolveToken(host)
 	etag := h.graphStore.SeedEtag(host)
 	result, err := h.client.FetchConditionalContext(ctx, host, graphstore.SnapshotManifestPath, token, etag)
 	if err != nil {
 		log.Printf("warning: graph snapshot fetch mark://%s%s: %v", host, graphstore.SnapshotManifestPath, err)
-		return
+		return false
 	}
 	if result.Response.Status == protocol.StatusNotModified {
-		success = true
-		return
+		return true
 	}
 	if result.Response.Status == protocol.StatusOK {
 		nodes, edges, loadErr := graphstore.LoadSnapshot(graphstore.SnapshotManifestPath, result.Response, func(shardPath string) (protocol.Response, error) {
@@ -250,7 +218,7 @@ func (h *handler) seedGraph(ctx context.Context, host string) { //nolint:gocyclo
 		})
 		if loadErr != nil {
 			log.Printf("warning: graph snapshot load mark://%s%s: %v", host, graphstore.SnapshotManifestPath, loadErr)
-			return
+			return false
 		}
 		h.graphStore.ReplaceSeed(host, nodes, edges)
 		if snapshotEtag := result.Response.Metadata["etag"]; snapshotEtag != "" {
@@ -259,36 +227,33 @@ func (h *handler) seedGraph(ctx context.Context, host string) { //nolint:gocyclo
 		if err := h.graphStore.Save(); err != nil {
 			log.Printf("warning: graph seed save: %v", err)
 		}
-		success = true
-		return
+		return true
 	}
 	if result.Response.Status != protocol.StatusNotFound {
 		log.Printf("warning: graph snapshot mark://%s%s returned %s", host, graphstore.SnapshotManifestPath, result.Response.Status)
-		return
+		return false
 	}
 
 	const legacyPath = "/graph.md"
 	result, err = h.client.FetchConditionalContext(ctx, host, legacyPath, token, etag)
 	if err != nil {
 		log.Printf("warning: graph seed fetch mark://%s%s: %v", host, legacyPath, err)
-		return
+		return false
 	}
 	if result.Response.Status == protocol.StatusNotFound {
-		success = true
-		return
+		return true
 	}
 	if result.Response.Status == protocol.StatusNotModified {
-		success = true
-		return
+		return true
 	}
 	if result.Response.Status != protocol.StatusOK {
 		log.Printf("warning: legacy graph seed mark://%s%s returned %s", host, legacyPath, result.Response.Status)
-		return
+		return false
 	}
 	nodes, edges, parseErr := graphstore.ParseExportStrict(result.Response.Body)
 	if parseErr != nil {
 		log.Printf("warning: legacy graph seed parse mark://%s%s: %v", host, legacyPath, parseErr)
-		return
+		return false
 	}
 	h.graphStore.ReplaceSeed(host, nodes, edges)
 	if etag := result.Response.Metadata["etag"]; etag != "" {
@@ -297,7 +262,7 @@ func (h *handler) seedGraph(ctx context.Context, host string) { //nolint:gocyclo
 	if err := h.graphStore.Save(); err != nil {
 		log.Printf("warning: graph seed save: %v", err)
 	}
-	success = true
+	return true
 }
 
 // resolveToken returns the auth token for a host using the shared cascade:

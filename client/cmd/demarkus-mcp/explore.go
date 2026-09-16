@@ -7,7 +7,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
-	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/links"
 	listformat "github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
@@ -115,7 +114,7 @@ func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mc
 		}
 		fmt.Fprintf(&b, "## %s\n(graph store unavailable)\n", section)
 	} else {
-		if !neighborhoodRequested || neighborhoodOpts.Direction != graphstore.NeighborhoodOutgoing {
+		if mcpfmt.RevalidatesBacklinks(&req) {
 			b.WriteString(h.revalidateBacklinks(ctx, fullURL))
 		}
 		if neighborhoodRequested {

@@ -19,12 +19,16 @@ import (
 const freshnessSource = "mark://source/a.md"
 
 func revisionGraph(revision int, target string) *graph.Graph {
+	return revisionGraphFor(freshnessSource, revision, target)
+}
+
+func revisionGraphFor(url string, revision int, target string) *graph.Graph {
 	g := graph.New()
-	observation := graph.Observe(freshnessSource, map[string]string{"version": fmt.Sprint(revision), "etag": fmt.Sprintf("etag-%d", revision)})
+	observation := graph.Observe(url, map[string]string{"version": fmt.Sprint(revision), "etag": fmt.Sprintf("etag-%d", revision)})
 	observation.Complete = true
-	g.AddNode(&graph.Node{URL: freshnessSource, Status: "ok", Title: "source", Observation: observation})
+	g.AddNode(&graph.Node{URL: url, Status: "ok", Title: "source", Observation: observation})
 	if target != "" {
-		g.AddEdge(freshnessSource, "mark://source/"+target)
+		g.AddEdge(url, "mark://source/"+target)
 	}
 	return g
 }
