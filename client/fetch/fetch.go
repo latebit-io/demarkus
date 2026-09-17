@@ -229,6 +229,11 @@ func (c *Client) List(host, path, token string) (Result, error) {
 
 // ListWithOptions is List with explicit LIST options (e.g. IncludeArchived).
 func (c *Client) ListWithOptions(host, path, token string, opts ListOptions) (Result, error) {
+	return c.ListWithOptionsContext(context.Background(), host, path, token, opts)
+}
+
+// ListWithOptionsContext is ListWithOptions with caller cancellation propagated through network I/O.
+func (c *Client) ListWithOptionsContext(ctx context.Context, host, path, token string, opts ListOptions) (Result, error) {
 	if opts.PageSize < 0 || opts.PageSize > protocol.MaxListPageSize {
 		return Result{}, fmt.Errorf("LIST page size must be between 1 and %d, or 0 for the server default", protocol.MaxListPageSize)
 	}
@@ -245,18 +250,23 @@ func (c *Client) ListWithOptions(host, path, token string, opts ListOptions) (Re
 	if len(extra) == 0 {
 		extra = nil
 	}
-	return c.cachedRequestMeta(host, path, token, protocol.VerbList, extra)
+	return c.cachedRequestMetaContext(ctx, host, path, token, protocol.VerbList, extra)
 }
 
 // Versions retrieves the version history of a document.
 // If token is non-empty, it is sent as the auth metadata for read access to private paths.
 func (c *Client) Versions(host, path, token string) (Result, error) {
+	return c.VersionsContext(context.Background(), host, path, token)
+}
+
+// VersionsContext is Versions with caller cancellation propagated through network I/O.
+func (c *Client) VersionsContext(ctx context.Context, host, path, token string) (Result, error) {
 	req := protocol.Request{Verb: protocol.VerbVersions, Path: path, Metadata: make(map[string]string)}
 	if token != "" {
 		req.Metadata["auth"] = token
 	}
-	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConn(conn, req)
+	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
+		return c.requestOnConnContext(ctx, conn, req)
 	})
 }
 
@@ -380,10 +390,6 @@ func (c *Client) Archive(host, path, token string) (Result, error) {
 
 // cachedRequestMeta handles cacheable reads with optional request metadata.
 // Extra metadata bypasses caching because cache keys do not include it.
-func (c *Client) cachedRequestMeta(host, path, token, verb string, extra map[string]string) (Result, error) {
-	return c.cachedRequestMetaContext(context.Background(), host, path, token, verb, extra)
-}
-
 func (c *Client) cachedRequestMetaContext(ctx context.Context, host, path, token, verb string, extra map[string]string) (Result, error) {
 	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
 		req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string)}

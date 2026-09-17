@@ -15,8 +15,8 @@ type ClientStore struct {
 }
 
 // List fetches one LIST page.
-func (s *ClientStore) List(_ context.Context, dir string, includeArchived bool, cursor string) (protocol.Response, error) {
-	res, err := s.Client.ListWithOptions(s.Host, dir, s.Token, fetch.ListOptions{IncludeArchived: includeArchived, Cursor: cursor})
+func (s *ClientStore) List(ctx context.Context, dir string, includeArchived bool, cursor string) (protocol.Response, error) {
+	res, err := s.Client.ListWithOptionsContext(ctx, s.Host, dir, s.Token, fetch.ListOptions{IncludeArchived: includeArchived, Cursor: cursor})
 	return res.Response, err
 }
 
@@ -27,7 +27,7 @@ func (s *ClientStore) Fetch(ctx context.Context, docPath string) (protocol.Respo
 }
 
 // Versions fetches a document's version history.
-func (s *ClientStore) Versions(_ context.Context, docPath string) (protocol.Response, error) {
-	res, err := s.Client.Versions(s.Host, docPath, s.Token)
+func (s *ClientStore) Versions(ctx context.Context, docPath string) (protocol.Response, error) {
+	res, err := s.Client.VersionsContext(ctx, s.Host, docPath, s.Token)
 	return res.Response, err
 }

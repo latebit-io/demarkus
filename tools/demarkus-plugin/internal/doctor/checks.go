@@ -77,7 +77,8 @@ func (a *audit) checkLinks(ctx context.Context) {
 		}
 	}
 	if len(unconfirmed) > 0 {
-		a.note("link confirmation budget of %d fetches spent; %d links unconfirmed: %s", MaxLinkConfirms, len(unconfirmed), strings.Join(unconfirmed, ", "))
+		shown := unconfirmed[:min(len(unconfirmed), maxUnconfirmedShown)]
+		a.note("link confirmation budget of %d fetches spent; %d links unconfirmed, first %d: %s", MaxLinkConfirms, len(unconfirmed), len(shown), strings.Join(shown, ", "))
 	}
 }
 
@@ -322,6 +323,8 @@ func (a *audit) checkLostMetadata(ctx context.Context) {
 		if !readableStatus(d.status) || strings.TrimSpace(d.meta["tags"]) != "" {
 			continue
 		}
+		// A missing or unparsable version leaves nothing to walk; the
+		// document is still reported as untagged by checkMetadata.
 		current, _ := strconv.Atoi(d.meta["version"])
 		if current < 2 || !spend(p) {
 			continue

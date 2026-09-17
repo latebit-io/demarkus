@@ -46,7 +46,7 @@ func cmdDoctor(args []string) {
 	if err != nil {
 		die(err)
 	}
-	defer store.Client.Close()
+	defer store.Client.Close() // no error to handle; on die the process exits and the OS closes the sockets
 	report, err := doctor.Run(context.Background(), store, doctor.Options{Scope: *scope, Deep: *deep})
 	if err != nil {
 		die(err)

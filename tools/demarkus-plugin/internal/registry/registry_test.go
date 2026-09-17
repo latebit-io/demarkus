@@ -798,4 +798,10 @@ func TestMemoryEndpointResolvesLocalAndRemoteRows(t *testing.T) {
 	if ep, err = MemoryEndpoint("soul"); err != nil || ep.Token != "" {
 		t.Fatalf("a tokenless row resolves without a token: %+v, err=%v", ep, err)
 	}
+	if err := MemoryRegister("team", "https://broker.example", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if ep, err = MemoryEndpoint("team"); err != nil || !ep.Broker || ep.Token != "" {
+		t.Fatalf("a broker row is flagged and carries no token: %+v, err=%v", ep, err)
+	}
 }

@@ -151,8 +151,11 @@ func MemoryEndpoint(id string) (Endpoint, error) {
 		return ep, nil
 	}
 	tok, err := os.ReadFile(row.TokenFile)
-	if err != nil || strings.TrimSpace(string(tok)) == "" {
-		return Endpoint{}, errors.New("token file " + row.TokenFile + " missing or empty; re-run /soul-join --token")
+	if err != nil {
+		return Endpoint{}, fmt.Errorf("read token file %s: %w (re-run /soul-join --token if it is gone)", row.TokenFile, err)
+	}
+	if strings.TrimSpace(string(tok)) == "" {
+		return Endpoint{}, errors.New("token file " + row.TokenFile + " is empty; re-run /soul-join --token")
 	}
 	ep.Token = strings.TrimSpace(string(tok))
 	return ep, nil

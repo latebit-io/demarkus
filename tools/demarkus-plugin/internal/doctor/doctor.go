@@ -29,8 +29,10 @@ const (
 	MaxVersionFetches = 100
 	MaxVersionsPerDoc = 10
 	MaxAuditDuration  = 10 * time.Minute
-	oversizedBytes    = 8 * 1024
-	adrNumberWidth    = 4
+	// maxUnconfirmedShown caps the pairs listed in the coverage note; the count stays exact.
+	maxUnconfirmedShown = 10
+	oversizedBytes      = 8 * 1024
+	adrNumberWidth      = 4
 )
 
 var (
