@@ -28,7 +28,7 @@ Root crawl error or unauthorized, or inventory failed, unauthorized or incomplet
 - **Stale index entries**: broken links from a hub or index doc.
 - **Missing hub**: a `/<project>/` subtree with documents and no `index.md`.
 - **Untitled**: `ok` nodes shown `(no title)` (no H1 or declared title); on a `not-found` node that is the broken-link finding, not a second one.
-- **ADR sequence**: per `adr/` directory, list it; duplicate or gapped `NNNN` prefixes. List failure: inconclusive, surfaced, excluded.
+- **ADR sequence**: per `adr/` directory in the inventory, duplicate or gapped `NNNN` prefixes; a directory the inventory left incomplete is inconclusive, surfaced, excluded.
 
 ## Write-auth drift (whole-soul audits only)
 
@@ -50,10 +50,12 @@ At most 100 documents, hub-linked and recently modified first when sampling; `fo
 
 ## Report
 
-Plain, one-line summary first (`N docs, X findings`), then one `###` section per check, most actionable first, `(<n>)` count, and `[deep check, scanned <k>/<N> docs]` on every deep-check section; one bullet per finding: path, evidence, one-line fix. Examples:
+Plain: a heading with the document count, one line `<N> docs, <X> findings`, then one `###` section per check, most actionable first, `(<n>)` count, and `[deep check, scanned <k>/<N> docs]` on every deep-check section; one bullet per finding: path, evidence, one-line fix. Examples:
 
 ```text
 ## <scope> hygiene report  (<N> docs)
+
+<N> docs, <X> findings
 
 ### Broken links (<n>)
 - /<doc>.md → /<missing-target>.md  (fetch → not-found): fix the link or restore the target
@@ -72,7 +74,7 @@ Plain, one-line summary first (`N docs, X findings`), then one `###` section per
 - provision verify-auth: <verdict> (server pid <pid>, token registry <path>); on drift: writes will fail unauthorized; re-run /soul-init or update the registry hash
 ```
 
-Every other check follows the same bullet shape with its fix. End with a short prioritized "what I'd fix first". "All clean" only when every check ran to complete coverage and found nothing; incomplete coverage (deadline, crawl failure, inventory bound, deep-check cap) lists confirmed findings, then the gaps; "no findings in the covered scope" only at zero findings.
+Every other check follows the same bullet shape with its fix. End with a short prioritized "what I'd fix first". "All clean" only when every check ran to complete coverage and found nothing; incomplete coverage (crawl failure, inventory bound, deep-check cap) lists confirmed findings, then the gaps; "no findings in the covered scope" only at zero findings.
 
 ## Don't
 

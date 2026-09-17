@@ -439,11 +439,16 @@ func registryProject(args []string) {
 	fs := flag.NewFlagSet("project", flag.ExitOnError)
 	dir := fs.String("dir", "", "the project directory (default: harness project variable)")
 	_ = fs.Parse(args) // ExitOnError: Parse never returns
+	if len(fs.Args()) != 0 {
+		fail("project: usage: registry project [--dir DIR]")
+	}
 	r, err := project.Resolve(*dir)
 	if err != nil {
 		fail("project: " + err.Error())
 	}
-	fmt.Println(r.Lines())
+	if _, err := fmt.Println(r.Lines()); err != nil {
+		fail("project: write output: " + err.Error())
+	}
 }
 
 // memoryDefaultListing renders `memory-default --list`: EMPTY or starred
