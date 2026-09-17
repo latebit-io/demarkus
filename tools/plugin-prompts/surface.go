@@ -30,10 +30,13 @@ func checkToolSurface(root string) error {
 		if err != nil {
 			return err
 		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return fmt.Errorf("relative path for %s: %w", path, err)
+		}
 		for i, line := range strings.Split(string(raw), "\n") {
 			for _, name := range toolNamePattern.FindAllString(line, -1) {
 				if mcpfmt.AdvancedTools[name] {
-					rel, _ := filepath.Rel(root, path)
 					offenders = append(offenders, fmt.Sprintf("%s:%d references %s", filepath.ToSlash(rel), i+1, name))
 				}
 			}

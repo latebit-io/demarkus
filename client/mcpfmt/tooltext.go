@@ -9,11 +9,9 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// Tool builders shared by demarkus-mcp and the broker gateway. A surface
-// supplies only how a URL argument is described and any suffix its own
-// semantics add, so one operation has one schema on both transports. Every
-// string here is paid in tokens on each model turn of hosts that eager-load
-// schemas.
+// Tool builders shared by demarkus-mcp and the broker gateway: a surface adds
+// only its URL wording and an optional suffix, so one operation has one schema
+// on both transports. Every string here is paid in tokens on each model turn.
 
 // Descriptions the surfaces still compose themselves (lookup, discover,
 // resolve, index) because their arguments differ by transport.

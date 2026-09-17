@@ -125,3 +125,15 @@ func TestMemoryDefaultListingFlagsStaleBinding(t *testing.T) {
 		t.Fatalf("unbound empty: %q", got)
 	}
 }
+
+func TestSetEnvReplacesInheritedValue(t *testing.T) {
+	env := setEnv([]string{"HOME=/h", "DEMARKUS_MCP_PROFILE=full", "PATH=/bin"}, "DEMARKUS_MCP_PROFILE", "lean")
+	if len(env) != 3 || env[2] != "DEMARKUS_MCP_PROFILE=lean" || env[0] != "HOME=/h" || env[1] != "PATH=/bin" {
+		t.Fatalf("env = %v", env)
+	}
+	for _, entry := range env[:2] {
+		if strings.HasPrefix(entry, "DEMARKUS_MCP_PROFILE=") {
+			t.Fatalf("inherited profile survived: %v", env)
+		}
+	}
+}

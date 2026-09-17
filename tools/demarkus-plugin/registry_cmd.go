@@ -495,6 +495,18 @@ func registryPromoteTarget(args []string) {
 	}
 }
 
+// setEnv replaces key in an execve environment; execve keeps the first
+// duplicate, so an inherited value would otherwise win over ours.
+func setEnv(env []string, key, value string) []string {
+	kept := env[:0:0]
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, key+"=") {
+			kept = append(kept, entry)
+		}
+	}
+	return append(kept, key+"="+value)
+}
+
 // cmdMcpServe launches demarkus-mcp for the local memory or a joined remote one
 // (--memory <slug>), injecting DEMARKUS_AUTH from the shared state. --soul stays
 // accepted: older plugin versions persisted it in users' .mcp.json entries.
@@ -561,7 +573,7 @@ func cmdMcpServe(args []string) {
 
 	// Plugin prompts are checked against the lean profile. The environment
 	// carries the choice so an older demarkus-mcp still starts.
-	env = append(env, "DEMARKUS_MCP_PROFILE=lean")
+	env = setEnv(env, "DEMARKUS_MCP_PROFILE", "lean")
 	argv := []string{mcpBin, "-host", host}
 	if insecure {
 		argv = append(argv, "-insecure")

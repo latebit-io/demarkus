@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 )
 
 // validConfigTemplate carries a sentinel where the broker signing
@@ -819,10 +821,11 @@ func TestLoadConfigOIDCClientSecretEnvOverride(t *testing.T) {
 
 func TestMCPConfigValidate(t *testing.T) {
 	tests := []struct {
-		name     string
-		mcp      MCPConfig
-		wantErr  string
-		wantAddr string
+		name        string
+		mcp         MCPConfig
+		wantErr     string
+		wantAddr    string
+		wantProfile string
 	}{
 		{
 			name:     "zero value gets default addr",
@@ -840,14 +843,16 @@ func TestMCPConfigValidate(t *testing.T) {
 			wantAddr: ":8081",
 		},
 		{
-			name:     "tool profile defaults to full",
-			mcp:      MCPConfig{Addr: ":8081"},
-			wantAddr: ":8081",
+			name:        "tool profile defaults to full",
+			mcp:         MCPConfig{Addr: ":8081"},
+			wantAddr:    ":8081",
+			wantProfile: mcpfmt.ProfileFull,
 		},
 		{
-			name:     "lean tool profile accepted",
-			mcp:      MCPConfig{Addr: ":8081", ToolProfile: "lean"},
-			wantAddr: ":8081",
+			name:        "lean tool profile accepted",
+			mcp:         MCPConfig{Addr: ":8081", ToolProfile: "lean"},
+			wantAddr:    ":8081",
+			wantProfile: mcpfmt.ProfileLean,
 		},
 		{
 			name:    "unknown tool profile rejected",
@@ -874,6 +879,9 @@ func TestMCPConfigValidate(t *testing.T) {
 				}
 				if tt.mcp.Addr != tt.wantAddr {
 					t.Errorf("validate: addr = %q, want %q", tt.mcp.Addr, tt.wantAddr)
+				}
+				if tt.wantProfile != "" && tt.mcp.ToolProfile != tt.wantProfile {
+					t.Errorf("validate: toolProfile = %q, want %q", tt.mcp.ToolProfile, tt.wantProfile)
 				}
 				return
 			}
