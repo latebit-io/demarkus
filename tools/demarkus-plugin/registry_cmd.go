@@ -548,48 +548,24 @@ func cmdMcpServe(args []string) {
 		os.Exit(1)
 	}
 
-	var host, tokenFile string
-	insecure := false
-	if *memory == "" {
-		cfg, err := config.LoadConfig()
-		if err != nil || cfg == nil {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: no local memory configured; SessionStart may not have run yet")
-			os.Exit(1)
-		}
-		host = "mark://localhost:" + cfg.Port
-		insecure = true
-		tf, err := config.StatePath("plugin-memory.token")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: resolve token path: "+err.Error())
-			os.Exit(1)
-		}
-		tokenFile = tf
-	} else {
-		row, ok, err := registry.RemoteMemoryRow(*memory)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: catalog lookup failed: "+err.Error())
-			os.Exit(1)
-		}
-		if !ok {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: memory '"+*memory+"' not in the catalog; re-run /soul-join")
-			os.Exit(1)
-		}
-		host, insecure, tokenFile = row.Host, row.Insecure, row.TokenFile
-		if row.IsBroker() {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: memory '"+*memory+"' is a broker memory served over HTTP MCP; register it with `claude mcp add --transport http` instead of mcp-serve")
-			os.Exit(1)
-		}
+	id := *memory
+	if id == "" {
+		id = config.LocalMemoryID
 	}
+	ep, err := registry.MemoryEndpoint(id)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: "+err.Error())
+		os.Exit(1)
+	}
+	if ep.Broker {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: memory '"+id+"' is a broker memory served over HTTP MCP; register it with `claude mcp add --transport http` instead of mcp-serve")
+		os.Exit(1)
+	}
+	host, insecure := ep.Host, ep.Insecure
 
 	env := os.Environ()
-	if tokenFile != "" && tokenFile != "-" {
-		tok, err := os.ReadFile(tokenFile)
-		if err == nil && strings.TrimSpace(string(tok)) != "" {
-			env = append(env, "DEMARKUS_AUTH="+strings.TrimSpace(string(tok)))
-		} else if *memory != "" {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: token file "+tokenFile+" missing/empty; re-run /soul-join --token")
-			os.Exit(1)
-		}
+	if ep.Token != "" {
+		env = append(env, "DEMARKUS_AUTH="+ep.Token)
 	}
 
 	// Plugin prompts are checked against the lean profile. The environment

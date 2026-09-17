@@ -758,3 +758,44 @@ func TestMcpCursorHarnessPathAndShape(t *testing.T) {
 		t.Fatal("unknown harness should be rejected")
 	}
 }
+
+func TestMemoryEndpointResolvesLocalAndRemoteRows(t *testing.T) {
+	home := setupHome(t)
+	if _, err := MemoryEndpoint(config.LocalMemoryID); err == nil {
+		t.Fatal("no local config must be an error")
+	}
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "plugin-memory.conf"), []byte("SOUL_DIR=/no/such\nPORT=6310\nMODE=default\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ep, err := MemoryEndpoint(config.LocalMemoryID)
+	if err != nil || ep.Host != "mark://localhost:6310" || !ep.Insecure || ep.Token != "" || ep.Broker {
+		t.Fatalf("local endpoint without a token file = %+v, err=%v", ep, err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "plugin-memory.token"), []byte(" tok \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ep, err = MemoryEndpoint(config.LocalMemoryID); err != nil || ep.Token != "tok" {
+		t.Fatalf("local token not read: %+v, err=%v", ep, err)
+	}
+	if _, err := MemoryEndpoint("nope"); err == nil {
+		t.Fatal("an unknown catalog id must be an error")
+	}
+	if _, err := MemoryJoin("soul.demarkus.io", "remote-token", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if ep, err = MemoryEndpoint("soul"); err != nil || ep.Token != "remote-token" || !ep.Insecure || ep.Broker {
+		t.Fatalf("remote endpoint = %+v, err=%v", ep, err)
+	}
+	if err := os.Remove(filepath.Join(home, ".demarkus", "soul-soul.token")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MemoryEndpoint("soul"); err == nil {
+		t.Fatal("a remote row whose token file is missing must be an error")
+	}
+	if _, err := MemoryJoin("soul.demarkus.io", "", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if ep, err = MemoryEndpoint("soul"); err != nil || ep.Token != "" {
+		t.Fatalf("a tokenless row resolves without a token: %+v, err=%v", ep, err)
+	}
+}

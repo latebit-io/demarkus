@@ -108,6 +108,56 @@ func RemoteMemoryRow(slug string) (MemoryRow, bool, error) {
 	return MemoryRow{}, false, nil
 }
 
+// Endpoint is how a catalog store is reached: the local managed server or a
+// remote row. Token is the file's trimmed content, "" when the row has none.
+type Endpoint struct {
+	Host     string // mark://host[:port]
+	Insecure bool
+	Broker   bool // HTTPS broker: OAuth in the harness, no token file
+	Token    string
+}
+
+// MemoryEndpoint resolves a catalog id. The local store needs its config and
+// tolerates a missing token file (session start may not have run yet); a
+// remote row without a readable token is an error unless it declares none.
+func MemoryEndpoint(id string) (Endpoint, error) {
+	if id == config.LocalMemoryID {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			return Endpoint{}, err
+		}
+		if cfg == nil {
+			return Endpoint{}, errors.New("no local store configured; run /soul-init")
+		}
+		tf, err := config.StatePath("plugin-memory.token")
+		if err != nil {
+			return Endpoint{}, err
+		}
+		tok, err := os.ReadFile(tf)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Endpoint{}, fmt.Errorf("read plugin token: %w", err)
+		}
+		return Endpoint{Host: "mark://localhost:" + cfg.Port, Insecure: true, Token: strings.TrimSpace(string(tok))}, nil
+	}
+	row, ok, err := RemoteMemoryRow(id)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	if !ok {
+		return Endpoint{}, errors.New("store '" + id + "' is not in the catalog; run /soul-join")
+	}
+	ep := Endpoint{Host: row.Host, Insecure: row.Insecure, Broker: row.IsBroker()}
+	if row.TokenFile == "" || row.TokenFile == "-" || ep.Broker {
+		return ep, nil
+	}
+	tok, err := os.ReadFile(row.TokenFile)
+	if err != nil || strings.TrimSpace(string(tok)) == "" {
+		return Endpoint{}, errors.New("token file " + row.TokenFile + " missing or empty; re-run /soul-join --token")
+	}
+	ep.Token = strings.TrimSpace(string(tok))
+	return ep, nil
+}
+
 // MemoryRow is one memories-catalog record.
 type MemoryRow struct {
 	Host      string

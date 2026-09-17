@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.131
+
+/soul-doctor runs as one `demarkus-plugin doctor` call: the binary reads the scope once and derives every hygiene check (links, orphans, hubs, metadata, shape, style, ADR sequence and references, write-auth drift), exact within stated bounds; the prompt shrinks to the command and how to present the report.
+
 ## 0.13.129
 
 Command and skill bodies cut about a third on invocation: the remember skill, /soul-journal, /soul-context, /soul and /soul-doctor share one store-resolution block backed by the new `registry project` subcommand (slug, store, binding state in one call), the doctor report is a pattern plus examples, and every step, bound and failure line is kept.

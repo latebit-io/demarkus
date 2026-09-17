@@ -49,7 +49,7 @@ func styleDecision(pt config.ParsedTool, args map[string]any, guideRef string) (
 	// bans em dashes "anywhere: prose, headings, or examples", and fenced
 	// examples are exactly where they would otherwise ship. Severity is warn
 	// by default, so a rare intentional quote can still proceed.
-	if n := strings.Count(body, "—"); n > 0 {
+	if n := EmDashCount(body); n > 0 {
 		problems = append(problems, fmt.Sprintf(
 			"%d em dash(es); the style guide bans them everywhere (prose, headings, examples); use a comma, colon, semicolon, or parentheses", n))
 	}

@@ -85,15 +85,18 @@ func (e *SlugError) Error() string {
 // cannot be a path segment is a SlugError rather than a guessed name.
 func Slug(dir string) (string, error) {
 	slug := strings.ReplaceAll(strings.ToLower(filepath.Base(dir)), " ", "-")
-	if !slugRe.MatchString(slug) {
+	if !IsSlug(slug) {
 		return "", &SlugError{Name: filepath.Base(dir)}
 	}
 	return slug, nil
 }
 
-// staleHint names the recovery for a binding the catalog no longer lists, so
+// IsSlug reports whether s can be a store path segment.
+func IsSlug(s string) bool { return slugRe.MatchString(s) }
+
+// Hint names the recovery for a binding the catalog no longer lists, so
 // prompts relay it instead of restating which command restores which store.
-func (r Resolution) staleHint() string {
+func (r Resolution) Hint() string {
 	restore := "/soul-join"
 	if r.Store == config.LocalMemoryID {
 		restore = "/soul-init"
@@ -108,7 +111,7 @@ func (r Resolution) Header() string {
 	case StateLocal:
 		store = "Bound store: `" + r.Store + "` (local, no project binding)."
 	case StateStale:
-		store = "Bound store: `" + r.Store + "` (stale: " + r.staleHint() + ")."
+		store = "Bound store: `" + r.Store + "` (stale: " + r.Hint() + ")."
 	}
 	return "Project slug: `" + r.Slug + "`. " + store
 }
@@ -118,7 +121,7 @@ func (r Resolution) Header() string {
 func (r Resolution) Lines() string {
 	lines := "slug=" + r.Slug + "\nstore=" + r.Store + "\nstate=" + r.State
 	if r.State == StateStale {
-		lines += "\nhint=" + r.staleHint()
+		lines += "\nhint=" + r.Hint()
 	}
 	return lines
 }

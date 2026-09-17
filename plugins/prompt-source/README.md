@@ -40,5 +40,5 @@ Every byte here is paid in tokens: session guidance on every session, command an
 - Behavior first. Keep every step, rule, path, flag, shell snippet, output shape, and template directive. Shorten the words around them.
 - Nothing volatile. No timestamps, ids, or counts in guidance, nudges, or descriptions; they break prompt-cache prefixes.
 - No em dashes.
-- Rule once. Write gate rules (destination, tags, retention, style): one line, follow the gate. Binary checks (`registry project`, `provision verify-auth`, `detect-promote`): command plus output contract, no prose re-derivation. Read contract: MCP server instructions. Procedures: invoking skill or command. Shared blocks: partial. Reports: pattern plus examples. Session guidance: behavioral contract only.
+- Rule once. Write gate rules (destination, tags, retention, style): one line, follow the gate. Binary checks (`doctor`, `registry project`, `provision verify-auth`, `detect-promote`): command plus output contract, no prose re-derivation. Read contract: MCP server instructions. Procedures: invoking skill or command. Shared blocks: partial. Reports: pattern plus examples. Session guidance: behavioral contract only.
 - Regenerate and bump the affected plugin lineage in the same PR.

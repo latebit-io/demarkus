@@ -1,81 +1,24 @@
 ---
 description: "Audit the {{.Store}} (or a single project) for catalog hygiene: orphans, broken links, untagged docs, stale index entries, hub and document shape, ADR gaps. Read-only."
-argument-hint: "[project-slug | blank = whole local {{.Store}}]"
+argument-hint: "[project-slug | blank = whole {{.Store}}] [--deep]"
 ---
 
-Read-only health check over a demarkus knowledge base: report what is rotting, suggest fixes, **never write**.
+Read-only health check over the project's {{.Store}}; the plugin binary runs every check and prints the report. **Never writes.** An organizational knowledge system is `/knowledge-doctor`'s territory ({{.KnowledgePluginName}} plugin).
 
-## Scope
+## Run
 
-From `$ARGUMENTS`: **blank** is the whole local {{.Store}} (`/`, `demarkus-memory` MCP tools, bare paths); a **project slug** is `/<slug>/`, valid only as `^[a-z0-9][a-z0-9._-]*$` (reject empty, `.`, `..`, `/`, `\`, `:`, `?`, `#`, `%`; invalid: report, stop). Hub: `/index.md` or `/<slug>/index.md`. An organizational world is `/knowledge-doctor`'s territory ({{.KnowledgePluginName}} plugin).
+`$ARGUMENTS`: an optional project slug, and `--deep` to also check metadata lost across versions (one version walk per untagged document). Bash:
 
-## Gather
-
-1. **Crawl.** `mark_graph` on the hub, `depth: 5`. Nodes `[status] <url> "title" N links` (note non-`ok` status and `(no title)`); edges `<from> -> <to>` (`mark://` internal, `http(s)` external). Edge findings cover only the crawled subgraph; disclose it.
-2. **Inventory.** `mark_list` the scope with `include_archived: true`, `next-cursor` as `cursor` until `complete: true`, recursing into returned subdirectories with `include_archived: true`. Track visited paths and directory/cursor pairs; each incomplete page must return a non-empty, different, unseen cursor. At most 500 list calls, 200 directories, 10,000 documents; a limit makes coverage incomplete only when a required call, directory or document remains; a terminal complete page exactly at a limit with no queued directories is exhaustive. Truncated: report the exact boundary, stop before core checks.
-3. **Crawl disconnected documents.** `mark_graph` follows one seed to depth 5 and caps at 200 nodes, so the hub crawl proves nothing beyond it: for every inventory document absent from the root crawl's successful nodes (`[error]` nodes included), `mark_graph` that document with `depth: 1`.
-4. **Bound.** At most 100 supplemental `mark_graph` calls, retries included; at the budget, list skipped documents, orphan analysis partial.
-5. **Retry once** per failed source while budget remains; a final failure leaves orphan analysis incomplete.
-
-Root crawl error or unauthorized, or inventory failed, unauthorized or incomplete: surface, stop; nothing downstream is trustworthy. A root crawl that only hit its bound continues with what it collected, boundary disclosed, steps 3-5 covering the rest. Supplemental failures continue with completed data: only that source's broken-link edges and orphan analysis go incomplete; confirmed findings stand, unconfirmed ones are suppressed. Empty-{{.Store}} handling applies only to successful empty responses.
-
-## Core checks (graph plus inventory; fetches only for the bounded broken-link confirmations)
-
-- **Broken links**: an edge whose `mark://` target is missing from the inventory (the crawl is not existence proof; beyond-depth is not broken). Confirm at most 50 suspects with one `mark_fetch` each; report only explicit `not-found`; unauthorized, transport, server or other errors are inconclusive, surfaced. Budget exhausted: list unconfirmed suspects, coverage incomplete.
-- **Orphans**: an inventory document, not the hub, never the target of a `mark://` edge across root plus supplemental crawls; requires every inventory document crawled, else partial with the skipped documents listed.
-- **Stale index entries**: broken links from a hub or index doc.
-- **Missing hub**: a `/<project>/` subtree with documents and no `index.md`.
-- **Untitled**: `ok` nodes shown `(no title)` (no H1 or declared title); on a `not-found` node that is the broken-link finding, not a second one.
-- **ADR sequence**: per `adr/` directory in the inventory, duplicate or gapped `NNNN` prefixes; a directory the inventory left incomplete is inconclusive, surfaced, excluded.
-
-## Write-auth drift (whole-{{.Store}} audits only)
-
-The plugin's token and the registry the server reads can diverge silently; writes then fail `unauthorized` while reads stay healthy. Run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` and render its one-line verdict: `write auth healthy`; `token drift` with the registry path it names, that writes will fail `unauthorized`, and its fix (re-run `/soul-init`, or update the registry hash); `cannot verify`: inconclusive. Binary missing or older than the subcommand (unknown command error): skip, say so. Other non-zero exit: inconclusive, error verbatim. Never edit the tokens registry.
-
-## Deep checks (per-doc `mark_fetch`; single project, or on request)
-
-At most 100 documents, hub-linked and recently modified first when sampling; `force: true` for every body check (a plain fetch outlines bodies of 8 KB or more and an outline passes checks it should fail). Capped or sampled: report exact coverage and skipped count.
-
-- **Untagged**: `tags` empty; findable only by title or path (the gate prevents new ones). Fix: re-publish with `metadata.tags`.
-- **Metadata lost across versions** *(legacy servers)*: an untagged doc that once carried tags; appends before the metadata merge wrote only `{agent: ...}`, journals the usual victims. Retire once clean. For untagged docs with more than one version: (1) `mark_versions`; `chain-valid` false: report `chain-error`, inconclusive. (2) Fetch versions newest-first below current (`mark_fetch /<path>/v<N>`, `verbose: true`) until one carries `tags`; at most 10 fetches per doc, 100 calls for the check including `mark_versions`; budget gone: stop, list skipped or truncated docs, a hit after truncating is low-confidence. (3) Report recovered `tags`, `importance`, `type`, `title` and source version as a **repair candidate**, not a verdict (a later publish may have dropped them deliberately); a failed call leaves the doc inconclusive; never infer metadata a call did not return. Untagged since `v1`: curation, not loss. Appends between the versions point at legacy damage, a publish at intent; confirm with the user before restoring. Repair (separate write step): force-fetch with `verbose: true` (an outline destroys the doc); version moved: re-run the check; `mark_publish` that body with the current map plus recovered fields (an omission deletes opaque keys), `retention` only if asked, `expected_version` current, `on_conflict: "fail"`; error or conflict: report, stop, doc unchanged.
-- **Duplicate content**: equal `content-hash` (`verbose: true`) under different paths.
-- **Hub shape** (`index.md` at any depth, or mostly link bullets): 8 KB or more; a bullet past one line or carrying bold, `Status:`, a date or a PR number; over 40 outbound documents (anchors into one doc count once). Fix: `/soul-curate <path>` (split: one line per link, status in the child, a second-level hub).
-- **Oversized** *(advisory)*: bodies of 8 KB or more, largest first. Fix: `/soul-curate <path>` (hub plus topic files).
-- **Document shape**: no summary between the `# H1` and the first heading (`index.md`, `log.md`, journals exempt); a heading below the H1 carrying a date, PR number or all-caps status word. Fix: `/soul-curate <path>`.
-- **Untyped** *(advisory)*: no `type` or `type: Document`; a `type` key (`Reference`, `Decision`, `Architecture`, `Plan`, `Journal`, `Guide`, ...) makes the {{.Store}} filterable (`filter: type=...`). `index.md` and `log.md` exempt. A local {{.Store}} declares no `require_fields`: backfill suggestion.
-- **In-body frontmatter**: first non-blank line `---` with reserved keys (`version`, `previous-hash`, `archived`, `meta.*`): an exported doc pasted back into a publish; stored literally, garbled headings, in-body `version:` off the real one. Fix: strip, re-publish with metadata out of band.
-- **Dangling and unlinked references**: prose relations the graph never captured (only `[text](url)` is an edge). Per fetched body, no fetches beyond this tier's, tight patterns only: ADR references `ADR[ -]?#?\d{3,4}` (case-insensitive), canonical target the inventory path `<scope>/adr/NNNN-*.md`; bare `mark://` URLs deferred (cross-world and placeholder false positives). Exclude the doc's own ADR number and any mention inside a fenced (```` ``` ````/`~~~`) block. Already-linked is decided against the citing body's own `[text](url)` links, never the crawl's edge store (an orphan's links never enter it). **Unlinked**: target in the inventory, no link in the body; fix: `[ADR 0005](mark://.../0005-....md)`. **Dangling**: no inventory doc (inventory, not `mark_lookup`, which misses untagged ADRs); fix: restore or drop; a body that annotates the absence itself is **known**, not actionable.
-
-## Report
-
-Plain: a heading with the document count, one line `<N> docs, <X> findings`, then one `###` section per check, most actionable first, `(<n>)` count, and `[deep check, scanned <k>/<N> docs]` on every deep-check section; one bullet per finding: path, evidence, one-line fix. Examples:
-
-```text
-## <scope> hygiene report  (<N> docs)
-
-<N> docs, <X> findings
-
-### Broken links (<n>)
-- /<doc>.md → /<missing-target>.md  (fetch → not-found): fix the link or restore the target
-
-### Orphans (<n>)
-- /plans/<name>.md: no inbound `mark://` edge after complete crawling; add an inbound catalog link
-
-### Metadata lost across versions (<n>)        [deep check, scanned <k>/<N> docs]
-- /journal/2026-08-12.md: candidate: tagged at v1 (11 tags, importance 0.6, type Journal), none at v5; repair = force-fetch v5, publish that body with v5's metadata map plus the v1 fields, `expected_version: 5`, `on_conflict: "fail"`
-
-### Dangling & unlinked references (<n>)        [deep check, scanned <k>/<N> docs]
-- /adr/0006-navigation-rework.md → "ADR 0005", dangling: no such doc in scope (mark_list → no match); restore it or drop the reference
-- /roadmap.md → "ADR 0006", unlinked: target exists but the citing body has no Markdown link; link the prose mention
-
-### Token drift        [whole-{{.Store}} audit]
-- provision verify-auth: <verdict> (server pid <pid>, token registry <path>); on drift: writes will fail unauthorized; re-run /soul-init or update the registry hash
+```bash
+"$HOME/.demarkus/bin/demarkus-plugin" doctor --dir {{if eq .Harness "claude"}}"${CLAUDE_PROJECT_DIR}"{{else}}<shell-escaped-absolute-project-dir>{{end}} [--scope /<slug>/] [--deep]
 ```
 
-Every other check follows the same bullet shape with its fix. End with a short prioritized "what I'd fix first". "All clean" only when every check ran to complete coverage and found nothing; incomplete coverage (crawl failure, inventory bound, deep-check cap) lists confirmed findings, then the gaps; "no findings in the covered scope" only at zero findings.
+The binary resolves the bound {{.Store}} from the project directory (`--store <id>` overrides), validates the slug, reads every document in scope once and runs every hygiene check (links, orphans, hubs, metadata, shape, style, ADR sequence and references; a whole-{{.Store}} audit adds the write-auth verdict).
+
+- Exit 0: print the report verbatim, then a short prioritized "what I'd fix first". "All clean" only when it has zero findings and Coverage says complete; otherwise name the gaps Coverage lists.
+- Exit 1: the audit is untrustworthy (store unreachable, unauthorized, inventory bound, broker-tier store, binary older than the subcommand); surface stderr verbatim and stop. Never substitute a manual crawl.
 
 ## Don't
 
 - Write or modify anything; a requested fix is a separate, explicit step.
-- Fabricate: empty `mark_graph` (empty {{.Store}}) or hub `not-found`: say so, stop.
-- Fetch every document by default; deep checks only on a bounded, disclosed scope.
+- Fabricate findings or coverage the report does not state.
