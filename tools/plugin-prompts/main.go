@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -81,11 +82,22 @@ type artifact struct {
 
 func main() {
 	mode := "check"
-	if len(os.Args) > 1 {
-		mode = os.Args[1]
+	args := os.Args[1:]
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		mode, args = args[0], args[1:]
 	}
-	if mode != "check" && mode != "write" {
-		fmt.Fprintln(os.Stderr, "usage: plugin-prompts [check|write]")
+	flags := flag.NewFlagSet("plugin-prompts", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	brandsPath := flags.String("brands", "", "extra brands file ({\"brands\": [...]}) rendered alongside the manifest")
+	flags.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: plugin-prompts [check|write] [--brands <file>]")
+		flags.PrintDefaults()
+	}
+	if err := flags.Parse(args); err != nil {
+		os.Exit(2) // the flag set already printed the error and usage
+	}
+	if flags.NArg() > 0 || (mode != "check" && mode != "write") {
+		flags.Usage()
 		os.Exit(2)
 	}
 
@@ -98,7 +110,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	artifacts, err := renderAll(root)
+	artifacts, err := renderAll(root, *brandsPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -135,7 +147,9 @@ func findRoot() (string, error) {
 	}
 }
 
-func renderAll(root string) ([]artifact, error) {
+// renderAll renders the manifest's targets and brands; brandsPath, when set,
+// names a brands file whose entries are added to the manifest's brands.
+func renderAll(root, brandsPath string) ([]artifact, error) {
 	manifestPath := filepath.Join(root, "plugins", "prompt-source", "manifest.json")
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -147,6 +161,13 @@ func renderAll(root string) ([]artifact, error) {
 	}
 	if err := validateManifest(&spec); err != nil {
 		return nil, err
+	}
+	if brandsPath != "" {
+		extra, err := loadBrandsFile(brandsPath)
+		if err != nil {
+			return nil, err
+		}
+		spec.Brands = append(spec.Brands, extra...)
 	}
 	if err := validateBrands(&spec); err != nil {
 		return nil, err

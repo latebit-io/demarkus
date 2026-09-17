@@ -47,7 +47,7 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifacts, err := renderAll(root)
+	artifacts, err := renderAll(root, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,7 +498,7 @@ func TestCursorArtifactsPutHarnessFlagBeforeSubcommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifacts, err := renderAll(root)
+	artifacts, err := renderAll(root, "")
 	if err != nil {
 		t.Fatal(err)
 	}

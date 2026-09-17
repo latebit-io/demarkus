@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,6 +29,43 @@ type brand struct {
 }
 
 const brandOutputPrefix = "plugins/brands/"
+
+// brandsFile is the --brands document: brands kept outside the manifest so a
+// downstream repository can render them against an unmodified checkout.
+type brandsFile struct {
+	Brands []brand `json:"brands"`
+}
+
+func loadBrandsFile(path string) ([]brand, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read brands file: %w", err)
+	}
+	spec, err := decodeBrandsFile(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse brands file %s: %w", path, err)
+	}
+	if len(spec.Brands) == 0 {
+		return nil, fmt.Errorf("brands file %s: no brands", path)
+	}
+	return spec.Brands, nil
+}
+
+func decodeBrandsFile(raw []byte) (brandsFile, error) {
+	var spec brandsFile
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&spec); err != nil {
+		return brandsFile{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return brandsFile{}, errors.New("unexpected trailing JSON value")
+		}
+		return brandsFile{}, err
+	}
+	return spec, nil
+}
 
 var pluginNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
@@ -111,6 +152,10 @@ func brandArtifacts(root string, b *brand, base, t *target) ([]artifact, error) 
 	outDir := filepath.Join(root, b.Output)
 	for _, name := range copiedFiles {
 		err := filepath.WalkDir(filepath.Join(baseDir, name), func(path string, entry os.DirEntry, walkErr error) error {
+			// The knowledge base has no .mcp.json (OAuth MCP is registered at join).
+			if errors.Is(walkErr, fs.ErrNotExist) && path == filepath.Join(baseDir, name) {
+				return nil
+			}
 			if walkErr != nil {
 				return walkErr
 			}
