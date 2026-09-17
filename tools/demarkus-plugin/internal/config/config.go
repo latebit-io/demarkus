@@ -357,6 +357,17 @@ func ListRemoteMemories() ([]string, error) {
 	return out, nil
 }
 
+// HarnessProjectDir is the project directory the host exports for hooks, or
+// "" when no host variable is set.
+func HarnessProjectDir() string {
+	for _, key := range []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"} {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // ProjectBinding the catalog slug bound to DIR, checking DIR then its ancestors
 // (nearest wins). "" when unbound.
 func ProjectBinding(dir string) (string, error) {

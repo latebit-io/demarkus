@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.125
+
+Session guidance cut to the behavioral contract, about a quarter of its former size: the plugin binary now states the project slug and bound store as a header line, and rules the write-time gates already enforce (destination, tags, retention, style) are stated once as follow-the-gate; the recall contract rides the MCP server instructions and the full layout and flows stay in the remember skill.
+
 ## 0.13.108
 
 Default recall to scoped lookup followed by a targeted section fetch. Start with three results and no expansion; budgeted context remains optional for focused evidence queries.

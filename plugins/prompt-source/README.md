@@ -38,4 +38,5 @@ Every byte here is paid in tokens: session guidance on every session, command an
 - Behavior first. Keep every step, rule, path, flag, shell snippet, output shape, and template directive. Shorten the words around them.
 - Nothing volatile. No timestamps, ids, or counts in guidance, nudges, or descriptions; they break prompt-cache prefixes.
 - No em dashes.
+- Session guidance is the behavioral contract only. A rule the plugin binary enforces at write time (destination, tags, retention, style) is stated once as follow the gate; the read contract rides the MCP server instructions; procedures live in the skill or command that runs them.
 - Regenerate and bump the affected plugin lineage in the same PR.

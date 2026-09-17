@@ -150,7 +150,6 @@ func validManifest() manifest {
 			Harness:          harness,
 			Agent:            harness,
 			Output:           canonicalOutputs[pair],
-			ProjectDir:       "project",
 			RepoInstructions: "instructions",
 			ToolForm:         "tools",
 		})

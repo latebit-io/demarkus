@@ -42,7 +42,6 @@ type target struct {
 	Harness          string `json:"harness"`
 	Agent            string `json:"agent"`
 	Output           string `json:"output"`
-	ProjectDir       string `json:"project_dir"`
 	RepoInstructions string `json:"repo_instructions"`
 	ToolForm         string `json:"tool_form"`
 	// Plugin names surface in prose. PluginName is this target's own; the
@@ -283,8 +282,8 @@ func hasParentTraversal(path string) bool {
 }
 
 func validateTarget(target *target) error {
-	if target.Name == "" || target.Output == "" || target.Agent == "" || target.ProjectDir == "" || target.RepoInstructions == "" || target.ToolForm == "" {
-		return fmt.Errorf("manifest target %q: name, output, agent, project_dir, repo_instructions, and tool_form are required", target.Name)
+	if target.Name == "" || target.Output == "" || target.Agent == "" || target.RepoInstructions == "" || target.ToolForm == "" {
+		return fmt.Errorf("manifest target %q: name, output, agent, repo_instructions, and tool_form are required", target.Name)
 	}
 	if target.Surface != "memory" && target.Surface != "knowledge" {
 		return fmt.Errorf("manifest target %s: invalid surface %q", target.Name, target.Surface)

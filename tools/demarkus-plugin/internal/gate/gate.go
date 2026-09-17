@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 
@@ -189,12 +188,7 @@ func projectDir(roots []string) (cwd, ambiguous string, err error) {
 	}
 	switch len(found) {
 	case 0:
-		for _, k := range []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"} {
-			if v := os.Getenv(k); v != "" {
-				return v, "", nil
-			}
-		}
-		return "", "", nil
+		return config.HarnessProjectDir(), "", nil
 	case 1:
 		return found[0], "", nil
 	}

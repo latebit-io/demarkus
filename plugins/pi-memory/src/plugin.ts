@@ -68,8 +68,10 @@ export async function callNudge(req: Record<string, unknown>): Promise<string> {
 // ("" when the binary ran but had nothing to inject) or null when the binary is
 // unavailable / failed — so the caller can retry rather than burn its one-shot
 // guidance flag on a transient failure.
-export async function callGuidance(surface: "memory" | "knowledge", guidanceFile: string): Promise<string | null> {
-  const o = await runBin<{ context?: string }>(["guidance", "--surface", surface, "--guidance-file", guidanceFile]);
+export async function callGuidance(surface: "memory" | "knowledge", guidanceFile: string, projectDir?: string): Promise<string | null> {
+  const args = ["guidance", "--surface", surface, "--guidance-file", guidanceFile];
+  if (projectDir) args.push("--project-dir", projectDir);
+  const o = await runBin<{ context?: string }>(args);
   return o === null ? null : (o.context ?? "");
 }
 

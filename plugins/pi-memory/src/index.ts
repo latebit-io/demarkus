@@ -150,10 +150,12 @@ async function checkForUpdate(): Promise<string> {
 
 export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   let contextDelivered = false;
+  let projectDir = "";
   let activity = new SessionActivity();
 
   pi.on("session_start", async (_event, ctx) => {
     contextDelivered = false;
+    projectDir = ctx.cwd;
     activity = new SessionActivity();
 
     // Provision first (this installs demarkus-plugin), then register the MCP
@@ -175,7 +177,7 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event) => {
     const parts: string[] = [];
     if (!contextDelivered) {
-      const context = await callGuidance("memory", GUIDANCE_FILE);
+      const context = await callGuidance("memory", GUIDANCE_FILE, projectDir);
       // null = binary failed; leave the flag unset so we retry next turn rather
       // than dropping guidance for the whole session. "" = ran, nothing to say.
       if (context !== null) {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.126
+
+Session guidance cut to the behavioral contract, about a quarter of its former size: the read contract and the older-broker fallback live in the MCP server instructions and the /knowledge command, and rules the write-time gates already enforce are stated once as follow-the-gate.
+
 ## 0.5.109
 
 Default recall to scoped lookup followed by a targeted section fetch. Preserve world scope and partial-result disclosure; expand context only for focused evidence queries.

@@ -201,10 +201,11 @@ func cmdGuidance() {
 	fs := flag.NewFlagSet("guidance", flag.ExitOnError)
 	surface := fs.String("surface", "memory", "memory | knowledge")
 	guidanceFile := fs.String("guidance-file", "", "path to the plugin's static guidance markdown")
+	projectDir := fs.String("project-dir", "", "project directory for the slug and binding header (default: harness environment)")
 	format := fs.String("format", "json", "output format: json | claude | cursor")
 	_ = fs.Parse(os.Args[2:])
 
-	out, err := guidance.Evaluate(guidance.Input{Surface: *surface, GuidanceFile: *guidanceFile})
+	out, err := guidance.Evaluate(guidance.Input{Surface: *surface, GuidanceFile: *guidanceFile, ProjectDir: *projectDir})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] guidance: "+err.Error())
 		return

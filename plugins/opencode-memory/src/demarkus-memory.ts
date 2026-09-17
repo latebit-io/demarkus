@@ -85,9 +85,9 @@ async function callNudge(req: Record<string, unknown>): Promise<string> {
 }
 
 // null = binary unavailable/failed (caller retries next turn); "" = ran, nothing to say.
-async function callGuidance(): Promise<string | null> {
+async function callGuidance(directory: string): Promise<string | null> {
   const o = await runBin<{ context?: string }>(
-    ["guidance", "--surface", "memory", "--guidance-file", GUIDANCE_FILE],
+    ["guidance", "--surface", "memory", "--guidance-file", GUIDANCE_FILE, "--project-dir", directory],
     undefined,
     true,
   );
@@ -315,7 +315,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
         .join("\n");
 
       const [context, recall] = await Promise.all([
-        s.guidanceDelivered ? Promise.resolve("") : callGuidance(),
+        s.guidanceDelivered ? Promise.resolve("") : callGuidance(directory),
         callNudge({ event: "recall", surface: "memory", prompt: promptText }),
       ]);
 
