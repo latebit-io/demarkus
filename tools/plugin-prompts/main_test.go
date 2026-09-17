@@ -171,7 +171,7 @@ func TestRenderTemplateRejectsUnclosedFrontmatter(t *testing.T) {
 	if err := os.WriteFile(path, []byte("---\ndescription: Open block\n\nBody for {{.Agent}}.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := renderTemplate(path, &target{Agent: "Claude Code"}); err == nil || !strings.Contains(err.Error(), "not closed") {
+	if _, err := renderTemplate(path, &target{Agent: "Claude Code"}, nil); err == nil || !strings.Contains(err.Error(), "not closed") {
 		t.Fatalf("renderTemplate() error = %v, want unclosed frontmatter rejection", err)
 	}
 }
@@ -222,7 +222,7 @@ func TestRenderAliasKeepsQuotedDescriptionValid(t *testing.T) {
 		if err := os.WriteFile(alias, []byte("memory-x\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		got, err := renderAlias(alias, &target{Agent: "Claude Code"})
+		got, err := renderAlias(alias, &target{Agent: "Claude Code"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -249,7 +249,7 @@ func TestRenderAliasShipsTargetBodyWithDeprecatedDescription(t *testing.T) {
 	if err := os.WriteFile(alias, []byte("memory-x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := renderAlias(alias, &target{Agent: "Claude Code"})
+	got, err := renderAlias(alias, &target{Agent: "Claude Code"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,14 +263,14 @@ func TestRenderAliasShipsTargetBodyWithDeprecatedDescription(t *testing.T) {
 	if err := os.WriteFile(bare, []byte("memory-x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := renderAlias(bare, &target{Agent: "Claude Code"}); err == nil || !strings.Contains(err.Error(), ".md.alias") {
+	if _, err := renderAlias(bare, &target{Agent: "Claude Code"}, nil); err == nil || !strings.Contains(err.Error(), ".md.alias") {
 		t.Fatalf("alias without .md.alias suffix should be rejected by name, got %v", err)
 	}
 	self := filepath.Join(commands, "memory-x.md.alias")
 	if err := os.WriteFile(self, []byte("memory-x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := renderAlias(self, &target{Agent: "Claude Code"}); err == nil {
+	if _, err := renderAlias(self, &target{Agent: "Claude Code"}, nil); err == nil {
 		t.Fatal("self-alias should be rejected")
 	}
 }
@@ -515,5 +515,28 @@ func TestCursorArtifactsPutHarnessFlagBeforeSubcommand(t *testing.T) {
 	}
 	if seen == 0 {
 		t.Fatal("no rendered Cursor command registers an MCP server with --harness cursor")
+	}
+}
+
+func TestRenderTemplateIncludesPartials(t *testing.T) {
+	dir := t.TempDir()
+	partial := filepath.Join(dir, "store.tmpl")
+	if err := os.WriteFile(partial, []byte("Store {{.Store}} for {{.Agent}}."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "SKILL.md.tmpl")
+	if err := os.WriteFile(path, []byte("# Skill\n\n{{template \"store.tmpl\" .}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tgt := &target{Agent: "Claude Code", Store: "soul"}
+	out, err := renderTemplate(path, tgt, []string{partial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "Store soul for Claude Code.") {
+		t.Fatalf("partial not rendered:\n%s", out)
+	}
+	if _, err := renderTemplate(path, tgt, nil); err == nil {
+		t.Fatal("an undefined partial must fail the render")
 	}
 }

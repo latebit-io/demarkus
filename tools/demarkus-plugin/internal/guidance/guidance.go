@@ -6,14 +6,15 @@
 package guidance
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry"
 )
 
 // Input selects which surface's session guidance to evaluate.
@@ -97,41 +98,20 @@ func memory(in Input) (Output, error) {
 
 // projectHeader states the project slug and bound store as data, so the
 // guidance need not teach the slug rule or the binding lookup. Empty when no
-// project directory is known.
+// project directory is known; an unusable directory name is stated, not fatal.
 func projectHeader(dir string) (string, error) {
-	if dir == "" {
-		dir = config.HarnessProjectDir()
-	}
-	if dir == "" {
+	r, err := project.Resolve(dir)
+	if errors.Is(err, project.ErrNoDir) {
 		return "", nil
 	}
-	// Bindings are recorded absolute; a relative --project-dir must match them.
-	dir, err := filepath.Abs(dir)
 	if err != nil {
-		return "", fmt.Errorf("resolve project dir: %w", err)
-	}
-	bound, err := config.ProjectBinding(dir)
-	if err != nil {
+		var slugErr *project.SlugError
+		if errors.As(err, &slugErr) {
+			return "Project slug: none (" + slugErr.Error() + ").", nil
+		}
 		return "", err
 	}
-	store := "Bound store: `" + config.LocalMemoryID + "` (local, no project binding)."
-	if bound != "" {
-		joined, err := registry.IsCatalogMemory(bound)
-		if err != nil {
-			return "", err
-		}
-		store = "Bound store: `" + bound + "`."
-		if !joined {
-			store = "Bound store: `" + bound + "` (stale: not in the catalog; run /soul-join or /soul-default)."
-		}
-	}
-	return "Project slug: `" + projectSlug(dir) + "`. " + store, nil
-}
-
-// projectSlug is the memory path segment for a project directory: basename,
-// lowercased, spaces to hyphens.
-func projectSlug(dir string) string {
-	return strings.ReplaceAll(strings.ToLower(filepath.Base(dir)), " ", "-")
+	return r.Header(), nil
 }
 
 // serverHealthWarning delegates to provision.HealthWarning so the health check —

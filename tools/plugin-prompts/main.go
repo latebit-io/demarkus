@@ -178,55 +178,74 @@ func renderAll(root string) ([]artifact, error) {
 		artifacts = append(artifacts, copied...)
 	}
 	for _, target := range renderTargets {
-		if err := validateTarget(target); err != nil {
+		rendered, err := renderSurface(root, target, seen)
+		if err != nil {
 			return nil, err
 		}
-		templateRoot := filepath.Join(root, "plugins", "prompt-source", target.Surface)
-		err := filepath.WalkDir(templateRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			isAlias := strings.HasSuffix(entry.Name(), ".md.alias")
-			if !isAlias && !strings.HasSuffix(entry.Name(), ".tmpl") {
-				return nil
-			}
-			rel, err := filepath.Rel(templateRoot, path)
-			if err != nil {
-				return err
-			}
-			var rendered []byte
-			if isAlias {
-				rendered, err = renderAlias(path, target)
-			} else {
-				rendered, err = renderTemplate(path, target)
-			}
-			if err != nil {
-				return err
-			}
-			output := filepath.Join(root, target.Output, strings.TrimSuffix(strings.TrimSuffix(rel, ".tmpl"), ".alias"))
-			if target.Harness == "cursor" && filepath.Base(filepath.Dir(output)) == "commands" {
-				rendered, err = cursorCommand(strings.TrimSuffix(filepath.Base(output), ".md"), rendered)
-				if err != nil {
-					return fmt.Errorf("%s: %w", path, err)
-				}
-			}
-			if err := claimOutput(seen, output, path); err != nil {
-				return err
-			}
-			if err := validateArtifact(output, rendered, target); err != nil {
-				return err
-			}
-			artifacts = append(artifacts, artifact{Path: output, Content: rendered, Target: target})
-			return nil
-		})
-		if err != nil {
-			return nil, fmt.Errorf("render %s: %w", target.Name, err)
-		}
+		artifacts = append(artifacts, rendered...)
 	}
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
+	return artifacts, nil
+}
+
+// renderSurface renders every template and alias under the target's surface
+// tree, skipping the partials directory, which templates include by name.
+func renderSurface(root string, target *target, seen map[string]string) ([]artifact, error) {
+	if err := validateTarget(target); err != nil {
+		return nil, err
+	}
+	var artifacts []artifact
+	templateRoot := filepath.Join(root, "plugins", "prompt-source", target.Surface)
+	partials, err := filepath.Glob(filepath.Join(templateRoot, partialsDir, "*.tmpl"))
+	if err != nil {
+		return nil, fmt.Errorf("glob partials for %s: %w", target.Name, err)
+	}
+	err = filepath.WalkDir(templateRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == partialsDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		isAlias := strings.HasSuffix(entry.Name(), ".md.alias")
+		if !isAlias && !strings.HasSuffix(entry.Name(), ".tmpl") {
+			return nil
+		}
+		rel, err := filepath.Rel(templateRoot, path)
+		if err != nil {
+			return err
+		}
+		var rendered []byte
+		if isAlias {
+			rendered, err = renderAlias(path, target, partials)
+		} else {
+			rendered, err = renderTemplate(path, target, partials)
+		}
+		if err != nil {
+			return err
+		}
+		output := filepath.Join(root, target.Output, strings.TrimSuffix(strings.TrimSuffix(rel, ".tmpl"), ".alias"))
+		if target.Harness == "cursor" && filepath.Base(filepath.Dir(output)) == "commands" {
+			rendered, err = cursorCommand(strings.TrimSuffix(filepath.Base(output), ".md"), rendered)
+			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+		}
+		if err := claimOutput(seen, output, path); err != nil {
+			return err
+		}
+		if err := validateArtifact(output, rendered, target); err != nil {
+			return err
+		}
+		artifacts = append(artifacts, artifact{Path: output, Content: rendered, Target: target})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render %s: %w", target.Name, err)
+	}
 	return artifacts, nil
 }
 
@@ -306,7 +325,13 @@ func validateTarget(target *target) error {
 	return nil
 }
 
-func renderTemplate(path string, target *target) ([]byte, error) {
+// partialsDir holds a surface's shared blocks, included with
+// {{template "<file>" .}}, so one rule is stated once in source.
+const partialsDir = "partials"
+
+// renderTemplate executes one template for a target; partials are the
+// surface's shared block files, parsed alongside it.
+func renderTemplate(path string, target *target, partials []string) ([]byte, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -314,6 +339,11 @@ func renderTemplate(path string, target *target) ([]byte, error) {
 	tmpl, err := template.New(filepath.Base(path)).Option("missingkey=error").Parse(string(raw))
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if len(partials) > 0 {
+		if tmpl, err = tmpl.ParseFiles(partials...); err != nil {
+			return nil, fmt.Errorf("parse partials for %s: %w", path, err)
+		}
 	}
 	var output bytes.Buffer
 	if err := tmpl.Execute(&output, target); err != nil {
@@ -343,7 +373,7 @@ func claimOutput(seen map[string]string, output, source string) error {
 // renderAlias renders a deprecated command alias: a `<old>.md.alias` file in
 // commands/ names the target command, and the alias ships the target's full
 // body under the old name so both names behave identically on every harness.
-func renderAlias(path string, target *target) ([]byte, error) {
+func renderAlias(path string, target *target, partials []string) ([]byte, error) {
 	if !strings.HasSuffix(path, ".md.alias") {
 		return nil, fmt.Errorf("%s: alias files must be named <command>.md.alias", path)
 	}
@@ -361,7 +391,7 @@ func renderAlias(path string, target *target) ([]byte, error) {
 	if strings.TrimSuffix(filepath.Base(path), ".md.alias") == name {
 		return nil, fmt.Errorf("%s: alias targets itself", path)
 	}
-	rendered, err := renderTemplate(filepath.Join(filepath.Dir(path), name+".md.tmpl"), target)
+	rendered, err := renderTemplate(filepath.Join(filepath.Dir(path), name+".md.tmpl"), target, partials)
 	if err != nil {
 		return nil, fmt.Errorf("%s: alias target: %w", path, err)
 	}

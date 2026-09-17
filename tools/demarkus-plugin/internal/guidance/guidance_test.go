@@ -105,7 +105,7 @@ func TestMemoryGuidanceProjectHeader(t *testing.T) {
 	}
 	stale := filepath.Join(t.TempDir(), "stale")
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/no/such/dir\nPORT=6310\nMODE=default\n", "project-souls": stale + "\tgone\n"})
-	if out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: stale}); !strings.Contains(out, "Bound store: `gone` (stale: not in the catalog; run /soul-join or /soul-default).") {
+	if out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: stale}); !strings.Contains(out, "Bound store: `gone` (stale: not in the catalog; restore it with /soul-join or rebind with /soul-default).") {
 		t.Fatalf("stale binding must be marked:\n%s", out)
 	}
 }
@@ -127,5 +127,13 @@ func TestGuidanceSurfacesUnreadableFileAndRelativeProjectDir(t *testing.T) {
 	t.Chdir(project)
 	if out := ctx(t, Input{Surface: "memory", ProjectDir: "."}); !strings.Contains(out, "Project slug: `rel-project`. Bound store: `team`.") {
 		t.Fatalf("relative project dir must resolve to its binding:\n%s", out)
+	}
+}
+
+func TestMemoryGuidanceSurvivesInvalidProjectName(t *testing.T) {
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/no/such/dir\nPORT=6310\nMODE=default\n"})
+	out := ctx(t, Input{Surface: "memory", ProjectDir: filepath.Join(t.TempDir(), "bad#name")})
+	if !strings.Contains(out, "Project slug: none (directory name \"bad#name\" is not a valid slug") {
+		t.Fatalf("an unusable directory name must be stated, not drop the guidance:\n%s", out)
 	}
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.127
+
+Command and skill bodies cut about a third on invocation: the remember skill, /soul-journal, /soul-context, /soul and /soul-doctor share one store-resolution block backed by the new `registry project` subcommand (slug, store, binding state in one call), the doctor report is a pattern plus examples, and every step, bound and failure line is kept.
+
 ## 0.13.125
 
 Session guidance cut to the behavioral contract, about a quarter of its former size: the plugin binary now states the project slug and bound store as a header line, and rules the write-time gates already enforce (destination, tags, retention, style) are stated once as follow-the-gate; the recall contract rides the MCP server instructions and the full layout and flows stay in the remember skill.

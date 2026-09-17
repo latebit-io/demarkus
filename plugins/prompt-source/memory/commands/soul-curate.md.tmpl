@@ -7,9 +7,7 @@ Curate one document so an agent reads it in one fetch and finds it by its subjec
 
 `$ARGUMENTS`: the document path (e.g. `/demarkus/plans/foo.md`). Empty: ask which; `/soul-doctor` lists candidates under Oversized, Hub shape, and Document shape.
 
-## {{.StoreTitle}}
-
-Resolve the bound {{.Store}} first, exactly as the `remember` skill does (`registry memory-default --list --bind`); every `mark_*` call goes through that server. Not connected: say so, stop.
+{{template "store.tmpl" .}}
 
 ## Steps
 

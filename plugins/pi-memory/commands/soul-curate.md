@@ -9,9 +9,15 @@ Curate one document so an agent reads it in one fetch and finds it by its subjec
 
 `$ARGUMENTS`: the document path (e.g. `/demarkus/plans/foo.md`). Empty: ask which; `/soul-doctor` lists candidates under Oversized, Hub shape, and Document shape.
 
-## Soul
+## Soul and project
 
-Resolve the bound soul first, exactly as the `remember` skill does (`registry memory-default --list --bind`); every `mark_*` call goes through that server. Not connected: say so, stop.
+Slug and bound soul: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
+
+```bash
+"$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
+```
+
+`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); tools not connected: say so, name the server, stop.
 
 ## Steps
 

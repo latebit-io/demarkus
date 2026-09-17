@@ -1,0 +1,3 @@
+{{template "store.tmpl" .}}
+
+A slug never proves identity. Before the first read or write, `mark_fetch /<slug>/index.md` with `force: true` and `verbose: true`; keep the result (body, version, metadata map) as the hub state. `ok` or `archived`: the subtree is this checkout's only when established this session (a checkout path recorded in the hub matches, or the user confirmed); otherwise the user confirms or picks a unique slug matching `^[a-z0-9][a-z0-9._-]*$`. `not-found`: `mark_list /<slug>/` with `include_archived: true`; any entry means the subtree exists without a hub, same confirmation; `not-found` or an empty complete page: new project. Any other failure: identity unknown, surface it, ask before writing.

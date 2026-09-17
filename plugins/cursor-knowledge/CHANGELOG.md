@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.130
+
+Command and skill bodies cut about a fifth to a third on invocation: /knowledge-doctor and the knowledge-promote skill keep every stage, bound and failure line in terser prose, with the doctor report as a pattern plus examples.
+
 ## 0.5.128
 
 Session guidance cut to the behavioral contract, about a quarter of its former size: the read contract and the older-broker fallback live in the MCP server instructions and the /knowledge command, and rules the write-time gates already enforce are stated once as follow-the-gate.

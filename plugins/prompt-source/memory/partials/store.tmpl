@@ -1,0 +1,9 @@
+## {{.StoreTitle}} and project
+
+Slug and bound {{.Store}}: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
+
+```bash
+"$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
+```
+
+`<project-dir>`: {{if eq .Harness "claude"}}`"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word{{else}}the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes{{end}}. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound {{.Store}} is unavailable; relay the hint, stop, never fall back to the local {{.Store}}. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server{{if eq .Harness "claude"}} (`mcp__<store>__mark_*`){{else}} (the MCP server named `<store>`){{end}}; tools not connected: say so, name the server, stop.

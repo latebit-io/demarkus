@@ -66,6 +66,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  nudge     Decide a recall/promote/session-end nudge (reads JSON on stdin)\n")
 	fmt.Fprintf(os.Stderr, "  guidance  Emit the session-start context for a surface (memory|knowledge)\n")
 	fmt.Fprintf(os.Stderr, "  update-check  Report whether a newer release of the calling plugin exists\n")
+	fmt.Fprintf(os.Stderr, "  registry  Manage joined stores, bindings and promote targets; `registry project` prints a project's slug, store and binding state\n")
 	fmt.Fprintf(os.Stderr, "  version   Print version and exit\n")
 }
 

@@ -7,103 +7,76 @@ description: Remember, save, recall, or query personal notes across OpenCode ses
 
 # Remember
 
-Routes "remember" / "recall" intents through the project's soul server (local `demarkus-memory` unless the project is bound elsewhere; see "Resolving the soul binding"): a versioned, link-graph-aware personal store, not the host's built-in memory feature. Tool names are harness-specific; use the available server's `mark_*` tools. Organized by project: top-level `/index.md` is the project list, each project lives at `/<slug>/` with a consistent structure.
+Routes "remember" / "recall" intents through the project's soul: a versioned, link-graph-aware personal store, never the host's built-in memory. `/index.md` lists projects; each project lives at `/<slug>/`.
 
-## When to trigger
+## Triggers
 
-Phrases and intents like:
+"remember this", "save to memory", "save to my soul", "note that", "jot down", "what do I know about X", "do I have notes on Y", "recall Z", "add this to my notes", "put this in my memory", "put this in my soul", "find anything about", "what have I saved about". Not for ephemeral session context ("remember that we're using Python 3.12 here").
 
-- "remember this", "save to memory", "save to my soul", "note that", "jot down"
-- "what do I know about X", "do I have notes on Y", "recall Z"
-- "add this to my notes", "put this in my memory", "put this in my soul"
-- "find anything about ...", "what have I saved about ..."
+## Soul and project
 
-Do NOT trigger for ephemeral context ("remember that in this conversation we're using Python 3.12"); that stays in the session.
-
-## Determining the current project
-
-Resolve the slug before any read or write:
-
-1. Canonicalize the current project directory, take its basename. Lowercase slug if needed (spaces → hyphens).
-2. Project directory unavailable, or user clearly means another project: ask which project.
-
-3. Slug syntax before any path: `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`/`..`, delimiters (`/`, `\`, `:`, `?`, `#`, `%`). Basename never proves identity. Collision check on the bound soul only (binding: next section): root index or `mark_list /` with `include_archived: true`, `next-cursor` → `cursor` until `complete: true`; incomplete → unknown, ask before writing. Root records a canonical checkout path → require exact match; slug exists otherwise → user confirms this checkout or picks a unique slug. Only then touch `/<slug>/...`; new slug: see "Creating a new project".
-
-## Resolving the soul binding
-
-Before the first `mark_*` call, resolve which soul this project uses; a project bound with `/soul-join` or `/soul-default` lives on that soul, not the local one. Run:
+Slug and bound soul: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
 
 ```bash
-"$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind <shell-escaped-absolute-project-dir>
+"$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
 ```
 
-Replace `<shell-escaped-absolute-project-dir>` with exactly one POSIX-shell-safe word for the project directory; never wrap the raw path in literal single quotes. Read the last line first: trailing `STALE <slug>` → bound soul unavailable; tell the user to restore it (`/soul-init` when the slug is `demarkus-memory`, `/soul-join` otherwise) or `/soul-default` to rebind, and stop; never fall back to the local soul when that line is present. `EMPTY` → local soul, id `demarkus-memory`. `CATALOG` → the row marked `*` is this project's soul; no marked row means the local soul. Non-zero exit or malformed output → surface the exact error and stop. Every read and write in this skill goes through that soul's server (the MCP server named `<id>`; local soul is `demarkus-memory`). If its tools are not connected, say so, name the server, and stop.
+`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); tools not connected: say so, name the server, stop.
 
-## Per-project structure
+A slug never proves identity. Before the first read or write, `mark_fetch /<slug>/index.md` with `force: true` and `verbose: true`; keep the result (body, version, metadata map) as the hub state. `ok` or `archived`: the subtree is this checkout's only when established this session (a checkout path recorded in the hub matches, or the user confirmed); otherwise the user confirms or picks a unique slug matching `^[a-z0-9][a-z0-9._-]*$`. `not-found`: `mark_list /<slug>/` with `include_archived: true`; any entry means the subtree exists without a hub, same confirmation; `not-found` or an empty complete page: new project. Any other failure: identity unknown, surface it, ask before writing.
 
-Canonical layout below. A `/project-template.md` at the soul root overrides it: fetch with `force: true` and follow it when present, even above the normal full-body threshold. Only `not-found` means no override; an outline-only response or any other fetch failure (transport, auth, server error) is a real error: surface it and stop, no silent fallback. Each `/<project>/` subtree:
+## Layout
 
-- `/<project>/index.md`: project hub; links every doc below, anchors discovery
-- Hub rule (`index.md`, any link page): links plus one line each, under 8 KB; no content, status, dates, or summaries copied from children; tags name the hub, not its children; each child links back to its hub; about 40 outbound documents, then a second-level hub; a document that outgrows one fetch splits into a hub plus topic files. Real relations go in `rel-*` metadata, not hub adjacency. The style gate warns on a hub over 8 KB, a bullet past one line or carrying status, or over 40 outbound documents.
-- `/<project>/architecture.md`: system design, module boundaries, key decisions
-- `/<project>/patterns.md`: code patterns, conventions, idioms
-- `/<project>/guidelines.md`: hard code-quality rules; read before writing code
-- `/<project>/debugging.md`: lessons from bugs and investigations
-- `/<project>/roadmap.md`: done, next, deliberately not prioritized
-- `/<project>/debt.md`: technical debt and improvement opportunities
-- `/<project>/thoughts.md`: open questions, reflections, ideas
-- `/<project>/adr/<NNNN>-<slug>.md`: Architecture Decision Records (one per decision, zero-padded 4-digit sequence)
-- `/<project>/plans/<name>.md`: plan documents (lifecycle carried in the text)
-- `/<project>/journal/<YYYY-MM-DD>.md`: dated session notes, one file per day
+A root `/project-template.md` overrides the layout below: fetch it with `force: true` and follow it when present. Only `not-found` means no override; outline-only or any other failure: surface, stop. Under `/<project>/`:
 
-OKF `type` on publish: `architecture.md` → `Architecture`, `adr/*` → `Decision`, `plans/*` and `roadmap.md` → `Plan`, `journal/*` → `Journal`, `patterns.md`/`guidelines.md`/`debugging.md` → `Guide`, standalone reference docs → `Reference`. `debt.md` and `thoughts.md`: server default (`Document`). Hubs (`index.md`): untyped.
+- `index.md`: hub; links every doc below. Hub rule (any link page): links plus one line each, under 8 KB, no status, dates or child summaries; tags name the hub; each child links back; about 40 outbound documents, then a second-level hub; a document that outgrows one fetch splits into hub plus topic files; relations go in `rel-*` metadata. The style gate warns on violations.
+- `architecture.md` (design, boundaries, decisions), `patterns.md`, `guidelines.md` (hard rules, read before code), `debugging.md` (bug lessons), `roadmap.md` (done, next, not prioritized), `debt.md`, `thoughts.md` (open questions, ideas)
+- `adr/<NNNN>-<slug>.md`: one decision each, zero-padded 4 digits
+- `plans/<name>.md`: lifecycle (active, completed, archived) in the text
+- `journal/<YYYY-MM-DD>.md`: one file per day
 
-## Tool routing
+OKF `type` on publish: `architecture.md` `Architecture`; `adr/*` `Decision`; `plans/*`, `roadmap.md` `Plan`; `journal/*` `Journal`; `patterns.md`, `guidelines.md`, `debugging.md` `Guide`; standalone references `Reference`; `debt.md`, `thoughts.md` server default (`Document`); hubs untyped.
 
-Read intents default to section-first:
+## Read
 
-1. `mark_lookup` in `/<project>/` or a narrower established subtree; `/` only for cross-project intent. Start with `limit: 3`, no `budget`, and descriptive subjects rather than bare IDs. Catalog mode for names/tags; `match: body` for section text or catalog misses, with `#anchor` and snippet rows. Narrow with `filter` (`tag=`, `modified-after=`, `modified-before=`). Never widen explicit scope unasked.
-2. `mark_fetch` the best matching `#anchor`; choose a section from an outline, or read a short document whole when no anchor is available. A given URL can be fetched directly. Optional `budget: 1500` expansion is for focused body queries likely to return the evidence directly, not ordinary name lookup. Target two calls and about 1,500 result tokens without sacrificing correctness.
-3. `mark_fetch /index.md` or `/<project>/index.md` when needed as the discovery backstop for untagged content. Use `mark_backlinks` / `mark_graph` for related documents within the requested scope.
-4. Surface any lookup, fetch or graph failure and stop that read; never turn errors into empty results. Disclose partial results. Only a successful non-partial empty lookup means nothing found.
+1. `mark_lookup` in `/<project>/` or a narrower established subtree; `/` only for cross-project intent. `limit: 3`, no `budget`, descriptive subjects, not bare ids. Catalog mode for names and tags; `match: body` for section text or catalog misses (rows carry `#anchor` and snippet). `filter` (`tag=`, `modified-after=`, `modified-before=`) narrows. Never widen explicit scope unasked.
+2. `mark_fetch` the best `#anchor`, a section from an outline, or a short document whole; a given URL directly. `budget: 1500` only for focused body queries likely to return the evidence. Target two calls, about 1,500 result tokens, correctness first.
+3. `/index.md` or `/<project>/index.md` as the backstop for untagged content; `mark_backlinks` / `mark_graph` for related documents in scope.
+4. Any lookup, fetch or graph failure: surface, stop that read; disclose partial results. Only a successful non-partial empty lookup means nothing found.
 
-Write intents: route by content type.
+## Write
 
-Force-fetch means `mark_fetch` with `force: true` and `verbose: true`: the complete body and the complete metadata map, which `mark_publish` replaces wholesale. Shared conflict-safe flow for `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `plans/*.md`, `thoughts.md`: force-fetch the target. `not-found`: create with `expected_version: 0`, `on_conflict: "fail"`, suitable `type`/`tags`/`importance`. `ok`: require a complete body, apply the change, publish at the fetched version with `on_conflict: "fail"`, preserving the complete metadata map except unrequested `retention`. First conflict on either path: force-fetch the complete current body and metadata, preserve concurrent edits, reapply the change once, retry with the fresh version; surface a second conflict or any fetch failure without overwriting. `mark_append` only for a purely additive change after a successful fetch confirms the document exists; pass its fetched version; on conflict refetch, treat already-present content as success, or retry the append once before surfacing failure.
+Force-fetch = `mark_fetch` with `force: true` and `verbose: true`: complete body and complete metadata map, which `mark_publish` replaces wholesale.
 
-- **Fleeting observation / daily note** → append to today's `/<project>/journal/<YYYY-MM-DD>.md`; prefer `/soul-journal`, which owns this flow. Handling directly with the file absent: create via `mark_publish` (`expected_version: 0`, `on_conflict: "fail"`), header like `# <Project> journal: <YYYY-MM-DD>`. Creation conflict: force-fetch the complete journal and metadata, append the entry once only if absent at its current version, surface any retry failure rather than reporting success.
-- **Architecture decision** → recursively `mark_list /<project>/adr/` with `include_archived: true` through every returned subdirectory before choosing the next sequence number. Follow each `next-cursor` as `cursor` until `complete: true`; `include_archived: true` on every page; track visited paths and directory/cursor pairs; require a non-empty, different, unseen continuation cursor; at most 100 list calls, 100 directories, 10,000 documents. A bound makes coverage incomplete only when required work remains; a terminal complete page exactly at a bound with no queued directories is exhaustive. `not-found` on the initial `/<project>/adr/` call only: no ADRs yet, an empty complete inventory, start at `0001`. `not-found` on a subdirectory or continuation call, any other listing error, truncating bound, cursor failure, or incomplete terminal state: surface it, assign no number. After a complete inventory, create `/<project>/adr/<NNNN>-<slug>.md` via `mark_publish` (`expected_version: 0`, `on_conflict: "fail"`). Conflict: repeat the complete inventory, take the next unused sequence, retry once, surface a second conflict. ADR template: `# <NNNN>. <Title>`, `## Status`, `## Context`, `## Decision`, `## Consequences`.
-- **Pattern / convention learned** → `/<project>/patterns.md` via the shared flow. Purely additive new section in an existing document: the versioned `mark_append` exception above; existing section: the conflict-safe publish path.
-- **Hard rule for code quality** → `/<project>/guidelines.md`.
-- **Lesson from a bug / a gotcha** → `/<project>/debugging.md` (high recall value; capture the non-obvious why).
-- **Architecture change** → force-fetch `/<project>/architecture.md`. `not-found`: create with `expected_version: 0`, `on_conflict: "fail"`, metadata `type: Architecture`, `tags: architecture,<project>`, `importance: 0.9`; no `retention` unless explicitly requested. `ok`: reject an outline, update the relevant section, publish at the fetched version, `on_conflict: "fail"`, complete fetched metadata map except unrequested `retention`. First conflict on either path: force-fetch again, reapply the change preserving concurrent content, retry once with the fresh complete metadata map except unrequested `retention`; surface a second conflict without overwriting.
-- **What's next / done / not prioritized** → `/<project>/roadmap.md`.
-- **Technical debt** → `/<project>/debt.md`.
-- **Plan document** → `/<project>/plans/<name>.md` (active / completed / archived carried in the text).
-- **Open question / idea, not yet decided** → `/<project>/thoughts.md`.
-- **Cross-project or global note** → no fitting project: ask the user where it belongs. No ad-hoc top-level files (root holds only `/index.md` and an optional `/project-template.md` override).
+Shared flow (`patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `plans/*.md`, `thoughts.md`, `architecture.md`): force-fetch the target. `not-found`: create at `expected_version: 0`, `on_conflict: "fail"`, suitable `type`, `tags`, `importance` (`architecture.md`: `type: Architecture`, `tags: architecture,<project>`, `importance: 0.9`). `ok`: require a complete body (reject an outline), apply the change, publish at the fetched version, `on_conflict: "fail"`, complete metadata map minus unrequested `retention`. First conflict on either path: force-fetch again, preserve concurrent edits, reapply once, retry at the fresh version; a second conflict or any fetch failure: surface, never overwrite. `mark_append` only for a purely additive change after a successful fetch proves the document exists, at its fetched version; on conflict refetch, already-present content counts as done, else retry once, then surface.
 
-**Every `mark_publish` sets `metadata`:** `tags` (comma-separated subjects, the primary `mark_lookup` match target) and, sparingly, `importance` (0–1, default 0.5; high values only for genuinely central docs like index hubs and architecture). Untagged docs are findable only by title words or explicit path; tagging on write is what makes recall work. The server infers neither field. Reserved keys are rejected except explicitly requested, write-gated `metadata.retention`; any other key is stored opaquely and reachable through lookup's `filter` axis.
+Routes:
 
-**All metadata goes in the `metadata` object, never the body.** Recognized keys: `title`, `tags`, `importance`, OKF `type` (document kind). Never hand-write YAML frontmatter at the top of a body: a `---` … `---` fence, or `name:` / `description:` / `type:` keys. demarkus prepends its own version envelope and carries metadata out of band, so a body opening with `---` is stored literally: garbled headings in a viewer, invisible to `mark_lookup`. Name = `# H1` heading (or `metadata.title`); **kind = OKF `type` field** (`type` key in `metadata`, e.g. `metadata: {"type": "Reference"}`); one-line summary = first sentence under the H1.
+- **Fleeting note**: append to today's `/<project>/journal/<YYYY-MM-DD>.md`; `/soul-journal` owns the flow. Directly, file absent: create (`expected_version: 0`, `on_conflict: "fail"`), header `# <Project> journal: <YYYY-MM-DD>`; creation conflict: force-fetch, append once only if absent at the current version, surface any retry failure.
+- **Decision**: inventory `/<project>/adr/` with `mark_list`, `include_archived: true` on every page, recursing into every returned subdirectory, `next-cursor` as `cursor` until `complete: true`, tracking visited paths and directory/cursor pairs, each incomplete page a non-empty, different, unseen cursor; at most 100 list calls, 100 directories, 10,000 documents. A bound makes coverage incomplete only when required work remains; a terminal complete page at a bound with no queued directories is exhaustive. `not-found` on the initial call only: no ADRs, start at `0001`. `not-found` deeper, any other listing error, truncating bound, cursor failure or incomplete terminal state: surface, assign no number. Then create `/<project>/adr/<NNNN>-<slug>.md` (`expected_version: 0`, `on_conflict: "fail"`); conflict: repeat the inventory, take the next unused number, retry once, surface a second conflict. Template: `# <NNNN>. <Title>`, `## Status`, `## Context`, `## Decision`, `## Consequences`.
+- **Pattern or convention**: `patterns.md`; a purely additive new section may use the append exception, an existing section takes the publish path.
+- **Hard code-quality rule**: `guidelines.md`. **Bug lesson**: `debugging.md` (the non-obvious why). **Architecture change**: `architecture.md`. **Next, done, not prioritized**: `roadmap.md`. **Debt**: `debt.md`. **Plan**: `plans/<name>.md`. **Open question or idea**: `thoughts.md`.
+- **Cross-project or unplaceable**: ask the user where; root holds only `/index.md` and an optional `/project-template.md`.
 
-`mark_append` preserves metadata: the server carries the current version's `tags`/`importance`/`title`/`type` onto the appended version (`retention` never inherited), so an append never costs a catalog entry. It cannot add to them: when an append introduces a materially new subject, force-fetch the full body, reject an outline-only response, re-publish with the correct `expected_version`, `on_conflict: "fail"`, and complete current metadata plus extended `tags`. Surface any fetch or publish failure before reporting metadata success. `mark_publish` replaces the metadata map: publishing tags alone discards `importance`, `title`, `type`, and opaque keys.
+Metadata: every `mark_publish` sets `metadata.tags` (comma-separated subjects, the primary lookup target; the server infers nothing) and, sparingly, `importance` (0-1, default 0.5; high only for hubs and architecture). Recognized keys `title`, `tags`, `importance`, `type`; reserved keys rejected except explicitly requested, gated `retention`; other keys stored opaquely, reachable through lookup `filter`. Metadata never goes in the body: no `---` frontmatter fence, no `name:`/`description:`/`type:` keys; a body opening with `---` is stored literally, garbles headings and is invisible to lookup. Name = `# H1` (or `metadata.title`); kind = `metadata.type`; summary = first sentence under the H1.
+
+`mark_append` carries `tags`, `importance`, `title`, `type` forward (`retention` never) and cannot widen them: a materially new subject means force-fetch (reject an outline), re-publish at the fetched version, `on_conflict: "fail"`, complete metadata plus extended `tags`; surface any failure before claiming metadata success. `mark_publish` replaces the map: tags alone discard `importance`, `title`, `type` and opaque keys.
 
 Always reference what you saved by full path.
 
-## Creating a new project
+## New project
 
-Project not yet in `/index.md` (layout above; a published `/project-template.md` override wins):
+Project absent from `/index.md` (a published `/project-template.md` wins):
 
-1. Complete the project-identity validation above and confirm the unique slug before constructing or fetching `/<slug>/...`.
-2. Force-fetch `/<slug>/index.md`. `not-found`: create the short project hub with `expected_version: 0`, `on_conflict: "fail"`, suitable index tags/importance, no `type`; no empty template stubs. `ok`: require a complete body and verify any recorded canonical checkout path matches the current checkout before treating it as partial prior state. Missing or mismatched path: explicit user confirmation before reuse; otherwise choose a unique slug and do not attach this checkout to that hub. Creation conflict: force-fetch once, apply the same identity check, continue; otherwise report the exact failure.
-3. Ensure the first content doc exists via the conflict-safe journal or architecture route above, then force-fetch the project hub and add that doc's link only if absent. Publish the complete hub body and metadata with `on_conflict: "fail"`, removing `type` and unrequested `retention`; on conflict, refetch, preserve concurrent links, retry the missing link once, surface a second conflict. Hub confirmed: continue to root repair even if content creation or linking is only partial.
-4. Force-fetch `/index.md`. `not-found`: bootstrap with a `# Projects` heading and the project link, `expected_version: 0`, `on_conflict: "fail"`, metadata `tags: projects,index` plus `importance: 0.9`; deliberately no `type` (`index.md` is untyped). `ok`: require a complete body, retain the complete metadata map, remove `type`, union `projects,index` into existing tags, set `importance: 0.9` only when absent, add the link only if absent, preserve every existing link, publish at the fetched version with sanitized metadata and `on_conflict: "fail"`; no `retention` unless explicitly requested for this write. First conflict on either path: force-fetch the fresh complete body/version and metadata. Stop successfully only when the link is present and metadata has both tags, an importance value, no `type`, and no unrequested `retention`; otherwise add the missing link if needed, apply the same metadata repair, retry once with every other fresh field preserved. Root repair failing after the hub exists: report partial completion with every successful path and the exact failed operation; never claim full success. Never publish an outline, accept an unchecked merge candidate, or overwrite a concurrent index update.
+1. The identity check above returned `not-found` for `/<slug>/index.md`, or the user confirmed reuse of an existing hub as partial prior state; the slug is confirmed unique.
+2. Create a short hub (`expected_version: 0`, `on_conflict: "fail"`, hub tags and importance, no `type`, no empty stubs). Creation conflict: force-fetch once, apply the identity check, continue; other failures: report exactly.
+3. Ensure the first content doc exists through the journal or architecture route, then force-fetch the hub and add its link only if absent; publish the complete hub body and metadata, `on_conflict: "fail"`, removing `type` and unrequested `retention`; conflict: refetch, preserve concurrent links, retry the link once, surface a second conflict. Hub confirmed: continue to step 4 even if content or linking is partial.
+4. Force-fetch `/index.md`. `not-found`: create `# Projects` plus the project link (`expected_version: 0`, `on_conflict: "fail"`, `tags: projects,index`, `importance: 0.9`, no `type`). `ok`: complete body, keep the metadata map, remove `type`, union `projects,index` into tags, `importance: 0.9` only when absent, add the link only if absent, keep every existing link, publish at the fetched version, `on_conflict: "fail"`, no unrequested `retention`. First conflict: force-fetch, done only when the link is present and metadata has both tags, an importance, no `type`, no unrequested `retention`; else repair and retry once with every other fresh field kept. Root repair failing after the hub exists: report partial completion with every successful path and the exact failed operation. Never publish an outline, accept an unchecked merge candidate, or overwrite a concurrent index update.
 
 ## Don't
 
-- Don't fabricate. `mark_fetch` `not-found` means the document does not exist; say so.
-- Don't invent expected_versions. 0 for new documents; fetch first when updating.
-- Don't bypass the MCP tools with shell commands; the soul is the source of truth.
-- Don't create top-level files outside `/<project>/` subtrees except `/index.md` and a `/project-template.md` override.
-- Don't save secrets, credentials, or anything the user has not explicitly authorized.
+- Fabricate: `not-found` means the document does not exist; say so.
+- Invent `expected_version`: 0 for new, fetch first for updates.
+- Bypass the MCP tools with shell; the soul is the source of truth.
+- Create top-level files beyond `/index.md` and `/project-template.md`.
+- Save secrets, credentials, or anything the user has not authorized.

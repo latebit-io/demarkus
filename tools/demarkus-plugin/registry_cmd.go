@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry"
 )
@@ -115,7 +116,7 @@ func fail(msg string) {
 // bash and the mcp-config.mjs JS; the switch below is the subcommand list.
 func cmdRegistry(args []string) {
 	if len(args) == 0 {
-		fail("registry: missing subcommand (mcp|memory-join (alias soul-join)|memory-default (alias soul-default)|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote)")
+		fail("registry: missing subcommand (mcp|memory-join (alias soul-join)|memory-default (alias soul-default)|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote|project)")
 	}
 	switch args[0] {
 	case "mcp":
@@ -124,6 +125,8 @@ func cmdRegistry(args []string) {
 		registryMemoryJoin(args[1:])
 	case "memory-default", "soul-default":
 		registryMemoryDefault(args[1:])
+	case "project":
+		registryProject(args[1:])
 	case "knowledge-join":
 		registryKnowledgeJoin(args[1:])
 	case "knowledge-register":
@@ -428,6 +431,19 @@ func registryMemoryDefault(args []string) {
 	default:
 		fail("memory-default: choose --list or --set SLUG")
 	}
+}
+
+// registryProject prints the slug, store and binding state a prompt needs
+// before its first mark_* call, so no template restates the rule.
+func registryProject(args []string) {
+	fs := flag.NewFlagSet("project", flag.ExitOnError)
+	dir := fs.String("dir", "", "the project directory (default: harness project variable)")
+	_ = fs.Parse(args) // ExitOnError: Parse never returns
+	r, err := project.Resolve(*dir)
+	if err != nil {
+		fail("project: " + err.Error())
+	}
+	fmt.Println(r.Lines())
 }
 
 // memoryDefaultListing renders `memory-default --list`: EMPTY or starred

@@ -7,52 +7,48 @@ description: Restore session context from the current project's soul (recent jou
 
 Bring the project's recent soul into the session so agent and user pick up where they left off. Read-only.
 
-## Soul
+## Soul and project
 
-Resolve which soul this project uses before any `mark_*` call; a project bound with `/soul-join` or `/soul-default` lives on that soul, not the local one. Establish the absolute project directory; if unavailable, ask the user which project and stop before running anything below. Then run:
+Slug and bound soul: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
 
 ```bash
-"$HOME/.demarkus/bin/demarkus-plugin" registry memory-default --list --bind <shell-escaped-absolute-project-dir>
+"$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
 ```
 
-Replace `<shell-escaped-absolute-project-dir>` with exactly one POSIX-shell-safe word for the current project directory; never wrap the raw path in literal single quotes. Read the last line first: trailing `STALE <slug>` → bound soul no longer available; tell the user to restore it (`/soul-init` when the slug is `demarkus-memory`, `/soul-join` for any other slug) or `/soul-default` to rebind, and stop; never fall back to the local soul when that line is present, whatever precedes it. `EMPTY` → no souls joined: local soul, id `demarkus-memory`. `CATALOG` → `<id>\t<tier>\t<host>\t<insecure>\t<current>` rows; the row marked `*` is this project's soul; no marked row means the local soul. Non-zero exit or malformed output → surface the exact error and stop; never fall back silently. Every `mark_*` call below goes through that soul's server (the MCP server named `<id>`; local soul is `demarkus-memory`). If that server's tools are not connected, say so, name the server, and stop.
+`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); tools not connected: say so, name the server, stop.
+
+A slug never proves identity. Before the first read or write, `mark_fetch /<slug>/index.md` with `force: true` and `verbose: true`; keep the result (body, version, metadata map) as the hub state. `ok` or `archived`: the subtree is this checkout's only when established this session (a checkout path recorded in the hub matches, or the user confirmed); otherwise the user confirms or picks a unique slug matching `^[a-z0-9][a-z0-9._-]*$`. `not-found`: `mark_list /<slug>/` with `include_archived: true`; any entry means the subtree exists without a hub, same confirmation; `not-found` or an empty complete page: new project. Any other failure: identity unknown, surface it, ask before writing.
 
 ## Steps
 
-1. **Resolve and validate the project slug.** Use the absolute current project directory; candidate = its basename, lowercased, spaces replaced by hyphens. Before reading, check that the candidate subtree belongs to this exact absolute project path (established this session, or confirmed by the user); if the subtree exists but that is not established, ask the user to confirm or choose the unique slug rather than restoring another project's context. Never assume equal basenames mean the same project. Slug syntax before any path: `^[a-z0-9][a-z0-9._-]*$`; reject empty, `.`/`..`, delimiters (`/`, `\`, `:`, `?`, `#`, `%`).
-2. **Confirm the project exists in the soul.** `mark_fetch /<project>/index.md` with `force: true`. `not-found` → `mark_list /<project>/`, follow `next-cursor` as `cursor` until `complete: true` (max 20 pages; cursor rule as in step 3):
-   - complete and `not-found` or empty → no entries yet: say so, suggest `/soul-journal "<entry>"`, stop.
-   - incomplete (budget, cursor) → identity unknown; step 1 confirmed → continue with listed entries, else stop.
-   - unauthorized, transport, server, malformed, other list failure → surface, never treat as absence.
-   - entries present → note the root index is missing, continue.
+1. **Confirm the project** from the identity check above: new project: say so, suggest `/soul-journal "<entry>"`, stop; subtree without a hub: note it, continue; identity unknown: stop.
 
-3. **Pull recent journal entries.** `mark_list /<project>/journal/`, `next-cursor` → `cursor` until `complete: true`, max 100 calls; each incomplete page needs a non-empty unseen cursor. Fetch today plus the two most recent prior days (UTC `YYYY-MM-DD.md`) with `force: true`; today `not-found` → two most recent prior days. Bound hit before complete, or any cursor, list, fetch failure → partial.
+2. **Recent journal.** `mark_list /<slug>/journal/`, `next-cursor` as `cursor` until `complete: true`, max 100 calls, each incomplete page a non-empty unseen cursor; a bound before complete is partial. Fetch today plus the two most recent prior days (UTC `YYYY-MM-DD.md`) with `force: true`; today `not-found`: the two most recent prior days. Any cursor, list or fetch failure: partial.
 
-4. **Pull active work.** `mark_fetch /<project>/roadmap.md` with `force: true`. `not-found` → skip; other failures → surface.
+3. **Active work.** `mark_fetch /<slug>/roadmap.md` with `force: true`. `not-found`: skip; other failures: surface.
 
-5. **Summarize.** Plain text, no preamble, this shape:
+4. **Summarize.** Plain text, no preamble:
 
    ```text
    ## <Project>: recent context
 
    ### What's in flight
-   <one or two sentences pulled from roadmap.md, or "No roadmap yet">
+   <one or two sentences from roadmap.md, or "No roadmap yet">
 
    ### Recent journal
-   - <YYYY-MM-DD>: <one-line summary of that day's entry>
-   - <YYYY-MM-DD>: <...>
+   - <YYYY-MM-DD>: <one-line summary>
 
    ### Pick up where you left off
-   <one or two specific suggestions tied to the most recent journal entry; what was the user about to do next?>
+   <one or two specific suggestions from the latest entry: what was the user about to do?>
 
    ### Coverage
-   <per partial or failed read (steps 2-4): what, exact error or bound; omit if none>
+   <per partial or failed read (steps 1-3): what, exact error or bound; omit if none>
    ```
 
-   One line per summary. Restore context, don't read entries verbatim.
+   One line per summary; restore context, never read entries verbatim.
 
 ## Don't
 
-- Don't fabricate. Empty section (no roadmap, no recent journals) → say so.
-- Don't pull every doc; session primer, not a dump.
-- Don't write to the soul. Read-only.
+- Fabricate: an empty section (no roadmap, no recent journals) says so.
+- Pull every doc; a primer, not a dump.
+- Write to the soul.

@@ -53,6 +53,6 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 | appliance | single-host install |
 | librarian | the library's agent, or simply the agent |
 
-Plugin commands are `/soul-*` and act on your soul. Plugin names, MCP server ids, `demarkus-plugin` registry subcommands (`memory-join`, `memory-default`), and memory broker prompt names are identifiers and keep the memory form; their `soul-*` aliases remain for one release.
+Plugin commands are `/soul-*` and act on your soul. Plugin names, MCP server ids, `demarkus-plugin` registry subcommands (`memory-join`, `memory-default`, `project`), and memory broker prompt names are identifiers and keep the memory form; their `soul-*` aliases remain for one release.
 
 Glossary exceptions, kept on purpose: the single-host installer and its page are still called the appliance until the installer is renamed; the memory subdomain of single-host installs made before the rename stays `soul.<host>` so existing installs work unchanged. `soul.demarkus.io` is the project's own soul.
