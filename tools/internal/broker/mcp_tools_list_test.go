@@ -3,6 +3,8 @@ package broker
 import (
 	"strings"
 	"testing"
+
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 )
 
 func TestMCPToolsExactly17(t *testing.T) {
@@ -23,18 +25,71 @@ func TestMCPToolsExactly17(t *testing.T) {
 	}
 }
 
-func TestMCPToolDescriptionsReferenceBrokerURLForm(t *testing.T) {
-	// The broker addresses worlds by name, not host:port. Every tool
-	// that takes a URL argument must spell out the mark://{worldName}/
-	// form in its description so the LLM picks the right shape.
-	// mark_graph_export is the lone exception (no URL argument).
+func TestMCPURLFormStatedOnceInInstructions(t *testing.T) {
+	// The broker addresses worlds by name. The URL form rides the server
+	// instructions once; every URL argument still shows a mark:// example so
+	// the model picks the right shape without a per-tool description suffix.
+	for _, instructions := range []string{knowledgeInstructions, memoryInstructions} {
+		if !strings.Contains(instructions, "mark://{worldName}/{path}") {
+			t.Fatalf("instructions must state the URL form: %q", instructions[:80])
+		}
+	}
 	for _, tool := range mcpTools() {
-		if tool.Name == "mark_graph_export" {
-			continue
+		if strings.Contains(tool.Description, "URLs: mark://") {
+			t.Errorf("tool %q repeats the URL hint in its description", tool.Name)
 		}
-		if !strings.Contains(tool.Description, "mark://") {
-			t.Errorf("tool %q description missing mark:// URL hint: %q", tool.Name, tool.Description)
+		for name, prop := range tool.InputSchema.Properties {
+			desc, _ := prop.(map[string]any)["description"].(string)
+			if strings.Contains(name, "url") && !strings.Contains(desc, "mark://") {
+				t.Errorf("tool %q argument %q lacks a mark:// example: %q", tool.Name, name, desc)
+			}
 		}
+	}
+}
+
+// Wire bytes of tools/list per profile with five percent headroom; o200k is
+// about 4.1 bytes per token (2026-09-17). Raise only with a measured offset.
+const (
+	knowledgeFullSchemaBudgetBytes = 12550
+	knowledgeLeanSchemaBudgetBytes = 9400
+	memoryFullSchemaBudgetBytes    = 8900
+	memoryLeanSchemaBudgetBytes    = 8100
+)
+
+func TestGatewayToolProfilesAndBudget(t *testing.T) {
+	cases := []struct {
+		name                   string
+		profile                *GatewayProfile
+		fullBudget, leanBudget int
+	}{
+		{"knowledge", KnowledgeGatewayProfile(), knowledgeFullSchemaBudgetBytes, knowledgeLeanSchemaBudgetBytes},
+		{"memory", MemoryGatewayProfile(), memoryFullSchemaBudgetBytes, memoryLeanSchemaBudgetBytes},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			advanced := 0
+			for _, tool := range tc.profile.Tools {
+				if mcpfmt.AdvancedTools[tool.Name] {
+					advanced++
+				}
+			}
+			full := mcpfmt.ProfileTools(mcpfmt.ProfileFull, tc.profile.Tools)
+			lean := mcpfmt.ProfileTools(mcpfmt.ProfileLean, tc.profile.Tools)
+			if len(full) != len(tc.profile.Tools) || len(lean) != len(tc.profile.Tools)-advanced {
+				t.Fatalf("full = %d, lean = %d, want %d and %d", len(full), len(lean), len(tc.profile.Tools), len(tc.profile.Tools)-advanced)
+			}
+			for _, tool := range lean {
+				if mcpfmt.AdvancedTools[tool.Name] {
+					t.Errorf("lean profile exposes %s", tool.Name)
+				}
+			}
+			if err := mcpfmt.CheckSchemaBudget(full, tc.fullBudget); err != nil {
+				t.Error(err)
+			}
+			if err := mcpfmt.CheckSchemaBudget(lean, tc.leanBudget); err != nil {
+				t.Error(err)
+			}
+		})
 	}
 }
 

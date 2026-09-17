@@ -35,12 +35,12 @@ var (
 	Fetch = Envelope{
 		Lean:        []string{"version", "title"},
 		Verbose:     []string{"version", "modified", "etag"},
-		VerboseDesc: "every metadata key: etag, content-hash, modified, agent, importance, tags, type, rel-* (default false)",
+		VerboseDesc: "all metadata keys (default false)",
 	}
 	Lookup = Envelope{
 		Lean:        []string{"matches", "match"},
 		CapTags:     true,
-		VerboseDesc: "full tag lists per row (default false: ten tags, then +N more)",
+		VerboseDesc: "full tag lists per row (default false)",
 	}
 	LookupAll = Envelope{
 		Lean:        []string{"worlds", "succeeded", "failed", "matches", "match"},

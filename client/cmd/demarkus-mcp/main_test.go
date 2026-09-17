@@ -17,6 +17,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -103,42 +104,42 @@ func TestToolDefinitions(t *testing.T) {
 	}{
 		{
 			name:         "mark_fetch with host",
-			tool:         markFetchTool("mark://example.com:6309"),
+			tool:         mcpfmt.FetchTool(urlDesc("mark://example.com:6309"), ""),
 			wantName:     "mark_fetch",
 			wantRequired: []string{"url"},
 			wantDesc:     "Fetch a document",
 		},
 		{
 			name:         "mark_fetch without host",
-			tool:         markFetchTool(""),
+			tool:         mcpfmt.FetchTool(urlDesc(""), ""),
 			wantName:     "mark_fetch",
 			wantRequired: []string{"url"},
-			wantDesc:     "mark://",
+			wantDesc:     "Fetch a document",
 		},
 		{
 			name:         "mark_list",
-			tool:         markListTool(""),
+			tool:         mcpfmt.ListTool(urlDesc(""), ""),
 			wantName:     "mark_list",
 			wantRequired: []string{"url"},
 			wantDesc:     "List documents",
 		},
 		{
 			name:         "mark_graph",
-			tool:         markGraphTool(""),
+			tool:         mcpfmt.GraphTool(urlDesc(""), ""),
 			wantName:     "mark_graph",
 			wantRequired: []string{"url"},
 			wantDesc:     "Crawl outbound links",
 		},
 		{
 			name:         "mark_versions",
-			tool:         markVersionsTool(""),
+			tool:         mcpfmt.VersionsTool(urlDesc(""), ""),
 			wantName:     "mark_versions",
 			wantRequired: []string{"url"},
-			wantDesc:     "version history",
+			wantDesc:     "Version history",
 		},
 		{
 			name:         "mark_publish",
-			tool:         markPublishTool(""),
+			tool:         mcpfmt.PublishTool(urlDesc(""), requiresToken),
 			wantName:     "mark_publish",
 			wantRequired: []string{"url", "body", "expected_version"},
 			wantDesc:     "Publish or update",
@@ -166,9 +167,9 @@ func TestToolDefinitions(t *testing.T) {
 	}
 }
 
-func TestURLHint(t *testing.T) {
+func TestHostInstructions(t *testing.T) {
 	t.Run("with host", func(t *testing.T) {
-		hint := urlHint("mark://example.com:6309")
+		hint := hostInstructions("mark://example.com:6309")
 		if !strings.Contains(hint, "example.com:6309") {
 			t.Errorf("hint %q should contain the host", hint)
 		}
@@ -178,7 +179,7 @@ func TestURLHint(t *testing.T) {
 	})
 
 	t.Run("without host", func(t *testing.T) {
-		hint := urlHint("")
+		hint := hostInstructions("")
 		if !strings.Contains(hint, "mark://") {
 			t.Errorf("hint %q should mention mark:// URLs", hint)
 		}
@@ -188,8 +189,8 @@ func TestURLHint(t *testing.T) {
 func TestURLDesc(t *testing.T) {
 	t.Run("with host", func(t *testing.T) {
 		desc := urlDesc("mark://example.com:6309")
-		if !strings.Contains(desc, "bare path") {
-			t.Errorf("desc %q should mention bare path", desc)
+		if !strings.Contains(desc, "path, e.g. /") {
+			t.Errorf("desc %q should show a bare path example", desc)
 		}
 	})
 
@@ -387,7 +388,7 @@ func TestAgentMeta(t *testing.T) {
 
 func TestToolDefinition_MarkDiscover(t *testing.T) {
 	t.Run("url is optional", func(t *testing.T) {
-		tool := markDiscoverTool("mark://example.com:6309")
+		tool := markDiscoverTool()
 		if tool.Name != "mark_discover" {
 			t.Errorf("name = %q, want mark_discover", tool.Name)
 		}
@@ -423,7 +424,7 @@ func TestHandlerMarkDiscover_InvalidURL(t *testing.T) {
 }
 
 func TestToolDefinition_MarkAppend(t *testing.T) {
-	tool := markAppendTool("mark://example.com:6309")
+	tool := mcpfmt.AppendTool(urlDesc("mark://example.com:6309"), requiresToken)
 	if tool.Name != "mark_append" {
 		t.Errorf("name = %q, want mark_append", tool.Name)
 	}
@@ -1309,7 +1310,7 @@ func TestIsHashPath(t *testing.T) {
 }
 
 func TestMarkBacklinksTool_URLRequired(t *testing.T) {
-	tool := markBacklinksTool("mark://localhost:6309")
+	tool := mcpfmt.BacklinksTool(urlDesc("mark://localhost:6309"), "")
 	props := tool.InputSchema.Properties
 	if _, ok := props["url"]; !ok {
 		t.Fatal("expected url property")
@@ -1451,7 +1452,7 @@ func TestHandlerMarkGraphExport_NilStore(t *testing.T) {
 }
 
 func TestToolDefinition_MarkGraphPublish(t *testing.T) {
-	tool := markGraphPublishTool("")
+	tool := mcpfmt.GraphPublishTool("graph document target, e.g. "+urlDesc(""), requiresToken)
 	if tool.Name != "mark_graph_publish" {
 		t.Errorf("name = %q, want mark_graph_publish", tool.Name)
 	}

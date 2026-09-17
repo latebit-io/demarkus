@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"gopkg.in/yaml.v3"
 )
 
@@ -368,6 +369,10 @@ type MCPConfig struct {
 	// (Server.PublicURL, the default). Feeds RFC 9728 `resource` + the
 	// 401 resource_metadata link.
 	PublicURL string `yaml:"publicURL"`
+	// ToolProfile selects the tool surface: "lean" omits operator and
+	// federation tools no plugin prompt uses; "full" (default) keeps every
+	// tool for direct consumers. See client/mcpfmt.AdvancedTools.
+	ToolProfile string `yaml:"toolProfile"`
 	// TLS terminates HTTPS at the broker when CertFile and KeyFile
 	// are set. Leave blank to run plain HTTP inside the cluster (the
 	// Ingress terminates HTTPS at the edge), matching the existing
@@ -928,6 +933,12 @@ func (s *ServerConfig) applyDeviceFlowDefaults() error {
 func (m *MCPConfig) validate() error {
 	if m.Addr == "" {
 		m.Addr = defaultMCPAddr
+	}
+	if m.ToolProfile == "" {
+		m.ToolProfile = mcpfmt.ProfileFull
+	}
+	if err := mcpfmt.ValidProfile(m.ToolProfile); err != nil {
+		return fmt.Errorf("server.mcp.toolProfile: %w", err)
 	}
 	hasCert := m.TLS.CertFile != ""
 	hasKey := m.TLS.KeyFile != ""

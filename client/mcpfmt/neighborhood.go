@@ -13,7 +13,7 @@ import (
 const neighborhoodPageSize = 10
 
 // ExploreDescription keeps default and explicit navigation behavior consistent.
-const ExploreDescription = "Orient around one document: outline, outbound links, backlinks, siblings (10 each). Relation query arguments request grouped, paginated neighborhoods. "
+const ExploreDescription = "Orient around one document: outline, outbound links, backlinks, siblings (10 each). Relation query arguments request grouped, paginated neighborhoods."
 
 // RevalidatesBacklinks decides when explore pays for source revalidation:
 // only relation queries that read incoming edges. Default explore reads the cache.
@@ -57,18 +57,18 @@ func FormatExploreBacklinks(backlinks []graphstore.BacklinkEntry) string {
 func NeighborhoodParams() []mcp.ToolOption {
 	return []mcp.ToolOption{
 		mcp.WithString("direction",
-			mcp.Description("relations relative to url: incoming, outgoing, or both (default both)"),
+			mcp.Description("incoming, outgoing, or both (default both)"),
 			mcp.Enum("incoming", "outgoing", "both"),
 		),
 		mcp.WithArray("relations",
-			mcp.Description("exact relation predicates; empty string selects body links; omit for all"),
+			mcp.Description("relation predicates to include; empty string is body links; omit for all"),
 			mcp.WithStringItems(), mcp.MaxItems(graphstore.MaxNeighborhoodEdgesPerRow), mcp.UniqueItems(true),
 		),
 		mcp.WithNumber("page_size",
-			mcp.Description("neighbor documents per page, 1-100 (default 10)"),
+			mcp.Description("documents per page, 1-100 (default 10)"),
 			mcp.Min(1), mcp.Max(graphstore.MaxNeighborhoodPageSize), mcp.MultipleOf(1),
 		),
-		mcp.WithString("cursor", mcp.Description("continuation cursor from prior mark_explore result")),
+		mcp.WithString("cursor", mcp.Description(cursorDesc)),
 	}
 }
 

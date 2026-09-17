@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -113,7 +114,9 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 	// MCP gateway on its own listener; distinct Addr lets the chart
 	// route the two surfaces through different Ingress hosts or paths
 	// (SSE responses are write-side, untouched by the read timeouts).
-	mcpSrv := newHardenedServer(cfg.Server.MCP.Addr, srv.MCPGateway(opts.Version, opts.Profile))
+	profile := *opts.Profile
+	profile.Tools = mcpfmt.ProfileTools(cfg.Server.MCP.ToolProfile, profile.Tools)
+	mcpSrv := newHardenedServer(cfg.Server.MCP.Addr, srv.MCPGateway(opts.Version, &profile))
 	mcpErrs := make(chan error, 1)
 	mcpTLS := cfg.Server.MCP.TLS
 	go func() {

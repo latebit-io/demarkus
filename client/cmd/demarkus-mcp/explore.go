@@ -19,21 +19,6 @@ import (
 // is reported honestly as "+N more".
 const exploreSectionCap = 10
 
-func markExploreTool(host string) mcp.Tool {
-	neighborhoodParams := mcpfmt.NeighborhoodParams()
-	options := make([]mcp.ToolOption, 0, len(neighborhoodParams)+3)
-	options = append(options,
-		mcp.WithDescription(mcpfmt.ExploreDescription+urlHint(host)),
-		mcp.WithString("url",
-			mcp.Required(),
-			mcp.Description(urlDesc(host)),
-		),
-	)
-	options = append(options, neighborhoodParams...)
-	options = append(options, mcpfmt.Fetch.Param())
-	return mcp.NewTool("mark_explore", options...)
-}
-
 func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {

@@ -165,6 +165,8 @@ server:
     firstMintMaxAttempts: 6
     firstMintInitialBackoff: 250ms
     firstMintMaxBackoff: 8s
+    # Tool surface: "full" (default) or "lean"; see MCP-API.md "Tool profiles".
+    toolProfile: "full"
 
 oidc:
   # OIDC discovery URL (e.g. https://accounts.google.com).

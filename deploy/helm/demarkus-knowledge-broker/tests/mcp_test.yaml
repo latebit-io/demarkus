@@ -189,6 +189,22 @@ tests:
           path: stringData["config.yaml"]
           pattern: 'firstMintMaxBackoff: "1s"'
 
+  - it: config.yaml renders the default full tool profile
+    template: secret-config.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'firstMintMaxBackoff: "8s"\s*\n\s*toolProfile: "full"'
+
+  - it: mcp.toolProfile lean overrides into the rendered config
+    template: secret-config.yaml
+    set:
+      server.mcp.toolProfile: lean
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'toolProfile: "lean"'
+
   # worlds[].internalAddress: stable shape, override flows through.
 
   - it: world without internalAddress renders an empty internalAddress field

@@ -90,6 +90,17 @@ links it discovers in document bodies, because real-world markdown
 embeds them; that leniency is crawler-scoped only, never the parser
 for caller-supplied URLs.
 
+## Tool profiles
+
+`server.mcp.toolProfile` selects the surface `tools/list` returns. `full`
+(default) is the complete list below. `lean` omits the operator and
+federation tools no plugin prompt references: `mark_archive`,
+`mark_discover`, `mark_resolve`, `mark_index`, `mark_graph_export`,
+`mark_graph_publish`. The set is defined once in `client/mcpfmt` and
+shared with `demarkus-mcp -profile`; `tools/plugin-prompts check` fails
+when a prompt template references a tool outside it. Tool behavior is
+identical in both profiles.
+
 ## Tools
 
 Fifteen tools below have semantic parity with the local

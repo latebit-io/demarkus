@@ -301,6 +301,9 @@ fresh-provision 401 is propagation lag, not a real denial. Defaults
 sit well under the typical kubelet sync period; tune up only for
 slow-kubelet clusters.
 
+`server.mcp.toolProfile` selects the tool surface, `full` (default) or
+`lean`; see "Tool profiles" in `tools/demarkus-knowledge-broker/MCP-API.md`.
+
 ### Operator reference: 12-tool surface
 
 See `tools/demarkus-memory-broker/MCP-API.md` in the repo for the

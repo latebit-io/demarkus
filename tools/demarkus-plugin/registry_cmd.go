@@ -559,6 +559,9 @@ func cmdMcpServe(args []string) {
 		}
 	}
 
+	// Plugin prompts are checked against the lean profile. The environment
+	// carries the choice so an older demarkus-mcp still starts.
+	env = append(env, "DEMARKUS_MCP_PROFILE=lean")
 	argv := []string{mcpBin, "-host", host}
 	if insecure {
 		argv = append(argv, "-insecure")

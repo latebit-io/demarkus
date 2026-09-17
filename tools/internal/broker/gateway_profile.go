@@ -66,13 +66,7 @@ func MemoryGatewayProfile() *GatewayProfile {
 func markWorldsSelfTool() mcp.Tool {
 	return mcp.NewTool("mark_worlds",
 		mcp.WithDescription(
-			"Show your own world: this memory service maps your identity to exactly "+
-				"one private world, and every other tool addresses it as "+
-				"mark://{worldName}/{path}. Returns a markdown table with columns: "+
-				"world (your {worldName}), url (external address for a direct "+
-				"client, may be blank), address (internal dial address), and "+
-				"writable (always yes; your world is yours to write). Call this "+
-				"once to learn your world name before using the other tools.",
+			"Show your own world: your identity maps to one private world and every other tool addresses it as mark://{worldName}/{path}. Table columns: world, url (external, may be blank), address (internal), writable (always yes). Call once before the other tools.",
 		),
 	)
 }

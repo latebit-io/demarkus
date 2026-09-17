@@ -840,6 +840,21 @@ func TestMCPConfigValidate(t *testing.T) {
 			wantAddr: ":8081",
 		},
 		{
+			name:     "tool profile defaults to full",
+			mcp:      MCPConfig{Addr: ":8081"},
+			wantAddr: ":8081",
+		},
+		{
+			name:     "lean tool profile accepted",
+			mcp:      MCPConfig{Addr: ":8081", ToolProfile: "lean"},
+			wantAddr: ":8081",
+		},
+		{
+			name:    "unknown tool profile rejected",
+			mcp:     MCPConfig{Addr: ":8081", ToolProfile: "wide"},
+			wantErr: "server.mcp.toolProfile: unknown tool profile",
+		},
+		{
 			name:    "tls cert without key",
 			mcp:     MCPConfig{Addr: ":8081", TLS: MCPTLSConfig{CertFile: "/c"}},
 			wantErr: "server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together",

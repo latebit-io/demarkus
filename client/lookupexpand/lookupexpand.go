@@ -18,7 +18,7 @@ import (
 const Param = "budget"
 
 // ParamDesc describes the budget argument on both surfaces.
-const ParamDesc = "approximate result tokens (4 bytes each); when set, the matched sections' text follows the table in rank order under '" + Delimiter + " path#anchor' lines, whole sections only, until spent (default 0: table only)"
+const ParamDesc = "result tokens for expansion: matched sections follow the table in rank order under '" + Delimiter + " path#anchor' lines, whole sections, until spent (default 0: table only)"
 
 // Delimiter opens every expanded block and every note. Body lines that start
 // with it (a nested blockquote) are indented one space, so only the frame

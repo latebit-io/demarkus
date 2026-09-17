@@ -95,6 +95,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	if err := checkToolSurface(root); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	artifacts, err := renderAll(root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
