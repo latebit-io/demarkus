@@ -40,8 +40,6 @@ func TestLoadBrandsFileRejectsEmptyAndMissing(t *testing.T) {
 	}
 }
 
-// A brands file renders like a manifest brand: prompts under the brand name,
-// base files copied, plugin.json and README rewritten, all under plugins/brands/.
 func TestRenderAllAddsBrandsFromFile(t *testing.T) {
 	root, err := findRoot()
 	if err != nil {
@@ -85,6 +83,96 @@ func TestRenderAllAddsBrandsFromFile(t *testing.T) {
 		if !seen[want] {
 			t.Fatalf("brand output lacks %s", want)
 		}
+	}
+}
+
+func TestRenderAllBrandsCursorBase(t *testing.T) {
+	root, err := findRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "brands.json")
+	spec := `{"brands": [{"name": "acme-cursor", "base": "cursor-knowledge", "output": "plugins/brands/acme-cursor",
+		"plugin_name": "acme-knowledge", "memory_plugin_name": "acme-brain", "description": "Acme Knowledge."}]}`
+	if err := os.WriteFile(path, []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := renderAll(root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "plugins", "brands", "acme-cursor") + string(filepath.Separator)
+	seen := map[string]bool{}
+	for i := range artifacts {
+		if rel, ok := strings.CutPrefix(artifacts[i].Path, outDir); ok {
+			seen[filepath.ToSlash(rel)] = true
+		}
+	}
+	for _, want := range []string{".cursor-plugin/plugin.json", "hooks/gate.sh", "scripts/bootstrap.sh", "README.md"} {
+		if !seen[want] {
+			t.Fatalf("cursor brand lacks %s", want)
+		}
+	}
+	if seen["mcp.json"] || seen[".claude-plugin/plugin.json"] {
+		t.Fatal("cursor knowledge brand copied a memory or claude file")
+	}
+}
+
+// writeBaseFixture lays out a minimal base plugin under root/output.
+func writeBaseFixture(t *testing.T, root, output string, files map[string]string) {
+	t.Helper()
+	for rel, content := range files {
+		path := filepath.Join(root, output, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestBrandArtifactsRequiresEveryCopiedRoot(t *testing.T) {
+	const manifest = "{\n  \"name\": \"demarkus-memory\",\n  \"description\": \"base\",\n  \"version\": \"1\"\n}\n"
+	tests := []struct {
+		name    string
+		surface string
+		files   map[string]string
+		wantErr string
+	}{
+		{name: "knowledge without mcp config", surface: "knowledge",
+			files: map[string]string{"hooks/a.sh": "", "scripts/b.sh": "", ".claude-plugin/plugin.json": manifest}},
+		{name: "memory without mcp config", surface: "memory",
+			files:   map[string]string{"hooks/a.sh": "", "scripts/b.sh": "", ".claude-plugin/plugin.json": manifest},
+			wantErr: "copy .mcp.json"},
+		{name: "memory without hooks", surface: "memory",
+			files:   map[string]string{"scripts/b.sh": "", ".mcp.json": "{}", ".claude-plugin/plugin.json": manifest},
+			wantErr: "copy hooks"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			base := &target{Name: "base", Surface: tt.surface, Harness: "claude", Output: "plugins/base", PluginName: "demarkus-memory"}
+			writeBaseFixture(t, root, base.Output, tt.files)
+			b := &brand{Name: "acme", Base: "base", Output: "plugins/brands/acme", PluginName: "acme", Description: "Acme."}
+			_, err := brandArtifacts(root, b, base, brandTarget(b, base))
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("err = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateBrandsRejectsUnbrandableHarness(t *testing.T) {
+	spec := &manifest{
+		Targets: []target{{Name: "pi-memory", Surface: "memory", Harness: "pi", PluginName: "demarkus-pi-memory"}},
+		Brands:  []brand{{Name: "acme", Base: "pi-memory", Output: "plugins/brands/acme", PluginName: "acme", Description: "Acme."}},
+	}
+	if err := validateBrands(spec); err == nil || !strings.Contains(err.Error(), "only claude and cursor") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
