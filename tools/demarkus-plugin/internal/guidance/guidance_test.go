@@ -85,7 +85,9 @@ func TestMemoryGuidanceProjectHeader(t *testing.T) {
 		"souls":              "team\tmark://team.example:6309\tfalse\t-\n",
 	})
 	gfile := filepath.Join(t.TempDir(), "g.md")
-	_ = os.WriteFile(gfile, []byte("<!-- markdownlint-disable MD041 -->\n<!-- Code generated; DO NOT EDIT. -->\n# standing guidance"), 0o644)
+	if err := os.WriteFile(gfile, []byte("<!-- markdownlint-disable MD041 -->\n<!-- Code generated; DO NOT EDIT. -->\n# standing guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: project})
 	if !strings.Contains(out, "Project slug: `my-repo`. Bound store: `team`.") {
 		t.Fatalf("header missing or wrong:\n%s", out)
@@ -96,6 +98,7 @@ func TestMemoryGuidanceProjectHeader(t *testing.T) {
 	if strings.Index(out, "Project slug") > strings.Index(out, "standing guidance") {
 		t.Fatal("header must precede the static guidance")
 	}
+	t.Setenv("CURSOR_PROJECT_DIR", "")
 	t.Setenv("CLAUDE_PROJECT_DIR", filepath.Join(t.TempDir(), "other"))
 	if out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile}); !strings.Contains(out, "Project slug: `other`. Bound store: `demarkus-memory` (local, no project binding).") {
 		t.Fatalf("unbound project header wrong:\n%s", out)
@@ -104,5 +107,25 @@ func TestMemoryGuidanceProjectHeader(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/no/such/dir\nPORT=6310\nMODE=default\n", "project-souls": stale + "\tgone\n"})
 	if out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: stale}); !strings.Contains(out, "Bound store: `gone` (stale: not in the catalog; run /soul-join or /soul-default).") {
 		t.Fatalf("stale binding must be marked:\n%s", out)
+	}
+}
+
+func TestGuidanceSurfacesUnreadableFileAndRelativeProjectDir(t *testing.T) {
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/no/such/dir\nPORT=6310\nMODE=default\n"})
+	if _, err := Evaluate(Input{Surface: "memory", GuidanceFile: filepath.Join(t.TempDir(), "missing.md")}); err == nil {
+		t.Fatal("a configured guidance file that cannot be read must be an error, not silent empty guidance")
+	}
+	project := filepath.Join(t.TempDir(), "rel-project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setupHome(t, map[string]string{
+		"plugin-memory.conf": "SOUL_DIR=/no/such/dir\nPORT=6310\nMODE=default\n",
+		"project-souls":      project + "\tteam\n",
+		"souls":              "team\tmark://team.example:6309\tfalse\t-\n",
+	})
+	t.Chdir(project)
+	if out := ctx(t, Input{Surface: "memory", ProjectDir: "."}); !strings.Contains(out, "Project slug: `rel-project`. Bound store: `team`.") {
+		t.Fatalf("relative project dir must resolve to its binding:\n%s", out)
 	}
 }

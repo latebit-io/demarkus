@@ -6,6 +6,7 @@
 package guidance
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,20 +42,21 @@ func Evaluate(in Input) (Output, error) {
 }
 
 // readFile returns the static guidance without the generator's leading HTML
-// comments, which would otherwise ride every session.
-func readFile(p string) string {
+// comments, which would otherwise ride every session. An empty path is
+// optional; a configured path that cannot be read is an error.
+func readFile(p string) (string, error) {
 	if p == "" {
-		return ""
+		return "", nil
 	}
 	b, err := os.ReadFile(p)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("read guidance file: %w", err)
 	}
 	text := string(b)
 	for {
 		line, rest, found := strings.Cut(text, "\n")
 		if !found || !strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->") {
-			return strings.TrimLeft(text, "\n")
+			return strings.TrimLeft(text, "\n"), nil
 		}
 		text = rest
 	}
@@ -83,7 +85,11 @@ func memory(in Input) (Output, error) {
 	if header != "" {
 		parts = append(parts, header)
 	}
-	if g := readFile(in.GuidanceFile); g != "" {
+	g, err := readFile(in.GuidanceFile)
+	if err != nil {
+		return Output{}, err
+	}
+	if g != "" {
 		parts = append(parts, g)
 	}
 	return Output{Context: strings.Join(parts, "\n\n")}, nil
@@ -98,6 +104,11 @@ func projectHeader(dir string) (string, error) {
 	}
 	if dir == "" {
 		return "", nil
+	}
+	// Bindings are recorded absolute; a relative --project-dir must match them.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve project dir: %w", err)
 	}
 	bound, err := config.ProjectBinding(dir)
 	if err != nil {
@@ -170,7 +181,11 @@ func knowledge(in Input) (Output, error) {
 		b.WriteString("\n- **" + s + "** (MCP server `" + s + "`)")
 	}
 	parts := []string{b.String()}
-	if g := readFile(in.GuidanceFile); g != "" {
+	g, err := readFile(in.GuidanceFile)
+	if err != nil {
+		return Output{}, err
+	}
+	if g != "" {
 		parts = append(parts, g)
 	}
 	memory, err := config.MemoryConfigured()
