@@ -27,7 +27,7 @@ func TestDecodeBrandsFileIsStrict(t *testing.T) {
 	}
 }
 
-func TestLoadBrandsFileRejectsEmptyAndMissing(t *testing.T) {
+func TestLoadBrandsFileMissingErrorsEmptyLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "brands.json")
 	if _, err := loadBrandsFile(path); err == nil || !strings.Contains(err.Error(), "read brands file") {
 		t.Fatalf("missing file err = %v", err)
@@ -35,8 +35,9 @@ func TestLoadBrandsFileRejectsEmptyAndMissing(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"brands": []}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadBrandsFile(path); err == nil || !strings.Contains(err.Error(), "no brands") {
-		t.Fatalf("empty file err = %v", err)
+	brands, err := loadBrandsFile(path)
+	if err != nil || len(brands) != 0 {
+		t.Fatalf("empty list = %v, %v", brands, err)
 	}
 }
 

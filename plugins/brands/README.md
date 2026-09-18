@@ -100,11 +100,13 @@ The script, `demarkus-plugins/regen.sh`; Go and jq are the only tools:
 # Render the brands against the pinned demarkus commit, replace the generated
 # plugin directories, and rebuild every marketplace entry that points at them.
 set -euo pipefail
+shopt -s nullglob
 here=$(cd "$(dirname "$0")" && pwd) && repo=$(dirname "$here")
 up=${DEMARKUS_SRC:-$HOME/src/demarkus}
 mkdir -p "$(dirname "$up")"
 [ -d "$up/.git" ] || git clone https://github.com/latebit-io/demarkus "$up"
 git -C "$up" fetch -q origin && git -C "$up" checkout -q "$(cat "$here/upstream.ref")"
+git -C "$up" clean -qfdx -- plugins/brands   # drop brands from earlier runs
 (cd "$up/tools" && go run ./plugin-prompts write --brands "$here/brands.json" && go run ./plugin-prompts check --brands "$here/brands.json")
 cd "$repo"
 find demarkus-plugins -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +

@@ -44,9 +44,8 @@ func loadBrandsFile(path string) ([]brand, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse brands file %s: %w", path, err)
 	}
-	if len(spec.Brands) == 0 {
-		return nil, fmt.Errorf("brands file %s: no brands", path)
-	}
+	// An empty list is valid: a downstream regen with every brand removed
+	// still needs a successful run to prune its outputs.
 	return spec.Brands, nil
 }
 
