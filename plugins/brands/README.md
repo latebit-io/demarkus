@@ -80,55 +80,66 @@ Layout in the repository your users will add as a marketplace (a monorepo works;
 .cursor-plugin/marketplace.json    # Cursor brands
 demarkus-plugins/brands.json
 demarkus-plugins/upstream.ref      # one demarkus commit SHA
+demarkus-plugins/regen.sh          # the script below
 demarkus-plugins/acme-brain/       # generated, committed through a PR
 demarkus-plugins/acme-knowledge/
 demarkus-plugins/acme-brain-cursor/
 demarkus-plugins/acme-knowledge-cursor/
 ```
 
-Marketplace entry, one per brand in the marketplace file of its harness; `source` paths are relative to the repository root and `version` must equal the base plugin's version, which the generated manifest carries:
+Marketplace files, one per harness, hold the repository metadata; `demarkus-plugins/regen.sh` fills their `plugins` arrays from the generated manifests on every run (name, `source`, description, `version`), so a brand removed from `brands.json` disappears from its marketplace and a version bump lands without hand edits. Start each file as:
 
 ```json
-{
-  "name": "acme",
-  "owner": { "name": "acme" },
-  "plugins": [
-    {
-      "name": "acme-brain",
-      "source": "./demarkus-plugins/acme-brain",
-      "description": "Acme Brain: local, versioned memory for Claude Code.",
-      "version": "0.13.131"
-    }
-  ]
-}
+{ "name": "acme", "owner": { "name": "acme" }, "plugins": [] }
+```
+
+The script, `demarkus-plugins/regen.sh`; Go and jq are the only tools:
+
+```bash
+#!/usr/bin/env bash
+# Render the brands against the pinned demarkus commit, replace the generated
+# plugin directories, and rebuild every marketplace entry that points at them.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd) && repo=$(dirname "$here")
+up=${DEMARKUS_SRC:-$HOME/src/demarkus}
+[ -d "$up/.git" ] || git clone https://github.com/latebit-io/demarkus "$up"
+git -C "$up" fetch -q origin && git -C "$up" checkout -q "$(cat "$here/upstream.ref")"
+(cd "$up/tools" && go run ./plugin-prompts write --brands "$here/brands.json" && go run ./plugin-prompts check --brands "$here/brands.json")
+cd "$repo"
+find demarkus-plugins -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+for harness in claude cursor; do
+  m=".$harness-plugin/marketplace.json"; [ -f "$m" ] || continue
+  jq '.plugins |= map(select(.source | startswith("./demarkus-plugins/") | not))' "$m" > "$m.tmp" && mv "$m.tmp" "$m"
+done
+for dir in "$up"/plugins/brands/*/; do
+  name=$(basename "$dir") && cp -R "$dir" "demarkus-plugins/$name"
+  for harness in claude cursor; do
+    manifest="demarkus-plugins/$name/.$harness-plugin/plugin.json"; [ -f "$manifest" ] || continue
+    m=".$harness-plugin/marketplace.json"
+    jq --arg src "./demarkus-plugins/$name" --slurpfile p "$manifest" \
+      '.plugins += [{name: $p[0].name, source: $src, description: $p[0].description, version: $p[0].version}]' \
+      "$m" > "$m.tmp" && mv "$m.tmp" "$m"
+  done
+done
 ```
 
 ### Regenerate locally and open a pull request
 
-No CI is required; Go is the only tool. Keep a demarkus clone next to your repository and run this for every update:
+No CI is required. Bump `upstream.ref` when you want a newer demarkus, then:
 
 ```bash
-# once
-git clone https://github.com/latebit-io/demarkus ~/src/demarkus
-
-# each update: pin, render, copy, PR
-cd ~/src/demarkus && git fetch origin && git checkout "$(cat ~/src/acme/demarkus-plugins/upstream.ref)"
-(cd tools && go run ./plugin-prompts write --brands ~/src/acme/demarkus-plugins/brands.json)
-cd ~/src/acme && git switch -c chore/demarkus-brands
-for dir in ~/src/demarkus/plugins/brands/*/; do
-  name=$(basename "$dir")
-  rm -rf "demarkus-plugins/$name" && cp -R "$dir" "demarkus-plugins/$name"
-done
-# set each marketplace version to the one in demarkus-plugins/<name>/.claude-plugin/plugin.json or .cursor-plugin/plugin.json
-git add demarkus-plugins .claude-plugin .cursor-plugin && git commit -m "chore(plugins): regenerate demarkus brands"
+git switch -c chore/demarkus-brands
+bash demarkus-plugins/regen.sh
+git add demarkus-plugins .claude-plugin .cursor-plugin
+git commit -m "chore(plugins): regenerate demarkus brands"
 gh pr create --fill
 ```
 
-Wrap it in a `make brands` target so an update is one command. Bump `upstream.ref` first when you want a newer demarkus.
+A `make brands` target wrapping the script makes an update one command.
 
 ### Regenerate in CI
 
-A job that regenerates on every change to `brands.json` or `upstream.ref` and opens a pull request:
+The same script, run by a job that opens a pull request on every change to `brands.json` or `upstream.ref`:
 
 ```yaml
 name: demarkus brands
@@ -145,22 +156,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: stable }
-      - run: |
-          git clone https://github.com/latebit-io/demarkus /tmp/demarkus
-          git -C /tmp/demarkus checkout "$(cat demarkus-plugins/upstream.ref)"
-          brands="$GITHUB_WORKSPACE/demarkus-plugins/brands.json"
-          (cd /tmp/demarkus/tools && go run ./plugin-prompts write --brands "$brands" && go run ./plugin-prompts check --brands "$brands")
-          for dir in /tmp/demarkus/plugins/brands/*/; do
-            name=$(basename "$dir")
-            rm -rf "demarkus-plugins/$name" && cp -R "$dir" "demarkus-plugins/$name"
-            for harness in claude cursor; do
-              manifest="demarkus-plugins/$name/.$harness-plugin/plugin.json"
-              [ -f "$manifest" ] || continue
-              version=$(jq -r .version "$manifest")
-              jq --arg n "$(jq -r .name "$manifest")" --arg v "$version" '(.plugins[] | select(.name == $n) | .version) = $v' \
-                ".$harness-plugin/marketplace.json" > /tmp/m.json && mv /tmp/m.json ".$harness-plugin/marketplace.json"
-            done
-          done
+      - run: DEMARKUS_SRC=/tmp/demarkus bash demarkus-plugins/regen.sh
       - uses: peter-evans/create-pull-request@v6
         with:
           branch: chore/demarkus-brands

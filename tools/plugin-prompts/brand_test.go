@@ -166,6 +166,25 @@ func TestBrandArtifactsRequiresEveryCopiedRoot(t *testing.T) {
 	}
 }
 
+func TestValidateBrandsPluginNameUniquePerHarness(t *testing.T) {
+	targets := []target{
+		{Name: "claude-memory", Surface: "memory", Harness: "claude", PluginName: "demarkus-memory"},
+		{Name: "claude-knowledge", Surface: "knowledge", Harness: "claude", PluginName: "demarkus-knowledge"},
+		{Name: "cursor-memory", Surface: "memory", Harness: "cursor", PluginName: "demarkus-memory"},
+	}
+	entry := func(name, base string) brand {
+		return brand{Name: name, Base: base, Output: "plugins/brands/" + name, PluginName: "acme", Description: "Acme."}
+	}
+	across := &manifest{Targets: targets, Brands: []brand{entry("acme", "claude-memory"), entry("acme-cursor", "cursor-memory")}}
+	if err := validateBrands(across); err != nil {
+		t.Fatalf("same plugin_name across harnesses: %v", err)
+	}
+	within := &manifest{Targets: targets, Brands: []brand{entry("acme", "claude-memory"), entry("acme-k", "claude-knowledge")}}
+	if err := validateBrands(within); err == nil || !strings.Contains(err.Error(), `duplicate plugin_name "acme" on harness claude`) {
+		t.Fatalf("same plugin_name within a harness: err = %v", err)
+	}
+}
+
 func TestValidateBrandsRejectsUnbrandableHarness(t *testing.T) {
 	spec := &manifest{
 		Targets: []target{{Name: "pi-memory", Surface: "memory", Harness: "pi", PluginName: "demarkus-pi-memory"}},

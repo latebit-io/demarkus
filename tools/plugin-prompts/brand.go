@@ -99,6 +99,8 @@ func validateBrands(spec *manifest) error {
 	}
 	names := map[string]struct{}{}
 	outputs := map[string]struct{}{}
+	// plugin_name is unique per harness; harnesses have separate marketplaces.
+	pluginNames := map[string]struct{}{}
 	for i := range spec.Brands {
 		b := &spec.Brands[i]
 		base, ok := targets[b.Base]
@@ -128,8 +130,13 @@ func validateBrands(spec *manifest) error {
 		if _, dup := outputs[b.Output]; dup {
 			return fmt.Errorf("brand %q: duplicate output %s", b.Name, b.Output)
 		}
+		pluginKey := base.Harness + "/" + b.PluginName
+		if _, dup := pluginNames[pluginKey]; dup {
+			return fmt.Errorf("brand %q: duplicate plugin_name %q on harness %s", b.Name, b.PluginName, base.Harness)
+		}
 		names[b.Name] = struct{}{}
 		outputs[b.Output] = struct{}{}
+		pluginNames[pluginKey] = struct{}{}
 	}
 	return nil
 }
