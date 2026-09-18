@@ -69,7 +69,7 @@ cd tools && go run ./plugin-prompts write --brands /path/to/brands.json \
          && go run ./plugin-prompts check --brands /path/to/brands.json
 ```
 
-`write` renders the prompts with your names, copies `hooks/` and `scripts/` plus the MCP config of a memory base from the base plugin, rewrites the name and description in the plugin manifest (`.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json`; version and hooks untouched), and writes a README into each `output`. A base missing any of those files fails the render. `check` fails on any drift between templates and generated files. Both need the full checkout, since the copied files come from the base plugin.
+`write` renders the prompts with your names, copies `hooks/` and `scripts/` plus the MCP config of a memory base from the base plugin, rewrites the name and description in the plugin manifest (`.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json`; version and hooks untouched), and writes a README into each `output`. A base missing any of those files fails the render. Every directory under `plugins/brands/` is managed: `write` deletes files and directories no configured brand produces, including the whole directory of a brand removed from the file, and `check` reports them as drift. Both need the full checkout, since the copied files come from the base plugin.
 
 ## Publishing from your own repository
 
@@ -106,7 +106,6 @@ up=${DEMARKUS_SRC:-$HOME/src/demarkus}
 mkdir -p "$(dirname "$up")"
 [ -d "$up/.git" ] || git clone https://github.com/latebit-io/demarkus "$up"
 git -C "$up" fetch -q origin && git -C "$up" checkout -q "$(cat "$here/upstream.ref")"
-git -C "$up" clean -qfdx -- plugins/brands   # drop brands from earlier runs
 (cd "$up/tools" && go run ./plugin-prompts write --brands "$here/brands.json" && go run ./plugin-prompts check --brands "$here/brands.json")
 cd "$repo"
 # preflight: every generated harness needs its marketplace file before anything is deleted

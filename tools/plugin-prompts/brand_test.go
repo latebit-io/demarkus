@@ -198,6 +198,111 @@ func TestValidateBrandsRejectsUnbrandableHarness(t *testing.T) {
 	}
 }
 
+func TestWriteAllRemovesDirectoryOfDroppedBrand(t *testing.T) {
+	root := t.TempDir()
+	writeBaseFixture(t, root, "plugins/brands", map[string]string{"README.md": "guide", "old/hooks/x.sh": "", "old/.claude-plugin/plugin.json": "{}"})
+	old := filepath.Join(root, "plugins", "brands", "old")
+	err := checkAll(root, nil)
+	if err == nil || !strings.Contains(err.Error(), "plugins/brands/old/hooks/x.sh (unexpected)") {
+		t.Fatalf("check before prune: %v", err)
+	}
+	if err := writeAll(root, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("dropped brand directory still present (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "plugins", "brands", "README.md")); err != nil {
+		t.Fatalf("hand-kept README removed: %v", err)
+	}
+	if err := checkAll(root, nil); err != nil {
+		t.Fatalf("check after prune: %v", err)
+	}
+}
+
+// copyTree copies src into dst, keeping file modes.
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, content, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The downstream lifecycle: write a brand, then write with the brand removed
+// from the file; the old output must go, and check must flag it in between.
+func TestWriteWithEmptyBrandsFileRemovesEarlierBrand(t *testing.T) {
+	repo, err := findRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	for _, dir := range []string{"plugins/prompt-source", "plugins/claude-code/hooks", "plugins/claude-code/scripts", "plugins/claude-code/.claude-plugin"} {
+		copyTree(t, filepath.Join(repo, filepath.FromSlash(dir)), filepath.Join(root, filepath.FromSlash(dir)))
+	}
+	for _, file := range []string{"plugins/claude-code/.mcp.json", "plugins/brands/README.md"} {
+		copyTree(t, filepath.Join(repo, filepath.FromSlash(file)), filepath.Join(root, filepath.FromSlash(file)))
+	}
+	brands := filepath.Join(t.TempDir(), "brands.json")
+	entry := `{"brands": [{"name": "acme", "base": "claude-memory", "output": "plugins/brands/acme", "plugin_name": "acme", "description": "Acme."}]}`
+	if err := os.WriteFile(brands, []byte(entry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := renderAll(root, brands)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAll(root, artifacts); err != nil {
+		t.Fatal(err)
+	}
+	acme := filepath.Join(root, "plugins", "brands", "acme")
+	if _, err := os.Stat(filepath.Join(acme, "hooks")); err != nil {
+		t.Fatalf("brand not written: %v", err)
+	}
+	if err := os.WriteFile(brands, []byte(`{"brands": []}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if artifacts, err = renderAll(root, brands); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAll(root, artifacts); err == nil || !strings.Contains(err.Error(), "plugins/brands/acme/") {
+		t.Fatalf("check with the brand removed: %v", err)
+	}
+	if err := writeAll(root, artifacts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(acme); !os.IsNotExist(err) {
+		t.Fatalf("removed brand output still present (err=%v)", err)
+	}
+	if err := checkAll(root, artifacts); err != nil {
+		t.Fatalf("check after prune: %v", err)
+	}
+}
+
 func TestRenderAllRejectsBrandsFileDuplicatingName(t *testing.T) {
 	root, err := findRoot()
 	if err != nil {
