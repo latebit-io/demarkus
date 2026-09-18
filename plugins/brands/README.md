@@ -8,9 +8,10 @@ The demarkus repository ships no brands. A brand is declared in a small `brands.
 
 A brand changes the plugin name, its description, and every place the prompts name the plugin. It keeps, on purpose:
 
-- the MCP server key `demarkus-memory` in `.mcp.json` (Claude Code) and `mcp.json` (Cursor). The `demarkus-plugin` binary identifies the local memory by that key; the destination gate, project binding, and slug reservation depend on it. Renaming the key means forking the binary.
 - the `demarkus-plugin` binary, its pinned version in `scripts/bootstrap.sh`, and its download source (the demarkus GitHub releases).
 - the state directory `~/.demarkus` and the `DEMARKUS_*` environment variables.
+
+The memory MCP server key defaults to `demarkus-memory`, which is what tool names and the `plugin:<name>:demarkus-memory` label show. `mcp_server_key` on a memory brand renames it (`plugin:<name>:memory`, tools `mcp__plugin_<name>_memory__mark_*`, prompts under `/memory/`): the generator rewrites `.mcp.json` (Claude Code) or `mcp.json` (Cursor) and adds `mcp-serve --name <key>`, which records the key under `~/.demarkus` so the destination gate and nudges still recognize the local memory. The key is reserved like `demarkus-memory`: no joined store may use it as a slug. Needs a `demarkus-plugin` release with `mcp-serve --name`; pin `upstream.ref` at a pin bump after that change.
 
 Because the state is shared, a brand replaces the upstream plugin on a machine. Installing both doubles every hook and both fight over one managed server. Tell your users to uninstall `demarkus-memory` and `demarkus-knowledge` before installing the brand.
 
@@ -29,6 +30,7 @@ One entry per plugin you want generated; delete the entries you do not need. Thi
       "output": "plugins/brands/acme-brain",
       "plugin_name": "acme-brain",
       "knowledge_plugin_name": "acme-knowledge",
+      "mcp_server_key": "memory",
       "description": "Acme Brain: local, versioned memory for Claude Code, powered by demarkus."
     },
     {
@@ -59,7 +61,7 @@ One entry per plugin you want generated; delete the entries you do not need. Thi
 }
 ```
 
-Fields: `name` and `output` are unique per entry; `output` must live under `plugins/brands/` of the demarkus checkout; `plugin_name` is lowercase letters, digits, and hyphens, becomes the `/<plugin_name>:` command prefix, and may repeat across harnesses since each harness has its own marketplace; `memory_plugin_name` and `knowledge_plugin_name` name the sibling plugin on the same harness when you brand both surfaces; `store_noun` and `store_noun_plural` replace the word "soul" in the prompts. Unknown fields are rejected.
+Fields: `name` and `output` are unique per entry; `output` must live under `plugins/brands/` of the demarkus checkout; `plugin_name` is lowercase letters, digits, and hyphens, becomes the `/<plugin_name>:` command prefix, and may repeat across harnesses since each harness has its own marketplace; `memory_plugin_name` and `knowledge_plugin_name` name the sibling plugin on the same harness when you brand both surfaces; `store_noun` and `store_noun_plural` replace the word "soul" in the prompts; `mcp_server_key` (memory bases only) renames the MCP server as described above. Unknown fields are rejected.
 
 Rendering:
 

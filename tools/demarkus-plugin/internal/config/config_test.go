@@ -28,6 +28,33 @@ func setupConfigHome(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+func TestLocalMemoryAliasResolvesBrandedServer(t *testing.T) {
+	branded := "mcp__plugin_acme-brain_memory__mark_publish"
+	setupConfigHome(t, map[string]string{"knowledge-systems": "corp\n"})
+	if id, err := MemoryTargetID(branded); err != nil || id != "" {
+		t.Fatalf("no alias: id=%q err=%v", id, err)
+	}
+	setupConfigHome(t, map[string]string{"knowledge-systems": "corp\n", LocalMemoryAliasFile: "memory\n"})
+	for _, tool := range []string{branded, "mcp__memory__mark_append", "memory_mark_publish", "mcp__plugin_demarkus-memory_demarkus-memory__mark_publish"} {
+		id, err := MemoryTargetID(tool)
+		if err != nil || id != LocalMemoryID {
+			t.Fatalf("%s: id=%q err=%v", tool, id, err)
+		}
+		scope, err := KnowledgeScope(tool)
+		if err != nil || scope != "" {
+			t.Fatalf("%s: knowledge scope=%q err=%v", tool, scope, err)
+		}
+	}
+	if scope, err := KnowledgeScope("mcp__corp__mark_publish"); err != nil || scope != "corp" {
+		t.Fatalf("knowledge tool: scope=%q err=%v", scope, err)
+	}
+	for slug, want := range map[string]bool{"memory": true, "demarkus_memory": true, "corp": false} {
+		if got, err := IsLocalMemoryName(slug); err != nil || got != want {
+			t.Fatalf("IsLocalMemoryName(%q) = %v, %v", slug, got, err)
+		}
+	}
+}
+
 func TestKnowledgePolicy(t *testing.T) {
 	t.Run("defaults to warn", func(t *testing.T) {
 		setupConfigHome(t, nil)

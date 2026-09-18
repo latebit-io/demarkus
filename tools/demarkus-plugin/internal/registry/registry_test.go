@@ -209,6 +209,46 @@ func TestMemoryJoinAndCollision(t *testing.T) {
 	if _, err := MemoryJoin("demarkus-memory.example.com", "", false, ""); err == nil {
 		t.Error("expected reserved-slug rejection")
 	}
+	// the branded MCP server name is reserved too
+	if err := SetLocalMemoryAlias("brain"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MemoryJoin("brain.example.com", "", false, ""); err == nil {
+		t.Error("expected alias-slug rejection")
+	}
+}
+
+func TestSetLocalMemoryAlias(t *testing.T) {
+	home := setupHome(t)
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "knowledge-systems"), []byte("corp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, alias, want string
+		wantErr           bool
+	}{
+		{name: "collides with knowledge system", alias: "corp", wantErr: true},
+		{name: "bad characters", alias: "Bad Name", wantErr: true},
+		{name: "records", alias: "memory", want: "memory"},
+		{name: "unchanged", alias: "memory", want: "memory"},
+		{name: "default id clears", alias: config.LocalMemoryID, want: ""},
+		{name: "records again", alias: "brain", want: "brain"},
+		{name: "empty clears", alias: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := SetLocalMemoryAlias(tt.alias)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if got, err := config.LocalMemoryAlias(); err != nil || got != tt.want {
+				t.Fatalf("stored alias = %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
 }
 
 func TestMemoryJoinRollsBackBindingFailure(t *testing.T) {

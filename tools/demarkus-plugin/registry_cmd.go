@@ -535,7 +535,20 @@ func cmdMcpServe(args []string) {
 	fs := flag.NewFlagSet("mcp-serve", flag.ExitOnError)
 	memory := fs.String("memory", "", "joined remote-memory slug (omit for the local managed memory)")
 	fs.StringVar(memory, "soul", "", "deprecated alias of -memory")
+	name := fs.String("name", "", "MCP server name a branded plugin registers the local memory under; recorded so gates resolve it")
 	_ = fs.Parse(args) // ExitOnError: Parse never returns
+
+	if *name != "" && *memory != "" {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: -name applies to the local managed memory only")
+		os.Exit(2)
+	}
+	if *memory == "" {
+		// Best effort on purpose: a failed record only means the gates see the
+		// tools as an unknown server; the memory itself must still start.
+		if err := registry.SetLocalMemoryAlias(*name); err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: record local memory alias: "+err.Error())
+		}
+	}
 
 	binDir, err := config.StatePath("bin")
 	if err != nil {

@@ -56,6 +56,9 @@ type target struct {
 	Store      string `json:"store_noun"`
 	Stores     string `json:"store_noun_plural"`
 	StoreTitle string `json:"-"`
+	// MCPServerKey names the memory MCP server in prompts and config; a brand
+	// may override it, canonical targets keep the default.
+	MCPServerKey string `json:"-"`
 }
 
 const defaultStoreNoun = "soul"
@@ -70,6 +73,9 @@ func applyStoreDefaults(t *target) {
 	}
 	r := []rune(t.Store)
 	t.StoreTitle = strings.ToUpper(string(r[0])) + string(r[1:])
+	if t.MCPServerKey == "" {
+		t.MCPServerKey = defaultMCPServerKey
+	}
 }
 
 type artifact struct {

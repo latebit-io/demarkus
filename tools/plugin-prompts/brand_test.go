@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,6 +187,88 @@ func TestValidateBrandsPluginNameUniquePerHarness(t *testing.T) {
 	if err := validateBrands(within); err == nil || !strings.Contains(err.Error(), `duplicate plugin_name "acme" on harness claude`) {
 		t.Fatalf("same plugin_name within a harness: err = %v", err)
 	}
+}
+
+func TestBrandMCPConfigRenamesServerAndPassesName(t *testing.T) {
+	base := []byte("{\n  \"mcpServers\": {\n    \"demarkus-memory\": {\n      \"command\": \"${HOME}/.demarkus/bin/demarkus-plugin\",\n      \"args\": [\"mcp-serve\"]\n    }\n  }\n}\n")
+	out, err := brandMCPConfig(base, "memory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Servers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := doc.Servers["memory"]
+	if !ok || len(doc.Servers) != 1 {
+		t.Fatalf("servers = %v", doc.Servers)
+	}
+	if entry.Command != "${HOME}/.demarkus/bin/demarkus-plugin" || strings.Join(entry.Args, " ") != "mcp-serve --name memory" {
+		t.Fatalf("entry = %+v", entry)
+	}
+	if _, err := brandMCPConfig([]byte(`{"mcpServers": {"other": {}}}`), "memory"); err == nil {
+		t.Fatal("unexpected server name should fail")
+	}
+}
+
+func TestValidateBrandsMCPServerKey(t *testing.T) {
+	targets := []target{
+		{Name: "claude-memory", Surface: "memory", Harness: "claude", PluginName: "demarkus-memory"},
+		{Name: "claude-knowledge", Surface: "knowledge", Harness: "claude", PluginName: "demarkus-knowledge"},
+	}
+	entry := func(base, key string) brand {
+		return brand{Name: "acme", Base: base, Output: "plugins/brands/acme", PluginName: "acme", Description: "Acme.", MCPServerKey: key}
+	}
+	tests := []struct {
+		name string
+		b    brand
+		want string
+	}{
+		{name: "memory base", b: entry("claude-memory", "memory")},
+		{name: "knowledge base", b: entry("claude-knowledge", "memory"), want: "memory bases only"},
+		{name: "default key", b: entry("claude-memory", "demarkus-memory"), want: "other than"},
+		{name: "bad key", b: entry("claude-memory", "Memory!"), want: "lowercase"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBrands(&manifest{Targets: targets, Brands: []brand{tt.b}})
+			if tt.want == "" && err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestBrandArtifactsRewriteMCPConfig(t *testing.T) {
+	root := t.TempDir()
+	base := &target{Name: "base", Surface: "memory", Harness: "claude", Output: "plugins/base", PluginName: "demarkus-memory"}
+	writeBaseFixture(t, root, base.Output, map[string]string{
+		"hooks/a.sh": "", "scripts/b.sh": "",
+		".mcp.json":                  `{"mcpServers": {"demarkus-memory": {"command": "x", "args": ["mcp-serve"]}}}`,
+		".claude-plugin/plugin.json": "{\n  \"name\": \"demarkus-memory\",\n  \"description\": \"base\",\n  \"version\": \"1\"\n}\n",
+	})
+	b := &brand{Name: "acme", Base: "base", Output: "plugins/brands/acme", PluginName: "acme", Description: "Acme.", MCPServerKey: "memory"}
+	arts, err := brandArtifacts(root, b, base, brandTarget(b, base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range arts {
+		if filepath.Base(arts[i].Path) == ".mcp.json" {
+			if text := string(arts[i].Content); strings.Contains(text, "demarkus-memory") {
+				t.Fatalf(".mcp.json still names the base server: %s", text)
+			}
+			return
+		}
+	}
+	t.Fatal(".mcp.json not produced")
 }
 
 func TestValidateBrandsRejectsUnbrandableHarness(t *testing.T) {

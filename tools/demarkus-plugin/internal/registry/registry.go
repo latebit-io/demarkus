@@ -717,11 +717,57 @@ func memoryJoinBroker(rawURL, token string, insecure bool, bindDir string) (*Mem
 	return &MemoryJoinResult{Slug: slug, Host: validated.URL, TokenFile: "-", Broker: true, McpURL: validated.McpURL}, nil
 }
 
+// aliasSafe mirrors pluginNameRE in tools/plugin-prompts: the generator
+// validated the key; this guards a hand-edited .mcp.json.
+var aliasSafe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// SetLocalMemoryAlias records the MCP server name a branded plugin serves the
+// local memory under (empty or the default id clears it). Rejects a name that
+// would shadow a joined memory or knowledge system.
+func SetLocalMemoryAlias(alias string) error {
+	p, err := config.StatePath(config.LocalMemoryAliasFile)
+	if err != nil {
+		return err
+	}
+	if alias == config.LocalMemoryID {
+		alias = ""
+	}
+	if alias != "" && !aliasSafe.MatchString(alias) {
+		return fmt.Errorf("local memory alias '%s': lowercase letters, digits, and hyphens only", alias)
+	}
+	return withLock(p, func() error {
+		current, err := config.LocalMemoryAlias()
+		if err != nil || current == alias {
+			return err
+		}
+		if alias == "" {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		}
+		for _, list := range []func() ([]string, error){config.ListRemoteMemories, config.ListKnowledgeSystems} {
+			slugs, err := list()
+			if err != nil {
+				return err
+			}
+			if slices.Contains(slugs, alias) {
+				return fmt.Errorf("local memory alias '%s' collides with a joined store of that slug", alias)
+			}
+		}
+		return atomicWrite(p, []byte(alias+"\n"))
+	})
+}
+
 // memoryJoinPaths resolves the state files every memory join touches and
 // rejects the reserved local slug; shared by the QUIC and broker paths.
 func memoryJoinPaths(slug, bindDir string) (memoriesPath, bindingsPath, managedTokenFile string, err error) {
-	if slug == config.LocalMemoryID {
-		return "", "", "", fmt.Errorf("slug '%s' is reserved for the local managed memory; join a host with a different first label", config.LocalMemoryID)
+	local, err := config.IsLocalMemoryName(slug)
+	if err != nil {
+		return "", "", "", err
+	}
+	if local {
+		return "", "", "", fmt.Errorf("slug '%s' is reserved for the local managed memory; join a host with a different first label", slug)
 	}
 	memoriesPath, err = config.StatePath("souls")
 	if err != nil {

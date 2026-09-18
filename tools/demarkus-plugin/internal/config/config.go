@@ -447,12 +447,50 @@ func QualifyTool(tool, server string) string {
 // norm makes "demarkus-memory" and "demarkus_memory" compare equal.
 func norm(s string) string { return strings.ToLower(strings.ReplaceAll(s, "-", "_")) }
 
-func serverIsLocalMemory(server string) bool {
+// LocalMemoryAliasFile holds the MCP server name a branded plugin registers the
+// local memory under (`mcp-serve --name`); registry.SetLocalMemoryAlias writes it.
+const LocalMemoryAliasFile = "local-memory-alias"
+
+// LocalMemoryAlias the recorded alias, or "" when the default name is in use.
+func LocalMemoryAlias() (string, error) {
+	p, err := path(LocalMemoryAliasFile)
+	if err != nil {
+		return "", err
+	}
+	return readTrimmed(p)
+}
+
+// IsLocalMemoryName reports whether slug names the local memory: the reserved
+// id or the alias a branded plugin registered.
+func IsLocalMemoryName(slug string) (bool, error) {
+	if norm(slug) == norm(LocalMemoryID) {
+		return true, nil
+	}
+	alias, err := LocalMemoryAlias()
+	if err != nil {
+		return false, err
+	}
+	return alias != "" && norm(slug) == norm(alias), nil
+}
+
+// serverMatches: the server itself, or "<plugin>_<id>" as Claude Code prefixes plugin servers.
+func serverMatches(n, id string) bool {
+	return n == norm(id) || strings.HasSuffix(n, "_"+norm(id))
+}
+
+func serverIsLocalMemory(server string) (bool, error) {
 	if server == "" {
-		return true // un-prefixed: assume the local memory
+		return true, nil // un-prefixed: assume the local memory
 	}
 	n := norm(server)
-	return n == norm(LocalMemoryID) || strings.HasSuffix(n, "_"+norm(LocalMemoryID))
+	if serverMatches(n, LocalMemoryID) {
+		return true, nil
+	}
+	alias, err := LocalMemoryAlias()
+	if err != nil || alias == "" {
+		return false, err
+	}
+	return serverMatches(n, alias), nil
 }
 
 // MemoryTargetID canonical id of the memory a tool writes to (for binding compare),
@@ -462,7 +500,11 @@ func MemoryTargetID(tool string) (string, error) {
 	if !ok {
 		return "", nil
 	}
-	if serverIsLocalMemory(pt.Server) {
+	local, err := serverIsLocalMemory(pt.Server)
+	if err != nil {
+		return "", err
+	}
+	if local {
 		return LocalMemoryID, nil
 	}
 	remotes, err := ListRemoteMemories()
@@ -484,7 +526,11 @@ func KnowledgeScope(tool string) (string, error) {
 	if !ok {
 		return "", nil
 	}
-	if serverIsLocalMemory(pt.Server) {
+	local, err := serverIsLocalMemory(pt.Server)
+	if err != nil {
+		return "", err
+	}
+	if local {
 		return "", nil
 	}
 	systems, err := ListKnowledgeSystems()

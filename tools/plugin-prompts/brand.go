@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -25,7 +26,12 @@ type brand struct {
 	KnowledgePluginName string `json:"knowledge_plugin_name"`
 	Store               string `json:"store_noun"`
 	Stores              string `json:"store_noun_plural"`
+	// MCPServerKey renames the memory MCP server (default "demarkus-memory"), so
+	// tools read mcp__plugin_<brand>_<key>__mark_*; mcp-serve --name tells the gates.
+	MCPServerKey string `json:"mcp_server_key"`
 }
+
+const defaultMCPServerKey = "demarkus-memory"
 
 const brandOutputPrefix = "plugins/brands/"
 
@@ -124,6 +130,14 @@ func validateBrands(spec *manifest) error {
 		if b.PluginName == base.PluginName {
 			return fmt.Errorf("brand %q: plugin_name %q is the base plugin's own name", b.Name, b.PluginName)
 		}
+		if b.MCPServerKey != "" {
+			if base.Surface != "memory" {
+				return fmt.Errorf("brand %q: mcp_server_key applies to memory bases only", b.Name)
+			}
+			if !pluginNameRE.MatchString(b.MCPServerKey) || b.MCPServerKey == defaultMCPServerKey {
+				return fmt.Errorf("brand %q: mcp_server_key must be lowercase letters, digits, and hyphens, other than %q", b.Name, defaultMCPServerKey)
+			}
+		}
 		if !strings.HasPrefix(b.Output, brandOutputPrefix) || hasParentTraversal(b.Output) {
 			return fmt.Errorf("brand %q: output must live under %s", b.Name, brandOutputPrefix)
 		}
@@ -171,6 +185,9 @@ func brandTarget(b *brand, base *target) *target {
 	case b.Stores != "":
 		t.Stores = b.Stores
 	}
+	if b.MCPServerKey != "" {
+		t.MCPServerKey = b.MCPServerKey
+	}
 	applyStoreDefaults(&t)
 	return &t
 }
@@ -207,16 +224,51 @@ func brandArtifacts(root string, b *brand, base, t *target) ([]artifact, error) 
 			return nil, fmt.Errorf("brand %s: copy %s: %w", b.Name, name, err)
 		}
 	}
-	manifest := filepath.FromSlash(brandLayouts[base.Harness].Manifest)
+	layout := brandLayouts[base.Harness]
+	if t.MCPServerKey != defaultMCPServerKey {
+		mcpPath := filepath.Join(outDir, filepath.FromSlash(layout.MCP))
+		i := slices.IndexFunc(out, func(a artifact) bool { return a.Path == mcpPath })
+		if i < 0 {
+			return nil, fmt.Errorf("brand %s: %s not copied from the base", b.Name, layout.MCP)
+		}
+		content, err := brandMCPConfig(out[i].Content, t.MCPServerKey)
+		if err != nil {
+			return nil, fmt.Errorf("brand %s: %s: %w", b.Name, layout.MCP, err)
+		}
+		out[i].Content = content
+	}
+	manifest := filepath.FromSlash(layout.Manifest)
 	pluginJSON, err := brandPluginJSON(filepath.Join(baseDir, manifest), base.PluginName, b)
 	if err != nil {
 		return nil, fmt.Errorf("brand %s: %w", b.Name, err)
 	}
 	out = append(out,
 		artifact{Path: filepath.Join(outDir, manifest), Content: pluginJSON, Target: t, Copied: true},
-		artifact{Path: filepath.Join(outDir, "README.md"), Content: []byte(brandReadme(b, base)), Target: t, Copied: true},
+		artifact{Path: filepath.Join(outDir, "README.md"), Content: []byte(brandReadme(b, base, t)), Target: t, Copied: true},
 	)
 	return out, nil
+}
+
+// brandMCPConfig renames the base MCP server entry to key and appends
+// `--name <key>` so mcp-serve records the alias the gates resolve.
+func brandMCPConfig(raw []byte, key string) ([]byte, error) {
+	var doc struct {
+		Servers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	entry, ok := doc.Servers[defaultMCPServerKey]
+	if !ok || len(doc.Servers) != 1 {
+		return nil, fmt.Errorf("expected exactly one MCP server named %q", defaultMCPServerKey)
+	}
+	args, _ := entry["args"].([]any)
+	entry["args"] = append(args, "--name", key)
+	out, err := json.MarshalIndent(map[string]any{"mcpServers": map[string]any{key: entry}}, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
 }
 
 var (
@@ -245,19 +297,19 @@ func brandPluginJSON(basePath, baseName string, b *brand) ([]byte, error) {
 	return []byte(text), nil
 }
 
-func brandReadme(b *brand, base *target) string {
+func brandReadme(b *brand, base, t *target) string {
 	return fmt.Sprintf(`# %s
 
 %s
 
 This plugin is generated from the %s plugin in the demarkus repository
 (source: %s). Prompts, hooks, and scripts are identical apart from the plugin
-name; it shares the demarkus-plugin binary, the "demarkus-memory" MCP server key,
-and the ~/.demarkus state, so install it instead of, not alongside, %s.
+name; it shares the demarkus-plugin binary, the local memory (MCP server key
+%q), and the ~/.demarkus state, so install it instead of, not alongside, %s.
 
 Regenerate from a demarkus checkout after editing the templates, the base
 plugin, or the brand entry:
 
     cd tools && go run ./plugin-prompts write [--brands <file>]
-`, b.PluginName, b.Description, base.PluginName, base.Output, base.PluginName)
+`, b.PluginName, b.Description, base.PluginName, base.Output, t.MCPServerKey, base.PluginName)
 }
