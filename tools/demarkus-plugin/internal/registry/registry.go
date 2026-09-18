@@ -725,9 +725,22 @@ func memoryJoinBroker(rawURL, token string, insecure bool, bindDir string) (*Mem
 var aliasSafe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // SetLocalMemoryAlias records the MCP server name a branded plugin serves the
-// local memory under (empty or the default id clears it). Rejects a name whose
-// tools would resolve to a joined memory or knowledge system.
-func SetLocalMemoryAlias(alias string) error {
+// local memory under (empty or the default id clears it), returning the value
+// stored; a name whose tools would resolve to a joined store is rejected.
+func SetLocalMemoryAlias(alias string) (string, error) {
+	if alias == config.LocalMemoryID {
+		alias = ""
+	}
+	return alias, setLocalMemoryAlias(alias, nil)
+}
+
+// RestoreLocalMemoryAlias puts previous back only while written is still the
+// stored alias, so a failed command never undoes a later command's record.
+func RestoreLocalMemoryAlias(previous, written string) error {
+	return setLocalMemoryAlias(previous, &written)
+}
+
+func setLocalMemoryAlias(alias string, onlyIfCurrent *string) error {
 	p, err := config.StatePath(config.LocalMemoryAliasFile)
 	if err != nil {
 		return err
@@ -740,9 +753,6 @@ func SetLocalMemoryAlias(alias string) error {
 	if err != nil {
 		return err
 	}
-	if alias == config.LocalMemoryID {
-		alias = ""
-	}
 	if alias != "" && !aliasSafe.MatchString(alias) {
 		return fmt.Errorf("local memory alias '%s': lowercase letters, digits, and hyphens only", alias)
 	}
@@ -751,7 +761,7 @@ func SetLocalMemoryAlias(alias string) error {
 	return withLock(memoriesPath, func() error {
 		return withLock(systemsPath, func() error {
 			current, err := config.LocalMemoryAlias()
-			if err != nil || current == alias {
+			if err != nil || current == alias || (onlyIfCurrent != nil && current != *onlyIfCurrent) {
 				return err
 			}
 			if alias == "" {
