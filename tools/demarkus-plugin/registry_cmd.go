@@ -585,16 +585,25 @@ func cmdMcpServe(args []string) {
 	// Record the alias last, once startup can no longer fail short of exec: a
 	// rejected name (one a joined store uses) must not start the server, and a
 	// persisted name without a running server would strand the gates.
-	previous, token := "", ""
+	previous, token, recorded := "", "", false
 	if *memory == "" {
-		if previous, token, err = registry.SetLocalMemoryAlias(*name); err != nil {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: record local memory alias: "+err.Error())
+		alias, err := config.LocalMemoryAlias()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: read local memory alias: "+err.Error())
 			os.Exit(1)
+		}
+		// An unbranded start with no alias on disk touches nothing: the default
+		// name needs no record, and the write path stays off for plain installs.
+		if recorded = *name != "" || alias != ""; recorded {
+			if previous, token, err = registry.SetLocalMemoryAlias(*name); err != nil {
+				fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: record local memory alias: "+err.Error())
+				os.Exit(1)
+			}
 		}
 	}
 	if err := syscall.Exec(mcpBin, argv, env); err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: exec failed: "+err.Error())
-		if *memory == "" {
+		if recorded {
 			// Only while our write is still the stored one: a later mcp-serve may have started.
 			if rerr := registry.RestoreLocalMemoryAlias(previous, token); rerr != nil {
 				fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: restore local memory alias: "+rerr.Error())
