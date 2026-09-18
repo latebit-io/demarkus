@@ -543,10 +543,11 @@ func cmdMcpServe(args []string) {
 		os.Exit(2)
 	}
 	if *memory == "" {
-		// Best effort on purpose: a failed record only means the gates see the
-		// tools as an unknown server; the memory itself must still start.
+		// A rejected name (e.g. one a joined store already uses) would route
+		// this server's writes to the wrong identity, so refuse to start.
 		if err := registry.SetLocalMemoryAlias(*name); err != nil {
 			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: record local memory alias: "+err.Error())
+			os.Exit(1)
 		}
 	}
 

@@ -280,6 +280,9 @@ func KnowledgeRegister(slug string) error {
 		if slices.Contains(rows, slug) {
 			return nil // already registered
 		}
+		if err := rejectLocalMemoryName(slug); err != nil {
+			return err
+		}
 		rows = append(rows, slug)
 		return atomicWrite(p, []byte(strings.Join(rows, "\n")+"\n"))
 	})
@@ -722,10 +725,18 @@ func memoryJoinBroker(rawURL, token string, insecure bool, bindDir string) (*Mem
 var aliasSafe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // SetLocalMemoryAlias records the MCP server name a branded plugin serves the
-// local memory under (empty or the default id clears it). Rejects a name that
-// would shadow a joined memory or knowledge system.
+// local memory under (empty or the default id clears it). Rejects a name whose
+// tools would resolve to a joined memory or knowledge system.
 func SetLocalMemoryAlias(alias string) error {
 	p, err := config.StatePath(config.LocalMemoryAliasFile)
+	if err != nil {
+		return err
+	}
+	memoriesPath, err := config.StatePath("souls")
+	if err != nil {
+		return err
+	}
+	systemsPath, err := config.StatePath("knowledge-systems")
 	if err != nil {
 		return err
 	}
@@ -735,40 +746,52 @@ func SetLocalMemoryAlias(alias string) error {
 	if alias != "" && !aliasSafe.MatchString(alias) {
 		return fmt.Errorf("local memory alias '%s': lowercase letters, digits, and hyphens only", alias)
 	}
-	return withLock(p, func() error {
-		current, err := config.LocalMemoryAlias()
-		if err != nil || current == alias {
-			return err
-		}
-		if alias == "" {
-			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+	// Under both catalog locks (memories, then knowledge) so a concurrent join
+	// or register cannot commit the same name; joins take memories first too.
+	return withLock(memoriesPath, func() error {
+		return withLock(systemsPath, func() error {
+			current, err := config.LocalMemoryAlias()
+			if err != nil || current == alias {
 				return err
 			}
-			return nil
-		}
-		for _, list := range []func() ([]string, error){config.ListRemoteMemories, config.ListKnowledgeSystems} {
-			slugs, err := list()
-			if err != nil {
-				return err
+			if alias == "" {
+				if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				return nil
 			}
-			if slices.Contains(slugs, alias) {
-				return fmt.Errorf("local memory alias '%s' collides with a joined store of that slug", alias)
+			for _, list := range []func() ([]string, error){config.ListRemoteMemories, config.ListKnowledgeSystems} {
+				slugs, err := list()
+				if err != nil {
+					return err
+				}
+				for _, slug := range slugs {
+					if config.ServerMatches(slug, alias) {
+						return fmt.Errorf("local memory alias '%s' would capture the joined store '%s'", alias, slug)
+					}
+				}
 			}
-		}
-		return atomicWrite(p, []byte(alias+"\n"))
+			return atomicWrite(p, []byte(alias+"\n"))
+		})
 	})
+}
+
+// rejectLocalMemoryName fails a catalog insert whose slug names the local
+// memory; called under the catalog lock so an alias write cannot interleave.
+func rejectLocalMemoryName(slug string) error {
+	local, err := config.IsLocalMemoryName(slug)
+	if err != nil {
+		return err
+	}
+	if local {
+		return fmt.Errorf("slug '%s' is reserved for the local managed memory; join a host with a different first label", slug)
+	}
+	return nil
 }
 
 // memoryJoinPaths resolves the state files every memory join touches and
 // rejects the reserved local slug; shared by the QUIC and broker paths.
 func memoryJoinPaths(slug, bindDir string) (memoriesPath, bindingsPath, managedTokenFile string, err error) {
-	local, err := config.IsLocalMemoryName(slug)
-	if err != nil {
-		return "", "", "", err
-	}
-	if local {
-		return "", "", "", fmt.Errorf("slug '%s' is reserved for the local managed memory; join a host with a different first label", slug)
-	}
 	memoriesPath, err = config.StatePath("souls")
 	if err != nil {
 		return "", "", "", err
@@ -812,6 +835,9 @@ func commitMemoryJoin(slug, host, token, tokenFile, managedTokenFile, bindDir, m
 }
 
 func prepareMemoryJoinMutations(slug, host, token, tokenFile, managedTokenFile, bindDir, memoriesPath, bindingsPath string, insecure bool) ([]stateMutation, string, error) {
+	if err := rejectLocalMemoryName(slug); err != nil {
+		return nil, "", err
+	}
 	existing, exists, err := RemoteMemoryRow(slug)
 	if err != nil {
 		return nil, "", err

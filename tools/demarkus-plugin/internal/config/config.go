@@ -473,8 +473,11 @@ func IsLocalMemoryName(slug string) (bool, error) {
 	return alias != "" && norm(slug) == norm(alias), nil
 }
 
-// serverMatches: the server itself, or "<plugin>_<id>" as Claude Code prefixes plugin servers.
-func serverMatches(n, id string) bool {
+// ServerMatches reports whether an MCP server name resolves to id: the name
+// itself, or "<plugin>_<id>" as Claude Code prefixes plugin servers. Hyphens
+// and underscores compare equal.
+func ServerMatches(server, id string) bool {
+	n := norm(server)
 	return n == norm(id) || strings.HasSuffix(n, "_"+norm(id))
 }
 
@@ -482,15 +485,14 @@ func serverIsLocalMemory(server string) (bool, error) {
 	if server == "" {
 		return true, nil // un-prefixed: assume the local memory
 	}
-	n := norm(server)
-	if serverMatches(n, LocalMemoryID) {
+	if ServerMatches(server, LocalMemoryID) {
 		return true, nil
 	}
 	alias, err := LocalMemoryAlias()
 	if err != nil || alias == "" {
 		return false, err
 	}
-	return serverMatches(n, alias), nil
+	return ServerMatches(server, alias), nil
 }
 
 // MemoryTargetID canonical id of the memory a tool writes to (for binding compare),

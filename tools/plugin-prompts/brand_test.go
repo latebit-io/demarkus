@@ -211,8 +211,15 @@ func TestBrandMCPConfigRenamesServerAndPassesName(t *testing.T) {
 	if entry.Command != "${HOME}/.demarkus/bin/demarkus-plugin" || strings.Join(entry.Args, " ") != "mcp-serve --name memory" {
 		t.Fatalf("entry = %+v", entry)
 	}
-	if _, err := brandMCPConfig([]byte(`{"mcpServers": {"other": {}}}`), "memory"); err == nil {
-		t.Fatal("unexpected server name should fail")
+	for name, raw := range map[string]string{
+		"other server":  `{"mcpServers": {"other": {}}}`,
+		"null entry":    `{"mcpServers": {"demarkus-memory": null}}`,
+		"args missing":  `{"mcpServers": {"demarkus-memory": {"command": "x"}}}`,
+		"args not list": `{"mcpServers": {"demarkus-memory": {"command": "x", "args": "mcp-serve"}}}`,
+	} {
+		if _, err := brandMCPConfig([]byte(raw), "memory"); err == nil {
+			t.Fatalf("%s: expected an error", name)
+		}
 	}
 }
 

@@ -262,7 +262,13 @@ func brandMCPConfig(raw []byte, key string) ([]byte, error) {
 	if !ok || len(doc.Servers) != 1 {
 		return nil, fmt.Errorf("expected exactly one MCP server named %q", defaultMCPServerKey)
 	}
-	args, _ := entry["args"].([]any)
+	if entry == nil {
+		return nil, fmt.Errorf("MCP server %q must be an object", defaultMCPServerKey)
+	}
+	args, ok := entry["args"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("MCP server %q must have an args array", defaultMCPServerKey)
+	}
 	entry["args"] = append(args, "--name", key)
 	out, err := json.MarshalIndent(map[string]any{"mcpServers": map[string]any{key: entry}}, "", "  ")
 	if err != nil {

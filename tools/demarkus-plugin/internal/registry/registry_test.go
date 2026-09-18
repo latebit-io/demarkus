@@ -216,11 +216,14 @@ func TestMemoryJoinAndCollision(t *testing.T) {
 	if _, err := MemoryJoin("brain.example.com", "", false, ""); err == nil {
 		t.Error("expected alias-slug rejection")
 	}
+	if err := KnowledgeRegister("brain"); err == nil {
+		t.Error("expected alias-slug rejection on knowledge register")
+	}
 }
 
 func TestSetLocalMemoryAlias(t *testing.T) {
 	home := setupHome(t)
-	if err := os.WriteFile(filepath.Join(home, ".demarkus", "knowledge-systems"), []byte("corp\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "knowledge-systems"), []byte("corp\nacme-memory\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -228,11 +231,12 @@ func TestSetLocalMemoryAlias(t *testing.T) {
 		wantErr           bool
 	}{
 		{name: "collides with knowledge system", alias: "corp", wantErr: true},
+		{name: "captures a plugin-prefixed store", alias: "memory", wantErr: true},
 		{name: "bad characters", alias: "Bad Name", wantErr: true},
-		{name: "records", alias: "memory", want: "memory"},
-		{name: "unchanged", alias: "memory", want: "memory"},
+		{name: "records", alias: "brain", want: "brain"},
+		{name: "unchanged", alias: "brain", want: "brain"},
 		{name: "default id clears", alias: config.LocalMemoryID, want: ""},
-		{name: "records again", alias: "brain", want: "brain"},
+		{name: "records again", alias: "vault", want: "vault"},
 		{name: "empty clears", alias: "", want: ""},
 	}
 	for _, tt := range tests {
