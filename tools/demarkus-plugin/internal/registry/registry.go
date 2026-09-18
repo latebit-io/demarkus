@@ -793,9 +793,19 @@ func setLocalMemoryAlias(alias, onlyIfToken string) (previous, token string, err
 						return err
 					}
 					for _, slug := range slugs {
-						if config.ServerMatches(slug, alias) {
-							return fmt.Errorf("local memory alias '%s' would capture the joined store '%s'", alias, slug)
+						if !config.ServerMatches(slug, alias) {
+							continue
 						}
+						taken := fmt.Errorf("local memory alias '%s' would capture the joined store '%s'", alias, slug)
+						if onlyIfToken == "" {
+							return taken
+						}
+						// A restore whose value was joined meanwhile must still retire
+						// our own record: no server runs under it.
+						if err := atomicWrite(p, []byte(token+" \n")); err != nil {
+							return err
+						}
+						return fmt.Errorf("alias cleared instead: %w", taken)
 					}
 				}
 			}

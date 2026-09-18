@@ -321,6 +321,28 @@ func TestRestoreLocalMemoryAliasOnlyForOwnWrite(t *testing.T) {
 	if got := storedAlias(t); got != "beta" {
 		t.Fatalf("alias = %q, want C's beta kept", got)
 	}
+	// the previous value was joined as a store meanwhile: the owned record is
+	// cleared rather than left pointing at a server that never started
+	tokD := set("delta")
+	if err := KnowledgeRegister("beta"); err != nil {
+		t.Fatal(err)
+	}
+	err := RestoreLocalMemoryAlias("beta", tokD)
+	if err == nil || !strings.Contains(err.Error(), "alias cleared instead") {
+		t.Fatalf("restore onto a joined name: err = %v", err)
+	}
+	if got := storedAlias(t); got != "" {
+		t.Fatalf("alias = %q, want cleared", got)
+	}
+	// same collision, but a later server owns the record: untouched
+	storedAliasBefore = ""
+	set("epsilon")
+	if err := RestoreLocalMemoryAlias("beta", tokD); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedAlias(t); got != "epsilon" {
+		t.Fatalf("alias = %q, want epsilon kept", got)
+	}
 }
 
 func TestMemoryJoinRollsBackBindingFailure(t *testing.T) {
