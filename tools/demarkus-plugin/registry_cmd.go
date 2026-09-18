@@ -542,15 +542,6 @@ func cmdMcpServe(args []string) {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: -name applies to the local managed memory only")
 		os.Exit(2)
 	}
-	if *memory == "" {
-		// A rejected name (e.g. one a joined store already uses) would route
-		// this server's writes to the wrong identity, so refuse to start.
-		if err := registry.SetLocalMemoryAlias(*name); err != nil {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: record local memory alias: "+err.Error())
-			os.Exit(1)
-		}
-	}
-
 	binDir, err := config.StatePath("bin")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: "+err.Error())
@@ -590,8 +581,28 @@ func cmdMcpServe(args []string) {
 		argv = append(argv, "-insecure")
 	}
 	argv = append(argv, fs.Args()...) // forward any extra args the harness appends
+
+	// Record the alias last, once startup can no longer fail short of exec: a
+	// rejected name (one a joined store uses) must not start the server, and a
+	// persisted name without a running server would strand the gates.
+	previous := ""
+	if *memory == "" {
+		if previous, err = config.LocalMemoryAlias(); err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: read local memory alias: "+err.Error())
+			os.Exit(1)
+		}
+		if err := registry.SetLocalMemoryAlias(*name); err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: record local memory alias: "+err.Error())
+			os.Exit(1)
+		}
+	}
 	if err := syscall.Exec(mcpBin, argv, env); err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: exec failed: "+err.Error())
+		if *memory == "" {
+			if rerr := registry.SetLocalMemoryAlias(previous); rerr != nil {
+				fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: restore local memory alias: "+rerr.Error())
+			}
+		}
 		os.Exit(1)
 	}
 }
