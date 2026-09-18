@@ -16,6 +16,8 @@ func TestDecodeBrandsFileIsStrict(t *testing.T) {
 		{name: "unknown field", raw: `{"brands": [], "targets": []}`, want: "unknown field"},
 		{name: "trailing value", raw: `{"brands": []} {}`, want: "trailing"},
 		{name: "array root", raw: `[]`, want: "cannot unmarshal"},
+		{name: "null brands", raw: `{"brands": null}`, want: "must be an array"},
+		{name: "missing brands", raw: `{}`, want: "must be an array"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

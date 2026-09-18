@@ -62,6 +62,10 @@ func decodeBrandsFile(raw []byte) (brandsFile, error) {
 		}
 		return brandsFile{}, err
 	}
+	// A missing or null list would read as "remove every brand" downstream.
+	if spec.Brands == nil {
+		return brandsFile{}, errors.New(`"brands" must be an array`)
+	}
 	return spec, nil
 }
 

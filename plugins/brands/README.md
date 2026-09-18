@@ -109,20 +109,28 @@ git -C "$up" fetch -q origin && git -C "$up" checkout -q "$(cat "$here/upstream.
 git -C "$up" clean -qfdx -- plugins/brands   # drop brands from earlier runs
 (cd "$up/tools" && go run ./plugin-prompts write --brands "$here/brands.json" && go run ./plugin-prompts check --brands "$here/brands.json")
 cd "$repo"
+# preflight: every generated harness needs its marketplace file before anything is deleted
+for manifest in "$up"/plugins/brands/*/.claude-plugin/plugin.json "$up"/plugins/brands/*/.cursor-plugin/plugin.json; do
+  m="$(basename "$(dirname "$manifest")")/marketplace.json"
+  [ -f "$m" ] || { echo "regen: $m missing, needed by $manifest" >&2; exit 1; }
+done
 find demarkus-plugins -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
-for harness in claude cursor; do
-  m=".$harness-plugin/marketplace.json"; [ -f "$m" ] || continue
+for m in .claude-plugin/marketplace.json .cursor-plugin/marketplace.json; do
+  [ -f "$m" ] || continue
   # source may be an object (Cursor); only string sources under demarkus-plugins/ are ours
-  jq '.plugins |= map(select(((.source | strings | startswith("./demarkus-plugins/")) // false) | not))' "$m" > "$m.tmp" && mv "$m.tmp" "$m"
+  jq '.plugins |= map(select(((.source | strings | startswith("./demarkus-plugins/")) // false) | not))' "$m" > "$m.tmp"
+  mv "$m.tmp" "$m"
 done
 for dir in "$up"/plugins/brands/*/; do
-  name=$(basename "$dir") && cp -R "$dir" "demarkus-plugins/$name"
-  for harness in claude cursor; do
-    manifest="demarkus-plugins/$name/.$harness-plugin/plugin.json"; [ -f "$manifest" ] || continue
-    m=".$harness-plugin/marketplace.json"
+  name=$(basename "$dir")
+  cp -R "$dir" "demarkus-plugins/$name"
+  for manifest in "demarkus-plugins/$name"/.claude-plugin/plugin.json "demarkus-plugins/$name"/.cursor-plugin/plugin.json; do
+    [ -f "$manifest" ] || continue
+    m="$(basename "$(dirname "$manifest")")/marketplace.json"
     jq --arg src "./demarkus-plugins/$name" --slurpfile p "$manifest" \
       '.plugins += [{name: $p[0].name, source: $src, description: $p[0].description, version: $p[0].version}]' \
-      "$m" > "$m.tmp" && mv "$m.tmp" "$m"
+      "$m" > "$m.tmp"
+    mv "$m.tmp" "$m"
   done
 done
 ```
