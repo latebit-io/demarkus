@@ -9,17 +9,20 @@ BIN_DIR="${HOME}/.demarkus/bin"
 BIN="${BIN_DIR}/demarkus-plugin"
 
 # An MCP command has no runtime timeout, so a hung step would hang the server
-# start. Pure bash: macOS ships no timeout(1). The dog's stdio is detached so
-# its orphaned sleep never holds the MCP pipe.
+# start. Pure bash: macOS ships no timeout(1). set -m gives each job its own
+# process group, so the kill reaches children (curl, demarkus-token) too.
 bounded() {
   local secs="$1" rc=0 pid dog
   shift
-  "$@" &
+  set -m
+  # Job control skips the usual /dev/null stdin; keep jobs off the MCP pipe.
+  "$@" </dev/null &
   pid=$!
-  ( sleep "${secs}"; kill "${pid}" 2>/dev/null ) >/dev/null 2>&1 &
+  ( sleep "${secs}"; kill -- "-${pid}" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
   dog=$!
+  set +m
   wait "${pid}" || rc=$?
-  kill "${dog}" 2>/dev/null || true
+  kill -- "-${dog}" 2>/dev/null || true
   return "${rc}"
 }
 
