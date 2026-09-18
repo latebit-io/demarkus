@@ -5,7 +5,7 @@
       { "command": "./hooks/session-start.sh", "timeout": 600 }
     ],
     "beforeMCPExecution": [
-      { "command": "./hooks/gate.sh", "matcher": "mark_publish|mark_append", "timeout": 20 }
+      { "command": "./hooks/gate.sh", "matcher": "mark_publish|mark_append", "timeout": 20, "failClosed": true }
     ]
   }
 }

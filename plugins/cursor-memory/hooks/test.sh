@@ -11,7 +11,8 @@ cat > "${HOME}/.demarkus/bin/demarkus-plugin" <<FAKE
 printf '%s\n' "\$*" >> "${CALLS}"
 in="\$(cat)"
 case "\$1" in
-  gate) echo '{"permission":"allow","agent_message":"warned"}' ;;
+  gate) [[ -z "\${FAKE_GATE_CRASH:-}" ]] || exit 3
+        echo '{"permission":"allow","agent_message":"warned"}' ;;
   nudge) case "\$*" in *session-end*) echo '{"followup_message":"journal?"}' ;; *) echo '{"permission":"allow","agent_message":"promote?"}' ;; esac ;;
   guidance) echo '{"additional_context":"guidance"}' ;;
 esac
@@ -56,9 +57,18 @@ out="$(echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish"}
 [[ "${out}" == '{"permission":"allow","agent_message":"promote?"}' ]] || fail "promote output: ${out}"
 grep -q '^nudge --event promote --format cursor$' "${CALLS}" || fail "promote flags wrong"
 
-# every shim fails open without the binary
+# a crashing binary denies: exit 2, diagnostic on stderr
+err="${HOME}/gate.err"
+rc=0
+echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish"}' | FAKE_GATE_CRASH=1 bash "${HERE}/gate.sh" >/dev/null 2>"${err}" || rc=$?
+[[ "${rc}" -eq 2 ]] || fail "gate should exit 2 when the binary crashes, got ${rc}"
+grep -q 'gate crashed (exit 3)' "${err}" || fail "gate should log the crash on stderr: $(cat "${err}")"
+
+# every shim fails open without the binary; the failClosed gate says allow out loud
 rm "${HOME}/.demarkus/bin/demarkus-plugin"
-for s in gate promote-nudge stop-nudge; do
+out="$(echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish"}' | bash "${HERE}/gate.sh" 2>/dev/null)" || fail "gate exited non-zero without the binary"
+[[ "${out}" == '{"permission":"allow"}' ]] || fail "gate should print an explicit allow without the binary: ${out}"
+for s in promote-nudge stop-nudge; do
   out="$(echo '{"hook_event_name":"x","conversation_id":"c","status":"completed"}' | bash "${HERE}/${s}.sh")" || fail "${s} exited non-zero without the binary"
   [[ -z "${out}" ]] || fail "${s} should be silent without the binary"
 done

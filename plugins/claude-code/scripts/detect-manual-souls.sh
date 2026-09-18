@@ -5,7 +5,8 @@
 # A "manual memory" is an MCP server that invokes demarkus-mcp DIRECTLY against a
 # remote mark:// host, i.e. a memory wired by editing .mcp.json by hand, with its
 # token sitting inline in the config (and in `claude mcp list` output). Entries
-# that go through our launch wrappers (soul-remote-wrapper.sh / mcp-wrapper.sh)
+# that go through our launch wrappers (memory-remote-wrapper.sh, its pre-rename
+# name soul-remote-wrapper.sh, or mcp-wrapper.sh)
 # are already managed and are NOT reported.
 #
 # Output:
@@ -35,6 +36,7 @@ LIST="$(claude mcp list 2>/dev/null || true)"
 ROWS="$(printf '%s\n' "${LIST}" | awk '
   # Skip our managed wrappers and the local-memory wrapper outright.
   /memory-remote-wrapper\.sh/ { next }
+  /soul-remote-wrapper\.sh/   { next }
   /mcp-wrapper\.sh/         { next }
   # Must invoke demarkus-mcp directly against a remote mark:// host.
   /demarkus-mcp/ && /mark:\/\// {

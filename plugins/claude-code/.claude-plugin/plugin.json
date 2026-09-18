@@ -14,7 +14,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh",
+            "timeout": 900
           }
         ]
       }
@@ -25,7 +26,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-pre.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-pre.sh",
+            "timeout": 20
           }
         ]
       }
@@ -36,7 +38,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-post.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-post.sh",
+            "timeout": 20
           }
         ]
       },
@@ -45,7 +48,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/promote-nudge.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/promote-nudge.sh",
+            "timeout": 10
           }
         ]
       }
@@ -55,7 +59,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-journal-nudge.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-journal-nudge.sh",
+            "timeout": 10
           }
         ]
       }
@@ -65,7 +70,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/recall-nudge.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/recall-nudge.sh",
+            "timeout": 10
           }
         ]
       }

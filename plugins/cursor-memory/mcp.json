@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "demarkus-memory": {
-      "command": "${userHome}/.demarkus/bin/demarkus-plugin",
+      "command": "${CURSOR_PLUGIN_ROOT}/scripts/mcp-launch.sh",
       "args": ["mcp-serve"]
     }
   }

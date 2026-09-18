@@ -8,7 +8,7 @@
       { "command": "./hooks/mark-activity.sh", "timeout": 10 }
     ],
     "beforeMCPExecution": [
-      { "command": "./hooks/gate.sh", "matcher": "mark_publish|mark_append", "timeout": 20 },
+      { "command": "./hooks/gate.sh", "matcher": "mark_publish|mark_append", "timeout": 20, "failClosed": true },
       { "command": "./hooks/promote-nudge.sh", "matcher": "mark_publish", "timeout": 20 }
     ],
     "afterMCPExecution": [

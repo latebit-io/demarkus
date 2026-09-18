@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MCP launcher (memory). Claude Code connects MCP servers while the SessionStart
+# MCP launcher (memory). Cursor connects MCP servers while the sessionStart
 # hook is still bootstrapping, so a clean or freshly re-pinned machine would exec
 # a missing or stale binary. Install first; stdout stays clean for MCP stdio.
 set -euo pipefail

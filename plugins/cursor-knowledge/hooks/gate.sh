@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# beforeMCPExecution gate adapter (knowledge). Gate logic lives in the shared
-# demarkus-plugin binary; this pipes Cursor's payload through and prints its
-# permission verdict. Fails open (no output, stderr diagnostic) when the binary is absent.
+# beforeMCPExecution gate adapter. Gate logic lives in the shared demarkus-plugin
+# binary; this pipes Cursor's payload through and prints its permission verdict.
 set -uo pipefail
 BIN="${HOME}/.demarkus/bin/demarkus-plugin"
-[ -x "${BIN}" ] || { echo "[demarkus-knowledge] ${BIN} missing (bootstrap not run yet?); allowing the write (fail-open)" >&2; exit 0; }
-"${BIN}" gate --format cursor || { echo "[demarkus-knowledge] gate exited $?; allowing the write (fail-open)" >&2; exit 0; }
+# Absent binary fails open, with an explicit allow: the hook is failClosed, so
+# empty output is not a safe verdict.
+[ -x "${BIN}" ] || { echo "[demarkus-knowledge] ${BIN} missing (bootstrap not run yet?); allowing the write" >&2; echo '{"permission":"allow"}'; exit 0; }
+# The binary exits 0 on its own internal errors, so non-zero is a crash or a
+# broken install. Exit 2 denies: enforcement must not vanish silently.
+"${BIN}" gate --format cursor || { rc=$?; echo "[demarkus-knowledge] gate crashed (exit ${rc}); write blocked. Retry, or reinstall ${BIN}" >&2; exit 2; }

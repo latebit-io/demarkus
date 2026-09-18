@@ -14,7 +14,8 @@ printf '%s\n' "\$*" >> "${CALLS}"
 in="\$(cat)"
 case "\$1" in
   version) echo "${PIN}" ;;
-  gate) echo '{"permission":"deny","user_message":"tags","agent_message":"tags"}' ;;
+  gate) [[ -z "\${FAKE_GATE_CRASH:-}" ]] || exit 3
+        echo '{"permission":"deny","user_message":"tags","agent_message":"tags"}' ;;
   guidance) echo '{"additional_context":"guidance"}' ;;
 esac
 FAKE
@@ -31,10 +32,16 @@ out="$(echo '{"hook_event_name":"sessionStart","conversation_id":"c"}' | bash "$
 [[ "${out}" == '{"additional_context":"guidance"}' ]] || fail "session-start output: ${out}"
 grep -q -- "^guidance --surface knowledge --guidance-file ${HERE}/../context/session-guidance.md --format cursor$" "${CALLS}" || fail "guidance flags wrong: $(cat "${CALLS}")"
 
-# gate fails open without the binary: empty stdout, diagnostic on stderr
-rm "${HOME}/.demarkus/bin/demarkus-plugin"
+# a crashing binary denies: exit 2, diagnostic on stderr
 err="${HOME}/gate.err"
+rc=0
+echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish"}' | FAKE_GATE_CRASH=1 bash "${HERE}/gate.sh" >/dev/null 2>"${err}" || rc=$?
+[[ "${rc}" -eq 2 ]] || fail "gate should exit 2 when the binary crashes, got ${rc}"
+grep -q 'gate crashed (exit 3)' "${err}" || fail "gate should log the crash on stderr: $(cat "${err}")"
+
+# gate fails open without the binary: explicit allow, diagnostic on stderr
+rm "${HOME}/.demarkus/bin/demarkus-plugin"
 out="$(echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish"}' | bash "${HERE}/gate.sh" 2>"${err}")" || fail "gate exited non-zero without the binary"
-[[ -z "${out}" ]] || fail "gate stdout should be empty without the binary: ${out}"
+[[ "${out}" == '{"permission":"allow"}' ]] || fail "gate should print an explicit allow without the binary: ${out}"
 grep -q 'demarkus-plugin missing' "${err}" || fail "gate should log the missing binary on stderr: $(cat "${err}")"
 echo "cursor-knowledge hooks: OK"
