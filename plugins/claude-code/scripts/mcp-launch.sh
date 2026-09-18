@@ -11,6 +11,13 @@ BIN="${BIN_DIR}/demarkus-plugin"
 # An MCP command has no runtime timeout, so a hung step would hang the server
 # start. Pure bash: macOS ships no timeout(1). set -m gives each job its own
 # process group, so the kill reaches children (curl, demarkus-token) too.
+# Signal a job's process group. A group already gone is the normal case, so
+# only a failure against a live group is logged.
+killgroup() {
+  kill -0 -- "-$2" 2>/dev/null || return 0
+  kill "-$1" -- "-$2" || echo "[demarkus-memory] kill -$1 of process group $2 failed" >&2
+}
+
 bounded() {
   local secs="$1" rc=0 pid dog
   shift
@@ -19,13 +26,13 @@ bounded() {
   "$@" </dev/null &
   pid=$!
   # TERM, a short grace, then KILL: a leader ignoring TERM would block the wait.
-  ( sleep "${secs}"; kill -TERM -- "-${pid}"; sleep 5; kill -KILL -- "-${pid}" ) </dev/null >/dev/null 2>&1 &
+  ( sleep "${secs}"; killgroup TERM "${pid}"; sleep 5; killgroup KILL "${pid}" ) </dev/null >/dev/null &
   dog=$!
   set +m
   wait "${pid}" || rc=$?
-  kill -- "-${dog}" 2>/dev/null || true
+  killgroup TERM "${dog}"
   # Leader died by signal: sweep group members that ignored the TERM.
-  [[ "${rc}" -le 128 ]] || kill -KILL -- "-${pid}" 2>/dev/null || true
+  [[ "${rc}" -le 128 ]] || killgroup KILL "${pid}"
   return "${rc}"
 }
 
