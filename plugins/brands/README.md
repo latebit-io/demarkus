@@ -102,6 +102,7 @@ The script, `demarkus-plugins/regen.sh`; Go and jq are the only tools:
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd) && repo=$(dirname "$here")
 up=${DEMARKUS_SRC:-$HOME/src/demarkus}
+mkdir -p "$(dirname "$up")"
 [ -d "$up/.git" ] || git clone https://github.com/latebit-io/demarkus "$up"
 git -C "$up" fetch -q origin && git -C "$up" checkout -q "$(cat "$here/upstream.ref")"
 (cd "$up/tools" && go run ./plugin-prompts write --brands "$here/brands.json" && go run ./plugin-prompts check --brands "$here/brands.json")
@@ -109,7 +110,8 @@ cd "$repo"
 find demarkus-plugins -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
 for harness in claude cursor; do
   m=".$harness-plugin/marketplace.json"; [ -f "$m" ] || continue
-  jq '.plugins |= map(select(.source | startswith("./demarkus-plugins/") | not))' "$m" > "$m.tmp" && mv "$m.tmp" "$m"
+  # source may be an object (Cursor); only string sources under demarkus-plugins/ are ours
+  jq '.plugins |= map(select(((.source | strings | startswith("./demarkus-plugins/")) // false) | not))' "$m" > "$m.tmp" && mv "$m.tmp" "$m"
 done
 for dir in "$up"/plugins/brands/*/; do
   name=$(basename "$dir") && cp -R "$dir" "demarkus-plugins/$name"
