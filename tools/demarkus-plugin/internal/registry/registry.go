@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -725,71 +727,88 @@ func memoryJoinBroker(rawURL, token string, insecure bool, bindDir string) (*Mem
 var aliasSafe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // SetLocalMemoryAlias records the MCP server name a branded plugin serves the
-// local memory under (empty or the default id clears it), returning the value
-// stored; a name whose tools would resolve to a joined store is rejected.
-func SetLocalMemoryAlias(alias string) (string, error) {
+// local memory under (empty or the default id: the default name), returning the
+// replaced alias and this write's token for RestoreLocalMemoryAlias.
+func SetLocalMemoryAlias(alias string) (previous, token string, err error) {
 	if alias == config.LocalMemoryID {
 		alias = ""
 	}
-	return alias, setLocalMemoryAlias(alias, nil)
+	return setLocalMemoryAlias(alias, "")
 }
 
-// RestoreLocalMemoryAlias puts previous back only while written is still the
-// stored alias, so a failed command never undoes a later command's record.
-func RestoreLocalMemoryAlias(previous, written string) error {
-	return setLocalMemoryAlias(previous, &written)
+// RestoreLocalMemoryAlias puts previous back only while token still identifies
+// the stored write, so a failed command never undoes a later command's record.
+func RestoreLocalMemoryAlias(previous, token string) error {
+	_, _, err := setLocalMemoryAlias(previous, token)
+	return err
 }
 
-func setLocalMemoryAlias(alias string, onlyIfCurrent *string) error {
+func newWriteToken() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("write token: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// setLocalMemoryAlias writes "<token> <alias>" and returns the alias it
+// replaced; a non-empty onlyIfToken makes the write conditional on that token
+// still being the stored one.
+func setLocalMemoryAlias(alias, onlyIfToken string) (previous, token string, err error) {
 	p, err := config.StatePath(config.LocalMemoryAliasFile)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	memoriesPath, err := config.StatePath("souls")
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	systemsPath, err := config.StatePath("knowledge-systems")
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	if alias != "" && !aliasSafe.MatchString(alias) {
-		return fmt.Errorf("local memory alias '%s': lowercase letters, digits, and hyphens only", alias)
+		return "", "", fmt.Errorf("local memory alias '%s': lowercase letters, digits, and hyphens only", alias)
+	}
+	token, err = newWriteToken()
+	if err != nil {
+		return "", "", err
 	}
 	// Under both catalog locks (memories, then knowledge) so a concurrent join
 	// or register cannot commit the same name; joins take memories first too.
-	return withLock(memoriesPath, func() error {
+	err = withLock(memoriesPath, func() error {
 		return withLock(systemsPath, func() error {
-			current, err := config.LocalMemoryAlias()
-			if err != nil || current == alias || (onlyIfCurrent != nil && current != *onlyIfCurrent) {
+			current, currentToken, err := config.LocalMemoryAliasRecord()
+			if err != nil {
 				return err
 			}
-			if alias == "" {
-				if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-					return err
-				}
+			if onlyIfToken != "" && currentToken != onlyIfToken {
 				return nil
 			}
-			for _, list := range []func() ([]string, error){config.ListRemoteMemories, config.ListKnowledgeSystems} {
-				slugs, err := list()
-				if err != nil {
-					return err
-				}
-				for _, slug := range slugs {
-					if config.ServerMatches(slug, alias) {
-						return fmt.Errorf("local memory alias '%s' would capture the joined store '%s'", alias, slug)
+			previous = current
+			if alias != "" {
+				for _, list := range []func() ([]string, error){config.ListRemoteMemories, config.ListKnowledgeSystems} {
+					slugs, err := list()
+					if err != nil {
+						return err
+					}
+					for _, slug := range slugs {
+						if config.ServerMatches(slug, alias) {
+							return fmt.Errorf("local memory alias '%s' would capture the joined store '%s'", alias, slug)
+						}
 					}
 				}
 			}
-			return atomicWrite(p, []byte(alias+"\n"))
+			return atomicWrite(p, []byte(token+" "+alias+"\n"))
 		})
 	})
+	return previous, token, err
 }
 
-// rejectLocalMemoryName fails a catalog insert whose slug names the local
-// memory; called under the catalog lock so an alias write cannot interleave.
+// rejectLocalMemoryName fails a catalog insert whose slug would route to the
+// local memory; called under the catalog lock so an alias write cannot interleave.
 func rejectLocalMemoryName(slug string) error {
-	local, err := config.IsLocalMemoryName(slug)
+	local, err := config.ResolvesToLocalMemory(slug)
 	if err != nil {
 		return err
 	}

@@ -210,7 +210,7 @@ func TestMemoryJoinAndCollision(t *testing.T) {
 		t.Error("expected reserved-slug rejection")
 	}
 	// the branded MCP server name is reserved too
-	if _, err := SetLocalMemoryAlias("brain"); err != nil {
+	if _, _, err := SetLocalMemoryAlias("brain"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := MemoryJoin("brain.example.com", "", false, ""); err == nil {
@@ -218,6 +218,16 @@ func TestMemoryJoinAndCollision(t *testing.T) {
 	}
 	if err := KnowledgeRegister("brain"); err == nil {
 		t.Error("expected alias-slug rejection on knowledge register")
+	}
+	// a slug the routing predicate would read as "<plugin>_<alias>" is reserved too
+	if _, _, err := SetLocalMemoryAlias("memory"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MemoryJoin("acme-memory.example.com", "", false, ""); err == nil {
+		t.Error("expected plugin-prefixed alias rejection on join")
+	}
+	if err := KnowledgeRegister("acme-memory"); err == nil {
+		t.Error("expected plugin-prefixed alias rejection on knowledge register")
 	}
 }
 
@@ -241,42 +251,75 @@ func TestSetLocalMemoryAlias(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stored, err := SetLocalMemoryAlias(tt.alias)
+			_, token, err := SetLocalMemoryAlias(tt.alias)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
 			if tt.wantErr {
 				return
 			}
-			got, err := config.LocalMemoryAlias()
-			if err != nil || got != tt.want || stored != tt.want {
-				t.Fatalf("stored alias = %q (returned %q), %v; want %q", got, stored, err, tt.want)
+			alias, stored, err := config.LocalMemoryAliasRecord()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if alias != tt.want || token == "" || stored != token {
+				t.Fatalf("record = %q %q, returned token %q; want alias %q", alias, stored, token, tt.want)
 			}
 		})
 	}
 }
 
-func TestRestoreLocalMemoryAliasOnlyWhenStillOwned(t *testing.T) {
+func storedAlias(t *testing.T) string {
+	t.Helper()
+	alias, err := config.LocalMemoryAlias()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return alias
+}
+
+func TestRestoreLocalMemoryAliasOnlyForOwnWrite(t *testing.T) {
 	setupHome(t)
-	if _, err := SetLocalMemoryAlias("alpha"); err != nil {
-		t.Fatal(err)
+	storedAliasBefore := ""
+	set := func(alias string) string {
+		t.Helper()
+		previous, token, err := SetLocalMemoryAlias(alias)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// the replaced alias is observed under the lock, so restore never uses a stale read
+		if want := storedAliasBefore; previous != want {
+			t.Fatalf("set(%q): previous = %q, want %q", alias, previous, want)
+		}
+		storedAliasBefore = alias
+		return token
 	}
-	if _, err := SetLocalMemoryAlias("beta"); err != nil {
-		t.Fatal(err)
+	restore := func(previous, token string) {
+		t.Helper()
+		if err := RestoreLocalMemoryAlias(previous, token); err != nil {
+			t.Fatal(err)
+		}
+		storedAliasBefore = storedAlias(t)
 	}
-	// command A (wrote alpha) fails after command B recorded beta: no rollback
-	if err := RestoreLocalMemoryAlias("", "alpha"); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := config.LocalMemoryAlias(); got != "beta" {
+	tokA := set("alpha")
+	tokB := set("beta")
+	// command A fails after B recorded: no rollback
+	restore("", tokA)
+	if got := storedAlias(t); got != "beta" {
 		t.Fatalf("alias = %q, want beta kept", got)
 	}
-	// command B fails: its own record is rolled back to what it saw
-	if err := RestoreLocalMemoryAlias("alpha", "beta"); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := config.LocalMemoryAlias(); got != "alpha" {
+	// B fails: its own write is rolled back to what it saw
+	restore("alpha", tokB)
+	if got := storedAlias(t); got != "alpha" {
 		t.Fatalf("alias = %q, want alpha restored", got)
+	}
+	// ABA: C re-records the value A wrote; A's rollback must not touch C's write
+	tokA = set("beta")
+	set("gamma")
+	set("beta")
+	restore("alpha", tokA)
+	if got := storedAlias(t); got != "beta" {
+		t.Fatalf("alias = %q, want C's beta kept", got)
 	}
 }
 

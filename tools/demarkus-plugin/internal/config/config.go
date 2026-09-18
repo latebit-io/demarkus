@@ -447,30 +447,33 @@ func QualifyTool(tool, server string) string {
 // norm makes "demarkus-memory" and "demarkus_memory" compare equal.
 func norm(s string) string { return strings.ToLower(strings.ReplaceAll(s, "-", "_")) }
 
-// LocalMemoryAliasFile holds the MCP server name a branded plugin registers the
-// local memory under (`mcp-serve --name`); registry.SetLocalMemoryAlias writes it.
+// LocalMemoryAliasFile holds "<write-token> <alias>": the MCP server name a
+// branded plugin serves the local memory under (empty for the default) and the
+// write's token, so a failed start restores only its own record.
 const LocalMemoryAliasFile = "local-memory-alias"
+
+// LocalMemoryAliasRecord the stored alias ("" for the default name) and write token.
+func LocalMemoryAliasRecord() (alias, token string, err error) {
+	p, err := path(LocalMemoryAliasFile)
+	if err != nil {
+		return "", "", err
+	}
+	s, err := readRaw(p)
+	if err != nil {
+		return "", "", err
+	}
+	// Only line ends trimmed: an empty alias is "<token> " and must keep its space.
+	token, alias, found := strings.Cut(strings.TrimRight(s, "\r\n"), " ")
+	if !found {
+		return strings.TrimSpace(token), "", nil // token-less record: alias only
+	}
+	return alias, token, nil
+}
 
 // LocalMemoryAlias the recorded alias, or "" when the default name is in use.
 func LocalMemoryAlias() (string, error) {
-	p, err := path(LocalMemoryAliasFile)
-	if err != nil {
-		return "", err
-	}
-	return readTrimmed(p)
-}
-
-// IsLocalMemoryName reports whether slug names the local memory: the reserved
-// id or the alias a branded plugin registered.
-func IsLocalMemoryName(slug string) (bool, error) {
-	if norm(slug) == norm(LocalMemoryID) {
-		return true, nil
-	}
-	alias, err := LocalMemoryAlias()
-	if err != nil {
-		return false, err
-	}
-	return alias != "" && norm(slug) == norm(alias), nil
+	alias, _, err := LocalMemoryAliasRecord()
+	return alias, err
 }
 
 // ServerMatches reports whether an MCP server name resolves to id: the name
@@ -481,10 +484,10 @@ func ServerMatches(server, id string) bool {
 	return n == norm(id) || strings.HasSuffix(n, "_"+norm(id))
 }
 
-func serverIsLocalMemory(server string) (bool, error) {
-	if server == "" {
-		return true, nil // un-prefixed: assume the local memory
-	}
+// ResolvesToLocalMemory reports whether an MCP server name routes to the local
+// memory: the reserved id or the recorded alias, exact or plugin-prefixed.
+// Catalog inserts reject slugs by the same predicate, so none can route as local.
+func ResolvesToLocalMemory(server string) (bool, error) {
 	if ServerMatches(server, LocalMemoryID) {
 		return true, nil
 	}
@@ -493,6 +496,13 @@ func serverIsLocalMemory(server string) (bool, error) {
 		return false, err
 	}
 	return ServerMatches(server, alias), nil
+}
+
+func serverIsLocalMemory(server string) (bool, error) {
+	if server == "" {
+		return true, nil // un-prefixed: assume the local memory
+	}
+	return ResolvesToLocalMemory(server)
 }
 
 // MemoryTargetID canonical id of the memory a tool writes to (for binding compare),
