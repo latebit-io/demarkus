@@ -18,11 +18,14 @@ bounded() {
   # Job control skips the usual /dev/null stdin; keep jobs off the MCP pipe.
   "$@" </dev/null &
   pid=$!
-  ( sleep "${secs}"; kill -- "-${pid}" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+  # TERM, a short grace, then KILL: a leader ignoring TERM would block the wait.
+  ( sleep "${secs}"; kill -TERM -- "-${pid}"; sleep 5; kill -KILL -- "-${pid}" ) </dev/null >/dev/null 2>&1 &
   dog=$!
   set +m
   wait "${pid}" || rc=$?
   kill -- "-${dog}" 2>/dev/null || true
+  # Leader died by signal: sweep group members that ignored the TERM.
+  [[ "${rc}" -le 128 ]] || kill -KILL -- "-${pid}" 2>/dev/null || true
   return "${rc}"
 }
 
