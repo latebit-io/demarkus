@@ -11,10 +11,9 @@ BIN="${BIN_DIR}/demarkus-plugin"
 bash "${SCRIPTS_DIR}/bootstrap.sh" 1>&2 || echo "[demarkus-memory] bootstrap failed; trying the installed binary" >&2
 [[ -x "${BIN}" ]] || { echo "[demarkus-memory] ${BIN} not installed; run /soul-init" >&2; exit 1; }
 
-# mcp-serve needs demarkus-mcp and the token, which only provision installs.
-# provision takes a cross-process lock, so it serializes with the hook's run.
-if [[ ! -x "${BIN_DIR}/demarkus-mcp" ]]; then
-  "${BIN}" provision 1>&2 || echo "[demarkus-memory] provision failed; mcp-serve will report what is missing" >&2
-fi
+# mcp-serve needs the pinned demarkus-mcp and the token, which only provision
+# installs. Its cross-process lock serializes this with the hook's run. Not
+# fatal: a failed upgrade (offline) must not take down an installed memory.
+"${BIN}" provision 1>&2 || echo "[demarkus-memory] provision failed; mcp-serve will report what is missing" >&2
 
 exec "${BIN}" "$@"

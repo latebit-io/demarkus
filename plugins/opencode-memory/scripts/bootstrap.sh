@@ -22,9 +22,10 @@ version_at_least() {
   IFS=. read -r have_major have_minor have_patch <<<"$1"
   IFS=. read -r need_major need_minor need_patch <<<"$2"
   [[ "${have_major}" =~ ^[0-9]+$ && "${have_minor}" =~ ^[0-9]+$ && "${have_patch}" =~ ^[0-9]+$ ]] || return 1
-  ((have_major > need_major)) ||
-    ((have_major == need_major && have_minor > need_minor)) ||
-    ((have_major == need_major && have_minor == need_minor && have_patch >= need_patch))
+  # 10#: a leading-zero component would otherwise parse as octal.
+  ((10#${have_major} > 10#${need_major})) ||
+    ((10#${have_major} == 10#${need_major} && 10#${have_minor} > 10#${need_minor})) ||
+    ((10#${have_major} == 10#${need_major} && 10#${have_minor} == 10#${need_minor} && 10#${have_patch} >= 10#${need_patch}))
 }
 
 installed=""
