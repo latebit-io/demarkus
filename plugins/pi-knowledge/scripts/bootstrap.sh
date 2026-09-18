@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # bootstrap.sh — the ONE bash script the demarkus plugins retain. It ensures the
-# shared demarkus-plugin binary is installed at the pinned version, then exits.
+# shared demarkus-plugin binary is at the pinned version or newer, then exits.
 # Everything else (provisioning the server, gates, nudges, guidance, registry)
 # lives in that binary. A harness's session-start runs this, then calls
 # `demarkus-plugin provision` (memory) / `demarkus-plugin guidance` (knowledge).
@@ -15,8 +15,26 @@ TOOLS_VERSION="0.42.1"   # demarkus-plugin ships in the tools/ release
 BIN_DIR="${HOME}/.demarkus/bin"
 BIN="${BIN_DIR}/demarkus-plugin"
 
-# Already at the pinned version? Nothing to do.
-if [[ -x "${BIN}" ]] && [[ "$("${BIN}" version 2>/dev/null || true)" == "${TOOLS_VERSION}" ]]; then
+# The binary is shared by every installed demarkus plugin. The pin is a minimum:
+# an older plugin must never downgrade a helper a newer one installed.
+version_at_least() {
+  local have_major have_minor have_patch need_major need_minor need_patch
+  IFS=. read -r have_major have_minor have_patch <<<"$1"
+  IFS=. read -r need_major need_minor need_patch <<<"$2"
+  [[ "${have_major}" =~ ^[0-9]+$ && "${have_minor}" =~ ^[0-9]+$ && "${have_patch}" =~ ^[0-9]+$ ]] || return 1
+  ((have_major > need_major)) ||
+    ((have_major == need_major && have_minor > need_minor)) ||
+    ((have_major == need_major && have_minor == need_minor && have_patch >= need_patch))
+}
+
+installed=""
+if [[ -x "${BIN}" ]]; then
+  if ! installed="$("${BIN}" version 2>&1)"; then
+    echo "[demarkus] bootstrap: existing helper version check failed: ${installed}" >&2
+    installed=""
+  fi
+fi
+if [[ -n "${installed}" ]] && version_at_least "${installed}" "${TOOLS_VERSION}"; then
   exit 0
 fi
 
